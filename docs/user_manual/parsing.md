@@ -73,11 +73,11 @@ The **Parse reports** button is disabled until both of these are selected:
 
 Here is a simple example workflow.
 
-1. Open **Launch Parsing** from the main window.
-2. Under **Select a source (directory or archive file)**, click **Browse**.
+1. Open **Parse Reports** from the main window.
+2. Under **Reports directory or archive**, click **Browse**.
 3. Choose a folder that contains the reports you want to import.
    - If you cancel directory selection, you can choose a supported archive instead.
-4. Under **Select a database file**, click **Browse**.
+4. Under **Database file**, click **Browse**.
 5. Choose a new or existing `.db` file.
 6. Choose the metadata mode you want.
 7. Click **Parse reports**.

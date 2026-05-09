@@ -1,4 +1,5 @@
 import tempfile
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -8,6 +9,14 @@ from modules.characteristic_alias_service import (
     ensure_characteristic_alias_schema,
     upsert_characteristic_alias,
 )
+
+for _module_name in ("PyQt6", "PyQt6.QtCore", "PyQt6.QtGui", "PyQt6.QtWidgets"):
+    _module = sys.modules.get(_module_name)
+    if _module is not None and getattr(_module, "__file__", None) is None:
+        sys.modules.pop(_module_name, None)
+sys.modules.pop("modules.ui_foundation", None)
+sys.modules.pop("modules.help_menu", None)
+sys.modules.pop("modules.characteristic_mapping_dialog", None)
 
 try:
     from PyQt6.QtWidgets import QApplication, QMessageBox
@@ -47,11 +56,25 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
 
             self.assertEqual(dialog.windowTitle(), 'Characteristic Name Matching')
             self.assertEqual(dialog.db_path_input.text(), db_path)
+            self.assertGreaterEqual(dialog.minimumWidth(), 860)
+            self.assertGreaterEqual(dialog.minimumHeight(), 540)
             self.assertEqual(dialog.alias_table.rowCount(), 1)
             self.assertEqual(dialog.alias_table.item(0, 0).text(), 'DIA - X')
             self.assertEqual(dialog.alias_table.item(0, 1).text(), 'DIAMETER - X')
             self.assertEqual(dialog.alias_table.item(0, 2).text(), 'One reference only')
             self.assertEqual(dialog.alias_table.item(0, 3).text(), 'REF-1')
+            self.assertTrue(dialog.db_warning_label.isHidden())
+            self.assertTrue(dialog.empty_warning_label.isHidden())
+            self.assertFalse(dialog.collision_warning_label.isHidden())
+            dialog.close()
+
+    def test_dialog_without_db_shows_db_warning(self):
+        dialog = CharacteristicMappingDialog(parent=None, db_file='')
+        try:
+            self.assertFalse(dialog.db_warning_label.isHidden())
+            self.assertTrue(dialog.empty_warning_label.isHidden())
+            self.assertEqual(dialog.alias_table.rowCount(), 0)
+        finally:
             dialog.close()
 
     def test_import_export_require_selected_db_file(self):
@@ -168,8 +191,10 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
                 )
                 with patch('modules.characteristic_mapping_dialog.QFileDialog.getOpenFileName', return_value=(csv_path, 'CSV files (*.csv)')):
                     with patch('modules.characteristic_mapping_dialog.import_characteristic_aliases_csv', side_effect=validation_error):
-                        with patch('modules.characteristic_mapping_dialog.QMessageBox.exec', return_value=QMessageBox.StandardButton.Ok) as critical_mock:
-                            dialog.import_mappings()
+                        with patch('modules.characteristic_mapping_dialog.CustomLogger', return_value=None):
+                            with patch('modules.characteristic_mapping_dialog.QMessageBox.exec', return_value=QMessageBox.StandardButton.Ok) as critical_mock:
+                                with patch.object(QMessageBox, 'question', return_value=QMessageBox.StandardButton.No):
+                                    dialog.import_mappings()
 
                 self.assertTrue(critical_mock.called)
                 active_box = dialog.findChild(QMessageBox)
@@ -261,11 +286,12 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
 
                 with patch('modules.characteristic_mapping_dialog.QFileDialog.getOpenFileName', return_value=(csv_path, 'CSV files (*.csv)')):
                     with patch('modules.characteristic_mapping_dialog.import_characteristic_aliases_csv', side_effect=validation_error):
-                        with patch('modules.characteristic_mapping_dialog.QMessageBox.exec', return_value=QMessageBox.StandardButton.Ok):
-                            with patch.object(QMessageBox, 'question', return_value=QMessageBox.StandardButton.Yes):
-                                with patch('modules.characteristic_mapping_dialog.QFileDialog.getSaveFileName', return_value=(report_path, 'CSV files (*.csv)')):
-                                    with patch.object(QMessageBox, 'information', return_value=QMessageBox.StandardButton.Ok) as info_mock:
-                                        dialog.import_mappings()
+                        with patch('modules.characteristic_mapping_dialog.CustomLogger', return_value=None):
+                            with patch('modules.characteristic_mapping_dialog.QMessageBox.exec', return_value=QMessageBox.StandardButton.Ok):
+                                with patch.object(QMessageBox, 'question', return_value=QMessageBox.StandardButton.Yes):
+                                    with patch('modules.characteristic_mapping_dialog.QFileDialog.getSaveFileName', return_value=(report_path, 'CSV files (*.csv)')):
+                                        with patch.object(QMessageBox, 'information', return_value=QMessageBox.StandardButton.Ok) as info_mock:
+                                            dialog.import_mappings()
 
                 info_mock.assert_called_once_with(dialog, 'Report saved', 'Saved remediation report with 1 row issue(s).')
                 with open(report_path, 'r', encoding='utf-8') as report_file:
@@ -287,8 +313,9 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
             try:
                 with patch('modules.characteristic_mapping_dialog.QFileDialog.getOpenFileName', return_value=(csv_path, 'CSV files (*.csv)')):
                     with patch('modules.characteristic_mapping_dialog.import_characteristic_aliases_csv', side_effect=RuntimeError('boom')):
-                        with patch.object(QMessageBox, 'critical', return_value=QMessageBox.StandardButton.Ok) as critical_mock:
-                            dialog.import_mappings()
+                        with patch('modules.characteristic_mapping_dialog.CustomLogger', return_value=None):
+                            with patch.object(QMessageBox, 'critical', return_value=QMessageBox.StandardButton.Ok) as critical_mock:
+                                dialog.import_mappings()
 
                 self.assertTrue(critical_mock.called)
                 self.assertEqual(critical_mock.call_args[0][1], 'Import error')
@@ -312,8 +339,9 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
                 )
                 with patch('modules.characteristic_mapping_dialog.QFileDialog.getOpenFileName', return_value=(csv_path, 'CSV files (*.csv)')):
                     with patch('modules.characteristic_mapping_dialog.import_characteristic_aliases_csv', side_effect=schema_error):
-                        with patch.object(QMessageBox, 'critical', return_value=QMessageBox.StandardButton.Ok) as critical_mock:
-                            dialog.import_mappings()
+                        with patch('modules.characteristic_mapping_dialog.CustomLogger', return_value=None):
+                            with patch.object(QMessageBox, 'critical', return_value=QMessageBox.StandardButton.Ok) as critical_mock:
+                                dialog.import_mappings()
 
                 self.assertTrue(critical_mock.called)
                 message = critical_mock.call_args[0][2]
@@ -335,8 +363,9 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
             try:
                 with patch('modules.characteristic_mapping_dialog.QFileDialog.getSaveFileName', return_value=(output_path, 'CSV files (*.csv)')):
                     with patch('modules.characteristic_mapping_dialog.export_characteristic_aliases_csv', side_effect=RuntimeError('boom')):
-                        with patch.object(QMessageBox, 'critical', return_value=QMessageBox.StandardButton.Ok) as critical_mock:
-                            dialog.export_mappings()
+                        with patch('modules.characteristic_mapping_dialog.CustomLogger', return_value=None):
+                            with patch.object(QMessageBox, 'critical', return_value=QMessageBox.StandardButton.Ok) as critical_mock:
+                                dialog.export_mappings()
 
                 self.assertTrue(critical_mock.called)
                 self.assertEqual(critical_mock.call_args[0][1], 'Export error')

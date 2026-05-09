@@ -39,7 +39,10 @@ sys.modules['PyQt6.QtGui'] = qtgui_stub
 
 qtwidgets_stub = types.ModuleType('PyQt6.QtWidgets')
 for name in [
+    'QApplication',
     'QDialog',
+    'QFrame',
+    'QGridLayout',
     'QVBoxLayout',
     'QPushButton',
     'QFileDialog',
@@ -48,15 +51,19 @@ for name in [
     'QHBoxLayout',
     'QProgressBar',
     'QLabel',
+    'QLineEdit',
+    'QSizePolicy',
     'QTableWidget',
     'QTableWidgetItem',
     'QHeaderView',
     'QCheckBox',
+    'QWidget',
 ]:
     setattr(qtwidgets_stub, name, type(name, (), {}))
 sys.modules['PyQt6.QtWidgets'] = qtwidgets_stub
 
-from modules.csv_summary_dialog import DataProcessingThread  # noqa: E402
+import modules.csv_summary_dialog as csv_summary_dialog_module  # noqa: E402
+from modules.csv_summary_dialog import CSVSummaryDialog, DataProcessingThread  # noqa: E402
 from modules.csv_summary_utils import build_default_plot_toggles  # noqa: E402
 
 
@@ -266,3 +273,100 @@ class CsvSummaryFormulaTests(unittest.TestCase):
         self.assertEqual(cp_formula, '="N/A"')
         self.assertIn('ROUND((', cpk_formula)
         self.assertNotIn('MIN(', cpk_formula)
+
+
+class _FakeButton:
+    def __init__(self, enabled=False):
+        self._enabled = bool(enabled)
+
+    def setEnabled(self, value):
+        self._enabled = bool(value)
+
+    def isEnabled(self):
+        return self._enabled
+
+
+class _FakeCheckbox:
+    def __init__(self, checked=False):
+        self._checked = bool(checked)
+
+    def isChecked(self):
+        return self._checked
+
+    def setChecked(self, value):
+        self._checked = bool(value)
+
+
+class _FakeLabel:
+    def __init__(self, value=''):
+        self.value = value
+
+    def setText(self, value):
+        self.value = value
+
+    def text(self):
+        return self.value
+
+
+class _FakePathField(_FakeLabel):
+    def __init__(self):
+        super().__init__("")
+        self.tooltip = ""
+
+    def setToolTip(self, value):
+        self.tooltip = value
+
+
+class CsvSummaryDialogStateTests(unittest.TestCase):
+    def _build_dialog_state(self):
+        dialog = CSVSummaryDialog.__new__(CSVSummaryDialog)
+        dialog.input_file = ""
+        dialog.output_file = ""
+        dialog.data_frame = None
+        dialog.selected_indexes = []
+        dialog.selected_data_columns = []
+        dialog.column_spec_limits = {}
+        dialog.plot_toggles = {}
+        dialog.filter_button = _FakeButton()
+        dialog.spec_limits_button = _FakeButton()
+        dialog.output_button = _FakeButton()
+        dialog.start_button = _FakeButton()
+        dialog.input_path_field = _FakePathField()
+        dialog.output_path_field = _FakePathField()
+        dialog.columns_status_label = _FakeLabel()
+        dialog.spec_limits_status_label = _FakeLabel()
+        dialog.plot_options_status_label = _FakeLabel()
+        dialog.readiness_label = _FakeLabel()
+        dialog.include_extended_plots = _FakeCheckbox(True)
+        dialog.summary_only_checkbox = _FakeCheckbox(False)
+        return dialog
+
+    def test_dialog_source_uses_create_summary_and_elastic_sizing(self):
+        source = Path(csv_summary_dialog_module.__file__).read_text(encoding='utf-8')
+        self.assertIn('QPushButton("Create Summary")', source)
+        self.assertIn('configure_window_size(self, minimum=(760, 460), initial=(900, 620))', source)
+        self.assertNotIn('setGeometry(', source)
+
+    def test_sync_ui_state_blocks_when_output_or_limits_missing_and_unblocks_when_ready(self):
+        dialog = self._build_dialog_state()
+        dialog._sync_ui_state()
+
+        self.assertFalse(dialog.start_button.isEnabled())
+        self.assertEqual("Select an input CSV to begin.", dialog.readiness_label.text())
+
+        dialog.data_frame = object()
+        dialog.input_file = '/tmp/input.csv'
+        dialog.selected_indexes = ['PART']
+        dialog.selected_data_columns = ['LENGTH']
+        dialog.column_spec_limits = {'LENGTH': {'nom': 10.0, 'usl': 0.5, 'lsl': 0.6}}
+        dialog._sync_ui_state()
+
+        self.assertFalse(dialog.start_button.isEnabled())
+        self.assertEqual("Fix invalid spec limits: expected LSL <= NOM <= USL.", dialog.readiness_label.text())
+
+        dialog.column_spec_limits = {'LENGTH': {'nom': 10.0, 'usl': 0.5, 'lsl': -0.5}}
+        dialog.output_file = '/tmp/output.xlsx'
+        dialog._sync_ui_state()
+
+        self.assertTrue(dialog.start_button.isEnabled())
+        self.assertEqual("Ready to create CSV summary workbook.", dialog.readiness_label.text())

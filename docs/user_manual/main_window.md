@@ -16,13 +16,13 @@ It also gives you quick access to **About**, **Release notes**, **Tools**, and h
 
 ## What each button does
 
-### Launch Parsing
+### Parse Reports
 
 Opens the [Parsing](parsing.md) dialog.
 
 Use this when you want to read report files and save their measurements into a **database file**. This is usually the first step for the main database-based workflow.
 
-### Launch Modify Database
+### Modify Database
 
 Opens the [Modify Database](modify_database.md) dialog.
 
@@ -34,7 +34,7 @@ Use this when you want to rename stored values already saved in the database, su
 
 This is optional. Use it when the database needs cleanup before export.
 
-### Launch Export
+### Export Workbook
 
 Opens the [Export overview](export_overview.md) dialog.
 
@@ -78,10 +78,10 @@ Use it when you want to see what changed in the current release.
 
 For a new user, the simplest workflow is:
 
-1. Open **Launch Parsing** and create or update a **database file**.
-2. If needed, use **Launch Modify Database** to clean up stored values.
+1. Open **Parse Reports** and create or update a **database file**.
+2. If needed, use **Modify Database** to clean up stored values.
 3. If needed, use **Match Characteristic Names** so equivalent characteristics use a common name.
-4. Open **Launch Export** and create the final **Excel file**.
+4. Open **Export Workbook** and create the final **Excel file**.
 
 A practical version is:
 

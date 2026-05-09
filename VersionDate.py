@@ -2,7 +2,7 @@ RELEASE_VERSION = "2026.05rc1"
 VERSION_DATE = "260508"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = (
-    "OCR metadata enrichment, clearer parsing choices, visible export filters, and searchable database cleanup are now easier to use."
+    "OCR metadata enrichment, clearer parsing choices, visible export filters, searchable database cleanup, and a calmer workflow UI are now easier to use."
 )
 PUBLIC_VERSION_LABEL = "2026.05 (build 260508)"
 
@@ -13,6 +13,7 @@ release_notes = f"""
     - Existing database metadata can be enriched from the Tools menu with visible progress and cancel control<br>
     - Export now shows which filters are active and includes a one-click Clear filters action<br>
     - Modify Database normalization now uses searchable field tabs with occurrence counts<br>
+    - Main workflow windows now use a calmer visual style with clearer status rows, bounded paths, and more consistent progress feedback<br>
 
     <br><b>Archive:</b><br>
 

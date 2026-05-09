@@ -14,12 +14,23 @@ from VersionDate import release_notes
 from PyQt6.QtCore import QByteArray
 from PyQt6.QtGui import QIcon, QPixmap, QAction
 from PyQt6.QtWidgets import (
-    QGridLayout,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QProgressBar,
     QPushButton,
+    QVBoxLayout,
     QWidget,
+)
+from modules.ui_foundation import (
+    apply_metroliza_theme,
+    configure_accessibility,
+    configure_window_size,
+    section_label,
+    secondary_label,
+    separator,
+    set_status_variant,
+    status_chip,
 )
 
 
@@ -39,10 +50,12 @@ class MainWindow(QMainWindow):
             self.setWindowTitle(f"Metroliza [{version_label}]")
         else:
             self.setWindowTitle(f"Metroliza [{version_label}] ({days_until_expiration+1} day{'s' if days_until_expiration+1 > 1 else ''} left)")
-        self.setGeometry(100, 100, 300, 150)
+        configure_window_size(self, minimum=(460, 360), initial=(560, 460))
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
-        self.layout = QGridLayout()
+        self.layout = QVBoxLayout()
+        self.layout.setContentsMargins(16, 16, 16, 16)
+        self.layout.setSpacing(10)
         self.central_widget.setLayout(self.layout)
         self.days_until_expiration = days_until_expiration
 
@@ -58,13 +71,20 @@ class MainWindow(QMainWindow):
         self.directory = None
         self.db_file = None
 
-        # Initialize and set up buttons with tooltips
-        self.parse_button = QPushButton("Launch Parsing")
-        self.modifydb_button = QPushButton("Launch Modify Database")
-        self.export_button = QPushButton("Launch Export")
+        # Initialize and set up command-center widgets
+        self.workflow_label = section_label("Workflow")
+        self.context_label = section_label("Current context")
+        self.source_status_label = status_chip("Source: not selected", "neutral")
+        self.database_status_label = status_chip("Database: not selected", "neutral")
+        self.workflow_hint_label = secondary_label(
+            "Parse reports, clean database values when needed, match names, then export the workbook."
+        )
+        self.parse_button = QPushButton("Parse Reports")
+        self.modifydb_button = QPushButton("Modify Database")
+        self.export_button = QPushButton("Export Workbook")
         self.csv_summary_button = QPushButton("CSV Summary")
         self.map_characteristics_button = QPushButton("Match Characteristic Names")
-        self.metadata_enrichment_status_label = QLabel("Metadata enrichment idle")
+        self.metadata_enrichment_status_label = status_chip("Metadata enrichment idle", "neutral")
         self.metadata_enrichment_progress_bar = QProgressBar()
         self.cancel_metadata_enrichment_button = QPushButton("Cancel")
         self.setup_button_tooltips()
@@ -74,6 +94,8 @@ class MainWindow(QMainWindow):
 
         # Add buttons to the layout and connect signals
         self.setup_buttons_layout()
+        self._sync_context_rows()
+        apply_metroliza_theme(self)
 
     def decode_icon(self, encoded_icon):
         """Decode the base64 encoded icon and return an QIcon object.
@@ -93,11 +115,11 @@ class MainWindow(QMainWindow):
 
     def setup_button_tooltips(self):
         """Set up the tooltips for the buttons."""
-        self.parse_button.setToolTip("Use Parsing module to get data from PDF reports into database for further export to Excel")
-        self.modifydb_button.setToolTip("Use Modify Database module to modify Reference, Part number or Header in database")
-        self.export_button.setToolTip("Use Export module to filter, set and export data from database to Excel file")
-        self.csv_summary_button.setToolTip("Use CSV module to automatically create charts from CSV data")
-        self.map_characteristics_button.setToolTip("Tell the app which different characteristic names should be treated as the same characteristic.")
+        self.parse_button.setToolTip("Import measurements from PDF reports into a SQLite database.")
+        self.modifydb_button.setToolTip("Clean stored references, sample numbers, headers, and record values.")
+        self.export_button.setToolTip("Filter, group, and export database measurements to an Excel workbook.")
+        self.csv_summary_button.setToolTip("Create a standalone summary workbook from CSV data.")
+        self.map_characteristics_button.setToolTip("Map different report names to one common characteristic name.")
         self.cancel_metadata_enrichment_button.setToolTip("Request metadata enrichment cancellation after the current report")
 
     def setup_menu_actions(self):
@@ -117,14 +139,38 @@ class MainWindow(QMainWindow):
 
     def setup_buttons_layout(self):
         """Add the buttons to the layout and connect the signals."""
-        self.layout.addWidget(self.parse_button, 0, 0)
-        self.layout.addWidget(self.modifydb_button, 1, 0)
-        self.layout.addWidget(self.export_button, 2, 0)
-        self.layout.addWidget(self.csv_summary_button, 3, 0)
-        self.layout.addWidget(self.map_characteristics_button, 4, 0)
-        self.layout.addWidget(self.metadata_enrichment_status_label, 5, 0)
-        self.layout.addWidget(self.metadata_enrichment_progress_bar, 6, 0)
-        self.layout.addWidget(self.cancel_metadata_enrichment_button, 7, 0)
+        self.layout.addWidget(self.context_label)
+        self.layout.addWidget(self.source_status_label)
+        self.layout.addWidget(self.database_status_label)
+        self.layout.addWidget(separator())
+        self.layout.addWidget(self.workflow_label)
+        self.layout.addWidget(self.workflow_hint_label)
+
+        primary_row = QHBoxLayout()
+        primary_row.setContentsMargins(0, 0, 0, 0)
+        primary_row.setSpacing(8)
+        primary_row.addWidget(self.parse_button)
+        primary_row.addWidget(self.export_button)
+        self.layout.addLayout(primary_row)
+
+        prep_row = QHBoxLayout()
+        prep_row.setContentsMargins(0, 0, 0, 0)
+        prep_row.setSpacing(8)
+        prep_row.addWidget(self.modifydb_button)
+        prep_row.addWidget(self.map_characteristics_button)
+        self.layout.addLayout(prep_row)
+
+        secondary_row = QHBoxLayout()
+        secondary_row.setContentsMargins(0, 0, 0, 0)
+        secondary_row.setSpacing(8)
+        secondary_row.addWidget(self.csv_summary_button)
+        secondary_row.addStretch(1)
+        self.layout.addLayout(secondary_row)
+
+        self.layout.addWidget(separator())
+        self.layout.addWidget(self.metadata_enrichment_status_label)
+        self.layout.addWidget(self.metadata_enrichment_progress_bar)
+        self.layout.addWidget(self.cancel_metadata_enrichment_button)
         self.parse_button.clicked.connect(self.launch_parsing_dialog)
         self.modifydb_button.clicked.connect(self.launch_modifydb_dialog)
         self.export_button.clicked.connect(self.launch_export_dialog)
@@ -134,6 +180,20 @@ class MainWindow(QMainWindow):
         self.metadata_enrichment_status_label.setVisible(False)
         self.metadata_enrichment_progress_bar.setVisible(False)
         self.cancel_metadata_enrichment_button.setVisible(False)
+        configure_accessibility(self.parse_button, name="Parse Reports")
+        configure_accessibility(self.export_button, name="Export Workbook")
+        configure_accessibility(self.modifydb_button, name="Modify Database")
+        configure_accessibility(self.map_characteristics_button, name="Match Characteristic Names")
+        configure_accessibility(self.csv_summary_button, name="CSV Summary")
+        configure_accessibility(self.cancel_metadata_enrichment_button, name="Cancel metadata enrichment")
+
+    def _sync_context_rows(self):
+        source_text = self.directory if self.directory else "not selected"
+        database_text = self.db_file if self.db_file else "not selected"
+        self.source_status_label.setText(f"Source: {source_text}")
+        self.database_status_label.setText(f"Database: {database_text}")
+        set_status_variant(self.source_status_label, "success" if self.directory else "neutral")
+        set_status_variant(self.database_status_label, "success" if self.db_file else "neutral")
 
     def is_metadata_enrichment_active(self):
         return (
@@ -147,10 +207,12 @@ class MainWindow(QMainWindow):
             if not self.db_file:
                 self.metadata_enrichment_status_label.setText("Select a database before enrichment")
                 self.metadata_enrichment_status_label.setVisible(True)
+                set_status_variant(self.metadata_enrichment_status_label, "warning")
                 return
             if self.is_metadata_enrichment_active():
                 self.metadata_enrichment_status_label.setText("Metadata enrichment already running")
                 self.metadata_enrichment_status_label.setVisible(True)
+                set_status_variant(self.metadata_enrichment_status_label, "info")
                 return
 
             self.metadata_enrichment_thread = MetadataEnrichmentThread(self.db_file)
@@ -162,6 +224,7 @@ class MainWindow(QMainWindow):
 
             self.metadata_enrichment_status_label.setText("Metadata enrichment starting")
             self.metadata_enrichment_status_label.setVisible(True)
+            set_status_variant(self.metadata_enrichment_status_label, "info")
             self.metadata_enrichment_progress_bar.setValue(0)
             self.metadata_enrichment_progress_bar.setVisible(True)
             self.cancel_metadata_enrichment_button.setEnabled(True)
@@ -177,12 +240,14 @@ class MainWindow(QMainWindow):
                 self.metadata_enrichment_thread.stop_enrichment()
                 self.cancel_metadata_enrichment_button.setEnabled(False)
                 self.metadata_enrichment_status_label.setText("Canceling metadata enrichment...")
+                set_status_variant(self.metadata_enrichment_status_label, "warning")
         except Exception as e:
             self.log_and_exit(e)
 
     def on_metadata_enrichment_error(self, message):
         self.metadata_enrichment_error_message = message
         self.metadata_enrichment_status_label.setText(f"Metadata enrichment failed: {message}")
+        set_status_variant(self.metadata_enrichment_status_label, "danger")
 
     def on_metadata_enrichment_finished(self):
         try:
@@ -193,6 +258,7 @@ class MainWindow(QMainWindow):
                 self.metadata_enrichment_status_label.setText(
                     f"Metadata enrichment failed: {self.metadata_enrichment_error_message}"
                 )
+                set_status_variant(self.metadata_enrichment_status_label, "danger")
                 return
             if self.metadata_enrichment_thread is None:
                 return
@@ -202,6 +268,7 @@ class MainWindow(QMainWindow):
                 self.metadata_enrichment_status_label.setText(
                     f"Metadata enrichment complete: {result.enriched_files}/{result.total_files} reports updated"
                 )
+                set_status_variant(self.metadata_enrichment_status_label, "success")
         except Exception as e:
             self.log_and_exit(e)
 
@@ -286,12 +353,14 @@ class MainWindow(QMainWindow):
     def set_db_file(self, db_file):
         try:
             self.db_file = db_file
+            self._sync_context_rows()
         except Exception as e:
             self.log_and_exit(e)
 
     def set_directory(self, directory):
         try:
             self.directory = directory
+            self._sync_context_rows()
         except Exception as e:
             self.log_and_exit(e)
 

@@ -7,14 +7,30 @@ qtcore_stub.Qt = type("Qt", (), {"ItemDataRole": type("ItemDataRole", (), {"User
 sys.modules["PyQt6.QtCore"] = qtcore_stub
 
 qtwidgets_stub = types.ModuleType("PyQt6.QtWidgets")
+qtwidgets_stub.QSizePolicy = type(
+    "QSizePolicy",
+    (),
+    {"Policy": type("Policy", (), {"Expanding": 1, "Fixed": 2})},
+)
+qtwidgets_stub.QHeaderView = type(
+    "QHeaderView",
+    (),
+    {"ResizeMode": type("ResizeMode", (), {"Interactive": 0, "Stretch": 1, "ResizeToContents": 2})},
+)
+qtwidgets_stub.QApplication = type("QApplication", (), {"instance": staticmethod(lambda: None)})
 for name in [
     "QDialog",
     "QGridLayout",
+    "QHBoxLayout",
     "QTableWidget",
     "QTableWidgetItem",
     "QPushButton",
     "QFileDialog",
     "QMessageBox",
+    "QFrame",
+    "QLabel",
+    "QLineEdit",
+    "QWidget",
 ]:
     setattr(qtwidgets_stub, name, type(name, (), {}))
 sys.modules["PyQt6.QtWidgets"] = qtwidgets_stub
@@ -23,6 +39,8 @@ sys.modules["PyQt6.QtGui"] = types.ModuleType("PyQt6.QtGui")
 custom_logger_stub = types.ModuleType("modules.custom_logger")
 custom_logger_stub.CustomLogger = type("CustomLogger", (), {"__init__": lambda self, *args, **kwargs: None})
 sys.modules["modules.custom_logger"] = custom_logger_stub
+sys.modules.pop("modules.ui_foundation", None)
+sys.modules.pop("modules.modify_db", None)
 
 from modules.modify_db import ModifyDB  # noqa: E402
 

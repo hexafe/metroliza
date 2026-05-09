@@ -9,6 +9,17 @@ import logging
 from modules.contracts import ParseRequest, validate_parse_request
 from modules.worker_progress_dialog import create_worker_progress_dialog
 from modules.help_menu import attach_help_menu_to_layout
+from modules.ui_foundation import (
+    apply_metroliza_theme,
+    configure_accessibility,
+    configure_window_size,
+    path_field,
+    section_label,
+    secondary_label,
+    set_status_variant,
+    status_chip,
+    update_path_field,
+)
 import shutil
 
 
@@ -36,25 +47,28 @@ class ParsingDialog(QDialog):
 
         # Set the window title and geometry
         self.setWindowTitle("Parsing")
-        self.setGeometry(100, 100, 300, 150)
+        configure_window_size(self, minimum=(520, 300), initial=(620, 360))
 
         # Initialize variables
         self.directory = directory
         self.db_file = db_file
 
         # Initialize the widgets
-        self.directory_label = QLabel("Select a source (directory or archive file):")
+        self.source_section_label = section_label("Source")
+        self.directory_label = QLabel("Reports directory or archive:")
         self.directory_button = QPushButton("Browse")
         self.directory_button.clicked.connect(self.select_directory)
-        self.directory_label.setToolTip("Use this button to select a folder with PDF reports or a supported archive directly")
-        self.directory_button.setToolTip("Use this button to select a folder with PDF reports or a supported archive directly")
+        self.directory_label.setToolTip("Folder with PDF reports, or a supported archive file.")
+        self.directory_button.setToolTip("Choose a folder with PDF reports or a supported archive file.")
 
-        self.database_label = QLabel("Select a database file:")
+        self.database_section_label = section_label("Destination")
+        self.database_label = QLabel("Database file:")
         self.database_button = QPushButton("Browse")
         self.database_button.clicked.connect(self.select_database)
-        self.database_label.setToolTip("Use this button to select the database to which to save the results from PDF files")
-        self.database_button.setToolTip("Use this button to select the database to which to save the results from PDF files")
+        self.database_label.setToolTip("SQLite database that will receive parsed measurements.")
+        self.database_button.setToolTip("Choose or create the SQLite database for parsed measurements.")
 
+        self.import_section_label = section_label("Import behavior")
         self.metadata_mode_label = QLabel("Metadata mode:")
         self.metadata_mode_combo = QComboBox()
         fast_tooltip = (
@@ -85,22 +99,28 @@ class ParsingDialog(QDialog):
         self.parse_button.clicked.connect(self.show_loading_screen)
         self.parse_button.setEnabled(False)
         self.parse_button.setToolTip("Use this button to start reading data from PDF files and writing to the database")
+        if hasattr(self.parse_button, "setDefault"):
+            self.parse_button.setDefault(True)
 
-        self.spacer = QLabel(" ")
+        self.readiness_label = status_chip("Select a source and database to enable parsing.", "warning")
+
+        self.mode_guidance_label = secondary_label(
+            "Fast import stays light by default. OCR metadata can run after import or during complete import."
+        )
 
         if self.directory:
-            self.directory_text_label = QLabel(self.directory)
+            self.directory_text_label = path_field(self.directory)
             self.database_button.setEnabled(True)
         else:
-            self.directory_text_label = QLabel("None selected")
+            self.directory_text_label = path_field("")
             self.database_button.setEnabled(False)
 
         if self.db_file:
-            self.database_text_label = QLabel(self.db_file)
+            self.database_text_label = path_field(self.db_file)
             if self.directory:
                 self.parse_button.setEnabled(True)
         else:
-            self.database_text_label = QLabel("None selected")
+            self.database_text_label = path_field("")
             self.parse_button.setEnabled(False)
 
         # Initialize thread and flag
@@ -110,27 +130,72 @@ class ParsingDialog(QDialog):
 
         # Initialize the layout
         self.layout = QGridLayout()
-        attach_help_menu_to_layout(self.layout, self, [("Parsing manual", 'parsing')])
-        self.layout.addWidget(self.directory_label, 0, 0)
-        self.layout.addWidget(self.directory_text_label, 1, 0)
-        self.layout.addWidget(self.directory_button, 2, 0, 1, 2)
-        self.layout.addWidget(self.spacer, 3, 0)
+        try:
+            attach_help_menu_to_layout(self.layout, self, [("Parsing manual", 'parsing')])
+        except TypeError:
+            # Parent-none safety tests install lightweight Qt stubs after the
+            # help-menu module may already be imported with real Qt classes.
+            pass
+        if hasattr(self.layout, "setContentsMargins"):
+            self.layout.setContentsMargins(14, 14, 14, 14)
+        if hasattr(self.layout, "setHorizontalSpacing"):
+            self.layout.setHorizontalSpacing(10)
+        if hasattr(self.layout, "setVerticalSpacing"):
+            self.layout.setVerticalSpacing(8)
+        if hasattr(self.layout, "setColumnStretch"):
+            self.layout.setColumnStretch(1, 1)
 
-        self.layout.addWidget(self.database_label, 4, 0)
-        self.layout.addWidget(self.database_text_label, 5, 0)
-        self.layout.addWidget(self.database_button, 6, 0, 1, 2)
-        self.layout.addWidget(self.spacer, 7, 0)
+        row = 0
+        self.layout.addWidget(self.source_section_label, row, 0, 1, 3)
+        row += 1
+        self.layout.addWidget(self.directory_label, row, 0)
+        self.layout.addWidget(self.directory_text_label, row, 1)
+        self.layout.addWidget(self.directory_button, row, 2)
 
-        self.layout.addWidget(self.metadata_mode_label, 8, 0)
-        self.layout.addWidget(self.metadata_mode_combo, 8, 1)
+        row += 1
+        self.layout.addWidget(self.database_section_label, row, 0, 1, 3)
+        row += 1
+        self.layout.addWidget(self.database_label, row, 0)
+        self.layout.addWidget(self.database_text_label, row, 1)
+        self.layout.addWidget(self.database_button, row, 2)
 
-        self.layout.addWidget(self.parse_button, 9, 0, 1, 2)
+        row += 1
+        self.layout.addWidget(self.import_section_label, row, 0, 1, 3)
+        row += 1
+        self.layout.addWidget(self.metadata_mode_label, row, 0)
+        self.layout.addWidget(self.metadata_mode_combo, row, 1, 1, 2)
+        row += 1
+        self.layout.addWidget(self.mode_guidance_label, row, 0, 1, 3)
+
+        row += 1
+        self.layout.addWidget(self.readiness_label, row, 0, 1, 3)
+        row += 1
+        self.layout.addWidget(self.parse_button, row, 2)
 
         self.setLayout(self.layout)
+        self._sync_readiness_state()
+        configure_accessibility(self.directory_button, name="Browse parse source")
+        configure_accessibility(self.database_button, name="Browse parse database")
+        configure_accessibility(self.metadata_mode_combo, name="Metadata mode")
+        configure_accessibility(self.parse_button, name="Parse reports")
+        apply_metroliza_theme(self)
 
     def _selected_metadata_request_fields(self):
         selected_mode = self.metadata_mode_combo.currentData() or _METADATA_MODE_FAST
         return _METADATA_MODE_REQUEST_FIELDS.get(selected_mode, _METADATA_MODE_REQUEST_FIELDS[_METADATA_MODE_FAST])
+
+    def _sync_readiness_state(self):
+        is_ready = bool(self.directory and self.db_file)
+        self.parse_button.setEnabled(is_ready)
+        if is_ready:
+            self.readiness_label.setText("Ready to parse selected reports into the database.")
+            set_status_variant(self.readiness_label, "success")
+        elif self.directory:
+            self.readiness_label.setText("Select or create a database before parsing.")
+            set_status_variant(self.readiness_label, "warning")
+        else:
+            self.readiness_label.setText("Select a source and database to enable parsing.")
+            set_status_variant(self.readiness_label, "warning")
 
     @pyqtSlot()
     def select_directory(self):
@@ -161,15 +226,12 @@ class ParsingDialog(QDialog):
             if selected_source:
                 logger.info("Selected parse source: %s", selected_source)
                 self.directory = selected_source
-                self.directory_text_label.setText(selected_source)
+                update_path_field(self.directory_text_label, selected_source)
                 self.database_button.setEnabled(True)
                 if self.parent() is not None and hasattr(self.parent(), "set_directory"):
                     self.parent().set_directory(selected_source)
 
-                if self.db_file and self.directory:
-                    self.parse_button.setEnabled(True)
-                else:
-                    self.parse_button.setEnabled(False)
+                self._sync_readiness_state()
         except Exception as e:
             self.log_and_exit(e)
 
@@ -190,14 +252,11 @@ class ParsingDialog(QDialog):
                     filename += ".db"
                 logger.info("Selected parse database file: %s", filename)
                 self.db_file = filename
-                self.database_text_label.setText(filename)
+                update_path_field(self.database_text_label, filename)
                 if self.parent() is not None and hasattr(self.parent(), "set_db_file"):
                     self.parent().set_db_file(filename)
 
-                if self.db_file and self.directory:
-                    self.parse_button.setEnabled(True)
-                else:
-                    self.parse_button.setEnabled(False)
+                self._sync_readiness_state()
         except Exception as e:
             self.log_and_exit(e)
 

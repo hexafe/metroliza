@@ -7,14 +7,30 @@ qtcore_stub.Qt = type('Qt', (), {'ItemDataRole': type('ItemDataRole', (), {'User
 sys.modules['PyQt6.QtCore'] = qtcore_stub
 
 qtwidgets_stub = types.ModuleType('PyQt6.QtWidgets')
+qtwidgets_stub.QSizePolicy = type(
+    'QSizePolicy',
+    (),
+    {'Policy': type('Policy', (), {'Expanding': 1, 'Fixed': 2})},
+)
+qtwidgets_stub.QHeaderView = type(
+    'QHeaderView',
+    (),
+    {'ResizeMode': type('ResizeMode', (), {'Interactive': 0, 'Stretch': 1, 'ResizeToContents': 2})},
+)
+qtwidgets_stub.QApplication = type('QApplication', (), {'instance': staticmethod(lambda: None)})
 for name in [
     'QDialog',
     'QGridLayout',
+    'QHBoxLayout',
     'QTableWidget',
     'QTableWidgetItem',
     'QPushButton',
     'QFileDialog',
     'QMessageBox',
+    'QFrame',
+    'QLabel',
+    'QLineEdit',
+    'QWidget',
 ]:
     setattr(qtwidgets_stub, name, type(name, (), {}))
 sys.modules['PyQt6.QtWidgets'] = qtwidgets_stub
@@ -23,6 +39,8 @@ sys.modules['PyQt6.QtGui'] = types.ModuleType('PyQt6.QtGui')
 custom_logger_stub = types.ModuleType('modules.custom_logger')
 custom_logger_stub.CustomLogger = type('CustomLogger', (), {'__init__': lambda self, *args, **kwargs: None})
 sys.modules['modules.custom_logger'] = custom_logger_stub
+sys.modules.pop('modules.ui_foundation', None)
+sys.modules.pop('modules.modify_db', None)
 
 from modules.modify_db import ModifyDB  # noqa: E402
 
@@ -69,7 +87,58 @@ class _FakeMatrixTable:
         return self._rows[row][col]
 
 
+class _FakeHeader:
+    def __init__(self):
+        self.stretch_last_section = None
+        self.resize_modes = {}
+
+    def setStretchLastSection(self, value):
+        self.stretch_last_section = value
+
+    def setSectionResizeMode(self, column, mode):
+        self.resize_modes[column] = mode
+
+
+class _FakeResizeTable:
+    def __init__(self, columns):
+        self._columns = columns
+        self.minimum_height = None
+        self.alternating_rows = None
+        self.size_policy = None
+        self.header = _FakeHeader()
+
+    def setMinimumHeight(self, value):
+        self.minimum_height = value
+
+    def setAlternatingRowColors(self, value):
+        self.alternating_rows = value
+
+    def setSizePolicy(self, horizontal, vertical):
+        self.size_policy = (horizontal, vertical)
+
+    def horizontalHeader(self):
+        return self.header
+
+    def columnCount(self):
+        return self._columns
+
+
 class TestModifyDbUpdateStatements(unittest.TestCase):
+    @staticmethod
+    def _mode_value(mode):
+        return getattr(mode, "value", mode)
+
+    @staticmethod
+    def _mode_name(mode):
+        return getattr(mode, "name", None)
+
+    def _assert_resize_mode(self, actual, *, expected_name, expected_stub):
+        actual_name = self._mode_name(actual)
+        if actual_name is not None:
+            self.assertEqual(actual_name, expected_name)
+            return
+        self.assertEqual(actual, expected_stub)
+
     def test_build_update_statements_returns_only_changed_rows(self):
         table = _FakeTable(
             [
@@ -112,6 +181,28 @@ class TestModifyDbUpdateStatements(unittest.TestCase):
         self.assertEqual(
             statements,
             [('UPDATE report_metadata SET reference = ? WHERE reference = ?', ('B2', 'B'))],
+        )
+
+    def test_configure_normalize_table_sets_stretch_and_occurrence_resize(self):
+        table = _FakeResizeTable(columns=3)
+
+        ModifyDB._configure_normalize_table(table)
+
+        resize_mode = qtwidgets_stub.QHeaderView.ResizeMode
+        self._assert_resize_mode(
+            table.header.resize_modes[0],
+            expected_name="Stretch",
+            expected_stub=resize_mode.Stretch,
+        )
+        self._assert_resize_mode(
+            table.header.resize_modes[1],
+            expected_name="Stretch",
+            expected_stub=resize_mode.Stretch,
+        )
+        self._assert_resize_mode(
+            table.header.resize_modes[2],
+            expected_name="ResizeToContents",
+            expected_stub=resize_mode.ResizeToContents,
         )
 
 

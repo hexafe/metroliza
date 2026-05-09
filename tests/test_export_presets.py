@@ -161,7 +161,7 @@ class TestExportPresetFlowIntegration(unittest.TestCase):
             'QApplication', 'QDialog', 'QFileDialog', 'QGridLayout', 'QLabel', 'QLineEdit',
             'QMessageBox', 'QProgressBar', 'QPushButton', 'QVBoxLayout',
             'QComboBox', 'QCheckBox', 'QHBoxLayout', 'QWidget', 'QScrollArea',
-            'QSizePolicy', 'QToolButton',
+            'QSizePolicy', 'QToolButton', 'QFrame', 'QHeaderView',
         ]:
             setattr(qtwidgets_stub, name, object)
         sys.modules['PyQt6.QtWidgets'] = qtwidgets_stub

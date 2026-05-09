@@ -17,6 +17,26 @@ from modules.data_grouping_service import (
 )
 from modules.list_selection_utils import ListSelectionUtils
 from modules import ui_theme_tokens
+try:
+    from modules import ui_foundation
+except Exception:  # pragma: no cover - fallback for heavily stubbed tests
+    class _UiFoundationFallback:
+        @staticmethod
+        def apply_metroliza_theme(_widget):
+            return None
+
+        @staticmethod
+        def configure_window_size(widget, *, minimum=(420, 260), initial=(640, 420), screen_margin=40):
+            del minimum, screen_margin
+            if hasattr(widget, "resize"):
+                widget.resize(*initial)
+
+        @staticmethod
+        def status_chip(text, variant="neutral"):
+            del variant
+            return QtWidgets.QLabel(text)
+
+    ui_foundation = _UiFoundationFallback()
 from modules.help_menu import attach_help_menu_to_layout
 from PyQt6.QtCore import Qt
 import PyQt6.QtWidgets as QtWidgets
@@ -68,6 +88,15 @@ class DataGrouping(QDialog):
         selection_mode_enum = getattr(getattr(QtWidgets, "QAbstractItemView", None), "SelectionMode", None)
         return getattr(selection_mode_enum, "MultiSelection", 2)
 
+    @staticmethod
+    def _safe_attr(instance, name, default=None):
+        try:
+            return getattr(instance, name, default)
+        except RuntimeError:
+            # PyQt raises this for uninitialized QObject test doubles created
+            # with __new__ to exercise pure helper behavior.
+            return default
+
     def setup_ui(self):
         """Handle `setup_ui` for `DataGrouping`.
 
@@ -84,6 +113,7 @@ class DataGrouping(QDialog):
             self.create_widgets()
             self.arrange_layout()
             self.connect_signals()
+            self._refresh_selection_summary()
         except Exception as e:
             self.log_and_exit(e)
 
@@ -101,44 +131,51 @@ class DataGrouping(QDialog):
 
         try:
             # Create labels and list widgets for each column to be filtered
-            self.reference_label = QLabel("REFERENCE:")
+            self.reference_label = QLabel("Reference:")
             self.reference_list = QListWidget()
 
-            self.part_label = QLabel("PART #:")
+            self.part_label = QLabel("Parts:")
             self.part_list = QListWidget()
             self.part_list.setSelectionMode(self._multi_selection_mode())
             self.all_parts_list = QListWidget()
             self.all_parts_list.setSelectionMode(self._multi_selection_mode())
             
-            self.groups_label = QLabel("GROUPS:")
+            self.groups_label = QLabel("Groups:")
             self.groups_list = QListWidget()
             
-            self.part_group_label = QLabel("PART IN SELECTED GROUP:")
+            self.part_group_label = QLabel("Parts in selected group:")
             self.part_group_list = QListWidget()
             self.part_group_list.setSelectionMode(self._multi_selection_mode())
 
             # Create separate QLineEdit widgets for searching in each list widget
             self.reference_search_input = QLineEdit()
-            self.reference_search_input.setPlaceholderText("Search REFERENCE...")
+            self.reference_search_input.setPlaceholderText("Search reference...")
             self.part_search_input = QLineEdit()
-            self.part_search_input.setPlaceholderText("Search PART #...")
+            self.part_search_input.setPlaceholderText("Search part...")
             self.group_search_input = QLineEdit()
-            self.group_search_input.setPlaceholderText("Search GROUP...")
+            self.group_search_input.setPlaceholderText("Search group...")
             self.part_group_search_input = QLineEdit()
-            self.part_group_search_input.setPlaceholderText("Search PART IN SELECTED GROUP...")
+            self.part_group_search_input.setPlaceholderText("Search selected group...")
             
             # Create buttons
-            self.create_group_button = QPushButton("Create/add to group")
+            self.create_group_button = QPushButton("Create or add")
             self.create_group_button.setDisabled(True)
-            self.rename_group_button = QPushButton("Rename selected group")
+            self.rename_group_button = QPushButton("Rename group")
             self.rename_group_button.setDisabled(True)
-            self.remove_from_group_button = QPushButton("Remove from selected group")
+            self.remove_from_group_button = QPushButton("Remove from group")
             self.remove_from_group_button.setDisabled(True)
-            self.delete_group_button = QPushButton("Delete selected group")
+            self.delete_group_button = QPushButton("Delete group")
             self.delete_group_button.setDisabled(True)
             
             self.use_grouping_button = QPushButton("Use grouping")
-            self.dont_use_grouping_button = QPushButton("Do not use grouping")
+            self.dont_use_grouping_button = QPushButton("Clear grouping")
+            if hasattr(self.use_grouping_button, "setDefault"):
+                self.use_grouping_button.setDefault(True)
+            if hasattr(self.use_grouping_button, "setAutoDefault"):
+                self.use_grouping_button.setAutoDefault(True)
+            self.reference_summary_label = ui_foundation.status_chip("Reference: none", variant="neutral")
+            self.group_summary_label = ui_foundation.status_chip("Group: none", variant="neutral")
+            self.selection_summary_label = ui_foundation.status_chip("Selected parts: 0", variant="neutral")
         except Exception as e:
             self.log_and_exit(e)
 
@@ -157,40 +194,79 @@ class DataGrouping(QDialog):
         try:
             self.layout = QGridLayout(self)
             attach_help_menu_to_layout(self.layout, self, [("Grouping manual", 'export_grouping')])
+            self.layout.setContentsMargins(10, 10, 10, 10)
+            self.layout.setHorizontalSpacing(8)
+            self.layout.setVerticalSpacing(8)
+            ui_foundation.apply_metroliza_theme(self)
 
-            self.layout.addWidget(self.reference_label, 0, 0)
-            self.layout.addWidget(self.reference_search_input, 1, 0)
-            self.layout.addWidget(self.reference_list, 2, 0)
+            summary_row = QtWidgets.QHBoxLayout()
+            summary_row.setContentsMargins(0, 0, 0, 0)
+            summary_row.setSpacing(8)
+            summary_row.addWidget(self.reference_summary_label, 1)
+            summary_row.addWidget(self.group_summary_label, 1)
+            summary_row.addWidget(self.selection_summary_label, 1)
+            self.layout.addLayout(summary_row, 0, 0, 1, 4)
 
-            self.layout.addWidget(self.part_label, 0, 1)
-            self.layout.addWidget(self.part_search_input, 1, 1)
-            self.layout.addWidget(self.part_list, 2, 1)
+            self.layout.addWidget(self.reference_label, 1, 0)
+            self.layout.addWidget(self.reference_search_input, 2, 0)
+            self.layout.addWidget(self.reference_list, 3, 0)
 
-            self.layout.addWidget(self.groups_label, 0, 2)
-            self.layout.addWidget(self.group_search_input, 1, 2)
-            self.layout.addWidget(self.groups_list, 2, 2)
-            
-            self.layout.addWidget(self.part_group_label, 0, 3)
-            self.layout.addWidget(self.part_group_search_input, 1, 3)
-            self.layout.addWidget(self.part_group_list, 2, 3)
+            self.layout.addWidget(self.part_label, 1, 1)
+            self.layout.addWidget(self.part_search_input, 2, 1)
+            self.layout.addWidget(self.part_list, 3, 1)
 
-            for row in range(self.layout.rowCount()):
-                for column in range(self.layout.columnCount()):
-                    item = self.layout.itemAtPosition(row, column)
-                    if item is not None:
-                        widget = item.widget()
-                        if widget is not None:
-                            widget.setFixedWidth(200)
+            self.layout.addWidget(self.groups_label, 1, 2)
+            self.layout.addWidget(self.group_search_input, 2, 2)
+            self.layout.addWidget(self.groups_list, 3, 2)
 
-            self.layout.addWidget(self.create_group_button, 4, 0, 1, 4)
-            self.layout.addWidget(self.rename_group_button, 5, 0, 1, 4)
-            self.layout.addWidget(self.remove_from_group_button, 6, 0, 1, 4)
-            self.layout.addWidget(self.delete_group_button, 7, 0, 1, 4)
+            self.layout.addWidget(self.part_group_label, 1, 3)
+            self.layout.addWidget(self.part_group_search_input, 2, 3)
+            self.layout.addWidget(self.part_group_list, 3, 3)
 
-            self.layout.addWidget(self.use_grouping_button, 8, 0, 1, 2)
-            self.layout.addWidget(self.dont_use_grouping_button, 8, 2, 1, 2)
+            self._configure_pane_widget(self.reference_search_input, min_width=160)
+            self._configure_pane_widget(self.part_search_input, min_width=220)
+            self._configure_pane_widget(self.group_search_input, min_width=180)
+            self._configure_pane_widget(self.part_group_search_input, min_width=220)
+            self._configure_pane_widget(self.reference_list, min_width=160, min_height=220, expands_vertically=True)
+            self._configure_pane_widget(self.part_list, min_width=220, min_height=220, expands_vertically=True)
+            self._configure_pane_widget(self.groups_list, min_width=180, min_height=220, expands_vertically=True)
+            self._configure_pane_widget(self.part_group_list, min_width=220, min_height=220, expands_vertically=True)
 
-            self.show()
+            for column in range(4):
+                self.layout.setColumnStretch(column, 1 if column in (0, 2) else 2)
+                self.layout.setColumnMinimumWidth(column, 150 if column in (0, 2) else 210)
+            self.layout.setRowStretch(3, 1)
+
+            actions_row_one = QtWidgets.QHBoxLayout()
+            actions_row_one.setContentsMargins(0, 0, 0, 0)
+            actions_row_one.setSpacing(8)
+            actions_row_one.addWidget(self.create_group_button)
+            actions_row_one.addWidget(self.rename_group_button)
+            actions_row_one.addStretch(1)
+            self.layout.addLayout(actions_row_one, 4, 0, 1, 4)
+
+            actions_row_two = QtWidgets.QHBoxLayout()
+            actions_row_two.setContentsMargins(0, 0, 0, 0)
+            actions_row_two.setSpacing(8)
+            actions_row_two.addWidget(self.remove_from_group_button)
+            actions_row_two.addWidget(self.delete_group_button)
+            actions_row_two.addStretch(1)
+            self.layout.addLayout(actions_row_two, 5, 0, 1, 4)
+
+            final_row = QtWidgets.QHBoxLayout()
+            final_row.setContentsMargins(0, 0, 0, 0)
+            final_row.setSpacing(8)
+            final_row.addStretch(1)
+            final_row.addWidget(self.dont_use_grouping_button)
+            final_row.addWidget(self.use_grouping_button)
+            self.layout.addLayout(final_row, 6, 0, 1, 4)
+
+            ui_foundation.configure_window_size(
+                self,
+                minimum=(900, 500),
+                initial=(1240, 700),
+                screen_margin=44,
+            )
         except Exception as e:
             self.log_and_exit(e)
             
@@ -237,6 +313,13 @@ class DataGrouping(QDialog):
             
             self.use_grouping_button.clicked.connect(self.use_grouping)
             self.dont_use_grouping_button.clicked.connect(self.dont_use_grouping)
+            for list_widget in (
+                self.reference_list,
+                self.part_list,
+                self.groups_list,
+                self.part_group_list,
+            ):
+                list_widget.itemSelectionChanged.connect(self._refresh_selection_summary)
         except Exception as e:
             self.log_and_exit(e)
             
@@ -245,6 +328,50 @@ class DataGrouping(QDialog):
 
     def _handle_list_item_pressed(self, list_widget, item):
         self._list_selection_utils.handle_shift_range_press(list_widget, item)
+
+    def _configure_pane_widget(self, widget, *, min_width=None, min_height=None, expands_vertically=False):
+        if widget is None:
+            return
+        if min_width is not None and hasattr(widget, "setMinimumWidth"):
+            widget.setMinimumWidth(min_width)
+        if min_height is not None and hasattr(widget, "setMinimumHeight"):
+            widget.setMinimumHeight(min_height)
+        size_policy_class = getattr(QtWidgets, "QSizePolicy", None)
+        policy_enum = getattr(size_policy_class, "Policy", None)
+        if size_policy_class is None or policy_enum is None or not hasattr(widget, "setSizePolicy"):
+            return
+        horizontal_policy = getattr(policy_enum, "Expanding", None)
+        vertical_policy = getattr(policy_enum, "Expanding" if expands_vertically else "Preferred", None)
+        if horizontal_policy is not None and vertical_policy is not None:
+            widget.setSizePolicy(horizontal_policy, vertical_policy)
+
+    def _refresh_selection_summary(self):
+        reference_label = self._safe_attr(self, "reference_summary_label")
+        group_label = self._safe_attr(self, "group_summary_label")
+        selection_label = self._safe_attr(self, "selection_summary_label")
+        if reference_label is None and group_label is None and selection_label is None:
+            return
+
+        reference_text = "none"
+        selected_reference = self._selected_reference_name()
+        if selected_reference:
+            reference_text = selected_reference
+        if reference_label is not None and hasattr(reference_label, "setText"):
+            reference_label.setText(f"Reference: {reference_text}")
+
+        selected_group_name = self._selected_group_name() or "none"
+        if group_label is not None and hasattr(group_label, "setText"):
+            group_label.setText(f"Group: {selected_group_name}")
+
+        part_list = self._safe_attr(self, "part_list")
+        part_group_list = self._safe_attr(self, "part_group_list")
+        selected_part_count = len(part_list.selectedItems()) if part_list is not None and hasattr(part_list, "selectedItems") else 0
+        selected_group_part_count = len(part_group_list.selectedItems()) if part_group_list is not None and hasattr(part_group_list, "selectedItems") else 0
+        summary_text = f"Selected parts: {selected_part_count}"
+        if selected_group_part_count:
+            summary_text += f" | Selected in group: {selected_group_part_count}"
+        if selection_label is not None and hasattr(selection_label, "setText"):
+            selection_label.setText(summary_text)
 
     def read_data_to_df(self):
         """Handle `read_data_to_df` for `DataGrouping`.
@@ -558,7 +685,11 @@ class DataGrouping(QDialog):
         return f"{group_name} (n={sample_size})"
 
     def _selected_group_name(self):
-        selected = self.groups_list.currentItem()
+        groups_list = self._safe_attr(self, "groups_list")
+        if groups_list is None or not hasattr(groups_list, "currentItem"):
+            return None
+
+        selected = groups_list.currentItem()
         if selected is None:
             return None
 
@@ -572,7 +703,7 @@ class DataGrouping(QDialog):
         return self._group_display_to_name.get(display_name, display_name)
 
     def _selected_reference_name(self):
-        reference_list = getattr(self, 'reference_list', None)
+        reference_list = self._safe_attr(self, 'reference_list')
         if reference_list is None or not hasattr(reference_list, 'currentItem'):
             return None
 
@@ -663,6 +794,7 @@ class DataGrouping(QDialog):
                 self.groups_list.setCurrentRow(preferred_group_index)
             selected_group = self._selected_group_name()
             self._populate_part_group_list(selected_group)
+            self._refresh_selection_summary()
         except Exception as e:
             self.log_and_exit(e)
 
@@ -706,6 +838,7 @@ class DataGrouping(QDialog):
             self._populate_part_list(selected_reference)
             has_part_selection = bool(self.part_list.selectedItems()) if hasattr(self.part_list, 'selectedItems') else False
             self.create_group_button.setEnabled(bool(selected_reference) or has_part_selection)
+            self._refresh_selection_summary()
         except Exception as e:
             self.log_and_exit(e)
     
@@ -725,6 +858,7 @@ class DataGrouping(QDialog):
             selected_part = bool(self.part_list.selectedItems()) if hasattr(self.part_list, 'selectedItems') else (self.part_list.currentItem() is not None)
             selected_reference = self._selected_reference_name()
             self.create_group_button.setEnabled(selected_part or bool(selected_reference))
+            self._refresh_selection_summary()
         except Exception as e:
             self.log_and_exit(e)
 
@@ -771,6 +905,7 @@ class DataGrouping(QDialog):
 
             selected_part_group = self.part_group_list.currentItem() is not None
             self.remove_from_group_button.setEnabled(selected_group and not is_default_group and selected_part_group)
+            self._refresh_selection_summary()
         except Exception as e:
             self.log_and_exit(e)
 
@@ -800,6 +935,7 @@ class DataGrouping(QDialog):
             selected_part_group = self.part_group_list.currentItem() is not None
             selected_group_name = self._selected_group_name()
             self.remove_from_group_button.setEnabled(selected_part_group and selected_group_name != self.default_group)
+            self._refresh_selection_summary()
         except Exception as e:
             self.log_and_exit(e)
             

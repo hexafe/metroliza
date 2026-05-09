@@ -2219,6 +2219,12 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       margin: 0;
       font-size: 20px;
     }}
+    .metric-summary-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 12px;
+      margin-top: 16px;
+    }}
     .insight-list {{
       margin: 14px 0 0;
     }}
@@ -2723,7 +2729,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
         resetLightboxState();
       }};
 
-      document.querySelectorAll('.chart-image-trigger').forEach((trigger) => {{
+      document.querySelectorAll('.chart-image-trigger[data-lightbox-route="image"]').forEach((trigger) => {{
         trigger.addEventListener('click', () => {{
           const source = trigger.getAttribute('data-image-src') || '';
           const caption = trigger.getAttribute('data-image-caption') || '';
@@ -2732,7 +2738,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
         }});
       }});
 
-      document.querySelectorAll('.plotly-expand-trigger').forEach((trigger) => {{
+      document.querySelectorAll('.plotly-expand-trigger[data-lightbox-route="plotly"]').forEach((trigger) => {{
         trigger.addEventListener('click', () => {{
           const plotlyShell = trigger.closest('.plotly-shell');
           const plotlySource = plotlyShell ? plotlyShell.querySelector('.plotly-chart') : null;
@@ -2886,7 +2892,7 @@ def _render_plotly_shell(chart: dict[str, Any]) -> str:
         '<span class="plotly-shell-note">Inspect the chart directly in the saved dashboard.</span>'
         '</div>'
         '<div class="plotly-actions">'
-        f'<button type="button" class="plotly-expand-trigger" aria-label="Enlarge interactive chart: {html.escape(title)}" data-image-caption="{html.escape(title)}">Increase size</button>'
+        f'<button type="button" class="plotly-expand-trigger" data-lightbox-route="plotly" aria-label="Enlarge interactive chart: {html.escape(title)}" data-image-caption="{html.escape(title)}">Increase size</button>'
         '</div>'
         '</div>'
         f'<div class="plotly-chart" aria-label="Interactive chart: {html.escape(title)}" '
@@ -2911,6 +2917,7 @@ def _render_chart_snapshot(chart: dict[str, Any], *, interactive_available: bool
         f'<div class="{wrapper_class}">' if wrapper_class else ""
     ) + (
         f'<button type="button" class="chart-image-trigger" aria-label="Enlarge chart: {html.escape(title)}" '
+        'data-lightbox-route="image" '
         f'data-image-src="{html.escape(image_path)}" '
         f'data-image-caption="{html.escape(title)}">'
         f'<img src="{html.escape(image_path)}" alt="{html.escape(title)}">'
@@ -3107,11 +3114,16 @@ def _render_group_analysis_metric(metric: dict[str, Any]) -> str:
         'Back to Group Analysis</a>'
     )
 
-    subsections = []
+    summary_panels = []
     if summary_rows:
-        subsections.append('<div class="subsection-title">Metric summary</div>' + _render_summary_table(summary_rows))
+        summary_panels.append(_render_detail_panel("Metric summary", _render_summary_table(summary_rows)))
     if insights:
-        subsections.append('<div class="subsection-title">Key insights</div>' + _render_text_list(insights))
+        summary_panels.append(_render_detail_panel("Key insights", _render_text_list(insights)))
+    summary_grid_markup = (
+        f'<div class="metric-summary-grid detail-grid">{"".join(summary_panels)}</div>'
+        if summary_panels
+        else ""
+    )
 
     raw_table_sections = []
     if descriptive_stats.get("rows"):
@@ -3142,7 +3154,7 @@ def _render_group_analysis_metric(metric: dict[str, Any]) -> str:
         f'<article id="{html.escape(metric.get("id") or "")}" class="metric-block">'
         f'<div class="section-top"><div><h3>{html.escape(str(metric.get("metric") or "Metric"))}</h3></div>'
         f'<div class="section-actions"><div class="pill-row">{pill_markup}</div>{back_button}</div></div>'
-        f'{"".join(subsections)}'
+        f'{summary_grid_markup}'
         f'{plot_markup}'
         f'{raw_tables_markup}'
         '</article>'

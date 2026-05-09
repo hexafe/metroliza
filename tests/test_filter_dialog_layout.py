@@ -62,6 +62,12 @@ class TestFilterDialogLayout(unittest.TestCase):
                 "dialog_size": [dialog.width(), dialog.height()],
                 "available": [available.width(), available.height()],
                 "has_filter_tabs": hasattr(dialog, "filter_tabs"),
+                "has_filter_summary": hasattr(dialog, "filter_summary_label"),
+                "filter_summary_text": dialog.filter_summary_label.text() if hasattr(dialog, "filter_summary_label") else "",
+                "apply_visible": dialog.apply_button.isVisible(),
+                "nok_visible": dialog.has_nok_button.isVisible(),
+                "date_from_visible": dialog.date_from_calendar.isVisible(),
+                "date_to_visible": dialog.date_to_calendar.isVisible(),
                 "sections": sections,
                 "tab_count": dialog.filter_tabs.count(),
                 "tab_titles": [dialog.filter_tabs.tabText(index) for index in range(dialog.filter_tabs.count())],
@@ -77,6 +83,12 @@ class TestFilterDialogLayout(unittest.TestCase):
         self.assertLessEqual(payload["dialog_size"][0], 820)
         self.assertLessEqual(payload["dialog_size"][1], 620)
         self.assertTrue(payload["has_filter_tabs"])
+        self.assertTrue(payload["has_filter_summary"])
+        self.assertIn("active", payload["filter_summary_text"].lower())
+        self.assertTrue(payload["apply_visible"])
+        self.assertTrue(payload["nok_visible"])
+        self.assertTrue(payload["date_from_visible"])
+        self.assertTrue(payload["date_to_visible"])
         self.assertEqual(payload["sections"], ["Measurement", "Report metadata", "Source"])
         self.assertEqual(payload["tab_count"], 3)
         self.assertEqual(payload["tab_titles"], ["Measurement", "Report metadata", "Source"])

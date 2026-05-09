@@ -3,6 +3,7 @@
 from PyQt6.QtWidgets import (
     QDialog,
     QGridLayout,
+    QHBoxLayout,
     QTableWidget,
     QTableWidgetItem,
     QPushButton,
@@ -17,6 +18,7 @@ from modules.custom_logger import CustomLogger
 from modules.db import execute_select_with_columns, run_transaction_with_retry
 from modules.help_menu import attach_help_menu_to_layout
 from modules.report_repository import ReportRepository
+from modules.ui_foundation import apply_metroliza_theme, configure_table, configure_window_size
 
 
 logger = logging.getLogger(__name__)
@@ -81,7 +83,7 @@ class ModifyDB(QDialog):
         self.setWindowTitle("Modify database")
         if parent is not None and hasattr(parent, "windowIcon"):
             self.setWindowIcon(parent.windowIcon())
-        self.setGeometry(100, 100, 1100, 650)
+        configure_window_size(self, minimum=(860, 540), initial=(1100, 650))
         self.setModal(True)
 
         self.db_file = db_file
@@ -118,6 +120,7 @@ class ModifyDB(QDialog):
             self.create_widgets()
             self.arrange_layout()
             self.connect_signals()
+            apply_metroliza_theme(self)
             if self.db_file:
                 self.populate_tables()
         except Exception as e:
@@ -148,12 +151,14 @@ class ModifyDB(QDialog):
             self.report_records_table = QTableWidget()
             self.report_records_table.setSelectionMode(self._multi_selection_mode())
             self.report_records_table.setSelectionBehavior(self._select_rows_behavior())
+            configure_table(self.report_records_table, stretch_column=1, resize_to_contents=(0,), min_height=260)
 
             self.measurement_filter_edit = QtWidgets.QLineEdit()
             self.measurement_filter_edit.setPlaceholderText("Filter measurement rows")
             self.measurement_records_table = QTableWidget()
             self.measurement_records_table.setSelectionMode(self._multi_selection_mode())
             self.measurement_records_table.setSelectionBehavior(self._select_rows_behavior())
+            configure_table(self.measurement_records_table, stretch_column=4, resize_to_contents=(0, 1), min_height=260)
 
             # Create buttons for Select DB file, Apply changes, Undo, and Cancel
             self.select_db_button = QPushButton("Select DB file")
@@ -162,6 +167,14 @@ class ModifyDB(QDialog):
                 self.apply_button.setEnabled(False)
             self.undo_button = QPushButton("Undo last change")
             self.cancel_button = QPushButton("Cancel")
+            if hasattr(self.apply_button, "setDefault"):
+                self.apply_button.setDefault(True)
+            if hasattr(self.apply_button, "setAutoDefault"):
+                self.apply_button.setAutoDefault(True)
+            if hasattr(self.cancel_button, "setAutoDefault"):
+                self.cancel_button.setAutoDefault(False)
+            if hasattr(self.select_db_button, "setAutoDefault"):
+                self.select_db_button.setAutoDefault(False)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -171,15 +184,32 @@ class ModifyDB(QDialog):
         table.setSelectionBehavior(self._select_rows_behavior())
         table.setColumnCount(3)
         table.setHorizontalHeaderLabels(["Original value", "New value", "Occurrences"])
-        table.setColumnWidth(0, 260)
-        table.setColumnWidth(1, 260)
-        table.setColumnWidth(2, 120)
+        self._configure_normalize_table(table)
         return table
+
+    @staticmethod
+    def _configure_normalize_table(table):
+        configure_table(table, stretch_column=1, resize_to_contents=(2,), min_height=220)
+        header = table.horizontalHeader() if hasattr(table, "horizontalHeader") else None
+        resize_mode_enum = getattr(getattr(QtWidgets, "QHeaderView", None), "ResizeMode", None)
+        stretch_mode = getattr(resize_mode_enum, "Stretch", None)
+        resize_to_contents_mode = getattr(resize_mode_enum, "ResizeToContents", None)
+        if header is None or stretch_mode is None or resize_to_contents_mode is None:
+            return
+        header.setSectionResizeMode(0, stretch_mode)
+        header.setSectionResizeMode(1, stretch_mode)
+        header.setSectionResizeMode(2, resize_to_contents_mode)
 
     def arrange_layout(self):
         try:
             layout = QGridLayout(self)
             attach_help_menu_to_layout(layout, self, [("Modify Database manual", 'modify_database')])
+            if hasattr(layout, "setContentsMargins"):
+                layout.setContentsMargins(14, 14, 14, 14)
+            if hasattr(layout, "setHorizontalSpacing"):
+                layout.setHorizontalSpacing(10)
+            if hasattr(layout, "setVerticalSpacing"):
+                layout.setVerticalSpacing(8)
 
             normalize_layout = QtWidgets.QVBoxLayout(self.normalize_tab)
             normalize_layout.addWidget(self.normalize_tab_widget)
@@ -200,10 +230,18 @@ class ModifyDB(QDialog):
             self.tab_widget.addTab(self.measurement_rows_tab, "Measurement rows")
 
             layout.addWidget(self.tab_widget, 0, 0, 1, 3)
-            layout.addWidget(self.select_db_button, 1, 0, 1, 3)
-            layout.addWidget(self.apply_button, 2, 0, 1, 1)
-            # layout.addWidget(self.undo_button, 2, 1, 1, 1) #to be re-added after undo functionality correction
-            layout.addWidget(self.cancel_button, 2, 2, 1, 1)
+
+            footer_layout = QHBoxLayout()
+            if hasattr(footer_layout, "setSpacing"):
+                footer_layout.setSpacing(8)
+            footer_layout.addWidget(self.select_db_button)
+            footer_layout.addStretch(1)
+            footer_layout.addWidget(self.cancel_button)
+            footer_layout.addSpacing(10)
+            footer_layout.addWidget(self.apply_button)
+            # Undo remains non-primary until editing behavior is revisited.
+            # footer_layout.addWidget(self.undo_button)
+            layout.addLayout(footer_layout, 1, 0, 1, 3)
 
             self.show()
         except Exception as e:
@@ -431,8 +469,7 @@ class ModifyDB(QDialog):
             table.setItem(i, 2, count_item)
             self.undo_data[table][i] = original_value
 
-        if hasattr(table, "resizeColumnsToContents"):
-            table.resizeColumnsToContents()
+        self._configure_normalize_table(table)
 
     def populate_report_records_table(self):
         """Load report-level rows from the overview view into an editable table."""
@@ -502,6 +539,7 @@ class ModifyDB(QDialog):
         table.setHorizontalHeaderLabels([spec["label"] for spec in specs])
         table.setRowCount(len(rows))
         self._record_specs_by_table[table] = list(specs)
+        self._configure_record_table(table, specs)
 
         column_indexes = {column.lower(): index for index, column in enumerate(columns)}
         for row_index, row_values in enumerate(rows):
@@ -511,8 +549,34 @@ class ModifyDB(QDialog):
                 item = self._record_table_item(value, editable=spec.get("editable", False))
                 table.setItem(row_index, column_index, item)
 
-        if hasattr(table, "resizeColumnsToContents"):
-            table.resizeColumnsToContents()
+    @staticmethod
+    def _configure_record_table(table, specs):
+        key_columns = tuple(index for index, spec in enumerate(specs) if spec.get("key"))
+        preferred_stretch_fields = (
+            "comment",
+            "description",
+            "characteristic_name",
+            "feature_label",
+            "section_name",
+            "header",
+            "reference",
+            "part_name",
+        )
+        stretch_column = 0
+        for candidate_field in preferred_stretch_fields:
+            for index, spec in enumerate(specs):
+                if spec.get("field") == candidate_field:
+                    stretch_column = index
+                    break
+            else:
+                continue
+            break
+        configure_table(
+            table,
+            stretch_column=stretch_column,
+            resize_to_contents=key_columns,
+            min_height=260,
+        )
 
     def _record_table_item(self, value, *, editable):
         item = QTableWidgetItem(self._display_value(value))
@@ -559,22 +623,22 @@ class ModifyDB(QDialog):
 
     def collect_modifications(self):
         """Collect a user-facing summary of all modified rows across tables."""
-        modifications_text = ""
+        modifications = []
 
         # Collect modifications for reference table
         reference_modifications = self.collect_table_modifications(self.reference_table, "References")
         if reference_modifications:
-            modifications_text += reference_modifications + "\n"
+            modifications.append(reference_modifications)
 
         # Collect modifications for part number table
         part_number_modifications = self.collect_table_modifications(self.part_number_table, "Part numbers")
         if part_number_modifications:
-            modifications_text += part_number_modifications + "\n"
+            modifications.append(part_number_modifications)
 
         # Collect modifications for header table
         header_modifications = self.collect_table_modifications(self.header_table, "Headers")
         if header_modifications:
-            modifications_text += header_modifications + "\n"
+            modifications.append(header_modifications)
 
         report_modifications = self.collect_record_table_modifications(
             self.report_records_table,
@@ -582,7 +646,7 @@ class ModifyDB(QDialog):
             "report_id",
         )
         if report_modifications:
-            modifications_text += report_modifications + "\n"
+            modifications.append(report_modifications)
 
         measurement_modifications = self.collect_record_table_modifications(
             self.measurement_records_table,
@@ -590,29 +654,41 @@ class ModifyDB(QDialog):
             "measurement_id",
         )
         if measurement_modifications:
-            modifications_text += measurement_modifications + "\n"
+            modifications.append(measurement_modifications)
 
-        return modifications_text
+        return "\n".join(modifications)
+
+    @staticmethod
+    def _summary_value(value):
+        if value is None:
+            return "NULL"
+        text = str(value)
+        return f'"{text}"'
 
     def collect_table_modifications(self, table, table_name):
         """Build a per-table change list using original values stored in UserRole."""
-        modifications_text = ""
+        lines = []
         edit_column = self._normalize_table_edit_column(table)
 
         for i in range(table.rowCount()):
             item = table.item(i, edit_column)
             if item is None:
                 continue
-            old_value = str(item.data(Qt.ItemDataRole.UserRole))
+            old_value = item.data(Qt.ItemDataRole.UserRole)
             new_value = str(item.text())
+            occurrences_item = table.item(i, 2) if table.columnCount() > 2 else None
+            occurrence_count = occurrences_item.text() if occurrences_item is not None else ""
 
             if old_value != new_value:
-                modifications_text += f"{old_value} → {new_value}\n"
+                line = (
+                    f"{table_name}: {self._summary_value(old_value)} -> "
+                    f"{self._summary_value(new_value)}"
+                )
+                if occurrence_count:
+                    line += f" (occurrences: {occurrence_count})"
+                lines.append(line)
 
-        if modifications_text:
-            modifications_text = f"{table_name}:\n{modifications_text}"
-
-        return modifications_text
+        return "\n".join(lines)
 
     def collect_record_table_modifications(self, table, table_name, key_field):
         """Build a summary of changed targeted record fields."""
@@ -630,13 +706,14 @@ class ModifyDB(QDialog):
                     continue
                 old_value = self._original_value_for_record_field(table, key_field, record_id, field_name)
                 lines.append(
-                    f"{key_field.upper()} {record_id} {spec['label']}: "
-                    f"{self._display_value(old_value)} → {self._display_value(new_value)}"
+                    f"{table_name}.{spec['label']}: "
+                    f"{self._summary_value(old_value)} -> {self._summary_value(new_value)} "
+                    f"({key_field.upper()}={record_id})"
                 )
 
         if not lines:
             return ""
-        return f"{table_name}:\n" + "\n".join(lines) + "\n"
+        return "\n".join(lines)
 
     def _original_value_for_record_field(self, table, key_field, record_id, field_name):
         specs = self._record_specs_by_table.get(table, [])

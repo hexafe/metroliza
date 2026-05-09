@@ -281,7 +281,7 @@ Examples of metric availability by spec type:
 
 ## Release metadata
 
-Current release highlight (`2026.05 (build 260508)`): OCR metadata enrichment, clearer parsing choices, visible export filters, and searchable database cleanup are now easier to use.
+Current release highlight (`2026.05 (build 260508)`): OCR metadata enrichment, clearer parsing choices, visible export filters, searchable database cleanup, and a calmer workflow UI are now easier to use.
 
 Canonical release metadata is in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, `CURRENT_RELEASE_HIGHLIGHT`).
 

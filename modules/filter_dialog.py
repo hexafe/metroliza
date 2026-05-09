@@ -2,6 +2,26 @@ from modules.custom_logger import CustomLogger
 from modules.db import execute_with_retry
 from modules.list_selection_utils import ListSelectionUtils
 from modules import ui_theme_tokens
+try:
+    from modules import ui_foundation
+except Exception:  # pragma: no cover - fallback for heavily stubbed tests
+    class _UiFoundationFallback:
+        @staticmethod
+        def apply_metroliza_theme(_widget):
+            return None
+
+        @staticmethod
+        def configure_window_size(widget, *, minimum=(420, 260), initial=(640, 420), screen_margin=40):
+            del minimum, screen_margin
+            if hasattr(widget, "resize"):
+                widget.resize(*initial)
+
+        @staticmethod
+        def status_chip(text, variant="neutral"):
+            del variant
+            return QtWidgets.QLabel(text)
+
+    ui_foundation = _UiFoundationFallback()
 from modules.help_menu import attach_help_menu_to_layout
 from modules.filter_state import FilterState
 from modules.report_query_service import (
@@ -135,6 +155,7 @@ class FilterDialog(QDialog):
             self.populate_list_widgets()
             self._apply_list_theme_styles()
             self.connect_signals()
+            self._refresh_filter_summary()
         except Exception as e:
             self.log_and_exit(e)
 
@@ -145,73 +166,73 @@ class FilterDialog(QDialog):
             self.ax_list = QListWidget()
             self.ax_list.setSelectionMode(self._multi_selection_mode())
 
-            self.reference_label = QLabel("REFERENCE:")
+            self.reference_label = QLabel("Reference:")
             self.reference_list = QListWidget()
             self.reference_list.setSelectionMode(self._multi_selection_mode())
 
-            self.header_label = QLabel("HEADER:")
+            self.header_label = QLabel("Header:")
             self.header_list = QListWidget()
             self.header_list.setSelectionMode(self._multi_selection_mode())
             self.all_headers_list = QListWidget()
             self.all_headers_list.setSelectionMode(self._multi_selection_mode())
 
-            self.part_name_label = QLabel("PART NAME:")
+            self.part_name_label = QLabel("Part name:")
             self.part_name_list = QListWidget()
             self.part_name_list.setSelectionMode(self._multi_selection_mode())
 
-            self.revision_label = QLabel("REVISION:")
+            self.revision_label = QLabel("Revision:")
             self.revision_list = QListWidget()
             self.revision_list.setSelectionMode(self._multi_selection_mode())
 
-            self.template_variant_label = QLabel("TEMPLATE VARIANT:")
+            self.template_variant_label = QLabel("Template variant:")
             self.template_variant_list = QListWidget()
             self.template_variant_list.setSelectionMode(self._multi_selection_mode())
 
-            self.sample_number_label = QLabel("SAMPLE NUMBER:")
+            self.sample_number_label = QLabel("Sample number:")
             self.sample_number_list = QListWidget()
             self.sample_number_list.setSelectionMode(self._multi_selection_mode())
 
-            self.operator_name_label = QLabel("OPERATOR NAME:")
+            self.operator_name_label = QLabel("Operator:")
             self.operator_name_list = QListWidget()
             self.operator_name_list.setSelectionMode(self._multi_selection_mode())
 
-            self.sample_number_kind_label = QLabel("SAMPLE NUMBER KIND:")
+            self.sample_number_kind_label = QLabel("Sample number kind:")
             self.sample_number_kind_list = QListWidget()
             self.sample_number_kind_list.setSelectionMode(self._multi_selection_mode())
 
-            self.status_code_label = QLabel("STATUS CODE:")
+            self.status_code_label = QLabel("Status code:")
             self.status_code_list = QListWidget()
             self.status_code_list.setSelectionMode(self._multi_selection_mode())
 
-            self.filename_label = QLabel("FILENAME:")
+            self.filename_label = QLabel("Filename:")
             self.filename_list = QListWidget()
             self.filename_list.setSelectionMode(self._multi_selection_mode())
 
-            self.parser_id_label = QLabel("PARSER ID:")
+            self.parser_id_label = QLabel("Parser ID:")
             self.parser_id_list = QListWidget()
             self.parser_id_list.setSelectionMode(self._multi_selection_mode())
 
-            self.template_family_label = QLabel("TEMPLATE FAMILY:")
+            self.template_family_label = QLabel("Template family:")
             self.template_family_list = QListWidget()
             self.template_family_list.setSelectionMode(self._multi_selection_mode())
             
-            self.selected_headers_label = QLabel("SELECTED HEADERS:")
+            self.selected_headers_label = QLabel("Selected headers:")
             self.selected_headers_list = QListWidget()
             self.selected_headers_list.setSelectionMode(self._multi_selection_mode())
 
-            self.has_nok_button = QPushButton("HAS NOK ONLY")
+            self.has_nok_button = QPushButton("Has NOK only")
             if hasattr(self.has_nok_button, "setCheckable"):
                 self.has_nok_button.setCheckable(True)
             if hasattr(self.has_nok_button, "setChecked"):
                 self.has_nok_button.setChecked(False)
 
-            self.date_from_label = QLabel("MEASUREMENT DATE FROM:")
+            self.date_from_label = QLabel("Measurement date from:")
             self.date_from_calendar = QDateEdit(calendarPopup=True)
             self.date_from_calendar.setCalendarPopup(True)
             self.date_from_calendar.setDate(QDate(1970, 1, 1))
             self.date_from_calendar.setMinimumWidth(100)
 
-            self.date_to_label = QLabel("MEASUREMENT DATE TO:")
+            self.date_to_label = QLabel("Measurement date to:")
             self.date_to_calendar = QDateEdit(calendarPopup=True)
             self.date_to_calendar.setCalendarPopup(True)
             self.date_to_calendar.setDate(QDate.currentDate())
@@ -237,38 +258,45 @@ class FilterDialog(QDialog):
             self.ax_search_input = QLineEdit()
             self.ax_search_input.setPlaceholderText("Search AX...")
             self.reference_search_input = QLineEdit()
-            self.reference_search_input.setPlaceholderText("Search REFERENCE...")
+            self.reference_search_input.setPlaceholderText("Search reference...")
             self.header_search_input = QLineEdit()
-            self.header_search_input.setPlaceholderText("Search HEADER...")
+            self.header_search_input.setPlaceholderText("Search header...")
             self.part_name_search_input = QLineEdit()
-            self.part_name_search_input.setPlaceholderText("Search PART NAME...")
+            self.part_name_search_input.setPlaceholderText("Search part name...")
             self.revision_search_input = QLineEdit()
-            self.revision_search_input.setPlaceholderText("Search REVISION...")
+            self.revision_search_input.setPlaceholderText("Search revision...")
             self.template_variant_search_input = QLineEdit()
-            self.template_variant_search_input.setPlaceholderText("Search TEMPLATE VARIANT...")
+            self.template_variant_search_input.setPlaceholderText("Search template variant...")
             self.sample_number_search_input = QLineEdit()
-            self.sample_number_search_input.setPlaceholderText("Search SAMPLE NUMBER...")
+            self.sample_number_search_input.setPlaceholderText("Search sample number...")
             self.operator_name_search_input = QLineEdit()
-            self.operator_name_search_input.setPlaceholderText("Search OPERATOR NAME...")
+            self.operator_name_search_input.setPlaceholderText("Search operator...")
             self.sample_number_kind_search_input = QLineEdit()
-            self.sample_number_kind_search_input.setPlaceholderText("Search SAMPLE NUMBER KIND...")
+            self.sample_number_kind_search_input.setPlaceholderText("Search sample number kind...")
             self.status_code_search_input = QLineEdit()
-            self.status_code_search_input.setPlaceholderText("Search STATUS CODE...")
+            self.status_code_search_input.setPlaceholderText("Search status code...")
             self.filename_search_input = QLineEdit()
-            self.filename_search_input.setPlaceholderText("Search FILENAME...")
+            self.filename_search_input.setPlaceholderText("Search filename...")
             self.parser_id_search_input = QLineEdit()
-            self.parser_id_search_input.setPlaceholderText("Search PARSER ID...")
+            self.parser_id_search_input.setPlaceholderText("Search parser ID...")
             self.template_family_search_input = QLineEdit()
-            self.template_family_search_input.setPlaceholderText("Search TEMPLATE FAMILY...")
+            self.template_family_search_input.setPlaceholderText("Search template family...")
 
             # Create a button to apply the filters
-            self.apply_button = QPushButton("Apply filters")
+            self.apply_button = QPushButton("Apply Filters")
+            if hasattr(self.apply_button, "setDefault"):
+                self.apply_button.setDefault(True)
+            if hasattr(self.apply_button, "setAutoDefault"):
+                self.apply_button.setAutoDefault(True)
+            if hasattr(self.apply_button, "setMinimumWidth"):
+                self.apply_button.setMinimumWidth(140)
 
             # Create a button to select today's date as "date TO"
             self.select_today_button = QPushButton("Select today")
 
             # Create a button to select the beginning of time
             self.select_beginning_button = QPushButton("Select beginning of time")
+            self.filter_summary_label = ui_foundation.status_chip("No active filters", variant="neutral")
         except Exception as e:
             self.log_and_exit(e)
 
@@ -278,6 +306,7 @@ class FilterDialog(QDialog):
             attach_help_menu_to_layout(self.layout, self, [("Filtering manual", 'export_filtering')])
             self.layout.setContentsMargins(10, 10, 10, 10)
             self.layout.setSpacing(8)
+            ui_foundation.apply_metroliza_theme(self)
 
             self._add_filter_tabs(self.layout)
             self._add_filter_footer(self.layout)
@@ -344,12 +373,14 @@ class FilterDialog(QDialog):
         footer_layout.addWidget(self.date_to_label, 1, 0)
         footer_layout.addWidget(self.date_to_calendar, 1, 1)
         footer_layout.addWidget(self.select_today_button, 1, 2)
+        footer_layout.addWidget(self.filter_summary_label, 2, 0, 1, 3)
 
         action_layout = QtWidgets.QHBoxLayout()
         action_layout.setContentsMargins(0, 0, 0, 0)
         action_layout.addStretch(1)
         action_layout.addWidget(self.apply_button)
-        footer_layout.addLayout(action_layout, 1, 3)
+        footer_layout.addLayout(action_layout, 1, 3, 2, 1)
+        footer_layout.setColumnStretch(1, 1)
         footer_layout.setColumnStretch(3, 1)
         parent_layout.addWidget(footer_widget)
 
@@ -370,20 +401,12 @@ class FilterDialog(QDialog):
             widget.setSizePolicy(horizontal_policy, vertical_policy)
 
     def _apply_window_size_constraints(self):
-        default_width = 760
-        default_height = 560
-        app = QtWidgets.QApplication.instance() if hasattr(QtWidgets, "QApplication") else None
-        screen = app.primaryScreen() if app is not None and hasattr(app, "primaryScreen") else None
-        available = screen.availableGeometry() if screen is not None and hasattr(screen, "availableGeometry") else None
-        if available is None:
-            self.resize(default_width, default_height)
-            return
-
-        width = min(default_width, int(available.width() * 0.96))
-        height = min(default_height, int(available.height() * 0.9))
-        if hasattr(self, "setMaximumSize"):
-            self.setMaximumSize(available.width(), available.height())
-        self.resize(width, height)
+        ui_foundation.configure_window_size(
+            self,
+            minimum=(620, 420),
+            initial=(760, 560),
+            screen_margin=48,
+        )
             
     def connect_signals(self):
         try:
@@ -423,6 +446,29 @@ class FilterDialog(QDialog):
             self.select_today_button.clicked.connect(self.select_today_as_date_to)
             self.select_beginning_button.clicked.connect(self.select_beginning_of_time)
             self.apply_button.clicked.connect(self.apply_filters)
+            for list_widget in (
+                self.ax_list,
+                self.header_list,
+                self.reference_list,
+                self.part_name_list,
+                self.revision_list,
+                self.template_variant_list,
+                self.sample_number_list,
+                self.operator_name_list,
+                self.sample_number_kind_list,
+                self.status_code_list,
+                self.filename_list,
+                self.parser_id_list,
+                self.template_family_list,
+                self.selected_headers_list,
+            ):
+                list_widget.itemSelectionChanged.connect(self._refresh_filter_summary)
+            if hasattr(self.date_from_calendar, "dateChanged"):
+                self.date_from_calendar.dateChanged.connect(self._refresh_filter_summary)
+            if hasattr(self.date_to_calendar, "dateChanged"):
+                self.date_to_calendar.dateChanged.connect(self._refresh_filter_summary)
+            if hasattr(self.has_nok_button, "toggled"):
+                self.has_nok_button.toggled.connect(self._refresh_filter_summary)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -467,6 +513,61 @@ class FilterDialog(QDialog):
 
     def _handle_list_item_pressed(self, list_widget, item):
         self._list_selection_utils.handle_shift_range_press(list_widget, item)
+
+    @staticmethod
+    def _selected_value_count(list_widget):
+        if list_widget is None or not hasattr(list_widget, "selectedItems"):
+            return 0
+        values = [
+            item.text()
+            for item in list_widget.selectedItems()
+            if item is not None and hasattr(item, "text")
+        ]
+        if "SELECT ALL" in values:
+            return 0
+        return len(values)
+
+    def _refresh_filter_summary(self):
+        summary_label = getattr(self, "filter_summary_label", None)
+        if summary_label is None or not hasattr(summary_label, "setText"):
+            return
+
+        selected_counts = {
+            "AX": self._selected_value_count(getattr(self, "ax_list", None)),
+            "Reference": self._selected_value_count(getattr(self, "reference_list", None)),
+            "Header": self._selected_value_count(getattr(self, "header_list", None)),
+            "Part": self._selected_value_count(getattr(self, "part_name_list", None)),
+            "Revision": self._selected_value_count(getattr(self, "revision_list", None)),
+            "Variant": self._selected_value_count(getattr(self, "template_variant_list", None)),
+            "Sample": self._selected_value_count(getattr(self, "sample_number_list", None)),
+            "Operator": self._selected_value_count(getattr(self, "operator_name_list", None)),
+            "Sample kind": self._selected_value_count(getattr(self, "sample_number_kind_list", None)),
+            "Status": self._selected_value_count(getattr(self, "status_code_list", None)),
+            "Filename": self._selected_value_count(getattr(self, "filename_list", None)),
+            "Parser": self._selected_value_count(getattr(self, "parser_id_list", None)),
+            "Template family": self._selected_value_count(getattr(self, "template_family_list", None)),
+        }
+        active_fields = sum(1 for count in selected_counts.values() if count > 0)
+        selected_values = sum(selected_counts.values())
+
+        has_nok_only = bool(getattr(self.has_nok_button, "isChecked", lambda: False)()) if hasattr(self, "has_nok_button") else False
+        if has_nok_only:
+            active_fields += 1
+
+        date_from = self.date_from_calendar.date().toString("yyyy-MM-dd") if hasattr(self, "date_from_calendar") else "1970-01-01"
+        date_to = self.date_to_calendar.date().toString("yyyy-MM-dd") if hasattr(self, "date_to_calendar") else QDate.currentDate().toString("yyyy-MM-dd")
+        default_date_to = QDate.currentDate().toString("yyyy-MM-dd")
+        if not (date_from == "1970-01-01" and date_to == default_date_to):
+            active_fields += 1
+
+        if active_fields == 0:
+            summary_label.setText("No active filters")
+            return
+
+        summary_text = f"Active filters: {active_fields} | Selected values: {selected_values}"
+        if has_nok_only:
+            summary_text += " | NOK only"
+        summary_label.setText(summary_text)
 
     def _delete_selected_headers(self):
         selected_headers = {item.text() for item in self.selected_headers_list.selectedItems()}
@@ -521,6 +622,7 @@ class FilterDialog(QDialog):
             self._populate_distinct_values(self.filename_list, "FILENAME", source_view="vw_report_overview", filter_query=current_filter_query)
             self._populate_distinct_values(self.parser_id_list, "PARSER_ID", source_view="vw_report_overview", filter_query=current_filter_query)
             self._populate_distinct_values(self.template_family_list, "TEMPLATE_FAMILY", source_view="vw_report_overview", filter_query=current_filter_query)
+            self._refresh_filter_summary()
         except Exception as e:
             self.log_and_exit(e)
 
@@ -552,6 +654,7 @@ class FilterDialog(QDialog):
                 for row in range(self.all_headers_list.count()):
                     item = self.all_headers_list.item(row)
                     self.header_list.addItem(item.text())
+            self._refresh_filter_summary()
         except Exception as e:
             self.log_and_exit(e)
                 
@@ -571,6 +674,7 @@ class FilterDialog(QDialog):
             for item in selected_header_items:
                 selected_header_item = QListWidgetItem(item.text())
                 self.selected_headers_list.addItem(selected_header_item)
+            self._refresh_filter_summary()
         except Exception as e:
             self.log_and_exit(e)
 

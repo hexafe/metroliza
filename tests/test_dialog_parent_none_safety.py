@@ -34,6 +34,7 @@ def _build_qt_stubs():
 
     qtwidgets = types.ModuleType('PyQt6.QtWidgets')
     qtwidgets.QDialog = _FakeDialog
+    qtwidgets.QApplication = type('QApplication', (), {'instance': staticmethod(lambda: None)})
 
     widget_names = [
         'QAbstractItemView', 'QGridLayout', 'QLabel', 'QLineEdit', 'QListWidget',

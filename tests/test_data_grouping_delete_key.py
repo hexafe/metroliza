@@ -229,9 +229,8 @@ class TestDataGroupingDeleteKey(unittest.TestCase):
         return dialog
 
     def _load_data_grouping_module(self):
-        existing_module = sys.modules.get("modules.data_grouping")
-        if existing_module is not None:
-            return existing_module
+        sys.modules.pop("modules.ui_foundation", None)
+        sys.modules.pop("modules.data_grouping", None)
         return importlib.import_module("modules.data_grouping")
 
     def test_delete_key_moves_selected_part_group_items_to_population(self):

@@ -52,6 +52,16 @@ from modules.worker_progress_dialog import create_worker_progress_dialog
 from modules.help_menu import attach_help_menu_to_layout
 from modules.report_query_service import build_measurement_export_query
 from modules.filter_state import NOT_APPLIED_LABEL, summarize_filter_state
+from modules.ui_foundation import (
+    apply_metroliza_theme,
+    configure_window_size,
+    path_field,
+    section_label,
+    separator,
+    set_status_variant,
+    status_chip,
+    update_path_field,
+)
 
 
 _URL_PATTERN = re.compile(r"((?:https?|file)://[^\s]+)")
@@ -188,7 +198,7 @@ class ExportDialog(QDialog):
         self.setWindowTitle("Export")
         if parent is not None and hasattr(parent, "windowIcon"):
             self.setWindowIcon(parent.windowIcon())
-        self.setGeometry(100, 100, 300, 150)
+        configure_window_size(self, minimum=(540, 430), initial=(620, 700))
 
         self.db_file = db_file
         self.excel_file = ""
@@ -282,6 +292,9 @@ class ExportDialog(QDialog):
             self.group_button = QPushButton("Edit...")
             self.group_button.clicked.connect(self.open_grouping_window)
             self.group_button.setToolTip("Edit the optional grouping assignments.")
+            self.clear_group_button = QPushButton("Clear grouping")
+            self.clear_group_button.clicked.connect(self.clear_grouping)
+            self.clear_group_button.setToolTip("Reset optional grouping assignments.")
 
             self.select_excel_label = QLabel("Excel file:")
             self.select_excel_button = QPushButton("Browse")
@@ -309,6 +322,7 @@ class ExportDialog(QDialog):
             self.excel_file_text_label = self._build_path_field(self.excel_file)
             self._set_path_field_value(self.database_text_label, self.db_file)
             self._set_path_field_value(self.excel_file_text_label, self.excel_file)
+            self.path_readiness_label = status_chip("", "warning")
 
             # Export preset selector
             self.preset_label = QLabel("Preset:")
@@ -324,7 +338,7 @@ class ExportDialog(QDialog):
             )
             self.preset_combobox.setToolTip(self.preset_label.toolTip())
 
-            self.export_target_label = QLabel("Optional outputs:")
+            self.export_target_label = QLabel("Additional outputs:")
             self.include_google_sheets_checkbox = QCheckBox("Google Sheets version")
             self.include_google_sheets_checkbox.setChecked(False)
             google_tooltip = (
@@ -447,6 +461,12 @@ class ExportDialog(QDialog):
             self.advanced_toggle_button.toggled.connect(self._toggle_advanced_options)
             self.advanced_toggle_button.setToolTip("Show or hide the rarely needed advanced export options.")
 
+            self.preset_output_section_label = section_label("Preset and output")
+            self.filters_grouping_section_label = section_label("Filters and grouping")
+            self.chart_analysis_section_label = section_label("Chart and group analysis")
+            self.optional_outputs_section_label = section_label("Optional outputs")
+            self.advanced_section_label = section_label("Advanced")
+
             self._set_compact_row_label_widths()
             self._update_group_analysis_scope_enabled_state()
             self._update_export_button_enabled_state()
@@ -476,6 +496,8 @@ class ExportDialog(QDialog):
             content_layout.setColumnStretch(3, 1)
 
             row = 0
+            content_layout.addWidget(self.preset_output_section_label, row, 0, 1, 4)
+            row += 1
             content_layout.addWidget(self.preset_label, row, 0)
             content_layout.addWidget(self.preset_combobox, row, 1, 1, 3)
 
@@ -490,7 +512,13 @@ class ExportDialog(QDialog):
             content_layout.addWidget(self.select_excel_button, row, 3)
 
             row += 1
-            content_layout.addWidget(self._build_separator(), row, 0, 1, 4)
+            content_layout.addWidget(self.path_readiness_label, row, 0, 1, 4)
+
+            row += 1
+            content_layout.addWidget(separator(), row, 0, 1, 4)
+
+            row += 1
+            content_layout.addWidget(self.filters_grouping_section_label, row, 0, 1, 4)
 
             row += 1
             content_layout.addWidget(QLabel("Filters:"), row, 0)
@@ -506,10 +534,19 @@ class ExportDialog(QDialog):
             row += 1
             content_layout.addWidget(QLabel("Grouping:"), row, 0)
             content_layout.addWidget(self.select_group_label, row, 1, 1, 2)
-            content_layout.addWidget(self.group_button, row, 3)
+            grouping_actions = QWidget()
+            grouping_actions_layout = QHBoxLayout(grouping_actions)
+            grouping_actions_layout.setContentsMargins(0, 0, 0, 0)
+            grouping_actions_layout.setSpacing(6)
+            grouping_actions_layout.addWidget(self.group_button)
+            grouping_actions_layout.addWidget(self.clear_group_button)
+            content_layout.addWidget(grouping_actions, row, 3)
 
             row += 1
-            content_layout.addWidget(self._build_separator(), row, 0, 1, 4)
+            content_layout.addWidget(separator(), row, 0, 1, 4)
+
+            row += 1
+            content_layout.addWidget(self.chart_analysis_section_label, row, 0, 1, 4)
 
             row += 1
             content_layout.addWidget(self.export_type_label, row, 0)
@@ -524,7 +561,10 @@ class ExportDialog(QDialog):
             content_layout.addWidget(self.group_analysis_scope_combobox, row, 3)
 
             row += 1
-            content_layout.addWidget(self._build_separator(), row, 0, 1, 4)
+            content_layout.addWidget(separator(), row, 0, 1, 4)
+
+            row += 1
+            content_layout.addWidget(self.optional_outputs_section_label, row, 0, 1, 4)
 
             row += 1
             content_layout.addWidget(self.export_target_label, row, 0)
@@ -539,6 +579,9 @@ class ExportDialog(QDialog):
             optional_outputs_layout.addWidget(self.html_dashboard_info_button)
             optional_outputs_layout.addStretch(1)
             content_layout.addWidget(optional_outputs_widget, row, 1, 1, 3)
+
+            row += 1
+            content_layout.addWidget(self.advanced_section_label, row, 0, 1, 4)
 
             row += 1
             content_layout.addWidget(self.advanced_toggle_button, row, 0, 1, 4)
@@ -564,12 +607,15 @@ class ExportDialog(QDialog):
 
             self.setLayout(self.layout)
             self._apply_window_size_constraints()
+            apply_metroliza_theme(self)
 
             self.setTabOrder(self.preset_combobox, self.select_db_button)
             self.setTabOrder(self.select_db_button, self.select_excel_button)
             self.setTabOrder(self.select_excel_button, self.filter_button)
-            self.setTabOrder(self.filter_button, self.group_button)
-            self.setTabOrder(self.group_button, self.export_type_combobox)
+            self.setTabOrder(self.filter_button, self.clear_filter_button)
+            self.setTabOrder(self.clear_filter_button, self.group_button)
+            self.setTabOrder(self.group_button, self.clear_group_button)
+            self.setTabOrder(self.clear_group_button, self.export_type_combobox)
             self.setTabOrder(self.export_type_combobox, self.sort_measurements_combobox)
             self.setTabOrder(self.sort_measurements_combobox, self.group_analysis_level_combobox)
             self.setTabOrder(self.group_analysis_level_combobox, self.group_analysis_scope_combobox)
@@ -597,20 +643,15 @@ class ExportDialog(QDialog):
         return bool(enrichment_active)
 
     def _build_path_field(self, value):
-        field = QLineEdit()
-        field.setReadOnly(True)
-        field.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self._set_path_field_value(field, value)
-        return field
+        return path_field(value)
 
     def _set_path_field_value(self, field, value, *, empty_text="None selected"):
+        if hasattr(field, "setToolTip"):
+            update_path_field(field, value, empty_text=empty_text)
+            return
         text = str(value or "").strip()
         if hasattr(field, "setText"):
             field.setText(text if text else empty_text)
-        if hasattr(field, "setToolTip"):
-            field.setToolTip(text if text else "")
-        if text and hasattr(field, "setCursorPosition"):
-            field.setCursorPosition(0)
 
     def _build_info_button(self, tooltip_text):
         button = QToolButton()
@@ -622,12 +663,6 @@ class ExportDialog(QDialog):
         if hasattr(button, "setFixedSize"):
             button.setFixedSize(20, 20)
         return button
-
-    def _build_separator(self):
-        separator = QLabel("")
-        separator.setStyleSheet("border-top: 1px solid #d7d7d7;")
-        separator.setMinimumHeight(1)
-        return separator
 
     def _set_compact_row_label_widths(self):
         for label in (
@@ -659,19 +694,47 @@ class ExportDialog(QDialog):
         return screen.availableGeometry()
 
     def _apply_window_size_constraints(self):
-        available_geometry = self._available_geometry()
-        if available_geometry is None:
-            return
-        max_width = max(520, available_geometry.width() - 40)
-        max_height = max(420, available_geometry.height() - 40)
-        self.setMaximumSize(max_width, max_height)
         size_hint = self.sizeHint()
-        self.resize(min(size_hint.width(), max_width), min(size_hint.height(), max_height))
+        initial_width = min(max(580, size_hint.width()), 700)
+        initial_height = min(max(560, size_hint.height()), 860)
+        configure_window_size(
+            self,
+            minimum=(540, 430),
+            initial=(initial_width, initial_height),
+            screen_margin=40,
+        )
 
     def _update_export_button_enabled_state(self):
         if not hasattr(self, "export_button"):
             return
-        self.export_button.setEnabled(bool(str(self.db_file or "").strip()) and bool(str(self.excel_file or "").strip()))
+        has_database = bool(str(self.db_file or "").strip())
+        has_output = bool(str(self.excel_file or "").strip())
+        self.export_button.setEnabled(has_database and has_output)
+        self._refresh_path_readiness_state(has_database=has_database, has_output=has_output)
+
+    def _refresh_path_readiness_state(self, *, has_database=None, has_output=None):
+        label = getattr(self, "path_readiness_label", None)
+        if label is None:
+            return
+        if has_database is None:
+            has_database = bool(str(self.db_file or "").strip())
+        if has_output is None:
+            has_output = bool(str(self.excel_file or "").strip())
+
+        if has_database and has_output:
+            label.setText("Database and output workbook selected. Ready for export.")
+            set_status_variant(label, "success")
+            return
+        if has_database:
+            label.setText("Select an output workbook path to enable export.")
+            set_status_variant(label, "warning")
+            return
+        if has_output:
+            label.setText("Select a database file to enable export.")
+            set_status_variant(label, "warning")
+            return
+        label.setText("Select both a database file and output workbook path to enable export.")
+        set_status_variant(label, "warning")
 
     def _show_database_required_warning(self, action_name):
         QMessageBox.information(
@@ -844,6 +907,14 @@ class ExportDialog(QDialog):
             self.filter_state = None
             self._refresh_filter_state_summary()
             self._discard_child_dialog('filter_window')
+        except Exception as e:
+            self.log_and_exit(e)
+
+    def clear_grouping(self):
+        try:
+            self.df_for_grouping = None
+            self.set_grouping_applied(False)
+            self._discard_child_dialog('grouping_window')
         except Exception as e:
             self.log_and_exit(e)
     

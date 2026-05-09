@@ -243,6 +243,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn('Detailed tables', html_text)
             self.assertIn('Pairwise comparisons', html_text)
             self.assertIn('Descriptive stats', html_text)
+            self.assertIn('metric-summary-grid detail-grid', html_text)
             self.assertLess(html_text.index('Metric summary'), html_text.index('Detailed tables'))
             self.assertLess(html_text.index('Key insights'), html_text.index('Detailed tables'))
             self.assertLess(html_text.index('Recommended action'), html_text.index('Detailed tables'))
@@ -253,6 +254,8 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn('<th>Cpk</th>', html_text)
             self.assertIn('chart-lightbox', html_text)
             self.assertIn('chart-lightbox-plotly', html_text)
+            self.assertIn('data-lightbox-route="image"', html_text)
+            self.assertIn('data-lightbox-route="plotly"', html_text)
             self.assertIn("const lightboxPlotly = document.getElementById('chart-lightbox-plotly');", html_text)
             self.assertIn('renderPlotlyContainer(lightboxPlotly', html_text)
             self.assertIn('window.Plotly.purge(lightboxPlotly)', html_text)
@@ -261,8 +264,15 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn("lightbox.addEventListener('close', resetLightboxState);", html_text)
             self.assertIn('chart-image-trigger', html_text)
             self.assertIn('Enlarge chart: Diameter / X', html_text)
-            self.assertIn("document.querySelectorAll('.chart-image-trigger').forEach((trigger) => {", html_text)
+            self.assertIn(
+                "document.querySelectorAll('.chart-image-trigger[data-lightbox-route=\"image\"]').forEach((trigger) => {",
+                html_text,
+            )
             self.assertIn('openImageLightbox(source, caption);', html_text)
+            self.assertIn(
+                "document.querySelectorAll('.plotly-expand-trigger[data-lightbox-route=\"plotly\"]').forEach((trigger) => {",
+                html_text,
+            )
             self.assertNotIn("const plotlySource = chartCard ? chartCard.querySelector('.plotly-chart') : null;", html_text)
             self.assertNotIn('if (plotlySource && window.Plotly && openPlotlyLightbox(plotlySource, caption)) {', html_text)
             self.assertNotIn('Capability type', html_text)

@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
+    QHeaderView,
 )
 
 from modules.characteristic_alias_service import (
@@ -33,6 +34,14 @@ from modules.characteristic_alias_service import (
 )
 from modules.custom_logger import CustomLogger
 from modules.help_menu import attach_help_menu_to_layout
+from modules.ui_foundation import (
+    apply_metroliza_theme,
+    configure_table,
+    configure_window_size,
+    section_label,
+    set_status_variant,
+    status_chip,
+)
 
 
 ALL_REFERENCES_LABEL = 'All references'
@@ -100,6 +109,7 @@ class CharacteristicAliasEditorDialog(QDialog):
     def __init__(self, parent=None, *, initial_values=None):
         super().__init__(parent)
         self.setWindowTitle('Edit name match' if initial_values else 'Add new name match')
+        configure_window_size(self, minimum=(520, 420), initial=(640, 520))
 
         self.alias_input = QLineEdit()
         self.alias_input.setPlaceholderText('e.g. TP GAP')
@@ -184,6 +194,7 @@ class CharacteristicAliasEditorDialog(QDialog):
         self.clear_button.clicked.connect(self._clear_fields)
         self.cancel_button.clicked.connect(self.reject)
         self._sync_scope_value_state(self.apply_to_combo.currentText())
+        apply_metroliza_theme(self)
 
     def _clear_fields(self):
         self.alias_input.clear()
@@ -249,7 +260,7 @@ class CharacteristicMappingDialog(QDialog):
         if parent is not None and hasattr(parent, 'windowIcon'):
             self.setWindowIcon(parent.windowIcon())
         self.setModal(True)
-        self.resize(900, 600)
+        configure_window_size(self, minimum=(860, 540), initial=(1020, 680))
 
         self.db_file = db_file
 
@@ -257,18 +268,28 @@ class CharacteristicMappingDialog(QDialog):
             'Use this tool when the same characteristic appears under different names in different reports or references.'
         )
         self.subtitle_label.setWordWrap(True)
+        self.matching_section_label = section_label('Name matches')
 
         self.db_label = QLabel('Database file:')
         self.db_path_input = QLineEdit(str(db_file or ''))
         self.db_path_input.setReadOnly(True)
         self.select_db_button = QPushButton('Browse DB')
+        self.db_warning_label = status_chip('Select a database file to manage name matches.', 'warning')
 
-        self.table_title_label = QLabel('Saved name matches')
+        self.table_title_label = section_label('Saved name matches')
         self.empty_state_label = QLabel(
             'No name matches have been added yet.\n'
             'Add a match if the same characteristic appears under different names in your reports.'
         )
         self.empty_state_label.setWordWrap(True)
+        self.empty_warning_label = status_chip(
+            'No mappings are currently stored in this database.',
+            'warning',
+        )
+        self.collision_warning_label = status_chip(
+            'Duplicate alias + scope combinations are blocked during add/edit and CSV import.',
+            'info',
+        )
 
         self.alias_table = QTableWidget(0, len(self.TABLE_HEADERS), self)
         self.alias_table.setHorizontalHeaderLabels(self.TABLE_HEADERS)
@@ -284,14 +305,25 @@ class CharacteristicMappingDialog(QDialog):
         self.export_button = QPushButton('Export CSV')
         self.close_button = QPushButton('Close')
 
-        button_row = QHBoxLayout()
-        button_row.addWidget(self.add_button)
-        button_row.addWidget(self.edit_button)
-        button_row.addWidget(self.delete_button)
-        button_row.addWidget(self.import_button)
-        button_row.addWidget(self.export_button)
-        button_row.addStretch()
-        button_row.addWidget(self.close_button)
+        table_actions_row = QHBoxLayout()
+        table_actions_row.addWidget(self.add_button)
+        table_actions_row.addWidget(self.edit_button)
+        table_actions_row.addWidget(self.delete_button)
+        table_actions_row.addStretch()
+
+        io_actions_row = QHBoxLayout()
+        io_actions_row.addWidget(self.import_button)
+        io_actions_row.addWidget(self.export_button)
+        io_actions_row.addStretch()
+
+        close_row = QHBoxLayout()
+        close_row.addStretch()
+        close_row.addWidget(self.close_button)
+
+        footer_row = QHBoxLayout()
+        footer_row.addLayout(table_actions_row, 2)
+        footer_row.addLayout(io_actions_row, 2)
+        footer_row.addLayout(close_row, 1)
 
         db_row = QHBoxLayout()
         db_row.addWidget(self.db_label)
@@ -301,11 +333,15 @@ class CharacteristicMappingDialog(QDialog):
         layout = QVBoxLayout(self)
         attach_help_menu_to_layout(layout, self, [("Characteristic matching manual", 'characteristic_name_matching')])
         layout.addWidget(self.subtitle_label)
+        layout.addWidget(self.matching_section_label)
         layout.addLayout(db_row)
+        layout.addWidget(self.db_warning_label)
         layout.addWidget(self.table_title_label)
         layout.addWidget(self.empty_state_label)
+        layout.addWidget(self.empty_warning_label)
+        layout.addWidget(self.collision_warning_label)
         layout.addWidget(self.alias_table)
-        layout.addLayout(button_row)
+        layout.addLayout(footer_row)
 
         self.add_button.clicked.connect(self.add_mapping)
         self.edit_button.clicked.connect(self.edit_mapping)
@@ -315,8 +351,15 @@ class CharacteristicMappingDialog(QDialog):
         self.close_button.clicked.connect(self.accept)
         self.select_db_button.clicked.connect(self.select_db_file)
 
+        configure_table(self.alias_table, stretch_column=1, resize_to_contents=(2, 3), min_height=280)
+        header = self.alias_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        set_status_variant(self.collision_warning_label, 'info')
         self.load_aliases()
         self._sync_selection_actions()
+        self._sync_warning_labels()
+        apply_metroliza_theme(self)
 
     def _scope_display_values(self, scope_type, scope_value):
         if str(scope_type or '').strip().lower() == 'reference':
@@ -332,6 +375,12 @@ class CharacteristicMappingDialog(QDialog):
         has_selection = self._selected_mapping() is not None
         self.edit_button.setEnabled(has_selection)
         self.delete_button.setEnabled(has_selection)
+
+    def _sync_warning_labels(self):
+        has_db = bool(str(self.db_file or '').strip())
+        has_aliases = self.alias_table.rowCount() > 0
+        self.db_warning_label.setVisible(not has_db)
+        self.empty_warning_label.setVisible(has_db and not has_aliases)
 
     def select_db_file(self):
         filename, _ = QFileDialog.getOpenFileName(
@@ -354,6 +403,7 @@ class CharacteristicMappingDialog(QDialog):
             self.alias_table.setRowCount(0)
             self.empty_state_label.setVisible(True)
             self._sync_selection_actions()
+            self._sync_warning_labels()
             return
 
         try:
@@ -377,8 +427,8 @@ class CharacteristicMappingDialog(QDialog):
                 self.alias_table.setItem(row_index, column_index, QTableWidgetItem(value))
 
         self.empty_state_label.setVisible(len(alias_rows) == 0)
-        self.alias_table.resizeColumnsToContents()
         self._sync_selection_actions()
+        self._sync_warning_labels()
 
     def _selected_mapping(self):
         selected_rows = self.alias_table.selectionModel().selectedRows()

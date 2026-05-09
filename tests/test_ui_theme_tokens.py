@@ -25,6 +25,12 @@ class TestUiThemeTokens(unittest.TestCase):
     def test_selected_row_background_override_fallback_is_less_aggressive(self):
         self.assertEqual(ui_theme_tokens.selected_row_background_override(None), '#5E88AD')
 
+    def test_visual_theme_tokens_are_restrained_desktop_palette(self):
+        self.assertEqual(ui_theme_tokens.WINDOW_BACKGROUND, '#F6F8FA')
+        self.assertEqual(ui_theme_tokens.SURFACE_BACKGROUND, '#FFFFFF')
+        self.assertEqual(ui_theme_tokens.ACCENT_PRIMARY, '#256D85')
+        self.assertEqual(ui_theme_tokens.STATUS_COLORS['warning'], ('#B7791F', '#FFF6E5'))
+
 
 if __name__ == '__main__':
     unittest.main()
