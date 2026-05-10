@@ -63,6 +63,8 @@ def test_windows_pyinstaller_build_validates_ocr_packaging_inputs():
     assert "requirements-ocr.txt" in script_text
     assert "scripts/validate_packaged_pdf_parser.py" in script_text
     assert "--require-header-ocr" in script_text
+    assert "Validating Oznak packaging inputs" in script_text
+    assert "importlib.util.find_spec('oznak')" in script_text
 
 
 def test_windows_runtime_setup_and_diagnostic_scripts_cover_ocr_prerequisites():

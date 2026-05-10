@@ -9,6 +9,7 @@ param(
     [switch]$EnableConsole,
     [switch]$AllowBrokenPdfParserBuild,
     [switch]$AllowMissingHeaderOcrBuild,
+    [switch]$AllowMissingOznakBuild,
     [ValidateSet('auto', 'gcc', 'clang')]
     [string]$CompilerStrategy = 'auto',
     [switch]$AutoInstallCompiler,
@@ -450,11 +451,13 @@ $credentialsPathLabel = if ($BundleCredentials) { $CredentialsPath } else { '(di
 $consoleMode = if ($EnableConsole) { 'force' } else { 'disable' }
 $pdfGateLabel = if ($AllowBrokenPdfParserBuild) { 'UNSAFE OVERRIDE ENABLED' } else { 'strict' }
 $headerOcrGateLabel = if ($AllowMissingHeaderOcrBuild) { 'UNSAFE OVERRIDE ENABLED' } else { 'strict' }
+$oznakGateLabel = if ($AllowMissingOznakBuild) { 'UNSAFE OVERRIDE ENABLED' } else { 'strict' }
 
 Write-Host '[2/6] Build mode'
 Write-Host "      Native parser module: $nativeModeLabel"
 Write-Host "      PDF parser gate: $pdfGateLabel"
 Write-Host "      Header OCR gate: $headerOcrGateLabel"
+Write-Host "      Oznak connector gate: $oznakGateLabel"
 Write-Host "      Credentials bundle path: $credentialsPathLabel"
 Write-Host "      Windows console mode: $consoleMode"
 Write-Host "      Requested compiler strategy: $CompilerStrategy"
@@ -509,6 +512,14 @@ if (-not $headerOcrPackageAvailable -and -not $AllowMissingHeaderOcrBuild) {
 
 if ($AllowMissingHeaderOcrBuild) {
     Write-Warning 'UNSAFE: continuing even though packaged header OCR may be broken. Do not use this switch for release artifacts.'
+}
+
+if (-not $oznakPackageAvailable -and -not $AllowMissingOznakBuild) {
+    throw 'Oznak is required for packaged builds with industrial database integration. Install requirements-build.txt before invoking Nuitka, or pass -AllowMissingOznakBuild only for explicitly unsafe local diagnostics.'
+}
+
+if ($AllowMissingOznakBuild) {
+    Write-Warning 'UNSAFE: continuing even though packaged industrial database integration may be unavailable. Do not use this switch for release artifacts.'
 }
 
 # Section: compiler detection / selection

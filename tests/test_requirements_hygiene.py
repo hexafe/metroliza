@@ -52,7 +52,15 @@ class RequirementsHygieneTests(unittest.TestCase):
         matches = [entry for entry in runtime_entries if entry.lower().startswith('hexafe-groupstats[pandas] @ ')]
 
         self.assertEqual(matches, [
-            'hexafe-groupstats[pandas] @ git+https://github.com/hexafe/hexafe-groupstats.git@10788c87b31da7856b269f9ebe0740efa4b1fff1'
+            'hexafe-groupstats[pandas] @ git+https://github.com/hexafe/hexafe-groupstats.git@92327125499f801fcc42f1d1e970c4e55dcd4b3a'
+        ])
+
+    def test_runtime_requirements_pin_oznak_to_public_git_source(self):
+        runtime_entries = self._runtime_requirements()
+        matches = [entry for entry in runtime_entries if entry.lower().startswith('oznak @ ')]
+
+        self.assertEqual(matches, [
+            'oznak @ git+https://github.com/hexafe/oznak.git@17459eb4338dcd8aed9dd478dde0a0c18a12613e'
         ])
 
     def test_runtime_requirements_do_not_rely_on_local_hexafe_groupstats_path(self):
@@ -61,6 +69,13 @@ class RequirementsHygieneTests(unittest.TestCase):
         self.assertNotIn('git+ssh://git@github.com/hexafe/hexafe-groupstats.git', runtime_text)
         self.assertNotIn('../hexafe-groupstats', runtime_text)
         self.assertNotRegex(runtime_text, re.compile(r'(^|\s)-e\s+.+hexafe-groupstats', re.MULTILINE))
+
+    def test_runtime_requirements_do_not_rely_on_local_oznak_path(self):
+        runtime_text = pathlib.Path('requirements.txt').read_text(encoding='utf-8')
+
+        self.assertNotIn('git+ssh://git@github.com/hexafe/oznak.git', runtime_text)
+        self.assertNotIn('../oznak', runtime_text)
+        self.assertNotRegex(runtime_text, re.compile(r'(^|\s)-e\s+.+oznak', re.MULTILINE))
 
 
 if __name__ == '__main__':

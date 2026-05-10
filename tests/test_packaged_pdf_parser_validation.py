@@ -217,6 +217,7 @@ def test_build_nuitka_script_fails_closed_by_default_and_names_unsafe_override()
 
     assert '[switch]$AllowBrokenPdfParserBuild' in script
     assert '[switch]$AllowMissingHeaderOcrBuild' in script
+    assert '[switch]$AllowMissingOznakBuild' in script
     assert '[switch]$BundleCredentials' in script
     assert '[string]$CredentialsPath = ""' in script
     assert '-CredentialsPath no longer bundles credentials by itself.' in script
@@ -229,6 +230,8 @@ def test_build_nuitka_script_fails_closed_by_default_and_names_unsafe_override()
     assert 'UNSAFE: continuing even though packaged PDF parsing may be broken.' in script
     assert 'RapidOCR header OCR is required for packaged builds.' in script
     assert 'UNSAFE: continuing even though packaged header OCR may be broken.' in script
+    assert 'Oznak is required for packaged builds with industrial database integration.' in script
+    assert 'UNSAFE: continuing even though packaged industrial database integration may be unavailable.' in script
     assert 'function Invoke-CheckedPythonCommand' in script
     assert 'function Resolve-PreferredCompiler' in script
     assert 'function Install-PreferredCompiler' in script
@@ -250,6 +253,7 @@ def test_build_nuitka_script_defaults_to_release_onefile_and_includes_runtime_pa
     assert "$commonArgs += '--include-package=oznak'" in script
     assert "$commonArgs += '--include-distribution-metadata=oznak'" in script
     assert "$oznakPackageAvailable" in script
+    assert "$oznakGateLabel" in script
     assert "'--include-module=modules.cmm_report_parser'" in script
     assert "'--include-module=modules.header_ocr_backend'" in script
     assert "'--include-module=modules.header_ocr_geometry'" in script

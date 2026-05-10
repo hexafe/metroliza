@@ -110,6 +110,10 @@ try {
         Invoke-Checked -Executable $venvPython -Arguments @('scripts/validate_packaged_pdf_parser.py', '--require-header-ocr')
     }
 
+    Invoke-Step 'Validating Oznak packaging inputs' {
+        Invoke-Checked -Executable $venvPython -Arguments @('-c', "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('oznak') else 1)")
+    }
+
     if ($WithNative) {
         Invoke-Step 'Building native modules and PyInstaller EXE' {
             $helper = Join-Path $repoRoot 'packaging/build_native_and_package.ps1'

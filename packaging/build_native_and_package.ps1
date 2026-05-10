@@ -22,6 +22,7 @@ param(
     [switch]$RequireNative,
     [switch]$EnableConsole,
     [switch]$AllowBrokenPdfParserBuild,
+    [switch]$AllowMissingOznakBuild,
 
     [ValidateSet('auto', 'gcc', 'clang')]
     [string]$CompilerStrategy = 'auto',
@@ -380,6 +381,7 @@ try {
             Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $FastDev.IsPresent -SwitchName '-FastDev'
             Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $EnableConsole.IsPresent -SwitchName '-EnableConsole'
             Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $AllowBrokenPdfParserBuild.IsPresent -SwitchName '-AllowBrokenPdfParserBuild'
+            Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $AllowMissingOznakBuild.IsPresent -SwitchName '-AllowMissingOznakBuild'
             Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $AutoInstallCompiler.IsPresent -SwitchName '-AutoInstallCompiler'
             Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $OpenInstallHelp.IsPresent -SwitchName '-OpenInstallHelp'
 
