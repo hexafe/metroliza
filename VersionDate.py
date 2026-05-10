@@ -1,18 +1,18 @@
 RELEASE_VERSION = "2026.05"
-VERSION_DATE = "260509"
+VERSION_DATE = "260510"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = (
-    "CSV Summary now lives under Tools, fast parsing can hand enrichment back to the main window, grouping shortcuts are restored, and the main workflow is easier to read."
+    "Industrial data workflows now let you set up production-line sources, sync records, link them to reports, and export the saved context from guided dialogs."
 )
-PUBLIC_VERSION_LABEL = "2026.05 (build 260509)"
+PUBLIC_VERSION_LABEL = "2026.05 (build 260510)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
-    - CSV Summary now opens from the Tools menu and makes Create Summary the clear primary action<br>
-    - Fast import with enrichment now returns control to the main window before metadata enrichment continues<br>
-    - Grouping keyboard shortcuts now create, add, or rename groups without applying grouping by accident<br>
-    - Help and manuals now open from the Help menu in the browser<br>
-    - Main workflows use clearer status rows and fit long file paths better<br>
+    - Industrial data is now available from the Tools menu for connecting production-line records with Metroliza reports<br>
+    - Separate Sources, Sync, and Export dialogs make production-line data setup easier to follow<br>
+    - Connection testing and sync show clear progress, support canceling, and keep credentials session-only<br>
+    - Exports can include previously synced industrial context without contacting production databases during export<br>
+    - Characteristic name matching is easier to review, search, import, and edit before Group Analysis<br>
 
     <br><b>Archive:</b><br>
 

@@ -13,7 +13,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}(?:rc\d+)?$")
         self.assertRegex(metadata.build, r"^\d{6}$")
         self.assertEqual(metadata.version_label, f"{metadata.release_version}({metadata.build})")
-        self.assertEqual(metadata.public_version_label, "2026.05 (build 260509)")
+        self.assertEqual(metadata.public_version_label, "2026.05 (build 260510)")
         self.assertTrue(metadata.highlight)
 
     def test_in_app_current_release_notes_stay_user_facing(self):
@@ -21,9 +21,9 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
 
         current_section = VersionDate.release_notes.split("<br><b>Archive:</b><br>", 1)[0]
 
-        self.assertIn("CSV Summary now opens from the Tools menu", current_section)
-        self.assertIn("Help and manuals now open from the Help menu", current_section)
-        self.assertIn("Main workflows use clearer status rows", current_section)
+        self.assertIn("Industrial data is now available from the Tools menu", current_section)
+        self.assertIn("Separate Sources, Sync, and Export dialogs", current_section)
+        self.assertIn("keep credentials session-only", current_section)
         for technical_term in (
             "loading animation",
             "PyInstaller",
@@ -37,6 +37,8 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
             "benchmark",
             "test coverage",
             "regression",
+            "adapter",
+            "schema",
         ):
             self.assertNotIn(technical_term, current_section)
 

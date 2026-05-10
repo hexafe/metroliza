@@ -1,11 +1,11 @@
 # Changelog (for end users)
 
-## 2026.05 (build 260509) — current version
-- CSV Summary now opens from the Tools menu and makes Create Summary the clear primary action.
-- Fast import with enrichment now returns control to the main window before metadata enrichment continues.
-- Grouping keyboard shortcuts now create, add, or rename groups without applying grouping by accident.
-- Help and manuals now open from the Help menu in the browser.
-- Main workflows use clearer status rows and fit long file paths better.
+## 2026.05 (build 260510) — current version
+- Industrial data is now available from the Tools menu for connecting production-line records with Metroliza reports.
+- Separate Sources, Sync, and Export dialogs make production-line data setup easier to follow.
+- Connection testing and sync show clear progress, support canceling, and keep credentials session-only.
+- Exports can include previously synced industrial context without contacting production databases during export.
+- Characteristic name matching is easier to review, search, import, and edit before Group Analysis.
 
 ## 2026.04 (build 260421)
 - Re-running parsing on an existing database refreshes older CMM report rows so OCR header metadata can replace filename-only values.
