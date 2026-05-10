@@ -50,6 +50,7 @@ def test_onefile_spec_collects_ocr_runtime_assets_and_model_data():
 def test_windows_pyinstaller_build_validates_ocr_packaging_inputs():
     script_text = Path("build_windows_exe.ps1").read_text(encoding="utf-8")
 
+    assert "requirements-build.txt" in script_text
     assert "requirements-ocr.txt" in script_text
     assert "scripts/validate_packaged_pdf_parser.py" in script_text
     assert "--require-header-ocr" in script_text

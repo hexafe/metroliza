@@ -159,9 +159,10 @@ Distribution audit status:
 - `pyinstaller packaging/metroliza_onefile.spec` produces a single-file artifact (`EXE(...)` with no `COLLECT(...)` stage), so it is configured as a onefile build rather than an onedir bundle.
 - default PyInstaller output filename follows release metadata: `metroliza_P_<RELEASE_VERSION>(<VERSION_DATE>).exe`
 - The spec explicitly preserves the known fragile runtime pieces for this app: optional native parser module, PyMuPDF backends, and Windows CPython runtime DLLs.
-- The root `build_windows_exe.ps1` wrapper installs `requirements-ocr.txt` and runs the
-  packaged-dependency validator with `--require-header-ocr` before building, so missing
-  RapidOCR dependencies or model files fail before a broken EXE is produced.
+- The root `build_windows_exe.ps1` wrapper installs `requirements-build.txt`, then
+  `requirements-ocr.txt`, and runs the packaged-dependency validator with
+  `--require-header-ocr` before building, so missing build dependencies, RapidOCR
+  dependencies, or model files fail before a broken EXE is produced.
 - Commercial or external distributions must keep `THIRD_PARTY_NOTICES.md` with the
   packaged artifact and retain the bundled package license/metadata files where the
   packager preserves them.

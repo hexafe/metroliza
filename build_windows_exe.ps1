@@ -97,13 +97,7 @@ try {
     if (-not $SkipInstall) {
         Invoke-Step 'Installing packaging dependencies' {
             Invoke-Checked -Executable $venvPython -Arguments @('-m', 'pip', 'install', '--upgrade', 'pip', 'wheel')
-            Invoke-Checked -Executable $venvPython -Arguments @('-m', 'pip', 'install', '-r', 'requirements.txt')
-            Invoke-Checked -Executable $venvPython -Arguments @(
-                '-m', 'pip', 'install',
-                'pyinstaller>=6.11',
-                'pyinstaller-hooks-contrib>=2025.0',
-                'zstandard>=0.22.0'
-            )
+            Invoke-Checked -Executable $venvPython -Arguments @('-m', 'pip', 'install', '-r', 'requirements-build.txt')
 
             $ocrRequirements = Join-Path $repoRoot 'requirements-ocr.txt'
             if (Test-Path -LiteralPath $ocrRequirements) {

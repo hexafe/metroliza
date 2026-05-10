@@ -7,9 +7,8 @@ import hashlib
 import importlib
 import importlib.util
 import sys
+from typing import Any
 from pathlib import Path
-
-from defusedxml import ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_PYMUPDF_MODULES = (
@@ -48,6 +47,17 @@ class PackagingValidationError(RuntimeError):
     """Raised when packaged PDF parser validation fails."""
 
 
+def _load_defusedxml_element_tree():
+    try:
+        from defusedxml import ElementTree
+    except ModuleNotFoundError as exc:
+        raise PackagingValidationError(
+            "defusedxml is required when validating a Nuitka XML report. "
+            "Install build dependencies with `python -m pip install -r requirements-build.txt`."
+        ) from exc
+    return ElementTree
+
+
 def require_pdf_backend_available(*, allow_broken: bool = False) -> str:
     _, resolve_pdf_backend_module_name = _load_pdf_backend_helpers()
     backend_name = resolve_pdf_backend_module_name()
@@ -60,7 +70,7 @@ def require_pdf_backend_available(*, allow_broken: bool = False) -> str:
     )
 
 
-def _flatten_report_strings(root: ET.Element) -> list[str]:
+def _flatten_report_strings(root: Any) -> list[str]:
     values: list[str] = []
     for element in root.iter():
         if element.text and element.text.strip():
@@ -74,7 +84,7 @@ def validate_nuitka_report_has_pdf_backend(report_path: str | Path) -> tuple[str
     if not report.is_file():
         raise PackagingValidationError(f"Nuitka build report not found: {report}")
 
-    root = ET.parse(report).getroot()
+    root = _load_defusedxml_element_tree().parse(report).getroot()
     haystack = "\n".join(_flatten_report_strings(root))
     PDF_BACKEND_CANDIDATES, _ = _load_pdf_backend_helpers()
     included = tuple(name for name in PDF_BACKEND_CANDIDATES if name in haystack)
@@ -195,7 +205,7 @@ def validate_nuitka_report_has_header_ocr(report_path: str | Path) -> tuple[str,
     if not report.is_file():
         raise PackagingValidationError(f"Nuitka build report not found: {report}")
 
-    root = ET.parse(report).getroot()
+    root = _load_defusedxml_element_tree().parse(report).getroot()
     haystack = "\n".join(_flatten_report_strings(root))
     missing_modules = tuple(module_name for module_name in REQUIRED_HEADER_OCR_REPORT_MODULES if module_name not in haystack)
     if missing_modules:

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from modules import pdf_backend
+import scripts.validate_packaged_pdf_parser as validator
 from scripts.validate_packaged_pdf_parser import (
     PackagingValidationError,
     require_pdf_backend_available,
@@ -98,6 +99,20 @@ def test_require_header_ocr_available_reports_import_failure(monkeypatch):
 
     with pytest.raises(PackagingValidationError, match='import failed: onnxruntime'):
         require_header_ocr_available()
+
+
+def test_require_header_ocr_preflight_does_not_need_defusedxml(monkeypatch, capsys):
+    monkeypatch.setattr(
+        validator,
+        '_load_defusedxml_element_tree',
+        lambda: (_ for _ in ()).throw(AssertionError('defusedxml should not be loaded')),
+    )
+    monkeypatch.setattr(validator, 'require_header_ocr_available', lambda **_kwargs: ('rapidocr',))
+    monkeypatch.setattr(validator, 'validate_vendored_header_ocr_models', lambda *_args, **_kwargs: ('model.onnx',))
+    monkeypatch.setattr(validator, 'validate_third_party_notice', lambda *_args, **_kwargs: None)
+
+    assert validator.main(['--require-header-ocr']) == 0
+    assert 'Validated packaged header OCR dependencies' in capsys.readouterr().out
 
 
 def test_validate_vendored_header_ocr_models_rejects_missing_assets(tmp_path):
