@@ -473,6 +473,12 @@ if ($LASTEXITCODE -eq 0) {
     $chartNativeModuleAvailable = $true
 }
 
+$oznakPackageAvailable = $false
+python -c "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('oznak') else 1)" 2>$null
+if ($LASTEXITCODE -eq 0) {
+    $oznakPackageAvailable = $true
+}
+
 $pdfBackendPackageAvailable = $false
 python -c "import sys,pathlib;root=pathlib.Path.cwd();sys.path.insert(0, str(root));from scripts.validate_packaged_pdf_parser import require_pdf_backend_available;print(require_pdf_backend_available(allow_broken=False))" 2>$null
 if ($LASTEXITCODE -eq 0) {
@@ -556,6 +562,12 @@ if ($chartNativeModuleAvailable) {
     Write-Warning "Native module '_metroliza_chart_native' not found in this environment. Building with matplotlib chart fallback only."
 }
 
+if ($oznakPackageAvailable) {
+    Write-Host '      Oznak packaging: include optional industrial database adapter package'
+} else {
+    Write-Host '      Oznak packaging: optional package not installed; industrial sync will report unavailable at runtime'
+}
+
 # Section: Nuitka argument assembly
 # Keep parser/runtime imports explicit here because the rc1 plugin/backend refactor
 # introduced dynamic import paths that packagers may not infer reliably on their own.
@@ -601,6 +613,11 @@ if ($nativeModuleAvailable) {
 
 if ($chartNativeModuleAvailable) {
     $commonArgs += '--include-module=_metroliza_chart_native'
+}
+
+if ($oznakPackageAvailable) {
+    $commonArgs += '--include-package=oznak'
+    $commonArgs += '--include-distribution-metadata=oznak'
 }
 
 if ($pdfBackendPackageAvailable) {

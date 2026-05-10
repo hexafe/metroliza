@@ -359,6 +359,15 @@ class ExportDialog(QDialog):
             self.generate_html_dashboard_checkbox.setToolTip(html_dashboard_tooltip)
             self.html_dashboard_info_button = self._build_info_button(html_dashboard_tooltip)
 
+            self.include_industrial_context_checkbox = QCheckBox("Industrial context")
+            self.include_industrial_context_checkbox.setChecked(False)
+            industrial_context_tooltip = (
+                "Append cached Oznak industrial context to the measurement export and add "
+                "a context worksheet when linked records exist."
+            )
+            self.include_industrial_context_checkbox.setToolTip(industrial_context_tooltip)
+            self.industrial_context_info_button = self._build_info_button(industrial_context_tooltip)
+
             # Add dropdown list for chart type
             self.export_type_label = QLabel("Chart type:")
             self.export_type_combobox = QComboBox()
@@ -577,6 +586,9 @@ class ExportDialog(QDialog):
             optional_outputs_layout.addSpacing(8)
             optional_outputs_layout.addWidget(self.generate_html_dashboard_checkbox)
             optional_outputs_layout.addWidget(self.html_dashboard_info_button)
+            optional_outputs_layout.addSpacing(8)
+            optional_outputs_layout.addWidget(self.include_industrial_context_checkbox)
+            optional_outputs_layout.addWidget(self.industrial_context_info_button)
             optional_outputs_layout.addStretch(1)
             content_layout.addWidget(optional_outputs_widget, row, 1, 1, 3)
 
@@ -621,7 +633,8 @@ class ExportDialog(QDialog):
             self.setTabOrder(self.group_analysis_level_combobox, self.group_analysis_scope_combobox)
             self.setTabOrder(self.group_analysis_scope_combobox, self.include_google_sheets_checkbox)
             self.setTabOrder(self.include_google_sheets_checkbox, self.generate_html_dashboard_checkbox)
-            self.setTabOrder(self.generate_html_dashboard_checkbox, self.advanced_toggle_button)
+            self.setTabOrder(self.generate_html_dashboard_checkbox, self.include_industrial_context_checkbox)
+            self.setTabOrder(self.include_industrial_context_checkbox, self.advanced_toggle_button)
             self.setTabOrder(self.advanced_toggle_button, self.violin_plot_min_samplesize)
             self.setTabOrder(self.violin_plot_min_samplesize, self.summary_plot_scale)
             self.setTabOrder(self.summary_plot_scale, self.hide_ok_results_checkbox)
@@ -999,6 +1012,11 @@ class ExportDialog(QDialog):
                 summary_scale_input=summary_scale_input,
                 hide_ok_results=self.hide_ok_results_checkbox.isChecked(),
                 generate_html_dashboard=self.generate_html_dashboard_checkbox.isChecked(),
+                include_industrial_context=(
+                    self.include_industrial_context_checkbox.isChecked()
+                    if hasattr(self, "include_industrial_context_checkbox")
+                    else False
+                ),
                 filter_query=self.filter_query,
                 grouping_df=self.df_for_grouping,
                 group_analysis_level=self._selected_group_analysis_level(),

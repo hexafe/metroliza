@@ -21,7 +21,10 @@ sys.modules.pop("modules.characteristic_mapping_dialog", None)
 try:
     from PyQt6.QtWidgets import QApplication, QMessageBox
     from modules.characteristic_mapping_dialog import (
+        ALL_REFERENCES_LABEL,
         CharacteristicMappingDialog,
+        CharacteristicAliasEditorDialog,
+        ONE_REFERENCE_LABEL,
         build_remediation_report_rows,
     )
 except ImportError as exc:  # pragma: no cover - environment-dependent import
@@ -56,8 +59,8 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
 
             self.assertEqual(dialog.windowTitle(), 'Characteristic Name Matching')
             self.assertEqual(dialog.db_path_input.text(), db_path)
-            self.assertGreaterEqual(dialog.minimumWidth(), 860)
-            self.assertGreaterEqual(dialog.minimumHeight(), 540)
+            self.assertGreaterEqual(dialog.minimumWidth(), 980)
+            self.assertGreaterEqual(dialog.minimumHeight(), 620)
             self.assertEqual(dialog.alias_table.rowCount(), 1)
             self.assertEqual(dialog.alias_table.item(0, 0).text(), 'DIA - X')
             self.assertEqual(dialog.alias_table.item(0, 1).text(), 'DIAMETER - X')
@@ -74,10 +77,14 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
             self.assertFalse(dialog.db_warning_label.isHidden())
             self.assertTrue(dialog.empty_warning_label.isHidden())
             self.assertEqual(dialog.alias_table.rowCount(), 0)
+            self.assertFalse(dialog.add_button.isEnabled())
+            self.assertFalse(dialog.add_from_selected_button.isEnabled())
+            self.assertFalse(dialog.import_button.isEnabled())
+            self.assertFalse(dialog.export_button.isEnabled())
         finally:
             dialog.close()
 
-    def test_import_export_require_selected_db_file(self):
+    def test_import_export_require_selected_db_file_when_called_directly(self):
         dialog = CharacteristicMappingDialog(parent=None, db_file='')
         try:
             with patch.object(QMessageBox, 'warning', return_value=QMessageBox.StandardButton.Ok) as warn_mock:
@@ -87,6 +94,106 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
             with patch.object(QMessageBox, 'warning', return_value=QMessageBox.StandardButton.Ok) as warn_mock:
                 dialog.export_mappings()
                 self.assertTrue(warn_mock.called)
+        finally:
+            dialog.close()
+
+    def test_source_metric_options_load_filter_and_enable_add_from_selected(self):
+        metric_rows = [
+            {
+                'metric_name': 'DIA - X',
+                'measurement_count': 8,
+                'report_count': 2,
+                'reference_count': 1,
+                'sample_references': 'REF-1',
+            },
+            {
+                'metric_name': 'TP GAP',
+                'measurement_count': 3,
+                'report_count': 1,
+                'reference_count': 1,
+                'sample_references': 'REF-2',
+            },
+        ]
+        reference_rows = [{'reference': 'REF-1'}, {'reference': 'REF-2'}]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f'{tmpdir}/aliases.sqlite'
+            ensure_characteristic_alias_schema(db_path)
+
+            with patch('modules.characteristic_mapping_dialog.fetch_distinct_report_metric_names', return_value=metric_rows):
+                with patch('modules.characteristic_mapping_dialog.fetch_distinct_references', return_value=reference_rows):
+                    dialog = CharacteristicMappingDialog(parent=None, db_file=db_path)
+
+            try:
+                self.assertEqual(dialog.metric_table.rowCount(), 2)
+                self.assertEqual(dialog.metric_table.item(0, 0).text(), 'DIA - X')
+                self.assertEqual(dialog.metric_table.item(0, 3).text(), '8')
+                self.assertFalse(dialog.add_from_selected_button.isEnabled())
+
+                dialog.metric_table.selectRow(1)
+                self.assertTrue(dialog.add_from_selected_button.isEnabled())
+
+                dialog.metric_search_input.setText('dia')
+                self.assertEqual(dialog.metric_table.rowCount(), 1)
+                self.assertEqual(dialog.metric_table.item(0, 0).text(), 'DIA - X')
+            finally:
+                dialog.close()
+
+    def test_editor_uses_db_backed_combos_and_impact_preview(self):
+        metric_rows = [{'metric_name': 'DIA - X'}, {'metric_name': 'TP GAP'}]
+        reference_rows = [{'reference': 'REF-1'}, {'reference': 'REF-2'}]
+
+        impact_calls = []
+
+        def impact_resolver(alias_name, scope_type, scope_value):
+            impact_calls.append((alias_name, scope_type, scope_value))
+            return {'measurement_count': 8, 'report_count': 2, 'reference_count': 1}
+
+        dialog = CharacteristicAliasEditorDialog(
+            parent=None,
+            metric_options=metric_rows,
+            reference_options=reference_rows,
+            impact_resolver=impact_resolver,
+        )
+        try:
+            dialog.show()
+            self.app.processEvents()
+            dialog.alias_input.setCurrentText('DIA - X')
+            dialog.common_name_input.setCurrentText('DIAMETER - X')
+            dialog.apply_to_combo.setCurrentText(ONE_REFERENCE_LABEL)
+            dialog.reference_input.setCurrentText('REF-1')
+            self.app.processEvents()
+
+            self.assertTrue(dialog.reference_input.isVisible())
+            self.assertIn(('DIA - X', 'reference', 'REF-1'), impact_calls)
+            self.assertIn('Affects 8 rows in 2 reports across 1 references.', dialog.impact_label.text())
+            dialog._validate_and_accept()
+            self.assertEqual(
+                dialog.result_payload,
+                {
+                    'alias_name': 'DIA - X',
+                    'canonical_name': 'DIAMETER - X',
+                    'scope_type': 'reference',
+                    'scope_value': 'REF-1',
+                },
+            )
+        finally:
+            dialog.close()
+
+    def test_editor_hides_reference_for_global_scope(self):
+        dialog = CharacteristicAliasEditorDialog(
+            parent=None,
+            initial_values={
+                'alias_name': 'DIA - X',
+                'canonical_name': 'DIAMETER - X',
+                'scope_type': 'global',
+                'scope_value': None,
+            },
+        )
+        try:
+            dialog.show()
+            self.app.processEvents()
+            self.assertEqual(dialog.apply_to_combo.currentText(), ALL_REFERENCES_LABEL)
+            self.assertTrue(dialog.reference_input.isHidden())
         finally:
             dialog.close()
 

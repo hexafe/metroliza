@@ -102,7 +102,11 @@ from modules.export_query_service import (
     fetch_sql_measurement_summaries,
     load_measurement_export_partition_dataframe,
 )
-from modules.report_query_service import build_measurement_export_query
+from modules.report_query_service import (
+    INDUSTRIAL_EXPORT_COLUMNS,
+    build_industrial_measurement_export_query,
+    build_measurement_export_query,
+)
 from modules.export_grouping_utils import (
     add_group_key as _add_group_key,
     apply_group_assignments as _apply_group_assignments,
@@ -3361,8 +3365,16 @@ class ExportDataThread(QThread):
         self.db_file = validated_request.paths.db_file
         self.excel_file = validated_request.paths.excel_file
 
-        default_filter_query = build_measurement_export_query()
-        self.filter_query = validated_request.filter_query or default_filter_query
+        self.include_industrial_context = validated_request.options.include_industrial_context
+        default_filter_query = build_measurement_export_query(
+            include_industrial_context=self.include_industrial_context
+        )
+        selected_filter_query = validated_request.filter_query or default_filter_query
+        self.filter_query = (
+            build_industrial_measurement_export_query(selected_filter_query)
+            if self.include_industrial_context and validated_request.filter_query
+            else selected_filter_query
+        )
         self.df_for_grouping = validated_request.grouping_df
         self.selected_export_type = validated_request.options.export_type
         self.export_target = validated_request.options.export_target
@@ -5184,9 +5196,65 @@ class ExportDataThread(QThread):
                 return
             export_df = self._build_export_filtered_dataframe()
             self.write_data_to_excel(export_df, "MEASUREMENTS", excel_writer)
+            if self.include_industrial_context:
+                self.export_industrial_context_data(export_df, excel_writer)
         except Exception as e:
             self.log_and_exit(e)
             raise
+
+    def export_industrial_context_data(self, export_df, excel_writer):
+        """Write cached industrial context and link diagnostics when enabled."""
+
+        if export_df is None or export_df.empty:
+            diagnostics_df = pd.DataFrame(
+                [{"metric": "export_rows", "value": 0}, {"metric": "linked_reports", "value": 0}]
+            )
+            self.write_data_to_excel(diagnostics_df, "INDUSTRIAL_DIAGNOSTICS", excel_writer)
+            return
+
+        available_columns = [column for column in INDUSTRIAL_EXPORT_COLUMNS if column in export_df.columns]
+        linked_df = export_df
+        if "INDUSTRIAL_RECORD_ID" in linked_df.columns:
+            linked_df = linked_df[linked_df["INDUSTRIAL_RECORD_ID"].notna()]
+
+        if available_columns and not linked_df.empty:
+            context_columns = [
+                column
+                for column in (
+                    "REPORT_ID",
+                    "REFERENCE",
+                    "DATE",
+                    "PART_NAME",
+                    "REVISION",
+                    "SAMPLE_NUMBER",
+                    *INDUSTRIAL_EXPORT_COLUMNS,
+                )
+                if column in linked_df.columns
+            ]
+            context_df = linked_df[context_columns].drop_duplicates().reset_index(drop=True)
+            self.write_data_to_excel(context_df, "INDUSTRIAL_CONTEXT", excel_writer)
+
+        report_count = int(export_df["REPORT_ID"].nunique()) if "REPORT_ID" in export_df.columns else 0
+        linked_report_count = (
+            int(linked_df["REPORT_ID"].nunique())
+            if "REPORT_ID" in linked_df.columns and not linked_df.empty
+            else 0
+        )
+        linked_record_count = (
+            int(linked_df["INDUSTRIAL_RECORD_ID"].nunique())
+            if "INDUSTRIAL_RECORD_ID" in linked_df.columns and not linked_df.empty
+            else 0
+        )
+        diagnostics_df = pd.DataFrame(
+            [
+                {"metric": "export_rows", "value": int(len(export_df))},
+                {"metric": "reports_in_export", "value": report_count},
+                {"metric": "linked_reports", "value": linked_report_count},
+                {"metric": "unmatched_reports", "value": max(report_count - linked_report_count, 0)},
+                {"metric": "linked_industrial_records", "value": linked_record_count},
+            ]
+        )
+        self.write_data_to_excel(diagnostics_df, "INDUSTRIAL_DIAGNOSTICS", excel_writer)
 
     def write_data_to_excel(self, df, table_name, excel_writer):
         """Handle `write_data_to_excel` for `ExportDataThread`.

@@ -148,6 +148,9 @@ def test_report_schema_creates_storage_layers_and_views(tmp_path):
         schema_version = conn.execute(
             "SELECT value FROM app_schema WHERE key = 'schema_version'"
         ).fetchone()[0]
+        industrial_schema_version = conn.execute(
+            "SELECT value FROM app_schema WHERE key = 'industrial_schema_version'"
+        ).fetchone()
 
     assert {
         "source_files",
@@ -157,6 +160,10 @@ def test_report_schema_creates_storage_layers_and_views(tmp_path):
         "report_metadata_candidates",
         "report_metadata_warnings",
         "report_measurements",
+        "industrial_source_profiles",
+        "industrial_sync_runs",
+        "industrial_records",
+        "industrial_link_candidates",
         "app_schema",
     }.issubset(tables)
     assert {"vw_report_overview", "vw_measurement_export", "vw_grouping_reports"}.issubset(views)
@@ -165,8 +172,10 @@ def test_report_schema_creates_storage_layers_and_views(tmp_path):
         "idx_report_metadata_reference",
         "idx_report_measurements_report",
         "idx_report_measurements_report_header_ax",
+        "idx_industrial_records_reference",
     }.issubset(indexes)
     assert schema_version == SCHEMA_VERSION
+    assert industrial_schema_version is not None
 
 
 def test_report_schema_exposes_expected_view_columns(tmp_path):

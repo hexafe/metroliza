@@ -1,0 +1,108 @@
+from __future__ import annotations
+
+import pytest
+import yaml
+
+from modules.industrial_data_repository import IndustrialDataRepository
+from modules.industrial_source_config import (
+    IndustrialSourceConfigError,
+    build_source_profile,
+    import_source_profiles_to_repository,
+    load_source_profiles_from_config,
+    upsert_source_profile_in_config,
+)
+
+
+def test_source_config_round_trip_uses_oznak_yaml_shape_without_credentials(tmp_path):
+    config_path = tmp_path / "industrial_sources.yaml"
+    profile = build_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+        source_object_name="events",
+        allowed_columns=("event_id", "reference", "station"),
+        timestamp_column="event_at",
+        default_pagination_column="event_id",
+    )
+
+    upsert_source_profile_in_config(config_path, profile)
+
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert set(payload) == {"databases"}
+    assert payload["databases"]["assembly_mes"] == {
+        "type": "mssql",
+        "host": "mes.example.invalid",
+        "port": 1433,
+        "database": "plantdb",
+        "table": "events",
+        "display_name": "Assembly MES",
+        "allowed_columns": ["event_id", "reference", "station"],
+        "timestamp_column": "event_at",
+        "pagination_column": "event_id",
+    }
+    assert "password" not in config_path.read_text(encoding="utf-8").lower()
+
+    loaded = load_source_profiles_from_config(config_path)
+    assert len(loaded) == 1
+    assert loaded[0].profile_key == "assembly_mes"
+    assert loaded[0].database_type == "mssql"
+    assert loaded[0].allowed_columns == ("event_id", "reference", "station")
+
+
+def test_source_config_imports_manual_file_profiles_into_selected_database(tmp_path):
+    config_path = tmp_path / "industrial_sources.yaml"
+    config_path.write_text(
+        """
+databases:
+  line_a:
+    type: mysql
+    host: db.example.invalid
+    port: 3306
+    database: processdb
+    table: events
+    display_name: Line A
+    allowed_columns:
+      - id
+      - reference
+      - station
+    pagination_column: id
+""".strip(),
+        encoding="utf-8",
+    )
+    db_path = str(tmp_path / "metroliza.db")
+
+    imported = import_source_profiles_to_repository(
+        config_path,
+        IndustrialDataRepository(db_path),
+    )
+    profiles = IndustrialDataRepository(db_path).list_source_profiles(include_disabled=True)
+
+    assert [profile.profile_key for profile in imported] == ["line_a"]
+    assert len(profiles) == 1
+    assert profiles[0].profile_name == "Line A"
+    assert profiles[0].host == "db.example.invalid"
+    assert profiles[0].default_pagination_column == "id"
+
+
+def test_source_config_rejects_credential_like_keys(tmp_path):
+    config_path = tmp_path / "industrial_sources.yaml"
+    config_path.write_text(
+        """
+databases:
+  line_a:
+    type: mysql
+    host: db.example.invalid
+    port: 3306
+    database: processdb
+    table: events
+    password: should-not-be-here
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(IndustrialSourceConfigError, match="credential-like"):
+        load_source_profiles_from_config(config_path)

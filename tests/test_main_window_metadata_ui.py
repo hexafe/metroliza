@@ -44,6 +44,44 @@ class TestMainWindowMetadataUi(unittest.TestCase):
         finally:
             window.close()
 
+    def test_industrial_data_is_tools_action_without_launcher_button(self):
+        window = MainWindow(version_label="test", days_until_expiration=None)
+        try:
+            button_texts = [button.text() for button in window.findChildren(QPushButton)]
+            self.assertNotIn("Industrial Data", button_texts)
+
+            action_texts = [action.text() for action in window.tools_menu.actions()]
+            self.assertIn("Industrial data...", action_texts)
+        finally:
+            window.close()
+
+    def test_open_industrial_dialog_tracks_database_selection_changes(self):
+        window = MainWindow(version_label="test", days_until_expiration=None)
+        try:
+            class FakeIndustrialDialog:
+                def __init__(self):
+                    self.updated_paths = []
+
+                def isVisible(self):
+                    return True
+
+                def update_db_file(self, db_file):
+                    self.updated_paths.append(db_file)
+
+            fake_dialog = FakeIndustrialDialog()
+            window.industrial_data_dialog = fake_dialog
+
+            window.set_db_file("/tmp/metroliza-a.db")
+            window.set_db_file("/tmp/metroliza-b.db")
+
+            self.assertEqual(
+                fake_dialog.updated_paths,
+                ["/tmp/metroliza-a.db", "/tmp/metroliza-b.db"],
+            )
+            self.assertEqual(window.db_file, "/tmp/metroliza-b.db")
+        finally:
+            window.close()
+
     def test_release_and_about_are_under_help_menu(self):
         window = MainWindow(version_label="test", days_until_expiration=None)
         try:

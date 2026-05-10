@@ -4,6 +4,7 @@ from modules.report_schema import ensure_report_schema
 from modules.report_query_service import (
     build_distinct_value_query,
     build_grouping_query,
+    build_industrial_measurement_export_query,
     build_measurement_export_query,
     build_measurement_filter_query,
     build_report_overview_query,
@@ -46,6 +47,28 @@ def test_build_measurement_export_query_uses_denormalized_view():
     assert "ax AS AX" in query
     assert 'tol_plus AS "+TOL"' in query
     assert 'tol_minus AS "-TOL"' in query
+
+
+def test_build_industrial_measurement_export_query_appends_cached_context(tmp_path):
+    db_path = str(tmp_path / "reports.db")
+    ensure_report_schema(db_path)
+
+    query = build_industrial_measurement_export_query()
+
+    assert "FROM vw_measurement_export" in query
+    assert "industrial_link_candidates" in query
+    assert "INDUSTRIAL_RECORD_ID" in query
+    assert "INDUSTRIAL_STATION" in query
+    assert "INDUSTRIAL_LINK_CONFIDENCE" in query
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute(query).fetchall() == []
+
+
+def test_build_measurement_export_query_can_include_industrial_context():
+    query = build_measurement_export_query(include_industrial_context=True)
+
+    assert "INDUSTRIAL_SOURCE_PROFILE" in query
+    assert "base.*" in query
 
 
 def test_build_measurement_filter_query_includes_report_level_filters():
@@ -104,6 +127,19 @@ def test_build_measurement_export_query_translates_report_scoped_filters(tmp_pat
     assert "FROM vw_measurement_export" in query
     assert "WHERE report_id IN" in query
     assert report_scope_query in query
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute(query).fetchall() == []
+
+
+def test_build_industrial_measurement_export_query_wraps_custom_filter_scope(tmp_path):
+    db_path = str(tmp_path / "reports.db")
+    ensure_report_schema(db_path)
+    filter_query = build_measurement_filter_query(reference_values=["REF1"])
+
+    query = build_industrial_measurement_export_query(filter_query)
+
+    assert filter_query.rstrip(";") in query
+    assert "INDUSTRIAL_RECORD_ID" in query
     with sqlite3.connect(db_path) as conn:
         assert conn.execute(query).fetchall() == []
 

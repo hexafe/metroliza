@@ -14,6 +14,7 @@ def build_export_options_payload(
     summary_scale_input,
     hide_ok_results,
     generate_html_dashboard=False,
+    include_industrial_context=False,
     group_analysis_level="off",
     group_analysis_scope="auto",
 ):
@@ -29,12 +30,13 @@ def build_export_options_payload(
         hide_ok_results=bool(hide_ok_results),
         generate_summary_sheet=bool(preset_options['generate_summary_sheet']),
         generate_html_dashboard=bool(generate_html_dashboard),
+        include_industrial_context=bool(include_industrial_context),
         group_analysis_level=group_analysis_level,
         group_analysis_scope=group_analysis_scope,
     )
 
 
-def build_validated_export_request(*, db_file, excel_file, selected_preset, export_type, export_target, sorting_parameter, violin_input, summary_scale_input, hide_ok_results, filter_query, grouping_df, generate_html_dashboard=False, group_analysis_level="off", group_analysis_scope="auto"):
+def build_validated_export_request(*, db_file, excel_file, selected_preset, export_type, export_target, sorting_parameter, violin_input, summary_scale_input, hide_ok_results, filter_query, grouping_df, generate_html_dashboard=False, include_industrial_context=False, group_analysis_level="off", group_analysis_scope="auto"):
     """Build and validate ``ExportRequest`` from raw dialog selections."""
     options = validate_export_options(
         build_export_options_payload(
@@ -46,6 +48,7 @@ def build_validated_export_request(*, db_file, excel_file, selected_preset, expo
             summary_scale_input=summary_scale_input,
             hide_ok_results=hide_ok_results,
             generate_html_dashboard=generate_html_dashboard,
+            include_industrial_context=include_industrial_context,
             group_analysis_level=group_analysis_level,
             group_analysis_scope=group_analysis_scope,
         )

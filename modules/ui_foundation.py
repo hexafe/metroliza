@@ -82,11 +82,12 @@ QPushButton:disabled {{
     background: {tokens.SURFACE_MUTED_BACKGROUND};
     border-color: {tokens.BORDER_SUBTLE};
 }}
-QLineEdit, QComboBox, QDateEdit, QTextBrowser, QListWidget, QTableWidget {{
+QLineEdit, QComboBox, QDateEdit, QSpinBox, QTextBrowser, QListWidget, QTableWidget {{
     background: {tokens.SURFACE_BACKGROUND};
     border: 1px solid {tokens.BORDER_SUBTLE};
     border-radius: {tokens.RADIUS_SM}px;
     padding: 3px;
+    min-height: 22px;
     selection-background-color: {tokens.SELECTED_ROW_BACKGROUND_FALLBACK};
 }}
 QLineEdit:read-only {{
@@ -173,6 +174,8 @@ def section_label(text):
     label = _label(text)
     if hasattr(label, "setProperty"):
         label.setProperty("sectionLabel", True)
+    if hasattr(label, "setSizePolicy"):
+        label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     return label
 
 
@@ -182,6 +185,8 @@ def secondary_label(text):
         label.setProperty("secondary", True)
     if hasattr(label, "setWordWrap"):
         label.setWordWrap(True)
+    if hasattr(label, "setSizePolicy"):
+        label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     return label
 
 
@@ -192,6 +197,8 @@ def status_chip(text, variant="neutral"):
         label.setProperty("statusVariant", variant)
     if hasattr(label, "setWordWrap"):
         label.setWordWrap(True)
+    if hasattr(label, "setSizePolicy"):
+        label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     return label
 
 

@@ -10,12 +10,26 @@ from pathlib import Path
 BLOCKED_PREFIXES = (
     "benchmark_results/",
     "artifacts/parser_plugin_workspace_ci/",
+    "artifacts/industrial/",
     "logs/release_checks/",
+    "industrial_artifacts/",
+    "industrial_exports/",
     "smoke-artifacts/",
 )
+BLOCKED_PREFIXES_LOWER = tuple(prefix.lower() for prefix in BLOCKED_PREFIXES)
 BLOCKED_FILENAMES = {
+    ".env",
+    "connection_dump.json",
+    "databases.yaml",
+    "databases.yml",
+    "industrial_sources.yaml",
+    "industrial_sources.yml",
+    "industrial_connection_dump.json",
     "nuitka-build-report.xml",
+    "odbc.ini",
+    "token.json",
 }
+BLOCKED_FILENAMES_LOWER = {filename.lower() for filename in BLOCKED_FILENAMES}
 BLOCKED_SUFFIXES = (
     ".db",
     ".sqlite",
@@ -32,6 +46,7 @@ ALLOWED_TRACKED_PATHS = {
     "docs/user_manual/group_analysis/user_manual.pdf",
     "tests/fixtures/pdf/cmm_smoke_fixture.pdf",
 }
+ALLOWED_TRACKED_PATHS_LOWER = {path.lower() for path in ALLOWED_TRACKED_PATHS}
 
 
 def _git_lines(*args: str) -> list[str]:
@@ -46,13 +61,14 @@ def _git_lines(*args: str) -> list[str]:
 
 def _is_blocked(path: str) -> str | None:
     normalized = path.replace("\\", "/")
-    if normalized in ALLOWED_TRACKED_PATHS:
+    normalized_lower = normalized.lower()
+    if normalized_lower in ALLOWED_TRACKED_PATHS_LOWER:
         return None
-    if Path(normalized).name in BLOCKED_FILENAMES:
+    if Path(normalized_lower).name in BLOCKED_FILENAMES_LOWER:
         return "generated release report"
-    if any(normalized.startswith(prefix) for prefix in BLOCKED_PREFIXES):
+    if any(normalized_lower.startswith(prefix) for prefix in BLOCKED_PREFIXES_LOWER):
         return "generated release or benchmark artifact path"
-    if normalized.lower().endswith(BLOCKED_SUFFIXES):
+    if normalized_lower.endswith(BLOCKED_SUFFIXES):
         return "local data or generated evidence file type"
     return None
 

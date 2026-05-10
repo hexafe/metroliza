@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from modules.characteristic_alias_service import ensure_characteristic_alias_table
 from modules.db import run_transaction_with_retry
+from modules.industrial_data_schema import ensure_industrial_data_schema
 
 
 SCHEMA_VERSION = "report_metadata_v1"
@@ -317,6 +318,12 @@ def ensure_report_schema(database: str, *, connection=None, retries: int = 4, re
     run_transaction_with_retry(
         database,
         _ensure_schema,
+        connection=connection,
+        retries=retries,
+        retry_delay_s=retry_delay_s,
+    )
+    ensure_industrial_data_schema(
+        database,
         connection=connection,
         retries=retries,
         retry_delay_s=retry_delay_s,

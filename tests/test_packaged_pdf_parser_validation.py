@@ -247,6 +247,9 @@ def test_build_nuitka_script_defaults_to_release_onefile_and_includes_runtime_pa
     assert "$modeLabel = if ($FastDev) { 'standalone (faster dev build)' } else { 'onefile (release-like build)' }" in script
     assert "'--include-package=modules'" in script
     assert "'--include-package=hexafe_groupstats'" in script
+    assert "$commonArgs += '--include-package=oznak'" in script
+    assert "$commonArgs += '--include-distribution-metadata=oznak'" in script
+    assert "$oznakPackageAvailable" in script
     assert "'--include-module=modules.cmm_report_parser'" in script
     assert "'--include-module=modules.header_ocr_backend'" in script
     assert "'--include-module=modules.header_ocr_geometry'" in script
@@ -302,6 +305,7 @@ def test_pyinstaller_spec_collects_windows_runtime_and_pdf_parser_dependencies()
     assert 'def _collect_windows_python_runtime_binaries()' in spec
     assert "pymupdf_datas, pymupdf_binaries, pymupdf_hiddenimports = _collect_optional_runtime_assets('pymupdf')" in spec
     assert "fitz_datas, fitz_binaries, fitz_hiddenimports = _collect_optional_runtime_assets('fitz')" in spec
+    assert "oznak_datas, oznak_binaries, oznak_hiddenimports = _collect_optional_runtime_assets('oznak')" in spec
     assert "rapidocr_datas, rapidocr_binaries, rapidocr_hiddenimports = _collect_optional_runtime_assets('rapidocr')" in spec
     assert "onnxruntime_datas, onnxruntime_binaries, onnxruntime_hiddenimports = _collect_optional_runtime_assets('onnxruntime')" in spec
     assert "openvino_datas, openvino_binaries, openvino_hiddenimports = _collect_optional_runtime_assets('openvino')" in spec
@@ -312,11 +316,12 @@ def test_pyinstaller_spec_collects_windows_runtime_and_pdf_parser_dependencies()
     assert "openvino_metadata_datas = _collect_optional_distribution_metadata('openvino')" in spec
     assert "opencv_python_metadata_datas = _collect_optional_distribution_metadata('opencv-python')" in spec
     assert "numpy_metadata_datas = _collect_optional_distribution_metadata('numpy')" in spec
+    assert "oznak_metadata_datas = _collect_optional_distribution_metadata('oznak')" in spec
     assert 'def _collect_optional_vendored_model_data()' in spec
     assert "html_dashboard_datas = [(str(ROOT_DIR / 'modules' / 'html_dashboard_assets' / 'plotly-2.27.0.min.js'), 'modules/html_dashboard_assets')]" in spec
     assert "third_party_notice_datas = [(str(ROOT_DIR / 'THIRD_PARTY_NOTICES.md'), '.')]" in spec
-    assert "binaries=windows_runtime_binaries + pymupdf_binaries + fitz_binaries + hexafe_groupstats_binaries + rapidocr_binaries + onnxruntime_binaries + openvino_binaries + cv2_binaries + numpy_binaries" in spec
-    assert "datas=third_party_notice_datas + html_dashboard_datas + pymupdf_datas + fitz_datas + hexafe_groupstats_datas + rapidocr_datas + onnxruntime_datas + openvino_datas + cv2_datas + numpy_datas + rapidocr_metadata_datas + onnxruntime_metadata_datas + openvino_metadata_datas + opencv_python_metadata_datas + numpy_metadata_datas + ocr_model_datas" in spec
+    assert "binaries=windows_runtime_binaries + pymupdf_binaries + fitz_binaries + hexafe_groupstats_binaries + oznak_binaries + rapidocr_binaries + onnxruntime_binaries + openvino_binaries + cv2_binaries + numpy_binaries" in spec
+    assert "datas=third_party_notice_datas + html_dashboard_datas + pymupdf_datas + fitz_datas + hexafe_groupstats_datas + oznak_datas + rapidocr_datas + onnxruntime_datas + openvino_datas + cv2_datas + numpy_datas + rapidocr_metadata_datas + onnxruntime_metadata_datas + openvino_metadata_datas + opencv_python_metadata_datas + numpy_metadata_datas + oznak_metadata_datas + ocr_model_datas" in spec
     assert "'modules.cmm_report_parser'" in spec
     assert "'modules.native_chart_compositor'" in spec
     assert "'rapidocr'" in spec
@@ -324,6 +329,8 @@ def test_pyinstaller_spec_collects_windows_runtime_and_pdf_parser_dependencies()
     assert "'openvino'" in spec
     assert "'cv2'" in spec
     assert "'numpy'" in spec
+    assert "'oznak'" in spec
+    assert '*oznak_hiddenimports' in spec
     assert '*rapidocr_hiddenimports' in spec
     assert '*onnxruntime_hiddenimports' in spec
     assert '*openvino_hiddenimports' in spec

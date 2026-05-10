@@ -149,6 +149,20 @@ Interactive Plotly histograms use the same bin range as the workbook/native hist
 
 This option does not replace the workbook. It adds an extra review file alongside it.
 
+### Industrial context
+
+You can optionally check **Industrial context**.
+
+This adds cached Oznak industrial columns to the measurement export and writes industrial context/diagnostics worksheets when linked production-process records exist in the selected Metroliza report database.
+
+Before using this option, open **Tools > Industrial data...** from the main window. Configure production line sources either by editing `~/.metroliza/industrial_sources.yaml` directly or by using **Production sources...**, which reads/writes the same Oznak-style config file. Then use **Sync...** to enter references, test the production database connection, sync production rows into the selected Metroliza report database cache, and refresh links.
+
+If the report reference and production reference are not the same value, open **Production links...** after sync. Manual links connect one Metroliza report to one cached production row and take priority over automatic exact-reference links.
+
+Export uses only local cached industrial rows from the Metroliza report database. It does not connect to production line databases while the workbook is being created. If no industrial rows have been synced or no report links exist yet, the normal export still works, but no industrial context is added.
+
+The industrial data launcher can also open a dedicated cached Oznak export dialog. That export follows the CSV Summary pattern: choose scope/grouping, select an output workbook, decide whether to include plots, then create the workbook from cached rows only.
+
 ### Chart type
 
 Available chart types are:

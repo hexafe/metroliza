@@ -200,6 +200,19 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
                 'idx_report_measurements_ax',
                 'idx_report_measurements_status',
                 'idx_report_measurements_family',
+                'idx_industrial_source_profiles_enabled',
+                'idx_industrial_source_profiles_alias',
+                'idx_industrial_sync_runs_profile_started',
+                'idx_industrial_sync_runs_status',
+                'idx_industrial_records_profile_timestamp',
+                'idx_industrial_records_reference',
+                'idx_industrial_records_part_revision',
+                'idx_industrial_records_serial',
+                'idx_industrial_records_batch_lot',
+                'idx_industrial_record_values_record_field',
+                'idx_industrial_join_rules_enabled_priority',
+                'idx_industrial_link_candidates_record_status',
+                'idx_industrial_link_candidates_report_measurement',
             }
             self.assertEqual(actual_index_names, expected_index_names)
 

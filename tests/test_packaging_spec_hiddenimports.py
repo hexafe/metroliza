@@ -21,6 +21,15 @@ def test_onefile_spec_collects_hexafe_groupstats_hiddenimports():
     assert "*hexafe_groupstats_hiddenimports" in spec_text
 
 
+def test_onefile_spec_collects_optional_oznak_hiddenimports():
+    spec_text = Path("packaging/metroliza_onefile.spec").read_text(encoding="utf-8")
+
+    assert "_collect_optional_runtime_assets('oznak')" in spec_text
+    assert "_collect_optional_distribution_metadata('oznak')" in spec_text
+    assert "'oznak'" in spec_text
+    assert "*oznak_hiddenimports" in spec_text
+
+
 def test_onefile_spec_collects_ocr_runtime_assets_and_model_data():
     spec_text = Path("packaging/metroliza_onefile.spec").read_text(encoding="utf-8")
 

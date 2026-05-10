@@ -9,6 +9,7 @@ from modules.release_notes_dialog import ReleaseNotesDialog
 from modules.custom_logger import CustomLogger
 from modules.csv_summary_dialog import CSVSummaryDialog
 from modules.characteristic_mapping_dialog import CharacteristicMappingDialog
+from modules.industrial_data_dialog import IndustrialDataDialog
 from modules.help_menu import build_help_menu
 from VersionDate import release_notes
 from PyQt6.QtCore import QByteArray
@@ -67,6 +68,7 @@ class MainWindow(QMainWindow):
         self.export_dialog = None
         self.metadata_enrichment_thread = None
         self.metadata_enrichment_error_message = None
+        self.industrial_data_dialog = None
         self.directory = None
         self.db_file = None
 
@@ -131,9 +133,13 @@ class MainWindow(QMainWindow):
         self.enrich_metadata_action = QAction("Enrich existing database metadata...", self)
         self.enrich_metadata_action.setToolTip("Run OCR metadata enrichment on reports already saved in the selected database")
         self.enrich_metadata_action.triggered.connect(self.launch_metadata_enrichment)
+        self.industrial_data_action = QAction("Industrial data...", self)
+        self.industrial_data_action.setToolTip("Configure, sync, link, and export cached Oznak industrial data")
+        self.industrial_data_action.triggered.connect(self.launch_industrial_data_dialog)
         self.tools_menu = self.menuBar().addMenu("Tools")
         self.tools_menu.addAction(self.csv_summary_action)
         self.tools_menu.addAction(self.enrich_metadata_action)
+        self.tools_menu.addAction(self.industrial_data_action)
         _, self.help_menu = build_help_menu(self, [("Main window manual", 'main_window')], menu_bar=self.menuBar())
         if hasattr(self.help_menu, "addSeparator"):
             self.help_menu.addSeparator()
@@ -349,6 +355,17 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.log_and_exit(e)
 
+    def launch_industrial_data_dialog(self):
+        try:
+            if not self.industrial_data_dialog or not self.industrial_data_dialog.isVisible():
+                self.industrial_data_dialog = IndustrialDataDialog(self, self.db_file)
+                self.industrial_data_dialog.show()
+
+            self.industrial_data_dialog.raise_()
+            self.industrial_data_dialog.activateWindow()
+        except Exception as e:
+            self.log_and_exit(e)
+
     def launch_characteristic_mapping_dialog(self):
         try:
             characteristic_mapping_dialog = CharacteristicMappingDialog(self, self.db_file)
@@ -360,6 +377,8 @@ class MainWindow(QMainWindow):
         try:
             self.db_file = db_file
             self._sync_context_rows()
+            if self.industrial_data_dialog and self.industrial_data_dialog.isVisible():
+                self.industrial_data_dialog.update_db_file(db_file)
         except Exception as e:
             self.log_and_exit(e)
 

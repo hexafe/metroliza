@@ -82,6 +82,7 @@ windows_runtime_binaries = _collect_windows_python_runtime_binaries()
 pymupdf_datas, pymupdf_binaries, pymupdf_hiddenimports = _collect_optional_runtime_assets('pymupdf')
 fitz_datas, fitz_binaries, fitz_hiddenimports = _collect_optional_runtime_assets('fitz')
 hexafe_groupstats_datas, hexafe_groupstats_binaries, hexafe_groupstats_hiddenimports = _collect_optional_runtime_assets('hexafe_groupstats')
+oznak_datas, oznak_binaries, oznak_hiddenimports = _collect_optional_runtime_assets('oznak')
 rapidocr_datas, rapidocr_binaries, rapidocr_hiddenimports = _collect_optional_runtime_assets('rapidocr')
 onnxruntime_datas, onnxruntime_binaries, onnxruntime_hiddenimports = _collect_optional_runtime_assets('onnxruntime')
 openvino_datas, openvino_binaries, openvino_hiddenimports = _collect_optional_runtime_assets('openvino')
@@ -92,6 +93,7 @@ onnxruntime_metadata_datas = _collect_optional_distribution_metadata('onnxruntim
 openvino_metadata_datas = _collect_optional_distribution_metadata('openvino')
 opencv_python_metadata_datas = _collect_optional_distribution_metadata('opencv-python')
 numpy_metadata_datas = _collect_optional_distribution_metadata('numpy')
+oznak_metadata_datas = _collect_optional_distribution_metadata('oznak')
 ocr_model_datas = _collect_optional_vendored_model_data()
 html_dashboard_datas = [(str(ROOT_DIR / 'modules' / 'html_dashboard_assets' / 'plotly-2.27.0.min.js'), 'modules/html_dashboard_assets')]
 third_party_notice_datas = [(str(ROOT_DIR / 'THIRD_PARTY_NOTICES.md'), '.')]
@@ -100,12 +102,13 @@ third_party_notice_datas = [(str(ROOT_DIR / 'THIRD_PARTY_NOTICES.md'), '.')]
 a = Analysis(
     [str(ROOT_DIR / 'metroliza.py')],
     pathex=[],
-    binaries=windows_runtime_binaries + pymupdf_binaries + fitz_binaries + hexafe_groupstats_binaries + rapidocr_binaries + onnxruntime_binaries + openvino_binaries + cv2_binaries + numpy_binaries,
-    datas=third_party_notice_datas + html_dashboard_datas + pymupdf_datas + fitz_datas + hexafe_groupstats_datas + rapidocr_datas + onnxruntime_datas + openvino_datas + cv2_datas + numpy_datas + rapidocr_metadata_datas + onnxruntime_metadata_datas + openvino_metadata_datas + opencv_python_metadata_datas + numpy_metadata_datas + ocr_model_datas,
+    binaries=windows_runtime_binaries + pymupdf_binaries + fitz_binaries + hexafe_groupstats_binaries + oznak_binaries + rapidocr_binaries + onnxruntime_binaries + openvino_binaries + cv2_binaries + numpy_binaries,
+    datas=third_party_notice_datas + html_dashboard_datas + pymupdf_datas + fitz_datas + hexafe_groupstats_datas + oznak_datas + rapidocr_datas + onnxruntime_datas + openvino_datas + cv2_datas + numpy_datas + rapidocr_metadata_datas + onnxruntime_metadata_datas + openvino_metadata_datas + opencv_python_metadata_datas + numpy_metadata_datas + oznak_metadata_datas + ocr_model_datas,
     hiddenimports=[
         '_metroliza_cmm_native',
         '_metroliza_chart_native',
         'hexafe_groupstats',
+        'oznak',
         'pymupdf',
         'fitz',
         'rapidocr',
@@ -119,6 +122,7 @@ a = Analysis(
         'modules.header_ocr_corrections',
         'modules.native_chart_compositor',
         *hexafe_groupstats_hiddenimports,
+        *oznak_hiddenimports,
         *pymupdf_hiddenimports,
         *fitz_hiddenimports,
         *rapidocr_hiddenimports,

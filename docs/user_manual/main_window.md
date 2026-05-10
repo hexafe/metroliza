@@ -9,7 +9,8 @@ From here you can open:
 - Parsing,
 - Modify Database,
 - Export,
-- Characteristic Name Matching.
+- Characteristic Name Matching,
+- Industrial data source setup, sync, and cached Oznak link refresh.
 
 It also gives you quick access to the **Tools** and **Help** menus from the menu bar.
 
@@ -44,6 +45,40 @@ Use this when you already have a database file and want to create an **Excel fil
 Opens the [CSV Summary](csv_summary.md) workflow from the **Tools** menu.
 
 This is a separate mini-app inside Metroliza. It works directly from a CSV file and does **not** require the normal parse-to-database workflow.
+
+### Tools > Industrial data...
+
+Opens the compact industrial data launcher. It keeps two database concepts separate:
+
+- **Metroliza report database**: the SQLite file Metroliza creates from CMM/metrology reports. This stores report metadata, measurements, local industrial cache rows, sync diagnostics, and report-to-production links.
+- **Production line database**: an existing MySQL/MSSQL source that Oznak reads from. It belongs to the production line and can contain sensor/process rows for many years of assemblies.
+
+Use this when you want to connect assembly-process data from Oznak-supported production line databases to the metrology reports already saved in Metroliza.
+
+The launcher opens separate workflows:
+
+- **Production sources...** edits non-secret production line connection setup such as database type, host, database name, table/view, columns, record key, and timestamp column. This stays available even before a Metroliza report database is selected.
+- **Sync...** asks for the production database username/password for the current session, opens the reference filter, tests the production database connection, syncs rows into the selected Metroliza report database cache, and can cancel a running sync.
+- **Production links...** lets you manually link a Metroliza report to a cached production row when both systems use different reference values.
+- **Export...** creates a cached industrial workbook with filter/grouping summaries and an explicit **Include plots** option.
+- **Refresh links** refreshes local report-to-process links before the main Metroliza export.
+
+There are two ways to configure production line databases:
+
+- Edit the YAML config file directly. By default, Metroliza uses `~/.metroliza/industrial_sources.yaml` with the same top-level `databases:` format as Oznak.
+- Use **Production sources...**. The dialog reads and writes that config file, and when a Metroliza report database is selected it also synchronizes the non-secret source profiles into the local cache tables.
+
+Metroliza stores the source setup, cache rows, sync diagnostics, and links in the selected Metroliza report database. It does not store the production database username or password in the report database or config file.
+
+Export never connects to the production line database directly. Live production database access happens only when the user explicitly runs **Test connection** or **Sync now** in the sync dialog.
+
+**Sync now** is reference-scoped. It requires at least one reference before it fetches production-line rows, so Metroliza does not pull an entire historical source table.
+
+Use **Edit filter...** in the sync dialog to paste references quickly as a comma-separated, semicolon-separated, space-separated, tab-separated, or line-separated list. During sync, Metroliza batches long reference lists and uses Oznak chunked fetching when the source profile has a record key/pagination column.
+
+If the Metroliza report reference and production reference are different, use **Production links...** after sync. Select one Metroliza report, select one cached production row, then click **Link selected**. Manual links take priority over automatic exact-reference links during export.
+
+Use **Edit...** next to grouping in the industrial export dialog to choose production-line grouping fields such as station, line, work order, batch/lot, operator, or process status. The export dialog uses those fields for the summary sheet and optional plots.
 
 ### Match Characteristic Names
 
@@ -80,15 +115,17 @@ For a new user, the simplest workflow is:
 1. Open **Parse Reports** and create or update a **database file**.
 2. If needed, use **Modify Database** to clean up stored values.
 3. If needed, use **Match Characteristic Names** so equivalent characteristics use a common name.
-4. Open **Export Workbook** and create the final **Excel file**.
+4. If needed, open **Tools > Industrial data...**, test/sync industrial data, and refresh links.
+5. Open **Export Workbook** and create the final **Excel file**.
 
 A practical version is:
 
 - **Parse data** first.
 - **Optionally modify the database**.
 - **Optionally match characteristic names**.
+- **Optionally sync industrial data**.
 - **Export**.
-- Use **Tools** for utility workflows such as **CSV Summary** or **Enrich existing database metadata...**.
+- Use **Tools** for utility workflows such as **CSV Summary**, **Industrial data...**, or **Enrich existing database metadata...**.
 - Use **Help** for manuals, **Release notes**, and **About**.
 
 ## Typical user journeys

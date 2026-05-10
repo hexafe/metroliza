@@ -1,0 +1,223 @@
+import json
+import sqlite3
+
+from modules.industrial_data_repository import IndustrialDataRepository
+from modules.industrial_data_schema import SCHEMA_VERSION, ensure_industrial_data_schema
+
+
+def test_industrial_schema_creates_expected_tables_and_indexes(tmp_path):
+    db_path = str(tmp_path / "industrial.db")
+    ensure_industrial_data_schema(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        tables = {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
+        indexes = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_industrial_%'"
+            ).fetchall()
+        }
+        schema_version = conn.execute(
+            "SELECT value FROM app_schema WHERE key = 'industrial_schema_version'"
+        ).fetchone()[0]
+        profile_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(industrial_source_profiles)").fetchall()
+        }
+
+    assert {
+        "app_schema",
+        "industrial_source_profiles",
+        "industrial_sync_runs",
+        "industrial_records",
+        "industrial_record_values",
+        "industrial_join_rules",
+        "industrial_link_candidates",
+    }.issubset(tables)
+    assert {
+        "idx_industrial_source_profiles_enabled",
+        "idx_industrial_sync_runs_profile_started",
+        "idx_industrial_records_profile_timestamp",
+        "idx_industrial_record_values_record_field",
+    }.issubset(indexes)
+    assert schema_version == SCHEMA_VERSION
+    assert {"host", "port", "database_name"}.issubset(profile_columns)
+    assert "password" not in profile_columns
+    assert "token" not in profile_columns
+    assert "credentials_json" not in profile_columns
+
+
+def test_source_profile_upsert_list_and_sync_run_lifecycle(tmp_path):
+    db_path = str(tmp_path / "industrial.db")
+    repository = IndustrialDataRepository(db_path)
+
+    profile = repository.upsert_source_profile(
+        profile_key="line-a",
+        profile_name="Line A",
+        source_db_alias="plant_a",
+        database_type="mssql",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+        source_object_name="dbo.events",
+        allowed_columns=["reference", "serial", "reference"],
+        timestamp_column="event_at",
+        default_pagination_column="event_id",
+        is_enabled=True,
+    )
+    updated_profile = repository.upsert_source_profile(
+        profile_key="line-a",
+        profile_name="Line A Updated",
+        source_db_alias="plant_a",
+        database_type="mssql",
+        host="mes2.example.invalid",
+        port=1444,
+        database_name="plantdb2",
+        source_object_name="dbo.events",
+        allowed_columns=["serial", "station"],
+        timestamp_column="event_at",
+        default_pagination_column="event_id",
+        is_enabled=False,
+    )
+
+    profiles = repository.list_source_profiles(include_disabled=True)
+
+    assert profile.id == updated_profile.id
+    assert len(profiles) == 1
+    assert profiles[0].profile_name == "Line A Updated"
+    assert profiles[0].host == "mes2.example.invalid"
+    assert profiles[0].port == 1444
+    assert profiles[0].database_name == "plantdb2"
+    assert profiles[0].allowed_columns == ("serial", "station")
+    assert profiles[0].is_enabled is False
+
+    sync_run_id = repository.create_sync_run(
+        source_profile_id=profile.id,
+        filters={"station": "A1", "password": "super-secret"},
+        oznak_version="0.2.0",
+        oznak_commit="abc123",
+        diagnostics={"token": "very-secret", "phase": "fetch"},
+    )
+    repository.finish_sync_run(
+        sync_run_id=sync_run_id,
+        status="succeeded",
+        row_count=2,
+        diagnostics={"refresh_token": "another-secret", "rows": 2},
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT status, row_count, filters_json, diagnostics_json
+            FROM industrial_sync_runs
+            WHERE id = ?
+            """,
+            (sync_run_id,),
+        ).fetchone()
+
+    assert row is not None
+    status, row_count, filters_json, diagnostics_json = row
+    assert status == "succeeded"
+    assert row_count == 2
+    assert "super-secret" not in (filters_json or "")
+    assert "very-secret" not in (diagnostics_json or "")
+    assert "another-secret" not in (diagnostics_json or "")
+    assert json.loads(filters_json)["password"] == "<redacted>"
+    assert json.loads(diagnostics_json)["refresh_token"] == "<redacted>"
+
+
+def test_upsert_records_and_summarize_counts_from_synthetic_rows(tmp_path):
+    db_path = str(tmp_path / "industrial.db")
+    repository = IndustrialDataRepository(db_path)
+    profile = repository.upsert_source_profile(
+        profile_key="line-b",
+        profile_name="Line B",
+        source_db_alias="plant_b",
+        database_type="mysql",
+        source_object_name="factory.events",
+        allowed_columns=["reference", "serial", "station"],
+    )
+    sync_run_id = repository.create_sync_run(source_profile_id=profile.id, filters={"line": "L1"})
+
+    first_pass = repository.upsert_industrial_records_from_rows(
+        source_profile_id=profile.id,
+        source_db_alias=profile.source_db_alias,
+        sync_run_id=sync_run_id,
+        rows=[
+            {
+                "source_record_key": "ROW-1",
+                "process_timestamp": "2026-05-01T10:00:00Z",
+                "reference": "REF-1",
+                "part_name": "Housing",
+                "serial": "SN-1",
+                "station": "S1",
+                "temperature_c": 22.5,
+                "measurements": {"force": 8.4},
+            },
+            {
+                "record_key": "ROW-2",
+                "timestamp": "2026-05-01T10:01:00Z",
+                "reference": "REF-2",
+                "part_number": "PN-2",
+                "operator": "Op-B",
+                "batch": "LOT-9",
+                "status": "pass",
+                "custom_code": "X2",
+                "token": "should-not-persist",
+            },
+        ],
+    )
+    second_pass = repository.upsert_industrial_records_from_rows(
+        source_profile_id=profile.id,
+        source_db_alias=profile.source_db_alias,
+        sync_run_id=sync_run_id,
+        rows=[
+            {
+                "source_record_key": "ROW-1",
+                "process_timestamp": "2026-05-01T10:05:00Z",
+                "reference": "REF-1-UPDATED",
+                "station": "S2",
+                "temperature_c": 23.0,
+            }
+        ],
+    )
+    repository.finish_sync_run(sync_run_id=sync_run_id, status="succeeded", row_count=2)
+
+    counts = repository.summarize_counts(source_profile_id=profile.id)
+
+    assert first_pass == {"processed": 2, "inserted": 2, "updated": 0, "value_rows": 3}
+    assert second_pass == {"processed": 1, "inserted": 0, "updated": 1, "value_rows": 1}
+    assert counts.source_profiles == 1
+    assert counts.sync_runs == 1
+    assert counts.records == 2
+    assert counts.record_values == 3
+    assert counts.join_rules == 0
+    assert counts.link_candidates == 0
+
+    with sqlite3.connect(db_path) as conn:
+        updated_record = conn.execute(
+            """
+            SELECT reference, station, raw_record_json
+            FROM industrial_records
+            WHERE source_profile_id = ? AND source_record_key = 'ROW-1'
+            """,
+            (profile.id,),
+        ).fetchone()
+        token_values = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM industrial_record_values values_row
+            JOIN industrial_records records_row ON records_row.id = values_row.record_id
+            WHERE records_row.source_profile_id = ? AND values_row.field_name = 'token'
+            """,
+            (profile.id,),
+        ).fetchone()[0]
+
+    assert updated_record is not None
+    reference, station, raw_record_json = updated_record
+    assert reference == "REF-1-UPDATED"
+    assert station == "S2"
+    assert "should-not-persist" not in (raw_record_json or "")
+    assert token_values == 0

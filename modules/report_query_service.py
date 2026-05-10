@@ -7,6 +7,23 @@ _REPORT_OVERVIEW_VIEW = "vw_report_overview"
 _GROUPING_REPORT_VIEW = "vw_grouping_reports"
 _MEASUREMENT_EXPORT_VIEW = "vw_measurement_export"
 
+INDUSTRIAL_EXPORT_COLUMNS = (
+    "INDUSTRIAL_RECORD_ID",
+    "INDUSTRIAL_SOURCE_PROFILE",
+    "INDUSTRIAL_SOURCE_DB",
+    "INDUSTRIAL_PROCESS_TIMESTAMP",
+    "INDUSTRIAL_PART_NUMBER",
+    "INDUSTRIAL_SERIAL",
+    "INDUSTRIAL_BATCH_LOT",
+    "INDUSTRIAL_WORK_ORDER",
+    "INDUSTRIAL_STATION",
+    "INDUSTRIAL_LINE",
+    "INDUSTRIAL_OPERATOR",
+    "INDUSTRIAL_STATUS",
+    "INDUSTRIAL_LINK_CONFIDENCE",
+    "INDUSTRIAL_LINK_RULE",
+)
+
 
 def _normalize_sql_query(query):
     if not isinstance(query, str):
@@ -127,7 +144,56 @@ def build_grouping_query(filter_query=None):
     return _build_select_from_view(select_clause, _GROUPING_REPORT_VIEW)
 
 
-def build_measurement_export_query(filter_query=None):
+def _append_industrial_context_to_export_query(base_query):
+    normalized_base_query = _normalize_sql_query(base_query)
+    return f"""
+        SELECT
+            base.*,
+            ir.id AS INDUSTRIAL_RECORD_ID,
+            isp.profile_name AS INDUSTRIAL_SOURCE_PROFILE,
+            ir.source_db_alias AS INDUSTRIAL_SOURCE_DB,
+            ir.process_timestamp AS INDUSTRIAL_PROCESS_TIMESTAMP,
+            ir.part_number AS INDUSTRIAL_PART_NUMBER,
+            ir.serial AS INDUSTRIAL_SERIAL,
+            ir.batch_lot AS INDUSTRIAL_BATCH_LOT,
+            ir.work_order AS INDUSTRIAL_WORK_ORDER,
+            ir.station AS INDUSTRIAL_STATION,
+            ir.line AS INDUSTRIAL_LINE,
+            ir.operator_name AS INDUSTRIAL_OPERATOR,
+            ir.process_status AS INDUSTRIAL_STATUS,
+            ilc.confidence AS INDUSTRIAL_LINK_CONFIDENCE,
+            ijr.rule_name AS INDUSTRIAL_LINK_RULE
+        FROM (
+            {normalized_base_query}
+        ) AS base
+        LEFT JOIN industrial_link_candidates ilc ON ilc.id = (
+            SELECT selected_candidate.id
+            FROM industrial_link_candidates selected_candidate
+            LEFT JOIN industrial_join_rules selected_rule
+                ON selected_rule.id = selected_candidate.join_rule_id
+            WHERE selected_candidate.report_id = base.REPORT_ID
+              AND selected_candidate.measurement_id IS NULL
+              AND selected_candidate.status = 'accepted'
+            ORDER BY COALESCE(selected_rule.priority, 100), selected_candidate.confidence DESC, selected_candidate.id
+            LIMIT 1
+        )
+        LEFT JOIN industrial_records ir ON ir.id = ilc.industrial_record_id
+        LEFT JOIN industrial_source_profiles isp ON isp.id = ir.source_profile_id
+        LEFT JOIN industrial_join_rules ijr ON ijr.id = ilc.join_rule_id
+    """
+
+
+def build_industrial_measurement_export_query(filter_query=None):
+    """Build a measurement export query with optional cached industrial context columns."""
+
+    base_query = build_measurement_export_query(filter_query)
+    return _append_industrial_context_to_export_query(base_query)
+
+
+def build_measurement_export_query(filter_query=None, *, include_industrial_context=False):
+    if include_industrial_context:
+        return build_industrial_measurement_export_query(filter_query)
+
     normalized_filter_query = _normalize_sql_query(filter_query)
     if normalized_filter_query:
         if not _is_export_scoped_query(normalized_filter_query):
