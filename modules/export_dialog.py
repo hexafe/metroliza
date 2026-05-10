@@ -198,7 +198,7 @@ class ExportDialog(QDialog):
         self.setWindowTitle("Export")
         if parent is not None and hasattr(parent, "windowIcon"):
             self.setWindowIcon(parent.windowIcon())
-        configure_window_size(self, minimum=(540, 430), initial=(620, 700))
+        configure_window_size(self, minimum=(700, 430), initial=(760, 700))
 
         self.db_file = db_file
         self.excel_file = ""
@@ -502,7 +502,8 @@ class ExportDialog(QDialog):
             content_layout.setHorizontalSpacing(12)
             content_layout.setVerticalSpacing(8)
             content_layout.setColumnStretch(1, 1)
-            content_layout.setColumnStretch(3, 1)
+            content_layout.setColumnStretch(2, 0)
+            content_layout.setColumnStretch(3, 0)
 
             row = 0
             content_layout.addWidget(self.preset_output_section_label, row, 0, 1, 4)
@@ -531,25 +532,15 @@ class ExportDialog(QDialog):
 
             row += 1
             content_layout.addWidget(QLabel("Filters:"), row, 0)
-            content_layout.addWidget(self.select_filter_label, row, 1, 1, 2)
-            filter_actions = QWidget()
-            filter_actions_layout = QHBoxLayout(filter_actions)
-            filter_actions_layout.setContentsMargins(0, 0, 0, 0)
-            filter_actions_layout.setSpacing(6)
-            filter_actions_layout.addWidget(self.filter_button)
-            filter_actions_layout.addWidget(self.clear_filter_button)
-            content_layout.addWidget(filter_actions, row, 3)
+            content_layout.addWidget(self.select_filter_label, row, 1)
+            content_layout.addWidget(self.filter_button, row, 2)
+            content_layout.addWidget(self.clear_filter_button, row, 3)
 
             row += 1
             content_layout.addWidget(QLabel("Grouping:"), row, 0)
-            content_layout.addWidget(self.select_group_label, row, 1, 1, 2)
-            grouping_actions = QWidget()
-            grouping_actions_layout = QHBoxLayout(grouping_actions)
-            grouping_actions_layout.setContentsMargins(0, 0, 0, 0)
-            grouping_actions_layout.setSpacing(6)
-            grouping_actions_layout.addWidget(self.group_button)
-            grouping_actions_layout.addWidget(self.clear_group_button)
-            content_layout.addWidget(grouping_actions, row, 3)
+            content_layout.addWidget(self.select_group_label, row, 1)
+            content_layout.addWidget(self.group_button, row, 2)
+            content_layout.addWidget(self.clear_group_button, row, 3)
 
             row += 1
             content_layout.addWidget(separator(), row, 0, 1, 4)
@@ -604,7 +595,7 @@ class ExportDialog(QDialog):
 
             self.content_scroll_area = QScrollArea()
             self.content_scroll_area.setWidgetResizable(True)
-            self.content_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.content_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
             self.content_scroll_area.setWidget(self.content_widget)
             self.content_scroll_area.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             self.layout.addWidget(self.content_scroll_area, 1)
@@ -708,11 +699,21 @@ class ExportDialog(QDialog):
 
     def _apply_window_size_constraints(self):
         size_hint = self.sizeHint()
-        initial_width = min(max(580, size_hint.width()), 700)
+        content_width = 0
+        if hasattr(self, "content_widget") and self.content_widget is not None:
+            content_width = self.content_widget.minimumSizeHint().width()
+        desired_width = max(720, content_width + 44, size_hint.width())
+        initial_width = min(desired_width, 900)
         initial_height = min(max(560, size_hint.height()), 860)
+        minimum_width = min(max(700, content_width + 28), 900)
+        available = self._available_geometry()
+        if available is not None and hasattr(available, "width"):
+            bounded_width = max(540, available.width() - 40)
+            minimum_width = min(minimum_width, bounded_width)
+            initial_width = min(initial_width, bounded_width)
         configure_window_size(
             self,
-            minimum=(540, 430),
+            minimum=(minimum_width, 430),
             initial=(initial_width, initial_height),
             screen_margin=40,
         )

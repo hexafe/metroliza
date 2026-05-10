@@ -151,6 +151,59 @@ class TestUiRevampFoundationLayout(unittest.TestCase):
         self.assertEqual(payload["movie_file_name"], "")
         self.assertIn("Cancel", payload["cancel_texts"])
 
+    def test_export_dialog_initial_width_contains_visible_buttons(self):
+        payload = self._run_probe(
+            """
+            import json
+            import os
+            import tempfile
+            from PyQt6.QtCore import QPoint
+            from PyQt6.QtWidgets import QApplication, QAbstractButton
+
+            with tempfile.TemporaryDirectory() as home_dir:
+                os.environ["HOME"] = home_dir
+                from modules.export_dialog import ExportDialog
+
+                app = QApplication.instance() or QApplication([])
+                dialog = ExportDialog(None, db_file="/tmp/metroliza-export-layout-check.db")
+                dialog.show()
+                app.processEvents()
+
+                visible_button_bounds = []
+                for button in dialog.findChildren(QAbstractButton):
+                    if not button.isVisible():
+                        continue
+                    top_left = button.mapTo(dialog, QPoint(0, 0))
+                    visible_button_bounds.append({
+                        "text": button.text(),
+                        "left": top_left.x(),
+                        "right": top_left.x() + button.width(),
+                        "width": button.width(),
+                    })
+
+                viewport_width = dialog.content_scroll_area.viewport().width()
+                print(json.dumps({
+                    "dialog_size": [dialog.width(), dialog.height()],
+                    "available": [
+                        app.primaryScreen().availableGeometry().width(),
+                        app.primaryScreen().availableGeometry().height(),
+                    ],
+                    "viewport_width": viewport_width,
+                    "content_min_width": dialog.content_widget.minimumSizeHint().width(),
+                    "button_bounds": visible_button_bounds,
+                }, sort_keys=True))
+                dialog.close()
+                app.processEvents()
+            """
+        )
+
+        self.assertLessEqual(payload["dialog_size"][0], payload["available"][0])
+        self.assertGreaterEqual(payload["viewport_width"], payload["content_min_width"])
+        for button in payload["button_bounds"]:
+            self.assertGreaterEqual(button["left"], 0, button)
+            self.assertLessEqual(button["right"], payload["dialog_size"][0], button)
+        self.assertIn("Export", {button["text"] for button in payload["button_bounds"]})
+
 
 if __name__ == "__main__":
     unittest.main()

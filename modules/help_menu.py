@@ -22,16 +22,17 @@ GITHUB_REPOSITORY_BASE_URL = 'https://github.com/hexafe/metroliza'
 DEFAULT_RELEASE_DOCS_REF = 'master'
 GITHUB_RENDERED_DOCS_REF = os.environ.get('METROLIZA_RELEASE_DOCS_REF', DEFAULT_RELEASE_DOCS_REF)
 
-MANUAL_PATHS = {
-    'main_window': USER_MANUAL_ROOT / 'main_window.md',
-    'parsing': USER_MANUAL_ROOT / 'parsing.md',
-    'modify_database': USER_MANUAL_ROOT / 'modify_database.md',
-    'export_overview': USER_MANUAL_ROOT / 'export_overview.md',
-    'export_filtering': USER_MANUAL_ROOT / 'export_filtering.md',
-    'export_grouping': USER_MANUAL_ROOT / 'export_grouping.md',
-    'csv_summary': USER_MANUAL_ROOT / 'csv_summary.md',
-    'characteristic_name_matching': USER_MANUAL_ROOT / 'characteristic_name_matching.md',
+MANUAL_RELATIVE_PATHS = {
+    'main_window': 'docs/user_manual/main_window.md',
+    'parsing': 'docs/user_manual/parsing.md',
+    'modify_database': 'docs/user_manual/modify_database.md',
+    'export_overview': 'docs/user_manual/export_overview.md',
+    'export_filtering': 'docs/user_manual/export_filtering.md',
+    'export_grouping': 'docs/user_manual/export_grouping.md',
+    'csv_summary': 'docs/user_manual/csv_summary.md',
+    'characteristic_name_matching': 'docs/user_manual/characteristic_name_matching.md',
 }
+MANUAL_PATHS = {key: REPO_ROOT / relative_path for key, relative_path in MANUAL_RELATIVE_PATHS.items()}
 
 class _FallbackAction:
     def __init__(self, *_args, **_kwargs):
@@ -108,18 +109,18 @@ def manual_url(manual_key: str) -> str:
     path segment. That page is what gives the browser-friendly rendered Markdown
     view instead of downloading raw file contents.
     """
-    relative_path = manual_path(manual_key).relative_to(REPO_ROOT).as_posix()
-    return github_blob_url(relative_path)
+    return github_blob_url(MANUAL_RELATIVE_PATHS[manual_key])
 
 
 
 def open_manual(parent, manual_key: str) -> bool:
     """Open a user manual in the default browser via GitHub."""
-    path = manual_path(manual_key)
-    if not path.exists():
-        QMessageBox.warning(parent, 'Manual not found', f'Could not find the user manual at:\n{path}')
+    try:
+        url = manual_url(manual_key)
+    except KeyError:
+        QMessageBox.warning(parent, 'Manual not found', f'Unknown user manual key: {manual_key}')
         return False
-    return bool(QDesktopServices.openUrl(QUrl(manual_url(manual_key))))
+    return bool(QDesktopServices.openUrl(QUrl(url)))
 
 
 
@@ -155,6 +156,7 @@ __all__ = [
     'DEFAULT_RELEASE_DOCS_REF',
     'GITHUB_RENDERED_DOCS_REF',
     'MANUAL_PATHS',
+    'MANUAL_RELATIVE_PATHS',
     'USER_MANUAL_ROOT',
     'attach_help_menu_to_layout',
     'build_help_menu',
