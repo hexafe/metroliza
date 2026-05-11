@@ -1,18 +1,16 @@
 # Changelog (for end users)
 
-## 2026.05 (build 260510) — current version
-- Industrial data is now available from the Tools menu for connecting production-line records with Metroliza reports.
-- Separate Sources, Sync, and Export dialogs make production-line data setup easier to follow.
-- Industrial analytics can now create dashboards and statistics from cached production rows without requiring CMM measurements.
-- Analytics dashboards include time series, histograms, violin plots, box plots, grouping, time buckets, and pasted-reference marking.
-- Analytics setup now includes production filters and explicit CSV/Excel time and reference column selection.
-- CSV Summary now opens the same analytics workflow for CSV and Excel files, including optional separate sheets for each selected parameter.
+## 2026.05 RC1 (build 260511) — current version
+- CSV Summary now uses the shared analytics workflow for CSV and Excel files.
+- Metrics load automatically after choosing a CSV or Excel file, and the larger metrics picker makes longer column lists easier to manage.
+- CSV and Excel analytics can use a separate Groups dialog. Rows that are not assigned to a custom group stay in `POPULATION`, which supports selected-vs-rest comparisons.
+- Dashboards and Excel workbooks include the selected plots, using the same chart style and histogram binning used in Export.
+- Analytics completion now links directly to the generated dashboard and workbook files.
+- Detailed diagnostics are collapsed by default, while progress messages stay visible during dashboard and workbook creation.
+- Industrial data tools remain available from the Tools menu for connecting, syncing, exporting, and analyzing production-line records.
 - Legacy CSV Summary remains available for older presets, specification limits, and summary-only workbooks.
 - Canceling analytics avoids leaving partial dashboard or workbook files behind.
-- Connection testing and sync show clear progress, support canceling, and keep credentials session-only.
-- Exports can include previously synced industrial context without contacting production databases during export.
-- Older database files now open correctly in export, grouping, matching, industrial tools, and Modify Database.
-- Characteristic name matching is easier to review, search, import, and edit before Group Analysis.
+- Older database files open correctly in export, grouping, matching, industrial tools, and Modify Database.
 
 ## 2026.04 (build 260421)
 - Re-running parsing on an existing database refreshes older CMM report rows so OCR header metadata can replace filename-only values.

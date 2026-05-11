@@ -1,25 +1,20 @@
-RELEASE_VERSION = "2026.05"
-VERSION_DATE = "260510"
+RELEASE_VERSION = "2026.05rc1"
+VERSION_DATE = "260511"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = (
-    "Industrial analytics now turns cached production rows or CSV/Excel files into filtered dashboards, grouped statistics, and Excel workbooks."
+    "Industrial analytics and CSV Summary now create grouped dashboards and Excel workbooks with export-matching plots."
 )
-PUBLIC_VERSION_LABEL = "2026.05 (build 260510)"
+PUBLIC_VERSION_LABEL = "2026.05 RC1 (build 260511)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
-    - Industrial data is now available from the Tools menu for connecting production-line records with Metroliza reports<br>
-    - Separate Sources, Sync, and Export dialogs make production-line data setup easier to follow<br>
-    - Analyze cached production data without CMM measurements, including grouped dashboards, time buckets, histograms, time series, violin plots, box plots, and statistics<br>
-    - Analytics setup now includes production filters and explicit CSV/Excel time and reference column selection<br>
-    - CSV Summary now opens the same analytics workflow for CSV and Excel files, with optional separate sheets for each selected parameter<br>
-    - Legacy CSV Summary remains available for older presets, specification limits, and summary-only workbooks<br>
-    - Pasted reference lists can mark, filter, or compare selected parts in analytics outputs<br>
-    - Canceling analytics avoids leaving partial dashboard or workbook files behind<br>
-    - Connection testing and sync show clear progress, support canceling, and keep credentials session-only<br>
-    - Exports can include previously synced industrial context without contacting production databases during export<br>
-    - Older database files now open correctly in export, grouping, matching, industrial tools, and Modify Database<br>
-    - Characteristic name matching is easier to review, search, import, and edit before Group Analysis<br>
+    - CSV Summary now uses the shared analytics workflow for CSV and Excel files<br>
+    - Metrics load automatically after choosing a CSV or Excel file, with a larger picker for selecting columns<br>
+    - CSV and Excel analytics can use a separate Groups dialog, with unassigned rows kept in POPULATION<br>
+    - Dashboards and Excel workbooks include the selected plots with the same chart style and histogram binning used in Export<br>
+    - After analytics finishes, the result window links directly to the created dashboard and workbook files<br>
+    - Detailed diagnostics are collapsed by default, while progress messages stay visible during dashboard and workbook creation<br>
+    - Industrial data tools remain available from the Tools menu for connecting, syncing, exporting, and analyzing production-line records<br>
 
     <br><b>Archive:</b><br>
 

@@ -13,7 +13,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}(?:rc\d+)?$")
         self.assertRegex(metadata.build, r"^\d{6}$")
         self.assertEqual(metadata.version_label, f"{metadata.release_version}({metadata.build})")
-        self.assertEqual(metadata.public_version_label, "2026.05 (build 260510)")
+        self.assertEqual(metadata.public_version_label, "2026.05 RC1 (build 260511)")
         self.assertTrue(metadata.highlight)
 
     def test_in_app_current_release_notes_stay_user_facing(self):
@@ -21,9 +21,10 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
 
         current_section = VersionDate.release_notes.split("<br><b>Archive:</b><br>", 1)[0]
 
-        self.assertIn("Industrial data is now available from the Tools menu", current_section)
-        self.assertIn("Separate Sources, Sync, and Export dialogs", current_section)
-        self.assertIn("keep credentials session-only", current_section)
+        self.assertIn("CSV Summary now uses the shared analytics workflow", current_section)
+        self.assertIn("larger picker for selecting columns", current_section)
+        self.assertIn("unassigned rows kept in POPULATION", current_section)
+        self.assertIn("Detailed diagnostics are collapsed by default", current_section)
         for technical_term in (
             "loading animation",
             "PyInstaller",
@@ -59,6 +60,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
             updated = temp_readme.read_text(encoding="utf-8")
             self.assertIn(f"Current release highlight (`{metadata.public_version_label}`):", updated)
             self.assertIn(f"### Changelog highlights (release `{metadata.public_version_label}`)", updated)
+            self.assertIn("RC1", updated)
             self.assertNotIn("rc1", updated)
 
     def test_sync_changelog_writes_current_header(self):

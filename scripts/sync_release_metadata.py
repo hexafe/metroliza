@@ -48,9 +48,14 @@ def load_metadata() -> ReleaseMetadata:
         names = ", ".join(missing)
         raise RuntimeError(f"VersionDate.py missing required release fields: {names}")
 
-    public_release_version = re.sub(r"rc\d+$", "", str(module.RELEASE_VERSION))
+    release_version = str(module.RELEASE_VERSION)
+    release_match = re.fullmatch(r"(\d{4}\.\d{2})(?:rc(\d+))?", release_version)
+    if release_match and release_match.group(2):
+        public_release_version = f"{release_match.group(1)} RC{release_match.group(2)}"
+    else:
+        public_release_version = release_version
     return ReleaseMetadata(
-        release_version=str(module.RELEASE_VERSION),
+        release_version=release_version,
         build=str(module.VERSION_DATE),
         version_label=f"{module.RELEASE_VERSION}({module.VERSION_DATE})",
         public_version_label=f"{public_release_version} (build {module.VERSION_DATE})",

@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/hexafe/metroliza/actions/workflows/ci.yml/badge.svg)](https://github.com/hexafe/metroliza/actions/workflows/ci.yml)
 
-Metroliza is a Python desktop app for industrial metrology workflows: parsing measurement reports, organizing data in SQLite, and exporting analysis-ready Excel summaries.
+Metroliza is a Python desktop app for industrial metrology workflows: parsing measurement reports, organizing data in SQLite, and creating analysis-ready Excel summaries, dashboards, and grouped statistics.
 
 ## Quickstart
 
@@ -123,7 +123,8 @@ also confirm the generated parser diagnostics report
 4. Export Excel reports with summaries and plots.
 5. Optionally generate a Google Sheets version while always keeping a local `.xlsx` fallback.
    - OAuth uses the minimal Drive scope: `https://www.googleapis.com/auth/drive.file`.
-6. Optionally generate an HTML dashboard sidecar with offline Plotly interactions, an Auto/Light/Dark theme switch, and workbook-matching PNG snapshots.
+6. Optionally analyze CSV/Excel files or cached production-line rows with grouped dashboards and Excel workbooks.
+7. Optionally generate an HTML dashboard sidecar with offline Plotly interactions, an Auto/Light/Dark theme switch, and workbook-matching PNG snapshots.
 
 
 ## CMM parser backend policy
@@ -265,6 +266,7 @@ Examples of metric availability by spec type:
 - Parsing guide: [`docs/user_manual/parsing.md`](docs/user_manual/parsing.md)
 - Modify Database guide: [`docs/user_manual/modify_database.md`](docs/user_manual/modify_database.md)
 - Export overview: [`docs/user_manual/export_overview.md`](docs/user_manual/export_overview.md)
+- CSV Summary guide: [`docs/user_manual/csv_summary.md`](docs/user_manual/csv_summary.md)
 - Group Analysis worksheet manual: [`docs/user_manual/group_analysis/user_manual.md`](docs/user_manual/group_analysis/user_manual.md)
 - Group Analysis printable companion: [`docs/user_manual/group_analysis/user_manual.pdf`](docs/user_manual/group_analysis/user_manual.pdf)
 
@@ -281,11 +283,11 @@ Examples of metric availability by spec type:
 
 ## Release metadata
 
-Current release highlight (`2026.05 (build 260510)`): Industrial analytics now turns cached production rows or CSV/Excel files into filtered dashboards, grouped statistics, and Excel workbooks.
+Current release highlight (`2026.05 RC1 (build 260511)`): Industrial analytics and CSV Summary now create grouped dashboards and Excel workbooks with export-matching plots.
 
 Canonical release metadata is in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, `CURRENT_RELEASE_HIGHLIGHT`).
 
-### Changelog highlights (release `2026.05 (build 260510)`)
+### Changelog highlights (release `2026.05 RC1 (build 260511)`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 
