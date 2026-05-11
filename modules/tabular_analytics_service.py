@@ -16,6 +16,8 @@ from modules.industrial_analytics_service import (
     ProductionAnalyticsDiagnostic,
     ProductionMetricCandidate,
 )
+from modules.industrial_analytics_state import ProductionChartSelection
+from modules.industrial_analytics_workbook_charts import add_analytics_workbook_charts
 
 
 _SAFE_COLUMN_RE = re.compile(r"[^A-Za-z0-9_]+")
@@ -223,6 +225,7 @@ def export_tabular_analytics_workbook(
     aggregation_result: ProductionAggregationResult | None = None,
     diagnostics: tuple[ProductionAnalyticsDiagnostic, ...] = (),
     separate_parameter_sheets: bool = True,
+    chart_selection: ProductionChartSelection | None = None,
 ) -> TabularAnalyticsWorkbookResult:
     """Write workbook output for CSV/Excel analytics, optionally one sheet per metric."""
 
@@ -256,6 +259,16 @@ def export_tabular_analytics_workbook(
             index=False,
         )
         sheet_names.append(summary_sheet)
+
+        add_analytics_workbook_charts(
+            writer=writer,
+            dataframe=safe_dataframe,
+            metric_selection=metric_candidates,
+            chart_selection=chart_selection,
+            data_sheet_name=table_sheet,
+            used_names=used_names,
+            sheet_names=sheet_names,
+        )
 
         diagnostics_sheet = unique_sheet_name("Diagnostics", used_names)
         _diagnostics_dataframe(diagnostics).to_excel(writer, sheet_name=diagnostics_sheet, index=False)

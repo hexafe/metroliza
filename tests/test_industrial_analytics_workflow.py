@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import zipfile
 from pathlib import Path
 
 import pandas as pd
@@ -24,6 +25,7 @@ def test_run_production_cache_analytics_writes_dashboard_and_workbook(tmp_path) 
     seed_production_analytics_cache(db_path)
     dashboard_file = tmp_path / "production_analytics.html"
     workbook_file = tmp_path / "production_analytics.xlsx"
+    progress_messages: list[str] = []
 
     result = run_production_cache_analytics(
         db_file=db_path,
@@ -44,6 +46,7 @@ def test_run_production_cache_analytics_writes_dashboard_and_workbook(tmp_path) 
             groupstats=True,
         ),
         separate_parameter_sheets=True,
+        progress_callback=progress_messages.append,
     )
 
     assert Path(result.html_dashboard_path).exists()
@@ -55,8 +58,18 @@ def test_run_production_cache_analytics_writes_dashboard_and_workbook(tmp_path) 
     assert {"Production Data", "Aggregates", "Metrics", "Groupstats", "Diagnostics"}.issubset(
         result.workbook_sheet_names
     )
+    assert "Charts" in result.workbook_sheet_names
+    with zipfile.ZipFile(workbook_file) as workbook_zip:
+        names = set(workbook_zip.namelist())
+    assert any(name.startswith("xl/charts/chart") for name in names)
+    assert any(name.startswith("xl/media/image") for name in names)
     production_columns = pd.read_excel(workbook_file, sheet_name="Production Data").columns
     assert "raw_record_json" not in production_columns
+    assert progress_messages
+    assert progress_messages[0].startswith("Loading production data...")
+    assert any(message.startswith("Writing dashboard...") for message in progress_messages)
+    assert progress_messages[-1].startswith("Analytics complete")
+    assert all("ETA" in message for message in progress_messages)
 
 
 def test_run_tabular_file_analytics_reuses_shared_dashboard_and_parameter_workbook(tmp_path) -> None:
@@ -72,6 +85,7 @@ def test_run_tabular_file_analytics_reuses_shared_dashboard_and_parameter_workbo
             "Width mm": [5.0, 5.1, 5.2, 5.4, 5.3, 5.5],
         }
     ).to_csv(input_file, index=False)
+    progress_messages: list[str] = []
 
     result = run_tabular_file_analytics(
         input_file=str(input_file),
@@ -85,6 +99,7 @@ def test_run_tabular_file_analytics_reuses_shared_dashboard_and_parameter_workbo
         ),
         chart_selection=ProductionChartSelection(groupstats=True),
         separate_parameter_sheets=True,
+        progress_callback=progress_messages.append,
     )
 
     assert Path(result.html_dashboard_path).exists()
@@ -93,6 +108,15 @@ def test_run_tabular_file_analytics_reuses_shared_dashboard_and_parameter_workbo
     assert result.metric_count == 1
     assert result.parameter_sheet_count == 1
     assert "Length Mm" in result.workbook_sheet_names
+    assert "Charts" in result.workbook_sheet_names
+    with zipfile.ZipFile(workbook_file) as workbook_zip:
+        names = set(workbook_zip.namelist())
+    assert any(name.startswith("xl/charts/chart") for name in names)
+    assert progress_messages
+    assert progress_messages[0].startswith("Loading CSV/Excel data...")
+    assert any(message.startswith("Writing dashboard...") for message in progress_messages)
+    assert progress_messages[-1].startswith("Analytics complete")
+    assert all("ETA" in message for message in progress_messages)
 
 
 def test_run_production_cache_analytics_cancel_removes_temp_outputs(tmp_path) -> None:

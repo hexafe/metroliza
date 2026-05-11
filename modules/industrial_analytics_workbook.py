@@ -15,6 +15,8 @@ from modules.industrial_analytics_service import (
     ProductionGroupstatsResult,
 )
 from modules.industrial_analytics_state import ProductionMetricSelection
+from modules.industrial_analytics_state import ProductionChartSelection
+from modules.industrial_analytics_workbook_charts import add_analytics_workbook_charts
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,7 @@ def export_production_analytics_workbook(
     groupstats_result: ProductionGroupstatsResult | None = None,
     diagnostics: tuple[ProductionAnalyticsDiagnostic, ...] = (),
     separate_parameter_sheets: bool = True,
+    chart_selection: ProductionChartSelection | None = None,
 ) -> IndustrialAnalyticsWorkbookResult:
     """Write production analytics workbook output."""
 
@@ -69,6 +72,16 @@ def export_production_analytics_workbook(
             index=False,
         )
         sheet_names.append(metric_sheet)
+
+        add_analytics_workbook_charts(
+            writer=writer,
+            dataframe=safe_dataframe,
+            metric_selection=metric_selection,
+            chart_selection=chart_selection,
+            data_sheet_name=data_sheet,
+            used_names=used_names,
+            sheet_names=sheet_names,
+        )
 
         if groupstats_result is not None and groupstats_result.metrics:
             stats_sheet = unique_sheet_name("Groupstats", used_names)

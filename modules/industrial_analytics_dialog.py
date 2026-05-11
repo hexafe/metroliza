@@ -32,6 +32,7 @@ from modules.industrial_analytics_state import (
 from modules.industrial_analytics_workflow import default_dashboard_path, default_workbook_path
 from modules.industrial_data_repository import IndustrialDataRepository
 from modules.industrial_workers import IndustrialAnalyticsThread
+from modules.export_dialog_service import build_export_artifact_link_line
 from modules.progress_status import build_three_line_status
 from modules.tabular_analytics_service import load_tabular_analytics_file
 from modules.ui_foundation import (
@@ -47,6 +48,118 @@ from modules.worker_progress_dialog import create_worker_progress_dialog
 
 SOURCE_PRODUCTION_CACHE = "production_cache"
 SOURCE_TABULAR_FILE = "tabular_file"
+
+
+def build_analytics_completion_message(result) -> tuple[str, str, str, str]:
+    """Build an export-style completion payload for generated analytics files."""
+
+    dashboard_line = build_export_artifact_link_line("HTML dashboard", result.html_dashboard_path)
+    workbook_line = build_export_artifact_link_line("Workbook", result.workbook_path)
+
+    message_lines = ["Analytics created successfully!"]
+    for artifact_line in (dashboard_line, workbook_line):
+        if artifact_line:
+            message_lines.extend(["", artifact_line])
+    message_lines.extend(
+        [
+            "",
+            f"Charts: {result.html_dashboard_chart_count}",
+            f"Rows analyzed: {result.row_count}",
+        ]
+    )
+    reveal_path = str(result.workbook_path or "")
+    return "info", "Analytics successful", "\n".join(message_lines), reveal_path
+
+
+class MetricSelectionDialog(QDialog):
+    """Choose which discovered metrics should be included in the analytics run."""
+
+    def __init__(
+        self,
+        parent=None,
+        *,
+        metrics: tuple[ProductionMetricSelection, ...],
+        selected_fields: set[str] | None = None,
+    ):
+        super().__init__(parent)
+        self.metrics = tuple(metrics)
+        self.setWindowTitle("Select metrics")
+        configure_window_size(self, minimum=(540, 420), initial=(640, 620))
+
+        self.summary_label = status_chip("", "neutral")
+        self.metrics_list = QListWidget()
+        self.metrics_list.setMinimumHeight(320)
+
+        self.select_all_button = QPushButton("Select all")
+        self.clear_button = QPushButton("Clear")
+        self.cancel_button = QPushButton("Cancel")
+        self.apply_button = QPushButton("Use metrics")
+        self.apply_button.setDefault(True)
+
+        self.select_all_button.clicked.connect(lambda: self._set_metric_checks(True))
+        self.clear_button.clicked.connect(lambda: self._set_metric_checks(False))
+        self.cancel_button.clicked.connect(self.reject)
+        self.apply_button.clicked.connect(self.accept)
+        self.metrics_list.itemChanged.connect(lambda _item: self._sync_summary())
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+        layout.addWidget(self.summary_label)
+        layout.addWidget(section_label("Metrics"))
+        layout.addWidget(self.metrics_list, 1)
+
+        actions = QHBoxLayout()
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.setSpacing(8)
+        actions.addWidget(self.select_all_button)
+        actions.addWidget(self.clear_button)
+        actions.addStretch(1)
+        actions.addWidget(self.cancel_button)
+        actions.addWidget(self.apply_button)
+        layout.addLayout(actions)
+
+        self._populate_metrics(selected_fields)
+        apply_metroliza_theme(self)
+
+    def _populate_metrics(self, selected_fields: set[str] | None) -> None:
+        selected_lookup = None if selected_fields is None else set(selected_fields)
+        self.metrics_list.blockSignals(True)
+        self.metrics_list.clear()
+        for metric in self.metrics:
+            item = QListWidgetItem(metric.display_label)
+            item.setData(Qt.ItemDataRole.UserRole, metric)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            is_checked = selected_lookup is None or metric.field_name in selected_lookup
+            item.setCheckState(Qt.CheckState.Checked if is_checked else Qt.CheckState.Unchecked)
+            self.metrics_list.addItem(item)
+        self.metrics_list.blockSignals(False)
+        self._sync_summary()
+
+    def _set_metric_checks(self, checked: bool) -> None:
+        state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+        self.metrics_list.blockSignals(True)
+        for index in range(self.metrics_list.count()):
+            self.metrics_list.item(index).setCheckState(state)
+        self.metrics_list.blockSignals(False)
+        self._sync_summary()
+
+    def _sync_summary(self) -> None:
+        selected_count = len(self.selected_metrics())
+        total_count = len(self.metrics)
+        self.summary_label.setText(f"{selected_count} of {total_count} metrics selected")
+        set_status_variant(self.summary_label, "success" if selected_count else "warning")
+
+    def selected_metrics(self) -> tuple[ProductionMetricSelection, ...]:
+        metrics = []
+        for index in range(self.metrics_list.count()):
+            item = self.metrics_list.item(index)
+            if item.checkState() != Qt.CheckState.Checked:
+                continue
+            metric = item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(metric, ProductionMetricSelection):
+                metrics.append(metric)
+        return tuple(metrics)
 
 
 class IndustrialAnalyticsDialog(QDialog):
@@ -91,6 +204,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.readiness_label = status_chip("Load metrics and choose an output path.", "warning")
         self.filter_row_label = section_label("Filters")
         self.filter_summary_label = status_chip(self.filter_state.summary(), "neutral")
+        self.metrics_summary_label = status_chip("No metrics loaded", "warning")
 
         self.sheet_name_combo = QComboBox()
         self.sheet_name_combo.setEditable(True)
@@ -98,6 +212,8 @@ class IndustrialAnalyticsDialog(QDialog):
         self.sheet_name_combo.currentTextChanged.connect(self._handle_tabular_source_changed)
         self.timestamp_column_combo = QComboBox()
         self.reference_column_combo = QComboBox()
+        self.timestamp_column_combo.currentTextChanged.connect(self._handle_tabular_column_changed)
+        self.reference_column_combo.currentTextChanged.connect(self._handle_tabular_column_changed)
         self._reset_tabular_column_options()
 
         self.metrics_list = QListWidget()
@@ -149,8 +265,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.browse_input_button = QPushButton("Browse")
         self.filters_button = QPushButton("Filters...")
         self.load_metrics_button = QPushButton("Load metrics")
-        self.select_all_metrics_button = QPushButton("Select all")
-        self.clear_metrics_button = QPushButton("Clear")
+        self.choose_metrics_button = QPushButton("Choose metrics...")
         self.dashboard_button = QPushButton("Browse")
         self.workbook_button = QPushButton("Browse")
         self.close_button = QPushButton("Close")
@@ -160,8 +275,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.browse_input_button.clicked.connect(self.select_input_file)
         self.filters_button.clicked.connect(self.open_filters_dialog)
         self.load_metrics_button.clicked.connect(self.load_metrics)
-        self.select_all_metrics_button.clicked.connect(lambda: self._set_metric_checks(True))
-        self.clear_metrics_button.clicked.connect(lambda: self._set_metric_checks(False))
+        self.choose_metrics_button.clicked.connect(self.open_metrics_dialog)
         self.dashboard_button.clicked.connect(self.select_dashboard_file)
         self.workbook_button.clicked.connect(self.select_workbook_file)
         self.close_button.clicked.connect(self.reject)
@@ -229,15 +343,14 @@ class IndustrialAnalyticsDialog(QDialog):
 
         row += 1
         grid.addWidget(section_label("Metrics"), row, 0)
-        grid.addWidget(self.metrics_list, row, 1, 1, 2)
+        grid.addWidget(self.metrics_summary_label, row, 1)
+        grid.addWidget(self.choose_metrics_button, row, 2)
 
         row += 1
         metric_actions = QHBoxLayout()
         metric_actions.setContentsMargins(0, 0, 0, 0)
         metric_actions.setSpacing(8)
         metric_actions.addWidget(self.load_metrics_button)
-        metric_actions.addWidget(self.select_all_metrics_button)
-        metric_actions.addWidget(self.clear_metrics_button)
         metric_actions.addStretch(1)
         grid.addLayout(metric_actions, row, 1, 1, 2)
 
@@ -347,6 +460,16 @@ class IndustrialAnalyticsDialog(QDialog):
         self._reset_tabular_column_options()
         self._sync_ui_state()
 
+    def _handle_tabular_column_changed(self, _text: str = "") -> None:
+        if self.is_production_source:
+            return
+        if not self.metric_candidates:
+            return
+        self.metric_candidates = ()
+        self.metrics_list.clear()
+        self._reset_group_options(())
+        self._sync_ui_state()
+
     def _reset_tabular_column_options(self) -> None:
         for combo in (self.timestamp_column_combo, self.reference_column_combo):
             combo.blockSignals(True)
@@ -406,7 +529,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.metrics_list.clear()
         self._reset_tabular_column_options()
         self._reset_group_options(())
-        self._sync_ui_state()
+        self.load_metrics()
 
     def open_filters_dialog(self) -> None:
         dialog = IndustrialAnalyticsFilterDialog(self, filter_state=self.filter_state)
@@ -500,16 +623,57 @@ class IndustrialAnalyticsDialog(QDialog):
         self._populate_metrics()
         self._sync_ui_state()
 
-    def _populate_metrics(self) -> None:
+    def open_metrics_dialog(self) -> None:
+        if not self.metric_candidates:
+            self.load_metrics()
+        if not self.metric_candidates:
+            return
+        dialog = MetricSelectionDialog(
+            self,
+            metrics=self.metric_candidates,
+            selected_fields=(
+                {metric.field_name for metric in self._selected_metrics()}
+                if self.metrics_list.count()
+                else None
+            ),
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._apply_metric_selection(dialog.selected_metrics())
+
+    def _populate_metrics(self, selected_fields: set[str] | None = None) -> None:
+        selected_lookup = None if selected_fields is None else set(selected_fields)
         self.metrics_list.blockSignals(True)
         self.metrics_list.clear()
         for metric in self.metric_candidates:
             item = QListWidgetItem(metric.display_label)
             item.setData(Qt.ItemDataRole.UserRole, metric)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(Qt.CheckState.Checked)
+            is_checked = selected_lookup is None or metric.field_name in selected_lookup
+            item.setCheckState(Qt.CheckState.Checked if is_checked else Qt.CheckState.Unchecked)
             self.metrics_list.addItem(item)
         self.metrics_list.blockSignals(False)
+
+    def _apply_metric_selection(self, selected_metrics: tuple[ProductionMetricSelection, ...]) -> None:
+        if self.metrics_list.count() != len(self.metric_candidates):
+            self._populate_metrics({metric.field_name for metric in selected_metrics})
+            self._sync_ui_state()
+            return
+        selected_fields = {metric.field_name for metric in selected_metrics}
+        state_by_field = {
+            metric.field_name: (
+                Qt.CheckState.Checked if metric.field_name in selected_fields else Qt.CheckState.Unchecked
+            )
+            for metric in self.metric_candidates
+        }
+        self.metrics_list.blockSignals(True)
+        for index in range(self.metrics_list.count()):
+            item = self.metrics_list.item(index)
+            metric = item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(metric, ProductionMetricSelection):
+                item.setCheckState(state_by_field.get(metric.field_name, Qt.CheckState.Unchecked))
+        self.metrics_list.blockSignals(False)
+        self._sync_ui_state()
 
     def _set_metric_checks(self, checked: bool) -> None:
         state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
@@ -585,6 +749,17 @@ class IndustrialAnalyticsDialog(QDialog):
 
         metrics = self._selected_metrics()
         source_ready = bool(self.db_file) if self.is_production_source else bool(self.input_file)
+        candidate_count = len(self.metric_candidates)
+        self.choose_metrics_button.setEnabled(bool(candidate_count))
+        self.load_metrics_button.setEnabled(source_ready)
+        self.load_metrics_button.setText("Reload metrics" if candidate_count else "Load metrics")
+        if candidate_count:
+            self.metrics_summary_label.setText(f"{len(metrics)} of {candidate_count} metrics selected")
+            set_status_variant(self.metrics_summary_label, "success" if metrics else "warning")
+        else:
+            self.metrics_summary_label.setText("No metrics loaded")
+            set_status_variant(self.metrics_summary_label, "warning" if source_ready else "neutral")
+
         charts_ready = self._chart_selection().has_any
         workbook_ready = not self.workbook_checkbox.isChecked() or bool(self.output_workbook_file)
         ready = bool(source_ready and metrics and self.output_dashboard_file and charts_ready and workbook_ready)
@@ -652,6 +827,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.analytics_thread.result_ready.connect(self.on_analytics_finished)
         self.analytics_thread.error_occurred.connect(self.on_analytics_error)
         self.analytics_thread.cancelled.connect(self.on_analytics_cancelled)
+        self.analytics_thread.update_label.connect(self.loading_label.setText)
         self.analytics_thread.finished.connect(self.on_analytics_thread_stopped)
         self.analytics_thread.start()
         self.loading_dialog.show()
@@ -660,19 +836,24 @@ class IndustrialAnalyticsDialog(QDialog):
         if self.analytics_thread is not None:
             self.analytics_thread.cancel()
         if hasattr(self, "loading_label"):
-            self.loading_label.setText("Canceling analytics after the current step...")
+            self.loading_label.setText(
+                build_three_line_status(
+                    "Canceling analytics...",
+                    "Waiting for the current analytics step to stop",
+                    "ETA --",
+                )
+            )
 
     def on_analytics_finished(self, result) -> None:
         if hasattr(self, "loading_dialog"):
             self.loading_dialog.close()
-        message = (
-            f"Dashboard: {result.html_dashboard_path}\n"
-            f"Charts: {result.html_dashboard_chart_count}\n"
-            f"Rows analyzed: {result.row_count}"
-        )
-        if result.workbook_path:
-            message += f"\nWorkbook: {result.workbook_path}"
-        QMessageBox.information(self, self.windowTitle(), message)
+        level, title, message, reveal_path = build_analytics_completion_message(result)
+        try:
+            from modules.export_dialog import show_export_result_message
+
+            show_export_result_message(self, level, title, message, excel_file=reveal_path)
+        except Exception:
+            QMessageBox.information(self, title, message)
 
     def on_analytics_error(self, message: str) -> None:
         if hasattr(self, "loading_dialog"):
@@ -698,7 +879,9 @@ class IndustrialAnalyticsDialog(QDialog):
 
 
 __all__ = [
+    "build_analytics_completion_message",
     "IndustrialAnalyticsDialog",
+    "MetricSelectionDialog",
     "SOURCE_PRODUCTION_CACHE",
     "SOURCE_TABULAR_FILE",
 ]

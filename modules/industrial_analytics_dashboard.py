@@ -11,6 +11,7 @@ from typing import Any
 
 import pandas as pd
 
+from modules.export_summary_utils import resolve_histogram_bin_count
 from modules.industrial_analytics_service import (
     ProductionAggregationResult,
     ProductionAnalyticsDiagnostic,
@@ -22,11 +23,28 @@ from modules.industrial_analytics_state import (
     ProductionMetricSelection,
     ReferenceCohortState,
 )
+from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE
 
 
 DASHBOARD_SCHEMA = "metroliza.production_analytics_dashboard.v1"
 PLOTLY_ASSET_NAME = "plotly-2.27.0.min.js"
 PLOTLY_ASSET_SOURCE = Path(__file__).resolve().parent / "html_dashboard_assets" / PLOTLY_ASSET_NAME
+PLOTLY_MODEBAR_REMOVE = (
+    "select2d",
+    "lasso2d",
+    "autoScale2d",
+    "toggleSpikelines",
+    "hoverClosestCartesian",
+    "hoverCompareCartesian",
+)
+PLOT_COLORWAY = (
+    SUMMARY_PLOT_PALETTE["distribution_foreground"],
+    "#D55E00",
+    "#009E73",
+    SUMMARY_PLOT_PALETTE["outlier"],
+    SUMMARY_PLOT_PALETTE["central_tendency"],
+    SUMMARY_PLOT_PALETTE["distribution_base"],
+)
 
 
 def build_production_dashboard_manifest(
@@ -208,7 +226,10 @@ def _build_histogram_chart(
     frame: pd.DataFrame,
 ) -> dict[str, Any]:
     traces = []
-    for index, (label, group) in enumerate(_plot_groups(frame), start=0):
+    groups = _plot_groups(frame)
+    all_values = _numeric_values(frame[metric.field_name])
+    bins = _histogram_bins(all_values)
+    for index, (label, group) in enumerate(groups, start=0):
         values = _numeric_values(group[metric.field_name])
         if not values:
             continue
@@ -217,8 +238,13 @@ def _build_histogram_chart(
                 "type": "histogram",
                 "name": label,
                 "x": values,
-                "opacity": 0.72 if len(_plot_groups(frame)) > 1 else 0.86,
-                "marker": {"color": _plot_color(index, label)},
+                "xbins": bins,
+                "bingroup": f"hist-{metric.field_name}",
+                "opacity": 0.58 if len(groups) > 1 else 0.86,
+                "marker": {
+                    "color": _plot_color(index, label),
+                    "line": {"color": "rgba(255,255,255,0.72)", "width": 0.8},
+                },
                 "hovertemplate": f"{html.escape(label)}<br>{metric.display_label}=%{{x}}<br>Count=%{{y}}<extra></extra>",
             }
         )
@@ -231,6 +257,7 @@ def _build_histogram_chart(
         data=traces,
         layout={
             "barmode": "overlay",
+            "bargap": 0.04,
             "xaxis": {"title": metric.display_label},
             "yaxis": {"title": "Count"},
         },
@@ -327,11 +354,35 @@ def _chart_payload(
 ) -> dict[str, Any]:
     resolved_layout = {
         "title": {"text": title, "font": {"size": 18}},
-        "margin": {"l": 58, "r": 24, "t": 54, "b": 52},
-        "legend": {"orientation": "h", "y": -0.24},
-        "template": "plotly_white",
+        "font": {"family": 'Aptos, "Segoe UI", "Helvetica Neue", sans-serif', "color": "#1f2933"},
+        "paper_bgcolor": "#ffffff",
+        "plot_bgcolor": "#ffffff",
+        "colorway": list(PLOT_COLORWAY),
+        "dragmode": "zoom",
+        "margin": {"l": 56, "r": 24, "t": 58, "b": 56},
+        "hoverlabel": {"bgcolor": "#ffffff", "font": {"color": "#1f2933"}},
+        "legend": {
+            "orientation": "h",
+            "yanchor": "bottom",
+            "y": 1.02,
+            "xanchor": "left",
+            "x": 0.0,
+            "bgcolor": "rgba(255,255,255,0.86)",
+            "bordercolor": SUMMARY_PLOT_PALETTE["annotation_box_edge"],
+            "borderwidth": 1,
+        },
+        "xaxis": {
+            "gridcolor": SUMMARY_PLOT_PALETTE["grid"],
+            "zerolinecolor": SUMMARY_PLOT_PALETTE["grid"],
+            "linecolor": SUMMARY_PLOT_PALETTE["axis_spine"],
+        },
+        "yaxis": {
+            "gridcolor": SUMMARY_PLOT_PALETTE["grid"],
+            "zerolinecolor": SUMMARY_PLOT_PALETTE["grid"],
+            "linecolor": SUMMARY_PLOT_PALETTE["axis_spine"],
+        },
     }
-    resolved_layout.update(layout)
+    _merge_axis_layout(resolved_layout, layout)
     return {
         "id": chart_id,
         "title": title,
@@ -339,7 +390,12 @@ def _chart_payload(
         "plotly_spec": {
             "data": data,
             "layout": resolved_layout,
-            "config": {"responsive": True, "displaylogo": False},
+            "config": {
+                "responsive": True,
+                "displaylogo": False,
+                "scrollZoom": False,
+                "modeBarButtonsToRemove": list(PLOTLY_MODEBAR_REMOVE),
+            },
         },
     }
 
@@ -377,14 +433,39 @@ def _grouped_frames(
 
 def _plot_color(index: int, label: str) -> str:
     if "selected" in label.casefold():
-        return "#d62728"
-    palette = ("#1f77b4", "#2ca02c", "#9467bd", "#ff7f0e", "#17becf", "#7f7f7f")
-    return palette[index % len(palette)]
+        return SUMMARY_PLOT_PALETTE["spec_limit"]
+    return PLOT_COLORWAY[index % len(PLOT_COLORWAY)]
 
 
 def _numeric_values(series: pd.Series) -> list[float]:
     values = pd.to_numeric(series, errors="coerce").dropna()
     return [float(value) for value in values.tolist()]
+
+
+def _histogram_bins(values: list[float]) -> dict[str, float]:
+    if not values:
+        return {}
+    minimum = min(values)
+    maximum = max(values)
+    if minimum == maximum:
+        padding = max(abs(minimum) * 0.01, 0.5)
+        minimum -= padding
+        maximum += padding
+    binning = resolve_histogram_bin_count(values)
+    bin_count = max(1, int(binning.get("bin_count") or 1))
+    bin_size = (maximum - minimum) / bin_count
+    if bin_size <= 0:
+        bin_size = 1.0
+    return {"start": minimum, "end": maximum, "size": bin_size}
+
+
+def _merge_axis_layout(base_layout: dict[str, Any], override: dict[str, Any]) -> None:
+    for key, value in override.items():
+        if key in {"xaxis", "yaxis"} and isinstance(value, dict):
+            axis = base_layout.setdefault(key, {})
+            axis.update(value)
+        else:
+            base_layout[key] = value
 
 
 def _json_values(series: pd.Series) -> list[Any]:
@@ -534,12 +615,17 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
       padding: 12px 14px;
       margin: 0 0 14px;
     }}
-    .diagnostics h2 {{
-      margin: 0 0 8px;
+    .diagnostics summary {{
+      cursor: pointer;
       font-size: 16px;
+      font-weight: 650;
+      list-style-position: inside;
+    }}
+    .diagnostics summary::marker {{
+      color: var(--accent);
     }}
     .diagnostics ul {{
-      margin: 0;
+      margin: 10px 0 0;
       padding-left: 18px;
     }}
     .stats-section {{
@@ -652,7 +738,8 @@ def _render_diagnostics(diagnostics: list[dict[str, Any]]) -> str:
     if not messages:
         return ""
     rows = "".join(f"<li>{html.escape(message)}</li>" for message in messages)
-    return f'<section class="diagnostics"><h2>Diagnostics</h2><ul>{rows}</ul></section>'
+    label = f"Diagnostics ({len(messages)})"
+    return f'<details class="diagnostics"><summary>{html.escape(label)}</summary><ul>{rows}</ul></details>'
 
 
 def _render_groupstats(groupstats: dict[str, Any]) -> str:

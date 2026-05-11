@@ -29,8 +29,8 @@ Main controls:
 
 - **Select input file (CSV or Excel)**
 - **Choose time and reference columns**
-- **Load metrics**
 - **Choose metrics**
+- **Reload metrics** when source or column choices change
 - **Choose grouping, time bucket, and aggregation**
 - **Paste references or IDs to mark/filter/compare**
 - **Choose charts and statistics**
@@ -44,22 +44,24 @@ Supported file types are `.csv`, `.xlsx`, and `.xls`.
 
 After a valid file is loaded:
 
-- numeric-looking columns can be loaded as metrics,
+- numeric-looking columns are loaded automatically as metrics,
 - time and reference columns can be auto-detected or selected explicitly,
 - grouping columns can be selected,
 - dashboard and workbook output can be created.
 
-For Excel files, choose the sheet before loading metrics. If automatic detection does not
-pick the correct time or reference column, choose those columns and click **Load metrics**
-again before creating analytics.
+For Excel files, Metroliza loads the first sheet after file selection. Choose a different
+sheet and click **Reload metrics** when needed. If automatic detection does not pick the
+correct time or reference column, choose those columns and click **Reload metrics** again
+before creating analytics.
 
-### 2. Load And Choose Metrics
+### 2. Review And Choose Metrics
 
-Click **Load metrics**. Metroliza detects numeric-looking columns and lists them as
-selectable parameters.
+Metroliza detects numeric-looking columns automatically after you choose the input file.
+Click **Choose metrics** to open the larger metrics selection dialog.
 
-Select the parameters you want to analyze. These selected parameters can also be written to
-separate workbook sheets.
+Select the parameters you want to analyze. Use **Select all** or **Clear** in that dialog
+when you need to adjust many metrics at once. These selected parameters can also be written
+to separate workbook sheets.
 
 ### 3. Choose Grouping And Aggregation
 
@@ -101,6 +103,10 @@ Choose chart/statistics outputs:
 Choose an HTML dashboard path. Optionally enable workbook output and **Separate sheet per
 selected parameter**.
 
+Selected plots are included in the dashboard and in the workbook chart sheet. Time series
+and histogram outputs use native Excel charts in the workbook; violin and box outputs use
+Metroliza-rendered plot images.
+
 ### 6. Create Analytics
 
 Metroliza creates the dashboard and optional workbook in the background.
@@ -117,6 +123,7 @@ The workbook can include:
 - aggregated rows,
 - metric summaries,
 - diagnostics,
+- selected charts,
 - separate sheets for each selected parameter.
 
 ## Progress And Cancel Behavior
@@ -128,3 +135,6 @@ When processing starts, Metroliza shows a worker/progress dialog with:
 - a **Cancel** button.
 
 If processing completes normally, the app shows where the dashboard and workbook were saved.
+The completion dialog links the generated dashboard and workbook files.
+Dashboard diagnostics are collapsed by default; open the diagnostics section when you need
+technical details.

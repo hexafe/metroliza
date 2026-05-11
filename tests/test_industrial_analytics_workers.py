@@ -56,3 +56,37 @@ def test_industrial_analytics_thread_emits_cancelled_for_cancelled_workflow(
     assert cancelled_messages == ["Analytics generation was canceled."]
     assert errors == []
     assert results == []
+
+
+def test_industrial_analytics_thread_relays_workflow_status_updates(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    _skip_if_pyqt_unavailable()
+
+    result = object()
+
+    def emit_progress(**kwargs):
+        progress_callback = kwargs["progress_callback"]
+        assert callable(progress_callback)
+        progress_callback("Loading production data...\nReading cached rows (1/5)\nETA --")
+        return result
+
+    monkeypatch.setattr(industrial_workers, "run_production_cache_analytics", emit_progress)
+    thread = IndustrialAnalyticsThread(
+        source_kind="production_cache",
+        db_file=str(tmp_path / "production.db"),
+        output_dashboard_file=str(tmp_path / "analytics.html"),
+    )
+    labels: list[str] = []
+    results: list[object] = []
+    errors: list[str] = []
+    _capture_signal(thread.update_label, labels)
+    _capture_signal(thread.result_ready, results)
+    _capture_signal(thread.error_occurred, errors)
+
+    thread.run()
+
+    assert labels == ["Loading production data...\nReading cached rows (1/5)\nETA --"]
+    assert results == [result]
+    assert errors == []

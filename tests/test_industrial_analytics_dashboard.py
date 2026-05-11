@@ -86,6 +86,12 @@ def test_build_production_dashboard_manifest_contains_requested_chart_families(t
     }
     assert "raw_record_json" not in json.dumps(manifest)
     assert "Selected references" in json.dumps(manifest)
+    histogram = next(chart for chart in manifest["charts"] if chart["chart_type"] == "histogram")
+    traces = histogram["plotly_spec"]["data"]
+    assert traces
+    assert {trace["bingroup"] for trace in traces} == {"hist-cycle_time_s"}
+    assert all(trace["xbins"] == traces[0]["xbins"] for trace in traces)
+    assert traces[0]["xbins"]["size"] > 0
 
 
 def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None:
@@ -116,6 +122,21 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     assert match is not None
     chart_payload = json.loads(match.group(1))
     assert len(chart_payload) == 4
+
+
+def test_write_production_dashboard_collapses_diagnostics_by_default(tmp_path) -> None:
+    manifest = _production_dashboard_fixture(tmp_path)
+    manifest["diagnostics"] = [
+        {"severity": "warning", "code": "sample", "message": "Diagnostic details"}
+    ]
+    output_file = tmp_path / "production_dashboard.html"
+
+    write_production_dashboard(manifest, output_file)
+
+    html_text = output_file.read_text(encoding="utf-8")
+    assert '<details class="diagnostics">' in html_text
+    assert "<summary>Diagnostics (1)</summary>" in html_text
+    assert "<h2>Diagnostics</h2>" not in html_text
 
 
 def test_time_series_trace_drops_sparse_aggregation_nan_pairs() -> None:

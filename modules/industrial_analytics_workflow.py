@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Literal
@@ -31,6 +32,7 @@ from modules.industrial_analytics_workbook import (
     IndustrialAnalyticsWorkbookResult,
     export_production_analytics_workbook,
 )
+from modules.progress_status import build_three_line_status
 from modules.tabular_analytics_service import (
     TabularAnalyticsWorkbookResult,
     export_tabular_analytics_workbook,
@@ -39,6 +41,7 @@ from modules.tabular_analytics_service import (
 
 AnalyticsSourceKind = Literal["production_cache", "tabular_file"]
 CancelCheck = Callable[[], bool]
+ProgressCallback = Callable[[str], None]
 
 
 class AnalyticsCancelled(RuntimeError):
@@ -75,9 +78,20 @@ def run_production_cache_analytics(
     output_workbook_file: str | None = None,
     separate_parameter_sheets: bool = True,
     cancel_check: CancelCheck | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> IndustrialAnalyticsRunResult:
     """Run production analytics from the local Oznak cache."""
 
+    start_time = time.perf_counter()
+    total_steps = 6 if output_workbook_file else 5
+    _emit_progress(
+        progress_callback,
+        "Loading production data...",
+        "Reading cached rows and selected metrics",
+        step=1,
+        total_steps=total_steps,
+        start_time=start_time,
+    )
     _raise_if_cancelled(cancel_check)
     metrics = metric_selection or tuple(
         candidate.to_selection()
@@ -92,10 +106,34 @@ def run_production_cache_analytics(
         filter_state=filter_state,
         metric_selection=metrics,
     )
+    _emit_progress(
+        progress_callback,
+        "Applying references...",
+        "Marking selected comparison cohorts",
+        step=2,
+        total_steps=total_steps,
+        start_time=start_time,
+    )
     _raise_if_cancelled(cancel_check)
     cohorted = apply_reference_cohorts(loaded.dataframe, cohort)
+    _emit_progress(
+        progress_callback,
+        "Aggregating metrics...",
+        "Computing selected grouping and time buckets",
+        step=3,
+        total_steps=total_steps,
+        start_time=start_time,
+    )
     _raise_if_cancelled(cancel_check)
     aggregated = aggregate_production_frame(cohorted.dataframe, aggregation, metrics)
+    _emit_progress(
+        progress_callback,
+        "Running statistical analysis...",
+        "Analyzing selected metrics" if charts.groupstats else "Groupstats disabled for this run",
+        step=4,
+        total_steps=total_steps,
+        start_time=start_time,
+    )
     _raise_if_cancelled(cancel_check)
     groupstats = _analyze_groupstats_if_enabled(
         cohorted.dataframe,
@@ -111,6 +149,14 @@ def run_production_cache_analytics(
         + aggregated.diagnostics
         + groupstats.diagnostics
     )
+    _emit_progress(
+        progress_callback,
+        "Writing dashboard...",
+        "Rendering HTML dashboard and chart payloads",
+        step=5,
+        total_steps=total_steps,
+        start_time=start_time,
+    )
     dashboard = _write_dashboard(
         frame=cohorted.dataframe,
         metrics=metrics,
@@ -125,6 +171,14 @@ def run_production_cache_analytics(
     )
     workbook = None
     if output_workbook_file:
+        _emit_progress(
+            progress_callback,
+            "Writing workbook...",
+            "Creating Excel sheets and selected plots",
+            step=6,
+            total_steps=total_steps,
+            start_time=start_time,
+        )
         _raise_if_cancelled(cancel_check)
         workbook = _export_production_workbook_with_temp(
             output_workbook_file=output_workbook_file,
@@ -134,8 +188,14 @@ def run_production_cache_analytics(
             groupstats_result=groupstats,
             diagnostics=diagnostics,
             separate_parameter_sheets=separate_parameter_sheets,
+            chart_selection=charts,
             cancel_check=cancel_check,
         )
+    _emit_complete(
+        progress_callback,
+        start_time=start_time,
+        includes_workbook=bool(output_workbook_file),
+    )
     return _run_result(
         source_kind="production_cache",
         dashboard=dashboard,
@@ -162,9 +222,20 @@ def run_tabular_file_analytics(
     output_workbook_file: str | None = None,
     separate_parameter_sheets: bool = True,
     cancel_check: CancelCheck | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> IndustrialAnalyticsRunResult:
     """Run analytics from a CSV or Excel file."""
 
+    start_time = time.perf_counter()
+    total_steps = 6 if output_workbook_file else 5
+    _emit_progress(
+        progress_callback,
+        "Loading CSV/Excel data...",
+        "Reading rows and detecting metric columns",
+        step=1,
+        total_steps=total_steps,
+        start_time=start_time,
+    )
     _raise_if_cancelled(cancel_check)
     loaded = load_tabular_analytics_file(
         input_file,
@@ -172,14 +243,38 @@ def run_tabular_file_analytics(
         timestamp_column=timestamp_column,
         reference_column=reference_column,
     )
+    _emit_progress(
+        progress_callback,
+        "Applying references...",
+        "Marking selected comparison cohorts",
+        step=2,
+        total_steps=total_steps,
+        start_time=start_time,
+    )
     _raise_if_cancelled(cancel_check)
     metrics = metric_selection or tuple(candidate.to_selection() for candidate in loaded.metric_candidates[:5])
     aggregation = aggregation_state or ProductionAggregationState()
     charts = chart_selection or ProductionChartSelection()
     cohort = cohort_state or ReferenceCohortState()
     cohorted = apply_reference_cohorts(loaded.dataframe, cohort)
+    _emit_progress(
+        progress_callback,
+        "Aggregating metrics...",
+        "Computing selected grouping and time buckets",
+        step=3,
+        total_steps=total_steps,
+        start_time=start_time,
+    )
     _raise_if_cancelled(cancel_check)
     aggregated = aggregate_production_frame(cohorted.dataframe, aggregation, metrics)
+    _emit_progress(
+        progress_callback,
+        "Running statistical analysis...",
+        "Analyzing selected metrics" if charts.groupstats else "Groupstats disabled for this run",
+        step=4,
+        total_steps=total_steps,
+        start_time=start_time,
+    )
     _raise_if_cancelled(cancel_check)
     groupstats = _analyze_groupstats_if_enabled(
         cohorted.dataframe,
@@ -195,6 +290,14 @@ def run_tabular_file_analytics(
         + aggregated.diagnostics
         + groupstats.diagnostics
     )
+    _emit_progress(
+        progress_callback,
+        "Writing dashboard...",
+        "Rendering HTML dashboard and chart payloads",
+        step=5,
+        total_steps=total_steps,
+        start_time=start_time,
+    )
     dashboard = _write_dashboard(
         frame=cohorted.dataframe,
         metrics=metrics,
@@ -209,6 +312,14 @@ def run_tabular_file_analytics(
     )
     workbook = None
     if output_workbook_file:
+        _emit_progress(
+            progress_callback,
+            "Writing workbook...",
+            "Creating Excel sheets and selected plots",
+            step=6,
+            total_steps=total_steps,
+            start_time=start_time,
+        )
         _raise_if_cancelled(cancel_check)
         selected_fields = {metric.field_name for metric in metrics}
         selected_candidates = tuple(
@@ -221,8 +332,14 @@ def run_tabular_file_analytics(
             aggregation_result=aggregated,
             diagnostics=diagnostics,
             separate_parameter_sheets=separate_parameter_sheets,
+            chart_selection=charts,
             cancel_check=cancel_check,
         )
+    _emit_complete(
+        progress_callback,
+        start_time=start_time,
+        includes_workbook=bool(output_workbook_file),
+    )
     return _run_result(
         source_kind="tabular_file",
         dashboard=dashboard,
@@ -233,6 +350,75 @@ def run_tabular_file_analytics(
         groupstats_metric_count=groupstats.analyzed_metric_count,
         diagnostics=diagnostics,
     )
+
+
+def _emit_progress(
+    progress_callback: ProgressCallback | None,
+    stage_line: str,
+    detail_line: str,
+    *,
+    step: int,
+    total_steps: int,
+    start_time: float,
+) -> None:
+    if progress_callback is None:
+        return
+    safe_step = max(1, min(step, total_steps))
+    progress_callback(
+        build_three_line_status(
+            stage_line,
+            f"{detail_line} ({safe_step}/{total_steps})",
+            _progress_timing_line(
+                completed_steps=safe_step - 1,
+                total_steps=total_steps,
+                start_time=start_time,
+            ),
+        )
+    )
+
+
+def _emit_complete(
+    progress_callback: ProgressCallback | None,
+    *,
+    start_time: float,
+    includes_workbook: bool,
+) -> None:
+    if progress_callback is None:
+        return
+    detail_line = "Dashboard and workbook generated" if includes_workbook else "Dashboard generated"
+    progress_callback(
+        build_three_line_status(
+            "Analytics complete",
+            detail_line,
+            f"{_format_duration(time.perf_counter() - start_time)} elapsed, ETA 0:00",
+        )
+    )
+
+
+def _progress_timing_line(
+    *,
+    completed_steps: int,
+    total_steps: int,
+    start_time: float,
+) -> str:
+    elapsed_seconds = max(0.0, time.perf_counter() - start_time)
+    elapsed_display = _format_duration(elapsed_seconds)
+    if completed_steps <= 0:
+        return f"{elapsed_display} elapsed, ETA --"
+    remaining_steps = max(total_steps - completed_steps, 0)
+    if remaining_steps <= 0:
+        return f"{elapsed_display} elapsed, ETA 0:00"
+    seconds_per_step = elapsed_seconds / completed_steps
+    return f"{elapsed_display} elapsed, ETA {_format_duration(seconds_per_step * remaining_steps)}"
+
+
+def _format_duration(seconds: float) -> str:
+    total_seconds = max(0, int(round(seconds)))
+    minutes, remainder = divmod(total_seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours:d}:{minutes:02d}:{remainder:02d}"
+    return f"{minutes:d}:{remainder:02d}"
 
 
 def _analyze_groupstats_if_enabled(
@@ -303,6 +489,7 @@ def _export_production_workbook_with_temp(
     groupstats_result: ProductionGroupstatsResult,
     diagnostics: tuple[ProductionAnalyticsDiagnostic, ...],
     separate_parameter_sheets: bool,
+    chart_selection: ProductionChartSelection,
     cancel_check: CancelCheck | None,
 ) -> IndustrialAnalyticsWorkbookResult:
     target_path = _workbook_output_path(output_workbook_file)
@@ -316,6 +503,7 @@ def _export_production_workbook_with_temp(
             groupstats_result=groupstats_result,
             diagnostics=diagnostics,
             separate_parameter_sheets=separate_parameter_sheets,
+            chart_selection=chart_selection,
         )
         _raise_if_cancelled(cancel_check)
         Path(workbook.output_file).replace(target_path)
@@ -333,6 +521,7 @@ def _export_tabular_workbook_with_temp(
     aggregation_result,
     diagnostics: tuple[ProductionAnalyticsDiagnostic, ...],
     separate_parameter_sheets: bool,
+    chart_selection: ProductionChartSelection,
     cancel_check: CancelCheck | None,
 ) -> TabularAnalyticsWorkbookResult:
     target_path = _workbook_output_path(output_workbook_file)
@@ -345,6 +534,7 @@ def _export_tabular_workbook_with_temp(
             aggregation_result=aggregation_result,
             diagnostics=diagnostics,
             separate_parameter_sheets=separate_parameter_sheets,
+            chart_selection=chart_selection,
         )
         _raise_if_cancelled(cancel_check)
         Path(workbook.output_file).replace(target_path)

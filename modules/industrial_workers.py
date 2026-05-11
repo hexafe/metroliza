@@ -90,6 +90,7 @@ class IndustrialAnalyticsThread(QThread):
     result_ready = pyqtSignal(object)
     error_occurred = pyqtSignal(str)
     cancelled = pyqtSignal(str)
+    update_label = pyqtSignal(str)
 
     def __init__(
         self,
@@ -133,6 +134,9 @@ class IndustrialAnalyticsThread(QThread):
     def _is_cancelled(self) -> bool:
         return self._cancel_requested or self.isInterruptionRequested()
 
+    def _emit_progress_message(self, message: str) -> None:
+        self.update_label.emit(message)
+
     def run(self):
         try:
             if self.source_kind == "tabular_file":
@@ -149,6 +153,7 @@ class IndustrialAnalyticsThread(QThread):
                     chart_selection=self.chart_selection,
                     separate_parameter_sheets=self.separate_parameter_sheets,
                     cancel_check=self._is_cancelled,
+                    progress_callback=self._emit_progress_message,
                 )
             else:
                 result = run_production_cache_analytics(
@@ -162,6 +167,7 @@ class IndustrialAnalyticsThread(QThread):
                     chart_selection=self.chart_selection,
                     separate_parameter_sheets=self.separate_parameter_sheets,
                     cancel_check=self._is_cancelled,
+                    progress_callback=self._emit_progress_message,
                 )
             self.result_ready.emit(result)
         except AnalyticsCancelled as exc:

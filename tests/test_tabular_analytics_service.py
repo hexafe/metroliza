@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import zipfile
 
 import pandas as pd
 
@@ -110,6 +111,10 @@ def test_tabular_data_reuses_dashboard_and_aggregation_path(tmp_path) -> None:
         "violin",
         "box",
     }
+    histogram = next(chart for chart in manifest["charts"] if chart["chart_type"] == "histogram")
+    traces = histogram["plotly_spec"]["data"]
+    assert traces[0]["bingroup"] == f"hist-{metrics[0].field_name}"
+    assert traces[0]["xbins"]["size"] > 0
 
 
 def test_tabular_workbook_export_writes_separate_parameter_sheets(tmp_path) -> None:
@@ -138,3 +143,29 @@ def test_tabular_workbook_export_writes_separate_parameter_sheets(tmp_path) -> N
     workbook = pd.ExcelFile(output_file)
     assert {"Table Data", "Aggregates", "Metrics", "Diagnostics"}.issubset(workbook.sheet_names)
     assert {"Length Mm", "Width Mm"}.issubset(workbook.sheet_names)
+
+
+def test_tabular_workbook_export_includes_selected_chart_outputs(tmp_path) -> None:
+    input_file = tmp_path / "table.csv"
+    output_file = tmp_path / "analytics_with_charts.xlsx"
+    _sample_table().to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file)
+
+    result = export_tabular_analytics_workbook(
+        dataframe=loaded.dataframe,
+        metric_candidates=loaded.metric_candidates[:1],
+        output_file=output_file,
+        chart_selection=ProductionChartSelection(
+            time_series=True,
+            histogram=True,
+            violin=True,
+            box=True,
+        ),
+        separate_parameter_sheets=False,
+    )
+
+    assert "Charts" in result.sheet_names
+    with zipfile.ZipFile(output_file) as workbook_zip:
+        names = set(workbook_zip.namelist())
+    assert any(name.startswith("xl/charts/chart") for name in names)
+    assert any(name.startswith("xl/media/image") for name in names)

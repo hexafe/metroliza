@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sys
+import types
+
 import pandas as pd
 
 from tests.industrial_analytics_fixtures import seed_production_analytics_cache
@@ -7,19 +10,24 @@ from tests.industrial_analytics_fixtures import seed_production_analytics_cache
 try:
     from PyQt6.QtWidgets import QApplication
     from modules.industrial_analytics_dialog import (
+        build_analytics_completion_message,
         IndustrialAnalyticsDialog,
+        MetricSelectionDialog,
         SOURCE_PRODUCTION_CACHE,
         SOURCE_TABULAR_FILE,
     )
     from modules.industrial_analytics_filter_dialog import IndustrialAnalyticsFilterDialog
-    from modules.industrial_analytics_state import ProductionFilterState
+    from modules.industrial_analytics_state import ProductionFilterState, ProductionMetricSelection
     from modules.industrial_workers import IndustrialAnalyticsThread
 except ImportError as exc:  # pragma: no cover - environment/order dependent
+    build_analytics_completion_message = None
     QApplication = None
     IndustrialAnalyticsDialog = None
     IndustrialAnalyticsFilterDialog = None
     IndustrialAnalyticsThread = None
+    MetricSelectionDialog = None
     ProductionFilterState = None
+    ProductionMetricSelection = None
     SOURCE_PRODUCTION_CACHE = "production_cache"
     SOURCE_TABULAR_FILE = "tabular_file"
     PYQT_IMPORT_ERROR = exc
@@ -152,6 +160,114 @@ def test_tabular_analytics_dialog_loads_csv_metrics_and_group_columns(tmp_path) 
         dialog.close()
 
 
+def test_tabular_analytics_dialog_auto_loads_metrics_after_file_selection(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _app()
+    input_file = tmp_path / "table.csv"
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=3, freq="h"),
+            "Reference ID": ["R1", "R2", "R3"],
+            "Length mm": [10.0, 10.2, 10.4],
+            "Width mm": [5.0, 5.2, 5.4],
+        }
+    ).to_csv(input_file, index=False)
+    monkeypatch.setattr(
+        "modules.industrial_analytics_dialog.QFileDialog.getOpenFileName",
+        lambda *_args, **_kwargs: (str(input_file), "CSV (*.csv)"),
+    )
+
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.select_input_file()
+
+        assert dialog.input_file == str(input_file)
+        assert dialog.metrics_list.count() == 2
+        assert dialog.metrics_summary_label.text() == "2 of 2 metrics selected"
+        assert dialog.choose_metrics_button.isEnabled()
+        assert dialog.load_metrics_button.text() == "Reload metrics"
+        assert dialog.start_button.isEnabled()
+
+        dialog.timestamp_column_combo.setCurrentIndex(0)
+
+        assert dialog.metric_candidates == ()
+        assert dialog.metrics_list.count() == 0
+        assert dialog.load_metrics_button.text() == "Load metrics"
+        assert not dialog.start_button.isEnabled()
+    finally:
+        dialog.close()
+
+
+def test_metric_selection_dialog_select_all_and_clear_are_in_large_dialog() -> None:
+    _app()
+    metrics = (
+        ProductionMetricSelection("length_mm", "Length Mm"),
+        ProductionMetricSelection("width_mm", "Width Mm"),
+    )
+
+    dialog = MetricSelectionDialog(metrics=metrics, selected_fields={"length_mm"})
+    try:
+        assert [metric.field_name for metric in dialog.selected_metrics()] == ["length_mm"]
+
+        dialog.clear_button.click()
+        assert dialog.selected_metrics() == ()
+        assert dialog.summary_label.text() == "0 of 2 metrics selected"
+
+        dialog.select_all_button.click()
+        assert [metric.field_name for metric in dialog.selected_metrics()] == [
+            "length_mm",
+            "width_mm",
+        ]
+        assert dialog.summary_label.text() == "2 of 2 metrics selected"
+    finally:
+        dialog.close()
+
+
+def test_analytics_completion_message_uses_export_style_file_links(tmp_path, monkeypatch) -> None:
+    _app()
+    dashboard_file = tmp_path / "analytics.html"
+    workbook_file = tmp_path / "analytics.xlsx"
+
+    class AnalyticsResult:
+        html_dashboard_path = str(dashboard_file)
+        workbook_path = str(workbook_file)
+        html_dashboard_chart_count = 7
+        row_count = 42
+
+    level, title, message, reveal_path = build_analytics_completion_message(AnalyticsResult)
+    assert level == "info"
+    assert title == "Analytics successful"
+    assert f"HTML dashboard: {dashboard_file.resolve().as_uri()}" in message
+    assert f"Workbook: {workbook_file.resolve().as_uri()}" in message
+    assert "Charts: 7" in message
+    assert "Rows analyzed: 42" in message
+    assert reveal_path == str(workbook_file)
+
+    calls = []
+    fake_export_dialog = types.SimpleNamespace(
+        show_export_result_message=lambda parent, level, title, message, excel_file=None: calls.append(
+            (parent, level, title, message, excel_file)
+        )
+    )
+    monkeypatch.setitem(sys.modules, "modules.export_dialog", fake_export_dialog)
+
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.on_analytics_finished(AnalyticsResult)
+
+        assert len(calls) == 1
+        assert calls[0][0] is dialog
+        assert calls[0][1] == "info"
+        assert calls[0][2] == "Analytics successful"
+        assert f"HTML dashboard: {dashboard_file.resolve().as_uri()}" in calls[0][3]
+        assert f"Workbook: {workbook_file.resolve().as_uri()}" in calls[0][3]
+        assert calls[0][4] == str(workbook_file)
+    finally:
+        dialog.close()
+
+
 def test_analytics_dialog_wires_cancellable_worker_without_running_job(tmp_path) -> None:
     _app()
 
@@ -179,9 +295,17 @@ def test_analytics_dialog_wires_cancellable_worker_without_running_job(tmp_path)
 
         assert dialog.analytics_thread is thread
         assert thread.started
+        status_text = "Writing dashboard...\nRendering HTML dashboard (5/6)\n0:04 elapsed, ETA 0:01"
+        thread.update_label.emit(status_text)
+        assert dialog.loading_label.text() == status_text
 
         dialog.cancel_analytics()
         assert thread.cancel_called
+        assert dialog.loading_label.text() == (
+            "Canceling analytics...\n"
+            "Waiting for the current analytics step to stop\n"
+            "ETA --"
+        )
 
         thread.finished.emit()
         assert dialog.analytics_thread is None
