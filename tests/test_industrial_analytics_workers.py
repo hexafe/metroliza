@@ -20,6 +20,13 @@ def _skip_if_pyqt_unavailable() -> None:
         pytest.skip(f"PyQt6 is unavailable in this environment: {PYQT_IMPORT_ERROR}")
 
 
+def _capture_signal(signal, values: list[object]) -> None:
+    if hasattr(signal, "connect"):
+        signal.connect(values.append)
+        return
+    signal.emit = values.append
+
+
 def test_industrial_analytics_thread_emits_cancelled_for_cancelled_workflow(
     monkeypatch,
     tmp_path,
@@ -40,9 +47,9 @@ def test_industrial_analytics_thread_emits_cancelled_for_cancelled_workflow(
     cancelled_messages: list[str] = []
     errors: list[str] = []
     results: list[object] = []
-    thread.cancelled.connect(cancelled_messages.append)
-    thread.error_occurred.connect(errors.append)
-    thread.result_ready.connect(results.append)
+    _capture_signal(thread.cancelled, cancelled_messages)
+    _capture_signal(thread.error_occurred, errors)
+    _capture_signal(thread.result_ready, results)
 
     thread.run()
 
