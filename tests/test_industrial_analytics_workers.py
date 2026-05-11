@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 try:
-    from PyQt6.QtCore import QCoreApplication
     from modules import industrial_workers
     from modules.industrial_analytics_workflow import AnalyticsCancelled
     from modules.industrial_workers import IndustrialAnalyticsThread
 except ImportError as exc:  # pragma: no cover - environment/order dependent
-    QCoreApplication = None
     industrial_workers = None
     AnalyticsCancelled = None
     IndustrialAnalyticsThread = None
@@ -14,24 +12,19 @@ except ImportError as exc:  # pragma: no cover - environment/order dependent
 else:
     PYQT_IMPORT_ERROR = None
 
-_APP = None
 
-
-def _app():
+def _skip_if_pyqt_unavailable() -> None:
     if PYQT_IMPORT_ERROR is not None:
         import pytest
 
         pytest.skip(f"PyQt6 is unavailable in this environment: {PYQT_IMPORT_ERROR}")
-    global _APP
-    _APP = QCoreApplication.instance() or _APP or QCoreApplication([])
-    return _APP
 
 
 def test_industrial_analytics_thread_emits_cancelled_for_cancelled_workflow(
     monkeypatch,
     tmp_path,
 ) -> None:
-    _app()
+    _skip_if_pyqt_unavailable()
 
     def raise_cancelled(**kwargs):
         cancel_check = kwargs["cancel_check"]
