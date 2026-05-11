@@ -31,7 +31,7 @@ Main controls:
 - **Choose time and reference columns**
 - **Choose metrics**
 - **Reload metrics** when source or column choices change
-- **Choose grouping, time bucket, and aggregation**
+- **Edit row groups, then choose time bucket and aggregation**
 - **Paste references or IDs to mark/filter/compare**
 - **Choose charts and statistics**
 - **Select dashboard and workbook output paths**
@@ -65,7 +65,14 @@ to separate workbook sheets.
 
 ### 3. Choose Grouping And Aggregation
 
-Choose an optional **Group by** field, a time bucket, and an aggregation method.
+Click **Edit groups** when you want export-style groups for the CSV/Excel rows. The
+grouping dialog starts with every row in **POPULATION**. Select rows or a reference, create
+a named group, and leave the remaining rows in **POPULATION** when you want selected-vs-rest
+comparisons.
+
+The selected groups are written as the `GROUP` column and are used by aggregation, charts,
+groupstats, and workbook output. Choose a time bucket and aggregation method in the main
+dialog.
 
 Available time buckets:
 

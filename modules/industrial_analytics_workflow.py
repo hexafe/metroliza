@@ -34,7 +34,9 @@ from modules.industrial_analytics_workbook import (
 )
 from modules.progress_status import build_three_line_status
 from modules.tabular_analytics_service import (
+    TABULAR_GROUP_COLUMN,
     TabularAnalyticsWorkbookResult,
+    apply_tabular_grouping,
     export_tabular_analytics_workbook,
     load_tabular_analytics_file,
 )
@@ -216,6 +218,7 @@ def run_tabular_file_analytics(
     sheet_name: str | int | None = None,
     timestamp_column: str | None = None,
     reference_column: str | None = None,
+    grouping_df=None,
     aggregation_state: ProductionAggregationState | None = None,
     cohort_state: ReferenceCohortState | None = None,
     chart_selection: ProductionChartSelection | None = None,
@@ -243,20 +246,24 @@ def run_tabular_file_analytics(
         timestamp_column=timestamp_column,
         reference_column=reference_column,
     )
+    grouped = apply_tabular_grouping(loaded.dataframe, grouping_df)
     _emit_progress(
         progress_callback,
-        "Applying references...",
-        "Marking selected comparison cohorts",
+        "Applying groups and references...",
+        "Assigning manual groups and comparison cohorts",
         step=2,
         total_steps=total_steps,
         start_time=start_time,
     )
     _raise_if_cancelled(cancel_check)
     metrics = metric_selection or tuple(candidate.to_selection() for candidate in loaded.metric_candidates[:5])
-    aggregation = aggregation_state or ProductionAggregationState()
+    aggregation = _aggregation_with_tabular_grouping(
+        aggregation_state or ProductionAggregationState(),
+        grouping_applied=grouped.applied,
+    )
     charts = chart_selection or ProductionChartSelection()
     cohort = cohort_state or ReferenceCohortState()
-    cohorted = apply_reference_cohorts(loaded.dataframe, cohort)
+    cohorted = apply_reference_cohorts(grouped.dataframe, cohort)
     _emit_progress(
         progress_callback,
         "Aggregating metrics...",
@@ -286,6 +293,7 @@ def run_tabular_file_analytics(
     _raise_if_cancelled(cancel_check)
     diagnostics = (
         loaded.diagnostics
+        + grouped.diagnostics
         + cohorted.diagnostics
         + aggregated.diagnostics
         + groupstats.diagnostics
@@ -419,6 +427,18 @@ def _format_duration(seconds: float) -> str:
     if hours:
         return f"{hours:d}:{minutes:02d}:{remainder:02d}"
     return f"{minutes:d}:{remainder:02d}"
+
+
+def _aggregation_with_tabular_grouping(
+    aggregation: ProductionAggregationState,
+    *,
+    grouping_applied: bool,
+) -> ProductionAggregationState:
+    if not grouping_applied:
+        return aggregation
+    if TABULAR_GROUP_COLUMN in aggregation.group_fields:
+        return aggregation
+    return replace(aggregation, group_fields=(TABULAR_GROUP_COLUMN, *aggregation.group_fields))
 
 
 def _analyze_groupstats_if_enabled(

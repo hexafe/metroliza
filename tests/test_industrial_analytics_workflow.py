@@ -119,6 +119,47 @@ def test_run_tabular_file_analytics_reuses_shared_dashboard_and_parameter_workbo
     assert all("ETA" in message for message in progress_messages)
 
 
+def test_run_tabular_file_analytics_uses_manual_population_grouping(tmp_path) -> None:
+    input_file = tmp_path / "table.csv"
+    dashboard_file = tmp_path / "grouped_table_analytics.html"
+    workbook_file = tmp_path / "grouped_table_analytics.xlsx"
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=6, freq="12h"),
+            "Reference ID": ["R1", "R1", "R2", "R2", "R3", "R3"],
+            "Length mm": [10.0, 10.1, 10.2, 10.4, 10.3, 10.5],
+        }
+    ).to_csv(input_file, index=False)
+    grouping_df = pd.DataFrame(
+        {
+            "REPORT_ID": [1, 2, 3, 4, 5, 6],
+            "GROUP": ["Selected", "Selected", "POPULATION", "POPULATION", "POPULATION", ""],
+        }
+    )
+
+    result = run_tabular_file_analytics(
+        input_file=str(input_file),
+        output_dashboard_file=str(dashboard_file),
+        output_workbook_file=str(workbook_file),
+        metric_selection=(ProductionMetricSelection("length_mm", display_label="Length mm"),),
+        grouping_df=grouping_df,
+        aggregation_state=ProductionAggregationState(
+            time_bucket="none",
+            aggregation_methods=("mean",),
+        ),
+        chart_selection=ProductionChartSelection(groupstats=True),
+        separate_parameter_sheets=False,
+    )
+
+    assert result.metric_count == 1
+    assert result.groupstats_metric_count == 1
+    table_data = pd.read_excel(workbook_file, sheet_name="Table Data")
+    assert set(table_data["GROUP"]) == {"POPULATION", "Selected"}
+    aggregates = pd.read_excel(workbook_file, sheet_name="Aggregates")
+    assert set(aggregates["GROUP"]) == {"POPULATION", "Selected"}
+    assert "tabular_grouping_applied" in {diagnostic.code for diagnostic in result.diagnostics}
+
+
 def test_run_production_cache_analytics_cancel_removes_temp_outputs(tmp_path) -> None:
     db_path = str(tmp_path / "production_only.db")
     seed_production_analytics_cache(db_path)

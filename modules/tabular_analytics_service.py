@@ -23,6 +23,8 @@ from modules.industrial_analytics_workbook_charts import add_analytics_workbook_
 _SAFE_COLUMN_RE = re.compile(r"[^A-Za-z0-9_]+")
 _TIMESTAMP_HINTS = ("timestamp", "time", "date", "datetime", "created", "process")
 _REFERENCE_HINTS = ("reference", "ref", "part", "part_number", "id", "serial")
+TABULAR_GROUP_COLUMN = "GROUP"
+TABULAR_DEFAULT_GROUP = "POPULATION"
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,17 @@ class TabularAnalyticsWorkbookResult:
     output_file: str
     sheet_names: tuple[str, ...]
     parameter_sheet_count: int
+
+
+@dataclass(frozen=True)
+class TabularGroupingResult:
+    """CSV/Excel analytics frame after optional manual grouping assignments."""
+
+    dataframe: pd.DataFrame
+    diagnostics: tuple[ProductionAnalyticsDiagnostic, ...] = ()
+    applied: bool = False
+    group_count: int = 0
+    custom_group_count: int = 0
 
 
 def _excel_safe_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
@@ -164,6 +177,125 @@ def load_tabular_analytics_file(
         timestamp_column=timestamp_field,
         reference_column=reference_field,
         csv_config=csv_config,
+    )
+
+
+def build_tabular_grouping_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
+    """Build DataGrouping-compatible rows from a normalized CSV/Excel analytics frame."""
+
+    columns = ["REPORT_ID", "REFERENCE", "DATE", "SAMPLE_NUMBER", "PART_NAME", "FILENAME"]
+    if not isinstance(dataframe, pd.DataFrame) or dataframe.empty:
+        return pd.DataFrame(columns=columns)
+
+    frame = dataframe.copy().reset_index(drop=True)
+    row_numbers = _source_row_numbers(frame)
+    row_count = len(frame.index)
+    references = _display_series(frame.get("reference"), fallback="", row_count=row_count)
+    dates = _date_display_series(frame.get("process_datetime"), len(frame.index))
+    filenames = _display_series(frame.get("source_file"), fallback="", row_count=row_count)
+    sheet_names = _display_series(frame.get("source_sheet"), fallback="", row_count=row_count)
+    source_labels = [
+        " | ".join(part for part in (filename, f"Sheet: {sheet}" if sheet else "") if part)
+        for filename, sheet in zip(filenames, sheet_names, strict=False)
+    ]
+    return pd.DataFrame(
+        {
+            "REPORT_ID": row_numbers,
+            "REFERENCE": [
+                reference if reference else f"Row {row_number}"
+                for reference, row_number in zip(references, row_numbers, strict=False)
+            ],
+            "DATE": dates,
+            "SAMPLE_NUMBER": [str(row_number) for row_number in row_numbers],
+            "PART_NAME": references,
+            "FILENAME": source_labels,
+        },
+        columns=columns,
+    )
+
+
+def apply_tabular_grouping(
+    dataframe: pd.DataFrame,
+    grouping_df: pd.DataFrame | None,
+    *,
+    group_column: str = TABULAR_GROUP_COLUMN,
+    default_group: str = TABULAR_DEFAULT_GROUP,
+) -> TabularGroupingResult:
+    """Apply manual DataGrouping assignments to a CSV/Excel analytics dataframe."""
+
+    frame = dataframe.copy()
+    diagnostics: list[ProductionAnalyticsDiagnostic] = []
+    if not isinstance(grouping_df, pd.DataFrame) or grouping_df.empty or "GROUP" not in grouping_df.columns:
+        return TabularGroupingResult(dataframe=frame)
+
+    if "source_row_number" not in frame.columns:
+        diagnostics.append(
+            ProductionAnalyticsDiagnostic(
+                severity="warning",
+                code="tabular_grouping_missing_row_number",
+                message="Manual grouping was skipped because source row numbers are unavailable.",
+            )
+        )
+        return TabularGroupingResult(dataframe=frame, diagnostics=tuple(diagnostics))
+
+    grouping = grouping_df.copy()
+    if "REPORT_ID" in grouping.columns:
+        grouping_key = pd.to_numeric(grouping["REPORT_ID"], errors="coerce")
+    elif "SAMPLE_NUMBER" in grouping.columns:
+        grouping_key = pd.to_numeric(grouping["SAMPLE_NUMBER"], errors="coerce")
+    else:
+        diagnostics.append(
+            ProductionAnalyticsDiagnostic(
+                severity="warning",
+                code="tabular_grouping_missing_identity",
+                message="Manual grouping was skipped because grouping rows have no source row identity.",
+            )
+        )
+        return TabularGroupingResult(dataframe=frame, diagnostics=tuple(diagnostics))
+
+    grouping = grouping.assign(__source_row_number=grouping_key)
+    grouping = grouping[grouping["__source_row_number"].notna()].copy()
+    if grouping.empty:
+        diagnostics.append(
+            ProductionAnalyticsDiagnostic(
+                severity="warning",
+                code="tabular_grouping_empty_identity",
+                message="Manual grouping was skipped because grouping row identities are empty.",
+            )
+        )
+        return TabularGroupingResult(dataframe=frame, diagnostics=tuple(diagnostics))
+
+    grouping[group_column] = _normalize_group_labels(grouping["GROUP"], default_group=default_group)
+    assignment = (
+        grouping.drop_duplicates(subset=["__source_row_number"], keep="last")
+        .set_index("__source_row_number")[group_column]
+        .to_dict()
+    )
+    row_numbers = pd.to_numeric(frame["source_row_number"], errors="coerce")
+    frame[group_column] = row_numbers.map(assignment).fillna(default_group).astype(str)
+    group_labels = sorted(label for label in frame[group_column].dropna().astype(str).unique() if label)
+    custom_labels = [label for label in group_labels if label != default_group]
+    diagnostics.append(
+        ProductionAnalyticsDiagnostic(
+            severity="info",
+            code="tabular_grouping_applied",
+            message=(
+                f"Manual grouping applied: {len(custom_labels)} custom group(s) plus "
+                f"{default_group}."
+            ),
+            context={
+                "group_count": len(group_labels),
+                "custom_group_count": len(custom_labels),
+                "default_group": default_group,
+            },
+        )
+    )
+    return TabularGroupingResult(
+        dataframe=frame,
+        diagnostics=tuple(diagnostics),
+        applied=True,
+        group_count=len(group_labels),
+        custom_group_count=len(custom_labels),
     )
 
 
@@ -313,6 +445,38 @@ def _normalize_columns(dataframe: pd.DataFrame) -> tuple[pd.DataFrame, dict[str,
     return dataframe.rename(columns=renamed).copy(), mapping
 
 
+def _source_row_numbers(dataframe: pd.DataFrame) -> list[int]:
+    if "source_row_number" not in dataframe.columns:
+        return list(range(1, len(dataframe.index) + 1))
+    values = pd.to_numeric(dataframe["source_row_number"], errors="coerce")
+    fallback = pd.Series(range(1, len(dataframe.index) + 1), index=dataframe.index)
+    return values.fillna(fallback).astype(int).tolist()
+
+
+def _display_series(series: pd.Series | None, *, fallback: str, row_count: int) -> list[str]:
+    if series is None:
+        return [fallback] * row_count
+    return [
+        text if text else fallback
+        for text in series.fillna("").astype(str).map(lambda value: value.strip()).tolist()
+    ]
+
+
+def _date_display_series(series: pd.Series | None, row_count: int) -> list[str]:
+    if series is None:
+        return [""] * row_count
+    parsed = pd.to_datetime(series, errors="coerce")
+    return [
+        "" if pd.isna(value) else value.strftime("%Y-%m-%d %H:%M:%S")
+        for value in parsed.tolist()
+    ]
+
+
+def _normalize_group_labels(series: pd.Series, *, default_group: str) -> pd.Series:
+    labels = series.fillna(default_group).astype(str).str.strip()
+    return labels.mask(labels == "", default_group)
+
+
 def _safe_column_name(value: str, *, fallback: str) -> str:
     name = _SAFE_COLUMN_RE.sub("_", str(value or "").strip()).strip("_").lower()
     if not name:
@@ -397,6 +561,7 @@ def _parameter_dataframe(dataframe: pd.DataFrame, metric_field: str) -> pd.DataF
             "source_row_number",
             "process_datetime",
             "reference",
+            TABULAR_GROUP_COLUMN,
             "source_file",
             "source_sheet",
         )
@@ -409,8 +574,13 @@ def _parameter_dataframe(dataframe: pd.DataFrame, metric_field: str) -> pd.DataF
 
 
 __all__ = [
+    "TABULAR_DEFAULT_GROUP",
+    "TABULAR_GROUP_COLUMN",
     "TabularAnalyticsLoadResult",
     "TabularAnalyticsWorkbookResult",
+    "TabularGroupingResult",
+    "apply_tabular_grouping",
+    "build_tabular_grouping_dataframe",
     "discover_tabular_metric_candidates",
     "export_tabular_analytics_workbook",
     "load_tabular_analytics_file",

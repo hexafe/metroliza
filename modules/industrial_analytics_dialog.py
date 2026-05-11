@@ -34,7 +34,11 @@ from modules.industrial_data_repository import IndustrialDataRepository
 from modules.industrial_workers import IndustrialAnalyticsThread
 from modules.export_dialog_service import build_export_artifact_link_line
 from modules.progress_status import build_three_line_status
-from modules.tabular_analytics_service import load_tabular_analytics_file
+from modules.tabular_analytics_grouping_dialog import TabularAnalyticsGroupingDialog
+from modules.tabular_analytics_service import (
+    TABULAR_GROUP_COLUMN,
+    load_tabular_analytics_file,
+)
 from modules.ui_foundation import (
     apply_metroliza_theme,
     configure_window_size,
@@ -181,6 +185,9 @@ class IndustrialAnalyticsDialog(QDialog):
         self.analytics_thread = None
         self.metric_candidates: tuple[ProductionMetricSelection, ...] = ()
         self.filter_state = ProductionFilterState()
+        self.tabular_load_result = None
+        self.df_for_grouping = None
+        self.grouping_applied = False
 
         self.setWindowTitle("Production analytics" if self.is_production_source else "CSV / Excel analytics")
         configure_window_size(self, minimum=(720, 560), initial=(880, 680))
@@ -205,6 +212,8 @@ class IndustrialAnalyticsDialog(QDialog):
         self.filter_row_label = section_label("Filters")
         self.filter_summary_label = status_chip(self.filter_state.summary(), "neutral")
         self.metrics_summary_label = status_chip("No metrics loaded", "warning")
+        self.grouping_row_label = section_label("Group by")
+        self.grouping_summary_label = status_chip("Groups: not applied", "neutral")
 
         self.sheet_name_combo = QComboBox()
         self.sheet_name_combo.setEditable(True)
@@ -266,6 +275,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.filters_button = QPushButton("Filters...")
         self.load_metrics_button = QPushButton("Load metrics")
         self.choose_metrics_button = QPushButton("Choose metrics...")
+        self.edit_groups_button = QPushButton("Edit groups...")
         self.dashboard_button = QPushButton("Browse")
         self.workbook_button = QPushButton("Browse")
         self.close_button = QPushButton("Close")
@@ -276,6 +286,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.filters_button.clicked.connect(self.open_filters_dialog)
         self.load_metrics_button.clicked.connect(self.load_metrics)
         self.choose_metrics_button.clicked.connect(self.open_metrics_dialog)
+        self.edit_groups_button.clicked.connect(self.open_grouping_dialog)
         self.dashboard_button.clicked.connect(self.select_dashboard_file)
         self.workbook_button.clicked.connect(self.select_workbook_file)
         self.close_button.clicked.connect(self.reject)
@@ -355,8 +366,10 @@ class IndustrialAnalyticsDialog(QDialog):
         grid.addLayout(metric_actions, row, 1, 1, 2)
 
         row += 1
-        grid.addWidget(section_label("Group by"), row, 0)
+        grid.addWidget(self.grouping_row_label, row, 0)
         grid.addWidget(self.group_field_combo, row, 1, 1, 2)
+        grid.addWidget(self.grouping_summary_label, row, 1)
+        grid.addWidget(self.edit_groups_button, row, 2)
 
         row += 1
         grid.addWidget(section_label("Time bucket"), row, 0)
@@ -445,6 +458,10 @@ class IndustrialAnalyticsDialog(QDialog):
         self.filters_button.setVisible(self.is_production_source)
         self.database_row_label.setVisible(self.is_production_source)
         self.database_field.setVisible(self.is_production_source)
+        self.grouping_row_label.setText("Group by" if self.is_production_source else "Groups")
+        self.group_field_combo.setVisible(self.is_production_source)
+        self.grouping_summary_label.setVisible(show_file)
+        self.edit_groups_button.setVisible(show_file)
         self._sync_filter_summary()
 
     def _sync_filter_summary(self) -> None:
@@ -455,6 +472,8 @@ class IndustrialAnalyticsDialog(QDialog):
         if self.is_production_source:
             return
         self.metric_candidates = ()
+        self.tabular_load_result = None
+        self._clear_tabular_grouping()
         self.metrics_list.clear()
         self._reset_group_options(())
         self._reset_tabular_column_options()
@@ -466,9 +485,15 @@ class IndustrialAnalyticsDialog(QDialog):
         if not self.metric_candidates:
             return
         self.metric_candidates = ()
+        self.tabular_load_result = None
+        self._clear_tabular_grouping()
         self.metrics_list.clear()
         self._reset_group_options(())
         self._sync_ui_state()
+
+    def _clear_tabular_grouping(self) -> None:
+        self.df_for_grouping = None
+        self.grouping_applied = False
 
     def _reset_tabular_column_options(self) -> None:
         for combo in (self.timestamp_column_combo, self.reference_column_combo):
@@ -526,6 +551,8 @@ class IndustrialAnalyticsDialog(QDialog):
         self.output_dashboard_file = default_dashboard_path(filename)
         self.output_workbook_file = default_workbook_path(filename)
         self.metric_candidates = ()
+        self.tabular_load_result = None
+        self._clear_tabular_grouping()
         self.metrics_list.clear()
         self._reset_tabular_column_options()
         self._reset_group_options(())
@@ -599,6 +626,7 @@ class IndustrialAnalyticsDialog(QDialog):
                     timestamp_column=self._selected_tabular_column(self.timestamp_column_combo),
                     reference_column=self._selected_tabular_column(self.reference_column_combo),
                 )
+                self.tabular_load_result = loaded
                 self.metric_candidates = tuple(candidate.to_selection() for candidate in loaded.metric_candidates)
                 self._reset_group_options(
                     tuple(
@@ -640,6 +668,54 @@ class IndustrialAnalyticsDialog(QDialog):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         self._apply_metric_selection(dialog.selected_metrics())
+
+    def open_grouping_dialog(self) -> None:
+        if self.is_production_source:
+            return
+        if self.tabular_load_result is None:
+            self.load_metrics()
+        if self.tabular_load_result is None or self.tabular_load_result.dataframe.empty:
+            QMessageBox.warning(self, self.windowTitle(), "Load CSV/Excel metrics before editing groups.")
+            return
+        dialog = TabularAnalyticsGroupingDialog(
+            self,
+            dataframe=self.tabular_load_result.dataframe,
+        )
+        dialog.exec()
+        self._sync_ui_state()
+
+    def set_df_for_grouping(self, df) -> None:
+        self.df_for_grouping = df
+        self._sync_grouping_summary()
+
+    def set_grouping_applied(self, applied: bool) -> None:
+        self.grouping_applied = bool(applied)
+        if not self.grouping_applied:
+            self.df_for_grouping = None
+        self._sync_grouping_summary()
+
+    def _sync_grouping_summary(self) -> None:
+        if self.is_production_source:
+            return
+        if not self.grouping_applied or self.df_for_grouping is None or self.df_for_grouping.empty:
+            self.grouping_summary_label.setText("Groups: not applied")
+            set_status_variant(self.grouping_summary_label, "neutral")
+            return
+        groups = (
+            self.df_for_grouping.get("GROUP", [])
+            if hasattr(self.df_for_grouping, "get")
+            else []
+        )
+        group_values = sorted({str(value).strip() for value in groups if str(value).strip()})
+        custom_groups = [value for value in group_values if value != "POPULATION"]
+        if custom_groups:
+            self.grouping_summary_label.setText(
+                f"Groups: {len(custom_groups)} custom + POPULATION"
+            )
+            set_status_variant(self.grouping_summary_label, "success")
+        else:
+            self.grouping_summary_label.setText("Groups: POPULATION only")
+            set_status_variant(self.grouping_summary_label, "info")
 
     def _populate_metrics(self, selected_fields: set[str] | None = None) -> None:
         selected_lookup = None if selected_fields is None else set(selected_fields)
@@ -709,11 +785,15 @@ class IndustrialAnalyticsDialog(QDialog):
         return text if text and text != "First sheet" else None
 
     def _aggregation_state(self) -> ProductionAggregationState:
-        group_field = str(self.group_field_combo.currentData() or "").strip()
+        if not self.is_production_source and self.grouping_applied:
+            group_fields = (TABULAR_GROUP_COLUMN,)
+        else:
+            group_field = str(self.group_field_combo.currentData() or "").strip()
+            group_fields = (group_field,) if group_field else ()
         return ProductionAggregationState(
             time_bucket=str(self.time_bucket_combo.currentData() or "none"),
             aggregation_methods=(str(self.aggregation_combo.currentData() or "mean"),),
-            group_fields=(group_field,) if group_field else (),
+            group_fields=group_fields,
         )
 
     def _cohort_state(self) -> ReferenceCohortState:
@@ -751,6 +831,7 @@ class IndustrialAnalyticsDialog(QDialog):
         source_ready = bool(self.db_file) if self.is_production_source else bool(self.input_file)
         candidate_count = len(self.metric_candidates)
         self.choose_metrics_button.setEnabled(bool(candidate_count))
+        self.edit_groups_button.setEnabled(bool(candidate_count and not self.is_production_source))
         self.load_metrics_button.setEnabled(source_ready)
         self.load_metrics_button.setText("Reload metrics" if candidate_count else "Load metrics")
         if candidate_count:
@@ -759,6 +840,7 @@ class IndustrialAnalyticsDialog(QDialog):
         else:
             self.metrics_summary_label.setText("No metrics loaded")
             set_status_variant(self.metrics_summary_label, "warning" if source_ready else "neutral")
+        self._sync_grouping_summary()
 
         charts_ready = self._chart_selection().has_any
         workbook_ready = not self.workbook_checkbox.isChecked() or bool(self.output_workbook_file)
@@ -807,6 +889,7 @@ class IndustrialAnalyticsDialog(QDialog):
             sheet_name=self._selected_sheet_name(),
             timestamp_column=self._selected_tabular_column(self.timestamp_column_combo),
             reference_column=self._selected_tabular_column(self.reference_column_combo),
+            grouping_df=self.df_for_grouping if self.grouping_applied else None,
         )
 
     def show_loading_screen(self) -> None:

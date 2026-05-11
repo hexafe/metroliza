@@ -12,6 +12,9 @@ from modules.industrial_analytics_state import (
     ProductionChartSelection,
 )
 from modules.tabular_analytics_service import (
+    TABULAR_GROUP_COLUMN,
+    apply_tabular_grouping,
+    build_tabular_grouping_dataframe,
     export_tabular_analytics_workbook,
     load_tabular_analytics_file,
 )
@@ -79,6 +82,43 @@ def test_load_tabular_analytics_file_detects_excel_metrics(tmp_path) -> None:
     assert {"length_mm", "width_mm"}.issubset(metric_names)
     assert result.sheet_name == "Measurements"
     assert result.dataframe["process_datetime"].notna().all()
+
+
+def test_tabular_grouping_dataframe_builds_source_row_identity_rows(tmp_path) -> None:
+    input_file = tmp_path / "table.csv"
+    _sample_table().to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file)
+
+    grouping_frame = build_tabular_grouping_dataframe(loaded.dataframe)
+
+    assert grouping_frame["REPORT_ID"].tolist() == [1, 2, 3, 4, 5, 6]
+    assert set(grouping_frame["REFERENCE"]) == {"R1", "R2", "R3"}
+    assert grouping_frame["SAMPLE_NUMBER"].tolist() == ["1", "2", "3", "4", "5", "6"]
+    assert grouping_frame["FILENAME"].str.contains("table.csv").all()
+
+
+def test_apply_tabular_grouping_keeps_unassigned_rows_in_population(tmp_path) -> None:
+    input_file = tmp_path / "table.csv"
+    _sample_table().to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file)
+    grouping_frame = build_tabular_grouping_dataframe(loaded.dataframe)
+    grouping_frame["GROUP"] = "POPULATION"
+    grouping_frame.loc[grouping_frame["REPORT_ID"].isin([1, 2]), "GROUP"] = "Selected"
+
+    grouped = apply_tabular_grouping(loaded.dataframe, grouping_frame)
+
+    assert grouped.applied
+    assert grouped.group_count == 2
+    assert grouped.custom_group_count == 1
+    assert grouped.dataframe[TABULAR_GROUP_COLUMN].tolist() == [
+        "Selected",
+        "Selected",
+        "POPULATION",
+        "POPULATION",
+        "POPULATION",
+        "POPULATION",
+    ]
+    assert [diagnostic.code for diagnostic in grouped.diagnostics] == ["tabular_grouping_applied"]
 
 
 def test_tabular_data_reuses_dashboard_and_aggregation_path(tmp_path) -> None:

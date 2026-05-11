@@ -323,6 +323,8 @@ def _plot_groups(dataframe: pd.DataFrame, metric_field: str) -> list[tuple[str, 
 
 
 def _preferred_group_column(dataframe: pd.DataFrame) -> str | None:
+    if "GROUP" in dataframe.columns and dataframe["GROUP"].nunique(dropna=True) > 1:
+        return "GROUP"
     if "reference_cohort" in dataframe.columns and dataframe["reference_cohort"].nunique(dropna=True) > 1:
         return "reference_cohort"
     for column in ("station", "line", "process_status", "source_db_alias"):

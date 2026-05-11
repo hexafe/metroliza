@@ -200,6 +200,32 @@ def test_tabular_analytics_dialog_auto_loads_metrics_after_file_selection(
         dialog.close()
 
 
+def test_tabular_analytics_dialog_uses_manual_groups_for_aggregation_state() -> None:
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        grouping_df = pd.DataFrame(
+            {
+                "REPORT_ID": [1, 2, 3],
+                "GROUP": ["Selected", "POPULATION", "POPULATION"],
+            }
+        )
+        dialog.metric_candidates = (
+            ProductionMetricSelection("length_mm", "Length Mm"),
+        )
+        dialog._populate_metrics()
+        dialog.set_df_for_grouping(grouping_df)
+        dialog.set_grouping_applied(True)
+
+        thread = dialog.create_analytics_thread()
+
+        assert thread.grouping_df is grouping_df
+        assert thread.aggregation_state.group_fields == ("GROUP",)
+        assert dialog.grouping_summary_label.text() == "Groups: 1 custom + POPULATION"
+    finally:
+        dialog.close()
+
+
 def test_metric_selection_dialog_select_all_and_clear_are_in_large_dialog() -> None:
     _app()
     metrics = (

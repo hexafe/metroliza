@@ -406,6 +406,8 @@ def _plot_groups(frame: pd.DataFrame) -> list[tuple[str, pd.DataFrame]]:
 
 
 def _preferred_group_columns(frame: pd.DataFrame) -> list[str]:
+    if "GROUP" in frame.columns and frame["GROUP"].nunique(dropna=True) > 1:
+        return ["GROUP"]
     if "reference_cohort" in frame.columns and frame["reference_cohort"].nunique(dropna=True) > 1:
         return ["reference_cohort"]
     for column in ("station", "line", "process_status", "source_db_alias"):

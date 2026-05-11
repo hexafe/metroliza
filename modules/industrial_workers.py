@@ -109,6 +109,7 @@ class IndustrialAnalyticsThread(QThread):
         sheet_name: str | int | None = None,
         timestamp_column: str | None = None,
         reference_column: str | None = None,
+        grouping_df=None,
     ):
         super().__init__()
         self.source_kind = source_kind
@@ -125,6 +126,7 @@ class IndustrialAnalyticsThread(QThread):
         self.sheet_name = sheet_name
         self.timestamp_column = timestamp_column
         self.reference_column = reference_column
+        self.grouping_df = grouping_df
         self._cancel_requested = False
 
     def cancel(self) -> None:
@@ -148,6 +150,7 @@ class IndustrialAnalyticsThread(QThread):
                     sheet_name=self.sheet_name,
                     timestamp_column=self.timestamp_column,
                     reference_column=self.reference_column,
+                    grouping_df=self.grouping_df,
                     aggregation_state=self.aggregation_state,
                     cohort_state=self.cohort_state,
                     chart_selection=self.chart_selection,
