@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
 )
 
 from modules.industrial_data_repository import IndustrialDataRepository
+from modules.industrial_analytics_dialog import IndustrialAnalyticsDialog
 from modules.industrial_export_dialog import IndustrialExportDialog
 from modules.industrial_linking_dialog import IndustrialLinkingDialog
 from modules.industrial_source_config import (
@@ -51,6 +52,7 @@ class IndustrialDataDialog(QDialog):
         self.source_window = None
         self.sync_window = None
         self.export_window = None
+        self.analytics_window = None
         self.linking_window = None
         self.sync_filter_state = IndustrialFilterState()
         self.export_filter_state = IndustrialFilterState()
@@ -58,7 +60,7 @@ class IndustrialDataDialog(QDialog):
         self.include_plots = True
 
         self.setWindowTitle("Industrial data")
-        configure_window_size(self, minimum=(560, 340), initial=(680, 430))
+        configure_window_size(self, minimum=(560, 380), initial=(680, 500))
 
         self.database_field = path_field(
             str(db_file or ""),
@@ -77,6 +79,7 @@ class IndustrialDataDialog(QDialog):
         self.sync_button = QPushButton("Sync...")
         self.links_button = QPushButton("Production links...")
         self.export_button = QPushButton("Export...")
+        self.analyze_button = QPushButton("Analyze...")
         self.initialize_button = QPushButton("Initialize cache")
         self.refresh_links_button = QPushButton("Refresh links")
         self.close_button = QPushButton("Close")
@@ -85,6 +88,7 @@ class IndustrialDataDialog(QDialog):
         self.sync_button.clicked.connect(self.open_sync_dialog)
         self.links_button.clicked.connect(self.open_links_dialog)
         self.export_button.clicked.connect(self.open_export_dialog)
+        self.analyze_button.clicked.connect(self.open_analytics_dialog)
         self.initialize_button.clicked.connect(self.initialize_cache)
         self.refresh_links_button.clicked.connect(self.refresh_links)
         self.close_button.clicked.connect(self.reject)
@@ -130,6 +134,10 @@ class IndustrialDataDialog(QDialog):
         grid.addWidget(section_label("Export filter"), row, 0)
         grid.addWidget(self.export_filter_label, row, 1)
         grid.addWidget(self.export_button, row, 2)
+
+        row += 1
+        grid.addWidget(section_label("Analytics"), row, 0)
+        grid.addWidget(self.analyze_button, row, 2)
 
         row += 1
         grid.addWidget(section_label("Grouping"), row, 0)
@@ -279,6 +287,15 @@ class IndustrialDataDialog(QDialog):
         self.export_window.exec()
         self.refresh_status()
 
+    def open_analytics_dialog(self) -> None:
+        self.analytics_window = IndustrialAnalyticsDialog(
+            self,
+            db_file=self.db_file,
+            source_kind="production_cache",
+        )
+        self.analytics_window.exec()
+        self.refresh_status()
+
     def open_links_dialog(self) -> None:
         self.linking_window = IndustrialLinkingDialog(self, db_file=self.db_file)
         self.linking_window.exec()
@@ -351,6 +368,7 @@ class IndustrialDataDialog(QDialog):
         self.sync_button.setEnabled(db_available)
         self.links_button.setEnabled(db_available)
         self.export_button.setEnabled(db_available)
+        self.analyze_button.setEnabled(db_available)
         self.refresh_links_button.setEnabled(db_available)
 
     def closeEvent(self, event) -> None:

@@ -281,7 +281,7 @@ Examples of metric availability by spec type:
 
 ## Release metadata
 
-Current release highlight (`2026.05 (build 260510)`): Industrial data workflows now let you set up production-line sources, sync records, link them to reports, and export the saved context from guided dialogs.
+Current release highlight (`2026.05 (build 260510)`): Industrial analytics now turns cached production rows or CSV/Excel files into dashboards, grouped statistics, and Excel workbooks.
 
 Canonical release metadata is in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, `CURRENT_RELEASE_HIGHLIGHT`).
 

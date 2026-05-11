@@ -161,7 +161,11 @@ If the report reference and production reference are not the same value, open **
 
 Export uses only local cached industrial rows from the Metroliza report database. It does not connect to production line databases while the workbook is being created. If no industrial rows have been synced or no report links exist yet, the normal export still works, but no industrial context is added.
 
-The industrial data launcher can also open a dedicated cached Oznak export dialog. That export follows the CSV Summary pattern: choose scope/grouping, select an output workbook, decide whether to include plots, then create the workbook from cached rows only.
+The industrial data launcher can also open dedicated cached Oznak export and analytics
+dialogs. **Export...** creates a workbook from cached rows only. **Analyze...** creates an
+HTML dashboard and optional workbook from cached production rows, with grouping, time
+buckets, reference marking, histograms, time series, violin plots, box plots, and grouped
+statistics.
 
 ### Chart type
 

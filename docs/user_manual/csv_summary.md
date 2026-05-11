@@ -1,176 +1,117 @@
 # CSV Summary
 
-## When to use CSV Summary
+## When To Use CSV Summary
 
-Use **CSV Summary** when you want to create an Excel summary directly from a CSV file.
+Use **CSV Summary** when you want to analyze a CSV or Excel file without first creating a
+Metroliza database.
 
 Open it from **Tools > CSV Summary...** in the main window.
 
-This workflow is separate from the normal **Parsing → database file → Export** flow.
+This workflow is separate from the normal **Parsing -> database file -> Export** flow. It
+uses the shared analytics workflow, so file data can use the same grouping, time buckets,
+charts, statistics, and workbook output as cached production data.
 
 Use CSV Summary when:
 
-- your source is already a CSV,
-- you want a quick summary workbook, or
+- your source is already a CSV or Excel file,
+- you want a dashboard or summary workbook, or
 - you do not need the main database-based reporting flow.
 
-## Full workflow
+## Full Workflow
 
-The dialog is a simple step-by-step launcher.
+The dialog is a compact analytics launcher.
 
 Main controls:
 
-- **Select input file (CSV)**
-- **Filter columns (optional)**
-- **Set spec limits (optional)**
-- **Clear saved presets (optional)**
-- **Include histogram and boxplot charts**
-- **Summary-only mode (skip per-column sheets/charts)**
-- **Select output file (xlsx)**
-- **Create Summary**
+- **Select input file (CSV or Excel)**
+- **Load metrics**
+- **Choose metrics**
+- **Choose grouping, time bucket, and aggregation**
+- **Paste references or IDs to mark/filter/compare**
+- **Choose charts and statistics**
+- **Select dashboard and workbook output paths**
+- **Create analytics**
 
-### 1. Select input file (CSV)
+### 1. Select Input File
 
-Choose the CSV file you want to summarize.
-The selected file must already end with `.csv`.
+Choose the CSV or Excel file you want to analyze.
+Supported file types are `.csv`, `.xlsx`, and `.xls`.
 
-After a valid CSV is loaded:
+After a valid file is loaded:
 
-- the column filter button is enabled,
-- the spec limits button is enabled,
-- the output button is enabled.
+- numeric-looking columns can be loaded as metrics,
+- grouping columns can be selected,
+- dashboard and workbook output can be created.
 
-Metroliza also tries to restore saved presets for that CSV file pattern.
+For Excel files, choose the sheet before loading metrics.
 
-### 2. Filter columns (optional)
+### 2. Load And Choose Metrics
 
-Open the column filter dialog if you want to control which columns are treated as index columns and which are treated as data columns.
+Click **Load metrics**. Metroliza detects numeric-looking columns and lists them as
+selectable parameters.
 
-See [Column filtering](#column-filtering) below.
+Select the parameters you want to analyze. These selected parameters can also be written to
+separate workbook sheets.
 
-### 3. Set spec limits (optional)
+### 3. Choose Grouping And Aggregation
 
-Open the spec limits dialog if you want to enter per-column:
+Choose an optional **Group by** field, a time bucket, and an aggregation method.
 
-- **NOM**,
-- **USL**, and
-- **LSL**.
+Available time buckets:
 
-See [Spec limits](#spec-limits) below.
+- raw rows,
+- hour,
+- day,
+- week,
+- month,
+- year.
 
-### 4. Choose plot options
+Available aggregation choices include mean, median, count, sum, min, max, standard
+deviation, and percentiles.
 
-You can choose whether to include chart-heavy output.
+### 4. Paste References Or IDs
 
-See [Plot options](#plot-options) below.
+Paste references or IDs if you want those rows to stand out in charts and statistics.
 
-### 5. Select output file (xlsx)
+Reference modes:
 
-Choose where the output **Excel file** should be saved.
-If you choose a path without an `.xlsx` suffix, Metroliza saves it as `.xlsx`.
+- highlight selected values,
+- compare selected values against the rest,
+- analyze selected values only,
+- create a selected group.
 
-After you choose an output file, **Create Summary** becomes enabled.
+### 5. Choose Outputs
 
-### 6. Click Create Summary
+Choose chart/statistics outputs:
 
-This saves the current preset choices and starts the background export.
+- time series,
+- histogram,
+- violin plot,
+- box plot,
+- groupstats.
 
-## Column filtering
+Choose an HTML dashboard path. Optionally enable workbook output and **Separate sheet per
+selected parameter**.
 
-The column filter dialog is called **Filter Columns**.
+### 6. Create Analytics
 
-It has two selection lists:
+Metroliza creates the dashboard and optional workbook in the background.
 
-- index columns,
-- data columns.
+## Output
 
-### Default first-column index option
-
-The index list includes:
-
-**SELECT DEFAULT (FIRST COLUMN)**
-
-If you use this option, Metroliza treats the first CSV column as the index column.
-
-### Select all data columns
-
-The data list includes:
-
-**SELECT ALL**
-
-If you use this option, Metroliza selects all columns except the chosen index columns as data columns.
-
-This is the fastest option for a standard CSV layout.
-
-## Spec limits
-
-The spec limits dialog is called **Column spec limits**.
-
-For each selected data column, you can enter:
-
-- **NOM**,
-- **USL**,
-- **LSL**.
-
-Blank or invalid values are treated safely and normalized by the app, so this dialog is mainly for users who want explicit target/spec values in the summary output.
-
-## Plot options
-
-### Include histogram and boxplot charts
-
-When enabled, the summary can include histogram and boxplot-style chart output.
-
-This gives a richer workbook, but it can be slower for large files or many columns.
-
-### Summary-only mode
-
-**Summary-only mode (skip per-column sheets/charts)** creates a lighter output.
-
-Use this when you want a faster workbook that focuses on summary information instead of detailed per-column chart pages.
-
-### Large file / many chart guidance
-
-If the current settings would create a very large number of charts, Metroliza shows a warning.
-
-It can offer a faster **Quick-look mode** by disabling charts.
-
-This is helpful when:
-
-- the CSV has many data columns,
-- chart generation would be slow,
-- you want a quick first pass before creating a full chart-heavy workbook.
-
-## Output and presets
-
-### What output you get
-
-CSV Summary creates an **Excel file** (`.xlsx`).
+CSV Summary creates an **HTML dashboard** and, when selected, an **Excel workbook** (`.xlsx`).
 
 This output is separate from the main Parse/Export database workflow.
 
-### How presets are remembered
+The workbook can include:
 
-CSV Summary remembers settings in saved presets under your user profile.
+- table data,
+- aggregated rows,
+- metric summaries,
+- diagnostics,
+- separate sheets for each selected parameter.
 
-These presets can include:
-
-- selected index columns,
-- selected data columns,
-- CSV loading config,
-- spec limits,
-- chart settings,
-- summary-only choice.
-
-When you reopen a similar CSV later, Metroliza may restore those saved choices automatically.
-
-### Clear saved presets
-
-Use **Clear saved presets (optional)** if you want to remove the stored CSV Summary presets.
-Metroliza asks for confirmation before deleting presets.
-
-This clears the saved preset file for the CSV Summary workflow.
-
-## Progress and cancel behavior
+## Progress And Cancel Behavior
 
 When processing starts, Metroliza shows a worker/progress dialog with:
 
@@ -178,6 +119,4 @@ When processing starts, Metroliza shows a worker/progress dialog with:
 - a progress bar,
 - a **Cancel** button.
 
-If you cancel, the worker is asked to stop and the app shows a **Processing canceled** message when the worker finishes canceling.
-
-If processing completes normally, the app shows **Processing complete** and tells you where the Excel file was saved.
+If processing completes normally, the app shows where the dashboard and workbook were saved.

@@ -7,9 +7,9 @@ from modules.modify_db import ModifyDB
 from modules.about_window import AboutWindow
 from modules.release_notes_dialog import ReleaseNotesDialog
 from modules.custom_logger import CustomLogger
-from modules.csv_summary_dialog import CSVSummaryDialog
 from modules.characteristic_mapping_dialog import CharacteristicMappingDialog
 from modules.industrial_data_dialog import IndustrialDataDialog
+from modules.industrial_analytics_dialog import IndustrialAnalyticsDialog, SOURCE_TABULAR_FILE
 from modules.help_menu import build_help_menu
 from VersionDate import release_notes
 from PyQt6.QtCore import QByteArray
@@ -128,7 +128,7 @@ class MainWindow(QMainWindow):
         self.release_notes_action = QAction("Release notes", self)
         self.release_notes_action.triggered.connect(self.open_release_notes_dialog)
         self.csv_summary_action = QAction("CSV Summary...", self)
-        self.csv_summary_action.setToolTip("Create a standalone summary workbook from CSV data.")
+        self.csv_summary_action.setToolTip("Analyze CSV or Excel data with dashboards and workbook output.")
         self.csv_summary_action.triggered.connect(self.launch_csv_summary_dialog)
         self.enrich_metadata_action = QAction("Enrich existing database metadata...", self)
         self.enrich_metadata_action.setToolTip("Run OCR metadata enrichment on reports already saved in the selected database")
@@ -349,9 +349,11 @@ class MainWindow(QMainWindow):
 
     def launch_csv_summary_dialog(self):
         try:
-            csv_summary_window = CSVSummaryDialog(self)
+            csv_summary_window = IndustrialAnalyticsDialog(
+                self,
+                source_kind=SOURCE_TABULAR_FILE,
+            )
             csv_summary_window.exec()
-            pass
         except Exception as e:
             self.log_and_exit(e)
 

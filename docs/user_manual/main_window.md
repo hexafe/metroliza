@@ -44,7 +44,9 @@ Use this when you already have a database file and want to create an **Excel fil
 
 Opens the [CSV Summary](csv_summary.md) workflow from the **Tools** menu.
 
-This is a separate mini-app inside Metroliza. It works directly from a CSV file and does **not** require the normal parse-to-database workflow.
+This works directly from a CSV or Excel file and does **not** require the normal
+parse-to-database workflow. It can create dashboards, grouped statistics, and optional
+Excel workbooks with separate sheets for selected parameters.
 
 ### Tools > Industrial data...
 
@@ -61,6 +63,8 @@ The launcher opens separate workflows:
 - **Sync...** asks for the production database username/password for the current session, opens the reference filter, tests the production database connection, syncs rows into the selected Metroliza report database cache, and can cancel a running sync.
 - **Production links...** lets you manually link a Metroliza report to a cached production row when both systems use different reference values.
 - **Export...** creates a cached industrial workbook with filter/grouping summaries and an explicit **Include plots** option.
+- **Analyze...** creates dashboards, grouped statistics, time-bucket summaries, and optional
+  workbooks from cached production rows without requiring CMM measurements.
 - **Refresh links** refreshes local report-to-process links before the main Metroliza export.
 
 There are two ways to configure production line databases:

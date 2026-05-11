@@ -7,6 +7,17 @@ from typing import Any
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from modules.industrial_data_repository import IndustrialDataRepository, IndustrialSourceProfile
+from modules.industrial_analytics_state import (
+    ProductionAggregationState,
+    ProductionChartSelection,
+    ProductionFilterState,
+    ProductionMetricSelection,
+    ReferenceCohortState,
+)
+from modules.industrial_analytics_workflow import (
+    run_production_cache_analytics,
+    run_tabular_file_analytics,
+)
 from modules.industrial_export_service import export_cached_industrial_workbook
 from modules.industrial_join_service import materialize_industrial_report_links
 from modules.industrial_workflow_state import IndustrialFilterState, IndustrialGroupingState
@@ -67,6 +78,73 @@ class IndustrialExportThread(QThread):
                     include_charts=self.include_charts,
                 )
             )
+        except Exception as exc:
+            self.error_occurred.emit(str(exc))
+
+
+class IndustrialAnalyticsThread(QThread):
+    """Create production/file analytics dashboard and workbook outside the Qt main thread."""
+
+    result_ready = pyqtSignal(object)
+    error_occurred = pyqtSignal(str)
+
+    def __init__(
+        self,
+        *,
+        source_kind: str,
+        db_file: str = "",
+        input_file: str = "",
+        output_dashboard_file: str,
+        output_workbook_file: str = "",
+        metric_selection: tuple[ProductionMetricSelection, ...] = (),
+        filter_state: ProductionFilterState | None = None,
+        aggregation_state: ProductionAggregationState | None = None,
+        cohort_state: ReferenceCohortState | None = None,
+        chart_selection: ProductionChartSelection | None = None,
+        separate_parameter_sheets: bool = True,
+        sheet_name: str | int | None = None,
+    ):
+        super().__init__()
+        self.source_kind = source_kind
+        self.db_file = db_file
+        self.input_file = input_file
+        self.output_dashboard_file = output_dashboard_file
+        self.output_workbook_file = output_workbook_file
+        self.metric_selection = tuple(metric_selection or ())
+        self.filter_state = filter_state or ProductionFilterState()
+        self.aggregation_state = aggregation_state or ProductionAggregationState()
+        self.cohort_state = cohort_state or ReferenceCohortState()
+        self.chart_selection = chart_selection or ProductionChartSelection()
+        self.separate_parameter_sheets = bool(separate_parameter_sheets)
+        self.sheet_name = sheet_name
+
+    def run(self):
+        try:
+            if self.source_kind == "tabular_file":
+                result = run_tabular_file_analytics(
+                    input_file=self.input_file,
+                    output_dashboard_file=self.output_dashboard_file,
+                    output_workbook_file=self.output_workbook_file or None,
+                    metric_selection=self.metric_selection,
+                    sheet_name=self.sheet_name,
+                    aggregation_state=self.aggregation_state,
+                    cohort_state=self.cohort_state,
+                    chart_selection=self.chart_selection,
+                    separate_parameter_sheets=self.separate_parameter_sheets,
+                )
+            else:
+                result = run_production_cache_analytics(
+                    db_file=self.db_file,
+                    output_dashboard_file=self.output_dashboard_file,
+                    output_workbook_file=self.output_workbook_file or None,
+                    metric_selection=self.metric_selection,
+                    filter_state=self.filter_state,
+                    aggregation_state=self.aggregation_state,
+                    cohort_state=self.cohort_state,
+                    chart_selection=self.chart_selection,
+                    separate_parameter_sheets=self.separate_parameter_sheets,
+                )
+            self.result_ready.emit(result)
         except Exception as exc:
             self.error_occurred.emit(str(exc))
 

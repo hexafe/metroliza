@@ -1,0 +1,116 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pandas as pd
+
+from modules.industrial_analytics_dashboard import build_production_dashboard_manifest
+from modules.industrial_analytics_service import aggregate_production_frame
+from modules.industrial_analytics_state import (
+    ProductionAggregationState,
+    ProductionChartSelection,
+)
+from modules.tabular_analytics_service import (
+    export_tabular_analytics_workbook,
+    load_tabular_analytics_file,
+)
+
+
+def _sample_table() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=6, freq="12h"),
+            "Reference ID": ["R1", "R1", "R2", "R2", "R3", "R3"],
+            "Line": ["L1", "L1", "L2", "L2", "L1", "L2"],
+            "Length mm": [10.0, 10.1, 10.2, 10.4, 10.3, 10.5],
+            "Width mm": [5.0, 5.1, 5.2, 5.4, 5.3, 5.5],
+            "Comment": ["ok", "ok", "review", "ok", "ok", "review"],
+        }
+    )
+
+
+def test_load_tabular_analytics_file_detects_csv_metrics_and_contract_columns(tmp_path) -> None:
+    input_file = tmp_path / "table.csv"
+    _sample_table().to_csv(input_file, index=False)
+
+    result = load_tabular_analytics_file(input_file)
+    by_name = {candidate.field_name: candidate for candidate in result.metric_candidates}
+
+    assert {"length_mm", "width_mm"}.issubset(by_name)
+    assert "comment" not in by_name
+    assert "process_datetime" in result.dataframe.columns
+    assert "reference" in result.dataframe.columns
+    assert set(result.dataframe["reference"]) == {"R1", "R2", "R3"}
+    assert result.csv_config["delimiter"] == ","
+
+
+def test_load_tabular_analytics_file_detects_excel_metrics(tmp_path) -> None:
+    input_file = tmp_path / "table.xlsx"
+    _sample_table().to_excel(input_file, index=False, sheet_name="Measurements")
+
+    result = load_tabular_analytics_file(input_file, sheet_name="Measurements")
+    metric_names = {candidate.field_name for candidate in result.metric_candidates}
+
+    assert {"length_mm", "width_mm"}.issubset(metric_names)
+    assert result.sheet_name == "Measurements"
+    assert result.dataframe["process_datetime"].notna().all()
+
+
+def test_tabular_data_reuses_dashboard_and_aggregation_path(tmp_path) -> None:
+    input_file = tmp_path / "table.csv"
+    _sample_table().to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file)
+    metrics = tuple(candidate.to_selection() for candidate in loaded.metric_candidates[:1])
+    aggregation = ProductionAggregationState(
+        time_bucket="day",
+        aggregation_methods=("mean",),
+        group_fields=("line",),
+    )
+
+    aggregated = aggregate_production_frame(loaded.dataframe, aggregation, metrics)
+    manifest = build_production_dashboard_manifest(
+        frame=loaded.dataframe,
+        metric_selection=metrics,
+        aggregation_state=aggregation,
+        aggregation_result=aggregated,
+        chart_selection=ProductionChartSelection(time_series=True, histogram=True, violin=True, box=True),
+        diagnostics=loaded.diagnostics + aggregated.diagnostics,
+    )
+
+    assert aggregated.is_aggregated
+    assert "line" in aggregated.dataframe.columns
+    assert manifest["summary"]["chart_count"] == 4
+    assert {chart["chart_type"] for chart in manifest["charts"]} == {
+        "time_series",
+        "histogram",
+        "violin",
+        "box",
+    }
+
+
+def test_tabular_workbook_export_writes_separate_parameter_sheets(tmp_path) -> None:
+    input_file = tmp_path / "table.csv"
+    output_file = tmp_path / "analytics.xlsx"
+    _sample_table().to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file)
+    metrics = tuple(candidate.to_selection() for candidate in loaded.metric_candidates)
+    aggregated = aggregate_production_frame(
+        loaded.dataframe,
+        ProductionAggregationState(time_bucket="day", aggregation_methods=("mean",)),
+        metrics,
+    )
+
+    result = export_tabular_analytics_workbook(
+        dataframe=loaded.dataframe,
+        metric_candidates=loaded.metric_candidates,
+        output_file=output_file,
+        aggregation_result=aggregated,
+        diagnostics=loaded.diagnostics + aggregated.diagnostics,
+        separate_parameter_sheets=True,
+    )
+
+    assert Path(result.output_file).exists()
+    assert result.parameter_sheet_count == len(loaded.metric_candidates)
+    workbook = pd.ExcelFile(output_file)
+    assert {"Table Data", "Aggregates", "Metrics", "Diagnostics"}.issubset(workbook.sheet_names)
+    assert {"Length Mm", "Width Mm"}.issubset(workbook.sheet_names)
