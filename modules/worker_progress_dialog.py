@@ -10,7 +10,7 @@ from modules.ui_foundation import apply_metroliza_theme, configure_window_size, 
 
 def _scaled_loading_gif_size(source_size):
     """Return an aspect-preserving presentation size for the loading GIF."""
-    target_max_dimension = 168
+    target_max_dimension = 216
     if not source_size.isValid() or source_size.isEmpty():
         return QSize(target_max_dimension, target_max_dimension)
 
@@ -30,7 +30,6 @@ def create_worker_progress_dialog(parent, *, window_title, initial_status_text, 
     loading_dialog = QDialog(parent, Qt.WindowType.WindowTitleHint)
     loading_dialog.setWindowTitle(window_title)
     loading_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-    configure_window_size(loading_dialog, minimum=(460, 220), initial=(520, 260))
     apply_metroliza_theme(loading_dialog)
 
     loading_gif_label = QLabel(loading_dialog)
@@ -56,29 +55,40 @@ def create_worker_progress_dialog(parent, *, window_title, initial_status_text, 
     loading_label = secondary_label(initial_status_text)
     loading_label.setParent(loading_dialog)
     loading_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
-    loading_label.setMinimumHeight((loading_label.fontMetrics().lineSpacing() * 3) + 8)
+    loading_label.setMinimumHeight(loading_label.fontMetrics().lineSpacing() * 3)
     loading_label.setWordWrap(True)
 
     loading_bar = QProgressBar(loading_dialog)
     loading_bar.setValue(0)
-    loading_bar.setMinimumWidth(360)
+    loading_bar.setMinimumWidth(320)
     loading_bar.setMaximumHeight(20)
     loading_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
     layout = QVBoxLayout(loading_dialog)
-    layout.setContentsMargins(16, 16, 16, 16)
-    layout.setSpacing(10)
+    layout.setContentsMargins(12, 12, 12, 12)
+    layout.setSpacing(6)
 
     status_layout = QHBoxLayout()
-    status_layout.setSpacing(14)
+    status_layout.setSpacing(10)
     status_layout.addWidget(loading_gif_label, alignment=Qt.AlignmentFlag.AlignVCenter)
     status_layout.addWidget(loading_label, stretch=1)
     layout.addLayout(status_layout)
-    layout.addWidget(loading_bar)
 
     cancel_button = QPushButton("Cancel", loading_dialog)
     cancel_button.clicked.connect(on_cancel)
-    layout.addWidget(cancel_button, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+    footer_layout = QHBoxLayout()
+    footer_layout.setSpacing(8)
+    footer_layout.addWidget(loading_bar, stretch=1, alignment=Qt.AlignmentFlag.AlignVCenter)
+    footer_layout.addWidget(cancel_button, alignment=Qt.AlignmentFlag.AlignVCenter)
+    layout.addLayout(footer_layout)
+
+    content_size = loading_dialog.sizeHint()
+    configure_window_size(
+        loading_dialog,
+        minimum=(480, 240),
+        initial=(max(520, content_size.width()), max(240, content_size.height())),
+    )
 
     loading_dialog._loading_gif_buffer = loading_gif_buffer
     return loading_dialog, loading_label, loading_bar, loading_gif

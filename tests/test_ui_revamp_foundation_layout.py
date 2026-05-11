@@ -117,16 +117,28 @@ class TestUiRevampFoundationLayout(unittest.TestCase):
             source_buffer.open(QIODevice.OpenModeFlag.ReadOnly)
             source_size = QImageReader(source_buffer, b"gif").size()
             cancel_texts = [button.text() for button in progress_dialog.findChildren(QPushButton)]
+            cancel_geometries = [
+                [button.geometry().x(), button.geometry().y(), button.geometry().width(), button.geometry().height()]
+                for button in progress_dialog.findChildren(QPushButton)
+                if button.text() == "Cancel"
+            ]
             print(json.dumps({
                 "progress_size": [progress_dialog.width(), progress_dialog.height()],
                 "release_size": [release_notes.width(), release_notes.height()],
                 "available": [available.width(), available.height()],
                 "progress_text": label.text(),
                 "bar_max_height": progress_bar.maximumHeight(),
+                "bar_geometry": [
+                    progress_bar.geometry().x(),
+                    progress_bar.geometry().y(),
+                    progress_bar.geometry().width(),
+                    progress_bar.geometry().height(),
+                ],
                 "movie_size": [movie_size.width(), movie_size.height()],
                 "source_size": [source_size.width(), source_size.height()],
                 "movie_file_name": movie.fileName(),
                 "cancel_texts": cancel_texts,
+                "cancel_geometries": cancel_geometries,
             }, sort_keys=True))
             progress_dialog.close()
             release_notes.close()
@@ -136,12 +148,12 @@ class TestUiRevampFoundationLayout(unittest.TestCase):
 
         self.assertLessEqual(payload["progress_size"][0], payload["available"][0])
         self.assertLessEqual(payload["progress_size"][1], payload["available"][1])
-        self.assertLessEqual(payload["progress_size"][1], 320)
+        self.assertLessEqual(payload["progress_size"][1], 280)
         self.assertLessEqual(payload["release_size"][0], payload["available"][0])
         self.assertIn("Stage", payload["progress_text"])
         self.assertLessEqual(payload["bar_max_height"], 20)
-        self.assertEqual(max(payload["movie_size"]), 168)
-        self.assertGreaterEqual(min(payload["movie_size"]), 150)
+        self.assertEqual(max(payload["movie_size"]), 216)
+        self.assertGreaterEqual(min(payload["movie_size"]), 200)
         self.assertTrue(payload["source_size"][0] > 0 and payload["source_size"][1] > 0)
         self.assertAlmostEqual(
             payload["movie_size"][0] / payload["movie_size"][1],
@@ -150,6 +162,10 @@ class TestUiRevampFoundationLayout(unittest.TestCase):
         )
         self.assertEqual(payload["movie_file_name"], "")
         self.assertIn("Cancel", payload["cancel_texts"])
+        self.assertLessEqual(
+            abs(payload["bar_geometry"][1] - payload["cancel_geometries"][0][1]),
+            12,
+        )
 
     def test_export_dialog_initial_width_contains_visible_buttons(self):
         payload = self._run_probe(
