@@ -33,6 +33,8 @@ class TabularAnalyticsLoadResult:
     column_mapping: dict[str, str] = field(default_factory=dict)
     source_file: str = ""
     sheet_name: str | None = None
+    timestamp_column: str | None = None
+    reference_column: str | None = None
     csv_config: dict[str, Any] = field(default_factory=dict)
 
 
@@ -135,6 +137,9 @@ def load_tabular_analytics_file(
 
     metric_candidates = discover_tabular_metric_candidates(
         frame,
+        reserved_columns=tuple(
+            column for column in (timestamp_field, reference_field) if column is not None
+        ),
         numeric_threshold=numeric_threshold,
         min_numeric_count=min_numeric_count,
     )
@@ -154,6 +159,8 @@ def load_tabular_analytics_file(
         column_mapping=mapping,
         source_file=str(path),
         sheet_name=None if resolved_sheet_name is None else str(resolved_sheet_name),
+        timestamp_column=timestamp_field,
+        reference_column=reference_field,
         csv_config=csv_config,
     )
 
@@ -161,6 +168,7 @@ def load_tabular_analytics_file(
 def discover_tabular_metric_candidates(
     dataframe: pd.DataFrame,
     *,
+    reserved_columns: tuple[str, ...] = (),
     numeric_threshold: float = 0.8,
     min_numeric_count: int = 2,
 ) -> tuple[ProductionMetricCandidate, ...]:
@@ -173,6 +181,7 @@ def discover_tabular_metric_candidates(
         "process_datetime",
         "reference",
     }
+    reserved.update(str(column) for column in reserved_columns)
     candidates: list[ProductionMetricCandidate] = []
     for column in dataframe.columns:
         column_name = str(column)

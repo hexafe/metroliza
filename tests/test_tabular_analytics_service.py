@@ -44,6 +44,30 @@ def test_load_tabular_analytics_file_detects_csv_metrics_and_contract_columns(tm
     assert result.csv_config["delimiter"] == ","
 
 
+def test_load_tabular_analytics_file_uses_explicit_time_and_reference_columns(tmp_path) -> None:
+    input_file = tmp_path / "table.csv"
+    pd.DataFrame(
+        {
+            "Created At": pd.date_range("2026-05-10 08:00", periods=4, freq="h"),
+            "Batch Number": [1001, 1001, 1002, 1002],
+            "Numeric ID": [1, 2, 3, 4],
+            "Length mm": [10.0, 10.2, 10.1, 10.4],
+        }
+    ).to_csv(input_file, index=False)
+
+    result = load_tabular_analytics_file(
+        input_file,
+        timestamp_column="Created At",
+        reference_column="Batch Number",
+    )
+
+    assert result.timestamp_column == "created_at"
+    assert result.reference_column == "batch_number"
+    assert set(result.dataframe["reference"]) == {"1001", "1002"}
+    assert result.dataframe["process_datetime"].notna().all()
+    assert "batch_number" not in {candidate.field_name for candidate in result.metric_candidates}
+
+
 def test_load_tabular_analytics_file_detects_excel_metrics(tmp_path) -> None:
     input_file = tmp_path / "table.xlsx"
     _sample_table().to_excel(input_file, index=False, sheet_name="Measurements")

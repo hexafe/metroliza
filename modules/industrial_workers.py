@@ -15,6 +15,7 @@ from modules.industrial_analytics_state import (
     ReferenceCohortState,
 )
 from modules.industrial_analytics_workflow import (
+    AnalyticsCancelled,
     run_production_cache_analytics,
     run_tabular_file_analytics,
 )
@@ -50,6 +51,7 @@ class IndustrialExportThread(QThread):
 
     result_ready = pyqtSignal(object)
     error_occurred = pyqtSignal(str)
+    cancelled = pyqtSignal(str)
 
     def __init__(
         self,
@@ -103,6 +105,8 @@ class IndustrialAnalyticsThread(QThread):
         chart_selection: ProductionChartSelection | None = None,
         separate_parameter_sheets: bool = True,
         sheet_name: str | int | None = None,
+        timestamp_column: str | None = None,
+        reference_column: str | None = None,
     ):
         super().__init__()
         self.source_kind = source_kind
@@ -117,6 +121,16 @@ class IndustrialAnalyticsThread(QThread):
         self.chart_selection = chart_selection or ProductionChartSelection()
         self.separate_parameter_sheets = bool(separate_parameter_sheets)
         self.sheet_name = sheet_name
+        self.timestamp_column = timestamp_column
+        self.reference_column = reference_column
+        self._cancel_requested = False
+
+    def cancel(self) -> None:
+        self._cancel_requested = True
+        self.requestInterruption()
+
+    def _is_cancelled(self) -> bool:
+        return self._cancel_requested or self.isInterruptionRequested()
 
     def run(self):
         try:
@@ -127,10 +141,13 @@ class IndustrialAnalyticsThread(QThread):
                     output_workbook_file=self.output_workbook_file or None,
                     metric_selection=self.metric_selection,
                     sheet_name=self.sheet_name,
+                    timestamp_column=self.timestamp_column,
+                    reference_column=self.reference_column,
                     aggregation_state=self.aggregation_state,
                     cohort_state=self.cohort_state,
                     chart_selection=self.chart_selection,
                     separate_parameter_sheets=self.separate_parameter_sheets,
+                    cancel_check=self._is_cancelled,
                 )
             else:
                 result = run_production_cache_analytics(
@@ -143,8 +160,11 @@ class IndustrialAnalyticsThread(QThread):
                     cohort_state=self.cohort_state,
                     chart_selection=self.chart_selection,
                     separate_parameter_sheets=self.separate_parameter_sheets,
+                    cancel_check=self._is_cancelled,
                 )
             self.result_ready.emit(result)
+        except AnalyticsCancelled as exc:
+            self.cancelled.emit(str(exc))
         except Exception as exc:
             self.error_occurred.emit(str(exc))
 

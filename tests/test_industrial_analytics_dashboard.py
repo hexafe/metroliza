@@ -4,12 +4,15 @@ import json
 import re
 from pathlib import Path
 
+import pandas as pd
+
 from modules.industrial_analytics_dashboard import (
     DASHBOARD_SCHEMA,
     build_production_dashboard_manifest,
     write_production_dashboard,
 )
 from modules.industrial_analytics_service import (
+    ProductionAggregationResult,
     aggregate_production_frame,
     analyze_production_groupstats,
     apply_reference_cohorts,
@@ -113,3 +116,55 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     assert match is not None
     chart_payload = json.loads(match.group(1))
     assert len(chart_payload) == 4
+
+
+def test_time_series_trace_drops_sparse_aggregation_nan_pairs() -> None:
+    frame = pd.DataFrame(
+        {
+            "process_datetime": pd.to_datetime(
+                ["2026-05-10T00:00:00Z", "2026-05-11T00:00:00Z"],
+                utc=True,
+            ),
+            "cycle_time_s": [35.0, 36.0],
+            "station": ["S1", "S1"],
+        }
+    )
+    aggregate_frame = pd.DataFrame(
+        {
+            "time_bucket_start": pd.to_datetime(
+                ["2026-05-10T00:00:00Z", "2026-05-11T00:00:00Z"],
+                utc=True,
+            ),
+            "station": ["S1", "S1"],
+            "cycle_time_s__std": [float("nan"), 0.3],
+            "raw_row_count": [1, 2],
+        }
+    )
+
+    manifest = build_production_dashboard_manifest(
+        frame=frame,
+        metric_selection=(ProductionMetricSelection("cycle_time_s"),),
+        aggregation_state=ProductionAggregationState(
+            time_bucket="day",
+            aggregation_methods=("std",),
+            group_fields=("station",),
+        ),
+        aggregation_result=ProductionAggregationResult(
+            dataframe=aggregate_frame,
+            source_row_count=2,
+            output_row_count=2,
+            is_aggregated=True,
+        ),
+        chart_selection=ProductionChartSelection(
+            time_series=True,
+            histogram=False,
+            violin=False,
+            box=False,
+            groupstats=False,
+        ),
+    )
+
+    traces = manifest["charts"][0]["plotly_spec"]["data"]
+    assert len(traces) == 1
+    assert traces[0]["x"] == ["2026-05-11T00:00:00+00:00"]
+    assert traces[0]["y"] == [0.3]

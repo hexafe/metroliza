@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from modules.industrial_analytics_state import (
     ProductionAggregationState,
@@ -11,6 +12,7 @@ from modules.industrial_analytics_state import (
     ReferenceCohortState,
 )
 from modules.industrial_analytics_workflow import (
+    AnalyticsCancelled,
     run_production_cache_analytics,
     run_tabular_file_analytics,
 )
@@ -91,3 +93,30 @@ def test_run_tabular_file_analytics_reuses_shared_dashboard_and_parameter_workbo
     assert result.metric_count == 1
     assert result.parameter_sheet_count == 1
     assert "Length Mm" in result.workbook_sheet_names
+
+
+def test_run_production_cache_analytics_cancel_removes_temp_outputs(tmp_path) -> None:
+    db_path = str(tmp_path / "production_only.db")
+    seed_production_analytics_cache(db_path)
+    dashboard_file = tmp_path / "production_analytics.html"
+    workbook_file = tmp_path / "production_analytics.xlsx"
+    calls = {"count": 0}
+
+    def cancel_after_dashboard_write() -> bool:
+        calls["count"] += 1
+        return calls["count"] >= 7
+
+    with pytest.raises(AnalyticsCancelled):
+        run_production_cache_analytics(
+            db_file=db_path,
+            output_dashboard_file=str(dashboard_file),
+            output_workbook_file=str(workbook_file),
+            metric_selection=(ProductionMetricSelection("cycle_time_s"),),
+            chart_selection=ProductionChartSelection(time_series=True, histogram=False),
+            cancel_check=cancel_after_dashboard_write,
+        )
+
+    assert not dashboard_file.exists()
+    assert not workbook_file.exists()
+    assert not list(tmp_path.glob(".production_analytics.*.tmp.html"))
+    assert not list(tmp_path.glob(".production_analytics.*.tmp.xlsx"))

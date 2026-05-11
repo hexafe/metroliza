@@ -48,6 +48,37 @@ def test_metric_discovery_uses_dynamic_numeric_fields_without_report_metadata(tm
     assert "fixture_text_code" not in by_name
 
 
+def test_metric_discovery_includes_fixed_numeric_record_columns(tmp_path) -> None:
+    db_path = str(tmp_path / "production_only.db")
+    seed_production_analytics_cache(db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("ALTER TABLE industrial_records ADD COLUMN machine_speed_rpm REAL")
+        conn.execute(
+            """
+            UPDATE industrial_records
+            SET machine_speed_rpm = 1200.0 + id
+            """
+        )
+
+    candidates = discover_production_metric_candidates(db_path)
+    by_name = {candidate.field_name: candidate for candidate in candidates}
+
+    assert by_name["machine_speed_rpm"].source_kind == "fixed"
+    result = load_production_analytics_frame(
+        db_path,
+        metric_selection=(
+            ProductionMetricSelection(
+                "machine_speed_rpm",
+                display_label="Machine speed",
+                source_kind="fixed",
+            ),
+        ),
+    )
+    assert result.has_rows
+    assert "machine_speed_rpm" in result.dataframe.columns
+    assert pd.api.types.is_numeric_dtype(result.dataframe["machine_speed_rpm"])
+
+
 def test_load_frame_pivots_dynamic_metrics_and_parses_time_without_report_metadata(tmp_path) -> None:
     db_path = str(tmp_path / "production_only.db")
     fixture = seed_production_analytics_cache(db_path)

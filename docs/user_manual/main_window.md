@@ -48,6 +48,11 @@ This works directly from a CSV or Excel file and does **not** require the normal
 parse-to-database workflow. It can create dashboards, grouped statistics, and optional
 Excel workbooks with separate sheets for selected parameters.
 
+### Tools > Legacy CSV Summary...
+
+Opens the original CSV Summary workbook dialog for existing CSV Summary presets,
+specification limits, and summary-only workbook output.
+
 ### Tools > Industrial data...
 
 Opens the compact industrial data launcher. It keeps two database concepts separate:
@@ -64,7 +69,9 @@ The launcher opens separate workflows:
 - **Production links...** lets you manually link a Metroliza report to a cached production row when both systems use different reference values.
 - **Export...** creates a cached industrial workbook with filter/grouping summaries and an explicit **Include plots** option.
 - **Analyze...** creates dashboards, grouped statistics, time-bucket summaries, and optional
-  workbooks from cached production rows without requiring CMM measurements.
+  workbooks from cached production rows without requiring CMM measurements. The analytics
+  setup includes production filters, pasted-reference cohorts, grouping, time buckets, and
+  chart selection.
 - **Refresh links** refreshes local report-to-process links before the main Metroliza export.
 
 There are two ways to configure production line databases:

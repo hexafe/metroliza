@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
 )
 
 from modules.industrial_analytics_service import discover_production_metric_candidates
+from modules.industrial_analytics_filter_dialog import IndustrialAnalyticsFilterDialog
 from modules.industrial_analytics_state import (
     ProductionAggregationState,
     ProductionChartSelection,
@@ -66,6 +67,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.output_workbook_file = default_workbook_path(self.db_file or "production_analytics")
         self.analytics_thread = None
         self.metric_candidates: tuple[ProductionMetricSelection, ...] = ()
+        self.filter_state = ProductionFilterState()
 
         self.setWindowTitle("Production analytics" if self.is_production_source else "CSV / Excel analytics")
         configure_window_size(self, minimum=(720, 560), initial=(880, 680))
@@ -74,6 +76,8 @@ class IndustrialAnalyticsDialog(QDialog):
         self.database_row_label = section_label("Report database")
         self.input_file_row_label = section_label("CSV/Excel file")
         self.sheet_name_row_label = section_label("Excel sheet")
+        self.timestamp_column_row_label = section_label("Time column")
+        self.reference_column_row_label = section_label("Reference column")
         self.database_field = path_field(self.db_file, empty_text="No Metroliza report database selected")
         self.input_file_field = path_field("", empty_text="No CSV/Excel file selected")
         self.dashboard_path_field = path_field(
@@ -85,10 +89,16 @@ class IndustrialAnalyticsDialog(QDialog):
             empty_text="No workbook path selected",
         )
         self.readiness_label = status_chip("Load metrics and choose an output path.", "warning")
+        self.filter_row_label = section_label("Filters")
+        self.filter_summary_label = status_chip(self.filter_state.summary(), "neutral")
 
         self.sheet_name_combo = QComboBox()
         self.sheet_name_combo.setEditable(True)
         self.sheet_name_combo.addItem("First sheet", "")
+        self.sheet_name_combo.currentTextChanged.connect(self._handle_tabular_source_changed)
+        self.timestamp_column_combo = QComboBox()
+        self.reference_column_combo = QComboBox()
+        self._reset_tabular_column_options()
 
         self.metrics_list = QListWidget()
         self.metrics_list.setMinimumHeight(120)
@@ -137,6 +147,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.parameter_sheets_checkbox.setChecked(True)
 
         self.browse_input_button = QPushButton("Browse")
+        self.filters_button = QPushButton("Filters...")
         self.load_metrics_button = QPushButton("Load metrics")
         self.select_all_metrics_button = QPushButton("Select all")
         self.clear_metrics_button = QPushButton("Clear")
@@ -147,6 +158,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.start_button.setDefault(True)
 
         self.browse_input_button.clicked.connect(self.select_input_file)
+        self.filters_button.clicked.connect(self.open_filters_dialog)
         self.load_metrics_button.clicked.connect(self.load_metrics)
         self.select_all_metrics_button.clicked.connect(lambda: self._set_metric_checks(True))
         self.clear_metrics_button.clicked.connect(lambda: self._set_metric_checks(False))
@@ -190,6 +202,11 @@ class IndustrialAnalyticsDialog(QDialog):
         grid.addWidget(self.source_label, row, 1, 1, 2)
 
         row += 1
+        grid.addWidget(self.filter_row_label, row, 0)
+        grid.addWidget(self.filter_summary_label, row, 1)
+        grid.addWidget(self.filters_button, row, 2)
+
+        row += 1
         grid.addWidget(self.database_row_label, row, 0)
         grid.addWidget(self.database_field, row, 1, 1, 2)
 
@@ -201,6 +218,14 @@ class IndustrialAnalyticsDialog(QDialog):
         row += 1
         grid.addWidget(self.sheet_name_row_label, row, 0)
         grid.addWidget(self.sheet_name_combo, row, 1, 1, 2)
+
+        row += 1
+        grid.addWidget(self.timestamp_column_row_label, row, 0)
+        grid.addWidget(self.timestamp_column_combo, row, 1, 1, 2)
+
+        row += 1
+        grid.addWidget(self.reference_column_row_label, row, 0)
+        grid.addWidget(self.reference_column_combo, row, 1, 1, 2)
 
         row += 1
         grid.addWidget(section_label("Metrics"), row, 0)
@@ -292,10 +317,69 @@ class IndustrialAnalyticsDialog(QDialog):
         show_file = not self.is_production_source
         self.input_file_row_label.setVisible(show_file)
         self.sheet_name_row_label.setVisible(show_file)
-        for widget in (self.input_file_field, self.browse_input_button, self.sheet_name_combo):
+        self.timestamp_column_row_label.setVisible(show_file)
+        self.reference_column_row_label.setVisible(show_file)
+        for widget in (
+            self.input_file_field,
+            self.browse_input_button,
+            self.sheet_name_combo,
+            self.timestamp_column_combo,
+            self.reference_column_combo,
+        ):
             widget.setVisible(show_file)
+        self.filter_row_label.setVisible(self.is_production_source)
+        self.filter_summary_label.setVisible(self.is_production_source)
+        self.filters_button.setVisible(self.is_production_source)
         self.database_row_label.setVisible(self.is_production_source)
         self.database_field.setVisible(self.is_production_source)
+        self._sync_filter_summary()
+
+    def _sync_filter_summary(self) -> None:
+        self.filter_summary_label.setText(self.filter_state.summary())
+        set_status_variant(self.filter_summary_label, "info" if self.filter_state.is_applied else "neutral")
+
+    def _handle_tabular_source_changed(self, _text: str = "") -> None:
+        if self.is_production_source:
+            return
+        self.metric_candidates = ()
+        self.metrics_list.clear()
+        self._reset_group_options(())
+        self._reset_tabular_column_options()
+        self._sync_ui_state()
+
+    def _reset_tabular_column_options(self) -> None:
+        for combo in (self.timestamp_column_combo, self.reference_column_combo):
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItem("Auto detect", "")
+            combo.blockSignals(False)
+
+    def _populate_tabular_column_options(
+        self,
+        column_mapping: dict[str, str],
+        *,
+        timestamp_column: str | None,
+        reference_column: str | None,
+    ) -> None:
+        for combo, selected_column in (
+            (self.timestamp_column_combo, timestamp_column),
+            (self.reference_column_combo, reference_column),
+        ):
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItem("Auto detect", "")
+            for original, normalized in column_mapping.items():
+                label = original if original == normalized else f"{original} ({normalized})"
+                combo.addItem(label, normalized)
+            index = combo.findData(selected_column or "")
+            combo.setCurrentIndex(index if index >= 0 else 0)
+            combo.blockSignals(False)
+
+    def _selected_tabular_column(self, combo: QComboBox) -> str | None:
+        if self.is_production_source:
+            return None
+        value = str(combo.currentData() or "").strip()
+        return value or None
 
     def _cache_summary(self) -> str:
         if not self.db_file:
@@ -320,7 +404,19 @@ class IndustrialAnalyticsDialog(QDialog):
         self.output_workbook_file = default_workbook_path(filename)
         self.metric_candidates = ()
         self.metrics_list.clear()
+        self._reset_tabular_column_options()
         self._reset_group_options(())
+        self._sync_ui_state()
+
+    def open_filters_dialog(self) -> None:
+        dialog = IndustrialAnalyticsFilterDialog(self, filter_state=self.filter_state)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self.filter_state = dialog.filter_state
+        self.metric_candidates = ()
+        self.metrics_list.clear()
+        self._reset_group_options(())
+        self._sync_filter_summary()
         self._sync_ui_state()
 
     def select_dashboard_file(self) -> None:
@@ -352,7 +448,10 @@ class IndustrialAnalyticsDialog(QDialog):
             if self.is_production_source:
                 if not self.db_file:
                     raise ValueError("Select a Metroliza report database first.")
-                candidates = discover_production_metric_candidates(self.db_file)
+                candidates = discover_production_metric_candidates(
+                    self.db_file,
+                    filter_state=self.filter_state,
+                )
                 self.metric_candidates = tuple(candidate.to_selection() for candidate in candidates)
                 self._reset_group_options(
                     (
@@ -366,11 +465,17 @@ class IndustrialAnalyticsDialog(QDialog):
                     )
                 )
                 self.source_label.setText(self._cache_summary())
+                self._sync_filter_summary()
             else:
                 if not self.input_file:
                     raise ValueError("Select a CSV or Excel file first.")
                 sheet_name = self._selected_sheet_name()
-                loaded = load_tabular_analytics_file(self.input_file, sheet_name=sheet_name)
+                loaded = load_tabular_analytics_file(
+                    self.input_file,
+                    sheet_name=sheet_name,
+                    timestamp_column=self._selected_tabular_column(self.timestamp_column_combo),
+                    reference_column=self._selected_tabular_column(self.reference_column_combo),
+                )
                 self.metric_candidates = tuple(candidate.to_selection() for candidate in loaded.metric_candidates)
                 self._reset_group_options(
                     tuple(
@@ -381,6 +486,11 @@ class IndustrialAnalyticsDialog(QDialog):
                 )
                 self.source_label.setText(
                     f"{Path(self.input_file).name}: {len(loaded.dataframe.index)} rows"
+                )
+                self._populate_tabular_column_options(
+                    loaded.column_mapping,
+                    timestamp_column=loaded.timestamp_column,
+                    reference_column=loaded.reference_column,
                 )
         except Exception as exc:
             QMessageBox.warning(self, self.windowTitle(), f"Could not load metrics: {exc}")
@@ -514,12 +624,14 @@ class IndustrialAnalyticsDialog(QDialog):
             output_dashboard_file=self.output_dashboard_file,
             output_workbook_file=self.output_workbook_file if self.workbook_checkbox.isChecked() else "",
             metric_selection=self._selected_metrics(),
-            filter_state=ProductionFilterState(),
+            filter_state=self.filter_state,
             aggregation_state=self._aggregation_state(),
             cohort_state=self._cohort_state(),
             chart_selection=self._chart_selection(),
             separate_parameter_sheets=self.parameter_sheets_checkbox.isChecked(),
             sheet_name=self._selected_sheet_name(),
+            timestamp_column=self._selected_tabular_column(self.timestamp_column_combo),
+            reference_column=self._selected_tabular_column(self.reference_column_combo),
         )
 
     def show_loading_screen(self) -> None:
@@ -539,13 +651,16 @@ class IndustrialAnalyticsDialog(QDialog):
         self.analytics_thread = self.create_analytics_thread()
         self.analytics_thread.result_ready.connect(self.on_analytics_finished)
         self.analytics_thread.error_occurred.connect(self.on_analytics_error)
+        self.analytics_thread.cancelled.connect(self.on_analytics_cancelled)
         self.analytics_thread.finished.connect(self.on_analytics_thread_stopped)
         self.analytics_thread.start()
         self.loading_dialog.show()
 
     def cancel_analytics(self) -> None:
+        if self.analytics_thread is not None:
+            self.analytics_thread.cancel()
         if hasattr(self, "loading_label"):
-            self.loading_label.setText("Analytics is finishing the current file operation...")
+            self.loading_label.setText("Canceling analytics after the current step...")
 
     def on_analytics_finished(self, result) -> None:
         if hasattr(self, "loading_dialog"):
@@ -563,6 +678,11 @@ class IndustrialAnalyticsDialog(QDialog):
         if hasattr(self, "loading_dialog"):
             self.loading_dialog.close()
         QMessageBox.warning(self, self.windowTitle(), f"Could not create analytics: {message}")
+
+    def on_analytics_cancelled(self, message: str) -> None:
+        if hasattr(self, "loading_dialog"):
+            self.loading_dialog.close()
+        QMessageBox.information(self, self.windowTitle(), message or "Analytics generation was canceled.")
 
     def on_analytics_thread_stopped(self) -> None:
         self.analytics_thread = None

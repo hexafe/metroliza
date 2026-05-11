@@ -289,8 +289,12 @@ def _time_series_traces(
     groups = _grouped_frames(frame, group_columns, default_name=default_name)
     for index, (label, group) in enumerate(groups, start=0):
         group = group.sort_values(x_column)
+        y_series = pd.to_numeric(group[y_column], errors="coerce")
+        valid_mask = group[x_column].notna() & y_series.notna()
+        group = group.loc[valid_mask].copy()
+        y_series = y_series.loc[valid_mask]
         x_values = _json_values(group[x_column])
-        y_values = _numeric_values(group[y_column])
+        y_values = [float(value) for value in y_series.tolist()]
         if not x_values or not y_values:
             continue
         marker_symbol = "diamond" if "selected" in label.casefold() else "circle"

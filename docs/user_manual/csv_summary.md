@@ -11,6 +11,10 @@ This workflow is separate from the normal **Parsing -> database file -> Export**
 uses the shared analytics workflow, so file data can use the same grouping, time buckets,
 charts, statistics, and workbook output as cached production data.
 
+The original CSV Summary workbook workflow is still available from
+**Tools > Legacy CSV Summary...** for older presets, specification limits, and summary-only
+workbooks that have not yet been migrated into the shared analytics launcher.
+
 Use CSV Summary when:
 
 - your source is already a CSV or Excel file,
@@ -24,6 +28,7 @@ The dialog is a compact analytics launcher.
 Main controls:
 
 - **Select input file (CSV or Excel)**
+- **Choose time and reference columns**
 - **Load metrics**
 - **Choose metrics**
 - **Choose grouping, time bucket, and aggregation**
@@ -40,10 +45,13 @@ Supported file types are `.csv`, `.xlsx`, and `.xls`.
 After a valid file is loaded:
 
 - numeric-looking columns can be loaded as metrics,
+- time and reference columns can be auto-detected or selected explicitly,
 - grouping columns can be selected,
 - dashboard and workbook output can be created.
 
-For Excel files, choose the sheet before loading metrics.
+For Excel files, choose the sheet before loading metrics. If automatic detection does not
+pick the correct time or reference column, choose those columns and click **Load metrics**
+again before creating analytics.
 
 ### 2. Load And Choose Metrics
 

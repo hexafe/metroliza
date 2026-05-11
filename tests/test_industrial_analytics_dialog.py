@@ -11,9 +11,13 @@ try:
         SOURCE_PRODUCTION_CACHE,
         SOURCE_TABULAR_FILE,
     )
+    from modules.industrial_analytics_filter_dialog import IndustrialAnalyticsFilterDialog
+    from modules.industrial_analytics_state import ProductionFilterState
 except ImportError as exc:  # pragma: no cover - environment/order dependent
     QApplication = None
     IndustrialAnalyticsDialog = None
+    IndustrialAnalyticsFilterDialog = None
+    ProductionFilterState = None
     SOURCE_PRODUCTION_CACHE = "production_cache"
     SOURCE_TABULAR_FILE = "tabular_file"
     PYQT_IMPORT_ERROR = exc
@@ -57,6 +61,55 @@ def test_production_analytics_dialog_loads_cached_metric_candidates(tmp_path) ->
         dialog.close()
 
 
+def test_production_analytics_dialog_passes_filter_state_to_worker(tmp_path) -> None:
+    _app()
+    db_path = str(tmp_path / "production_only.db")
+    seed_production_analytics_cache(db_path)
+
+    dialog = IndustrialAnalyticsDialog(db_file=db_path, source_kind=SOURCE_PRODUCTION_CACHE)
+    try:
+        dialog.filter_state = ProductionFilterState(references=("REF-100",), stations=("S1",))
+        dialog.load_metrics()
+
+        assert "Reference: REF-100" in dialog.filter_summary_label.text()
+        thread = dialog.create_analytics_thread()
+        assert thread.filter_state.references == ("REF-100",)
+        assert thread.filter_state.stations == ("S1",)
+    finally:
+        dialog.close()
+
+
+def test_production_filter_dialog_builds_fixed_and_dynamic_filters() -> None:
+    _app()
+    dialog = IndustrialAnalyticsFilterDialog()
+    try:
+        dialog.source_profile_ids_field.setText("1, 2")
+        dialog.time_start_field.setText("2026-05-10T00:00:00Z")
+        dialog.time_end_field.setText("2026-05-11T00:00:00Z")
+        dialog.text_fields["stations"].setText("S1; S2")
+        dialog.text_fields["references"].setText("REF-100 REF-200")
+        dialog.dynamic_filters_edit.setPlainText(
+            "cycle_time_s gt 40\nfixture_text_code contains alpha\ncavity in 1,2"
+        )
+
+        state = dialog.current_state()
+
+        assert state.source_profile_ids == (1, 2)
+        assert state.time_start == "2026-05-10T00:00:00Z"
+        assert state.time_end == "2026-05-11T00:00:00Z"
+        assert state.stations == ("S1", "S2")
+        assert state.references == ("REF-100", "REF-200")
+        assert [dynamic_filter.field_name for dynamic_filter in state.dynamic_filters] == [
+            "cycle_time_s",
+            "fixture_text_code",
+            "cavity",
+        ]
+        assert state.dynamic_filters[0].operator == "gt"
+        assert state.dynamic_filters[2].values == ("1", "2")
+    finally:
+        dialog.close()
+
+
 def test_tabular_analytics_dialog_loads_csv_metrics_and_group_columns(tmp_path) -> None:
     _app()
     input_file = tmp_path / "table.csv"
@@ -87,6 +140,11 @@ def test_tabular_analytics_dialog_loads_csv_metrics_and_group_columns(tmp_path) 
         ]
         assert {"Length Mm", "Width Mm"}.issubset(metric_labels)
         assert "line" in group_values
+        assert dialog.timestamp_column_combo.currentData() == "time_stamp"
+        assert dialog.reference_column_combo.currentData() == "reference_id"
         assert dialog.start_button.isEnabled()
+        thread = dialog.create_analytics_thread()
+        assert thread.timestamp_column == "time_stamp"
+        assert thread.reference_column == "reference_id"
     finally:
         dialog.close()

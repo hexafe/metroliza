@@ -44,6 +44,16 @@ PRODUCTION_RECORD_COLUMNS: tuple[str, ...] = (
     "raw_record_json",
 )
 FIXED_METRIC_CANDIDATE_COLUMNS: tuple[str, ...] = ()
+FIXED_METRIC_EXCLUDED_COLUMNS = frozenset(
+    {
+        *PRODUCTION_RECORD_COLUMNS,
+        "created_at",
+        "updated_at",
+        "id",
+        "raw_record_json",
+    }
+)
+FIXED_METRIC_NUMERIC_TYPE_MARKERS = ("INT", "REAL", "NUM", "DEC", "DOUBLE", "FLOAT")
 
 
 @dataclass(frozen=True)
@@ -160,6 +170,27 @@ def discover_production_metric_candidates(
 
     dynamic_rows = _load_dynamic_metric_discovery_rows(db_file, filter_state=filter_state)
     candidates: list[ProductionMetricCandidate] = []
+    for field_name in _fixed_metric_candidate_columns(db_file):
+        fixed_rows = _load_fixed_metric_discovery_rows(
+            db_file,
+            field_name=field_name,
+            filter_state=filter_state,
+        )
+        candidate = _build_metric_candidate(
+            field_name=field_name,
+            source_kind="fixed",
+            values=fixed_rows["field_value"] if "field_value" in fixed_rows else pd.Series(dtype=object),
+            source_profile_ids=(
+                fixed_rows["source_profile_id"]
+                if "source_profile_id" in fixed_rows
+                else pd.Series(dtype=object)
+            ),
+            numeric_threshold=numeric_threshold,
+            min_numeric_count=min_numeric_count,
+        )
+        if candidate is not None:
+            candidates.append(candidate)
+
     if not dynamic_rows.empty:
         for field_name, group in dynamic_rows.groupby("field_name", dropna=False):
             field_text = str(field_name or "").strip()
@@ -169,39 +200,16 @@ def discover_production_metric_candidates(
                 require_identifier("dynamic metric field", field_text)
             except ValueError:
                 continue
-            values = group["field_value"].dropna().astype(str)
-            values = values[values.str.strip() != ""]
-            non_null_count = int(len(values.index))
-            if non_null_count == 0:
-                continue
-            numeric_values = pd.to_numeric(values, errors="coerce")
-            numeric_count = int(numeric_values.notna().sum())
-            numeric_ratio = numeric_count / non_null_count if non_null_count else 0.0
-            if numeric_count < int(min_numeric_count) or numeric_ratio < float(numeric_threshold):
-                continue
-            sample_values = tuple(dict.fromkeys(values.head(5).astype(str).tolist()))
-            source_profile_ids = tuple(
-                sorted(
-                    int(value)
-                    for value in group["source_profile_id"].dropna().unique().tolist()
-                )
+            candidate = _build_metric_candidate(
+                field_name=field_text,
+                source_kind="dynamic",
+                values=group["field_value"],
+                source_profile_ids=group["source_profile_id"],
+                numeric_threshold=numeric_threshold,
+                min_numeric_count=min_numeric_count,
             )
-            warning_flags = ()
-            if numeric_count < non_null_count:
-                warning_flags = ("contains_non_numeric_values",)
-            candidates.append(
-                ProductionMetricCandidate(
-                    field_name=field_text,
-                    display_label=production_field_label(field_text),
-                    source_kind="dynamic",
-                    non_null_count=non_null_count,
-                    numeric_count=numeric_count,
-                    numeric_ratio=round(numeric_ratio, 4),
-                    sample_values=sample_values,
-                    source_profile_ids=source_profile_ids,
-                    warning_flags=warning_flags,
-                )
-            )
+            if candidate is not None:
+                candidates.append(candidate)
 
     return tuple(sorted(candidates, key=lambda item: item.display_label.lower()))
 
@@ -228,7 +236,19 @@ def load_production_analytics_frame(
             diagnostics=tuple(diagnostics),
         )
 
-    dataframe = _load_fixed_production_frame(db_file, filter_state=filter_state)
+    record_columns = _industrial_record_columns(db_file)
+    fixed_metric_fields = tuple(
+        metric.field_name
+        for metric in metric_selection
+        if metric.source_kind == "fixed"
+        and metric.field_name in record_columns
+        and metric.field_name not in PRODUCTION_RECORD_COLUMNS
+    )
+    dataframe = _load_fixed_production_frame(
+        db_file,
+        filter_state=filter_state,
+        extra_columns=fixed_metric_fields,
+    )
     if dataframe.empty:
         diagnostics.append(
             ProductionAnalyticsDiagnostic(
@@ -799,6 +819,82 @@ def _industrial_tables_available(db_file: str) -> bool:
     return {row[0] for row in rows} == {"industrial_records", "industrial_record_values"}
 
 
+def _industrial_record_columns(db_file: str) -> dict[str, str]:
+    try:
+        with sqlite_connection_scope(db_file) as conn:
+            rows = conn.execute("PRAGMA table_info(industrial_records)").fetchall()
+    except sqlite3.Error:
+        return {}
+    return {str(row[1]): str(row[2] or "") for row in rows}
+
+
+def _fixed_metric_candidate_columns(db_file: str) -> tuple[str, ...]:
+    record_columns = _industrial_record_columns(db_file)
+    candidates: list[str] = []
+    for field_name in FIXED_METRIC_CANDIDATE_COLUMNS:
+        if field_name in record_columns:
+            candidates.append(field_name)
+    for field_name, declared_type in record_columns.items():
+        if field_name in FIXED_METRIC_EXCLUDED_COLUMNS:
+            continue
+        if not _is_declared_numeric_type(declared_type):
+            continue
+        candidates.append(field_name)
+    valid_candidates = []
+    for field_name in dict.fromkeys(candidates):
+        try:
+            require_identifier("fixed metric field", field_name)
+        except ValueError:
+            continue
+        valid_candidates.append(field_name)
+    return tuple(valid_candidates)
+
+
+def _is_declared_numeric_type(declared_type: str) -> bool:
+    normalized = str(declared_type or "").upper()
+    return any(marker in normalized for marker in FIXED_METRIC_NUMERIC_TYPE_MARKERS)
+
+
+def _build_metric_candidate(
+    *,
+    field_name: str,
+    source_kind: str,
+    values: pd.Series,
+    source_profile_ids: pd.Series,
+    numeric_threshold: float,
+    min_numeric_count: int,
+) -> ProductionMetricCandidate | None:
+    text_values = values.dropna().astype(str)
+    text_values = text_values[text_values.str.strip() != ""]
+    non_null_count = int(len(text_values.index))
+    if non_null_count == 0:
+        return None
+    numeric_values = pd.to_numeric(text_values, errors="coerce")
+    numeric_count = int(numeric_values.notna().sum())
+    numeric_ratio = numeric_count / non_null_count if non_null_count else 0.0
+    if numeric_count < int(min_numeric_count) or numeric_ratio < float(numeric_threshold):
+        return None
+    warning_flags = ()
+    if numeric_count < non_null_count:
+        warning_flags = ("contains_non_numeric_values",)
+    return ProductionMetricCandidate(
+        field_name=field_name,
+        display_label=production_field_label(field_name),
+        source_kind=source_kind,
+        non_null_count=non_null_count,
+        numeric_count=numeric_count,
+        numeric_ratio=round(numeric_ratio, 4),
+        sample_values=tuple(dict.fromkeys(text_values.head(5).astype(str).tolist())),
+        source_profile_ids=tuple(
+            sorted(
+                int(value)
+                for value in source_profile_ids.dropna().unique().tolist()
+            )
+        ),
+        warning_flags=warning_flags,
+    )
+
+
 def _missing_filter_field_diagnostic(
     field_name: str,
     *,
@@ -1023,12 +1119,43 @@ def _load_dynamic_metric_discovery_rows(
         return pd.read_sql_query(query, conn, params=params)
 
 
+def _load_fixed_metric_discovery_rows(
+    db_file: str,
+    *,
+    field_name: str,
+    filter_state: ProductionFilterState | None,
+) -> pd.DataFrame:
+    require_identifier("fixed metric field", field_name)
+    where_clauses, params = _fixed_filter_sql(filter_state)
+    where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+    query = f"""
+        SELECT
+            records.{_quote_identifier(field_name)} AS field_value,
+            records.source_profile_id
+        FROM industrial_records records
+        {where_sql}
+        ORDER BY records.id
+    """
+    with sqlite_connection_scope(db_file) as conn:
+        return pd.read_sql_query(query, conn, params=params)
+
+
 def _load_fixed_production_frame(
     db_file: str,
     *,
     filter_state: ProductionFilterState | None,
+    extra_columns: tuple[str, ...] = (),
 ) -> pd.DataFrame:
-    select_columns = ", ".join(f"records.{column}" for column in PRODUCTION_RECORD_COLUMNS)
+    record_columns = _industrial_record_columns(db_file)
+    selected_columns = list(PRODUCTION_RECORD_COLUMNS)
+    for column in extra_columns:
+        require_identifier("fixed metric field", column)
+        if column in record_columns and column not in selected_columns:
+            selected_columns.append(column)
+    select_columns = ", ".join(
+        f"records.{_quote_identifier(column)} AS {_quote_identifier(column)}"
+        for column in selected_columns
+    )
     where_clauses, params = _fixed_filter_sql(filter_state)
     where_sql = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
     query = f"""
@@ -1108,6 +1235,10 @@ def _append_in_filter(
     placeholders = ", ".join("?" for _ in values)
     clauses.append(f"{column_sql} IN ({placeholders})")
     params.extend(values)
+
+
+def _quote_identifier(value: str) -> str:
+    return '"' + str(value).replace('"', '""') + '"'
 
 
 def _frame_base_columns() -> tuple[str, ...]:

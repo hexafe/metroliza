@@ -2,7 +2,7 @@ RELEASE_VERSION = "2026.05"
 VERSION_DATE = "260510"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = (
-    "Industrial analytics now turns cached production rows or CSV/Excel files into dashboards, grouped statistics, and Excel workbooks."
+    "Industrial analytics now turns cached production rows or CSV/Excel files into filtered dashboards, grouped statistics, and Excel workbooks."
 )
 PUBLIC_VERSION_LABEL = "2026.05 (build 260510)"
 
@@ -11,8 +11,11 @@ release_notes = f"""
     - Industrial data is now available from the Tools menu for connecting production-line records with Metroliza reports<br>
     - Separate Sources, Sync, and Export dialogs make production-line data setup easier to follow<br>
     - Analyze cached production data without CMM measurements, including grouped dashboards, time buckets, histograms, time series, violin plots, box plots, and statistics<br>
+    - Analytics setup now includes production filters and explicit CSV/Excel time and reference column selection<br>
     - CSV Summary now opens the same analytics workflow for CSV and Excel files, with optional separate sheets for each selected parameter<br>
+    - Legacy CSV Summary remains available for older presets, specification limits, and summary-only workbooks<br>
     - Pasted reference lists can mark, filter, or compare selected parts in analytics outputs<br>
+    - Canceling analytics avoids leaving partial dashboard or workbook files behind<br>
     - Connection testing and sync show clear progress, support canceling, and keep credentials session-only<br>
     - Exports can include previously synced industrial context without contacting production databases during export<br>
     - Older database files now open correctly in export, grouping, matching, industrial tools, and Modify Database<br>
