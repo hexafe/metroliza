@@ -89,6 +89,7 @@ class IndustrialAnalyticsThread(QThread):
 
     result_ready = pyqtSignal(object)
     error_occurred = pyqtSignal(str)
+    cancelled = pyqtSignal(str)
 
     def __init__(
         self,

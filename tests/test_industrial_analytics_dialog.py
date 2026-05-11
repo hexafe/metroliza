@@ -13,10 +13,12 @@ try:
     )
     from modules.industrial_analytics_filter_dialog import IndustrialAnalyticsFilterDialog
     from modules.industrial_analytics_state import ProductionFilterState
+    from modules.industrial_workers import IndustrialAnalyticsThread
 except ImportError as exc:  # pragma: no cover - environment/order dependent
     QApplication = None
     IndustrialAnalyticsDialog = None
     IndustrialAnalyticsFilterDialog = None
+    IndustrialAnalyticsThread = None
     ProductionFilterState = None
     SOURCE_PRODUCTION_CACHE = "production_cache"
     SOURCE_TABULAR_FILE = "tabular_file"
@@ -147,4 +149,43 @@ def test_tabular_analytics_dialog_loads_csv_metrics_and_group_columns(tmp_path) 
         assert thread.timestamp_column == "time_stamp"
         assert thread.reference_column == "reference_id"
     finally:
+        dialog.close()
+
+
+def test_analytics_dialog_wires_cancellable_worker_without_running_job(tmp_path) -> None:
+    _app()
+
+    class NonStartingAnalyticsThread(IndustrialAnalyticsThread):
+        def __init__(self) -> None:
+            super().__init__(
+                source_kind=SOURCE_PRODUCTION_CACHE,
+                output_dashboard_file=str(tmp_path / "analytics.html"),
+            )
+            self.started = False
+            self.cancel_called = False
+
+        def start(self) -> None:
+            self.started = True
+
+        def cancel(self) -> None:
+            self.cancel_called = True
+
+    thread = NonStartingAnalyticsThread()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_PRODUCTION_CACHE)
+    try:
+        dialog.create_analytics_thread = lambda: thread
+
+        dialog.show_loading_screen()
+
+        assert dialog.analytics_thread is thread
+        assert thread.started
+
+        dialog.cancel_analytics()
+        assert thread.cancel_called
+
+        thread.finished.emit()
+        assert dialog.analytics_thread is None
+    finally:
+        if hasattr(dialog, "loading_dialog"):
+            dialog.loading_dialog.close()
         dialog.close()
