@@ -5,6 +5,8 @@ import subprocess
 import sys
 import textwrap
 
+import pytest
+
 
 def _create_legacy_database(db_path):
     with sqlite3.connect(db_path) as connection:
@@ -63,14 +65,33 @@ def _create_legacy_database(db_path):
 def _run_probe(script):
     env = os.environ.copy()
     env["QT_QPA_PLATFORM"] = "offscreen"
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
-        cwd=os.fspath(os.path.dirname(os.path.dirname(__file__))),
-        env=env,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    env["QT_STYLE_OVERRIDE"] = "Fusion"
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", textwrap.dedent(script)],
+            cwd=os.fspath(os.path.dirname(os.path.dirname(__file__))),
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip()
+        headless_runtime_markers = (
+            "libGL.so.1",
+            "libEGL.so.1",
+            "Could not load the Qt platform plugin",
+            "no Qt platform plugin could be initialized",
+            "qt.qpa.plugin",
+        )
+        if any(marker in stderr for marker in headless_runtime_markers):
+            pytest.skip(f"PyQt runtime dependency missing in test environment: {stderr}")
+        raise AssertionError(
+            "ModifyDB schema probe subprocess failed unexpectedly.\n"
+            f"Return code: {exc.returncode}\n"
+            f"STDOUT:\n{(exc.stdout or '').strip()}\n"
+            f"STDERR:\n{stderr}"
+        ) from exc
     return json.loads(result.stdout.strip().splitlines()[-1])
 
 
