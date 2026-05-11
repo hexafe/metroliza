@@ -9,11 +9,13 @@ try:
 
     from modules.industrial_filter_dialog import IndustrialFilterDialog
     from modules.industrial_workflow_state import IndustrialFilterState, parse_reference_values
+    from modules.report_schema import ensure_report_schema
 except Exception as exc:  # pragma: no cover - depends on local Qt runtime availability.
     QApplication = None
     QDialog = None
     IndustrialFilterDialog = None
     IndustrialFilterState = None
+    ensure_report_schema = None
     parse_reference_values = None
     PYQT_IMPORT_ERROR = exc
 else:
@@ -80,11 +82,17 @@ def test_filter_dialog_rejects_invalid_reference_column():
 def test_filter_dialog_loads_references_from_local_metroliza_metadata_only(tmp_path):
     _app()
     db_path = str(tmp_path / "metroliza.db")
+    ensure_report_schema(db_path)
     with sqlite3.connect(db_path) as conn:
-        conn.execute("CREATE TABLE report_metadata(reference TEXT)")
         conn.executemany(
-            "INSERT INTO report_metadata(reference) VALUES (?)",
-            [("REF-2",), ("REF-1",), ("REF-1",), ("",), (None,)],
+            "INSERT INTO report_metadata(report_id, reference, metadata_version) VALUES (?, ?, ?)",
+            [
+                (1, "REF-2", "report_metadata_v1"),
+                (2, "REF-1", "report_metadata_v1"),
+                (3, "REF-1", "report_metadata_v1"),
+                (4, "", "report_metadata_v1"),
+                (5, None, "report_metadata_v1"),
+            ],
         )
 
     dialog = IndustrialFilterDialog(db_file=db_path, state=IndustrialFilterState())

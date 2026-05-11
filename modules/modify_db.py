@@ -14,10 +14,12 @@ import PyQt6.QtCore as QtCore
 from PyQt6.QtCore import Qt
 import PyQt6.QtWidgets as QtWidgets
 import logging
+import sqlite3
 from modules.custom_logger import CustomLogger
 from modules.db import execute_select_with_columns, run_transaction_with_retry
 from modules.help_menu import attach_help_menu_to_layout
 from modules.report_repository import ReportRepository
+from modules.report_schema import ensure_report_schema
 from modules.ui_foundation import apply_metroliza_theme, configure_table, configure_window_size
 
 
@@ -78,6 +80,46 @@ class ModifyDB(QDialog):
         for column in MEASUREMENT_RECORD_COLUMNS
     )
 
+    LEGACY_REPORT_RECORD_COLUMNS = (
+        {"label": "REPORT_ID", "field": "report_id", "source": "ID", "editable": False, "key": True},
+        {"label": "REFERENCE", "field": "reference", "source": "REFERENCE", "editable": True},
+        {"label": "DATE", "field": "report_date", "source": "DATE", "editable": True},
+        {"label": "SAMPLE_NUMBER", "field": "sample_number", "source": "SAMPLE_NUMBER", "editable": True},
+        {"label": "FILELOC", "field": "fileloc", "source": "FILELOC", "editable": False},
+        {"label": "FILENAME", "field": "filename", "source": "FILENAME", "editable": False},
+    )
+
+    LEGACY_MEASUREMENT_RECORD_COLUMNS = (
+        {"label": "MEASUREMENT_ID", "field": "measurement_id", "source": "ID", "editable": False, "key": True},
+        {"label": "REPORT_ID", "field": "report_id", "source": "REPORT_ID", "editable": False},
+        {"label": "HEADER", "field": "header", "source": "HEADER", "editable": True},
+        {"label": "AX", "field": "ax", "source": "AX", "editable": True},
+        {"label": "NOM", "field": "nominal", "source": "NOM", "editable": True, "value_type": "float"},
+        {"label": "+TOL", "field": "tol_plus", "source": "+TOL", "editable": True, "value_type": "float"},
+        {"label": "-TOL", "field": "tol_minus", "source": "-TOL", "editable": True, "value_type": "float"},
+        {"label": "BONUS", "field": "bonus", "source": "BONUS", "editable": True, "value_type": "float"},
+        {"label": "MEAS", "field": "meas", "source": "MEAS", "editable": True, "value_type": "float"},
+        {"label": "DEV", "field": "dev", "source": "DEV", "editable": True, "value_type": "float"},
+        {"label": "OUTTOL", "field": "outtol", "source": "OUTTOL", "editable": True, "value_type": "float"},
+    )
+
+    LEGACY_REPORT_FIELD_COLUMNS = {
+        "reference": "REFERENCE",
+        "report_date": "DATE",
+        "sample_number": "SAMPLE_NUMBER",
+    }
+    LEGACY_MEASUREMENT_FIELD_COLUMNS = {
+        "header": "HEADER",
+        "ax": "AX",
+        "nominal": "NOM",
+        "tol_plus": "+TOL",
+        "tol_minus": "-TOL",
+        "bonus": "BONUS",
+        "meas": "MEAS",
+        "dev": "DEV",
+        "outtol": "OUTTOL",
+    }
+
     def __init__(self, parent=None, db_file=""):
         super().__init__(parent)
         self.setWindowTitle("Modify database")
@@ -90,6 +132,7 @@ class ModifyDB(QDialog):
         self.undo_data = {}
         self._last_clicked_row_by_table = {}
         self._record_specs_by_table = {}
+        self._storage_flavor = "current"
 
         self.setup_ui()
 
@@ -413,46 +456,64 @@ class ModifyDB(QDialog):
             self.measurement_records_table.clearContents()
             self.undo_data.clear()
             self._record_specs_by_table.clear()
+            self._prepare_database_for_loading()
 
-            reference_values, _ = execute_select_with_columns(
-                self.db_file,
-                """
-                SELECT reference, COUNT(*) AS occurrences
-                FROM report_metadata
-                WHERE reference IS NOT NULL
-                GROUP BY reference
-                ORDER BY reference;
-                """,
+            reference_source = ("REPORTS", "REFERENCE") if self._uses_legacy_schema() else ("report_metadata", "reference")
+            sample_number_source = (
+                ("REPORTS", "SAMPLE_NUMBER") if self._uses_legacy_schema() else ("report_metadata", "sample_number")
             )
-            self.populate_table(self.reference_table, reference_values)
+            header_source = ("MEASUREMENTS", "HEADER") if self._uses_legacy_schema() else ("report_measurements", "header")
 
-            part_number_values, _ = execute_select_with_columns(
-                self.db_file,
-                """
-                SELECT sample_number, COUNT(*) AS occurrences
-                FROM report_metadata
-                WHERE sample_number IS NOT NULL
-                GROUP BY sample_number
-                ORDER BY sample_number;
-                """,
-            )
-            self.populate_table(self.part_number_table, part_number_values)
+            self.populate_table(self.reference_table, self._distinct_value_counts(*reference_source))
+            self.populate_table(self.part_number_table, self._distinct_value_counts(*sample_number_source))
+            self.populate_table(self.header_table, self._distinct_value_counts(*header_source))
 
-            header_values, _ = execute_select_with_columns(
-                self.db_file,
-                """
-                SELECT header, COUNT(*) AS occurrences
-                FROM report_measurements
-                WHERE header IS NOT NULL
-                GROUP BY header
-                ORDER BY header;
-                """,
-            )
-            self.populate_table(self.header_table, header_values)
-            self.populate_report_records_table()
-            self.populate_measurement_records_table()
+            if self._uses_legacy_schema():
+                self.populate_legacy_report_records_table()
+                self.populate_legacy_measurement_records_table()
+            else:
+                self.populate_report_records_table()
+                self.populate_measurement_records_table()
         except Exception as e:
             self.log_and_exit(e)
+
+    def _prepare_database_for_loading(self):
+        """Resolve current vs legacy storage before querying schema-specific tables."""
+        if not self.db_file:
+            return
+
+        has_current_metadata = bool(self._source_columns("report_metadata"))
+        has_legacy_reports = bool(self._source_columns("REPORTS"))
+        has_legacy_measurements = bool(self._source_columns("MEASUREMENTS"))
+
+        if has_legacy_reports and has_legacy_measurements and not has_current_metadata:
+            self._storage_flavor = "legacy"
+            return
+
+        self._storage_flavor = "current"
+        ensure_report_schema(self.db_file)
+
+    def _uses_legacy_schema(self):
+        return self._storage_flavor == "legacy"
+
+    def _distinct_value_counts(self, source_name, column_name):
+        available_columns = self._source_columns(source_name)
+        if column_name.lower() not in available_columns:
+            return []
+
+        quoted_column = self._quote_identifier(column_name)
+        quoted_source = self._quote_identifier(source_name)
+        rows, _columns = execute_select_with_columns(
+            self.db_file,
+            f"""
+            SELECT {quoted_column}, COUNT(*) AS occurrences
+            FROM {quoted_source}
+            WHERE {quoted_column} IS NOT NULL
+            GROUP BY {quoted_column}
+            ORDER BY {quoted_column};
+            """,
+        )
+        return rows
 
     def populate_table(self, table, values):
         table.setRowCount(len(values))
@@ -513,11 +574,42 @@ class ModifyDB(QDialog):
         )
         self._populate_record_table(self.measurement_records_table, specs, rows, columns)
 
+    def populate_legacy_report_records_table(self):
+        available_columns = self._source_columns("REPORTS")
+        specs = self._available_specs(self.LEGACY_REPORT_RECORD_COLUMNS, available_columns)
+        if not specs:
+            self._populate_record_table(self.report_records_table, [], [], [])
+            return
+
+        select_exprs = self._select_exprs_for_specs(specs)
+        order_by = " ORDER BY ID" if "id" in available_columns else ""
+        rows, columns = execute_select_with_columns(
+            self.db_file,
+            f"SELECT {', '.join(select_exprs)} FROM REPORTS{order_by};",
+        )
+        self._populate_record_table(self.report_records_table, specs, rows, columns)
+
+    def populate_legacy_measurement_records_table(self):
+        available_columns = self._source_columns("MEASUREMENTS")
+        specs = self._available_specs(self.LEGACY_MEASUREMENT_RECORD_COLUMNS, available_columns)
+        if not specs:
+            self._populate_record_table(self.measurement_records_table, [], [], [])
+            return
+
+        select_exprs = self._select_exprs_for_specs(specs)
+        order_by_parts = [column for column in ("REPORT_ID", "ID") if column.lower() in available_columns]
+        order_by = f" ORDER BY {', '.join(order_by_parts)}" if order_by_parts else ""
+        rows, columns = execute_select_with_columns(
+            self.db_file,
+            f"SELECT {', '.join(select_exprs)} FROM MEASUREMENTS{order_by};",
+        )
+        self._populate_record_table(self.measurement_records_table, specs, rows, columns)
+
     def _source_columns(self, source_name):
         try:
             _rows, columns = execute_select_with_columns(self.db_file, f"SELECT * FROM {source_name} LIMIT 0;")
             return {column.lower() for column in columns}
-        except Exception:
+        except sqlite3.Error:
             return set()
 
     def _available_specs(self, specs, available_columns):
@@ -528,11 +620,16 @@ class ModifyDB(QDialog):
         for spec in specs:
             source = spec["source"]
             field = spec["field"]
-            if source == field:
-                expressions.append(source)
+            quoted_source = self._quote_identifier(source)
+            if source.lower() == field.lower():
+                expressions.append(quoted_source)
             else:
-                expressions.append(f"{source} AS {field}")
+                expressions.append(f"{quoted_source} AS {self._quote_identifier(field)}")
         return expressions
+
+    @staticmethod
+    def _quote_identifier(identifier):
+        return f'"{str(identifier).replace(chr(34), chr(34) * 2)}"'
 
     def _populate_record_table(self, table, specs, rows, columns):
         table.setColumnCount(len(specs))
@@ -736,9 +833,14 @@ class ModifyDB(QDialog):
         """Apply collected UPDATE statements in a single retried transaction."""
         try:
             statements = []
-            statements.extend(self.build_update_statements(self.reference_table, "report_metadata", "reference"))
-            statements.extend(self.build_update_statements(self.part_number_table, "report_metadata", "sample_number"))
-            statements.extend(self.build_update_statements(self.header_table, "report_measurements", "header"))
+            if self._uses_legacy_schema():
+                statements.extend(self.build_update_statements(self.reference_table, "REPORTS", "REFERENCE"))
+                statements.extend(self.build_update_statements(self.part_number_table, "REPORTS", "SAMPLE_NUMBER"))
+                statements.extend(self.build_update_statements(self.header_table, "MEASUREMENTS", "HEADER"))
+            else:
+                statements.extend(self.build_update_statements(self.reference_table, "report_metadata", "reference"))
+                statements.extend(self.build_update_statements(self.part_number_table, "report_metadata", "sample_number"))
+                statements.extend(self.build_update_statements(self.header_table, "report_measurements", "header"))
             report_updates = self.collect_report_record_updates()
             measurement_updates = self.collect_measurement_record_updates()
 
@@ -747,7 +849,9 @@ class ModifyDB(QDialog):
                 return
 
             repository = None
-            if report_updates or measurement_updates:
+            if self._uses_legacy_schema():
+                statements.extend(self._build_legacy_record_update_statements(report_updates, measurement_updates))
+            elif report_updates or measurement_updates:
                 repository = self._create_report_repository()
                 self._validate_record_update_methods(repository, report_updates, measurement_updates)
 
@@ -757,7 +861,7 @@ class ModifyDB(QDialog):
                     lambda cursor: self._apply_update_statements(cursor, statements),
                 )
 
-            if report_updates or measurement_updates:
+            if repository is not None:
                 self.apply_record_updates(repository, report_updates, measurement_updates)
 
             # Display a message box with confirmation
@@ -788,6 +892,50 @@ class ModifyDB(QDialog):
                 query = f"UPDATE {table_name} SET {column_name} = ? WHERE {column_name} = ?"
                 statements.append((query, (new_value, old_value)))
 
+        return statements
+
+    def _build_legacy_record_update_statements(self, report_updates, measurement_updates):
+        statements = []
+        statements.extend(
+            self._build_legacy_update_statements(
+                "REPORTS",
+                "ID",
+                self.LEGACY_REPORT_FIELD_COLUMNS,
+                report_updates,
+            )
+        )
+        statements.extend(
+            self._build_legacy_update_statements(
+                "MEASUREMENTS",
+                "ID",
+                self.LEGACY_MEASUREMENT_FIELD_COLUMNS,
+                measurement_updates,
+            )
+        )
+        return statements
+
+    def _build_legacy_update_statements(self, table_name, key_column, field_columns, updates):
+        statements = []
+        quoted_table = self._quote_identifier(table_name)
+        quoted_key = self._quote_identifier(key_column)
+        for record_id, fields in updates:
+            assignments = []
+            params = []
+            for field_name, value in fields.items():
+                column_name = field_columns.get(field_name)
+                if column_name is None:
+                    continue
+                assignments.append(f"{self._quote_identifier(column_name)} = ?")
+                params.append(value)
+            if not assignments:
+                continue
+            params.append(record_id)
+            statements.append(
+                (
+                    f"UPDATE {quoted_table} SET {', '.join(assignments)} WHERE {quoted_key} = ?",
+                    tuple(params),
+                )
+            )
         return statements
 
     @staticmethod

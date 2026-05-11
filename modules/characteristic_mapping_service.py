@@ -43,11 +43,27 @@ def _sqlite_object_exists(
     return bool(rows)
 
 
+def _legacy_measurement_tables_exist(
+    db_path: str,
+    *,
+    connection: sqlite3.Connection | None = None,
+) -> bool:
+    return (
+        _sqlite_object_exists(db_path, 'MEASUREMENTS', connection=connection)
+        and _sqlite_object_exists(db_path, 'REPORTS', connection=connection)
+    )
+
+
 def _measurement_source_sql(
     db_path: str,
     *,
     connection: sqlite3.Connection | None = None,
 ) -> str | None:
+    if _legacy_measurement_tables_exist(db_path, connection=connection):
+        from modules.report_schema import ensure_report_schema
+
+        ensure_report_schema(db_path, connection=connection)
+
     if _sqlite_object_exists(db_path, 'vw_measurement_export', connection=connection):
         return """
             SELECT
@@ -76,10 +92,7 @@ def _measurement_source_sql(
             LEFT JOIN report_metadata rm ON rm.report_id = pr.id
         """
 
-    if (
-        _sqlite_object_exists(db_path, 'MEASUREMENTS', connection=connection)
-        and _sqlite_object_exists(db_path, 'REPORTS', connection=connection)
-    ):
+    if _legacy_measurement_tables_exist(db_path, connection=connection):
         return """
             SELECT
                 REPORTS.ID AS report_id,

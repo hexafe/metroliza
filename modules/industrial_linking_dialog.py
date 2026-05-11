@@ -24,6 +24,7 @@ from modules.industrial_join_service import (
     materialize_industrial_report_links,
     set_manual_industrial_report_link,
 )
+from modules.report_schema import ensure_report_schema
 from modules.ui_foundation import (
     apply_metroliza_theme,
     configure_table,
@@ -76,6 +77,7 @@ def list_reports_for_manual_linking(db_file: str, *, search_text: str = "") -> l
         """
         params = (pattern, pattern, pattern, pattern, pattern)
     with sqlite_connection_scope(db_file) as conn:
+        ensure_report_schema(db_file, connection=conn)
         rows = conn.execute(
             f"""
             SELECT

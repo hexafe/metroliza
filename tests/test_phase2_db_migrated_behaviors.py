@@ -12,15 +12,24 @@ sys.modules.setdefault('PyQt6.QtCore', qtcore_stub)
 
 qtwidgets_stub = types.ModuleType('PyQt6.QtWidgets')
 for name in [
+    'QApplication',
     'QDialog',
+    'QFrame',
     'QGridLayout',
+    'QHBoxLayout',
+    'QHeaderView',
+    'QLabel',
+    'QLineEdit',
+    'QSizePolicy',
     'QTableWidget',
     'QTableWidgetItem',
     'QPushButton',
     'QFileDialog',
     'QMessageBox',
+    'QWidget',
 ]:
     setattr(qtwidgets_stub, name, type(name, (), {}))
+qtwidgets_stub.QApplication.instance = staticmethod(lambda: None)
 sys.modules.setdefault('PyQt6.QtWidgets', qtwidgets_stub)
 qtgui_stub = types.ModuleType('PyQt6.QtGui')
 sys.modules.setdefault('PyQt6.QtGui', qtgui_stub)

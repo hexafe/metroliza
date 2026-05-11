@@ -8,6 +8,7 @@ import sqlite3
 from modules.db import connect_sqlite
 from modules.industrial_data_repository import utc_timestamp
 from modules.industrial_data_schema import ensure_industrial_data_schema
+from modules.report_schema import ensure_report_schema
 
 
 REPORT_FIELD_SQL = {
@@ -290,7 +291,7 @@ def materialize_industrial_report_links(
     """Materialize report-level industrial link candidates for one rule."""
 
     rule = validate_join_rule(rule or IndustrialJoinRuleSpec())
-    ensure_industrial_data_schema(database, connection=connection)
+    ensure_report_schema(database, connection=connection)
     owns_connection = connection is None
     conn = connection or connect_sqlite(database)
     try:

@@ -12,6 +12,7 @@ release_notes = f"""
     - Separate Sources, Sync, and Export dialogs make production-line data setup easier to follow<br>
     - Connection testing and sync show clear progress, support canceling, and keep credentials session-only<br>
     - Exports can include previously synced industrial context without contacting production databases during export<br>
+    - Older database files now open correctly in export, grouping, matching, industrial tools, and Modify Database<br>
     - Characteristic name matching is easier to review, search, import, and edit before Group Analysis<br>
 
     <br><b>Archive:</b><br>

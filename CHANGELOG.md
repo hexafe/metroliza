@@ -5,6 +5,7 @@
 - Separate Sources, Sync, and Export dialogs make production-line data setup easier to follow.
 - Connection testing and sync show clear progress, support canceling, and keep credentials session-only.
 - Exports can include previously synced industrial context without contacting production databases during export.
+- Older database files now open correctly in export, grouping, matching, industrial tools, and Modify Database.
 - Characteristic name matching is easier to review, search, import, and edit before Group Analysis.
 
 ## 2026.04 (build 260421)

@@ -19,6 +19,7 @@ from modules.industrial_workflow_state import (
     parse_reference_values,
     require_identifier,
 )
+from modules.report_schema import ensure_report_schema
 from modules.ui_foundation import apply_metroliza_theme, configure_window_size, status_chip
 
 
@@ -86,6 +87,7 @@ class IndustrialFilterDialog(QDialog):
             return
         try:
             with sqlite_connection_scope(self.db_file) as conn:
+                ensure_report_schema(self.db_file, connection=conn)
                 rows = conn.execute(
                     """
                     SELECT DISTINCT TRIM(reference)

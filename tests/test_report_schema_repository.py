@@ -1,8 +1,10 @@
 import json
 import sqlite3
 
+from modules.characteristic_mapping_service import fetch_distinct_report_metric_names
 from modules.report_identity import build_report_identity_hash
 from modules.report_metadata_models import CanonicalReportMetadata
+from modules.report_query_service import build_grouping_query, build_measurement_export_query
 from modules.report_repository import ReportRepository, compute_sha256
 from modules.report_schema import SCHEMA_VERSION, ensure_report_schema
 
@@ -236,6 +238,105 @@ def test_report_schema_refreshes_stale_measurement_export_view(tmp_path):
         export_columns = _columns(conn, "vw_measurement_export")
 
     assert "measurement_id" in export_columns
+
+
+def test_report_schema_migrates_legacy_reports_measurements_into_current_views(tmp_path):
+    db_path = str(tmp_path / "legacy.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE REPORTS (
+                ID INTEGER PRIMARY KEY,
+                REFERENCE TEXT,
+                DATE TEXT,
+                SAMPLE_NUMBER TEXT,
+                FILELOC TEXT,
+                FILENAME TEXT
+            );
+            CREATE TABLE MEASUREMENTS (
+                ID INTEGER PRIMARY KEY,
+                REPORT_ID INTEGER,
+                HEADER TEXT,
+                AX TEXT,
+                NOM REAL,
+                "+TOL" REAL,
+                "-TOL" REAL,
+                BONUS REAL,
+                MEAS REAL,
+                DEV REAL,
+                OUTTOL REAL
+            );
+            INSERT INTO REPORTS (ID, REFERENCE, DATE, SAMPLE_NUMBER, FILELOC, FILENAME)
+            VALUES (7, 'REF-LEGACY', '2026-05-10', 'SN-7', '/reports', 'legacy.pdf');
+            INSERT INTO MEASUREMENTS (ID, REPORT_ID, HEADER, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL)
+            VALUES (70, 7, 'Diameter', 'X', 10.0, 0.1, -0.1, NULL, 10.02, 0.02, 0.0);
+            """
+        )
+
+    ensure_report_schema(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        export_cursor = conn.execute(build_measurement_export_query())
+        export_row = export_cursor.fetchone()
+        export_columns = [description[0] for description in export_cursor.description]
+        grouping_cursor = conn.execute(build_grouping_query())
+        grouping_row = grouping_cursor.fetchone()
+        grouping_columns = [description[0] for description in grouping_cursor.description]
+        export_count = conn.execute("SELECT COUNT(*) FROM vw_measurement_export").fetchone()[0]
+        legacy_count = conn.execute("SELECT COUNT(*) FROM MEASUREMENTS").fetchone()[0]
+
+    assert export_row is not None
+    export_map = dict(zip(export_columns, export_row))
+    grouping_map = dict(zip(grouping_columns, grouping_row))
+    assert export_map["REFERENCE"] == "REF-LEGACY"
+    assert export_map["DATE"] == "2026-05-10"
+    assert export_map["SAMPLE_NUMBER"] == "SN-7"
+    assert export_map["HEADER"] == "Diameter"
+    assert export_map["AX"] == "X"
+    assert export_map["NOM"] == 10.0
+    assert grouping_map["REFERENCE"] == "REF-LEGACY"
+    assert grouping_map["DATE"] == "2026-05-10"
+    assert grouping_map["SAMPLE_NUMBER"] == "SN-7"
+    assert export_count == 1
+    assert legacy_count == 1
+
+    ensure_report_schema(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM vw_measurement_export").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM report_metadata").fetchone()[0] == 1
+
+
+def test_characteristic_mapping_sees_legacy_rows_after_schema_bootstrap(tmp_path):
+    db_path = str(tmp_path / "mixed_legacy.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY, REFERENCE TEXT);
+            CREATE TABLE MEASUREMENTS (
+                ID INTEGER PRIMARY KEY,
+                REPORT_ID INTEGER,
+                HEADER TEXT,
+                AX TEXT
+            );
+            INSERT INTO REPORTS(ID, REFERENCE) VALUES (10, 'R-B'), (11, 'R-A');
+            INSERT INTO MEASUREMENTS(ID, REPORT_ID, HEADER, AX)
+            VALUES (1, 10, 'WIDTH', 'Y'), (2, 11, 'WIDTH', ''), (3, 11, 'WIDTH', 'Y');
+            """
+        )
+
+    ensure_report_schema(db_path)
+
+    rows = fetch_distinct_report_metric_names(db_path)
+    by_metric = {row["metric_name"]: row for row in rows}
+
+    assert by_metric["WIDTH - Y"] == {
+        "metric_name": "WIDTH - Y",
+        "measurement_count": 2,
+        "report_count": 2,
+        "reference_count": 2,
+        "sample_references": ["R-A", "R-B"],
+    }
 
 
 def test_repository_dedupes_source_files_by_sha256_and_keeps_locations(tmp_path):

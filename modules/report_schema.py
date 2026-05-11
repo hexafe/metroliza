@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import sqlite3
+from collections import defaultdict
+from pathlib import PurePath
+
 from modules.characteristic_alias_service import ensure_characteristic_alias_table
 from modules.db import run_transaction_with_retry
 from modules.industrial_data_schema import ensure_industrial_data_schema
@@ -297,12 +303,295 @@ SCHEMA_VIEW_STATEMENTS = (
 SCHEMA_VIEW_NAMES = ("vw_report_overview", "vw_measurement_export", "vw_grouping_reports")
 
 
+def _normalize_column_map(description) -> dict[str, int]:
+    return {column[0].lower(): index for index, column in enumerate(description or [])}
+
+
+def _row_value(row, columns: dict[str, int], column_name: str, default=None):
+    index = columns.get(column_name.lower())
+    if index is None:
+        return default
+    return row[index]
+
+
+def _text_value(value) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _float_value(value) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _legacy_file_parts(legacy_report_id: int, report_row, report_columns: dict[str, int]) -> tuple[str, str, str, str]:
+    directory_path = _text_value(_row_value(report_row, report_columns, "FILELOC")) or ""
+    file_name = _text_value(_row_value(report_row, report_columns, "FILENAME")) or f"legacy-report-{legacy_report_id}.pdf"
+    separator = "\\" if "\\" in directory_path and "/" not in directory_path else "/"
+    normalized_directory = directory_path.rstrip("/\\")
+    absolute_path = (
+        f"{normalized_directory}{separator}{file_name}"
+        if directory_path
+        else file_name
+    )
+    file_extension = PurePath(file_name).suffix.lower()
+    return absolute_path, directory_path, file_name, file_extension
+
+
+def _legacy_source_sha(legacy_report_id: int) -> str:
+    return hashlib.sha256(f"metroliza:legacy-report:{legacy_report_id}".encode("utf-8")).hexdigest()
+
+
+def _legacy_measurement_status(outtol) -> tuple[int, str]:
+    numeric_outtol = _float_value(outtol)
+    is_nok = int(bool(numeric_outtol is not None and numeric_outtol > 0))
+    return is_nok, "nok" if is_nok else "ok"
+
+
+def _fetch_table_rows(cursor, table_name: str) -> tuple[list[tuple], dict[str, int]]:
+    try:
+        cursor.execute(f'SELECT * FROM "{table_name}"')
+    except sqlite3.Error:
+        return [], {}
+    rows = cursor.fetchall()
+    return rows, _normalize_column_map(cursor.description)
+
+
+def _migrate_legacy_report_tables(cursor) -> None:
+    """Copy legacy REPORTS/MEASUREMENTS rows into the current schema once.
+
+    Legacy tables are left intact. The copied rows make old databases readable
+    through the current views used by export, filtering, grouping, and industrial
+    linking. Existing current rows are not overwritten so user edits made after
+    an upgrade remain authoritative.
+    """
+
+    report_rows, report_columns = _fetch_table_rows(cursor, "REPORTS")
+    measurement_rows, measurement_columns = _fetch_table_rows(cursor, "MEASUREMENTS")
+    if not report_rows or "id" not in report_columns or "report_id" not in measurement_columns:
+        return
+
+    measurements_by_report: dict[int, list[tuple]] = defaultdict(list)
+    for measurement_row in measurement_rows:
+        legacy_report_id = _row_value(measurement_row, measurement_columns, "REPORT_ID")
+        if legacy_report_id is None:
+            continue
+        try:
+            measurements_by_report[int(legacy_report_id)].append(measurement_row)
+        except (TypeError, ValueError):
+            continue
+
+    for report_row in report_rows:
+        legacy_report_id = _row_value(report_row, report_columns, "ID")
+        try:
+            legacy_report_id = int(legacy_report_id)
+        except (TypeError, ValueError):
+            continue
+
+        report_measurements = measurements_by_report.get(legacy_report_id, [])
+        nok_count = sum(
+            _legacy_measurement_status(_row_value(row, measurement_columns, "OUTTOL"))[0]
+            for row in report_measurements
+        )
+        absolute_path, directory_path, file_name, file_extension = _legacy_file_parts(
+            legacy_report_id,
+            report_row,
+            report_columns,
+        )
+        sha256 = _legacy_source_sha(legacy_report_id)
+        now_sql = "CURRENT_TIMESTAMP"
+
+        cursor.execute(
+            f"""
+            INSERT OR IGNORE INTO source_files (
+                sha256,
+                file_size_bytes,
+                source_format,
+                discovered_at,
+                ingested_at,
+                is_active
+            )
+            VALUES (?, NULL, 'legacy_sqlite', {now_sql}, {now_sql}, 1)
+            """,
+            (sha256,),
+        )
+        cursor.execute("SELECT id FROM source_files WHERE sha256 = ?", (sha256,))
+        source_file_id = int(cursor.fetchone()[0])
+        cursor.execute(
+            f"""
+            INSERT OR IGNORE INTO source_file_locations (
+                source_file_id,
+                absolute_path,
+                directory_path,
+                file_name,
+                file_extension,
+                file_modified_at,
+                discovered_at,
+                is_active
+            )
+            VALUES (?, ?, ?, ?, ?, NULL, {now_sql}, 1)
+            """,
+            (source_file_id, absolute_path, directory_path, file_name, file_extension),
+        )
+
+        cursor.execute("SELECT id FROM parsed_reports WHERE source_file_id = ?", (source_file_id,))
+        parsed_report_row = cursor.fetchone()
+        if parsed_report_row is None:
+            cursor.execute(
+                f"""
+                INSERT INTO parsed_reports (
+                    source_file_id,
+                    parser_id,
+                    parser_version,
+                    template_family,
+                    template_variant,
+                    parse_status,
+                    measurement_count,
+                    has_nok,
+                    nok_count,
+                    identity_hash,
+                    raw_report_json,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, 'legacy_sqlite', NULL, 'legacy_sqlite', NULL, 'parsed', ?, ?, ?, ?, ?, {now_sql}, {now_sql})
+                """,
+                (
+                    source_file_id,
+                    len(report_measurements),
+                    int(nok_count > 0),
+                    nok_count,
+                    f"legacy-report:{legacy_report_id}",
+                    json.dumps(
+                        {
+                            "legacy_report_id": legacy_report_id,
+                            "legacy_source": "REPORTS/MEASUREMENTS",
+                        },
+                        sort_keys=True,
+                    ),
+                ),
+            )
+            report_id = int(cursor.lastrowid)
+        else:
+            report_id = int(parsed_report_row[0])
+
+        reference = _text_value(_row_value(report_row, report_columns, "REFERENCE"))
+        sample_number = _text_value(_row_value(report_row, report_columns, "SAMPLE_NUMBER"))
+        report_date = _text_value(_row_value(report_row, report_columns, "DATE"))
+        cursor.execute(
+            """
+            INSERT OR IGNORE INTO report_metadata (
+                report_id,
+                reference,
+                reference_raw,
+                report_date,
+                sample_number,
+                sample_number_kind,
+                metadata_version,
+                metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                report_id,
+                reference,
+                reference,
+                report_date,
+                sample_number,
+                "explicit_sample_number" if sample_number else None,
+                SCHEMA_VERSION,
+                json.dumps(
+                    {
+                        "legacy_report_id": legacy_report_id,
+                        "field_sources": {
+                            "reference": "legacy_reports",
+                            "report_date": "legacy_reports",
+                            "sample_number": "legacy_reports",
+                        },
+                    },
+                    sort_keys=True,
+                ),
+            ),
+        )
+
+        cursor.execute("SELECT 1 FROM report_measurements WHERE report_id = ? LIMIT 1", (report_id,))
+        if cursor.fetchone() is not None:
+            continue
+
+        measurement_payloads = []
+        for row_order, measurement_row in enumerate(report_measurements, start=1):
+            header = _text_value(_row_value(measurement_row, measurement_columns, "HEADER"))
+            outtol = _row_value(measurement_row, measurement_columns, "OUTTOL")
+            is_nok, status_code = _legacy_measurement_status(outtol)
+            measurement_payloads.append(
+                (
+                    report_id,
+                    row_order,
+                    header,
+                    header,
+                    header,
+                    header,
+                    header,
+                    _text_value(_row_value(measurement_row, measurement_columns, "AX")),
+                    _float_value(_row_value(measurement_row, measurement_columns, "NOM")),
+                    _float_value(_row_value(measurement_row, measurement_columns, "+TOL")),
+                    _float_value(_row_value(measurement_row, measurement_columns, "-TOL")),
+                    _float_value(_row_value(measurement_row, measurement_columns, "BONUS")),
+                    _float_value(_row_value(measurement_row, measurement_columns, "MEAS")),
+                    _float_value(_row_value(measurement_row, measurement_columns, "DEV")),
+                    _float_value(outtol),
+                    is_nok,
+                    status_code,
+                    json.dumps(
+                        {
+                            "legacy_measurement_id": _row_value(measurement_row, measurement_columns, "ID"),
+                            "legacy_report_id": legacy_report_id,
+                        },
+                        sort_keys=True,
+                    ),
+                )
+            )
+        cursor.executemany(
+            """
+            INSERT INTO report_measurements (
+                report_id,
+                row_order,
+                header,
+                section_name,
+                feature_label,
+                characteristic_name,
+                description,
+                ax,
+                nominal,
+                tol_plus,
+                tol_minus,
+                bonus,
+                meas,
+                dev,
+                outtol,
+                is_nok,
+                status_code,
+                raw_measurement_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            measurement_payloads,
+        )
+
+
 def ensure_report_schema(database: str, *, connection=None, retries: int = 4, retry_delay_s: float = 1) -> None:
     """Ensure report ingestion tables, indexes, views, and schema metadata exist."""
 
     def _ensure_schema(cursor):
         for statement in SCHEMA_TABLE_STATEMENTS:
             cursor.execute(statement)
+        _migrate_legacy_report_tables(cursor)
         ensure_characteristic_alias_table(cursor)
         for statement in SCHEMA_INDEX_STATEMENTS:
             cursor.execute(statement)

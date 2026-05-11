@@ -15,6 +15,7 @@ from modules.data_grouping_service import (
     load_grouping_dataframe,
     reassign_group_keys_to_default,
 )
+from modules.report_schema import ensure_report_schema
 from modules.list_selection_utils import ListSelectionUtils
 from modules import ui_theme_tokens
 try:
@@ -391,6 +392,7 @@ class DataGrouping(QDialog):
 
         try:
             filter_query = self.parent().get_filter_query() if self.parent() else None
+            ensure_report_schema(self.db_file)
             self.df = load_grouping_dataframe(read_sql_dataframe, self.db_file, filter_query)
         except (sqlite3.Error, ValueError, TypeError) as e:
             self.log_and_exit(e)

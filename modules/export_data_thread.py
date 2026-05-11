@@ -107,6 +107,7 @@ from modules.report_query_service import (
     build_industrial_measurement_export_query,
     build_measurement_export_query,
 )
+from modules.report_schema import ensure_report_schema
 from modules.export_grouping_utils import (
     add_group_key as _add_group_key,
     apply_group_assignments as _apply_group_assignments,
@@ -4317,6 +4318,7 @@ class ExportDataThread(QThread):
             self._ensure_chart_executor()
             with sqlite_connection_scope(self.db_file) as connection:
                 self._db_connection = connection
+                ensure_report_schema(self.db_file, connection=connection, retries=5, retry_delay_s=1)
                 self._prepare_export_snapshot()
 
                 self._emit_stage_progress('preparing_query', 0.0)
