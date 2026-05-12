@@ -18,7 +18,11 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-from modules.industrial_data_repository import IndustrialDataRepository, IndustrialSourceProfile
+from modules.industrial_data_repository import (
+    IndustrialDataRepository,
+    IndustrialSourceProfile,
+    redact_sensitive_text,
+)
 from modules.industrial_filter_dialog import IndustrialFilterDialog
 from modules.industrial_workflow_state import IndustrialFilterState
 from modules.industrial_workers import IndustrialOznakSyncThread
@@ -81,6 +85,7 @@ class IndustrialSyncDialog(QDialog):
         self.sync_now_button.clicked.connect(self.sync_now)
         self.cancel_sync_button.clicked.connect(self.cancel_sync)
         self.close_button.clicked.connect(self.reject)
+        self.profile_combo.currentIndexChanged.connect(lambda _index: self._sync_action_buttons())
         self.cancel_sync_button.setEnabled(False)
 
         self._build_layout()
@@ -152,8 +157,7 @@ class IndustrialSyncDialog(QDialog):
     def _set_ready_state(self, enabled: bool, message: str) -> None:
         self.status_label.setText(message)
         set_status_variant(self.status_label, "neutral" if enabled else "warning")
-        for button in (self.edit_filter_button, self.test_connection_button, self.sync_now_button):
-            button.setEnabled(enabled)
+        self._sync_action_buttons()
 
     def current_profile(self) -> IndustrialSourceProfile | None:
         profile = self.profile_combo.currentData()
@@ -193,6 +197,7 @@ class IndustrialSyncDialog(QDialog):
             self.filter_status_label,
             "success" if self.filter_state.is_applied else "warning",
         )
+        self._sync_action_buttons()
 
     def open_filter_dialog(self) -> None:
         self.filter_window = IndustrialFilterDialog(self, db_file=self.db_file, state=self.filter_state)
@@ -248,6 +253,10 @@ class IndustrialSyncDialog(QDialog):
         self.oznak_sync_thread.start()
 
     def _set_action_buttons_enabled(self, enabled: bool) -> None:
+        if enabled:
+            self._sync_action_buttons()
+            self.close_button.setEnabled(True)
+            return
         for button in (
             self.edit_filter_button,
             self.test_connection_button,
@@ -265,10 +274,12 @@ class IndustrialSyncDialog(QDialog):
         if parent is not None and hasattr(parent, "refresh_status"):
             parent.refresh_status()
         if result["status"] != "succeeded":
-            self.status_label.setText(
-                "Connection test failed" if result["test_only"] else "Industrial sync failed"
+            status_text = self._format_failed_result_status(result)
+            self.status_label.setText(status_text)
+            set_status_variant(
+                self.status_label,
+                "neutral" if result.get("status") == "cancelled" else "danger",
             )
-            set_status_variant(self.status_label, "danger")
             return
         if result["test_only"]:
             self.status_label.setText(f"Connection test passed ({result['row_count']} rows visible)")
@@ -288,14 +299,18 @@ class IndustrialSyncDialog(QDialog):
         set_status_variant(self.status_label, "success")
 
     def on_oznak_error(self, message: str) -> None:
-        QMessageBox.warning(self, "Industrial sync", f"Oznak operation failed: {message}")
+        QMessageBox.warning(
+            self,
+            "Industrial sync",
+            f"Oznak operation failed: {redact_sensitive_text(message)}",
+        )
         parent = self.parent()
         if parent is not None and hasattr(parent, "refresh_status"):
             parent.refresh_status()
 
     def on_oznak_thread_stopped(self) -> None:
-        has_source = self.current_profile() is not None
-        self._set_action_buttons_enabled(has_source)
+        self._sync_action_buttons()
+        self.close_button.setEnabled(True)
         self.cancel_sync_button.setEnabled(False)
         self.oznak_sync_thread = None
 
@@ -306,3 +321,38 @@ class IndustrialSyncDialog(QDialog):
             event.ignore()
             return
         super().closeEvent(event)
+
+    def _sync_action_buttons(self) -> None:
+        thread = self.oznak_sync_thread
+        if thread is not None and thread.isRunning():
+            self.edit_filter_button.setEnabled(False)
+            self.test_connection_button.setEnabled(False)
+            self.sync_now_button.setEnabled(False)
+            return
+        has_source = self.current_profile() is not None
+        self.edit_filter_button.setEnabled(has_source)
+        self.test_connection_button.setEnabled(has_source)
+        self.sync_now_button.setEnabled(has_source and self.filter_state.is_applied)
+
+    def _format_failed_result_status(self, result: dict[str, Any]) -> str:
+        if result.get("status") == "cancelled":
+            base = "Industrial sync cancelled"
+        elif result.get("test_only"):
+            base = "Connection test failed"
+        else:
+            base = "Industrial sync failed"
+        detail = self._result_error_detail(result)
+        return f"{base}: {detail}" if detail else base
+
+    @staticmethod
+    def _result_error_detail(result: dict[str, Any]) -> str:
+        candidates: list[Any] = [result.get("error")]
+        diagnostics = result.get("diagnostics")
+        if isinstance(diagnostics, dict):
+            candidates.extend(diagnostics.get("errors") or ())
+            candidates.extend(diagnostics.get("warnings") or ())
+        for candidate in candidates:
+            text = redact_sensitive_text(candidate)
+            if text:
+                return text
+        return ""

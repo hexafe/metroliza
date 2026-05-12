@@ -225,6 +225,8 @@ class IndustrialLinkingDialog(QDialog):
 
         self.report_search_edit.textChanged.connect(self.reload_data)
         self.production_search_edit.textChanged.connect(self.reload_data)
+        self.report_table.itemSelectionChanged.connect(self._sync_button_state)
+        self.production_table.itemSelectionChanged.connect(self._sync_button_state)
         self.refresh_button.clicked.connect(self.reload_data)
         self.auto_link_button.clicked.connect(self.refresh_auto_links)
         self.link_button.clicked.connect(self.link_selected_records)
@@ -343,8 +345,10 @@ class IndustrialLinkingDialog(QDialog):
 
     def _sync_button_state(self) -> None:
         has_db = bool(self.db_file)
-        self.link_button.setEnabled(has_db)
-        self.clear_button.setEnabled(has_db)
+        has_report = self.selected_report_id() is not None
+        has_production = self.selected_production_record_id() is not None
+        self.link_button.setEnabled(has_db and has_report and has_production)
+        self.clear_button.setEnabled(has_db and has_report)
         self.auto_link_button.setEnabled(has_db)
 
     def link_selected_records(self) -> None:

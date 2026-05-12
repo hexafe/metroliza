@@ -37,6 +37,7 @@ except Exception as exc:  # pragma: no cover - depends on local Qt runtime avail
 else:
     PYQT_IMPORT_ERROR = None
 from modules.industrial_data_repository import IndustrialDataRepository
+from modules.db import sqlite_connection_scope
 from modules.oznak_adapter import OznakAdapterFetchResult, OznakAdapterStatus
 
 
@@ -240,6 +241,118 @@ def test_sync_thread_test_only_does_not_persist_rows(monkeypatch, tmp_path):
     assert emitted[0]["test_only"] is True
     assert counts.sync_runs == 0
     assert counts.records == 0
+
+
+def test_sync_thread_records_sanitized_failed_sync_run(monkeypatch, tmp_path):
+    db_path = str(tmp_path / "metroliza.db")
+    repository = IndustrialDataRepository(db_path)
+    profile = repository.upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="events",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+    )
+    status = OznakAdapterStatus(available=True, version="0.1.0", fetch_available=True)
+    result = OznakAdapterFetchResult(
+        status=status,
+        records=(),
+        row_count=0,
+        implemented=True,
+        diagnostics={"stage": "fetch_call"},
+        error="database rejected password=super-secret",
+    )
+    monkeypatch.setattr(industrial_workers, "get_oznak_adapter_status", lambda: status)
+    monkeypatch.setattr(industrial_workers, "create_oznak_cancellation_token", lambda: None)
+    monkeypatch.setattr(
+        industrial_workers,
+        "fetch_oznak_records_for_source_profile",
+        lambda *args, **kwargs: result,
+    )
+
+    thread = IndustrialOznakSyncThread(
+        db_file=db_path,
+        profile=profile,
+        username="operator",
+        password="secret-password",
+        limit=50,
+        timeout_seconds=30,
+        reference_filter_column="reference",
+        reference_values=("REF-1",),
+        test_only=False,
+    )
+    emitted = []
+    thread.result_ready.connect(emitted.append)
+
+    thread.run()
+
+    assert emitted[0]["status"] == "failed"
+    assert emitted[0]["error"] == "database rejected password=<redacted>"
+    with sqlite_connection_scope(db_path) as conn:
+        status_row = conn.execute(
+            "SELECT status, error_summary FROM industrial_sync_runs"
+        ).fetchone()
+    assert status_row == ("failed", "database rejected password=<redacted>")
+
+
+def test_sync_thread_records_cancelled_run_without_upserting_rows(monkeypatch, tmp_path):
+    db_path = str(tmp_path / "metroliza.db")
+    repository = IndustrialDataRepository(db_path)
+    profile = repository.upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="events",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+    )
+    status = OznakAdapterStatus(available=True, version="0.1.0", fetch_available=True)
+    result = OznakAdapterFetchResult(
+        status=status,
+        records=({"source_primary_key": "ROW-1", "raw_record": {"event_id": "ROW-1"}},),
+        row_count=1,
+        implemented=True,
+        diagnostics={"stage": "mapped"},
+    )
+    monkeypatch.setattr(industrial_workers, "get_oznak_adapter_status", lambda: status)
+    monkeypatch.setattr(industrial_workers, "create_oznak_cancellation_token", lambda: None)
+    monkeypatch.setattr(
+        industrial_workers,
+        "fetch_oznak_records_for_source_profile",
+        lambda *args, **kwargs: result,
+    )
+
+    thread = IndustrialOznakSyncThread(
+        db_file=db_path,
+        profile=profile,
+        username="operator",
+        password="secret-password",
+        limit=50,
+        timeout_seconds=30,
+        reference_filter_column="reference",
+        reference_values=("REF-1",),
+        test_only=False,
+    )
+    emitted = []
+    thread.result_ready.connect(emitted.append)
+    thread.cancel()
+
+    thread.run()
+    counts = repository.summarize_counts(source_profile_id=profile.id)
+
+    assert emitted[0]["status"] == "cancelled"
+    assert emitted[0]["error"] == "Sync cancelled by user."
+    assert counts.records == 0
+    with sqlite_connection_scope(db_path) as conn:
+        status_row = conn.execute(
+            "SELECT status, error_summary FROM industrial_sync_runs"
+        ).fetchone()
+    assert status_row == ("cancelled", "Sync cancelled by user.")
 
 
 def test_dialog_requires_reference_scope_for_sync_but_not_connection_test(tmp_path):

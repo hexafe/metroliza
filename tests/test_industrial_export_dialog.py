@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sys
+import types
+
 import pytest
 
 try:
@@ -62,3 +65,41 @@ def test_export_dialog_uses_csv_summary_style_readiness_and_plot_toggle(tmp_path
 def test_export_dialog_has_no_live_oznak_fetch_dependency():
     assert "fetch_oznak_records_for_source_profile" not in vars(industrial_export_dialog)
     assert "create_oznak_cancellation_token" not in vars(industrial_export_dialog)
+
+
+def test_export_dialog_completion_uses_export_style_workbook_link(tmp_path, monkeypatch):
+    _app()
+    output_path = tmp_path / "industrial.xlsx"
+    calls = []
+    fake_export_dialog = types.SimpleNamespace(
+        show_export_result_message=lambda parent, level, title, message, excel_file=None: calls.append(
+            (parent, level, title, message, excel_file)
+        )
+    )
+    monkeypatch.setitem(sys.modules, "modules.export_dialog", fake_export_dialog)
+    dialog = IndustrialExportDialog(db_file=str(tmp_path / "industrial.db"))
+
+    dialog.on_export_finished(
+        {
+            "output_file": str(output_path),
+            "row_count": 3,
+            "summary_rows": 2,
+            "charts": True,
+        }
+    )
+
+    assert calls == [
+        (
+            dialog,
+            "info",
+            "Industrial export complete",
+            (
+                "Industrial export complete.\n\n"
+                f"Industrial workbook: {output_path.resolve().as_uri()}\n\n"
+                "Rows: 3\n"
+                "Summary rows: 2"
+            ),
+            str(output_path),
+        )
+    ]
+    dialog.close()

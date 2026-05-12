@@ -11,7 +11,7 @@ import yaml
 from modules.industrial_data_repository import (
     IndustrialDataRepository,
     IndustrialSourceProfile,
-    SENSITIVE_KEY_NAMES,
+    looks_sensitive_key,
     utc_timestamp,
 )
 from modules.industrial_workflow_state import require_identifier
@@ -19,7 +19,6 @@ from modules.industrial_workflow_state import require_identifier
 
 DEFAULT_INDUSTRIAL_SOURCE_CONFIG_PATH = Path.home() / ".metroliza" / "industrial_sources.yaml"
 CONFIG_ROOT_KEY = "databases"
-_SENSITIVE_SUBSTRINGS = ("password", "passwd", "pwd", "secret", "token", "credential", "api_key")
 _PROFILE_REQUIRED_KEYS = ("type", "host", "port", "database", "table")
 
 
@@ -324,8 +323,7 @@ def _find_sensitive_paths(value: Any, *, prefix: str = "") -> set[str]:
 
 
 def _is_sensitive_key(key: str) -> bool:
-    normalized = key.strip().lower()
-    return normalized in SENSITIVE_KEY_NAMES or any(token in normalized for token in _SENSITIVE_SUBSTRINGS)
+    return looks_sensitive_key(key)
 
 
 def _normalize_columns(columns: Iterable[str] | None) -> tuple[str, ...]:

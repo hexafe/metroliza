@@ -5,11 +5,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import re
 from typing import Any, Iterable, Mapping
 
 from modules.db import run_transaction_with_retry
 from modules.industrial_data_schema import ensure_industrial_data_schema
 
+
+_REDACT_URI_CREDENTIALS = re.compile(r"([a-zA-Z][a-zA-Z0-9+.\-]*://[^:/\s]+:)([^@/\s]+)@")
+_REDACT_KEY_VALUE = re.compile(
+    r"(?i)\b(password|passwd|pwd|[a-z0-9_-]*token|[a-z0-9_-]*secret|credential|api[_-]?key|access[_-]?key)\s*([=:])\s*([^,\s;]+)"
+)
+_REDACT_QUOTED_KEY_VALUE = re.compile(
+    r"(?i)(['\"]?(?:password|passwd|pwd|[a-z0-9_-]*token|[a-z0-9_-]*secret|credential|api[_-]?key|access[_-]?key)['\"]?\s*:\s*['\"])([^'\",;}]+)(['\"]?)"
+)
 
 SENSITIVE_KEY_NAMES = frozenset(
     {
@@ -27,6 +36,30 @@ SENSITIVE_KEY_NAMES = frozenset(
         "credential",
         "credentials",
     }
+)
+SENSITIVE_COMPACT_KEY_NAMES = frozenset(
+    re.sub(r"[^a-z0-9]+", "", key) for key in SENSITIVE_KEY_NAMES
+) | frozenset(
+    {
+        "apikey",
+        "apitoken",
+        "accesstoken",
+        "refreshtoken",
+        "accesskey",
+        "secretkey",
+        "clientsecret",
+    }
+)
+SENSITIVE_COMPACT_SUBSTRINGS = (
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "credential",
+    "apikey",
+    "apitoken",
+    "accesskey",
+    "clientsecret",
 )
 
 KNOWN_RECORD_FIELDS = frozenset(
@@ -119,9 +152,32 @@ def _from_json(value: Any, default: Any) -> Any:
         return default
 
 
-def _looks_sensitive_key(key: str) -> bool:
+def redact_sensitive_text(value: Any, *, max_len: int | None = 320) -> str:
+    """Redact credential-like fragments from free-form diagnostics text."""
+
+    text = str(value or "").strip()
+    text = _REDACT_URI_CREDENTIALS.sub(r"\1<redacted>@", text)
+    text = _REDACT_KEY_VALUE.sub(r"\1\2<redacted>", text)
+    text = _REDACT_QUOTED_KEY_VALUE.sub(r"\1<redacted>\3", text)
+    if max_len is not None and len(text) > max_len:
+        return f"{text[: max_len - 3]}..."
+    return text
+
+
+def looks_sensitive_key(key: str) -> bool:
+    """Return whether a payload key should be treated as credential-like."""
+
     token = str(key or "").strip().lower()
-    return token in SENSITIVE_KEY_NAMES
+    compact_token = re.sub(r"[^a-z0-9]+", "", token)
+    return (
+        token in SENSITIVE_KEY_NAMES
+        or compact_token in SENSITIVE_COMPACT_KEY_NAMES
+        or any(part in compact_token for part in SENSITIVE_COMPACT_SUBSTRINGS)
+    )
+
+
+def _looks_sensitive_key(key: str) -> bool:
+    return looks_sensitive_key(key)
 
 
 def _redact_sensitive_payload(value: Any) -> Any:
@@ -404,6 +460,9 @@ class IndustrialDataRepository:
             raise ValueError("status must be one of: succeeded, failed, cancelled")
         finished = finished_at or utc_timestamp()
         diagnostics_payload = _redact_sensitive_payload(dict(diagnostics or {}))
+        redacted_error_summary = (
+            redact_sensitive_text(error_summary, max_len=500) if error_summary else None
+        )
 
         def _finish(cursor) -> None:
             cursor.execute(
@@ -421,7 +480,7 @@ class IndustrialDataRepository:
                     finished,
                     status,
                     int(row_count),
-                    error_summary,
+                    redacted_error_summary,
                     _to_json(diagnostics_payload),
                     sync_run_id,
                 ),

@@ -1,5 +1,6 @@
 import sqlite3
 
+from modules.db import sqlite_connection_scope
 from modules.industrial_data_repository import IndustrialDataRepository
 from modules.industrial_join_service import (
     IndustrialJoinRuleSpec,
@@ -103,7 +104,7 @@ def test_materialize_industrial_report_links_marks_exact_and_ambiguous(tmp_path)
     assert summary.unmatched_reports == 1
     assert summary.candidates_inserted == 3
 
-    with sqlite3.connect(db_path) as conn:
+    with sqlite_connection_scope(db_path) as conn:
         statuses = {
             row[0]: row[1]
             for row in conn.execute(
@@ -209,7 +210,7 @@ def test_manual_link_allows_different_report_and_production_references(tmp_path)
         ],
     )
 
-    with sqlite3.connect(db_path) as conn:
+    with sqlite_connection_scope(db_path) as conn:
         report_id = conn.execute("SELECT id FROM parsed_reports").fetchone()[0]
         production_record_id = conn.execute("SELECT id FROM industrial_records").fetchone()[0]
 
@@ -219,7 +220,7 @@ def test_manual_link_allows_different_report_and_production_references(tmp_path)
         industrial_record_id=production_record_id,
     )
 
-    with sqlite3.connect(db_path) as conn:
+    with sqlite_connection_scope(db_path) as conn:
         row = conn.execute(
             """
             SELECT
@@ -243,7 +244,7 @@ def test_manual_link_allows_different_report_and_production_references(tmp_path)
     assert row == (link_id, "accepted", 1.0, "manual_user_link", 0, "MET-123", "PRODUCTION-999")
 
     export_query = build_measurement_export_query(include_industrial_context=True)
-    with sqlite3.connect(db_path) as conn:
+    with sqlite_connection_scope(db_path) as conn:
         conn.row_factory = sqlite3.Row
         export_row = conn.execute(export_query).fetchone()
 
@@ -252,8 +253,69 @@ def test_manual_link_allows_different_report_and_production_references(tmp_path)
     assert export_row["INDUSTRIAL_STATION"] == "S1"
 
     removed = clear_manual_industrial_report_link(db_path, report_id=report_id)
-    with sqlite3.connect(db_path) as conn:
+    with sqlite_connection_scope(db_path) as conn:
         remaining = conn.execute("SELECT COUNT(*) FROM industrial_link_candidates").fetchone()[0]
 
     assert removed == 1
     assert remaining == 0
+
+
+def test_manual_link_takes_priority_over_automatic_accepted_candidate(tmp_path):
+    db_path = str(tmp_path / "reports.db")
+    report_repository = ReportRepository(db_path)
+    report_repository.ensure_schema()
+    _persist_report(tmp_path, report_repository, file_name="met-ref.pdf", reference="MET-123")
+
+    industrial_repository = IndustrialDataRepository(db_path)
+    profile = industrial_repository.upsert_source_profile(
+        profile_key="assembly",
+        profile_name="Assembly",
+        source_db_alias="plant_a",
+        database_type="mssql",
+        source_object_name="assembly.events",
+        allowed_columns=["reference", "station"],
+    )
+    industrial_repository.upsert_industrial_records_from_rows(
+        source_profile_id=profile.id,
+        source_db_alias=profile.source_db_alias,
+        rows=[
+            {
+                "source_record_key": "AUTO-1",
+                "reference": "MET-123",
+                "station": "AUTO",
+            },
+            {
+                "source_record_key": "MANUAL-1",
+                "reference": "PRODUCTION-999",
+                "station": "MANUAL",
+            },
+        ],
+    )
+
+    auto_summary = materialize_industrial_report_links(db_path)
+    assert auto_summary.accepted_links == 1
+    with sqlite_connection_scope(db_path) as conn:
+        report_id = conn.execute("SELECT id FROM parsed_reports").fetchone()[0]
+        manual_record_id = conn.execute(
+            "SELECT id FROM industrial_records WHERE source_record_key = 'MANUAL-1'"
+        ).fetchone()[0]
+
+    set_manual_industrial_report_link(
+        db_path,
+        report_id=report_id,
+        industrial_record_id=manual_record_id,
+    )
+
+    export_query = build_measurement_export_query(include_industrial_context=True)
+    with sqlite_connection_scope(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        export_row = conn.execute(export_query).fetchone()
+    assert export_row["INDUSTRIAL_STATION"] == "MANUAL"
+    assert export_row["INDUSTRIAL_LINK_RULE"] == "Manual user link"
+
+    clear_manual_industrial_report_link(db_path, report_id=report_id)
+    with sqlite_connection_scope(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        export_row = conn.execute(export_query).fetchone()
+    assert export_row["INDUSTRIAL_STATION"] == "AUTO"
+    assert export_row["INDUSTRIAL_LINK_RULE"] == "Reference exact"

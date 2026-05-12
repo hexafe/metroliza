@@ -21,6 +21,7 @@ from modules.industrial_filter_dialog import IndustrialFilterDialog
 from modules.industrial_grouping_dialog import IndustrialGroupingDialog
 from modules.industrial_workflow_state import IndustrialFilterState, IndustrialGroupingState
 from modules.industrial_workers import IndustrialExportThread
+from modules.export_dialog_service import build_export_artifact_link_line
 from modules.progress_status import build_three_line_status
 from modules.ui_foundation import (
     apply_metroliza_theme,
@@ -255,6 +256,7 @@ class IndustrialExportDialog(QDialog):
         self.export_thread = self.create_export_thread()
         self.export_thread.result_ready.connect(self.on_export_finished)
         self.export_thread.error_occurred.connect(self.on_export_error)
+        self.export_thread.cancelled.connect(self.on_export_cancelled)
         self.export_thread.finished.connect(self.on_export_thread_stopped)
         self.export_thread.start()
         self.loading_dialog.show()
@@ -262,26 +264,47 @@ class IndustrialExportDialog(QDialog):
     def cancel_export(self) -> None:
         thread = self.export_thread
         if thread is not None and thread.isRunning():
-            thread.requestInterruption()
+            thread.cancel()
             self.loading_label.setText("Cancel requested. Waiting for workbook writer to stop.")
 
     def on_export_finished(self, result: dict[str, Any]) -> None:
         if hasattr(self, "loading_bar"):
             self.loading_bar.setValue(100)
-        QMessageBox.information(
-            self,
-            "Industrial export complete",
-            (
-                f"Industrial export complete: {result['row_count']} rows, "
-                f"{result['summary_rows']} summary rows."
-            ),
-        )
+        output_file = str(result.get("output_file") or self.output_file)
+        workbook_line = build_export_artifact_link_line("Industrial workbook", output_file)
+        message_lines = [
+            "Industrial export complete.",
+            "",
+            workbook_line,
+            "",
+            f"Rows: {result['row_count']}",
+            f"Summary rows: {result['summary_rows']}",
+        ]
+        try:
+            from modules.export_dialog import show_export_result_message
+
+            show_export_result_message(
+                self,
+                "info",
+                "Industrial export complete",
+                "\n".join(line for line in message_lines if line is not None),
+                excel_file=output_file,
+            )
+        except Exception:
+            QMessageBox.information(
+                self,
+                "Industrial export complete",
+                "\n".join(line for line in message_lines if line),
+            )
         parent = self.parent()
         if parent is not None and hasattr(parent, "refresh_status"):
             parent.refresh_status()
 
     def on_export_error(self, message: str) -> None:
         QMessageBox.warning(self, "Industrial export", f"Could not export industrial data: {message}")
+
+    def on_export_cancelled(self, message: str) -> None:
+        QMessageBox.information(self, "Industrial export", message or "Industrial export was cancelled.")
 
     def on_export_thread_stopped(self) -> None:
         if hasattr(self, "loading_dialog"):

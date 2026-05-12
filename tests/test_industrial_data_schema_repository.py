@@ -1,6 +1,6 @@
 import json
-import sqlite3
 
+from modules.db import sqlite_connection_scope
 from modules.industrial_data_repository import IndustrialDataRepository
 from modules.industrial_data_schema import SCHEMA_VERSION, ensure_industrial_data_schema
 
@@ -9,7 +9,7 @@ def test_industrial_schema_creates_expected_tables_and_indexes(tmp_path):
     db_path = str(tmp_path / "industrial.db")
     ensure_industrial_data_schema(db_path)
 
-    with sqlite3.connect(db_path) as conn:
+    with sqlite_connection_scope(db_path) as conn:
         tables = {
             row[0]
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
@@ -95,7 +95,14 @@ def test_source_profile_upsert_list_and_sync_run_lifecycle(tmp_path):
 
     sync_run_id = repository.create_sync_run(
         source_profile_id=profile.id,
-        filters={"station": "A1", "password": "super-secret"},
+        filters={
+            "station": "A1",
+            "password": "super-secret",
+            "nested": {
+                "clientSecret": "nested-client-secret",
+                "headers": [{"apiKey": "nested-api-key"}],
+            },
+        },
         oznak_version="0.2.0",
         oznak_commit="abc123",
         diagnostics={"token": "very-secret", "phase": "fetch"},
@@ -104,10 +111,14 @@ def test_source_profile_upsert_list_and_sync_run_lifecycle(tmp_path):
         sync_run_id=sync_run_id,
         status="succeeded",
         row_count=2,
-        diagnostics={"refresh_token": "another-secret", "rows": 2},
+        diagnostics={
+            "refreshToken": "another-secret",
+            "rows": 2,
+            "trace": [{"accessToken": "nested-access-token"}],
+        },
     )
 
-    with sqlite3.connect(db_path) as conn:
+    with sqlite_connection_scope(db_path) as conn:
         row = conn.execute(
             """
             SELECT status, row_count, filters_json, diagnostics_json
@@ -122,10 +133,16 @@ def test_source_profile_upsert_list_and_sync_run_lifecycle(tmp_path):
     assert status == "succeeded"
     assert row_count == 2
     assert "super-secret" not in (filters_json or "")
+    assert "nested-client-secret" not in (filters_json or "")
+    assert "nested-api-key" not in (filters_json or "")
     assert "very-secret" not in (diagnostics_json or "")
     assert "another-secret" not in (diagnostics_json or "")
+    assert "nested-access-token" not in (diagnostics_json or "")
     assert json.loads(filters_json)["password"] == "<redacted>"
-    assert json.loads(diagnostics_json)["refresh_token"] == "<redacted>"
+    assert json.loads(filters_json)["nested"]["clientSecret"] == "<redacted>"
+    assert json.loads(filters_json)["nested"]["headers"][0]["apiKey"] == "<redacted>"
+    assert json.loads(diagnostics_json)["refreshToken"] == "<redacted>"
+    assert json.loads(diagnostics_json)["trace"][0]["accessToken"] == "<redacted>"
 
 
 def test_upsert_records_and_summarize_counts_from_synthetic_rows(tmp_path):
@@ -165,7 +182,9 @@ def test_upsert_records_and_summarize_counts_from_synthetic_rows(tmp_path):
                 "batch": "LOT-9",
                 "status": "pass",
                 "custom_code": "X2",
+                "quality_payload": {"apiKey": "dynamic-secret"},
                 "token": "should-not-persist",
+                "raw_record": {"event_id": "ROW-2", "nested": {"clientSecret": "raw-secret"}},
             },
         ],
     )
@@ -187,16 +206,16 @@ def test_upsert_records_and_summarize_counts_from_synthetic_rows(tmp_path):
 
     counts = repository.summarize_counts(source_profile_id=profile.id)
 
-    assert first_pass == {"processed": 2, "inserted": 2, "updated": 0, "value_rows": 3}
+    assert first_pass == {"processed": 2, "inserted": 2, "updated": 0, "value_rows": 4}
     assert second_pass == {"processed": 1, "inserted": 0, "updated": 1, "value_rows": 1}
     assert counts.source_profiles == 1
     assert counts.sync_runs == 1
     assert counts.records == 2
-    assert counts.record_values == 3
+    assert counts.record_values == 4
     assert counts.join_rules == 0
     assert counts.link_candidates == 0
 
-    with sqlite3.connect(db_path) as conn:
+    with sqlite_connection_scope(db_path) as conn:
         updated_record = conn.execute(
             """
             SELECT reference, station, raw_record_json
@@ -214,10 +233,33 @@ def test_upsert_records_and_summarize_counts_from_synthetic_rows(tmp_path):
             """,
             (profile.id,),
         ).fetchone()[0]
+        quality_payload = conn.execute(
+            """
+            SELECT values_row.field_value_json
+            FROM industrial_record_values values_row
+            JOIN industrial_records records_row ON records_row.id = values_row.record_id
+            WHERE records_row.source_profile_id = ?
+              AND records_row.source_record_key = 'ROW-2'
+              AND values_row.field_name = 'quality_payload'
+            """,
+            (profile.id,),
+        ).fetchone()[0]
+        row2_raw_record_json = conn.execute(
+            """
+            SELECT raw_record_json
+            FROM industrial_records
+            WHERE source_profile_id = ? AND source_record_key = 'ROW-2'
+            """,
+            (profile.id,),
+        ).fetchone()[0]
 
     assert updated_record is not None
     reference, station, raw_record_json = updated_record
     assert reference == "REF-1-UPDATED"
     assert station == "S2"
     assert "should-not-persist" not in (raw_record_json or "")
+    assert "raw-secret" not in (row2_raw_record_json or "")
+    assert json.loads(row2_raw_record_json)["nested"]["clientSecret"] == "<redacted>"
+    assert "dynamic-secret" not in (quality_payload or "")
+    assert json.loads(quality_payload)["apiKey"] == "<redacted>"
     assert token_values == 0

@@ -477,6 +477,25 @@ def test_analytics_completion_message_uses_export_style_file_links(tmp_path, mon
         dialog.close()
 
 
+def test_analytics_completion_message_reveals_dashboard_when_workbook_disabled(tmp_path) -> None:
+    _app()
+    dashboard_file = tmp_path / "analytics.html"
+
+    class AnalyticsResult:
+        html_dashboard_path = str(dashboard_file)
+        workbook_path = ""
+        html_dashboard_chart_count = 4
+        row_count = 12
+
+    level, title, message, reveal_path = build_analytics_completion_message(AnalyticsResult)
+
+    assert level == "info"
+    assert title == "Analytics successful"
+    assert f"HTML dashboard: {dashboard_file.resolve().as_uri()}" in message
+    assert "Workbook:" not in message
+    assert reveal_path == str(dashboard_file)
+
+
 def test_analytics_dialog_wires_cancellable_worker_without_running_job(tmp_path) -> None:
     _app()
 

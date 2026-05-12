@@ -106,3 +106,32 @@ databases:
 
     with pytest.raises(IndustrialSourceConfigError, match="credential-like"):
         load_source_profiles_from_config(config_path)
+
+
+def test_source_config_rejects_nested_camel_case_credentials(tmp_path):
+    config_path = tmp_path / "industrial_sources.yaml"
+    config_path.write_text(
+        """
+databases:
+  line_a:
+    type: mysql
+    host: db.example.invalid
+    port: 3306
+    database: processdb
+    table: events
+    options:
+      apiKey: should-not-be-here
+      nested:
+        clientSecret: also-secret
+        refreshToken: token-secret
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(IndustrialSourceConfigError) as excinfo:
+        load_source_profiles_from_config(config_path)
+
+    message = str(excinfo.value)
+    assert "options.apiKey" in message
+    assert "options.nested.clientSecret" in message
+    assert "options.nested.refreshToken" in message

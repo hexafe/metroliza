@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import sqlite3
-
 import pytest
+
+from modules.db import sqlite_connection_scope
 
 try:
     from PyQt6.QtWidgets import QApplication
@@ -119,11 +119,18 @@ def test_manual_linking_dialog_links_and_clears_different_references(tmp_path):
     db_path = _prepare_linking_db(tmp_path)
     dialog = IndustrialLinkingDialog(db_file=db_path)
 
+    assert not dialog.link_button.isEnabled()
+    assert not dialog.clear_button.isEnabled()
+
     dialog.report_table.selectRow(0)
+    assert dialog.clear_button.isEnabled()
+    assert not dialog.link_button.isEnabled()
+
     dialog.production_table.selectRow(0)
+    assert dialog.link_button.isEnabled()
     dialog.link_selected_records()
 
-    with sqlite3.connect(db_path) as conn:
+    with sqlite_connection_scope(db_path) as conn:
         linked = conn.execute(
             """
             SELECT report_metadata.reference, industrial_records.reference
@@ -140,7 +147,7 @@ def test_manual_linking_dialog_links_and_clears_different_references(tmp_path):
 
     dialog.report_table.selectRow(0)
     dialog.clear_selected_manual_link()
-    with sqlite3.connect(db_path) as conn:
+    with sqlite_connection_scope(db_path) as conn:
         remaining = conn.execute("SELECT COUNT(*) FROM industrial_link_candidates").fetchone()[0]
 
     assert remaining == 0

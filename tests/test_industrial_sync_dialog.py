@@ -71,6 +71,73 @@ def test_sync_dialog_adds_filter_column_to_runtime_profile_without_persisting(tm
     dialog.close()
 
 
+def test_sync_dialog_keeps_connection_test_enabled_until_references_are_selected(tmp_path):
+    _app()
+    db_path = str(tmp_path / "industrial.db")
+    IndustrialDataRepository(db_path).upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="events",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+    )
+    dialog = IndustrialSyncDialog(db_file=db_path)
+
+    assert dialog.test_connection_button.isEnabled()
+    assert not dialog.sync_now_button.isEnabled()
+
+    dialog.set_industrial_filter_state(
+        IndustrialFilterState(reference_column="reference", references=("REF-1",))
+    )
+
+    assert dialog.test_connection_button.isEnabled()
+    assert dialog.sync_now_button.isEnabled()
+    dialog.close()
+
+
+def test_sync_dialog_shows_sanitized_failed_and_cancelled_status(tmp_path):
+    _app()
+    db_path = str(tmp_path / "industrial.db")
+    IndustrialDataRepository(db_path).upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="events",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+    )
+    dialog = IndustrialSyncDialog(db_file=db_path)
+
+    dialog.on_oznak_result(
+        {
+            "test_only": False,
+            "status": "failed",
+            "error": "Fetch failed password=super-secret",
+            "diagnostics": {},
+        }
+    )
+
+    assert dialog.status_label.text() == "Industrial sync failed: Fetch failed password=<redacted>"
+    assert "super-secret" not in dialog.status_label.text()
+
+    dialog.on_oznak_result(
+        {
+            "test_only": False,
+            "status": "cancelled",
+            "error": "Sync cancelled by user.",
+            "diagnostics": {},
+        }
+    )
+
+    assert dialog.status_label.text() == "Industrial sync cancelled: Sync cancelled by user."
+    dialog.close()
+
+
 def test_sync_dialog_validates_session_credentials(tmp_path):
     _app()
     db_path = str(tmp_path / "industrial.db")

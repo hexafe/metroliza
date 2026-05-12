@@ -12,19 +12,15 @@ import hashlib
 import importlib
 import inspect
 import json
-import re
 from typing import Any, Mapping
+
+from modules.industrial_data_repository import redact_sensitive_text
 
 
 OZNAK_IMPORT_PATH = "oznak"
 OZNAK_FETCHER_IMPORT_PATH = "oznak.fetcher"
 DEFAULT_OZNAK_FETCH_CHUNK_SIZE = 5_000
 DEFAULT_REFERENCE_BATCH_SIZE = 100
-
-_REDACT_URI_CREDENTIALS = re.compile(r"([a-zA-Z][a-zA-Z0-9+.\-]*://[^:/\s]+:)([^@/\s]+)@")
-_REDACT_KEY_VALUE = re.compile(
-    r"(?i)\b(password|passwd|pwd|token|secret|api[_-]?key|access[_-]?key)\s*([=:])\s*([^,\s;]+)"
-)
 
 _ROW_KEY_ALIASES: dict[str, tuple[str, ...]] = {
     "source_primary_key": ("source_primary_key", "id", "pk", "row_id", "record_id", "external_id"),
@@ -83,12 +79,7 @@ class OznakAdapterFetchResult:
 
 
 def _redact_error_text(value: Any, *, max_len: int = 320) -> str:
-    text = str(value or "").strip()
-    text = _REDACT_URI_CREDENTIALS.sub(r"\1<redacted>@", text)
-    text = _REDACT_KEY_VALUE.sub(r"\1\2<redacted>", text)
-    if len(text) > max_len:
-        return f"{text[: max_len - 3]}..."
-    return text
+    return redact_sensitive_text(value, max_len=max_len)
 
 
 def _safe_exception_summary(exc: BaseException) -> str:
@@ -478,6 +469,9 @@ def fetch_oznak_records_for_source_profile(
 
     try:
         for reference_batch in reference_batches:
+            batch_limit = remaining_limit if remaining_limit is not None else None
+            if batch_limit is not None and batch_limit <= 0:
+                break
             filters = ()
             if reference_batch:
                 if query_filter_type is None:
@@ -491,9 +485,6 @@ def fetch_oznak_records_for_source_profile(
                     ),
                 )
 
-            batch_limit = remaining_limit if remaining_limit is not None else None
-            if batch_limit is not None and batch_limit <= 0:
-                break
             request = fetch_request_type(
                 profiles=(oznak_profile,),
                 filters=filters,
@@ -520,6 +511,8 @@ def fetch_oznak_records_for_source_profile(
                 )
             payloads.append(payload)
             batch_records = map_oznak_rows_to_industrial_records(payload, profile=profile)
+            if remaining_limit is not None:
+                batch_records = batch_records[:remaining_limit]
             records_list.extend(batch_records)
             if remaining_limit is not None:
                 remaining_limit -= len(batch_records)

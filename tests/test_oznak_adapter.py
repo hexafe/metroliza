@@ -413,3 +413,306 @@ def test_fetch_source_profile_uses_chunked_reference_batches_by_default(monkeypa
     assert result.diagnostics["fetch_strategy"] == "chunked"
     assert result.diagnostics["reference_batches"] == 2
     assert {record["reference"] for record in result.records} == {"REF1", "REF2", "REF3"}
+
+
+def test_fetch_source_profile_limit_zero_does_not_call_fetch(monkeypatch):
+    calls = {"single": 0, "chunked": 0, "filters": 0}
+
+    class FakeDatabaseProfile:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeFetchRequest:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeCredentialProvider:
+        def __init__(self, mapping):
+            self.mapping = mapping
+
+    class FakeQueryFilter:
+        def __init__(self, **kwargs):
+            calls["filters"] += 1
+            self.__dict__.update(kwargs)
+
+    def fake_fetch_records(*args, **kwargs):
+        calls["single"] += 1
+        return {"rows": []}
+
+    def fake_fetch_records_chunked(*args, **kwargs):
+        calls["chunked"] += 1
+        return {"rows": []}
+
+    oznak_module = types.ModuleType("oznak")
+    oznak_module.DatabaseProfile = FakeDatabaseProfile
+    oznak_module.FetchRequest = FakeFetchRequest
+    oznak_module.FetchResult = object
+    oznak_module.MappingCredentialProvider = FakeCredentialProvider
+    oznak_module.QueryFilter = FakeQueryFilter
+    oznak_module.fetch_records = fake_fetch_records
+    oznak_module.fetch_records_chunked = fake_fetch_records_chunked
+
+    fetcher_module = types.ModuleType("oznak.fetcher")
+    fetcher_module.fetch_records = fake_fetch_records
+
+    def _fake_import(module_name: str):
+        if module_name == "oznak":
+            return oznak_module
+        if module_name == "oznak.fetcher":
+            return fetcher_module
+        raise AssertionError(f"Unexpected import: {module_name}")
+
+    monkeypatch.setattr(oznak_adapter.importlib, "import_module", _fake_import)
+
+    result = oznak_adapter.fetch_oznak_records_for_source_profile(
+        types.SimpleNamespace(
+            id=12,
+            profile_name="Assembly MES",
+            source_db_alias="assembly_mes",
+            database_type="mssql",
+            host="mes.example.invalid",
+            port=1433,
+            database_name="plantdb",
+            source_object_name="events",
+            allowed_columns=("event_id", "reference"),
+            timestamp_column=None,
+            default_pagination_column="event_id",
+        ),
+        username="operator",
+        password="secret",
+        limit=0,
+        reference_filter_column="reference",
+        reference_values=("REF1", "REF2"),
+        reference_batch_size=1,
+    )
+
+    assert result.row_count == 0
+    assert calls == {"single": 0, "chunked": 0, "filters": 0}
+
+
+def test_fetch_source_profile_limit_stops_across_coerced_reference_batches(monkeypatch):
+    calls = []
+
+    class FakeDatabaseProfile:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeFetchRequest:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeCredentialProvider:
+        def __init__(self, mapping):
+            self.mapping = mapping
+
+    class FakeQueryFilter:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeResult:
+        def __init__(self, references):
+            self.data = [{"event_id": f"ROW-{reference}", "reference": reference} for reference in references]
+            self.source_results = ()
+            self.warnings = ()
+            self.errors = ()
+            self.row_count = len(self.data)
+            self.has_errors = False
+            self.partial_success = False
+
+    def fake_fetch_records_chunked(request, **kwargs):
+        references = request.filters[0].value
+        calls.append((references, request.limit))
+        return FakeResult(references)
+
+    oznak_module = types.ModuleType("oznak")
+    oznak_module.DatabaseProfile = FakeDatabaseProfile
+    oznak_module.FetchRequest = FakeFetchRequest
+    oznak_module.FetchResult = object
+    oznak_module.MappingCredentialProvider = FakeCredentialProvider
+    oznak_module.QueryFilter = FakeQueryFilter
+    oznak_module.fetch_records = lambda *args, **kwargs: FakeResult(())
+    oznak_module.fetch_records_chunked = fake_fetch_records_chunked
+
+    fetcher_module = types.ModuleType("oznak.fetcher")
+    fetcher_module.fetch_records = oznak_module.fetch_records
+
+    def _fake_import(module_name: str):
+        if module_name == "oznak":
+            return oznak_module
+        if module_name == "oznak.fetcher":
+            return fetcher_module
+        raise AssertionError(f"Unexpected import: {module_name}")
+
+    monkeypatch.setattr(oznak_adapter.importlib, "import_module", _fake_import)
+
+    result = oznak_adapter.fetch_oznak_records_for_source_profile(
+        types.SimpleNamespace(
+            id=12,
+            profile_name="Assembly MES",
+            source_db_alias="assembly_mes",
+            database_type="mssql",
+            host="mes.example.invalid",
+            port=1433,
+            database_name="plantdb",
+            source_object_name="events",
+            allowed_columns=("event_id", "reference"),
+            timestamp_column=None,
+            default_pagination_column="event_id",
+        ),
+        username="operator",
+        password="secret",
+        limit=2,
+        reference_filter_column="reference",
+        reference_values=("REF1", "REF2", "REF3"),
+        reference_batch_size=0,
+    )
+
+    assert calls == [(("REF1",), 2), (("REF2",), 1)]
+    assert result.row_count == 2
+    assert {record["reference"] for record in result.records} == {"REF1", "REF2"}
+    assert result.diagnostics["reference_batches"] == 3
+
+
+def test_fetch_source_profile_empty_references_and_no_chunking_uses_single_fetch(monkeypatch):
+    calls = {"single": [], "chunked": 0, "filters": 0}
+
+    class FakeDatabaseProfile:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeFetchRequest:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeCredentialProvider:
+        def __init__(self, mapping):
+            self.mapping = mapping
+
+    class FakeQueryFilter:
+        def __init__(self, **kwargs):
+            calls["filters"] += 1
+            self.__dict__.update(kwargs)
+
+    class FakeResult:
+        data = [{"event_id": "ROW-1", "reference": "REF1"}]
+        source_results = ()
+        warnings = ()
+        errors = ()
+        row_count = 1
+        has_errors = False
+        partial_success = False
+
+    def fake_fetch_records(request, **kwargs):
+        calls["single"].append(request.filters)
+        return FakeResult()
+
+    def fake_fetch_records_chunked(*args, **kwargs):
+        calls["chunked"] += 1
+        return FakeResult()
+
+    oznak_module = types.ModuleType("oznak")
+    oznak_module.DatabaseProfile = FakeDatabaseProfile
+    oznak_module.FetchRequest = FakeFetchRequest
+    oznak_module.FetchResult = object
+    oznak_module.MappingCredentialProvider = FakeCredentialProvider
+    oznak_module.QueryFilter = FakeQueryFilter
+    oznak_module.fetch_records = fake_fetch_records
+    oznak_module.fetch_records_chunked = fake_fetch_records_chunked
+
+    fetcher_module = types.ModuleType("oznak.fetcher")
+    fetcher_module.fetch_records = fake_fetch_records
+
+    def _fake_import(module_name: str):
+        if module_name == "oznak":
+            return oznak_module
+        if module_name == "oznak.fetcher":
+            return fetcher_module
+        raise AssertionError(f"Unexpected import: {module_name}")
+
+    monkeypatch.setattr(oznak_adapter.importlib, "import_module", _fake_import)
+
+    result = oznak_adapter.fetch_oznak_records_for_source_profile(
+        types.SimpleNamespace(
+            id=12,
+            profile_name="Assembly MES",
+            source_db_alias="assembly_mes",
+            database_type="mssql",
+            host="mes.example.invalid",
+            port=1433,
+            database_name="plantdb",
+            source_object_name="events",
+            allowed_columns=("event_id", "reference"),
+            timestamp_column=None,
+            default_pagination_column="event_id",
+        ),
+        username="operator",
+        password="secret",
+        reference_values=(),
+        chunk_size=0,
+    )
+
+    assert calls == {"single": [()], "chunked": 0, "filters": 0}
+    assert result.row_count == 1
+    assert result.diagnostics["fetch_strategy"] == "single_request"
+
+
+def test_fetch_source_profile_redacts_runtime_fetch_exceptions(monkeypatch):
+    class FakeDatabaseProfile:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeFetchRequest:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeCredentialProvider:
+        def __init__(self, mapping):
+            self.mapping = mapping
+
+    def fake_fetch_records(*args, **kwargs):
+        raise RuntimeError(
+            "mssql://operator:uri-secret@db.example.invalid failed "
+            "password=plain-secret token:token-secret {'clientSecret': 'dict-secret'}"
+        )
+
+    oznak_module = types.ModuleType("oznak")
+    oznak_module.DatabaseProfile = FakeDatabaseProfile
+    oznak_module.FetchRequest = FakeFetchRequest
+    oznak_module.FetchResult = object
+    oznak_module.MappingCredentialProvider = FakeCredentialProvider
+    oznak_module.fetch_records = fake_fetch_records
+
+    fetcher_module = types.ModuleType("oznak.fetcher")
+    fetcher_module.fetch_records = fake_fetch_records
+
+    def _fake_import(module_name: str):
+        if module_name == "oznak":
+            return oznak_module
+        if module_name == "oznak.fetcher":
+            return fetcher_module
+        raise AssertionError(f"Unexpected import: {module_name}")
+
+    monkeypatch.setattr(oznak_adapter.importlib, "import_module", _fake_import)
+
+    result = oznak_adapter.fetch_oznak_records_for_source_profile(
+        types.SimpleNamespace(
+            id=12,
+            profile_name="Assembly MES",
+            source_db_alias="assembly_mes",
+            database_type="mssql",
+            host="mes.example.invalid",
+            port=1433,
+            database_name="plantdb",
+            source_object_name="events",
+            allowed_columns=("event_id", "reference"),
+            timestamp_column=None,
+            default_pagination_column=None,
+        ),
+        username="operator",
+        password="secret",
+    )
+
+    assert result.error
+    for secret in ("uri-secret", "plain-secret", "token-secret", "dict-secret"):
+        assert secret not in result.error
+    assert result.error.count("<redacted>") >= 4

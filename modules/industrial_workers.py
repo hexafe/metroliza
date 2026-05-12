@@ -6,7 +6,11 @@ from typing import Any
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from modules.industrial_data_repository import IndustrialDataRepository, IndustrialSourceProfile
+from modules.industrial_data_repository import (
+    IndustrialDataRepository,
+    IndustrialSourceProfile,
+    redact_sensitive_text,
+)
 from modules.industrial_analytics_state import (
     ProductionAggregationState,
     ProductionChartSelection,
@@ -19,7 +23,10 @@ from modules.industrial_analytics_workflow import (
     run_production_cache_analytics,
     run_tabular_file_analytics,
 )
-from modules.industrial_export_service import export_cached_industrial_workbook
+from modules.industrial_export_service import (
+    IndustrialExportCancelled,
+    export_cached_industrial_workbook,
+)
 from modules.industrial_join_service import materialize_industrial_report_links
 from modules.industrial_workflow_state import IndustrialFilterState, IndustrialGroupingState
 from modules.oznak_adapter import (
@@ -68,6 +75,14 @@ class IndustrialExportThread(QThread):
         self.filter_state = filter_state
         self.grouping_state = grouping_state
         self.include_charts = include_charts
+        self._cancel_requested = False
+
+    def cancel(self) -> None:
+        self._cancel_requested = True
+        self.requestInterruption()
+
+    def _is_cancelled(self) -> bool:
+        return self._cancel_requested or self.isInterruptionRequested()
 
     def run(self):
         try:
@@ -78,10 +93,13 @@ class IndustrialExportThread(QThread):
                     filter_state=self.filter_state,
                     grouping_state=self.grouping_state,
                     include_charts=self.include_charts,
+                    cancel_check=self._is_cancelled,
                 )
             )
+        except IndustrialExportCancelled as exc:
+            self.cancelled.emit(str(exc))
         except Exception as exc:
-            self.error_occurred.emit(str(exc))
+            self.error_occurred.emit(redact_sensitive_text(exc))
 
 
 class IndustrialAnalyticsThread(QThread):
@@ -265,7 +283,7 @@ class IndustrialOznakSyncThread(QThread):
                 error = "Sync cancelled by user."
             elif result.error:
                 final_status = "failed"
-                error = result.error
+                error = redact_sensitive_text(result.error)
             else:
                 final_status = "succeeded"
                 error = None
@@ -302,18 +320,19 @@ class IndustrialOznakSyncThread(QThread):
                 }
             )
         except Exception as exc:
+            sanitized_error = redact_sensitive_text(exc)
             if sync_run_id is not None:
                 try:
                     repository.finish_sync_run(
                         sync_run_id=sync_run_id,
                         status="cancelled" if self._cancel_requested else "failed",
                         row_count=0,
-                        error_summary=str(exc),
+                        error_summary=sanitized_error,
                         diagnostics={"stage": "thread_error"},
                     )
                 except Exception:
                     pass
-            self.error_occurred.emit(str(exc))
+            self.error_occurred.emit(sanitized_error)
 
     def _emit_progress_from_diagnostic(self, diagnostic: Any) -> None:
         message = getattr(diagnostic, "message", None)

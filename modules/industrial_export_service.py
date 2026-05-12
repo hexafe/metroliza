@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 
 from modules.db import sqlite_connection_scope
-from modules.industrial_workflow_state import IndustrialFilterState, IndustrialGroupingState
+from modules.industrial_workflow_state import (
+    IndustrialFilterState,
+    IndustrialGroupingState,
+    require_identifier,
+)
 
+CancelCheck = Callable[[], bool]
 
 INDUSTRIAL_EXPORT_COLUMNS = (
     "source_db_alias",
@@ -26,8 +31,12 @@ INDUSTRIAL_EXPORT_COLUMNS = (
     "line",
     "operator_name",
     "process_status",
-    "raw_record_json",
 )
+INDUSTRIAL_FILTER_RECORD_COLUMNS = frozenset(INDUSTRIAL_EXPORT_COLUMNS)
+
+
+class IndustrialExportCancelled(Exception):
+    """Raised when a cached industrial export is cancelled before finalization."""
 
 
 def load_cached_industrial_dataframe(
@@ -46,6 +55,7 @@ def load_cached_industrial_dataframe(
     references = tuple(filter_state.references)
     with sqlite_connection_scope(db_file) as conn:
         if references:
+            reference_column = _resolve_filter_column(conn, filter_state.reference_column)
             conn.execute("DROP TABLE IF EXISTS temp_industrial_reference_filter")
             conn.execute(
                 "CREATE TEMP TABLE temp_industrial_reference_filter (reference TEXT PRIMARY KEY)"
@@ -54,12 +64,26 @@ def load_cached_industrial_dataframe(
                 "INSERT OR IGNORE INTO temp_industrial_reference_filter(reference) VALUES (?)",
                 [(reference,) for reference in references],
             )
+            if reference_column in INDUSTRIAL_FILTER_RECORD_COLUMNS:
+                query = (
+                    f"{base_query} "
+                    f"JOIN temp_industrial_reference_filter rf ON rf.reference = ir.{reference_column} "
+                    "ORDER BY ir.reference COLLATE NOCASE, ir.process_timestamp, ir.id"
+                )
+                return pd.read_sql_query(query, conn)
+
             query = (
                 f"{base_query} "
-                "JOIN temp_industrial_reference_filter rf ON rf.reference = ir.reference "
+                "WHERE EXISTS ("
+                "  SELECT 1"
+                "  FROM industrial_record_values rv"
+                "  JOIN temp_industrial_reference_filter rf"
+                "    ON rf.reference = COALESCE(rv.field_value_text, rv.field_value_json, '')"
+                "  WHERE rv.record_id = ir.id AND rv.field_name = ?"
+                ") "
                 "ORDER BY ir.reference COLLATE NOCASE, ir.process_timestamp, ir.id"
             )
-            return pd.read_sql_query(query, conn)
+            return pd.read_sql_query(query, conn, params=(reference_column,))
 
         query = f"{base_query} ORDER BY ir.reference COLLATE NOCASE, ir.process_timestamp, ir.id"
         return pd.read_sql_query(query, conn)
@@ -110,6 +134,7 @@ def export_cached_industrial_workbook(
     filter_state: IndustrialFilterState | None = None,
     grouping_state: IndustrialGroupingState | None = None,
     include_charts: bool = True,
+    cancel_check: CancelCheck | None = None,
 ) -> dict[str, Any]:
     """Write cached Oznak data, grouped summary, diagnostics, and basic charts."""
 
@@ -117,9 +142,15 @@ def export_cached_industrial_workbook(
     if output_path.suffix.lower() != ".xlsx":
         output_path = output_path.with_suffix(".xlsx")
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_output_path = output_path.with_name(f".{output_path.stem}.tmp{output_path.suffix}")
+    if temp_output_path.exists():
+        temp_output_path.unlink()
 
+    _raise_if_cancelled(cancel_check)
     dataframe = load_cached_industrial_dataframe(db_file, filter_state=filter_state)
+    _raise_if_cancelled(cancel_check)
     summary = build_industrial_summary(dataframe, grouping_state=grouping_state)
+    _raise_if_cancelled(cancel_check)
     diagnostics = pd.DataFrame(
         [
             {
@@ -131,12 +162,25 @@ def export_cached_industrial_workbook(
         ]
     )
 
-    with pd.ExcelWriter(output_path, engine="xlsxwriter") as writer:
-        dataframe.to_excel(writer, sheet_name="Industrial Data", index=False)
-        summary.to_excel(writer, sheet_name="Industrial Summary", index=False)
-        diagnostics.to_excel(writer, sheet_name="Diagnostics", index=False)
-        if include_charts:
-            _write_industrial_charts(writer, summary)
+    try:
+        with pd.ExcelWriter(temp_output_path, engine="xlsxwriter") as writer:
+            dataframe.to_excel(writer, sheet_name="Industrial Data", index=False)
+            _raise_if_cancelled(cancel_check)
+            summary.to_excel(writer, sheet_name="Industrial Summary", index=False)
+            _raise_if_cancelled(cancel_check)
+            diagnostics.to_excel(writer, sheet_name="Diagnostics", index=False)
+            _raise_if_cancelled(cancel_check)
+            if include_charts:
+                _write_industrial_charts(writer, summary)
+                _raise_if_cancelled(cancel_check)
+        _raise_if_cancelled(cancel_check)
+        temp_output_path.replace(output_path)
+    except IndustrialExportCancelled:
+        temp_output_path.unlink(missing_ok=True)
+        raise
+    except Exception:
+        temp_output_path.unlink(missing_ok=True)
+        raise
 
     return {
         "output_file": str(output_path),
@@ -169,3 +213,22 @@ def _write_industrial_charts(writer: pd.ExcelWriter, summary: pd.DataFrame) -> N
     chart.set_y_axis({"name": "Records"})
     chart.set_legend({"none": True})
     chart_sheet.insert_chart(2, 0, chart, {"x_scale": 1.6, "y_scale": 1.25})
+
+
+def _resolve_filter_column(conn, reference_column: str) -> str:
+    column = str(reference_column or "reference").strip()
+    require_identifier("reference column", column)
+    if column in INDUSTRIAL_FILTER_RECORD_COLUMNS:
+        return column
+    row = conn.execute(
+        "SELECT 1 FROM industrial_record_values WHERE field_name = ? LIMIT 1",
+        (column,),
+    ).fetchone()
+    if row is not None:
+        return column
+    raise ValueError(f"Unsupported industrial filter column: {column}")
+
+
+def _raise_if_cancelled(cancel_check: CancelCheck | None) -> None:
+    if cancel_check is not None and cancel_check():
+        raise IndustrialExportCancelled("Industrial export was cancelled.")
