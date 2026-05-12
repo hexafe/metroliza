@@ -57,7 +57,7 @@ specification limits, and summary-only workbook output.
 
 Opens the compact industrial data launcher. It keeps two database concepts separate:
 
-- **Metroliza report database**: the SQLite file Metroliza creates from CMM/metrology reports. This stores report metadata, measurements, local industrial cache rows, sync diagnostics, and report-to-production links.
+- **Metroliza report database**: the SQLite file Metroliza creates from CMM/metrology reports. This stores report metadata, measurements, local industrial cache rows, sync diagnostics, and report-to-production links. Use **Select DB...** in the Industrial data window when the launcher was opened before a report database was selected in the main window.
 - **Production line database**: an existing MySQL/MSSQL source that Oznak reads from. It belongs to the production line and can contain sensor/process rows for many years of assemblies.
 
 Use this when you want to connect assembly-process data from Oznak-supported production line databases to the metrology reports already saved in Metroliza.
@@ -65,7 +65,7 @@ Use this when you want to connect assembly-process data from Oznak-supported pro
 The launcher opens separate workflows:
 
 - **Production sources...** edits non-secret production line connection setup such as database type, host, database name, table/view, columns, record key, and timestamp column. This stays available even before a Metroliza report database is selected.
-- **Sync...** asks for the production database username/password for the current session, opens the reference filter, tests the production database connection, syncs rows into the selected Metroliza report database cache, and can cancel a running sync.
+- **Connect and sync...** asks for the production database username/password for the current session, opens the reference filter, tests the production database connection, syncs rows into the selected Metroliza report database cache, and can cancel a running sync.
 - **Production links...** lets you manually link a Metroliza report to a cached production row when both systems use different reference values.
 - **Export...** creates a cached industrial workbook with filter/grouping summaries and an explicit **Include plots** option.
 - **Analyze...** creates dashboards, grouped statistics, time-bucket summaries, and optional
@@ -81,7 +81,7 @@ There are two ways to configure production line databases:
 
 Metroliza stores the source setup, cache rows, sync diagnostics, and links in the selected Metroliza report database. It does not store the production database username or password in the report database or config file.
 
-Export never connects to the production line database directly. Live production database access happens only when the user explicitly runs **Test connection** or **Sync now** in the sync dialog.
+Export never connects to the production line database directly. Live production database access happens only when the user explicitly runs **Test connection** or **Sync now** in the sync dialog opened from **Connect and sync...**.
 
 **Sync now** is reference-scoped. It requires at least one reference before it fetches production-line rows, so Metroliza does not pull an entire historical source table.
 

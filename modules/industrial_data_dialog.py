@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from PyQt6.QtWidgets import (
     QDialog,
+    QFileDialog,
     QGridLayout,
     QHBoxLayout,
     QMessageBox,
@@ -75,8 +76,9 @@ class IndustrialDataDialog(QDialog):
         self.grouping_label = status_chip(self.grouping_state.summary(), "neutral")
         self.export_options_label = status_chip("Export plots: included", "neutral")
 
+        self.select_database_button = QPushButton("Select DB...")
         self.sources_button = QPushButton("Production sources...")
-        self.sync_button = QPushButton("Sync...")
+        self.sync_button = QPushButton("Connect and sync...")
         self.links_button = QPushButton("Production links...")
         self.export_button = QPushButton("Export...")
         self.analyze_button = QPushButton("Analyze...")
@@ -84,6 +86,7 @@ class IndustrialDataDialog(QDialog):
         self.refresh_links_button = QPushButton("Refresh links")
         self.close_button = QPushButton("Close")
 
+        self.select_database_button.clicked.connect(self.select_database_file)
         self.sources_button.clicked.connect(self.open_sources_dialog)
         self.sync_button.clicked.connect(self.open_sync_dialog)
         self.links_button.clicked.connect(self.open_links_dialog)
@@ -110,7 +113,8 @@ class IndustrialDataDialog(QDialog):
 
         row = 0
         grid.addWidget(section_label("Metroliza report database"), row, 0)
-        grid.addWidget(self.database_field, row, 1, 1, 2)
+        grid.addWidget(self.database_field, row, 1)
+        grid.addWidget(self.select_database_button, row, 2)
 
         row += 1
         grid.addWidget(section_label("Oznak connector"), row, 0)
@@ -167,6 +171,24 @@ class IndustrialDataDialog(QDialog):
         self.db_file = db_file
         self.refresh_status()
 
+    def select_database_file(self) -> None:
+        """Select the local Metroliza report database used for cache and links."""
+
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Metroliza report database",
+            str(self.db_file or ""),
+            "SQLite database (*.db *.sqlite *.sqlite3);;All files (*)",
+        )
+        if not filename:
+            return
+
+        self.db_file = filename
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "set_db_file"):
+            parent.set_db_file(filename)
+        self.refresh_status()
+
     def refresh_status(self) -> None:
         update_path_field(
             self.database_field,
@@ -198,7 +220,7 @@ class IndustrialDataDialog(QDialog):
             self.sources_label.setText(self._format_config_source_status())
             self._set_action_buttons_enabled(db_available=False)
             self.status_label.setText(
-                "Configure production sources now. Select a Metroliza report database only when you want to cache, link, or export synced production rows."
+                "Configure production sources now. Select a Metroliza report database here to enable connection tests, row fetch/sync, links, export, and analytics."
             )
             set_status_variant(self.status_label, "warning")
             return
@@ -363,6 +385,7 @@ class IndustrialDataDialog(QDialog):
         return "Production source config file ready"
 
     def _set_action_buttons_enabled(self, *, db_available: bool) -> None:
+        self.select_database_button.setEnabled(True)
         self.sources_button.setEnabled(True)
         self.initialize_button.setEnabled(db_available)
         self.sync_button.setEnabled(db_available)

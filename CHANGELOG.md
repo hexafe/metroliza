@@ -10,7 +10,7 @@
 - Dashboards and Excel workbooks include the selected plots, using the same chart style and histogram binning used in Export.
 - Analytics completion now links directly to the generated dashboard and workbook files.
 - Detailed diagnostics are collapsed by default, while progress messages stay visible during dashboard and workbook creation.
-- Industrial data tools remain available from the Tools menu for connecting, syncing, exporting, and analyzing production-line records.
+- Industrial data can select the report database directly before connecting, syncing, exporting, or analyzing production-line records.
 - Legacy CSV Summary remains available for older presets, specification limits, and summary-only workbooks.
 - Canceling analytics avoids leaving partial dashboard or workbook files behind.
 - Older database files open correctly in export, grouping, matching, industrial tools, and Modify Database.

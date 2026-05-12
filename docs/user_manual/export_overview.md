@@ -155,7 +155,7 @@ You can optionally check **Industrial context**.
 
 This adds cached Oznak industrial columns to the measurement export and writes industrial context/diagnostics worksheets when linked production-process records exist in the selected Metroliza report database.
 
-Before using this option, open **Tools > Industrial data...** from the main window. Configure production line sources either by editing `~/.metroliza/industrial_sources.yaml` directly or by using **Production sources...**, which reads/writes the same Oznak-style config file. Then use **Sync...** to enter references, test the production database connection, sync production rows into the selected Metroliza report database cache, and refresh links.
+Before using this option, open **Tools > Industrial data...** from the main window. Configure production line sources either by editing `~/.metroliza/industrial_sources.yaml` directly or by using **Production sources...**, which reads/writes the same Oznak-style config file. If the launcher was opened before a report database was selected, use **Select DB...** first. Then use **Connect and sync...** to enter references, test the production database connection, sync production rows into the selected Metroliza report database cache, and refresh links.
 
 If the report reference and production reference are not the same value, open **Production links...** after sync. Manual links connect one Metroliza report to one cached production row and take priority over automatic exact-reference links.
 

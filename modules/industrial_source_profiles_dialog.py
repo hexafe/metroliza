@@ -317,13 +317,24 @@ class IndustrialSourceProfilesDialog(QDialog):
         except (IndustrialSourceConfigError, ValueError) as exc:
             QMessageBox.warning(self, "Production line source", str(exc))
             return
-        self.status_label.setText(f"Saved production source: {saved_profile.profile_name}")
         self.profile_saved.emit(saved_profile)
         parent = self.parent()
         if parent is not None and hasattr(parent, "refresh_status"):
             parent.refresh_status()
         self.reload_profiles()
         self._select_profile_key(saved_profile.profile_key)
+        self.status_label.setText(self._saved_source_status(saved_profile))
+
+    def _saved_source_status(self, profile: IndustrialSourceProfile) -> str:
+        next_step = (
+            "Use Connect and sync in the Industrial data window to test the connection or fetch rows."
+            if self.db_file
+            else (
+                "Select a Metroliza report database in the Industrial data window, then use "
+                "Connect and sync to test the connection or fetch rows."
+            )
+        )
+        return f"Saved production source: {profile.profile_name}. {next_step}"
 
     def profile_from_form(self) -> IndustrialSourceProfile:
         profile_name = self.source_name_edit.text().strip()

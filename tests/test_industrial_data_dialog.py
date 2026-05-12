@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 try:
-    from PyQt6.QtWidgets import QApplication, QComboBox  # noqa: F401
+    from PyQt6.QtWidgets import QApplication, QComboBox, QWidget  # noqa: F401
 
     from modules import industrial_data_dialog
     from modules import industrial_workers
@@ -103,6 +103,8 @@ def test_source_dialog_can_configure_file_before_metroliza_database_is_selected(
     config_text = config_path.read_text(encoding="utf-8")
     assert "assembly_mes:" in config_text
     assert "password" not in config_text.lower()
+    assert "Select a Metroliza report database" in dialog.status_label.text()
+    assert "Connect and sync" in dialog.status_label.text()
     dialog.close()
 
 
@@ -260,8 +262,9 @@ def test_launcher_dialog_keeps_connection_fields_out_of_main_surface(tmp_path):
 
     assert not hasattr(dialog, "source_name_edit")
     assert not hasattr(dialog, "password_edit")
+    assert dialog.select_database_button.text() == "Select DB..."
     assert dialog.sources_button.text() == "Production sources..."
-    assert dialog.sync_button.text() == "Sync..."
+    assert dialog.sync_button.text() == "Connect and sync..."
     assert dialog.links_button.text() == "Production links..."
     assert dialog.export_button.text() == "Export..."
     assert dialog.sizeHint().height() <= 520
@@ -277,8 +280,42 @@ def test_launcher_keeps_source_configuration_available_without_database():
     assert not dialog.links_button.isEnabled()
     assert not dialog.export_button.isEnabled()
     assert not dialog.initialize_button.isEnabled()
-    assert "Configure production sources now" in dialog.status_label.text()
+    assert dialog.select_database_button.isEnabled()
+    assert "Select a Metroliza report database here" in dialog.status_label.text()
     dialog.close()
+
+
+def test_launcher_can_select_metroliza_database_and_enable_oznak_actions(monkeypatch, tmp_path):
+    _app()
+    db_path = tmp_path / "metroliza.db"
+
+    class ParentWindow(QWidget):
+        def __init__(self):
+            super().__init__()
+            self.selected_db_file = None
+
+        def set_db_file(self, db_file):
+            self.selected_db_file = db_file
+
+    parent = ParentWindow()
+    dialog = IndustrialDataDialog(parent=parent, db_file=None)
+    monkeypatch.setattr(
+        industrial_data_dialog.QFileDialog,
+        "getOpenFileName",
+        lambda *args, **kwargs: (str(db_path), "SQLite database (*.db *.sqlite *.sqlite3)"),
+    )
+
+    dialog.select_database_file()
+
+    assert parent.selected_db_file == str(db_path)
+    assert dialog.db_file == str(db_path)
+    assert dialog.sync_button.isEnabled()
+    assert dialog.initialize_button.isEnabled()
+    assert dialog.links_button.isEnabled()
+    assert dialog.export_button.isEnabled()
+    assert "Local industrial cache ready" in dialog.status_label.text()
+    dialog.close()
+    parent.close()
 
 
 def test_industrial_workflow_dialogs_fit_their_initial_heights(tmp_path):

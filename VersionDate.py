@@ -18,7 +18,7 @@ release_notes = f"""
     - Dashboards and Excel workbooks include the selected plots with the same chart style and histogram binning used in Export<br>
     - After analytics finishes, the result window links directly to the created dashboard and workbook files<br>
     - Detailed diagnostics are collapsed by default, while progress messages stay visible during dashboard and workbook creation<br>
-    - Industrial data tools remain available from the Tools menu for connecting, syncing, exporting, and analyzing production-line records<br>
+    - Industrial data can select the report database directly before connecting, syncing, exporting, or analyzing production-line records<br>
 
     <br><b>Archive:</b><br>
 
