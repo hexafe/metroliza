@@ -618,15 +618,10 @@ class CSVSummaryDialog(QDialog):
             return "No data columns selected"
 
         defaults = {'nom': 0.0, 'usl': 0.0, 'lsl': 0.0}
+        normalized_limits = normalize_column_spec_limits(selected, column_spec_limits)
         custom_count = 0
         for column in selected:
-            payload = (column_spec_limits or {}).get(column, defaults)
-            normalized = {
-                'nom': float(payload.get('nom', 0.0) or 0.0),
-                'usl': float(payload.get('usl', 0.0) or 0.0),
-                'lsl': float(payload.get('lsl', 0.0) or 0.0),
-            }
-            if normalized != defaults:
+            if normalized_limits.get(column, defaults) != defaults:
                 custom_count += 1
         if custom_count == 0:
             return f"Defaults for {len(selected)} columns"
@@ -656,11 +651,12 @@ class CSVSummaryDialog(QDialog):
     @staticmethod
     def _spec_limit_issues(column_spec_limits, selected_data_columns):
         issues = []
+        normalized_limits = normalize_column_spec_limits(selected_data_columns, column_spec_limits)
         for column in (selected_data_columns or []):
-            limits = (column_spec_limits or {}).get(column, {})
-            nom = float(limits.get('nom', 0.0) or 0.0)
-            usl = float(limits.get('usl', 0.0) or 0.0)
-            lsl = float(limits.get('lsl', 0.0) or 0.0)
+            limits = normalized_limits.get(column, {})
+            nom = limits.get('nom', 0.0)
+            usl = limits.get('usl', 0.0)
+            lsl = limits.get('lsl', 0.0)
             absolute_usl = nom + usl
             absolute_lsl = nom + lsl
             if not (absolute_lsl <= nom <= absolute_usl):
@@ -964,6 +960,7 @@ class CSVSummaryDialog(QDialog):
             self.column_spec_limits,
             self.plot_toggles if self.include_extended_plots.isChecked() else build_default_plot_toggles(self.selected_data_columns, full_report=False),
             summary_only=self.summary_only_checkbox.isChecked(),
+            include_charts=self.include_extended_plots.isChecked(),
         )
         # Connect the progress signal to the update_progress_bar slot
         self.worker_thread.progress_signal.connect(self.update_progress_bar)

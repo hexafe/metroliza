@@ -1365,8 +1365,9 @@ complexity.
 
 - Dynamic field typing: numeric inference can misclassify IDs that look numeric. Start with a
   conservative threshold and let users explicitly select metrics.
-- Large cached datasets: pandas pivoting can be memory-heavy. Add row-count diagnostics first;
-  consider chunked SQL or server-side cache summaries later.
+- Large cached datasets: pandas pivoting can be memory-heavy. Dynamic metric value reads now
+  chunk SQLite `IN (...)` queries; consider server-side cache summaries later if dataframe
+  memory use becomes the bottleneck.
 - Timestamp quality: production sources may emit mixed formats or time zones. Preserve raw
   timestamp text and report invalid parse counts.
 - Week definition: use Monday-start weeks unless user feedback requires ISO label formatting

@@ -278,6 +278,14 @@ def test_fetch_source_profile_builds_current_public_oznak_contract(monkeypatch):
     assert captured["profile"]["database"] == "plantdb"
     assert captured["profile"]["table"] == "events"
     assert captured["profile"]["pagination_column"] == "event_id"
+    assert captured["profile"]["connect_timeout_seconds"] == 10
+    assert captured["profile"]["query_timeout_seconds"] == 10
+    assert captured["profile"]["allowed_columns"] == (
+        "event_id",
+        "event_at",
+        "reference",
+        "station",
+    )
     assert captured["request"]["limit"] == 25
     assert captured["request"]["timeout_seconds"] == 10
     assert captured["request"]["filters"][0].column == "reference"
@@ -490,7 +498,7 @@ def test_fetch_source_profile_limit_zero_does_not_call_fetch(monkeypatch):
     assert calls == {"single": 0, "chunked": 0, "filters": 0}
 
 
-def test_fetch_source_profile_limit_stops_across_coerced_reference_batches(monkeypatch):
+def test_fetch_source_profile_limit_uses_single_fetch_across_reference_batches(monkeypatch):
     calls = []
 
     class FakeDatabaseProfile:
@@ -519,10 +527,13 @@ def test_fetch_source_profile_limit_stops_across_coerced_reference_batches(monke
             self.has_errors = False
             self.partial_success = False
 
-    def fake_fetch_records_chunked(request, **kwargs):
+    def fake_fetch_records(request, **kwargs):
         references = request.filters[0].value
         calls.append((references, request.limit))
         return FakeResult(references)
+
+    def fake_fetch_records_chunked(*args, **kwargs):
+        raise AssertionError("chunked fetch should not run when a limit is passed")
 
     oznak_module = types.ModuleType("oznak")
     oznak_module.DatabaseProfile = FakeDatabaseProfile
@@ -530,7 +541,7 @@ def test_fetch_source_profile_limit_stops_across_coerced_reference_batches(monke
     oznak_module.FetchResult = object
     oznak_module.MappingCredentialProvider = FakeCredentialProvider
     oznak_module.QueryFilter = FakeQueryFilter
-    oznak_module.fetch_records = lambda *args, **kwargs: FakeResult(())
+    oznak_module.fetch_records = fake_fetch_records
     oznak_module.fetch_records_chunked = fake_fetch_records_chunked
 
     fetcher_module = types.ModuleType("oznak.fetcher")
@@ -571,6 +582,73 @@ def test_fetch_source_profile_limit_stops_across_coerced_reference_batches(monke
     assert result.row_count == 2
     assert {record["reference"] for record in result.records} == {"REF1", "REF2"}
     assert result.diagnostics["reference_batches"] == 3
+    assert result.diagnostics["fetch_strategy"] == "single_request"
+
+
+def test_fetch_source_profile_marks_partial_success_as_completed_with_warnings(monkeypatch):
+    class FakeDatabaseProfile:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeFetchRequest:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeCredentialProvider:
+        def __init__(self, mapping):
+            self.mapping = mapping
+
+    class FakeResult:
+        data = [{"event_id": "ROW-1", "reference": "REF1"}]
+        source_results = ()
+        warnings = ("secondary source timed out password=secret",)
+        errors = ()
+        row_count = 1
+        has_errors = True
+        partial_success = True
+
+    oznak_module = types.ModuleType("oznak")
+    oznak_module.DatabaseProfile = FakeDatabaseProfile
+    oznak_module.FetchRequest = FakeFetchRequest
+    oznak_module.FetchResult = object
+    oznak_module.MappingCredentialProvider = FakeCredentialProvider
+    oznak_module.fetch_records = lambda *args, **kwargs: FakeResult()
+
+    fetcher_module = types.ModuleType("oznak.fetcher")
+    fetcher_module.fetch_records = oznak_module.fetch_records
+
+    def _fake_import(module_name: str):
+        if module_name == "oznak":
+            return oznak_module
+        if module_name == "oznak.fetcher":
+            return fetcher_module
+        raise AssertionError(f"Unexpected import: {module_name}")
+
+    monkeypatch.setattr(oznak_adapter.importlib, "import_module", _fake_import)
+
+    result = oznak_adapter.fetch_oznak_records_for_source_profile(
+        types.SimpleNamespace(
+            id=12,
+            profile_name="Assembly MES",
+            source_db_alias="assembly_mes",
+            database_type="mssql",
+            host="mes.example.invalid",
+            port=1433,
+            database_name="plantdb",
+            source_object_name="events",
+            allowed_columns=("event_id", "reference"),
+            timestamp_column=None,
+            default_pagination_column=None,
+        ),
+        username="operator",
+        password="secret",
+    )
+
+    assert result.error is None
+    assert result.row_count == 1
+    assert result.diagnostics["completed_with_warnings"] is True
+    assert result.diagnostics["partial_success"] is True
+    assert result.diagnostics["warnings"] == ("secondary source timed out password=<redacted>",)
 
 
 def test_fetch_source_profile_empty_references_and_no_chunking_uses_single_fetch(monkeypatch):

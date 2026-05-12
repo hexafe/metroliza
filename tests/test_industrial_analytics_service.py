@@ -20,6 +20,7 @@ from modules.industrial_analytics_state import (
     ProductionMetricSelection,
     ReferenceCohortState,
 )
+from modules.industrial_data_repository import IndustrialDataRepository
 from tests.industrial_analytics_fixtures import seed_production_analytics_cache
 
 
@@ -103,6 +104,48 @@ def test_load_frame_pivots_dynamic_metrics_and_parses_time_without_report_metada
     assert pd.api.types.is_numeric_dtype(frame["cycle_time_s"])
     assert pd.api.types.is_datetime64_any_dtype(frame["process_datetime"])
     assert int(frame["mostly_numeric_value"].isna().sum()) == 1
+
+
+def test_load_frame_chunks_large_dynamic_metric_reads(tmp_path) -> None:
+    db_path = str(tmp_path / "large_dynamic.db")
+    repository = IndustrialDataRepository(db_path)
+    profile = repository.upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="events",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+    )
+    sync_run_id = repository.create_sync_run(source_profile_id=profile.id)
+    rows = [
+        {
+            "source_primary_key": f"ROW-{index}",
+            "process_timestamp": "2026-05-11T00:00:00Z",
+            "reference": f"REF-{index}",
+            "cycle_time_s": float(index),
+            "raw_record": {"event_id": f"ROW-{index}", "cycle_time_s": float(index)},
+        }
+        for index in range(1100)
+    ]
+    repository.upsert_industrial_records_from_rows(
+        source_profile_id=profile.id,
+        source_db_alias=profile.source_db_alias,
+        rows=rows,
+        sync_run_id=sync_run_id,
+    )
+    repository.finish_sync_run(sync_run_id=sync_run_id, status="succeeded", row_count=len(rows))
+
+    result = load_production_analytics_frame(
+        db_path,
+        metric_selection=(ProductionMetricSelection("cycle_time_s"),),
+    )
+
+    assert result.row_count == 1100
+    assert "cycle_time_s" in result.dataframe.columns
+    assert int(result.dataframe["cycle_time_s"].notna().sum()) == 1100
 
 
 def test_load_frame_respects_fixed_reference_and_source_filters(tmp_path) -> None:

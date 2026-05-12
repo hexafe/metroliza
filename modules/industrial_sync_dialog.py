@@ -273,6 +273,19 @@ class IndustrialSyncDialog(QDialog):
         parent = self.parent()
         if parent is not None and hasattr(parent, "refresh_status"):
             parent.refresh_status()
+        if result.get("status") == "completed_with_warnings":
+            detail = self._result_error_detail(result)
+            if result.get("test_only"):
+                base = f"Connection test completed with warnings ({result.get('row_count', 0)} rows visible)"
+            else:
+                upsert_summary = result.get("upsert_summary") or {}
+                base = (
+                    "Sync complete with warnings: "
+                    f"{upsert_summary.get('processed', result.get('row_count', 0))} rows"
+                )
+            self.status_label.setText(f"{base}: {detail}" if detail else base)
+            set_status_variant(self.status_label, "warning")
+            return
         if result["status"] != "succeeded":
             status_text = self._format_failed_result_status(result)
             self.status_label.setText(status_text)

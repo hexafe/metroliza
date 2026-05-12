@@ -36,6 +36,22 @@ from modules.oznak_adapter import (
 )
 
 
+def _oznak_warning_detail(diagnostics: dict[str, Any]) -> str | None:
+    """Return a sanitized short warning detail from Oznak diagnostics."""
+    if not isinstance(diagnostics, dict):
+        return None
+    candidates: list[Any] = []
+    candidates.extend(diagnostics.get("errors") or ())
+    candidates.extend(diagnostics.get("warnings") or ())
+    if diagnostics.get("partial_success") or diagnostics.get("completed_with_warnings"):
+        candidates.append("Oznak completed with warnings. Check sync diagnostics for details.")
+    for candidate in candidates:
+        text = redact_sensitive_text(candidate)
+        if text:
+            return text
+    return None
+
+
 class IndustrialLinkRefreshThread(QThread):
     """Run local industrial link refresh outside the Qt main thread."""
 
@@ -278,19 +294,23 @@ class IndustrialOznakSyncThread(QThread):
                 progress_callback=self._emit_progress_from_diagnostic,
             )
 
+            warning_detail = _oznak_warning_detail(result.diagnostics)
             if self._cancel_requested:
                 final_status = "cancelled"
                 error = "Sync cancelled by user."
-            elif result.error:
+            elif result.error and not result.records:
                 final_status = "failed"
                 error = redact_sensitive_text(result.error)
+            elif warning_detail or result.error:
+                final_status = "completed_with_warnings"
+                error = warning_detail or redact_sensitive_text(result.error)
             else:
                 final_status = "succeeded"
                 error = None
 
             upsert_summary: dict[str, int] = {}
             link_summary = None
-            if not self.test_only and final_status == "succeeded":
+            if not self.test_only and final_status in {"succeeded", "completed_with_warnings"}:
                 upsert_summary = repository.upsert_industrial_records_from_rows(
                     source_profile_id=self.profile.id,
                     source_db_alias=self.profile.source_db_alias,
@@ -300,9 +320,10 @@ class IndustrialOznakSyncThread(QThread):
                 link_summary = materialize_industrial_report_links(self.db_file)
 
             if sync_run_id is not None:
+                stored_status = "succeeded" if final_status == "completed_with_warnings" else final_status
                 repository.finish_sync_run(
                     sync_run_id=sync_run_id,
-                    status=final_status,
+                    status=stored_status,
                     row_count=result.row_count,
                     error_summary=error,
                     diagnostics=result.diagnostics,

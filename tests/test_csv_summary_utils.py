@@ -255,6 +255,16 @@ class CsvSummaryUtilsTests(unittest.TestCase):
         self.assertEqual({'nom': 10.0, 'usl': 0.5, 'lsl': 0.0}, limits['LENGTH'])
         self.assertEqual({'nom': 0.0, 'usl': 0.0, 'lsl': 0.0}, limits['WIDTH'])
 
+    def test_normalize_column_spec_limits_ignores_malformed_numeric_presets(self):
+        with patch('modules.csv_summary_utils.logger.warning') as warning_mock:
+            limits = normalize_column_spec_limits(
+                ['LENGTH'],
+                {'LENGTH': {'nom': 'abc', 'usl': '0,5', 'lsl': None}},
+            )
+
+        self.assertEqual({'nom': 0.0, 'usl': 0.5, 'lsl': 0.0}, limits['LENGTH'])
+        warning_mock.assert_called_once()
+
 
     def test_migrate_csv_summary_presets_upgrades_legacy_payload(self):
         presets = {

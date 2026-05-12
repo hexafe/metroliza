@@ -301,6 +301,7 @@ def _combine_fetch_diagnostics(payloads: list[Any]) -> dict[str, Any]:
     combined_warnings: list[str] = []
     combined_errors: list[str] = []
     row_count = 0
+    has_errors = False
     partial_success = False
     for payload in payloads:
         diagnostics = _fetch_result_diagnostics(payload)
@@ -309,11 +310,12 @@ def _combine_fetch_diagnostics(payloads: list[Any]) -> dict[str, Any]:
         combined_errors.extend(diagnostics["errors"])
         if diagnostics.get("row_count") is not None:
             row_count += int(diagnostics["row_count"] or 0)
+        has_errors = has_errors or bool(diagnostics.get("has_errors"))
         partial_success = partial_success or bool(diagnostics.get("partial_success"))
     return {
         "row_count": row_count,
-        "has_errors": bool(combined_errors),
-        "partial_success": partial_success or (bool(combined_errors) and row_count > 0),
+        "has_errors": has_errors or bool(combined_errors),
+        "partial_success": partial_success or ((has_errors or bool(combined_errors)) and row_count > 0),
         "warnings": tuple(combined_warnings),
         "errors": tuple(combined_errors),
         "source_results": tuple(combined_sources),
@@ -325,6 +327,40 @@ def _batched(values: tuple[str, ...], batch_size: int) -> tuple[tuple[str, ...],
         return ((),)
     safe_batch_size = max(1, int(batch_size))
     return tuple(values[index : index + safe_batch_size] for index in range(0, len(values), safe_batch_size))
+
+
+def _construct_with_supported_kwargs(factory: Any, kwargs: dict[str, Any]) -> Any:
+    """Instantiate an Oznak contract while tolerating older keyword surfaces."""
+    try:
+        signature = inspect.signature(factory)
+    except (TypeError, ValueError):
+        return factory(**kwargs)
+
+    parameters = signature.parameters
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()):
+        return factory(**kwargs)
+
+    accepted = {
+        name: value
+        for name, value in kwargs.items()
+        if name in parameters and value is not None
+    }
+    return factory(**accepted)
+
+
+def _normalize_runtime_columns(
+    columns: tuple[str, ...],
+    *required_columns: Any,
+) -> tuple[str, ...]:
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for column in (*columns, *required_columns):
+        text = str(column or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        normalized.append(text)
+    return tuple(normalized)
 
 
 def map_oznak_rows_to_industrial_records(payload: Any, *, profile: Any) -> tuple[dict[str, Any], ...]:
@@ -425,26 +461,36 @@ def fetch_oznak_records_for_source_profile(
     port = _profile_value(profile, "port")
     database_name = str(_profile_value(profile, "database_name", "database") or "").strip()
     table_name = str(_profile_value(profile, "source_object_name", "table") or "").strip()
-    allowed_columns = tuple(_profile_value(profile, "allowed_columns") or ())
     timestamp_column = _profile_value(profile, "timestamp_column")
     pagination_column = _profile_value(profile, "default_pagination_column", "pagination_column")
+    allowed_columns = _normalize_runtime_columns(
+        tuple(_profile_value(profile, "allowed_columns") or ()),
+        timestamp_column,
+        pagination_column,
+        reference_filter_column,
+    )
 
     try:
         normalized_reference_values = tuple(
             str(value).strip() for value in (reference_values or ()) if str(value).strip()
         )
-        oznak_profile = database_profile_type(
-            alias=alias,
-            dialect=database_type,
-            host=host,
-            port=int(port) if port is not None else 0,
-            database=database_name,
-            table=table_name,
-            allowed_columns=allowed_columns,
-            timestamp_column=timestamp_column,
-            pagination_column=pagination_column,
-            display_name=_profile_value(profile, "profile_name"),
-            metadata={"metroliza_source_profile_id": _profile_value(profile, "id", "profile_id")},
+        oznak_profile = _construct_with_supported_kwargs(
+            database_profile_type,
+            {
+                "alias": alias,
+                "dialect": database_type,
+                "host": host,
+                "port": int(port) if port is not None else 0,
+                "database": database_name,
+                "table": table_name,
+                "allowed_columns": allowed_columns,
+                "timestamp_column": timestamp_column,
+                "pagination_column": pagination_column,
+                "display_name": _profile_value(profile, "profile_name"),
+                "connect_timeout_seconds": timeout_seconds,
+                "query_timeout_seconds": timeout_seconds,
+                "metadata": {"metroliza_source_profile_id": _profile_value(profile, "id", "profile_id")},
+            },
         )
         fetch_columns = allowed_columns or None
         credential_provider = credential_provider_type({alias: (username, password)})
@@ -464,6 +510,7 @@ def fetch_oznak_records_for_source_profile(
         callable(fetch_records_chunked)
         and chunk_size is not None
         and int(chunk_size) > 0
+        and remaining_limit is None
         and bool(pagination_column)
     )
 
@@ -485,13 +532,16 @@ def fetch_oznak_records_for_source_profile(
                     ),
                 )
 
-            request = fetch_request_type(
-                profiles=(oznak_profile,),
-                filters=filters,
-                columns=fetch_columns,
-                limit=batch_limit,
-                date_column=timestamp_column,
-                timeout_seconds=timeout_seconds,
+            request = _construct_with_supported_kwargs(
+                fetch_request_type,
+                {
+                    "profiles": (oznak_profile,),
+                    "filters": filters,
+                    "columns": fetch_columns,
+                    "limit": batch_limit,
+                    "date_column": timestamp_column,
+                    "timeout_seconds": timeout_seconds,
+                },
             )
             if use_chunked_fetch:
                 payload = fetch_records_chunked(
@@ -537,6 +587,10 @@ def fetch_oznak_records_for_source_profile(
     }
     diagnostics.update(_combine_fetch_diagnostics(payloads))
     errors = diagnostics.get("errors") or ()
+    warnings = diagnostics.get("warnings") or ()
+    partial_success = bool(diagnostics.get("partial_success"))
+    if partial_success or warnings:
+        diagnostics["completed_with_warnings"] = True
     error = "; ".join(str(item) for item in errors) if errors and not records else None
     return OznakAdapterFetchResult(
         status=status,

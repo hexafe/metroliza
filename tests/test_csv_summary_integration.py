@@ -226,6 +226,63 @@ class CsvSummaryIntegrationTests(unittest.TestCase):
             self.assertIn('CSV_SUMMARY', workbook_xml)
             self.assertIn('LENGTH', workbook_xml)
 
+    def test_csv_summary_quick_look_skips_all_chart_parts(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_file = Path(tmpdir) / 'quick_look.xlsx'
+            df = pd.DataFrame({'PART': ['A', 'B', 'C'], 'LENGTH': [10.0, 10.1, 10.2]})
+
+            worker = DataProcessingThread(
+                selected_indexes=['PART'],
+                selected_data_columns=['LENGTH'],
+                input_file='input.csv',
+                output_file=str(output_file),
+                data_frame=df,
+                plot_toggles=build_default_plot_toggles(['LENGTH'], full_report=False),
+                include_charts=False,
+            )
+            worker.run()
+
+            with zipfile.ZipFile(output_file, 'r') as workbook_zip:
+                workbook_xml = workbook_zip.read('xl/workbook.xml').decode('utf-8')
+                chart_files = [
+                    name for name in workbook_zip.namelist() if name.startswith('xl/charts/chart')
+                ]
+
+            self.assertIn('CSV_SUMMARY', workbook_xml)
+            self.assertIn('LENGTH', workbook_xml)
+            self.assertEqual([], chart_files)
+
+    def test_csv_summary_scatter_downsampling_uses_sampled_row_positions(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_file = Path(tmpdir) / 'sampled_scatter.xlsx'
+            row_count = 5000
+            df = pd.DataFrame(
+                {
+                    'PART': [f'P{i}' for i in range(row_count)],
+                    'LENGTH': [float(i) for i in range(row_count)],
+                }
+            )
+
+            worker = DataProcessingThread(
+                selected_indexes=['PART'],
+                selected_data_columns=['LENGTH'],
+                input_file='input.csv',
+                output_file=str(output_file),
+                data_frame=df,
+                plot_toggles=build_default_plot_toggles(['LENGTH'], full_report=False),
+                include_charts=True,
+            )
+            worker.run()
+
+            with zipfile.ZipFile(output_file, 'r') as workbook_zip:
+                chart_xml = workbook_zip.read('xl/charts/chart1.xml').decode('utf-8')
+                sheet_xml = workbook_zip.read('xl/worksheets/sheet1.xml').decode('utf-8')
+
+            self.assertIn('$U$2:$U$2501', chart_xml)
+            self.assertIn('$V$2:$V$2501', chart_xml)
+            self.assertIn('<c r="U2"><v>1</v></c>', sheet_xml)
+            self.assertIn('<c r="U3"><v>3</v></c>', sheet_xml)
+
 
 
 
@@ -272,6 +329,24 @@ class CsvSummaryIntegrationTests(unittest.TestCase):
             worker.run()
 
             self.assertFalse(output_file.exists())
+
+    def test_csv_summary_canceled_run_preserves_existing_target_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_file = Path(tmpdir) / 'existing.xlsx'
+            output_file.write_bytes(b'existing workbook bytes')
+            df = pd.DataFrame({'PART': ['A', 'B', 'C'], 'LENGTH': [10.0, 10.1, 10.2]})
+
+            worker = DataProcessingThread(
+                selected_indexes=['PART'],
+                selected_data_columns=['LENGTH'],
+                input_file='input.csv',
+                output_file=str(output_file),
+                data_frame=df,
+            )
+            worker.cancel()
+            worker.run()
+
+            self.assertEqual(b'existing workbook bytes', output_file.read_bytes())
 
     def test_csv_summary_summary_only_mode_skips_detail_sheets(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -179,8 +179,8 @@ Implemented:
 
 - Reference paste parsing now accepts comma, semicolon, whitespace, tab, and newline separated lists and de-duplicates values in input order.
 - Oznak sync now batches reference lists by default so large pasted lists do not create one unbounded `IN (...)` clause.
-- Oznak sync now prefers `fetch_records_chunked()` by default when the package exposes it and the source profile has a pagination/record-key column.
-- Normal `fetch_records()` remains a fallback when chunked fetch is unavailable or no pagination column is configured.
+- Oznak sync now prefers `fetch_records_chunked()` only for unbounded fetches when the package exposes it and the source profile has a pagination/record-key column.
+- Normal `fetch_records()` remains the path when a sync/test limit is passed, when chunked fetch is unavailable, or when no pagination column is configured.
 - Adapter diagnostics record fetch strategy, chunk size, reference batch size, reference batch count, filter column, and reference count.
 
 Validation:
@@ -627,6 +627,52 @@ Current status after fix:
 - Automatic exact-reference linking is no longer the only path.
 - User-managed links can connect different Metroliza and production references after sync.
 - Export will prefer the user-managed link because it is stored with priority `0`.
+
+### 2026-05-12 Update: CSV Summary And Oznak Sync Hardening
+
+Implemented:
+
+- Oznak sync no longer reports partial Oznak batch failures as clean success.
+  Worker/UI results now use `completed_with_warnings` when rows were fetched but
+  Oznak diagnostics contain warnings/errors; cached rows are still upserted, and
+  the sync-run row stores `succeeded` with a redacted warning summary because the
+  current SQLite status enum is `running/succeeded/failed/cancelled`.
+- Oznak bounded fetch behavior is safer:
+  - explicit sync limits and `Test connection` use normal `fetch_records()`;
+  - chunked fetch remains available for unbounded runs with a pagination column;
+  - timeout seconds are mapped into `DatabaseProfile.connect_timeout_seconds`
+    and `DatabaseProfile.query_timeout_seconds` when the installed Oznak contract
+    supports those fields;
+  - runtime fetch columns include timestamp, pagination, and reference-filter
+    columns without mutating saved source profiles.
+- CSV Summary quick-look mode now skips all chart parts instead of keeping a
+  scatter chart hidden in the workbook.
+- CSV Summary scatter downsampling now writes sampled row-position/value helper
+  columns and charts those sampled points, rather than pointing the chart at the
+  first contiguous workbook rows.
+- Legacy CSV Summary workbook creation now writes to a same-directory temporary
+  `.xlsx` file and atomically replaces the target only after success. Cancelled
+  or failed runs clean up the temp file and preserve an existing target workbook.
+- Malformed CSV Summary preset numeric values are coerced safely to defaults with
+  a warning instead of breaking dialog readiness.
+- Industrial analytics dynamic metric reads now chunk large SQLite `IN (...)`
+  queries so large cached datasets do not exceed parameter limits.
+- Industrial launcher readiness now distinguishes:
+  - no Metroliza report DB selected;
+  - cache unavailable/not initialized;
+  - cache empty;
+  - cache ready with synced production rows.
+- Added accessibility names and explicit tab order for the industrial launcher.
+
+Validation:
+
+- `python -m ruff check .`: passed.
+- `python -m compileall -q -x '^\./\.git/' .`: passed.
+- `python scripts/sync_release_metadata.py --check`: passed.
+- `python scripts/check_release_hygiene.py`: passed.
+- `git diff --check`: passed.
+- `QT_QPA_PLATFORM=offscreen python -m pytest tests/test_csv_summary_utils.py tests/test_csv_summary_integration.py tests/test_oznak_adapter.py tests/test_industrial_data_dialog.py tests/test_industrial_sync_dialog.py tests/test_industrial_analytics_service.py -q`: `92 passed`.
+- `QT_QPA_PLATFORM=offscreen python -m pytest -q`: `1413 passed, 82 skipped, 7 warnings, 60 subtests passed`.
 
 ## Verified Baselines
 

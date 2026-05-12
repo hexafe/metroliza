@@ -33,6 +33,7 @@ from modules.industrial_workflow_state import IndustrialFilterState, IndustrialG
 from modules.oznak_adapter import get_oznak_adapter_status
 from modules.ui_foundation import (
     apply_metroliza_theme,
+    configure_accessibility,
     configure_window_size,
     path_field,
     section_label,
@@ -97,6 +98,7 @@ class IndustrialDataDialog(QDialog):
         self.close_button.clicked.connect(self.reject)
 
         self._build_layout()
+        self._configure_accessibility()
         self.refresh_status()
         apply_metroliza_theme(self)
 
@@ -251,9 +253,21 @@ class IndustrialDataDialog(QDialog):
         if config_error:
             self.status_label.setText(config_error)
             set_status_variant(self.status_label, "warning")
-        else:
-            self.status_label.setText("Local industrial cache ready for the selected Metroliza report database.")
+        elif counts.records > 0:
+            self.status_label.setText(
+                "Local industrial cache ready with synced production rows."
+            )
             set_status_variant(self.status_label, "success")
+        elif profiles:
+            self.status_label.setText(
+                "Local industrial cache empty. Run a connection test or sync production rows for the selected source."
+            )
+            set_status_variant(self.status_label, "warning")
+        else:
+            self.status_label.setText(
+                "Local industrial cache empty. Create or import a production source before syncing."
+            )
+            set_status_variant(self.status_label, "warning")
 
     @staticmethod
     def _format_oznak_status() -> str:
@@ -393,6 +407,34 @@ class IndustrialDataDialog(QDialog):
         self.export_button.setEnabled(db_available)
         self.analyze_button.setEnabled(db_available)
         self.refresh_links_button.setEnabled(db_available)
+
+    def _configure_accessibility(self) -> None:
+        configure_accessibility(self.database_field, name="Selected Metroliza report database")
+        configure_accessibility(self.oznak_label, name="Oznak connector readiness")
+        configure_accessibility(self.cache_label, name="Industrial cache readiness")
+        configure_accessibility(self.sources_label, name="Production source readiness")
+        configure_accessibility(self.sync_filter_label, name="Industrial sync filter summary")
+        configure_accessibility(self.export_filter_label, name="Industrial export filter summary")
+        configure_accessibility(self.grouping_label, name="Industrial export grouping summary")
+        configure_accessibility(self.export_options_label, name="Industrial export option summary")
+        configure_accessibility(self.select_database_button, name="Select Metroliza report database")
+        configure_accessibility(self.sources_button, name="Open production sources")
+        configure_accessibility(self.sync_button, name="Open industrial sync")
+        configure_accessibility(self.links_button, name="Open production links")
+        configure_accessibility(self.export_button, name="Open industrial export")
+        configure_accessibility(self.analyze_button, name="Open industrial analytics")
+        configure_accessibility(self.initialize_button, name="Initialize industrial cache")
+        configure_accessibility(self.refresh_links_button, name="Refresh industrial links")
+        configure_accessibility(self.close_button, name="Close industrial data")
+
+        self.setTabOrder(self.select_database_button, self.sources_button)
+        self.setTabOrder(self.sources_button, self.sync_button)
+        self.setTabOrder(self.sync_button, self.export_button)
+        self.setTabOrder(self.export_button, self.analyze_button)
+        self.setTabOrder(self.analyze_button, self.initialize_button)
+        self.setTabOrder(self.initialize_button, self.refresh_links_button)
+        self.setTabOrder(self.refresh_links_button, self.links_button)
+        self.setTabOrder(self.links_button, self.close_button)
 
     def closeEvent(self, event) -> None:
         thread = self.link_refresh_thread

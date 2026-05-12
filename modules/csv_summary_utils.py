@@ -16,6 +16,19 @@ _BLANK_GROUP_VALUE = "(blank)"
 logger = logging.getLogger(__name__)
 
 
+def _coerce_float(value, default=0.0):
+    """Best-effort numeric coercion for user-editable CSV Summary presets."""
+    if value is None or value == "":
+        return float(default)
+    try:
+        if isinstance(value, str):
+            value = value.strip().replace(",", ".")
+        return float(value)
+    except (TypeError, ValueError):
+        logger.warning("Ignoring malformed CSV Summary numeric preset value: %r", value)
+        return float(default)
+
+
 def _score_dataframe(df, numeric_columns_hint=None):
     if df.empty:
         return 0, []
@@ -351,9 +364,9 @@ def normalize_column_spec_limits(data_columns, column_spec_limits):
             raw_payload = {}
 
         normalized[column] = {
-            'nom': float(raw_payload.get('nom', 0.0) or 0.0),
-            'usl': float(raw_payload.get('usl', 0.0) or 0.0),
-            'lsl': float(raw_payload.get('lsl', 0.0) or 0.0),
+            'nom': _coerce_float(raw_payload.get('nom', 0.0)),
+            'usl': _coerce_float(raw_payload.get('usl', 0.0)),
+            'lsl': _coerce_float(raw_payload.get('lsl', 0.0)),
         }
 
     return normalized

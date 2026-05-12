@@ -298,6 +298,71 @@ def test_sync_thread_records_sanitized_failed_sync_run(monkeypatch, tmp_path):
     assert status_row == ("failed", "database rejected password=<redacted>")
 
 
+def test_sync_thread_reports_partial_success_as_completed_with_warnings(monkeypatch, tmp_path):
+    db_path = str(tmp_path / "metroliza.db")
+    repository = IndustrialDataRepository(db_path)
+    profile = repository.upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="events",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+    )
+    status = OznakAdapterStatus(available=True, version="0.1.0", fetch_available=True)
+    result = OznakAdapterFetchResult(
+        status=status,
+        records=({"source_primary_key": "ROW-1", "raw_record": {"event_id": "ROW-1"}},),
+        row_count=1,
+        implemented=True,
+        diagnostics={
+            "stage": "mapped",
+            "partial_success": True,
+            "completed_with_warnings": True,
+            "warnings": ("secondary source timed out password=<redacted>",),
+        },
+    )
+    monkeypatch.setattr(industrial_workers, "get_oznak_adapter_status", lambda: status)
+    monkeypatch.setattr(industrial_workers, "create_oznak_cancellation_token", lambda: None)
+    monkeypatch.setattr(
+        industrial_workers,
+        "fetch_oznak_records_for_source_profile",
+        lambda *args, **kwargs: result,
+    )
+    monkeypatch.setattr(
+        industrial_workers,
+        "materialize_industrial_report_links",
+        lambda _db: SimpleNamespace(accepted_links=0, ambiguous_reports=0, unmatched_reports=0),
+    )
+
+    thread = IndustrialOznakSyncThread(
+        db_file=db_path,
+        profile=profile,
+        username="operator",
+        password="secret-password",
+        limit=50,
+        timeout_seconds=30,
+        reference_filter_column="reference",
+        reference_values=("REF-1",),
+        test_only=False,
+    )
+    emitted = []
+    thread.result_ready.connect(emitted.append)
+
+    thread.run()
+
+    assert emitted[0]["status"] == "completed_with_warnings"
+    assert emitted[0]["error"] == "secondary source timed out password=<redacted>"
+    assert emitted[0]["upsert_summary"]["processed"] == 1
+    with sqlite_connection_scope(db_path) as conn:
+        status_row = conn.execute(
+            "SELECT status, error_summary FROM industrial_sync_runs"
+        ).fetchone()
+    assert status_row == ("succeeded", "secondary source timed out password=<redacted>")
+
+
 def test_sync_thread_records_cancelled_run_without_upserting_rows(monkeypatch, tmp_path):
     db_path = str(tmp_path / "metroliza.db")
     repository = IndustrialDataRepository(db_path)
@@ -426,9 +491,40 @@ def test_launcher_can_select_metroliza_database_and_enable_oznak_actions(monkeyp
     assert dialog.initialize_button.isEnabled()
     assert dialog.links_button.isEnabled()
     assert dialog.export_button.isEnabled()
-    assert "Local industrial cache ready" in dialog.status_label.text()
+    assert "Local industrial cache empty" in dialog.status_label.text()
     dialog.close()
     parent.close()
+
+
+def test_launcher_reports_ready_state_when_cache_has_synced_rows(tmp_path):
+    _app()
+    db_path = str(tmp_path / "metroliza.db")
+    repository = IndustrialDataRepository(db_path)
+    profile = repository.upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="events",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+    )
+    sync_run_id = repository.create_sync_run(source_profile_id=profile.id)
+    repository.upsert_industrial_records_from_rows(
+        source_profile_id=profile.id,
+        source_db_alias=profile.source_db_alias,
+        rows=({"source_primary_key": "ROW-1", "raw_record": {"event_id": "ROW-1"}},),
+        sync_run_id=sync_run_id,
+    )
+    repository.finish_sync_run(sync_run_id=sync_run_id, status="succeeded", row_count=1)
+
+    dialog = IndustrialDataDialog(db_file=db_path)
+
+    assert "Local industrial cache ready with synced production rows" in dialog.status_label.text()
+    assert dialog.cache_label.accessibleName() == "Industrial cache readiness"
+    assert dialog.sync_button.accessibleName() == "Open industrial sync"
+    dialog.close()
 
 
 def test_industrial_workflow_dialogs_fit_their_initial_heights(tmp_path):

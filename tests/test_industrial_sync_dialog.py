@@ -138,6 +138,40 @@ def test_sync_dialog_shows_sanitized_failed_and_cancelled_status(tmp_path):
     dialog.close()
 
 
+def test_sync_dialog_shows_completed_with_warnings_status(tmp_path):
+    _app()
+    db_path = str(tmp_path / "industrial.db")
+    IndustrialDataRepository(db_path).upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="events",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+    )
+    dialog = IndustrialSyncDialog(db_file=db_path)
+
+    dialog.on_oznak_result(
+        {
+            "test_only": False,
+            "status": "completed_with_warnings",
+            "error": "secondary source timed out password=super-secret",
+            "row_count": 3,
+            "upsert_summary": {"processed": 3},
+            "diagnostics": {},
+        }
+    )
+
+    assert (
+        dialog.status_label.text()
+        == "Sync complete with warnings: 3 rows: secondary source timed out password=<redacted>"
+    )
+    assert "super-secret" not in dialog.status_label.text()
+    dialog.close()
+
+
 def test_sync_dialog_validates_session_credentials(tmp_path):
     _app()
     db_path = str(tmp_path / "industrial.db")

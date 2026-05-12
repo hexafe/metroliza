@@ -3,6 +3,7 @@
 from concurrent.futures import ProcessPoolExecutor
 import logging
 from pathlib import Path
+import tempfile
 import time
 
 import pandas as pd
@@ -23,6 +24,7 @@ from modules.stats_utils import is_one_sided_geometric_tolerance
 
 
 logger = logging.getLogger(__name__)
+_CHART_ROW_POSITION_COLUMN = "__csv_summary_row_position"
 
 class DataProcessingThread(QThread):
     """Background worker that transforms CSV data into an Excel summary file.
@@ -34,7 +36,19 @@ class DataProcessingThread(QThread):
     progress_signal = pyqtSignal(int)
     status_signal = pyqtSignal(str)
 
-    def __init__(self, selected_indexes, selected_data_columns, input_file, output_file, data_frame, csv_config=None, column_spec_limits=None, plot_toggles=None, summary_only=False):
+    def __init__(
+        self,
+        selected_indexes,
+        selected_data_columns,
+        input_file,
+        output_file,
+        data_frame,
+        csv_config=None,
+        column_spec_limits=None,
+        plot_toggles=None,
+        summary_only=False,
+        include_charts=True,
+    ):
         super().__init__()
         self.selected_indexes = selected_indexes
         self.selected_data_columns = selected_data_columns
@@ -46,6 +60,7 @@ class DataProcessingThread(QThread):
         self.column_spec_limits = column_spec_limits or {}
         self.plot_toggles = normalize_plot_toggles(selected_data_columns, plot_toggles)
         self.summary_only = bool(summary_only)
+        self.include_charts = bool(include_charts) and not self.summary_only
         self.stage_timings = {
             'transform_grouping': 0.0,
             'chart_rendering': 0.0,
@@ -80,6 +95,19 @@ class DataProcessingThread(QThread):
         if stage_name in self.stage_timings:
             self.stage_timings[stage_name] += max(0.0, float(elapsed))
 
+    def _create_atomic_writer(self):
+        output_path = Path(self.output_file)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_file = tempfile.NamedTemporaryFile(
+            prefix=f".{output_path.stem}.",
+            suffix=".tmp.xlsx",
+            dir=output_path.parent,
+            delete=False,
+        )
+        temp_path = Path(temp_file.name)
+        temp_file.close()
+        return pd.ExcelWriter(temp_path, engine='xlsxwriter'), temp_path, output_path
+
     def _apply_bottleneck_optimizations(self):
         total = sum(self.stage_timings.values())
         if total <= 0.0:
@@ -94,10 +122,12 @@ class DataProcessingThread(QThread):
     def _downsample_for_chart(self, selected_data, data_column):
         sample_limit = 1200 if self.optimization_toggles['chart_density_mode'] == 'reduced' else 4000
         row_count = len(selected_data)
+        chart_data = selected_data.copy()
+        chart_data[_CHART_ROW_POSITION_COLUMN] = range(1, row_count + 1)
         if row_count <= sample_limit:
-            return selected_data
-        stride = max(1, int(row_count / sample_limit))
-        return selected_data.iloc[::stride].copy()
+            return chart_data
+        stride = max(1, (row_count + sample_limit - 1) // sample_limit)
+        return chart_data.iloc[::stride].copy()
 
     @staticmethod
     def _format_eta(eta_seconds):
@@ -197,8 +227,21 @@ class DataProcessingThread(QThread):
 
         # Add data to the chart with the specified x and y ranges
         num_rows = len(selected_data[data_column])
-        x_range = f"={sheet_name}!${xl_col_to_name(0)}$2:${xl_col_to_name(0)}${num_rows + 1}"
-        y_range = f"={sheet_name}!${xl_col_to_name(col - 1)}$2:${xl_col_to_name(col - 1)}${num_rows + 1}"
+        if _CHART_ROW_POSITION_COLUMN in selected_data.columns:
+            helper_col = col + 18
+            worksheet.write(0, helper_col, 'Chart row')
+            worksheet.write(0, helper_col + 1, f'{data_column} chart sample')
+            for row_index, (_, row) in enumerate(selected_data.iterrows(), start=1):
+                worksheet.write(row_index, helper_col, row[_CHART_ROW_POSITION_COLUMN])
+                worksheet.write(row_index, helper_col + 1, row[data_column])
+            worksheet.set_column(helper_col, helper_col + 1, None, None, {'hidden': True})
+            x_range = [sheet_name, 1, helper_col, num_rows, helper_col]
+            y_range = [sheet_name, 1, helper_col + 1, num_rows, helper_col + 1]
+            x_axis_max = int(selected_data[_CHART_ROW_POSITION_COLUMN].max()) + 1
+        else:
+            x_range = f"={sheet_name}!${xl_col_to_name(0)}$2:${xl_col_to_name(0)}${num_rows + 1}"
+            y_range = f"={sheet_name}!${xl_col_to_name(col - 1)}$2:${xl_col_to_name(col - 1)}${num_rows + 1}"
+            x_axis_max = num_rows + 1
 
         # Add the series to the chart
         chart.add_series({
@@ -213,7 +256,7 @@ class DataProcessingThread(QThread):
             # 'name': 'Date',
             # 'date_axis': True,
             'min': 0,
-            'max': num_rows + 1,
+            'max': x_axis_max,
         })
         chart.set_y_axis({
             'name': f'{sheet_name}',
@@ -379,6 +422,9 @@ class DataProcessingThread(QThread):
         # Perform the data processing and save to the Excel file here
 
         if self.selected_indexes and self.selected_data_columns:
+            writer = None
+            temp_output_path = None
+            final_output_path = None
             try:
                 logger.info(
                     "CSV summary processing started: input='%s', output='%s', columns=%d, summary_only=%s",
@@ -387,8 +433,8 @@ class DataProcessingThread(QThread):
                     len(self.selected_data_columns),
                     self.summary_only,
                 )
-                # Create an Excel writer with the selected output file
-                writer = pd.ExcelWriter(self.output_file, engine='xlsxwriter')
+                # Write to a same-directory temporary workbook, then replace the target atomically.
+                writer, temp_output_path, final_output_path = self._create_atomic_writer()
 
                 # Calculate the total number of filtered data columns
                 total_filtered_columns = len(self.selected_data_columns)
@@ -456,20 +502,22 @@ class DataProcessingThread(QThread):
                         total_write_seconds += write_elapsed
                         self._record_stage_timing('worksheet_writes', write_elapsed)
 
-                        chart_start = time.perf_counter()
-                        chart_data = self._downsample_for_chart(selected_data, data_column)
-                        self.add_xy_chart(worksheet, data_column, col, chart_data, writer, sheet_name)
+                        chart_elapsed = 0.0
+                        if self.include_charts:
+                            chart_start = time.perf_counter()
+                            chart_data = self._downsample_for_chart(selected_data, data_column)
+                            self.add_xy_chart(worksheet, data_column, col, chart_data, writer, sheet_name)
 
-                        plot_options = self.plot_toggles.get(data_column, {'histogram': True, 'boxplot': True})
-                        if plot_options.get('histogram', True):
-                            self.add_histogram_chart(worksheet, data_column, col, chart_data, writer, sheet_name)
-                        if plot_options.get('boxplot', True) and not self.optimization_toggles['defer_non_essential_charts']:
-                            self.add_boxplot_chart(worksheet, data_column, col, chart_data, writer, sheet_name)
+                            plot_options = self.plot_toggles.get(data_column, {'histogram': True, 'boxplot': True})
+                            if plot_options.get('histogram', True):
+                                self.add_histogram_chart(worksheet, data_column, col, chart_data, writer, sheet_name)
+                            if plot_options.get('boxplot', True) and not self.optimization_toggles['defer_non_essential_charts']:
+                                self.add_boxplot_chart(worksheet, data_column, col, chart_data, writer, sheet_name)
 
-                        chart_elapsed = time.perf_counter() - chart_start
-                        total_chart_seconds += chart_elapsed
-                        self._record_stage_timing('chart_rendering', chart_elapsed)
-                        self._apply_bottleneck_optimizations()
+                            chart_elapsed = time.perf_counter() - chart_start
+                            total_chart_seconds += chart_elapsed
+                            self._record_stage_timing('chart_rendering', chart_elapsed)
+                            self._apply_bottleneck_optimizations()
                         logger.debug(
                             "CSV Summary column '%s' timings: write=%.3fs, chart=%.3fs, rows=%d, toggles=%s",
                             data_column,
@@ -524,10 +572,12 @@ class DataProcessingThread(QThread):
 
                 if self.canceled:
                     writer.close()
+                    writer = None
                     try:
-                        Path(self.output_file).unlink(missing_ok=True)
+                        if temp_output_path is not None:
+                            temp_output_path.unlink(missing_ok=True)
                     except Exception:
-                        logger.warning("Failed to remove canceled CSV summary output '%s'.", self.output_file)
+                        logger.warning("Failed to remove canceled CSV summary temp output '%s'.", temp_output_path)
                     logger.info("CSV summary processing canceled for output '%s'.", self.output_file)
                     self.status_signal.emit(build_three_line_status("Processing canceled", "No further work will be processed.", "ETA --"))
                     return
@@ -536,8 +586,11 @@ class DataProcessingThread(QThread):
 
                 # Save the Excel file
                 writer.close()
+                writer = None
+                if temp_output_path is not None and final_output_path is not None:
+                    temp_output_path.replace(final_output_path)
 
-                if not self.summary_only and total_filtered_columns > 0:
+                if self.include_charts and total_filtered_columns > 0:
                     logger.debug(
                         "CSV Summary timing totals: write=%.3fs, chart=%.3fs, columns=%d, stage_timings=%s, toggles=%s",
                         total_write_seconds,
@@ -554,6 +607,16 @@ class DataProcessingThread(QThread):
                 self.status_signal.emit(build_three_line_status("Processing complete", "Workbook generated successfully", "ETA 0:00"))
 
             except Exception:
+                if writer is not None:
+                    try:
+                        writer.close()
+                    except Exception:
+                        logger.debug("Failed to close failed CSV summary writer cleanly.", exc_info=True)
+                if temp_output_path is not None:
+                    try:
+                        temp_output_path.unlink(missing_ok=True)
+                    except Exception:
+                        logger.debug("Failed to clean failed CSV summary temp output.", exc_info=True)
                 logger.exception(
                     "CSV summary data processing failed for input '%s' and output '%s'.",
                     self.input_file,

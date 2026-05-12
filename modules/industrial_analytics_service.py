@@ -54,6 +54,8 @@ FIXED_METRIC_EXCLUDED_COLUMNS = frozenset(
     }
 )
 FIXED_METRIC_NUMERIC_TYPE_MARKERS = ("INT", "REAL", "NUM", "DEC", "DOUBLE", "FLOAT")
+_SQLITE_BATCH_PARAMETER_TARGET = 900
+_DYNAMIC_FIELD_BATCH_SIZE = 100
 
 
 @dataclass(frozen=True)
@@ -1184,21 +1186,33 @@ def _load_dynamic_values_for_records(
         return pd.DataFrame(columns=["record_id", "field_name", "field_value"])
     for field_name in field_names:
         require_identifier("dynamic field", field_name)
-    record_placeholders = ", ".join("?" for _ in record_ids)
-    field_placeholders = ", ".join("?" for _ in field_names)
-    query = f"""
-        SELECT
-            record_id,
-            field_name,
-            COALESCE(field_value_text, field_value_json) AS field_value
-        FROM industrial_record_values
-        WHERE record_id IN ({record_placeholders})
-          AND field_name IN ({field_placeholders})
-        ORDER BY record_id, field_name COLLATE NOCASE
-    """
-    params = tuple(record_ids) + tuple(field_names)
+    frames: list[pd.DataFrame] = []
     with sqlite_connection_scope(db_file) as conn:
-        return pd.read_sql_query(query, conn, params=params)
+        for field_chunk in _chunk_tuple(field_names, _DYNAMIC_FIELD_BATCH_SIZE):
+            record_batch_size = max(1, _SQLITE_BATCH_PARAMETER_TARGET - len(field_chunk))
+            for record_chunk in _chunk_tuple(record_ids, record_batch_size):
+                record_placeholders = ", ".join("?" for _ in record_chunk)
+                field_placeholders = ", ".join("?" for _ in field_chunk)
+                query = f"""
+                    SELECT
+                        record_id,
+                        field_name,
+                        COALESCE(field_value_text, field_value_json) AS field_value
+                    FROM industrial_record_values
+                    WHERE record_id IN ({record_placeholders})
+                      AND field_name IN ({field_placeholders})
+                    ORDER BY record_id, field_name COLLATE NOCASE
+                """
+                params = tuple(record_chunk) + tuple(field_chunk)
+                frames.append(pd.read_sql_query(query, conn, params=params))
+    if not frames:
+        return pd.DataFrame(columns=["record_id", "field_name", "field_value"])
+    return pd.concat(frames, ignore_index=True)
+
+
+def _chunk_tuple(values: tuple[Any, ...], size: int) -> tuple[tuple[Any, ...], ...]:
+    safe_size = max(1, int(size))
+    return tuple(values[index : index + safe_size] for index in range(0, len(values), safe_size))
 
 
 def _fixed_filter_sql(filter_state: ProductionFilterState | None) -> tuple[list[str], list[Any]]:
