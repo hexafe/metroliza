@@ -200,6 +200,108 @@ def test_tabular_analytics_dialog_auto_loads_metrics_after_file_selection(
         dialog.close()
 
 
+def test_tabular_analytics_dialog_lists_excel_sheets_after_file_selection(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _app()
+    input_file = tmp_path / "table.xlsx"
+    with pd.ExcelWriter(input_file) as writer:
+        pd.DataFrame({"Length mm": [10.0, 10.2]}).to_excel(
+            writer,
+            index=False,
+            sheet_name="FirstLine",
+        )
+        pd.DataFrame({"Width mm": [5.0, 5.2]}).to_excel(
+            writer,
+            index=False,
+            sheet_name="SecondLine",
+        )
+    monkeypatch.setattr(
+        "modules.industrial_analytics_dialog.QFileDialog.getOpenFileName",
+        lambda *_args, **_kwargs: (str(input_file), "Excel (*.xlsx)"),
+    )
+
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.select_input_file()
+
+        sheet_names = [
+            dialog.sheet_name_combo.itemText(index)
+            for index in range(dialog.sheet_name_combo.count())
+        ]
+        assert sheet_names == ["FirstLine", "SecondLine"]
+        assert dialog.sheet_name_combo.isEnabled()
+        assert dialog.metrics_list.count() == 1
+        assert dialog.metrics_list.item(0).text() == "Length Mm"
+
+        dialog.sheet_name_combo.setCurrentIndex(1)
+        assert dialog.metric_candidates == ()
+        dialog.load_metrics()
+
+        assert dialog.metrics_list.count() == 1
+        assert dialog.metrics_list.item(0).text() == "Width Mm"
+    finally:
+        dialog.close()
+
+
+def test_tabular_row_filter_is_summarized_passed_to_worker_and_used_for_grouping(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _app()
+    input_file = tmp_path / "table.csv"
+    pd.DataFrame(
+        {
+            "TraceCode": ["TC-001", "TC-002", "TC-003"],
+            "Batch": ["B1", "B2", "B1"],
+            "Length mm": [10.0, 10.2, 10.4],
+        }
+    ).to_csv(input_file, index=False)
+    calls = {}
+
+    class FakeGroupingDialog:
+        def __init__(self, parent, *, dataframe, column_mapping, grouping_dataframe):
+            calls["parent"] = parent
+            calls["rows"] = len(dataframe.index)
+            calls["tracecodes"] = tuple(dataframe["tracecode"])
+            calls["column_mapping"] = column_mapping
+            calls["grouping_dataframe"] = grouping_dataframe
+
+        def exec(self):
+            calls["executed"] = True
+            return 0
+
+    monkeypatch.setattr(
+        "modules.industrial_analytics_dialog.TabularAnalyticsGroupingDialog",
+        FakeGroupingDialog,
+    )
+
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.input_file = str(input_file)
+        dialog.load_metrics()
+        dialog.tabular_filter_columns = ("tracecode",)
+        dialog.tabular_filter_keys = (("TC-001",), ("TC-003",))
+        dialog._sync_ui_state()
+
+        assert dialog.filter_summary_label.text() == "TraceCode: 2 selected, 2 rows"
+        assert dialog.start_button.isEnabled()
+
+        thread = dialog.create_analytics_thread()
+        assert thread.tabular_filter_columns == ("tracecode",)
+        assert thread.tabular_filter_keys == (("TC-001",), ("TC-003",))
+
+        dialog.open_grouping_dialog()
+
+        assert calls["rows"] == 2
+        assert calls["tracecodes"] == ("TC-001", "TC-003")
+        assert calls["column_mapping"]["TraceCode"] == "tracecode"
+        assert calls["executed"] is True
+    finally:
+        dialog.close()
+
+
 def test_tabular_analytics_dialog_uses_manual_groups_for_aggregation_state() -> None:
     _app()
     dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
@@ -302,6 +404,32 @@ def test_metric_selection_dialog_select_all_and_clear_are_in_large_dialog() -> N
             "width_mm",
         ]
         assert dialog.summary_label.text() == "2 of 2 metrics selected"
+    finally:
+        dialog.close()
+
+
+def test_metric_selection_dialog_filters_visible_metrics_without_losing_selection() -> None:
+    _app()
+    metrics = (
+        ProductionMetricSelection("length_mm", "Length Mm"),
+        ProductionMetricSelection("width_mm", "Width Mm"),
+        ProductionMetricSelection("cycle_time_s", "Cycle Time S"),
+    )
+
+    dialog = MetricSelectionDialog(metrics=metrics, selected_fields={"length_mm", "cycle_time_s"})
+    try:
+        dialog.search_field.setText("cycle")
+
+        visible = [
+            dialog.metrics_list.item(index).text()
+            for index in range(dialog.metrics_list.count())
+            if not dialog.metrics_list.item(index).isHidden()
+        ]
+        assert visible == ["Cycle Time S"]
+        assert [metric.field_name for metric in dialog.selected_metrics()] == [
+            "length_mm",
+            "cycle_time_s",
+        ]
     finally:
         dialog.close()
 

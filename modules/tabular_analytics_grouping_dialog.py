@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QListWidget,
     QMessageBox,
     QPushButton,
@@ -20,6 +21,7 @@ from modules.help_menu import attach_help_menu_to_layout
 from modules.tabular_analytics_service import (
     TABULAR_DEFAULT_GROUP,
     build_tabular_grouping_dataframe,
+    selectable_tabular_source_columns,
 )
 from modules.ui_foundation import (
     apply_list_selection_style,
@@ -67,6 +69,16 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.selector_status_label = status_chip("No grouping columns selected", "neutral")
         layout.addWidget(section_label("Grouping columns"))
         layout.addWidget(self.selector_status_label)
+
+        self.column_search = QLineEdit()
+        self.column_search.setPlaceholderText("Search columns")
+        self.available_columns_list = QListWidget()
+        self.available_columns_list.setMaximumHeight(110)
+        apply_list_selection_style(self.available_columns_list)
+        configure_accessibility(self.column_search, name="Search CSV grouping columns")
+        configure_accessibility(self.available_columns_list, name="Available CSV grouping columns")
+        layout.addWidget(self.column_search)
+        layout.addWidget(self.available_columns_list)
 
         selector_actions = QHBoxLayout()
         selector_actions.setSpacing(8)
@@ -134,6 +146,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
         footer.addWidget(self.use_grouping_button)
         layout.addLayout(footer)
 
+        self.column_search.textChanged.connect(self._refresh_available_columns)
+        self.available_columns_list.itemDoubleClicked.connect(lambda _item: self.add_selector_column())
         self.add_column_button.clicked.connect(self.add_selector_column)
         self.remove_column_button.clicked.connect(self.remove_last_selector_column)
         self.clear_columns_button.clicked.connect(self.clear_selector_columns)
@@ -150,8 +164,10 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._refresh_all()
 
     def _source_columns(self) -> list[str]:
-        excluded = {"GROUP", "GROUP_KEY", "GROUP_COLOR"}
-        return [column for column in self.source_dataframe.columns if column not in excluded]
+        return selectable_tabular_source_columns(
+            self.source_dataframe,
+            normalized_source_columns=set(self.column_labels),
+        )
 
     def _available_columns(self) -> list[str]:
         return [column for column in self._source_columns() if column not in self.selector_columns]
@@ -162,6 +178,20 @@ class TabularAnalyticsGroupingDialog(QDialog):
 
     def _selector_columns_text(self) -> str:
         return " | ".join(self._column_label(column) for column in self.selector_columns)
+
+    def _refresh_available_columns(self) -> None:
+        search = self.column_search.text().strip().casefold()
+        self.available_columns_list.clear()
+        for column in self._available_columns():
+            label = self._column_label(column)
+            if search and search not in label.casefold() and search not in column.casefold():
+                continue
+            self.available_columns_list.addItem(label)
+            item = self.available_columns_list.item(self.available_columns_list.count() - 1)
+            item.setData(Qt.ItemDataRole.UserRole, column)
+        if self.available_columns_list.count():
+            self.available_columns_list.setCurrentRow(0)
+        self.add_column_button.setEnabled(self.available_columns_list.count() > 0)
 
     def _build_grouping_dataframe(self) -> pd.DataFrame:
         frame = build_tabular_grouping_dataframe(
@@ -217,29 +247,15 @@ class TabularAnalyticsGroupingDialog(QDialog):
         )
 
     def add_selector_column(self) -> None:
-        available = self._available_columns()
-        if not available:
+        item = self.available_columns_list.currentItem()
+        if item is None:
+            return
+        column = item.data(Qt.ItemDataRole.UserRole)
+        if not column or column in self.selector_columns:
             return
         filtered_source = self._filtered_source_for_next_level()
-        choices: dict[str, str] = {}
-        for column in available:
-            label = self._column_label(column)
-            if label in choices:
-                label = f"{label} ({column})"
-            choices[label] = column
-        column_label, accepted = QInputDialog.getItem(
-            self,
-            "Add grouping column",
-            "Column:",
-            list(choices),
-            0,
-            False,
-        )
-        column = choices.get(column_label, "")
-        if not accepted or not column:
-            return
         previous_filter_active = bool(self.selected_selector_keys)
-        self.selector_columns.append(column)
+        self.selector_columns.append(str(column))
         if previous_filter_active:
             preview_rows = build_csv_grouping_preview(filtered_source, self.selector_columns)
             self.selected_selector_keys = {tuple(row["key"]) for row in preview_rows}
@@ -410,6 +426,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._sync_status()
 
     def _refresh_all(self, preferred_group: str | None = None) -> None:
+        self._refresh_available_columns()
         self._refresh_selectors()
         self._refresh_groups(preferred_group=preferred_group)
         self._populate_group_members()

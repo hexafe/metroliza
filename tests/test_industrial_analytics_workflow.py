@@ -164,6 +164,41 @@ def test_run_tabular_file_analytics_uses_manual_population_grouping(tmp_path) ->
     assert "tabular_grouping_applied" in {diagnostic.code for diagnostic in result.diagnostics}
 
 
+def test_run_tabular_file_analytics_applies_visual_row_filter_before_outputs(tmp_path) -> None:
+    input_file = tmp_path / "filtered_table.csv"
+    dashboard_file = tmp_path / "filtered_table_analytics.html"
+    workbook_file = tmp_path / "filtered_table_analytics.xlsx"
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=4, freq="h"),
+            "TraceCode": ["TC-001", "TC-002", "TC-003", "TC-004"],
+            "Line": ["L1", "L2", "L1", "L2"],
+            "Length mm": [10.0, 10.2, 10.4, 10.6],
+        }
+    ).to_csv(input_file, index=False)
+
+    result = run_tabular_file_analytics(
+        input_file=str(input_file),
+        output_dashboard_file=str(dashboard_file),
+        output_workbook_file=str(workbook_file),
+        metric_selection=(ProductionMetricSelection("length_mm", display_label="Length mm"),),
+        tabular_filter_columns=("tracecode",),
+        tabular_filter_keys=(("TC-001",), ("TC-003",)),
+        aggregation_state=ProductionAggregationState(
+            time_bucket="none",
+            aggregation_methods=("mean",),
+            group_fields=("line",),
+        ),
+        chart_selection=ProductionChartSelection(groupstats=False),
+        separate_parameter_sheets=False,
+    )
+
+    table_data = pd.read_excel(workbook_file, sheet_name="Table Data")
+    assert result.row_count == 2
+    assert table_data["tracecode"].tolist() == ["TC-001", "TC-003"]
+    assert "tabular_filters_applied" in {diagnostic.code for diagnostic in result.diagnostics}
+
+
 def test_run_production_cache_analytics_cancel_removes_temp_outputs(tmp_path) -> None:
     db_path = str(tmp_path / "production_only.db")
     seed_production_analytics_cache(db_path)

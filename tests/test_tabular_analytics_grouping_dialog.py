@@ -39,6 +39,7 @@ def test_available_grouping_columns_include_tracecode_even_when_reference_is_dif
 
     assert "tracecode" in dialog._available_columns()
     assert "reference" not in dialog._available_columns()
+    assert "source_row_number" not in dialog._available_columns()
 
 
 def test_selected_tracecode_keys_resolve_source_rows_independent_of_reference() -> None:

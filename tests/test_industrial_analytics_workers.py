@@ -112,6 +112,8 @@ def test_industrial_analytics_thread_passes_tabular_grouping_to_workflow(
         input_file=str(tmp_path / "table.csv"),
         output_dashboard_file=str(tmp_path / "analytics.html"),
         grouping_df=grouping_df,
+        tabular_filter_columns=("tracecode",),
+        tabular_filter_keys=(("TC-001",),),
         sheet_name="Measurements",
         timestamp_column="time_stamp",
         reference_column="reference_id",
@@ -126,6 +128,8 @@ def test_industrial_analytics_thread_passes_tabular_grouping_to_workflow(
     assert results == [result]
     assert errors == []
     assert captured["grouping_df"] is grouping_df
+    assert captured["tabular_filter_columns"] == ("tracecode",)
+    assert captured["tabular_filter_keys"] == (("TC-001",),)
     assert captured["sheet_name"] == "Measurements"
     assert captured["timestamp_column"] == "time_stamp"
     assert captured["reference_column"] == "reference_id"

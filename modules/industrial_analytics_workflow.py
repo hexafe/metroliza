@@ -36,6 +36,7 @@ from modules.progress_status import build_three_line_status
 from modules.tabular_analytics_service import (
     TABULAR_GROUP_COLUMN,
     TabularAnalyticsWorkbookResult,
+    apply_tabular_row_filter,
     apply_tabular_grouping,
     export_tabular_analytics_workbook,
     load_tabular_analytics_file,
@@ -221,6 +222,8 @@ def run_tabular_file_analytics(
     sheet_name: str | int | None = None,
     timestamp_column: str | None = None,
     reference_column: str | None = None,
+    tabular_filter_columns: tuple[str, ...] | list[str] | None = None,
+    tabular_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
     grouping_df=None,
     aggregation_state: ProductionAggregationState | None = None,
     cohort_state: ReferenceCohortState | None = None,
@@ -249,7 +252,12 @@ def run_tabular_file_analytics(
         timestamp_column=timestamp_column,
         reference_column=reference_column,
     )
-    grouped = apply_tabular_grouping(loaded.dataframe, grouping_df)
+    filtered = apply_tabular_row_filter(
+        loaded.dataframe,
+        filter_columns=tabular_filter_columns,
+        selected_filter_keys=tabular_filter_keys,
+    )
+    grouped = apply_tabular_grouping(filtered.dataframe, grouping_df)
     _emit_progress(
         progress_callback,
         "Applying groups and references...",
@@ -296,6 +304,7 @@ def run_tabular_file_analytics(
     _raise_if_cancelled(cancel_check)
     diagnostics = (
         loaded.diagnostics
+        + filtered.diagnostics
         + grouped.diagnostics
         + cohorted.diagnostics
         + aggregated.diagnostics

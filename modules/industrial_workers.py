@@ -109,6 +109,8 @@ class IndustrialAnalyticsThread(QThread):
         sheet_name: str | int | None = None,
         timestamp_column: str | None = None,
         reference_column: str | None = None,
+        tabular_filter_columns: tuple[str, ...] | list[str] | None = None,
+        tabular_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
         grouping_df=None,
     ):
         super().__init__()
@@ -126,6 +128,8 @@ class IndustrialAnalyticsThread(QThread):
         self.sheet_name = sheet_name
         self.timestamp_column = timestamp_column
         self.reference_column = reference_column
+        self.tabular_filter_columns = tuple(tabular_filter_columns or ())
+        self.tabular_filter_keys = tuple(tuple(key) for key in (tabular_filter_keys or ()))
         self.grouping_df = grouping_df
         self._cancel_requested = False
 
@@ -150,6 +154,8 @@ class IndustrialAnalyticsThread(QThread):
                     sheet_name=self.sheet_name,
                     timestamp_column=self.timestamp_column,
                     reference_column=self.reference_column,
+                    tabular_filter_columns=self.tabular_filter_columns,
+                    tabular_filter_keys=self.tabular_filter_keys,
                     grouping_df=self.grouping_df,
                     aggregation_state=self.aggregation_state,
                     cohort_state=self.cohort_state,

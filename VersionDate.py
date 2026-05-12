@@ -2,15 +2,16 @@ RELEASE_VERSION = "2026.05rc1"
 VERSION_DATE = "260512"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = (
-    "Industrial analytics and CSV Summary now create grouped dashboards, filtered summaries, and Excel workbooks with export-matching plots."
+    "Industrial analytics and CSV Summary now create grouped dashboards, row-filtered summaries, and Excel workbooks with export-matching plots."
 )
 PUBLIC_VERSION_LABEL = "2026.05 RC1 (build 260512)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
     - CSV Summary now uses the shared analytics workflow for CSV and Excel files<br>
-    - CSV Summary grouping can use any CSV column, including unique trace codes, to filter rows before export<br>
-    - Metrics load automatically after choosing a CSV or Excel file, with a larger picker for selecting columns<br>
+    - CSV Summary can filter CSV or Excel rows, including unique trace codes, before grouping, charts, dashboard output, and workbook output<br>
+    - Metrics load automatically after choosing a CSV or Excel file, with a larger picker for selecting columns and search<br>
+    - Excel files now show the available sheet names after selection<br>
     - CSV and Excel analytics can use a separate Groups dialog, with unassigned rows kept in POPULATION<br>
     - Grouped charts show selected groups separately, use marker-only time-series scatter plots, and normalize histograms so small groups remain visible<br>
     - Histogram outputs include export-style statistics tables<br>

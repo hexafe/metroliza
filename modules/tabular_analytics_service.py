@@ -9,7 +9,7 @@ from typing import Any
 
 import pandas as pd
 
-from modules.csv_summary_utils import load_csv_with_fallbacks
+from modules.csv_summary_utils import filter_csv_summary_by_group_keys, load_csv_with_fallbacks
 from modules.excel_sheet_utils import unique_sheet_name
 from modules.industrial_analytics_service import (
     ProductionAggregationResult,
@@ -82,6 +82,17 @@ class TabularGroupingResult:
     custom_group_count: int = 0
 
 
+@dataclass(frozen=True)
+class TabularFilterResult:
+    """CSV/Excel analytics frame after optional visual row filtering."""
+
+    dataframe: pd.DataFrame
+    diagnostics: tuple[ProductionAnalyticsDiagnostic, ...] = ()
+    applied: bool = False
+    input_row_count: int = 0
+    output_row_count: int = 0
+
+
 def _excel_safe_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
     safe_frame = dataframe.copy()
     for column in safe_frame.columns:
@@ -89,6 +100,41 @@ def _excel_safe_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
         if isinstance(dtype, pd.DatetimeTZDtype):
             safe_frame[column] = safe_frame[column].dt.tz_convert(None)
     return safe_frame
+
+
+def list_tabular_excel_sheets(input_file: str | Path) -> tuple[str, ...]:
+    """Return workbook sheet names for a CSV/Excel analytics input file."""
+
+    path = Path(input_file)
+    if path.suffix.lower() not in {".xlsx", ".xls"}:
+        return ()
+    with pd.ExcelFile(path) as workbook:
+        return tuple(str(sheet) for sheet in workbook.sheet_names)
+
+
+def selectable_tabular_source_columns(
+    dataframe: pd.DataFrame,
+    *,
+    normalized_source_columns: set[str] | tuple[str, ...] | list[str] | None = None,
+) -> list[str]:
+    """Return user-facing CSV/Excel source columns, excluding analytics helper fields."""
+
+    if not isinstance(dataframe, pd.DataFrame):
+        return []
+    known_sources = {str(column) for column in (normalized_source_columns or ())}
+    excluded = set(_INTERNAL_COLUMNS)
+    excluded.update({"GROUP_KEY", "GROUP_COLOR"})
+    excluded_lookup = {column.casefold() for column in excluded}
+    columns: list[str] = []
+    for column in dataframe.columns:
+        column_name = str(column)
+        if known_sources:
+            if column_name in known_sources and column_name.casefold() not in excluded_lookup:
+                columns.append(column_name)
+            continue
+        if column_name.casefold() not in excluded_lookup and not column_name.startswith("__"):
+            columns.append(column_name)
+    return columns
 
 
 def load_tabular_analytics_file(
@@ -252,6 +298,54 @@ def build_tabular_grouping_dataframe(
             "FILENAME": source_labels,
         },
         columns=columns,
+    )
+
+
+def apply_tabular_row_filter(
+    dataframe: pd.DataFrame,
+    *,
+    filter_columns: tuple[str, ...] | list[str] | None = None,
+    selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+) -> TabularFilterResult:
+    """Filter normalized CSV/Excel analytics rows by selected column-value keys."""
+
+    if not isinstance(dataframe, pd.DataFrame):
+        return TabularFilterResult(dataframe=pd.DataFrame())
+
+    input_count = int(len(dataframe.index))
+    columns = tuple(column for column in (filter_columns or ()) if column in dataframe.columns)
+    selected_keys = tuple(
+        tuple(str(part) for part in key)
+        for key in (selected_filter_keys or ())
+        if isinstance(key, (list, tuple)) and len(key) == len(columns)
+    )
+    if not columns or not selected_keys:
+        return TabularFilterResult(
+            dataframe=dataframe.copy(),
+            applied=False,
+            input_row_count=input_count,
+            output_row_count=input_count,
+        )
+
+    filtered = filter_csv_summary_by_group_keys(dataframe, columns, selected_keys)
+    output_count = int(len(filtered.index))
+    diagnostic = ProductionAnalyticsDiagnostic(
+        severity="info",
+        code="tabular_filters_applied",
+        message=f"CSV/Excel row filter reduced rows from {input_count} to {output_count}.",
+        context={
+            "filter_columns": list(columns),
+            "selected_filter_count": len(selected_keys),
+            "input_row_count": input_count,
+            "output_row_count": output_count,
+        },
+    )
+    return TabularFilterResult(
+        dataframe=filtered.reset_index(drop=True),
+        diagnostics=(diagnostic,),
+        applied=True,
+        input_row_count=input_count,
+        output_row_count=output_count,
     )
 
 
@@ -581,9 +675,16 @@ def _resolve_requested_or_inferred_column(
     lowered = {str(column).casefold(): str(column) for column in columns}
     for hint in hints:
         for lowered_name, column in lowered.items():
-            if hint in lowered_name:
+            if _column_name_matches_hint(lowered_name, hint):
                 return column
     return None
+
+
+def _column_name_matches_hint(lowered_name: str, hint: str) -> bool:
+    if hint in {"id", "ref"}:
+        tokens = [token for token in re.split(r"[^a-z0-9]+", lowered_name) if token]
+        return hint in tokens
+    return hint in lowered_name
 
 
 def _resolve_requested_column(
@@ -692,10 +793,14 @@ __all__ = [
     "TABULAR_GROUP_COLUMN",
     "TabularAnalyticsLoadResult",
     "TabularAnalyticsWorkbookResult",
+    "TabularFilterResult",
     "TabularGroupingResult",
+    "apply_tabular_row_filter",
     "apply_tabular_grouping",
     "build_tabular_grouping_dataframe",
     "discover_tabular_metric_candidates",
     "export_tabular_analytics_workbook",
+    "list_tabular_excel_sheets",
     "load_tabular_analytics_file",
+    "selectable_tabular_source_columns",
 ]

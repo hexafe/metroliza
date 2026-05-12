@@ -283,7 +283,7 @@ Examples of metric availability by spec type:
 
 ## Release metadata
 
-Current release highlight (`2026.05 RC1 (build 260512)`): Industrial analytics and CSV Summary now create grouped dashboards, filtered summaries, and Excel workbooks with export-matching plots.
+Current release highlight (`2026.05 RC1 (build 260512)`): Industrial analytics and CSV Summary now create grouped dashboards, row-filtered summaries, and Excel workbooks with export-matching plots.
 
 Canonical release metadata is in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, `CURRENT_RELEASE_HIGHLIGHT`).
 

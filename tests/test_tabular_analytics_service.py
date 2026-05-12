@@ -14,6 +14,7 @@ from modules.industrial_analytics_state import (
 )
 from modules.tabular_analytics_service import (
     TABULAR_GROUP_COLUMN,
+    apply_tabular_row_filter,
     apply_tabular_grouping,
     build_tabular_grouping_dataframe,
     export_tabular_analytics_workbook,
@@ -134,6 +135,20 @@ def test_load_tabular_analytics_file_detects_excel_metrics(tmp_path) -> None:
     assert result.dataframe["process_datetime"].notna().all()
 
 
+def test_tabular_reference_inference_does_not_treat_width_as_id(tmp_path) -> None:
+    input_file = tmp_path / "width_only.xlsx"
+    pd.DataFrame({"Width mm": [5.0, 5.2]}).to_excel(
+        input_file,
+        index=False,
+        sheet_name="Measurements",
+    )
+
+    result = load_tabular_analytics_file(input_file, sheet_name="Measurements")
+
+    assert result.reference_column is None
+    assert {candidate.field_name for candidate in result.metric_candidates} == {"width_mm"}
+
+
 def test_tabular_grouping_dataframe_builds_source_row_identity_rows(tmp_path) -> None:
     input_file = tmp_path / "table.csv"
     _sample_table().to_csv(input_file, index=False)
@@ -173,6 +188,30 @@ def test_tabular_grouping_dataframe_uses_user_selector_columns_independent_of_re
         "TC-003 | C1",
     ]
     assert grouping_frame["PART_NAME"].tolist() == grouping_frame["REFERENCE"].tolist()
+
+
+def test_apply_tabular_row_filter_uses_selected_column_keys(tmp_path) -> None:
+    input_file = tmp_path / "tracecodes.csv"
+    pd.DataFrame(
+        {
+            "Reference": ["R1", "R2", "R3"],
+            "TraceCode": ["TC-001", "TC-002", "TC-003"],
+            "Length mm": [10.0, 10.2, 10.4],
+        }
+    ).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file)
+
+    filtered = apply_tabular_row_filter(
+        loaded.dataframe,
+        filter_columns=("tracecode",),
+        selected_filter_keys=(("TC-001",), ("TC-003",)),
+    )
+
+    assert filtered.applied is True
+    assert filtered.input_row_count == 3
+    assert filtered.output_row_count == 2
+    assert filtered.dataframe["tracecode"].tolist() == ["TC-001", "TC-003"]
+    assert [diagnostic.code for diagnostic in filtered.diagnostics] == ["tabular_filters_applied"]
 
 
 def test_apply_tabular_grouping_keeps_unassigned_rows_in_population(tmp_path) -> None:

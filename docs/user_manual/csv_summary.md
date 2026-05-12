@@ -28,7 +28,8 @@ The dialog is a compact analytics launcher.
 Main controls:
 
 - **Select input file (CSV or Excel)**
-- **Choose time and reference columns**
+- **Choose sheet, time, and reference columns**
+- **Filter rows from the selected file**
 - **Choose metrics**
 - **Reload metrics** when source or column choices change
 - **Edit row groups, then choose time bucket and aggregation**
@@ -49,26 +50,35 @@ After a valid file is loaded:
 - grouping columns can be selected,
 - dashboard and workbook output can be created.
 
-For Excel files, Metroliza loads the first sheet after file selection. Choose a different
+For Excel files, Metroliza lists workbook sheets after file selection. Choose a different
 sheet and click **Reload metrics** when needed. If automatic detection does not pick the
 correct time or reference column, choose those columns and click **Reload metrics** again
 before creating analytics.
 
-### 2. Review And Choose Metrics
+### 2. Filter Rows
+
+Click **Filter rows** when you want the summary to use only part of the selected file.
+The filter dialog lets you add source columns, search column names, and select matching
+value combinations such as `TraceCode | Batch`. Filtering is applied before grouping,
+aggregation, charts, groupstats, dashboard output, and workbook output.
+
+### 3. Review And Choose Metrics
 
 Metroliza detects numeric-looking columns automatically after you choose the input file.
-Click **Choose metrics** to open the larger metrics selection dialog.
+Click **Choose metrics** to open the larger metrics selection dialog. Use the search field
+when a file contains many numeric columns.
 
 Select the parameters you want to analyze. Use **Select all** or **Clear** in that dialog
 when you need to adjust many metrics at once. These selected parameters can also be written
 to separate workbook sheets.
 
-### 3. Choose Grouping And Aggregation
+### 4. Choose Grouping And Aggregation
 
 Click **Edit groups** when you want export-style groups for the CSV/Excel rows. The
 grouping dialog starts empty and leaves every row in **POPULATION** until you create a
-custom group. Click **Add column** to choose the first column used to select parts, such as
-`TraceCode`, then add another column when you want to refine the visible combinations. The
+custom group. Search for a source column, click **Add column** to choose the first column
+used to select parts, such as `TraceCode`, then add another column when you want to refine
+the visible combinations. The
 matching list shows each selected column chain as values like `TraceCode | Cavity`, so you
 can select the rows for a named group and leave the remaining rows in **POPULATION** for
 selected-vs-rest comparisons.
@@ -89,7 +99,7 @@ Available time buckets:
 Available aggregation choices include mean, median, count, sum, min, max, standard
 deviation, and percentiles.
 
-### 4. Paste References Or IDs
+### 5. Paste References Or IDs
 
 Paste references or IDs if you want those rows to stand out in charts and statistics.
 
@@ -100,7 +110,7 @@ Reference modes:
 - analyze selected values only,
 - create a selected group.
 
-### 5. Choose Outputs
+### 6. Choose Outputs
 
 Choose chart/statistics outputs:
 
@@ -120,7 +130,7 @@ populations. Histograms include export-style statistics tables. Workbook time se
 multi-group histograms use Excel charts where that keeps the data editable; single-group
 histograms, violin plots, and box plots use Metroliza/plotstats-rendered plot images.
 
-### 6. Create Analytics
+### 7. Create Analytics
 
 Metroliza creates the dashboard and optional workbook in the background.
 
