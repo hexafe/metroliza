@@ -95,7 +95,7 @@ def _install_headless_stubs() -> None:
 
     for attr in (
         'QDialog', 'QVBoxLayout', 'QPushButton', 'QFileDialog', 'QListWidget', 'QMessageBox',
-        'QHBoxLayout', 'QGridLayout', 'QProgressBar', 'QLabel', 'QLineEdit', 'QTableWidget',
+        'QHBoxLayout', 'QGridLayout', 'QProgressBar', 'QInputDialog', 'QLabel', 'QLineEdit', 'QTableWidget',
         'QTableWidgetItem', 'QHeaderView', 'QCheckBox', 'QSizePolicy', 'QWidget', 'QFrame'
     ):
         setattr(qtwidgets_stub, attr, type(attr, (), {}))

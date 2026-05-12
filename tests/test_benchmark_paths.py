@@ -1,4 +1,7 @@
-from scripts.benchmark_paths import build_benchmark_run_summary
+import importlib
+import sys
+
+from scripts.benchmark_paths import build_benchmark_run_summary, _install_headless_stubs
 
 
 def test_build_benchmark_run_summary_includes_contract_keys():
@@ -40,3 +43,20 @@ def test_build_benchmark_run_summary_includes_contract_keys():
     assert summary['chart_backend_distribution']['counts'] == {'native': 2, 'matplotlib': 6}
     assert summary['per_chart_type_timing_medians_s']['histogram'] == 0.6
     assert summary['high_header_cardinality_scenario_timing_s']['speedup_ratio'] == 2.0
+
+
+def test_headless_stubs_cover_csv_summary_dialog_import(monkeypatch):
+    for module_name in (
+        'PyQt6',
+        'PyQt6.QtCore',
+        'PyQt6.QtGui',
+        'PyQt6.QtWidgets',
+        'modules.csv_summary_dialog',
+    ):
+        monkeypatch.delitem(sys.modules, module_name, raising=False)
+
+    _install_headless_stubs()
+    dialog_module = importlib.import_module('modules.csv_summary_dialog')
+
+    assert hasattr(sys.modules['PyQt6.QtWidgets'], 'QInputDialog')
+    assert dialog_module.QInputDialog is sys.modules['PyQt6.QtWidgets'].QInputDialog
