@@ -66,9 +66,12 @@ to separate workbook sheets.
 ### 3. Choose Grouping And Aggregation
 
 Click **Edit groups** when you want export-style groups for the CSV/Excel rows. The
-grouping dialog starts with every row in **POPULATION**. Select rows or a reference, create
-a named group, and leave the remaining rows in **POPULATION** when you want selected-vs-rest
-comparisons.
+grouping dialog starts empty and leaves every row in **POPULATION** until you create a
+custom group. Click **Add column** to choose the first column used to select parts, such as
+`TraceCode`, then add another column when you want to refine the visible combinations. The
+matching list shows each selected column chain as values like `TraceCode | Cavity`, so you
+can select the rows for a named group and leave the remaining rows in **POPULATION** for
+selected-vs-rest comparisons.
 
 The selected groups are written as the `GROUP` column and are used by aggregation, charts,
 groupstats, and workbook output. Choose a time bucket and aggregation method in the main
@@ -110,9 +113,12 @@ Choose chart/statistics outputs:
 Choose an HTML dashboard path. Optionally enable workbook output and **Separate sheet per
 selected parameter**.
 
-Selected plots are included in the dashboard and in the workbook chart sheet. Time series
-and histogram outputs use native Excel charts in the workbook; violin and box outputs use
-Metroliza-rendered plot images.
+Selected plots are included in the dashboard and in the workbook chart sheet. Grouped time
+series use separate marker-only scatter traces. Multi-group histograms are normalized to
+show each group's share, so smaller selected groups remain visible next to larger
+populations. Histograms include export-style statistics tables. Workbook time series and
+multi-group histograms use Excel charts where that keeps the data editable; single-group
+histograms, violin plots, and box plots use Metroliza/plotstats-rendered plot images.
 
 ### 6. Create Analytics
 

@@ -110,6 +110,7 @@ if _USE_QT_STUBS:
         'QHeaderView',
         'QCheckBox',
         'QWidget',
+        'QInputDialog',
     ]:
         setattr(qtwidgets_stub, name, type(name, (), {}))
     qtwidgets_stub.QFileDialog = _DummyQFileDialog
@@ -117,7 +118,7 @@ if _USE_QT_STUBS:
     sys.modules['PyQt6.QtWidgets'] = qtwidgets_stub
 
 import modules.csv_summary_dialog as csv_summary_dialog_module  # noqa: E402
-from modules.csv_summary_dialog import CSVSummaryDialog, DataProcessingThread  # noqa: E402
+from modules.csv_summary_dialog import CSVSummaryDialog, CSVSummaryGroupingDialog, DataProcessingThread  # noqa: E402
 from modules.csv_summary_utils import build_default_plot_toggles  # noqa: E402
 
 if _USE_QT_STUBS:
@@ -294,6 +295,36 @@ class CsvSummaryIntegrationTests(unittest.TestCase):
             self.assertIn('CSV_SUMMARY', workbook_xml)
             self.assertNotIn('LENGTH', workbook_xml)
 
+    def test_csv_summary_export_uses_grouping_filtered_dataframe(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_file = Path(tmpdir) / 'filtered.xlsx'
+            df = pd.DataFrame(
+                {
+                    'Reference': ['R1', 'R1', 'R2', 'R2'],
+                    'TraceCode': ['T-001', 'T-002', 'T-003', 'T-004'],
+                    'LENGTH': [10.0, 10.1, 10.2, 10.3],
+                }
+            )
+            filtered = csv_summary_dialog_module.filter_csv_summary_by_group_keys(
+                df,
+                ['TraceCode'],
+                [('T-001',), ('T-004',)],
+            )
+
+            worker = DataProcessingThread(
+                selected_indexes=['Reference'],
+                selected_data_columns=['LENGTH'],
+                input_file='input.csv',
+                output_file=str(output_file),
+                data_frame=filtered,
+                summary_only=True,
+            )
+            worker.run()
+
+            overview = pd.read_excel(output_file, sheet_name='CSV_SUMMARY')
+
+            self.assertEqual(2, int(overview.loc[0, 'sample_size']))
+
 if __name__ == '__main__':
     unittest.main()
 
@@ -384,17 +415,22 @@ class CsvSummaryDialogStateTests(unittest.TestCase):
         dialog.input_file = ""
         dialog.output_file = ""
         dialog.data_frame = None
+        dialog.column_names = []
         dialog.selected_indexes = []
         dialog.selected_data_columns = []
         dialog.column_spec_limits = {}
         dialog.plot_toggles = {}
+        dialog.grouping_columns = []
+        dialog.selected_group_keys = []
         dialog.filter_button = _FakeButton()
+        dialog.grouping_button = _FakeButton()
         dialog.spec_limits_button = _FakeButton()
         dialog.output_button = _FakeButton()
         dialog.start_button = _FakeButton()
         dialog.input_path_field = _FakePathField()
         dialog.output_path_field = _FakePathField()
         dialog.columns_status_label = _FakeLabel()
+        dialog.grouping_status_label = _FakeLabel()
         dialog.spec_limits_status_label = _FakeLabel()
         dialog.plot_options_status_label = _FakeLabel()
         dialog.readiness_label = _FakeLabel()
@@ -417,7 +453,8 @@ class CsvSummaryDialogStateTests(unittest.TestCase):
         self.assertFalse(dialog.start_button.isEnabled())
         self.assertEqual("Select an input CSV to begin.", dialog.readiness_label.text())
 
-        dialog.data_frame = object()
+        dialog.data_frame = pd.DataFrame({'Reference': ['R1'], 'TraceCode': ['T-001'], 'LENGTH': [10.0]})
+        dialog.column_names = ['Reference', 'TraceCode', 'LENGTH']
         dialog.input_file = '/tmp/input.csv'
         dialog.selected_indexes = ['PART']
         dialog.selected_data_columns = ['LENGTH']
@@ -433,6 +470,38 @@ class CsvSummaryDialogStateTests(unittest.TestCase):
 
         self.assertTrue(dialog.start_button.isEnabled())
         self.assertEqual("Ready to create CSV summary workbook.", dialog.readiness_label.text())
+
+    def test_grouping_status_uses_all_source_columns_independent_of_reference_index(self):
+        dialog = self._build_dialog_state()
+        dialog.data_frame = pd.DataFrame(
+            {
+                'Reference': ['R1', 'R1', 'R2'],
+                'TraceCode': ['T-001', 'T-002', 'T-003'],
+                'LENGTH': [10.0, 10.1, 10.2],
+            }
+        )
+        dialog.column_names = ['Reference', 'TraceCode', 'LENGTH']
+        dialog.input_file = '/tmp/input.csv'
+        dialog.output_file = '/tmp/output.xlsx'
+        dialog.selected_indexes = ['Reference']
+        dialog.selected_data_columns = ['LENGTH']
+        dialog.grouping_columns = ['TraceCode']
+        dialog.selected_group_keys = [('T-001',), ('T-003',)]
+
+        dialog._sync_ui_state()
+
+        self.assertTrue(dialog.start_button.isEnabled())
+        self.assertEqual(
+            "TraceCode: 2 selected group(s), 2 rows",
+            dialog.grouping_status_label.text(),
+        )
+
+    def test_grouping_dialog_available_columns_are_not_limited_by_reference_choice(self):
+        grouping_dialog = CSVSummaryGroupingDialog.__new__(CSVSummaryGroupingDialog)
+        grouping_dialog.column_names = ['Reference', 'TraceCode', 'Shift', 'LENGTH']
+        grouping_dialog.grouping_columns = ['Reference']
+
+        self.assertEqual(['TraceCode', 'Shift', 'LENGTH'], grouping_dialog._available_columns())
 
     def test_handle_input_button_rejects_non_csv_path_without_mutating_input(self):
         dialog = CSVSummaryDialog.__new__(CSVSummaryDialog)

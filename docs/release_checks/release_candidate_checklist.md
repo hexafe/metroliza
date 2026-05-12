@@ -37,7 +37,7 @@ Complete before beginning open testing on an RC build.
 Complete before beginning open testing on an RC build.
 
 - [ ] Feature freeze timestamp is recorded in release tracker and announcement thread. *(Owner: Release manager)*
-- [ ] Active RC branch name is confirmed and documented (for example `release/2026.03-rc1`). *(Owner: Release engineer)*
+- [ ] Active RC branch name is confirmed and documented (for example `release/2026.05-rc1`; PR validation branches such as `codex/*` are not final RC branches). *(Owner: Release engineer)*
 - [x] Build identifier for open testing is published (artifact/version/hash) and linked in tracker. *(Owner: Release engineer)*
 - [ ] Mandatory CI baseline is completed and linked (build/lint/tests) before open testing starts. *(Owner: Release owner)*
 - [ ] Known-issues document link is prepared and shared with open testers. *(Owner: QA/Product)*
@@ -45,23 +45,23 @@ Complete before beginning open testing on an RC build.
 
 ## 4) RC branch creation
 
-Create the RC branch from the approved base commit (typically `main`):
+Create the RC branch from the approved base commit (currently `master` in this repository):
 
 ```bash
-git checkout main
-git pull --ff-only origin main
-git checkout -b release/2026.03-rc1
-git push -u origin release/2026.03-rc1
+git checkout master
+git pull --ff-only origin master
+git checkout -b release/2026.05-rc1
+git push -u origin release/2026.05-rc1
 ```
 
-Alternative (single command if local main is already up to date):
+Alternative (single command if local `master` is already up to date):
 
 ```bash
-git checkout -b release/2026.03-rc1 origin/main
-git push -u origin release/2026.03-rc1
+git checkout -b release/2026.05-rc1 origin/master
+git push -u origin release/2026.05-rc1
 ```
 
-- [ ] RC branch follows naming convention (for example `release/2026.03-rc1`).
+- [ ] RC branch follows naming convention (for example `release/2026.05-rc1`).
 - [ ] Branch creation commit SHA and timestamp are recorded in release notes/tracker.
 
 <a id="required-test-suites-and-sign-off-owners"></a>
@@ -101,27 +101,27 @@ python -m maturin build --manifest-path modules/native/chart_renderer/Cargo.toml
 - [ ] Pure-Python parser fallback works when native module is intentionally unavailable (`METROLIZA_CMM_PARSER_BACKEND=python`). *(Owner: QA)*
 - [ ] Basic startup flow works (open app, load a representative input, generate an export). *(Owner: QA)*
 - [ ] Produced artifacts are named/versioned as expected for RC distribution. *(Owner: Release manager)*
-- [ ] Third-party notices/license attribution are bundled or attached to release artifacts, including RapidOCR, ONNX Runtime, OpenCV, and NumPy. *(Owner: Release manager/QA)*
+- [ ] Third-party notices/license attribution are bundled or attached to release artifacts, including RapidOCR, ONNX Runtime, OpenCV, NumPy, hexafe-plotstats, and Oznak. *(Owner: Release manager/QA)*
 
 - [ ] GitHub CI checks for the RC branch/PR are green before merge/tag. *(Owner: Release owner)*
 - [ ] CMM parser perf gate evidence (`cmm-parser-perf-gate` + `cmm-parser-perf-artifacts`) is reviewed when parser/backend changes are present; triage follows [`cmm_parser_perf_guardrail.md`](./cmm_parser_perf_guardrail.md). *(Owner: Release owner/QA)*
 - [ ] Coverage visibility output from `unit-tests` is reviewed (job log summary and `unit-test-coverage` artifact `coverage.xml`) as RC confidence evidence; this is informational and not a blocking PR check. *(Owner: Release owner/QA)*
-- [ ] Any optional manual smoke evidence (if executed) is linked from release notes or tracker (`packaging-smoke`, `google-conversion-smoke`). *(Owner: Release owner)*
+- [ ] Manual release smoke evidence is linked before open-testing promotion when applicable. Google conversion smoke is release-blocking for promoted RC artifacts; skipped default CI does not satisfy that gate. *(Owner: Release owner)*
 
-### 2026.05 UI/UX release-fix evidence
+### 2026.05 RC1 integration evidence
 
-Local evidence from `codex/metroliza-ui-ux-visual-revamp` on 2026-05-09:
+Current validation branch: `codex/oznak-metroliza-integration`.
+Current RC metadata: `2026.05rc1(260512)`.
 
-- `QT_QPA_PLATFORM=offscreen python -m pytest -q` passed: 1282 passed, 27 skipped, 7 warnings, 60 subtests passed.
+- Latest recorded pushed CI baseline before the final audit hardening pass was green:
+  `https://github.com/hexafe/metroliza/actions/runs/25694807782`.
+- Coverage run passed locally: `QT_QPA_PLATFORM=offscreen python -m pytest tests -q --cov=. --cov-report=term --cov-report=xml:coverage.xml` -> 1395 passed, 66 skipped, 95 warnings, 60 subtests passed; total line coverage 81%.
 - `python -m ruff check .` passed.
 - `python -m compileall -q -x '^\./\.git/' .` passed.
 - `python scripts/sync_release_metadata.py --check` passed.
 - `python scripts/check_release_hygiene.py` passed.
 - `git diff --check` passed.
-- `python -m bandit -r modules scripts packaging metroliza.py VersionDate.py -x modules/html_dashboard_assets -f json -o /tmp/metroliza-bandit.json` completed with 0 high findings; remaining medium/low findings are release-audit triage items.
-- `python -m pip_audit -r requirements.txt -r requirements-dev.txt -r requirements-build.txt --progress-spinner off --cache-dir /tmp/metroliza-pip-audit-cache` reported no known vulnerabilities for auditable dependencies; `hexafe-groupstats` was skipped because it is installed from Git rather than PyPI.
-- Synthetic benchmark warmup passed with:
-  `PYTHONPATH=. python scripts/benchmark_paths.py --output-dir /tmp/metroliza-perf-ci-warmup --pdf-count 20 --report-count 40 --headers-per-report 6 --csv-rows 300 --csv-columns 4 --fit-group-count 12 --fit-sample-size 90 --fit-monte-carlo-samples 40 --group-preprocess-groups 10 --group-preprocess-values 1500 --cmm-bench-report-count 120 --cmm-bench-measurements-per-report 120`.
+- Manual packaging and Google conversion smoke jobs were skipped in default CI and are not open-testing promotion evidence.
 
 Optional CI/manual smoke commands (non-blocking for regular PRs/pushes):
 
@@ -167,24 +167,24 @@ Complete before declaring open testing closed and moving to final Go/No-Go decis
 - [ ] Deferred defect list is approved and captured with owner + milestone. *(Owner: Product/Release manager)*
 - [ ] Required sign-off owners have all recorded completion in the release tracker. *(Owner: Release manager)*
 
-## 8) Merge-to-main and tagging criteria
+## 8) Merge-to-master and tagging criteria
 
 Only promote RC when all gates are green and approvals are complete.
 
 - [ ] All required checks in the [Required test suites and sign-off owners](#required-test-suites-and-sign-off-owners) section are complete and linked.
 - [ ] No unresolved `must-fix` defects remain.
 - [ ] Release owner sign-off recorded.
-- [ ] RC branch merged to `main` with approved strategy.
-- [ ] Release tag created from the merge commit (example: `vYYYY.MM` (for example `v2026.03`)).
+- [ ] RC branch merged to `master` with approved strategy.
+- [ ] Release tag created from the merge commit (example: `vYYYY.MM` (for example `v2026.05`)).
 - [ ] Tag is pushed and visible on remote.
 
 Suggested commands:
 
 ```bash
-git checkout main
-git pull --ff-only origin main
-git tag -a v2026.03 <merge-commit-sha> -m "Release v2026.03"
-git push origin v2026.03
+git checkout master
+git pull --ff-only origin master
+git tag -a v2026.05 <merge-commit-sha> -m "Release v2026.05"
+git push origin v2026.05
 ```
 
 ## 9) Rollback plan and communication checklist

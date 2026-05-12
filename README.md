@@ -123,7 +123,7 @@ also confirm the generated parser diagnostics report
 4. Export Excel reports with summaries and plots.
 5. Optionally generate a Google Sheets version while always keeping a local `.xlsx` fallback.
    - OAuth uses the minimal Drive scope: `https://www.googleapis.com/auth/drive.file`.
-6. Optionally analyze CSV/Excel files or cached production-line rows with grouped dashboards and Excel workbooks.
+6. Optionally analyze CSV/Excel files or cached production-line rows with grouped dashboards and Excel workbooks, including marker-only scatter time series and histogram statistics tables.
 7. Optionally generate an HTML dashboard sidecar with offline Plotly interactions, an Auto/Light/Dark theme switch, and workbook-matching PNG snapshots.
 
 
@@ -283,11 +283,11 @@ Examples of metric availability by spec type:
 
 ## Release metadata
 
-Current release highlight (`2026.05 RC1 (build 260511)`): Industrial analytics and CSV Summary now create grouped dashboards and Excel workbooks with export-matching plots.
+Current release highlight (`2026.05 RC1 (build 260512)`): Industrial analytics and CSV Summary now create grouped dashboards, filtered summaries, and Excel workbooks with export-matching plots.
 
 Canonical release metadata is in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, `CURRENT_RELEASE_HIGHLIGHT`).
 
-### Changelog highlights (release `2026.05 RC1 (build 260511)`)
+### Changelog highlights (release `2026.05 RC1 (build 260512)`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 

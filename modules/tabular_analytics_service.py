@@ -21,10 +21,30 @@ from modules.industrial_analytics_workbook_charts import add_analytics_workbook_
 
 
 _SAFE_COLUMN_RE = re.compile(r"[^A-Za-z0-9_]+")
-_TIMESTAMP_HINTS = ("timestamp", "time", "date", "datetime", "created", "process")
+_TIMESTAMP_HINTS = (
+    "timestamp",
+    "time_stamp",
+    "datetime",
+    "date",
+    "created",
+    "created_at",
+    "process_datetime",
+    "process_timestamp",
+    "event_at",
+)
 _REFERENCE_HINTS = ("reference", "ref", "part", "part_number", "id", "serial")
 TABULAR_GROUP_COLUMN = "GROUP"
 TABULAR_DEFAULT_GROUP = "POPULATION"
+_INTERNAL_COLUMNS = frozenset(
+    {
+        "source_row_number",
+        "source_file",
+        "source_sheet",
+        "process_datetime",
+        "reference",
+        TABULAR_GROUP_COLUMN,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -99,17 +119,15 @@ def load_tabular_analytics_file(
         raise ValueError("Unsupported analytics file type. Use CSV or Excel.")
 
     frame, mapping = _normalize_columns(raw_frame)
+    frame, mapping = _reserve_internal_columns(frame, mapping)
     frame.insert(0, "source_row_number", range(1, len(frame.index) + 1))
     frame["source_file"] = path.name
     if resolved_sheet_name is not None:
         frame["source_sheet"] = str(resolved_sheet_name)
 
-    timestamp_field = _resolve_requested_or_inferred_column(
-        timestamp_column,
-        mapping,
-        frame.columns,
-        hints=_TIMESTAMP_HINTS,
-    )
+    timestamp_field = _resolve_requested_column(timestamp_column, mapping, frame.columns)
+    if timestamp_field is None:
+        timestamp_field = _infer_timestamp_column(frame, hints=_TIMESTAMP_HINTS)
     if timestamp_field is not None:
         frame["process_datetime"] = pd.to_datetime(frame[timestamp_field], errors="coerce", utc=True)
         bad_count = int(frame["process_datetime"].isna().sum())
@@ -180,7 +198,11 @@ def load_tabular_analytics_file(
     )
 
 
-def build_tabular_grouping_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
+def build_tabular_grouping_dataframe(
+    dataframe: pd.DataFrame,
+    *,
+    selector_columns: tuple[str, ...] | list[str] | None = None,
+) -> pd.DataFrame:
     """Build DataGrouping-compatible rows from a normalized CSV/Excel analytics frame."""
 
     columns = ["REPORT_ID", "REFERENCE", "DATE", "SAMPLE_NUMBER", "PART_NAME", "FILENAME"]
@@ -198,16 +220,35 @@ def build_tabular_grouping_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
         " | ".join(part for part in (filename, f"Sheet: {sheet}" if sheet else "") if part)
         for filename, sheet in zip(filenames, sheet_names, strict=False)
     ]
+    selectors = [
+        column
+        for column in (selector_columns or ())
+        if column in frame.columns
+    ]
+    if selectors:
+        selector_labels = [
+            " | ".join(
+                _display_text(row.get(column), fallback="")
+                for column in selectors
+            ).strip()
+            for _index, row in frame[selectors].iterrows()
+        ]
+        selector_labels = [
+            label if label else f"Row {row_number}"
+            for label, row_number in zip(selector_labels, row_numbers, strict=False)
+        ]
+    else:
+        selector_labels = [
+            reference if reference else f"Row {row_number}"
+            for reference, row_number in zip(references, row_numbers, strict=False)
+        ]
     return pd.DataFrame(
         {
             "REPORT_ID": row_numbers,
-            "REFERENCE": [
-                reference if reference else f"Row {row_number}"
-                for reference, row_number in zip(references, row_numbers, strict=False)
-            ],
+            "REFERENCE": selector_labels,
             "DATE": dates,
             "SAMPLE_NUMBER": [str(row_number) for row_number in row_numbers],
-            "PART_NAME": references,
+            "PART_NAME": selector_labels,
             "FILENAME": source_labels,
         },
         columns=columns,
@@ -358,6 +399,7 @@ def export_tabular_analytics_workbook(
     diagnostics: tuple[ProductionAnalyticsDiagnostic, ...] = (),
     separate_parameter_sheets: bool = True,
     chart_selection: ProductionChartSelection | None = None,
+    group_fields: tuple[str, ...] = (),
 ) -> TabularAnalyticsWorkbookResult:
     """Write workbook output for CSV/Excel analytics, optionally one sheet per metric."""
 
@@ -400,6 +442,7 @@ def export_tabular_analytics_workbook(
             data_sheet_name=table_sheet,
             used_names=used_names,
             sheet_names=sheet_names,
+            group_fields=group_fields,
         )
 
         diagnostics_sheet = unique_sheet_name("Diagnostics", used_names)
@@ -445,6 +488,38 @@ def _normalize_columns(dataframe: pd.DataFrame) -> tuple[pd.DataFrame, dict[str,
     return dataframe.rename(columns=renamed).copy(), mapping
 
 
+def _reserve_internal_columns(
+    dataframe: pd.DataFrame,
+    mapping: dict[str, str],
+) -> tuple[pd.DataFrame, dict[str, str]]:
+    """Move source columns away from internal analytics column names."""
+
+    renamed: dict[str, str] = {}
+    used = {str(column).casefold() for column in dataframe.columns}
+    internal_names = {name.casefold() for name in _INTERNAL_COLUMNS}
+    for column in dataframe.columns:
+        column_name = str(column)
+        if column_name.casefold() not in internal_names:
+            continue
+        base = f"input_{column_name}"
+        candidate = base
+        suffix = 1
+        while candidate.casefold() in used:
+            suffix += 1
+            candidate = f"{base}_{suffix}"
+        used.add(candidate.casefold())
+        renamed[column_name] = candidate
+
+    if not renamed:
+        return dataframe, mapping
+
+    updated_mapping = {
+        original: renamed.get(normalized, normalized)
+        for original, normalized in mapping.items()
+    }
+    return dataframe.rename(columns=renamed).copy(), updated_mapping
+
+
 def _source_row_numbers(dataframe: pd.DataFrame) -> list[int]:
     if "source_row_number" not in dataframe.columns:
         return list(range(1, len(dataframe.index) + 1))
@@ -460,6 +535,13 @@ def _display_series(series: pd.Series | None, *, fallback: str, row_count: int) 
         text if text else fallback
         for text in series.fillna("").astype(str).map(lambda value: value.strip()).tolist()
     ]
+
+
+def _display_text(value, *, fallback: str) -> str:
+    if pd.isna(value):
+        return fallback
+    text = str(value).strip()
+    return text if text else fallback
 
 
 def _date_display_series(series: pd.Series | None, row_count: int) -> list[str]:
@@ -493,6 +575,22 @@ def _resolve_requested_or_inferred_column(
     *,
     hints: tuple[str, ...],
 ) -> str | None:
+    requested_column = _resolve_requested_column(requested, mapping, columns)
+    if requested_column is not None:
+        return requested_column
+    lowered = {str(column).casefold(): str(column) for column in columns}
+    for hint in hints:
+        for lowered_name, column in lowered.items():
+            if hint in lowered_name:
+                return column
+    return None
+
+
+def _resolve_requested_column(
+    requested: str | None,
+    mapping: dict[str, str],
+    columns,
+) -> str | None:
     if requested:
         requested_text = str(requested).strip()
         if requested_text in columns:
@@ -502,12 +600,28 @@ def _resolve_requested_or_inferred_column(
         safe = _safe_column_name(requested_text, fallback="column")
         if safe in columns:
             return safe
-    lowered = {str(column).casefold(): str(column) for column in columns}
+    return None
+
+
+def _infer_timestamp_column(dataframe: pd.DataFrame, *, hints: tuple[str, ...]) -> str | None:
+    lowered = {str(column).casefold(): str(column) for column in dataframe.columns}
     for hint in hints:
         for lowered_name, column in lowered.items():
-            if hint in lowered_name:
+            if hint in lowered_name and _looks_like_timestamp_column(dataframe[column]):
                 return column
     return None
+
+
+def _looks_like_timestamp_column(series: pd.Series) -> bool:
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return True
+    values = series.dropna()
+    if values.empty or pd.api.types.is_numeric_dtype(values):
+        return False
+    parsed = pd.to_datetime(values, errors="coerce", utc=True)
+    valid_count = int(parsed.notna().sum())
+    required_count = min(2, len(values.index))
+    return valid_count >= required_count and (valid_count / len(values.index)) >= 0.8
 
 
 def _display_label_from_column(column_name: str) -> str:

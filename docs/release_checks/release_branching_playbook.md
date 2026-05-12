@@ -9,19 +9,19 @@ For canonical policy (branch naming, merge rules, and tagging rules), always fol
 
 ## TL;DR flow
 
-1. Create `release/YYYY.MM-rc1` from `main` to start the release cycle.
+1. Create `release/YYYY.MM-rc1` from `master` to start the release cycle.
 2. Build each planned change on its own `feature/*` branch.
 3. Merge only release-approved features into the active release branch.
 4. Freeze feature scope, then build EXE from the release branch and deploy internally.
 5. During testing, keep working only on release fixes/improvements inside the release branch (`rc2`, `rc3`, ...).
-6. After test deployment is green and sign-off is complete, merge release into `main` and tag final release.
+6. After test deployment is green and sign-off is complete, merge release into `master` and tag final release.
 
 ---
 
 ## Branch roles
 
 - `feature/<name>`: one isolated feature/fix.
-- `main`: stable line; updated only by completed releases/hotfixes.
+- `master`: stable line; updated only by completed releases/hotfixes.
 - `release/YYYY.MM-rcN`: active release integration + stabilization branch used for packaging and internal testing.
 - `hotfix/<name>`: urgent production patch after a release.
 
@@ -31,11 +31,11 @@ Do **not** rename a feature branch into a release branch.
 
 Instead:
 - Keep feature branches short-lived.
-- Cut the release branch first from `main`.
+- Cut the release branch first from `master`.
 - Merge selected/approved features into that release branch only.
-- Keep `main` untouched until release sign-off.
+- Keep `master` untouched until release sign-off.
 
-This keeps `main` maximally stable during the full RC cycle.
+This keeps `master` maximally stable during the full RC cycle.
 
 ---
 
@@ -49,17 +49,17 @@ Assume you finished:
 ### 1) Cut release branch first
 
 ```bash
-git checkout main
-git pull --ff-only origin main
-git checkout -b release/2026.03-rc1
+git checkout master
+git pull --ff-only origin master
+git checkout -b release/2026.05-rc1
 ```
 
-This branch is now the release integration target; `main` stays stable.
+This branch is now the release integration target; `master` stays stable.
 
 ### 2) Merge release-approved features into release branch
 
 ```bash
-git checkout release/2026.03-rc1
+git checkout release/2026.05-rc1
 git merge --no-ff feature/csv-presets-improvement
 git merge --no-ff feature/google-export-warning-copy
 git merge --no-ff feature/export-speed-tuning
@@ -69,7 +69,7 @@ Run baseline checks and commit release-doc updates on the release branch.
 
 ### 3) Freeze scope
 
-On `release/2026.03-rc1`, allow only:
+On `release/2026.05-rc1`, allow only:
 - bug fixes,
 - release metadata/docs/checklist updates,
 - packaging fixes.
@@ -85,10 +85,10 @@ Use the packaging/checklist flow in `release_candidate_checklist.md`.
 Fix directly on RC:
 
 ```bash
-git checkout release/2026.03-rc1
+git checkout release/2026.05-rc1
 # apply fix
 git commit -m "Fix: <issue>"
-git tag -a v2026.03-rc2 -m "Release candidate v2026.03-rc2"
+git tag -a v2026.05-rc2 -m "Release candidate v2026.05-rc2"
 ```
 
 Deploy rc2 and repeat until stable.
@@ -96,9 +96,9 @@ Deploy rc2 and repeat until stable.
 ### 6) Finalize release
 
 ```bash
-git checkout main
-git merge --no-ff release/2026.03-rc1
-git tag v2026.03
+git checkout master
+git merge --no-ff release/2026.05-rc1
+git tag v2026.05
 ```
 
 Then close/delete RC branch.
@@ -118,9 +118,9 @@ This protects stability by treating any late feature as a new release-scope deci
 
 ## Suggested naming convention
 
-- RC branch: `release/YYYY.MM-rcN` (example: `release/2026.03-rc1`)
-- RC tag: `vYYYY.MM-rcN` (example: `v2026.03-rc2`)
-- Final tag: `vYYYY.MM` (example: `v2026.03`)
+- RC branch: `release/YYYY.MM-rcN` (example: `release/2026.05-rc1`)
+- RC tag: `vYYYY.MM-rcN` (example: `v2026.05-rc2`)
+- Final tag: `vYYYY.MM` (example: `v2026.05`)
 
 Use the monthly release format consistently for RC branches and tags.
 

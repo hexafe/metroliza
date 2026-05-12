@@ -1,9 +1,12 @@
 # Changelog (for end users)
 
-## 2026.05 RC1 (build 260511) — current version
+## 2026.05 RC1 (build 260512) — current version
 - CSV Summary now uses the shared analytics workflow for CSV and Excel files.
+- CSV Summary grouping can now use any CSV column, including unique trace codes, to filter the rows included in a summary workbook.
 - Metrics load automatically after choosing a CSV or Excel file, and the larger metrics picker makes longer column lists easier to manage.
 - CSV and Excel analytics can use a separate Groups dialog. Rows that are not assigned to a custom group stay in `POPULATION`, which supports selected-vs-rest comparisons.
+- Grouped charts show selected groups separately, time-series charts use marker-only scatter plots, and multi-group histograms use normalized shares so small groups remain visible.
+- Histogram outputs include export-style statistics tables.
 - Dashboards and Excel workbooks include the selected plots, using the same chart style and histogram binning used in Export.
 - Analytics completion now links directly to the generated dashboard and workbook files.
 - Detailed diagnostics are collapsed by default, while progress messages stay visible during dashboard and workbook creation.

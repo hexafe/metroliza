@@ -4,13 +4,14 @@ from pathlib import Path
 import logging
 import re
 
-from PyQt6.QtCore import pyqtSlot
+from PyQt6.QtCore import Qt, pyqtSlot
 from PyQt6.QtWidgets import (
     QCheckBox,
     QDialog,
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QListWidget,
     QMessageBox,
@@ -21,9 +22,11 @@ from PyQt6.QtWidgets import (
 )
 
 from modules.csv_summary_utils import (
+    build_csv_grouping_preview,
     build_csv_summary_preset_key,
     build_default_plot_toggles,
     estimate_enabled_chart_count,
+    filter_csv_summary_by_group_keys,
     load_csv_summary_presets,
     load_csv_with_fallbacks,
     migrate_csv_summary_presets,
@@ -138,6 +141,187 @@ class FilterDialog(QDialog):
         return self.selected_indexes, self.selected_data_columns
 
 
+class CSVSummaryGroupingDialog(QDialog):
+    """Build a visual CSV Summary grouping/filter from selected source columns."""
+
+    def __init__(
+        self,
+        parent,
+        data_frame,
+        column_names,
+        grouping_columns=None,
+        selected_group_keys=None,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle("CSV grouping")
+        configure_window_size(self, minimum=(620, 360), initial=(760, 520))
+
+        self.data_frame = data_frame
+        self.column_names = list(column_names or [])
+        self.grouping_columns = [
+            column for column in (grouping_columns or []) if column in self.column_names
+        ]
+        self.selected_group_keys = {
+            tuple(key)
+            for key in (selected_group_keys or [])
+            if isinstance(key, (list, tuple)) and len(key) == len(self.grouping_columns)
+        }
+
+        layout = QVBoxLayout()
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+        attach_help_menu_to_layout(layout, self, [("CSV Summary manual", 'csv_summary')])
+
+        layout.addWidget(section_label("Grouping columns"))
+        self.columns_status_label = status_chip(self._columns_status_text(), "neutral")
+        layout.addWidget(self.columns_status_label)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        self.add_column_button = QPushButton("Add column")
+        self.remove_column_button = QPushButton("Remove last")
+        self.clear_button = QPushButton("Clear")
+        actions.addWidget(self.add_column_button)
+        actions.addWidget(self.remove_column_button)
+        actions.addWidget(self.clear_button)
+        actions.addStretch(1)
+        layout.addLayout(actions)
+
+        layout.addWidget(section_label("Matching groups"))
+        self.group_list = QListWidget()
+        self.group_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
+        apply_list_selection_style(self.group_list)
+        configure_accessibility(self.group_list, name="CSV grouping preview")
+        layout.addWidget(self.group_list)
+
+        footer = QHBoxLayout()
+        footer.setSpacing(8)
+        self.clear_filter_button = QPushButton("Clear selection")
+        ok_button = QPushButton("OK")
+        cancel_button = QPushButton("Cancel")
+        ok_button.clicked.connect(self.accept)
+        cancel_button.clicked.connect(self.reject)
+        if hasattr(ok_button, "setDefault"):
+            ok_button.setDefault(True)
+        footer.addWidget(self.clear_filter_button)
+        footer.addStretch(1)
+        footer.addWidget(cancel_button)
+        footer.addWidget(ok_button)
+        layout.addLayout(footer)
+
+        self.add_column_button.clicked.connect(self.add_grouping_column)
+        self.remove_column_button.clicked.connect(self.remove_last_grouping_column)
+        self.clear_button.clicked.connect(self.clear_grouping)
+        self.clear_filter_button.clicked.connect(self.clear_selection)
+        self.group_list.itemSelectionChanged.connect(self._store_current_selection)
+
+        self.setLayout(layout)
+        apply_metroliza_theme(self)
+        self._refresh_preview()
+
+    def _columns_status_text(self):
+        if not self.grouping_columns:
+            return "No grouping columns selected"
+        return " | ".join(self.grouping_columns)
+
+    def _available_columns(self):
+        return [column for column in self.column_names if column not in self.grouping_columns]
+
+    def _filtered_frame_for_next_level(self):
+        return filter_csv_summary_by_group_keys(
+            self.data_frame,
+            self.grouping_columns,
+            list(self.selected_group_keys),
+        )
+
+    def add_grouping_column(self):
+        available = self._available_columns()
+        if not available:
+            return
+
+        filtered_frame = self._filtered_frame_for_next_level()
+        column, accepted = QInputDialog.getItem(
+            self,
+            "Add grouping column",
+            "Column:",
+            available,
+            0,
+            False,
+        )
+        if not accepted or not column:
+            return
+
+        previous_filter_active = bool(self.selected_group_keys)
+        self.grouping_columns.append(column)
+        if previous_filter_active:
+            preview_rows = build_csv_grouping_preview(filtered_frame, self.grouping_columns)
+            self.selected_group_keys = {tuple(row["key"]) for row in preview_rows}
+        else:
+            self.selected_group_keys = set()
+        self._refresh_preview()
+
+    def remove_last_grouping_column(self):
+        if not self.grouping_columns:
+            return
+        self.grouping_columns.pop()
+        if not self.grouping_columns:
+            self.selected_group_keys = set()
+            self._refresh_preview()
+            return
+        self.selected_group_keys = {
+            tuple(key[: len(self.grouping_columns)])
+            for key in self.selected_group_keys
+            if len(key) >= len(self.grouping_columns)
+        }
+        self._refresh_preview()
+
+    def clear_grouping(self):
+        self.grouping_columns = []
+        self.selected_group_keys = set()
+        self._refresh_preview()
+
+    def clear_selection(self):
+        self.selected_group_keys = set()
+        self.group_list.clearSelection()
+        self._refresh_status()
+
+    def _store_current_selection(self):
+        self.selected_group_keys = {
+            tuple(item.data(Qt.ItemDataRole.UserRole))
+            for item in self.group_list.selectedItems()
+        }
+        self._refresh_status()
+
+    def _refresh_status(self):
+        self.columns_status_label.setText(self._columns_status_text())
+        set_status_variant(
+            self.columns_status_label,
+            "success" if self.grouping_columns else "neutral",
+        )
+        self.remove_column_button.setEnabled(bool(self.grouping_columns))
+        self.clear_button.setEnabled(bool(self.grouping_columns))
+        self.clear_filter_button.setEnabled(bool(self.selected_group_keys))
+
+    def _refresh_preview(self):
+        self.group_list.blockSignals(True)
+        self.group_list.clear()
+        preview_rows = build_csv_grouping_preview(self.data_frame, self.grouping_columns)
+        selected_keys = set(self.selected_group_keys)
+        for row in preview_rows:
+            label = f"{row['label']} (n={row['row_count']})"
+            self.group_list.addItem(label)
+            list_item = self.group_list.item(self.group_list.count() - 1)
+            key = tuple(row["key"])
+            list_item.setData(Qt.ItemDataRole.UserRole, key)
+            if key in selected_keys:
+                list_item.setSelected(True)
+        self.group_list.blockSignals(False)
+        self._refresh_status()
+
+    def get_grouping(self):
+        return self.grouping_columns, [tuple(key) for key in sorted(self.selected_group_keys)]
+
+
 class SpecLimitsDialog(QDialog):
     """Edit per-column NOM/USL/LSL overrides used in generated summaries."""
 
@@ -227,6 +411,8 @@ class CSVSummaryDialog(QDialog):
         self.csv_config = {}
         self.column_spec_limits = {}
         self.plot_toggles = {}
+        self.grouping_columns = []
+        self.selected_group_keys = []
         self.summary_only = False
         self.worker_thread = None
 
@@ -239,6 +425,11 @@ class CSVSummaryDialog(QDialog):
         self.filter_button = QPushButton("Edit...")
         self.columns_status_label = status_chip("No CSV loaded", "warning")
         self.filter_button.setToolTip("Choose index and data columns.")
+
+        self.grouping_label = QLabel("Grouping filter:")
+        self.grouping_button = QPushButton("Edit...")
+        self.grouping_status_label = status_chip("No grouping filter", "neutral")
+        self.grouping_button.setToolTip("Choose CSV columns and row groups used to filter the summary.")
 
         self.spec_limits_label = QLabel("Spec limits:")
         self.spec_limits_button = QPushButton("Edit...")
@@ -275,6 +466,7 @@ class CSVSummaryDialog(QDialog):
 
         self.input_button.clicked.connect(self.handle_input_button)
         self.filter_button.clicked.connect(self.handle_filter_button)
+        self.grouping_button.clicked.connect(self.handle_grouping_button)
         self.spec_limits_button.clicked.connect(self.handle_spec_limits_button)
         self.clear_presets_button.clicked.connect(self.handle_clear_presets_button)
         self.output_button.clicked.connect(self.handle_output_button)
@@ -304,6 +496,11 @@ class CSVSummaryDialog(QDialog):
         grid.addWidget(self.columns_label, row, 0)
         grid.addWidget(self.columns_status_label, row, 1)
         grid.addWidget(self.filter_button, row, 2)
+
+        row += 1
+        grid.addWidget(self.grouping_label, row, 0)
+        grid.addWidget(self.grouping_status_label, row, 1)
+        grid.addWidget(self.grouping_button, row, 2)
 
         row += 1
         grid.addWidget(self.spec_limits_label, row, 0)
@@ -338,6 +535,7 @@ class CSVSummaryDialog(QDialog):
         self._sync_ui_state()
         configure_accessibility(self.input_button, name="Browse CSV input")
         configure_accessibility(self.filter_button, name="Edit CSV columns")
+        configure_accessibility(self.grouping_button, name="Edit CSV grouping filter")
         configure_accessibility(self.spec_limits_button, name="Edit spec limits")
         configure_accessibility(self.output_button, name="Browse summary output")
         configure_accessibility(self.start_button, name="Create CSV summary")
@@ -352,7 +550,19 @@ class CSVSummaryDialog(QDialog):
             save_csv_summary_presets(self.preset_path, migrated)
         return migrated
 
-    def _save_presets(self, preset_key, selected_indexes, selected_data_columns, csv_config, column_spec_limits, include_extended_plots, summary_only, plot_toggles):
+    def _save_presets(
+        self,
+        preset_key,
+        selected_indexes,
+        selected_data_columns,
+        csv_config,
+        column_spec_limits,
+        include_extended_plots,
+        summary_only,
+        plot_toggles,
+        grouping_columns,
+        selected_group_keys,
+    ):
         """Persist current column/filter/report settings for a preset key."""
         if not preset_key:
             return
@@ -365,6 +575,8 @@ class CSVSummaryDialog(QDialog):
             "include_extended_plots": bool(include_extended_plots),
             "summary_only": bool(summary_only),
             "plot_toggles": normalize_plot_toggles(selected_data_columns, plot_toggles, full_report=include_extended_plots),
+            "grouping_columns": list(grouping_columns or []),
+            "selected_group_keys": [list(key) for key in (selected_group_keys or [])],
         }
         save_csv_summary_presets(self.preset_path, presets)
 
@@ -420,6 +632,27 @@ class CSVSummaryDialog(QDialog):
             return f"Defaults for {len(selected)} columns"
         return f"Custom limits on {custom_count}/{len(selected)} columns"
 
+    def _filtered_data_frame(self):
+        return filter_csv_summary_by_group_keys(
+            self.data_frame,
+            self.grouping_columns,
+            self.selected_group_keys,
+        )
+
+    def _summarize_grouping_filter(self):
+        if self.data_frame is None:
+            return "No CSV loaded"
+        if not self.grouping_columns:
+            return "No grouping filter"
+
+        filtered_frame = self._filtered_data_frame()
+        row_count = len(filtered_frame.index)
+        columns_text = " | ".join(self.grouping_columns)
+        if not self.selected_group_keys:
+            return f"{columns_text}: all {row_count} rows"
+        group_count = len(self.selected_group_keys)
+        return f"{columns_text}: {group_count} selected group(s), {row_count} rows"
+
     @staticmethod
     def _spec_limit_issues(column_spec_limits, selected_data_columns):
         issues = []
@@ -441,9 +674,17 @@ class CSVSummaryDialog(QDialog):
         limit_issues = self._spec_limit_issues(self.column_spec_limits, self.selected_data_columns)
 
         self.filter_button.setEnabled(has_data_frame)
+        self.grouping_button.setEnabled(has_data_frame)
         self.spec_limits_button.setEnabled(has_data_frame and has_data_columns)
         self.output_button.setEnabled(has_data_frame)
-        self.start_button.setEnabled(has_data_frame and has_output_file and has_data_columns and not limit_issues)
+        filtered_row_count = len(self._filtered_data_frame().index) if has_data_frame else 0
+        self.start_button.setEnabled(
+            has_data_frame
+            and has_output_file
+            and has_data_columns
+            and filtered_row_count > 0
+            and not limit_issues
+        )
 
         update_path_field(self.input_path_field, self.input_file)
         update_path_field(self.output_path_field, self.output_file)
@@ -459,6 +700,16 @@ class CSVSummaryDialog(QDialog):
         else:
             self.columns_status_label.setText("No CSV loaded")
             set_status_variant(self.columns_status_label, "warning")
+
+        self.grouping_status_label.setText(self._summarize_grouping_filter())
+        if not has_data_frame:
+            set_status_variant(self.grouping_status_label, "warning")
+        elif self.grouping_columns and filtered_row_count == 0:
+            set_status_variant(self.grouping_status_label, "danger")
+        elif self.grouping_columns:
+            set_status_variant(self.grouping_status_label, "success")
+        else:
+            set_status_variant(self.grouping_status_label, "neutral")
 
         self.spec_limits_status_label.setText(
             self._summarize_spec_limits(self.column_spec_limits, self.selected_data_columns)
@@ -501,6 +752,9 @@ class CSVSummaryDialog(QDialog):
             set_status_variant(self.readiness_label, "warning")
         elif limit_issues:
             self.readiness_label.setText("Fix invalid spec limits: expected LSL <= NOM <= USL.")
+            set_status_variant(self.readiness_label, "danger")
+        elif filtered_row_count <= 0:
+            self.readiness_label.setText("Grouping filter matches no rows.")
             set_status_variant(self.readiness_label, "danger")
         elif not has_output_file:
             self.readiness_label.setText("Select an output workbook path to enable Create Summary.")
@@ -546,6 +800,8 @@ class CSVSummaryDialog(QDialog):
                 self.column_names = []
                 self.selected_indexes = []
                 self.selected_data_columns = []
+                self.grouping_columns = []
+                self.selected_group_keys = []
                 self._sync_ui_state()
                 return
 
@@ -556,6 +812,16 @@ class CSVSummaryDialog(QDialog):
             self.selected_indexes = [col for col in preset_indexes if col in self.column_names] or self.column_names[:1]
             default_data_columns = resolve_default_data_columns(self.data_frame, self.selected_indexes)
             self.selected_data_columns = [col for col in preset_data_columns if col in default_data_columns] or default_data_columns
+            preset_grouping_columns = preset.get('grouping_columns', []) if isinstance(preset, dict) else []
+            self.grouping_columns = [
+                column for column in preset_grouping_columns if column in self.column_names
+            ]
+            preset_group_keys = preset.get('selected_group_keys', []) if isinstance(preset, dict) else []
+            self.selected_group_keys = [
+                tuple(key)
+                for key in preset_group_keys
+                if isinstance(key, list) and len(key) == len(self.grouping_columns)
+            ]
 
             if isinstance(preset, dict):
                 preset_include_extended_plots = bool(preset.get('include_extended_plots', True))
@@ -592,16 +858,33 @@ class CSVSummaryDialog(QDialog):
                     logger.info("Selected index columns: %s", self.selected_indexes)
                 if self.selected_data_columns:
                     logger.info("Selected data columns: %s", self.selected_data_columns)
-                    self.column_spec_limits = {
-                        column: self.column_spec_limits.get(column, {'nom': 0.0, 'usl': 0.0, 'lsl': 0.0})
-                        for column in self.selected_data_columns
-                    }
-                    self.plot_toggles = normalize_plot_toggles(
-                        self.selected_data_columns,
-                        self.plot_toggles,
-                        full_report=self.include_extended_plots.isChecked(),
-                    )
-                    self._sync_ui_state()
+                self.column_spec_limits = {
+                    column: self.column_spec_limits.get(column, {'nom': 0.0, 'usl': 0.0, 'lsl': 0.0})
+                    for column in self.selected_data_columns
+                }
+                self.plot_toggles = normalize_plot_toggles(
+                    self.selected_data_columns,
+                    self.plot_toggles,
+                    full_report=self.include_extended_plots.isChecked(),
+                )
+                self._sync_ui_state()
+
+    def handle_grouping_button(self):
+        """Open the CSV grouping/filter dialog using every loaded source column."""
+        if self.data_frame is None:
+            self._sync_ui_state()
+            return
+
+        grouping_dialog = CSVSummaryGroupingDialog(
+            self,
+            self.data_frame,
+            self.column_names,
+            grouping_columns=self.grouping_columns,
+            selected_group_keys=self.selected_group_keys,
+        )
+        if grouping_dialog.exec() == QDialog.DialogCode.Accepted:
+            self.grouping_columns, self.selected_group_keys = grouping_dialog.get_grouping()
+            self._sync_ui_state()
 
     def handle_spec_limits_button(self):
         """Open spec-limits editor and store normalized per-column values."""
@@ -676,7 +959,7 @@ class CSVSummaryDialog(QDialog):
             self.selected_data_columns,
             self.input_file,
             self.output_file,
-            self.data_frame,
+            self._filtered_data_frame(),
             self.csv_config,
             self.column_spec_limits,
             self.plot_toggles if self.include_extended_plots.isChecked() else build_default_plot_toggles(self.selected_data_columns, full_report=False),
@@ -774,5 +1057,7 @@ class CSVSummaryDialog(QDialog):
             self.include_extended_plots.isChecked(),
             self.summary_only_checkbox.isChecked(),
             self.plot_toggles,
+            self.grouping_columns,
+            self.selected_group_keys,
         )
         self.show_loading_screen()

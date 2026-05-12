@@ -8,6 +8,11 @@ NATIVE_BUILD_DISTRIBUTION_PATH = Path('docs/native_build_distribution.md')
 RC_CHECKLIST_PATH = Path('docs/release_checks/release_candidate_checklist.md')
 RELEASE_STATUS_PATH = Path('docs/release_checks/release_status.md')
 OPEN_TESTING_RUNBOOK_PATH = Path('docs/release_checks/open_testing_runbook.md')
+BRANCHING_STRATEGY_PATH = Path('docs/release_checks/branching_strategy.md')
+RELEASE_BRANCHING_PLAYBOOK_PATH = Path('docs/release_checks/release_branching_playbook.md')
+BEGINNER_RELEASE_PLAYBOOK_PATH = Path('docs/release_checks/release_playbook_beginner.md')
+GOOGLE_SMOKE_LOG_PATH = Path('docs/release_checks/google_conversion_smoke.md')
+GOOGLE_SMOKE_RUNBOOK_PATH = Path('docs/google_conversion_smoke_runbook.md')
 
 
 def test_ci_workflow_keeps_coverage_visibility_contract() -> None:
@@ -80,6 +85,9 @@ def test_ci_and_precommit_run_release_hygiene_scan() -> None:
     assert 'artifacts/parser_plugin_workspace_ci/' in gitignore
     assert 'smoke-artifacts/' in gitignore
     assert 'nuitka-build-report.xml' in gitignore
+    assert '.coverage' in gitignore
+    assert 'coverage.xml' in gitignore
+    assert 'htmlcov/' in gitignore
 
 
 def test_ci_workflow_keeps_native_chart_planner_parity_smoke_step() -> None:
@@ -140,6 +148,9 @@ def test_ci_policy_keeps_manual_smoke_lane_semantics_explicit() -> None:
 def test_release_status_and_runbook_keep_gate_semantics_aligned() -> None:
     release_status = RELEASE_STATUS_PATH.read_text(encoding='utf-8')
     open_testing_runbook = OPEN_TESTING_RUNBOOK_PATH.read_text(encoding='utf-8')
+    release_checklist = RC_CHECKLIST_PATH.read_text(encoding='utf-8')
+    google_runbook = GOOGLE_SMOKE_RUNBOOK_PATH.read_text(encoding='utf-8')
+    google_log = GOOGLE_SMOKE_LOG_PATH.read_text(encoding='utf-8')
 
     assert '**PR-blocking CI gates** are defined in [`../ci-policy.md`](../ci-policy.md)' in release_status
     assert (
@@ -155,6 +166,31 @@ def test_release_status_and_runbook_keep_gate_semantics_aligned() -> None:
         'optional manual smoke evidence collection (`packaging-smoke`, `google-conversion-smoke`)'
         in open_testing_runbook
     )
+    assert 'Google conversion smoke is release-blocking for promoted RC artifacts' in release_checklist
+    assert 'skipped default CI does not satisfy that gate' in release_checklist
+    assert 'does **not** count as smoke evidence' in google_runbook
+    assert 'not executed / promotion blocked' in google_runbook
+    assert 'green CI run does not satisfy this gate' in google_log
+
+
+def test_active_release_docs_use_master_as_current_production_branch() -> None:
+    docs = {
+        BRANCHING_STRATEGY_PATH: BRANCHING_STRATEGY_PATH.read_text(encoding='utf-8'),
+        RELEASE_BRANCHING_PLAYBOOK_PATH: RELEASE_BRANCHING_PLAYBOOK_PATH.read_text(encoding='utf-8'),
+        BEGINNER_RELEASE_PLAYBOOK_PATH: BEGINNER_RELEASE_PLAYBOOK_PATH.read_text(encoding='utf-8'),
+        RC_CHECKLIST_PATH: RC_CHECKLIST_PATH.read_text(encoding='utf-8'),
+    }
+
+    for path, text in docs.items():
+        assert 'git checkout main' not in text, f'{path} still uses main checkout commands'
+        assert 'origin main' not in text, f'{path} still pulls or pushes origin main'
+        assert 'merge into `main`' not in text, f'{path} still documents main as merge target'
+        assert 'release/2026.03-rc1' not in text, f'{path} still uses stale 2026.03 RC examples'
+
+    assert '`master`: current production-ready branch' in docs[BRANCHING_STRATEGY_PATH]
+    assert 'git checkout master' in docs[RC_CHECKLIST_PATH]
+    assert 'git checkout master' in docs[RELEASE_BRANCHING_PLAYBOOK_PATH]
+    assert 'git checkout master' in docs[BEGINNER_RELEASE_PLAYBOOK_PATH]
 
 
 def test_release_status_keeps_current_release_line_metadata() -> None:

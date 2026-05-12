@@ -44,10 +44,10 @@ Current branch status:
   it is coupled to measurement-export and group-analysis payload shapes.
 - `hexafe-groupstats` is already a Metroliza runtime dependency and is bridged through
   `modules/hexafe_groupstats_adapter.py`.
-- `hexafe-plotstats` is not currently a Metroliza runtime dependency. It has reusable
-  histogram, violin, IQR/box, scatter, trend-capable scatter, adapters, and native
-  renderer backends, but dependency pinning/release policy must be decided before
-  Metroliza relies on it.
+- 2026-05-12 update: Metroliza now pins `hexafe-plotstats[pandas]` from a public Git
+  commit and uses it through `modules/hexafe_plotstats_adapter.py` for histogram
+  rendering/statistics-table reuse. Keep the adapter boundary narrow until a formal package
+  release/tag replaces the temporary commit pin.
 - `hexafe/ProductionDataAnalyzer` currently provides useful concepts and simple
   helpers, especially time-indexed organization, ID filtering, and period aggregation.
   It is not ready to consume directly as an application dependency: it is a single
@@ -211,15 +211,14 @@ Findings:
   scatter, and scatter with trend.
 - Matplotlib is the default backend; Rust/native rendering is explicit and optional.
 - Adapters exist for Metroliza-like and groupstats-like payloads.
-- Metroliza does not currently depend on `hexafe-plotstats`, and package pin/release policy
-  still needs to be decided before making it a hard dependency.
+- 2026-05-12 update: Metroliza now depends on `hexafe-plotstats[pandas]` through an
+  explicit public Git commit pin and keeps usage behind a narrow adapter.
 
 Design consequence:
 
-- Build the first production dashboard directly with Plotly so the feature can ship without
-  a new package/runtime risk.
-- Add a narrow `hexafe-plotstats` adapter later, after the dependency version and Windows
-  packaging behavior are settled.
+- Keep interactive dashboards in Plotly where that provides the best user workflow, and use
+  the `hexafe-plotstats` adapter for reusable plot/statistics rendering where it adds value.
+- Replace the temporary Git commit pin with a formal package release/tag when available.
 
 ### ProductionDataAnalyzer
 
@@ -677,14 +676,13 @@ Last updated: 2026-05-11
     `python -m ruff check modules/industrial_analytics_state.py modules/industrial_analytics_service.py modules/industrial_analytics_dashboard.py modules/industrial_analytics_workbook.py modules/industrial_analytics_workflow.py modules/tabular_analytics_service.py modules/industrial_analytics_dialog.py modules/industrial_workers.py modules/industrial_data_dialog.py modules/main_window.py tests/test_industrial_analytics_state.py tests/test_industrial_analytics_service.py tests/test_industrial_analytics_dashboard.py tests/test_industrial_analytics_workflow.py tests/test_industrial_analytics_dialog.py tests/test_tabular_analytics_service.py tests/industrial_analytics_fixtures.py`
     and
     `QT_QPA_PLATFORM=offscreen python -m pytest tests/test_industrial_analytics_state.py tests/test_industrial_analytics_service.py tests/test_industrial_analytics_dashboard.py tests/test_industrial_analytics_workflow.py tests/test_industrial_analytics_dialog.py tests/test_tabular_analytics_service.py tests/test_main_window_metadata_ui.py tests/test_industrial_data_dialog.py -q`.
-- Step 12 status: deferred by implementation audit, not required for the functional
-  production-analysis release slice.
-  - The shipped dashboard path already provides the requested histogram, time-series,
-    violin, and box views with offline Plotly.
-  - `hexafe-plotstats` is still not a Metroliza runtime dependency, so adding it now would
-    change Windows packaging and dependency policy outside the core Oznak analytics scope.
-  - Keep this as a follow-up adapter/dependency-gating task after a formal package pin is
-    accepted.
+- Step 12 status: partially completed on 2026-05-12.
+  - The shipped dashboard path keeps offline Plotly for interactive histogram, time-series,
+    violin, and box views.
+  - `hexafe-plotstats` is now pinned as a runtime dependency and used through
+    `modules/hexafe_plotstats_adapter.py` for histogram rendering/statistics-table reuse.
+  - Remaining follow-up: replace the temporary Git commit pin with a formal package
+    release/tag when available.
 - Step 13 status: completed for implementation notes and validation record; release-note
   publication remains separate from this feature implementation unless requested.
 - Final validation:
@@ -1355,7 +1353,8 @@ Recommended implementation order:
 10. Step 9 UI workflow.
 11. Step 10 workbook extension.
 12. Step 11 CSV/Excel analytics source and CSV Summary replacement.
-13. Step 12 plotstats adapter dependency gate, deferred until a package pin is accepted.
+13. Step 12 plotstats adapter dependency gate, partially completed with a temporary public
+    Git commit pin on 2026-05-12.
 14. Step 13 implementation notes and validation record; release notes/CI happen in the
     publish slice.
 

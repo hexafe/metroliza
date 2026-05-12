@@ -91,7 +91,15 @@ def test_build_production_dashboard_manifest_contains_requested_chart_families(t
     assert traces
     assert {trace["bingroup"] for trace in traces} == {"hist-cycle_time_s"}
     assert all(trace["xbins"] == traces[0]["xbins"] for trace in traces)
+    assert all(trace["histnorm"] == "probability" for trace in traces)
+    assert histogram["plotly_spec"]["layout"]["yaxis"]["title"] == "Share of group"
     assert traces[0]["xbins"]["size"] > 0
+    assert histogram["stats_tables"]
+    assert any(
+        row["label"] == "Samples"
+        for table in histogram["stats_tables"]
+        for row in table["rows"]
+    )
 
 
 def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None:
@@ -113,6 +121,7 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     assert "raw_record_json" not in html_text
     assert "Selected references" in html_text
     assert "Descriptive stats" in html_text
+    assert "Samples" in html_text
 
     match = re.search(
         r'<script id="production-dashboard-charts" type="application/json">(.*?)</script>',
@@ -189,3 +198,83 @@ def test_time_series_trace_drops_sparse_aggregation_nan_pairs() -> None:
     assert len(traces) == 1
     assert traces[0]["x"] == ["2026-05-11T00:00:00+00:00"]
     assert traces[0]["y"] == [0.3]
+
+
+def test_time_series_highlight_mode_uses_separate_selected_and_population_traces() -> None:
+    frame = pd.DataFrame(
+        {
+            "process_datetime": pd.date_range("2026-05-10 08:00", periods=4, freq="h", tz="UTC"),
+            "reference": ["R1", "R2", "R1", "R2"],
+            "cycle_time_s": [35.0, 36.0, 35.2, 36.3],
+        }
+    )
+    cohort = ReferenceCohortState(references=("R1",), mode="highlight")
+    cohorted = apply_reference_cohorts(frame, cohort)
+
+    manifest = build_production_dashboard_manifest(
+        frame=cohorted.dataframe,
+        metric_selection=(ProductionMetricSelection("cycle_time_s", "Cycle Time S"),),
+        aggregation_state=ProductionAggregationState(
+            time_bucket="day",
+            aggregation_methods=("mean",),
+            group_fields=(),
+        ),
+        aggregation_result=ProductionAggregationResult(
+            dataframe=pd.DataFrame(
+                {
+                    "time_bucket_start": [pd.Timestamp("2026-05-10T00:00:00Z")],
+                    "cycle_time_s__mean": [35.625],
+                    "raw_row_count": [4],
+                }
+            ),
+            source_row_count=4,
+            output_row_count=1,
+            is_aggregated=True,
+        ),
+        chart_selection=ProductionChartSelection(
+            time_series=True,
+            histogram=False,
+            violin=False,
+            box=False,
+            groupstats=False,
+        ),
+        cohort_state=cohort,
+    )
+
+    traces = manifest["charts"][0]["plotly_spec"]["data"]
+
+    assert {trace["name"] for trace in traces} == {"Selected references", "Other references"}
+    assert {trace["mode"] for trace in traces} == {"markers"}
+    assert {trace["marker"]["symbol"] for trace in traces} == {"diamond", "circle"}
+
+
+def test_distribution_charts_use_selected_group_field_before_default_columns() -> None:
+    frame = pd.DataFrame(
+        {
+            "process_datetime": pd.date_range("2026-05-10 08:00", periods=4, freq="h"),
+            "station": ["S1", "S1", "S1", "S1"],
+            "machine": ["M1", "M2", "M1", "M2"],
+            "cycle_time_s": [35.0, 36.0, 34.8, 36.2],
+        }
+    )
+
+    manifest = build_production_dashboard_manifest(
+        frame=frame,
+        metric_selection=(ProductionMetricSelection("cycle_time_s", "Cycle Time S"),),
+        aggregation_state=ProductionAggregationState(
+            time_bucket="none",
+            aggregation_methods=("mean",),
+            group_fields=("machine",),
+        ),
+        chart_selection=ProductionChartSelection(
+            time_series=False,
+            histogram=True,
+            violin=True,
+            box=True,
+        ),
+    )
+
+    for chart_type in {"histogram", "violin", "box"}:
+        chart = next(chart for chart in manifest["charts"] if chart["chart_type"] == chart_type)
+        trace_names = {trace["name"] for trace in chart["plotly_spec"]["data"]}
+        assert trace_names == {"M1", "M2"}

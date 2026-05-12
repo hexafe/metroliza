@@ -226,6 +226,61 @@ def test_tabular_analytics_dialog_uses_manual_groups_for_aggregation_state() -> 
         dialog.close()
 
 
+def test_tabular_grouping_dialog_reopens_with_existing_groups_and_column_labels(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _app()
+    input_file = tmp_path / "table.csv"
+    pd.DataFrame(
+        {
+            "TraceCode": ["TC-001", "TC-002", "TC-003"],
+            "Batch": ["B1", "B1", "B2"],
+            "Length mm": [10.0, 10.2, 10.4],
+        }
+    ).to_csv(input_file, index=False)
+    calls = {}
+
+    class FakeGroupingDialog:
+        def __init__(self, parent, *, dataframe, column_mapping, grouping_dataframe):
+            calls["parent"] = parent
+            calls["columns"] = tuple(dataframe.columns)
+            calls["column_mapping"] = column_mapping
+            calls["grouping_dataframe"] = grouping_dataframe
+
+        def exec(self):
+            calls["executed"] = True
+            return 0
+
+    monkeypatch.setattr(
+        "modules.industrial_analytics_dialog.TabularAnalyticsGroupingDialog",
+        FakeGroupingDialog,
+    )
+
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.input_file = str(input_file)
+        dialog.load_metrics()
+        existing_grouping = pd.DataFrame(
+            {
+                "REPORT_ID": [1, 3],
+                "GROUP": ["Fixture A", "Fixture B"],
+            }
+        )
+        dialog.set_df_for_grouping(existing_grouping)
+        dialog.set_grouping_applied(True)
+
+        dialog.open_grouping_dialog()
+
+        assert calls["parent"] is dialog
+        assert "tracecode" in calls["columns"]
+        assert calls["column_mapping"]["TraceCode"] == "tracecode"
+        assert calls["grouping_dataframe"] is existing_grouping
+        assert calls["executed"] is True
+    finally:
+        dialog.close()
+
+
 def test_metric_selection_dialog_select_all_and_clear_are_in_large_dialog() -> None:
     _app()
     metrics = (

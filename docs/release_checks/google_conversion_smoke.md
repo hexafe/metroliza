@@ -38,3 +38,9 @@ Use this checklist/log when running the release-gated smoke command from:
 ## Historical Runs
 
 Superseded 2026-03 smoke attempts are archived at [`../archive/2026/google_conversion_smoke_runs_2026_03.md`](../archive/2026/google_conversion_smoke_runs_2026_03.md).
+
+## Current RC status
+
+- `2026.05 RC1 (build 260512)`: no Google conversion smoke evidence is recorded yet.
+  Default push/PR CI skips this manual job, so a green CI run does not satisfy this gate.
+  Record a live smoke run for the exact promoted commit/artifact before open-testing promotion.

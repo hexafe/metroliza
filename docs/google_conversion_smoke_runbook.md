@@ -6,7 +6,7 @@ This runbook defines how maintainers run and interpret the release-gated live Go
 
 - Script: `scripts/release_only_google_conversion_smoke.py`.
 - Purpose: verify that Metroliza can upload a generated `.xlsx` workbook to Google Drive, convert it to a Google Sheet, and confirm release-gated conversion metadata/warning expectations without extra Sheets API post-validation calls.
-- Execution model: manual or explicitly gated CI job only (not part of default unit-test discovery).
+- Execution model: manual or explicitly gated CI job only (not part of default unit-test discovery). A skipped default CI job is expected and does **not** count as smoke evidence.
 
 ## When smoke execution is mandatory
 
@@ -15,6 +15,10 @@ Run `scripts/release_only_google_conversion_smoke.py` in all of these cases:
 - Every RC candidate build before it can be promoted to open testing.
 - Any PR/change set that modifies Google auth, Drive/Sheets conversion/export logic, or fallback `.xlsx` behavior.
 - Any rebuilt RC artifact intended for promotion (smoke evidence must match the current build identity).
+
+If credentials, sandbox account access, or Google network access are unavailable, record the
+smoke as **not executed / promotion blocked** for that RC artifact rather than treating green
+default CI as a substitute.
 
 ## Prerequisites
 

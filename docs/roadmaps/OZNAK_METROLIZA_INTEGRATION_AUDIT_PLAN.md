@@ -707,8 +707,8 @@ Implemented in branch `codex/oznak-metroliza-integration`:
 
 Oznak dependency status:
 
-- Metroliza does not pin Oznak yet.
-- Live source sync is intentionally behind the optional adapter until Oznak exposes implemented `fetch_records()` with structured per-source diagnostics, timeout, and cancellation.
+- Metroliza now pins Oznak from Git in `requirements.txt` while the sibling package is still on the integration path.
+- Live source sync is available through the optional adapter when Oznak exposes package-native fetch behavior with structured per-source diagnostics, timeout, and cancellation.
 - Export uses local cached rows only.
 
 Validation so far:
@@ -811,9 +811,9 @@ This design strongly favors adding industrial context as columns in a query/view
 
 ### Dependency and Release Constraints
 
-- Metroliza pins `hexafe-groupstats[pandas]` from a public Git commit in `requirements.txt`.
+- Metroliza pins `hexafe-groupstats[pandas]` and `hexafe-plotstats[pandas]` from public Git commits in `requirements.txt`.
 - Tests assert dependency hygiene and prevent local path dependencies.
-- Packaging specs explicitly collect optional package hidden imports and data for `hexafe_groupstats`, OCR, PyMuPDF, and native modules.
+- Packaging specs explicitly collect optional package hidden imports and data for `hexafe_groupstats`, `hexafe_plotstats`, OCR, PyMuPDF, and native modules.
 - Release hygiene blocks databases, logs, PDFs, CSVs, and Excel files unless explicitly allowed.
 - Any industrial integration must preserve the rule: no real reports, real industrial exports, credentials, logs with credentials, or report-derived/plant-derived data in GitHub.
 

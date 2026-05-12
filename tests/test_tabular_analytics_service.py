@@ -10,6 +10,7 @@ from modules.industrial_analytics_service import aggregate_production_frame
 from modules.industrial_analytics_state import (
     ProductionAggregationState,
     ProductionChartSelection,
+    ProductionMetricSelection,
 )
 from modules.tabular_analytics_service import (
     TABULAR_GROUP_COLUMN,
@@ -72,6 +73,55 @@ def test_load_tabular_analytics_file_uses_explicit_time_and_reference_columns(tm
     assert "batch_number" not in {candidate.field_name for candidate in result.metric_candidates}
 
 
+def test_load_tabular_analytics_file_does_not_steal_cycle_time_as_timestamp(tmp_path) -> None:
+    input_file = tmp_path / "cycle_times.csv"
+    pd.DataFrame(
+        {
+            "Reference ID": ["R1", "R2", "R3"],
+            "Update Count": [1, 2, 3],
+            "Cycle Time S": [38.1, 39.4, 37.9],
+            "Result": ["ok", "ok", "review"],
+        }
+    ).to_csv(input_file, index=False)
+
+    result = load_tabular_analytics_file(input_file)
+
+    assert result.timestamp_column is None
+    assert result.dataframe["process_datetime"].isna().all()
+    metric_names = {candidate.field_name for candidate in result.metric_candidates}
+    assert "update_count" in metric_names
+    assert "cycle_time_s" in metric_names
+    assert "tabular_timestamp_not_selected" in {
+        diagnostic.code for diagnostic in result.diagnostics
+    }
+
+
+def test_load_tabular_analytics_file_preserves_source_columns_that_match_internal_names(
+    tmp_path,
+) -> None:
+    input_file = tmp_path / "internal_names.csv"
+    pd.DataFrame(
+        {
+            "source_row_number": [9001, 9002],
+            "source_file": ["operator-a.csv", "operator-b.csv"],
+            "reference": ["R1", "R2"],
+            "GROUP": ["Shift A", "Shift B"],
+            "Length mm": [10.0, 10.2],
+        }
+    ).to_csv(input_file, index=False)
+
+    result = load_tabular_analytics_file(input_file)
+
+    assert result.dataframe["source_row_number"].tolist() == [1, 2]
+    assert result.dataframe["source_file"].tolist() == ["internal_names.csv", "internal_names.csv"]
+    assert result.dataframe["reference"].tolist() == ["R1", "R2"]
+    assert result.dataframe["input_source_row_number"].tolist() == [9001, 9002]
+    assert result.dataframe["input_source_file"].tolist() == ["operator-a.csv", "operator-b.csv"]
+    assert result.dataframe["input_group"].tolist() == ["Shift A", "Shift B"]
+    assert result.column_mapping["source_row_number"] == "input_source_row_number"
+    assert result.column_mapping["GROUP"] == "input_group"
+
+
 def test_load_tabular_analytics_file_detects_excel_metrics(tmp_path) -> None:
     input_file = tmp_path / "table.xlsx"
     _sample_table().to_excel(input_file, index=False, sheet_name="Measurements")
@@ -95,6 +145,34 @@ def test_tabular_grouping_dataframe_builds_source_row_identity_rows(tmp_path) ->
     assert set(grouping_frame["REFERENCE"]) == {"R1", "R2", "R3"}
     assert grouping_frame["SAMPLE_NUMBER"].tolist() == ["1", "2", "3", "4", "5", "6"]
     assert grouping_frame["FILENAME"].str.contains("table.csv").all()
+
+
+def test_tabular_grouping_dataframe_uses_user_selector_columns_independent_of_reference(
+    tmp_path,
+) -> None:
+    input_file = tmp_path / "tracecodes.csv"
+    pd.DataFrame(
+        {
+            "Batch": ["B1", "B1", "B2"],
+            "TraceCode": ["TC-001", "TC-002", "TC-003"],
+            "Cavity": ["C1", "C2", "C1"],
+            "Length mm": [10.0, 10.1, 10.2],
+        }
+    ).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file, reference_column="Batch")
+
+    grouping_frame = build_tabular_grouping_dataframe(
+        loaded.dataframe,
+        selector_columns=("tracecode", "cavity"),
+    )
+
+    assert loaded.reference_column == "batch"
+    assert grouping_frame["REFERENCE"].tolist() == [
+        "TC-001 | C1",
+        "TC-002 | C2",
+        "TC-003 | C1",
+    ]
+    assert grouping_frame["PART_NAME"].tolist() == grouping_frame["REFERENCE"].tolist()
 
 
 def test_apply_tabular_grouping_keeps_unassigned_rows_in_population(tmp_path) -> None:
@@ -155,6 +233,31 @@ def test_tabular_data_reuses_dashboard_and_aggregation_path(tmp_path) -> None:
     traces = histogram["plotly_spec"]["data"]
     assert traces[0]["bingroup"] == f"hist-{metrics[0].field_name}"
     assert traces[0]["xbins"]["size"] > 0
+
+
+def test_tabular_aggregation_counts_source_rows_when_metric_values_are_missing() -> None:
+    frame = pd.DataFrame(
+        {
+            "source_row_number": [1, 2, 3],
+            "process_datetime": pd.date_range("2026-05-10 08:00", periods=3, freq="h"),
+            "machine": ["M1", "M1", "M2"],
+            "length_mm": [10.0, None, 10.5],
+        }
+    )
+
+    aggregated = aggregate_production_frame(
+        frame,
+        ProductionAggregationState(
+            time_bucket="none",
+            aggregation_methods=("mean",),
+            group_fields=("machine",),
+        ),
+        (ProductionMetricSelection("length_mm", "Length Mm"),),
+    )
+
+    by_machine = dict(zip(aggregated.dataframe["machine"], aggregated.dataframe["raw_row_count"], strict=False))
+    assert by_machine == {"M1": 2, "M2": 1}
+    assert int(aggregated.dataframe["raw_row_count"].sum()) == len(frame.index)
 
 
 def test_tabular_workbook_export_writes_separate_parameter_sheets(tmp_path) -> None:

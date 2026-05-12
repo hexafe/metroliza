@@ -38,6 +38,7 @@ def export_production_analytics_workbook(
     diagnostics: tuple[ProductionAnalyticsDiagnostic, ...] = (),
     separate_parameter_sheets: bool = True,
     chart_selection: ProductionChartSelection | None = None,
+    group_fields: tuple[str, ...] = (),
 ) -> IndustrialAnalyticsWorkbookResult:
     """Write production analytics workbook output."""
 
@@ -81,6 +82,7 @@ def export_production_analytics_workbook(
             data_sheet_name=data_sheet,
             used_names=used_names,
             sheet_names=sheet_names,
+            group_fields=group_fields,
         )
 
         if groupstats_result is not None and groupstats_result.metrics:

@@ -592,7 +592,13 @@ def aggregate_production_frame(
 
     named_aggs: dict[str, pd.NamedAgg] = {}
     if state.include_raw_row_count:
-        count_column = "industrial_record_id" if "industrial_record_id" in frame.columns else metric_names[0]
+        count_column = (
+            "industrial_record_id"
+            if "industrial_record_id" in frame.columns
+            else "source_row_number"
+            if "source_row_number" in frame.columns
+            else metric_names[0]
+        )
         named_aggs["raw_row_count"] = pd.NamedAgg(column=count_column, aggfunc="count")
     for metric_name in metric_names:
         for method in state.aggregation_methods:

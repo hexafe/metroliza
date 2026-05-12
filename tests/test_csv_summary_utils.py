@@ -6,10 +6,12 @@ from pathlib import Path
 import pandas as pd
 
 from modules.csv_summary_utils import (
+    build_csv_grouping_preview,
     build_csv_summary_preset_key,
     build_default_plot_toggles,
     estimate_enabled_chart_count,
     compute_column_summary_stats,
+    filter_csv_summary_by_group_keys,
     load_csv_summary_presets,
     migrate_csv_summary_presets,
     load_csv_with_fallbacks,
@@ -126,6 +128,46 @@ class CsvSummaryUtilsTests(unittest.TestCase):
         )
         self.assertEqual(3, count)
 
+    def test_csv_grouping_preview_uses_selected_columns_and_filter_keys(self):
+        df = pd.DataFrame(
+            {
+                'Reference': ['R1', 'R1', 'R2', 'R2'],
+                'TraceCode': ['T-001', 'T-002', 'T-003', 'T-004'],
+                'Shift': ['A', 'B', 'A', 'A'],
+                'Length': [10.0, 10.1, 10.2, 10.3],
+            }
+        )
+
+        trace_preview = build_csv_grouping_preview(df, ['TraceCode'])
+        self.assertEqual(
+            [('T-001',), ('T-002',), ('T-003',), ('T-004',)],
+            [row['key'] for row in trace_preview],
+        )
+
+        filtered = filter_csv_summary_by_group_keys(df, ['Reference'], [('R2',)])
+        nested_preview = build_csv_grouping_preview(filtered, ['Reference', 'Shift'])
+
+        self.assertEqual([('R2', 'A')], [row['key'] for row in nested_preview])
+        self.assertEqual([2], [row['row_count'] for row in nested_preview])
+
+    def test_csv_grouping_filter_keeps_tracecode_available_when_reference_is_different(self):
+        df = pd.DataFrame(
+            {
+                'Reference': ['R1', 'R1', 'R2'],
+                'TraceCode': ['T-001', 'T-002', 'T-003'],
+                'Length': [10.0, 10.1, 10.2],
+            }
+        )
+
+        filtered = filter_csv_summary_by_group_keys(
+            df,
+            ['TraceCode'],
+            [('T-001',), ('T-003',)],
+        )
+
+        self.assertEqual(['T-001', 'T-003'], filtered['TraceCode'].tolist())
+        self.assertEqual(['R1', 'R2'], filtered['Reference'].tolist())
+
     def test_load_csv_with_fallbacks_handles_wide_semicolon_decimal_csv(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             csv_path = Path(tmpdir) / 'wide.csv'
@@ -231,6 +273,8 @@ class CsvSummaryUtilsTests(unittest.TestCase):
         self.assertEqual(False, payload['summary_only'])
         self.assertIn('column_spec_limits', payload)
         self.assertIn('plot_toggles', payload)
+        self.assertEqual([], payload['grouping_columns'])
+        self.assertEqual([], payload['selected_group_keys'])
 
     def test_migrate_csv_summary_presets_no_change_for_current_schema(self):
         presets = {
@@ -242,6 +286,8 @@ class CsvSummaryUtilsTests(unittest.TestCase):
                 'include_extended_plots': False,
                 'summary_only': True,
                 'plot_toggles': {'LENGTH': {'histogram': False, 'boxplot': False}},
+                'grouping_columns': ['TraceCode'],
+                'selected_group_keys': [['T-001'], ['T-002']],
             }
         }
 

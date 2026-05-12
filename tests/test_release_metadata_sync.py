@@ -13,7 +13,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}(?:rc\d+)?$")
         self.assertRegex(metadata.build, r"^\d{6}$")
         self.assertEqual(metadata.version_label, f"{metadata.release_version}({metadata.build})")
-        self.assertEqual(metadata.public_version_label, "2026.05 RC1 (build 260511)")
+        self.assertEqual(metadata.public_version_label, "2026.05 RC1 (build 260512)")
         self.assertTrue(metadata.highlight)
 
     def test_in_app_current_release_notes_stay_user_facing(self):
@@ -22,6 +22,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         current_section = VersionDate.release_notes.split("<br><b>Archive:</b><br>", 1)[0]
 
         self.assertIn("CSV Summary now uses the shared analytics workflow", current_section)
+        self.assertIn("unique trace codes", current_section)
         self.assertIn("larger picker for selecting columns", current_section)
         self.assertIn("unassigned rows kept in POPULATION", current_section)
         self.assertIn("Detailed diagnostics are collapsed by default", current_section)
@@ -42,6 +43,18 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
             "schema",
         ):
             self.assertNotIn(technical_term, current_section)
+
+        current_bullets = [
+            line.strip()
+            for line in current_section.splitlines()
+            if line.strip().startswith("- ")
+        ]
+        changelog_bullets = [
+            line.strip()
+            for line in sync_release_metadata.CHANGELOG_PATH.read_text(encoding="utf-8").splitlines()
+            if line.strip().startswith("- ")
+        ]
+        self.assertLess(len(current_bullets), len(changelog_bullets))
 
     def test_sync_readme_updates_public_labels(self):
         metadata = sync_release_metadata.load_metadata()

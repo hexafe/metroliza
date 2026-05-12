@@ -15,6 +15,7 @@ BLOCKED_PREFIXES = (
     "industrial_artifacts/",
     "industrial_exports/",
     "smoke-artifacts/",
+    "htmlcov/",
 )
 BLOCKED_PREFIXES_LOWER = tuple(prefix.lower() for prefix in BLOCKED_PREFIXES)
 BLOCKED_FILENAMES = {
@@ -25,6 +26,8 @@ BLOCKED_FILENAMES = {
     "industrial_sources.yaml",
     "industrial_sources.yml",
     "industrial_connection_dump.json",
+    ".coverage",
+    "coverage.xml",
     "nuitka-build-report.xml",
     "odbc.ini",
     "token.json",

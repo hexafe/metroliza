@@ -90,3 +90,42 @@ def test_industrial_analytics_thread_relays_workflow_status_updates(
     assert labels == ["Loading production data...\nReading cached rows (1/5)\nETA --"]
     assert results == [result]
     assert errors == []
+
+
+def test_industrial_analytics_thread_passes_tabular_grouping_to_workflow(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    _skip_if_pyqt_unavailable()
+
+    result = object()
+    grouping_df = object()
+    captured = {}
+
+    def run_tabular(**kwargs):
+        captured.update(kwargs)
+        return result
+
+    monkeypatch.setattr(industrial_workers, "run_tabular_file_analytics", run_tabular)
+    thread = IndustrialAnalyticsThread(
+        source_kind="tabular_file",
+        input_file=str(tmp_path / "table.csv"),
+        output_dashboard_file=str(tmp_path / "analytics.html"),
+        grouping_df=grouping_df,
+        sheet_name="Measurements",
+        timestamp_column="time_stamp",
+        reference_column="reference_id",
+    )
+    results: list[object] = []
+    errors: list[str] = []
+    _capture_signal(thread.result_ready, results)
+    _capture_signal(thread.error_occurred, errors)
+
+    thread.run()
+
+    assert results == [result]
+    assert errors == []
+    assert captured["grouping_df"] is grouping_df
+    assert captured["sheet_name"] == "Measurements"
+    assert captured["timestamp_column"] == "time_stamp"
+    assert captured["reference_column"] == "reference_id"

@@ -680,6 +680,8 @@ class IndustrialAnalyticsDialog(QDialog):
         dialog = TabularAnalyticsGroupingDialog(
             self,
             dataframe=self.tabular_load_result.dataframe,
+            column_mapping=self.tabular_load_result.column_mapping,
+            grouping_dataframe=self.df_for_grouping if self.grouping_applied else None,
         )
         dialog.exec()
         self._sync_ui_state()

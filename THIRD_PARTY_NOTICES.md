@@ -33,14 +33,25 @@ Vendored RapidOCR model files:
 - `modules/ocr_models/rapidocr/ch_ppocr_mobile_v2.0_cls_mobile.onnx`
 - `modules/ocr_models/rapidocr/latin_PP-OCRv3_rec_mobile.onnx`
 
+## Hexafe runtime packages
+
+Metroliza can bundle internal Hexafe runtime packages for grouped statistics,
+statistical plots, and industrial database access.
+
+| Component | License / notice | Project |
+| --- | --- | --- |
+| hexafe-groupstats | MIT | https://github.com/hexafe/hexafe-groupstats |
+| hexafe-plotstats | MIT | https://github.com/hexafe/hexafe-plotstats |
+| Oznak | MIT | https://github.com/hexafe/oznak |
+
 ## Release packaging obligations
 
 - Ship or attach this notice with every distributed executable, installer, ZIP,
   or other release artifact.
 - Preserve RapidOCR's Apache-2.0 license notice and the model copyright
   attribution above.
-- Preserve ONNX Runtime, OpenVINO, OpenCV, and NumPy license/metadata files when the
-  packaging tool can include distribution metadata.
+- Preserve ONNX Runtime, OpenVINO, OpenCV, NumPy, hexafe-plotstats, and Oznak
+  license/metadata files when the packaging tool can include distribution metadata.
 - If RapidOCR, OCR model files, ONNX Runtime, OpenVINO, OpenCV, NumPy, or their pinned
   versions change, update this file and rerun the packaging validation tests.
 - Do not publish a release artifact produced with an unsafe OCR packaging

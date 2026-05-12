@@ -10,6 +10,7 @@ from modules.stats_utils import safe_process_capability
 
 _SAMPLE_ROWS = 200
 _TOP_FULL_READ_CANDIDATES = 2
+_BLANK_GROUP_VALUE = "(blank)"
 
 
 logger = logging.getLogger(__name__)
@@ -181,6 +182,21 @@ def migrate_csv_summary_presets(presets):
             payload.get('plot_toggles', {}),
             full_report=include_extended_plots,
         )
+        grouping_columns = payload.get('grouping_columns', [])
+        if not isinstance(grouping_columns, list):
+            grouping_columns = []
+            changed = True
+        grouping_columns = [str(column) for column in grouping_columns]
+
+        selected_group_keys = payload.get('selected_group_keys', [])
+        if not isinstance(selected_group_keys, list):
+            selected_group_keys = []
+            changed = True
+        selected_group_keys = [
+            [str(part) for part in key]
+            for key in selected_group_keys
+            if isinstance(key, list)
+        ]
 
         normalized_payload = {
             'selected_indexes': selected_indexes,
@@ -190,6 +206,8 @@ def migrate_csv_summary_presets(presets):
             'include_extended_plots': include_extended_plots,
             'summary_only': summary_only,
             'plot_toggles': plot_toggles,
+            'grouping_columns': grouping_columns,
+            'selected_group_keys': selected_group_keys,
         }
 
         if payload != normalized_payload:
@@ -339,6 +357,74 @@ def normalize_column_spec_limits(data_columns, column_spec_limits):
         }
 
     return normalized
+
+
+def normalize_csv_grouping_key(grouping_columns, values):
+    """Return a stable display/filter key for a CSV grouping row."""
+    grouping_columns = list(grouping_columns or [])
+    normalized = []
+    for index, _column in enumerate(grouping_columns):
+        value = values[index] if index < len(values) else None
+        if pd.isna(value):
+            normalized.append(_BLANK_GROUP_VALUE)
+            continue
+        text = str(value).strip()
+        normalized.append(text or _BLANK_GROUP_VALUE)
+    return tuple(normalized)
+
+
+def build_csv_grouping_preview(data_frame, grouping_columns):
+    """Build unique grouping combinations for the selected CSV columns."""
+    if data_frame is None or not grouping_columns:
+        return []
+    grouping_columns = [column for column in (grouping_columns or []) if column in data_frame.columns]
+    if not grouping_columns:
+        return []
+
+    preview_frame = data_frame[grouping_columns].copy()
+    for column in grouping_columns:
+        preview_frame[column] = preview_frame[column].map(
+            lambda value: normalize_csv_grouping_key([column], [value])[0]
+        )
+    preview_frame["_row_count"] = 1
+    grouped = (
+        preview_frame.groupby(grouping_columns, dropna=False, sort=True)["_row_count"]
+        .sum()
+        .reset_index()
+    )
+    rows = []
+    for record in grouped.to_dict("records"):
+        key = tuple(str(record[column]) for column in grouping_columns)
+        rows.append(
+            {
+                "key": key,
+                "label": " | ".join(key),
+                "row_count": int(record["_row_count"]),
+            }
+        )
+    return rows
+
+
+def filter_csv_summary_by_group_keys(data_frame, grouping_columns, selected_group_keys):
+    """Filter CSV Summary rows to selected grouping-key combinations."""
+    if data_frame is None:
+        return data_frame
+    grouping_columns = [column for column in (grouping_columns or []) if column in data_frame.columns]
+    selected_keys = {
+        tuple(str(part) for part in list(key))
+        for key in (selected_group_keys or [])
+        if isinstance(key, (list, tuple)) and len(key) == len(grouping_columns)
+    }
+    if not grouping_columns or not selected_keys:
+        return data_frame.copy()
+
+    key_frame = data_frame[grouping_columns].copy()
+    for column in grouping_columns:
+        key_frame[column] = key_frame[column].map(
+            lambda value: normalize_csv_grouping_key([column], [value])[0]
+        )
+    row_keys = key_frame.apply(lambda row: tuple(str(row[column]) for column in grouping_columns), axis=1)
+    return data_frame.loc[row_keys.isin(selected_keys)].copy()
 
 
 def parse_delimiter_with_sniffer(file_path):

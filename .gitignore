@@ -18,6 +18,9 @@ license.key
 # Local Python caches and scratch data
 __pycache__/
 .pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
 test.db
 
 # Local benchmark output
