@@ -6,6 +6,7 @@ import pytest
 try:
     from PyQt6.QtCore import Qt
     from PyQt6.QtWidgets import QApplication
+    from modules import ui_theme_tokens
     from modules.list_selection_utils import ListSelectionUtils
     from modules.tabular_analytics_grouping_dialog import TabularAnalyticsGroupingDialog
 except ImportError as exc:  # pragma: no cover - depends on PyQt collection order
@@ -37,6 +38,9 @@ def _dialog_for_frame(frame: pd.DataFrame):
     dialog.selector_columns = []
     dialog.selected_selector_keys = set()
     dialog.default_group = "POPULATION"
+    dialog.default_group_color = ui_theme_tokens.DEFAULT_GROUP_COLOR
+    dialog.group_color_column = "GROUP_COLOR"
+    dialog.group_palette = ui_theme_tokens.themed_group_palette()
     return dialog
 
 
@@ -54,6 +58,10 @@ class _FakeMouseEvent:
 
     def accept(self):
         self.accepted = True
+
+
+def _background_hex(item) -> str:
+    return item.background().color().name().upper()
 
 
 def test_available_grouping_columns_include_tracecode_even_when_reference_is_different() -> None:
@@ -108,6 +116,7 @@ def test_grouping_dataframe_labels_rows_with_selected_column_chain() -> None:
 
     assert grouping_frame["REFERENCE"].tolist() == ["TC-001 | C1", "TC-002 | C2"]
     assert grouping_frame["GROUP"].tolist() == ["POPULATION", "POPULATION"]
+    assert grouping_frame["GROUP_COLOR"].tolist() == ["#FFFFFF", "#FFFFFF"]
 
 
 def test_grouping_column_status_uses_original_column_labels() -> None:
@@ -152,7 +161,7 @@ def test_removing_middle_grouping_column_projects_selected_keys_by_column_name()
 
 
 def test_grouping_dialog_column_panes_are_tall_enough_for_multiple_columns() -> None:
-    _app()
+    app = _app()
     dialog = TabularAnalyticsGroupingDialog(
         dataframe=pd.DataFrame(
             {
@@ -164,8 +173,13 @@ def test_grouping_dialog_column_panes_are_tall_enough_for_multiple_columns() -> 
         )
     )
     try:
+        dialog.show()
+        app.processEvents()
+        app.processEvents()
         assert dialog.available_columns_list.minimumHeight() >= 150
         assert dialog.selected_columns_list.minimumHeight() >= 120
+        assert dialog.available_columns_list.height() >= 120
+        assert dialog.selected_columns_list.height() >= 120
         assert dialog.selector_list.minimumHeight() >= 220
     finally:
         dialog.close()
@@ -251,6 +265,100 @@ def test_create_group_uses_selected_keys_from_paged_selector() -> None:
         dialog.close()
 
 
+def test_create_or_add_prompts_each_time_so_second_group_can_be_created(monkeypatch) -> None:
+    _app()
+    frame = pd.DataFrame(
+        {
+            "source_row_number": [1, 2, 3],
+            "tracecode": ["TC-001", "TC-002", "TC-003"],
+            "length_mm": [1.0, 2.0, 3.0],
+        }
+    )
+    dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
+    responses = iter([("Fixture A", True), ("Fixture B", True)])
+    monkeypatch.setattr(
+        "modules.tabular_analytics_grouping_dialog.QInputDialog.getText",
+        lambda *_args, **_kwargs: next(responses),
+    )
+    try:
+        dialog.selector_columns = ["tracecode"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+
+        dialog.selected_selector_keys = {("TC-001",)}
+        dialog.create_group()
+        assert dialog.groups_list.currentItem().data(Qt.ItemDataRole.UserRole) == "Fixture A"
+
+        dialog.selected_selector_keys = {("TC-002",)}
+        dialog.create_group()
+
+        assignments = dialog.df.set_index("REPORT_ID")["GROUP"].to_dict()
+        assert assignments == {1: "Fixture A", 2: "Fixture B", 3: "POPULATION"}
+        colors = dialog.df.set_index("REPORT_ID")["GROUP_COLOR"].to_dict()
+        assert colors[1] != dialog.default_group_color
+        assert colors[2] != dialog.default_group_color
+        assert colors[1] != colors[2]
+    finally:
+        dialog.close()
+
+
+def test_add_to_existing_group_reuses_color_and_refreshes_colored_panes() -> None:
+    _app()
+    frame = pd.DataFrame(
+        {
+            "source_row_number": [1, 2, 3],
+            "tracecode": ["TC-001", "TC-002", "TC-003"],
+            "length_mm": [1.0, 2.0, 3.0],
+        }
+    )
+    dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
+    try:
+        dialog.selector_columns = ["tracecode"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+
+        dialog.selected_selector_keys = {("TC-001",)}
+        dialog.create_group(initial_group_name="Fixture A")
+        group_color = dialog.df.loc[dialog.df["REPORT_ID"] == 1, "GROUP_COLOR"].iloc[0]
+
+        dialog.selected_selector_keys = {("TC-002",)}
+        dialog._refresh_selectors()
+        dialog.create_group(initial_group_name="Fixture A")
+
+        grouped = dialog.df.loc[dialog.df["GROUP"] == "Fixture A", ["REPORT_ID", "GROUP_COLOR"]]
+        assert grouped["REPORT_ID"].tolist() == [1, 2]
+        assert set(grouped["GROUP_COLOR"]) == {group_color}
+        assert dialog.selected_selector_keys == set()
+        assert dialog.selector_list.selectedItems() == []
+
+        selector_colors = {
+            dialog.selector_list.item(index).data(Qt.ItemDataRole.UserRole): _background_hex(
+                dialog.selector_list.item(index)
+            )
+            for index in range(dialog.selector_list.count())
+        }
+        assert selector_colors[("TC-001",)] == group_color.upper()
+        assert selector_colors[("TC-002",)] == group_color.upper()
+        assert selector_colors[("TC-003",)] == dialog.default_group_color.upper()
+
+        group_colors = {
+            dialog.groups_list.item(index).data(Qt.ItemDataRole.UserRole): _background_hex(
+                dialog.groups_list.item(index)
+            )
+            for index in range(dialog.groups_list.count())
+        }
+        assert group_colors["Fixture A"] == group_color.upper()
+        assert group_colors["POPULATION"] == dialog.default_group_color.upper()
+
+        assert dialog.group_members_list.count() == 2
+        assert {
+            _background_hex(dialog.group_members_list.item(index))
+            for index in range(dialog.group_members_list.count())
+        } == {group_color.upper()}
+    finally:
+        dialog.close()
+
+
 def test_shift_range_selection_uses_pre_click_anchor_and_ctrl_toggles_range() -> None:
     _app()
     dialog = TabularAnalyticsGroupingDialog(dataframe=pd.DataFrame())
@@ -316,6 +424,7 @@ def test_existing_grouping_assignments_are_preserved_when_dialog_reopens() -> No
             {
                 "REPORT_ID": [1, 3],
                 "GROUP": ["Fixture A", "Fixture B"],
+                "GROUP_COLOR": ["#ABCDEF", "#FEDCBA"],
             }
         )
     )
@@ -323,3 +432,4 @@ def test_existing_grouping_assignments_are_preserved_when_dialog_reopens() -> No
     dialog._apply_group_assignments(assignments)
 
     assert dialog.df["GROUP"].tolist() == ["Fixture A", "POPULATION", "Fixture B"]
+    assert dialog.df["GROUP_COLOR"].tolist() == ["#ABCDEF", "#FFFFFF", "#FEDCBA"]
