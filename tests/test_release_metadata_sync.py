@@ -21,11 +21,11 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
 
         current_section = VersionDate.release_notes.split("<br><b>Archive:</b><br>", 1)[0]
 
-        self.assertIn("CSV Summary now uses the shared analytics workflow", current_section)
-        self.assertIn("unique trace codes", current_section)
-        self.assertIn("larger picker for selecting columns", current_section)
-        self.assertIn("unassigned rows kept in POPULATION", current_section)
-        self.assertIn("Detailed diagnostics are collapsed by default", current_section)
+        self.assertIn("CSV Summary now analyzes CSV and Excel files", current_section)
+        self.assertIn("double-click columns", current_section)
+        self.assertIn("filtered and grouped before dashboards", current_section)
+        self.assertIn("Cached industrial rows", current_section)
+        self.assertIn("older CSV Summary workbook path has been retired", current_section)
         for technical_term in (
             "loading animation",
             "PyInstaller",
@@ -49,6 +49,8 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
             for line in current_section.splitlines()
             if line.strip().startswith("- ")
         ]
+        self.assertGreaterEqual(len(current_bullets), 5)
+        self.assertLessEqual(len(current_bullets), 6)
         changelog_bullets = [
             line.strip()
             for line in sync_release_metadata.CHANGELOG_PATH.read_text(encoding="utf-8").splitlines()

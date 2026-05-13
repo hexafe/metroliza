@@ -2,24 +2,18 @@ RELEASE_VERSION = "2026.05rc1"
 VERSION_DATE = "260512"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = (
-    "Industrial analytics and CSV Summary now create grouped dashboards, row-filtered summaries, and Excel workbooks with export-matching plots."
+    "CSV and Excel analytics are easier to group and now share dashboards, Excel workbooks, and cached industrial context in one workflow."
 )
 PUBLIC_VERSION_LABEL = "2026.05 RC1 (build 260512)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
-    - CSV Summary now uses the shared analytics workflow for CSV and Excel files<br>
-    - CSV Summary can filter CSV or Excel rows, including unique trace codes, before grouping, charts, dashboard output, and workbook output<br>
-    - Metrics load automatically after choosing a CSV or Excel file, with a larger picker for selecting columns and search<br>
-    - Excel files now show the available sheet names after selection<br>
-    - CSV and Excel analytics can use a separate Groups dialog, with unassigned rows kept in POPULATION<br>
-    - Grouped charts show selected groups separately, use marker-only time-series scatter plots, and normalize histograms so small groups remain visible<br>
-    - Histogram outputs include export-style statistics tables<br>
-    - Dashboards and Excel workbooks include the selected plots with the same chart style and histogram binning used in Export<br>
-    - After analytics finishes, the result window links directly to the created dashboard and workbook files<br>
-    - Detailed diagnostics are collapsed by default, while progress messages stay visible during dashboard and workbook creation<br>
-    - Industrial data can select the report database directly before connecting, syncing, exporting, or analyzing production-line records<br>
-    - The older CSV Summary workbook path has been retired; CSV Summary now opens the shared CSV/Excel analytics workflow<br>
+    - CSV Summary now analyzes CSV and Excel files in the shared analytics workflow<br>
+    - Grouping is easier: double-click columns, select matching rows, then create or add a group<br>
+    - CSV and Excel rows can be filtered and grouped before dashboards, charts, and workbooks are created<br>
+    - Dashboards and Excel workbooks include the selected plots with the same chart style used in Export<br>
+    - Cached industrial rows can use the same grouped dashboard and workbook flow as CSV and Excel files<br>
+    - The older CSV Summary workbook path has been retired; CSV Summary now opens the shared analytics workflow<br>
 
     <br><b>Archive:</b><br>
 

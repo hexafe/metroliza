@@ -1,19 +1,12 @@
 # Changelog (for end users)
 
 ## 2026.05 RC1 (build 260512) — current version
-- CSV Summary now uses the shared analytics workflow for CSV and Excel files.
-- CSV Summary grouping can now use any CSV column, including unique trace codes, to filter the rows included in a summary workbook.
-- Metrics load automatically after choosing a CSV or Excel file, and the larger metrics picker makes longer column lists easier to manage.
-- CSV and Excel analytics can use a separate Groups dialog. Rows that are not assigned to a custom group stay in `POPULATION`, which supports selected-vs-rest comparisons.
-- Grouped charts show selected groups separately, time-series charts use marker-only scatter plots, and multi-group histograms use normalized shares so small groups remain visible.
-- Histogram outputs include export-style statistics tables.
-- Dashboards and Excel workbooks include the selected plots, using the same chart style and histogram binning used in Export.
-- Analytics completion now links directly to the generated dashboard and workbook files.
-- Detailed diagnostics are collapsed by default, while progress messages stay visible during dashboard and workbook creation.
-- Industrial data can select the report database directly before connecting, syncing, exporting, or analyzing production-line records.
-- The older CSV Summary workbook path has been retired; **CSV Summary...** now opens the shared CSV/Excel analytics workflow.
-- Canceling analytics avoids leaving partial dashboard or workbook files behind.
-- Older database files open correctly in export, grouping, matching, industrial tools, and Modify Database.
+- CSV Summary now analyzes CSV and Excel files in the shared analytics workflow.
+- Grouping is easier: double-click columns, select matching rows, then create or add a group.
+- CSV and Excel rows can be filtered and grouped before dashboards, charts, and workbooks are created.
+- Dashboards and Excel workbooks include the selected plots with the same chart style used in Export.
+- Cached industrial rows can use the same grouped dashboard and workbook flow as CSV and Excel files.
+- The older CSV Summary workbook path has been retired; **CSV Summary...** now opens the shared analytics workflow.
 
 ## 2026.04 (build 260421)
 - Re-running parsing on an existing database refreshes older CMM report rows so OCR header metadata can replace filename-only values.

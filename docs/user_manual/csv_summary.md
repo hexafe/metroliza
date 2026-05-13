@@ -72,12 +72,12 @@ to separate workbook sheets.
 
 Click **Edit groups** when you want export-style groups for the CSV/Excel rows. The
 grouping dialog starts empty and leaves every row in **POPULATION** until you create a
-custom group. Search for a source column, click **Add column** to choose the first column
-used to select parts, such as `TraceCode`, then add another column when you want to refine
-the visible combinations. The
-matching list shows each selected column chain as values like `TraceCode | Cavity`, so you
-can select the rows for a named group and leave the remaining rows in **POPULATION** for
-selected-vs-rest comparisons.
+custom group. Search for a source column and double-click it to choose the first column
+used to select parts, such as `TraceCode`. Double-click another available column when you
+want to refine the visible combinations, or double-click a selected column to remove it.
+The matching list shows each selected column chain as values like `TraceCode | Cavity`, so
+you can select the rows for a named group and leave the remaining rows in **POPULATION**
+for selected-vs-rest comparisons.
 
 The selected groups are written as the `GROUP` column and are used by aggregation, charts,
 groupstats, and workbook output. Choose a time bucket and aggregation method in the main

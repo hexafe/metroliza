@@ -122,17 +122,6 @@ class TabularAnalyticsGroupingDialog(QDialog):
         columns_grid.setColumnStretch(1, 1)
         layout.addWidget(column_area, 1)
 
-        selector_actions = QHBoxLayout()
-        selector_actions.setSpacing(8)
-        self.add_column_button = QPushButton("Add column")
-        self.remove_column_button = QPushButton("Remove selected column")
-        self.clear_columns_button = QPushButton("Clear columns")
-        selector_actions.addWidget(self.add_column_button)
-        selector_actions.addWidget(self.remove_column_button)
-        selector_actions.addWidget(self.clear_columns_button)
-        selector_actions.addStretch(1)
-        layout.addLayout(selector_actions)
-
         list_splitter = QSplitter(Qt.Orientation.Horizontal)
 
         selector_widget = QWidget()
@@ -155,20 +144,15 @@ class TabularAnalyticsGroupingDialog(QDialog):
         selector_column.addWidget(self.selector_list)
         selector_paging = QHBoxLayout()
         selector_paging.setSpacing(8)
-        self.select_visible_button = QPushButton("Select visible")
-        self.select_all_matching_button = QPushButton("Select all matching")
-        self.clear_matching_button = QPushButton("Clear matching")
         self.previous_page_button = QPushButton("Previous")
         self.next_page_button = QPushButton("Next")
         self.selector_page_label = status_chip("", "neutral")
-        selector_paging.addWidget(self.select_visible_button)
-        selector_paging.addWidget(self.select_all_matching_button)
-        selector_paging.addWidget(self.clear_matching_button)
         selector_paging.addStretch(1)
         selector_paging.addWidget(self.previous_page_button)
+        selector_paging.addWidget(self.selector_page_label)
         selector_paging.addWidget(self.next_page_button)
+        selector_paging.addStretch(1)
         selector_column.addLayout(selector_paging)
-        selector_column.addWidget(self.selector_page_label)
         list_splitter.addWidget(selector_widget)
 
         groups_widget = QWidget()
@@ -222,20 +206,14 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.column_search.textChanged.connect(self._refresh_available_columns)
         self.selected_column_search.textChanged.connect(self._refresh_selected_columns)
         self.available_columns_list.itemDoubleClicked.connect(lambda _item: self.add_selector_column())
-        self.selected_columns_list.itemDoubleClicked.connect(lambda _item: self.remove_selected_selector_column())
+        self.selected_columns_list.itemDoubleClicked.connect(self.remove_selected_selector_column)
         self.selected_columns_list.itemSelectionChanged.connect(self._sync_status)
         self.selector_search.textChanged.connect(self._handle_selector_search_changed)
-        self.add_column_button.clicked.connect(self.add_selector_column)
-        self.remove_column_button.clicked.connect(self.remove_selected_selector_column)
-        self.clear_columns_button.clicked.connect(self.clear_selector_columns)
-        self.select_visible_button.clicked.connect(self.select_visible_matching)
-        self.select_all_matching_button.clicked.connect(self.select_all_matching)
-        self.clear_matching_button.clicked.connect(self.clear_matching_selection)
         self.previous_page_button.clicked.connect(self.previous_selector_page)
         self.next_page_button.clicked.connect(self.next_selector_page)
         self.selector_list.itemSelectionChanged.connect(self._store_current_selection)
         self.groups_list.itemSelectionChanged.connect(self._populate_group_members)
-        self.create_group_button.clicked.connect(self.create_group)
+        self.create_group_button.clicked.connect(lambda: self.create_group())
         self.rename_group_button.clicked.connect(self.rename_group)
         self.delete_group_button.clicked.connect(self.delete_group)
         self.clear_selection_button.clicked.connect(self.clear_selection)
@@ -452,7 +430,6 @@ class TabularAnalyticsGroupingDialog(QDialog):
             item.setData(Qt.ItemDataRole.UserRole, column)
         if self.available_columns_list.count():
             self.available_columns_list.setCurrentRow(0)
-        self.add_column_button.setEnabled(self.available_columns_list.count() > 0)
 
     def _build_grouping_dataframe(self) -> pd.DataFrame:
         frame = build_tabular_grouping_dataframe(
@@ -558,10 +535,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.selector_columns.pop()
         self._after_selector_columns_removed(previous_columns=previous_columns)
 
-    def remove_selected_selector_column(self) -> None:
-        item = self.selected_columns_list.currentItem()
+    def remove_selected_selector_column(self, item: QListWidgetItem | None = None) -> None:
+        item = item or self.selected_columns_list.currentItem()
         if item is None:
-            self.remove_last_selector_column()
             return
         column = item.data(Qt.ItemDataRole.UserRole)
         if column not in self.selector_columns:
@@ -601,34 +577,6 @@ class TabularAnalyticsGroupingDialog(QDialog):
     def clear_selection(self) -> None:
         self.selected_selector_keys = set()
         self.selector_list.clearSelection()
-        self._sync_status()
-
-    def _visible_selector_keys(self) -> set[tuple[str, ...]]:
-        return {
-            tuple(self.selector_list.item(index).data(Qt.ItemDataRole.UserRole))
-            for index in range(self.selector_list.count())
-        }
-
-    def _matching_selector_keys(self) -> set[tuple[str, ...]]:
-        return set(
-            self._current_selector_index().matching_keys(
-                search_text=self.selector_search.text(),
-            )
-        )
-
-    def select_visible_matching(self) -> None:
-        self.selected_selector_keys |= self._visible_selector_keys()
-        self._refresh_selectors()
-        self._sync_status()
-
-    def select_all_matching(self) -> None:
-        self.selected_selector_keys |= self._matching_selector_keys()
-        self._refresh_selectors()
-        self._sync_status()
-
-    def clear_matching_selection(self) -> None:
-        self.selected_selector_keys -= self._matching_selector_keys()
-        self._refresh_selectors()
         self._sync_status()
 
     def previous_selector_page(self) -> None:
@@ -767,8 +715,6 @@ class TabularAnalyticsGroupingDialog(QDialog):
             else:
                 self.selector_status_label.setText(f"{columns_text}: all rows")
             set_status_variant(self.selector_status_label, "success")
-        self.remove_column_button.setEnabled(bool(self.selector_columns))
-        self.clear_columns_button.setEnabled(bool(self.selector_columns))
         self.create_group_button.setEnabled(bool(self.selector_columns and self.selected_selector_keys))
         selected_group = self._selected_group_name()
         self.rename_group_button.setEnabled(bool(selected_group))
@@ -829,11 +775,6 @@ class TabularAnalyticsGroupingDialog(QDialog):
         set_status_variant(self.selector_page_label, "neutral")
         self.previous_page_button.setEnabled(self._selector_page_offset > 0)
         self.next_page_button.setEnabled(self._selector_page_offset + len(preview_rows) < total_rows)
-        has_visible = bool(preview_rows)
-        has_matching = bool(total_rows)
-        self.select_visible_button.setEnabled(has_visible)
-        self.select_all_matching_button.setEnabled(has_matching)
-        self.clear_matching_button.setEnabled(bool(self.selected_selector_keys and has_matching))
 
     def _refresh_selected_columns(self) -> None:
         current_column = None
