@@ -364,7 +364,7 @@ def test_sync_thread_reports_partial_success_as_completed_with_warnings(monkeypa
         status_row = conn.execute(
             "SELECT status, error_summary FROM industrial_sync_runs"
         ).fetchone()
-    assert status_row == ("succeeded", "secondary source timed out password=<redacted>")
+    assert status_row == ("completed_with_warnings", "secondary source timed out password=<redacted>")
 
 
 def test_sync_thread_records_cancelled_run_without_upserting_rows(monkeypatch, tmp_path):

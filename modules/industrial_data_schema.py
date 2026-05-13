@@ -5,15 +5,32 @@ from __future__ import annotations
 from modules.db import run_transaction_with_retry
 
 
-SCHEMA_VERSION = "industrial_data_v1"
+SCHEMA_VERSION = "industrial_data_v2"
 
-SYNC_RUN_STATUSES = ("running", "succeeded", "failed", "cancelled")
+SYNC_RUN_STATUSES = ("running", "succeeded", "completed_with_warnings", "failed", "cancelled")
 JOIN_MATCH_MODES = ("exact", "time_window")
 LINK_CANDIDATE_STATUSES = ("candidate", "accepted", "rejected")
 
 
 def _quoted_values(values: tuple[str, ...]) -> str:
     return ", ".join(f"'{value}'" for value in values)
+
+
+def _industrial_sync_runs_table_statement(table_name: str = "industrial_sync_runs") -> str:
+    return f"""CREATE TABLE IF NOT EXISTS {table_name} (
+        id INTEGER PRIMARY KEY,
+        source_profile_id INTEGER NOT NULL,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        status TEXT NOT NULL CHECK (status IN ({_quoted_values(SYNC_RUN_STATUSES)})),
+        row_count INTEGER NOT NULL DEFAULT 0,
+        error_summary TEXT,
+        filters_json TEXT,
+        oznak_version TEXT,
+        oznak_commit TEXT,
+        diagnostics_json TEXT,
+        FOREIGN KEY (source_profile_id) REFERENCES industrial_source_profiles(id) ON DELETE CASCADE
+    )"""
 
 
 SCHEMA_TABLE_STATEMENTS = (
@@ -38,20 +55,7 @@ SCHEMA_TABLE_STATEMENTS = (
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     )""",
-    f"""CREATE TABLE IF NOT EXISTS industrial_sync_runs (
-        id INTEGER PRIMARY KEY,
-        source_profile_id INTEGER NOT NULL,
-        started_at TEXT NOT NULL,
-        finished_at TEXT,
-        status TEXT NOT NULL CHECK (status IN ({_quoted_values(SYNC_RUN_STATUSES)})),
-        row_count INTEGER NOT NULL DEFAULT 0,
-        error_summary TEXT,
-        filters_json TEXT,
-        oznak_version TEXT,
-        oznak_commit TEXT,
-        diagnostics_json TEXT,
-        FOREIGN KEY (source_profile_id) REFERENCES industrial_source_profiles(id) ON DELETE CASCADE
-    )""",
+    _industrial_sync_runs_table_statement(),
     """CREATE TABLE IF NOT EXISTS industrial_records (
         id INTEGER PRIMARY KEY,
         source_profile_id INTEGER NOT NULL,
@@ -144,6 +148,7 @@ def ensure_industrial_data_schema(
         for statement in SCHEMA_TABLE_STATEMENTS:
             cursor.execute(statement)
         _ensure_source_profile_columns(cursor)
+        _ensure_sync_run_status_constraint(cursor)
         for statement in SCHEMA_INDEX_STATEMENTS:
             cursor.execute(statement)
         cursor.execute(
@@ -158,6 +163,8 @@ def ensure_industrial_data_schema(
         retries=retries,
         retry_delay_s=retry_delay_s,
     )
+    if connection is not None:
+        connection.execute("PRAGMA foreign_keys=ON")
 
 
 def _ensure_source_profile_columns(cursor) -> None:
@@ -173,3 +180,46 @@ def _ensure_source_profile_columns(cursor) -> None:
     for column_name, statement in migrations.items():
         if column_name not in existing_columns:
             cursor.execute(statement)
+
+
+def _ensure_sync_run_status_constraint(cursor) -> None:
+    """Rebuild legacy sync-run tables whose CHECK constraint lacks warning status."""
+
+    cursor.execute(
+        """
+        SELECT sql
+        FROM sqlite_master
+        WHERE type = 'table' AND name = 'industrial_sync_runs'
+        """
+    )
+    row = cursor.fetchone()
+    create_sql = str(row[0] or "") if row else ""
+    if not create_sql or "completed_with_warnings" in create_sql:
+        return
+
+    columns = (
+        "id",
+        "source_profile_id",
+        "started_at",
+        "finished_at",
+        "status",
+        "row_count",
+        "error_summary",
+        "filters_json",
+        "oznak_version",
+        "oznak_commit",
+        "diagnostics_json",
+    )
+    column_list = ", ".join(columns)
+    cursor.execute("PRAGMA foreign_keys=OFF")
+    cursor.execute("DROP TABLE IF EXISTS industrial_sync_runs_new")
+    cursor.execute(_industrial_sync_runs_table_statement("industrial_sync_runs_new"))
+    cursor.execute(
+        f"""
+        INSERT INTO industrial_sync_runs_new ({column_list})
+        SELECT {column_list}
+        FROM industrial_sync_runs
+        """
+    )
+    cursor.execute("DROP TABLE industrial_sync_runs")
+    cursor.execute("ALTER TABLE industrial_sync_runs_new RENAME TO industrial_sync_runs")

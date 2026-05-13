@@ -371,10 +371,9 @@ class IndustrialOznakSyncThread(QThread):
                 link_summary = materialize_industrial_report_links(self.db_file)
 
             if sync_run_id is not None:
-                stored_status = "succeeded" if final_status == "completed_with_warnings" else final_status
                 repository.finish_sync_run(
                     sync_run_id=sync_run_id,
-                    status=stored_status,
+                    status=final_status,
                     row_count=result.row_count,
                     error_summary=error,
                     diagnostics=result.diagnostics,

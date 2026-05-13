@@ -105,6 +105,16 @@ def test_build_production_dashboard_manifest_contains_requested_chart_families(t
     )
 
 
+def test_dashboard_chart_layout_reserves_title_and_legend_spacing(tmp_path) -> None:
+    manifest = _production_dashboard_fixture(tmp_path)
+
+    layout = manifest["charts"][0]["plotly_spec"]["layout"]
+
+    assert layout["margin"]["t"] >= 110
+    assert layout["legend"]["y"] > 1.0
+    assert layout["title"]["y"] >= 0.99
+
+
 def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None:
     manifest = _production_dashboard_fixture(tmp_path)
     output_file = tmp_path / "production_dashboard.html"

@@ -4,7 +4,7 @@ Last updated: 2026-05-09
 
 ## Scope
 
-This is the repo-local plan for a focused UI/UX revamp of the Metroliza desktop app and exported HTML dashboard. It combines the earlier branch-local UI plan with the May 2026 audit of `modules/main_window.py`, `modules/export_dialog.py`, `modules/parsing_dialog.py`, `modules/modify_db.py`, `modules/characteristic_mapping_dialog.py`, and `modules/csv_summary_dialog.py`.
+This is the repo-local plan for a focused UI/UX revamp of the Metroliza desktop app and exported HTML dashboard. It combines the earlier branch-local UI plan with the May 2026 audit of `modules/main_window.py`, `modules/export_dialog.py`, `modules/parsing_dialog.py`, `modules/modify_db.py`, `modules/characteristic_mapping_dialog.py`, and the shared CSV/Excel analytics surface in `modules/industrial_analytics_dialog.py`.
 
 Metroliza should remain a professional metrology workflow tool: quiet, dense, predictable, and fast to scan. The goal is not a decorative redesign, not a marketing shell, and not a broad rewrite. Changes should be incremental, tested, and compatible with the current `codex/report-metadata-redesign` branch.
 

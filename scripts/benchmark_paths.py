@@ -894,6 +894,12 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
     fixture_metrics = _create_csv_fixture(csv_path, row_count=row_count, data_columns=data_columns)
 
     progress_messages: list[str] = []
+    progress_events: list[tuple[float, str]] = []
+
+    def record_progress(message: str) -> None:
+        progress_messages.append(str(message))
+        progress_events.append((time.perf_counter(), str(message)))
+
     run_start = time.perf_counter()
     result = run_tabular_file_analytics(
         input_file=str(csv_path),
@@ -908,15 +914,36 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
         ),
         output_workbook_file=str(output_xlsx),
         separate_parameter_sheets=True,
-        progress_callback=progress_messages.append,
+        progress_callback=record_progress,
     )
     run_s = time.perf_counter() - run_start
+    progress_marks = {
+        message.splitlines()[0].strip(): event_time - run_start
+        for event_time, message in progress_events
+        if message.strip()
+    }
+    chart_start_s = progress_marks.get('Writing dashboard...')
+    workbook_start_s = progress_marks.get('Writing workbook...')
+    complete_s = progress_marks.get('Analytics complete', run_s)
+    chart_generation_s = (
+        max(0.0, (workbook_start_s if workbook_start_s is not None else complete_s) - chart_start_s)
+        if chart_start_s is not None
+        else 0.0
+    )
+    workbook_write_s = (
+        max(0.0, complete_s - workbook_start_s)
+        if workbook_start_s is not None
+        else 0.0
+    )
 
     return ScenarioResult(
         scenario='csv_summary_export_path',
         wall_time_s=run_s,
         stage_timings_s={
             'shared_analytics_total': run_s,
+            'chart_generation': chart_generation_s,
+            'workbook_write': workbook_write_s,
+            'workbook_close': 0.0,
             'progress_messages': float(len(progress_messages)),
         },
         input_metrics={

@@ -625,18 +625,18 @@ def _chart_payload(
     layout: dict[str, Any],
 ) -> dict[str, Any]:
     resolved_layout = {
-        "title": {"text": title, "font": {"size": 18}, "y": 0.98, "yanchor": "top"},
+        "title": {"text": title, "font": {"size": 18}, "y": 0.99, "yanchor": "top"},
         "font": {"family": 'Aptos, "Segoe UI", "Helvetica Neue", sans-serif', "color": "#1f2933"},
         "paper_bgcolor": "#ffffff",
         "plot_bgcolor": "#ffffff",
         "colorway": list(PLOT_COLORWAY),
         "dragmode": "zoom",
-        "margin": {"l": 56, "r": 24, "t": 84, "b": 56},
+        "margin": {"l": 56, "r": 24, "t": 116, "b": 56},
         "hoverlabel": {"bgcolor": "#ffffff", "font": {"color": "#1f2933"}},
         "legend": {
             "orientation": "h",
             "yanchor": "bottom",
-            "y": 1.0,
+            "y": 1.11,
             "xanchor": "left",
             "x": 0.0,
             "bgcolor": "rgba(255,255,255,0.86)",

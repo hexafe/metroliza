@@ -52,7 +52,7 @@ pushed.
 
 1. CSV Summary should move under the Tools menu.
 2. The dancing duck GIF during parsing/exporting should be bigger.
-3. CSV Summary has an empty layout area around `Summary configuration`.
+3. CSV / Excel analytics must keep file loading before row filtering in the dialog flow.
 4. CSV Summary bottom actions are backwards: `Clear saved presets` looks more
    important than `Create Summary`.
 5. Grouping Enter-key workflow changed; Enter should not apply grouping.
@@ -76,9 +76,9 @@ worker.
 Files likely owned:
 
 - `modules/main_window.py`
-- `modules/csv_summary_dialog.py`
+- `modules/industrial_analytics_dialog.py`
 - `tests/test_main_window_metadata_ui.py`
-- `tests/test_csv_summary_integration.py`
+- `tests/test_industrial_analytics_dialog.py`
 - `tests/test_ui_revamp_foundation_layout.py`
 - `docs/user_manual/main_window.md`
 - `docs/user_manual/csv_summary.md`
@@ -88,8 +88,8 @@ Required changes:
 - Replace the main-window `CSV Summary` launcher button with
   `Tools > CSV Summary...`.
 - Keep `launch_csv_summary_dialog()` as the shared entry point.
-- Remove the standalone `Summary configuration` section label or make the CSV
-  dialog layout prevent that label from consuming vertical surplus.
+- Keep the CSV/Excel row filter hidden until source data is loaded, so file
+  loading remains the first visible step.
 - Move footer actions out of the grid:
   - secondary action left: `Clear saved presets`
   - stretch in the middle

@@ -650,9 +650,10 @@ Implemented:
 - CSV Summary scatter downsampling now writes sampled row-position/value helper
   columns and charts those sampled points, rather than pointing the chart at the
   first contiguous workbook rows.
-- Legacy CSV Summary workbook creation now writes to a same-directory temporary
-  `.xlsx` file and atomically replaces the target only after success. Cancelled
-  or failed runs clean up the temp file and preserve an existing target workbook.
+- The legacy CSV Summary worker/dialog has been retired; CSV/Excel analytics
+  now uses the shared production analytics workflow, whose dashboard and
+  workbook outputs write through same-directory temporary files and atomically
+  replace targets only after success.
 - Malformed CSV Summary preset numeric values are coerced safely to defaults with
   a warning instead of breaking dialog readiness.
 - Industrial analytics dynamic metric reads now chunk large SQLite `IN (...)`

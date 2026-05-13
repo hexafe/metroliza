@@ -287,8 +287,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
     def remove_last_selector_column(self) -> None:
         if not self.selector_columns:
             return
+        previous_columns = tuple(self.selector_columns)
         self.selector_columns.pop()
-        self._after_selector_columns_removed()
+        self._after_selector_columns_removed(previous_columns=previous_columns)
 
     def remove_selected_selector_column(self) -> None:
         item = self.selected_columns_list.currentItem()
@@ -298,17 +299,24 @@ class TabularAnalyticsGroupingDialog(QDialog):
         column = item.data(Qt.ItemDataRole.UserRole)
         if column not in self.selector_columns:
             return
+        previous_columns = tuple(self.selector_columns)
         self.selector_columns.remove(str(column))
-        self._after_selector_columns_removed()
+        self._after_selector_columns_removed(previous_columns=previous_columns)
 
-    def _after_selector_columns_removed(self) -> None:
+    def _after_selector_columns_removed(self, *, previous_columns: tuple[str, ...] | None = None) -> None:
         if not self.selector_columns:
             self.selected_selector_keys = set()
         else:
+            previous = tuple(previous_columns or self.selector_columns)
+            projection_indexes = [
+                previous.index(column)
+                for column in self.selector_columns
+                if column in previous
+            ]
             self.selected_selector_keys = {
-                tuple(key[: len(self.selector_columns)])
+                tuple(key[index] for index in projection_indexes)
                 for key in self.selected_selector_keys
-                if len(key) >= len(self.selector_columns)
+                if len(key) >= len(previous) and len(projection_indexes) == len(self.selector_columns)
             }
         self._selector_index = None
         self._rebuild_preserving_groups()

@@ -94,6 +94,31 @@ def test_grouping_column_status_uses_original_column_labels() -> None:
     assert dialog._selector_columns_text() == "TraceCode | Cavity"
 
 
+def test_removing_middle_grouping_column_projects_selected_keys_by_column_name() -> None:
+    dialog = _dialog_for_frame(
+        pd.DataFrame(
+            {
+                "source_row_number": [1, 2],
+                "tracecode": ["TC-001", "TC-002"],
+                "cavity": ["C1", "C2"],
+                "fixture": ["F1", "F2"],
+            }
+        )
+    )
+    dialog.selector_columns = ["tracecode", "fixture"]
+    dialog.selected_selector_keys = {
+        ("TC-001", "C1", "F1"),
+        ("TC-002", "C2", "F2"),
+    }
+    dialog.df = dialog._build_grouping_dataframe()
+    dialog._rebuild_preserving_groups = lambda: None
+    dialog._refresh_all = lambda: None
+
+    dialog._after_selector_columns_removed(previous_columns=("tracecode", "cavity", "fixture"))
+
+    assert dialog.selected_selector_keys == {("TC-001", "F1"), ("TC-002", "F2")}
+
+
 def test_existing_grouping_assignments_are_preserved_when_dialog_reopens() -> None:
     dialog = _dialog_for_frame(
         pd.DataFrame(

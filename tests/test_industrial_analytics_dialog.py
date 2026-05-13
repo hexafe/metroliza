@@ -211,14 +211,20 @@ def test_tabular_analytics_dialog_auto_loads_metrics_after_file_selection(
         assert dialog.metrics_list.count() == 2
         assert dialog.metrics_summary_label.text() == "2 of 2 metrics selected"
         assert dialog.choose_metrics_button.isEnabled()
-        assert dialog.load_metrics_button.text() == "Reload metrics"
+        assert dialog.load_metrics_button.text() == "Reload CSV/Excel data"
+        assert not dialog.filter_row_label.isHidden()
+        assert not dialog.filter_summary_label.isHidden()
+        assert not dialog.filters_button.isHidden()
         assert dialog.start_button.isEnabled()
 
         dialog.timestamp_column_combo.setCurrentIndex(0)
 
         assert dialog.metric_candidates == ()
         assert dialog.metrics_list.count() == 0
-        assert dialog.load_metrics_button.text() == "Load metrics"
+        assert dialog.load_metrics_button.text() == "Load CSV/Excel data"
+        assert dialog.filter_row_label.isHidden()
+        assert dialog.filter_summary_label.isHidden()
+        assert dialog.filters_button.isHidden()
         assert not dialog.start_button.isEnabled()
     finally:
         dialog.close()
@@ -323,6 +329,18 @@ def test_tabular_row_filter_is_summarized_passed_to_worker_and_used_for_grouping
         assert calls["tracecodes"] == ("TC-001", "TC-003")
         assert calls["column_mapping"]["TraceCode"] == "tracecode"
         assert calls["executed"] is True
+    finally:
+        dialog.close()
+
+
+def test_tabular_analytics_dialog_starts_with_load_before_row_filter() -> None:
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        assert dialog.load_metrics_button.text() == "Load CSV/Excel data"
+        assert dialog.filter_row_label.isHidden()
+        assert dialog.filter_summary_label.isHidden()
+        assert dialog.filters_button.isHidden()
     finally:
         dialog.close()
 

@@ -1220,7 +1220,7 @@ Primary files:
 - `modules/tabular_analytics_service.py`
 - `modules/industrial_analytics_service.py`
 - `modules/industrial_analytics_dashboard.py`
-- `modules/csv_summary_dialog.py` or its replacement launcher
+- `modules/industrial_analytics_dialog.py` as the shared CSV/Excel and production-cache launcher
 - `tests/test_tabular_analytics_service.py`
 - `tests/test_industrial_analytics_dashboard.py`
 

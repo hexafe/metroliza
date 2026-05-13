@@ -477,17 +477,18 @@ class IndustrialAnalyticsDialog(QDialog):
         grid.addWidget(self.reference_column_combo, row, 1, 1, 2)
 
         row += 1
-        grid.addWidget(self.filter_row_label, row, 0)
-        grid.addWidget(self.filter_summary_label, row, 1)
-        grid.addWidget(self.filters_button, row, 2)
-
-        row += 1
         metric_actions = QHBoxLayout()
         metric_actions.setContentsMargins(0, 0, 0, 0)
         metric_actions.setSpacing(8)
         metric_actions.addWidget(self.load_metrics_button)
         metric_actions.addStretch(1)
+        grid.addWidget(section_label("Data"), row, 0)
         grid.addLayout(metric_actions, row, 1, 1, 2)
+
+        row += 1
+        grid.addWidget(self.filter_row_label, row, 0)
+        grid.addWidget(self.filter_summary_label, row, 1)
+        grid.addWidget(self.filters_button, row, 2)
 
         row += 1
         metric_buttons = QHBoxLayout()
@@ -591,9 +592,7 @@ class IndustrialAnalyticsDialog(QDialog):
         ):
             widget.setVisible(show_file)
         self.filter_row_label.setText("Filters" if self.is_production_source else "Row filter")
-        self.filter_row_label.setVisible(True)
-        self.filter_summary_label.setVisible(True)
-        self.filters_button.setVisible(True)
+        self._sync_filter_visibility()
         self.filters_button.setText("Filters..." if self.is_production_source else "Filter rows...")
         self.database_row_label.setVisible(self.is_production_source)
         self.database_field.setVisible(self.is_production_source)
@@ -611,6 +610,12 @@ class IndustrialAnalyticsDialog(QDialog):
         summary, variant = self._tabular_filter_summary()
         self.filter_summary_label.setText(summary)
         set_status_variant(self.filter_summary_label, variant)
+
+    def _sync_filter_visibility(self) -> None:
+        show_filter = self.is_production_source or self.tabular_load_result is not None
+        self.filter_row_label.setVisible(show_filter)
+        self.filter_summary_label.setVisible(show_filter)
+        self.filters_button.setVisible(show_filter)
 
     def _handle_tabular_source_changed(self, _text: str = "") -> None:
         if self.is_production_source:
@@ -1121,7 +1126,13 @@ class IndustrialAnalyticsDialog(QDialog):
         self.edit_limits_button.setEnabled(bool(candidate_count and metrics))
         self.edit_groups_button.setEnabled(bool(candidate_count and not self.is_production_source))
         self.load_metrics_button.setEnabled(source_ready)
-        self.load_metrics_button.setText("Reload metrics" if candidate_count else "Load metrics")
+        if self.is_production_source:
+            self.load_metrics_button.setText("Reload metrics" if candidate_count else "Load metrics")
+        else:
+            self.load_metrics_button.setText(
+                "Reload CSV/Excel data" if candidate_count else "Load CSV/Excel data"
+            )
+        self._sync_filter_visibility()
         groupstats_available = self._tabular_groupstats_available()
         self.groupstats_checkbox.setEnabled(groupstats_available)
         if not groupstats_available:

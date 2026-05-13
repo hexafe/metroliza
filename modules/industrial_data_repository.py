@@ -9,9 +9,10 @@ import re
 from typing import Any, Iterable, Mapping
 
 from modules.db import run_transaction_with_retry
-from modules.industrial_data_schema import ensure_industrial_data_schema
+from modules.industrial_data_schema import SYNC_RUN_STATUSES, ensure_industrial_data_schema
 
 
+_FINISHED_SYNC_RUN_STATUSES = tuple(status for status in SYNC_RUN_STATUSES if status != "running")
 _REDACT_URI_CREDENTIALS = re.compile(r"([a-zA-Z][a-zA-Z0-9+.\-]*://[^:/\s]+:)([^@/\s]+)@")
 _REDACT_KEY_VALUE = re.compile(
     r"(?i)\b(password|passwd|pwd|[a-z0-9_-]*token|[a-z0-9_-]*secret|credential|api[_-]?key|access[_-]?key)\s*([=:])\s*([^,\s;]+)"
@@ -456,8 +457,8 @@ class IndustrialDataRepository:
         finished_at: str | None = None,
     ) -> None:
         self.ensure_schema()
-        if status not in {"succeeded", "failed", "cancelled"}:
-            raise ValueError("status must be one of: succeeded, failed, cancelled")
+        if status not in _FINISHED_SYNC_RUN_STATUSES:
+            raise ValueError(f"status must be one of: {', '.join(_FINISHED_SYNC_RUN_STATUSES)}")
         finished = finished_at or utc_timestamp()
         diagnostics_payload = _redact_sensitive_payload(dict(diagnostics or {}))
         redacted_error_summary = (

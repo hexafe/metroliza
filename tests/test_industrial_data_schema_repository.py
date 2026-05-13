@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from modules.db import sqlite_connection_scope
 from modules.industrial_data_repository import IndustrialDataRepository
 from modules.industrial_data_schema import SCHEMA_VERSION, ensure_industrial_data_schema
@@ -109,8 +111,9 @@ def test_source_profile_upsert_list_and_sync_run_lifecycle(tmp_path):
     )
     repository.finish_sync_run(
         sync_run_id=sync_run_id,
-        status="succeeded",
+        status="completed_with_warnings",
         row_count=2,
+        error_summary="secondary source timed out password=super-secret",
         diagnostics={
             "refreshToken": "another-secret",
             "rows": 2,
@@ -121,7 +124,7 @@ def test_source_profile_upsert_list_and_sync_run_lifecycle(tmp_path):
     with sqlite_connection_scope(db_path) as conn:
         row = conn.execute(
             """
-            SELECT status, row_count, filters_json, diagnostics_json
+            SELECT status, row_count, error_summary, filters_json, diagnostics_json
             FROM industrial_sync_runs
             WHERE id = ?
             """,
@@ -129,9 +132,10 @@ def test_source_profile_upsert_list_and_sync_run_lifecycle(tmp_path):
         ).fetchone()
 
     assert row is not None
-    status, row_count, filters_json, diagnostics_json = row
-    assert status == "succeeded"
+    status, row_count, error_summary, filters_json, diagnostics_json = row
+    assert status == "completed_with_warnings"
     assert row_count == 2
+    assert error_summary == "secondary source timed out password=<redacted>"
     assert "super-secret" not in (filters_json or "")
     assert "nested-client-secret" not in (filters_json or "")
     assert "nested-api-key" not in (filters_json or "")
@@ -143,6 +147,88 @@ def test_source_profile_upsert_list_and_sync_run_lifecycle(tmp_path):
     assert json.loads(filters_json)["nested"]["headers"][0]["apiKey"] == "<redacted>"
     assert json.loads(diagnostics_json)["refreshToken"] == "<redacted>"
     assert json.loads(diagnostics_json)["trace"][0]["accessToken"] == "<redacted>"
+
+
+def test_finish_sync_run_rejects_non_terminal_running_status(tmp_path):
+    db_path = str(tmp_path / "industrial.db")
+    repository = IndustrialDataRepository(db_path)
+    profile = repository.upsert_source_profile(
+        profile_key="line-running",
+        profile_name="Line Running",
+        source_db_alias="plant_running",
+        database_type="mssql",
+        source_object_name="dbo.events",
+    )
+    sync_run_id = repository.create_sync_run(source_profile_id=profile.id)
+
+    with pytest.raises(ValueError, match="succeeded, completed_with_warnings, failed, cancelled"):
+        repository.finish_sync_run(sync_run_id=sync_run_id, status="running", row_count=0)
+
+
+def test_schema_migrates_legacy_sync_run_status_constraint(tmp_path):
+    db_path = str(tmp_path / "industrial.db")
+    repository = IndustrialDataRepository(db_path)
+    profile = repository.upsert_source_profile(
+        profile_key="line-legacy",
+        profile_name="Line Legacy",
+        source_db_alias="plant_legacy",
+        database_type="mssql",
+        source_object_name="dbo.events",
+    )
+    sync_run_id = repository.create_sync_run(source_profile_id=profile.id)
+    repository.upsert_industrial_records_from_rows(
+        source_profile_id=profile.id,
+        source_db_alias="plant_legacy",
+        sync_run_id=sync_run_id,
+        rows=[
+            {
+                "source_record_key": "legacy-row",
+                "raw_record": {"line": "legacy"},
+                "values": {"length_mm": 10.5},
+            }
+        ],
+    )
+    repository.finish_sync_run(sync_run_id=sync_run_id, status="succeeded", row_count=1)
+
+    with sqlite_connection_scope(db_path) as conn:
+        table_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'industrial_sync_runs'"
+        ).fetchone()[0]
+        legacy_table_sql = table_sql.replace("'completed_with_warnings', ", "")
+        assert legacy_table_sql != table_sql
+        conn.execute("PRAGMA writable_schema=ON")
+        conn.execute(
+            "UPDATE sqlite_master SET sql = ? WHERE type = 'table' AND name = 'industrial_sync_runs'",
+            (legacy_table_sql,),
+        )
+        conn.execute("PRAGMA writable_schema=OFF")
+        conn.commit()
+
+    ensure_industrial_data_schema(db_path)
+    warning_run_id = repository.create_sync_run(source_profile_id=profile.id)
+    repository.finish_sync_run(
+        sync_run_id=warning_run_id,
+        status="completed_with_warnings",
+        row_count=2,
+    )
+
+    with sqlite_connection_scope(db_path) as conn:
+        table_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'industrial_sync_runs'"
+        ).fetchone()[0]
+        warning_status = conn.execute(
+            "SELECT status FROM industrial_sync_runs WHERE id = ?",
+            (warning_run_id,),
+        ).fetchone()[0]
+        linked_sync_run_id = conn.execute(
+            "SELECT sync_run_id FROM industrial_records WHERE source_record_key = 'legacy-row'"
+        ).fetchone()[0]
+        foreign_key_errors = conn.execute("PRAGMA foreign_key_check").fetchall()
+
+    assert "completed_with_warnings" in table_sql
+    assert warning_status == "completed_with_warnings"
+    assert linked_sync_run_id == sync_run_id
+    assert foreign_key_errors == []
 
 
 def test_upsert_records_and_summarize_counts_from_synthetic_rows(tmp_path):
