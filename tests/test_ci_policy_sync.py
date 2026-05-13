@@ -121,6 +121,8 @@ def test_perf_benchmark_trend_filters_to_baseline_backed_scenarios() -> None:
     workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
     ci_policy = CI_POLICY_PATH.read_text(encoding='utf-8')
 
+    assert 'name: Performance benchmark trend check (non-blocking)' in workflow
+    assert 'name: Trend comparison against checked-in baseline\n        continue-on-error: true' in workflow
     assert '--export-stage-metrics' in workflow
     assert (
         '--scenarios pdf_parse_path cmm_parser_backend_compare excel_export_path '

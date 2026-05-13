@@ -8,7 +8,9 @@ This document defines canonical benchmark scenarios and pass/fail policy for CI 
 - **Measured runs:** run each benchmark script **3** times after warmup.
 - **Statistic used for regression gate:** median wall time (`wall_time_s`) per scenario across measured runs.
 - **Regression threshold:** flag a scenario if median wall time regresses beyond the percentage threshold vs `docs/perf_baseline_snapshot.json` and beyond the configured absolute slowdown floor.
-- **Current CI status:** the shared benchmark trend job is intentionally **non-blocking** (`continue-on-error: true`) during rollout.
+- **Current CI status:** the shared benchmark trend job and its trend-comparison
+  step are intentionally **non-blocking** (`continue-on-error: true`) during
+  rollout so advisory benchmark drift does not publish a red PR check.
 - **Shared benchmark noise floor:** the non-blocking shared benchmark job uses a `12%` median-regression threshold plus a `0.100s` absolute slowdown floor. This keeps sub-100 ms hosted-runner jitter from producing red advisory jobs while preserving the trend report values for review.
 - **Export stage metrics:** the shared non-blocking benchmark job also records
   canonical export stage medians in `stage_metric_results`. These stage medians

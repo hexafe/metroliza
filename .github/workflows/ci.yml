@@ -543,6 +543,7 @@ jobs:
           done
 
       - name: Trend comparison against checked-in baseline
+        continue-on-error: true
         run: |
           PYTHONPATH=. python scripts/benchmark_trend_compare.py \
             --baseline docs/perf_baseline_snapshot.json \
