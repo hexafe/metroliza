@@ -4,14 +4,16 @@ import pandas as pd
 import pytest
 
 try:
-    from PyQt6.QtCore import Qt
+    from PyQt6.QtCore import QDate, Qt
     from PyQt6.QtWidgets import QApplication
     from modules.tabular_analytics_filter_dialog import TabularAnalyticsFilterDialog
-    from modules.tabular_analytics_service import load_tabular_analytics_file
+    from modules.tabular_analytics_service import TabularColumnFilter, load_tabular_analytics_file
 except ImportError as exc:  # pragma: no cover - depends on optional PyQt availability
     QApplication = None
+    QDate = None
     Qt = None
     TabularAnalyticsFilterDialog = None
+    TabularColumnFilter = None
     load_tabular_analytics_file = None
     PYQT_IMPORT_ERROR = exc
 else:
@@ -32,6 +34,7 @@ def _sample_loaded_table(tmp_path):
     input_file = tmp_path / "parts.csv"
     pd.DataFrame(
         {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=4, freq="D"),
             "Reference ID": ["R1", "R2", "R3", "R4"],
             "Line": ["L1", "L2", "L1", "L2"],
             "TraceCode": ["TC-001", "TC-002", "TC-003", "TC-004"],
@@ -48,6 +51,13 @@ def _column_keys(dialog: TabularAnalyticsFilterDialog) -> list[str]:
     ]
 
 
+def _selected_column_keys(dialog: TabularAnalyticsFilterDialog) -> list[str]:
+    return [
+        str(dialog.selected_columns_list.item(index).data(Qt.ItemDataRole.UserRole))
+        for index in range(dialog.selected_columns_list.count())
+    ]
+
+
 def _select_available_column(dialog: TabularAnalyticsFilterDialog, column: str) -> None:
     for index in range(dialog.column_list.count()):
         item = dialog.column_list.item(index)
@@ -57,6 +67,15 @@ def _select_available_column(dialog: TabularAnalyticsFilterDialog, column: str) 
     raise AssertionError(f"Column {column!r} is not available; found {_column_keys(dialog)}")
 
 
+def _select_filter_column(dialog: TabularAnalyticsFilterDialog, column: str) -> None:
+    for index in range(dialog.selected_columns_list.count()):
+        item = dialog.selected_columns_list.item(index)
+        if item.data(Qt.ItemDataRole.UserRole) == column:
+            dialog.selected_columns_list.setCurrentItem(item)
+            return
+    raise AssertionError(f"Column {column!r} is not selected; found {_selected_column_keys(dialog)}")
+
+
 def _select_matching_keys(
     dialog: TabularAnalyticsFilterDialog,
     keys: set[tuple[str, ...]],
@@ -64,6 +83,16 @@ def _select_matching_keys(
     for index in range(dialog.matching_list.count()):
         item = dialog.matching_list.item(index)
         item.setSelected(tuple(item.data(Qt.ItemDataRole.UserRole)) in keys)
+    dialog._store_current_selection()
+
+
+def _select_values(
+    dialog: TabularAnalyticsFilterDialog,
+    values: set[str],
+) -> None:
+    for index in range(dialog.matching_list.count()):
+        item = dialog.matching_list.item(index)
+        item.setSelected(str(item.data(Qt.ItemDataRole.UserRole)) in values)
     dialog._store_current_selection()
 
 
@@ -98,18 +127,21 @@ def test_filter_dialog_returns_selected_tracecode_keys(tmp_path) -> None:
     try:
         _select_available_column(dialog, "tracecode")
         dialog.add_filter_column()
-        _select_matching_keys(dialog, {("TC-001",), ("TC-003",)})
+        _select_values(dialog, {"TC-001", "TC-003"})
 
         assert dialog.get_filter() == (
             ("tracecode",),
             (("TC-001",), ("TC-003",)),
         )
-        assert dialog.status_label.text() == "TraceCode: 2 selected, 2 rows"
+        assert dialog.get_column_filters() == (
+            TabularColumnFilter("tracecode", selected_values=("TC-001", "TC-003")),
+        )
+        assert dialog.status_label.text() == "1 column filter(s), 2 rows"
     finally:
         dialog.close()
 
 
-def test_filter_dialog_expands_existing_selection_when_second_column_is_added(tmp_path) -> None:
+def test_filter_dialog_keeps_independent_value_choices_per_selected_column(tmp_path) -> None:
     _app()
     loaded = _sample_loaded_table(tmp_path)
 
@@ -120,14 +152,56 @@ def test_filter_dialog_expands_existing_selection_when_second_column_is_added(tm
     try:
         _select_available_column(dialog, "line")
         dialog.add_filter_column()
-        _select_matching_keys(dialog, {("L1",)})
+        _select_values(dialog, {"L1"})
 
         _select_available_column(dialog, "tracecode")
         dialog.add_filter_column()
+        _select_filter_column(dialog, "tracecode")
+        _select_values(dialog, {"TC-001", "TC-003"})
 
         columns, keys = dialog.get_filter()
         assert columns == ("line", "tracecode")
         assert set(keys) == {("L1", "TC-001"), ("L1", "TC-003")}
-        assert dialog.status_label.text() == "Line | TraceCode: 2 selected, 2 rows"
+        assert dialog.get_column_filters() == (
+            TabularColumnFilter("line", selected_values=("L1",)),
+            TabularColumnFilter("tracecode", selected_values=("TC-001", "TC-003")),
+        )
+        assert dialog.status_label.text() == "2 column filter(s), 2 rows"
+    finally:
+        dialog.close()
+
+
+def test_filter_dialog_supports_per_column_values_and_calendar_date_bounds(tmp_path) -> None:
+    _app()
+    loaded = _sample_loaded_table(tmp_path)
+
+    dialog = TabularAnalyticsFilterDialog(
+        dataframe=loaded.dataframe,
+        column_mapping=loaded.column_mapping,
+    )
+    try:
+        _select_available_column(dialog, "line")
+        dialog.add_filter_column()
+        _select_values(dialog, {"L1"})
+
+        _select_available_column(dialog, "time_stamp")
+        dialog.add_filter_column()
+        _select_filter_column(dialog, "time_stamp")
+        dialog.date_mode_combo.setCurrentIndex(dialog.date_mode_combo.findData("between"))
+        dialog.date_from_calendar.setDate(QDate(2026, 5, 11))
+        dialog.date_to_calendar.setDate(QDate(2026, 5, 13))
+        dialog._store_current_date_filter()
+
+        assert dialog.get_column_filters() == (
+            TabularColumnFilter("line", selected_values=("L1",)),
+            TabularColumnFilter(
+                "time_stamp",
+                date_mode="between",
+                date_from="2026-05-11",
+                date_to="2026-05-13",
+            ),
+        )
+        assert dialog.get_filter() == (("line", "time_stamp"), (("L1", "2026-05-12 08:00:00"),))
+        assert dialog.status_label.text() == "2 column filter(s), 1 rows"
     finally:
         dialog.close()

@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
 )
 
@@ -79,8 +80,12 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.column_search = QLineEdit()
         self.column_search.setPlaceholderText("Search columns")
         self.available_columns_list = QListWidget()
-        self.available_columns_list.setMaximumHeight(110)
         apply_list_selection_style(self.available_columns_list)
+        self.available_columns_list.setMinimumHeight(150)
+        self.available_columns_list.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
         configure_accessibility(self.column_search, name="Search CSV grouping columns")
         configure_accessibility(self.available_columns_list, name="Available CSV grouping columns")
         layout.addWidget(self.column_search)
@@ -98,8 +103,12 @@ class TabularAnalyticsGroupingDialog(QDialog):
         layout.addLayout(selector_actions)
 
         self.selected_columns_list = QListWidget()
-        self.selected_columns_list.setMaximumHeight(76)
         apply_list_selection_style(self.selected_columns_list)
+        self.selected_columns_list.setMinimumHeight(120)
+        self.selected_columns_list.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
         configure_accessibility(self.selected_columns_list, name="Selected CSV grouping columns")
         layout.addWidget(self.selected_columns_list)
 
@@ -118,6 +127,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.selector_list = QListWidget()
         self.selector_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         apply_list_selection_style(self.selector_list)
+        self.selector_list.setMinimumHeight(220)
+        self.selector_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         configure_accessibility(self.selector_list, name="CSV grouping row selectors")
         selector_column.addWidget(self.selector_list)
         list_row.addLayout(selector_column, 2)
@@ -127,6 +138,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
         groups_column.addWidget(QLabel("Groups"))
         self.groups_list = QListWidget()
         apply_list_selection_style(self.groups_list)
+        self.groups_list.setMinimumHeight(220)
+        self.groups_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         configure_accessibility(self.groups_list, name="CSV analytics groups")
         groups_column.addWidget(self.groups_list)
         list_row.addLayout(groups_column, 1)
@@ -136,6 +149,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
         members_column.addWidget(QLabel("Rows in selected group"))
         self.group_members_list = QListWidget()
         apply_list_selection_style(self.group_members_list)
+        self.group_members_list.setMinimumHeight(220)
+        self.group_members_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         configure_accessibility(self.group_members_list, name="Rows in selected CSV group")
         members_column.addWidget(self.group_members_list)
         list_row.addLayout(members_column, 2)
@@ -182,9 +197,22 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.dont_use_grouping_button.clicked.connect(self.dont_use_grouping)
 
         apply_metroliza_theme(self)
+        self._configure_stretch_panes()
         self._list_selection_utils.connect_shift_range_behavior(self.selector_list)
         self._list_selection_utils.connect_shift_range_behavior(self.group_members_list)
         self._refresh_all()
+
+    def _configure_stretch_panes(self) -> None:
+        pane_specs = (
+            (self.available_columns_list, 150),
+            (self.selected_columns_list, 120),
+            (self.selector_list, 220),
+            (self.groups_list, 220),
+            (self.group_members_list, 220),
+        )
+        for widget, minimum_height in pane_specs:
+            widget.setMinimumHeight(minimum_height)
+            widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
     def _source_columns(self) -> list[str]:
         return selectable_tabular_source_columns(

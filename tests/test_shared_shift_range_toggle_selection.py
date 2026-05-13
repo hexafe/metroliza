@@ -87,6 +87,12 @@ class _FakeListWidget:
             item.setSelected(False)
 
 
+class _FakeClickedListWidget(_FakeListWidget):
+    def __init__(self):
+        super().__init__()
+        self.itemClicked = _FakeSignal()
+
+
 class _FakeColor:
     def __init__(self, *_args, **_kwargs):
         return None
@@ -221,6 +227,28 @@ class TestSharedShiftRangeToggleSelection(unittest.TestCase):
             utils_module = importlib.import_module("modules.list_selection_utils")
             self._run_filter_preserve_selection_test(utils_module.ListSelectionUtils, canonical=False)
             self._run_filter_preserve_selection_test(utils_module.ListSelectionUtils, canonical=True)
+
+    def test_list_selection_utils_prefers_post_click_signal_when_available(self):
+        pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
+        with patch.dict(
+            sys.modules,
+            {
+                "PyQt6": pyqt6,
+                "PyQt6.QtCore": qtcore,
+                "PyQt6.QtWidgets": qtwidgets,
+                "PyQt6.QtGui": qtgui,
+            },
+            clear=False,
+        ):
+            sys.modules.pop("modules.list_selection_utils", None)
+            utils_module = importlib.import_module("modules.list_selection_utils")
+            helper = utils_module.ListSelectionUtils()
+            list_widget = _FakeClickedListWidget()
+
+            helper.connect_shift_range_behavior(list_widget)
+
+            self.assertTrue(hasattr(list_widget.itemClicked, "_callback"))
+            self.assertFalse(hasattr(list_widget.itemPressed, "_callback"))
 
     def test_filter_dialog_delegates_shift_and_filter_to_shared_helper(self):
         pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()

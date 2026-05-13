@@ -14,6 +14,7 @@ from modules.industrial_analytics_state import (
 )
 from modules.tabular_analytics_service import (
     TABULAR_GROUP_COLUMN,
+    TabularColumnFilter,
     apply_tabular_row_filter,
     apply_tabular_grouping,
     build_tabular_grouping_dataframe,
@@ -212,6 +213,42 @@ def test_apply_tabular_row_filter_uses_selected_column_keys(tmp_path) -> None:
     assert filtered.output_row_count == 2
     assert filtered.dataframe["tracecode"].tolist() == ["TC-001", "TC-003"]
     assert [diagnostic.code for diagnostic in filtered.diagnostics] == ["tabular_filters_applied"]
+
+
+def test_apply_tabular_row_filter_combines_column_scoped_filters_and_date_bounds(tmp_path) -> None:
+    input_file = tmp_path / "column_filters.csv"
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=5, freq="D"),
+            "Line": ["L1", "L1", "L2", "L1", "L2"],
+            "Station": ["A", "B", "A", "A", "B"],
+            "Length mm": [10.0, 10.1, 10.2, 10.3, 10.4],
+        }
+    ).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file)
+
+    filtered = apply_tabular_row_filter(
+        loaded.dataframe,
+        column_filters=(
+            TabularColumnFilter("line", selected_values=("L1",)),
+            TabularColumnFilter("station", selected_values=("A",)),
+            TabularColumnFilter(
+                "time_stamp",
+                date_mode="between",
+                date_from="2026-05-11",
+                date_to="2026-05-13",
+            ),
+        ),
+    )
+
+    assert filtered.applied is True
+    assert filtered.output_row_count == 1
+    assert filtered.dataframe["line"].tolist() == ["L1"]
+    assert filtered.dataframe["station"].tolist() == ["A"]
+    assert pd.to_datetime(filtered.dataframe["time_stamp"]).dt.strftime("%Y-%m-%d").tolist() == [
+        "2026-05-13"
+    ]
+    assert filtered.diagnostics[0].context["column_filters"][2]["date_mode"] == "between"
 
 
 def test_apply_tabular_grouping_keeps_unassigned_rows_in_population(tmp_path) -> None:

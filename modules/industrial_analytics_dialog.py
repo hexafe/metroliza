@@ -27,7 +27,6 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from modules.csv_summary_utils import filter_csv_summary_by_group_keys
 from modules.industrial_analytics_service import discover_production_metric_candidates
 from modules.industrial_analytics_filter_dialog import IndustrialAnalyticsFilterDialog
 from modules.industrial_analytics_state import (
@@ -46,6 +45,8 @@ from modules.tabular_analytics_filter_dialog import TabularAnalyticsFilterDialog
 from modules.tabular_analytics_grouping_dialog import TabularAnalyticsGroupingDialog
 from modules.tabular_analytics_service import (
     TABULAR_GROUP_COLUMN,
+    TabularColumnFilter,
+    apply_tabular_row_filter,
     list_tabular_excel_sheets,
     load_tabular_analytics_file,
 )
@@ -305,6 +306,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.tabular_load_result = None
         self.tabular_filter_columns: tuple[str, ...] = ()
         self.tabular_filter_keys: tuple[tuple[str, ...], ...] = ()
+        self.tabular_column_filters: tuple[TabularColumnFilter, ...] = ()
         self.df_for_grouping = None
         self.grouping_applied = False
 
@@ -651,6 +653,7 @@ class IndustrialAnalyticsDialog(QDialog):
     def _clear_tabular_filter(self) -> None:
         self.tabular_filter_columns = ()
         self.tabular_filter_keys = ()
+        self.tabular_column_filters = ()
 
     def _reset_tabular_column_options(self) -> None:
         for combo in (self.timestamp_column_combo, self.reference_column_combo):
@@ -774,9 +777,11 @@ class IndustrialAnalyticsDialog(QDialog):
             column_mapping=self.tabular_load_result.column_mapping,
             filter_columns=self.tabular_filter_columns,
             selected_filter_keys=self.tabular_filter_keys,
+            column_filters=self.tabular_column_filters,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
+        self.tabular_column_filters = dialog.get_column_filters()
         self.tabular_filter_columns, self.tabular_filter_keys = dialog.get_filter()
         self._clear_tabular_grouping()
         self._sync_filter_summary()
@@ -957,30 +962,62 @@ class IndustrialAnalyticsDialog(QDialog):
     def _filtered_tabular_dataframe(self):
         if self.tabular_load_result is None:
             return None
-        return filter_csv_summary_by_group_keys(
+        return apply_tabular_row_filter(
             self.tabular_load_result.dataframe,
-            self.tabular_filter_columns,
-            self.tabular_filter_keys,
-        )
+            filter_columns=self.tabular_filter_columns,
+            selected_filter_keys=self.tabular_filter_keys,
+            column_filters=self.tabular_column_filters,
+        ).dataframe
 
     def _tabular_filter_summary(self) -> tuple[str, str]:
         if self.tabular_load_result is None:
             return "No row filter", "neutral"
         dataframe = self._filtered_tabular_dataframe()
         row_count = len(dataframe.index) if dataframe is not None else 0
-        if not self.tabular_filter_columns or not self.tabular_filter_keys:
+        if not self.tabular_column_filters and (
+            not self.tabular_filter_columns or not self.tabular_filter_keys
+        ):
             return f"All rows ({len(self.tabular_load_result.dataframe.index)})", "neutral"
         label_lookup = {
             normalized: original
             for original, normalized in self.tabular_load_result.column_mapping.items()
         }
-        columns_text = " | ".join(
-            str(label_lookup.get(column, column)) for column in self.tabular_filter_columns
+        if self.tabular_column_filters:
+            columns_text = ", ".join(
+                self._tabular_column_filter_label(item, label_lookup)
+                for item in self.tabular_column_filters
+            )
+        else:
+            columns_text = " | ".join(
+                str(label_lookup.get(column, column)) for column in self.tabular_filter_columns
+            )
+        selection_count = (
+            len(self.tabular_column_filters)
+            if self.tabular_column_filters
+            else len(self.tabular_filter_keys)
         )
         return (
-            f"{columns_text}: {len(self.tabular_filter_keys)} selected, {row_count} rows",
+            f"{columns_text}: {selection_count} filter(s), {row_count} rows",
             "success" if row_count else "danger",
         )
+
+    @staticmethod
+    def _tabular_column_filter_label(
+        column_filter: TabularColumnFilter,
+        label_lookup: dict[str, str],
+    ) -> str:
+        label = str(label_lookup.get(column_filter.column, column_filter.column))
+        details: list[str] = []
+        if column_filter.selected_values:
+            details.append(f"{len(column_filter.selected_values)} value(s)")
+        if column_filter.has_date_filter:
+            if column_filter.date_mode == "from":
+                details.append(f">= {column_filter.date_from}")
+            elif column_filter.date_mode == "to":
+                details.append(f"<= {column_filter.date_to}")
+            elif column_filter.date_mode == "between":
+                details.append(f"{column_filter.date_from} to {column_filter.date_to}")
+        return f"{label} ({', '.join(details)})" if details else label
 
     def _populate_metrics(self, selected_fields: set[str] | None = None) -> None:
         selected_lookup = None if selected_fields is None else set(selected_fields)
@@ -1276,6 +1313,7 @@ class IndustrialAnalyticsDialog(QDialog):
             reference_column=self._selected_tabular_column(self.reference_column_combo),
             tabular_filter_columns=self.tabular_filter_columns,
             tabular_filter_keys=self.tabular_filter_keys,
+            tabular_column_filters=self.tabular_column_filters,
             grouping_df=self.df_for_grouping if self.grouping_applied else None,
         )
 

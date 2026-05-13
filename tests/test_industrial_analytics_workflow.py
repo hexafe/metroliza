@@ -19,6 +19,7 @@ from modules.industrial_analytics_workflow import (
     run_production_cache_analytics,
     run_tabular_file_analytics,
 )
+from modules.tabular_analytics_service import TabularColumnFilter
 from tests.industrial_analytics_fixtures import seed_production_analytics_cache
 
 
@@ -209,6 +210,39 @@ def test_run_tabular_file_analytics_applies_visual_row_filter_before_outputs(tmp
     table_data = pd.read_excel(workbook_file, sheet_name="Table Data")
     assert result.row_count == 2
     assert table_data["tracecode"].tolist() == ["TC-001", "TC-003"]
+    assert "tabular_filters_applied" in {diagnostic.code for diagnostic in result.diagnostics}
+
+
+def test_run_tabular_file_analytics_applies_column_scoped_row_filters(tmp_path) -> None:
+    input_file = tmp_path / "column_filtered_table.csv"
+    dashboard_file = tmp_path / "column_filtered_table_analytics.html"
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=5, freq="D"),
+            "TraceCode": ["TC-001", "TC-002", "TC-003", "TC-004", "TC-005"],
+            "Line": ["L1", "L2", "L1", "L1", "L2"],
+            "Length mm": [10.0, 10.2, 10.4, 10.6, 10.8],
+        }
+    ).to_csv(input_file, index=False)
+
+    result = run_tabular_file_analytics(
+        input_file=str(input_file),
+        output_dashboard_file=str(dashboard_file),
+        metric_selection=(ProductionMetricSelection("length_mm", display_label="Length mm"),),
+        tabular_column_filters=(
+            TabularColumnFilter("line", selected_values=("L1",)),
+            TabularColumnFilter(
+                "time_stamp",
+                date_mode="between",
+                date_from="2026-05-11",
+                date_to="2026-05-12",
+            ),
+        ),
+        aggregation_state=ProductionAggregationState(time_bucket="none", aggregation_methods=("mean",)),
+        chart_selection=ProductionChartSelection(groupstats=False),
+    )
+
+    assert result.row_count == 1
     assert "tabular_filters_applied" in {diagnostic.code for diagnostic in result.diagnostics}
 
 

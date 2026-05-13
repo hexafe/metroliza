@@ -23,7 +23,7 @@ from modules.industrial_analytics_workflow import (
     run_production_cache_analytics,
     run_tabular_file_analytics,
 )
-from modules.tabular_analytics_service import load_tabular_analytics_file
+from modules.tabular_analytics_service import TabularColumnFilter, load_tabular_analytics_file
 from modules.industrial_export_service import (
     IndustrialExportCancelled,
     export_cached_industrial_workbook,
@@ -146,6 +146,7 @@ class IndustrialAnalyticsThread(QThread):
         reference_column: str | None = None,
         tabular_filter_columns: tuple[str, ...] | list[str] | None = None,
         tabular_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+        tabular_column_filters: tuple[TabularColumnFilter, ...] | list[TabularColumnFilter] | None = None,
         grouping_df=None,
     ):
         super().__init__()
@@ -165,6 +166,7 @@ class IndustrialAnalyticsThread(QThread):
         self.reference_column = reference_column
         self.tabular_filter_columns = tuple(tabular_filter_columns or ())
         self.tabular_filter_keys = tuple(tuple(key) for key in (tabular_filter_keys or ()))
+        self.tabular_column_filters = tuple(tabular_column_filters or ())
         self.grouping_df = grouping_df
         self._cancel_requested = False
 
@@ -191,6 +193,7 @@ class IndustrialAnalyticsThread(QThread):
                     reference_column=self.reference_column,
                     tabular_filter_columns=self.tabular_filter_columns,
                     tabular_filter_keys=self.tabular_filter_keys,
+                    tabular_column_filters=self.tabular_column_filters,
                     grouping_df=self.grouping_df,
                     aggregation_state=self.aggregation_state,
                     cohort_state=self.cohort_state,

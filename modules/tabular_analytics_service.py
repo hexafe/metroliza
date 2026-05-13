@@ -93,6 +93,29 @@ class TabularFilterResult:
     output_row_count: int = 0
 
 
+@dataclass(frozen=True)
+class TabularColumnFilter:
+    """One CSV/Excel row-filter rule scoped to one source column."""
+
+    column: str
+    selected_values: tuple[str, ...] = ()
+    date_mode: str = "any"
+    date_from: str | None = None
+    date_to: str | None = None
+
+    @property
+    def has_value_filter(self) -> bool:
+        return bool(self.selected_values)
+
+    @property
+    def has_date_filter(self) -> bool:
+        return self.date_mode in {"from", "to", "between"} and bool(self.date_from or self.date_to)
+
+    @property
+    def is_active(self) -> bool:
+        return bool(self.column and (self.has_value_filter or self.has_date_filter))
+
+
 def _excel_safe_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
     safe_frame = dataframe.copy()
     for column in safe_frame.columns:
@@ -306,6 +329,7 @@ def apply_tabular_row_filter(
     *,
     filter_columns: tuple[str, ...] | list[str] | None = None,
     selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+    column_filters: tuple[TabularColumnFilter, ...] | list[TabularColumnFilter] | None = None,
 ) -> TabularFilterResult:
     """Filter normalized CSV/Excel analytics rows by selected column-value keys."""
 
@@ -313,6 +337,47 @@ def apply_tabular_row_filter(
         return TabularFilterResult(dataframe=pd.DataFrame())
 
     input_count = int(len(dataframe.index))
+    normalized_column_filters = _normalized_tabular_column_filters(dataframe, column_filters)
+    if normalized_column_filters:
+        mask = pd.Series(True, index=dataframe.index)
+        for column_filter in normalized_column_filters:
+            column_mask = pd.Series(True, index=dataframe.index)
+            if column_filter.selected_values:
+                selected_values = set(column_filter.selected_values)
+                column_values = _normalized_tabular_filter_series(dataframe[column_filter.column])
+                column_mask &= column_values.isin(selected_values)
+            if column_filter.has_date_filter:
+                column_mask &= _tabular_date_filter_mask(dataframe[column_filter.column], column_filter)
+            mask &= column_mask.fillna(False)
+        filtered = dataframe.loc[mask].copy()
+        output_count = int(len(filtered.index))
+        diagnostic = ProductionAnalyticsDiagnostic(
+            severity="info",
+            code="tabular_filters_applied",
+            message=f"CSV/Excel row filter reduced rows from {input_count} to {output_count}.",
+            context={
+                "column_filters": [
+                    {
+                        "column": item.column,
+                        "selected_value_count": len(item.selected_values),
+                        "date_mode": item.date_mode,
+                        "date_from": item.date_from,
+                        "date_to": item.date_to,
+                    }
+                    for item in normalized_column_filters
+                ],
+                "input_row_count": input_count,
+                "output_row_count": output_count,
+            },
+        )
+        return TabularFilterResult(
+            dataframe=filtered.reset_index(drop=True),
+            diagnostics=(diagnostic,),
+            applied=True,
+            input_row_count=input_count,
+            output_row_count=output_count,
+        )
+
     columns = tuple(column for column in (filter_columns or ()) if column in dataframe.columns)
     selected_keys = tuple(
         tuple(str(part) for part in key)
@@ -347,6 +412,66 @@ def apply_tabular_row_filter(
         input_row_count=input_count,
         output_row_count=output_count,
     )
+
+
+def _normalized_tabular_column_filters(
+    dataframe: pd.DataFrame,
+    column_filters: tuple[TabularColumnFilter, ...] | list[TabularColumnFilter] | None,
+) -> tuple[TabularColumnFilter, ...]:
+    normalized: list[TabularColumnFilter] = []
+    seen: set[str] = set()
+    for item in column_filters or ():
+        if not isinstance(item, TabularColumnFilter):
+            continue
+        column = str(item.column or "").strip()
+        if column not in dataframe.columns or column in seen:
+            continue
+        selected_values = tuple(
+            dict.fromkeys(
+                (str(value).strip() if value is not None else "") or "(blank)"
+                for value in item.selected_values
+            )
+        )
+        date_mode = item.date_mode if item.date_mode in {"from", "to", "between"} else "any"
+        normalized_filter = TabularColumnFilter(
+            column=column,
+            selected_values=selected_values,
+            date_mode=date_mode,
+            date_from=str(item.date_from or "").strip() or None,
+            date_to=str(item.date_to or "").strip() or None,
+        )
+        if normalized_filter.is_active:
+            normalized.append(normalized_filter)
+            seen.add(column)
+    return tuple(normalized)
+
+
+def _normalized_tabular_filter_series(series: pd.Series) -> pd.Series:
+    normalized = series.where(~series.isna(), "(blank)")
+    normalized = normalized.map(lambda value: str(value).strip() or "(blank)")
+    return normalized.astype("string")
+
+
+def _parse_tabular_filter_date(value: str | None):
+    if not value:
+        return None
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return None
+    return parsed.date()
+
+
+def _tabular_date_filter_mask(series: pd.Series, column_filter: TabularColumnFilter) -> pd.Series:
+    parsed = pd.to_datetime(series, errors="coerce")
+    dates = parsed.dt.date
+    mask = pd.Series(True, index=series.index)
+    lower = _parse_tabular_filter_date(column_filter.date_from)
+    upper = _parse_tabular_filter_date(column_filter.date_to)
+    if column_filter.date_mode in {"from", "between"} and lower is not None:
+        mask &= dates >= lower
+    if column_filter.date_mode in {"to", "between"} and upper is not None:
+        mask &= dates <= upper
+    return mask.fillna(False)
 
 
 def apply_tabular_grouping(
@@ -793,6 +918,7 @@ __all__ = [
     "TABULAR_GROUP_COLUMN",
     "TabularAnalyticsLoadResult",
     "TabularAnalyticsWorkbookResult",
+    "TabularColumnFilter",
     "TabularFilterResult",
     "TabularGroupingResult",
     "apply_tabular_row_filter",

@@ -36,6 +36,7 @@ from modules.progress_status import build_three_line_status
 from modules.tabular_analytics_service import (
     TABULAR_GROUP_COLUMN,
     TabularAnalyticsWorkbookResult,
+    TabularColumnFilter,
     apply_tabular_row_filter,
     apply_tabular_grouping,
     export_tabular_analytics_workbook,
@@ -224,6 +225,7 @@ def run_tabular_file_analytics(
     reference_column: str | None = None,
     tabular_filter_columns: tuple[str, ...] | list[str] | None = None,
     tabular_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+    tabular_column_filters: tuple[TabularColumnFilter, ...] | list[TabularColumnFilter] | None = None,
     grouping_df=None,
     aggregation_state: ProductionAggregationState | None = None,
     cohort_state: ReferenceCohortState | None = None,
@@ -256,6 +258,7 @@ def run_tabular_file_analytics(
         loaded.dataframe,
         filter_columns=tabular_filter_columns,
         selected_filter_keys=tabular_filter_keys,
+        column_filters=tabular_column_filters,
     )
     grouped = apply_tabular_grouping(filtered.dataframe, grouping_df)
     _emit_progress(

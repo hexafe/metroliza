@@ -4,10 +4,12 @@ try:
     from modules import industrial_workers
     from modules.industrial_analytics_workflow import AnalyticsCancelled
     from modules.industrial_workers import IndustrialAnalyticsThread
+    from modules.tabular_analytics_service import TabularColumnFilter
 except ImportError as exc:  # pragma: no cover - environment/order dependent
     industrial_workers = None
     AnalyticsCancelled = None
     IndustrialAnalyticsThread = None
+    TabularColumnFilter = None
     PYQT_IMPORT_ERROR = exc
 else:
     PYQT_IMPORT_ERROR = None
@@ -114,6 +116,7 @@ def test_industrial_analytics_thread_passes_tabular_grouping_to_workflow(
         grouping_df=grouping_df,
         tabular_filter_columns=("tracecode",),
         tabular_filter_keys=(("TC-001",),),
+        tabular_column_filters=(TabularColumnFilter("line", selected_values=("L1",)),),
         sheet_name="Measurements",
         timestamp_column="time_stamp",
         reference_column="reference_id",
@@ -130,6 +133,7 @@ def test_industrial_analytics_thread_passes_tabular_grouping_to_workflow(
     assert captured["grouping_df"] is grouping_df
     assert captured["tabular_filter_columns"] == ("tracecode",)
     assert captured["tabular_filter_keys"] == (("TC-001",),)
+    assert captured["tabular_column_filters"] == (TabularColumnFilter("line", selected_values=("L1",)),)
     assert captured["sheet_name"] == "Measurements"
     assert captured["timestamp_column"] == "time_stamp"
     assert captured["reference_column"] == "reference_id"

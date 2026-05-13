@@ -21,7 +21,9 @@ class ListSelectionUtils:
         return app_cls.keyboardModifiers()
 
     def connect_shift_range_behavior(self, list_widget):
-        list_widget.itemPressed.connect(lambda item, lw=list_widget: self.handle_shift_range_press(lw, item))
+        signal = getattr(list_widget, "itemClicked", None) or getattr(list_widget, "itemPressed", None)
+        if signal is not None:
+            signal.connect(lambda item, lw=list_widget: self.handle_shift_range_press(lw, item))
 
     def handle_shift_range_press(self, list_widget, item):
         if item is None:

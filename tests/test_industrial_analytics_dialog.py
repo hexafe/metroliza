@@ -20,6 +20,7 @@ try:
     from modules.industrial_analytics_filter_dialog import IndustrialAnalyticsFilterDialog
     from modules.industrial_analytics_state import ProductionFilterState, ProductionMetricSelection
     from modules.industrial_workers import IndustrialAnalyticsThread
+    from modules.tabular_analytics_service import TabularColumnFilter
 except ImportError as exc:  # pragma: no cover - environment/order dependent
     build_analytics_completion_message = None
     QApplication = None
@@ -29,6 +30,7 @@ except ImportError as exc:  # pragma: no cover - environment/order dependent
     MetricSelectionDialog = None
     ProductionFilterState = None
     ProductionMetricSelection = None
+    TabularColumnFilter = None
     SOURCE_PRODUCTION_CACHE = "production_cache"
     SOURCE_TABULAR_FILE = "tabular_file"
     PYQT_IMPORT_ERROR = exc
@@ -314,14 +316,18 @@ def test_tabular_row_filter_is_summarized_passed_to_worker_and_used_for_grouping
         dialog.load_metrics()
         dialog.tabular_filter_columns = ("tracecode",)
         dialog.tabular_filter_keys = (("TC-001",), ("TC-003",))
+        dialog.tabular_column_filters = (TabularColumnFilter("tracecode", selected_values=("TC-001", "TC-003")),)
         dialog._sync_ui_state()
 
-        assert dialog.filter_summary_label.text() == "TraceCode: 2 selected, 2 rows"
+        assert dialog.filter_summary_label.text() == "TraceCode (2 value(s)): 1 filter(s), 2 rows"
         assert dialog.start_button.isEnabled()
 
         thread = dialog.create_analytics_thread()
         assert thread.tabular_filter_columns == ("tracecode",)
         assert thread.tabular_filter_keys == (("TC-001",), ("TC-003",))
+        assert thread.tabular_column_filters == (
+            TabularColumnFilter("tracecode", selected_values=("TC-001", "TC-003")),
+        )
 
         dialog.open_grouping_dialog()
 
