@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-03-25T00:00:00Z",
+  "generated_at": "2026-05-13T00:00:00Z",
   "version": 1,
-  "notes": "Baseline refreshed from canonical distribution-fit batch rerun medians (2026-03-25).",
+  "notes": "Baseline refreshed for the shared CSV Summary analytics path after retiring the legacy worker (2026-05-13). Other scenario medians are unchanged.",
   "scenarios": {
     "pdf_parse_path": {
       "median_wall_time_s": 0.00703
@@ -16,7 +16,7 @@
       "median_wall_time_s": 1.601084
     },
     "csv_summary_export_path": {
-      "median_wall_time_s": 0.096793
+      "median_wall_time_s": 4.298208
     },
     "distribution_fit_monte_carlo_path": {
       "median_wall_time_s": 1.859312
