@@ -29,6 +29,17 @@ def _capture_signal(signal, values: list[object]) -> None:
     signal.emit = values.append
 
 
+def test_industrial_analytics_thread_rejects_unknown_source_kind(tmp_path) -> None:
+    _skip_if_pyqt_unavailable()
+    import pytest
+
+    with pytest.raises(ValueError, match="Unsupported analytics source kind"):
+        IndustrialAnalyticsThread(
+            source_kind="unknown",
+            output_dashboard_file=str(tmp_path / "analytics.html"),
+        )
+
+
 def test_industrial_analytics_thread_emits_cancelled_for_cancelled_workflow(
     monkeypatch,
     tmp_path,
@@ -102,6 +113,7 @@ def test_industrial_analytics_thread_passes_tabular_grouping_to_workflow(
 
     result = object()
     grouping_df = object()
+    tabular_load_result = object()
     captured = {}
 
     def run_tabular(**kwargs):
@@ -114,6 +126,7 @@ def test_industrial_analytics_thread_passes_tabular_grouping_to_workflow(
         input_file=str(tmp_path / "table.csv"),
         output_dashboard_file=str(tmp_path / "analytics.html"),
         grouping_df=grouping_df,
+        tabular_load_result=tabular_load_result,
         tabular_filter_columns=("tracecode",),
         tabular_filter_keys=(("TC-001",),),
         tabular_column_filters=(TabularColumnFilter("line", selected_values=("L1",)),),
@@ -131,6 +144,7 @@ def test_industrial_analytics_thread_passes_tabular_grouping_to_workflow(
     assert results == [result]
     assert errors == []
     assert captured["grouping_df"] is grouping_df
+    assert captured["tabular_load_result"] is tabular_load_result
     assert captured["tabular_filter_columns"] == ("tracecode",)
     assert captured["tabular_filter_keys"] == (("TC-001",),)
     assert captured["tabular_column_filters"] == (TabularColumnFilter("line", selected_values=("L1",)),)

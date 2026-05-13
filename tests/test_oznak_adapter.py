@@ -299,6 +299,76 @@ def test_fetch_source_profile_builds_current_public_oznak_contract(monkeypatch):
     assert progress_messages == ["Fetched 1 row"]
 
 
+def test_fetch_source_profile_falls_back_to_fetcher_module_when_root_fetch_missing(monkeypatch):
+    calls = {"fetcher": 0}
+
+    class FakeDatabaseProfile:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeFetchRequest:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeCredentialProvider:
+        def __init__(self, mapping):
+            self.mapping = mapping
+
+    class FakeResult:
+        data = [{"event_id": "ROW-1", "reference": "REF-1"}]
+        source_results = ()
+        warnings = ()
+        errors = ()
+        row_count = 1
+        has_errors = False
+        partial_success = False
+
+    def fake_fetch_records(*args, **kwargs):
+        calls["fetcher"] += 1
+        return FakeResult()
+
+    oznak_module = types.ModuleType("oznak")
+    oznak_module.DatabaseProfile = FakeDatabaseProfile
+    oznak_module.FetchRequest = FakeFetchRequest
+    oznak_module.FetchResult = object
+    oznak_module.MappingCredentialProvider = FakeCredentialProvider
+
+    fetcher_module = types.ModuleType("oznak.fetcher")
+    fetcher_module.fetch_records = fake_fetch_records
+
+    def _fake_import(module_name: str):
+        if module_name == "oznak":
+            return oznak_module
+        if module_name == "oznak.fetcher":
+            return fetcher_module
+        raise AssertionError(f"Unexpected import: {module_name}")
+
+    monkeypatch.setattr(oznak_adapter.importlib, "import_module", _fake_import)
+
+    result = oznak_adapter.fetch_oznak_records_for_source_profile(
+        types.SimpleNamespace(
+            id=12,
+            profile_name="Assembly MES",
+            source_db_alias="assembly_mes",
+            database_type="mssql",
+            host="mes.example.invalid",
+            port=1433,
+            database_name="plantdb",
+            source_object_name="events",
+            allowed_columns=("event_id", "reference"),
+            timestamp_column=None,
+            default_pagination_column=None,
+        ),
+        username="operator",
+        password="secret",
+        limit=1,
+    )
+
+    assert result.error is None
+    assert result.row_count == 1
+    assert calls["fetcher"] == 1
+
+
 def test_map_rows_generates_stable_record_key_when_source_key_missing():
     payload = {"rows": [{"reference": "REF-1", "station": "S1"}]}
     profile = {"profile_id": "p1", "source_db_alias": "assembly_mes"}
@@ -642,6 +712,7 @@ def test_fetch_source_profile_marks_partial_success_as_completed_with_warnings(m
         ),
         username="operator",
         password="secret",
+        limit=10,
     )
 
     assert result.error is None
@@ -651,7 +722,93 @@ def test_fetch_source_profile_marks_partial_success_as_completed_with_warnings(m
     assert result.diagnostics["warnings"] == ("secondary source timed out password=<redacted>",)
 
 
-def test_fetch_source_profile_empty_references_and_no_chunking_uses_single_fetch(monkeypatch):
+def test_fetch_source_profile_rejects_direct_unbounded_fetch_without_references(monkeypatch):
+    calls = {"single": [], "chunked": 0, "filters": 0}
+
+    class FakeDatabaseProfile:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeFetchRequest:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeCredentialProvider:
+        def __init__(self, mapping):
+            self.mapping = mapping
+
+    class FakeQueryFilter:
+        def __init__(self, **kwargs):
+            calls["filters"] += 1
+            self.__dict__.update(kwargs)
+
+    class FakeResult:
+        data = [{"event_id": "ROW-1", "reference": "REF1"}]
+        source_results = ()
+        warnings = ()
+        errors = ()
+        row_count = 1
+        has_errors = False
+        partial_success = False
+
+    def fake_fetch_records(request, **kwargs):
+        calls["single"].append(request.filters)
+        return FakeResult()
+
+    def fake_fetch_records_chunked(*args, **kwargs):
+        calls["chunked"] += 1
+        return FakeResult()
+
+    oznak_module = types.ModuleType("oznak")
+    oznak_module.DatabaseProfile = FakeDatabaseProfile
+    oznak_module.FetchRequest = FakeFetchRequest
+    oznak_module.FetchResult = object
+    oznak_module.MappingCredentialProvider = FakeCredentialProvider
+    oznak_module.QueryFilter = FakeQueryFilter
+    oznak_module.fetch_records = fake_fetch_records
+    oznak_module.fetch_records_chunked = fake_fetch_records_chunked
+
+    fetcher_module = types.ModuleType("oznak.fetcher")
+    fetcher_module.fetch_records = fake_fetch_records
+
+    def _fake_import(module_name: str):
+        if module_name == "oznak":
+            return oznak_module
+        if module_name == "oznak.fetcher":
+            return fetcher_module
+        raise AssertionError(f"Unexpected import: {module_name}")
+
+    monkeypatch.setattr(oznak_adapter.importlib, "import_module", _fake_import)
+
+    result = oznak_adapter.fetch_oznak_records_for_source_profile(
+        types.SimpleNamespace(
+            id=12,
+            profile_name="Assembly MES",
+            source_db_alias="assembly_mes",
+            database_type="mssql",
+            host="mes.example.invalid",
+            port=1433,
+            database_name="plantdb",
+            source_object_name="events",
+            allowed_columns=("event_id", "reference"),
+            timestamp_column=None,
+            default_pagination_column="event_id",
+        ),
+        username="operator",
+        password="secret",
+        reference_values=(),
+    )
+
+    assert calls == {"single": [], "chunked": 0, "filters": 0}
+    assert result.row_count == 0
+    assert result.error == (
+        "Oznak fetch requires reference/ID values or an explicit row limit. "
+        "Refusing an unbounded production-table read."
+    )
+    assert result.diagnostics["reason"] == "unbounded_fetch_rejected"
+
+
+def test_fetch_source_profile_allows_explicit_unbounded_fetch_when_requested(monkeypatch):
     calls = {"single": [], "chunked": 0, "filters": 0}
 
     class FakeDatabaseProfile:
@@ -727,6 +884,7 @@ def test_fetch_source_profile_empty_references_and_no_chunking_uses_single_fetch
         password="secret",
         reference_values=(),
         chunk_size=0,
+        allow_unbounded=True,
     )
 
     assert calls == {"single": [()], "chunked": 0, "filters": 0}
@@ -788,6 +946,7 @@ def test_fetch_source_profile_redacts_runtime_fetch_exceptions(monkeypatch):
         ),
         username="operator",
         password="secret",
+        limit=1,
     )
 
     assert result.error

@@ -293,6 +293,8 @@ class IndustrialAnalyticsDialog(QDialog):
         source_kind: str = SOURCE_PRODUCTION_CACHE,
     ):
         super().__init__(parent)
+        if source_kind not in {SOURCE_PRODUCTION_CACHE, SOURCE_TABULAR_FILE}:
+            raise ValueError(f"Unsupported analytics source kind: {source_kind}")
         self.db_file = db_file or ""
         self.source_kind = source_kind
         self.input_file = ""
@@ -432,7 +434,7 @@ class IndustrialAnalyticsDialog(QDialog):
 
     @property
     def is_production_source(self) -> bool:
-        return self.source_kind != SOURCE_TABULAR_FILE
+        return self.source_kind == SOURCE_PRODUCTION_CACHE
 
     def _build_layout(self) -> None:
         layout = QVBoxLayout(self)
@@ -782,7 +784,8 @@ class IndustrialAnalyticsDialog(QDialog):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         self.tabular_column_filters = dialog.get_column_filters()
-        self.tabular_filter_columns, self.tabular_filter_keys = dialog.get_filter()
+        self.tabular_filter_columns = ()
+        self.tabular_filter_keys = ()
         self._clear_tabular_grouping()
         self._sync_filter_summary()
         self._sync_ui_state()
@@ -1311,6 +1314,7 @@ class IndustrialAnalyticsDialog(QDialog):
             sheet_name=self._selected_sheet_name(),
             timestamp_column=self._selected_tabular_column(self.timestamp_column_combo),
             reference_column=self._selected_tabular_column(self.reference_column_combo),
+            tabular_load_result=self.tabular_load_result if not self.is_production_source else None,
             tabular_filter_columns=self.tabular_filter_columns,
             tabular_filter_keys=self.tabular_filter_keys,
             tabular_column_filters=self.tabular_column_filters,

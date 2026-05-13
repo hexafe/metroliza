@@ -6,7 +6,7 @@ import zipfile
 import pandas as pd
 
 from modules.industrial_analytics_dashboard import build_production_dashboard_manifest
-from modules.industrial_analytics_service import aggregate_production_frame
+from modules.industrial_analytics_service import ProductionGroupstatsResult, aggregate_production_frame
 from modules.industrial_analytics_state import (
     ProductionAggregationState,
     ProductionChartSelection,
@@ -389,3 +389,62 @@ def test_tabular_workbook_export_includes_selected_chart_outputs(tmp_path) -> No
         names = set(workbook_zip.namelist())
     assert any(name.startswith("xl/charts/chart") for name in names)
     assert any(name.startswith("xl/media/image") for name in names)
+
+
+def test_tabular_workbook_export_includes_groupstats_distribution_rows(tmp_path) -> None:
+    input_file = tmp_path / "table.csv"
+    output_file = tmp_path / "analytics_groupstats.xlsx"
+    _sample_table().to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file)
+    groupstats = ProductionGroupstatsResult(
+        metrics=(
+            {
+                "metric": "Length Mm",
+                "primary_insight": {"headline": "Selected group has higher mean."},
+                "descriptive_stats": (
+                    {
+                        "group": "A",
+                        "n": 3,
+                        "mean": 10.2,
+                        "std": 0.1,
+                        "median": 10.2,
+                        "iqr": 0.1,
+                        "min": 10.0,
+                        "max": 10.4,
+                        "cp": 1.1,
+                        "cpk": 1.0,
+                        "capability": "ok",
+                        "nok_count": 0,
+                        "nok_percent": 0.0,
+                    },
+                ),
+                "distribution_rows": (
+                    {
+                        "group": "A",
+                        "n": 3,
+                        "skewness": 0.2,
+                        "excess_kurtosis": -1.0,
+                        "normality_test": "Shapiro-Wilk",
+                        "normality_p_value": 0.82,
+                        "normality_status": "consistent",
+                    },
+                ),
+                "pairwise_rows": (),
+            },
+        ),
+    )
+
+    result = export_tabular_analytics_workbook(
+        dataframe=loaded.dataframe,
+        metric_candidates=loaded.metric_candidates[:1],
+        output_file=output_file,
+        groupstats_result=groupstats,
+        separate_parameter_sheets=False,
+    )
+
+    assert "Groupstats" in result.sheet_names
+    groupstats_sheet = pd.read_excel(output_file, sheet_name="Groupstats")
+    assert {"insight", "descriptive", "distribution"}.issubset(set(groupstats_sheet["row_type"]))
+    distribution = groupstats_sheet[groupstats_sheet["row_type"] == "distribution"].iloc[0]
+    assert distribution["normality_test"] == "Shapiro-Wilk"
+    assert distribution["skewness"] == 0.2

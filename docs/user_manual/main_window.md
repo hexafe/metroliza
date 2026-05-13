@@ -82,7 +82,7 @@ Export never connects to the production line database directly. Live production 
 
 **Sync now** is reference-scoped. It requires at least one reference before it fetches production-line rows, so Metroliza does not pull an entire historical source table.
 
-Use **Edit references...** in the sync dialog to paste reference/ID values quickly as a comma-separated, semicolon-separated, space-separated, tab-separated, or line-separated list. During sync, Metroliza batches long reference lists and uses Oznak chunked fetching when the source profile has a record key/pagination column.
+Use **Edit references...** in the sync dialog to paste reference/ID values quickly as a comma-separated, semicolon-separated, space-separated, tab-separated, or line-separated list. During sync, Metroliza batches long reference lists. Bounded sync and access checks use bounded Oznak requests; chunked Oznak fetching is reserved for explicit unbounded fetch paths when the source profile has a record key/pagination column.
 
 If the Metroliza report reference and production reference are different, use **Production links...** after sync. Select one Metroliza report, select one cached production row, then click **Link selected**. Manual links take priority over automatic exact-reference links during export.
 

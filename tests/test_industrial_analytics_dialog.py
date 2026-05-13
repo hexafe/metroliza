@@ -9,7 +9,7 @@ import pandas as pd
 from tests.industrial_analytics_fixtures import seed_production_analytics_cache
 
 try:
-    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtWidgets import QApplication, QDialog
     from modules.industrial_analytics_dialog import (
         build_analytics_completion_message,
         IndustrialAnalyticsDialog,
@@ -24,6 +24,7 @@ try:
 except ImportError as exc:  # pragma: no cover - environment/order dependent
     build_analytics_completion_message = None
     QApplication = None
+    QDialog = None
     IndustrialAnalyticsDialog = None
     IndustrialAnalyticsFilterDialog = None
     IndustrialAnalyticsThread = None
@@ -328,6 +329,7 @@ def test_tabular_row_filter_is_summarized_passed_to_worker_and_used_for_grouping
         assert thread.tabular_column_filters == (
             TabularColumnFilter("tracecode", selected_values=("TC-001", "TC-003")),
         )
+        assert thread.tabular_load_result is dialog.tabular_load_result
 
         dialog.open_grouping_dialog()
 
@@ -335,6 +337,52 @@ def test_tabular_row_filter_is_summarized_passed_to_worker_and_used_for_grouping
         assert calls["tracecodes"] == ("TC-001", "TC-003")
         assert calls["column_mapping"]["TraceCode"] == "tracecode"
         assert calls["executed"] is True
+    finally:
+        dialog.close()
+
+
+def test_tabular_filter_dialog_accept_uses_column_filters_without_legacy_keys(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _app()
+    input_file = tmp_path / "table.csv"
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=3, freq="h"),
+            "TraceCode": ["TC-001", "TC-002", "TC-003"],
+            "Length mm": [10.0, 10.2, 10.4],
+        }
+    ).to_csv(input_file, index=False)
+
+    class FakeFilterDialog:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def get_column_filters(self):
+            return (TabularColumnFilter("tracecode", selected_values=("TC-001",)),)
+
+        def get_filter(self):
+            raise AssertionError("legacy filter keys should not be built on accept")
+
+    monkeypatch.setattr(
+        "modules.industrial_analytics_dialog.TabularAnalyticsFilterDialog",
+        FakeFilterDialog,
+    )
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.input_file = str(input_file)
+        dialog.load_metrics()
+        dialog.open_tabular_filter_dialog()
+
+        assert dialog.tabular_column_filters == (
+            TabularColumnFilter("tracecode", selected_values=("TC-001",)),
+        )
+        assert dialog.tabular_filter_columns == ()
+        assert dialog.tabular_filter_keys == ()
     finally:
         dialog.close()
 

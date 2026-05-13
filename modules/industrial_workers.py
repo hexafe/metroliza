@@ -23,7 +23,11 @@ from modules.industrial_analytics_workflow import (
     run_production_cache_analytics,
     run_tabular_file_analytics,
 )
-from modules.tabular_analytics_service import TabularColumnFilter, load_tabular_analytics_file
+from modules.tabular_analytics_service import (
+    TabularAnalyticsLoadResult,
+    TabularColumnFilter,
+    load_tabular_analytics_file,
+)
 from modules.industrial_export_service import (
     IndustrialExportCancelled,
     export_cached_industrial_workbook,
@@ -144,12 +148,15 @@ class IndustrialAnalyticsThread(QThread):
         sheet_name: str | int | None = None,
         timestamp_column: str | None = None,
         reference_column: str | None = None,
+        tabular_load_result: TabularAnalyticsLoadResult | None = None,
         tabular_filter_columns: tuple[str, ...] | list[str] | None = None,
         tabular_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
         tabular_column_filters: tuple[TabularColumnFilter, ...] | list[TabularColumnFilter] | None = None,
         grouping_df=None,
     ):
         super().__init__()
+        if source_kind not in {"production_cache", "tabular_file"}:
+            raise ValueError(f"Unsupported analytics source kind: {source_kind}")
         self.source_kind = source_kind
         self.db_file = db_file
         self.input_file = input_file
@@ -164,6 +171,7 @@ class IndustrialAnalyticsThread(QThread):
         self.sheet_name = sheet_name
         self.timestamp_column = timestamp_column
         self.reference_column = reference_column
+        self.tabular_load_result = tabular_load_result
         self.tabular_filter_columns = tuple(tabular_filter_columns or ())
         self.tabular_filter_keys = tuple(tuple(key) for key in (tabular_filter_keys or ()))
         self.tabular_column_filters = tuple(tabular_column_filters or ())
@@ -187,6 +195,7 @@ class IndustrialAnalyticsThread(QThread):
                     input_file=self.input_file,
                     output_dashboard_file=self.output_dashboard_file,
                     output_workbook_file=self.output_workbook_file or None,
+                    tabular_load_result=self.tabular_load_result,
                     metric_selection=self.metric_selection,
                     sheet_name=self.sheet_name,
                     timestamp_column=self.timestamp_column,
@@ -202,7 +211,7 @@ class IndustrialAnalyticsThread(QThread):
                     cancel_check=self._is_cancelled,
                     progress_callback=self._emit_progress_message,
                 )
-            else:
+            elif self.source_kind == "production_cache":
                 result = run_production_cache_analytics(
                     db_file=self.db_file,
                     output_dashboard_file=self.output_dashboard_file,
@@ -216,6 +225,8 @@ class IndustrialAnalyticsThread(QThread):
                     cancel_check=self._is_cancelled,
                     progress_callback=self._emit_progress_message,
                 )
+            else:
+                raise ValueError(f"Unsupported analytics source kind: {self.source_kind}")
             self.result_ready.emit(result)
         except AnalyticsCancelled as exc:
             self.cancelled.emit(str(exc))

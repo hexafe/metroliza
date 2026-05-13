@@ -14,9 +14,11 @@ from modules.excel_sheet_utils import unique_sheet_name
 from modules.industrial_analytics_service import (
     ProductionAggregationResult,
     ProductionAnalyticsDiagnostic,
+    ProductionGroupstatsResult,
     ProductionMetricCandidate,
 )
 from modules.industrial_analytics_state import ProductionChartSelection
+from modules.industrial_analytics_workbook import groupstats_result_dataframe
 from modules.industrial_analytics_workbook_charts import add_analytics_workbook_charts
 
 
@@ -60,6 +62,8 @@ class TabularAnalyticsLoadResult:
     timestamp_column: str | None = None
     reference_column: str | None = None
     csv_config: dict[str, Any] = field(default_factory=dict)
+    source_size: int | None = None
+    source_mtime_ns: int | None = None
 
 
 @dataclass(frozen=True)
@@ -174,6 +178,7 @@ def load_tabular_analytics_file(
     path = Path(input_file)
     if not path.exists():
         raise FileNotFoundError(str(path))
+    source_stat = path.stat()
 
     diagnostics: list[ProductionAnalyticsDiagnostic] = []
     csv_config: dict[str, Any] = {}
@@ -264,6 +269,8 @@ def load_tabular_analytics_file(
         timestamp_column=timestamp_field,
         reference_column=reference_field,
         csv_config=csv_config,
+        source_size=int(source_stat.st_size),
+        source_mtime_ns=int(source_stat.st_mtime_ns),
     )
 
 
@@ -615,6 +622,7 @@ def export_tabular_analytics_workbook(
     metric_candidates: tuple[ProductionMetricCandidate, ...],
     output_file: str | Path,
     aggregation_result: ProductionAggregationResult | None = None,
+    groupstats_result: ProductionGroupstatsResult | None = None,
     diagnostics: tuple[ProductionAnalyticsDiagnostic, ...] = (),
     separate_parameter_sheets: bool = True,
     chart_selection: ProductionChartSelection | None = None,
@@ -663,6 +671,15 @@ def export_tabular_analytics_workbook(
             sheet_names=sheet_names,
             group_fields=group_fields,
         )
+
+        if groupstats_result is not None and groupstats_result.metrics:
+            stats_sheet = unique_sheet_name("Groupstats", used_names)
+            groupstats_result_dataframe(groupstats_result).to_excel(
+                writer,
+                sheet_name=stats_sheet,
+                index=False,
+            )
+            sheet_names.append(stats_sheet)
 
         diagnostics_sheet = unique_sheet_name("Diagnostics", used_names)
         _diagnostics_dataframe(diagnostics).to_excel(writer, sheet_name=diagnostics_sheet, index=False)

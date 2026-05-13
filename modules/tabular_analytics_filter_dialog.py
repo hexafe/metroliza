@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pandas as pd
-from PyQt6.QtCore import QDate, Qt
+from PyQt6.QtCore import QDate, Qt, QTimer
 from PyQt6.QtWidgets import (
     QComboBox,
     QDateEdit,
@@ -69,8 +69,14 @@ class TabularAnalyticsFilterDialog(QDialog):
         self.date_filters: dict[str, dict[str, str | None]] = {}
         self._date_filterable_cache: dict[str, bool] = {}
         self._value_index_by_column: dict[str, CsvGroupingIndex] = {}
+        self._filter_value_series_by_column: dict[str, pd.Series] = {}
+        self._filter_date_series_by_column: dict[str, pd.Series] = {}
         self._list_selection_utils = ListSelectionUtils()
         self._syncing_current_filter = False
+        self._status_timer = QTimer(self)
+        self._status_timer.setSingleShot(True)
+        self._status_timer.setInterval(80)
+        self._status_timer.timeout.connect(self._sync_status_now)
         if initial_filters:
             self._load_column_filters(initial_filters)
         else:
@@ -351,6 +357,8 @@ class TabularAnalyticsFilterDialog(QDialog):
         self.value_filters = {}
         self.date_filters = {}
         self._value_index_by_column = {}
+        self._filter_value_series_by_column = {}
+        self._filter_date_series_by_column = {}
         self._refresh_all()
 
     def clear_selection(self) -> None:
@@ -366,6 +374,8 @@ class TabularAnalyticsFilterDialog(QDialog):
         self.value_filters = {}
         self.date_filters = {}
         self._value_index_by_column = {}
+        self._filter_value_series_by_column = {}
+        self._filter_date_series_by_column = {}
         self._refresh_all()
 
     def _store_current_selection(self) -> None:
@@ -385,12 +395,12 @@ class TabularAnalyticsFilterDialog(QDialog):
         existing = set(self.value_filters.get(column, set()))
         self.value_filters[column] = (existing - visible_values) | selected_visible_values
         self._refresh_selected_columns()
-        self._sync_status()
+        self._schedule_status_sync()
 
     def _handle_selected_column_changed(self) -> None:
         self._refresh_values()
         self._sync_date_controls()
-        self._sync_status()
+        self._schedule_status_sync()
 
     def _set_current_selected_column(self, column: str) -> None:
         for index in range(self.selected_columns_list.count()):
@@ -405,6 +415,25 @@ class TabularAnalyticsFilterDialog(QDialog):
             index = CsvGroupingIndex(self.source_dataframe, (column,))
             self._value_index_by_column[column] = index
         return index
+
+    def _normalized_filter_series(self, column: str) -> pd.Series:
+        cached = self._filter_value_series_by_column.get(column)
+        if cached is not None:
+            return cached
+        series = self.source_dataframe[column]
+        normalized = series.where(~series.isna(), "(blank)")
+        normalized = normalized.map(lambda value: str(value).strip() or "(blank)").astype("string")
+        self._filter_value_series_by_column[column] = normalized
+        return normalized
+
+    def _date_filter_series(self, column: str) -> pd.Series:
+        cached = self._filter_date_series_by_column.get(column)
+        if cached is not None:
+            return cached
+        parsed = pd.to_datetime(self.source_dataframe[column], errors="coerce")
+        dates = parsed.dt.date
+        self._filter_date_series_by_column[column] = dates
+        return dates
 
     def _refresh_values(self) -> None:
         column = self._current_filter_column()
@@ -495,6 +524,9 @@ class TabularAnalyticsFilterDialog(QDialog):
         lower, upper = self._column_date_bounds(column)
         date_filter = self.date_filters.setdefault(column, {"mode": "any", "from": None, "to": None})
         self._syncing_current_filter = True
+        self.date_from_calendar.blockSignals(True)
+        self.date_to_calendar.blockSignals(True)
+        self.date_mode_combo.blockSignals(True)
         self.date_from_calendar.setDate(
             QDate.fromString(str(date_filter.get("from") or ""), "yyyy-MM-dd")
             if date_filter.get("from")
@@ -510,6 +542,9 @@ class TabularAnalyticsFilterDialog(QDialog):
         if not self.date_to_calendar.date().isValid():
             self.date_to_calendar.setDate(upper)
         self._set_combo_data(self.date_mode_combo, str(date_filter.get("mode") or "any"))
+        self.date_from_calendar.blockSignals(False)
+        self.date_to_calendar.blockSignals(False)
+        self.date_mode_combo.blockSignals(False)
         self._syncing_current_filter = False
 
     def _store_current_date_filter(self, *_args, force_clear: bool = False) -> None:
@@ -524,26 +559,47 @@ class TabularAnalyticsFilterDialog(QDialog):
             mode = str(self.date_mode_combo.currentData() or "any")
             self.date_filters[column] = {
                 "mode": mode,
-                "from": self._qdate_to_text(self.date_from_calendar.date()) if mode in {"from", "between"} else None,
-                "to": self._qdate_to_text(self.date_to_calendar.date()) if mode in {"to", "between"} else None,
+                "from": (
+                    self._qdate_to_text(self.date_from_calendar.date())
+                    if mode in {"from", "between"}
+                    else None
+                ),
+                "to": (
+                    self._qdate_to_text(self.date_to_calendar.date())
+                    if mode in {"to", "between"}
+                    else None
+                ),
             }
         self._refresh_selected_columns()
-        self._sync_status()
+        self._schedule_status_sync()
 
     def _sync_status(self) -> None:
+        self._sync_status_now()
+
+    def _schedule_status_sync(self) -> None:
+        self._sync_status_controls(self._active_column_filters())
+        self._status_timer.start()
+
+    def _flush_pending_status_update(self) -> None:
+        if self._status_timer.isActive():
+            self._status_timer.stop()
+        self._sync_status_now()
+
+    def _sync_status_now(self) -> None:
         active_filters = self._active_column_filters()
         if not self.filter_columns:
             self.status_label.setText("No row filter selected")
             set_status_variant(self.status_label, "neutral")
         elif active_filters:
-            row_count = len(
-                apply_tabular_row_filter(self.source_dataframe, column_filters=active_filters).dataframe.index
-            )
+            row_count = self._filtered_row_count(active_filters)
             self.status_label.setText(f"{len(active_filters)} column filter(s), {row_count} rows")
             set_status_variant(self.status_label, "success" if row_count else "danger")
         else:
             self.status_label.setText(f"{self._filter_columns_text()}: all rows")
             set_status_variant(self.status_label, "info")
+        self._sync_status_controls(active_filters)
+
+    def _sync_status_controls(self, active_filters: tuple[TabularColumnFilter, ...]) -> None:
         self.remove_column_button.setEnabled(bool(self.filter_columns))
         self.clear_columns_button.setEnabled(bool(self.filter_columns))
         current_column = self._current_filter_column()
@@ -551,6 +607,31 @@ class TabularAnalyticsFilterDialog(QDialog):
             bool(current_column and self._filter_for_column(current_column).is_active)
         )
         self.clear_filter_button.setEnabled(bool(self.filter_columns or active_filters))
+
+    def _filtered_row_count(self, active_filters: tuple[TabularColumnFilter, ...]) -> int:
+        if not active_filters:
+            return int(len(self.source_dataframe.index))
+        mask = pd.Series(True, index=self.source_dataframe.index)
+        for column_filter in active_filters:
+            column_mask = pd.Series(True, index=self.source_dataframe.index)
+            if column_filter.selected_values:
+                selected_values = set(column_filter.selected_values)
+                column_mask &= self._normalized_filter_series(column_filter.column).isin(selected_values)
+            if column_filter.has_date_filter:
+                column_mask &= self._date_filter_mask(column_filter)
+            mask &= column_mask.fillna(False)
+        return int(mask.fillna(False).sum())
+
+    def _date_filter_mask(self, column_filter: TabularColumnFilter) -> pd.Series:
+        dates = self._date_filter_series(column_filter.column)
+        mask = pd.Series(True, index=self.source_dataframe.index)
+        lower = pd.to_datetime(column_filter.date_from, errors="coerce")
+        upper = pd.to_datetime(column_filter.date_to, errors="coerce")
+        if column_filter.date_mode in {"from", "between"} and not pd.isna(lower):
+            mask &= dates >= lower.date()
+        if column_filter.date_mode in {"to", "between"} and not pd.isna(upper):
+            mask &= dates <= upper.date()
+        return mask.fillna(False)
 
     def _refresh_all(self) -> None:
         self._refresh_available_columns()

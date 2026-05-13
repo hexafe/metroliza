@@ -6,12 +6,14 @@ import pytest
 try:
     from PyQt6.QtCore import QDate, Qt
     from PyQt6.QtWidgets import QApplication
+    import modules.tabular_analytics_filter_dialog as filter_dialog_module
     from modules.tabular_analytics_filter_dialog import TabularAnalyticsFilterDialog
     from modules.tabular_analytics_service import TabularColumnFilter, load_tabular_analytics_file
 except ImportError as exc:  # pragma: no cover - depends on optional PyQt availability
     QApplication = None
     QDate = None
     Qt = None
+    filter_dialog_module = None
     TabularAnalyticsFilterDialog = None
     TabularColumnFilter = None
     load_tabular_analytics_file = None
@@ -84,6 +86,7 @@ def _select_matching_keys(
         item = dialog.matching_list.item(index)
         item.setSelected(tuple(item.data(Qt.ItemDataRole.UserRole)) in keys)
     dialog._store_current_selection()
+    dialog._flush_pending_status_update()
 
 
 def _select_values(
@@ -94,6 +97,7 @@ def _select_values(
         item = dialog.matching_list.item(index)
         item.setSelected(str(item.data(Qt.ItemDataRole.UserRole)) in values)
     dialog._store_current_selection()
+    dialog._flush_pending_status_update()
 
 
 def test_filter_dialog_exposes_source_columns_without_internal_helpers(tmp_path) -> None:
@@ -171,6 +175,31 @@ def test_filter_dialog_keeps_independent_value_choices_per_selected_column(tmp_p
         dialog.close()
 
 
+def test_filter_dialog_status_count_uses_cached_debounced_path(tmp_path, monkeypatch) -> None:
+    _app()
+    loaded = _sample_loaded_table(tmp_path)
+    calls = {"apply": 0}
+
+    def fail_apply(*args, **kwargs):
+        calls["apply"] += 1
+        raise AssertionError("status count should not call full row filter")
+
+    monkeypatch.setattr(filter_dialog_module, "apply_tabular_row_filter", fail_apply)
+    dialog = TabularAnalyticsFilterDialog(
+        dataframe=loaded.dataframe,
+        column_mapping=loaded.column_mapping,
+    )
+    try:
+        _select_available_column(dialog, "line")
+        dialog.add_filter_column()
+        _select_values(dialog, {"L1"})
+
+        assert calls["apply"] == 0
+        assert dialog.status_label.text() == "1 column filter(s), 2 rows"
+    finally:
+        dialog.close()
+
+
 def test_filter_dialog_supports_per_column_values_and_calendar_date_bounds(tmp_path) -> None:
     _app()
     loaded = _sample_loaded_table(tmp_path)
@@ -191,6 +220,7 @@ def test_filter_dialog_supports_per_column_values_and_calendar_date_bounds(tmp_p
         dialog.date_from_calendar.setDate(QDate(2026, 5, 11))
         dialog.date_to_calendar.setDate(QDate(2026, 5, 13))
         dialog._store_current_date_filter()
+        dialog._flush_pending_status_update()
 
         assert dialog.get_column_filters() == (
             TabularColumnFilter("line", selected_values=("L1",)),

@@ -35,6 +35,7 @@ from modules.industrial_analytics_workbook import (
 from modules.progress_status import build_three_line_status
 from modules.tabular_analytics_service import (
     TABULAR_GROUP_COLUMN,
+    TabularAnalyticsLoadResult,
     TabularAnalyticsWorkbookResult,
     TabularColumnFilter,
     apply_tabular_row_filter,
@@ -219,6 +220,7 @@ def run_tabular_file_analytics(
     *,
     input_file: str,
     output_dashboard_file: str,
+    tabular_load_result: TabularAnalyticsLoadResult | None = None,
     metric_selection: tuple[ProductionMetricSelection, ...] = (),
     sheet_name: str | int | None = None,
     timestamp_column: str | None = None,
@@ -242,18 +244,30 @@ def run_tabular_file_analytics(
     _emit_progress(
         progress_callback,
         "Loading CSV/Excel data...",
-        "Reading rows and detecting metric columns",
+        "Checking loaded rows and metric columns"
+        if tabular_load_result is not None
+        else "Reading rows and detecting metric columns",
         step=1,
         total_steps=total_steps,
         start_time=start_time,
     )
     _raise_if_cancelled(cancel_check)
-    loaded = load_tabular_analytics_file(
-        input_file,
-        sheet_name=sheet_name,
-        timestamp_column=timestamp_column,
-        reference_column=reference_column,
-    )
+    if tabular_load_result is not None:
+        _validate_tabular_load_snapshot(
+            tabular_load_result,
+            input_file=input_file,
+            sheet_name=sheet_name,
+            timestamp_column=timestamp_column,
+            reference_column=reference_column,
+        )
+        loaded = tabular_load_result
+    else:
+        loaded = load_tabular_analytics_file(
+            input_file,
+            sheet_name=sheet_name,
+            timestamp_column=timestamp_column,
+            reference_column=reference_column,
+        )
     filtered = apply_tabular_row_filter(
         loaded.dataframe,
         filter_columns=tabular_filter_columns,
@@ -357,6 +371,7 @@ def run_tabular_file_analytics(
             dataframe=cohorted.dataframe,
             metric_candidates=selected_candidates,
             aggregation_result=aggregated,
+            groupstats_result=groupstats,
             diagnostics=diagnostics,
             separate_parameter_sheets=separate_parameter_sheets,
             chart_selection=charts,
@@ -459,6 +474,34 @@ def _aggregation_with_tabular_grouping(
     if TABULAR_GROUP_COLUMN in aggregation.group_fields:
         return aggregation
     return replace(aggregation, group_fields=(TABULAR_GROUP_COLUMN, *aggregation.group_fields))
+
+
+def _validate_tabular_load_snapshot(
+    loaded: TabularAnalyticsLoadResult,
+    *,
+    input_file: str,
+    sheet_name: str | int | None,
+    timestamp_column: str | None,
+    reference_column: str | None,
+) -> None:
+    source_path = Path(input_file)
+    loaded_path = Path(loaded.source_file) if loaded.source_file else source_path
+    try:
+        current_stat = source_path.stat()
+    except OSError as exc:
+        raise ValueError(f"Reload CSV/Excel data before export: source file is unavailable ({exc}).") from exc
+    if loaded_path.resolve() != source_path.resolve():
+        raise ValueError("Reload CSV/Excel data before export: selected source file changed.")
+    if loaded.source_size is not None and int(current_stat.st_size) != int(loaded.source_size):
+        raise ValueError("Reload CSV/Excel data before export: source file size changed.")
+    if loaded.source_mtime_ns is not None and int(current_stat.st_mtime_ns) != int(loaded.source_mtime_ns):
+        raise ValueError("Reload CSV/Excel data before export: source file timestamp changed.")
+    if sheet_name is not None and loaded.sheet_name is not None and str(sheet_name) != loaded.sheet_name:
+        raise ValueError("Reload CSV/Excel data before export: selected Excel sheet changed.")
+    if timestamp_column is not None and loaded.timestamp_column != str(timestamp_column):
+        raise ValueError("Reload CSV/Excel data before export: selected time column changed.")
+    if reference_column is not None and loaded.reference_column != str(reference_column):
+        raise ValueError("Reload CSV/Excel data before export: selected part/id column changed.")
 
 
 def _analyze_groupstats_if_enabled(
@@ -565,6 +608,7 @@ def _export_tabular_workbook_with_temp(
     dataframe,
     metric_candidates,
     aggregation_result,
+    groupstats_result: ProductionGroupstatsResult,
     diagnostics: tuple[ProductionAnalyticsDiagnostic, ...],
     separate_parameter_sheets: bool,
     chart_selection: ProductionChartSelection,
@@ -579,6 +623,7 @@ def _export_tabular_workbook_with_temp(
             metric_candidates=metric_candidates,
             output_file=temp_path,
             aggregation_result=aggregation_result,
+            groupstats_result=groupstats_result,
             diagnostics=diagnostics,
             separate_parameter_sheets=separate_parameter_sheets,
             chart_selection=chart_selection,

@@ -423,6 +423,7 @@ def fetch_oznak_records_for_source_profile(
     reference_values: tuple[str, ...] | list[str] | None = None,
     chunk_size: int | None = DEFAULT_OZNAK_FETCH_CHUNK_SIZE,
     reference_batch_size: int = DEFAULT_REFERENCE_BATCH_SIZE,
+    allow_unbounded: bool = False,
     cancellation_token: Any = None,
     progress_callback: Any = None,
     import_module: Any = None,
@@ -439,14 +440,38 @@ def fetch_oznak_records_for_source_profile(
             error=status.error,
         )
 
+    normalized_reference_values = tuple(
+        str(value).strip() for value in (reference_values or ()) if str(value).strip()
+    )
+    if not normalized_reference_values and limit is None and not allow_unbounded:
+        return OznakAdapterFetchResult(
+            status=status,
+            implemented=True,
+            diagnostics={"stage": "scope_validation", "reason": "unbounded_fetch_rejected"},
+            error=(
+                "Oznak fetch requires reference/ID values or an explicit row limit. "
+                "Refusing an unbounded production-table read."
+            ),
+        )
+
     try:
         oznak_module = importer(OZNAK_IMPORT_PATH)
         database_profile_type = getattr(oznak_module, "DatabaseProfile")
         fetch_request_type = getattr(oznak_module, "FetchRequest")
         credential_provider_type = getattr(oznak_module, "MappingCredentialProvider")
-        fetch_records = getattr(oznak_module, "fetch_records")
+        fetch_records = getattr(oznak_module, "fetch_records", None)
         fetch_records_chunked = getattr(oznak_module, "fetch_records_chunked", None)
         query_filter_type = getattr(oznak_module, "QueryFilter", None)
+        if not callable(fetch_records):
+            fetcher_module = importer(OZNAK_FETCHER_IMPORT_PATH)
+            fetch_records = getattr(fetcher_module, "fetch_records", None)
+            fetch_records_chunked = fetch_records_chunked or getattr(
+                fetcher_module,
+                "fetch_records_chunked",
+                None,
+            )
+        if not callable(fetch_records):
+            raise AttributeError("oznak.fetch_records is unavailable.")
     except Exception as exc:
         return OznakAdapterFetchResult(
             status=status,
@@ -471,9 +496,6 @@ def fetch_oznak_records_for_source_profile(
     )
 
     try:
-        normalized_reference_values = tuple(
-            str(value).strip() for value in (reference_values or ()) if str(value).strip()
-        )
         oznak_profile = _construct_with_supported_kwargs(
             database_profile_type,
             {

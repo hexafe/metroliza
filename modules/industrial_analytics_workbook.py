@@ -87,7 +87,7 @@ def export_production_analytics_workbook(
 
         if groupstats_result is not None and groupstats_result.metrics:
             stats_sheet = unique_sheet_name("Groupstats", used_names)
-            _groupstats_dataframe(groupstats_result).to_excel(
+            groupstats_result_dataframe(groupstats_result).to_excel(
                 writer,
                 sheet_name=stats_sheet,
                 index=False,
@@ -156,10 +156,25 @@ def _metric_summary_dataframe(
     return pd.DataFrame(rows)
 
 
-def _groupstats_dataframe(groupstats_result: ProductionGroupstatsResult) -> pd.DataFrame:
+def groupstats_result_dataframe(groupstats_result: ProductionGroupstatsResult) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     for metric in groupstats_result.metrics:
         metric_name = metric.get("metric") or metric.get("field_name")
+        insight = metric.get("primary_insight") if isinstance(metric.get("primary_insight"), dict) else {}
+        insight_text = str(
+            insight.get("headline")
+            or insight.get("first_action")
+            or insight.get("summary")
+            or ""
+        ).strip()
+        if insight_text:
+            rows.append(
+                {
+                    "metric": metric_name,
+                    "row_type": "insight",
+                    "message": insight_text,
+                }
+            )
         for row in metric.get("descriptive_stats") or []:
             rows.append(
                 {
@@ -173,6 +188,25 @@ def _groupstats_dataframe(groupstats_result: ProductionGroupstatsResult) -> pd.D
                     "iqr": row.get("iqr"),
                     "min": row.get("min"),
                     "max": row.get("max"),
+                    "cp": row.get("cp"),
+                    "cpk": row.get("cpk"),
+                    "capability": row.get("capability"),
+                    "nok_count": row.get("nok_count"),
+                    "nok_percent": row.get("nok_percent"),
+                }
+            )
+        for row in metric.get("distribution_rows") or []:
+            rows.append(
+                {
+                    "metric": metric_name,
+                    "row_type": "distribution",
+                    "group": row.get("group"),
+                    "n": row.get("n"),
+                    "skewness": row.get("skewness"),
+                    "excess_kurtosis": row.get("excess_kurtosis"),
+                    "normality_test": row.get("normality_test"),
+                    "normality_p_value": row.get("normality_p_value"),
+                    "normality_status": row.get("normality_status"),
                 }
             )
         for row in metric.get("pairwise_rows") or []:
@@ -236,4 +270,5 @@ def _parameter_dataframe(dataframe: pd.DataFrame, metric_field: str) -> pd.DataF
 __all__ = [
     "IndustrialAnalyticsWorkbookResult",
     "export_production_analytics_workbook",
+    "groupstats_result_dataframe",
 ]

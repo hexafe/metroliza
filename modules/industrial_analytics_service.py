@@ -309,6 +309,26 @@ def load_production_analytics_frame(
             )
         )
 
+    if state.time_start or state.time_end:
+        time_filter_result = _apply_time_filters(dataframe, state)
+        dataframe = time_filter_result.dataframe
+        diagnostics.extend(time_filter_result.diagnostics)
+        if time_filter_result.input_row_count != time_filter_result.output_row_count:
+            diagnostics.append(
+                ProductionAnalyticsDiagnostic(
+                    severity="info",
+                    code="time_filters_applied",
+                    message=(
+                        "Production time filters reduced rows from "
+                        f"{time_filter_result.input_row_count} to {time_filter_result.output_row_count}."
+                    ),
+                    context={
+                        "input_row_count": time_filter_result.input_row_count,
+                        "output_row_count": time_filter_result.output_row_count,
+                    },
+                )
+            )
+
     missing_metrics: list[str] = []
     for metric in metric_selection:
         if metric.field_name not in dataframe.columns:
@@ -375,39 +395,9 @@ def apply_production_filters(
         filtered = filtered[filtered[column].isin(values)].copy()
 
     if state.time_start or state.time_end:
-        if "process_datetime" not in filtered.columns:
-            filtered["process_datetime"] = pd.to_datetime(
-                filtered.get("process_timestamp"),
-                errors="coerce",
-                utc=True,
-            )
-        timestamps = pd.to_datetime(filtered["process_datetime"], errors="coerce", utc=True)
-        mask = pd.Series(True, index=filtered.index)
-        if state.time_start:
-            start = pd.to_datetime(state.time_start, errors="coerce", utc=True)
-            if pd.isna(start):
-                diagnostics.append(
-                    ProductionAnalyticsDiagnostic(
-                        severity="warning",
-                        code="invalid_time_filter_start",
-                        message=f"Invalid production time-start filter: {state.time_start}.",
-                    )
-                )
-            else:
-                mask &= timestamps >= start
-        if state.time_end:
-            end = pd.to_datetime(state.time_end, errors="coerce", utc=True)
-            if pd.isna(end):
-                diagnostics.append(
-                    ProductionAnalyticsDiagnostic(
-                        severity="warning",
-                        code="invalid_time_filter_end",
-                        message=f"Invalid production time-end filter: {state.time_end}.",
-                    )
-                )
-            else:
-                mask &= timestamps < end
-        filtered = filtered[mask].copy()
+        time_filter_result = _apply_time_filters(filtered, state)
+        filtered = time_filter_result.dataframe
+        diagnostics.extend(time_filter_result.diagnostics)
 
     if state.dynamic_filters:
         dynamic_result = _apply_dynamic_filters(filtered, state.dynamic_filters)
@@ -429,6 +419,60 @@ def apply_production_filters(
         diagnostics=tuple(diagnostics),
         input_row_count=input_count,
         output_row_count=output_count,
+    )
+
+
+def _apply_time_filters(
+    dataframe: pd.DataFrame,
+    state: ProductionFilterState,
+) -> ProductionFilterResult:
+    filtered = dataframe.copy()
+    diagnostics: list[ProductionAnalyticsDiagnostic] = []
+    input_count = int(len(filtered.index))
+    if not state.time_start and not state.time_end:
+        return ProductionFilterResult(
+            dataframe=filtered.reset_index(drop=True),
+            input_row_count=input_count,
+            output_row_count=input_count,
+        )
+    if "process_datetime" not in filtered.columns:
+        filtered["process_datetime"] = pd.to_datetime(
+            filtered.get("process_timestamp"),
+            errors="coerce",
+            utc=True,
+        )
+    timestamps = pd.to_datetime(filtered["process_datetime"], errors="coerce", utc=True)
+    mask = pd.Series(True, index=filtered.index)
+    if state.time_start:
+        start = pd.to_datetime(state.time_start, errors="coerce", utc=True)
+        if pd.isna(start):
+            diagnostics.append(
+                ProductionAnalyticsDiagnostic(
+                    severity="warning",
+                    code="invalid_time_filter_start",
+                    message=f"Invalid production time-start filter: {state.time_start}.",
+                )
+            )
+        else:
+            mask &= timestamps >= start
+    if state.time_end:
+        end = pd.to_datetime(state.time_end, errors="coerce", utc=True)
+        if pd.isna(end):
+            diagnostics.append(
+                ProductionAnalyticsDiagnostic(
+                    severity="warning",
+                    code="invalid_time_filter_end",
+                    message=f"Invalid production time-end filter: {state.time_end}.",
+                )
+            )
+        else:
+            mask &= timestamps < end
+    filtered = filtered[mask].copy()
+    return ProductionFilterResult(
+        dataframe=filtered.reset_index(drop=True),
+        diagnostics=tuple(diagnostics),
+        input_row_count=input_count,
+        output_row_count=int(len(filtered.index)),
     )
 
 
@@ -1272,12 +1316,6 @@ def _fixed_filter_sql(filter_state: ProductionFilterState | None) -> tuple[list[
         ("process_status", state.process_statuses),
     ):
         _append_in_filter(clauses, params, f"records.{column}", values)
-    if state.time_start:
-        clauses.append("records.process_timestamp >= ?")
-        params.append(state.time_start)
-    if state.time_end:
-        clauses.append("records.process_timestamp < ?")
-        params.append(state.time_end)
     return clauses, params
 
 
@@ -1289,9 +1327,16 @@ def _append_in_filter(
 ) -> None:
     if not values:
         return
-    placeholders = ", ".join("?" for _ in values)
-    clauses.append(f"{column_sql} IN ({placeholders})")
-    params.extend(values)
+    chunks = _chunk_tuple(tuple(values), _SQLITE_BATCH_PARAMETER_TARGET)
+    chunk_clauses: list[str] = []
+    for chunk in chunks:
+        placeholders = ", ".join("?" for _ in chunk)
+        chunk_clauses.append(f"{column_sql} IN ({placeholders})")
+        params.extend(chunk)
+    if len(chunk_clauses) == 1:
+        clauses.append(chunk_clauses[0])
+    else:
+        clauses.append("(" + " OR ".join(chunk_clauses) + ")")
 
 
 def _quote_identifier(value: str) -> str:

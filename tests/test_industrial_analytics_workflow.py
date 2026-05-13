@@ -12,6 +12,7 @@ from modules.industrial_analytics_state import (
     ProductionMetricSelection,
     ReferenceCohortState,
 )
+import modules.industrial_analytics_workflow as workflow_module
 from modules.industrial_analytics_workflow import (
     AnalyticsCancelled,
     default_dashboard_path,
@@ -19,7 +20,7 @@ from modules.industrial_analytics_workflow import (
     run_production_cache_analytics,
     run_tabular_file_analytics,
 )
-from modules.tabular_analytics_service import TabularColumnFilter
+from modules.tabular_analytics_service import TabularColumnFilter, load_tabular_analytics_file
 from tests.industrial_analytics_fixtures import seed_production_analytics_cache
 
 
@@ -135,6 +136,69 @@ def test_run_tabular_file_analytics_reuses_shared_dashboard_and_parameter_workbo
     assert any(message.startswith("Writing dashboard...") for message in progress_messages)
     assert progress_messages[-1].startswith("Analytics complete")
     assert all("ETA" in message for message in progress_messages)
+
+
+def test_run_tabular_file_analytics_uses_loaded_snapshot_without_reloading(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    input_file = tmp_path / "snapshot_table.csv"
+    dashboard_file = tmp_path / "snapshot_table_analytics.html"
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=3, freq="h"),
+            "Reference ID": ["R1", "R2", "R3"],
+            "Length mm": [10.0, 10.2, 10.4],
+        }
+    ).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file)
+
+    def fail_reload(*args, **kwargs):
+        raise AssertionError("loaded tabular analytics snapshot should be reused")
+
+    monkeypatch.setattr(workflow_module, "load_tabular_analytics_file", fail_reload)
+
+    result = run_tabular_file_analytics(
+        input_file=str(input_file),
+        output_dashboard_file=str(dashboard_file),
+        tabular_load_result=loaded,
+        metric_selection=(ProductionMetricSelection("length_mm", display_label="Length mm"),),
+        chart_selection=ProductionChartSelection(time_series=True),
+    )
+
+    assert result.row_count == 3
+    assert Path(result.html_dashboard_path).exists()
+
+
+def test_run_tabular_file_analytics_rejects_stale_loaded_snapshot(tmp_path) -> None:
+    input_file = tmp_path / "stale_table.csv"
+    dashboard_file = tmp_path / "stale_table_analytics.html"
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=3, freq="h"),
+            "Reference ID": ["R1", "R2", "R3"],
+            "Length mm": [10.0, 10.2, 10.4],
+        }
+    ).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file)
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=4, freq="h"),
+            "Reference ID": ["R1", "R2", "R3", "R4"],
+            "Length mm": [10.0, 10.2, 10.4, 10.6],
+        }
+    ).to_csv(input_file, index=False)
+
+    with pytest.raises(ValueError, match="Reload CSV/Excel data before export"):
+        run_tabular_file_analytics(
+            input_file=str(input_file),
+            output_dashboard_file=str(dashboard_file),
+            tabular_load_result=loaded,
+            metric_selection=(ProductionMetricSelection("length_mm", display_label="Length mm"),),
+            chart_selection=ProductionChartSelection(time_series=True),
+        )
+
+    assert not dashboard_file.exists()
 
 
 def test_run_tabular_file_analytics_uses_manual_population_grouping(tmp_path) -> None:
