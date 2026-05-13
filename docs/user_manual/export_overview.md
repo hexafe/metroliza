@@ -153,13 +153,13 @@ This option does not replace the workbook. It adds an extra review file alongsid
 
 You can optionally check **Industrial context**.
 
-This adds cached Oznak industrial columns to the measurement export and writes industrial context/diagnostics worksheets when linked production-process records exist in the selected Metroliza report database.
+This adds cached production context from accepted local links to the measurement export and writes industrial context/diagnostics worksheets when linked production-process records exist in the selected Metroliza report database.
 
 Before using this option, open **Tools > Industrial data...** from the main window. Configure production line sources either by editing `~/.metroliza/industrial_sources.yaml` directly or by using **Production sources...**, which reads/writes the same Oznak-style config file. If the launcher was opened before a report database was selected, use **Select DB...** first. Then use **Connect / check / sync...** to enter reference/ID values, check production database access with a one-row read that saves nothing, sync selected production rows into the local Metroliza cache, and refresh links.
 
 If the report reference and production reference are not the same value, open **Production links...** after sync. Manual links connect one Metroliza report to one cached production row and take priority over automatic exact-reference links.
 
-Export uses only local cached industrial rows from the Metroliza report database. It does not connect to production line databases while the workbook is being created. If no industrial rows have been synced or no report links exist yet, the normal export still works, but no industrial context is added.
+Export uses only local cached industrial rows from the Metroliza report database. It does not connect to production line databases or query Oznak while the workbook is being created. The chain is: Oznak sync fills the local cache, automatic link refresh or manual links create accepted local links, and normal export joins one accepted production link per report, prioritizing manual links. If no industrial rows have been synced or no report links exist yet, the normal export still works, but no industrial context is added.
 
 The industrial data launcher can also open dedicated cached Oznak export and analytics
 dialogs. **Export...** creates a workbook from cached rows only. **Analyze...** creates an

@@ -362,8 +362,8 @@ class ExportDialog(QDialog):
             self.include_industrial_context_checkbox = QCheckBox("Industrial context")
             self.include_industrial_context_checkbox.setChecked(False)
             industrial_context_tooltip = (
-                "Append cached Oznak industrial context to the measurement export and add "
-                "a context worksheet when linked records exist."
+                "Append cached production context from accepted local links to the measurement "
+                "export and add a context worksheet when linked records exist."
             )
             self.include_industrial_context_checkbox.setToolTip(industrial_context_tooltip)
             self.industrial_context_info_button = self._build_info_button(industrial_context_tooltip)

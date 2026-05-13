@@ -194,6 +194,7 @@ class CsvGroupingIndex:
         self,
         *,
         search_text: str = "",
+        offset: int = 0,
         limit: int | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         """Return display rows and total match count for the selected grouping columns."""
@@ -209,10 +210,31 @@ class CsvGroupingIndex:
             labels = filtered["_label"].astype("string").str.casefold()
             filtered = filtered.loc[labels.str.contains(search, regex=False, na=False)]
         total = int(len(filtered.index))
+        offset = max(0, int(offset or 0))
+        if offset:
+            filtered = filtered.iloc[offset:]
         if limit is not None and int(limit) >= 0:
             filtered = filtered.head(int(limit))
+        return self._records_to_rows(filtered), total
+
+    def matching_keys(self, *, search_text: str = "") -> tuple[tuple[str, ...], ...]:
+        """Return every grouping key matching the current search text."""
+
+        if not self.active:
+            return ()
+        preview = self._preview_frame()
+        if preview.empty:
+            return ()
+        filtered = preview
+        search = str(search_text or "").strip().casefold()
+        if search:
+            labels = filtered["_label"].astype("string").str.casefold()
+            filtered = filtered.loc[labels.str.contains(search, regex=False, na=False)]
+        return tuple(row["key"] for row in self._records_to_rows(filtered))
+
+    def _records_to_rows(self, frame: pd.DataFrame) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
-        for record in filtered.to_dict("records"):
+        for record in frame.to_dict("records"):
             key = tuple(str(record[column]) for column in self.grouping_columns)
             rows.append(
                 {
@@ -221,7 +243,7 @@ class CsvGroupingIndex:
                     "row_count": int(record["_row_count"]),
                 }
             )
-        return rows, total
+        return rows
 
     def filter_rows(self, selected_group_keys) -> pd.DataFrame:
         """Return rows matching selected grouping keys using vectorized key membership."""

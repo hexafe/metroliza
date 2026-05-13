@@ -340,6 +340,7 @@ def _build_histogram_chart(
                 if normalize_groups
                 else {"title": "Count"}
             ),
+            **_metric_reference_markings(metric, all_values, axis="x"),
         },
     )
     stats_tables = _histogram_stats_tables(metric, groups)
@@ -387,6 +388,7 @@ def _build_distribution_chart(
         layout={
             "xaxis": {"title": "Group"},
             "yaxis": {"title": metric.display_label},
+            **_metric_reference_markings(metric, _numeric_values(frame[metric.field_name]), axis="y"),
         },
     )
     image = _render_distribution_image(metric, frame, chart_type=chart_type, groups=groups)
@@ -760,8 +762,86 @@ def _merge_axis_layout(base_layout: dict[str, Any], override: dict[str, Any]) ->
         if key in {"xaxis", "yaxis"} and isinstance(value, dict):
             axis = base_layout.setdefault(key, {})
             axis.update(value)
+        elif key in {"shapes", "annotations"} and isinstance(value, list):
+            base_layout.setdefault(key, [])
+            base_layout[key].extend(value)
         else:
             base_layout[key] = value
+
+
+def _metric_reference_markings(
+    metric: ProductionMetricSelection,
+    values: list[float],
+    *,
+    axis: str,
+) -> dict[str, list[dict[str, Any]]]:
+    finite_values = np.asarray(values, dtype=float)
+    finite_values = finite_values[np.isfinite(finite_values)]
+    markings: list[tuple[str, float, str, str]] = []
+    if metric.lsl is not None:
+        markings.append(("LSL", float(metric.lsl), SUMMARY_PLOT_PALETTE["spec_limit"], "dash"))
+    if metric.usl is not None:
+        markings.append(("USL", float(metric.usl), SUMMARY_PLOT_PALETTE["spec_limit"], "dash"))
+    if finite_values.size:
+        markings.append(("Mean", float(np.mean(finite_values)), SUMMARY_PLOT_PALETTE["central_tendency"], "solid"))
+        markings.append(("Median", float(np.median(finite_values)), SUMMARY_PLOT_PALETTE["annotation_text"], "dot"))
+    if not markings:
+        return {}
+
+    shapes = []
+    annotations = []
+    for label, value, color, dash in markings:
+        if axis == "y":
+            shapes.append(
+                {
+                    "type": "line",
+                    "xref": "paper",
+                    "yref": "y",
+                    "x0": 0,
+                    "x1": 1,
+                    "y0": value,
+                    "y1": value,
+                    "line": {"color": color, "width": 1.1, "dash": dash},
+                }
+            )
+            annotations.append(
+                {
+                    "xref": "paper",
+                    "yref": "y",
+                    "x": 1.01,
+                    "y": value,
+                    "text": label,
+                    "showarrow": False,
+                    "xanchor": "left",
+                    "font": {"size": 11, "color": color},
+                }
+            )
+        else:
+            shapes.append(
+                {
+                    "type": "line",
+                    "xref": "x",
+                    "yref": "paper",
+                    "x0": value,
+                    "x1": value,
+                    "y0": 0,
+                    "y1": 1,
+                    "line": {"color": color, "width": 1.1, "dash": dash},
+                }
+            )
+            annotations.append(
+                {
+                    "xref": "x",
+                    "yref": "paper",
+                    "x": value,
+                    "y": 1.04,
+                    "text": label,
+                    "showarrow": False,
+                    "yanchor": "bottom",
+                    "font": {"size": 11, "color": color},
+                }
+            )
+    return {"shapes": shapes, "annotations": annotations}
 
 
 def _json_values(series: pd.Series, *, time_bucket: str | None = None) -> list[Any]:
@@ -932,11 +1012,20 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
     }}
     .chart-image {{
       width: 100%;
-      max-height: 460px;
+      max-height: 360px;
       object-fit: contain;
       background: #ffffff;
       border: 1px solid var(--line);
       border-radius: 6px;
+    }}
+    .chart-snapshot {{
+      margin-top: 10px;
+    }}
+    .chart-snapshot summary {{
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
     }}
     .chart-stats {{
       margin-top: 10px;
@@ -1193,18 +1282,31 @@ def _render_chart_shell(chart: dict[str, Any]) -> str:
         return ""
     stats_markup = _render_chart_stats_tables(chart.get("stats_tables"))
     image = chart.get("image") if isinstance(chart.get("image"), dict) else {}
+    has_plotly = isinstance(chart.get("plotly_spec"), dict)
+    snapshot_markup = ""
     if image.get("base64"):
         alt = str(image.get("alt") or title)
-        media_markup = (
+        image_markup = (
             f'<img class="chart-image" alt="{html.escape(alt)}" '
             f'src="data:{html.escape(str(image.get("mime_type") or "image/png"))};base64,{image["base64"]}">'
         )
+        if has_plotly:
+            snapshot_markup = (
+                '<details class="chart-snapshot">'
+                '<summary>Static snapshot</summary>'
+                f"{image_markup}"
+                "</details>"
+            )
+            media_markup = f'<div class="plotly-chart" id="{html.escape(chart_id)}"></div>'
+        else:
+            media_markup = image_markup
     else:
         media_markup = f'<div class="plotly-chart" id="{html.escape(chart_id)}"></div>'
     return (
         '<article class="chart-card">'
         f'<div class="chart-title">{html.escape(title)}</div>'
         f"{media_markup}"
+        f"{snapshot_markup}"
         f"{stats_markup}"
         '</article>'
     )

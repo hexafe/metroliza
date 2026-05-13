@@ -22,11 +22,8 @@ from modules.matplotlib_runtime import configure_headless_matplotlib
 
 configure_headless_matplotlib()
 
-import matplotlib
 import pandas as pd
 import numpy as np
-
-matplotlib.use(os.environ.get('MPLBACKEND', 'Agg'), force=True)
 
 import importlib.util
 

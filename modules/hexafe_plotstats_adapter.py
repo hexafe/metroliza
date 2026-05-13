@@ -55,11 +55,15 @@ def build_histogram_stats_table(
         return None
     package_rows = _histogram_table_rows_from_plotstats(array, lsl=lsl, usl=usl)
     if package_rows:
-        rows = package_rows
+        rows = _normalize_histogram_capability_rows(package_rows, lsl=lsl, usl=usl)
         resolved_backend = "hexafe-plotstats"
     else:
         table_payload = build_histogram_table_data(_summary_stats(array, lsl=lsl, usl=usl))
-        rows = tuple((str(label), str(value)) for label, value in table_payload.get("rows", ()))
+        rows = _normalize_histogram_capability_rows(
+            tuple((str(label), str(value)) for label, value in table_payload.get("rows", ())),
+            lsl=lsl,
+            usl=usl,
+        )
         resolved_backend = backend
     return HistogramStatsTable(title=str(title or "Parameter"), rows=rows, backend=resolved_backend)
 
@@ -236,6 +240,69 @@ def _nominal_from_limits(lsl: float | None, usl: float | None) -> float | None:
     if lsl is not None and usl is not None and lsl <= usl:
         return (float(lsl) + float(usl)) / 2.0
     return None
+
+
+def _normalize_histogram_capability_rows(
+    rows: tuple[tuple[str, str], ...],
+    *,
+    lsl: float | None,
+    usl: float | None,
+) -> tuple[tuple[str, str], ...]:
+    has_lsl = lsl is not None
+    has_usl = usl is not None
+    has_any_limit = has_lsl or has_usl
+    has_two_sided_limits = has_lsl and has_usl
+    normalized: list[tuple[str, str]] = []
+    seen_labels: set[str] = set()
+
+    for raw_label, raw_value in rows:
+        label = str(raw_label or "").strip()
+        value = str(raw_value or "").strip()
+        label_key = label.casefold().replace(" ", "")
+        if label_key == "cp":
+            label = "Cp"
+            if not has_two_sided_limits:
+                value = "N/A"
+        elif label_key in {"cpk", "cpu", "cpl"}:
+            label = "Cpk"
+            if not has_any_limit:
+                value = "N/A"
+        elif label_key == "nok":
+            label = "NOK"
+            if not has_any_limit:
+                value = "N/A"
+        elif label_key in {"nok%", "nokpct"}:
+            label = "NOK %"
+            if not has_any_limit:
+                value = "N/A"
+        if label:
+            seen_labels.add(label.casefold())
+        normalized.append((label, value))
+
+    required_rows: list[tuple[str, str]] = []
+    if "cp" not in seen_labels:
+        required_rows.append(("Cp", "N/A" if not has_two_sided_limits else ""))
+    if "cpk" not in seen_labels:
+        required_rows.append(("Cpk", "N/A" if not has_any_limit else ""))
+    if not has_any_limit:
+        if "nok" not in seen_labels:
+            required_rows.append(("NOK", "N/A"))
+        if "nok %" not in seen_labels:
+            required_rows.append(("NOK %", "N/A"))
+
+    for label, value in required_rows:
+        normalized = _insert_histogram_row_before_samples(normalized, (label, value))
+    return tuple(normalized)
+
+
+def _insert_histogram_row_before_samples(
+    rows: list[tuple[str, str]],
+    row: tuple[str, str],
+) -> list[tuple[str, str]]:
+    for index, (label, _value) in enumerate(rows):
+        if str(label).strip().casefold() == "samples":
+            return rows[:index] + [row] + rows[index:]
+    return [*rows, row]
 
 
 def _draw_stats_table(table_ax, stats_table: HistogramStatsTable) -> None:

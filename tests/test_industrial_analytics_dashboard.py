@@ -135,6 +135,8 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     assert "Selected references" in html_text
     assert "Descriptive stats" in html_text
     assert "Samples" in html_text
+    assert 'class="plotly-chart" id="histogram-cycle_time_s"' in html_text
+    assert "Static snapshot" in html_text
 
     match = re.search(
         r'<script id="production-dashboard-charts" type="application/json">(.*?)</script>',
@@ -300,6 +302,72 @@ def test_metric_limits_flow_into_dashboard_stats_tables() -> None:
     labels = {row["label"] for row in rows}
     assert {"Cp", "Cpk", "NOK", "NOK %"}.issubset(labels)
     assert any(row["label"] == "NOK" and row["value"].startswith("2") for row in rows)
+    layout = histogram["plotly_spec"]["layout"]
+    assert {annotation["text"] for annotation in layout["annotations"]} >= {
+        "LSL",
+        "USL",
+        "Mean",
+        "Median",
+    }
+    assert len(layout["shapes"]) >= 4
+
+
+def test_histogram_stats_rows_without_limits_show_capability_as_not_applicable() -> None:
+    frame = pd.DataFrame(
+        {
+            "process_datetime": pd.date_range("2026-05-10", periods=4, freq="h", tz="UTC"),
+            "length_mm": [9.0, 10.0, 11.0, 12.5],
+        }
+    )
+
+    manifest = build_production_dashboard_manifest(
+        frame=frame,
+        metric_selection=(ProductionMetricSelection("length_mm", "Length Mm"),),
+        chart_selection=ProductionChartSelection(
+            time_series=False,
+            histogram=True,
+            violin=False,
+            box=False,
+            groupstats=False,
+        ),
+    )
+
+    rows = {
+        row["label"]: row["value"]
+        for table in manifest["charts"][0]["stats_tables"]
+        for row in table["rows"]
+    }
+
+    assert rows["Cp"] == "N/A"
+    assert rows["Cpk"] == "N/A"
+    assert rows["NOK"] == "N/A"
+    assert rows["NOK %"] == "N/A"
+
+
+def test_dashboard_snapshot_rendering_keeps_matplotlib_headless_backend() -> None:
+    frame = pd.DataFrame(
+        {
+            "process_datetime": pd.date_range("2026-05-10", periods=4, freq="h", tz="UTC"),
+            "length_mm": [9.0, 10.0, 11.0, 12.5],
+        }
+    )
+
+    manifest = build_production_dashboard_manifest(
+        frame=frame,
+        metric_selection=(ProductionMetricSelection("length_mm", "Length Mm"),),
+        chart_selection=ProductionChartSelection(
+            time_series=False,
+            histogram=True,
+            violin=False,
+            box=False,
+            groupstats=False,
+        ),
+    )
+
+    import matplotlib
+
+    assert manifest["charts"][0]["image"]["mime_type"] == "image/png"
+    assert matplotlib.get_backend().casefold() == "agg"
 
 
 def test_time_series_highlight_mode_uses_separate_selected_and_population_traces() -> None:

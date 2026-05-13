@@ -372,12 +372,18 @@ class IndustrialAnalyticsDialog(QDialog):
             ("highlight", "Highlight"),
             ("compare_rest", "Compare selected vs rest"),
             ("filter_selected", "Analyze selected only"),
-            ("group_selected", "Create selected group"),
+            ("group_selected", "Group pasted references"),
         ):
             self.reference_mode_combo.addItem(label, value)
+        reference_action_tooltip = (
+            "Pasted references create an analysis-only cohort for this run. "
+            "Group pasted references does not edit manual CSV groups."
+        )
+        self.reference_mode_combo.setToolTip(reference_action_tooltip)
         self.references_edit = QPlainTextEdit()
         self.references_edit.setPlaceholderText("Paste Part / IDs to highlight/filter; separate with comma, semicolon, space, or new line")
         self.references_edit.setMaximumHeight(90)
+        self.references_edit.setToolTip(reference_action_tooltip)
 
         self.time_series_checkbox = QCheckBox("Time series")
         self.histogram_checkbox = QCheckBox("Histogram")
@@ -520,11 +526,15 @@ class IndustrialAnalyticsDialog(QDialog):
         grid.addWidget(self.aggregation_combo, row, 1, 1, 2)
 
         row += 1
-        grid.addWidget(section_label("Reference mode"), row, 0)
+        reference_mode_label = section_label("Pasted reference action")
+        reference_mode_label.setToolTip(self.reference_mode_combo.toolTip())
+        grid.addWidget(reference_mode_label, row, 0)
         grid.addWidget(self.reference_mode_combo, row, 1, 1, 2)
 
         row += 1
-        grid.addWidget(section_label("References"), row, 0)
+        references_label = section_label("References")
+        references_label.setToolTip(self.references_edit.toolTip())
+        grid.addWidget(references_label, row, 0)
         grid.addWidget(self.references_edit, row, 1, 1, 2)
 
         row += 1

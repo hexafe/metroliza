@@ -16,6 +16,12 @@ def configure_headless_matplotlib(*, cache_dir_name: str = "metroliza-mpl") -> N
     """
 
     os.environ.setdefault("MPLBACKEND", "Agg")
+    try:
+        import matplotlib
+
+        matplotlib.use(os.environ.get("MPLBACKEND", "Agg"), force=True)
+    except Exception:
+        pass
 
     if os.environ.get("MPLCONFIGDIR"):
         return

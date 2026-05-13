@@ -174,7 +174,11 @@ def _append_industrial_context_to_export_query(base_query):
             WHERE selected_candidate.report_id = base.REPORT_ID
               AND selected_candidate.measurement_id IS NULL
               AND selected_candidate.status = 'accepted'
-            ORDER BY COALESCE(selected_rule.priority, 100), selected_candidate.confidence DESC, selected_candidate.id
+            ORDER BY
+              CASE WHEN selected_rule.rule_key = 'manual_user_link' THEN 0 ELSE 1 END,
+              COALESCE(selected_rule.priority, 100),
+              selected_candidate.confidence DESC,
+              selected_candidate.id
             LIMIT 1
         )
         LEFT JOIN industrial_records ir ON ir.id = ilc.industrial_record_id

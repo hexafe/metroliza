@@ -18,8 +18,6 @@ from modules.matplotlib_runtime import configure_headless_matplotlib
 
 configure_headless_matplotlib()
 
-import matplotlib
-matplotlib.use(os.environ.get("MPLBACKEND", "Agg"), force=True)
 import matplotlib.pyplot as plt
 import numpy as np
 

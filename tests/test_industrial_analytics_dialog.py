@@ -84,6 +84,22 @@ def test_production_analytics_dialog_loads_cached_metric_candidates(tmp_path) ->
         dialog.close()
 
 
+def test_reference_cohort_labels_describe_pasted_reference_action(tmp_path) -> None:
+    _app()
+    db_path = str(tmp_path / "production_only.db")
+    seed_production_analytics_cache(db_path)
+
+    dialog = IndustrialAnalyticsDialog(db_file=db_path, source_kind=SOURCE_PRODUCTION_CACHE)
+    try:
+        group_selected_index = dialog.reference_mode_combo.findData("group_selected")
+
+        assert dialog.reference_mode_combo.itemText(group_selected_index) == "Group pasted references"
+        assert "analysis-only cohort" in dialog.reference_mode_combo.toolTip()
+        assert "comma, semicolon, space, or new line" in dialog.references_edit.placeholderText()
+    finally:
+        dialog.close()
+
+
 def test_production_analytics_dialog_passes_filter_state_to_worker(tmp_path) -> None:
     _app()
     db_path = str(tmp_path / "production_only.db")

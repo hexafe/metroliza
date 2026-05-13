@@ -3,6 +3,14 @@
 from collections.abc import Callable
 
 from PyQt6.QtCore import Qt
+try:
+    from PyQt6.QtCore import QEvent, QObject
+except ImportError:  # pragma: no cover - compatibility with narrow Qt test stubs
+    QEvent = None
+
+    class QObject:  # type: ignore[no-redef]
+        def __init__(self, *_args, **_kwargs):
+            pass
 import PyQt6.QtWidgets as QtWidgets
 
 
@@ -12,6 +20,7 @@ class ListSelectionUtils:
     def __init__(self, keyboard_modifiers: Callable[[], int] | None = None):
         self._last_clicked_row_by_list = {}
         self._keyboard_modifiers = keyboard_modifiers or self._default_keyboard_modifiers
+        self._event_filters_by_list = {}
 
     @staticmethod
     def _default_keyboard_modifiers():
@@ -21,6 +30,14 @@ class ListSelectionUtils:
         return app_cls.keyboardModifiers()
 
     def connect_shift_range_behavior(self, list_widget):
+        if list_widget in self._event_filters_by_list:
+            return
+        if QEvent is not None and hasattr(list_widget, "viewport"):
+            viewport = list_widget.viewport()
+            if hasattr(viewport, "installEventFilter"):
+                event_filter = _ListSelectionEventFilter(self, list_widget)
+                viewport.installEventFilter(event_filter)
+                self._event_filters_by_list[list_widget] = event_filter
         signal = getattr(list_widget, "itemClicked", None) or getattr(list_widget, "itemPressed", None)
         if signal is not None:
             signal.connect(lambda item, lw=list_widget: self.handle_shift_range_press(lw, item))
@@ -49,6 +66,47 @@ class ListSelectionUtils:
 
         self._last_clicked_row_by_list[list_widget] = row
 
+    def handle_mouse_press(self, list_widget, event) -> bool:
+        if event is None or list_widget is None:
+            return False
+        index = list_widget.indexAt(event.position().toPoint() if hasattr(event, "position") else event.pos())
+        if not index.isValid():
+            return False
+
+        row = int(index.row())
+        modifiers = (
+            event.modifiers()
+            if hasattr(event, "modifiers")
+            else self._keyboard_modifiers()
+        )
+        is_shift_pressed = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+        if not is_shift_pressed:
+            self._last_clicked_row_by_list[list_widget] = row
+            return False
+
+        previous_row = self._last_clicked_row_by_list.get(list_widget)
+        if previous_row is None:
+            self._last_clicked_row_by_list[list_widget] = row
+            return False
+
+        start_row = min(previous_row, row)
+        end_row = max(previous_row, row)
+        model = list_widget.model()
+        if model is None:
+            return False
+
+        if not modifiers & Qt.KeyboardModifier.ControlModifier:
+            list_widget.clearSelection()
+        toggle = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
+        for item_row in range(start_row, end_row + 1):
+            item = list_widget.item(item_row)
+            if item is None or item.isHidden():
+                continue
+            item.setSelected(not item.isSelected() if toggle else True)
+        if hasattr(event, "accept"):
+            event.accept()
+        return True
+
     def preserve_selection_during_filter(self, list_widget, search_text, canonical_text_getter=None):
         selected_items = list_widget.selectedItems()
         list_widget.clearSelection()
@@ -73,3 +131,21 @@ class ListSelectionUtils:
 
         for item in selected_items:
             item.setSelected(True)
+
+
+class _ListSelectionEventFilter(QObject):
+    def __init__(self, helper: ListSelectionUtils, list_widget):
+        super().__init__(list_widget)
+        self._helper = helper
+        self._list_widget = list_widget
+
+    def eventFilter(self, watched, event) -> bool:
+        if QEvent is None:
+            return False
+        try:
+            viewport = self._list_widget.viewport()
+        except RuntimeError:
+            return False
+        if watched is viewport and event.type() == QEvent.Type.MouseButtonPress:
+            return self._helper.handle_mouse_press(self._list_widget, event)
+        return False

@@ -99,12 +99,14 @@ deviation, and percentiles.
 
 Paste references or IDs if you want those rows to stand out in charts and statistics.
 
-Reference modes:
+Pasted reference actions:
 
 - highlight selected values,
 - compare selected values against the rest,
 - analyze selected values only,
-- create a selected group.
+- group pasted references as an analysis-only cohort.
+
+This pasted reference cohort does not edit manual CSV groups.
 
 ### 6. Choose Outputs
 

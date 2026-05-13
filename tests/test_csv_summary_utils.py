@@ -93,6 +93,7 @@ class CsvSummaryUtilsTests(unittest.TestCase):
         index = CsvGroupingIndex(df, ["Part ID", "TraceCode", "Line"])
 
         preview_rows, total = index.preview_rows(limit=50)
+        second_page, second_total = index.preview_rows(offset=1000, limit=5)
         selected = {
             ("P-0001", "TC-0001", "L1"),
             ("P-2500", "TC-2500", "L0"),
@@ -102,6 +103,9 @@ class CsvSummaryUtilsTests(unittest.TestCase):
 
         self.assertEqual(5000, total)
         self.assertEqual(50, len(preview_rows))
+        self.assertEqual(5000, second_total)
+        self.assertEqual(("P-1000", "TC-1000", "L0"), second_page[0]["key"])
+        self.assertEqual((("P-4999", "TC-4999", "L4"),), index.matching_keys(search_text="P-4999"))
         self.assertEqual(3, index.count_rows(selected))
         self.assertEqual(["P-0001", "P-2500", "P-4999"], filtered["Part ID"].tolist())
 

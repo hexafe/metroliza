@@ -1,7 +1,9 @@
 import sqlite3
 
 from modules.report_schema import ensure_report_schema
+from modules.industrial_join_service import set_manual_industrial_report_link
 from modules.report_query_service import (
+    _append_industrial_context_to_export_query,
     build_distinct_value_query,
     build_grouping_query,
     build_industrial_measurement_export_query,
@@ -9,6 +11,7 @@ from modules.report_query_service import (
     build_measurement_filter_query,
     build_report_overview_query,
 )
+from tests.industrial_analytics_fixtures import seed_production_analytics_cache
 
 
 def test_build_report_overview_query_uses_view():
@@ -69,6 +72,33 @@ def test_build_measurement_export_query_can_include_industrial_context():
 
     assert "INDUSTRIAL_SOURCE_PROFILE" in query
     assert "base.*" in query
+
+
+def test_industrial_context_export_uses_manual_accepted_link_before_auto_link(tmp_path):
+    db_path = str(tmp_path / "reports.db")
+    seed_production_analytics_cache(db_path, include_report_tables=True)
+
+    with sqlite3.connect(db_path) as conn:
+        manual_record_id = conn.execute(
+            "SELECT id FROM industrial_records WHERE reference = 'REF-200' ORDER BY id LIMIT 1"
+        ).fetchone()[0]
+
+    set_manual_industrial_report_link(
+        db_path,
+        report_id=1,
+        industrial_record_id=int(manual_record_id),
+    )
+
+    query = _append_industrial_context_to_export_query(
+        "SELECT 1 AS REPORT_ID, 'REF-100' AS REFERENCE"
+    )
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(query).fetchone()
+        columns = [description[0] for description in conn.execute(query).description]
+
+    result = dict(zip(columns, row, strict=True))
+    assert result["INDUSTRIAL_RECORD_ID"] == manual_record_id
+    assert result["INDUSTRIAL_LINK_RULE"] == "Manual user link"
 
 
 def test_build_measurement_filter_query_includes_report_level_filters():
