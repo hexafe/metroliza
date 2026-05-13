@@ -634,7 +634,9 @@ def test_analytics_completion_message_uses_export_style_file_links(tmp_path, mon
         dialog.close()
 
 
-def test_analytics_completion_message_reveals_dashboard_when_workbook_disabled(tmp_path) -> None:
+def test_analytics_completion_message_opens_dashboard_normally_when_workbook_disabled(
+    tmp_path, monkeypatch
+) -> None:
     _app()
     dashboard_file = tmp_path / "analytics.html"
 
@@ -650,7 +652,26 @@ def test_analytics_completion_message_reveals_dashboard_when_workbook_disabled(t
     assert title == "Analytics successful"
     assert f"HTML dashboard: {dashboard_file.resolve().as_uri()}" in message
     assert "Workbook:" not in message
-    assert reveal_path == str(dashboard_file)
+    assert reveal_path == ""
+
+    calls = []
+    fake_export_dialog = types.SimpleNamespace(
+        show_export_result_message=lambda parent, level, title, message, excel_file=None: calls.append(
+            (parent, level, title, message, excel_file)
+        )
+    )
+    monkeypatch.setitem(sys.modules, "modules.export_dialog", fake_export_dialog)
+
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.on_analytics_finished(AnalyticsResult)
+
+        assert len(calls) == 1
+        assert calls[0][0] is dialog
+        assert f"HTML dashboard: {dashboard_file.resolve().as_uri()}" in calls[0][3]
+        assert calls[0][4] == ""
+    finally:
+        dialog.close()
 
 
 def test_analytics_dialog_wires_cancellable_worker_without_running_job(tmp_path) -> None:

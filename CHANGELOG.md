@@ -1,12 +1,9 @@
 # Changelog (for end users)
 
 ## 2026.05 RC1 (build 260512) — current version
-- CSV Summary now analyzes CSV and Excel files in the shared analytics workflow.
-- Grouping is easier: double-click columns, select matching rows, then create or add a group.
-- CSV and Excel rows can be filtered and grouped before dashboards, charts, and workbooks are created.
-- Dashboards and Excel workbooks include the selected plots with the same chart style used in Export.
-- Cached industrial rows can use the same grouped dashboard and workbook flow as CSV and Excel files.
-- The older CSV Summary workbook path has been retired; **CSV Summary...** now opens the shared analytics workflow.
+- CSV Summary revamp.
+- Oznak integration: connect and fetch data from industrial databases.
+- UI revamp.
 
 ## 2026.04 (build 260421)
 - Re-running parsing on an existing database refreshes older CMM report rows so OCR header metadata can replace filename-only values.

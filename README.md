@@ -283,7 +283,7 @@ Examples of metric availability by spec type:
 
 ## Release metadata
 
-Current release highlight (`2026.05 RC1 (build 260512)`): CSV and Excel analytics are easier to group and now share dashboards, Excel workbooks, and cached industrial context in one workflow.
+Current release highlight (`2026.05 RC1 (build 260512)`): CSV Summary revamp, Oznak industrial database integration, and UI improvements.
 
 Canonical release metadata is in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, `CURRENT_RELEASE_HIGHLIGHT`).
 

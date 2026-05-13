@@ -36,7 +36,6 @@ from modules.ui_foundation import (
     apply_metroliza_theme,
     configure_accessibility,
     configure_window_size,
-    section_label,
     set_status_variant,
     status_chip,
 )
@@ -87,7 +86,6 @@ class TabularAnalyticsGroupingDialog(QDialog):
         attach_help_menu_to_layout(layout, self, [("CSV Summary manual", "csv_summary")])
 
         self.selector_status_label = status_chip("No grouping columns selected", "neutral")
-        layout.addWidget(section_label("Grouping columns"))
         layout.addWidget(self.selector_status_label)
 
         column_area = QWidget()

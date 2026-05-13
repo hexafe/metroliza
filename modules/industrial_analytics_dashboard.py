@@ -1047,6 +1047,13 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
     .chart-stats table {{
       font-size: 12px;
     }}
+    .chart-stats th {{
+      padding: 6px 7px;
+      background: #1f2937;
+      color: #ffffff;
+      border-bottom: 1px solid #111827;
+      text-align: left;
+    }}
     .chart-stats td {{
       padding: 5px 7px;
     }}

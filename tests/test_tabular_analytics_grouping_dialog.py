@@ -5,7 +5,7 @@ import pytest
 
 try:
     from PyQt6.QtCore import Qt
-    from PyQt6.QtWidgets import QApplication, QPushButton
+    from PyQt6.QtWidgets import QApplication, QLabel, QPushButton
     from modules import ui_theme_tokens
     from modules.list_selection_utils import ListSelectionUtils
     from modules.tabular_analytics_grouping_dialog import TabularAnalyticsGroupingDialog
@@ -305,6 +305,8 @@ def test_matching_rows_pane_removes_bulk_buttons_and_keeps_compact_pagination_ro
         assert not hasattr(dialog, "select_all_matching_button")
         assert not hasattr(dialog, "clear_matching_button")
         assert {"Select visible", "Select all matching", "Clear matching"}.isdisjoint(button_texts)
+        label_texts = {label.text() for label in dialog.findChildren(QLabel)}
+        assert "Grouping columns" not in label_texts
 
         selector_layout = dialog.selector_list.parentWidget().layout()
         paging_layout = selector_layout.itemAt(selector_layout.count() - 1).layout()

@@ -82,7 +82,7 @@ def build_analytics_completion_message(result) -> tuple[str, str, str, str]:
             f"Rows analyzed: {result.row_count}",
         ]
     )
-    reveal_path = str(result.workbook_path or result.html_dashboard_path or "")
+    reveal_path = str(result.workbook_path or "")
     return "info", "Analytics successful", "\n".join(message_lines), reveal_path
 
 

@@ -601,6 +601,19 @@ class TestShowExportResultMessage(unittest.TestCase):
 
         open_url_mock.assert_called_once()
 
+    def test_handle_export_result_link_opens_dashboard_file_normally_without_reveal_target(self):
+        from modules.export_dialog import handle_export_result_link
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            file_path = Path(tmpdir) / 'dashboard.html'
+            file_path.write_text('<html></html>', encoding='utf-8')
+
+            with patch('modules.export_dialog.reveal_file_in_explorer') as reveal_mock, patch('modules.export_dialog.QDesktopServices.openUrl') as open_url_mock:
+                handle_export_result_link(parent=None, url=file_path.resolve().as_uri(), excel_file='')
+
+        reveal_mock.assert_not_called()
+        open_url_mock.assert_called_once()
+
     def test_open_export_result_link_surfaces_failure_warning(self):
         from modules.export_dialog import _open_export_result_link
 

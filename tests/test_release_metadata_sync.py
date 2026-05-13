@@ -21,11 +21,13 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
 
         current_section = VersionDate.release_notes.split("<br><b>Archive:</b><br>", 1)[0]
 
-        self.assertIn("CSV Summary now analyzes CSV and Excel files", current_section)
-        self.assertIn("double-click columns", current_section)
-        self.assertIn("filtered and grouped before dashboards", current_section)
-        self.assertIn("Cached industrial rows", current_section)
-        self.assertIn("older CSV Summary workbook path has been retired", current_section)
+        expected_bullets = [
+            "- CSV Summary revamp<br>",
+            "- Oznak integration: connect and fetch data from industrial databases<br>",
+            "- UI revamp<br>",
+        ]
+        for expected_bullet in expected_bullets:
+            self.assertIn(expected_bullet, current_section)
         for technical_term in (
             "loading animation",
             "PyInstaller",
@@ -49,8 +51,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
             for line in current_section.splitlines()
             if line.strip().startswith("- ")
         ]
-        self.assertGreaterEqual(len(current_bullets), 5)
-        self.assertLessEqual(len(current_bullets), 6)
+        self.assertEqual(current_bullets, expected_bullets)
         changelog_bullets = [
             line.strip()
             for line in sync_release_metadata.CHANGELOG_PATH.read_text(encoding="utf-8").splitlines()

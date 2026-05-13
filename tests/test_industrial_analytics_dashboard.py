@@ -137,6 +137,10 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     assert "Samples" in html_text
     assert 'class="plotly-chart" id="histogram-cycle_time_s"' in html_text
     assert "Static snapshot" in html_text
+    assert ".chart-stats th" in html_text
+    assert "background: #1f2937" in html_text
+    assert "color: #ffffff" in html_text
+    assert "<th>Statistic</th><th>Value</th>" in html_text
 
     match = re.search(
         r'<script id="production-dashboard-charts" type="application/json">(.*?)</script>',

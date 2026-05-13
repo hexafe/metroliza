@@ -2,18 +2,15 @@ RELEASE_VERSION = "2026.05rc1"
 VERSION_DATE = "260512"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = (
-    "CSV and Excel analytics are easier to group and now share dashboards, Excel workbooks, and cached industrial context in one workflow."
+    "CSV Summary revamp, Oznak industrial database integration, and UI improvements."
 )
 PUBLIC_VERSION_LABEL = "2026.05 RC1 (build 260512)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
-    - CSV Summary now analyzes CSV and Excel files in the shared analytics workflow<br>
-    - Grouping is easier: double-click columns, select matching rows, then create or add a group<br>
-    - CSV and Excel rows can be filtered and grouped before dashboards, charts, and workbooks are created<br>
-    - Dashboards and Excel workbooks include the selected plots with the same chart style used in Export<br>
-    - Cached industrial rows can use the same grouped dashboard and workbook flow as CSV and Excel files<br>
-    - The older CSV Summary workbook path has been retired; CSV Summary now opens the shared analytics workflow<br>
+    - CSV Summary revamp<br>
+    - Oznak integration: connect and fetch data from industrial databases<br>
+    - UI revamp<br>
 
     <br><b>Archive:</b><br>
 
