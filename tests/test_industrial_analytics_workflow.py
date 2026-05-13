@@ -14,6 +14,8 @@ from modules.industrial_analytics_state import (
 )
 from modules.industrial_analytics_workflow import (
     AnalyticsCancelled,
+    default_dashboard_path,
+    default_workbook_path,
     run_production_cache_analytics,
     run_tabular_file_analytics,
 )
@@ -70,6 +72,17 @@ def test_run_production_cache_analytics_writes_dashboard_and_workbook(tmp_path) 
     assert any(message.startswith("Writing dashboard...") for message in progress_messages)
     assert progress_messages[-1].startswith("Analytics complete")
     assert all("ETA" in message for message in progress_messages)
+
+
+def test_default_analytics_paths_add_collision_suffixes(tmp_path) -> None:
+    source_file = tmp_path / "table.csv"
+    source_file.write_text("x\n1\n", encoding="utf-8")
+    (tmp_path / "table_analytics.html").write_text("old", encoding="utf-8")
+    (tmp_path / "table_analytics_1.html").write_text("old", encoding="utf-8")
+    (tmp_path / "table_analytics.xlsx").write_text("old", encoding="utf-8")
+
+    assert default_dashboard_path(source_file) == str(tmp_path / "table_analytics_2.html")
+    assert default_workbook_path(source_file) == str(tmp_path / "table_analytics_1.xlsx")
 
 
 def test_run_tabular_file_analytics_reuses_shared_dashboard_and_parameter_workbook(tmp_path) -> None:

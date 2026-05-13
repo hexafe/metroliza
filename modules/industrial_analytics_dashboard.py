@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import base64
 from datetime import datetime, timezone
 import html
+from io import BytesIO
 import json
 from pathlib import Path
 import shutil
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from modules.export_summary_utils import resolve_histogram_bin_count
-from modules.hexafe_plotstats_adapter import build_histogram_stats_table
+from modules.hexafe_plotstats_adapter import build_histogram_stats_table, render_histogram_png
 from modules.industrial_analytics_service import (
     ProductionAggregationResult,
     ProductionAnalyticsDiagnostic,
@@ -81,15 +84,14 @@ def build_production_dashboard_manifest(
             continue
         if charts.time_series:
             group_columns = _chart_group_columns(metric_frame, aggregation)
-            spec = _build_time_series_chart(
+            specs = _build_time_series_charts(
                 metric,
                 raw_frame=metric_frame,
                 aggregate_frame=aggregate_frame,
                 aggregation=aggregation,
                 group_columns=group_columns,
             )
-            if spec:
-                chart_specs.append(spec)
+            chart_specs.extend(spec for spec in specs if spec)
         if charts.histogram:
             spec = _build_histogram_chart(
                 metric,
@@ -188,17 +190,18 @@ def write_production_dashboard(
     }
 
 
-def _build_time_series_chart(
+def _build_time_series_charts(
     metric: ProductionMetricSelection,
     *,
     raw_frame: pd.DataFrame,
     aggregate_frame: pd.DataFrame,
     aggregation: ProductionAggregationState,
     group_columns: list[str] | None = None,
-) -> dict[str, Any]:
+) -> list[dict[str, Any]]:
     method = aggregation.aggregation_methods[0] if aggregation.aggregation_methods else "mean"
     aggregate_metric = f"{metric.field_name}__{method}"
     group_columns = group_columns or []
+    charts: list[dict[str, Any]] = []
     if (
         aggregation.is_aggregated
         and not aggregate_frame.empty
@@ -212,33 +215,78 @@ def _build_time_series_chart(
             y_column=aggregate_metric,
             group_columns=group_columns,
             default_name=f"{metric.display_label} ({method})",
+            time_bucket=aggregation.time_bucket,
         )
-        x_title = _bucket_axis_title(aggregation.time_bucket)
-        y_title = f"{metric.display_label} ({method})"
-    else:
-        traces = _time_series_traces(
-            raw_frame,
-            x_column="process_datetime",
-            y_column=metric.field_name,
-            group_columns=group_columns,
-            default_name=metric.display_label,
-        )
-        x_title = "Process time"
-        y_title = metric.display_label
+        if traces:
+            charts.append(
+                _chart_payload(
+                    chart_id=f"time-series-{metric.field_name}-aggregated",
+                    title=f"{metric.display_label} over time ({method})",
+                    chart_type="time_series",
+                    data=traces,
+                    layout={
+                        "xaxis": {"title": _bucket_axis_title(aggregation.time_bucket)},
+                        "yaxis": {"title": f"{metric.display_label} ({method})"},
+                        "hovermode": "x unified",
+                    },
+                )
+            )
+            overlay_traces = _time_series_traces(
+                raw_frame,
+                x_column="process_datetime",
+                y_column=metric.field_name,
+                group_columns=group_columns,
+                default_name=metric.display_label,
+            )
+            overlay_traces.extend(
+                _time_series_traces(
+                    aggregate_frame,
+                    x_column="time_bucket_start",
+                    y_column=aggregate_metric,
+                    group_columns=group_columns,
+                    default_name=f"{metric.display_label} aggregate",
+                    time_bucket=aggregation.time_bucket,
+                    aggregate_marker=True,
+                )
+            )
+            if overlay_traces:
+                charts.append(
+                    _chart_payload(
+                        chart_id=f"time-series-{metric.field_name}-raw-aggregate",
+                        title=f"{metric.display_label} raw values with {method} markers",
+                        chart_type="time_series_raw_aggregate",
+                        data=overlay_traces,
+                        layout={
+                            "xaxis": {"title": "Process time"},
+                            "yaxis": {"title": metric.display_label},
+                            "hovermode": "closest",
+                        },
+                    )
+                )
+        return charts
 
-    if not traces:
-        return {}
-    return _chart_payload(
-        chart_id=f"time-series-{metric.field_name}",
-        title=f"{metric.display_label} over time",
-        chart_type="time_series",
-        data=traces,
-        layout={
-            "xaxis": {"title": x_title},
-            "yaxis": {"title": y_title},
-            "hovermode": "x unified",
-        },
+    traces = _time_series_traces(
+        raw_frame,
+        x_column="process_datetime",
+        y_column=metric.field_name,
+        group_columns=group_columns,
+        default_name=metric.display_label,
     )
+    if not traces:
+        return []
+    return [
+        _chart_payload(
+            chart_id=f"time-series-{metric.field_name}",
+            title=f"{metric.display_label} over time",
+            chart_type="time_series",
+            data=traces,
+            layout={
+                "xaxis": {"title": "Process time"},
+                "yaxis": {"title": metric.display_label},
+                "hovermode": "x unified",
+            },
+        )
+    ]
 
 
 def _build_histogram_chart(
@@ -297,6 +345,9 @@ def _build_histogram_chart(
     stats_tables = _histogram_stats_tables(metric, groups)
     if stats_tables:
         chart["stats_tables"] = stats_tables
+    image = _render_distribution_image(metric, frame, chart_type="histogram", groups=groups)
+    if image:
+        chart["image"] = image
     return chart
 
 
@@ -308,7 +359,8 @@ def _build_distribution_chart(
     group_columns: list[str] | None = None,
 ) -> dict[str, Any]:
     traces = []
-    for index, (label, group) in enumerate(_plot_groups(frame, group_columns=group_columns), start=0):
+    groups = _plot_groups(frame, group_columns=group_columns)
+    for index, (label, group) in enumerate(groups, start=0):
         values = _numeric_values(group[metric.field_name])
         if not values:
             continue
@@ -327,7 +379,7 @@ def _build_distribution_chart(
         traces.append(trace)
     if not traces:
         return {}
-    return _chart_payload(
+    chart = _chart_payload(
         chart_id=f"{chart_type}-{metric.field_name}",
         title=f"{metric.display_label} {chart_type}",
         chart_type=chart_type,
@@ -337,6 +389,10 @@ def _build_distribution_chart(
             "yaxis": {"title": metric.display_label},
         },
     )
+    image = _render_distribution_image(metric, frame, chart_type=chart_type, groups=groups)
+    if image:
+        chart["image"] = image
+    return chart
 
 
 def _time_series_traces(
@@ -346,6 +402,8 @@ def _time_series_traces(
     y_column: str,
     group_columns: list[str],
     default_name: str,
+    time_bucket: str | None = None,
+    aggregate_marker: bool = False,
 ) -> list[dict[str, Any]]:
     if x_column not in frame.columns or y_column not in frame.columns:
         return []
@@ -357,22 +415,31 @@ def _time_series_traces(
         valid_mask = group[x_column].notna() & y_series.notna()
         group = group.loc[valid_mask].copy()
         y_series = y_series.loc[valid_mask]
-        x_values = _json_values(group[x_column])
+        x_values = _json_values(group[x_column], time_bucket=time_bucket)
         y_values = [float(value) for value in y_series.tolist()]
         if not x_values or not y_values:
             continue
-        marker_symbol = "diamond" if "selected" in label.casefold() else "circle"
+        marker_symbol = "x" if aggregate_marker else ("diamond" if "selected" in label.casefold() else "circle")
+        color = _plot_color(index, label)
+        trace_name = label
+        if aggregate_marker and not label.casefold().endswith("aggregate"):
+            trace_name = f"{label} aggregate"
         traces.append(
             {
                 "type": "scatter",
                 "mode": "markers",
-                "name": label,
+                "name": trace_name,
                 "x": x_values,
                 "y": y_values,
                 "marker": {
-                    "color": _plot_color(index, label),
-                    "size": 9 if marker_symbol == "diamond" else 7,
+                    "color": color,
+                    "size": 11 if aggregate_marker else (9 if marker_symbol == "diamond" else 7),
                     "symbol": marker_symbol,
+                    "line": (
+                        {"color": "#111827", "width": 1.7}
+                        if aggregate_marker
+                        else {"color": color, "width": 0.5}
+                    ),
                 },
                 "hovertemplate": f"{html.escape(label)}<br>Time=%{{x}}<br>Value=%{{y}}<extra></extra>",
             }
@@ -392,10 +459,161 @@ def _histogram_stats_tables(
             group[metric.field_name],
             title=label,
             backend="metroliza",
+            lsl=metric.lsl,
+            usl=metric.usl,
         )
         if table is not None:
             tables.append(table.as_dict())
     return tables
+
+
+def _render_distribution_image(
+    metric: ProductionMetricSelection,
+    frame: pd.DataFrame,
+    *,
+    chart_type: str,
+    groups: list[tuple[str, pd.DataFrame]] | None = None,
+) -> dict[str, str] | None:
+    groups = groups if groups is not None else _plot_groups(frame, group_columns=_preferred_group_columns(frame))
+    if not groups:
+        return None
+    if chart_type == "histogram" and len(groups) == 1:
+        values = _numeric_values(groups[0][1][metric.field_name])
+        rendered = render_histogram_png(
+            values,
+            title=f"{metric.display_label} distribution",
+            metric_label=metric.display_label,
+            lsl=metric.lsl,
+            usl=metric.usl,
+        )
+        if rendered is not None:
+            return {
+                "mime_type": "image/png",
+                "base64": base64.b64encode(rendered.png_bytes).decode("ascii"),
+                "alt": f"{metric.display_label} distribution",
+                "backend": rendered.backend,
+            }
+    try:
+        return _render_matplotlib_distribution_image(metric, groups, chart_type=chart_type)
+    except Exception:
+        return None
+
+
+def _render_matplotlib_distribution_image(
+    metric: ProductionMetricSelection,
+    groups: list[tuple[str, pd.DataFrame]],
+    *,
+    chart_type: str,
+) -> dict[str, str] | None:
+    from modules.matplotlib_runtime import configure_headless_matplotlib
+
+    configure_headless_matplotlib()
+    import matplotlib.pyplot as plt
+
+    value_groups: list[tuple[str, np.ndarray]] = []
+    for label, group in groups:
+        values = pd.to_numeric(group[metric.field_name], errors="coerce").dropna().to_numpy(dtype=float)
+        values = values[np.isfinite(values)]
+        if values.size:
+            value_groups.append((label, values))
+    if not value_groups:
+        return None
+
+    fig, ax = plt.subplots(figsize=(7.8, 4.2))
+    try:
+        labels = [label for label, _values in value_groups]
+        arrays = [values for _label, values in value_groups]
+        positions = np.arange(1, len(arrays) + 1)
+        if chart_type == "histogram":
+            combined = np.concatenate(arrays)
+            bins = _histogram_bins([float(value) for value in combined.tolist()])
+            bin_count = max(
+                1,
+                int(round((bins.get("end", 1.0) - bins.get("start", 0.0)) / bins.get("size", 1.0))),
+            )
+            for index, (label, values) in enumerate(value_groups):
+                ax.hist(
+                    values,
+                    bins=bin_count,
+                    alpha=0.52 if len(value_groups) > 1 else 0.82,
+                    color=_plot_color(index, label),
+                    edgecolor=SUMMARY_PLOT_PALETTE["distribution_foreground"],
+                    label=label,
+                    density=len(value_groups) > 1,
+                )
+            ax.set_ylabel("Density" if len(value_groups) > 1 else "Count")
+        elif chart_type == "violin":
+            parts = ax.violinplot(
+                arrays,
+                positions=positions,
+                showmeans=False,
+                showmedians=True,
+                showextrema=True,
+            )
+            for index, body in enumerate(parts.get("bodies", [])):
+                body.set_facecolor(_plot_color(index, labels[index]))
+                body.set_edgecolor(SUMMARY_PLOT_PALETTE["distribution_foreground"])
+                body.set_alpha(0.46)
+            ax.set_xticks(positions)
+            ax.set_xticklabels(labels, rotation=30 if max(len(label) for label in labels) > 12 else 0, ha="right")
+            ax.set_ylabel(metric.display_label)
+        else:
+            box = ax.boxplot(
+                arrays,
+                positions=positions,
+                patch_artist=True,
+                showmeans=True,
+                showfliers=True,
+                medianprops={"color": SUMMARY_PLOT_PALETTE["central_tendency"], "linewidth": 1.15},
+                meanprops={
+                    "marker": "o",
+                    "markerfacecolor": SUMMARY_PLOT_PALETTE["central_tendency"],
+                    "markeredgecolor": SUMMARY_PLOT_PALETTE["central_tendency"],
+                    "markersize": 4,
+                },
+                flierprops={
+                    "marker": "o",
+                    "markersize": 3,
+                    "markerfacecolor": SUMMARY_PLOT_PALETTE["outlier"],
+                    "markeredgecolor": SUMMARY_PLOT_PALETTE["outlier"],
+                    "alpha": 0.85,
+                },
+            )
+            for patch in box.get("boxes", []):
+                patch.set_facecolor(SUMMARY_PLOT_PALETTE["distribution_base"])
+                patch.set_edgecolor(SUMMARY_PLOT_PALETTE["distribution_foreground"])
+                patch.set_alpha(0.45)
+            ax.set_xticks(positions)
+            ax.set_xticklabels(labels, rotation=30 if max(len(label) for label in labels) > 12 else 0, ha="right")
+            ax.set_ylabel(metric.display_label)
+
+        if chart_type == "histogram" and len(value_groups) > 1:
+            ax.legend(loc="best", fontsize=8)
+        for limit, color, label in (
+            (metric.lsl, SUMMARY_PLOT_PALETTE["spec_limit"], "LSL"),
+            (metric.usl, SUMMARY_PLOT_PALETTE["spec_limit"], "USL"),
+        ):
+            if limit is not None and chart_type in {"histogram", "violin", "box"}:
+                axis_method = ax.axvline if chart_type == "histogram" else ax.axhline
+                axis_method(float(limit), color=color, linestyle="--", linewidth=1.1, label=label)
+        ax.set_title(f"{metric.display_label} {chart_type}", color=SUMMARY_PLOT_PALETTE["annotation_text"])
+        if chart_type == "histogram":
+            ax.set_xlabel(metric.display_label)
+        ax.grid(True, axis="y", color=SUMMARY_PLOT_PALETTE["grid"], linewidth=0.5, alpha=0.45)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        fig.tight_layout()
+        image_data = BytesIO()
+        fig.savefig(image_data, format="png", dpi=150)
+        image_data.seek(0)
+        return {
+            "mime_type": "image/png",
+            "base64": base64.b64encode(image_data.getvalue()).decode("ascii"),
+            "alt": f"{metric.display_label} {chart_type}",
+            "backend": "matplotlib",
+        }
+    finally:
+        plt.close(fig)
 
 
 def _chart_payload(
@@ -407,18 +625,18 @@ def _chart_payload(
     layout: dict[str, Any],
 ) -> dict[str, Any]:
     resolved_layout = {
-        "title": {"text": title, "font": {"size": 18}},
+        "title": {"text": title, "font": {"size": 18}, "y": 0.98, "yanchor": "top"},
         "font": {"family": 'Aptos, "Segoe UI", "Helvetica Neue", sans-serif', "color": "#1f2933"},
         "paper_bgcolor": "#ffffff",
         "plot_bgcolor": "#ffffff",
         "colorway": list(PLOT_COLORWAY),
         "dragmode": "zoom",
-        "margin": {"l": 56, "r": 24, "t": 58, "b": 56},
+        "margin": {"l": 56, "r": 24, "t": 84, "b": 56},
         "hoverlabel": {"bgcolor": "#ffffff", "font": {"color": "#1f2933"}},
         "legend": {
             "orientation": "h",
             "yanchor": "bottom",
-            "y": 1.02,
+            "y": 1.0,
             "xanchor": "left",
             "x": 0.0,
             "bgcolor": "rgba(255,255,255,0.86)",
@@ -546,16 +764,35 @@ def _merge_axis_layout(base_layout: dict[str, Any], override: dict[str, Any]) ->
             base_layout[key] = value
 
 
-def _json_values(series: pd.Series) -> list[Any]:
+def _json_values(series: pd.Series, *, time_bucket: str | None = None) -> list[Any]:
     values: list[Any] = []
     for value in series.tolist():
         if pd.isna(value):
             values.append(None)
+        elif time_bucket and time_bucket != "none":
+            values.append(_format_time_bucket_value(value, time_bucket))
         elif hasattr(value, "isoformat"):
             values.append(value.isoformat())
         else:
             values.append(value)
     return values
+
+
+def _format_time_bucket_value(value: Any, time_bucket: str) -> str:
+    timestamp = pd.Timestamp(value)
+    if timestamp.tzinfo is not None:
+        timestamp = timestamp.tz_convert(None)
+    if time_bucket == "year":
+        return timestamp.strftime("%Y")
+    if time_bucket == "month":
+        return timestamp.strftime("%Y-%m")
+    if time_bucket == "day":
+        return timestamp.strftime("%Y-%m-%d")
+    if time_bucket == "week":
+        return f"Week of {timestamp.strftime('%Y-%m-%d')}"
+    if time_bucket == "hour":
+        return timestamp.strftime("%Y-%m-%d %H:00")
+    return timestamp.isoformat()
 
 
 def _bucket_axis_title(time_bucket: str) -> str:
@@ -692,6 +929,14 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
     .plotly-chart {{
       width: 100%;
       height: 360px;
+    }}
+    .chart-image {{
+      width: 100%;
+      max-height: 460px;
+      object-fit: contain;
+      background: #ffffff;
+      border: 1px solid var(--line);
+      border-radius: 6px;
     }}
     .chart-stats {{
       margin-top: 10px;
@@ -867,7 +1112,19 @@ def _render_groupstats(groupstats: dict[str, Any]) -> str:
             continue
         descriptive = _render_table(
             metric.get("descriptive_stats"),
-            columns=("group", "n", "mean", "std", "median", "iqr", "min", "max"),
+            columns=("group", "n", "mean", "std", "median", "iqr", "min", "max", "cp", "capability"),
+        )
+        distribution = _render_table(
+            metric.get("distribution_rows"),
+            columns=(
+                "group",
+                "n",
+                "skewness",
+                "excess_kurtosis",
+                "normality_test",
+                "normality_p_value",
+                "normality_status",
+            ),
         )
         pairwise = _render_table(
             metric.get("pairwise_rows"),
@@ -888,6 +1145,8 @@ def _render_groupstats(groupstats: dict[str, Any]) -> str:
             f"{insight_markup}"
             "<h3>Descriptive stats</h3>"
             f"{descriptive}"
+            "<h3>Distribution checks</h3>"
+            f"{distribution}"
             "<h3>Pairwise tests</h3>"
             f"{pairwise}"
             "</article>"
@@ -933,10 +1192,19 @@ def _render_chart_shell(chart: dict[str, Any]) -> str:
     if not chart_id:
         return ""
     stats_markup = _render_chart_stats_tables(chart.get("stats_tables"))
+    image = chart.get("image") if isinstance(chart.get("image"), dict) else {}
+    if image.get("base64"):
+        alt = str(image.get("alt") or title)
+        media_markup = (
+            f'<img class="chart-image" alt="{html.escape(alt)}" '
+            f'src="data:{html.escape(str(image.get("mime_type") or "image/png"))};base64,{image["base64"]}">'
+        )
+    else:
+        media_markup = f'<div class="plotly-chart" id="{html.escape(chart_id)}"></div>'
     return (
         '<article class="chart-card">'
         f'<div class="chart-title">{html.escape(title)}</div>'
-        f'<div class="plotly-chart" id="{html.escape(chart_id)}"></div>'
+        f"{media_markup}"
         f"{stats_markup}"
         '</article>'
     )
@@ -966,7 +1234,8 @@ def _render_chart_stats_tables(stats_tables: Any) -> str:
         table_markup.append(
             '<div class="chart-stats-table">'
             f'<div class="chart-stats-title">{html.escape(title)}</div>'
-            f"<table><tbody>{''.join(body)}</tbody></table>"
+            "<table><thead><tr><th>Statistic</th><th>Value</th></tr></thead>"
+            f"<tbody>{''.join(body)}</tbody></table>"
             "</div>"
         )
     if not table_markup:

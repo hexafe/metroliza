@@ -695,7 +695,10 @@ def build_production_groupstats_inputs(
     grouped_values: dict[str, tuple[float, ...]] = {}
     if resolved_group_fields:
         grouped_frames = frame.groupby(resolved_group_fields, dropna=False, sort=True)
-        iterator = ((_groupstats_label(key), group) for key, group in grouped_frames)
+        iterator = (
+            (_groupstats_label(key, time_bucket=aggregation.time_bucket), group)
+            for key, group in grouped_frames
+        )
     else:
         iterator = (("All production rows", frame),)
 
@@ -782,7 +785,7 @@ def analyze_production_groupstats(
             raw_payload = analyze_group_metric(
                 metric.display_label,
                 input_result.grouped_values,
-                spec_records=[{}],
+                spec_records=[_metric_spec_record(metric)],
                 alpha=alpha,
                 correction_method=correction_method,
             )
@@ -1027,13 +1030,15 @@ def _aggregation_callable(method: str):
     return method
 
 
-def _groupstats_label(key: Any) -> str:
+def _groupstats_label(key: Any, *, time_bucket: str | None = None) -> str:
     if not isinstance(key, tuple):
         key = (key,)
     parts = []
     for value in key:
         if pd.isna(value):
             parts.append("(blank)")
+        elif time_bucket and time_bucket != "none" and hasattr(value, "isoformat"):
+            parts.append(_format_time_bucket_label(value, time_bucket))
         elif hasattr(value, "isoformat"):
             parts.append(value.isoformat())
         else:
@@ -1041,10 +1046,40 @@ def _groupstats_label(key: Any) -> str:
     return " | ".join(part.strip() or "(blank)" for part in parts)
 
 
+def _format_time_bucket_label(value: Any, time_bucket: str) -> str:
+    timestamp = pd.Timestamp(value)
+    if timestamp.tzinfo is not None:
+        timestamp = timestamp.tz_convert(None)
+    if time_bucket == "year":
+        return timestamp.strftime("%Y")
+    if time_bucket == "month":
+        return timestamp.strftime("%Y-%m")
+    if time_bucket == "day":
+        return timestamp.strftime("%Y-%m-%d")
+    if time_bucket == "week":
+        return f"Week of {timestamp.strftime('%Y-%m-%d')}"
+    if time_bucket == "hour":
+        return timestamp.strftime("%Y-%m-%d %H:00")
+    return timestamp.isoformat()
+
+
 def _finite_numeric_values(series: pd.Series) -> list[float]:
     values = pd.to_numeric(series, errors="coerce").dropna()
     values = values[np.isfinite(values)]
     return [float(value) for value in values.tolist()]
+
+
+def _metric_spec_record(metric: ProductionMetricSelection) -> dict[str, float | None]:
+    lsl = metric.lsl
+    usl = metric.usl
+    nominal = None
+    if lsl is not None and usl is not None and lsl < usl:
+        nominal = (lsl + usl) / 2.0
+    return {
+        "lsl": lsl,
+        "nominal": nominal,
+        "usl": usl,
+    }
 
 
 def _groupstats_metric_payload(
@@ -1065,6 +1100,7 @@ def _groupstats_metric_payload(
         "spec_payload": raw_payload.get("spec_payload"),
         "analysis_policy": raw_payload.get("analysis_policy"),
         "descriptive_stats": list(raw_payload.get("descriptive_stats") or []),
+        "distribution_rows": list(raw_payload.get("distribution_rows") or []),
         "pairwise_rows": list(raw_payload.get("pairwise_rows") or []),
         "capability": raw_payload.get("capability") or {},
         "backend_used": raw_payload.get("backend_used"),
@@ -1097,6 +1133,7 @@ def _skipped_groupstats_metric_payload(
         "skipped": True,
         "skip_reason": skip_reason,
         "descriptive_stats": [],
+        "distribution_rows": [],
         "pairwise_rows": [],
         "capability": {},
         "structured_insights": [],

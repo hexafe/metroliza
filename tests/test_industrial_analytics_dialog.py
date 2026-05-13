@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import time
 import types
 
 import pandas as pd
@@ -45,6 +46,15 @@ def _app():
     global _APP
     _APP = QApplication.instance() or _APP or QApplication([])
     return _APP
+
+
+def _wait_for_tabular_load(dialog, *, timeout_seconds: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    app = _app()
+    while dialog.tabular_load_thread is not None and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    assert dialog.tabular_load_thread is None
 
 
 def test_production_analytics_dialog_loads_cached_metric_candidates(tmp_path) -> None:
@@ -160,6 +170,19 @@ def test_tabular_analytics_dialog_loads_csv_metrics_and_group_columns(tmp_path) 
         dialog.close()
 
 
+def test_tabular_analytics_dialog_uses_part_id_wording_and_delimiters() -> None:
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.references_edit.setPlainText("R1,R2; R3\nR4")
+
+        assert dialog.reference_column_row_label.text() == "Part / ID column"
+        assert "comma, semicolon, space, or new line" in dialog.references_edit.placeholderText()
+        assert dialog._cohort_state().references == ("R1", "R2", "R3", "R4")
+    finally:
+        dialog.close()
+
+
 def test_tabular_analytics_dialog_auto_loads_metrics_after_file_selection(
     tmp_path,
     monkeypatch,
@@ -182,6 +205,7 @@ def test_tabular_analytics_dialog_auto_loads_metrics_after_file_selection(
     dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
     try:
         dialog.select_input_file()
+        _wait_for_tabular_load(dialog)
 
         assert dialog.input_file == str(input_file)
         assert dialog.metrics_list.count() == 2
@@ -225,6 +249,7 @@ def test_tabular_analytics_dialog_lists_excel_sheets_after_file_selection(
     dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
     try:
         dialog.select_input_file()
+        _wait_for_tabular_load(dialog)
 
         sheet_names = [
             dialog.sheet_name_combo.itemText(index)
@@ -324,6 +349,50 @@ def test_tabular_analytics_dialog_uses_manual_groups_for_aggregation_state() -> 
         assert thread.grouping_df is grouping_df
         assert thread.aggregation_state.group_fields == ("GROUP",)
         assert dialog.grouping_summary_label.text() == "Groups: 1 custom + POPULATION"
+    finally:
+        dialog.close()
+
+
+def test_tabular_groupstats_is_disabled_until_manual_groups_are_available() -> None:
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.metric_candidates = (ProductionMetricSelection("length_mm", "Length Mm"),)
+        dialog._populate_metrics()
+        dialog._sync_ui_state()
+
+        assert not dialog.groupstats_checkbox.isEnabled()
+        assert not dialog.groupstats_checkbox.isChecked()
+
+        grouping_df = pd.DataFrame(
+            {
+                "REPORT_ID": [1, 2],
+                "GROUP": ["Fixture A", "POPULATION"],
+            }
+        )
+        dialog.set_df_for_grouping(grouping_df)
+        dialog.set_grouping_applied(True)
+        dialog._sync_ui_state()
+
+        assert dialog.groupstats_checkbox.isEnabled()
+    finally:
+        dialog.close()
+
+
+def test_metric_limits_dialog_applies_absolute_one_sided_limits_to_worker_metric() -> None:
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.input_file = "table.csv"
+        dialog.output_dashboard_file = "table_analytics.html"
+        dialog.metric_candidates = (ProductionMetricSelection("length_mm", "Length Mm"),)
+        dialog._populate_metrics()
+        dialog.metric_spec_limits = {"length_mm": (9.5, None)}
+
+        thread = dialog.create_analytics_thread()
+
+        assert thread.metric_selection[0].lsl == 9.5
+        assert thread.metric_selection[0].usl is None
     finally:
         dialog.close()
 

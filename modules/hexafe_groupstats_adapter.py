@@ -8,6 +8,10 @@ from typing import Any
 import numpy as np
 
 from hexafe_groupstats import AnalysisConfig, analyze_metric
+try:
+    from hexafe_groupstats.adapters import distribution_rows as _package_distribution_rows
+except Exception:  # pragma: no cover - compatibility with older package builds
+    _package_distribution_rows = None
 
 _CORRECTION_METHOD_ALIASES = {
     'holm': 'holm',
@@ -192,6 +196,30 @@ def _structured_insight_payloads(result) -> list[dict[str, Any]]:
     return [row for row in payloads if row.get('headline') or row.get('why') or row.get('first_action')]
 
 
+def _distribution_rows(result) -> list[dict[str, Any]]:
+    if callable(_package_distribution_rows):
+        try:
+            return [dict(row) for row in _package_distribution_rows(result)]
+        except Exception:
+            return []
+    rows = []
+    for row in getattr(result, 'distribution_profiles', ()) or ():
+        rows.append(
+            {
+                'metric': getattr(row, 'metric', None),
+                'group': getattr(row, 'group', None),
+                'n': getattr(row, 'n', None),
+                'skewness': getattr(row, 'skewness', None),
+                'excess_kurtosis': getattr(row, 'excess_kurtosis', None),
+                'normality_test': getattr(row, 'normality_test', None),
+                'normality_p_value': getattr(row, 'normality_p_value', None),
+                'normality_status': getattr(row, 'normality_status', None),
+                'warnings': list(getattr(row, 'warnings', ()) or ()),
+            }
+        )
+    return rows
+
+
 def _metric_capability_payload(result, grouped_values: Mapping[str, Sequence[Any]], spec_payload: Mapping[str, Any]) -> dict[str, Any]:
     all_values = (
         np.concatenate([np.asarray(values, dtype=float) for values in grouped_values.values()])
@@ -261,7 +289,7 @@ def analyze_group_metric(
         config=AnalysisConfig(
             alpha=float(alpha),
             correction_method=_normalize_correction_method(correction_method),
-            distribution_diagnostics=False,
+            distribution_diagnostics=True,
         ),
     )
     spec_payload = normalized_spec_records[0] if normalized_spec_records else {'lsl': None, 'nominal': None, 'usl': None}
@@ -273,6 +301,7 @@ def analyze_group_metric(
         'spec_payload': spec_payload,
         'analysis_policy': _analysis_policy_payload(result),
         'descriptive_stats': _descriptive_rows(result),
+        'distribution_rows': _distribution_rows(result),
         'pairwise_rows': _pairwise_rows(result, grouped_values),
         'capability': _metric_capability_payload(result, grouped_values, spec_payload),
         'backend_used': result.backend_used,

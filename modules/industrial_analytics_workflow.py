@@ -273,6 +273,8 @@ def run_tabular_file_analytics(
         grouping_applied=grouped.applied,
     )
     charts = chart_selection or ProductionChartSelection()
+    if charts.groupstats and grouped.group_count < 2:
+        charts = replace(charts, groupstats=False)
     cohort = cohort_state or ReferenceCohortState()
     cohorted = apply_reference_cohorts(grouped.dataframe, cohort)
     _emit_progress(
@@ -651,13 +653,27 @@ def _run_result(
 def default_dashboard_path(base_file: str | Path, *, suffix: str = "analytics") -> str:
     path = Path(base_file)
     stem = path.stem or "analytics"
-    return str(path.with_name(f"{stem}_{suffix}.html"))
+    return str(_unique_default_output_path(path.with_name(f"{stem}_{suffix}.html")))
 
 
 def default_workbook_path(base_file: str | Path, *, suffix: str = "analytics") -> str:
     path = Path(base_file)
     stem = path.stem or "analytics"
-    return str(path.with_name(f"{stem}_{suffix}.xlsx"))
+    return str(_unique_default_output_path(path.with_name(f"{stem}_{suffix}.xlsx")))
+
+
+def _unique_default_output_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    suffix = path.suffix
+    stem = path.stem
+    parent = path.parent
+    counter = 1
+    while True:
+        candidate = parent / f"{stem}_{counter}{suffix}"
+        if not candidate.exists():
+            return candidate
+        counter += 1
 
 
 __all__ = [

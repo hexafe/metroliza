@@ -120,6 +120,9 @@ class TestExportPresetFlowIntegration(unittest.TestCase):
 
         # Minimal stubs for Qt and dependencies so we can import payload builder.
         qtcore_stub = types.ModuleType('PyQt6.QtCore')
+        qtcore_stub.QByteArray = bytes
+        qtcore_stub.QBuffer = object
+        qtcore_stub.QIODevice = types.SimpleNamespace(OpenModeFlag=types.SimpleNamespace(ReadOnly=0))
         qtcore_stub.QSize = object
         qtcore_stub.QTemporaryFile = object
         qtcore_stub.Qt = object
@@ -146,6 +149,7 @@ class TestExportPresetFlowIntegration(unittest.TestCase):
         sys.modules['PyQt6.QtCore'] = qtcore_stub
 
         qtgui_stub = types.ModuleType('PyQt6.QtGui')
+        qtgui_stub.QImageReader = object
         qtgui_stub.QMovie = object
 
         class _FakeDesktopServices:

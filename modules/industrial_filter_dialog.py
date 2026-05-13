@@ -30,7 +30,7 @@ class IndustrialFilterDialog(QDialog):
         super().__init__(parent)
         self.db_file = db_file
         self.state = state or IndustrialFilterState()
-        self.setWindowTitle("Industrial data filtering")
+        self.setWindowTitle("Industrial sync scope")
         configure_window_size(self, minimum=(520, 340), initial=(680, 460))
 
         self.summary_label = status_chip(self.state.summary(), "neutral")
@@ -38,11 +38,11 @@ class IndustrialFilterDialog(QDialog):
         self.reference_column_edit.setPlaceholderText("reference")
         self.references_edit = QPlainTextEdit()
         self.references_edit.setPlainText("\n".join(self.state.references))
-        self.references_edit.setPlaceholderText("Paste references: REF1, REF2; REF3 REF4")
+        self.references_edit.setPlaceholderText("REF1, REF2; REF3 REF4")
 
-        self.load_db_references_button = QPushButton("Use report DB references")
-        self.clear_button = QPushButton("Clear filter")
-        self.apply_button = QPushButton("Apply filter")
+        self.load_db_references_button = QPushButton("Use report DB values")
+        self.clear_button = QPushButton("Clear values")
+        self.apply_button = QPushButton("Apply references")
         self.cancel_button = QPushButton("Cancel")
 
         self.load_db_references_button.clicked.connect(self.load_database_references)
@@ -54,9 +54,9 @@ class IndustrialFilterDialog(QDialog):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
         layout.addWidget(self.summary_label)
-        layout.addWidget(QLabel("Reference column"))
+        layout.addWidget(QLabel("Reference/ID column in production data"))
         layout.addWidget(self.reference_column_edit)
-        layout.addWidget(QLabel("References"))
+        layout.addWidget(QLabel("Reference/ID values to fetch"))
         layout.addWidget(self.references_edit, 1)
 
         actions = QHBoxLayout()
@@ -79,11 +79,7 @@ class IndustrialFilterDialog(QDialog):
 
     def load_database_references(self) -> None:
         if not self.db_file:
-            QMessageBox.warning(
-                self,
-                "Industrial data filtering",
-                "Select a Metroliza report database first.",
-            )
+            QMessageBox.warning(self, "Industrial sync scope", "Select a Metroliza report database first.")
             return
         try:
             with sqlite_connection_scope(self.db_file) as conn:
@@ -99,7 +95,7 @@ class IndustrialFilterDialog(QDialog):
         except Exception as exc:
             QMessageBox.warning(
                 self,
-                "Industrial data filtering",
+                "Industrial sync scope",
                 f"Could not read references from the selected Metroliza report database: {exc}",
             )
             return
@@ -107,19 +103,19 @@ class IndustrialFilterDialog(QDialog):
         references = [str(row[0]).strip() for row in rows if str(row[0]).strip()]
         self.references_edit.setPlainText("\n".join(references))
         self.summary_label.setText(
-            f"Loaded {len(references)} reference(s) from the Metroliza report database"
+            f"Loaded {len(references)} reference value(s) from the Metroliza report database"
         )
 
     def clear_filter(self) -> None:
         self.references_edit.clear()
-        self.summary_label.setText("Filter cleared")
+        self.summary_label.setText("Reference/ID values cleared")
 
     def apply_filter(self) -> None:
         try:
             state = self.current_state()
             require_identifier("reference column", state.reference_column)
         except ValueError as exc:
-            QMessageBox.warning(self, "Industrial data filtering", str(exc))
+            QMessageBox.warning(self, "Industrial sync scope", str(exc))
             return
         parent = self.parent()
         if parent is not None and hasattr(parent, "set_industrial_filter_state"):

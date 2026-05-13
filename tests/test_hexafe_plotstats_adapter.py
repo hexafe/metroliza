@@ -29,6 +29,12 @@ def test_render_histogram_png_uses_hexafe_plotstats_when_available(monkeypatch) 
             }
 
     @dataclass(frozen=True)
+    class FakeSpecLimits:
+        lsl: float | None = None
+        nominal: float | None = None
+        usl: float | None = None
+
+    @dataclass(frozen=True)
     class FakePayload:
         table_rows: tuple = ()
 
@@ -38,8 +44,9 @@ def test_render_histogram_png_uses_hexafe_plotstats_when_available(monkeypatch) 
         value: str
         kind: str
 
-    def fake_build_histogram_payload(values, *, config, metadata):
+    def fake_build_histogram_payload(values, *, spec_limits=None, config, metadata):
         calls["values"] = tuple(values)
+        calls["spec_limits"] = spec_limits
         calls["metadata"] = metadata
         return FakePayload()
 
@@ -58,10 +65,13 @@ def test_render_histogram_png_uses_hexafe_plotstats_when_available(monkeypatch) 
     package.render_histogram = fake_render_histogram
     models = ModuleType("hexafe_plotstats.models")
     payloads = ModuleType("hexafe_plotstats.models.payloads")
+    common = ModuleType("hexafe_plotstats.models.common")
     payloads.TableRow = FakeTableRow
+    common.SpecLimits = FakeSpecLimits
     monkeypatch.setitem(sys.modules, "hexafe_plotstats", package)
     monkeypatch.setitem(sys.modules, "hexafe_plotstats.models", models)
     monkeypatch.setitem(sys.modules, "hexafe_plotstats.models.payloads", payloads)
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats.models.common", common)
 
     result = render_histogram_png(
         [1.0, 2.0, 3.0],
@@ -74,6 +84,7 @@ def test_render_histogram_png_uses_hexafe_plotstats_when_available(monkeypatch) 
     assert result.backend == "hexafe-plotstats"
     assert result.png_bytes.startswith(b"\x89PNG")
     assert calls["backend"] == "matplotlib"
-    assert calls["config"] == {"bins": 4, "density": False, "include_fit": False}
+    assert calls["config"] == {"bins": 4, "density": False, "include_fit": True}
+    assert calls["spec_limits"] == FakeSpecLimits()
     assert calls["metadata"]["axis_labels"] == {"x": "Cycle Time", "y": "Count"}
     assert any(row.label == "Mean" and row.value == "2.000" for row in calls["table_rows"])

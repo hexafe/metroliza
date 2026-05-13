@@ -19,6 +19,7 @@ release_notes = f"""
     - After analytics finishes, the result window links directly to the created dashboard and workbook files<br>
     - Detailed diagnostics are collapsed by default, while progress messages stay visible during dashboard and workbook creation<br>
     - Industrial data can select the report database directly before connecting, syncing, exporting, or analyzing production-line records<br>
+    - The older CSV Summary workbook path has been retired; CSV Summary now opens the shared CSV/Excel analytics workflow<br>
 
     <br><b>Archive:</b><br>
 

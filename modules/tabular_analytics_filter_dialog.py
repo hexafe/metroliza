@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-from modules.csv_summary_utils import build_csv_grouping_preview, filter_csv_summary_by_group_keys
+from modules.csv_summary_utils import CsvGroupingIndex
 from modules.help_menu import attach_help_menu_to_layout
 from modules.tabular_analytics_service import selectable_tabular_source_columns
 from modules.ui_foundation import (
@@ -26,6 +26,9 @@ from modules.ui_foundation import (
     set_status_variant,
     status_chip,
 )
+
+
+_MAX_VISIBLE_MATCHES = 1000
 
 
 class TabularAnalyticsFilterDialog(QDialog):
@@ -58,6 +61,7 @@ class TabularAnalyticsFilterDialog(QDialog):
             for key in (selected_filter_keys or ())
             if isinstance(key, (list, tuple)) and len(key) == len(self.filter_columns)
         }
+        self._grouping_index: CsvGroupingIndex | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
@@ -93,6 +97,12 @@ class TabularAnalyticsFilterDialog(QDialog):
         layout.addLayout(column_actions)
 
         layout.addWidget(QLabel("Matching rows"))
+        self.matching_search = QLineEdit()
+        self.matching_search.setPlaceholderText("Search matching row values")
+        configure_accessibility(self.matching_search, name="Search CSV row-filter matches")
+        layout.addWidget(self.matching_search)
+        self.matching_status_label = status_chip("", "neutral")
+        layout.addWidget(self.matching_status_label)
         self.matching_list = QListWidget()
         self.matching_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
         apply_list_selection_style(self.matching_list)
@@ -122,6 +132,7 @@ class TabularAnalyticsFilterDialog(QDialog):
         self.clear_filter_button.clicked.connect(self.clear_filter)
         self.cancel_button.clicked.connect(self.reject)
         self.apply_button.clicked.connect(self.accept)
+        self.matching_search.textChanged.connect(self._refresh_matches)
         self.matching_list.itemSelectionChanged.connect(self._store_current_selection)
 
         apply_metroliza_theme(self)
@@ -144,11 +155,7 @@ class TabularAnalyticsFilterDialog(QDialog):
         return " | ".join(self._column_label(column) for column in self.filter_columns)
 
     def _filtered_source_for_next_level(self) -> pd.DataFrame:
-        return filter_csv_summary_by_group_keys(
-            self.source_dataframe,
-            self.filter_columns,
-            list(self.selected_filter_keys),
-        )
+        return self._current_index().filter_rows(self.selected_filter_keys)
 
     def _refresh_available_columns(self) -> None:
         search = self.column_search.text().strip().casefold()
@@ -175,10 +182,11 @@ class TabularAnalyticsFilterDialog(QDialog):
         previous_filter_active = bool(self.selected_filter_keys)
         self.filter_columns.append(str(column))
         if previous_filter_active:
-            preview_rows = build_csv_grouping_preview(filtered_source, self.filter_columns)
-            self.selected_filter_keys = {tuple(row["key"]) for row in preview_rows}
+            child_index = CsvGroupingIndex(filtered_source, self.filter_columns)
+            self.selected_filter_keys = child_index.child_keys_for_selected(self.selected_filter_keys)
         else:
             self.selected_filter_keys = set()
+        self._grouping_index = None
         self._refresh_all()
 
     def remove_last_filter_column(self) -> None:
@@ -193,11 +201,13 @@ class TabularAnalyticsFilterDialog(QDialog):
                 for key in self.selected_filter_keys
                 if len(key) >= len(self.filter_columns)
             }
+        self._grouping_index = None
         self._refresh_all()
 
     def clear_filter_columns(self) -> None:
         self.filter_columns = []
         self.selected_filter_keys = set()
+        self._grouping_index = None
         self._refresh_all()
 
     def clear_selection(self) -> None:
@@ -208,19 +218,36 @@ class TabularAnalyticsFilterDialog(QDialog):
     def clear_filter(self) -> None:
         self.filter_columns = []
         self.selected_filter_keys = set()
+        self._grouping_index = None
         self._refresh_all()
 
     def _store_current_selection(self) -> None:
-        self.selected_filter_keys = {
+        visible_keys = {
+            tuple(self.matching_list.item(index).data(Qt.ItemDataRole.UserRole))
+            for index in range(self.matching_list.count())
+        }
+        selected_visible_keys = {
             tuple(item.data(Qt.ItemDataRole.UserRole))
             for item in self.matching_list.selectedItems()
         }
+        self.selected_filter_keys = (self.selected_filter_keys - visible_keys) | selected_visible_keys
         self._sync_status()
+
+    def _current_index(self) -> CsvGroupingIndex:
+        if (
+            self._grouping_index is None
+            or tuple(self.filter_columns) != self._grouping_index.grouping_columns
+        ):
+            self._grouping_index = CsvGroupingIndex(self.source_dataframe, self.filter_columns)
+        return self._grouping_index
 
     def _refresh_matches(self) -> None:
         self.matching_list.blockSignals(True)
         self.matching_list.clear()
-        preview_rows = build_csv_grouping_preview(self.source_dataframe, self.filter_columns)
+        preview_rows, total_rows = self._current_index().preview_rows(
+            search_text=self.matching_search.text(),
+            limit=_MAX_VISIBLE_MATCHES,
+        )
         selected_keys = set(self.selected_filter_keys)
         for row in preview_rows:
             self.matching_list.addItem(f"{row['label']} (n={row['row_count']})")
@@ -230,19 +257,24 @@ class TabularAnalyticsFilterDialog(QDialog):
             if key in selected_keys:
                 item.setSelected(True)
         self.matching_list.blockSignals(False)
+        if not self.filter_columns:
+            self.matching_status_label.setText("Add a filter column to preview row groups.")
+            set_status_variant(self.matching_status_label, "neutral")
+        elif total_rows > len(preview_rows):
+            self.matching_status_label.setText(
+                f"Showing {len(preview_rows)} of {total_rows} matching groups. Search to narrow."
+            )
+            set_status_variant(self.matching_status_label, "warning")
+        else:
+            self.matching_status_label.setText(f"Showing {total_rows} matching group(s).")
+            set_status_variant(self.matching_status_label, "info" if total_rows else "warning")
 
     def _sync_status(self) -> None:
         if not self.filter_columns:
             self.status_label.setText("No row filter selected")
             set_status_variant(self.status_label, "neutral")
         elif self.selected_filter_keys:
-            row_count = len(
-                filter_csv_summary_by_group_keys(
-                    self.source_dataframe,
-                    self.filter_columns,
-                    list(self.selected_filter_keys),
-                ).index
-            )
+            row_count = self._current_index().count_rows(self.selected_filter_keys)
             self.status_label.setText(
                 f"{self._filter_columns_text()}: {len(self.selected_filter_keys)} selected, {row_count} rows"
             )

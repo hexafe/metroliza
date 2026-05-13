@@ -327,11 +327,11 @@ class IndustrialSourceProfilesDialog(QDialog):
 
     def _saved_source_status(self, profile: IndustrialSourceProfile) -> str:
         next_step = (
-            "Use Connect and sync in the Industrial data window to test the connection or fetch rows."
+            "Use Connect / check / sync in the Industrial data window to check access or fetch rows."
             if self.db_file
             else (
                 "Select a Metroliza report database in the Industrial data window, then use "
-                "Connect and sync to test the connection or fetch rows."
+                "Connect / check / sync to check access or fetch rows."
             )
         )
         return f"Saved production source: {profile.profile_name}. {next_step}"

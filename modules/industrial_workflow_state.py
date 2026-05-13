@@ -39,16 +39,16 @@ class IndustrialFilterState:
 
     def summary(self) -> str:
         if not self.references:
-            return "Filter: no references selected"
+            return "References: none selected"
         preview = ", ".join(self.references[:3])
         if len(self.references) > 3:
             preview = f"{preview}, ..."
-        return f"Filter: {len(self.references)} reference(s) on {self.reference_column} ({preview})"
+        return f"References: {len(self.references)} value(s) in {self.reference_column} ({preview})"
 
     def validate_for_sync(self) -> None:
         require_identifier("reference column", self.reference_column)
         if not self.references:
-            raise ValueError("Enter at least one reference before syncing industrial data.")
+            raise ValueError("Enter at least one reference or ID value before syncing industrial data.")
 
 
 @dataclass(frozen=True)

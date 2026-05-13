@@ -8,7 +8,6 @@ from modules.about_window import AboutWindow
 from modules.release_notes_dialog import ReleaseNotesDialog
 from modules.custom_logger import CustomLogger
 from modules.characteristic_mapping_dialog import CharacteristicMappingDialog
-from modules.csv_summary_dialog import CSVSummaryDialog
 from modules.industrial_data_dialog import IndustrialDataDialog
 from modules.industrial_analytics_dialog import IndustrialAnalyticsDialog, SOURCE_TABULAR_FILE
 from modules.help_menu import build_help_menu
@@ -131,9 +130,6 @@ class MainWindow(QMainWindow):
         self.csv_summary_action = QAction("CSV Summary...", self)
         self.csv_summary_action.setToolTip("Analyze CSV or Excel data with dashboards and workbook output.")
         self.csv_summary_action.triggered.connect(self.launch_csv_summary_dialog)
-        self.legacy_csv_summary_action = QAction("Legacy CSV Summary...", self)
-        self.legacy_csv_summary_action.setToolTip("Open the original CSV Summary workbook workflow.")
-        self.legacy_csv_summary_action.triggered.connect(self.launch_legacy_csv_summary_dialog)
         self.enrich_metadata_action = QAction("Enrich existing database metadata...", self)
         self.enrich_metadata_action.setToolTip("Run OCR metadata enrichment on reports already saved in the selected database")
         self.enrich_metadata_action.triggered.connect(self.launch_metadata_enrichment)
@@ -142,7 +138,6 @@ class MainWindow(QMainWindow):
         self.industrial_data_action.triggered.connect(self.launch_industrial_data_dialog)
         self.tools_menu = self.menuBar().addMenu("Tools")
         self.tools_menu.addAction(self.csv_summary_action)
-        self.tools_menu.addAction(self.legacy_csv_summary_action)
         self.tools_menu.addAction(self.enrich_metadata_action)
         self.tools_menu.addAction(self.industrial_data_action)
         _, self.help_menu = build_help_menu(self, [("Main window manual", 'main_window')], menu_bar=self.menuBar())
@@ -358,13 +353,6 @@ class MainWindow(QMainWindow):
                 self,
                 source_kind=SOURCE_TABULAR_FILE,
             )
-            csv_summary_window.exec()
-        except Exception as e:
-            self.log_and_exit(e)
-
-    def launch_legacy_csv_summary_dialog(self):
-        try:
-            csv_summary_window = CSVSummaryDialog(self)
             csv_summary_window.exec()
         except Exception as e:
             self.log_and_exit(e)

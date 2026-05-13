@@ -79,13 +79,20 @@ class IndustrialDataDialog(QDialog):
 
         self.select_database_button = QPushButton("Select DB...")
         self.sources_button = QPushButton("Production sources...")
-        self.sync_button = QPushButton("Connect and sync...")
+        self.sync_button = QPushButton("Connect / check / sync...")
         self.links_button = QPushButton("Production links...")
         self.export_button = QPushButton("Export...")
         self.analyze_button = QPushButton("Analyze...")
         self.initialize_button = QPushButton("Initialize cache")
         self.refresh_links_button = QPushButton("Refresh links")
         self.close_button = QPushButton("Close")
+        self.sync_button.setToolTip(
+            "Enter production database credentials, check access with a one-row read, "
+            "and sync selected reference/ID values into the local cache."
+        )
+        self.analyze_button.setToolTip(
+            "Analyze cached industrial data with the shared CSV Summary analytics workflow."
+        )
 
         self.select_database_button.clicked.connect(self.select_database_file)
         self.sources_button.clicked.connect(self.open_sources_dialog)
@@ -132,7 +139,7 @@ class IndustrialDataDialog(QDialog):
         grid.addWidget(self.sources_button, row, 2)
 
         row += 1
-        grid.addWidget(section_label("Sync filter"), row, 0)
+        grid.addWidget(section_label("References to fetch"), row, 0)
         grid.addWidget(self.sync_filter_label, row, 1)
         grid.addWidget(self.sync_button, row, 2)
 
@@ -222,7 +229,7 @@ class IndustrialDataDialog(QDialog):
             self.sources_label.setText(self._format_config_source_status())
             self._set_action_buttons_enabled(db_available=False)
             self.status_label.setText(
-                "Configure production sources now. Select a Metroliza report database here to enable connection tests, row fetch/sync, links, export, and analytics."
+                "Configure production sources now. Select a Metroliza report database here to enable access checks, row fetch/sync, links, export, and analytics."
             )
             set_status_variant(self.status_label, "warning")
             return
@@ -260,7 +267,7 @@ class IndustrialDataDialog(QDialog):
             set_status_variant(self.status_label, "success")
         elif profiles:
             self.status_label.setText(
-                "Local industrial cache empty. Run a connection test or sync production rows for the selected source."
+                "Local industrial cache empty. Check production access or sync selected rows for the selected source."
             )
             set_status_variant(self.status_label, "warning")
         else:
@@ -413,13 +420,13 @@ class IndustrialDataDialog(QDialog):
         configure_accessibility(self.oznak_label, name="Oznak connector readiness")
         configure_accessibility(self.cache_label, name="Industrial cache readiness")
         configure_accessibility(self.sources_label, name="Production source readiness")
-        configure_accessibility(self.sync_filter_label, name="Industrial sync filter summary")
+        configure_accessibility(self.sync_filter_label, name="Industrial references-to-fetch summary")
         configure_accessibility(self.export_filter_label, name="Industrial export filter summary")
         configure_accessibility(self.grouping_label, name="Industrial export grouping summary")
         configure_accessibility(self.export_options_label, name="Industrial export option summary")
         configure_accessibility(self.select_database_button, name="Select Metroliza report database")
         configure_accessibility(self.sources_button, name="Open production sources")
-        configure_accessibility(self.sync_button, name="Open industrial sync")
+        configure_accessibility(self.sync_button, name="Open industrial connection, access check, and sync")
         configure_accessibility(self.links_button, name="Open production links")
         configure_accessibility(self.export_button, name="Open industrial export")
         configure_accessibility(self.analyze_button, name="Open industrial analytics")

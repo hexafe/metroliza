@@ -75,11 +75,13 @@ def test_build_production_dashboard_manifest_contains_requested_chart_families(t
 
     assert manifest["schema"] == DASHBOARD_SCHEMA
     assert manifest["summary"]["source_rows"] == 16
-    assert manifest["summary"]["chart_count"] == 4
+    assert manifest["summary"]["chart_count"] == 5
     assert manifest["summary"]["groupstats_metric_count"] == 1
     assert manifest["groupstats"]["metrics"][0]["descriptive_stats"]
+    assert manifest["groupstats"]["metrics"][0]["distribution_rows"]
     assert {chart["chart_type"] for chart in manifest["charts"]} == {
         "time_series",
+        "time_series_raw_aggregate",
         "histogram",
         "violin",
         "box",
@@ -95,6 +97,7 @@ def test_build_production_dashboard_manifest_contains_requested_chart_families(t
     assert histogram["plotly_spec"]["layout"]["yaxis"]["title"] == "Share of group"
     assert traces[0]["xbins"]["size"] > 0
     assert histogram["stats_tables"]
+    assert histogram["image"]["mime_type"] == "image/png"
     assert any(
         row["label"] == "Samples"
         for table in histogram["stats_tables"]
@@ -110,7 +113,7 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
 
     html_path = Path(result["html_dashboard_path"])
     assets_path = Path(result["html_dashboard_assets_path"])
-    assert result["html_dashboard_chart_count"] == 4
+    assert result["html_dashboard_chart_count"] == 5
     assert html_path.exists()
     assert (assets_path / "plotly-2.27.0.min.js").exists()
 
@@ -130,7 +133,7 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     )
     assert match is not None
     chart_payload = json.loads(match.group(1))
-    assert len(chart_payload) == 4
+    assert len(chart_payload) == 5
 
 
 def test_write_production_dashboard_collapses_diagnostics_by_default(tmp_path) -> None:
@@ -196,8 +199,97 @@ def test_time_series_trace_drops_sparse_aggregation_nan_pairs() -> None:
 
     traces = manifest["charts"][0]["plotly_spec"]["data"]
     assert len(traces) == 1
-    assert traces[0]["x"] == ["2026-05-11T00:00:00+00:00"]
+    assert traces[0]["x"] == ["2026-05-11"]
     assert traces[0]["y"] == [0.3]
+
+
+def test_aggregated_time_series_adds_raw_overlay_with_x_markers() -> None:
+    frame = pd.DataFrame(
+        {
+            "process_datetime": pd.to_datetime(
+                [
+                    "2026-01-10T00:00:00Z",
+                    "2026-01-20T00:00:00Z",
+                    "2026-01-11T00:00:00Z",
+                    "2026-01-21T00:00:00Z",
+                ],
+                utc=True,
+            ),
+            "machine": ["M1", "M1", "M2", "M2"],
+            "length_mm": [10.0, 12.0, 20.0, 22.0],
+        }
+    )
+    aggregate_frame = pd.DataFrame(
+        {
+            "time_bucket_start": [
+                pd.Timestamp("2026-01-01T00:00:00Z"),
+                pd.Timestamp("2026-01-01T00:00:00Z"),
+            ],
+            "machine": ["M1", "M2"],
+            "length_mm__mean": [11.0, 21.0],
+            "raw_row_count": [2, 2],
+        }
+    )
+
+    manifest = build_production_dashboard_manifest(
+        frame=frame,
+        metric_selection=(ProductionMetricSelection("length_mm", "Length Mm"),),
+        aggregation_state=ProductionAggregationState(
+            time_bucket="month",
+            aggregation_methods=("mean",),
+            group_fields=("machine",),
+        ),
+        aggregation_result=ProductionAggregationResult(
+            dataframe=aggregate_frame,
+            source_row_count=2,
+            output_row_count=1,
+            is_aggregated=True,
+        ),
+        chart_selection=ProductionChartSelection(
+            time_series=True,
+            histogram=False,
+            violin=False,
+            box=False,
+            groupstats=False,
+        ),
+    )
+
+    assert [chart["chart_type"] for chart in manifest["charts"]] == [
+        "time_series",
+        "time_series_raw_aggregate",
+    ]
+    overlay = manifest["charts"][1]["plotly_spec"]["data"]
+    aggregate_trace = next(trace for trace in overlay if trace["name"] == "M1 aggregate")
+    assert aggregate_trace["x"] == ["2026-01"]
+    assert aggregate_trace["marker"]["symbol"] == "x"
+    assert aggregate_trace["marker"]["line"]["width"] > 1
+
+
+def test_metric_limits_flow_into_dashboard_stats_tables() -> None:
+    frame = pd.DataFrame(
+        {
+            "process_datetime": pd.date_range("2026-05-10", periods=4, freq="h", tz="UTC"),
+            "length_mm": [9.0, 10.0, 11.0, 12.5],
+        }
+    )
+
+    manifest = build_production_dashboard_manifest(
+        frame=frame,
+        metric_selection=(ProductionMetricSelection("length_mm", "Length Mm", lsl=9.5, usl=12.0),),
+        chart_selection=ProductionChartSelection(
+            time_series=False,
+            histogram=True,
+            violin=False,
+            box=False,
+            groupstats=False,
+        ),
+    )
+
+    histogram = manifest["charts"][0]
+    rows = [row for table in histogram["stats_tables"] for row in table["rows"]]
+    labels = {row["label"] for row in rows}
+    assert {"Cp", "Cpk", "NOK", "NOK %"}.issubset(labels)
+    assert any(row["label"] == "NOK" and row["value"].startswith("2") for row in rows)
 
 
 def test_time_series_highlight_mode_uses_separate_selected_and_population_traces() -> None:

@@ -23,6 +23,7 @@ from modules.industrial_analytics_workflow import (
     run_production_cache_analytics,
     run_tabular_file_analytics,
 )
+from modules.tabular_analytics_service import load_tabular_analytics_file
 from modules.industrial_export_service import (
     IndustrialExportCancelled,
     export_cached_industrial_workbook,
@@ -219,6 +220,56 @@ class IndustrialAnalyticsThread(QThread):
             self.error_occurred.emit(str(exc))
 
 
+class TabularAnalyticsLoadThread(QThread):
+    """Load CSV/Excel analytics rows and metric candidates outside the Qt main thread."""
+
+    result_ready = pyqtSignal(object)
+    error_occurred = pyqtSignal(str)
+    cancelled = pyqtSignal(str)
+    update_label = pyqtSignal(str)
+
+    def __init__(
+        self,
+        *,
+        input_file: str,
+        sheet_name: str | int | None = None,
+        timestamp_column: str | None = None,
+        reference_column: str | None = None,
+    ):
+        super().__init__()
+        self.input_file = input_file
+        self.sheet_name = sheet_name
+        self.timestamp_column = timestamp_column
+        self.reference_column = reference_column
+        self._cancel_requested = False
+
+    def cancel(self) -> None:
+        self._cancel_requested = True
+        self.requestInterruption()
+
+    def _is_cancelled(self) -> bool:
+        return self._cancel_requested or self.isInterruptionRequested()
+
+    def run(self):
+        try:
+            self.update_label.emit("Loading CSV/Excel data...\nReading rows and detecting metrics\nETA --")
+            result = load_tabular_analytics_file(
+                self.input_file,
+                sheet_name=self.sheet_name,
+                timestamp_column=self.timestamp_column,
+                reference_column=self.reference_column,
+            )
+            if self._is_cancelled():
+                self.cancelled.emit("CSV/Excel loading was canceled.")
+                return
+            self.result_ready.emit(result)
+        except Exception as exc:
+            if self._is_cancelled():
+                self.cancelled.emit("CSV/Excel loading was canceled.")
+            else:
+                self.error_occurred.emit(str(exc))
+
+
 class IndustrialOznakSyncThread(QThread):
     """Run Oznak connection tests and source sync outside the Qt main thread."""
 
@@ -332,6 +383,7 @@ class IndustrialOznakSyncThread(QThread):
             self.result_ready.emit(
                 {
                     "test_only": self.test_only,
+                    "access_check_method": "bounded_fetch" if self.test_only else None,
                     "status": final_status,
                     "error": error,
                     "row_count": result.row_count,

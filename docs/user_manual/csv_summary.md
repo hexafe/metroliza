@@ -11,10 +11,6 @@ This workflow is separate from the normal **Parsing -> database file -> Export**
 uses the shared analytics workflow, so file data can use the same grouping, time buckets,
 charts, statistics, and workbook output as cached production data.
 
-The original CSV Summary workbook workflow is still available from
-**Tools > Legacy CSV Summary...** for older presets, specification limits, and summary-only
-workbooks that have not yet been migrated into the shared analytics launcher.
-
 Use CSV Summary when:
 
 - your source is already a CSV or Excel file,

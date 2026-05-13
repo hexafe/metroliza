@@ -47,13 +47,21 @@ def build_histogram_stats_table(
     *,
     title: str = "Parameter",
     backend: str = "metroliza",
+    lsl: float | None = None,
+    usl: float | None = None,
 ) -> HistogramStatsTable | None:
     array = _finite_values(values)
     if array.size == 0:
         return None
-    table_payload = build_histogram_table_data(_summary_stats(array))
-    rows = tuple((str(label), str(value)) for label, value in table_payload.get("rows", ()))
-    return HistogramStatsTable(title=str(title or "Parameter"), rows=rows, backend=backend)
+    package_rows = _histogram_table_rows_from_plotstats(array, lsl=lsl, usl=usl)
+    if package_rows:
+        rows = package_rows
+        resolved_backend = "hexafe-plotstats"
+    else:
+        table_payload = build_histogram_table_data(_summary_stats(array, lsl=lsl, usl=usl))
+        rows = tuple((str(label), str(value)) for label, value in table_payload.get("rows", ()))
+        resolved_backend = backend
+    return HistogramStatsTable(title=str(title or "Parameter"), rows=rows, backend=resolved_backend)
 
 
 def render_histogram_png(
@@ -62,6 +70,8 @@ def render_histogram_png(
     title: str,
     metric_label: str,
     bin_count: int | None = None,
+    lsl: float | None = None,
+    usl: float | None = None,
 ) -> HistogramRenderResult | None:
     """Render a histogram PNG through hexafe-plotstats, falling back to local Matplotlib."""
 
@@ -69,7 +79,13 @@ def render_histogram_png(
     if array.size == 0:
         return None
     resolved_bin_count = _resolved_bin_count(array, bin_count=bin_count)
-    stats_table = build_histogram_stats_table(array, title="Parameter", backend="hexafe-plotstats")
+    stats_table = build_histogram_stats_table(
+        array,
+        title="Parameter",
+        backend="hexafe-plotstats",
+        lsl=lsl,
+        usl=usl,
+    )
     if stats_table is None:
         return None
 
@@ -79,6 +95,8 @@ def render_histogram_png(
         metric_label=metric_label,
         bin_count=resolved_bin_count,
         stats_table=stats_table,
+        lsl=lsl,
+        usl=usl,
     )
     if result is not None:
         return result
@@ -98,17 +116,22 @@ def _render_with_hexafe_plotstats(
     metric_label: str,
     bin_count: int,
     stats_table: HistogramStatsTable,
+    lsl: float | None = None,
+    usl: float | None = None,
 ) -> HistogramRenderResult | None:
     try:
         from hexafe_plotstats import HistogramConfig, build_histogram_payload, render_histogram
+        from hexafe_plotstats.models.common import SpecLimits
         from hexafe_plotstats.models.payloads import TableRow
     except Exception:
         return None
 
     try:
+        spec_limits = SpecLimits(lsl=lsl, nominal=_nominal_from_limits(lsl, usl), usl=usl)
         payload = build_histogram_payload(
             values,
-            config=HistogramConfig(bins=bin_count, density=False, include_fit=False),
+            spec_limits=spec_limits,
+            config=HistogramConfig(bins=bin_count, density=False, include_fit=True),
             metadata={
                 "title": title,
                 "axis_labels": {"x": metric_label, "y": "Count"},
@@ -181,6 +204,40 @@ def _render_with_metroliza_fallback(
     )
 
 
+def _histogram_table_rows_from_plotstats(
+    values: np.ndarray,
+    *,
+    lsl: float | None = None,
+    usl: float | None = None,
+) -> tuple[tuple[str, str], ...]:
+    try:
+        from hexafe_plotstats import HistogramConfig, build_histogram_payload
+        from hexafe_plotstats.models.common import SpecLimits
+    except Exception:
+        return ()
+    try:
+        payload = build_histogram_payload(
+            values,
+            spec_limits=SpecLimits(lsl=lsl, nominal=_nominal_from_limits(lsl, usl), usl=usl),
+            config=HistogramConfig(density=False, include_fit=True),
+        )
+    except Exception:
+        return ()
+    rows = []
+    for row in getattr(payload, "table_rows", ()) or ():
+        label = str(getattr(row, "label", "") or "").strip()
+        value = str(getattr(row, "value", "") or "").strip()
+        if label:
+            rows.append((label, value))
+    return tuple(rows)
+
+
+def _nominal_from_limits(lsl: float | None, usl: float | None) -> float | None:
+    if lsl is not None and usl is not None and lsl <= usl:
+        return (float(lsl) + float(usl)) / 2.0
+    return None
+
+
 def _draw_stats_table(table_ax, stats_table: HistogramStatsTable) -> None:
     table_ax.axis("off")
     cell_text = [[label, value] for label, value in stats_table.rows]
@@ -232,23 +289,46 @@ def _finite_values(values: Iterable[Any]) -> np.ndarray:
     return array[np.isfinite(array)]
 
 
-def _summary_stats(values: np.ndarray) -> dict[str, Any]:
+def _summary_stats(
+    values: np.ndarray,
+    *,
+    lsl: float | None = None,
+    usl: float | None = None,
+) -> dict[str, Any]:
     sample_size = int(values.size)
     sigma = float(np.std(values, ddof=1)) if sample_size > 1 else None
+    average = float(np.mean(values))
+    below_lsl = int(np.sum(values < lsl)) if lsl is not None else 0
+    above_usl = int(np.sum(values > usl)) if usl is not None else 0
+    nok_count = below_lsl + above_usl
+    cp: float | str = "N/A"
+    cpk: float | str = "N/A"
+    if sigma is not None and sigma > 0:
+        if lsl is not None and usl is not None and lsl < usl:
+            cp = (usl - lsl) / (6 * sigma)
+            cpk = min((usl - average) / (3 * sigma), (average - lsl) / (3 * sigma))
+        elif usl is not None:
+            cpk = (usl - average) / (3 * sigma)
+        elif lsl is not None:
+            cpk = (average - lsl) / (3 * sigma)
     return {
         "minimum": float(np.min(values)),
         "maximum": float(np.max(values)),
-        "average": float(np.mean(values)),
+        "average": average,
         "median": float(np.median(values)),
         "sigma": sigma,
-        "cp": "N/A",
-        "cpk": "N/A",
+        "cp": cp,
+        "cpk": cpk,
+        "lsl": lsl,
+        "usl": usl,
         "capability_ci": {},
         "sample_size": sample_size,
-        "nok_count": 0,
-        "nok_pct": 0.0,
-        "observed_nok_count": 0,
-        "observed_nok_pct": 0.0,
+        "nok_count": nok_count,
+        "nok_pct": (nok_count / sample_size) if sample_size else 0.0,
+        "observed_nok_count": nok_count,
+        "observed_nok_below_lsl_count": below_lsl,
+        "observed_nok_above_usl_count": above_usl,
+        "observed_nok_pct": (nok_count / sample_size) if sample_size else 0.0,
         "estimated_nok_pct": None,
         "estimated_nok_ppm": None,
         "estimated_yield_pct": None,

@@ -261,9 +261,10 @@ def test_tabular_data_reuses_dashboard_and_aggregation_path(tmp_path) -> None:
 
     assert aggregated.is_aggregated
     assert "line" in aggregated.dataframe.columns
-    assert manifest["summary"]["chart_count"] == 4
+    assert manifest["summary"]["chart_count"] == 5
     assert {chart["chart_type"] for chart in manifest["charts"]} == {
         "time_series",
+        "time_series_raw_aggregate",
         "histogram",
         "violin",
         "box",

@@ -239,6 +239,8 @@ def _insert_histogram_chart(
             title=f"{metric.display_label} distribution",
             metric_label=metric.display_label,
             bin_count=bin_count,
+            lsl=getattr(metric, "lsl", None),
+            usl=getattr(metric, "usl", None),
         )
         if rendered is not None:
             worksheet.write(row, 8, f"Histogram rendered by {rendered.backend}")
@@ -319,6 +321,8 @@ def _insert_histogram_chart(
             row=row,
             column=table_col + len(groups) + 2,
             groups=groups,
+            lsl=getattr(metric, "lsl", None),
+            usl=getattr(metric, "usl", None),
         )
     return True
 
@@ -329,10 +333,18 @@ def _write_histogram_stats_tables(
     row: int,
     column: int,
     groups: list[tuple[str, np.ndarray]],
+    lsl: float | None = None,
+    usl: float | None = None,
 ) -> None:
     current_column = column
     for label, values in groups[:4]:
-        table = build_histogram_stats_table(values, title=label, backend="metroliza")
+        table = build_histogram_stats_table(
+            values,
+            title=label,
+            backend="metroliza",
+            lsl=lsl,
+            usl=usl,
+        )
         if table is None:
             continue
         worksheet.write(row, current_column, f"Stats: {table.title}")

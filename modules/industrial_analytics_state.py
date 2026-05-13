@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 import re
 from typing import Any, Literal, Mapping
 
@@ -135,6 +136,16 @@ def _normalize_mapping_values(value: Mapping[str, Any] | None) -> dict[str, Any]
     if not value:
         return {}
     return {str(key): nested for key, nested in value.items()}
+
+
+def _optional_finite_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) else None
 
 
 def production_field_label(field_name: str) -> str:
@@ -278,6 +289,8 @@ class ProductionMetricSelection:
     source_kind: MetricSourceKind = "dynamic"
     numeric_coercion: NumericCoercionPolicy = "coerce"
     limits_source: str = ""
+    lsl: float | None = None
+    usl: float | None = None
 
     def __post_init__(self) -> None:
         field_name = str(self.field_name or "").strip()
@@ -294,6 +307,8 @@ class ProductionMetricSelection:
         object.__setattr__(self, "source_kind", source_kind)
         object.__setattr__(self, "numeric_coercion", numeric_coercion)
         object.__setattr__(self, "limits_source", str(self.limits_source or "").strip())
+        object.__setattr__(self, "lsl", _optional_finite_float(self.lsl))
+        object.__setattr__(self, "usl", _optional_finite_float(self.usl))
 
 
 @dataclass(frozen=True)

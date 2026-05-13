@@ -41,7 +41,8 @@ class TestMainWindowMetadataUi(unittest.TestCase):
 
             action_texts = [action.text() for action in window.tools_menu.actions()]
             self.assertIn("CSV Summary...", action_texts)
-            self.assertIn("Legacy CSV Summary...", action_texts)
+            self.assertNotIn("Legacy CSV Summary...", action_texts)
+            self.assertFalse(hasattr(window, "legacy_csv_summary_action"))
         finally:
             window.close()
 

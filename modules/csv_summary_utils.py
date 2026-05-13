@@ -1,32 +1,13 @@
 import csv
-import json
-import logging
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
-
-from modules.stats_utils import safe_process_capability
 
 
 _SAMPLE_ROWS = 200
 _TOP_FULL_READ_CANDIDATES = 2
 _BLANK_GROUP_VALUE = "(blank)"
-
-
-logger = logging.getLogger(__name__)
-
-
-def _coerce_float(value, default=0.0):
-    """Best-effort numeric coercion for user-editable CSV Summary presets."""
-    if value is None or value == "":
-        return float(default)
-    try:
-        if isinstance(value, str):
-            value = value.strip().replace(",", ".")
-        return float(value)
-    except (TypeError, ValueError):
-        logger.warning("Ignoring malformed CSV Summary numeric preset value: %r", value)
-        return float(default)
 
 
 def _score_dataframe(df, numeric_columns_hint=None):
@@ -136,113 +117,6 @@ def load_csv_with_fallbacks(file_path, preferred_config=None):
     return best_df, best_config
 
 
-def load_csv_summary_presets(preset_path):
-    path = Path(preset_path)
-    if not path.exists():
-        return {}
-
-    try:
-        with path.open('r', encoding='utf-8') as handle:
-            data = json.load(handle)
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
-        logger.warning(
-            "Failed to load CSV summary presets from %s (%s): %s",
-            path,
-            exc.__class__.__name__,
-            exc,
-        )
-        return {}
-
-    return data if isinstance(data, dict) else {}
-
-
-def migrate_csv_summary_presets(presets):
-    """Migrate legacy CSV Summary presets to the current schema."""
-    if not isinstance(presets, dict):
-        return {}, True
-
-    migrated = {}
-    changed = False
-
-    for key, payload in presets.items():
-        if not isinstance(payload, dict):
-            changed = True
-            continue
-
-        selected_indexes = payload.get('selected_indexes', [])
-        if not isinstance(selected_indexes, list):
-            selected_indexes = []
-            changed = True
-
-        selected_data_columns = payload.get('selected_data_columns', [])
-        if not isinstance(selected_data_columns, list):
-            selected_data_columns = []
-            changed = True
-
-        include_extended_plots = bool(payload.get('include_extended_plots', True))
-        summary_only = bool(payload.get('summary_only', False))
-        csv_config = payload.get('csv_config', {})
-        if not isinstance(csv_config, dict):
-            csv_config = {}
-            changed = True
-
-        column_spec_limits = normalize_column_spec_limits(
-            selected_data_columns,
-            payload.get('column_spec_limits', {}),
-        )
-        plot_toggles = normalize_plot_toggles(
-            selected_data_columns,
-            payload.get('plot_toggles', {}),
-            full_report=include_extended_plots,
-        )
-        grouping_columns = payload.get('grouping_columns', [])
-        if not isinstance(grouping_columns, list):
-            grouping_columns = []
-            changed = True
-        grouping_columns = [str(column) for column in grouping_columns]
-
-        selected_group_keys = payload.get('selected_group_keys', [])
-        if not isinstance(selected_group_keys, list):
-            selected_group_keys = []
-            changed = True
-        selected_group_keys = [
-            [str(part) for part in key]
-            for key in selected_group_keys
-            if isinstance(key, list)
-        ]
-
-        normalized_payload = {
-            'selected_indexes': selected_indexes,
-            'selected_data_columns': selected_data_columns,
-            'csv_config': csv_config,
-            'column_spec_limits': column_spec_limits,
-            'include_extended_plots': include_extended_plots,
-            'summary_only': summary_only,
-            'plot_toggles': plot_toggles,
-            'grouping_columns': grouping_columns,
-            'selected_group_keys': selected_group_keys,
-        }
-
-        if payload != normalized_payload:
-            changed = True
-
-        migrated[key] = normalized_payload
-
-    return migrated, changed
-
-
-def save_csv_summary_presets(preset_path, presets):
-    path = Path(preset_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open('w', encoding='utf-8') as handle:
-        json.dump(presets, handle, indent=2, sort_keys=True)
-
-
-def build_csv_summary_preset_key(file_path):
-    path = Path(file_path)
-    return path.name.lower()
-
-
 def resolve_default_data_columns(data_frame, selected_indexes):
     selected_indexes = selected_indexes or []
     index_set = set(selected_indexes)
@@ -262,116 +136,6 @@ def resolve_default_data_columns(data_frame, selected_indexes):
     return [column for column in data_frame.columns if column not in index_set]
 
 
-def compute_column_summary_stats(series, usl=0.0, lsl=0.0, nom=0.0):
-    absolute_usl = nom + usl
-    absolute_lsl = nom + lsl
-    spec_limits_valid = absolute_lsl <= nom <= absolute_usl
-    spec_limits_note = '' if spec_limits_valid else 'Invalid spec limits: expected LSL <= NOM <= USL after applying NOM offsets.'
-
-    numeric_series = pd.to_numeric(series, errors='coerce').dropna()
-    if numeric_series.empty:
-        return {
-            'sample_size': 0,
-            'min': 'N/A',
-            'avg': 'N/A',
-            'max': 'N/A',
-            'std': 'N/A',
-            'cp': 'N/A',
-            'cpk': 'N/A',
-            'usl': usl,
-            'lsl': lsl,
-            'nom': nom,
-            'spec_limits_valid': spec_limits_valid,
-            'spec_limits_note': spec_limits_note,
-        }
-
-    minimum = round(float(numeric_series.min()), 3)
-    average = round(float(numeric_series.mean()), 3)
-    maximum = round(float(numeric_series.max()), 3)
-    sigma = round(float(numeric_series.std(ddof=1)), 3) if len(numeric_series) > 1 else 0.0
-
-    if spec_limits_valid:
-        cp, cpk = safe_process_capability(nom, usl, lsl, sigma, average)
-    else:
-        cp, cpk = 'N/A', 'N/A'
-
-    return {
-        'sample_size': int(numeric_series.count()),
-        'min': minimum,
-        'avg': average,
-        'max': maximum,
-        'std': sigma,
-        'cp': cp,
-        'cpk': cpk,
-        'usl': usl,
-        'lsl': lsl,
-        'nom': nom,
-        'spec_limits_valid': spec_limits_valid,
-        'spec_limits_note': spec_limits_note,
-    }
-
-
-def build_default_plot_toggles(data_columns, full_report=True):
-    """Build per-column plot toggles for CSV Summary export."""
-    return {
-        column: {
-            'histogram': bool(full_report),
-            'boxplot': bool(full_report),
-        }
-        for column in (data_columns or [])
-    }
-
-
-def recommend_extended_plots_default(data_columns, max_full_report_columns=20):
-    """Return a default full-report toggle tuned for export size."""
-    return len(data_columns or []) <= int(max_full_report_columns)
-
-
-def estimate_enabled_chart_count(data_columns, plot_toggles, full_report=True, summary_only=False):
-    """Estimate how many charts will be generated for a CSV Summary export."""
-    if summary_only or not full_report:
-        return 0
-
-    toggles = normalize_plot_toggles(data_columns, plot_toggles, full_report=True)
-    return sum(
-        int(column_toggles.get('histogram', False)) + int(column_toggles.get('boxplot', False))
-        for column_toggles in toggles.values()
-    )
-
-
-def normalize_plot_toggles(data_columns, plot_toggles, full_report=True):
-    """Ensure each selected column has a complete toggle payload."""
-    normalized = build_default_plot_toggles(data_columns, full_report=full_report)
-    plot_toggles = plot_toggles or {}
-
-    for column in normalized:
-        column_payload = plot_toggles.get(column, {})
-        if isinstance(column_payload, dict):
-            normalized[column]['histogram'] = bool(column_payload.get('histogram', normalized[column]['histogram']))
-            normalized[column]['boxplot'] = bool(column_payload.get('boxplot', normalized[column]['boxplot']))
-
-    return normalized
-
-
-def normalize_column_spec_limits(data_columns, column_spec_limits):
-    """Ensure selected columns have numeric NOM/USL/LSL payloads."""
-    normalized = {}
-    column_spec_limits = column_spec_limits or {}
-
-    for column in (data_columns or []):
-        raw_payload = column_spec_limits.get(column, {})
-        if not isinstance(raw_payload, dict):
-            raw_payload = {}
-
-        normalized[column] = {
-            'nom': _coerce_float(raw_payload.get('nom', 0.0)),
-            'usl': _coerce_float(raw_payload.get('usl', 0.0)),
-            'lsl': _coerce_float(raw_payload.get('lsl', 0.0)),
-        }
-
-    return normalized
-
-
 def normalize_csv_grouping_key(grouping_columns, values):
     """Return a stable display/filter key for a CSV grouping row."""
     grouping_columns = list(grouping_columns or [])
@@ -386,35 +150,167 @@ def normalize_csv_grouping_key(grouping_columns, values):
     return tuple(normalized)
 
 
+def _normalized_grouping_columns(data_frame, grouping_columns) -> list[str]:
+    if data_frame is None:
+        return []
+    return [column for column in (grouping_columns or []) if column in data_frame.columns]
+
+
+def _normalized_grouping_series(series: pd.Series) -> pd.Series:
+    normalized = series.where(~series.isna(), _BLANK_GROUP_VALUE)
+    normalized = normalized.map(lambda value: str(value).strip() or _BLANK_GROUP_VALUE)
+    return normalized.astype("string")
+
+
+def _normalized_grouping_key_frame(data_frame: pd.DataFrame, grouping_columns) -> pd.DataFrame:
+    columns = _normalized_grouping_columns(data_frame, grouping_columns)
+    if not columns:
+        return pd.DataFrame(index=getattr(data_frame, "index", None))
+    key_frame = pd.DataFrame(index=data_frame.index)
+    for column in columns:
+        key_frame[column] = _normalized_grouping_series(data_frame[column])
+    return key_frame
+
+
+class CsvGroupingIndex:
+    """Cached grouping-key index for responsive CSV/Excel filter and grouping dialogs."""
+
+    def __init__(self, data_frame: pd.DataFrame | None, grouping_columns):
+        self.data_frame = data_frame if isinstance(data_frame, pd.DataFrame) else pd.DataFrame()
+        self.grouping_columns = tuple(_normalized_grouping_columns(self.data_frame, grouping_columns))
+        self.key_frame = _normalized_grouping_key_frame(self.data_frame, self.grouping_columns)
+        self._grouped_preview: pd.DataFrame | None = None
+        self._row_index = None
+
+    @property
+    def active(self) -> bool:
+        return bool(self.grouping_columns)
+
+    @property
+    def row_count(self) -> int:
+        return int(len(self.data_frame.index))
+
+    def preview_rows(
+        self,
+        *,
+        search_text: str = "",
+        limit: int | None = None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Return display rows and total match count for the selected grouping columns."""
+
+        if not self.active:
+            return [], 0
+        preview = self._preview_frame()
+        if preview.empty:
+            return [], 0
+        filtered = preview
+        search = str(search_text or "").strip().casefold()
+        if search:
+            labels = filtered["_label"].astype("string").str.casefold()
+            filtered = filtered.loc[labels.str.contains(search, regex=False, na=False)]
+        total = int(len(filtered.index))
+        if limit is not None and int(limit) >= 0:
+            filtered = filtered.head(int(limit))
+        rows: list[dict[str, Any]] = []
+        for record in filtered.to_dict("records"):
+            key = tuple(str(record[column]) for column in self.grouping_columns)
+            rows.append(
+                {
+                    "key": key,
+                    "label": str(record["_label"]),
+                    "row_count": int(record["_row_count"]),
+                }
+            )
+        return rows, total
+
+    def filter_rows(self, selected_group_keys) -> pd.DataFrame:
+        """Return rows matching selected grouping keys using vectorized key membership."""
+
+        selected_keys = self._valid_selected_keys(selected_group_keys)
+        if not self.active or not selected_keys:
+            return self.data_frame.copy()
+        if len(self.grouping_columns) == 1:
+            column = self.grouping_columns[0]
+            values = {key[0] for key in selected_keys}
+            mask = self.key_frame[column].isin(values)
+        else:
+            mask = self._row_multi_index().isin(
+                pd.MultiIndex.from_tuples(selected_keys, names=list(self.grouping_columns))
+            )
+        return self.data_frame.loc[mask].copy()
+
+    def count_rows(self, selected_group_keys) -> int:
+        """Count rows matching selected grouping keys without materializing a filtered dataframe."""
+
+        selected_keys = self._valid_selected_keys(selected_group_keys)
+        if not self.active or not selected_keys:
+            return self.row_count
+        counts = self._preview_frame().set_index(list(self.grouping_columns))["_row_count"]
+        total = 0
+        for key in selected_keys:
+            lookup_key = key[0] if len(key) == 1 else key
+            if lookup_key in counts.index:
+                total += int(counts.loc[lookup_key])
+        return total
+
+    def child_keys_for_selected(self, selected_group_keys) -> set[tuple[str, ...]]:
+        """Return all current grouping keys represented by a parent selection."""
+
+        if not self.active:
+            return set()
+        raw_keys = {
+            tuple(str(part) for part in list(key))
+            for key in (selected_group_keys or [])
+            if isinstance(key, (list, tuple)) and 0 < len(key) <= len(self.grouping_columns)
+        }
+        if not raw_keys:
+            rows, _total = self.preview_rows()
+            return {tuple(row["key"]) for row in rows}
+        selected_length = len(next(iter(raw_keys), ()))
+        if selected_length >= len(self.grouping_columns):
+            return {key for key in raw_keys if len(key) == len(self.grouping_columns)}
+        parent_columns = self.grouping_columns[:selected_length]
+        parent_index = CsvGroupingIndex(self.data_frame, parent_columns)
+        filtered = parent_index.filter_rows(raw_keys)
+        child_index = CsvGroupingIndex(filtered, self.grouping_columns)
+        rows, _total = child_index.preview_rows()
+        return {tuple(row["key"]) for row in rows}
+
+    def _preview_frame(self) -> pd.DataFrame:
+        if self._grouped_preview is not None:
+            return self._grouped_preview
+        if not self.active:
+            self._grouped_preview = pd.DataFrame()
+            return self._grouped_preview
+        grouped = (
+            self.key_frame.groupby(list(self.grouping_columns), dropna=False, sort=True)
+            .size()
+            .reset_index(name="_row_count")
+        )
+        if grouped.empty:
+            grouped["_label"] = pd.Series(dtype="string")
+        else:
+            grouped["_label"] = grouped.loc[:, list(self.grouping_columns)].agg(" | ".join, axis=1)
+        self._grouped_preview = grouped
+        return grouped
+
+    def _row_multi_index(self):
+        if self._row_index is None:
+            self._row_index = pd.MultiIndex.from_frame(self.key_frame.loc[:, list(self.grouping_columns)])
+        return self._row_index
+
+    def _valid_selected_keys(self, selected_group_keys) -> set[tuple[str, ...]]:
+        expected_length = len(self.grouping_columns)
+        return {
+            tuple(str(part) for part in list(key))
+            for key in (selected_group_keys or [])
+            if isinstance(key, (list, tuple)) and len(key) == expected_length
+        }
+
+
 def build_csv_grouping_preview(data_frame, grouping_columns):
     """Build unique grouping combinations for the selected CSV columns."""
-    if data_frame is None or not grouping_columns:
-        return []
-    grouping_columns = [column for column in (grouping_columns or []) if column in data_frame.columns]
-    if not grouping_columns:
-        return []
-
-    preview_frame = data_frame[grouping_columns].copy()
-    for column in grouping_columns:
-        preview_frame[column] = preview_frame[column].map(
-            lambda value: normalize_csv_grouping_key([column], [value])[0]
-        )
-    preview_frame["_row_count"] = 1
-    grouped = (
-        preview_frame.groupby(grouping_columns, dropna=False, sort=True)["_row_count"]
-        .sum()
-        .reset_index()
-    )
-    rows = []
-    for record in grouped.to_dict("records"):
-        key = tuple(str(record[column]) for column in grouping_columns)
-        rows.append(
-            {
-                "key": key,
-                "label": " | ".join(key),
-                "row_count": int(record["_row_count"]),
-            }
-        )
+    rows, _total = CsvGroupingIndex(data_frame, grouping_columns).preview_rows()
     return rows
 
 
@@ -422,22 +318,7 @@ def filter_csv_summary_by_group_keys(data_frame, grouping_columns, selected_grou
     """Filter CSV Summary rows to selected grouping-key combinations."""
     if data_frame is None:
         return data_frame
-    grouping_columns = [column for column in (grouping_columns or []) if column in data_frame.columns]
-    selected_keys = {
-        tuple(str(part) for part in list(key))
-        for key in (selected_group_keys or [])
-        if isinstance(key, (list, tuple)) and len(key) == len(grouping_columns)
-    }
-    if not grouping_columns or not selected_keys:
-        return data_frame.copy()
-
-    key_frame = data_frame[grouping_columns].copy()
-    for column in grouping_columns:
-        key_frame[column] = key_frame[column].map(
-            lambda value: normalize_csv_grouping_key([column], [value])[0]
-        )
-    row_keys = key_frame.apply(lambda row: tuple(str(row[column]) for column in grouping_columns), axis=1)
-    return data_frame.loc[row_keys.isin(selected_keys)].copy()
+    return CsvGroupingIndex(data_frame, grouping_columns).filter_rows(selected_group_keys)
 
 
 def parse_delimiter_with_sniffer(file_path):

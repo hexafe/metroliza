@@ -885,145 +885,48 @@ def benchmark_group_preprocess_mixed_types_path(temp_dir: Path, *, group_count: 
 
 
 def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int) -> ScenarioResult:
-    from modules.csv_summary_dialog import DataProcessingThread, load_csv_with_fallbacks
-
-    class BenchmarkCSVThread(DataProcessingThread):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self.chart_seconds = 0.0
-
-        def add_xy_chart(self, worksheet, data_column, col, selected_data, writer, sheet_name):
-            start = time.perf_counter()
-            try:
-                return super().add_xy_chart(worksheet, data_column, col, selected_data, writer, sheet_name)
-            finally:
-                self.chart_seconds += time.perf_counter() - start
-
-        def add_histogram_chart(self, worksheet, data_column, col, selected_data, writer, sheet_name):
-            start = time.perf_counter()
-            try:
-                return super().add_histogram_chart(worksheet, data_column, col, selected_data, writer, sheet_name)
-            finally:
-                self.chart_seconds += time.perf_counter() - start
-
-        def add_boxplot_chart(self, worksheet, data_column, col, selected_data, writer, sheet_name):
-            start = time.perf_counter()
-            try:
-                return super().add_boxplot_chart(worksheet, data_column, col, selected_data, writer, sheet_name)
-            finally:
-                self.chart_seconds += time.perf_counter() - start
+    from modules.industrial_analytics_state import ProductionChartSelection
+    from modules.industrial_analytics_workflow import run_tabular_file_analytics
 
     csv_path = temp_dir / 'summary_fixture.csv'
+    output_html = temp_dir / 'summary_dashboard.html'
     output_xlsx = temp_dir / 'summary_output.xlsx'
     fixture_metrics = _create_csv_fixture(csv_path, row_count=row_count, data_columns=data_columns)
 
-    load_start = time.perf_counter()
-    loaded_df, csv_config = load_csv_with_fallbacks(str(csv_path))
-    data_load_s = time.perf_counter() - load_start
-
-    selected_indexes = ['PART']
-    selected_data_columns = [f'DIM_{idx:02d}' for idx in range(1, data_columns + 1)]
-    spec_limits = {
-        column: {'nom': 25.0, 'usl': 0.5, 'lsl': -0.5}
-        for column in selected_data_columns
-    }
-
-    import modules.csv_summary_worker as csv_worker_module
-    stats_seconds = 0.0
-    detail_sheet_write_seconds = 0.0
-    overview_sheet_write_seconds = 0.0
-    workbook_close_seconds = 0.0
-    original_stats = getattr(csv_worker_module, "compute_column_summary_stats", None)
-    original_to_excel = pd.DataFrame.to_excel
-    original_writer_close = pd.ExcelWriter.close
-
-    def timed_stats(*args, **kwargs):
-        nonlocal stats_seconds
-        start = time.perf_counter()
-        try:
-            if original_stats is None:
-                return None
-            return original_stats(*args, **kwargs)
-        finally:
-            stats_seconds += time.perf_counter() - start
-
-    def timed_to_excel(self, *args, **kwargs):
-        nonlocal detail_sheet_write_seconds, overview_sheet_write_seconds
-        sheet_name = kwargs.get('sheet_name')
-        if sheet_name is None and args:
-            sheet_name = args[0]
-        start = time.perf_counter()
-        try:
-            return original_to_excel(self, *args, **kwargs)
-        finally:
-            elapsed = time.perf_counter() - start
-            if sheet_name == 'CSV_SUMMARY':
-                overview_sheet_write_seconds += elapsed
-            else:
-                detail_sheet_write_seconds += elapsed
-
-    def timed_writer_close(self, *args, **kwargs):
-        nonlocal workbook_close_seconds
-        start = time.perf_counter()
-        try:
-            return original_writer_close(self, *args, **kwargs)
-        finally:
-            workbook_close_seconds += time.perf_counter() - start
-
-    if original_stats is not None:
-        csv_worker_module.compute_column_summary_stats = timed_stats
-    pd.DataFrame.to_excel = timed_to_excel
-    pd.ExcelWriter.close = timed_writer_close
-
-    worker = BenchmarkCSVThread(
-        selected_indexes=selected_indexes,
-        selected_data_columns=selected_data_columns,
-        input_file=str(csv_path),
-        output_file=str(output_xlsx),
-        data_frame=loaded_df,
-        csv_config=csv_config,
-        column_spec_limits=spec_limits,
-        summary_only=False,
-    )
-
+    progress_messages: list[str] = []
     run_start = time.perf_counter()
-    try:
-        worker.run()
-    finally:
-        if original_stats is not None:
-            csv_worker_module.compute_column_summary_stats = original_stats
-        pd.DataFrame.to_excel = original_to_excel
-        pd.ExcelWriter.close = original_writer_close
-
+    result = run_tabular_file_analytics(
+        input_file=str(csv_path),
+        output_dashboard_file=str(output_html),
+        reference_column='PART',
+        chart_selection=ProductionChartSelection(
+            time_series=True,
+            histograms=True,
+            violinplots=True,
+            boxplots=True,
+            groupstats=False,
+        ),
+        output_workbook_file=str(output_xlsx),
+        separate_parameter_sheets=True,
+        progress_callback=progress_messages.append,
+    )
     run_s = time.perf_counter() - run_start
-    if worker.canceled:
-        raise RuntimeError('CSV summary benchmark ended in canceled state.')
-
-    transform_s = float(worker.stage_timings.get('transform_grouping', 0.0))
-    chart_s = max(float(worker.stage_timings.get('chart_rendering', 0.0)), worker.chart_seconds)
-    worksheet_write_s = float(worker.stage_timings.get('worksheet_writes', 0.0))
-    workbook_write_s = worksheet_write_s + overview_sheet_write_seconds + workbook_close_seconds
-    unattributed_run_s = max(0.0, run_s - transform_s - stats_seconds - chart_s - workbook_write_s)
 
     return ScenarioResult(
         scenario='csv_summary_export_path',
-        wall_time_s=data_load_s + run_s,
+        wall_time_s=run_s,
         stage_timings_s={
-            'data_load': data_load_s,
-            'transform_grouping': transform_s,
-            'groupby_stats': stats_seconds,
-            'detail_sheet_to_excel': detail_sheet_write_seconds,
-            'worksheet_writes': worksheet_write_s,
-            'chart_generation': chart_s,
-            'overview_sheet_write': overview_sheet_write_seconds,
-            'workbook_write': workbook_write_s,
-            'workbook_close': workbook_close_seconds,
-            'unattributed_runtime': unattributed_run_s,
+            'shared_analytics_total': run_s,
+            'progress_messages': float(len(progress_messages)),
         },
         input_metrics={
             'rows': fixture_metrics['rows'],
             'headers': fixture_metrics['headers'],
-            'chart_count': data_columns * 3,
+            'chart_count': min(data_columns, 5) * 4,
+            'dashboard_bytes': output_html.stat().st_size if output_html.exists() else 0,
+            'workbook_bytes': output_xlsx.stat().st_size if output_xlsx.exists() else 0,
+            'analytics_rows': result.row_count,
+            'analytics_metrics': result.metric_count,
         },
     )
 

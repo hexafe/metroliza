@@ -55,7 +55,7 @@ The legacy `docs/group_analysis/user_manual.md` path is retained only as a redir
   - `modules/export_chart_payload_helpers.py` for chart payload/table shaping.
   - `modules/export_workbook_planning_helpers.py` for workbook/table layout sizing heuristics.
   - `modules/export_row_aggregation_utils.py` for row/group aggregation computations.
-- `modules/csv_summary_dialog.py` keeps dialog/UI concerns and delegates worker-side export logic to `modules/csv_summary_worker.py`.
+- CSV/Excel Summary is routed through `modules/industrial_analytics_dialog.py` and the shared tabular analytics workflow.
 - `modules/data_grouping.py` keeps widget/event orchestration and delegates data/query mutations to `modules/data_grouping_service.py`.
 - Grouping dialog colors use shared semantic tokens from `modules/ui_theme_tokens.py` so dialogs stay visually consistent across light/dark themes.
 - Group Analysis statistical computation is bridged through `modules/hexafe_groupstats_adapter.py`; workbook, dashboard, export orchestration, and UI remain Metroliza-owned.

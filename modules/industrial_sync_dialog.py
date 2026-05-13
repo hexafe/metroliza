@@ -1,4 +1,4 @@
-"""Oznak production-line connection test and reference-scoped sync dialog."""
+"""Oznak production-line access check and reference-scoped sync dialog."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ from modules.ui_foundation import (
 
 
 class IndustrialSyncDialog(QDialog):
-    """Run production-line connection checks and reference-scoped industrial syncs."""
+    """Run production-line access checks and reference-scoped industrial syncs."""
 
     def __init__(
         self,
@@ -74,11 +74,20 @@ class IndustrialSyncDialog(QDialog):
         self.username_edit.setPlaceholderText("production database username")
         self.password_edit.setPlaceholderText("not stored")
 
-        self.edit_filter_button = QPushButton("Edit filter...")
-        self.test_connection_button = QPushButton("Test connection")
+        self.edit_filter_button = QPushButton("Edit references...")
+        self.test_connection_button = QPushButton("Check access")
         self.sync_now_button = QPushButton("Sync now")
         self.cancel_sync_button = QPushButton("Cancel")
         self.close_button = QPushButton("Close")
+        self.test_connection_button.setToolTip(
+            "Reads up to one production row to verify credentials, table, columns, and query access. Nothing is saved."
+        )
+        self.sync_now_button.setToolTip(
+            "Fetches rows matching the selected reference/ID values and saves them in the local Metroliza cache."
+        )
+        self.edit_filter_button.setToolTip(
+            "Choose the production reference/ID column and paste values separated by comma, semicolon, spaces, tabs, or new lines."
+        )
 
         self.edit_filter_button.clicked.connect(self.open_filter_dialog)
         self.test_connection_button.clicked.connect(self.test_connection)
@@ -97,7 +106,7 @@ class IndustrialSyncDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
-        layout.addWidget(section_label("Production line connection test and sync"))
+        layout.addWidget(section_label("Production database access and sync"))
         layout.addWidget(self.status_label)
 
         form = QFormLayout()
@@ -106,7 +115,7 @@ class IndustrialSyncDialog(QDialog):
         form.addRow("Production source", self.profile_combo)
         form.addRow("Production DB username", self.username_edit)
         form.addRow("Production DB password", self.password_edit)
-        form.addRow("Production row limit", self.limit_spin)
+        form.addRow("Sync row limit", self.limit_spin)
         form.addRow("Query timeout seconds", self.timeout_spin)
         layout.addLayout(form)
 
@@ -149,7 +158,7 @@ class IndustrialSyncDialog(QDialog):
         if profiles:
             self._set_ready_state(
                 True,
-                "Production source selected. Enter credentials for this session.",
+                "Production source selected. Check access with a one-row read or sync selected reference/ID values.",
             )
         else:
             self._set_ready_state(False, "Create a production source before syncing.")
@@ -230,7 +239,7 @@ class IndustrialSyncDialog(QDialog):
             QMessageBox.warning(self, "Industrial sync", str(exc))
             return
 
-        action = "Testing production database connection" if test_only else "Syncing production data"
+        action = "Checking production database access" if test_only else "Syncing production data"
         self.status_label.setText(f"{action}...")
         set_status_variant(self.status_label, "neutral")
         self._set_action_buttons_enabled(False)
@@ -276,7 +285,10 @@ class IndustrialSyncDialog(QDialog):
         if result.get("status") == "completed_with_warnings":
             detail = self._result_error_detail(result)
             if result.get("test_only"):
-                base = f"Connection test completed with warnings ({result.get('row_count', 0)} rows visible)"
+                base = (
+                    "Access check completed with warnings: "
+                    f"{result.get('row_count', 0)} row(s) visible, nothing saved"
+                )
             else:
                 upsert_summary = result.get("upsert_summary") or {}
                 base = (
@@ -295,7 +307,14 @@ class IndustrialSyncDialog(QDialog):
             )
             return
         if result["test_only"]:
-            self.status_label.setText(f"Connection test passed ({result['row_count']} rows visible)")
+            row_count = int(result.get("row_count", 0) or 0)
+            if row_count <= 0:
+                self.status_label.setText(
+                    "Access check reached the database: 0 rows visible, nothing saved"
+                )
+                set_status_variant(self.status_label, "warning")
+                return
+            self.status_label.setText(f"Access check passed: {row_count} row(s) visible, nothing saved")
             set_status_variant(self.status_label, "success")
             return
         upsert_summary = result.get("upsert_summary") or {}
@@ -351,7 +370,7 @@ class IndustrialSyncDialog(QDialog):
         if result.get("status") == "cancelled":
             base = "Industrial sync cancelled"
         elif result.get("test_only"):
-            base = "Connection test failed"
+            base = "Access check failed"
         else:
             base = "Industrial sync failed"
         detail = self._result_error_detail(result)

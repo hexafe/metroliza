@@ -105,7 +105,7 @@ def test_source_dialog_can_configure_file_before_metroliza_database_is_selected(
     assert "assembly_mes:" in config_text
     assert "password" not in config_text.lower()
     assert "Select a Metroliza report database" in dialog.status_label.text()
-    assert "Connect and sync" in dialog.status_label.text()
+    assert "check access" in dialog.status_label.text()
     dialog.close()
 
 
@@ -214,11 +214,13 @@ def test_sync_thread_test_only_does_not_persist_rows(monkeypatch, tmp_path):
         "create_oznak_cancellation_token",
         lambda: SimpleNamespace(cancel=lambda: None),
     )
-    monkeypatch.setattr(
-        industrial_workers,
-        "fetch_oznak_records_for_source_profile",
-        lambda *args, **kwargs: result,
-    )
+    fetch_kwargs = {}
+
+    def fake_fetch(*args, **kwargs):
+        fetch_kwargs.update(kwargs)
+        return result
+
+    monkeypatch.setattr(industrial_workers, "fetch_oznak_records_for_source_profile", fake_fetch)
 
     thread = IndustrialOznakSyncThread(
         db_file=db_path,
@@ -239,6 +241,8 @@ def test_sync_thread_test_only_does_not_persist_rows(monkeypatch, tmp_path):
 
     assert emitted[0]["status"] == "succeeded"
     assert emitted[0]["test_only"] is True
+    assert emitted[0]["access_check_method"] == "bounded_fetch"
+    assert fetch_kwargs["limit"] == 1
     assert counts.sync_runs == 0
     assert counts.records == 0
 
@@ -442,10 +446,62 @@ def test_launcher_dialog_keeps_connection_fields_out_of_main_surface(tmp_path):
     assert not hasattr(dialog, "password_edit")
     assert dialog.select_database_button.text() == "Select DB..."
     assert dialog.sources_button.text() == "Production sources..."
-    assert dialog.sync_button.text() == "Connect and sync..."
+    assert dialog.sync_button.text() == "Connect / check / sync..."
     assert dialog.links_button.text() == "Production links..."
     assert dialog.export_button.text() == "Export..."
     assert dialog.sizeHint().height() <= 520
+    dialog.close()
+
+
+def test_sync_dialog_labels_bounded_access_check_clearly(tmp_path):
+    _app()
+    db_path = str(tmp_path / "metroliza.db")
+    IndustrialDataRepository(db_path).upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="events",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+        allowed_columns=("event_id", "reference"),
+    )
+
+    dialog = IndustrialSyncDialog(db_file=db_path)
+
+    assert dialog.test_connection_button.text() == "Check access"
+    assert "one production row" in dialog.test_connection_button.toolTip()
+    assert dialog.sync_now_button.text() == "Sync now"
+    assert "saves them in the local Metroliza cache" in dialog.sync_now_button.toolTip()
+    assert dialog.edit_filter_button.text() == "Edit references..."
+    dialog.close()
+
+
+def test_launcher_analytics_uses_shared_production_cache_workflow(monkeypatch, tmp_path):
+    _app()
+    db_path = str(tmp_path / "metroliza.db")
+    launched = {}
+
+    class FakeAnalyticsDialog:
+        def __init__(self, parent, *, db_file, source_kind):
+            launched["parent"] = parent
+            launched["db_file"] = db_file
+            launched["source_kind"] = source_kind
+            self.executed = False
+
+        def exec(self):
+            launched["executed"] = True
+
+    monkeypatch.setattr(industrial_data_dialog, "IndustrialAnalyticsDialog", FakeAnalyticsDialog)
+    dialog = IndustrialDataDialog(db_file=db_path)
+
+    dialog.open_analytics_dialog()
+
+    assert launched["parent"] is dialog
+    assert launched["db_file"] == db_path
+    assert launched["source_kind"] == "production_cache"
+    assert launched["executed"] is True
     dialog.close()
 
 
@@ -523,7 +579,7 @@ def test_launcher_reports_ready_state_when_cache_has_synced_rows(tmp_path):
 
     assert "Local industrial cache ready with synced production rows" in dialog.status_label.text()
     assert dialog.cache_label.accessibleName() == "Industrial cache readiness"
-    assert dialog.sync_button.accessibleName() == "Open industrial sync"
+    assert dialog.sync_button.accessibleName() == "Open industrial connection, access check, and sync"
     dialog.close()
 
 
