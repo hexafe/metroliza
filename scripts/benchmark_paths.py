@@ -901,9 +901,9 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
         reference_column='PART',
         chart_selection=ProductionChartSelection(
             time_series=True,
-            histograms=True,
-            violinplots=True,
-            boxplots=True,
+            histogram=True,
+            violin=True,
+            box=True,
             groupstats=False,
         ),
         output_workbook_file=str(output_xlsx),
