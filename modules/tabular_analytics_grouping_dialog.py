@@ -145,6 +145,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.previous_page_button = QPushButton("Previous")
         self.next_page_button = QPushButton("Next")
         self.selector_page_label = status_chip("", "neutral")
+        configure_accessibility(self.previous_page_button, name="Previous matching rows page")
+        configure_accessibility(self.next_page_button, name="Next matching rows page")
+        configure_accessibility(self.selector_page_label, name="Matching rows page")
         selector_paging.addStretch(1)
         selector_paging.addWidget(self.previous_page_button)
         selector_paging.addWidget(self.selector_page_label)
@@ -188,12 +191,21 @@ class TabularAnalyticsGroupingDialog(QDialog):
 
         footer = QHBoxLayout()
         footer.setSpacing(8)
-        self.create_group_button = QPushButton("Create or add")
+        self.create_group_button = QPushButton("Assign to group...")
         self.rename_group_button = QPushButton("Rename group")
         self.delete_group_button = QPushButton("Delete group")
         self.clear_selection_button = QPushButton("Clear selection")
         self.use_grouping_button = QPushButton("Use grouping")
         self.dont_use_grouping_button = QPushButton("Clear grouping")
+        configure_accessibility(
+            self.create_group_button,
+            name="Assign selected rows to a CSV analytics group",
+        )
+        configure_accessibility(self.rename_group_button, name="Rename selected CSV analytics group")
+        configure_accessibility(self.delete_group_button, name="Delete selected CSV analytics group")
+        configure_accessibility(self.clear_selection_button, name="Clear selected matching rows")
+        configure_accessibility(self.dont_use_grouping_button, name="Clear CSV analytics grouping")
+        configure_accessibility(self.use_grouping_button, name="Use CSV analytics grouping")
         footer.addWidget(self.create_group_button)
         footer.addWidget(self.rename_group_button)
         footer.addWidget(self.delete_group_button)

@@ -76,10 +76,11 @@ class IndustrialDataDialog(QDialog):
         self.export_filter_label = status_chip(self.export_filter_state.summary(), "neutral")
         self.grouping_label = status_chip(self.grouping_state.summary(), "neutral")
         self.export_options_label = status_chip("Export plots: included", "neutral")
+        self.analytics_status_label = status_chip("Analytics needs cached production rows.", "neutral")
 
         self.select_database_button = QPushButton("Select DB...")
         self.sources_button = QPushButton("Production sources...")
-        self.sync_button = QPushButton("Connect / check / sync...")
+        self.sync_button = QPushButton("Check access / sync...")
         self.links_button = QPushButton("Production links...")
         self.export_button = QPushButton("Export...")
         self.analyze_button = QPushButton("Analyze...")
@@ -87,8 +88,8 @@ class IndustrialDataDialog(QDialog):
         self.refresh_links_button = QPushButton("Refresh links")
         self.close_button = QPushButton("Close")
         self.sync_button.setToolTip(
-            "Enter production database credentials, check access with a one-row read, "
-            "and sync selected reference/ID values into the local cache."
+            "Open the production access dialog. Test connection performs a one-row read; "
+            "Sync now stores selected references in the local cache."
         )
         self.export_button.setToolTip(
             "Create an industrial workbook from the local cache, or fetch directly from a "
@@ -154,6 +155,7 @@ class IndustrialDataDialog(QDialog):
 
         row += 1
         grid.addWidget(section_label("Analytics"), row, 0)
+        grid.addWidget(self.analytics_status_label, row, 1)
         grid.addWidget(self.analyze_button, row, 2)
 
         row += 1
@@ -231,6 +233,8 @@ class IndustrialDataDialog(QDialog):
         if not self.db_file:
             self.cache_label.setText("Local industrial cache: unavailable until a report DB is selected")
             self.sources_label.setText(self._format_config_source_status())
+            self.analytics_status_label.setText("Select a report DB with cached rows to analyze.")
+            set_status_variant(self.analytics_status_label, "warning")
             self._set_action_buttons_enabled(db_available=False)
             self.status_label.setText(
                 "Configure production sources and use Export to fetch directly. Select a Metroliza report database only when you want cache sync, links, or analytics."
@@ -261,6 +265,12 @@ class IndustrialDataDialog(QDialog):
             f"{counts.records} records, {counts.sync_runs} sync runs, {counts.link_candidates} links"
         )
         self.sources_label.setText(f"{len(profiles)} production source(s) configured")
+        if counts.records > 0:
+            self.analytics_status_label.setText("Analytics ready from cached production rows.")
+            set_status_variant(self.analytics_status_label, "success")
+        else:
+            self.analytics_status_label.setText("Analytics needs synced rows in the local cache.")
+            set_status_variant(self.analytics_status_label, "warning")
         if config_error:
             self.status_label.setText(config_error)
             set_status_variant(self.status_label, "warning")
@@ -433,11 +443,12 @@ class IndustrialDataDialog(QDialog):
         configure_accessibility(self.sources_label, name="Production source readiness")
         configure_accessibility(self.sync_filter_label, name="Industrial references-to-fetch summary")
         configure_accessibility(self.export_filter_label, name="Industrial export filter summary")
+        configure_accessibility(self.analytics_status_label, name="Industrial analytics readiness")
         configure_accessibility(self.grouping_label, name="Industrial export grouping summary")
         configure_accessibility(self.export_options_label, name="Industrial export option summary")
         configure_accessibility(self.select_database_button, name="Select Metroliza report database")
         configure_accessibility(self.sources_button, name="Open production sources")
-        configure_accessibility(self.sync_button, name="Open industrial connection, access check, and sync")
+        configure_accessibility(self.sync_button, name="Open industrial access check and sync")
         configure_accessibility(self.links_button, name="Open production links")
         configure_accessibility(self.export_button, name="Open industrial workbook export")
         configure_accessibility(self.analyze_button, name="Open industrial analytics")

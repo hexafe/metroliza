@@ -49,6 +49,7 @@ PLOT_COLORWAY = (
     SUMMARY_PLOT_PALETTE["central_tendency"],
     SUMMARY_PLOT_PALETTE["distribution_base"],
 )
+_MANUAL_GROUP_FIELD_NAMES = {"group", "group_name", "csv_group", "tabular_group"}
 
 
 def build_production_dashboard_manifest(
@@ -427,11 +428,21 @@ def _time_series_traces(
         y_values = [float(value) for value in y_series.tolist()]
         if not x_values or not y_values:
             continue
-        marker_symbol = "x" if aggregate_marker else ("diamond" if "selected" in label.casefold() else "circle")
+        marker_symbol = (
+            "x"
+            if aggregate_marker
+            else ("diamond" if "selected" in label.casefold() else "circle")
+        )
         color = _plot_color(index, label)
         trace_name = label
         if aggregate_marker and not label.casefold().endswith("aggregate"):
             trace_name = f"{label} aggregate"
+        marker = _time_series_marker_style(
+            color=color,
+            symbol=marker_symbol,
+            point_count=len(x_values),
+            aggregate_marker=aggregate_marker,
+        )
         traces.append(
             {
                 "type": "scatter",
@@ -439,16 +450,7 @@ def _time_series_traces(
                 "name": trace_name,
                 "x": x_values,
                 "y": y_values,
-                "marker": {
-                    "color": color,
-                    "size": 11 if aggregate_marker else (9 if marker_symbol == "diamond" else 7),
-                    "symbol": marker_symbol,
-                    "line": (
-                        {"color": "#111827", "width": 1.7}
-                        if aggregate_marker
-                        else {"color": color, "width": 0.5}
-                    ),
-                },
+                "marker": marker,
                 "hovertemplate": f"{html.escape(label)}<br>Time=%{{x}}<br>Value=%{{y}}<extra></extra>",
             }
         )
@@ -741,6 +743,69 @@ def _plot_color(index: int, label: str) -> str:
     return PLOT_COLORWAY[index % len(PLOT_COLORWAY)]
 
 
+def _raw_marker_size(point_count: int, *, selected: bool = False) -> float:
+    if point_count >= 10_000:
+        base = 3.0
+    elif point_count >= 3_000:
+        base = 4.0
+    elif point_count >= 1_000:
+        base = 5.0
+    elif point_count >= 300:
+        base = 6.0
+    else:
+        base = 7.0
+    return min(base + (0.75 if selected else 0.0), 8.0)
+
+
+def _raw_marker_opacity(point_count: int, *, selected: bool = False) -> float:
+    if point_count >= 10_000:
+        base = 0.42
+    elif point_count >= 3_000:
+        base = 0.52
+    elif point_count >= 1_000:
+        base = 0.62
+    elif point_count >= 300:
+        base = 0.72
+    else:
+        base = 0.82
+    return min(base + (0.1 if selected else 0.0), 0.9)
+
+
+def _raw_marker_line_width(point_count: int, *, selected: bool = False) -> float:
+    if point_count >= 1_000:
+        return 0.25 if selected else 0.0
+    return 0.45 if selected else 0.35
+
+
+def _time_series_marker_style(
+    *,
+    color: str,
+    symbol: str,
+    point_count: int,
+    aggregate_marker: bool,
+) -> dict[str, Any]:
+    if aggregate_marker:
+        return {
+            "color": color,
+            "size": 8,
+            "symbol": symbol,
+            "opacity": 0.94,
+            "line": {"color": "#111827", "width": 1.4},
+        }
+
+    selected = symbol == "diamond"
+    return {
+        "color": color,
+        "size": _raw_marker_size(point_count, selected=selected),
+        "symbol": symbol,
+        "opacity": _raw_marker_opacity(point_count, selected=selected),
+        "line": {
+            "color": color,
+            "width": _raw_marker_line_width(point_count, selected=selected),
+        },
+    }
+
+
 def _numeric_values(series: pd.Series) -> list[float]:
     values = pd.to_numeric(series, errors="coerce").dropna()
     return [float(value) for value in values.tolist()]
@@ -999,7 +1064,7 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
     }}
     .chart-grid {{
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
       gap: 14px;
       padding-bottom: 24px;
     }}
@@ -1160,18 +1225,8 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
 
 
 def _render_summary_cards(summary: dict[str, Any]) -> str:
-    rows = (
-        ("Rows", summary.get("source_rows")),
-        ("Aggregate rows", summary.get("aggregate_rows")),
-        ("Metrics", summary.get("metric_count")),
-        ("Charts", summary.get("chart_count")),
-        ("Bucket", summary.get("time_bucket")),
-        ("Aggregation", ", ".join(summary.get("aggregation_methods") or [])),
-        ("Reference cohort", summary.get("reference_cohort_count")),
-        ("Stats metrics", summary.get("groupstats_metric_count")),
-    )
     markup = []
-    for label, value in rows:
+    for label, value in _summary_card_rows(summary):
         markup.append(
             '<div class="card">'
             f'<div class="card-label">{html.escape(str(label))}</div>'
@@ -1179,6 +1234,119 @@ def _render_summary_cards(summary: dict[str, Any]) -> str:
             '</div>'
         )
     return f'<section class="cards">{"".join(markup)}</section>'
+
+
+def _summary_int(value: Any) -> int | None:
+    try:
+        if value in (None, ""):
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _friendly_time_bucket(value: Any) -> str:
+    bucket = str(value or "").strip()
+    if not bucket or bucket.casefold() in {"none", "raw", "raw rows"}:
+        return ""
+    labels = {
+        "minute": "By minute",
+        "hour": "Hourly",
+        "day": "Daily",
+        "week": "Weekly",
+        "month": "Monthly",
+    }
+    return labels.get(bucket.casefold(), bucket.replace("_", " ").title())
+
+
+def _friendly_aggregation_methods(value: Any) -> str:
+    if isinstance(value, str):
+        methods = [value]
+    elif isinstance(value, (list, tuple, set)):
+        methods = [str(item) for item in value]
+    else:
+        methods = []
+    labels = [method.strip().replace("_", " ").title() for method in methods if method.strip()]
+    return ", ".join(labels)
+
+
+def _friendly_group_field_name(value: Any) -> str:
+    raw = str(value or "").strip()
+    folded = raw.casefold()
+    if not raw:
+        return ""
+    if raw == "GROUP" or folded in _MANUAL_GROUP_FIELD_NAMES:
+        return "Manual groups"
+    if folded == "reference_cohort":
+        return "Pasted reference cohorts"
+    return raw.replace("_", " ").title()
+
+
+def _friendly_group_fields(value: Any) -> str:
+    if isinstance(value, str):
+        fields = [value]
+    elif isinstance(value, (list, tuple, set)):
+        fields = list(value)
+    else:
+        fields = []
+    labels: list[str] = []
+    seen: set[str] = set()
+    for field in fields:
+        label = _friendly_group_field_name(field)
+        if not label:
+            continue
+        key = label.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        labels.append(label)
+    return ", ".join(labels)
+
+
+def _plural_summary_count(count: int, singular: str, plural: str | None = None) -> str:
+    return f"{count} {singular if count == 1 else (plural or singular + 's')}"
+
+
+def _summary_card_rows(summary: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
+    rows: list[tuple[str, Any]] = [
+        ("Rows", summary.get("source_rows")),
+    ]
+    aggregate_rows = _summary_int(summary.get("aggregate_rows"))
+    if aggregate_rows and aggregate_rows > 0:
+        rows.append(("Rows after aggregation", aggregate_rows))
+    rows.extend(
+        [
+            ("Metrics", summary.get("metric_count")),
+            ("Charts", summary.get("chart_count")),
+        ]
+    )
+
+    time_bucket = _friendly_time_bucket(summary.get("time_bucket"))
+    if time_bucket:
+        rows.append(("Time bucket", time_bucket))
+
+    aggregation = _friendly_aggregation_methods(summary.get("aggregation_methods"))
+    if aggregation:
+        rows.append(("Aggregation", aggregation))
+
+    group_fields = _friendly_group_fields(summary.get("group_fields"))
+    if group_fields:
+        rows.append(("Groups", group_fields))
+
+    reference_count = _summary_int(summary.get("reference_cohort_count"))
+    if reference_count and reference_count > 0:
+        rows.append(("Pasted references", reference_count))
+
+    groupstats_metric_count = _summary_int(summary.get("groupstats_metric_count"))
+    if groupstats_metric_count and groupstats_metric_count > 0:
+        rows.append(
+            (
+                "Groupstats",
+                _plural_summary_count(groupstats_metric_count, "metric"),
+            )
+        )
+
+    return tuple(rows)
 
 
 def _render_diagnostics(diagnostics: list[dict[str, Any]]) -> str:

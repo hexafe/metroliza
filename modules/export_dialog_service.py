@@ -11,6 +11,13 @@ from modules.export_preset_utils import build_export_options_for_preset
 from pathlib import Path
 
 
+def _int_or_default(value, default):
+    try:
+        return int(value if value not in (None, "") else default)
+    except (TypeError, ValueError):
+        return int(default)
+
+
 def build_export_options_payload(
     selected_preset,
     export_type,
@@ -31,8 +38,14 @@ def build_export_options_payload(
         export_type=export_type or preset_options['export_type'],
         export_target=export_target or ExportOptions.export_target,
         sorting_parameter=sorting_parameter or preset_options['sorting_parameter'],
-        violin_plot_min_samplesize=int(violin_input if violin_input not in (None, "") else preset_options['violin_plot_min_samplesize']),
-        summary_plot_scale=int(summary_scale_input if summary_scale_input not in (None, "") else preset_options['summary_plot_scale']),
+        violin_plot_min_samplesize=_int_or_default(
+            violin_input,
+            preset_options['violin_plot_min_samplesize'],
+        ),
+        summary_plot_scale=_int_or_default(
+            summary_scale_input,
+            preset_options['summary_plot_scale'],
+        ),
         hide_ok_results=bool(hide_ok_results),
         generate_summary_sheet=bool(preset_options['generate_summary_sheet']),
         generate_html_dashboard=bool(generate_html_dashboard),

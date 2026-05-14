@@ -57,6 +57,7 @@ from modules.tabular_analytics_service import (
 )
 from modules.ui_foundation import (
     apply_metroliza_theme,
+    configure_accessibility,
     configure_window_size,
     path_field,
     section_label,
@@ -391,12 +392,18 @@ class IndustrialAnalyticsDialog(QDialog):
         self.references_edit.setPlaceholderText("Paste Part / IDs to highlight/filter; separate with comma, semicolon, space, or new line")
         self.references_edit.setMaximumHeight(90)
         self.references_edit.setToolTip(reference_action_tooltip)
+        self.reference_mode_hint_label = status_chip(
+            "Pasted references affect only this analytics run; manual CSV groups are unchanged.",
+            "info",
+        )
 
         self.time_series_checkbox = QCheckBox("Time series")
         self.histogram_checkbox = QCheckBox("Histogram")
         self.violin_checkbox = QCheckBox("Violin")
         self.box_checkbox = QCheckBox("Box")
         self.groupstats_checkbox = QCheckBox("Groupstats")
+        self.groupstats_reason_label = status_chip("", "warning")
+        self.groupstats_reason_label.setVisible(False)
         self.workbook_checkbox = QCheckBox("Create workbook")
         self.parameter_sheets_checkbox = QCheckBox("Separate sheet per selected parameter")
         self.time_series_checkbox.setChecked(True)
@@ -444,6 +451,7 @@ class IndustrialAnalyticsDialog(QDialog):
             checkbox.stateChanged.connect(lambda _state: self._sync_ui_state())
 
         self._build_layout()
+        self._configure_accessibility()
         self._sync_source_visibility()
         self._reset_group_options(())
         self._sync_ui_state()
@@ -554,15 +562,16 @@ class IndustrialAnalyticsDialog(QDialog):
 
         row += 1
         reference_mode_label = section_label("Pasted reference action")
-        reference_mode_label.setToolTip(self.reference_mode_combo.toolTip())
         grid.addWidget(reference_mode_label, row, 0)
         grid.addWidget(self.reference_mode_combo, row, 1, 1, 2)
 
         row += 1
         references_label = section_label("References")
-        references_label.setToolTip(self.references_edit.toolTip())
         grid.addWidget(references_label, row, 0)
         grid.addWidget(self.references_edit, row, 1, 1, 2)
+
+        row += 1
+        grid.addWidget(self.reference_mode_hint_label, row, 1, 1, 2)
 
         row += 1
         chart_actions = QHBoxLayout()
@@ -579,6 +588,9 @@ class IndustrialAnalyticsDialog(QDialog):
         chart_actions.addStretch(1)
         grid.addWidget(section_label("Outputs"), row, 0)
         grid.addLayout(chart_actions, row, 1, 1, 2)
+
+        row += 1
+        grid.addWidget(self.groupstats_reason_label, row, 1, 1, 2)
 
         row += 1
         grid.addWidget(section_label("Dashboard"), row, 0)
@@ -612,6 +624,41 @@ class IndustrialAnalyticsDialog(QDialog):
         actions.addWidget(self.close_button)
         actions.addWidget(self.start_button)
         layout.addLayout(actions)
+
+    def _configure_accessibility(self) -> None:
+        configure_accessibility(self.source_label, name="Analytics source summary")
+        configure_accessibility(self.database_field, name="Analytics report database")
+        configure_accessibility(self.input_file_field, name="CSV or Excel input file")
+        configure_accessibility(self.browse_input_button, name="Browse CSV or Excel input")
+        configure_accessibility(self.sheet_name_combo, name="Excel sheet")
+        configure_accessibility(self.timestamp_column_combo, name="Analytics time column")
+        configure_accessibility(self.reference_column_combo, name="Analytics part or ID column")
+        configure_accessibility(self.load_metrics_button, name="Load analytics metrics")
+        configure_accessibility(self.filters_button, name="Edit analytics filters")
+        configure_accessibility(self.clear_filter_button, name="Clear analytics filter")
+        configure_accessibility(self.choose_metrics_button, name="Choose analytics metrics")
+        configure_accessibility(self.edit_limits_button, name="Edit metric limits")
+        configure_accessibility(self.edit_groups_button, name="Edit CSV analytics groups")
+        configure_accessibility(self.clear_groups_button, name="Clear CSV analytics groups")
+        configure_accessibility(self.group_field_combo, name="Production grouping field")
+        configure_accessibility(self.grouping_summary_label, name="CSV grouping summary")
+        configure_accessibility(self.time_bucket_combo, name="Analytics time bucket")
+        configure_accessibility(self.aggregation_combo, name="Analytics aggregation")
+        configure_accessibility(
+            self.reference_mode_combo,
+            name="Pasted reference action",
+            description=self.reference_mode_combo.toolTip(),
+        )
+        configure_accessibility(
+            self.references_edit,
+            name="Pasted references",
+            description=self.references_edit.toolTip(),
+        )
+        configure_accessibility(self.groupstats_checkbox, name="Include groupstats output")
+        configure_accessibility(self.dashboard_button, name="Select analytics dashboard path")
+        configure_accessibility(self.workbook_button, name="Select analytics workbook path")
+        configure_accessibility(self.close_button, name="Close analytics dialog")
+        configure_accessibility(self.start_button, name="Create analytics output")
 
     def _source_summary(self) -> str:
         if self.is_production_source:
@@ -1316,6 +1363,9 @@ class IndustrialAnalyticsDialog(QDialog):
         groupstats_available = groupstats_unavailable_reason is None
         self.groupstats_checkbox.setEnabled(groupstats_available)
         self.groupstats_checkbox.setToolTip(groupstats_unavailable_reason or "")
+        self.groupstats_reason_label.setVisible(bool(groupstats_unavailable_reason))
+        self.groupstats_reason_label.setText(groupstats_unavailable_reason or "")
+        set_status_variant(self.groupstats_reason_label, "warning")
         if not groupstats_available:
             self.groupstats_checkbox.blockSignals(True)
             self.groupstats_checkbox.setChecked(False)

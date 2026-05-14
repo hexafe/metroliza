@@ -4,7 +4,15 @@ from modules.progress_status import build_three_line_status
 from modules.parse_reports_thread import ParseReportsThread
 from modules.custom_logger import CustomLogger
 from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
-from PyQt6.QtWidgets import QComboBox, QDialog, QFileDialog, QGridLayout, QLabel, QMessageBox, QPushButton
+from PyQt6.QtWidgets import (
+    QComboBox,
+    QDialog,
+    QFileDialog,
+    QGridLayout,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+)
 import logging
 from modules.contracts import ParseRequest, validate_parse_request
 from modules.worker_progress_dialog import create_worker_progress_dialog
@@ -58,10 +66,13 @@ class ParsingDialog(QDialog):
         # Initialize the widgets
         self.source_section_label = section_label("Source")
         self.directory_label = QLabel("Reports directory or archive:")
-        self.directory_button = QPushButton("Browse")
+        self.directory_button = QPushButton("Browse folder")
         self.directory_button.clicked.connect(self.select_directory)
+        self.archive_button = QPushButton("Browse archive")
+        self.archive_button.clicked.connect(self.select_archive)
         self.directory_label.setToolTip("Folder with PDF reports, or a supported archive file.")
-        self.directory_button.setToolTip("Choose a folder with PDF reports or a supported archive file.")
+        self.directory_button.setToolTip("Choose a folder with PDF reports.")
+        self.archive_button.setToolTip("Choose a supported archive file with PDF reports.")
 
         self.database_section_label = section_label("Destination")
         self.database_label = QLabel("Database file:")
@@ -149,35 +160,37 @@ class ParsingDialog(QDialog):
             self.layout.setColumnStretch(1, 1)
 
         row = 0
-        self.layout.addWidget(self.source_section_label, row, 0, 1, 3)
+        self.layout.addWidget(self.source_section_label, row, 0, 1, 4)
         row += 1
         self.layout.addWidget(self.directory_label, row, 0)
         self.layout.addWidget(self.directory_text_label, row, 1)
         self.layout.addWidget(self.directory_button, row, 2)
+        self.layout.addWidget(self.archive_button, row, 3)
 
         row += 1
-        self.layout.addWidget(self.database_section_label, row, 0, 1, 3)
+        self.layout.addWidget(self.database_section_label, row, 0, 1, 4)
         row += 1
         self.layout.addWidget(self.database_label, row, 0)
         self.layout.addWidget(self.database_text_label, row, 1)
         self.layout.addWidget(self.database_button, row, 2)
 
         row += 1
-        self.layout.addWidget(self.import_section_label, row, 0, 1, 3)
+        self.layout.addWidget(self.import_section_label, row, 0, 1, 4)
         row += 1
         self.layout.addWidget(self.metadata_mode_label, row, 0)
-        self.layout.addWidget(self.metadata_mode_combo, row, 1, 1, 2)
+        self.layout.addWidget(self.metadata_mode_combo, row, 1, 1, 3)
         row += 1
-        self.layout.addWidget(self.mode_guidance_label, row, 0, 1, 3)
+        self.layout.addWidget(self.mode_guidance_label, row, 0, 1, 4)
 
         row += 1
-        self.layout.addWidget(self.readiness_label, row, 0, 1, 3)
+        self.layout.addWidget(self.readiness_label, row, 0, 1, 4)
         row += 1
-        self.layout.addWidget(self.parse_button, row, 2)
+        self.layout.addWidget(self.parse_button, row, 3)
 
         self.setLayout(self.layout)
         self._sync_readiness_state()
         configure_accessibility(self.directory_button, name="Browse parse source")
+        configure_accessibility(self.archive_button, name="Browse parse archive source")
         configure_accessibility(self.database_button, name="Browse parse database")
         configure_accessibility(self.metadata_mode_combo, name="Metadata mode")
         configure_accessibility(self.parse_button, name="Parse reports")
@@ -190,6 +203,17 @@ class ParsingDialog(QDialog):
     @staticmethod
     def _archive_extension_set():
         return {ext.lower() for _, extensions, _ in shutil.get_unpack_formats() for ext in extensions}
+
+    @staticmethod
+    def _archive_file_filter():
+        archive_patterns = sorted({
+            f"*{ext}"
+            for _, extensions, _ in shutil.get_unpack_formats()
+            for ext in extensions
+        })
+        if not archive_patterns:
+            return "All Files (*)"
+        return "Supported archives (" + " ".join(archive_patterns) + ")"
 
     def _selected_metadata_mode(self):
         return self.metadata_mode_combo.currentData() or _METADATA_MODE_FAST
@@ -230,6 +254,17 @@ class ParsingDialog(QDialog):
             self.readiness_label.setText("Select a source and database to enable parsing.")
             set_status_variant(self.readiness_label, "warning")
 
+    def _set_parse_source(self, selected_source):
+        if not selected_source:
+            return
+        logger.info("Selected parse source: %s", selected_source)
+        self.directory = selected_source
+        update_path_field(self.directory_text_label, selected_source)
+        self.database_button.setEnabled(True)
+        if self.parent() is not None and hasattr(self.parent(), "set_directory"):
+            self.parent().set_directory(selected_source)
+        self._sync_readiness_state()
+
     @pyqtSlot()
     def select_directory(self):
         """Choose a parse source, with a fallback path for archive selection."""
@@ -247,24 +282,28 @@ class ParsingDialog(QDialog):
                 if choose_archive != QMessageBox.StandardButton.Yes:
                     return
 
-                archive_patterns = sorted({f"*{ext}" for _, extensions, _ in shutil.get_unpack_formats() for ext in extensions})
-                archive_filter = "Supported archives (" + " ".join(archive_patterns) + ")" if archive_patterns else "All Files (*)"
                 selected_source, _ = QFileDialog.getOpenFileName(
                     self,
                     "Select archive",
                     "",
-                    f"{archive_filter};;All Files (*)",
+                    f"{self._archive_file_filter()};;All Files (*)",
                 )
 
-            if selected_source:
-                logger.info("Selected parse source: %s", selected_source)
-                self.directory = selected_source
-                update_path_field(self.directory_text_label, selected_source)
-                self.database_button.setEnabled(True)
-                if self.parent() is not None and hasattr(self.parent(), "set_directory"):
-                    self.parent().set_directory(selected_source)
+            self._set_parse_source(selected_source)
+        except Exception as e:
+            self.log_and_exit(e)
 
-                self._sync_readiness_state()
+    @pyqtSlot()
+    def select_archive(self):
+        """Choose an archive parse source directly without first opening folder selection."""
+        try:
+            selected_source, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select archive",
+                "",
+                f"{self._archive_file_filter()};;All Files (*)",
+            )
+            self._set_parse_source(selected_source)
         except Exception as e:
             self.log_and_exit(e)
 

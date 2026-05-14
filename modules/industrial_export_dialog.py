@@ -80,7 +80,7 @@ class IndustrialExportDialog(QDialog):
         self.username_edit = QLineEdit()
         self.password_edit = QLineEdit()
         self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.remember_credentials_checkbox = QCheckBox("Remember on this computer")
+        self.remember_credentials_checkbox = QCheckBox("Remember locally on this computer")
         self.remember_credentials_checkbox.setChecked(True)
         self.limit_spin = QSpinBox()
         self.limit_spin.setRange(1, 1_000_000)
@@ -91,6 +91,10 @@ class IndustrialExportDialog(QDialog):
         self.filter_status_label = status_chip(self.filter_state.summary(), "neutral")
         self.grouping_status_label = status_chip(self.grouping_state.summary(), "neutral")
         self.plot_status_label = status_chip("Plots included", "neutral")
+        self.live_fetch_hint_label = status_chip(
+            "Fetch row limit and timeout protect large live database exports.",
+            "info",
+        )
         self.include_plots_checkbox = QCheckBox("Include plots")
         self.include_plots_checkbox.setChecked(bool(include_plots))
         self.output_path_field = path_field("", empty_text="No output workbook selected")
@@ -161,6 +165,9 @@ class IndustrialExportDialog(QDialog):
             row += 1
             grid.addWidget(section_label("Timeout seconds"), row, 0)
             grid.addWidget(self.timeout_spin, row, 1, 1, 2)
+
+            row += 1
+            grid.addWidget(self.live_fetch_hint_label, row, 1, 1, 2)
         else:
             grid.addWidget(section_label("Metroliza report database"), row, 0)
             grid.addWidget(self.database_field, row, 1, 1, 2)

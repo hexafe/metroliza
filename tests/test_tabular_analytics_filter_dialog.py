@@ -125,6 +125,24 @@ def test_filter_dialog_exposes_source_columns_without_internal_helpers(tmp_path)
         dialog.close()
 
 
+def test_filter_dialog_uses_distinct_footer_actions(tmp_path) -> None:
+    _app()
+    loaded = _sample_loaded_table(tmp_path)
+
+    dialog = TabularAnalyticsFilterDialog(
+        dataframe=loaded.dataframe,
+        column_mapping=loaded.column_mapping,
+    )
+    try:
+        assert dialog.clear_selection_button.text() == "Clear values"
+        assert dialog.clear_filter_button.text() == "Reset filter"
+        assert dialog.clear_selection_button.accessibleName() == "Clear selected CSV filter values"
+        assert dialog.clear_filter_button.accessibleName() == "Reset CSV row filter"
+        assert dialog.apply_button.accessibleName() == "Apply CSV row filter"
+    finally:
+        dialog.close()
+
+
 def test_filter_dialog_returns_selected_tracecode_keys(tmp_path) -> None:
     _app()
     loaded = _sample_loaded_table(tmp_path)

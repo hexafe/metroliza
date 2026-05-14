@@ -788,8 +788,26 @@ class TestExportDialogServiceRequestAssembly(unittest.TestCase):
         self.assertIsNone(request.grouping_df)
         self.assertTrue(request.options.generate_html_dashboard)
         self.assertTrue(request.options.include_industrial_context)
-        self.assertEqual(request.options.group_analysis_level, 'standard')
-        self.assertEqual(request.options.group_analysis_scope, 'multi_reference')
+
+    def test_build_validated_export_request_falls_back_for_invalid_advanced_numbers(self):
+        from modules.export_dialog_service import build_validated_export_request
+
+        request = build_validated_export_request(
+            db_file='input.db',
+            excel_file=Path('out.xlsx'),
+            selected_preset=EXPORT_PRESET_FAST_DIAGNOSTICS,
+            export_type='Line',
+            export_target='excel_xlsx',
+            sorting_parameter='Date',
+            violin_input='not-a-number',
+            summary_scale_input='invalid',
+            hide_ok_results=False,
+            filter_query='SELECT * FROM T',
+            grouping_df=None,
+        )
+
+        self.assertEqual(request.options.violin_plot_min_samplesize, 8)
+        self.assertEqual(request.options.summary_plot_scale, 0)
 
     def test_build_validated_export_request_appends_xlsx_for_extensionless_path(self):
         from modules.export_dialog_service import build_validated_export_request

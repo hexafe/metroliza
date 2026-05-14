@@ -87,6 +87,23 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         self.assertEqual(dialog.directory_text_label.text(), '/tmp/source.zip')
         get_open_file_name.assert_called_once()
 
+    def test_archive_source_has_direct_browse_action(self):
+        parent = _DummyParent()
+        dialog = ParsingDialog(parent=parent, directory=None, db_file=None)
+
+        with patch(
+            'modules.parsing_dialog.QFileDialog.getOpenFileName',
+            return_value=('/tmp/source.zip', ''),
+        ) as get_open_file_name:
+            dialog.select_archive()
+
+        self.assertEqual(dialog.directory_button.text(), 'Browse folder')
+        self.assertEqual(dialog.archive_button.text(), 'Browse archive')
+        self.assertEqual(dialog.archive_button.accessibleName(), 'Browse parse archive source')
+        self.assertEqual(dialog.directory, '/tmp/source.zip')
+        self.assertEqual(dialog.directory_text_label.text(), '/tmp/source.zip')
+        get_open_file_name.assert_called_once()
+
     def test_default_metadata_mode_is_light_for_gui_parsing(self):
         dialog = ParsingDialog(parent=None, directory='/tmp/reports', db_file='/tmp/reports.db')
 

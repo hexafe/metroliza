@@ -96,6 +96,7 @@ def test_reference_cohort_labels_describe_pasted_reference_action(tmp_path) -> N
         assert dialog.reference_mode_combo.itemText(group_selected_index) == "Group pasted references"
         assert "analysis-only cohort" in dialog.reference_mode_combo.toolTip()
         assert "comma, semicolon, space, or new line" in dialog.references_edit.placeholderText()
+        assert "only this analytics run" in dialog.reference_mode_hint_label.text()
     finally:
         dialog.close()
 
@@ -498,6 +499,8 @@ def test_tabular_groupstats_is_disabled_until_manual_groups_are_available() -> N
         assert not dialog.groupstats_checkbox.isEnabled()
         assert not dialog.groupstats_checkbox.isChecked()
         assert "manual CSV/Excel groups" in dialog.groupstats_checkbox.toolTip()
+        assert not dialog.groupstats_reason_label.isHidden()
+        assert "manual CSV/Excel groups" in dialog.groupstats_reason_label.text()
 
         grouping_df = pd.DataFrame(
             {
@@ -511,6 +514,7 @@ def test_tabular_groupstats_is_disabled_until_manual_groups_are_available() -> N
 
         assert dialog.groupstats_checkbox.isEnabled()
         assert dialog.groupstats_checkbox.toolTip() == ""
+        assert dialog.groupstats_reason_label.isHidden()
     finally:
         dialog.close()
 

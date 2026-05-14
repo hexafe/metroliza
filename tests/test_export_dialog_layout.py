@@ -53,6 +53,14 @@ class TestExportDialogLayout(unittest.TestCase):
 
             app = QApplication.instance() or QApplication([])
             dialog = ExportDialog(parent=None, db_file="")
+            dialog.violin_plot_min_samplesize.setText("1")
+            dialog.summary_plot_scale.setText("-5")
+            pre_finished_values = [
+                dialog.violin_plot_min_samplesize.text(),
+                dialog.summary_plot_scale.text(),
+            ]
+            dialog.violin_plot_min_samplesize.editingFinished.emit()
+            dialog.summary_plot_scale.editingFinished.emit()
             dialog.show()
             app.processEvents()
 
@@ -69,6 +77,18 @@ class TestExportDialogLayout(unittest.TestCase):
                 "close_label": dialog.close_button.text(),
                 "db_text": dialog.database_text_label.text(),
                 "excel_text": dialog.excel_file_text_label.text(),
+                "pre_finished_values": pre_finished_values,
+                "post_finished_values": [
+                    dialog.violin_plot_min_samplesize.text(),
+                    dialog.summary_plot_scale.text(),
+                ],
+                "hide_ok_tooltip": dialog.hide_ok_results_checkbox.toolTip(),
+                "info_button_size": [
+                    dialog.google_sheets_info_button.width(),
+                    dialog.google_sheets_info_button.height(),
+                ],
+                "chart_hint": dialog.chart_analysis_hint_label.text(),
+                "export_accessible_name": dialog.export_button.accessibleName(),
             }, sort_keys=True))
             dialog.close()
             app.processEvents()
@@ -86,6 +106,13 @@ class TestExportDialogLayout(unittest.TestCase):
         self.assertEqual(payload["close_label"], "Close")
         self.assertEqual(payload["db_text"], "None selected")
         self.assertEqual(payload["excel_text"], "None selected")
+        self.assertEqual(payload["pre_finished_values"], ["1", "-5"])
+        self.assertEqual(payload["post_finished_values"], ["2", "0"])
+        self.assertIn("OK results are hidden", payload["hide_ok_tooltip"])
+        self.assertGreaterEqual(payload["info_button_size"][0], 24)
+        self.assertGreaterEqual(payload["info_button_size"][1], 24)
+        self.assertIn("Group analysis Off/Light/Standard", payload["chart_hint"])
+        self.assertEqual(payload["export_accessible_name"], "Start export")
 
     def test_long_paths_do_not_expand_dialog_width(self):
         payload = self._run_probe(

@@ -230,6 +230,11 @@ def test_grouping_dialog_uses_double_click_column_selection_without_action_butto
         assert not hasattr(dialog, "remove_column_button")
         assert not hasattr(dialog, "clear_columns_button")
         assert {"Add column", "Remove selected column", "Clear columns"}.isdisjoint(button_texts)
+        assert "Create or add" not in button_texts
+        assert "Assign to group..." in button_texts
+        assert dialog.create_group_button.accessibleName() == "Assign selected rows to a CSV analytics group"
+        assert dialog.previous_page_button.accessibleName() == "Previous matching rows page"
+        assert dialog.selector_page_label.accessibleName() == "Matching rows page"
 
         trace_item = _item_for_data(dialog.available_columns_list, "tracecode")
         dialog.available_columns_list.setCurrentItem(trace_item)

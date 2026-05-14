@@ -38,7 +38,6 @@ from PyQt6.QtWidgets import(
     QWidget,
     QScrollArea,
     QSizePolicy,
-    QToolButton,
 )
 import html
 import inspect
@@ -54,7 +53,9 @@ from modules.report_query_service import build_measurement_export_query
 from modules.filter_state import NOT_APPLIED_LABEL, summarize_filter_state
 from modules.ui_foundation import (
     apply_metroliza_theme,
+    configure_accessibility,
     configure_window_size,
+    info_button,
     path_field,
     section_label,
     separator,
@@ -374,16 +375,12 @@ class ExportDialog(QDialog):
             self.export_type_combobox.addItem("Line")
             self.export_type_combobox.addItem("Scatter")
             self.export_type_combobox.setCurrentText("Line")
-            self.export_type_label.setToolTip(
-                "Use this menu to select the type of charts in Excel sheets\n"
-                "On line chart samples numbers are visible\n"
-                "On scatter chart parts are numbered sequentially from 1"
+            chart_type_hint = (
+                "Line charts keep sample numbers visible. "
+                "Scatter charts number exported parts sequentially from 1."
             )
-            self.export_type_combobox.setToolTip(
-                "Use this menu to select the type of charts in Excel sheets\n"
-                "On line chart samples numbers are visible\n"
-                "On scatter chart parts are numbered sequentially from 1"
-            )
+            self.export_type_label.setToolTip(chart_type_hint)
+            self.export_type_combobox.setToolTip(chart_type_hint)
             
             # Add dropdown list for chart type
             self.sort_measurements_label = QLabel("Sort by:")
@@ -419,6 +416,11 @@ class ExportDialog(QDialog):
                 "Single-reference and Multi-reference enforce the corresponding scope check for that worksheet."
             )
             self.group_analysis_scope_combobox.setToolTip(self.group_analysis_scope_label.toolTip())
+            self.chart_analysis_hint_label = status_chip(
+                "Line keeps sample numbers visible; Scatter numbers parts sequentially. "
+                "Group analysis Off/Light/Standard controls worksheet detail.",
+                "info",
+            )
             
             # Add textbox to set min samplesize for violin plot
             self.violin_plot_min_samplesize_label = QLabel("Violin min n:")
@@ -444,14 +446,16 @@ class ExportDialog(QDialog):
             )
             self.summary_plot_scale.setMaximumWidth(96)
             
-            # Connect textChanged signal to validate_input function
-            self.violin_plot_min_samplesize.textChanged.connect(self.validate_violin_plot_min_samplesize_input)
-            self.summary_plot_scale.textChanged.connect(self.validate_plot_scale_input)
+            # Normalize advanced numeric fields only when editing is finished.
+            self.violin_plot_min_samplesize.editingFinished.connect(self.validate_violin_plot_min_samplesize_input)
+            self.summary_plot_scale.editingFinished.connect(self.validate_plot_scale_input)
             
             # Add a QCheckBox for "Hide OK results?"
-            self.hide_ok_results_checkbox = QCheckBox("Hide OK results?")
+            self.hide_ok_results_checkbox = QCheckBox("Hide OK results")
             self.hide_ok_results_checkbox.setChecked(False)
-            self.hide_ok_results_checkbox.setToolTip("When enabled, only OK results will be visible (columns with OK results will be hidden, not deleted)")
+            self.hide_ok_results_checkbox.setToolTip(
+                "When enabled, columns that contain only OK results are hidden from the workbook, not deleted."
+            )
             
             self.advanced_options_container = QWidget()
             advanced_options_layout = QGridLayout(self.advanced_options_container)
@@ -561,6 +565,9 @@ class ExportDialog(QDialog):
             content_layout.addWidget(self.group_analysis_scope_combobox, row, 3)
 
             row += 1
+            content_layout.addWidget(self.chart_analysis_hint_label, row, 0, 1, 4)
+
+            row += 1
             content_layout.addWidget(separator(), row, 0, 1, 4)
 
             row += 1
@@ -631,8 +638,31 @@ class ExportDialog(QDialog):
             self.setTabOrder(self.summary_plot_scale, self.hide_ok_results_checkbox)
             self.setTabOrder(self.hide_ok_results_checkbox, self.close_button)
             self.setTabOrder(self.close_button, self.export_button)
+            self._configure_accessibility()
         except Exception as e:
             self.log_and_exit(e)
+
+    def _configure_accessibility(self):
+        configure_accessibility(self.preset_combobox, name="Export preset")
+        configure_accessibility(self.select_db_button, name="Select export database")
+        configure_accessibility(self.select_excel_button, name="Select output workbook")
+        configure_accessibility(self.filter_button, name="Edit export filters")
+        configure_accessibility(self.clear_filter_button, name="Clear export filters")
+        configure_accessibility(self.group_button, name="Edit export grouping")
+        configure_accessibility(self.clear_group_button, name="Clear export grouping")
+        configure_accessibility(self.export_type_combobox, name="Export chart type")
+        configure_accessibility(self.sort_measurements_combobox, name="Export sort order")
+        configure_accessibility(self.group_analysis_level_combobox, name="Group analysis level")
+        configure_accessibility(self.group_analysis_scope_combobox, name="Group analysis scope")
+        configure_accessibility(self.include_google_sheets_checkbox, name="Create Google Sheets output")
+        configure_accessibility(self.generate_html_dashboard_checkbox, name="Create HTML dashboard")
+        configure_accessibility(self.include_industrial_context_checkbox, name="Include industrial context")
+        configure_accessibility(self.advanced_toggle_button, name="Show advanced export options")
+        configure_accessibility(self.violin_plot_min_samplesize, name="Violin plot minimum sample count")
+        configure_accessibility(self.summary_plot_scale, name="Summary plot Y limit scale")
+        configure_accessibility(self.hide_ok_results_checkbox, name="Hide OK-only result columns")
+        configure_accessibility(self.close_button, name="Close export dialog")
+        configure_accessibility(self.export_button, name="Start export")
 
     def _refresh_metadata_enrichment_notice(self):
         if not hasattr(self, "metadata_enrichment_notice_label"):
@@ -658,15 +688,7 @@ class ExportDialog(QDialog):
             field.setText(text if text else empty_text)
 
     def _build_info_button(self, tooltip_text):
-        button = QToolButton()
-        button.setText("?")
-        button.setAutoRaise(True)
-        button.setToolTip(tooltip_text)
-        if hasattr(Qt, "FocusPolicy"):
-            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        if hasattr(button, "setFixedSize"):
-            button.setFixedSize(20, 20)
-        return button
+        return info_button(tooltip_text, name="Export option information")
 
     def _set_compact_row_label_widths(self):
         for label in (
@@ -759,39 +781,29 @@ class ExportDialog(QDialog):
 
     def validate_violin_plot_min_samplesize_input(self):
         try:
-            # Get user input
             user_input = self.violin_plot_min_samplesize.text()
-
-            # Validate if input is an integer and >= 2
             try:
                 input_value = int(user_input)
                 if input_value < 2:
                     input_value = 2
             except ValueError:
-                # Replace non-integer input with default value
                 input_value = 6
-
-            # Update the textbox with the validated value
-            self.violin_plot_min_samplesize.setText(str(input_value))
+            if self.violin_plot_min_samplesize.text() != str(input_value):
+                self.violin_plot_min_samplesize.setText(str(input_value))
         except Exception as e:
             self.log_and_exit(e)
 
     def validate_plot_scale_input(self):
         try:
-            # Get user input
             user_input = self.summary_plot_scale.text()
-
-            # Validate if input is a float > 0
             try:
                 input_value = int(user_input)
                 if input_value <= 0:
                     input_value = 0
             except ValueError:
-                # Replace non-number with default value
                 input_value = 0
-
-            # Update the textbox with the validated value
-            self.summary_plot_scale.setText(str(input_value))
+            if self.summary_plot_scale.text() != str(input_value):
+                self.summary_plot_scale.setText(str(input_value))
         except Exception as e:
             self.log_and_exit(e)
 

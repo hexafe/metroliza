@@ -448,7 +448,8 @@ def test_launcher_dialog_keeps_connection_fields_out_of_main_surface(tmp_path):
     assert not hasattr(dialog, "password_edit")
     assert dialog.select_database_button.text() == "Select DB..."
     assert dialog.sources_button.text() == "Production sources..."
-    assert dialog.sync_button.text() == "Connect / check / sync..."
+    assert dialog.sync_button.text() == "Check access / sync..."
+    assert "Test connection performs a one-row read" in dialog.sync_button.toolTip()
     assert dialog.links_button.text() == "Production links..."
     assert dialog.export_button.text() == "Export..."
     assert dialog.sizeHint().height() <= 520
@@ -518,6 +519,7 @@ def test_launcher_keeps_source_configuration_available_without_database(tmp_path
     assert not dialog.links_button.isEnabled()
     assert not dialog.export_button.isEnabled()
     assert not dialog.initialize_button.isEnabled()
+    assert "Select a report DB" in dialog.analytics_status_label.text()
     assert dialog.select_database_button.isEnabled()
     assert "use Export to fetch directly" in dialog.status_label.text()
     dialog.close()
@@ -549,6 +551,7 @@ def test_launcher_enables_direct_export_when_source_config_exists(tmp_path):
     assert dialog.export_button.isEnabled()
     assert not dialog.sync_button.isEnabled()
     assert not dialog.analyze_button.isEnabled()
+    assert "Select a report DB" in dialog.analytics_status_label.text()
     dialog.close()
 
 
@@ -619,6 +622,7 @@ def test_launcher_can_select_metroliza_database_and_enable_oznak_actions(monkeyp
     assert dialog.links_button.isEnabled()
     assert dialog.export_button.isEnabled()
     assert "Local industrial cache empty" in dialog.status_label.text()
+    assert "needs synced rows" in dialog.analytics_status_label.text()
     dialog.close()
     parent.close()
 
@@ -649,8 +653,10 @@ def test_launcher_reports_ready_state_when_cache_has_synced_rows(tmp_path):
     dialog = IndustrialDataDialog(db_file=db_path)
 
     assert "Local industrial cache ready with synced production rows" in dialog.status_label.text()
+    assert "Analytics ready" in dialog.analytics_status_label.text()
     assert dialog.cache_label.accessibleName() == "Industrial cache readiness"
-    assert dialog.sync_button.accessibleName() == "Open industrial connection, access check, and sync"
+    assert dialog.analytics_status_label.accessibleName() == "Industrial analytics readiness"
+    assert dialog.sync_button.accessibleName() == "Open industrial access check and sync"
     dialog.close()
 
 

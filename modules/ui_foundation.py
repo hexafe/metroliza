@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QPushButton,
     QSizePolicy,
     QWidget,
 )
@@ -258,6 +259,23 @@ def configure_accessibility(widget, *, name, description=""):
         widget.setAccessibleName(name)
     if description and hasattr(widget, "setAccessibleDescription"):
         widget.setAccessibleDescription(description)
+
+
+def info_button(tooltip_text, *, name="More information", size=24):
+    """Create a compact supplemental help target with accessible metadata."""
+    try:
+        from PyQt6.QtWidgets import QToolButton
+
+        button = QToolButton()
+        button.setAutoRaise(True)
+    except (ImportError, AttributeError):  # pragma: no cover - lightweight Qt stubs
+        button = QPushButton()
+    button.setText("?")
+    button.setToolTip(str(tooltip_text or ""))
+    configure_accessibility(button, name=name, description=str(tooltip_text or ""))
+    if hasattr(button, "setFixedSize"):
+        button.setFixedSize(size, size)
+    return button
 
 
 def apply_list_selection_style(list_widget):

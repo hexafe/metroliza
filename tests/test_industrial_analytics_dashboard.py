@@ -142,6 +142,14 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     assert "background: #1f2937" in html_text
     assert "color: #ffffff" in html_text
     assert "<th>Statistic</th><th>Value</th>" in html_text
+    assert "grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));" in html_text
+    assert '<div class="card-label">Rows after aggregation</div>' in html_text
+    assert '<div class="card-label">Groups</div>' in html_text
+    assert "Pasted reference cohorts" in html_text
+    assert '<div class="card-label">Pasted references</div>' in html_text
+    assert '<div class="card-label">Groupstats</div>' in html_text
+    assert '<div class="card-label">Reference cohort</div>' not in html_text
+    assert '<div class="card-label">Stats metrics</div>' not in html_text
 
     match = re.search(
         r'<script id="production-dashboard-charts" type="application/json">(.*?)</script>',
@@ -421,6 +429,39 @@ def test_time_series_highlight_mode_uses_separate_selected_and_population_traces
     assert {trace["name"] for trace in traces} == {"Selected references", "Other references"}
     assert {trace["mode"] for trace in traces} == {"markers"}
     assert {trace["marker"]["symbol"] for trace in traces} == {"diamond", "circle"}
+
+
+def test_large_time_series_uses_compact_marker_style() -> None:
+    row_count = 12_000
+    frame = pd.DataFrame(
+        {
+            "process_datetime": pd.date_range(
+                "2026-05-10 08:00",
+                periods=row_count,
+                freq="s",
+                tz="UTC",
+            ),
+            "length_mm": [float(index % 100) for index in range(row_count)],
+        }
+    )
+
+    manifest = build_production_dashboard_manifest(
+        frame=frame,
+        metric_selection=(ProductionMetricSelection("length_mm", "Length Mm"),),
+        chart_selection=ProductionChartSelection(
+            time_series=True,
+            histogram=False,
+            violin=False,
+            box=False,
+            groupstats=False,
+        ),
+    )
+
+    marker = manifest["charts"][0]["plotly_spec"]["data"][0]["marker"]
+
+    assert marker["size"] <= 3.5
+    assert marker["opacity"] <= 0.55
+    assert marker["line"]["width"] == 0.0
 
 
 def test_distribution_charts_use_selected_group_field_before_default_columns() -> None:

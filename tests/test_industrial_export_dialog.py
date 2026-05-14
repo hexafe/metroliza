@@ -105,6 +105,8 @@ def test_export_dialog_direct_mode_loads_source_and_creates_live_thread(tmp_path
 
     assert dialog.live_mode is True
     assert dialog.remember_credentials_checkbox.isChecked()
+    assert dialog.remember_credentials_checkbox.text() == "Remember locally on this computer"
+    assert "large live database exports" in dialog.live_fetch_hint_label.text()
     assert dialog.profile_combo.count() == 1
     assert not dialog.start_button.isEnabled()
 
