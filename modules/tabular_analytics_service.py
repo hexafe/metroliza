@@ -83,6 +83,7 @@ class TabularSqliteStore:
     columns: tuple[str, ...]
     source_columns: tuple[str, ...]
     row_count: int
+    date_filter_columns: dict[str, str] = field(default_factory=dict)
 
     def cleanup(self) -> None:
         for candidate in (Path(self.path), Path(f"{self.path}-wal"), Path(f"{self.path}-shm")):
@@ -104,7 +105,10 @@ class TabularSqliteStore:
             selected_filter_keys=selected_filter_keys,
             column_filters=column_filters,
         )
-        query = f"SELECT * FROM {_quote_identifier(self.table_name)}{where_sql}"
+        query = (
+            f"SELECT {', '.join(_quote_identifier(column) for column in self.columns)} "
+            f"FROM {_quote_identifier(self.table_name)}{where_sql}"
+        )
         if limit is not None and int(limit) >= 0:
             query = f"{query} LIMIT {int(limit)}"
         with sqlite_connection_scope(self.path) as connection:
@@ -196,6 +200,8 @@ class TabularSqliteStore:
     def is_date_filterable(self, column: str) -> bool:
         if column not in self.columns:
             return False
+        if column in self.date_filter_columns:
+            return True
         column_key = column.casefold()
         if not any(token in column_key for token in ("date", "time", "timestamp", "created", "updated")):
             return False
@@ -214,10 +220,11 @@ class TabularSqliteStore:
     def date_bounds(self, column: str) -> tuple[date, date] | None:
         if column not in self.columns:
             return None
+        date_expr = self._sqlite_date_filter_expr(column)
         query = (
-            f"SELECT MIN(date({_quote_identifier(column)})), MAX(date({_quote_identifier(column)})) "
+            f"SELECT MIN({date_expr}), MAX({date_expr}) "
             f"FROM {_quote_identifier(self.table_name)} "
-            f"WHERE date({_quote_identifier(column)}) IS NOT NULL"
+            f"WHERE {date_expr} IS NOT NULL"
         )
         with sqlite_connection_scope(self.path) as connection:
             lower, upper = connection.execute(query).fetchone()
@@ -250,7 +257,7 @@ class TabularSqliteStore:
                     )
                     params.extend(column_filter.selected_values)
                 if column_filter.has_date_filter:
-                    date_expr = f"date({_quote_identifier(column_filter.column)})"
+                    date_expr = self._sqlite_date_filter_expr(column_filter.column)
                     lower = _parse_tabular_filter_date(column_filter.date_from)
                     upper = _parse_tabular_filter_date(column_filter.date_to)
                     if column_filter.date_mode in {"from", "between"} and lower is not None:
@@ -278,6 +285,9 @@ class TabularSqliteStore:
                     key_clauses.append(f"({' AND '.join(parts)})")
                 clauses.append(f"({' OR '.join(key_clauses)})")
         return (f" WHERE {' AND '.join(clauses)}" if clauses else ""), params
+
+    def _sqlite_date_filter_expr(self, column: str) -> str:
+        return f"date({_quote_identifier(self.date_filter_columns.get(column, column))})"
 
 
 @dataclass(frozen=True)
@@ -624,6 +634,7 @@ def _load_csv_files_into_sqlite(
     file_specs: list[dict[str, Any]] = []
     global_mapping: dict[str, str] = {}
     source_columns: list[str] = []
+    date_filter_source_columns: set[str] = set()
     timestamp_field: str | None = None
     reference_field: str | None = None
 
@@ -658,6 +669,13 @@ def _load_csv_files_into_sqlite(
             timestamp_field = file_timestamp_field
         if reference_field is None and file_reference_field is not None:
             reference_field = file_reference_field
+        date_filter_source_columns.update(
+            _sqlite_date_filter_source_columns(
+                normalized_sample,
+                normalized_columns,
+                timestamp_field=file_timestamp_field,
+            )
+        )
         file_specs.append(
             {
                 "path": path,
@@ -694,6 +712,12 @@ def _load_csv_files_into_sqlite(
     db_path = Path(temp_file.name)
     temp_file.close()
     table_columns = ("source_row_number", "source_file", "process_datetime", "reference", *source_columns)
+    date_filter_columns = _sqlite_date_filter_storage_columns(
+        tuple(source_columns),
+        date_filter_source_columns,
+        table_columns,
+    )
+    storage_columns = (*table_columns, *date_filter_columns.values())
     row_number = 0
     bad_timestamp_count = 0
     metric_stats: dict[str, dict[str, Any]] = {}
@@ -701,7 +725,7 @@ def _load_csv_files_into_sqlite(
 
     try:
         with sqlite_connection_scope(str(db_path)) as connection:
-            _create_sqlite_table(connection, _TABULAR_SQLITE_TABLE, table_columns)
+            _create_sqlite_table(connection, _TABULAR_SQLITE_TABLE, storage_columns)
             for spec in file_specs:
                 path = spec["path"]
                 csv_config = spec["csv_config"]
@@ -746,6 +770,16 @@ def _load_csv_files_into_sqlite(
 
                     for column in source_columns:
                         output_chunk[column] = normalized_chunk[column] if column in normalized_chunk else None
+                    for column, storage_column in date_filter_columns.items():
+                        if column in normalized_chunk:
+                            parsed_dates = pd.to_datetime(
+                                normalized_chunk[column],
+                                errors="coerce",
+                                utc=True,
+                            )
+                            output_chunk[storage_column] = _sqlite_datetime_text(parsed_dates)
+                        else:
+                            output_chunk[storage_column] = None
                     _update_metric_stats(
                         metric_stats,
                         output_chunk,
@@ -756,7 +790,7 @@ def _load_csv_files_into_sqlite(
                             if column is not None
                         ),
                     )
-                    output_chunk.loc[:, list(table_columns)].to_sql(
+                    output_chunk.loc[:, list(storage_columns)].to_sql(
                         _TABULAR_SQLITE_TABLE,
                         connection,
                         if_exists="append",
@@ -779,7 +813,14 @@ def _load_csv_files_into_sqlite(
             _create_sqlite_indexes(
                 connection,
                 _TABULAR_SQLITE_TABLE,
-                ("source_row_number", "source_file", "process_datetime", "reference", *source_columns[:32]),
+                (
+                    "source_row_number",
+                    "source_file",
+                    "process_datetime",
+                    "reference",
+                    *source_columns[:32],
+                    *date_filter_columns.values(),
+                ),
             )
 
         if timestamp_field is not None and bad_timestamp_count:
@@ -828,6 +869,7 @@ def _load_csv_files_into_sqlite(
             columns=table_columns,
             source_columns=tuple(source_columns),
             row_count=row_number,
+            date_filter_columns=dict(date_filter_columns),
         )
         preview = store.read_dataframe(limit=TABULAR_SQLITE_PREVIEW_ROWS)
         first_snapshot = snapshots[0] if len(snapshots) == 1 else None
@@ -869,6 +911,48 @@ def _load_csv_files_into_sqlite(
 def _detect_csv_config(path: Path) -> dict[str, Any]:
     best_config = detect_csv_read_configs(path)[0]
     return {"delimiter": best_config["delimiter"], "decimal": best_config["decimal"]}
+
+
+def _sqlite_date_filter_source_columns(
+    dataframe: pd.DataFrame,
+    columns: tuple[str, ...],
+    *,
+    timestamp_field: str | None,
+) -> set[str]:
+    candidates: set[str] = set()
+    for column in columns:
+        if column not in dataframe.columns:
+            continue
+        column_key = column.casefold()
+        if column == timestamp_field:
+            candidates.add(column)
+            continue
+        if not any(token in column_key for token in ("date", "time", "timestamp", "created", "updated")):
+            continue
+        if _looks_like_timestamp_column(dataframe[column]):
+            candidates.add(column)
+    return candidates
+
+
+def _sqlite_date_filter_storage_columns(
+    source_columns: tuple[str, ...],
+    date_filter_source_columns: set[str],
+    table_columns: tuple[str, ...],
+) -> dict[str, str]:
+    used = {column.casefold() for column in table_columns}
+    storage_columns: dict[str, str] = {}
+    for column in source_columns:
+        if column not in date_filter_source_columns:
+            continue
+        base = f"__date_filter_{_safe_column_name(column, fallback='column')}"
+        candidate = base
+        suffix = 1
+        while candidate.casefold() in used:
+            suffix += 1
+            candidate = f"{base}_{suffix}"
+        used.add(candidate.casefold())
+        storage_columns[column] = candidate
+    return storage_columns
 
 
 def _sqlite_datetime_text(series: pd.Series) -> pd.Series:

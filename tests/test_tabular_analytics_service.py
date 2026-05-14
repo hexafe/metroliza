@@ -225,6 +225,41 @@ def test_load_tabular_analytics_file_can_use_sqlite_for_single_csv_filters(tmp_p
         cleanup_tabular_load_result(result)
 
 
+def test_sqlite_tabular_date_filter_matches_pandas_for_non_iso_dates(tmp_path) -> None:
+    input_file = tmp_path / "non_iso_dates.csv"
+    pd.DataFrame(
+        {
+            "Time Stamp": ["05/10/2026", "05/11/2026", "05/12/2026"],
+            "Station": ["A", "B", "A"],
+            "Length mm": [10.0, 10.1, 10.2],
+        }
+    ).to_csv(input_file, index=False)
+
+    result = load_tabular_analytics_file(input_file, force_sqlite=True)
+    try:
+        filtered = materialize_tabular_dataframe(
+            result,
+            column_filters=(
+                TabularColumnFilter(
+                    "time_stamp",
+                    date_mode="between",
+                    date_from="2026-05-11",
+                    date_to="2026-05-12",
+                ),
+            ),
+        )
+
+        assert filtered.output_row_count == 2
+        assert filtered.dataframe["time_stamp"].tolist() == ["05/11/2026", "05/12/2026"]
+        assert not any(str(column).startswith("__date_filter_") for column in filtered.dataframe.columns)
+        assert result.sqlite_store.date_bounds("time_stamp") == (
+            pd.Timestamp("2026-05-10").date(),
+            pd.Timestamp("2026-05-12").date(),
+        )
+    finally:
+        cleanup_tabular_load_result(result)
+
+
 def test_load_tabular_analytics_file_detects_excel_metrics(tmp_path) -> None:
     input_file = tmp_path / "table.xlsx"
     _sample_table().to_excel(input_file, index=False, sheet_name="Measurements")

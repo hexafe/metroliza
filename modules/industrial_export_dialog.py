@@ -61,6 +61,7 @@ class IndustrialExportDialog(QDialog):
         self.config_path = Path(config_path or default_industrial_source_config_path()).expanduser()
         self.live_mode = not bool(db_file)
         self._live_profile_load_error = ""
+        self._pending_credentials_to_save: tuple[str, str, str] | None = None
         self.output_file = ""
         self.filter_state = filter_state or IndustrialFilterState()
         self.grouping_state = grouping_state or IndustrialGroupingState()
@@ -80,6 +81,7 @@ class IndustrialExportDialog(QDialog):
         self.password_edit = QLineEdit()
         self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.remember_credentials_checkbox = QCheckBox("Remember on this computer")
+        self.remember_credentials_checkbox.setChecked(True)
         self.limit_spin = QSpinBox()
         self.limit_spin.setRange(1, 1_000_000)
         self.limit_spin.setValue(5000)
@@ -313,13 +315,19 @@ class IndustrialExportDialog(QDialog):
 
     def _load_stored_credentials_for_current_profile(self) -> None:
         profile = self.current_profile()
-        if profile is None:
-            return
-        stored = load_industrial_credentials(profile.profile_key)
-        if stored.username and not self.username_edit.text().strip():
-            self.username_edit.setText(stored.username)
-        if stored.password and not self.password_edit.text():
-            self.password_edit.setText(stored.password)
+        self.username_edit.blockSignals(True)
+        self.password_edit.blockSignals(True)
+        try:
+            if profile is None:
+                self.username_edit.clear()
+                self.password_edit.clear()
+                return
+            stored = load_industrial_credentials(profile.profile_key)
+            self.username_edit.setText(stored.username or "")
+            self.password_edit.setText(stored.password or "")
+        finally:
+            self.username_edit.blockSignals(False)
+            self.password_edit.blockSignals(False)
 
     def _read_live_credentials(self) -> tuple[str, str]:
         username = self.username_edit.text().strip()
@@ -378,17 +386,14 @@ class IndustrialExportDialog(QDialog):
             QMessageBox.warning(self, "Industrial export", f"Could not start export: {exc}")
 
     def create_export_thread(self) -> IndustrialExportThread:
+        self._pending_credentials_to_save = None
         if self.live_mode:
             profile = self.current_profile()
             if profile is None:
                 raise ValueError("Create or select a production source before exporting.")
             username, password = self._read_live_credentials()
             if self.remember_credentials_checkbox.isChecked():
-                save_industrial_credentials(
-                    profile.profile_key,
-                    username=username,
-                    password=password,
-                )
+                self._pending_credentials_to_save = (profile.profile_key, username, password)
             return IndustrialLiveExportThread(
                 profile=profile,
                 username=username,
@@ -460,6 +465,7 @@ class IndustrialExportDialog(QDialog):
             f"Rows: {result['row_count']}",
             f"Summary rows: {result['summary_rows']}",
         ]
+        credential_save_error = self._save_pending_credentials_after_success()
         try:
             from modules.export_dialog import show_export_result_message
 
@@ -479,11 +485,19 @@ class IndustrialExportDialog(QDialog):
         parent = self.parent()
         if parent is not None and hasattr(parent, "refresh_status"):
             parent.refresh_status()
+        if credential_save_error:
+            QMessageBox.warning(
+                self,
+                "Industrial export",
+                f"Export completed, but credentials could not be saved: {credential_save_error}",
+            )
 
     def on_export_error(self, message: str) -> None:
+        self._pending_credentials_to_save = None
         QMessageBox.warning(self, "Industrial export", f"Could not export industrial data: {message}")
 
     def on_export_cancelled(self, message: str) -> None:
+        self._pending_credentials_to_save = None
         QMessageBox.information(self, "Industrial export", message or "Industrial export was cancelled.")
 
     def on_export_thread_stopped(self) -> None:
@@ -491,3 +505,19 @@ class IndustrialExportDialog(QDialog):
             self.loading_dialog.close()
         self.export_thread = None
         self._sync_ui_state()
+
+    def _save_pending_credentials_after_success(self) -> str | None:
+        pending = self._pending_credentials_to_save
+        self._pending_credentials_to_save = None
+        if pending is None:
+            return None
+        profile_key, username, password = pending
+        try:
+            save_industrial_credentials(
+                profile_key,
+                username=username,
+                password=password,
+            )
+        except Exception as exc:
+            return str(exc)
+        return None
