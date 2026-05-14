@@ -217,8 +217,8 @@ def test_tabular_analytics_dialog_auto_loads_metrics_after_file_selection(
         }
     ).to_csv(input_file, index=False)
     monkeypatch.setattr(
-        "modules.industrial_analytics_dialog.QFileDialog.getOpenFileName",
-        lambda *_args, **_kwargs: (str(input_file), "CSV (*.csv)"),
+        "modules.industrial_analytics_dialog.QFileDialog.getOpenFileNames",
+        lambda *_args, **_kwargs: ([str(input_file)], "CSV (*.csv)"),
     )
 
     dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
@@ -249,6 +249,50 @@ def test_tabular_analytics_dialog_auto_loads_metrics_after_file_selection(
         dialog.close()
 
 
+def test_tabular_analytics_dialog_loads_multiple_csv_files(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _app()
+    first_file = tmp_path / "line_a.csv"
+    second_file = tmp_path / "line_b.csv"
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=2, freq="h"),
+            "Line": ["A", "B"],
+            "Length mm": [10.0, 10.2],
+        }
+    ).to_csv(first_file, index=False)
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-11 08:00", periods=2, freq="h"),
+            "Line": ["A", "B"],
+            "Length mm": [10.4, 10.6],
+        }
+    ).to_csv(second_file, index=False)
+    monkeypatch.setattr(
+        "modules.industrial_analytics_dialog.QFileDialog.getOpenFileNames",
+        lambda *_args, **_kwargs: ([str(first_file), str(second_file)], "CSV (*.csv)"),
+    )
+
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.select_input_file()
+        _wait_for_tabular_load(dialog)
+
+        assert dialog.input_file == str(first_file)
+        assert dialog.input_files == (str(first_file), str(second_file))
+        assert dialog.tabular_load_result.storage_mode == "sqlite"
+        assert dialog.source_label.text() == "2 CSV files: 4 rows"
+        assert dialog.filter_summary_label.text() == "All rows (4)"
+        assert dialog.sheet_name_combo.itemText(0) == "CSV files"
+        assert not dialog.sheet_name_combo.isEnabled()
+        assert dialog.metrics_list.count() == 1
+        assert dialog.input_file_field.text().startswith("2 CSV files:")
+    finally:
+        dialog.close()
+
+
 def test_tabular_analytics_dialog_lists_excel_sheets_after_file_selection(
     tmp_path,
     monkeypatch,
@@ -267,8 +311,8 @@ def test_tabular_analytics_dialog_lists_excel_sheets_after_file_selection(
             sheet_name="SecondLine",
         )
     monkeypatch.setattr(
-        "modules.industrial_analytics_dialog.QFileDialog.getOpenFileName",
-        lambda *_args, **_kwargs: (str(input_file), "Excel (*.xlsx)"),
+        "modules.industrial_analytics_dialog.QFileDialog.getOpenFileNames",
+        lambda *_args, **_kwargs: ([str(input_file)], "Excel (*.xlsx)"),
     )
 
     dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)

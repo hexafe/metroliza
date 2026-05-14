@@ -303,7 +303,7 @@ def _raise_if_sensitive(entry: Mapping[str, Any], *, profile_alias: str, path: P
         joined = ", ".join(sensitive_paths)
         raise IndustrialSourceConfigError(
             f"Profile '{profile_alias}' in '{path}' contains credential-like key(s): {joined}. "
-            "Move credentials to the Sync dialog or environment variables."
+            "Move credentials to the local credential store or environment variables."
         )
 
 

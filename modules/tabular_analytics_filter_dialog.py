@@ -52,12 +52,14 @@ class TabularAnalyticsFilterDialog(QDialog):
         filter_columns: tuple[str, ...] | list[str] | None = None,
         selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
         column_filters: tuple[TabularColumnFilter, ...] | list[TabularColumnFilter] | None = None,
+        sqlite_store=None,
     ):
         super().__init__(parent)
         self.setWindowTitle("CSV / Excel row filter")
         configure_window_size(self, minimum=(860, 560), initial=(1060, 720))
 
         self.source_dataframe = dataframe.copy() if isinstance(dataframe, pd.DataFrame) else pd.DataFrame()
+        self.sqlite_store = sqlite_store
         self.column_labels = {
             normalized: original
             for original, normalized in (column_mapping or {}).items()
@@ -202,7 +204,7 @@ class TabularAnalyticsFilterDialog(QDialog):
         self.clear_selection_button.clicked.connect(self.clear_selection)
         self.clear_filter_button.clicked.connect(self.clear_filter)
         self.cancel_button.clicked.connect(self.reject)
-        self.apply_button.clicked.connect(self.accept)
+        self.apply_button.clicked.connect(self._accept_filter)
         self.matching_search.textChanged.connect(self._refresh_values)
         self.matching_list.itemSelectionChanged.connect(self._store_current_selection)
         self.date_mode_combo.currentIndexChanged.connect(self._store_current_date_filter)
@@ -214,6 +216,11 @@ class TabularAnalyticsFilterDialog(QDialog):
         self._refresh_all()
 
     def _source_columns(self) -> list[str]:
+        if self.sqlite_store is not None:
+            return selectable_tabular_source_columns(
+                pd.DataFrame(columns=list(self.sqlite_store.source_columns)),
+                normalized_source_columns=self.sqlite_store.source_columns,
+            )
         return selectable_tabular_source_columns(
             self.source_dataframe,
             normalized_source_columns=set(self.column_labels),
@@ -230,8 +237,9 @@ class TabularAnalyticsFilterDialog(QDialog):
         return " | ".join(self._column_label(column) for column in self.filter_columns)
 
     def _load_column_filters(self, column_filters: tuple[TabularColumnFilter, ...]) -> None:
+        valid_columns = set(self._source_columns())
         for item in column_filters:
-            if not isinstance(item, TabularColumnFilter) or item.column not in self.source_dataframe.columns:
+            if not isinstance(item, TabularColumnFilter) or item.column not in valid_columns:
                 continue
             column = str(item.column)
             if column not in self.filter_columns:
@@ -244,7 +252,8 @@ class TabularAnalyticsFilterDialog(QDialog):
             }
 
     def _load_legacy_filter(self, filter_columns, selected_filter_keys) -> None:
-        columns = [column for column in (filter_columns or ()) if column in self.source_dataframe.columns]
+        valid_columns = set(self._source_columns())
+        columns = [column for column in (filter_columns or ()) if column in valid_columns]
         self.filter_columns = list(columns)
         for index, column in enumerate(columns):
             values = {
@@ -446,10 +455,17 @@ class TabularAnalyticsFilterDialog(QDialog):
             self.matching_list.blockSignals(False)
             self._syncing_current_filter = False
             return
-        preview_rows, total_rows = self._value_index(column).preview_rows(
-            search_text=self.matching_search.text(),
-            limit=_MAX_VISIBLE_MATCHES,
-        )
+        if self.sqlite_store is not None:
+            preview_rows, total_rows = self.sqlite_store.preview_value_rows(
+                column,
+                search_text=self.matching_search.text(),
+                limit=_MAX_VISIBLE_MATCHES,
+            )
+        else:
+            preview_rows, total_rows = self._value_index(column).preview_rows(
+                search_text=self.matching_search.text(),
+                limit=_MAX_VISIBLE_MATCHES,
+            )
         selected_values = set(self.value_filters.get(column, set()))
         for row in preview_rows:
             self.matching_list.addItem(f"{row['label']} (n={row['row_count']})")
@@ -470,6 +486,15 @@ class TabularAnalyticsFilterDialog(QDialog):
             set_status_variant(self.matching_status_label, "info" if total_rows else "warning")
 
     def _is_date_filterable(self, column: str | None) -> bool:
+        if self.sqlite_store is not None:
+            if not column:
+                return False
+            cached = self._date_filterable_cache.get(column)
+            if cached is not None:
+                return cached
+            is_date = bool(self.sqlite_store.is_date_filterable(column))
+            self._date_filterable_cache[column] = is_date
+            return is_date
         if not column or column not in self.source_dataframe.columns:
             return False
         cached = self._date_filterable_cache.get(column)
@@ -496,6 +521,13 @@ class TabularAnalyticsFilterDialog(QDialog):
         return is_date
 
     def _column_date_bounds(self, column: str) -> tuple[QDate, QDate]:
+        if self.sqlite_store is not None:
+            bounds = self.sqlite_store.date_bounds(column)
+            if bounds is None:
+                today = QDate.currentDate()
+                return today, today
+            start, end = bounds
+            return QDate(start.year, start.month, start.day), QDate(end.year, end.month, end.day)
         parsed = pd.to_datetime(self.source_dataframe[column], errors="coerce").dropna()
         if parsed.empty:
             today = QDate.currentDate()
@@ -555,6 +587,8 @@ class TabularAnalyticsFilterDialog(QDialog):
             return
         if force_clear:
             self.date_filters[column] = {"mode": "any", "from": None, "to": None}
+        elif not self._is_date_filterable(column):
+            return
         else:
             mode = str(self.date_mode_combo.currentData() or "any")
             self.date_filters[column] = {
@@ -572,6 +606,19 @@ class TabularAnalyticsFilterDialog(QDialog):
             }
         self._refresh_selected_columns()
         self._schedule_status_sync()
+
+    def _commit_current_filter_controls(self) -> None:
+        if self._syncing_current_filter:
+            return
+        self._store_current_selection()
+        self.date_from_calendar.interpretText()
+        self.date_to_calendar.interpretText()
+        self._store_current_date_filter()
+        self._flush_pending_status_update()
+
+    def _accept_filter(self) -> None:
+        self._commit_current_filter_controls()
+        self.accept()
 
     def _sync_status(self) -> None:
         self._sync_status_now()
@@ -609,6 +656,8 @@ class TabularAnalyticsFilterDialog(QDialog):
         self.clear_filter_button.setEnabled(bool(self.filter_columns or active_filters))
 
     def _filtered_row_count(self, active_filters: tuple[TabularColumnFilter, ...]) -> int:
+        if self.sqlite_store is not None:
+            return int(self.sqlite_store.count_rows(column_filters=active_filters))
         if not active_filters:
             return int(len(self.source_dataframe.index))
         mask = pd.Series(True, index=self.source_dataframe.index)
@@ -641,12 +690,20 @@ class TabularAnalyticsFilterDialog(QDialog):
         self._sync_status()
 
     def get_column_filters(self) -> tuple[TabularColumnFilter, ...]:
+        self._commit_current_filter_controls()
         return self._active_column_filters()
 
     def get_filter(self) -> tuple[tuple[str, ...], tuple[tuple[str, ...], ...]]:
+        self._commit_current_filter_controls()
         active_filters = self._active_column_filters()
         if not active_filters:
             return (), ()
+        if self.sqlite_store is not None:
+            columns = tuple(item.column for item in active_filters)
+            return columns, self.sqlite_store.preview_group_keys(
+                columns,
+                column_filters=active_filters,
+            )
         filtered = apply_tabular_row_filter(self.source_dataframe, column_filters=active_filters).dataframe
         columns = tuple(item.column for item in active_filters)
         if filtered.empty:

@@ -20,7 +20,11 @@ from modules.industrial_analytics_workflow import (
     run_production_cache_analytics,
     run_tabular_file_analytics,
 )
-from modules.tabular_analytics_service import TabularColumnFilter, load_tabular_analytics_file
+from modules.tabular_analytics_service import (
+    TabularColumnFilter,
+    cleanup_tabular_load_result,
+    load_tabular_analytics_file,
+)
 from tests.industrial_analytics_fixtures import seed_production_analytics_cache
 
 
@@ -167,6 +171,41 @@ def test_run_tabular_file_analytics_uses_loaded_snapshot_without_reloading(
     )
 
     assert result.row_count == 3
+    assert Path(result.html_dashboard_path).exists()
+
+
+def test_run_tabular_file_analytics_uses_sqlite_backed_loaded_snapshot(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    input_file = tmp_path / "sqlite_snapshot_table.csv"
+    dashboard_file = tmp_path / "sqlite_snapshot_table_analytics.html"
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=4, freq="h"),
+            "Line": ["A", "B", "A", "B"],
+            "Length mm": [10.0, 10.2, 10.4, 10.6],
+        }
+    ).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file, force_sqlite=True)
+
+    def fail_reload(*args, **kwargs):
+        raise AssertionError("sqlite-backed tabular analytics snapshot should be reused")
+
+    monkeypatch.setattr(workflow_module, "load_tabular_analytics_file", fail_reload)
+    try:
+        result = run_tabular_file_analytics(
+            input_file=str(input_file),
+            output_dashboard_file=str(dashboard_file),
+            tabular_load_result=loaded,
+            metric_selection=(ProductionMetricSelection("length_mm", display_label="Length mm"),),
+            tabular_column_filters=(TabularColumnFilter("line", selected_values=("A",)),),
+            chart_selection=ProductionChartSelection(time_series=True),
+        )
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+    assert result.row_count == 2
     assert Path(result.html_dashboard_path).exists()
 
 

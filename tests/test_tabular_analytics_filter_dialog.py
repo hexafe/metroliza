@@ -8,7 +8,11 @@ try:
     from PyQt6.QtWidgets import QApplication
     import modules.tabular_analytics_filter_dialog as filter_dialog_module
     from modules.tabular_analytics_filter_dialog import TabularAnalyticsFilterDialog
-    from modules.tabular_analytics_service import TabularColumnFilter, load_tabular_analytics_file
+    from modules.tabular_analytics_service import (
+        TabularColumnFilter,
+        cleanup_tabular_load_result,
+        load_tabular_analytics_file,
+    )
 except ImportError as exc:  # pragma: no cover - depends on optional PyQt availability
     QApplication = None
     QDate = None
@@ -16,6 +20,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional PyQt availa
     filter_dialog_module = None
     TabularAnalyticsFilterDialog = None
     TabularColumnFilter = None
+    cleanup_tabular_load_result = None
     load_tabular_analytics_file = None
     PYQT_IMPORT_ERROR = exc
 else:
@@ -200,6 +205,36 @@ def test_filter_dialog_status_count_uses_cached_debounced_path(tmp_path, monkeyp
         dialog.close()
 
 
+def test_filter_dialog_uses_sqlite_store_for_value_preview_and_counts(tmp_path) -> None:
+    _app()
+    input_file = tmp_path / "sqlite_filter.csv"
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=4, freq="D"),
+            "Line": ["L1", "L2", "L1", "L2"],
+            "Length mm": [10.0, 10.2, 10.4, 10.6],
+        }
+    ).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file, force_sqlite=True)
+
+    dialog = TabularAnalyticsFilterDialog(
+        dataframe=loaded.dataframe,
+        column_mapping=loaded.column_mapping,
+        sqlite_store=loaded.sqlite_store,
+    )
+    try:
+        _select_available_column(dialog, "line")
+        dialog.add_filter_column()
+        _select_values(dialog, {"L1"})
+
+        assert dialog.status_label.text() == "1 column filter(s), 2 rows"
+        assert dialog.get_column_filters() == (TabularColumnFilter("line", selected_values=("L1",)),)
+        assert dialog.get_filter() == (("line",), (("L1",),))
+    finally:
+        dialog.close()
+        cleanup_tabular_load_result(loaded)
+
+
 def test_filter_dialog_supports_per_column_values_and_calendar_date_bounds(tmp_path) -> None:
     _app()
     loaded = _sample_loaded_table(tmp_path)
@@ -233,5 +268,39 @@ def test_filter_dialog_supports_per_column_values_and_calendar_date_bounds(tmp_p
         )
         assert dialog.get_filter() == (("line", "time_stamp"), (("L1", "2026-05-12 08:00:00"),))
         assert dialog.status_label.text() == "2 column filter(s), 1 rows"
+    finally:
+        dialog.close()
+
+
+def test_filter_dialog_apply_commits_pending_date_editor_text(tmp_path) -> None:
+    _app()
+    loaded = _sample_loaded_table(tmp_path)
+
+    dialog = TabularAnalyticsFilterDialog(
+        dataframe=loaded.dataframe,
+        column_mapping=loaded.column_mapping,
+    )
+    try:
+        _select_available_column(dialog, "time_stamp")
+        dialog.add_filter_column()
+        _select_filter_column(dialog, "time_stamp")
+        dialog.date_mode_combo.setCurrentIndex(dialog.date_mode_combo.findData("between"))
+        dialog.date_from_calendar.lineEdit().setText("2026-05-11")
+        dialog.date_to_calendar.lineEdit().setText("2026-05-12")
+
+        dialog.apply_button.click()
+
+        assert dialog.get_column_filters() == (
+            TabularColumnFilter(
+                "time_stamp",
+                date_mode="between",
+                date_from="2026-05-11",
+                date_to="2026-05-12",
+            ),
+        )
+        assert dialog.get_filter() == (
+            ("time_stamp",),
+            (("2026-05-11 08:00:00",), ("2026-05-12 08:00:00",)),
+        )
     finally:
         dialog.close()

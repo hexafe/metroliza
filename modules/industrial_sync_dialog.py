@@ -6,6 +6,7 @@ from dataclasses import replace
 from typing import Any
 
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QFormLayout,
@@ -23,6 +24,7 @@ from modules.industrial_data_repository import (
     IndustrialSourceProfile,
     redact_sensitive_text,
 )
+from modules.industrial_credentials import load_industrial_credentials, save_industrial_credentials
 from modules.industrial_filter_dialog import IndustrialFilterDialog
 from modules.industrial_workflow_state import IndustrialFilterState
 from modules.industrial_workers import IndustrialOznakSyncThread
@@ -64,6 +66,7 @@ class IndustrialSyncDialog(QDialog):
         self.username_edit = QLineEdit()
         self.password_edit = QLineEdit()
         self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.remember_credentials_checkbox = QCheckBox("Remember on this computer")
         self.limit_spin = QSpinBox()
         self.limit_spin.setRange(1, 1_000_000)
         self.limit_spin.setValue(5000)
@@ -72,7 +75,7 @@ class IndustrialSyncDialog(QDialog):
         self.timeout_spin.setValue(30)
 
         self.username_edit.setPlaceholderText("production database username")
-        self.password_edit.setPlaceholderText("not stored")
+        self.password_edit.setPlaceholderText("local credential store or session password")
 
         self.edit_filter_button = QPushButton("Edit references...")
         self.test_connection_button = QPushButton("Check access")
@@ -94,7 +97,7 @@ class IndustrialSyncDialog(QDialog):
         self.sync_now_button.clicked.connect(self.sync_now)
         self.cancel_sync_button.clicked.connect(self.cancel_sync)
         self.close_button.clicked.connect(self.reject)
-        self.profile_combo.currentIndexChanged.connect(lambda _index: self._sync_action_buttons())
+        self.profile_combo.currentIndexChanged.connect(self._handle_profile_changed)
         self.cancel_sync_button.setEnabled(False)
 
         self._build_layout()
@@ -115,6 +118,7 @@ class IndustrialSyncDialog(QDialog):
         form.addRow("Production source", self.profile_combo)
         form.addRow("Production DB username", self.username_edit)
         form.addRow("Production DB password", self.password_edit)
+        form.addRow("", self.remember_credentials_checkbox)
         form.addRow("Sync row limit", self.limit_spin)
         form.addRow("Query timeout seconds", self.timeout_spin)
         layout.addLayout(form)
@@ -160,6 +164,7 @@ class IndustrialSyncDialog(QDialog):
                 True,
                 "Production source selected. Check access with a one-row read or sync selected reference/ID values.",
             )
+            self._load_stored_credentials_for_current_profile()
         else:
             self._set_ready_state(False, "Create a production source before syncing.")
 
@@ -171,6 +176,20 @@ class IndustrialSyncDialog(QDialog):
     def current_profile(self) -> IndustrialSourceProfile | None:
         profile = self.profile_combo.currentData()
         return profile if isinstance(profile, IndustrialSourceProfile) else None
+
+    def _handle_profile_changed(self, _index: int) -> None:
+        self._load_stored_credentials_for_current_profile()
+        self._sync_action_buttons()
+
+    def _load_stored_credentials_for_current_profile(self) -> None:
+        profile = self.current_profile()
+        if profile is None:
+            return
+        stored = load_industrial_credentials(profile.profile_key)
+        if stored.username and not self.username_edit.text().strip():
+            self.username_edit.setText(stored.username)
+        if stored.password and not self.password_edit.text():
+            self.password_edit.setText(stored.password)
 
     def _profile_for_current_filter(self) -> IndustrialSourceProfile:
         profile = self.current_profile()
@@ -235,7 +254,13 @@ class IndustrialSyncDialog(QDialog):
             username, password = self._read_credentials()
             if not test_only:
                 self.filter_state.validate_for_sync()
-        except ValueError as exc:
+            if self.remember_credentials_checkbox.isChecked():
+                save_industrial_credentials(
+                    profile.profile_key,
+                    username=username,
+                    password=password,
+                )
+        except (OSError, ValueError) as exc:
             QMessageBox.warning(self, "Industrial sync", str(exc))
             return
 

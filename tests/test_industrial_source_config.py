@@ -3,6 +3,11 @@ from __future__ import annotations
 import pytest
 import yaml
 
+from modules.industrial_credentials import (
+    credential_env_keys,
+    load_industrial_credentials,
+    save_industrial_credentials,
+)
 from modules.industrial_data_repository import IndustrialDataRepository
 from modules.industrial_source_config import (
     IndustrialSourceConfigError,
@@ -135,3 +140,30 @@ databases:
     assert "options.apiKey" in message
     assert "options.nested.clientSecret" in message
     assert "options.nested.refreshToken" in message
+
+
+def test_local_credential_store_round_trip_uses_user_env_file(tmp_path):
+    credential_path = tmp_path / "industrial_credentials.env"
+    username_key, password_key = credential_env_keys("assembly_mes")
+
+    saved_path = save_industrial_credentials(
+        "assembly_mes",
+        username="operator",
+        password="secret password",
+        credential_path=credential_path,
+    )
+
+    assert saved_path == credential_path
+    assert username_key in credential_path.read_text(encoding="utf-8")
+    assert password_key in credential_path.read_text(encoding="utf-8")
+    assert credential_path.stat().st_mode & 0o777 == 0o600
+
+    loaded = load_industrial_credentials(
+        "assembly_mes",
+        credential_path=credential_path,
+        environ={},
+    )
+
+    assert loaded.username == "operator"
+    assert loaded.password == "secret password"
+    assert loaded.source == str(credential_path)

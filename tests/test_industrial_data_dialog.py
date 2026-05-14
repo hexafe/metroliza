@@ -38,6 +38,7 @@ else:
     PYQT_IMPORT_ERROR = None
 from modules.industrial_data_repository import IndustrialDataRepository
 from modules.db import sqlite_connection_scope
+from modules.industrial_source_config import build_source_profile, upsert_source_profile_in_config
 from modules.oznak_adapter import OznakAdapterFetchResult, OznakAdapterStatus
 
 
@@ -95,7 +96,7 @@ def test_source_dialog_can_configure_file_before_metroliza_database_is_selected(
     dialog.host_edit.setText("mes.example.invalid")
     dialog.database_edit.setText("plantdb")
     dialog.table_edit.setText("events")
-    dialog.columns_edit.setText("event_id, reference")
+    dialog.columns_edit.setText("event_id, station")
     dialog.record_key_edit.setText("event_id")
 
     dialog.save_source()
@@ -103,9 +104,10 @@ def test_source_dialog_can_configure_file_before_metroliza_database_is_selected(
     assert config_path.exists()
     config_text = config_path.read_text(encoding="utf-8")
     assert "assembly_mes:" in config_text
+    assert "reference" not in config_text
     assert "password" not in config_text.lower()
-    assert "Select a Metroliza report database" in dialog.status_label.text()
-    assert "check access" in dialog.status_label.text()
+    assert "Use Export" in dialog.status_label.text()
+    assert "sync rows into the local cache" in dialog.status_label.text()
     dialog.close()
 
 
@@ -505,9 +507,11 @@ def test_launcher_analytics_uses_shared_production_cache_workflow(monkeypatch, t
     dialog.close()
 
 
-def test_launcher_keeps_source_configuration_available_without_database():
+def test_launcher_keeps_source_configuration_available_without_database(tmp_path):
     _app()
     dialog = IndustrialDataDialog(db_file=None)
+    dialog.config_path = tmp_path / "industrial_sources.yaml"
+    dialog.refresh_status()
 
     assert dialog.sources_button.isEnabled()
     assert not dialog.sync_button.isEnabled()
@@ -515,7 +519,74 @@ def test_launcher_keeps_source_configuration_available_without_database():
     assert not dialog.export_button.isEnabled()
     assert not dialog.initialize_button.isEnabled()
     assert dialog.select_database_button.isEnabled()
-    assert "Select a Metroliza report database here" in dialog.status_label.text()
+    assert "use Export to fetch directly" in dialog.status_label.text()
+    dialog.close()
+
+
+def test_launcher_enables_direct_export_when_source_config_exists(tmp_path):
+    _app()
+    config_path = tmp_path / "industrial_sources.yaml"
+    upsert_source_profile_in_config(
+        config_path,
+        build_source_profile(
+            profile_key="assembly_mes",
+            profile_name="Assembly MES",
+            source_db_alias="assembly_mes",
+            database_type="mssql",
+            host="mes.example.invalid",
+            port=1433,
+            database_name="plantdb",
+            source_object_name="events",
+            allowed_columns=("event_id", "station"),
+            default_pagination_column="event_id",
+        ),
+    )
+    dialog = IndustrialDataDialog(db_file=None)
+    dialog.config_path = config_path
+    dialog.refresh_status()
+
+    assert dialog.sources_button.isEnabled()
+    assert dialog.export_button.isEnabled()
+    assert not dialog.sync_button.isEnabled()
+    assert not dialog.analyze_button.isEnabled()
+    dialog.close()
+
+
+def test_launcher_opens_direct_export_without_metroliza_database(monkeypatch, tmp_path):
+    _app()
+    launched = {}
+
+    class FakeExportDialog:
+        def __init__(
+            self,
+            parent,
+            *,
+            db_file,
+            filter_state,
+            grouping_state,
+            include_plots,
+            config_path,
+        ):
+            launched["parent"] = parent
+            launched["db_file"] = db_file
+            launched["config_path"] = config_path
+            launched["filter_state"] = filter_state
+            launched["grouping_state"] = grouping_state
+            launched["include_plots"] = include_plots
+
+        def exec(self):
+            launched["executed"] = True
+
+    monkeypatch.setattr(industrial_data_dialog, "IndustrialExportDialog", FakeExportDialog)
+    dialog = IndustrialDataDialog(db_file=None)
+    dialog.config_path = tmp_path / "industrial_sources.yaml"
+
+    dialog.open_export_dialog()
+
+    assert launched["parent"] is dialog
+    assert launched["db_file"] is None
+    assert launched["config_path"] == dialog.config_path
+    assert launched["executed"] is True
     dialog.close()
 
 

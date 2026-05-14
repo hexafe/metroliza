@@ -28,10 +28,12 @@ from modules.tabular_analytics_service import (
     TabularAnalyticsLoadResult,
     TabularColumnFilter,
     load_tabular_analytics_file,
+    load_tabular_analytics_files,
 )
 from modules.industrial_export_service import (
     IndustrialExportCancelled,
     export_cached_industrial_workbook,
+    export_live_industrial_workbook,
 )
 from modules.industrial_join_service import materialize_industrial_report_links
 from modules.industrial_workflow_state import IndustrialFilterState, IndustrialGroupingState
@@ -122,6 +124,95 @@ class IndustrialExportThread(QThread):
             self.cancelled.emit(str(exc))
         except Exception as exc:
             self.error_occurred.emit(redact_sensitive_text(exc))
+
+
+class IndustrialLiveExportThread(QThread):
+    """Fetch live Oznak rows and write an industrial workbook outside the Qt main thread."""
+
+    result_ready = pyqtSignal(object)
+    error_occurred = pyqtSignal(str)
+    cancelled = pyqtSignal(str)
+    update_label = pyqtSignal(str)
+
+    def __init__(
+        self,
+        *,
+        profile: IndustrialSourceProfile,
+        username: str,
+        password: str,
+        output_file: str,
+        limit: int,
+        timeout_seconds: int,
+        filter_state: IndustrialFilterState,
+        grouping_state: IndustrialGroupingState,
+        include_charts: bool,
+    ):
+        super().__init__()
+        self.profile = profile
+        self.username = username
+        self.password = password
+        self.output_file = output_file
+        self.limit = limit
+        self.timeout_seconds = timeout_seconds
+        self.filter_state = filter_state
+        self.grouping_state = grouping_state
+        self.include_charts = include_charts
+        self.cancellation_token = None
+        self._cancel_requested = False
+
+    def cancel(self) -> None:
+        self._cancel_requested = True
+        token = self.cancellation_token
+        if token is not None and hasattr(token, "cancel"):
+            token.cancel()
+        self.requestInterruption()
+
+    def _is_cancelled(self) -> bool:
+        return self._cancel_requested or self.isInterruptionRequested()
+
+    def _emit_progress_from_diagnostic(self, diagnostic: Any) -> None:
+        message = getattr(diagnostic, "message", None)
+        if not message:
+            source = getattr(diagnostic, "source_alias", "")
+            status = getattr(getattr(diagnostic, "status", None), "value", None) or getattr(
+                diagnostic,
+                "status",
+                "",
+            )
+            message = f"{source}: {status}".strip(": ")
+        self.update_label.emit(str(message))
+
+    def run(self):
+        try:
+            status = get_oznak_adapter_status()
+            if status.available:
+                try:
+                    self.cancellation_token = create_oznak_cancellation_token()
+                except Exception:
+                    self.cancellation_token = None
+            self.result_ready.emit(
+                export_live_industrial_workbook(
+                    profile=self.profile,
+                    username=self.username,
+                    password=self.password,
+                    output_file=self.output_file,
+                    limit=self.limit,
+                    timeout_seconds=self.timeout_seconds,
+                    filter_state=self.filter_state,
+                    grouping_state=self.grouping_state,
+                    include_charts=self.include_charts,
+                    cancellation_token=self.cancellation_token,
+                    progress_callback=self._emit_progress_from_diagnostic,
+                    cancel_check=self._is_cancelled,
+                )
+            )
+        except IndustrialExportCancelled as exc:
+            self.cancelled.emit(str(exc))
+        except Exception as exc:
+            if self._is_cancelled():
+                self.cancelled.emit("Live industrial export was cancelled.")
+            else:
+                self.error_occurred.emit(redact_sensitive_text(exc))
 
 
 class IndustrialAnalyticsThread(QThread):
@@ -269,12 +360,14 @@ class TabularAnalyticsLoadThread(QThread):
         self,
         *,
         input_file: str,
+        input_files: tuple[str, ...] | list[str] | None = None,
         sheet_name: str | int | None = None,
         timestamp_column: str | None = None,
         reference_column: str | None = None,
     ):
         super().__init__()
         self.input_file = input_file
+        self.input_files = tuple(input_files or ())
         self.sheet_name = sheet_name
         self.timestamp_column = timestamp_column
         self.reference_column = reference_column
@@ -290,12 +383,20 @@ class TabularAnalyticsLoadThread(QThread):
     def run(self):
         try:
             self.update_label.emit("Loading CSV/Excel data...\nReading rows and detecting metrics\nETA --")
-            result = load_tabular_analytics_file(
-                self.input_file,
-                sheet_name=self.sheet_name,
-                timestamp_column=self.timestamp_column,
-                reference_column=self.reference_column,
-            )
+            if self.input_files:
+                result = load_tabular_analytics_files(
+                    self.input_files,
+                    sheet_name=self.sheet_name,
+                    timestamp_column=self.timestamp_column,
+                    reference_column=self.reference_column,
+                )
+            else:
+                result = load_tabular_analytics_file(
+                    self.input_file,
+                    sheet_name=self.sheet_name,
+                    timestamp_column=self.timestamp_column,
+                    reference_column=self.reference_column,
+                )
             if self._is_cancelled():
                 self.cancelled.emit("CSV/Excel loading was canceled.")
                 return

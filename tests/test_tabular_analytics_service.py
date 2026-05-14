@@ -22,8 +22,12 @@ from modules.tabular_analytics_service import (
     apply_tabular_row_filter,
     apply_tabular_grouping,
     build_tabular_grouping_dataframe,
+    cleanup_tabular_load_result,
+    count_tabular_materialized_rows,
     export_tabular_analytics_workbook,
     load_tabular_analytics_file,
+    load_tabular_analytics_files,
+    materialize_tabular_dataframe,
 )
 
 
@@ -126,6 +130,99 @@ def test_load_tabular_analytics_file_preserves_source_columns_that_match_interna
     assert result.dataframe["input_group"].tolist() == ["Shift A", "Shift B"]
     assert result.column_mapping["source_row_number"] == "input_source_row_number"
     assert result.column_mapping["GROUP"] == "input_group"
+
+
+def test_load_tabular_analytics_files_combines_multiple_csvs_in_sqlite(tmp_path) -> None:
+    first_file = tmp_path / "line_a.csv"
+    second_file = tmp_path / "line_b.csv"
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=3, freq="h"),
+            "Line": ["A", "A", "B"],
+            "Length mm": [10.0, 10.2, 10.4],
+        }
+    ).to_csv(first_file, index=False)
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-11 08:00", periods=2, freq="h"),
+            "Line": ["B", "A"],
+            "Length mm": [10.6, 10.8],
+        }
+    ).to_csv(second_file, index=False)
+
+    result = load_tabular_analytics_files((first_file, second_file))
+    sqlite_path = Path(result.sqlite_store.path)
+    try:
+        assert result.storage_mode == "sqlite"
+        assert sqlite_path.exists()
+        assert result.row_count == 5
+        assert result.source_files == (str(first_file), str(second_file))
+        assert [snapshot.row_count for snapshot in result.source_snapshots] == [3, 2]
+        assert result.dataframe["source_row_number"].tolist() == [1, 2, 3, 4, 5]
+        assert result.dataframe["source_file"].tolist() == [
+            "line_a.csv",
+            "line_a.csv",
+            "line_a.csv",
+            "line_b.csv",
+            "line_b.csv",
+        ]
+        assert {candidate.field_name for candidate in result.metric_candidates} == {"length_mm"}
+
+        filtered = materialize_tabular_dataframe(
+            result,
+            column_filters=(TabularColumnFilter("line", selected_values=("A",)),),
+        )
+
+        assert filtered.applied is True
+        assert filtered.input_row_count == 5
+        assert filtered.output_row_count == 3
+        assert count_tabular_materialized_rows(
+            result,
+            column_filters=(TabularColumnFilter("line", selected_values=("A",)),),
+        ) == 3
+        assert filtered.dataframe["source_row_number"].tolist() == [1, 2, 5]
+    finally:
+        cleanup_tabular_load_result(result)
+    assert not sqlite_path.exists()
+
+
+def test_load_tabular_analytics_file_can_use_sqlite_for_single_csv_filters(tmp_path) -> None:
+    input_file = tmp_path / "single_large_path.csv"
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=5, freq="D"),
+            "Station": ["A", "B", "A", "A", "B"],
+            "Length mm": [10.0, 10.1, 10.2, 10.3, 10.4],
+        }
+    ).to_csv(input_file, index=False)
+
+    result = load_tabular_analytics_file(input_file, force_sqlite=True)
+    try:
+        assert result.storage_mode == "sqlite"
+        assert result.row_count == 5
+        assert result.source_snapshots[0].row_count == 5
+
+        filtered = materialize_tabular_dataframe(
+            result,
+            column_filters=(
+                TabularColumnFilter("station", selected_values=("A",)),
+                TabularColumnFilter(
+                    "time_stamp",
+                    date_mode="between",
+                    date_from="2026-05-11",
+                    date_to="2026-05-13",
+                ),
+            ),
+        )
+
+        assert filtered.output_row_count == 2
+        assert filtered.dataframe["station"].tolist() == ["A", "A"]
+        assert pd.to_datetime(filtered.dataframe["time_stamp"]).dt.strftime("%Y-%m-%d").tolist() == [
+            "2026-05-12",
+            "2026-05-13",
+        ]
+    finally:
+        cleanup_tabular_load_result(result)
 
 
 def test_load_tabular_analytics_file_detects_excel_metrics(tmp_path) -> None:

@@ -7,20 +7,28 @@ from typing import Any
 
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
+    QLineEdit,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QVBoxLayout,
 )
 
 from modules.industrial_data_repository import IndustrialDataRepository
+from modules.industrial_credentials import load_industrial_credentials, save_industrial_credentials
 from modules.industrial_filter_dialog import IndustrialFilterDialog
 from modules.industrial_grouping_dialog import IndustrialGroupingDialog
+from modules.industrial_source_config import (
+    default_industrial_source_config_path,
+    load_source_profiles_from_config,
+)
 from modules.industrial_workflow_state import IndustrialFilterState, IndustrialGroupingState
-from modules.industrial_workers import IndustrialExportThread
+from modules.industrial_workers import IndustrialExportThread, IndustrialLiveExportThread
 from modules.export_dialog_service import build_export_artifact_link_line
 from modules.progress_status import build_three_line_status
 from modules.ui_foundation import (
@@ -36,7 +44,7 @@ from modules.worker_progress_dialog import create_worker_progress_dialog
 
 
 class IndustrialExportDialog(QDialog):
-    """Configure and run cached industrial workbook export."""
+    """Configure and run cached or live industrial workbook export."""
 
     def __init__(
         self,
@@ -46,9 +54,13 @@ class IndustrialExportDialog(QDialog):
         filter_state: IndustrialFilterState | None = None,
         grouping_state: IndustrialGroupingState | None = None,
         include_plots: bool = True,
+        config_path: str | Path | None = None,
     ):
         super().__init__(parent)
         self.db_file = db_file
+        self.config_path = Path(config_path or default_industrial_source_config_path()).expanduser()
+        self.live_mode = not bool(db_file)
+        self._live_profile_load_error = ""
         self.output_file = ""
         self.filter_state = filter_state or IndustrialFilterState()
         self.grouping_state = grouping_state or IndustrialGroupingState()
@@ -56,13 +68,24 @@ class IndustrialExportDialog(QDialog):
         self.filter_window = None
         self.grouping_window = None
         self.setWindowTitle("Export industrial data")
-        configure_window_size(self, minimum=(620, 380), initial=(760, 430))
+        configure_window_size(self, minimum=(620, 420), initial=(780, 560))
 
         self.database_field = path_field(
             str(db_file or ""),
             empty_text="No Metroliza report database selected",
         )
+        self.profile_combo = QComboBox()
         self.cache_status_label = status_chip("Local industrial cache not checked", "neutral")
+        self.username_edit = QLineEdit()
+        self.password_edit = QLineEdit()
+        self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.remember_credentials_checkbox = QCheckBox("Remember on this computer")
+        self.limit_spin = QSpinBox()
+        self.limit_spin.setRange(1, 1_000_000)
+        self.limit_spin.setValue(5000)
+        self.timeout_spin = QSpinBox()
+        self.timeout_spin.setRange(1, 3600)
+        self.timeout_spin.setValue(30)
         self.filter_status_label = status_chip(self.filter_state.summary(), "neutral")
         self.grouping_status_label = status_chip(self.grouping_state.summary(), "neutral")
         self.plot_status_label = status_chip("Plots included", "neutral")
@@ -87,8 +110,12 @@ class IndustrialExportDialog(QDialog):
         self.close_button.clicked.connect(self.reject)
         self.start_button.clicked.connect(self.handle_start_button)
         self.include_plots_checkbox.stateChanged.connect(self._sync_ui_state)
+        self.profile_combo.currentIndexChanged.connect(self._handle_profile_changed)
+        self.username_edit.textChanged.connect(self._sync_ui_state)
+        self.password_edit.textChanged.connect(self._sync_ui_state)
 
         self._build_layout()
+        self.reload_live_profiles()
         self._sync_ui_state()
         apply_metroliza_theme(self)
 
@@ -96,7 +123,8 @@ class IndustrialExportDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
-        layout.addWidget(section_label("Cached industrial workbook"))
+        title = "Live production workbook" if self.live_mode else "Cached industrial workbook"
+        layout.addWidget(section_label(title))
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(10)
@@ -104,12 +132,40 @@ class IndustrialExportDialog(QDialog):
         grid.setColumnStretch(1, 1)
 
         row = 0
-        grid.addWidget(section_label("Metroliza report database"), row, 0)
-        grid.addWidget(self.database_field, row, 1, 1, 2)
+        if self.live_mode:
+            grid.addWidget(section_label("Production source"), row, 0)
+            grid.addWidget(self.profile_combo, row, 1, 1, 2)
 
-        row += 1
-        grid.addWidget(section_label("Cache"), row, 0)
-        grid.addWidget(self.cache_status_label, row, 1, 1, 2)
+            row += 1
+            grid.addWidget(section_label("Source config"), row, 0)
+            grid.addWidget(self.cache_status_label, row, 1, 1, 2)
+
+            row += 1
+            grid.addWidget(section_label("Production DB username"), row, 0)
+            grid.addWidget(self.username_edit, row, 1, 1, 2)
+
+            row += 1
+            grid.addWidget(section_label("Production DB password"), row, 0)
+            grid.addWidget(self.password_edit, row, 1, 1, 2)
+
+            row += 1
+            grid.addWidget(section_label("Credentials"), row, 0)
+            grid.addWidget(self.remember_credentials_checkbox, row, 1, 1, 2)
+
+            row += 1
+            grid.addWidget(section_label("Fetch row limit"), row, 0)
+            grid.addWidget(self.limit_spin, row, 1, 1, 2)
+
+            row += 1
+            grid.addWidget(section_label("Timeout seconds"), row, 0)
+            grid.addWidget(self.timeout_spin, row, 1, 1, 2)
+        else:
+            grid.addWidget(section_label("Metroliza report database"), row, 0)
+            grid.addWidget(self.database_field, row, 1, 1, 2)
+
+            row += 1
+            grid.addWidget(section_label("Cache"), row, 0)
+            grid.addWidget(self.cache_status_label, row, 1, 1, 2)
 
         row += 1
         filter_actions = QHBoxLayout()
@@ -154,6 +210,12 @@ class IndustrialExportDialog(QDialog):
         layout.addLayout(actions)
 
     def _cache_summary(self) -> str:
+        if self.live_mode:
+            if self._live_profile_load_error:
+                return self._live_profile_load_error
+            if self.profile_combo.count() > 0:
+                return f"{self.profile_combo.count()} production source(s) configured in file"
+            return "No production sources configured in the local source file"
         if not self.db_file:
             return "No Metroliza report database selected"
         try:
@@ -164,6 +226,20 @@ class IndustrialExportDialog(QDialog):
             f"{counts.records} cached production rows, {counts.link_candidates} report links, "
             f"{counts.source_profiles} production sources"
         )
+
+    def reload_live_profiles(self) -> None:
+        if not self.live_mode:
+            return
+        self.profile_combo.clear()
+        self._live_profile_load_error = ""
+        try:
+            profiles = load_source_profiles_from_config(self.config_path)
+        except Exception as exc:
+            self._live_profile_load_error = f"Could not load source config: {exc}"
+            return
+        for profile in profiles:
+            self.profile_combo.addItem(profile.profile_name, profile)
+        self._load_stored_credentials_for_current_profile()
 
     def _sync_ui_state(self) -> None:
         update_path_field(
@@ -187,13 +263,32 @@ class IndustrialExportDialog(QDialog):
         set_status_variant(self.grouping_status_label, "success" if self.grouping_state.is_applied else "neutral")
         set_status_variant(self.plot_status_label, "neutral")
 
-        ready = bool(self.db_file and self.output_file)
+        ready = bool(self.output_file)
+        if self.live_mode:
+            ready = ready and self.current_profile() is not None and bool(
+                self.username_edit.text().strip()
+            ) and bool(self.password_edit.text())
+        else:
+            ready = ready and bool(self.db_file)
         self.start_button.setEnabled(ready)
         if ready:
-            self.readiness_label.setText(
-                "Ready to create industrial workbook from cached production rows."
-            )
+            if self.live_mode:
+                self.readiness_label.setText(
+                    "Ready to fetch production rows directly and create the workbook."
+                )
+            else:
+                self.readiness_label.setText(
+                    "Ready to create industrial workbook from cached production rows."
+                )
             set_status_variant(self.readiness_label, "success")
+        elif self.live_mode:
+            if self.current_profile() is None:
+                self.readiness_label.setText("Create a production source before exporting.")
+            elif not self.username_edit.text().strip() or not self.password_edit.text():
+                self.readiness_label.setText("Enter production database credentials to enable export.")
+            else:
+                self.readiness_label.setText("Select an output workbook to enable export.")
+            set_status_variant(self.readiness_label, "warning")
         elif self.db_file:
             self.readiness_label.setText("Select an output workbook to enable export.")
             set_status_variant(self.readiness_label, "warning")
@@ -207,6 +302,33 @@ class IndustrialExportDialog(QDialog):
         if parent is not None and hasattr(parent, "set_export_filter_state"):
             parent.set_export_filter_state(state)
         self._sync_ui_state()
+
+    def current_profile(self):
+        profile = self.profile_combo.currentData()
+        return profile if self.live_mode and profile is not None else None
+
+    def _handle_profile_changed(self, _index: int) -> None:
+        self._load_stored_credentials_for_current_profile()
+        self._sync_ui_state()
+
+    def _load_stored_credentials_for_current_profile(self) -> None:
+        profile = self.current_profile()
+        if profile is None:
+            return
+        stored = load_industrial_credentials(profile.profile_key)
+        if stored.username and not self.username_edit.text().strip():
+            self.username_edit.setText(stored.username)
+        if stored.password and not self.password_edit.text():
+            self.password_edit.setText(stored.password)
+
+    def _read_live_credentials(self) -> tuple[str, str]:
+        username = self.username_edit.text().strip()
+        password = self.password_edit.text()
+        if not username:
+            raise ValueError("Enter the production database username.")
+        if not password:
+            raise ValueError("Enter the production database password.")
+        return username, password
 
     def set_industrial_grouping_state(self, state: IndustrialGroupingState) -> None:
         self.grouping_state = state
@@ -250,9 +372,34 @@ class IndustrialExportDialog(QDialog):
         self._sync_ui_state()
         if not self.start_button.isEnabled():
             return
-        self.show_loading_screen()
+        try:
+            self.show_loading_screen()
+        except Exception as exc:
+            QMessageBox.warning(self, "Industrial export", f"Could not start export: {exc}")
 
     def create_export_thread(self) -> IndustrialExportThread:
+        if self.live_mode:
+            profile = self.current_profile()
+            if profile is None:
+                raise ValueError("Create or select a production source before exporting.")
+            username, password = self._read_live_credentials()
+            if self.remember_credentials_checkbox.isChecked():
+                save_industrial_credentials(
+                    profile.profile_key,
+                    username=username,
+                    password=password,
+                )
+            return IndustrialLiveExportThread(
+                profile=profile,
+                username=username,
+                password=password,
+                output_file=self.output_file,
+                limit=self.limit_spin.value(),
+                timeout_seconds=self.timeout_spin.value(),
+                filter_state=self.filter_state,
+                grouping_state=self.grouping_state,
+                include_charts=self.include_plots_checkbox.isChecked(),
+            )
         return IndustrialExportThread(
             db_file=str(self.db_file),
             output_file=self.output_file,
@@ -262,23 +409,34 @@ class IndustrialExportDialog(QDialog):
         )
 
     def show_loading_screen(self) -> None:
+        export_thread = self.create_export_thread()
         self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif = (
             create_worker_progress_dialog(
                 self,
                 window_title="Exporting industrial data...",
                 initial_status_text=build_three_line_status(
-                    "Exporting cached industrial data...",
-                    "Creating workbook from local Metroliza cache",
+                    (
+                        "Fetching production rows..."
+                        if self.live_mode
+                        else "Exporting cached industrial data..."
+                    ),
+                    (
+                        "Creating workbook from live Oznak data"
+                        if self.live_mode
+                        else "Creating workbook from local Metroliza cache"
+                    ),
                     "ETA --",
                 ),
                 on_cancel=self.cancel_export,
             )
         )
         self.loading_bar.setValue(0)
-        self.export_thread = self.create_export_thread()
+        self.export_thread = export_thread
         self.export_thread.result_ready.connect(self.on_export_finished)
         self.export_thread.error_occurred.connect(self.on_export_error)
         self.export_thread.cancelled.connect(self.on_export_cancelled)
+        if hasattr(self.export_thread, "update_label"):
+            self.export_thread.update_label.connect(self.loading_label.setText)
         self.export_thread.finished.connect(self.on_export_thread_stopped)
         self.export_thread.start()
         self.loading_dialog.show()

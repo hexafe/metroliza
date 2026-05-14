@@ -87,7 +87,7 @@ class IndustrialSourceProfilesDialog(QDialog):
         self.database_edit.setPlaceholderText("production database name")
         self.table_edit.setPlaceholderText("production table or view name")
         self.columns_edit.setPlaceholderText(
-            "id, reference, part_number, revision, serial, station, line, status"
+            "id, part_number, revision, serial, station, line, status"
         )
         self.record_key_edit.setPlaceholderText("id")
         self.timestamp_column_edit.setPlaceholderText("process_timestamp")
@@ -330,8 +330,8 @@ class IndustrialSourceProfilesDialog(QDialog):
             "Use Connect / check / sync in the Industrial data window to check access or fetch rows."
             if self.db_file
             else (
-                "Select a Metroliza report database in the Industrial data window, then use "
-                "Connect / check / sync to check access or fetch rows."
+                "Use Export in the Industrial data window to fetch directly, or select a "
+                "Metroliza report database when you want to sync rows into the local cache."
             )
         )
         return f"Saved production source: {profile.profile_name}. {next_step}"
@@ -361,7 +361,6 @@ class IndustrialSourceProfilesDialog(QDialog):
         for required_column in (
             self.record_key_edit.text().strip(),
             self.timestamp_column_edit.text().strip(),
-            "reference",
         ):
             if required_column and required_column not in columns:
                 columns.append(required_column)

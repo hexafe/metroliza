@@ -39,10 +39,10 @@ from modules.tabular_analytics_service import (
     TabularAnalyticsLoadResult,
     TabularAnalyticsWorkbookResult,
     TabularColumnFilter,
-    apply_tabular_row_filter,
     apply_tabular_grouping,
     export_tabular_analytics_workbook,
     load_tabular_analytics_file,
+    materialize_tabular_dataframe,
 )
 
 AnalyticsSourceKind = Literal["production_cache", "tabular_file"]
@@ -308,8 +308,8 @@ def run_tabular_file_analytics(
             timestamp_column=request.timestamp_column,
             reference_column=request.reference_column,
         )
-    filtered = apply_tabular_row_filter(
-        loaded.dataframe,
+    filtered = materialize_tabular_dataframe(
+        loaded,
         filter_columns=request.tabular_filter_columns,
         selected_filter_keys=request.tabular_filter_keys,
         column_filters=request.tabular_column_filters,
@@ -526,6 +526,21 @@ def _validate_tabular_load_snapshot(
     timestamp_column: str | None,
     reference_column: str | None,
 ) -> None:
+    if loaded.source_snapshots:
+        _validate_tabular_source_snapshots(loaded.source_snapshots)
+        if len(loaded.source_snapshots) == 1:
+            source_path = Path(input_file)
+            loaded_path = Path(loaded.source_snapshots[0].path)
+            if loaded_path.resolve() != source_path.resolve():
+                raise ValueError("Reload CSV/Excel data before export: selected source file changed.")
+        if sheet_name is not None and loaded.sheet_name is not None and str(sheet_name) != loaded.sheet_name:
+            raise ValueError("Reload CSV/Excel data before export: selected Excel sheet changed.")
+        if timestamp_column is not None and loaded.timestamp_column != str(timestamp_column):
+            raise ValueError("Reload CSV/Excel data before export: selected time column changed.")
+        if reference_column is not None and loaded.reference_column != str(reference_column):
+            raise ValueError("Reload CSV/Excel data before export: selected part/id column changed.")
+        return
+
     source_path = Path(input_file)
     loaded_path = Path(loaded.source_file) if loaded.source_file else source_path
     try:
@@ -544,6 +559,21 @@ def _validate_tabular_load_snapshot(
         raise ValueError("Reload CSV/Excel data before export: selected time column changed.")
     if reference_column is not None and loaded.reference_column != str(reference_column):
         raise ValueError("Reload CSV/Excel data before export: selected part/id column changed.")
+
+
+def _validate_tabular_source_snapshots(snapshots) -> None:
+    for snapshot in snapshots:
+        source_path = Path(snapshot.path)
+        try:
+            current_stat = source_path.stat()
+        except OSError as exc:
+            raise ValueError(
+                f"Reload CSV/Excel data before export: source file is unavailable ({exc})."
+            ) from exc
+        if int(current_stat.st_size) != int(snapshot.size):
+            raise ValueError("Reload CSV/Excel data before export: source file size changed.")
+        if int(current_stat.st_mtime_ns) != int(snapshot.mtime_ns):
+            raise ValueError("Reload CSV/Excel data before export: source file timestamp changed.")
 
 
 def _analyze_groupstats_if_enabled(

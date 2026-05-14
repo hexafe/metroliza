@@ -10,12 +10,15 @@ try:
 
     import modules.industrial_export_dialog as industrial_export_dialog
     from modules.industrial_export_dialog import IndustrialExportDialog
+    from modules.industrial_source_config import build_source_profile, upsert_source_profile_in_config
     from modules.industrial_workflow_state import IndustrialFilterState, IndustrialGroupingState
+    from modules.industrial_workers import IndustrialLiveExportThread
 except Exception as exc:  # pragma: no cover - depends on local Qt runtime availability.
     QApplication = None
     IndustrialExportDialog = None
     IndustrialFilterState = None
     IndustrialGroupingState = None
+    IndustrialLiveExportThread = None
     industrial_export_dialog = None
     PYQT_IMPORT_ERROR = exc
 else:
@@ -75,6 +78,45 @@ def test_export_dialog_uses_csv_summary_style_readiness_and_plot_toggle(tmp_path
 def test_export_dialog_has_no_live_oznak_fetch_dependency():
     assert "fetch_oznak_records_for_source_profile" not in vars(industrial_export_dialog)
     assert "create_oznak_cancellation_token" not in vars(industrial_export_dialog)
+
+
+def test_export_dialog_direct_mode_loads_source_and_creates_live_thread(tmp_path):
+    _app()
+    config_path = tmp_path / "industrial_sources.yaml"
+    output_path = tmp_path / "industrial_live.xlsx"
+    upsert_source_profile_in_config(
+        config_path,
+        build_source_profile(
+            profile_key="assembly_mes",
+            profile_name="Assembly MES",
+            source_db_alias="assembly_mes",
+            database_type="mssql",
+            host="mes.example.invalid",
+            port=1433,
+            database_name="plantdb",
+            source_object_name="events",
+            allowed_columns=("event_id", "station"),
+            default_pagination_column="event_id",
+        ),
+    )
+    dialog = IndustrialExportDialog(db_file=None, config_path=config_path)
+
+    assert dialog.live_mode is True
+    assert dialog.profile_combo.count() == 1
+    assert not dialog.start_button.isEnabled()
+
+    dialog.username_edit.setText("operator")
+    dialog.password_edit.setText("secret-password")
+    dialog.output_file = str(output_path)
+    dialog._sync_ui_state()
+    thread = dialog.create_export_thread()
+
+    assert dialog.start_button.isEnabled()
+    assert isinstance(thread, IndustrialLiveExportThread)
+    assert thread.profile.profile_key == "assembly_mes"
+    assert thread.output_file == str(output_path)
+    assert thread.limit == 5000
+    dialog.close()
 
 
 def test_export_dialog_completion_uses_export_style_workbook_link(tmp_path, monkeypatch):

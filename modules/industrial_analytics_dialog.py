@@ -48,9 +48,12 @@ from modules.tabular_analytics_grouping_dialog import TabularAnalyticsGroupingDi
 from modules.tabular_analytics_service import (
     TABULAR_GROUP_COLUMN,
     TabularColumnFilter,
-    apply_tabular_row_filter,
+    cleanup_tabular_load_result,
+    count_tabular_materialized_rows,
     list_tabular_excel_sheets,
-    load_tabular_analytics_file,
+    load_tabular_analytics_files,
+    materialize_tabular_dataframe,
+    tabular_load_result_row_count,
 )
 from modules.ui_foundation import (
     apply_metroliza_theme,
@@ -300,6 +303,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.db_file = db_file or ""
         self.source_kind = source_kind
         self.input_file = ""
+        self.input_files: tuple[str, ...] = ()
         self.output_dashboard_file = default_dashboard_path(self.db_file or "production_analytics")
         self.output_workbook_file = default_workbook_path(self.db_file or "production_analytics")
         self.analytics_thread = None
@@ -320,7 +324,7 @@ class IndustrialAnalyticsDialog(QDialog):
 
         self.source_label = status_chip(self._source_summary(), "neutral")
         self.database_row_label = section_label("Report database")
-        self.input_file_row_label = section_label("CSV/Excel file")
+        self.input_file_row_label = section_label("CSV/Excel file(s)")
         self.sheet_name_row_label = section_label("Excel sheet")
         self.timestamp_column_row_label = section_label("Time column")
         self.reference_column_row_label = section_label("Part / ID column")
@@ -663,7 +667,7 @@ class IndustrialAnalyticsDialog(QDialog):
         if self.input_file and (self.tabular_load_result is not None or self.metric_candidates):
             self._tabular_reload_notice = "Reload CSV/Excel data after changing the selected sheet."
         self.metric_candidates = ()
-        self.tabular_load_result = None
+        self._set_tabular_load_result(None)
         self.metric_spec_limits = {}
         self._clear_tabular_filter()
         self._clear_tabular_grouping()
@@ -679,7 +683,7 @@ class IndustrialAnalyticsDialog(QDialog):
             return
         self._tabular_reload_notice = "Reload CSV/Excel data after changing the time column or part / ID column."
         self.metric_candidates = ()
-        self.tabular_load_result = None
+        self._set_tabular_load_result(None)
         self.metric_spec_limits = {}
         self._clear_tabular_filter()
         self._clear_tabular_grouping()
@@ -695,6 +699,39 @@ class IndustrialAnalyticsDialog(QDialog):
         self.tabular_filter_columns = ()
         self.tabular_filter_keys = ()
         self.tabular_column_filters = ()
+
+    def _set_tabular_load_result(self, loaded) -> None:
+        current = self.tabular_load_result
+        if current is not None and current is not loaded:
+            cleanup_tabular_load_result(current)
+        self.tabular_load_result = loaded
+
+    def _selected_input_files(self) -> tuple[str, ...]:
+        if self.input_files:
+            return self.input_files
+        return (self.input_file,) if self.input_file else ()
+
+    def _input_files_display(self) -> str:
+        input_files = self._selected_input_files()
+        if not input_files:
+            return ""
+        if len(input_files) == 1:
+            return input_files[0]
+        names = [Path(path).name for path in input_files]
+        preview = ", ".join(names[:3])
+        if len(names) > 3:
+            preview = f"{preview}, +{len(names) - 3} more"
+        return f"{len(names)} CSV files: {preview}"
+
+    def _tabular_filtered_row_count(self) -> int:
+        if self.tabular_load_result is None:
+            return 0
+        return count_tabular_materialized_rows(
+            self.tabular_load_result,
+            filter_columns=self.tabular_filter_columns,
+            selected_filter_keys=self.tabular_filter_keys,
+            column_filters=self.tabular_column_filters,
+        )
 
     def clear_tabular_filter_and_groups(self) -> None:
         if self.is_production_source:
@@ -719,6 +756,11 @@ class IndustrialAnalyticsDialog(QDialog):
     def _populate_tabular_sheet_options(self) -> None:
         self.sheet_name_combo.blockSignals(True)
         self.sheet_name_combo.clear()
+        if len(self._selected_input_files()) > 1:
+            self.sheet_name_combo.addItem("CSV files", "")
+            self.sheet_name_combo.setEnabled(False)
+            self.sheet_name_combo.blockSignals(False)
+            return
         path = Path(self.input_file) if self.input_file else None
         suffix = path.suffix.lower() if path is not None else ""
         if suffix in {".xlsx", ".xls"}:
@@ -777,20 +819,33 @@ class IndustrialAnalyticsDialog(QDialog):
         return f"Cached production rows: {counts.records}; sources: {counts.source_profiles}"
 
     def select_input_file(self) -> None:
-        filename, _ = QFileDialog.getOpenFileName(
+        filenames, _ = QFileDialog.getOpenFileNames(
             self,
             "Open CSV or Excel data",
             self.input_file or "",
             "CSV / Excel (*.csv *.xlsx *.xls);;CSV (*.csv);;Excel (*.xlsx *.xls);;All files (*)",
         )
-        if not filename:
+        if not filenames:
             return
-        self.input_file = filename
-        self.output_dashboard_file = default_dashboard_path(filename)
-        self.output_workbook_file = default_workbook_path(filename)
+        selected_files = tuple(str(Path(filename)) for filename in filenames)
+        if len(selected_files) > 1 and any(Path(filename).suffix.lower() != ".csv" for filename in selected_files):
+            QMessageBox.warning(
+                self,
+                self.windowTitle(),
+                "Select only CSV files when loading multiple CSV Summary inputs.",
+            )
+            return
+        self.input_files = selected_files
+        self.input_file = selected_files[0]
+        output_seed = self.input_file
+        if len(selected_files) > 1:
+            first_path = Path(self.input_file)
+            output_seed = str(first_path.with_name(f"{first_path.stem}_combined.csv"))
+        self.output_dashboard_file = default_dashboard_path(output_seed)
+        self.output_workbook_file = default_workbook_path(output_seed)
         self._tabular_reload_notice = ""
         self.metric_candidates = ()
-        self.tabular_load_result = None
+        self._set_tabular_load_result(None)
         self.metric_spec_limits = {}
         self._clear_tabular_filter()
         self._clear_tabular_grouping()
@@ -833,6 +888,7 @@ class IndustrialAnalyticsDialog(QDialog):
             filter_columns=self.tabular_filter_columns,
             selected_filter_keys=self.tabular_filter_keys,
             column_filters=self.tabular_column_filters,
+            sqlite_store=self.tabular_load_result.sqlite_store,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
@@ -891,11 +947,12 @@ class IndustrialAnalyticsDialog(QDialog):
                 self.source_label.setText(self._cache_summary())
                 self._sync_filter_summary()
             else:
-                if not self.input_file:
+                input_files = self._selected_input_files()
+                if not input_files:
                     raise ValueError("Select a CSV or Excel file first.")
                 sheet_name = self._selected_sheet_name()
-                loaded = load_tabular_analytics_file(
-                    self.input_file,
+                loaded = load_tabular_analytics_files(
+                    input_files,
                     sheet_name=sheet_name,
                     timestamp_column=self._selected_tabular_column(self.timestamp_column_combo),
                     reference_column=self._selected_tabular_column(self.reference_column_combo),
@@ -911,7 +968,7 @@ class IndustrialAnalyticsDialog(QDialog):
 
     def _apply_tabular_load_result(self, loaded, *, populate_metrics: bool = True) -> None:
         self._tabular_reload_notice = ""
-        self.tabular_load_result = loaded
+        self._set_tabular_load_result(loaded)
         self.metric_candidates = tuple(candidate.to_selection() for candidate in loaded.metric_candidates)
         self.metric_spec_limits = {
             field_name: limits
@@ -925,7 +982,7 @@ class IndustrialAnalyticsDialog(QDialog):
                 if column not in {metric.field_name for metric in self.metric_candidates}
             )
         )
-        self.source_label.setText(f"{Path(self.input_file).name}: {len(loaded.dataframe.index)} rows")
+        self.source_label.setText(self._tabular_source_label(loaded))
         self._populate_tabular_column_options(
             loaded.column_mapping,
             timestamp_column=loaded.timestamp_column,
@@ -934,6 +991,17 @@ class IndustrialAnalyticsDialog(QDialog):
         if populate_metrics:
             self._populate_metrics()
             self._sync_ui_state()
+
+    def _tabular_source_label(self, loaded) -> str:
+        row_count = tabular_load_result_row_count(loaded)
+        source_files = tuple(getattr(loaded, "source_files", ()) or self._selected_input_files())
+        if len(source_files) > 1:
+            return f"{len(source_files)} CSV files: {row_count} rows"
+        if source_files:
+            return f"{Path(source_files[0]).name}: {row_count} rows"
+        if self.input_file:
+            return f"{Path(self.input_file).name}: {row_count} rows"
+        return f"CSV/Excel table: {row_count} rows"
 
     def open_metrics_dialog(self) -> None:
         if not self.metric_candidates:
@@ -1019,8 +1087,8 @@ class IndustrialAnalyticsDialog(QDialog):
     def _filtered_tabular_dataframe(self):
         if self.tabular_load_result is None:
             return None
-        return apply_tabular_row_filter(
-            self.tabular_load_result.dataframe,
+        return materialize_tabular_dataframe(
+            self.tabular_load_result,
             filter_columns=self.tabular_filter_columns,
             selected_filter_keys=self.tabular_filter_keys,
             column_filters=self.tabular_column_filters,
@@ -1029,12 +1097,11 @@ class IndustrialAnalyticsDialog(QDialog):
     def _tabular_filter_summary(self) -> tuple[str, str]:
         if self.tabular_load_result is None:
             return "No row filter", "neutral"
-        dataframe = self._filtered_tabular_dataframe()
-        row_count = len(dataframe.index) if dataframe is not None else 0
+        row_count = self._tabular_filtered_row_count()
         if not self.tabular_column_filters and (
             not self.tabular_filter_columns or not self.tabular_filter_keys
         ):
-            return f"All rows ({len(self.tabular_load_result.dataframe.index)})", "neutral"
+            return f"All rows ({tabular_load_result_row_count(self.tabular_load_result)})", "neutral"
         label_lookup = {
             normalized: original
             for original, normalized in self.tabular_load_result.column_mapping.items()
@@ -1168,7 +1235,7 @@ class IndustrialAnalyticsDialog(QDialog):
             value = str(data_value).strip()
             return value or None
         text = self.sheet_name_combo.currentText().strip()
-        return text if text and text not in {"First sheet", "CSV file"} else None
+        return text if text and text not in {"First sheet", "CSV file", "CSV files"} else None
 
     def _aggregation_state(self) -> ProductionAggregationState:
         if not self.is_production_source and self.grouping_applied:
@@ -1200,7 +1267,11 @@ class IndustrialAnalyticsDialog(QDialog):
     def _sync_ui_state(self) -> None:
         self._sync_filter_summary()
         update_path_field(self.database_field, self.db_file, empty_text="No Metroliza report database selected")
-        update_path_field(self.input_file_field, self.input_file, empty_text="No CSV/Excel file selected")
+        update_path_field(
+            self.input_file_field,
+            self._input_files_display(),
+            empty_text="No CSV/Excel file selected",
+        )
         update_path_field(
             self.dashboard_path_field,
             self.output_dashboard_file,
@@ -1215,12 +1286,11 @@ class IndustrialAnalyticsDialog(QDialog):
         self.parameter_sheets_checkbox.setEnabled(self.workbook_checkbox.isChecked())
 
         metrics = self._selected_metrics()
-        source_ready = bool(self.db_file) if self.is_production_source else bool(self.input_file)
+        source_ready = bool(self.db_file) if self.is_production_source else bool(self._selected_input_files())
         candidate_count = len(self.metric_candidates)
         filtered_row_count = None
         if not self.is_production_source and self.tabular_load_result is not None:
-            filtered_frame = self._filtered_tabular_dataframe()
-            filtered_row_count = 0 if filtered_frame is None else len(filtered_frame.index)
+            filtered_row_count = self._tabular_filtered_row_count()
         self.choose_metrics_button.setEnabled(bool(candidate_count))
         self.edit_limits_button.setEnabled(bool(candidate_count and metrics))
         self.edit_groups_button.setEnabled(bool(candidate_count and not self.is_production_source))
@@ -1308,7 +1378,8 @@ class IndustrialAnalyticsDialog(QDialog):
         if self.is_production_source:
             self.load_metrics()
             return
-        if not self.input_file:
+        input_files = self._selected_input_files()
+        if not input_files:
             QMessageBox.warning(self, self.windowTitle(), "Select a CSV or Excel file first.")
             return
         if self.tabular_load_thread is not None and self.tabular_load_thread.isRunning():
@@ -1328,6 +1399,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.loading_bar.setRange(0, 0)
         self.tabular_load_thread = TabularAnalyticsLoadThread(
             input_file=self.input_file,
+            input_files=input_files,
             sheet_name=self._selected_sheet_name(),
             timestamp_column=self._selected_tabular_column(self.timestamp_column_combo),
             reference_column=self._selected_tabular_column(self.reference_column_combo),
@@ -1493,6 +1565,18 @@ class IndustrialAnalyticsDialog(QDialog):
         self.analytics_thread = None
         self._sync_ui_state()
 
+    def reject(self) -> None:
+        thread = self.tabular_load_thread
+        if thread is not None and thread.isRunning():
+            QMessageBox.information(self, self.windowTitle(), "Wait for CSV/Excel loading to finish.")
+            return
+        thread = self.analytics_thread
+        if thread is not None and thread.isRunning():
+            QMessageBox.information(self, self.windowTitle(), "Wait for analytics generation to finish.")
+            return
+        self._set_tabular_load_result(None)
+        super().reject()
+
     def closeEvent(self, event) -> None:
         thread = self.tabular_load_thread
         if thread is not None and thread.isRunning():
@@ -1504,6 +1588,7 @@ class IndustrialAnalyticsDialog(QDialog):
             QMessageBox.information(self, self.windowTitle(), "Wait for analytics generation to finish.")
             event.ignore()
             return
+        self._set_tabular_load_result(None)
         super().closeEvent(event)
 
 

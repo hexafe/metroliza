@@ -5,12 +5,16 @@ import pytest
 try:
     from PyQt6.QtWidgets import QApplication
 
+    import modules.industrial_sync_dialog as industrial_sync_dialog
+    from modules.industrial_credentials import IndustrialStoredCredentials
     from modules.industrial_data_repository import IndustrialDataRepository
     from modules.industrial_sync_dialog import IndustrialSyncDialog
     from modules.industrial_workflow_state import IndustrialFilterState
 except Exception as exc:  # pragma: no cover - depends on local Qt runtime availability.
     QApplication = None
+    industrial_sync_dialog = None
     IndustrialDataRepository = None
+    IndustrialStoredCredentials = None
     IndustrialSyncDialog = None
     IndustrialFilterState = None
     PYQT_IMPORT_ERROR = exc
@@ -31,7 +35,7 @@ def _app():
     return _QT_APP
 
 
-def test_sync_dialog_keeps_credentials_session_only_and_requires_saved_source(tmp_path):
+def test_sync_dialog_requires_saved_source_and_masks_password(tmp_path):
     _app()
     db_path = str(tmp_path / "industrial.db")
     dialog = IndustrialSyncDialog(db_file=db_path)
@@ -39,6 +43,38 @@ def test_sync_dialog_keeps_credentials_session_only_and_requires_saved_source(tm
     assert dialog.profile_combo.count() == 0
     assert not dialog.sync_now_button.isEnabled()
     assert dialog.password_edit.echoMode() == dialog.password_edit.EchoMode.Password
+    assert dialog.remember_credentials_checkbox.text() == "Remember on this computer"
+    dialog.close()
+
+
+def test_sync_dialog_prefills_locally_saved_credentials(monkeypatch, tmp_path):
+    _app()
+    db_path = str(tmp_path / "industrial.db")
+    IndustrialDataRepository(db_path).upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="events",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+    )
+    monkeypatch.setattr(
+        industrial_sync_dialog,
+        "load_industrial_credentials",
+        lambda _profile_key: IndustrialStoredCredentials(
+            username="operator",
+            password="secret-password",
+            source="test",
+        ),
+    )
+
+    dialog = IndustrialSyncDialog(db_file=db_path)
+
+    assert dialog.username_edit.text() == "operator"
+    assert dialog.password_edit.text() == "secret-password"
+    assert not dialog.remember_credentials_checkbox.isChecked()
     dialog.close()
 
 

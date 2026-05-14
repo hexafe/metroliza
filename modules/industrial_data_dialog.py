@@ -90,6 +90,10 @@ class IndustrialDataDialog(QDialog):
             "Enter production database credentials, check access with a one-row read, "
             "and sync selected reference/ID values into the local cache."
         )
+        self.export_button.setToolTip(
+            "Create an industrial workbook from the local cache, or fetch directly from a "
+            "configured production source when no Metroliza report database is selected."
+        )
         self.analyze_button.setToolTip(
             "Analyze cached industrial data with the shared CSV Summary analytics workflow."
         )
@@ -229,7 +233,7 @@ class IndustrialDataDialog(QDialog):
             self.sources_label.setText(self._format_config_source_status())
             self._set_action_buttons_enabled(db_available=False)
             self.status_label.setText(
-                "Configure production sources now. Select a Metroliza report database here to enable access checks, row fetch/sync, links, export, and analytics."
+                "Configure production sources and use Export to fetch directly. Select a Metroliza report database only when you want cache sync, links, or analytics."
             )
             set_status_variant(self.status_label, "warning")
             return
@@ -326,6 +330,7 @@ class IndustrialDataDialog(QDialog):
             filter_state=self.export_filter_state,
             grouping_state=self.grouping_state,
             include_plots=self.include_plots,
+            config_path=self.config_path,
         )
         self.export_window.exec()
         self.refresh_status()
@@ -405,13 +410,19 @@ class IndustrialDataDialog(QDialog):
             return f"{len(profiles)} production source(s) configured in file"
         return "Production source config file ready"
 
+    def _has_configured_sources(self) -> bool:
+        try:
+            return bool(load_source_profiles_from_config(self.config_path))
+        except Exception:
+            return False
+
     def _set_action_buttons_enabled(self, *, db_available: bool) -> None:
         self.select_database_button.setEnabled(True)
         self.sources_button.setEnabled(True)
         self.initialize_button.setEnabled(db_available)
         self.sync_button.setEnabled(db_available)
         self.links_button.setEnabled(db_available)
-        self.export_button.setEnabled(db_available)
+        self.export_button.setEnabled(db_available or self._has_configured_sources())
         self.analyze_button.setEnabled(db_available)
         self.refresh_links_button.setEnabled(db_available)
 
@@ -428,7 +439,7 @@ class IndustrialDataDialog(QDialog):
         configure_accessibility(self.sources_button, name="Open production sources")
         configure_accessibility(self.sync_button, name="Open industrial connection, access check, and sync")
         configure_accessibility(self.links_button, name="Open production links")
-        configure_accessibility(self.export_button, name="Open industrial export")
+        configure_accessibility(self.export_button, name="Open industrial workbook export")
         configure_accessibility(self.analyze_button, name="Open industrial analytics")
         configure_accessibility(self.initialize_button, name="Initialize industrial cache")
         configure_accessibility(self.refresh_links_button, name="Refresh industrial links")

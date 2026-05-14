@@ -45,6 +45,42 @@ def load_csv_with_fallbacks(file_path, preferred_config=None):
     if not path.exists():
         raise FileNotFoundError(file_path)
 
+    sampled_results = detect_csv_read_configs(path, preferred_config=preferred_config)
+    narrowed_candidates = sampled_results[:_TOP_FULL_READ_CANDIDATES]
+
+    best_df = None
+    best_score = -1
+    best_config = None
+
+    for candidate in narrowed_candidates:
+        delimiter = candidate['delimiter']
+        decimal = candidate['decimal']
+        sample_numeric_columns = candidate['sample_numeric_columns']
+
+        try:
+            df = pd.read_csv(path, delimiter=delimiter, decimal=decimal, low_memory=False)
+        except Exception:
+            continue
+
+        score, _ = _score_dataframe(df, numeric_columns_hint=sample_numeric_columns)
+
+        if score > best_score:
+            best_df = df
+            best_score = score
+            best_config = {'delimiter': delimiter, 'decimal': decimal}
+
+    if best_df is None:
+        raise ValueError(f"Unable to read CSV file: {file_path}")
+
+    return best_df, best_config
+
+
+def detect_csv_read_configs(file_path, preferred_config=None):
+    """Return likely CSV delimiter/decimal configs ordered by sample score."""
+    path = Path(file_path)
+    if not path.exists():
+        raise FileNotFoundError(file_path)
+
     delimiter_candidates = [';', ',', '\t', '|']
     decimal_candidates = [',', '.']
 
@@ -88,33 +124,7 @@ def load_csv_with_fallbacks(file_path, preferred_config=None):
         raise ValueError(f"Unable to read CSV file: {file_path}")
 
     sampled_results.sort(key=lambda item: item['sample_score'], reverse=True)
-    narrowed_candidates = sampled_results[:_TOP_FULL_READ_CANDIDATES]
-
-    best_df = None
-    best_score = -1
-    best_config = None
-
-    for candidate in narrowed_candidates:
-        delimiter = candidate['delimiter']
-        decimal = candidate['decimal']
-        sample_numeric_columns = candidate['sample_numeric_columns']
-
-        try:
-            df = pd.read_csv(path, delimiter=delimiter, decimal=decimal, low_memory=False)
-        except Exception:
-            continue
-
-        score, _ = _score_dataframe(df, numeric_columns_hint=sample_numeric_columns)
-
-        if score > best_score:
-            best_df = df
-            best_score = score
-            best_config = {'delimiter': delimiter, 'decimal': decimal}
-
-    if best_df is None:
-        raise ValueError(f"Unable to read CSV file: {file_path}")
-
-    return best_df, best_config
+    return sampled_results
 
 
 def resolve_default_data_columns(data_frame, selected_indexes):
