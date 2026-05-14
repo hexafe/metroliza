@@ -209,12 +209,26 @@ def groupstats_result_dataframe(groupstats_result: ProductionGroupstatsResult) -
                     "normality_status": row.get("normality_status"),
                 }
             )
+        omnibus = metric.get("omnibus") if isinstance(metric.get("omnibus"), dict) else {}
+        if omnibus:
+            rows.append(
+                {
+                    "metric": metric_name,
+                    "row_type": "overall",
+                    "group": "All groups",
+                    "p_value": omnibus.get("p_value"),
+                    "effect_size": omnibus.get("effect_size"),
+                    "test_used": omnibus.get("test_name"),
+                    "significant": omnibus.get("significant"),
+                }
+            )
         for row in metric.get("pairwise_rows") or []:
             rows.append(
                 {
                     "metric": metric_name,
                     "row_type": "pairwise",
                     "group": f"{row.get('group_a')} vs {row.get('group_b')}",
+                    "delta_mean": row.get("delta_mean"),
                     "p_value": row.get("p_value"),
                     "adjusted_p_value": row.get("adjusted_p_value"),
                     "effect_size": row.get("effect_size"),

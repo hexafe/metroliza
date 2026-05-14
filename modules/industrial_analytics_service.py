@@ -829,7 +829,7 @@ def analyze_production_groupstats(
             raw_payload = analyze_group_metric(
                 metric.display_label,
                 input_result.grouped_values,
-                spec_records=[_metric_spec_record(metric)],
+                spec_records=_metric_spec_records(metric),
                 alpha=alpha,
                 correction_method=correction_method,
             )
@@ -1113,6 +1113,20 @@ def _finite_numeric_values(series: pd.Series) -> list[float]:
     return [float(value) for value in values.tolist()]
 
 
+def _coerce_float(value: Any) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if np.isfinite(numeric) else None
+
+
+def _metric_spec_records(metric: ProductionMetricSelection) -> list[dict[str, float | None]]:
+    if metric.lsl is None and metric.usl is None:
+        return []
+    return [_metric_spec_record(metric)]
+
+
 def _metric_spec_record(metric: ProductionMetricSelection) -> dict[str, float | None]:
     lsl = metric.lsl
     usl = metric.usl
@@ -1126,10 +1140,78 @@ def _metric_spec_record(metric: ProductionMetricSelection) -> dict[str, float | 
     }
 
 
+def _ordered_groupstats_labels(labels: Any) -> list[str]:
+    unique_labels: list[str] = []
+    seen: set[str] = set()
+    for label in labels or []:
+        normalized = str(label)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        unique_labels.append(normalized)
+    population = [label for label in unique_labels if label == "POPULATION"]
+    others = [label for label in unique_labels if label != "POPULATION"]
+    return population + others
+
+
+def _order_groupstats_pairwise_rows(
+    rows: Any,
+    *,
+    group_order: list[str],
+) -> list[dict[str, Any]]:
+    if not isinstance(rows, list):
+        return []
+
+    order_index = {label: index for index, label in enumerate(group_order)}
+    ordered_rows: list[dict[str, Any]] = []
+    seen_pairs: set[frozenset[str]] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        group_a = str(row.get("group_a") or "")
+        group_b = str(row.get("group_b") or "")
+        if not group_a or not group_b or group_a == group_b:
+            continue
+        pair_key = frozenset((group_a, group_b))
+        if pair_key in seen_pairs:
+            continue
+        seen_pairs.add(pair_key)
+
+        normalized = dict(row)
+        if group_a != "POPULATION" and group_b == "POPULATION":
+            normalized["group_a"] = "POPULATION"
+            normalized["group_b"] = group_a
+            delta_mean = _coerce_float(normalized.get("delta_mean"))
+            if delta_mean is not None:
+                normalized["delta_mean"] = -delta_mean
+            group_a, group_b = "POPULATION", group_a
+        elif group_a != "POPULATION" and group_b != "POPULATION":
+            if order_index.get(group_b, 10_000) < order_index.get(group_a, 10_000):
+                normalized["group_a"] = group_b
+                normalized["group_b"] = group_a
+                delta_mean = _coerce_float(normalized.get("delta_mean"))
+                if delta_mean is not None:
+                    normalized["delta_mean"] = -delta_mean
+                group_a, group_b = group_b, group_a
+        ordered_rows.append(normalized)
+
+    def _sort_key(row: dict[str, Any]) -> tuple[int, int, int]:
+        group_a = str(row.get("group_a") or "")
+        group_b = str(row.get("group_b") or "")
+        index_a = order_index.get(group_a, 10_000)
+        index_b = order_index.get(group_b, 10_000)
+        if group_a == "POPULATION" or group_b == "POPULATION":
+            return (0, max(index_a, index_b), min(index_a, index_b))
+        return (1, min(index_a, index_b), max(index_a, index_b))
+
+    return sorted(ordered_rows, key=_sort_key)
+
+
 def _groupstats_metric_payload(
     input_result: ProductionGroupstatsInputResult,
     raw_payload: dict[str, Any],
 ) -> dict[str, Any]:
+    group_order = _ordered_groupstats_labels(input_result.grouped_values.keys())
     return {
         "metric": input_result.metric.display_label,
         "field_name": input_result.metric.field_name,
@@ -1145,7 +1227,11 @@ def _groupstats_metric_payload(
         "analysis_policy": raw_payload.get("analysis_policy"),
         "descriptive_stats": list(raw_payload.get("descriptive_stats") or []),
         "distribution_rows": list(raw_payload.get("distribution_rows") or []),
-        "pairwise_rows": list(raw_payload.get("pairwise_rows") or []),
+        "omnibus": raw_payload.get("omnibus") or {},
+        "pairwise_rows": _order_groupstats_pairwise_rows(
+            list(raw_payload.get("pairwise_rows") or []),
+            group_order=group_order,
+        ),
         "capability": raw_payload.get("capability") or {},
         "backend_used": raw_payload.get("backend_used"),
         "selection_detail": raw_payload.get("selection_detail"),

@@ -176,6 +176,21 @@ def _pairwise_rows(result, grouped_values: Mapping[str, Sequence[Any]]) -> list[
     return rows
 
 
+def _omnibus_payload(result, *, alpha: float) -> dict[str, Any]:
+    omnibus = getattr(result, 'omnibus', None)
+    if omnibus is None:
+        return {}
+    p_value = getattr(omnibus, 'p_value', None)
+    return {
+        'test_name': getattr(omnibus, 'test_name', None),
+        'p_value': p_value,
+        'effect_size': getattr(omnibus, 'effect_size', None),
+        'effect_type': getattr(omnibus, 'effect_type', None),
+        'significant': bool(p_value is not None and p_value < alpha),
+        'warnings': list(getattr(omnibus, 'warnings', ()) or ()),
+    }
+
+
 def _structured_insight_payloads(result) -> list[dict[str, Any]]:
     payloads = []
     for row in getattr(result, 'structured_insights', ()) or ():
@@ -302,6 +317,7 @@ def analyze_group_metric(
         'analysis_policy': _analysis_policy_payload(result),
         'descriptive_stats': _descriptive_rows(result),
         'distribution_rows': _distribution_rows(result),
+        'omnibus': _omnibus_payload(result, alpha=float(alpha)),
         'pairwise_rows': _pairwise_rows(result, grouped_values),
         'capability': _metric_capability_payload(result, grouped_values, spec_payload),
         'backend_used': result.backend_used,

@@ -369,6 +369,7 @@ def _build_distribution_chart(
         trace = {
             "type": trace_type,
             "name": label,
+            "x": [label] * len(values),
             "y": values,
             "marker": {"color": _plot_color(index, label)},
             "hovertemplate": f"{html.escape(label)}<br>{metric.display_label}=%{{y}}<extra></extra>",
@@ -386,7 +387,12 @@ def _build_distribution_chart(
         chart_type=chart_type,
         data=traces,
         layout={
-            "xaxis": {"title": "Group"},
+            "xaxis": {
+                "title": "Group",
+                "type": "category",
+                "categoryorder": "array",
+                "categoryarray": [str(trace["name"]) for trace in traces],
+            },
             "yaxis": {"title": metric.display_label},
             **_metric_reference_markings(metric, _numeric_values(frame[metric.field_name]), axis="y"),
         },
@@ -1222,9 +1228,22 @@ def _render_groupstats(groupstats: dict[str, Any]) -> str:
                 "normality_status",
             ),
         )
+        omnibus = _render_table(
+            _groupstats_omnibus_rows(metric.get("omnibus")),
+            columns=("test_name", "p_value", "effect_size", "effect_type", "significant"),
+        )
         pairwise = _render_table(
             metric.get("pairwise_rows"),
-            columns=("group_a", "group_b", "p_value", "adjusted_p_value", "effect_size", "test_used"),
+            columns=(
+                "group_a",
+                "group_b",
+                "delta_mean",
+                "p_value",
+                "adjusted_p_value",
+                "effect_size",
+                "significant",
+                "test_used",
+            ),
         )
         insight = metric.get("primary_insight") if isinstance(metric.get("primary_insight"), dict) else {}
         insight_text = str(
@@ -1243,6 +1262,8 @@ def _render_groupstats(groupstats: dict[str, Any]) -> str:
             f"{descriptive}"
             "<h3>Distribution checks</h3>"
             f"{distribution}"
+            "<h3>Overall group test</h3>"
+            f"{omnibus}"
             "<h3>Pairwise tests</h3>"
             f"{pairwise}"
             "</article>"
@@ -1250,6 +1271,12 @@ def _render_groupstats(groupstats: dict[str, Any]) -> str:
     if not cards:
         return ""
     return f'<section class="stats-section">{"".join(cards)}</section>'
+
+
+def _groupstats_omnibus_rows(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, dict) or not value:
+        return []
+    return [value]
 
 
 def _render_table(rows: Any, *, columns: tuple[str, ...]) -> str:

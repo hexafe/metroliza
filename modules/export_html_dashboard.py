@@ -858,6 +858,14 @@ def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str, them
         y_label=str(payload.get("y_label") or "Measurement"),
         theme=theme,
     )
+    category_labels = [str(trace["name"]) for trace in traces]
+    layout["xaxis"].update(
+        {
+            "type": "category",
+            "categoryorder": "array",
+            "categoryarray": category_labels,
+        }
+    )
     shapes, annotations = _build_horizontal_reference_shapes(nominal=nominal, lsl=lsl, usl=usl, theme=theme)
     layout["shapes"] = shapes
     layout["annotations"] = annotations

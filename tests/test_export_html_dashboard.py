@@ -368,6 +368,32 @@ class TestExportHtmlDashboard(unittest.TestCase):
         expected_bin_width = (max(all_values) - min(all_values)) / expected_bin_count
         self.assertAlmostEqual(spec['data'][0]['xbins']['size'], expected_bin_width)
 
+    def test_group_analysis_violin_plotly_spec_treats_numeric_labels_as_categories(self):
+        spec = _build_group_analysis_plotly_spec(
+            'FEATURE_1',
+            'violin',
+            {
+                'groups': [
+                    {'group': '73211', 'values': [9.99, 10.01, 10.03]},
+                    {'group': 'A', 'values': [10.08, 10.11, 10.16]},
+                    {'group': 'POPULATION', 'values': [9.95, 10.0, 10.05]},
+                ],
+            },
+        )
+
+        xaxis = spec['layout']['xaxis']
+        self.assertEqual(xaxis['type'], 'category')
+        self.assertEqual(xaxis['categoryorder'], 'array')
+        self.assertEqual(xaxis['categoryarray'], ['73211', 'A', 'POPULATION'])
+        self.assertEqual([trace['name'] for trace in spec['data']], ['73211', 'A', 'POPULATION'])
+        self.assertTrue(
+            all(
+                isinstance(x_value, str)
+                for trace in spec['data']
+                for x_value in trace['x']
+            )
+        )
+
     def test_summary_histogram_plotly_spec_uses_matplotlib_bin_range(self):
         values = [0.0, 2.0, 4.0, 6.0, 8.0, 10.0]
         spec = _build_plotly_chart_spec(

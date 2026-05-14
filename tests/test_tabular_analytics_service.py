@@ -6,7 +6,11 @@ import zipfile
 import pandas as pd
 
 from modules.industrial_analytics_dashboard import build_production_dashboard_manifest
-from modules.industrial_analytics_service import ProductionGroupstatsResult, aggregate_production_frame
+from modules.industrial_analytics_service import (
+    ProductionGroupstatsResult,
+    aggregate_production_frame,
+    analyze_production_groupstats,
+)
 from modules.industrial_analytics_state import (
     ProductionAggregationState,
     ProductionChartSelection,
@@ -310,6 +314,64 @@ def test_tabular_data_reuses_dashboard_and_aggregation_path(tmp_path) -> None:
     traces = histogram["plotly_spec"]["data"]
     assert traces[0]["bingroup"] == f"hist-{metrics[0].field_name}"
     assert traces[0]["xbins"]["size"] > 0
+
+
+def test_tabular_groupstats_without_specs_runs_overall_and_unique_pairwise_tests() -> None:
+    frame = pd.DataFrame(
+        {
+            "process_datetime": pd.date_range("2026-05-10 08:00", periods=24, freq="h"),
+            "GROUP": ["POPULATION"] * 8 + ["A"] * 8 + ["B"] * 8,
+            "length_mm": [
+                1.0,
+                2.0,
+                3.0,
+                4.0,
+                5.0,
+                6.0,
+                7.0,
+                8.0,
+                10.0,
+                11.0,
+                12.0,
+                13.0,
+                14.0,
+                15.0,
+                16.0,
+                17.0,
+                1.1,
+                2.1,
+                3.1,
+                4.1,
+                5.1,
+                6.1,
+                7.1,
+                8.1,
+            ],
+        }
+    )
+
+    result = analyze_production_groupstats(
+        frame,
+        (ProductionMetricSelection("length_mm", "Length Mm"),),
+        group_fields=("GROUP",),
+    )
+
+    metric = result.metrics[0]
+    assert metric["omnibus"]["test_name"]
+    assert metric["omnibus"]["p_value"] is not None
+    assert [(row["group_a"], row["group_b"]) for row in metric["pairwise_rows"]] == [
+        ("POPULATION", "A"),
+        ("POPULATION", "B"),
+        ("A", "B"),
+    ]
+    assert all(
+        (row["group_b"], row["group_a"]) not in {
+            (other["group_a"], other["group_b"])
+            for other in metric["pairwise_rows"]
+        }
+        for row in metric["pairwise_rows"]
+    )
+    assert {row["significant"] for row in metric["pairwise_rows"]} == {False, True}
 
 
 def test_tabular_aggregation_counts_source_rows_when_metric_values_are_missing() -> None:

@@ -13,6 +13,7 @@ from modules.industrial_analytics_dashboard import (
 )
 from modules.industrial_analytics_service import (
     ProductionAggregationResult,
+    ProductionGroupstatsResult,
     aggregate_production_frame,
     analyze_production_groupstats,
     apply_reference_cohorts,
@@ -452,3 +453,130 @@ def test_distribution_charts_use_selected_group_field_before_default_columns() -
         chart = next(chart for chart in manifest["charts"] if chart["chart_type"] == chart_type)
         trace_names = {trace["name"] for trace in chart["plotly_spec"]["data"]}
         assert trace_names == {"M1", "M2"}
+
+
+def test_distribution_charts_force_numeric_group_names_to_categories() -> None:
+    frame = pd.DataFrame(
+        {
+            "process_datetime": pd.date_range("2026-05-10 08:00", periods=6, freq="h"),
+            "GROUP": ["73211", "73211", "A", "A", "POPULATION", "POPULATION"],
+            "length_mm": [10.0, 10.2, 11.0, 11.2, 9.8, 10.1],
+        }
+    )
+
+    manifest = build_production_dashboard_manifest(
+        frame=frame,
+        metric_selection=(ProductionMetricSelection("length_mm", "Length Mm"),),
+        aggregation_state=ProductionAggregationState(
+            time_bucket="none",
+            aggregation_methods=("mean",),
+            group_fields=("GROUP",),
+        ),
+        chart_selection=ProductionChartSelection(
+            time_series=False,
+            histogram=False,
+            violin=True,
+            box=True,
+            groupstats=False,
+        ),
+    )
+
+    for chart_type in {"violin", "box"}:
+        chart = next(chart for chart in manifest["charts"] if chart["chart_type"] == chart_type)
+        xaxis = chart["plotly_spec"]["layout"]["xaxis"]
+        traces = chart["plotly_spec"]["data"]
+        assert xaxis["type"] == "category"
+        assert xaxis["categoryorder"] == "array"
+        assert xaxis["categoryarray"] == ["73211", "A", "POPULATION"]
+        assert [trace["name"] for trace in traces] == ["73211", "A", "POPULATION"]
+        assert all(
+            isinstance(x_value, str)
+            for trace in traces
+            for x_value in trace["x"]
+        )
+
+
+def test_groupstats_html_renders_overall_and_ordered_pairwise_rows(tmp_path) -> None:
+    frame = pd.DataFrame(
+        {
+            "process_datetime": pd.date_range("2026-05-10 08:00", periods=3, freq="h"),
+            "GROUP": ["POPULATION", "A", "B"],
+            "length_mm": [10.0, 12.0, 10.1],
+        }
+    )
+    groupstats = ProductionGroupstatsResult(
+        metrics=(
+            {
+                "metric": "Length Mm",
+                "skipped": False,
+                "primary_insight": {"headline": "A differs from the population."},
+                "descriptive_stats": [],
+                "distribution_rows": [],
+                "omnibus": {
+                    "test_name": "Welch ANOVA",
+                    "p_value": 0.001,
+                    "effect_size": 0.9,
+                    "effect_type": "eta_squared",
+                    "significant": True,
+                },
+                "pairwise_rows": [
+                    {
+                        "group_a": "POPULATION",
+                        "group_b": "A",
+                        "delta_mean": -2.0,
+                        "p_value": 0.001,
+                        "adjusted_p_value": 0.003,
+                        "effect_size": 1.2,
+                        "significant": True,
+                        "test_used": "Tukey HSD",
+                    },
+                    {
+                        "group_a": "POPULATION",
+                        "group_b": "B",
+                        "delta_mean": -0.1,
+                        "p_value": 0.8,
+                        "adjusted_p_value": 0.8,
+                        "effect_size": 0.02,
+                        "significant": False,
+                        "test_used": "Tukey HSD",
+                    },
+                    {
+                        "group_a": "A",
+                        "group_b": "B",
+                        "delta_mean": 1.9,
+                        "p_value": 0.002,
+                        "adjusted_p_value": 0.006,
+                        "effect_size": 1.1,
+                        "significant": True,
+                        "test_used": "Tukey HSD",
+                    },
+                ],
+            },
+        ),
+    )
+    manifest = build_production_dashboard_manifest(
+        frame=frame,
+        metric_selection=(ProductionMetricSelection("length_mm", "Length Mm"),),
+        chart_selection=ProductionChartSelection(
+            time_series=False,
+            histogram=False,
+            violin=False,
+            box=False,
+            groupstats=True,
+        ),
+        groupstats_result=groupstats,
+    )
+    output_file = tmp_path / "dashboard.html"
+
+    write_production_dashboard(manifest, output_file)
+
+    html_text = output_file.read_text(encoding="utf-8")
+    assert "Overall group test" in html_text
+    assert "Welch ANOVA" in html_text
+    assert "Pairwise tests" in html_text
+    assert html_text.index("<td>POPULATION</td><td>A</td>") < html_text.index(
+        "<td>POPULATION</td><td>B</td>"
+    )
+    assert html_text.index("<td>POPULATION</td><td>B</td>") < html_text.index(
+        "<td>A</td><td>B</td>"
+    )
