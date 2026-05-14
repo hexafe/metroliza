@@ -49,6 +49,16 @@ def test_export_dialog_uses_csv_summary_style_readiness_and_plot_toggle(tmp_path
     assert not dialog.start_button.isEnabled()
     assert dialog.include_plots_checkbox.text() == "Include plots"
     assert dialog.plot_status_label.text() == "Plots disabled"
+    assert dialog.clear_filter_button.isEnabled()
+    assert dialog.clear_grouping_button.isEnabled()
+
+    dialog.clear_filter()
+    dialog.clear_grouping()
+
+    assert dialog.filter_state.references == ()
+    assert dialog.grouping_state.fields == ()
+    assert not dialog.clear_filter_button.isEnabled()
+    assert not dialog.clear_grouping_button.isEnabled()
 
     dialog.output_file = output_path
     dialog._sync_ui_state()
@@ -56,8 +66,8 @@ def test_export_dialog_uses_csv_summary_style_readiness_and_plot_toggle(tmp_path
 
     assert dialog.start_button.isEnabled()
     assert thread.output_file == output_path
-    assert thread.filter_state.references == ("REF-1",)
-    assert thread.grouping_state.fields == ("station",)
+    assert thread.filter_state.references == ()
+    assert thread.grouping_state.fields == ()
     assert thread.include_charts is False
     dialog.close()
 

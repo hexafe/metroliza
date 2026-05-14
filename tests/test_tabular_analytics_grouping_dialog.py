@@ -204,11 +204,11 @@ def test_grouping_dialog_column_panes_are_tall_enough_for_multiple_columns() -> 
         dialog.show()
         app.processEvents()
         app.processEvents()
-        assert dialog.available_columns_list.minimumHeight() >= 150
+        assert dialog.available_columns_list.minimumHeight() >= 120
         assert dialog.selected_columns_list.minimumHeight() >= 120
         assert dialog.available_columns_list.height() >= 120
         assert dialog.selected_columns_list.height() >= 120
-        assert dialog.selector_list.minimumHeight() >= 220
+        assert dialog.selector_list.minimumHeight() >= 80
     finally:
         dialog.close()
 
@@ -323,6 +323,47 @@ def test_matching_rows_pane_removes_bulk_buttons_and_keeps_compact_pagination_ro
         assert dialog.selector_page_label.text() == "Page 1 of 2"
         assert dialog.previous_page_button.isEnabled() is False
         assert dialog.next_page_button.isEnabled() is True
+    finally:
+        dialog.close()
+
+
+def test_matching_rows_paging_controls_stay_below_selector_list_at_constrained_height() -> None:
+    app = _app()
+    frame = pd.DataFrame(
+        {
+            "source_row_number": list(range(1, 1003)),
+            "tracecode": [f"TC-{index:04d}" for index in range(1002)],
+            "length_mm": [float(index) for index in range(1002)],
+        }
+    )
+    dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
+    try:
+        dialog.selector_columns = ["tracecode"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+        dialog.resize(dialog.width(), 520)
+        dialog.show()
+        app.processEvents()
+        app.processEvents()
+
+        selector_rect = dialog.selector_list.geometry()
+        paging_rects = [
+            widget.geometry()
+            for widget in (
+                dialog.previous_page_button,
+                dialog.selector_page_label,
+                dialog.next_page_button,
+            )
+        ]
+
+        assert all(widget.isVisible() for widget in (
+            dialog.previous_page_button,
+            dialog.selector_page_label,
+            dialog.next_page_button,
+        ))
+        assert all(rect.height() > 0 and rect.width() > 0 for rect in paging_rects)
+        assert all(selector_rect.intersected(rect).isEmpty() for rect in paging_rects)
+        assert all(selector_rect.bottom() < rect.top() for rect in paging_rects)
     finally:
         dialog.close()
 

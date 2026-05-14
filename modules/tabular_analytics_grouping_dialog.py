@@ -107,9 +107,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.selected_columns_list = QListWidget()
         for list_widget in (self.available_columns_list, self.selected_columns_list):
             apply_list_selection_style(list_widget)
-            list_widget.setMinimumHeight(150)
+            list_widget.setMinimumHeight(120)
             list_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.selected_columns_list.setMinimumHeight(150)
+        self.selected_columns_list.setMinimumHeight(120)
         configure_accessibility(self.column_search, name="Search CSV grouping columns")
         configure_accessibility(self.selected_column_search, name="Search selected CSV grouping columns")
         configure_accessibility(self.available_columns_list, name="Available CSV grouping columns")
@@ -136,10 +136,10 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.selector_list = QListWidget()
         self.selector_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         apply_list_selection_style(self.selector_list)
-        self.selector_list.setMinimumHeight(220)
+        self.selector_list.setMinimumHeight(80)
         self.selector_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         configure_accessibility(self.selector_list, name="CSV grouping row selectors")
-        selector_column.addWidget(self.selector_list)
+        selector_column.addWidget(self.selector_list, 1)
         selector_paging = QHBoxLayout()
         selector_paging.setSpacing(8)
         self.previous_page_button = QPushButton("Previous")
@@ -151,6 +151,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
         selector_paging.addWidget(self.next_page_button)
         selector_paging.addStretch(1)
         selector_column.addLayout(selector_paging)
+        selector_column.setStretch(3, 1)
+        selector_column.setStretch(4, 0)
         list_splitter.addWidget(selector_widget)
 
         groups_widget = QWidget()
@@ -160,10 +162,10 @@ class TabularAnalyticsGroupingDialog(QDialog):
         groups_column.addWidget(QLabel("Groups"))
         self.groups_list = QListWidget()
         apply_list_selection_style(self.groups_list)
-        self.groups_list.setMinimumHeight(220)
+        self.groups_list.setMinimumHeight(120)
         self.groups_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         configure_accessibility(self.groups_list, name="CSV analytics groups")
-        groups_column.addWidget(self.groups_list)
+        groups_column.addWidget(self.groups_list, 1)
         list_splitter.addWidget(groups_widget)
 
         members_widget = QWidget()
@@ -173,10 +175,10 @@ class TabularAnalyticsGroupingDialog(QDialog):
         members_column.addWidget(QLabel("Rows in selected group"))
         self.group_members_list = QListWidget()
         apply_list_selection_style(self.group_members_list)
-        self.group_members_list.setMinimumHeight(220)
+        self.group_members_list.setMinimumHeight(120)
         self.group_members_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         configure_accessibility(self.group_members_list, name="Rows in selected CSV group")
-        members_column.addWidget(self.group_members_list)
+        members_column.addWidget(self.group_members_list, 1)
         list_splitter.addWidget(members_widget)
         list_splitter.setStretchFactor(0, 2)
         list_splitter.setStretchFactor(1, 1)
@@ -231,11 +233,11 @@ class TabularAnalyticsGroupingDialog(QDialog):
 
     def _configure_stretch_panes(self) -> None:
         pane_specs = (
-            (self.available_columns_list, 150),
-            (self.selected_columns_list, 150),
-            (self.selector_list, 220),
-            (self.groups_list, 220),
-            (self.group_members_list, 220),
+            (self.available_columns_list, 120),
+            (self.selected_columns_list, 120),
+            (self.selector_list, 80),
+            (self.groups_list, 120),
+            (self.group_members_list, 120),
         )
         for widget, minimum_height in pane_specs:
             widget.setMinimumHeight(minimum_height)

@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import pandas as pd
+
 try:
     from modules import industrial_workers
     from modules.industrial_analytics_workflow import AnalyticsCancelled
     from modules.industrial_workers import IndustrialAnalyticsThread
-    from modules.tabular_analytics_service import TabularColumnFilter
+    from modules.tabular_analytics_service import TabularAnalyticsLoadResult, TabularColumnFilter
 except ImportError as exc:  # pragma: no cover - environment/order dependent
     industrial_workers = None
     AnalyticsCancelled = None
     IndustrialAnalyticsThread = None
+    TabularAnalyticsLoadResult = None
     TabularColumnFilter = None
     PYQT_IMPORT_ERROR = exc
 else:
@@ -112,8 +115,11 @@ def test_industrial_analytics_thread_passes_tabular_grouping_to_workflow(
     _skip_if_pyqt_unavailable()
 
     result = object()
-    grouping_df = object()
-    tabular_load_result = object()
+    grouping_df = pd.DataFrame({"REPORT_ID": [1], "GROUP": ["POPULATION"]})
+    tabular_load_result = TabularAnalyticsLoadResult(
+        dataframe=pd.DataFrame({"length_mm": [10.0]}),
+        metric_candidates=(),
+    )
     captured = {}
 
     def run_tabular(**kwargs):
@@ -143,7 +149,8 @@ def test_industrial_analytics_thread_passes_tabular_grouping_to_workflow(
 
     assert results == [result]
     assert errors == []
-    assert captured["grouping_df"] is grouping_df
+    assert captured["grouping_df"] is not grouping_df
+    assert captured["grouping_df"].equals(grouping_df)
     assert captured["tabular_load_result"] is tabular_load_result
     assert captured["tabular_filter_columns"] == ("tracecode",)
     assert captured["tabular_filter_keys"] == (("TC-001",),)

@@ -411,6 +411,7 @@ def test_tabular_analytics_dialog_starts_with_load_before_row_filter() -> None:
         assert dialog.filter_row_label.isHidden()
         assert dialog.filter_summary_label.isHidden()
         assert dialog.filters_button.isHidden()
+        assert dialog.clear_filter_button.isHidden()
     finally:
         dialog.close()
 
@@ -434,7 +435,8 @@ def test_tabular_analytics_dialog_uses_manual_groups_for_aggregation_state() -> 
 
         thread = dialog.create_analytics_thread()
 
-        assert thread.grouping_df is grouping_df
+        assert thread.grouping_df is not grouping_df
+        assert thread.grouping_df.equals(grouping_df)
         assert thread.aggregation_state.group_fields == ("GROUP",)
         assert dialog.grouping_summary_label.text() == "Groups: 1 custom + POPULATION"
     finally:
@@ -451,6 +453,7 @@ def test_tabular_groupstats_is_disabled_until_manual_groups_are_available() -> N
 
         assert not dialog.groupstats_checkbox.isEnabled()
         assert not dialog.groupstats_checkbox.isChecked()
+        assert "manual CSV/Excel groups" in dialog.groupstats_checkbox.toolTip()
 
         grouping_df = pd.DataFrame(
             {
@@ -463,6 +466,48 @@ def test_tabular_groupstats_is_disabled_until_manual_groups_are_available() -> N
         dialog._sync_ui_state()
 
         assert dialog.groupstats_checkbox.isEnabled()
+        assert dialog.groupstats_checkbox.toolTip() == ""
+    finally:
+        dialog.close()
+
+
+def test_tabular_clear_controls_reset_filters_and_groups(tmp_path) -> None:
+    _app()
+    input_file = tmp_path / "table.csv"
+    pd.DataFrame(
+        {
+            "TraceCode": ["TC-001", "TC-002"],
+            "Length mm": [10.0, 10.2],
+        }
+    ).to_csv(input_file, index=False)
+
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.input_file = str(input_file)
+        dialog.load_metrics()
+        grouping_df = pd.DataFrame(
+            {
+                "REPORT_ID": [1, 2],
+                "GROUP": ["Fixture A", "POPULATION"],
+            }
+        )
+        dialog.tabular_column_filters = (TabularColumnFilter("tracecode", selected_values=("TC-001",)),)
+        dialog.set_df_for_grouping(grouping_df)
+        dialog.set_grouping_applied(True)
+        dialog._sync_ui_state()
+
+        assert dialog.clear_filter_button.isEnabled()
+        assert dialog.clear_groups_button.isEnabled()
+
+        dialog.clear_tabular_filter_and_groups()
+
+        assert dialog.tabular_column_filters == ()
+        assert dialog.tabular_filter_columns == ()
+        assert dialog.tabular_filter_keys == ()
+        assert dialog.df_for_grouping is None
+        assert dialog.grouping_applied is False
+        assert not dialog.clear_filter_button.isEnabled()
+        assert not dialog.clear_groups_button.isEnabled()
     finally:
         dialog.close()
 
@@ -693,7 +738,10 @@ def test_analytics_dialog_wires_cancellable_worker_without_running_job(tmp_path)
             self.cancel_called = True
 
     thread = NonStartingAnalyticsThread()
-    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_PRODUCTION_CACHE)
+    dialog = IndustrialAnalyticsDialog(
+        db_file=str(tmp_path / "production.db"),
+        source_kind=SOURCE_PRODUCTION_CACHE,
+    )
     try:
         dialog.create_analytics_thread = lambda: thread
 

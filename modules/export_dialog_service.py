@@ -1,6 +1,12 @@
 """UI-independent orchestration helpers for export dialog workflows."""
 
-from modules.contracts import AppPaths, ExportOptions, ExportRequest, validate_export_options, validate_paths
+from modules.contracts import (
+    AppPaths,
+    ExportOptions,
+    ExportRequest,
+    validate_export_options,
+    validate_export_request,
+)
 from modules.export_preset_utils import build_export_options_for_preset
 from pathlib import Path
 
@@ -36,6 +42,17 @@ def build_export_options_payload(
     )
 
 
+def normalize_excel_export_path(excel_file):
+    """Return an export path string, appending .xlsx when no suffix is provided."""
+    raw_path = str(excel_file or "").strip()
+    if not raw_path:
+        return raw_path
+    path = Path(raw_path)
+    if not path.suffix:
+        path = path.with_suffix(".xlsx")
+    return str(path)
+
+
 def build_validated_export_request(*, db_file, excel_file, selected_preset, export_type, export_target, sorting_parameter, violin_input, summary_scale_input, hide_ok_results, filter_query, grouping_df, generate_html_dashboard=False, include_industrial_context=False, group_analysis_level="off", group_analysis_scope="auto"):
     """Build and validate ``ExportRequest`` from raw dialog selections."""
     options = validate_export_options(
@@ -54,13 +71,13 @@ def build_validated_export_request(*, db_file, excel_file, selected_preset, expo
         )
     )
 
-    paths = AppPaths(db_file=db_file, excel_file=str(excel_file))
-    validate_paths(paths)
-    return ExportRequest(
-        paths=paths,
-        options=options,
-        filter_query=filter_query,
-        grouping_df=grouping_df,
+    return validate_export_request(
+        ExportRequest(
+            paths=AppPaths(db_file=db_file, excel_file=normalize_excel_export_path(excel_file)),
+            options=options,
+            filter_query=filter_query,
+            grouping_df=grouping_df,
+        )
     )
 
 

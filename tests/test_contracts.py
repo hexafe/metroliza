@@ -5,14 +5,18 @@ import pandas as pd
 from modules.contracts import (
     AppPaths,
     ExportOptions,
+    IndustrialAnalyticsRequest,
     ParseRequest,
     ExportRequest,
     validate_export_options,
     validate_export_request,
     validate_grouping_df,
+    validate_industrial_analytics_request,
     validate_parse_request,
     validate_paths,
 )
+from modules.industrial_analytics_state import ProductionMetricSelection
+from modules.tabular_analytics_service import TabularColumnFilter
 
 
 class TestValidateParseRequest(unittest.TestCase):
@@ -223,6 +227,55 @@ class TestValidateExportRequest(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             validate_export_request(request)
+
+
+class TestValidateIndustrialAnalyticsRequest(unittest.TestCase):
+    def test_normalizes_tabular_request_paths_filters_and_grouping(self):
+        grouping_df = pd.DataFrame({'REPORT_ID': [1], 'GROUP': ['POPULATION']})
+        request = IndustrialAnalyticsRequest(
+            source_kind='Tabular_File',
+            input_file=' table.csv ',
+            output_dashboard_file='dashboard',
+            output_workbook_file='workbook',
+            metric_selection=(ProductionMetricSelection('length_mm'),),
+            tabular_filter_columns=['tracecode'],
+            tabular_filter_keys=[['TC-001']],
+            tabular_column_filters=[TabularColumnFilter('line', selected_values=('L1',))],
+            grouping_df=grouping_df,
+        )
+
+        validated = validate_industrial_analytics_request(request, require_runnable=True)
+
+        self.assertEqual(validated.source_kind, 'tabular_file')
+        self.assertEqual(validated.input_file, 'table.csv')
+        self.assertEqual(validated.output_dashboard_file, 'dashboard.html')
+        self.assertEqual(validated.output_workbook_file, 'workbook.xlsx')
+        self.assertEqual(validated.tabular_filter_columns, ('tracecode',))
+        self.assertEqual(validated.tabular_filter_keys, (('TC-001',),))
+        self.assertEqual(validated.tabular_column_filters, (TabularColumnFilter('line', selected_values=('L1',)),))
+        self.assertIsNot(validated.grouping_df, grouping_df)
+        self.assertTrue(validated.grouping_df.equals(grouping_df))
+
+    def test_rejects_runnable_tabular_request_without_input(self):
+        with self.assertRaisesRegex(ValueError, 'Select a CSV or Excel file'):
+            validate_industrial_analytics_request(
+                IndustrialAnalyticsRequest(
+                    source_kind='tabular_file',
+                    output_dashboard_file='dashboard.html',
+                ),
+                require_runnable=True,
+            )
+
+    def test_rejects_wrong_dashboard_suffix(self):
+        with self.assertRaisesRegex(ValueError, 'Dashboard output path'):
+            validate_industrial_analytics_request(
+                IndustrialAnalyticsRequest(
+                    source_kind='production_cache',
+                    db_file='production.db',
+                    output_dashboard_file='dashboard.txt',
+                ),
+                require_runnable=True,
+            )
 
 
 if __name__ == '__main__':

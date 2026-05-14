@@ -7,6 +7,9 @@ images without depending directly on a specific spreadsheet engine.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
+from pathlib import Path
+import tempfile
 from typing import Any, Protocol
 
 import pandas as pd
@@ -350,6 +353,30 @@ class ExcelExportBackend:
         """Return a workbook adapter for format and chart creation."""
         return XlsxWorkbookAdapter(writer.book)
 
+    def create_temporary_workbook_path(self, excel_file: str) -> Path:
+        """Reserve a same-directory temporary workbook path for atomic commit."""
+        target_path = Path(excel_file)
+        fd, temp_name = tempfile.mkstemp(
+            prefix=f".{target_path.stem}.tmp-",
+            suffix=".xlsx",
+            dir=str(target_path.parent),
+        )
+        os.close(fd)
+        return Path(temp_name)
+
+    def replace_workbook(self, temp_path: Path, target_path: Path) -> None:
+        """Atomically replace the target workbook with the completed temp file."""
+        os.replace(temp_path, target_path)
+
+    def remove_temporary_workbook(self, temp_path: Path | None) -> None:
+        """Delete a temporary workbook if it still exists."""
+        if temp_path is None:
+            return
+        try:
+            temp_path.unlink()
+        except FileNotFoundError:
+            return
+
     def run(self, thread: Any) -> bool:
         """Run export pipeline with writer lifecycle management.
 
@@ -360,12 +387,28 @@ class ExcelExportBackend:
         Returns:
             bool: `True` when pipeline completes successfully, otherwise `False`.
         """
-        excel_writer = self.create_writer(thread.excel_file)
+        target_path = Path(thread.excel_file)
+        temp_path = self.create_temporary_workbook_path(str(target_path))
+        excel_writer = None
+        completed = False
         try:
-            completed = thread.run_export_pipeline(excel_writer)
-            if not completed:
-                return False
-        finally:
-            self.close_writer(excel_writer)
+            excel_writer = self.create_writer(str(temp_path))
+            try:
+                completed = thread.run_export_pipeline(excel_writer)
+            finally:
+                self.close_writer(excel_writer)
+        except BaseException:
+            self.remove_temporary_workbook(temp_path)
+            raise
+
+        if not completed:
+            self.remove_temporary_workbook(temp_path)
+            return False
+
+        try:
+            self.replace_workbook(temp_path, target_path)
+        except BaseException:
+            self.remove_temporary_workbook(temp_path)
+            raise
 
         return True

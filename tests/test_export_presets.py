@@ -791,6 +791,43 @@ class TestExportDialogServiceRequestAssembly(unittest.TestCase):
         self.assertEqual(request.options.group_analysis_level, 'standard')
         self.assertEqual(request.options.group_analysis_scope, 'multi_reference')
 
+    def test_build_validated_export_request_appends_xlsx_for_extensionless_path(self):
+        from modules.export_dialog_service import build_validated_export_request
+
+        request = build_validated_export_request(
+            db_file='input.db',
+            excel_file=Path('out'),
+            selected_preset=EXPORT_PRESET_FAST_DIAGNOSTICS,
+            export_type='Line',
+            export_target='excel_xlsx',
+            sorting_parameter='Sample #',
+            violin_input='6',
+            summary_scale_input='0',
+            hide_ok_results=False,
+            filter_query='SELECT * FROM T',
+            grouping_df=None,
+        )
+
+        self.assertEqual(request.paths.excel_file, 'out.xlsx')
+
+    def test_build_validated_export_request_rejects_non_xlsx_extension(self):
+        from modules.export_dialog_service import build_validated_export_request
+
+        with self.assertRaisesRegex(ValueError, r'\.xlsx extension'):
+            build_validated_export_request(
+                db_file='input.db',
+                excel_file=Path('out.xls'),
+                selected_preset=EXPORT_PRESET_FAST_DIAGNOSTICS,
+                export_type='Line',
+                export_target='excel_xlsx',
+                sorting_parameter='Sample #',
+                violin_input='6',
+                summary_scale_input='0',
+                hide_ok_results=False,
+                filter_query='SELECT * FROM T',
+                grouping_df=None,
+            )
+
 
 class TestExportDialogThreadStartupContract(unittest.TestCase):
     @classmethod
@@ -906,6 +943,78 @@ class TestExportDialogThreadStartupContract(unittest.TestCase):
         self.assertEqual(request.options.violin_plot_min_samplesize, 2)
         self.assertEqual(request.options.summary_plot_scale, 0)
         self.assertTrue(request.options.generate_html_dashboard)
+
+    def test_show_loading_screen_validation_failure_warns_without_progress_or_thread(self):
+        from modules.export_dialog import ExportDialog
+
+        class _FakeButton:
+            def __init__(self):
+                self.disabled_states = []
+
+            def setDisabled(self, value):
+                self.disabled_states.append(value)
+
+        class _FakeLineEdit:
+            def __init__(self, value):
+                self._value = value
+
+            def text(self):
+                return self._value
+
+            def setText(self, value):
+                self._value = value
+
+        class _FakeCombo:
+            def __init__(self, value):
+                self._value = value
+
+            def currentText(self):
+                return self._value
+
+        class _FakeCheckbox:
+            def __init__(self, checked):
+                self._checked = checked
+
+            def isChecked(self):
+                return self._checked
+
+        class _FakeMessageBox:
+            warning_calls = []
+
+            @staticmethod
+            def warning(*args):
+                _FakeMessageBox.warning_calls.append(args)
+
+        dialog = ExportDialog.__new__(ExportDialog)
+        dialog.export_button = _FakeButton()
+        dialog.violin_plot_min_samplesize = _FakeLineEdit('6')
+        dialog.summary_plot_scale = _FakeLineEdit('0')
+        dialog.preset_combobox = _FakeCombo('Main plots')
+        dialog.export_type_combobox = _FakeCombo('Line')
+        dialog.sort_measurements_combobox = _FakeCombo('Sample #')
+        dialog.include_google_sheets_checkbox = _FakeCheckbox(False)
+        dialog.generate_html_dashboard_checkbox = _FakeCheckbox(False)
+        dialog.hide_ok_results_checkbox = _FakeCheckbox(False)
+        dialog.filter_query = 'SELECT 1'
+        dialog.df_for_grouping = None
+        dialog.db_file = 'input.db'
+        dialog.excel_file = Path('out.xls')
+        dialog.config = {}
+        dialog.config_path = Path('/tmp/nonexistent-export-config.json')
+
+        with patch('modules.export_dialog.QMessageBox', _FakeMessageBox), \
+             patch('modules.export_dialog.create_worker_progress_dialog') as progress_mock, \
+             patch('modules.export_dialog.save_export_dialog_config') as save_mock, \
+             patch('modules.export_dialog.create_export_data_thread') as thread_mock:
+            dialog.show_loading_screen()
+
+        self.assertEqual(len(_FakeMessageBox.warning_calls), 1)
+        self.assertIn('.xlsx extension', _FakeMessageBox.warning_calls[0][2])
+        progress_mock.assert_not_called()
+        thread_mock.assert_not_called()
+        save_mock.assert_not_called()
+        self.assertEqual(dialog.export_button.disabled_states, [])
+        self.assertFalse(hasattr(dialog, 'loading_dialog'))
 
     def test_show_loading_screen_refreshes_enrichment_notice_before_worker_starts(self):
         from modules.export_dialog import ExportDialog

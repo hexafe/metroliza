@@ -72,13 +72,17 @@ class IndustrialExportDialog(QDialog):
         self.readiness_label = status_chip("Select an output workbook to enable export.", "warning")
 
         self.edit_filter_button = QPushButton("Edit...")
+        self.clear_filter_button = QPushButton("Clear")
         self.edit_grouping_button = QPushButton("Edit...")
+        self.clear_grouping_button = QPushButton("Clear")
         self.output_button = QPushButton("Browse")
         self.close_button = QPushButton("Close")
         self.start_button = QPushButton("Create industrial export")
 
         self.edit_filter_button.clicked.connect(self.open_filter_dialog)
+        self.clear_filter_button.clicked.connect(self.clear_filter)
         self.edit_grouping_button.clicked.connect(self.open_grouping_dialog)
+        self.clear_grouping_button.clicked.connect(self.clear_grouping)
         self.output_button.clicked.connect(self.select_output_file)
         self.close_button.clicked.connect(self.reject)
         self.start_button.clicked.connect(self.handle_start_button)
@@ -108,14 +112,24 @@ class IndustrialExportDialog(QDialog):
         grid.addWidget(self.cache_status_label, row, 1, 1, 2)
 
         row += 1
+        filter_actions = QHBoxLayout()
+        filter_actions.setContentsMargins(0, 0, 0, 0)
+        filter_actions.setSpacing(8)
+        filter_actions.addWidget(self.edit_filter_button)
+        filter_actions.addWidget(self.clear_filter_button)
         grid.addWidget(section_label("Filter"), row, 0)
         grid.addWidget(self.filter_status_label, row, 1)
-        grid.addWidget(self.edit_filter_button, row, 2)
+        grid.addLayout(filter_actions, row, 2)
 
         row += 1
+        grouping_actions = QHBoxLayout()
+        grouping_actions.setContentsMargins(0, 0, 0, 0)
+        grouping_actions.setSpacing(8)
+        grouping_actions.addWidget(self.edit_grouping_button)
+        grouping_actions.addWidget(self.clear_grouping_button)
         grid.addWidget(section_label("Grouping"), row, 0)
         grid.addWidget(self.grouping_status_label, row, 1)
-        grid.addWidget(self.edit_grouping_button, row, 2)
+        grid.addLayout(grouping_actions, row, 2)
 
         row += 1
         grid.addWidget(section_label("Plots"), row, 0)
@@ -164,6 +178,8 @@ class IndustrialExportDialog(QDialog):
         self.plot_status_label.setText(
             "Plots included" if self.include_plots_checkbox.isChecked() else "Plots disabled"
         )
+        self.clear_filter_button.setEnabled(self.filter_state.is_applied)
+        self.clear_grouping_button.setEnabled(self.grouping_state.is_applied)
         parent = self.parent()
         if parent is not None and hasattr(parent, "set_include_plots_state"):
             parent.set_include_plots_state(self.include_plots_checkbox.isChecked())
@@ -198,6 +214,12 @@ class IndustrialExportDialog(QDialog):
         if parent is not None and hasattr(parent, "set_industrial_grouping_state"):
             parent.set_industrial_grouping_state(state)
         self._sync_ui_state()
+
+    def clear_filter(self) -> None:
+        self.set_industrial_filter_state(IndustrialFilterState())
+
+    def clear_grouping(self) -> None:
+        self.set_industrial_grouping_state(IndustrialGroupingState())
 
     def open_filter_dialog(self) -> None:
         self.filter_window = IndustrialFilterDialog(self, db_file=self.db_file, state=self.filter_state)

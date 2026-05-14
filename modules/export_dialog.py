@@ -984,6 +984,46 @@ class ExportDialog(QDialog):
         """Validate inputs, persist options, and hand work to the export thread."""
         try:
             self._refresh_metadata_enrichment_notice()
+            violin_input = self.violin_plot_min_samplesize.text() or "6"
+            summary_scale_input = self.summary_plot_scale.text() or "0"
+
+            selected_preset = get_export_preset_id_for_label(self.preset_combobox.currentText())
+            try:
+                export_request = build_validated_export_request(
+                    db_file=self.db_file,
+                    excel_file=self.excel_file,
+                    selected_preset=selected_preset,
+                    export_type=self.export_type_combobox.currentText(),
+                    export_target=self._selected_export_target(),
+                    sorting_parameter=self.sort_measurements_combobox.currentText(),
+                    violin_input=violin_input,
+                    summary_scale_input=summary_scale_input,
+                    hide_ok_results=self.hide_ok_results_checkbox.isChecked(),
+                    generate_html_dashboard=self.generate_html_dashboard_checkbox.isChecked(),
+                    include_industrial_context=(
+                        self.include_industrial_context_checkbox.isChecked()
+                        if hasattr(self, "include_industrial_context_checkbox")
+                        else False
+                    ),
+                    filter_query=self.filter_query,
+                    grouping_df=self.df_for_grouping,
+                    group_analysis_level=self._selected_group_analysis_level(),
+                    group_analysis_scope=self._selected_group_analysis_scope(),
+                )
+            except ValueError as validation_error:
+                QMessageBox.warning(self, "Export validation failed", str(validation_error))
+                return
+
+            # Normalize user-visible values after validation/coercion.
+            self.excel_file = Path(export_request.paths.excel_file)
+            if hasattr(self, "excel_file_text_label"):
+                self._set_path_field_value(self.excel_file_text_label, self.excel_file)
+            self.violin_plot_min_samplesize.setText(str(export_request.options.violin_plot_min_samplesize))
+            self.summary_plot_scale.setText(str(export_request.options.summary_plot_scale))
+
+            self.config['selected_preset'] = selected_preset
+            save_export_dialog_config(self.config_path, self.config)
+
             self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif = create_worker_progress_dialog(
                 self,
                 window_title="Exporting data...",
@@ -994,39 +1034,6 @@ class ExportDialog(QDialog):
             # Disable the export button and show the progress dialog
             self.export_button.setDisabled(True)
             self.loading_dialog.show()
-
-            violin_input = self.violin_plot_min_samplesize.text() or "6"
-            summary_scale_input = self.summary_plot_scale.text() or "0"
-
-            selected_preset = get_export_preset_id_for_label(self.preset_combobox.currentText())
-            self.config['selected_preset'] = selected_preset
-            save_export_dialog_config(self.config_path, self.config)
-
-            export_request = build_validated_export_request(
-                db_file=self.db_file,
-                excel_file=self.excel_file,
-                selected_preset=selected_preset,
-                export_type=self.export_type_combobox.currentText(),
-                export_target=self._selected_export_target(),
-                sorting_parameter=self.sort_measurements_combobox.currentText(),
-                violin_input=violin_input,
-                summary_scale_input=summary_scale_input,
-                hide_ok_results=self.hide_ok_results_checkbox.isChecked(),
-                generate_html_dashboard=self.generate_html_dashboard_checkbox.isChecked(),
-                include_industrial_context=(
-                    self.include_industrial_context_checkbox.isChecked()
-                    if hasattr(self, "include_industrial_context_checkbox")
-                    else False
-                ),
-                filter_query=self.filter_query,
-                grouping_df=self.df_for_grouping,
-                group_analysis_level=self._selected_group_analysis_level(),
-                group_analysis_scope=self._selected_group_analysis_scope(),
-            )
-
-            # Normalize user-visible values after validation/coercion.
-            self.violin_plot_min_samplesize.setText(str(export_request.options.violin_plot_min_samplesize))
-            self.summary_plot_scale.setText(str(export_request.options.summary_plot_scale))
 
             # Start the exporting thread with validated options
             self._cancel_requested = False

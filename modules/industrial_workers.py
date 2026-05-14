@@ -6,6 +6,7 @@ from typing import Any
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from modules.contracts import IndustrialAnalyticsRequest, validate_industrial_analytics_request
 from modules.industrial_data_repository import (
     IndustrialDataRepository,
     IndustrialSourceProfile,
@@ -155,27 +156,49 @@ class IndustrialAnalyticsThread(QThread):
         grouping_df=None,
     ):
         super().__init__()
-        if source_kind not in {"production_cache", "tabular_file"}:
-            raise ValueError(f"Unsupported analytics source kind: {source_kind}")
-        self.source_kind = source_kind
-        self.db_file = db_file
-        self.input_file = input_file
-        self.output_dashboard_file = output_dashboard_file
-        self.output_workbook_file = output_workbook_file
-        self.metric_selection = tuple(metric_selection or ())
-        self.filter_state = filter_state or ProductionFilterState()
-        self.aggregation_state = aggregation_state or ProductionAggregationState()
-        self.cohort_state = cohort_state or ReferenceCohortState()
-        self.chart_selection = chart_selection or ProductionChartSelection()
-        self.separate_parameter_sheets = bool(separate_parameter_sheets)
-        self.sheet_name = sheet_name
-        self.timestamp_column = timestamp_column
-        self.reference_column = reference_column
-        self.tabular_load_result = tabular_load_result
-        self.tabular_filter_columns = tuple(tabular_filter_columns or ())
-        self.tabular_filter_keys = tuple(tuple(key) for key in (tabular_filter_keys or ()))
-        self.tabular_column_filters = tuple(tabular_column_filters or ())
-        self.grouping_df = grouping_df
+        validated_request = validate_industrial_analytics_request(
+            IndustrialAnalyticsRequest(
+                source_kind=source_kind,
+                db_file=db_file,
+                input_file=input_file,
+                output_dashboard_file=output_dashboard_file,
+                output_workbook_file=output_workbook_file,
+                metric_selection=tuple(metric_selection or ()),
+                filter_state=filter_state,
+                aggregation_state=aggregation_state,
+                cohort_state=cohort_state,
+                chart_selection=chart_selection,
+                separate_parameter_sheets=separate_parameter_sheets,
+                sheet_name=sheet_name,
+                timestamp_column=timestamp_column,
+                reference_column=reference_column,
+                tabular_load_result=tabular_load_result,
+                tabular_filter_columns=tabular_filter_columns or (),
+                tabular_filter_keys=tabular_filter_keys or (),
+                tabular_column_filters=tabular_column_filters or (),
+                grouping_df=grouping_df,
+            )
+        )
+        self.request = validated_request
+        self.source_kind = validated_request.source_kind
+        self.db_file = validated_request.db_file
+        self.input_file = validated_request.input_file
+        self.output_dashboard_file = validated_request.output_dashboard_file
+        self.output_workbook_file = validated_request.output_workbook_file
+        self.metric_selection = validated_request.metric_selection
+        self.filter_state = validated_request.filter_state or ProductionFilterState()
+        self.aggregation_state = validated_request.aggregation_state or ProductionAggregationState()
+        self.cohort_state = validated_request.cohort_state or ReferenceCohortState()
+        self.chart_selection = validated_request.chart_selection or ProductionChartSelection()
+        self.separate_parameter_sheets = validated_request.separate_parameter_sheets
+        self.sheet_name = validated_request.sheet_name
+        self.timestamp_column = validated_request.timestamp_column
+        self.reference_column = validated_request.reference_column
+        self.tabular_load_result = validated_request.tabular_load_result
+        self.tabular_filter_columns = validated_request.tabular_filter_columns
+        self.tabular_filter_keys = validated_request.tabular_filter_keys
+        self.tabular_column_filters = validated_request.tabular_column_filters
+        self.grouping_df = validated_request.grouping_df
         self._cancel_requested = False
 
     def cancel(self) -> None:
