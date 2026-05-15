@@ -1,6 +1,15 @@
 # Changelog (for end users)
 
-## 2026.05 RC1 (build 260512) — current version
+## 2026.05 RC2 (build 260515) — current version
+- CSV Summary can load multiple CSV files and handles large CSV files more reliably.
+- CSV Summary filters and grouping stay in sync with the loaded data, including date filters and numeric-looking group names.
+- Grouped statistics now compare groups overall and pair-by-pair instead of showing only separate group summaries.
+- HTML dashboards use clearer grouping labels and smaller datapoints for large datasets.
+- Oznak integration can fetch and export industrial database data directly without selecting a Metroliza database first.
+- Database credentials can be remembered locally after a successful Oznak export.
+- Export, parsing, filtering, and grouping screens fit more cleanly in compact windows.
+
+## 2026.05 RC1 (build 260512)
 - CSV Summary revamp.
 - Oznak integration: connect and fetch data from industrial databases.
 - UI revamp.

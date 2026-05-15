@@ -1,18 +1,27 @@
-RELEASE_VERSION = "2026.05rc1"
-VERSION_DATE = "260512"
+RELEASE_VERSION = "2026.05rc2"
+VERSION_DATE = "260515"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = (
-    "CSV Summary revamp, Oznak industrial database integration, and UI improvements."
+    "CSV Summary multi-file analytics, direct Oznak database export, and clearer dashboards."
 )
-PUBLIC_VERSION_LABEL = "2026.05 RC1 (build 260512)"
+PUBLIC_VERSION_LABEL = "2026.05 RC2 (build 260515)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
+    - CSV Summary can load multiple CSV files and handles large CSV files more reliably<br>
+    - CSV Summary filters and grouping stay in sync with the loaded data, including date filters and numeric-looking group names<br>
+    - Grouped statistics now compare groups overall and pair-by-pair instead of showing only separate group summaries<br>
+    - HTML dashboards use clearer grouping labels and smaller datapoints for large datasets<br>
+    - Oznak integration can fetch and export industrial database data directly without selecting a Metroliza database first<br>
+    - Database credentials can be remembered locally after a successful Oznak export<br>
+    - Export, parsing, filtering, and grouping screens were tightened so routine actions fit more cleanly in compact windows<br>
+
+    <br><b>Archive:</b><br>
+
+    <br><b>Version 2026.05rc1 (build 260512):</b><br>
     - CSV Summary revamp<br>
     - Oznak integration: connect and fetch data from industrial databases<br>
     - UI revamp<br>
-
-    <br><b>Archive:</b><br>
 
     <br><b>Version 2026.04 (build 260421):</b><br>
     - Re-running parsing on an existing database refreshes older CMM report rows so OCR header metadata can replace filename-only values<br>

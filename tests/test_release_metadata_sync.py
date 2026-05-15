@@ -13,7 +13,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}(?:rc\d+)?$")
         self.assertRegex(metadata.build, r"^\d{6}$")
         self.assertEqual(metadata.version_label, f"{metadata.release_version}({metadata.build})")
-        self.assertEqual(metadata.public_version_label, "2026.05 RC1 (build 260512)")
+        self.assertEqual(metadata.public_version_label, "2026.05 RC2 (build 260515)")
         self.assertTrue(metadata.highlight)
 
     def test_in_app_current_release_notes_stay_user_facing(self):
@@ -22,9 +22,13 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         current_section = VersionDate.release_notes.split("<br><b>Archive:</b><br>", 1)[0]
 
         expected_bullets = [
-            "- CSV Summary revamp<br>",
-            "- Oznak integration: connect and fetch data from industrial databases<br>",
-            "- UI revamp<br>",
+            "- CSV Summary can load multiple CSV files and handles large CSV files more reliably<br>",
+            "- CSV Summary filters and grouping stay in sync with the loaded data, including date filters and numeric-looking group names<br>",
+            "- Grouped statistics now compare groups overall and pair-by-pair instead of showing only separate group summaries<br>",
+            "- HTML dashboards use clearer grouping labels and smaller datapoints for large datasets<br>",
+            "- Oznak integration can fetch and export industrial database data directly without selecting a Metroliza database first<br>",
+            "- Database credentials can be remembered locally after a successful Oznak export<br>",
+            "- Export, parsing, filtering, and grouping screens were tightened so routine actions fit more cleanly in compact windows<br>",
         ]
         for expected_bullet in expected_bullets:
             self.assertIn(expected_bullet, current_section)
@@ -76,7 +80,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
             updated = temp_readme.read_text(encoding="utf-8")
             self.assertIn(f"Current release highlight (`{metadata.public_version_label}`):", updated)
             self.assertIn(f"### Changelog highlights (release `{metadata.public_version_label}`)", updated)
-            self.assertIn("RC1", updated)
+            self.assertIn("RC2", updated)
             self.assertNotIn("rc1", updated)
 
     def test_sync_changelog_writes_current_header(self):
