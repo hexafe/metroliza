@@ -8,6 +8,7 @@ import re
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -80,6 +81,12 @@ class IndustrialSourceProfilesDialog(QDialog):
         self.columns_edit = QLineEdit()
         self.record_key_edit = QLineEdit()
         self.timestamp_column_edit = QLineEdit()
+        self.order_by_checkbox = QCheckBox("Use server-side ORDER BY")
+        self.order_by_checkbox.setChecked(True)
+        self.order_by_checkbox.setToolTip(
+            "Sorts limited production reads on the SQL server. Turn this off if SQL Server fails "
+            "with low-memory sort errors; fetched rows may then be unordered."
+        )
 
         self.source_name_edit.setPlaceholderText("Assembly line MES")
         self.alias_edit.setPlaceholderText("assembly_mes")
@@ -124,6 +131,7 @@ class IndustrialSourceProfilesDialog(QDialog):
         form.addRow("Production columns", self.columns_edit)
         form.addRow("Record key / paging column", self.record_key_edit)
         form.addRow("Timestamp column", self.timestamp_column_edit)
+        form.addRow("Server ordering", self.order_by_checkbox)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -279,6 +287,7 @@ class IndustrialSourceProfilesDialog(QDialog):
         self.columns_edit.setText(", ".join(profile.allowed_columns))
         self.record_key_edit.setText(profile.default_pagination_column or "")
         self.timestamp_column_edit.setText(profile.timestamp_column or "")
+        self.order_by_checkbox.setChecked(profile.order_by_enabled)
         self.status_label.setText(f"Editing production source: {profile.profile_name}")
 
     def on_database_type_changed(self) -> None:
@@ -302,6 +311,7 @@ class IndustrialSourceProfilesDialog(QDialog):
         ):
             widget.clear()
         self.port_spin.setValue(1433 if self.db_type_combo.currentData() == "mssql" else 3306)
+        self.order_by_checkbox.setChecked(True)
         self.status_label.setText("New production source profile.")
 
     def save_source(self) -> None:
@@ -354,6 +364,7 @@ class IndustrialSourceProfilesDialog(QDialog):
             timestamp_column=self.timestamp_column_edit.text().strip() or None,
             default_pagination_column=self.record_key_edit.text().strip() or None,
             is_enabled=True,
+            order_by_enabled=self.order_by_checkbox.isChecked(),
         )
 
     def _columns_from_form(self) -> tuple[str, ...]:

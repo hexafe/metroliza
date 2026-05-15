@@ -32,6 +32,7 @@ def test_source_config_round_trip_uses_oznak_yaml_shape_without_credentials(tmp_
         allowed_columns=("event_id", "reference", "station"),
         timestamp_column="event_at",
         default_pagination_column="event_id",
+        order_by_enabled=False,
     )
 
     upsert_source_profile_in_config(config_path, profile)
@@ -48,6 +49,7 @@ def test_source_config_round_trip_uses_oznak_yaml_shape_without_credentials(tmp_
         "allowed_columns": ["event_id", "reference", "station"],
         "timestamp_column": "event_at",
         "pagination_column": "event_id",
+        "order_by_enabled": False,
     }
     assert "password" not in config_path.read_text(encoding="utf-8").lower()
 
@@ -56,6 +58,7 @@ def test_source_config_round_trip_uses_oznak_yaml_shape_without_credentials(tmp_
     assert loaded[0].profile_key == "assembly_mes"
     assert loaded[0].database_type == "mssql"
     assert loaded[0].allowed_columns == ("event_id", "reference", "station")
+    assert loaded[0].order_by_enabled is False
 
 
 def test_source_config_imports_manual_file_profiles_into_selected_database(tmp_path):
@@ -91,6 +94,29 @@ databases:
     assert profiles[0].profile_name == "Line A"
     assert profiles[0].host == "db.example.invalid"
     assert profiles[0].default_pagination_column == "id"
+    assert profiles[0].order_by_enabled is True
+
+
+def test_source_config_loads_order_by_disabled_from_manual_file(tmp_path):
+    config_path = tmp_path / "industrial_sources.yaml"
+    config_path.write_text(
+        """
+databases:
+  line_a:
+    type: mssql
+    host: db.example.invalid
+    port: 1433
+    database: processdb
+    table: events
+    order_by_enabled: false
+""".strip(),
+        encoding="utf-8",
+    )
+
+    profiles = load_source_profiles_from_config(config_path)
+
+    assert len(profiles) == 1
+    assert profiles[0].order_by_enabled is False
 
 
 def test_source_config_rejects_credential_like_keys(tmp_path):

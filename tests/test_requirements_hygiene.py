@@ -72,7 +72,7 @@ class RequirementsHygieneTests(unittest.TestCase):
         matches = [entry for entry in runtime_entries if entry.lower().startswith('oznak @ ')]
 
         self.assertEqual(matches, [
-            'oznak @ git+https://github.com/hexafe/oznak.git@17459eb4338dcd8aed9dd478dde0a0c18a12613e'
+            'oznak @ git+https://github.com/hexafe/oznak.git@36bd0c91f2afe94baae33d43b0c77b7c78faa478'
         ])
 
     def test_runtime_requirements_do_not_rely_on_local_hexafe_groupstats_path(self):

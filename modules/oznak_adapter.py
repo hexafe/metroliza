@@ -488,6 +488,8 @@ def fetch_oznak_records_for_source_profile(
     table_name = str(_profile_value(profile, "source_object_name", "table") or "").strip()
     timestamp_column = _profile_value(profile, "timestamp_column")
     pagination_column = _profile_value(profile, "default_pagination_column", "pagination_column")
+    raw_order_by_enabled = _profile_value(profile, "order_by_enabled")
+    order_by_enabled = True if raw_order_by_enabled is None else bool(raw_order_by_enabled)
     allowed_columns = _normalize_runtime_columns(
         tuple(_profile_value(profile, "allowed_columns") or ()),
         timestamp_column,
@@ -511,6 +513,7 @@ def fetch_oznak_records_for_source_profile(
                 "display_name": _profile_value(profile, "profile_name"),
                 "connect_timeout_seconds": timeout_seconds,
                 "query_timeout_seconds": timeout_seconds,
+                "order_by_enabled": order_by_enabled,
                 "metadata": {"metroliza_source_profile_id": _profile_value(profile, "id", "profile_id")},
             },
         )
@@ -534,6 +537,7 @@ def fetch_oznak_records_for_source_profile(
         and int(chunk_size) > 0
         and remaining_limit is None
         and bool(pagination_column)
+        and order_by_enabled
     )
 
     try:
@@ -562,6 +566,7 @@ def fetch_oznak_records_for_source_profile(
                     "columns": fetch_columns,
                     "limit": batch_limit,
                     "date_column": timestamp_column,
+                    "order_by_enabled": order_by_enabled,
                     "timeout_seconds": timeout_seconds,
                 },
             )
@@ -606,6 +611,7 @@ def fetch_oznak_records_for_source_profile(
         "reference_batches": len(reference_batches),
         "reference_filter_column": reference_filter_column,
         "reference_filter_count": len(normalized_reference_values),
+        "order_by_enabled": order_by_enabled,
     }
     diagnostics.update(_combine_fetch_diagnostics(payloads))
     errors = diagnostics.get("errors") or ()

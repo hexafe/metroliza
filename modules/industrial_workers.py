@@ -466,6 +466,7 @@ class IndustrialOznakSyncThread(QThread):
                         "timeout_seconds": self.timeout_seconds,
                         "reference_filter_column": self.reference_filter_column,
                         "reference_count": len(self.reference_values),
+                        "order_by_enabled": self.profile.order_by_enabled,
                     },
                     oznak_version=status.version,
                     diagnostics={"adapter": status.diagnostics},

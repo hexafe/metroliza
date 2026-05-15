@@ -118,6 +118,7 @@ def upsert_source_profile_to_repository(
         timestamp_column=profile.timestamp_column,
         default_pagination_column=profile.default_pagination_column,
         is_enabled=profile.is_enabled,
+        order_by_enabled=profile.order_by_enabled,
     )
 
 
@@ -162,6 +163,10 @@ def source_profile_to_config_entry(
         entry["pagination_column"] = profile.default_pagination_column
     else:
         entry.pop("pagination_column", None)
+    if not profile.order_by_enabled:
+        entry["order_by_enabled"] = False
+    else:
+        entry.pop("order_by_enabled", None)
     return entry
 
 
@@ -179,6 +184,7 @@ def build_source_profile(
     timestamp_column: str | None = None,
     default_pagination_column: str | None = None,
     is_enabled: bool = True,
+    order_by_enabled: bool = True,
 ) -> IndustrialSourceProfile:
     """Build an unsaved source profile after applying shared validation."""
 
@@ -209,6 +215,8 @@ def build_source_profile(
         normalized_port = int(port)
     if normalized_port < 1 or normalized_port > 65535:
         raise IndustrialSourceConfigError("Production database port must be between 1 and 65535.")
+    if type(order_by_enabled) is not bool:
+        raise IndustrialSourceConfigError("Server ORDER BY setting must be true or false.")
 
     for field_name, value in (
         ("source alias", normalized_key),
@@ -242,6 +250,7 @@ def build_source_profile(
         is_enabled=bool(is_enabled),
         created_at=now,
         updated_at=now,
+        order_by_enabled=bool(order_by_enabled),
     )
 
 
@@ -263,6 +272,12 @@ def _profile_from_entry(alias: str, entry: Mapping[str, Any], *, path: Path) -> 
         allowed_columns=entry.get("allowed_columns") or (),
         timestamp_column=entry.get("timestamp_column"),
         default_pagination_column=entry.get("pagination_column"),
+        order_by_enabled=_bool_config_value(
+            entry.get("order_by_enabled", True),
+            profile_alias=alias,
+            key="order_by_enabled",
+            path=path,
+        ),
     )
 
 
@@ -324,6 +339,14 @@ def _find_sensitive_paths(value: Any, *, prefix: str = "") -> set[str]:
 
 def _is_sensitive_key(key: str) -> bool:
     return looks_sensitive_key(key)
+
+
+def _bool_config_value(value: Any, *, profile_alias: str, key: str, path: Path) -> bool:
+    if type(value) is bool:
+        return value
+    raise IndustrialSourceConfigError(
+        f"Profile '{profile_alias}' in '{path}' has invalid '{key}': expected true or false."
+    )
 
 
 def _normalize_columns(columns: Iterable[str] | None) -> tuple[str, ...]:

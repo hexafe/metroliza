@@ -74,6 +74,8 @@ There are two ways to configure production line databases:
 - Edit the YAML config file directly. By default, Metroliza uses `~/.metroliza/industrial_sources.yaml` with the same top-level `databases:` format as Oznak.
 - Use **Production sources...**. The dialog reads and writes that config file, and when a Metroliza report database is selected it also synchronizes the non-secret source profiles into the local cache tables.
 
+Each production source can disable server-side `ORDER BY` for limited SQL reads. Leave it enabled for deterministic rows; turn it off when a low-memory SQL Server cannot run the sort.
+
 Metroliza stores the source setup, cache rows, sync diagnostics, and links in the selected Metroliza report database. It does not store the production database username or password in the report database or config file.
 
 Export never connects to the production line database directly. Live production database access happens only when the user explicitly runs **Check access** or **Sync now** in the sync dialog opened from **Connect / check / sync...**.

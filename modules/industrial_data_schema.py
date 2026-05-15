@@ -5,7 +5,7 @@ from __future__ import annotations
 from modules.db import run_transaction_with_retry
 
 
-SCHEMA_VERSION = "industrial_data_v2"
+SCHEMA_VERSION = "industrial_data_v3"
 
 SYNC_RUN_STATUSES = ("running", "succeeded", "completed_with_warnings", "failed", "cancelled")
 JOIN_MATCH_MODES = ("exact", "time_window")
@@ -52,6 +52,7 @@ SCHEMA_TABLE_STATEMENTS = (
         timestamp_column TEXT,
         default_pagination_column TEXT,
         is_enabled INTEGER NOT NULL DEFAULT 1 CHECK (is_enabled IN (0, 1)),
+        order_by_enabled INTEGER NOT NULL DEFAULT 1 CHECK (order_by_enabled IN (0, 1)),
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     )""",
@@ -176,6 +177,10 @@ def _ensure_source_profile_columns(cursor) -> None:
         "host": "ALTER TABLE industrial_source_profiles ADD COLUMN host TEXT",
         "port": "ALTER TABLE industrial_source_profiles ADD COLUMN port INTEGER",
         "database_name": "ALTER TABLE industrial_source_profiles ADD COLUMN database_name TEXT",
+        "order_by_enabled": (
+            "ALTER TABLE industrial_source_profiles "
+            "ADD COLUMN order_by_enabled INTEGER NOT NULL DEFAULT 1 CHECK (order_by_enabled IN (0, 1))"
+        ),
     }
     for column_name, statement in migrations.items():
         if column_name not in existing_columns:

@@ -45,7 +45,7 @@ def test_industrial_schema_creates_expected_tables_and_indexes(tmp_path):
         "idx_industrial_record_values_record_field",
     }.issubset(indexes)
     assert schema_version == SCHEMA_VERSION
-    assert {"host", "port", "database_name"}.issubset(profile_columns)
+    assert {"host", "port", "database_name", "order_by_enabled"}.issubset(profile_columns)
     assert "password" not in profile_columns
     assert "token" not in profile_columns
     assert "credentials_json" not in profile_columns
@@ -68,6 +68,7 @@ def test_source_profile_upsert_list_and_sync_run_lifecycle(tmp_path):
         timestamp_column="event_at",
         default_pagination_column="event_id",
         is_enabled=True,
+        order_by_enabled=False,
     )
     updated_profile = repository.upsert_source_profile(
         profile_key="line-a",
@@ -82,6 +83,7 @@ def test_source_profile_upsert_list_and_sync_run_lifecycle(tmp_path):
         timestamp_column="event_at",
         default_pagination_column="event_id",
         is_enabled=False,
+        order_by_enabled=False,
     )
 
     profiles = repository.list_source_profiles(include_disabled=True)
@@ -94,6 +96,7 @@ def test_source_profile_upsert_list_and_sync_run_lifecycle(tmp_path):
     assert profiles[0].database_name == "plantdb2"
     assert profiles[0].allowed_columns == ("serial", "station")
     assert profiles[0].is_enabled is False
+    assert profiles[0].order_by_enabled is False
 
     sync_run_id = repository.create_sync_run(
         source_profile_id=profile.id,

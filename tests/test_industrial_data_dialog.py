@@ -70,6 +70,7 @@ def test_dialog_saves_non_secret_source_metadata_without_credentials(tmp_path):
     dialog.columns_edit.setText("event_id, event_at, reference, station")
     dialog.record_key_edit.setText("event_id")
     dialog.timestamp_column_edit.setText("event_at")
+    dialog.order_by_checkbox.setChecked(False)
 
     dialog.save_source()
     profiles = IndustrialDataRepository(db_path).list_source_profiles(include_disabled=True)
@@ -81,7 +82,9 @@ def test_dialog_saves_non_secret_source_metadata_without_credentials(tmp_path):
     assert profiles[0].database_name == "plantdb"
     assert profiles[0].source_object_name == "events"
     assert profiles[0].allowed_columns == ("event_id", "event_at", "reference", "station")
+    assert profiles[0].order_by_enabled is False
     assert "assembly_mes:" in config_path.read_text(encoding="utf-8")
+    assert "order_by_enabled: false" in config_path.read_text(encoding="utf-8")
     assert not hasattr(dialog, "password_edit")
     dialog.close()
 
@@ -105,6 +108,7 @@ def test_source_dialog_can_configure_file_before_metroliza_database_is_selected(
     config_text = config_path.read_text(encoding="utf-8")
     assert "assembly_mes:" in config_text
     assert "reference" not in config_text
+    assert "order_by_enabled" not in config_text
     assert "password" not in config_text.lower()
     assert "Use Export" in dialog.status_label.text()
     assert "sync rows into the local cache" in dialog.status_label.text()

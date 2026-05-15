@@ -116,6 +116,7 @@ class IndustrialSourceProfile:
     is_enabled: bool
     created_at: str
     updated_at: str
+    order_by_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -248,6 +249,7 @@ class IndustrialDataRepository:
         timestamp_column: str | None = None,
         default_pagination_column: str | None = None,
         is_enabled: bool = True,
+        order_by_enabled: bool = True,
     ) -> IndustrialSourceProfile:
         self.ensure_schema()
         now = utc_timestamp()
@@ -269,10 +271,11 @@ class IndustrialDataRepository:
                     timestamp_column,
                     default_pagination_column,
                     is_enabled,
+                    order_by_enabled,
                     created_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(profile_key) DO UPDATE SET
                     profile_name = excluded.profile_name,
                     source_db_alias = excluded.source_db_alias,
@@ -285,6 +288,7 @@ class IndustrialDataRepository:
                     timestamp_column = excluded.timestamp_column,
                     default_pagination_column = excluded.default_pagination_column,
                     is_enabled = excluded.is_enabled,
+                    order_by_enabled = excluded.order_by_enabled,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -300,6 +304,7 @@ class IndustrialDataRepository:
                     timestamp_column,
                     default_pagination_column,
                     int(bool(is_enabled)),
+                    int(bool(order_by_enabled)),
                     now,
                     now,
                 ),
@@ -321,7 +326,8 @@ class IndustrialDataRepository:
                     default_pagination_column,
                     is_enabled,
                     created_at,
-                    updated_at
+                    updated_at,
+                    order_by_enabled
                 FROM industrial_source_profiles
                 WHERE profile_key = ?
                 """,
@@ -345,6 +351,7 @@ class IndustrialDataRepository:
                 is_enabled=bool(row[12]),
                 created_at=str(row[13]),
                 updated_at=str(row[14]),
+                order_by_enabled=bool(row[15]),
             )
 
         return run_transaction_with_retry(self.database, _upsert, connection=self.connection)
@@ -371,7 +378,8 @@ class IndustrialDataRepository:
                     default_pagination_column,
                     is_enabled,
                     created_at,
-                    updated_at
+                    updated_at,
+                    order_by_enabled
                 FROM industrial_source_profiles
                 {where_clause}
                 ORDER BY profile_name COLLATE NOCASE ASC, id ASC
@@ -396,6 +404,7 @@ class IndustrialDataRepository:
                         is_enabled=bool(row[12]),
                         created_at=str(row[13]),
                         updated_at=str(row[14]),
+                        order_by_enabled=bool(row[15]),
                     )
                 )
             return profiles

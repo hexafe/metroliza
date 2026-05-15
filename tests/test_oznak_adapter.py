@@ -253,6 +253,7 @@ def test_fetch_source_profile_builds_current_public_oznak_contract(monkeypatch):
         allowed_columns=("event_id", "event_at", "reference", "station"),
         timestamp_column="event_at",
         default_pagination_column="event_id",
+        order_by_enabled=False,
     )
 
     result = oznak_adapter.fetch_oznak_records_for_source_profile(
@@ -280,6 +281,7 @@ def test_fetch_source_profile_builds_current_public_oznak_contract(monkeypatch):
     assert captured["profile"]["pagination_column"] == "event_id"
     assert captured["profile"]["connect_timeout_seconds"] == 10
     assert captured["profile"]["query_timeout_seconds"] == 10
+    assert captured["profile"]["order_by_enabled"] is False
     assert captured["profile"]["allowed_columns"] == (
         "event_id",
         "event_at",
@@ -288,6 +290,7 @@ def test_fetch_source_profile_builds_current_public_oznak_contract(monkeypatch):
     )
     assert captured["request"]["limit"] == 25
     assert captured["request"]["timeout_seconds"] == 10
+    assert captured["request"]["order_by_enabled"] is False
     assert captured["request"]["filters"][0].column == "reference"
     assert captured["request"]["filters"][0].operator == "IN"
     assert captured["request"]["filters"][0].value == ("REF-77", "REF-78")
@@ -297,6 +300,7 @@ def test_fetch_source_profile_builds_current_public_oznak_contract(monkeypatch):
     assert captured["credentials"] == {"assembly_mes": ("operator", "secret")}
     assert captured["cancellation_token"] is token
     assert progress_messages == ["Fetched 1 row"]
+    assert result.diagnostics["order_by_enabled"] is False
 
 
 def test_fetch_source_profile_falls_back_to_fetcher_module_when_root_fetch_missing(monkeypatch):
@@ -491,6 +495,98 @@ def test_fetch_source_profile_uses_chunked_reference_batches_by_default(monkeypa
     assert result.diagnostics["fetch_strategy"] == "chunked"
     assert result.diagnostics["reference_batches"] == 2
     assert {record["reference"] for record in result.records} == {"REF1", "REF2", "REF3"}
+
+
+def test_fetch_source_profile_order_by_disabled_uses_single_fetch(monkeypatch):
+    calls = {"chunked": 0, "single": []}
+
+    class FakeDatabaseProfile:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeFetchRequest:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeCredentialProvider:
+        def __init__(self, mapping):
+            self.mapping = mapping
+
+    class FakeQueryFilter:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeResult:
+        data = [{"event_id": "ROW-REF1", "reference": "REF1"}]
+        source_results = ()
+        warnings = ()
+        errors = ()
+        row_count = 1
+        has_errors = False
+        partial_success = False
+
+    def fake_fetch_records(request, **kwargs):
+        calls["single"].append(
+            {
+                "filters": request.filters,
+                "order_by_enabled": request.order_by_enabled,
+            }
+        )
+        return FakeResult()
+
+    def fake_fetch_records_chunked(*args, **kwargs):
+        calls["chunked"] += 1
+        return FakeResult()
+
+    oznak_module = types.ModuleType("oznak")
+    oznak_module.DatabaseProfile = FakeDatabaseProfile
+    oznak_module.FetchRequest = FakeFetchRequest
+    oznak_module.FetchResult = object
+    oznak_module.MappingCredentialProvider = FakeCredentialProvider
+    oznak_module.QueryFilter = FakeQueryFilter
+    oznak_module.fetch_records = fake_fetch_records
+    oznak_module.fetch_records_chunked = fake_fetch_records_chunked
+
+    fetcher_module = types.ModuleType("oznak.fetcher")
+    fetcher_module.fetch_records = fake_fetch_records
+
+    def _fake_import(module_name: str):
+        if module_name == "oznak":
+            return oznak_module
+        if module_name == "oznak.fetcher":
+            return fetcher_module
+        raise AssertionError(f"Unexpected import: {module_name}")
+
+    monkeypatch.setattr(oznak_adapter.importlib, "import_module", _fake_import)
+    profile = types.SimpleNamespace(
+        id=12,
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+        source_object_name="events",
+        allowed_columns=("event_id", "reference"),
+        timestamp_column=None,
+        default_pagination_column="event_id",
+        order_by_enabled=False,
+    )
+
+    result = oznak_adapter.fetch_oznak_records_for_source_profile(
+        profile,
+        username="operator",
+        password="secret",
+        reference_filter_column="reference",
+        reference_values=("REF1",),
+        chunk_size=1000,
+    )
+
+    assert calls["chunked"] == 0
+    assert len(calls["single"]) == 1
+    assert calls["single"][0]["order_by_enabled"] is False
+    assert result.diagnostics["fetch_strategy"] == "single_request"
+    assert result.diagnostics["order_by_enabled"] is False
 
 
 def test_fetch_source_profile_limit_zero_does_not_call_fetch(monkeypatch):
