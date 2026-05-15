@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 from datetime import datetime, timezone
+import hashlib
 import html
 from io import BytesIO
 import json
@@ -50,6 +51,8 @@ PLOT_COLORWAY = (
     SUMMARY_PLOT_PALETTE["distribution_base"],
 )
 _MANUAL_GROUP_FIELD_NAMES = {"group", "group_name", "csv_group", "tabular_group"}
+DASHBOARD_RAW_POINT_LIMIT = 50_000
+DASHBOARD_AGGREGATE_TRACE_TARGET_POINTS = 2_500
 
 
 def build_production_dashboard_manifest(
@@ -177,10 +180,12 @@ def write_production_dashboard(
         if assets_dir is not None
         else destination.with_name(f"{destination.stem}_assets")
     )
+    requires_plotly = _manifest_requires_plotly(manifest)
     asset_directory.mkdir(parents=True, exist_ok=True)
-    plotly_target = asset_directory / PLOTLY_ASSET_NAME
-    if not plotly_target.exists():
-        shutil.copy2(PLOTLY_ASSET_SOURCE, plotly_target)
+    if requires_plotly:
+        plotly_target = asset_directory / PLOTLY_ASSET_NAME
+        if not plotly_target.exists():
+            shutil.copy2(PLOTLY_ASSET_SOURCE, plotly_target)
 
     html_text = _render_dashboard_html(manifest, asset_directory_name=asset_directory.name)
     destination.write_text(html_text, encoding="utf-8")
@@ -189,6 +194,11 @@ def write_production_dashboard(
         "html_dashboard_assets_path": str(asset_directory),
         "html_dashboard_chart_count": len(manifest.get("charts") or []),
     }
+
+
+def _manifest_requires_plotly(manifest: dict[str, Any]) -> bool:
+    charts = manifest.get("charts") if isinstance(manifest.get("charts"), list) else []
+    return any(isinstance(chart, dict) and isinstance(chart.get("plotly_spec"), dict) for chart in charts)
 
 
 def _build_time_series_charts(
@@ -203,6 +213,12 @@ def _build_time_series_charts(
     aggregate_metric = f"{metric.field_name}__{method}"
     group_columns = group_columns or []
     charts: list[dict[str, Any]] = []
+    raw_point_count = _time_series_point_count(
+        raw_frame,
+        x_column="process_datetime",
+        y_column=metric.field_name,
+    )
+    use_hybrid_raw = raw_point_count > DASHBOARD_RAW_POINT_LIMIT
     if (
         aggregation.is_aggregated
         and not aggregate_frame.empty
@@ -233,30 +249,44 @@ def _build_time_series_charts(
                 )
             )
             overlay_traces = _time_series_traces(
+                aggregate_frame,
+                x_column="time_bucket_start",
+                y_column=aggregate_metric,
+                group_columns=group_columns,
+                default_name=f"{metric.display_label} aggregate",
+                time_bucket=aggregation.time_bucket,
+                aggregate_marker=True,
+            )
+            if use_hybrid_raw:
+                hybrid = _build_hybrid_time_series_chart(
+                    metric,
+                    raw_frame=raw_frame,
+                    aggregate_traces=overlay_traces,
+                    group_columns=group_columns,
+                    chart_id=f"time-series-{metric.field_name}-raw-aggregate",
+                    title=f"{metric.display_label} raw values with {method} markers",
+                    chart_type="time_series_raw_aggregate",
+                    x_axis_title="Process time",
+                    y_axis_title=metric.display_label,
+                )
+                if hybrid:
+                    charts.append(hybrid)
+                return charts
+            raw_traces = _time_series_traces(
                 raw_frame,
                 x_column="process_datetime",
                 y_column=metric.field_name,
                 group_columns=group_columns,
                 default_name=metric.display_label,
             )
-            overlay_traces.extend(
-                _time_series_traces(
-                    aggregate_frame,
-                    x_column="time_bucket_start",
-                    y_column=aggregate_metric,
-                    group_columns=group_columns,
-                    default_name=f"{metric.display_label} aggregate",
-                    time_bucket=aggregation.time_bucket,
-                    aggregate_marker=True,
-                )
-            )
-            if overlay_traces:
+            raw_traces.extend(overlay_traces)
+            if raw_traces:
                 charts.append(
                     _chart_payload(
                         chart_id=f"time-series-{metric.field_name}-raw-aggregate",
                         title=f"{metric.display_label} raw values with {method} markers",
                         chart_type="time_series_raw_aggregate",
-                        data=overlay_traces,
+                        data=raw_traces,
                         layout={
                             "xaxis": {"title": "Process time"},
                             "yaxis": {"title": metric.display_label},
@@ -265,6 +295,26 @@ def _build_time_series_charts(
                     )
                 )
         return charts
+
+    if use_hybrid_raw:
+        hybrid = _build_hybrid_time_series_chart(
+            metric,
+            raw_frame=raw_frame,
+            aggregate_traces=_display_aggregate_time_series_traces(
+                raw_frame,
+                x_column="process_datetime",
+                y_column=metric.field_name,
+                group_columns=group_columns,
+                default_name=f"{metric.display_label} aggregate",
+            ),
+            group_columns=group_columns,
+            chart_id=f"time-series-{metric.field_name}",
+            title=f"{metric.display_label} over time",
+            chart_type="time_series",
+            x_axis_title="Process time",
+            y_axis_title=metric.display_label,
+        )
+        return [hybrid] if hybrid else []
 
     traces = _time_series_traces(
         raw_frame,
@@ -296,60 +346,25 @@ def _build_histogram_chart(
     *,
     group_columns: list[str] | None = None,
 ) -> dict[str, Any]:
-    traces = []
     groups = _plot_groups(frame, group_columns=group_columns)
-    all_values = _numeric_values(frame[metric.field_name])
-    bins = _histogram_bins(all_values)
-    normalize_groups = len(groups) > 1
-    for index, (label, group) in enumerate(groups, start=0):
-        values = _numeric_values(group[metric.field_name])
-        if not values:
-            continue
-        trace = {
-            "type": "histogram",
-            "name": label,
-            "x": values,
-            "xbins": bins,
-            "bingroup": f"hist-{metric.field_name}",
-            "opacity": 0.58 if normalize_groups else 0.86,
-            "marker": {
-                "color": _plot_color(index, label),
-                "line": {"color": "rgba(255,255,255,0.72)", "width": 0.8},
-            },
-            "hovertemplate": f"{html.escape(label)}<br>{metric.display_label}=%{{x}}<br>Count=%{{y}}<extra></extra>",
-        }
-        if normalize_groups:
-            trace["histnorm"] = "probability"
-            trace["hovertemplate"] = (
-                f"{html.escape(label)}<br>{metric.display_label}=%{{x}}"
-                "<br>Share=%{y:.1%}<extra></extra>"
-            )
-        traces.append(trace)
-    if not traces:
+    image_groups, sampling_note = _sample_plot_groups_for_static_image(
+        groups,
+        metric.field_name,
+        seed_parts=("histogram", metric.field_name),
+    )
+    stats_tables = _histogram_stats_tables(metric, groups)
+    image = _render_distribution_image(metric, frame, chart_type="histogram", groups=image_groups)
+    if not stats_tables and not image:
         return {}
-    chart = _chart_payload(
+    chart = _static_chart_payload(
         chart_id=f"histogram-{metric.field_name}",
         title=f"{metric.display_label} distribution",
         chart_type="histogram",
-        data=traces,
-        layout={
-            "barmode": "overlay",
-            "bargap": 0.04,
-            "xaxis": {"title": metric.display_label},
-            "yaxis": (
-                {"title": "Share of group", "tickformat": ".0%"}
-                if normalize_groups
-                else {"title": "Count"}
-            ),
-            **_metric_reference_markings(metric, all_values, axis="x"),
-        },
+        group_labels=[label for label, _group in groups],
+        image=image,
+        stats_tables=stats_tables,
+        notes=([sampling_note] if sampling_note else []),
     )
-    stats_tables = _histogram_stats_tables(metric, groups)
-    if stats_tables:
-        chart["stats_tables"] = stats_tables
-    image = _render_distribution_image(metric, frame, chart_type="histogram", groups=groups)
-    if image:
-        chart["image"] = image
     return chart
 
 
@@ -360,48 +375,302 @@ def _build_distribution_chart(
     chart_type: str,
     group_columns: list[str] | None = None,
 ) -> dict[str, Any]:
-    traces = []
     groups = _plot_groups(frame, group_columns=group_columns)
-    for index, (label, group) in enumerate(groups, start=0):
-        values = _numeric_values(group[metric.field_name])
-        if not values:
-            continue
-        trace_type = "box" if chart_type == "box" else "violin"
-        trace = {
-            "type": trace_type,
-            "name": label,
-            "x": [label] * len(values),
-            "y": values,
-            "marker": {"color": _plot_color(index, label)},
-            "hovertemplate": f"{html.escape(label)}<br>{metric.display_label}=%{{y}}<extra></extra>",
-        }
-        if trace_type == "violin":
-            trace.update({"box": {"visible": True}, "meanline": {"visible": True}, "points": False})
-        else:
-            trace.update({"boxmean": True, "boxpoints": False})
-        traces.append(trace)
-    if not traces:
+    image_groups, sampling_note = _sample_plot_groups_for_static_image(
+        groups,
+        metric.field_name,
+        seed_parts=(chart_type, metric.field_name),
+    )
+    image = _render_distribution_image(metric, frame, chart_type=chart_type, groups=image_groups)
+    if not image:
         return {}
-    chart = _chart_payload(
+    return _static_chart_payload(
         chart_id=f"{chart_type}-{metric.field_name}",
         title=f"{metric.display_label} {chart_type}",
         chart_type=chart_type,
-        data=traces,
-        layout={
-            "xaxis": {
-                "title": "Group",
-                "type": "category",
-                "categoryorder": "array",
-                "categoryarray": [str(trace["name"]) for trace in traces],
-            },
-            "yaxis": {"title": metric.display_label},
-            **_metric_reference_markings(metric, _numeric_values(frame[metric.field_name]), axis="y"),
-        },
+        group_labels=[label for label, _group in groups],
+        image=image,
+        notes=([sampling_note] if sampling_note else []),
     )
-    image = _render_distribution_image(metric, frame, chart_type=chart_type, groups=groups)
-    if image:
-        chart["image"] = image
+
+
+def _build_hybrid_time_series_chart(
+    metric: ProductionMetricSelection,
+    *,
+    raw_frame: pd.DataFrame,
+    aggregate_traces: list[dict[str, Any]],
+    group_columns: list[str],
+    chart_id: str,
+    title: str,
+    chart_type: str,
+    x_axis_title: str,
+    y_axis_title: str,
+) -> dict[str, Any]:
+    raw_layers, sampling_note = _time_series_raw_image_layers(
+        raw_frame,
+        x_column="process_datetime",
+        y_column=metric.field_name,
+        group_columns=group_columns,
+        default_name=metric.display_label,
+        seed_parts=(chart_id, metric.field_name),
+    )
+    if raw_layers:
+        layout_images = [layer["image"] for layer in raw_layers]
+        raw_legend_traces = _raw_layer_legend_traces(raw_layers)
+    else:
+        layout_images = []
+        raw_legend_traces = []
+    traces = raw_legend_traces + list(aggregate_traces)
+    if not traces:
+        return {}
+    layout = {
+        "xaxis": {"title": x_axis_title},
+        "yaxis": {"title": y_axis_title},
+        "hovermode": "closest",
+    }
+    if layout_images:
+        layout["images"] = layout_images
+    chart = _chart_payload(
+        chart_id=chart_id,
+        title=title,
+        chart_type=chart_type,
+        data=traces,
+        layout=layout,
+    )
+    if sampling_note:
+        chart["notes"] = [sampling_note]
     return chart
+
+
+def _time_series_point_count(
+    frame: pd.DataFrame,
+    *,
+    x_column: str,
+    y_column: str,
+) -> int:
+    if x_column not in frame.columns or y_column not in frame.columns:
+        return 0
+    y_series = pd.to_numeric(frame[y_column], errors="coerce")
+    return int((frame[x_column].notna() & y_series.notna()).sum())
+
+
+def _display_aggregate_time_series_traces(
+    frame: pd.DataFrame,
+    *,
+    x_column: str,
+    y_column: str,
+    group_columns: list[str],
+    default_name: str,
+) -> list[dict[str, Any]]:
+    traces: list[dict[str, Any]] = []
+    groups = _grouped_frames(frame, group_columns, default_name=default_name)
+    for index, (label, group) in enumerate(groups, start=0):
+        xy = _coerce_time_series_xy(group, x_column=x_column, y_column=y_column)
+        if xy.empty:
+            continue
+        xy = xy.sort_values("__x_numeric")
+        bucket_count = max(
+            1,
+            min(
+                DASHBOARD_AGGREGATE_TRACE_TARGET_POINTS,
+                int(np.ceil(len(xy.index) / max(1, DASHBOARD_RAW_POINT_LIMIT // 10))),
+            ),
+        )
+        chunks = np.array_split(xy[["__x_numeric", "__y"]].to_numpy(dtype=float), bucket_count)
+        x_values: list[Any] = []
+        y_values: list[float] = []
+        for chunk in chunks:
+            if chunk.size == 0:
+                continue
+            x_mean = float(np.mean(chunk[:, 0]))
+            y_mean = float(np.mean(chunk[:, 1]))
+            x_values.append(_display_x_value(x_mean, mode=str(xy["__x_mode"].iloc[0])))
+            y_values.append(y_mean)
+        if not x_values:
+            continue
+        color = _plot_color(index, label)
+        traces.append(
+            {
+                "type": "scatter",
+                "mode": "markers",
+                "name": f"{label} aggregate",
+                "x": x_values,
+                "y": y_values,
+                "marker": _time_series_marker_style(
+                    color=color,
+                    symbol="x",
+                    point_count=len(x_values),
+                    aggregate_marker=True,
+                ),
+                "hovertemplate": (
+                    f"{html.escape(label)} aggregate<br>Time=%{{x}}<br>"
+                    "Mean=%{y}<extra></extra>"
+                ),
+            }
+        )
+    return traces
+
+
+def _time_series_raw_image_layers(
+    frame: pd.DataFrame,
+    *,
+    x_column: str,
+    y_column: str,
+    group_columns: list[str],
+    default_name: str,
+    seed_parts: tuple[str, ...],
+) -> tuple[list[dict[str, Any]], str | None]:
+    groups = _grouped_frames(frame, group_columns, default_name=default_name)
+    prepared: list[tuple[str, pd.DataFrame]] = []
+    total_points = 0
+    x_modes: set[str] = set()
+    for label, group in groups:
+        xy = _coerce_time_series_xy(group, x_column=x_column, y_column=y_column)
+        if xy.empty:
+            continue
+        prepared.append((label, xy))
+        total_points += len(xy.index)
+        x_modes.add(str(xy["__x_mode"].iloc[0]))
+    if not prepared or len(x_modes) != 1:
+        return [], None
+
+    mode = next(iter(x_modes))
+    x_min = min(float(xy["__x_numeric"].min()) for _label, xy in prepared)
+    x_max = max(float(xy["__x_numeric"].max()) for _label, xy in prepared)
+    y_min = min(float(xy["__y"].min()) for _label, xy in prepared)
+    y_max = max(float(xy["__y"].max()) for _label, xy in prepared)
+    if np.isclose(x_min, x_max):
+        x_max = x_min + 1.0
+    if np.isclose(y_min, y_max):
+        y_min -= 0.5
+        y_max += 0.5
+    else:
+        padding = max((y_max - y_min) * 0.04, 1e-9)
+        y_min -= padding
+        y_max += padding
+
+    allocations = _sample_allocations(
+        [len(xy.index) for _label, xy in prepared],
+        DASHBOARD_RAW_POINT_LIMIT,
+    )
+    layers: list[dict[str, Any]] = []
+    sampled_points = 0
+    for index, ((label, xy), allocation) in enumerate(zip(prepared, allocations, strict=False)):
+        if allocation <= 0:
+            continue
+        source_count = len(xy.index)
+        sample_count = min(source_count, allocation)
+        sampled = _sample_xy_frame(
+            xy,
+            sample_count,
+            seed=_stable_seed(*seed_parts, label),
+        )
+        sampled_points += len(sampled.index)
+        color = _plot_color(index, label)
+        png_bytes = _render_time_series_raw_layer_png(
+            sampled["__x_numeric"].to_numpy(dtype=float),
+            sampled["__y"].to_numpy(dtype=float),
+            x_range=(x_min, x_max),
+            y_range=(y_min, y_max),
+            color=color,
+        )
+        layers.append(
+            {
+                "label": label,
+                "color": color,
+                "source_point_count": source_count,
+                "sampled_point_count": len(sampled.index),
+                "image": {
+                    "source": (
+                        "data:image/png;base64,"
+                        + base64.b64encode(png_bytes).decode("ascii")
+                    ),
+                    "xref": "x",
+                    "yref": "y",
+                    "x": _display_x_value(x_min, mode=mode),
+                    "y": y_max,
+                    "sizex": x_max - x_min,
+                    "sizey": y_max - y_min,
+                    "sizing": "stretch",
+                    "layer": "below",
+                    "opacity": 1.0,
+                    "visible": True,
+                    "metroliza_raw_layer": True,
+                    "metroliza_raw_layer_label": label,
+                },
+            }
+        )
+
+    sampling_note = None
+    if total_points > sampled_points:
+        sampling_note = (
+            f"Raw layer shows {sampled_points:,} randomly sampled points from "
+            f"{total_points:,} rows; statistics use all rows."
+        )
+    return layers, sampling_note
+
+
+def _coerce_time_series_xy(
+    frame: pd.DataFrame,
+    *,
+    x_column: str,
+    y_column: str,
+) -> pd.DataFrame:
+    if x_column not in frame.columns or y_column not in frame.columns:
+        return pd.DataFrame(columns=["__x_numeric", "__y", "__x_mode"])
+    y_series = pd.to_numeric(frame[y_column], errors="coerce")
+    x_raw = frame[x_column]
+    x_datetime = pd.to_datetime(x_raw, errors="coerce", utc=True)
+    non_null_x = int(x_raw.notna().sum())
+    datetime_count = int(x_datetime.notna().sum())
+    if datetime_count and datetime_count >= max(1, int(non_null_x * 0.8)):
+        x_numeric = x_datetime.astype("int64").astype(float) / 1_000_000.0
+        mode = "date"
+        valid_mask = x_datetime.notna() & y_series.notna()
+    else:
+        x_numeric = pd.to_numeric(x_raw, errors="coerce")
+        mode = "linear"
+        valid_mask = x_numeric.notna() & y_series.notna()
+    result = pd.DataFrame(
+        {
+            "__x_numeric": x_numeric.loc[valid_mask].astype(float),
+            "__y": y_series.loc[valid_mask].astype(float),
+        }
+    )
+    result = result.replace([np.inf, -np.inf], np.nan).dropna()
+    result["__x_mode"] = mode
+    return result
+
+
+def _display_x_value(value: float, *, mode: str) -> Any:
+    if mode == "date":
+        return pd.Timestamp(value, unit="ms", tz="UTC").isoformat()
+    return float(value)
+
+
+def _raw_layer_legend_traces(raw_layers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    traces: list[dict[str, Any]] = []
+    for index, layer in enumerate(raw_layers):
+        label = str(layer.get("label") or f"Raw layer {index + 1}")
+        traces.append(
+            {
+                "type": "scatter",
+                "mode": "markers",
+                "name": f"{label} raw layer",
+                "x": [None],
+                "y": [None],
+                "showlegend": True,
+                "hoverinfo": "skip",
+                "marker": {
+                    "color": str(layer.get("color") or SUMMARY_PLOT_PALETTE["distribution_foreground"]),
+                    "size": 8,
+                    "symbol": "circle",
+                    "opacity": 0.75,
+                },
+                "metroliza_raw_layer_index": index,
+            }
+        )
+    return traces
 
 
 def _time_series_traces(
@@ -597,6 +866,8 @@ def _render_matplotlib_distribution_image(
             ax.set_xticklabels(labels, rotation=30 if max(len(label) for label in labels) > 12 else 0, ha="right")
             ax.set_ylabel(metric.display_label)
 
+        if chart_type in {"violin", "box"}:
+            _annotate_distribution_group_stats(ax, labels, arrays, positions)
         if chart_type == "histogram" and len(value_groups) > 1:
             ax.legend(loc="best", fontsize=8)
         for limit, color, label in (
@@ -624,6 +895,37 @@ def _render_matplotlib_distribution_image(
         }
     finally:
         plt.close(fig)
+
+
+def _annotate_distribution_group_stats(
+    ax,
+    labels: list[str],
+    arrays: list[np.ndarray],
+    positions: np.ndarray,
+) -> None:
+    for label, values, position in zip(labels, arrays, positions, strict=False):
+        finite = values[np.isfinite(values)]
+        if finite.size == 0:
+            continue
+        mean_value = float(np.mean(finite))
+        median_value = float(np.median(finite))
+        text = f"n={finite.size:,}\nmean={mean_value:.3g}\nmedian={median_value:.3g}"
+        ax.annotate(
+            text,
+            xy=(position, mean_value),
+            xytext=(0, 12),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            fontsize=7,
+            color=SUMMARY_PLOT_PALETTE["annotation_text"],
+            bbox={
+                "boxstyle": "round,pad=0.22",
+                "facecolor": "white",
+                "edgecolor": SUMMARY_PLOT_PALETTE["annotation_box_edge"],
+                "alpha": 0.82,
+            },
+        )
 
 
 def _chart_payload(
@@ -680,6 +982,31 @@ def _chart_payload(
             },
         },
     }
+
+
+def _static_chart_payload(
+    *,
+    chart_id: str,
+    title: str,
+    chart_type: str,
+    group_labels: list[str],
+    image: dict[str, str] | None = None,
+    stats_tables: list[dict[str, Any]] | None = None,
+    notes: list[str] | None = None,
+) -> dict[str, Any]:
+    chart: dict[str, Any] = {
+        "id": chart_id,
+        "title": title,
+        "chart_type": chart_type,
+        "group_labels": [str(label) for label in group_labels],
+    }
+    if image:
+        chart["image"] = image
+    if stats_tables:
+        chart["stats_tables"] = stats_tables
+    if notes:
+        chart["notes"] = [str(note) for note in notes if str(note).strip()]
+    return chart
 
 
 def _plot_groups(
@@ -809,6 +1136,134 @@ def _time_series_marker_style(
 def _numeric_values(series: pd.Series) -> list[float]:
     values = pd.to_numeric(series, errors="coerce").dropna()
     return [float(value) for value in values.tolist()]
+
+
+def _sample_plot_groups_for_static_image(
+    groups: list[tuple[str, pd.DataFrame]],
+    metric_field_name: str,
+    *,
+    seed_parts: tuple[str, ...],
+) -> tuple[list[tuple[str, pd.DataFrame]], str | None]:
+    counts = [
+        int(pd.to_numeric(group[metric_field_name], errors="coerce").notna().sum())
+        if metric_field_name in group.columns
+        else 0
+        for _label, group in groups
+    ]
+    total = sum(counts)
+    if total <= DASHBOARD_RAW_POINT_LIMIT:
+        return groups, None
+    allocations = _sample_allocations(counts, DASHBOARD_RAW_POINT_LIMIT)
+    sampled_groups: list[tuple[str, pd.DataFrame]] = []
+    sampled_total = 0
+    for (label, group), allocation, count in zip(groups, allocations, counts, strict=False):
+        if count <= 0 or allocation <= 0 or metric_field_name not in group.columns:
+            sampled_groups.append((label, group.iloc[0:0].copy()))
+            continue
+        valid_index = pd.to_numeric(group[metric_field_name], errors="coerce").dropna().index
+        valid_group = group.loc[valid_index]
+        sample_size = min(len(valid_group.index), allocation)
+        sampled = valid_group.sample(
+            n=sample_size,
+            random_state=_stable_seed(*seed_parts, label),
+        ) if sample_size < len(valid_group.index) else valid_group
+        sampled_groups.append((label, sampled))
+        sampled_total += len(sampled.index)
+    note = (
+        f"Plot image shows {sampled_total:,} randomly sampled points from "
+        f"{total:,} rows; statistics use all rows."
+    )
+    return sampled_groups, note
+
+
+def _sample_allocations(counts: list[int], limit: int) -> list[int]:
+    total = sum(max(0, int(count)) for count in counts)
+    if total <= 0 or limit <= 0:
+        return [0 for _count in counts]
+    if total <= limit:
+        return [max(0, int(count)) for count in counts]
+    raw_allocations = [max(0.0, (max(0, int(count)) / total) * limit) for count in counts]
+    allocations = [
+        min(max(0, int(count)), max(1, int(np.floor(raw))))
+        if int(count) > 0
+        else 0
+        for count, raw in zip(counts, raw_allocations, strict=False)
+    ]
+    while sum(allocations) > limit:
+        candidates = [
+            (allocation, index)
+            for index, allocation in enumerate(allocations)
+            if allocation > 1
+        ]
+        if not candidates:
+            break
+        _allocation, index = max(candidates)
+        allocations[index] -= 1
+    while sum(allocations) < limit:
+        candidates = [
+            (
+                raw_allocations[index] - allocations[index],
+                max(0, int(counts[index])) - allocations[index],
+                index,
+            )
+            for index in range(len(allocations))
+            if allocations[index] < max(0, int(counts[index]))
+        ]
+        if not candidates:
+            break
+        _fraction, _remaining, index = max(candidates)
+        allocations[index] += 1
+    return allocations
+
+
+def _sample_xy_frame(frame: pd.DataFrame, sample_size: int, *, seed: int) -> pd.DataFrame:
+    if sample_size >= len(frame.index):
+        return frame.sort_values("__x_numeric")
+    return frame.sample(n=sample_size, random_state=seed).sort_values("__x_numeric")
+
+
+def _stable_seed(*parts: str) -> int:
+    digest = hashlib.sha256("|".join(str(part) for part in parts).encode("utf-8")).hexdigest()
+    return int(digest[:8], 16)
+
+
+def _render_time_series_raw_layer_png(
+    x_values: np.ndarray,
+    y_values: np.ndarray,
+    *,
+    x_range: tuple[float, float],
+    y_range: tuple[float, float],
+    color: str,
+) -> bytes:
+    from modules.matplotlib_runtime import configure_headless_matplotlib
+
+    configure_headless_matplotlib()
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(9.6, 3.8), dpi=120)
+    try:
+        fig.patch.set_alpha(0.0)
+        ax.set_facecolor((1.0, 1.0, 1.0, 0.0))
+        ax.scatter(
+            x_values,
+            y_values,
+            s=0.16,
+            alpha=0.18,
+            c=color,
+            marker=".",
+            linewidths=0,
+            rasterized=True,
+        )
+        ax.set_xlim(*x_range)
+        ax.set_ylim(*y_range)
+        ax.axis("off")
+        fig.subplots_adjust(0, 0, 1, 1)
+        image_data = BytesIO()
+        fig.savefig(image_data, format="png", transparent=True, dpi=120)
+        image_data.seek(0)
+        return image_data.getvalue()
+    finally:
+        plt.close(fig)
 
 
 def _histogram_bins(values: list[float]) -> dict[str, float]:
@@ -980,7 +1435,14 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
     charts = manifest.get("charts") if isinstance(manifest.get("charts"), list) else []
     diagnostics = manifest.get("diagnostics") if isinstance(manifest.get("diagnostics"), list) else []
     groupstats = manifest.get("groupstats") if isinstance(manifest.get("groupstats"), dict) else {}
-    charts_json = json.dumps(charts, ensure_ascii=False).replace("</", "<\\/")
+    plotly_charts = _plotly_chart_payloads(charts)
+    charts_json = json.dumps(plotly_charts, ensure_ascii=False).replace("</", "<\\/")
+    plotly_script = (
+        f'  <script src="{html.escape(asset_directory_name)}/{PLOTLY_ASSET_NAME}"></script>'
+        if plotly_charts
+        else ""
+    )
+    plotly_runtime = _render_plotly_runtime(charts_json) if plotly_charts else ""
     cards = _render_summary_cards(summary)
     diagnostics_markup = _render_diagnostics(diagnostics)
     groupstats_markup = _render_groupstats(groupstats)
@@ -995,7 +1457,7 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{html.escape(dashboard_title)}</title>
-  <script src="{html.escape(asset_directory_name)}/{PLOTLY_ASSET_NAME}"></script>
+{plotly_script}
   <style>
     :root {{
       color-scheme: light dark;
@@ -1097,6 +1559,13 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
       color: var(--muted);
       font-size: 12px;
       margin-bottom: 6px;
+    }}
+    .chart-notes {{
+      margin: 10px 0 0;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
     }}
     .chart-stats {{
       margin-top: 10px;
@@ -1210,6 +1679,28 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
       {chart_markup}
     </section>
   </main>
+{plotly_runtime}
+</body>
+</html>
+"""
+
+
+def _plotly_chart_payloads(charts: list[Any]) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    for chart in charts:
+        if not isinstance(chart, dict) or not isinstance(chart.get("plotly_spec"), dict):
+            continue
+        payloads.append(
+            {
+                "id": chart.get("id"),
+                "plotly_spec": chart.get("plotly_spec"),
+            }
+        )
+    return payloads
+
+
+def _render_plotly_runtime(charts_json: str) -> str:
+    return f"""
   <script id="production-dashboard-charts" type="application/json">{charts_json}</script>
   <script>
     const chartData = JSON.parse(document.getElementById('production-dashboard-charts').textContent);
@@ -1217,10 +1708,24 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
       const target = document.getElementById(chart.id);
       if (!target || !chart.plotly_spec) continue;
       Plotly.newPlot(target, chart.plotly_spec.data, chart.plotly_spec.layout, chart.plotly_spec.config);
+      if (typeof target.on === 'function') {{
+        target.on('plotly_legendclick', function(eventData) {{
+          const curveNumber = eventData && typeof eventData.curveNumber === 'number' ? eventData.curveNumber : -1;
+          const trace = (chart.plotly_spec.data || [])[curveNumber];
+          if (!trace || typeof trace.metroliza_raw_layer_index !== 'number') return true;
+          const imageIndex = trace.metroliza_raw_layer_index;
+          const images = (target.layout && target.layout.images) || [];
+          const image = images[imageIndex] || {{}};
+          const nextVisible = image.visible === false;
+          const update = {{}};
+          update[`images[${{imageIndex}}].visible`] = nextVisible;
+          Plotly.relayout(target, update);
+          Plotly.restyle(target, {{ visible: nextVisible ? true : 'legendonly' }}, [curveNumber]);
+          return false;
+        }});
+      }}
     }}
   </script>
-</body>
-</html>
 """
 
 
@@ -1483,6 +1988,7 @@ def _render_chart_shell(chart: dict[str, Any]) -> str:
     if not chart_id:
         return ""
     stats_markup = _render_chart_stats_tables(chart.get("stats_tables"))
+    notes_markup = _render_chart_notes(chart.get("notes"))
     image = chart.get("image") if isinstance(chart.get("image"), dict) else {}
     has_plotly = isinstance(chart.get("plotly_spec"), dict)
     snapshot_markup = ""
@@ -1503,15 +2009,33 @@ def _render_chart_shell(chart: dict[str, Any]) -> str:
         else:
             media_markup = image_markup
     else:
-        media_markup = f'<div class="plotly-chart" id="{html.escape(chart_id)}"></div>'
+        media_markup = (
+            f'<div class="plotly-chart" id="{html.escape(chart_id)}"></div>'
+            if has_plotly
+            else ""
+        )
     return (
         '<article class="chart-card">'
         f'<div class="chart-title">{html.escape(title)}</div>'
         f"{media_markup}"
         f"{snapshot_markup}"
+        f"{notes_markup}"
         f"{stats_markup}"
         '</article>'
     )
+
+
+def _render_chart_notes(notes: Any) -> str:
+    if not isinstance(notes, list) or not notes:
+        return ""
+    rows = "".join(
+        f"<li>{html.escape(str(note))}</li>"
+        for note in notes
+        if str(note).strip()
+    )
+    if not rows:
+        return ""
+    return f'<ul class="chart-notes">{rows}</ul>'
 
 
 def _render_chart_stats_tables(stats_tables: Any) -> str:

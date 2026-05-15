@@ -664,6 +664,75 @@ def test_enter_in_matching_rows_opens_group_prompt_and_assigns_rows(monkeypatch)
         dialog.close()
 
 
+def test_double_click_matching_rows_opens_group_prompt_and_assigns_selection(monkeypatch) -> None:
+    app = _app()
+    frame = pd.DataFrame(
+        {
+            "source_row_number": [1, 2, 3],
+            "tracecode": ["TC-001", "TC-002", "TC-003"],
+            "length_mm": [1.0, 2.0, 3.0],
+        }
+    )
+    dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
+    monkeypatch.setattr(
+        "modules.tabular_analytics_grouping_dialog.QInputDialog.getText",
+        lambda *_args, **_kwargs: ("Fixture A", True),
+    )
+    try:
+        dialog.selector_columns = ["tracecode"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+        dialog.show()
+        app.processEvents()
+
+        _select_selector_rows(dialog, 0, 2)
+        dialog.selector_list.itemDoubleClicked.emit(dialog.selector_list.item(1))
+
+        assignments = dialog.df.set_index("REPORT_ID")["GROUP"].to_dict()
+        assert assignments == {1: "Fixture A", 2: "Fixture A", 3: "POPULATION"}
+    finally:
+        dialog.close()
+
+
+def test_double_click_group_item_opens_rename_prompt(monkeypatch) -> None:
+    _app()
+    frame = pd.DataFrame(
+        {
+            "source_row_number": [1, 2, 3],
+            "tracecode": ["TC-001", "TC-002", "TC-003"],
+            "length_mm": [1.0, 2.0, 3.0],
+        }
+    )
+    dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
+    try:
+        dialog.selector_columns = ["tracecode"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+        dialog.selected_selector_keys = {("TC-001",)}
+        dialog.create_group(initial_group_name="Fixture A")
+        monkeypatch.setattr(
+            "modules.tabular_analytics_grouping_dialog.QInputDialog.getText",
+            lambda *_args, **_kwargs: ("Fixture B", True),
+        )
+
+        group_item = next(
+            dialog.groups_list.item(index)
+            for index in range(dialog.groups_list.count())
+            if dialog.groups_list.item(index).data(Qt.ItemDataRole.UserRole) == "Fixture A"
+        )
+        dialog.groups_list.setCurrentItem(group_item)
+        dialog.groups_list.itemDoubleClicked.emit(group_item)
+
+        assignments = dialog.df.set_index("REPORT_ID")["GROUP"].to_dict()
+        assert assignments[1] == "Fixture B"
+        assert "Fixture B" in {
+            dialog.groups_list.item(index).data(Qt.ItemDataRole.UserRole)
+            for index in range(dialog.groups_list.count())
+        }
+    finally:
+        dialog.close()
+
+
 def test_add_to_existing_group_reuses_color_and_refreshes_colored_panes() -> None:
     _app()
     frame = pd.DataFrame(

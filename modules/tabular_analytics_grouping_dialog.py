@@ -240,7 +240,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.previous_page_button.clicked.connect(self.previous_selector_page)
         self.next_page_button.clicked.connect(self.next_selector_page)
         self.selector_list.itemSelectionChanged.connect(self._store_current_selection)
+        self.selector_list.itemDoubleClicked.connect(self._assign_matching_rows_from_item)
         self.groups_list.itemSelectionChanged.connect(self._populate_group_members)
+        self.groups_list.itemDoubleClicked.connect(lambda _item: self.rename_group())
         self.create_group_button.clicked.connect(lambda: self.create_group())
         self.rename_group_button.clicked.connect(self.rename_group)
         self.delete_group_button.clicked.connect(self.delete_group)
@@ -794,6 +796,29 @@ class TabularAnalyticsGroupingDialog(QDialog):
         if "source_row_number" not in filtered.columns:
             return []
         return pd.to_numeric(filtered["source_row_number"], errors="coerce").dropna().astype(int).tolist()
+
+    def _assign_matching_rows_from_item(self, item: QListWidgetItem | None) -> None:
+        if item is None:
+            return
+        clicked_key = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(clicked_key, tuple):
+            return
+        visible_keys = set()
+        for index in range(self.selector_list.count()):
+            key = self.selector_list.item(index).data(Qt.ItemDataRole.UserRole)
+            if isinstance(key, tuple):
+                visible_keys.add(key)
+        selected_visible_keys = set()
+        for selected_item in self.selector_list.selectedItems():
+            key = selected_item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(key, tuple):
+                selected_visible_keys.add(key)
+        if clicked_key not in selected_visible_keys:
+            self.selector_list.clearSelection()
+            item.setSelected(True)
+            selected_visible_keys = {clicked_key}
+        self.selected_selector_keys = (self.selected_selector_keys - visible_keys) | selected_visible_keys
+        self.create_group()
 
     def _assign_rows_to_group(self, row_ids: list[int], group_name: str) -> None:
         if not row_ids or not group_name:

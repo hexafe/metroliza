@@ -90,13 +90,8 @@ def test_build_production_dashboard_manifest_contains_requested_chart_families(t
     assert "raw_record_json" not in json.dumps(manifest)
     assert "Selected references" in json.dumps(manifest)
     histogram = next(chart for chart in manifest["charts"] if chart["chart_type"] == "histogram")
-    traces = histogram["plotly_spec"]["data"]
-    assert traces
-    assert {trace["bingroup"] for trace in traces} == {"hist-cycle_time_s"}
-    assert all(trace["xbins"] == traces[0]["xbins"] for trace in traces)
-    assert all(trace["histnorm"] == "probability" for trace in traces)
-    assert histogram["plotly_spec"]["layout"]["yaxis"]["title"] == "Share of group"
-    assert traces[0]["xbins"]["size"] > 0
+    assert "plotly_spec" not in histogram
+    assert histogram["group_labels"] == ["Other references", "Selected references"]
     assert histogram["stats_tables"]
     assert histogram["image"]["mime_type"] == "image/png"
     assert any(
@@ -136,8 +131,9 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     assert "Selected references" in html_text
     assert "Descriptive stats" in html_text
     assert "Samples" in html_text
-    assert 'class="plotly-chart" id="histogram-cycle_time_s"' in html_text
-    assert "Static snapshot" in html_text
+    assert 'class="plotly-chart" id="histogram-cycle_time_s"' not in html_text
+    assert 'class="chart-image"' in html_text
+    assert "Static snapshot" not in html_text
     assert ".chart-stats th" in html_text
     assert "background: #1f2937" in html_text
     assert "color: #ffffff" in html_text
@@ -158,7 +154,11 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     )
     assert match is not None
     chart_payload = json.loads(match.group(1))
-    assert len(chart_payload) == 5
+    assert len(chart_payload) == 2
+    assert {chart["id"] for chart in chart_payload} == {
+        "time-series-cycle_time_s-aggregated",
+        "time-series-cycle_time_s-raw-aggregate",
+    }
 
 
 def test_write_production_dashboard_collapses_diagnostics_by_default(tmp_path) -> None:
@@ -315,14 +315,8 @@ def test_metric_limits_flow_into_dashboard_stats_tables() -> None:
     labels = {row["label"] for row in rows}
     assert {"Cp", "Cpk", "NOK", "NOK %"}.issubset(labels)
     assert any(row["label"] == "NOK" and row["value"].startswith("2") for row in rows)
-    layout = histogram["plotly_spec"]["layout"]
-    assert {annotation["text"] for annotation in layout["annotations"]} >= {
-        "LSL",
-        "USL",
-        "Mean",
-        "Median",
-    }
-    assert len(layout["shapes"]) >= 4
+    assert "plotly_spec" not in histogram
+    assert histogram["image"]["mime_type"] == "image/png"
 
 
 def test_histogram_stats_rows_without_limits_show_capability_as_not_applicable() -> None:
@@ -464,6 +458,63 @@ def test_large_time_series_uses_compact_marker_style() -> None:
     assert marker["line"]["width"] == 0.0
 
 
+def test_very_large_time_series_uses_sampled_raw_image_layers(tmp_path) -> None:
+    row_count = 60_000
+    frame = pd.DataFrame(
+        {
+            "process_datetime": pd.date_range(
+                "2026-05-10 08:00",
+                periods=row_count,
+                freq="s",
+                tz="UTC",
+            ),
+            "GROUP": ["A" if index % 2 == 0 else "B" for index in range(row_count)],
+            "length_mm": [float(index % 100) for index in range(row_count)],
+        }
+    )
+
+    manifest = build_production_dashboard_manifest(
+        frame=frame,
+        metric_selection=(ProductionMetricSelection("length_mm", "Length Mm"),),
+        aggregation_state=ProductionAggregationState(
+            time_bucket="none",
+            aggregation_methods=("mean",),
+            group_fields=("GROUP",),
+        ),
+        chart_selection=ProductionChartSelection(
+            time_series=True,
+            histogram=False,
+            violin=False,
+            box=False,
+            groupstats=False,
+        ),
+    )
+
+    chart = manifest["charts"][0]
+    spec = chart["plotly_spec"]
+    raw_traces = [
+        trace for trace in spec["data"] if "metroliza_raw_layer_index" in trace
+    ]
+    aggregate_traces = [
+        trace for trace in spec["data"] if "metroliza_raw_layer_index" not in trace
+    ]
+
+    assert raw_traces
+    assert len(spec["layout"]["images"]) == 2
+    assert all(image["source"].startswith("data:image/png;base64,") for image in spec["layout"]["images"])
+    assert sum(len(trace["x"]) for trace in aggregate_traces) < 1_000
+    assert chart["notes"] == [
+        "Raw layer shows 50,000 randomly sampled points from 60,000 rows; statistics use all rows."
+    ]
+
+    output_file = tmp_path / "large_dashboard.html"
+    write_production_dashboard(manifest, output_file)
+    html_text = output_file.read_text(encoding="utf-8")
+
+    assert "metroliza_raw_layer_index" in html_text
+    assert len(html_text.encode("utf-8")) < 6 * 1024 * 1024
+
+
 def test_distribution_charts_use_selected_group_field_before_default_columns() -> None:
     frame = pd.DataFrame(
         {
@@ -492,8 +543,8 @@ def test_distribution_charts_use_selected_group_field_before_default_columns() -
 
     for chart_type in {"histogram", "violin", "box"}:
         chart = next(chart for chart in manifest["charts"] if chart["chart_type"] == chart_type)
-        trace_names = {trace["name"] for trace in chart["plotly_spec"]["data"]}
-        assert trace_names == {"M1", "M2"}
+        assert chart["group_labels"] == ["M1", "M2"]
+        assert "plotly_spec" not in chart
 
 
 def test_distribution_charts_force_numeric_group_names_to_categories() -> None:
@@ -524,17 +575,8 @@ def test_distribution_charts_force_numeric_group_names_to_categories() -> None:
 
     for chart_type in {"violin", "box"}:
         chart = next(chart for chart in manifest["charts"] if chart["chart_type"] == chart_type)
-        xaxis = chart["plotly_spec"]["layout"]["xaxis"]
-        traces = chart["plotly_spec"]["data"]
-        assert xaxis["type"] == "category"
-        assert xaxis["categoryorder"] == "array"
-        assert xaxis["categoryarray"] == ["73211", "A", "POPULATION"]
-        assert [trace["name"] for trace in traces] == ["73211", "A", "POPULATION"]
-        assert all(
-            isinstance(x_value, str)
-            for trace in traces
-            for x_value in trace["x"]
-        )
+        assert chart["group_labels"] == ["73211", "A", "POPULATION"]
+        assert "plotly_spec" not in chart
 
 
 def test_groupstats_html_renders_overall_and_ordered_pairwise_rows(tmp_path) -> None:
