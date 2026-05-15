@@ -20,14 +20,20 @@ try:
     from modules.industrial_analytics_filter_dialog import IndustrialAnalyticsFilterDialog
     from modules.industrial_analytics_state import ProductionFilterState, ProductionMetricSelection
     from modules.industrial_workers import IndustrialAnalyticsThread
-    from modules.tabular_analytics_service import TabularColumnFilter
+    from modules.tabular_analytics_service import (
+        TabularColumnFilter,
+        cleanup_tabular_load_result,
+        load_tabular_analytics_files,
+    )
 except ImportError as exc:  # pragma: no cover - environment/order dependent
     build_analytics_completion_message = None
     QApplication = None
+    cleanup_tabular_load_result = None
     QDialog = None
     IndustrialAnalyticsDialog = None
     IndustrialAnalyticsFilterDialog = None
     IndustrialAnalyticsThread = None
+    load_tabular_analytics_files = None
     MetricSelectionDialog = None
     ProductionFilterState = None
     ProductionMetricSelection = None
@@ -292,6 +298,87 @@ def test_tabular_analytics_dialog_loads_multiple_csv_files(
         assert dialog.input_file_field.text().startswith("2 CSV files:")
     finally:
         dialog.close()
+
+
+def test_tabular_grouping_dialog_uses_sqlite_store_without_materializing_rows(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _app()
+    first_file = tmp_path / "line_a.csv"
+    second_file = tmp_path / "line_b.csv"
+    pd.DataFrame(
+        {
+            "Line": ["A", "B"],
+            "Length mm": [10.0, 10.2],
+        }
+    ).to_csv(first_file, index=False)
+    pd.DataFrame(
+        {
+            "Line": ["A", "B"],
+            "Length mm": [10.4, 10.6],
+        }
+    ).to_csv(second_file, index=False)
+    loaded = load_tabular_analytics_files((first_file, second_file))
+    calls = {}
+
+    class FakeGroupingDialog:
+        def __init__(
+            self,
+            parent,
+            *,
+            dataframe,
+            column_mapping,
+            grouping_dataframe,
+            sqlite_store,
+            filter_columns,
+            selected_filter_keys,
+            column_filters,
+        ):
+            calls["parent"] = parent
+            calls["rows"] = len(dataframe.index)
+            calls["column_mapping"] = column_mapping
+            calls["grouping_dataframe"] = grouping_dataframe
+            calls["sqlite_store"] = sqlite_store
+            calls["filter_columns"] = filter_columns
+            calls["selected_filter_keys"] = selected_filter_keys
+            calls["column_filters"] = column_filters
+
+        def exec(self):
+            calls["executed"] = True
+            return 0
+
+    def fail_materialize(*_args, **_kwargs):
+        raise AssertionError("SQLite-backed grouping should not materialize all tabular rows")
+
+    monkeypatch.setattr(
+        "modules.industrial_analytics_dialog.TabularAnalyticsGroupingDialog",
+        FakeGroupingDialog,
+    )
+    monkeypatch.setattr(
+        "modules.industrial_analytics_dialog.materialize_tabular_dataframe",
+        fail_materialize,
+    )
+
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.tabular_load_result = loaded
+        dialog.tabular_column_filters = (TabularColumnFilter("line", selected_values=("A",)),)
+
+        dialog.open_grouping_dialog()
+
+        assert calls["parent"] is dialog
+        assert calls["rows"] == len(loaded.dataframe.index)
+        assert calls["column_mapping"]["Line"] == "line"
+        assert calls["grouping_dataframe"] is None
+        assert calls["sqlite_store"] is loaded.sqlite_store
+        assert calls["filter_columns"] == ()
+        assert calls["selected_filter_keys"] == ()
+        assert calls["column_filters"] == (TabularColumnFilter("line", selected_values=("A",)),)
+        assert calls["executed"] is True
+    finally:
+        dialog.close()
+        cleanup_tabular_load_result(loaded)
 
 
 def test_tabular_analytics_dialog_lists_excel_sheets_after_file_selection(

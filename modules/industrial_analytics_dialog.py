@@ -1089,6 +1089,20 @@ class IndustrialAnalyticsDialog(QDialog):
         if self.tabular_load_result is None or self.tabular_load_result.dataframe.empty:
             QMessageBox.warning(self, self.windowTitle(), "Load CSV/Excel metrics before editing groups.")
             return
+        if self.tabular_load_result.sqlite_store is not None:
+            dialog = TabularAnalyticsGroupingDialog(
+                self,
+                dataframe=self.tabular_load_result.dataframe,
+                column_mapping=self.tabular_load_result.column_mapping,
+                grouping_dataframe=self.df_for_grouping if self.grouping_applied else None,
+                sqlite_store=self.tabular_load_result.sqlite_store,
+                filter_columns=self.tabular_filter_columns,
+                selected_filter_keys=self.tabular_filter_keys,
+                column_filters=self.tabular_column_filters,
+            )
+            dialog.exec()
+            self._sync_ui_state()
+            return
         dialog = TabularAnalyticsGroupingDialog(
             self,
             dataframe=self._filtered_tabular_dataframe(),

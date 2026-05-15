@@ -28,6 +28,7 @@ from modules.help_menu import attach_help_menu_to_layout
 from modules.list_selection_utils import ListSelectionUtils
 from modules.tabular_analytics_service import (
     TABULAR_DEFAULT_GROUP,
+    TabularColumnFilter,
     build_tabular_grouping_dataframe,
     selectable_tabular_source_columns,
 )
@@ -42,6 +43,7 @@ from modules.ui_foundation import (
 
 
 _SELECTOR_PAGE_SIZE = 1000
+_GROUP_MEMBER_PREVIEW_LIMIT = 1000
 
 
 class TabularAnalyticsGroupingDialog(QDialog):
@@ -54,11 +56,25 @@ class TabularAnalyticsGroupingDialog(QDialog):
         dataframe: pd.DataFrame | None = None,
         column_mapping: dict[str, str] | None = None,
         grouping_dataframe: pd.DataFrame | None = None,
+        sqlite_store=None,
+        filter_columns: tuple[str, ...] | list[str] | None = None,
+        selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+        column_filters: tuple[TabularColumnFilter, ...] | list[TabularColumnFilter] | None = None,
     ):
         super().__init__(parent)
         self.setWindowTitle("CSV / Excel groups")
         configure_window_size(self, minimum=(720, 440), initial=(900, 620))
         self.source_dataframe = dataframe.copy() if isinstance(dataframe, pd.DataFrame) else pd.DataFrame()
+        self.sqlite_store = sqlite_store
+        self.sqlite_filter_columns = tuple(str(column) for column in (filter_columns or ()))
+        self.sqlite_selected_filter_keys = tuple(
+            tuple(str(part) for part in key)
+            for key in (selected_filter_keys or ())
+            if isinstance(key, (list, tuple))
+        )
+        self.sqlite_column_filters = tuple(
+            item for item in (column_filters or ()) if isinstance(item, TabularColumnFilter)
+        )
         self.column_labels = {
             normalized: original
             for original, normalized in (column_mapping or {}).items()
@@ -238,6 +254,16 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._list_selection_utils.connect_shift_range_behavior(self.group_members_list)
         self._refresh_all()
 
+    def _is_sqlite_backed(self) -> bool:
+        return vars(self).get("sqlite_store") is not None
+
+    def _sqlite_filter_kwargs(self) -> dict[str, object]:
+        return {
+            "filter_columns": self.sqlite_filter_columns,
+            "selected_filter_keys": self.sqlite_selected_filter_keys,
+            "column_filters": self.sqlite_column_filters,
+        }
+
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self._configure_stretch_panes()
@@ -355,6 +381,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self,
         preview_rows: list[dict[str, object]],
     ) -> tuple[dict[tuple[str, ...], str], set[tuple[str, ...]]]:
+        if self._is_sqlite_backed():
+            return {}, set()
         if (
             not preview_rows
             or not self.selector_columns
@@ -415,6 +443,11 @@ class TabularAnalyticsGroupingDialog(QDialog):
         return color_map, mixed_keys
 
     def _source_columns(self) -> list[str]:
+        if self._is_sqlite_backed():
+            return selectable_tabular_source_columns(
+                pd.DataFrame(columns=list(self.sqlite_store.source_columns)),
+                normalized_source_columns=self.sqlite_store.source_columns,
+            )
         return selectable_tabular_source_columns(
             self.source_dataframe,
             normalized_source_columns=set(self.column_labels),
@@ -444,6 +477,20 @@ class TabularAnalyticsGroupingDialog(QDialog):
             self.available_columns_list.setCurrentRow(0)
 
     def _build_grouping_dataframe(self) -> pd.DataFrame:
+        if self._is_sqlite_backed():
+            return pd.DataFrame(
+                columns=[
+                    "REPORT_ID",
+                    "REFERENCE",
+                    "DATE",
+                    "SAMPLE_NUMBER",
+                    "PART_NAME",
+                    "FILENAME",
+                    "GROUP",
+                    self.group_color_column,
+                    "GROUP_KEY",
+                ]
+            )
         frame = build_tabular_grouping_dataframe(
             self.source_dataframe,
             selector_columns=tuple(self.selector_columns),
@@ -480,6 +527,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
         frame["REPORT_ID"] = frame["REPORT_ID"].astype(int)
         labels = frame["GROUP"].fillna(self.default_group).astype(str).str.strip()
         frame["GROUP"] = labels.mask(labels == "", self.default_group)
+        frame = frame[frame["GROUP"] != self.default_group]
+        if frame.empty:
+            return {}
         if self.group_color_column not in frame.columns:
             frame[self.group_color_column] = None
         deduped = frame.drop_duplicates(subset=["REPORT_ID"], keep="last").set_index("REPORT_ID")
@@ -489,7 +539,36 @@ class TabularAnalyticsGroupingDialog(QDialog):
         }
 
     def _apply_group_assignments(self, assignments: dict[int, tuple[str, str | None]]) -> None:
-        if not assignments or "REPORT_ID" not in self.df.columns:
+        if not assignments:
+            return
+        if self._is_sqlite_backed():
+            rows = []
+            for report_id, assignment in assignments.items():
+                if isinstance(assignment, tuple):
+                    group_name, color = assignment
+                else:
+                    group_name, color = str(assignment), None
+                group_name = str(group_name or self.default_group).strip() or self.default_group
+                if group_name == self.default_group:
+                    continue
+                rows.append(
+                    {
+                        "REPORT_ID": int(report_id),
+                        "REFERENCE": f"Row {int(report_id)}",
+                        "DATE": "",
+                        "SAMPLE_NUMBER": str(int(report_id)),
+                        "PART_NAME": f"Row {int(report_id)}",
+                        "FILENAME": "",
+                        "GROUP": group_name,
+                        self.group_color_column: color or self.default_group_color,
+                        "GROUP_KEY": int(report_id),
+                    }
+                )
+            if rows:
+                self.df = pd.DataFrame(rows)
+                self._ensure_group_color_integrity()
+            return
+        if "REPORT_ID" not in self.df.columns:
             return
         group_assignments = {}
         color_assignments = {}
@@ -518,6 +597,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
         return str(group_name) if group_name is not None else item.text()
 
     def _filtered_source_for_next_level(self) -> pd.DataFrame:
+        if self._is_sqlite_backed():
+            return pd.DataFrame()
         return self._current_selector_index().filter_rows(self.selected_selector_keys)
 
     def add_selector_column(self) -> None:
@@ -527,18 +608,96 @@ class TabularAnalyticsGroupingDialog(QDialog):
         column = item.data(Qt.ItemDataRole.UserRole)
         if not column or column in self.selector_columns:
             return
-        filtered_source = self._filtered_source_for_next_level()
-        previous_filter_active = bool(self.selected_selector_keys)
         self.selector_columns.append(str(column))
-        if previous_filter_active:
-            child_index = CsvGroupingIndex(filtered_source, self.selector_columns)
-            self.selected_selector_keys = child_index.child_keys_for_selected(self.selected_selector_keys)
-        else:
+        if self._is_sqlite_backed():
             self.selected_selector_keys = set()
+        else:
+            filtered_source = self._filtered_source_for_next_level()
+            previous_filter_active = bool(self.selected_selector_keys)
+            if previous_filter_active:
+                child_index = CsvGroupingIndex(filtered_source, self.selector_columns)
+                self.selected_selector_keys = child_index.child_keys_for_selected(self.selected_selector_keys)
+            else:
+                self.selected_selector_keys = set()
         self._selector_index = None
         self._selector_page_offset = 0
         self._rebuild_preserving_groups()
         self._refresh_all()
+
+    def _sqlite_preview_rows(
+        self,
+        *,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[dict[str, object]], int]:
+        if not self._is_sqlite_backed():
+            return [], 0
+        return self.sqlite_store.preview_group_rows(
+            tuple(self.selector_columns),
+            search_text=self.selector_search.text(),
+            offset=offset,
+            limit=limit,
+            **self._sqlite_filter_kwargs(),
+        )
+
+    def _sqlite_selector_row_count(self) -> int:
+        if not self._is_sqlite_backed():
+            return 0
+        if not self.selector_columns or not self.selected_selector_keys:
+            return self.sqlite_store.count_rows(**self._sqlite_filter_kwargs())
+        return self.sqlite_store.count_rows_for_group_keys(
+            tuple(self.selector_columns),
+            self.selected_selector_keys,
+            **self._sqlite_filter_kwargs(),
+        )
+
+    def _sqlite_row_ids_for_selected_keys(self) -> list[int]:
+        if not self._is_sqlite_backed() or not self.selector_columns or not self.selected_selector_keys:
+            return []
+        return self.sqlite_store.row_ids_for_group_keys(
+            tuple(self.selector_columns),
+            self.selected_selector_keys,
+            **self._sqlite_filter_kwargs(),
+        )
+
+    def _sqlite_total_grouping_rows(self) -> int:
+        if not self._is_sqlite_backed():
+            return 0
+        return self.sqlite_store.count_rows(**self._sqlite_filter_kwargs())
+
+    def _sqlite_filters_active(self) -> bool:
+        return bool(
+            self.sqlite_column_filters
+            or (self.sqlite_filter_columns and self.sqlite_selected_filter_keys)
+        )
+
+    def _sqlite_group_counts(self) -> dict[str, int]:
+        total = self._sqlite_total_grouping_rows()
+        if self.df.empty or "GROUP" not in self.df.columns or "REPORT_ID" not in self.df.columns:
+            return {self.default_group: total}
+        assigned = self.df.loc[:, ["REPORT_ID", "GROUP"]].copy()
+        assigned["REPORT_ID"] = pd.to_numeric(assigned["REPORT_ID"], errors="coerce")
+        assigned = assigned.dropna(subset=["REPORT_ID"])
+        if assigned.empty:
+            return {self.default_group: total}
+        assigned["REPORT_ID"] = assigned["REPORT_ID"].astype(int)
+        labels = assigned["GROUP"].fillna(self.default_group).astype(str).str.strip()
+        assigned["GROUP"] = labels.mask(labels == "", self.default_group)
+        assigned = assigned.drop_duplicates(subset=["REPORT_ID"], keep="last")
+        custom_assignments = assigned[assigned["GROUP"] != self.default_group]
+        group_counts: dict[str, int] = {}
+        for group_name, group_rows in custom_assignments.groupby("GROUP", dropna=False, sort=True):
+            row_ids = group_rows["REPORT_ID"].astype(int).tolist()
+            count = (
+                self.sqlite_store.count_source_row_numbers(row_ids, **self._sqlite_filter_kwargs())
+                if self._sqlite_filters_active()
+                else len(set(row_ids))
+            )
+            if count:
+                group_counts[str(group_name)] = int(count)
+        assigned_custom_count = int(sum(group_counts.values()))
+        group_counts[self.default_group] = max(0, total - assigned_custom_count)
+        return {str(group): int(count) for group, count in group_counts.items()}
 
     def remove_last_selector_column(self) -> None:
         if not self.selector_columns:
@@ -605,6 +764,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._refresh_selectors()
 
     def _rebuild_preserving_groups(self) -> None:
+        if self._is_sqlite_backed():
+            self._ensure_group_color_integrity()
+            return
         assignments = self._group_assignments(self.df)
         self.df = self._build_grouping_dataframe()
         self._apply_group_assignments(assignments)
@@ -624,6 +786,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
     def _row_ids_for_selected_keys(self) -> list[int]:
         if not self.selector_columns or not self.selected_selector_keys:
             return []
+        if self._is_sqlite_backed():
+            return self._sqlite_row_ids_for_selected_keys()
         filtered = self._current_selector_index().filter_rows(self.selected_selector_keys)
         if "source_row_number" not in filtered.columns:
             return []
@@ -634,6 +798,24 @@ class TabularAnalyticsGroupingDialog(QDialog):
             return
         group_exists = bool((self.df["GROUP"] == group_name).any())
         assigned_color = self._group_color_for_group(group_name) if group_exists else self._next_group_color()
+        if self._is_sqlite_backed():
+            incoming = pd.DataFrame(
+                {
+                    "REPORT_ID": row_ids,
+                    "REFERENCE": [f"Row {row_id}" for row_id in row_ids],
+                    "DATE": "",
+                    "SAMPLE_NUMBER": [str(row_id) for row_id in row_ids],
+                    "PART_NAME": [f"Row {row_id}" for row_id in row_ids],
+                    "FILENAME": "",
+                    "GROUP": group_name,
+                    self.group_color_column: assigned_color,
+                    "GROUP_KEY": row_ids,
+                }
+            )
+            existing = self.df.loc[~self.df["REPORT_ID"].isin(row_ids)] if not self.df.empty else self.df
+            self.df = pd.concat([existing, incoming], ignore_index=True)
+            self._ensure_group_color_integrity()
+            return
         row_mask = self.df["REPORT_ID"].isin(row_ids)
         self.df.loc[row_mask, "GROUP"] = group_name
         self.df.loc[row_mask, self.group_color_column] = assigned_color
@@ -708,8 +890,11 @@ class TabularAnalyticsGroupingDialog(QDialog):
         if not selected_group or selected_group == self.default_group:
             return
         selected_mask = self.df["GROUP"] == selected_group
-        self.df.loc[selected_mask, "GROUP"] = self.default_group
-        self.df.loc[selected_mask, self.group_color_column] = self.default_group_color
+        if self._is_sqlite_backed():
+            self.df = self.df.loc[~selected_mask].reset_index(drop=True)
+        else:
+            self.df.loc[selected_mask, "GROUP"] = self.default_group
+            self.df.loc[selected_mask, self.group_color_column] = self.default_group_color
         self._ensure_group_color_integrity()
         self._refresh_all(preferred_group=self.default_group)
 
@@ -718,7 +903,11 @@ class TabularAnalyticsGroupingDialog(QDialog):
             self.selector_status_label.setText("No grouping columns selected")
             set_status_variant(self.selector_status_label, "neutral")
         else:
-            row_count = self._current_selector_index().count_rows(self.selected_selector_keys)
+            row_count = (
+                self._sqlite_selector_row_count()
+                if self._is_sqlite_backed()
+                else self._current_selector_index().count_rows(self.selected_selector_keys)
+            )
             columns_text = self._selector_columns_text()
             if self.selected_selector_keys:
                 self.selector_status_label.setText(
@@ -736,22 +925,34 @@ class TabularAnalyticsGroupingDialog(QDialog):
     def _refresh_selectors(self) -> None:
         self.selector_list.blockSignals(True)
         self.selector_list.clear()
-        preview_rows, total_rows = self._current_selector_index().preview_rows(
-            search_text=self.selector_search.text(),
-            offset=self._selector_page_offset,
-            limit=_SELECTOR_PAGE_SIZE,
-        )
+        if self._is_sqlite_backed():
+            preview_rows, total_rows = self._sqlite_preview_rows(
+                offset=self._selector_page_offset,
+                limit=_SELECTOR_PAGE_SIZE,
+            )
+        else:
+            preview_rows, total_rows = self._current_selector_index().preview_rows(
+                search_text=self.selector_search.text(),
+                offset=self._selector_page_offset,
+                limit=_SELECTOR_PAGE_SIZE,
+            )
         self._selector_total_rows = total_rows
         if self._selector_page_offset >= total_rows and total_rows:
             self._selector_page_offset = max(
                 0,
                 ((total_rows - 1) // _SELECTOR_PAGE_SIZE) * _SELECTOR_PAGE_SIZE,
             )
-            preview_rows, total_rows = self._current_selector_index().preview_rows(
-                search_text=self.selector_search.text(),
-                offset=self._selector_page_offset,
-                limit=_SELECTOR_PAGE_SIZE,
-            )
+            if self._is_sqlite_backed():
+                preview_rows, total_rows = self._sqlite_preview_rows(
+                    offset=self._selector_page_offset,
+                    limit=_SELECTOR_PAGE_SIZE,
+                )
+            else:
+                preview_rows, total_rows = self._current_selector_index().preview_rows(
+                    search_text=self.selector_search.text(),
+                    offset=self._selector_page_offset,
+                    limit=_SELECTOR_PAGE_SIZE,
+                )
             self._selector_total_rows = total_rows
         selected_keys = set(self.selected_selector_keys)
         color_map, mixed_keys = self._selector_color_map(preview_rows)
@@ -814,9 +1015,13 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.groups_list.blockSignals(True)
         self.groups_list.clear()
         group_counts = (
-            self.df.groupby("GROUP", dropna=False)["REPORT_ID"].nunique().sort_index().to_dict()
-            if not self.df.empty
-            else {}
+            self._sqlite_group_counts()
+            if self._is_sqlite_backed()
+            else (
+                self.df.groupby("GROUP", dropna=False)["REPORT_ID"].nunique().sort_index().to_dict()
+                if not self.df.empty
+                else {}
+            )
         )
         if self.default_group not in group_counts:
             group_counts[self.default_group] = 0
@@ -840,10 +1045,26 @@ class TabularAnalyticsGroupingDialog(QDialog):
             self._sync_status()
             return
         rows = self.df[self.df["GROUP"] == selected_group]
-        for _index, row in rows.iterrows():
+        total_rows = len(rows.index)
+        if self._is_sqlite_backed() and selected_group == self.default_group:
+            total_rows = self._sqlite_group_counts().get(self.default_group, 0)
+            item = QListWidgetItem(
+                f"{self.default_group} contains {total_rows} unassigned row(s). "
+                "Select row values and assign a group to create custom groups."
+            )
+            self._apply_item_color(item, self.default_group_color)
+            self.group_members_list.addItem(item)
+            self._sync_status()
+            return
+        for _index, row in rows.head(_GROUP_MEMBER_PREVIEW_LIMIT).iterrows():
             label = str(row.get("REFERENCE") or row.get("PART_NAME") or row.get("SAMPLE_NUMBER") or "")
             item = QListWidgetItem(label)
             self._apply_item_color(item, self._group_color_for_row(row))
+            self.group_members_list.addItem(item)
+        if total_rows > _GROUP_MEMBER_PREVIEW_LIMIT:
+            item = QListWidgetItem(
+                f"Showing first {_GROUP_MEMBER_PREVIEW_LIMIT} of {total_rows} row(s)."
+            )
             self.group_members_list.addItem(item)
         self._sync_status()
 

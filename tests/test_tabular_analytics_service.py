@@ -225,6 +225,88 @@ def test_load_tabular_analytics_file_can_use_sqlite_for_single_csv_filters(tmp_p
         cleanup_tabular_load_result(result)
 
 
+def test_sqlite_group_preview_and_selection_respect_column_filters(tmp_path) -> None:
+    input_file = tmp_path / "group_preview.csv"
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=5, freq="D"),
+            "Line": ["L1", "L1", "L2", "L1", "L2"],
+            "Station": ["A", "B", "A", "A", "B"],
+            "Length mm": [10.0, 10.1, 10.2, 10.3, 10.4],
+        }
+    ).to_csv(input_file, index=False)
+
+    result = load_tabular_analytics_file(input_file, force_sqlite=True)
+    try:
+        filters = (
+            TabularColumnFilter("line", selected_values=("L1",)),
+            TabularColumnFilter("time_stamp", date_mode="from", date_from="2026-05-13"),
+        )
+
+        rows, total = result.sqlite_store.preview_group_rows(
+            ("station",),
+            column_filters=filters,
+            limit=20,
+        )
+        searched_rows, searched_total = result.sqlite_store.preview_group_rows(
+            ("station",),
+            column_filters=(TabularColumnFilter("line", selected_values=("L1",)),),
+            search_text="b",
+            limit=20,
+        )
+
+        assert total == 1
+        assert rows == [{"key": ("A",), "label": "A", "row_count": 1}]
+        assert searched_total == 1
+        assert searched_rows == [{"key": ("B",), "label": "B", "row_count": 1}]
+        assert result.sqlite_store.row_ids_for_group_keys(
+            ("station",),
+            {("A",)},
+            column_filters=filters,
+        ) == [4]
+        assert result.sqlite_store.count_rows_for_group_keys(
+            ("station",),
+            {("A",)},
+            column_filters=filters,
+        ) == 1
+        assert result.sqlite_store.count_source_row_numbers(
+            [1, 4],
+            column_filters=filters,
+        ) == 1
+    finally:
+        cleanup_tabular_load_result(result)
+
+
+def test_sqlite_group_preview_search_treats_wildcards_literally(tmp_path) -> None:
+    input_file = tmp_path / "wildcards.csv"
+    pd.DataFrame(
+        {
+            "Station": ["100%", "1000", "A_1", "AB1"],
+            "Length mm": [10.0, 10.1, 10.2, 10.3],
+        }
+    ).to_csv(input_file, index=False)
+
+    result = load_tabular_analytics_file(input_file, force_sqlite=True)
+    try:
+        percent_rows, percent_total = result.sqlite_store.preview_group_rows(
+            ("station",),
+            search_text="100%",
+            limit=20,
+        )
+        underscore_rows, underscore_total = result.sqlite_store.preview_group_rows(
+            ("station",),
+            search_text="A_",
+            limit=20,
+        )
+
+        assert percent_total == 1
+        assert percent_rows == [{"key": ("100%",), "label": "100%", "row_count": 1}]
+        assert underscore_total == 1
+        assert underscore_rows == [{"key": ("A_1",), "label": "A_1", "row_count": 1}]
+    finally:
+        cleanup_tabular_load_result(result)
+
+
 def test_sqlite_tabular_date_filter_matches_pandas_for_non_iso_dates(tmp_path) -> None:
     input_file = tmp_path / "non_iso_dates.csv"
     pd.DataFrame(

@@ -8,10 +8,18 @@ try:
     from PyQt6.QtWidgets import QApplication, QLabel, QPushButton
     from modules import ui_theme_tokens
     from modules.list_selection_utils import ListSelectionUtils
+    from modules.tabular_analytics_service import (
+        TabularColumnFilter,
+        cleanup_tabular_load_result,
+        load_tabular_analytics_file,
+    )
     from modules.tabular_analytics_grouping_dialog import TabularAnalyticsGroupingDialog
 except ImportError as exc:  # pragma: no cover - depends on PyQt collection order
     Qt = None
     QApplication = None
+    TabularColumnFilter = None
+    cleanup_tabular_load_result = None
+    load_tabular_analytics_file = None
     ListSelectionUtils = None
     TabularAnalyticsGroupingDialog = None
     PYQT_IMPORT_ERROR = exc
@@ -249,6 +257,88 @@ def test_grouping_dialog_uses_double_click_column_selection_without_action_butto
         assert dialog.selector_columns == []
     finally:
         dialog.close()
+
+
+def test_sqlite_grouping_dialog_uses_preview_rows_and_sparse_assignments(tmp_path) -> None:
+    _app()
+    input_file = tmp_path / "grouping.csv"
+    pd.DataFrame(
+        {
+            "Line": ["A", "B", "A", "B"],
+            "Station": ["S1", "S1", "S2", "S2"],
+            "Length mm": [10.0, 10.2, 10.4, 10.6],
+        }
+    ).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file, force_sqlite=True)
+
+    dialog = TabularAnalyticsGroupingDialog(
+        dataframe=loaded.dataframe,
+        column_mapping=loaded.column_mapping,
+        sqlite_store=loaded.sqlite_store,
+    )
+    try:
+        assert dialog.df.empty
+
+        line_item = _item_for_data(dialog.available_columns_list, "line")
+        dialog.available_columns_list.setCurrentItem(line_item)
+        dialog.add_selector_column()
+
+        assert dialog.selector_columns == ["line"]
+        assert dialog.selector_list.count() == 2
+        a_item = _item_for_data(dialog.selector_list, ("A",))
+        dialog.selector_list.setCurrentItem(a_item)
+        a_item.setSelected(True)
+        dialog._store_current_selection()
+        dialog.create_group(initial_group_name="Line A")
+
+        assert dialog.df["REPORT_ID"].tolist() == [1, 3]
+        assert dialog.df["GROUP"].tolist() == ["Line A", "Line A"]
+        assert "POPULATION" not in set(dialog.df["GROUP"])
+        group_labels = {
+            dialog.groups_list.item(index).text()
+            for index in range(dialog.groups_list.count())
+        }
+        assert group_labels == {"POPULATION (n=2)", "Line A (n=2)"}
+    finally:
+        dialog.close()
+        cleanup_tabular_load_result(loaded)
+
+
+def test_sqlite_group_counts_are_scoped_to_active_filters(tmp_path) -> None:
+    _app()
+    input_file = tmp_path / "filtered_group_counts.csv"
+    pd.DataFrame(
+        {
+            "Line": ["A", "B", "A", "B"],
+            "Station": ["S1", "S1", "S2", "S2"],
+            "Length mm": [10.0, 10.2, 10.4, 10.6],
+        }
+    ).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file, force_sqlite=True)
+    existing_grouping = pd.DataFrame(
+        {
+            "REPORT_ID": [2, 4],
+            "GROUP": ["Line B", "Line B"],
+        }
+    )
+
+    dialog = TabularAnalyticsGroupingDialog(
+        dataframe=loaded.dataframe,
+        column_mapping=loaded.column_mapping,
+        grouping_dataframe=existing_grouping,
+        sqlite_store=loaded.sqlite_store,
+        column_filters=(TabularColumnFilter("line", selected_values=("A",)),),
+    )
+    try:
+        group_labels = {
+            dialog.groups_list.item(index).text()
+            for index in range(dialog.groups_list.count())
+        }
+
+        assert group_labels == {"POPULATION (n=2)"}
+    finally:
+        dialog.close()
+        cleanup_tabular_load_result(loaded)
 
 
 def test_delete_and_backspace_remove_focused_selected_grouping_column() -> None:

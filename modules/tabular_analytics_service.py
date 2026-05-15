@@ -146,8 +146,8 @@ class TabularSqliteStore:
         params: list[Any] = []
         search = str(search_text or "").strip().casefold()
         if search:
-            where_parts.append(f"LOWER({value_expr}) LIKE ?")
-            params.append(f"%{search}%")
+            where_parts.append(f"LOWER({value_expr}) LIKE ? ESCAPE '\\'")
+            params.append(_sqlite_like_pattern(search))
         where_sql = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
         count_query = (
             f"SELECT COUNT(*) FROM ("
@@ -196,6 +196,160 @@ class TabularSqliteStore:
         with sqlite_connection_scope(self.path) as connection:
             records = connection.execute(query, params).fetchall()
         return tuple(tuple(str(part) for part in record) for record in records)
+
+    def preview_group_rows(
+        self,
+        columns: tuple[str, ...] | list[str],
+        *,
+        filter_columns: tuple[str, ...] | list[str] | None = None,
+        selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+        column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        search_text: str = "",
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        normalized_columns = tuple(str(column) for column in columns if str(column) in self.columns)
+        if not normalized_columns:
+            return [], 0
+        aliases = tuple(f"key_{index}" for index, _column in enumerate(normalized_columns))
+        select_exprs = [
+            f"{_sqlite_normalized_value_expr(column)} AS {_quote_identifier(alias)}"
+            for alias, column in zip(aliases, normalized_columns, strict=False)
+        ]
+        where_sql, params = self._where_clause(
+            filter_columns=filter_columns,
+            selected_filter_keys=selected_filter_keys,
+            column_filters=column_filters,
+        )
+        inner_query = (
+            f"SELECT {', '.join(select_exprs)} "
+            f"FROM {_quote_identifier(self.table_name)}{where_sql}"
+        )
+        label_expr = " || ' | ' || ".join(_quote_identifier(alias) for alias in aliases)
+        grouped_query = (
+            f"SELECT {', '.join(_quote_identifier(alias) for alias in aliases)}, "
+            f"COUNT(*) AS row_count, {label_expr} AS label "
+            f"FROM ({inner_query}) "
+            f"GROUP BY {', '.join(_quote_identifier(alias) for alias in aliases)}"
+        )
+        search = str(search_text or "").strip().casefold()
+        outer_where = ""
+        outer_params: list[Any] = []
+        if search:
+            outer_where = " WHERE LOWER(label) LIKE ? ESCAPE '\\'"
+            outer_params.append(_sqlite_like_pattern(search))
+        count_query = f"SELECT COUNT(*) FROM ({grouped_query}){outer_where}"
+        query = (
+            f"SELECT * FROM ({grouped_query}){outer_where} "
+            "ORDER BY label COLLATE NOCASE"
+        )
+        offset = max(0, int(offset or 0))
+        if limit is not None and int(limit) >= 0:
+            query = f"{query} LIMIT {int(limit)} OFFSET {offset}"
+        elif offset:
+            query = f"{query} LIMIT -1 OFFSET {offset}"
+        with sqlite_connection_scope(self.path) as connection:
+            total = int(connection.execute(count_query, [*params, *outer_params]).fetchone()[0] or 0)
+            records = connection.execute(query, [*params, *outer_params]).fetchall()
+        rows: list[dict[str, Any]] = []
+        for record in records:
+            key = tuple(str(record[index]) for index in range(len(aliases)))
+            rows.append(
+                {
+                    "key": key,
+                    "label": str(record[len(aliases) + 1]),
+                    "row_count": int(record[len(aliases)] or 0),
+                }
+            )
+        return rows, total
+
+    def row_ids_for_group_keys(
+        self,
+        columns: tuple[str, ...] | list[str],
+        selected_group_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | set[tuple[str, ...]],
+        *,
+        filter_columns: tuple[str, ...] | list[str] | None = None,
+        selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+        column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+    ) -> list[int]:
+        where_sql, params = self._where_clause_for_group_keys(
+            columns,
+            selected_group_keys,
+            filter_columns=filter_columns,
+            selected_filter_keys=selected_filter_keys,
+            column_filters=column_filters,
+        )
+        if not where_sql:
+            return []
+        query = (
+            f"SELECT {_quote_identifier('source_row_number')} "
+            f"FROM {_quote_identifier(self.table_name)}{where_sql} "
+            f"ORDER BY {_quote_identifier('source_row_number')}"
+        )
+        with sqlite_connection_scope(self.path) as connection:
+            return [int(row[0]) for row in connection.execute(query, params).fetchall()]
+
+    def count_rows_for_group_keys(
+        self,
+        columns: tuple[str, ...] | list[str],
+        selected_group_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | set[tuple[str, ...]],
+        *,
+        filter_columns: tuple[str, ...] | list[str] | None = None,
+        selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+        column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+    ) -> int:
+        where_sql, params = self._where_clause_for_group_keys(
+            columns,
+            selected_group_keys,
+            filter_columns=filter_columns,
+            selected_filter_keys=selected_filter_keys,
+            column_filters=column_filters,
+        )
+        if not where_sql:
+            return 0
+        query = f"SELECT COUNT(*) FROM {_quote_identifier(self.table_name)}{where_sql}"
+        with sqlite_connection_scope(self.path) as connection:
+            return int(connection.execute(query, params).fetchone()[0] or 0)
+
+    def count_source_row_numbers(
+        self,
+        row_ids: tuple[int, ...] | list[int] | set[int],
+        *,
+        filter_columns: tuple[str, ...] | list[str] | None = None,
+        selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+        column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+    ) -> int:
+        normalized_ids = tuple(
+            dict.fromkeys(
+                int(row_id)
+                for row_id in row_ids
+                if pd.notna(row_id)
+            )
+        )
+        if not normalized_ids:
+            return 0
+        filter_where, filter_params = self._where_clause(
+            filter_columns=filter_columns,
+            selected_filter_keys=selected_filter_keys,
+            column_filters=column_filters,
+        )
+        filter_clause = filter_where.removeprefix(" WHERE ")
+        row_column = _quote_identifier("source_row_number")
+        total = 0
+        with sqlite_connection_scope(self.path) as connection:
+            for start in range(0, len(normalized_ids), 900):
+                chunk = normalized_ids[start : start + 900]
+                placeholders = ", ".join("?" for _row_id in chunk)
+                row_clause = f"{row_column} IN ({placeholders})"
+                where_parts = [part for part in (filter_clause, row_clause) if part]
+                query = (
+                    f"SELECT COUNT(*) FROM {_quote_identifier(self.table_name)} "
+                    f"WHERE {' AND '.join(where_parts)}"
+                )
+                total += int(
+                    connection.execute(query, [*filter_params, *chunk]).fetchone()[0] or 0
+                )
+        return total
 
     def is_date_filterable(self, column: str) -> bool:
         if column not in self.columns:
@@ -285,6 +439,41 @@ class TabularSqliteStore:
                     key_clauses.append(f"({' AND '.join(parts)})")
                 clauses.append(f"({' OR '.join(key_clauses)})")
         return (f" WHERE {' AND '.join(clauses)}" if clauses else ""), params
+
+    def _where_clause_for_group_keys(
+        self,
+        columns: tuple[str, ...] | list[str],
+        selected_group_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | set[tuple[str, ...]],
+        *,
+        filter_columns: tuple[str, ...] | list[str] | None = None,
+        selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+        column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+    ) -> tuple[str, list[Any]]:
+        normalized_columns = tuple(str(column) for column in columns if str(column) in self.columns)
+        selected_keys = tuple(
+            tuple(str(part) for part in key)
+            for key in (selected_group_keys or ())
+            if isinstance(key, (list, tuple)) and len(key) == len(normalized_columns)
+        )
+        if not normalized_columns or not selected_keys:
+            return "", []
+        filter_where, params = self._where_clause(
+            filter_columns=filter_columns,
+            selected_filter_keys=selected_filter_keys,
+            column_filters=column_filters,
+        )
+        clauses: list[str] = []
+        if filter_where:
+            clauses.append(filter_where.removeprefix(" WHERE "))
+        key_clauses: list[str] = []
+        for key in selected_keys:
+            parts = []
+            for column, value in zip(normalized_columns, key, strict=False):
+                parts.append(f"{_sqlite_normalized_value_expr(column)} = ?")
+                params.append(str(value))
+            key_clauses.append(f"({' AND '.join(parts)})")
+        clauses.append(f"({' OR '.join(key_clauses)})")
+        return f" WHERE {' AND '.join(clauses)}", params
 
     def _sqlite_date_filter_expr(self, column: str) -> str:
         return f"date({_quote_identifier(self.date_filter_columns.get(column, column))})"
@@ -1385,6 +1574,12 @@ def _restore_sqlite_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
 
 def _quote_identifier(value: str) -> str:
     return f'"{str(value).replace(chr(34), chr(34) * 2)}"'
+
+
+def _sqlite_like_pattern(value: str) -> str:
+    text = str(value or "").casefold()
+    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 def _sqlite_normalized_value_expr(column: str) -> str:
