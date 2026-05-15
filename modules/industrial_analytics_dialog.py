@@ -6,6 +6,7 @@ from pathlib import Path
 
 from dataclasses import replace
 
+import pandas as pd
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -46,6 +47,7 @@ from modules.progress_status import build_three_line_status
 from modules.tabular_analytics_filter_dialog import TabularAnalyticsFilterDialog
 from modules.tabular_analytics_grouping_dialog import TabularAnalyticsGroupingDialog
 from modules.tabular_analytics_service import (
+    TABULAR_DEFAULT_GROUP,
     TABULAR_GROUP_COLUMN,
     TabularColumnFilter,
     cleanup_tabular_load_result,
@@ -1135,15 +1137,55 @@ class IndustrialAnalyticsDialog(QDialog):
             else []
         )
         group_values = sorted({str(value).strip() for value in groups if str(value).strip()})
-        custom_groups = [value for value in group_values if value != "POPULATION"]
+        has_population = self._tabular_grouping_has_population(set(group_values))
+        custom_groups = [value for value in group_values if value != TABULAR_DEFAULT_GROUP]
         if custom_groups:
-            self.grouping_summary_label.setText(
-                f"Groups: {len(custom_groups)} custom + POPULATION"
-            )
+            suffix = f" + {TABULAR_DEFAULT_GROUP}" if has_population else ""
+            self.grouping_summary_label.setText(f"Groups: {len(custom_groups)} custom{suffix}")
             set_status_variant(self.grouping_summary_label, "success")
-        else:
-            self.grouping_summary_label.setText("Groups: POPULATION only")
+        elif has_population:
+            self.grouping_summary_label.setText(f"Groups: {TABULAR_DEFAULT_GROUP} only")
             set_status_variant(self.grouping_summary_label, "info")
+        else:
+            self.grouping_summary_label.setText("Groups: not applied")
+            set_status_variant(self.grouping_summary_label, "neutral")
+
+    def _tabular_grouping_has_population(self, group_values: set[str] | None = None) -> bool:
+        group_values = set(group_values or ())
+        if TABULAR_DEFAULT_GROUP in group_values:
+            return True
+        if (
+            self.tabular_load_result is None
+            or self.tabular_load_result.sqlite_store is None
+            or self.df_for_grouping is None
+            or self.df_for_grouping.empty
+            or "REPORT_ID" not in self.df_for_grouping.columns
+            or "GROUP" not in self.df_for_grouping.columns
+        ):
+            return False
+        total_rows = count_tabular_materialized_rows(
+            self.tabular_load_result,
+            filter_columns=self.tabular_filter_columns,
+            selected_filter_keys=self.tabular_filter_keys,
+            column_filters=self.tabular_column_filters,
+        )
+        assigned = self.df_for_grouping.loc[:, ["REPORT_ID", "GROUP"]].copy()
+        assigned["REPORT_ID"] = pd.to_numeric(assigned["REPORT_ID"], errors="coerce")
+        assigned = assigned.dropna(subset=["REPORT_ID"])
+        if assigned.empty:
+            return total_rows > 0
+        labels = assigned["GROUP"].fillna(TABULAR_DEFAULT_GROUP).astype(str).str.strip()
+        assigned["GROUP"] = labels.mask(labels == "", TABULAR_DEFAULT_GROUP)
+        custom_assigned_ids = (
+            assigned[assigned["GROUP"] != TABULAR_DEFAULT_GROUP]["REPORT_ID"].astype(int).tolist()
+        )
+        assigned_count = self.tabular_load_result.sqlite_store.count_source_row_numbers(
+            custom_assigned_ids,
+            filter_columns=self.tabular_filter_columns,
+            selected_filter_keys=self.tabular_filter_keys,
+            column_filters=self.tabular_column_filters,
+        )
+        return assigned_count < total_rows
 
     def _filtered_tabular_dataframe(self):
         if self.tabular_load_result is None:
@@ -1284,6 +1326,8 @@ class IndustrialAnalyticsDialog(QDialog):
             return "Groupstats requires manual CSV/Excel groups. Use Edit groups... first."
         groups = self.df_for_grouping.get("GROUP", [])
         values = {str(value).strip() for value in groups if str(value).strip()}
+        if self._tabular_grouping_has_population(values):
+            values.add(TABULAR_DEFAULT_GROUP)
         if len(values) < 2:
             return "Groupstats requires at least 2 non-empty manual groups."
         return None

@@ -696,7 +696,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
             if count:
                 group_counts[str(group_name)] = int(count)
         assigned_custom_count = int(sum(group_counts.values()))
-        group_counts[self.default_group] = max(0, total - assigned_custom_count)
+        default_count = max(0, total - assigned_custom_count)
+        if default_count or not group_counts:
+            group_counts[self.default_group] = default_count
         return {str(group): int(count) for group, count in group_counts.items()}
 
     def remove_last_selector_column(self) -> None:
@@ -1023,7 +1025,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 else {}
             )
         )
-        if self.default_group not in group_counts:
+        if not group_counts:
             group_counts[self.default_group] = 0
         for group_name, count in sorted(group_counts.items(), key=lambda item: (item[0] != self.default_group, str(item[0]))):
             label = f"{group_name} (n={int(count)})"

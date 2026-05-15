@@ -299,6 +299,18 @@ def test_sqlite_grouping_dialog_uses_preview_rows_and_sparse_assignments(tmp_pat
             for index in range(dialog.groups_list.count())
         }
         assert group_labels == {"POPULATION (n=2)", "Line A (n=2)"}
+
+        b_item = _item_for_data(dialog.selector_list, ("B",))
+        dialog.selector_list.setCurrentItem(b_item)
+        b_item.setSelected(True)
+        dialog._store_current_selection()
+        dialog.create_group(initial_group_name="Line B")
+
+        group_labels = {
+            dialog.groups_list.item(index).text()
+            for index in range(dialog.groups_list.count())
+        }
+        assert group_labels == {"Line A (n=2)", "Line B (n=2)"}
     finally:
         dialog.close()
         cleanup_tabular_load_result(loaded)
@@ -580,6 +592,39 @@ def test_create_or_add_prompts_each_time_so_second_group_can_be_created(monkeypa
         assert colors[1] != dialog.default_group_color
         assert colors[2] != dialog.default_group_color
         assert colors[1] != colors[2]
+    finally:
+        dialog.close()
+
+
+def test_population_group_is_hidden_when_all_rows_are_assigned() -> None:
+    _app()
+    frame = pd.DataFrame(
+        {
+            "source_row_number": [1, 2, 3],
+            "tracecode": ["TC-001", "TC-002", "TC-003"],
+            "length_mm": [1.0, 2.0, 3.0],
+        }
+    )
+    dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
+    try:
+        dialog.selector_columns = ["tracecode"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+
+        _select_selector_rows(dialog, 0, 2)
+        dialog.create_group(initial_group_name="Fixture A")
+        assert {
+            dialog.groups_list.item(index).text()
+            for index in range(dialog.groups_list.count())
+        } == {"POPULATION (n=1)", "Fixture A (n=2)"}
+
+        _select_selector_rows(dialog, 2, 3)
+        dialog.create_group(initial_group_name="Fixture B")
+
+        assert {
+            dialog.groups_list.item(index).text()
+            for index in range(dialog.groups_list.count())
+        } == {"Fixture A (n=2)", "Fixture B (n=1)"}
     finally:
         dialog.close()
 

@@ -493,6 +493,20 @@ def test_apply_tabular_grouping_keeps_unassigned_rows_in_population(tmp_path) ->
     assert [diagnostic.code for diagnostic in grouped.diagnostics] == ["tabular_grouping_applied"]
 
 
+def test_apply_tabular_grouping_omits_population_when_all_rows_are_assigned(tmp_path) -> None:
+    input_file = tmp_path / "table.csv"
+    _sample_table().to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file)
+    grouping_frame = build_tabular_grouping_dataframe(loaded.dataframe)
+    grouping_frame["GROUP"] = ["A", "A", "B", "B", "C", "C"]
+
+    grouped = apply_tabular_grouping(loaded.dataframe, grouping_frame)
+
+    assert set(grouped.dataframe[TABULAR_GROUP_COLUMN]) == {"A", "B", "C"}
+    assert grouped.diagnostics[0].context["default_group_present"] is False
+    assert grouped.diagnostics[0].message == "Manual grouping applied: 3 custom group(s)."
+
+
 def test_tabular_data_reuses_dashboard_and_aggregation_path(tmp_path) -> None:
     input_file = tmp_path / "table.csv"
     _sample_table().to_csv(input_file, index=False)
@@ -586,6 +600,56 @@ def test_tabular_groupstats_without_specs_runs_overall_and_unique_pairwise_tests
         for row in metric["pairwise_rows"]
     )
     assert {row["significant"] for row in metric["pairwise_rows"]} == {False, True}
+
+
+def test_tabular_groupstats_without_population_compares_each_custom_pair() -> None:
+    frame = pd.DataFrame(
+        {
+            "process_datetime": pd.date_range("2026-05-10 08:00", periods=24, freq="h"),
+            "GROUP": ["A"] * 8 + ["B"] * 8 + ["C"] * 8,
+            "length_mm": [
+                1.0,
+                2.0,
+                3.0,
+                4.0,
+                5.0,
+                6.0,
+                7.0,
+                8.0,
+                10.0,
+                11.0,
+                12.0,
+                13.0,
+                14.0,
+                15.0,
+                16.0,
+                17.0,
+                20.0,
+                21.0,
+                22.0,
+                23.0,
+                24.0,
+                25.0,
+                26.0,
+                27.0,
+            ],
+        }
+    )
+
+    result = analyze_production_groupstats(
+        frame,
+        (ProductionMetricSelection("length_mm", "Length Mm"),),
+        group_fields=("GROUP",),
+    )
+
+    metric = result.metrics[0]
+    assert metric["group_sample_counts"] == {"A": 8, "B": 8, "C": 8}
+    assert [(row["group_a"], row["group_b"]) for row in metric["pairwise_rows"]] == [
+        ("A", "B"),
+        ("A", "C"),
+        ("B", "C"),
+    ]
+    assert all("POPULATION" not in (row["group_a"], row["group_b"]) for row in metric["pairwise_rows"])
 
 
 def test_tabular_aggregation_counts_source_rows_when_metric_values_are_missing() -> None:

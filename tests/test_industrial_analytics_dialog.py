@@ -606,6 +606,30 @@ def test_tabular_groupstats_is_disabled_until_manual_groups_are_available() -> N
         dialog.close()
 
 
+def test_tabular_grouping_summary_and_groupstats_do_not_require_population_group() -> None:
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.metric_candidates = (ProductionMetricSelection("length_mm", "Length Mm"),)
+        dialog._populate_metrics()
+        grouping_df = pd.DataFrame(
+            {
+                "REPORT_ID": [1, 2, 3, 4],
+                "GROUP": ["Fixture A", "Fixture A", "Fixture B", "Fixture B"],
+            }
+        )
+
+        dialog.set_df_for_grouping(grouping_df)
+        dialog.set_grouping_applied(True)
+        dialog._sync_ui_state()
+
+        assert dialog.grouping_summary_label.text() == "Groups: 2 custom"
+        assert dialog.groupstats_checkbox.isEnabled()
+        assert dialog.groupstats_reason_label.isHidden()
+    finally:
+        dialog.close()
+
+
 def test_tabular_clear_controls_reset_filters_and_groups(tmp_path) -> None:
     _app()
     input_file = tmp_path / "table.csv"

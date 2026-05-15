@@ -1676,18 +1676,23 @@ def apply_tabular_grouping(
     frame[group_column] = row_numbers.map(assignment).fillna(default_group).astype(str)
     group_labels = sorted(label for label in frame[group_column].dropna().astype(str).unique() if label)
     custom_labels = [label for label in group_labels if label != default_group]
+    has_default_group = default_group in group_labels
+    if custom_labels and has_default_group:
+        grouping_description = f"{len(custom_labels)} custom group(s) plus {default_group}."
+    elif custom_labels:
+        grouping_description = f"{len(custom_labels)} custom group(s)."
+    else:
+        grouping_description = f"{default_group} only."
     diagnostics.append(
         ProductionAnalyticsDiagnostic(
             severity="info",
             code="tabular_grouping_applied",
-            message=(
-                f"Manual grouping applied: {len(custom_labels)} custom group(s) plus "
-                f"{default_group}."
-            ),
+            message=f"Manual grouping applied: {grouping_description}",
             context={
                 "group_count": len(group_labels),
                 "custom_group_count": len(custom_labels),
                 "default_group": default_group,
+                "default_group_present": has_default_group,
             },
         )
     )
