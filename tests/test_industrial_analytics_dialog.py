@@ -643,8 +643,23 @@ def test_tabular_groupstats_is_disabled_until_manual_groups_are_available() -> N
         dialog._sync_ui_state()
 
         assert dialog.groupstats_checkbox.isEnabled()
+        assert dialog.groupstats_checkbox.isChecked()
         assert dialog.groupstats_checkbox.toolTip() == ""
         assert dialog.groupstats_reason_label.isHidden()
+
+        population_only_grouping = pd.DataFrame(
+            {
+                "REPORT_ID": [1, 2],
+                "GROUP": ["POPULATION", "POPULATION"],
+            }
+        )
+        dialog.set_df_for_grouping(population_only_grouping)
+        dialog.set_grouping_applied(True)
+        dialog._sync_ui_state()
+
+        assert not dialog.groupstats_checkbox.isEnabled()
+        assert not dialog.groupstats_checkbox.isChecked()
+        assert "at least 2 non-empty manual groups" in dialog.groupstats_checkbox.toolTip()
     finally:
         dialog.close()
 
@@ -671,6 +686,7 @@ def test_tabular_groupstats_toggle_does_not_start_analysis_worker(monkeypatch) -
 
         dialog.groupstats_checkbox.setChecked(False)
         dialog._sync_ui_state()
+        assert not dialog.groupstats_checkbox.isChecked()
         dialog.groupstats_checkbox.setChecked(True)
         dialog._sync_ui_state()
 
@@ -731,6 +747,7 @@ def test_tabular_clear_controls_reset_filters_and_groups(tmp_path) -> None:
 
         assert dialog.clear_filter_button.isEnabled()
         assert dialog.clear_groups_button.isEnabled()
+        assert dialog.groupstats_checkbox.isChecked()
 
         dialog.clear_tabular_filter_and_groups()
 
@@ -741,6 +758,7 @@ def test_tabular_clear_controls_reset_filters_and_groups(tmp_path) -> None:
         assert dialog.grouping_applied is False
         assert not dialog.clear_filter_button.isEnabled()
         assert not dialog.clear_groups_button.isEnabled()
+        assert not dialog.groupstats_checkbox.isChecked()
     finally:
         dialog.close()
 

@@ -743,6 +743,7 @@ class IndustrialAnalyticsDialog(QDialog):
     def _clear_tabular_grouping(self) -> None:
         self.df_for_grouping = None
         self.grouping_applied = False
+        self._set_groupstats_output_checked(False)
 
     def _clear_tabular_filter(self) -> None:
         self.tabular_filter_columns = ()
@@ -1123,6 +1124,17 @@ class IndustrialAnalyticsDialog(QDialog):
         if not self.grouping_applied:
             self.df_for_grouping = None
         self._sync_grouping_summary()
+        self._sync_groupstats_output_for_grouping_change()
+
+    def _set_groupstats_output_checked(self, checked: bool) -> None:
+        self.groupstats_checkbox.blockSignals(True)
+        self.groupstats_checkbox.setChecked(bool(checked))
+        self.groupstats_checkbox.blockSignals(False)
+
+    def _sync_groupstats_output_for_grouping_change(self) -> None:
+        if self.is_production_source:
+            return
+        self._set_groupstats_output_checked(self._tabular_groupstats_available())
 
     def _sync_grouping_summary(self) -> None:
         if self.is_production_source:
@@ -1425,9 +1437,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.groupstats_reason_label.setText(groupstats_unavailable_reason or "")
         set_status_variant(self.groupstats_reason_label, "warning")
         if not groupstats_available:
-            self.groupstats_checkbox.blockSignals(True)
-            self.groupstats_checkbox.setChecked(False)
-            self.groupstats_checkbox.blockSignals(False)
+            self._set_groupstats_output_checked(False)
         if candidate_count:
             self.metrics_summary_label.setText(f"{len(metrics)} of {candidate_count} metrics selected")
             set_status_variant(self.metrics_summary_label, "success" if metrics else "warning")
