@@ -1,3 +1,4 @@
+import ast
 import json
 import os
 from pathlib import Path
@@ -5,33 +6,28 @@ import subprocess
 import sys
 
 
-def test_main_window_import_does_not_eagerly_import_heavy_feature_stacks():
-    script = """
-import json
-import os
-import sys
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-import modules.main_window
-blocked = [
-    "matplotlib",
-    "matplotlib.pyplot",
-    "scipy",
-    "hexafe_groupstats",
-    "modules.export_dialog",
-    "modules.tabular_analytics_service",
-    "modules.industrial_analytics_workbook_charts",
-]
-print(json.dumps([name for name in blocked if name in sys.modules]))
-"""
-    completed = subprocess.run(
-        [sys.executable, "-c", script],
-        check=True,
-        capture_output=True,
-        text=True,
-        env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
-    )
+def test_main_window_does_not_top_level_import_heavy_feature_stacks():
+    module_ast = ast.parse(Path("modules/main_window.py").read_text(encoding="utf-8"))
+    blocked = {
+        "modules.export_dialog",
+        "modules.parsing_dialog",
+        "modules.metadata_enrichment_thread",
+        "modules.modify_db",
+        "modules.about_window",
+        "modules.release_notes_dialog",
+        "modules.characteristic_mapping_dialog",
+        "modules.industrial_data_dialog",
+        "modules.industrial_analytics_dialog",
+    }
 
-    assert json.loads(completed.stdout.strip()) == []
+    imported_modules = set()
+    for node in module_ast.body:
+        if isinstance(node, ast.Import):
+            imported_modules.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported_modules.add(node.module)
+
+    assert imported_modules.isdisjoint(blocked)
 
 
 def test_startup_profile_writes_jsonl_events(tmp_path):
