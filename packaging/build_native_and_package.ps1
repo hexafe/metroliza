@@ -236,6 +236,7 @@ function Resolve-NativeTargets {
 function Add-SwitchArgumentIfNeeded {
     param(
         [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
         [System.Collections.Generic.List[string]]$Arguments,
         [Parameter(Mandatory = $true)]
         [bool]$Enabled,
@@ -251,6 +252,7 @@ function Add-SwitchArgumentIfNeeded {
 function Add-ValueArgumentIfBound {
     param(
         [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
         [System.Collections.Generic.List[string]]$Arguments,
         [Parameter(Mandatory = $true)]
         [hashtable]$BoundParameters,

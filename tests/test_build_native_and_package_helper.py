@@ -17,6 +17,7 @@ def test_build_native_and_package_helper_covers_native_build_and_packaging_paths
     assert "[string]$CredentialsPath = ''" in script
     assert "Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $BundleCredentials.IsPresent -SwitchName '-BundleCredentials'" in script
     assert "Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $AllowMissingOznakBuild.IsPresent -SwitchName '-AllowMissingOznakBuild'" in script
+    assert "[AllowEmptyCollection()]\n        [System.Collections.Generic.List[string]]$Arguments" in script
     assert "@('-m', 'maturin', 'develop', '--release', '--manifest-path', $target.ManifestPath)" in script
     assert "build_backend_diagnostic_summary" in script
     assert "build_nuitka.ps1" in script
