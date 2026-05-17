@@ -511,6 +511,9 @@ def _build_plotstats_distribution_spec(
         "labels": labels,
         "series": series,
         "limits": _plotstats_metric_limits(metric),
+        "x_label": "Groups",
+        "y_label": metric.display_label,
+        "style": {"axis_label_x": "Groups", "axis_label_y": metric.display_label},
     }
     return build_dashboard_plotly_spec(
         payload,
@@ -1609,6 +1612,7 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
         else ""
     )
     plotly_runtime = _render_plotly_runtime(charts_json) if plotly_charts else ""
+    lightbox_markup = _render_chart_lightbox() if plotly_charts else ""
     cards = _render_summary_cards(summary)
     diagnostics_markup = _render_diagnostics(diagnostics)
     groupstats_markup = _render_groupstats(groupstats)
@@ -1758,10 +1762,33 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
       min-height: 420px;
       padding: 12px;
     }}
+    .chart-header {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin: 0 0 8px;
+    }}
     .chart-title {{
       font-size: 15px;
       font-weight: 650;
-      margin: 0 0 8px;
+      margin: 0;
+    }}
+    .plotly-expand-trigger {{
+      appearance: none;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 650;
+      padding: 5px 8px;
+      white-space: nowrap;
+    }}
+    .plotly-expand-trigger:hover {{
+      border-color: var(--accent);
+      color: var(--accent);
     }}
     .plotly-chart {{
       width: 100%;
@@ -1783,6 +1810,49 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
       color: var(--muted);
       font-size: 12px;
       margin-bottom: 6px;
+    }}
+    .chart-lightbox {{
+      width: min(96vw, 1280px);
+      max-width: 1280px;
+      border: 0;
+      border-radius: 8px;
+      padding: 0;
+      background: transparent;
+    }}
+    .chart-lightbox::backdrop {{
+      background: rgba(15, 23, 42, 0.74);
+    }}
+    .chart-lightbox-panel {{
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+    }}
+    .chart-lightbox-header {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }}
+    .chart-lightbox-title {{
+      font-size: 16px;
+      font-weight: 650;
+    }}
+    .chart-lightbox-close {{
+      appearance: none;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 650;
+      padding: 5px 8px;
+    }}
+    .chart-lightbox-plotly {{
+      width: 100%;
+      height: min(82vh, 760px);
     }}
     .chart-notes {{
       margin: 10px 0 0;
@@ -1940,6 +2010,7 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
     {groupstats_markup}
     {chart_markup}
   </main>
+  {lightbox_markup}
 {plotly_runtime}
 </body>
 </html>
@@ -1954,6 +2025,7 @@ def _plotly_chart_payloads(charts: list[Any]) -> list[dict[str, Any]]:
         payloads.append(
             {
                 "id": chart.get("id"),
+                "title": chart.get("title") or chart.get("id") or "Chart",
                 "plotly_spec": chart.get("plotly_spec"),
             }
         )
@@ -1995,31 +2067,88 @@ def _render_chart_section(chart: dict[str, Any], *, section_id: str) -> str:
     )
 
 
+def _render_chart_lightbox() -> str:
+    return (
+        '<dialog id="chart-lightbox" class="chart-lightbox" aria-label="Enlarged chart">'
+        '<div class="chart-lightbox-panel">'
+        '<div class="chart-lightbox-header">'
+        '<div id="chart-lightbox-title" class="chart-lightbox-title">Chart</div>'
+        '<button type="button" id="chart-lightbox-close" class="chart-lightbox-close">Close</button>'
+        '</div>'
+        '<div id="chart-lightbox-plotly" class="chart-lightbox-plotly" aria-label="Enlarged interactive chart"></div>'
+        '</div>'
+        '</dialog>'
+    )
+
+
 def _render_plotly_runtime(charts_json: str) -> str:
     return f"""
   <script id="production-dashboard-charts" type="application/json">{charts_json}</script>
   <script>
     const chartData = JSON.parse(document.getElementById('production-dashboard-charts').textContent);
+    const chartById = new Map(chartData.map((chart) => [chart.id, chart]));
+    function attachRawLayerLegendHandler(target, chart) {{
+      if (typeof target.on !== 'function') return;
+      target.on('plotly_legendclick', function(eventData) {{
+        const curveNumber = eventData && typeof eventData.curveNumber === 'number' ? eventData.curveNumber : -1;
+        const trace = (chart.plotly_spec.data || [])[curveNumber];
+        if (!trace || typeof trace.metroliza_raw_layer_index !== 'number') return true;
+        const imageIndex = trace.metroliza_raw_layer_index;
+        const images = (target.layout && target.layout.images) || [];
+        const image = images[imageIndex] || {{}};
+        const nextVisible = image.visible === false;
+        const update = {{}};
+        update[`images[${{imageIndex}}].visible`] = nextVisible;
+        Plotly.relayout(target, update);
+        Plotly.restyle(target, {{ visible: nextVisible ? true : 'legendonly' }}, [curveNumber]);
+        return false;
+      }});
+    }}
+    function renderPlotlyChart(target, chart, configOverrides = {{}}) {{
+      if (!target || !chart || !chart.plotly_spec) return;
+      const spec = chart.plotly_spec;
+      Plotly.newPlot(
+        target,
+        spec.data || [],
+        spec.layout || {{}},
+        {{ ...(spec.config || {{}}), ...configOverrides }}
+      );
+      attachRawLayerLegendHandler(target, chart);
+    }}
     for (const chart of chartData) {{
       const target = document.getElementById(chart.id);
-      if (!target || !chart.plotly_spec) continue;
-      Plotly.newPlot(target, chart.plotly_spec.data, chart.plotly_spec.layout, chart.plotly_spec.config);
-      if (typeof target.on === 'function') {{
-        target.on('plotly_legendclick', function(eventData) {{
-          const curveNumber = eventData && typeof eventData.curveNumber === 'number' ? eventData.curveNumber : -1;
-          const trace = (chart.plotly_spec.data || [])[curveNumber];
-          if (!trace || typeof trace.metroliza_raw_layer_index !== 'number') return true;
-          const imageIndex = trace.metroliza_raw_layer_index;
-          const images = (target.layout && target.layout.images) || [];
-          const image = images[imageIndex] || {{}};
-          const nextVisible = image.visible === false;
-          const update = {{}};
-          update[`images[${{imageIndex}}].visible`] = nextVisible;
-          Plotly.relayout(target, update);
-          Plotly.restyle(target, {{ visible: nextVisible ? true : 'legendonly' }}, [curveNumber]);
-          return false;
-        }});
-      }}
+      renderPlotlyChart(target, chart);
+    }}
+    const lightbox = document.getElementById('chart-lightbox');
+    const lightboxPlotly = document.getElementById('chart-lightbox-plotly');
+    const lightboxTitle = document.getElementById('chart-lightbox-title');
+    const lightboxClose = document.getElementById('chart-lightbox-close');
+    function closeLightbox() {{
+      if (!lightbox || !lightbox.open) return;
+      lightbox.close();
+    }}
+    function openLightbox(chartId) {{
+      const chart = chartById.get(chartId);
+      if (!chart || !lightbox || !lightboxPlotly) return;
+      if (lightboxTitle) lightboxTitle.textContent = chart.title || chartId;
+      Plotly.purge(lightboxPlotly);
+      renderPlotlyChart(lightboxPlotly, chart, {{ responsive: true }});
+      lightbox.showModal();
+      window.setTimeout(() => Plotly.Plots.resize(lightboxPlotly), 0);
+    }}
+    document.querySelectorAll('.plotly-expand-trigger[data-chart-id]').forEach((trigger) => {{
+      trigger.addEventListener('click', () => openLightbox(trigger.dataset.chartId));
+    }});
+    if (lightbox) {{
+      lightbox.addEventListener('click', (event) => {{
+        if (event.target === lightbox) closeLightbox();
+      }});
+      lightbox.addEventListener('close', () => {{
+        if (lightboxPlotly) Plotly.purge(lightboxPlotly);
+      }});
+    }}
+    if (lightboxClose) {{
+      lightboxClose.addEventListener('click', closeLightbox);
     }}
   </script>
 """
@@ -2341,6 +2470,12 @@ def _render_chart_shell(chart: dict[str, Any]) -> str:
     notes_markup = _render_chart_notes(chart.get("notes"))
     image = chart.get("image") if isinstance(chart.get("image"), dict) else {}
     has_plotly = isinstance(chart.get("plotly_spec"), dict)
+    action_markup = (
+        f'<button type="button" class="plotly-expand-trigger" data-chart-id="{html.escape(chart_id)}" '
+        f'aria-label="Enlarge chart: {html.escape(title)}">Increase size</button>'
+        if has_plotly
+        else ""
+    )
     snapshot_markup = ""
     if image.get("base64"):
         alt = str(image.get("alt") or title)
@@ -2366,7 +2501,10 @@ def _render_chart_shell(chart: dict[str, Any]) -> str:
         )
     return (
         '<article class="chart-card">'
+        '<div class="chart-header">'
         f'<div class="chart-title">{html.escape(title)}</div>'
+        f"{action_markup}"
+        "</div>"
         f"{media_markup}"
         f"{snapshot_markup}"
         f"{notes_markup}"

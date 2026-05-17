@@ -652,6 +652,22 @@ class TestDataGroupingCreateGroupSelectionPriority(unittest.TestCase):
         self.assertEqual(selected_part_group, 'Single Part Group')
         self.assertEqual(sibling_part_group, 'POPULATION')
 
+    def test_create_group_restores_selected_reference_after_refresh(self):
+        from unittest.mock import patch
+
+        dialog = self._base_dialog()
+        dialog.part_list = _FakeListWidget([_FakeListItem(user_role='k2')])
+        dialog.part_list.selectedItems = lambda: [_FakeListItem(user_role='k2')]
+        refresh_args = {}
+        dialog.populate_list_widgets = lambda **kwargs: refresh_args.update(kwargs)
+
+        input_dialog_cls = DataGrouping.create_group.__globals__['QInputDialog']
+        with patch.object(input_dialog_cls, 'getText', return_value=('Single Part Group', True), create=True):
+            dialog.create_group()
+
+        self.assertEqual(refresh_args["preferred_group_name"], "Single Part Group")
+        self.assertEqual(refresh_args["preferred_reference_name"], "REF-1")
+
     def test_create_group_ignores_blank_group_name(self):
         from unittest.mock import patch
 

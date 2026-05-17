@@ -1621,10 +1621,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
         manifest.get("source_label") or manifest.get("excel_file") or "Metroliza dashboard"
     )
     if dashboard_mode == "html_only":
-        lede_text = (
-            "Standalone browser dashboard for reviewing summary charts and group analysis "
-            "without generating an Excel workbook."
-        )
+        lede_text = "Review measurement charts and group analysis in the saved dashboard."
     else:
         lede_text = (
             "Extended summary charts exported alongside the workbook. Use the interactive view "

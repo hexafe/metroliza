@@ -975,11 +975,11 @@ class DataGrouping(QDialog):
 
         try:
             # Get the selected items from the list widgets
+            selected_reference = self._selected_reference_name()
             selected_part_keys = [item.data(Qt.ItemDataRole.UserRole) for item in self.part_list.selectedItems()]
             if selected_part_keys:
                 target_group_keys = selected_part_keys
             else:
-                selected_reference = self._selected_reference_name()
                 target_group_keys = []
                 if selected_reference:
                     target_group_keys = self.df.loc[
@@ -1008,8 +1008,15 @@ class DataGrouping(QDialog):
                     self.df['GROUP_KEY'].isin(target_group_keys),
                     self.group_color_column
                 ] = assigned_color
-                
-            self.populate_list_widgets()
+
+            preferred_group_name = new_group_name if ok_pressed and target_group_keys and new_group_name else None
+            try:
+                self.populate_list_widgets(
+                    preferred_group_name=preferred_group_name,
+                    preferred_reference_name=selected_reference,
+                )
+            except TypeError:
+                self.populate_list_widgets()
             self.remove_from_group_button.setDisabled(True)
         except Exception as e:
             self.log_and_exit(e)

@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 try:
     from PyQt6.QtWidgets import QApplication, QPushButton
@@ -20,6 +21,22 @@ class TestMainWindowMetadataUi(unittest.TestCase):
         if PYQT_IMPORT_ERROR is not None:
             raise unittest.SkipTest(f"PyQt6 is unavailable in this environment: {PYQT_IMPORT_ERROR}")
         cls.app = QApplication.instance() or QApplication([])
+
+    def test_main_window_preloads_feature_imports_on_init(self):
+        calls = []
+
+        def fake_warm_feature_imports():
+            calls.append("preload")
+            return ["modules.parsing_dialog"], []
+
+        with patch("modules.main_window.warm_feature_imports", side_effect=fake_warm_feature_imports):
+            window = MainWindow(version_label="test", days_until_expiration=None)
+        try:
+            self.assertEqual(calls, ["preload"])
+            self.assertTrue(window._feature_import_warmup_completed)
+            self.assertEqual(window._feature_import_warmup_failures, [])
+        finally:
+            window.close()
 
     def test_metadata_enrichment_is_tools_action_without_launcher_button(self):
         window = MainWindow(version_label="test", days_until_expiration=None)

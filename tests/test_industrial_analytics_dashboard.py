@@ -141,6 +141,10 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     assert "Static snapshot" not in html_text
     assert '<details class="chart-stats">' in html_text
     assert "<summary>Chart statistics (" in html_text
+    assert 'class="plotly-expand-trigger"' in html_text
+    assert 'id="chart-lightbox"' in html_text
+    assert 'id="chart-lightbox-plotly"' in html_text
+    assert "const chartById = new Map" in html_text
     assert ".chart-stats th" in html_text
     assert "background: #1f2937" in html_text
     assert '<header id="dashboard-start">' in html_text
