@@ -90,10 +90,13 @@ def test_build_production_dashboard_manifest_contains_requested_chart_families(t
     assert "raw_record_json" not in json.dumps(manifest)
     assert "Selected references" in json.dumps(manifest)
     histogram = next(chart for chart in manifest["charts"] if chart["chart_type"] == "histogram")
-    assert "plotly_spec" not in histogram
     assert histogram["group_labels"] == ["Other references", "Selected references"]
     assert histogram["stats_tables"]
-    assert histogram["image"]["mime_type"] == "image/png"
+    if "plotly_spec" in histogram:
+        assert histogram["plotly_spec"]["config"].get("staticPlot") is not True
+        assert histogram["plotly_spec"]["layout"]["yaxis"]["title"]["text"] == "Frequency (%)"
+    else:
+        assert histogram["image"]["mime_type"] == "image/png"
     assert any(
         row["label"] == "Samples"
         for table in histogram["stats_tables"]
@@ -131,8 +134,10 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     assert "Selected references" in html_text
     assert "Descriptive stats" in html_text
     assert "Samples" in html_text
-    assert 'class="plotly-chart" id="histogram-cycle_time_s"' not in html_text
-    assert 'class="chart-image"' in html_text
+    assert (
+        'class="plotly-chart" id="histogram-cycle_time_s"' in html_text
+        or 'class="chart-image"' in html_text
+    )
     assert "Static snapshot" not in html_text
     assert '<details class="chart-stats">' in html_text
     assert "<summary>Chart statistics (" in html_text
@@ -165,10 +170,9 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     assert {"time-series-cycle_time_s-aggregated", "time-series-cycle_time_s-raw-aggregate"}.issubset(
         chart_ids
     )
-    assert "histogram-cycle_time_s" not in chart_ids
     for chart in chart_payload:
-        if chart["id"] in {"violin-cycle_time_s", "box-cycle_time_s"}:
-            assert chart["plotly_spec"]["config"].get("staticPlot") is True
+        if chart["id"] in {"histogram-cycle_time_s", "violin-cycle_time_s", "box-cycle_time_s"}:
+            assert chart["plotly_spec"]["config"].get("staticPlot") is not True
 
 
 def test_write_production_dashboard_collapses_diagnostics_by_default(tmp_path) -> None:
@@ -327,7 +331,7 @@ def test_metric_limits_flow_into_dashboard_stats_tables() -> None:
     assert {"Cp", "Cpk", "NOK", "NOK %"}.issubset(labels)
     assert any(row["label"] == "NOK" and row["value"].startswith("2") for row in rows)
     if "plotly_spec" in histogram:
-        assert histogram["plotly_spec"]["config"].get("staticPlot") is True
+        assert histogram["plotly_spec"]["config"].get("staticPlot") is not True
     else:
         assert histogram["image"]["mime_type"] == "image/png"
 
@@ -561,10 +565,10 @@ def test_distribution_charts_use_selected_group_field_before_default_columns() -
     for chart_type in {"histogram", "violin", "box"}:
         chart = next(chart for chart in manifest["charts"] if chart["chart_type"] == chart_type)
         assert chart["group_labels"] == ["M1", "M2"]
-        if chart_type == "histogram":
-            assert "plotly_spec" not in chart
-        elif "plotly_spec" in chart:
-            assert chart["plotly_spec"]["config"].get("staticPlot") is True
+        if "plotly_spec" in chart:
+            assert chart["plotly_spec"]["config"].get("staticPlot") is not True
+            if chart_type == "histogram":
+                assert chart["plotly_spec"]["layout"]["yaxis"]["title"]["text"] == "Frequency (%)"
         else:
             assert chart["image"]["mime_type"] == "image/png"
 
@@ -599,12 +603,12 @@ def test_distribution_charts_force_numeric_group_names_to_categories() -> None:
         chart = next(chart for chart in manifest["charts"] if chart["chart_type"] == chart_type)
         assert chart["group_labels"] == ["73211", "A", "POPULATION"]
         if "plotly_spec" in chart:
-            assert chart["plotly_spec"]["config"].get("staticPlot") is True
+            assert chart["plotly_spec"]["config"].get("staticPlot") is not True
         else:
             assert chart["image"]["mime_type"] == "image/png"
 
 
-def test_dashboard_uses_plotstats_static_plotly_specs_when_available(monkeypatch) -> None:
+def test_dashboard_uses_plotstats_interactive_plotly_specs_when_available(monkeypatch) -> None:
     calls: list[dict[str, object]] = []
 
     def fake_plotstats_spec(payload, *, title, theme, static):
@@ -612,7 +616,7 @@ def test_dashboard_uses_plotstats_static_plotly_specs_when_available(monkeypatch
         return {
             "data": [{"type": "scatter", "x": [1.0], "y": [2.0]}],
             "layout": {"title": {"text": title}},
-            "config": {"staticPlot": True},
+            "config": {"responsive": True},
         }
 
     monkeypatch.setattr(
@@ -639,11 +643,11 @@ def test_dashboard_uses_plotstats_static_plotly_specs_when_available(monkeypatch
     )
 
     charts = {chart["chart_type"]: chart for chart in manifest["charts"]}
-    assert charts["histogram"]["plotly_spec"]["config"]["staticPlot"] is True
-    assert charts["violin"]["plotly_spec"]["config"]["staticPlot"] is True
-    assert charts["box"]["plotly_spec"]["config"]["staticPlot"] is True
+    assert charts["histogram"]["plotly_spec"]["config"].get("staticPlot") is not True
+    assert charts["violin"]["plotly_spec"]["config"].get("staticPlot") is not True
+    assert charts["box"]["plotly_spec"]["config"].get("staticPlot") is not True
     assert [call["payload"]["type"] for call in calls] == ["histogram", "distribution", "iqr"]
-    assert all(call["static"] is True for call in calls)
+    assert all(call["static"] is False for call in calls)
     assert calls[0]["payload"]["limits"] == {"lsl": 9.0, "nominal": 10.0, "usl": 11.0}
 
 

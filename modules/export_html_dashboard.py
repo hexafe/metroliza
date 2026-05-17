@@ -726,7 +726,7 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str, theme: 
     layout = _build_plotly_base_layout(
         title=title,
         x_label=str(((payload.get("style") or {}).get("axis_label_x") if isinstance(payload.get("style"), dict) else "") or "Measurement"),
-        y_label=str(((payload.get("style") or {}).get("axis_label_y") if isinstance(payload.get("style"), dict) else "") or "Count"),
+        y_label=str(((payload.get("style") or {}).get("axis_label_y") if isinstance(payload.get("style"), dict) else "") or "Frequency (%)"),
         theme=theme,
     )
     shapes, annotations = _build_vertical_reference_shapes(nominal=nominal, lsl=lsl, usl=usl, theme=theme)
@@ -775,11 +775,12 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str, theme: 
             {
                 "type": "histogram",
                 "x": values,
+                "histnorm": "percent",
                 "xbins": bins,
                 "bingroup": f"hist-{_slugify(title)[:40]}",
                 "marker": {"color": tokens["colorway"][0], "line": {"color": tokens["bar_outline"], "width": 1}},
                 "opacity": 0.86,
-                "hovertemplate": "Measurement=%{x}<br>Count=%{y}<extra></extra>",
+                "hovertemplate": "Measurement=%{x}<br>Frequency=%{y:.2f}%<extra></extra>",
             }
         ],
         "layout": layout,
@@ -970,37 +971,43 @@ def _build_plotly_trend_spec(payload: dict[str, Any], *, title: str, theme: str 
         theme=theme,
     )
     layout["hovermode"] = "x unified"
-    shapes = []
-    annotations = []
-    for index, limit in enumerate(payload.get("horizontal_limits") or [], start=1):
-        numeric_limit = _coerce_finite_float(limit)
-        if numeric_limit is None:
-            continue
-        shapes.append(
-            {
-                "type": "line",
-                "xref": "paper",
-                "yref": "y",
-                "x0": 0,
-                "x1": 1,
-                "y0": numeric_limit,
-                "y1": numeric_limit,
-                "line": {"color": tokens["reference_limit"], "width": 2, "dash": "dash"},
-            }
-        )
-        annotations.append(
-            {
-                "xref": "paper",
-                "yref": "y",
-                "x": 1.0,
-                "y": numeric_limit,
-                "xanchor": "right",
-                "text": f"Limit {index}={numeric_limit:.3f}",
-                "showarrow": False,
-                "font": {"size": 11, "color": tokens["reference_limit"]},
-                "bgcolor": tokens["annotation_bg"],
-            }
-        )
+    limits = payload.get("limits") if isinstance(payload.get("limits"), dict) else {}
+    shapes, annotations = _build_horizontal_reference_shapes(
+        nominal=limits.get("nominal"),
+        lsl=limits.get("lsl"),
+        usl=limits.get("usl"),
+        theme=theme,
+    )
+    if not shapes:
+        for index, limit in enumerate(payload.get("horizontal_limits") or [], start=1):
+            numeric_limit = _coerce_finite_float(limit)
+            if numeric_limit is None:
+                continue
+            shapes.append(
+                {
+                    "type": "line",
+                    "xref": "paper",
+                    "yref": "y",
+                    "x0": 0,
+                    "x1": 1,
+                    "y0": numeric_limit,
+                    "y1": numeric_limit,
+                    "line": {"color": tokens["reference_limit"], "width": 1, "dash": "dash"},
+                }
+            )
+            annotations.append(
+                {
+                    "xref": "paper",
+                    "yref": "y",
+                    "x": 1.0,
+                    "y": numeric_limit,
+                    "xanchor": "right",
+                    "text": f"Limit {index}={numeric_limit:.3f}",
+                    "showarrow": False,
+                    "font": {"size": 11, "color": tokens["reference_limit"]},
+                    "bgcolor": tokens["annotation_bg"],
+                }
+            )
     layout["shapes"] = shapes
     layout["annotations"] = annotations
     _apply_plotly_categorical_axis(
@@ -1018,20 +1025,60 @@ def _build_plotly_trend_spec(payload: dict[str, Any], *, title: str, theme: str 
     y_max = _coerce_finite_float(y_limits.get("max"))
     if y_min is not None and y_max is not None and y_min < y_max:
         layout["yaxis"]["range"] = [y_min, y_max]
+    traces = [
+        {
+            "type": "scatter",
+            "mode": "markers",
+            "x": x_values,
+            "y": y_values,
+            "customdata": sample_labels,
+            "marker": {"size": 8, "color": tokens["trend_marker"]},
+            "hovertemplate": "Sample=%{customdata}<br>Measurement=%{y}<extra></extra>",
+        }
+    ]
+    trend_trace = _build_subtle_trend_trace(x_values, y_values, theme=theme)
+    if trend_trace:
+        traces.append(trend_trace)
     return {
-        "data": [
-            {
-                "type": "scatter",
-                "mode": "markers",
-                "x": x_values,
-                "y": y_values,
-                "customdata": sample_labels,
-                "marker": {"size": 8, "color": tokens["trend_marker"]},
-                "hovertemplate": "Sample=%{customdata}<br>Measurement=%{y}<extra></extra>",
-            }
-        ],
+        "data": traces,
         "layout": layout,
         "config": _build_plotly_config(),
+    }
+
+
+def _build_subtle_trend_trace(
+    x_values: list[float],
+    y_values: list[float],
+    *,
+    theme: str = "light",
+) -> dict[str, Any] | None:
+    if len(x_values) < 2 or len(y_values) < 2 or len(x_values) != len(y_values):
+        return None
+    x_mean = sum(x_values) / len(x_values)
+    y_mean = sum(y_values) / len(y_values)
+    denominator = sum((x_value - x_mean) ** 2 for x_value in x_values)
+    if denominator <= 0:
+        return None
+    slope = (
+        sum(
+            (x_value - x_mean) * (y_value - y_mean)
+            for x_value, y_value in zip(x_values, y_values, strict=False)
+        )
+        / denominator
+    )
+    intercept = y_mean - slope * x_mean
+    x_min = min(x_values)
+    x_max = max(x_values)
+    tokens = _build_plotly_theme_tokens(theme)
+    return {
+        "type": "scatter",
+        "mode": "lines",
+        "name": "Trend",
+        "x": [x_min, x_max],
+        "y": [slope * x_min + intercept, slope * x_max + intercept],
+        "line": {"color": tokens["trend_marker"], "width": 1.1, "dash": "dash"},
+        "opacity": 0.35,
+        "hovertemplate": "Trend<extra></extra>",
     }
 
 
@@ -1107,7 +1154,7 @@ def _build_group_analysis_plotly_spec(
         layout = _build_plotly_base_layout(
             title=f"{metric_name} - Histogram",
             x_label="Measurement",
-            y_label="Count",
+            y_label="Frequency (%)",
             theme=theme,
         )
         layout["bargap"] = 0.04
@@ -1154,6 +1201,7 @@ def _build_group_analysis_plotly_spec(
                     "type": "histogram",
                     "name": label,
                     "x": values,
+                    "histnorm": "percent",
                     "xbins": bins,
                     "bingroup": f"group-hist-{_slugify(metric_name)[:32]}",
                     "marker": {
@@ -1161,7 +1209,7 @@ def _build_group_analysis_plotly_spec(
                         "line": {"color": tokens["bar_outline"], "width": 0.8},
                     },
                     "opacity": 0.55,
-                    "hovertemplate": f"{label}<br>Measurement=%{{x}}<br>Count=%{{y}}<extra></extra>",
+                    "hovertemplate": f"{label}<br>Measurement=%{{x}}<br>Frequency=%{{y:.2f}}%<extra></extra>",
                 }
                 for index, (label, values) in enumerate(normalized_groups, start=1)
             ],

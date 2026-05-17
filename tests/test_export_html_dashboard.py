@@ -366,6 +366,9 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(len(spec['data']), 2)
         self.assertEqual(spec['data'][0]['bingroup'], spec['data'][1]['bingroup'])
         self.assertEqual(spec['data'][0]['xbins'], spec['data'][1]['xbins'])
+        self.assertEqual(spec['layout']['yaxis']['title']['text'], 'Frequency (%)')
+        self.assertEqual(spec['data'][0]['histnorm'], 'percent')
+        self.assertEqual(spec['data'][1]['histnorm'], 'percent')
         expected_bin_count = resolve_histogram_bin_count(all_values)['bin_count']
         expected_bin_width = (max(all_values) - min(all_values)) / expected_bin_count
         self.assertAlmostEqual(spec['data'][0]['xbins']['size'], expected_bin_width)
@@ -463,7 +466,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(called_payload['type'], 'histogram')
         self.assertEqual([group['group'] for group in called_payload['groups']], ['A', 'B'])
 
-    def test_trend_plotly_spec_sorts_points_and_renders_markers_only(self):
+    def test_trend_plotly_spec_sorts_points_and_renders_subtle_trend(self):
         with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
             spec = _build_plotly_chart_spec(
                 {
@@ -472,6 +475,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
                     'y_values': [30.0, 10.0, 20.0],
                     'labels': ['third', 'first', 'second'],
                     'horizontal_limits': [25.0],
+                    'limits': {'lsl': 12.0, 'usl': 28.0},
                 },
                 title='Trend',
             )
@@ -482,6 +486,10 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(spec['data'][0]['customdata'], ['first', 'second', 'third'])
         self.assertEqual(spec['data'][0]['mode'], 'markers')
         self.assertNotIn('line', spec['data'][0])
+        self.assertEqual(spec['data'][1]['mode'], 'lines')
+        self.assertLessEqual(spec['data'][1]['opacity'], 0.35)
+        self.assertTrue(any(item['text'].startswith('LSL=') for item in spec['layout']['annotations']))
+        self.assertTrue(any(item['text'].startswith('USL=') for item in spec['layout']['annotations']))
 
 
 if __name__ == '__main__':

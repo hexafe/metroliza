@@ -440,22 +440,29 @@ def _build_plotstats_histogram_spec(
     title: str,
     stats_tables: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
-    if len(groups) != 1:
+    payload_groups: list[dict[str, Any]] = []
+    all_values: list[float] = []
+    for label, group in groups:
+        if metric.field_name not in group.columns:
+            continue
+        values = _finite_numeric_values(group[metric.field_name])
+        if not values:
+            continue
+        payload_groups.append({"group": str(label), "values": values})
+        all_values.extend(values)
+    if not all_values:
         return None
-    _label, group = groups[0]
-    if metric.field_name not in group.columns:
-        return None
-    values = _finite_numeric_values(group[metric.field_name])
-    if not values:
-        return None
-    bin_count = int(resolve_histogram_bin_count(values).get("bin_count") or 0)
+    bin_count = int(resolve_histogram_bin_count(all_values).get("bin_count") or 0)
     payload: dict[str, Any] = {
         "type": "histogram",
         "title": title,
-        "values": values,
         "limits": _plotstats_metric_limits(metric),
-        "style": {"axis_label_x": metric.display_label, "axis_label_y": "Count"},
+        "style": {"axis_label_x": metric.display_label, "axis_label_y": "Frequency (%)"},
     }
+    if len(payload_groups) == 1:
+        payload["values"] = payload_groups[0]["values"]
+    else:
+        payload["groups"] = payload_groups
     if bin_count > 0:
         payload["bin_count"] = bin_count
     if stats_tables:
@@ -464,7 +471,7 @@ def _build_plotstats_histogram_spec(
         payload,
         title=title,
         theme=metroliza_dashboard_plotstats_theme(),
-        static=True,
+        static=False,
     )
 
 
@@ -509,7 +516,7 @@ def _build_plotstats_distribution_spec(
         payload,
         title=title,
         theme=metroliza_dashboard_plotstats_theme(),
-        static=True,
+        static=False,
     )
 
 
