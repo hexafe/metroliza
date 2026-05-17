@@ -10,7 +10,8 @@ import pandas as pd
 
 from modules.excel_sheet_utils import unique_sheet_name
 from modules.export_summary_utils import resolve_histogram_bin_count
-from modules.hexafe_plotstats_adapter import build_histogram_stats_table
+from modules.hexafe_plotstats_adapter import build_histogram_stats_table, plotstats_export_charts_enabled
+from modules.hexafe_plotstats_adapter import render_chart_artifact_png
 from modules.hexafe_plotstats_adapter import render_histogram_png as render_plotstats_histogram_png
 from modules.industrial_analytics_state import ProductionChartSelection
 from modules.matplotlib_runtime import configure_headless_matplotlib
@@ -233,6 +234,32 @@ def _insert_histogram_chart(
 
     groups = _plot_groups(dataframe, metric.field_name, group_fields=group_fields)
     grouped_histogram = len(groups) > 1
+    if plotstats_export_charts_enabled():
+        payload: dict[str, object] = {
+            "type": "histogram",
+            "title": f"{metric.display_label} distribution",
+            "bin_count": bin_count,
+            "limits": _metric_limits(metric),
+        }
+        if grouped_histogram:
+            payload["groups"] = [
+                {"group": label, "values": group_values.tolist()}
+                for label, group_values in groups
+            ]
+        else:
+            payload["values"] = values.tolist()
+            payload["style"] = {"axis_label_x": metric.display_label, "axis_label_y": "Count"}
+        rendered = render_chart_artifact_png(payload, target="workbook_image", backend="auto")
+        if rendered is not None:
+            worksheet.write(row, 8, f"Histogram rendered by {rendered.backend}")
+            worksheet.insert_image(
+                row,
+                0,
+                f"{metric.field_name}_histogram.png",
+                {"image_data": BytesIO(rendered.png_bytes)},
+            )
+            return True
+
     if not grouped_histogram:
         rendered = render_plotstats_histogram_png(
             values,
@@ -369,10 +396,30 @@ def _insert_matplotlib_distribution_image(
     if not groups:
         return False
 
+    labels = [label for label, _values in groups]
+    values = [series for _label, series in groups]
+    if plotstats_export_charts_enabled():
+        payload = {
+            "type": "distribution" if chart_type == "violin" else "iqr",
+            "render_mode": "violin" if chart_type == "violin" else "iqr",
+            "title": f"{metric.display_label} {'violin' if chart_type == 'violin' else 'box plot'}",
+            "labels": labels,
+            "series": [series.tolist() for series in values],
+            "limits": _metric_limits(metric),
+        }
+        rendered = render_chart_artifact_png(payload, target="workbook_image", backend="auto")
+        if rendered is not None:
+            worksheet.write(row, 8, f"{chart_type.title()} rendered by {rendered.backend}")
+            worksheet.insert_image(
+                row,
+                0,
+                f"{metric.field_name}_{chart_type}.png",
+                {"image_data": BytesIO(rendered.png_bytes)},
+            )
+            return True
+
     fig, ax = plt.subplots(figsize=(7.4, 3.7))
     try:
-        labels = [label for label, _values in groups]
-        values = [series for _label, series in groups]
         positions = np.arange(1, len(values) + 1)
         if chart_type == "violin":
             parts = ax.violinplot(
@@ -434,6 +481,21 @@ def _insert_matplotlib_distribution_image(
 
     worksheet.insert_image(row, 0, f"{metric.field_name}_{chart_type}.png", {"image_data": image_data})
     return True
+
+
+def _metric_limits(metric: AnalyticsMetric) -> dict[str, float | None]:
+    lsl = _optional_float(getattr(metric, "lsl", None))
+    usl = _optional_float(getattr(metric, "usl", None))
+    nominal = ((lsl + usl) / 2.0) if lsl is not None and usl is not None and lsl <= usl else None
+    return {"lsl": lsl, "nominal": nominal, "usl": usl}
+
+
+def _optional_float(value) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if np.isfinite(number) else None
 
 
 def _plot_groups(

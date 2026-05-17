@@ -5,8 +5,12 @@ import sys
 from types import ModuleType, SimpleNamespace
 
 from modules.hexafe_plotstats_adapter import (
+    PLOTSTATS_EXPORT_CHARTS_ENV_VAR,
+    build_chart_artifact,
     build_dashboard_plotly_spec,
     build_histogram_stats_table,
+    plotstats_export_charts_enabled,
+    render_chart_artifact_png,
     render_histogram_png,
 )
 
@@ -133,3 +137,79 @@ def test_build_dashboard_plotly_spec_uses_plotstats_metroliza_adapter(monkeypatc
     assert calls["title"] == "Cycle Time"
     assert calls["theme"] == "compact_report"
     assert calls["static"] is True
+
+
+def test_plotstats_export_charts_enabled_reads_rollout_env(monkeypatch) -> None:
+    monkeypatch.delenv(PLOTSTATS_EXPORT_CHARTS_ENV_VAR, raising=False)
+    assert plotstats_export_charts_enabled() is False
+
+    monkeypatch.setenv(PLOTSTATS_EXPORT_CHARTS_ENV_VAR, "yes")
+    assert plotstats_export_charts_enabled() is True
+
+
+def test_build_chart_artifact_uses_plotstats_metroliza_artifact_adapter(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    def fake_artifact(payload, *, target, theme, backend, include_plotly, include_png, static):
+        calls["payload"] = payload
+        calls["target"] = target
+        calls["theme"] = theme
+        calls["backend"] = backend
+        calls["include_plotly"] = include_plotly
+        calls["include_png"] = include_png
+        calls["static"] = static
+        return {
+            "plotly_spec": {
+                "data": [{"type": "bar", "x": [1], "y": [2]}],
+                "layout": {},
+                "config": {},
+                "metadata": {"backend": "plotstats"},
+            },
+            "png_bytes": b"png",
+            "backend": "hexafe-plotstats:matplotlib",
+        }
+
+    package = ModuleType("hexafe_plotstats")
+    adapters = ModuleType("hexafe_plotstats.adapters")
+    adapters.chart_artifact_from_metroliza_payload = fake_artifact
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats", package)
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats.adapters", adapters)
+
+    artifact = build_chart_artifact(
+        {"type": "trend", "x": [1], "y": [2]},
+        target="html_dashboard",
+        title="Trend",
+        theme="dark",
+        include_plotly=True,
+        include_png=True,
+        static=False,
+    )
+
+    assert artifact is not None
+    assert artifact["backend"] == "hexafe-plotstats:matplotlib"
+    assert calls["payload"] == {"type": "trend", "x": [1], "y": [2], "title": "Trend"}
+    assert calls["target"] == "html_dashboard"
+    assert calls["theme"] == "dark"
+    assert calls["include_png"] is True
+    assert calls["static"] is False
+
+
+def test_render_chart_artifact_png_returns_bytes(monkeypatch) -> None:
+    def fake_artifact(payload, **_kwargs):
+        return {
+            "png_bytes": b"\x89PNG\r\n",
+            "backend": "hexafe-plotstats:matplotlib",
+            "payload_summary": {"type": payload.get("type")},
+        }
+
+    package = ModuleType("hexafe_plotstats")
+    adapters = ModuleType("hexafe_plotstats.adapters")
+    adapters.chart_artifact_from_metroliza_payload = fake_artifact
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats", package)
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats.adapters", adapters)
+
+    result = render_chart_artifact_png({"type": "histogram", "values": [1.0, 2.0]})
+
+    assert result is not None
+    assert result.png_bytes.startswith(b"\x89PNG")
+    assert result.backend == "hexafe-plotstats:matplotlib"

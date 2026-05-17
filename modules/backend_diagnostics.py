@@ -120,6 +120,7 @@ def _resolve_chart_renderer_entry() -> dict[str, Any]:
         entry["distribution_rollout_enabled"] = chart_renderer.native_chart_renderer_rollout_enabled_for("distribution")
         entry["iqr_rollout_enabled"] = chart_renderer.native_chart_renderer_rollout_enabled_for("iqr")
         entry["trend_rollout_enabled"] = chart_renderer.native_chart_renderer_rollout_enabled_for("trend")
+        entry["plotstats_rollout_enabled"] = chart_renderer.plotstats_chart_renderer_rollout_enabled()
         entry["histogram_effective_backend"] = histogram_effective
         entry["distribution_effective_backend"] = distribution_effective
         entry["iqr_effective_backend"] = iqr_effective
@@ -138,6 +139,7 @@ def _resolve_chart_renderer_entry() -> dict[str, Any]:
         entry["distribution_rollout_enabled"] = chart_renderer.native_chart_renderer_rollout_enabled_for("distribution")
         entry["iqr_rollout_enabled"] = chart_renderer.native_chart_renderer_rollout_enabled_for("iqr")
         entry["trend_rollout_enabled"] = chart_renderer.native_chart_renderer_rollout_enabled_for("trend")
+        entry["plotstats_rollout_enabled"] = chart_renderer.plotstats_chart_renderer_rollout_enabled()
         entry["histogram_effective_backend"] = "matplotlib"
         entry["distribution_effective_backend"] = "matplotlib"
         entry["iqr_effective_backend"] = "matplotlib"

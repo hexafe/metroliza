@@ -22,7 +22,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 BackendChoice = Literal["auto", "native", "matplotlib"]
-ResolvedBackend = Literal["native", "matplotlib"]
+ResolvedBackend = Literal["native", "matplotlib", "plotstats"]
 NATIVE_CHART_RENDERER_ROLLOUT_ENABLED = False
 _NATIVE_CHART_KINDS = {"histogram", "distribution", "iqr", "trend"}
 _ROLLOUT_CHARTS_ENV_VAR = "METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS"
@@ -260,6 +260,55 @@ class NativeChartRenderer(ChartRenderer):
         return ChartRenderResult(png_bytes=bytes(png_bytes), backend="native")
 
 
+class PlotstatsChartRenderer(ChartRenderer):
+    """hexafe-plotstats artifact renderer with the current renderer as fallback."""
+
+    def __init__(self, *, fallback_renderer: ChartRenderer | None = None):
+        self._fallback = fallback_renderer or MatplotlibChartRenderer()
+
+    def render_figure_png(self, fig: Any, *, mode: str = "workbook", chart_type: str | None = None) -> ChartRenderResult:
+        return self._fallback.render_figure_png(fig, mode=mode, chart_type=chart_type)
+
+    def render_histogram_png(self, payload: dict[str, Any], *, fallback_fig: Any | None = None, mode: str = "workbook") -> ChartRenderResult:
+        result = self._render_plotstats_payload(payload)
+        if result is not None:
+            return result
+        return self._fallback.render_histogram_png(payload, fallback_fig=fallback_fig, mode=mode)
+
+    def render_distribution_png(self, payload: dict[str, Any], *, fallback_fig: Any | None = None, mode: str = "workbook") -> ChartRenderResult:
+        result = self._render_plotstats_payload(payload)
+        if result is not None:
+            return result
+        return self._fallback.render_distribution_png(payload, fallback_fig=fallback_fig, mode=mode)
+
+    def render_iqr_png(self, payload: dict[str, Any], *, fallback_fig: Any | None = None, mode: str = "workbook") -> ChartRenderResult:
+        result = self._render_plotstats_payload(payload)
+        if result is not None:
+            return result
+        return self._fallback.render_iqr_png(payload, fallback_fig=fallback_fig, mode=mode)
+
+    def render_trend_png(self, payload: dict[str, Any], *, fallback_fig: Any | None = None, mode: str = "workbook") -> ChartRenderResult:
+        result = self._render_plotstats_payload(payload)
+        if result is not None:
+            return result
+        return self._fallback.render_trend_png(payload, fallback_fig=fallback_fig, mode=mode)
+
+    @staticmethod
+    def _render_plotstats_payload(payload: dict[str, Any]) -> ChartRenderResult | None:
+        try:
+            from modules.hexafe_plotstats_adapter import render_chart_artifact_png
+        except Exception:
+            return None
+
+        try:
+            rendered = render_chart_artifact_png(payload, target="workbook_image", backend="auto")
+        except Exception:
+            return None
+        if rendered is None:
+            return None
+        return ChartRenderResult(png_bytes=rendered.png_bytes, backend="plotstats")
+
+
 def _runtime_backend_choice() -> BackendChoice:
     choice = os.getenv("METROLIZA_CHART_RENDERER_BACKEND", "matplotlib").strip().lower()
     if choice in {"auto", "native", "matplotlib"}:
@@ -377,6 +426,16 @@ def native_chart_renderer_rollout_enabled_for(chart_kind: str) -> bool:
     return normalized in _runtime_rollout_chart_kinds()
 
 
+def plotstats_chart_renderer_rollout_enabled() -> bool:
+    """Return whether export chart images should use hexafe-plotstats artifacts."""
+
+    try:
+        from modules.hexafe_plotstats_adapter import plotstats_export_charts_enabled
+    except Exception:
+        return False
+    return bool(plotstats_export_charts_enabled())
+
+
 def _warn_native_backend_disabled(*, chart_kind: str) -> None:
     warnings.warn(
         f"METROLIZA_CHART_RENDERER_BACKEND=native requested for {chart_kind} charts, but native chart rendering is disabled by rollout policy; falling back to matplotlib backend.",
@@ -464,6 +523,13 @@ def resolve_trend_renderer_backend() -> ResolvedBackend:
 
 def build_chart_renderer() -> ChartRenderer:
     """Build the configured chart renderer implementation."""
+    renderer = _build_native_or_matplotlib_chart_renderer()
+    if plotstats_chart_renderer_rollout_enabled():
+        return PlotstatsChartRenderer(fallback_renderer=renderer)
+    return renderer
+
+
+def _build_native_or_matplotlib_chart_renderer() -> ChartRenderer:
     backend_choice = _runtime_backend_choice()
     enabled_chart_kinds = _runtime_rollout_chart_kinds()
     if backend_choice != "matplotlib" and any(

@@ -18,6 +18,7 @@ from modules.chart_render_spec import (
 from modules.chart_renderer import (
     MatplotlibChartRenderer,
     NativeChartRenderer,
+    PlotstatsChartRenderer,
     benchmark_histogram_render_runtime,
     build_chart_renderer,
     build_distribution_native_payload,
@@ -165,8 +166,33 @@ def test_build_chart_renderer_uses_native_when_distribution_backend_is_available
 
 def test_build_chart_renderer_matplotlib(monkeypatch):
     monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "matplotlib")
+    monkeypatch.delenv("METROLIZA_PLOTSTATS_EXPORT_CHARTS", raising=False)
     renderer = build_chart_renderer()
     assert isinstance(renderer, MatplotlibChartRenderer)
+
+
+def test_build_chart_renderer_wraps_plotstats_when_rollout_enabled(monkeypatch):
+    monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "matplotlib")
+    monkeypatch.setenv("METROLIZA_PLOTSTATS_EXPORT_CHARTS", "1")
+    renderer = build_chart_renderer()
+
+    assert isinstance(renderer, PlotstatsChartRenderer)
+
+    rendered = type(
+        "Rendered",
+        (),
+        {"png_bytes": b"plotstats-png", "backend": "hexafe-plotstats:matplotlib"},
+    )()
+    fig = plt.figure(figsize=(2, 1))
+    with mock.patch("modules.hexafe_plotstats_adapter.render_chart_artifact_png", return_value=rendered):
+        result = renderer.render_histogram_png(
+            {"type": "histogram", "values": [1.0, 2.0], "title": "Histogram"},
+            fallback_fig=fig,
+        )
+    plt.close(fig)
+
+    assert result.backend == "plotstats"
+    assert result.png_bytes == b"plotstats-png"
 
 
 def test_native_rollout_allowlist_enables_only_selected_chart_types(monkeypatch):

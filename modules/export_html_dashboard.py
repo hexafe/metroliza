@@ -11,6 +11,10 @@ import re
 from typing import Any
 
 from modules.export_summary_utils import resolve_histogram_bin_count
+from modules.hexafe_plotstats_adapter import (
+    build_plotstats_dashboard_spec,
+    plotstats_export_charts_enabled,
+)
 
 
 _PLOTLY_COLORWAY = [
@@ -1054,6 +1058,8 @@ def _build_group_analysis_plotly_spec(
     plot_key_normalized = str(plot_key or "").strip().lower()
     if plot_key_normalized == "violin":
         payload = {
+            "type": "distribution",
+            "title": f"{metric_name} - Violin",
             "render_mode": "violin",
             "labels": [label for label, _values in normalized_groups],
             "series": [values for _label, values in normalized_groups],
@@ -1061,9 +1067,36 @@ def _build_group_analysis_plotly_spec(
             "y_label": "Measurement",
             "limits": dict(spec_limits),
         }
+        if plotstats_export_charts_enabled():
+            spec = build_plotstats_dashboard_spec(
+                payload,
+                title=f"{metric_name} - Violin",
+                theme=theme,
+                static=False,
+            )
+            if spec:
+                return spec
         return _build_plotly_distribution_spec(payload, title=f"{metric_name} - Violin", theme=theme)
 
     if plot_key_normalized == "histogram":
+        if plotstats_export_charts_enabled():
+            payload = {
+                "type": "histogram",
+                "title": f"{metric_name} - Histogram",
+                "groups": [
+                    {"group": label, "values": values}
+                    for label, values in normalized_groups
+                ],
+                "limits": dict(spec_limits),
+            }
+            spec = build_plotstats_dashboard_spec(
+                payload,
+                title=f"{metric_name} - Histogram",
+                theme=theme,
+                static=False,
+            )
+            if spec:
+                return spec
         layout = _build_plotly_base_layout(
             title=f"{metric_name} - Histogram",
             x_label="Measurement",
@@ -1137,6 +1170,10 @@ def _build_plotly_chart_spec(payload: dict[str, Any] | None, *, title: str, them
         return {}
 
     chart_type = str(payload.get("type") or "").strip().lower()
+    if plotstats_export_charts_enabled():
+        spec = build_plotstats_dashboard_spec(payload, title=title, theme=theme, static=False)
+        if spec:
+            return spec
     if chart_type == "histogram":
         return _build_plotly_histogram_spec(payload, title=title, theme=theme)
     if chart_type == "distribution":

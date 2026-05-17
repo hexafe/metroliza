@@ -108,6 +108,7 @@ Persistence selection is controlled by `METROLIZA_CMM_PERSIST_BACKEND` with the 
 ### Chart renderer (`modules/chart_renderer.py`)
 
 - Backend selection is controlled by `METROLIZA_CHART_RENDERER_BACKEND` (`matplotlib`/`auto`/`native`).
+- `METROLIZA_PLOTSTATS_EXPORT_CHARTS=1` enables the release-candidate adapter path where workbook images and HTML dashboard Plotly specs ask `hexafe-plotstats` for a complete chart artifact first, then fall back to the existing Metroliza/native renderer for unsupported payloads.
 - Native rollout selection is controlled per chart kind by `METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS` (comma-separated allowlist such as `histogram,distribution,iqr,trend`); when unset, all supported chart kinds are enabled whenever `auto` or `native` is selected.
 - Native chart rendering is shipped when `_metroliza_chart_native` is available in the packaged build environment.
 - The current native module covers histogram, distribution, IQR, and trend summary charts through the `_metroliza_chart_native` extension surface.

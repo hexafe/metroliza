@@ -412,6 +412,53 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(bins['size'], 4.0)
         self.assertEqual(spec['layout']['xaxis']['range'], [-5.0, 15.0])
 
+    def test_summary_plotly_spec_uses_plotstats_artifact_when_rollout_enabled(self):
+        package_spec = {
+            'data': [{'type': 'bar', 'x': ['A'], 'y': [1]}],
+            'layout': {'title': {'text': 'Package histogram'}},
+            'config': {'responsive': True},
+            'metadata': {'backend': 'plotstats'},
+        }
+        with (
+            patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=True),
+            patch('modules.export_html_dashboard.build_plotstats_dashboard_spec', return_value=package_spec) as artifact,
+        ):
+            spec = _build_plotly_chart_spec(
+                {'type': 'histogram', 'values': [1.0, 2.0]},
+                title='Summary Histogram',
+            )
+
+        self.assertEqual(spec, package_spec)
+        artifact.assert_called_once()
+
+    def test_group_analysis_histogram_uses_plotstats_artifact_when_rollout_enabled(self):
+        package_spec = {
+            'data': [{'type': 'bar', 'x': ['A'], 'y': [1]}],
+            'layout': {'title': {'text': 'Package group histogram'}},
+            'config': {'responsive': True},
+            'metadata': {'backend': 'plotstats'},
+        }
+        with (
+            patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=True),
+            patch('modules.export_html_dashboard.build_plotstats_dashboard_spec', return_value=package_spec) as artifact,
+        ):
+            spec = _build_group_analysis_plotly_spec(
+                'FEATURE_1',
+                'histogram',
+                {
+                    'groups': [
+                        {'group': 'A', 'values': [1.0, 2.0]},
+                        {'group': 'B', 'values': [3.0, 4.0]},
+                    ],
+                    'spec_limits': {'lsl': 0.5, 'usl': 4.5},
+                },
+            )
+
+        self.assertEqual(spec, package_spec)
+        called_payload = artifact.call_args.args[0]
+        self.assertEqual(called_payload['type'], 'histogram')
+        self.assertEqual([group['group'] for group in called_payload['groups']], ['A', 'B'])
+
     def test_trend_plotly_spec_sorts_points_and_renders_markers_only(self):
         spec = _build_plotly_chart_spec(
             {

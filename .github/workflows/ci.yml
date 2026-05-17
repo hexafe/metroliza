@@ -156,7 +156,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: hexafe/hexafe-plotstats
-          ref: 2689231c51f9548de7f8ed50edddc61adb9bc0a5
+          ref: 7d64f6c6c11b7c9da33bfdffea40e00ce8e65573
           path: artifacts/security_siblings/hexafe-plotstats
 
       - name: Checkout pinned oznak for security audit

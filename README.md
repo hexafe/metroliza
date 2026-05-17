@@ -141,6 +141,7 @@ Parity between native and Python backends is enforced through fixture-based test
 ## Chart renderer backend policy
 
 - `METROLIZA_CHART_RENDERER_BACKEND` accepts `matplotlib` (default), `auto`, or `native`.
+- `METROLIZA_PLOTSTATS_EXPORT_CHARTS=1` enables the release-candidate path that asks `hexafe-plotstats` to produce export chart artifacts first, then falls back to the current Metroliza/native renderer when the package cannot produce a given chart.
 - Native chart rendering via `_metroliza_chart_native` is included when the native extension is built/installed in the packaging environment.
 - `METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS` accepts a comma-separated allowlist such as `histogram,distribution,iqr,trend`; when unset, all supported chart kinds are enabled whenever native mode is opted in via `auto` or `native`.
 - Matplotlib is the current default export path while native chart parity is still being tuned.

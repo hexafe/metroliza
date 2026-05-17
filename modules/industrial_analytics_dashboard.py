@@ -19,7 +19,9 @@ from modules.export_summary_utils import resolve_histogram_bin_count
 from modules.hexafe_plotstats_adapter import (
     build_dashboard_plotly_spec,
     build_histogram_stats_table,
+    build_plotstats_dashboard_spec,
     metroliza_dashboard_plotstats_theme,
+    plotstats_export_charts_enabled,
     render_histogram_png,
 )
 from modules.industrial_analytics_service import (
@@ -1098,6 +1100,25 @@ def _chart_payload(
         },
     }
     _merge_axis_layout(resolved_layout, layout)
+    if plotstats_export_charts_enabled():
+        spec = build_plotstats_dashboard_spec(
+            {
+                "type": chart_type,
+                "title": title,
+                "traces": data,
+                "layout": resolved_layout,
+            },
+            title=title,
+            theme="light",
+            static=False,
+        )
+        if spec:
+            return {
+                "id": chart_id,
+                "title": title,
+                "chart_type": chart_type,
+                "plotly_spec": spec,
+            }
     return {
         "id": chart_id,
         "title": title,
