@@ -330,14 +330,15 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertFalse((assets_dir / 'plotly-2.27.0.min.js').exists())
 
     def test_plotly_chart_spec_bundle_exposes_light_and_dark_variants(self):
-        bundle = _build_plotly_chart_spec_bundle(
-            {
-                'type': 'histogram',
-                'values': [9.9, 10.0, 10.1, 10.2],
-                'limits': {'lsl': 9.8, 'nominal': 10.0, 'usl': 10.2},
-            },
-            title='Diameter / X',
-        )
+        with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
+            bundle = _build_plotly_chart_spec_bundle(
+                {
+                    'type': 'histogram',
+                    'values': [9.9, 10.0, 10.1, 10.2],
+                    'limits': {'lsl': 9.8, 'nominal': 10.0, 'usl': 10.2},
+                },
+                title='Diameter / X',
+            )
 
         self.assertIn('light', bundle)
         self.assertIn('dark', bundle)
@@ -347,17 +348,18 @@ class TestExportHtmlDashboard(unittest.TestCase):
 
     def test_group_analysis_histogram_plotly_spec_uses_shared_bins_for_overlay(self):
         all_values = [9.99, 10.01, 10.02, 10.03, 10.08, 10.11, 10.14, 10.16]
-        spec = _build_group_analysis_plotly_spec(
-            'FEATURE_1',
-            'histogram',
-            {
-                'groups': [
-                    {'group': 'A', 'values': [9.99, 10.01, 10.02, 10.03]},
-                    {'group': 'B', 'values': [10.08, 10.11, 10.14, 10.16]},
-                ],
-                'spec_limits': {'lsl': 9.8, 'nominal': 10.0, 'usl': 10.2},
-            },
-        )
+        with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
+            spec = _build_group_analysis_plotly_spec(
+                'FEATURE_1',
+                'histogram',
+                {
+                    'groups': [
+                        {'group': 'A', 'values': [9.99, 10.01, 10.02, 10.03]},
+                        {'group': 'B', 'values': [10.08, 10.11, 10.14, 10.16]},
+                    ],
+                    'spec_limits': {'lsl': 9.8, 'nominal': 10.0, 'usl': 10.2},
+                },
+            )
 
         self.assertEqual(spec['layout']['barmode'], 'overlay')
         self.assertEqual(spec['layout']['hovermode'], 'x unified')
@@ -369,17 +371,18 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertAlmostEqual(spec['data'][0]['xbins']['size'], expected_bin_width)
 
     def test_group_analysis_violin_plotly_spec_treats_numeric_labels_as_categories(self):
-        spec = _build_group_analysis_plotly_spec(
-            'FEATURE_1',
-            'violin',
-            {
-                'groups': [
-                    {'group': '73211', 'values': [9.99, 10.01, 10.03]},
-                    {'group': 'A', 'values': [10.08, 10.11, 10.16]},
-                    {'group': 'POPULATION', 'values': [9.95, 10.0, 10.05]},
-                ],
-            },
-        )
+        with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
+            spec = _build_group_analysis_plotly_spec(
+                'FEATURE_1',
+                'violin',
+                {
+                    'groups': [
+                        {'group': '73211', 'values': [9.99, 10.01, 10.03]},
+                        {'group': 'A', 'values': [10.08, 10.11, 10.16]},
+                        {'group': 'POPULATION', 'values': [9.95, 10.0, 10.05]},
+                    ],
+                },
+            )
 
         xaxis = spec['layout']['xaxis']
         self.assertEqual(xaxis['type'], 'category')
@@ -396,15 +399,16 @@ class TestExportHtmlDashboard(unittest.TestCase):
 
     def test_summary_histogram_plotly_spec_uses_matplotlib_bin_range(self):
         values = [0.0, 2.0, 4.0, 6.0, 8.0, 10.0]
-        spec = _build_plotly_chart_spec(
-            {
-                'type': 'histogram',
-                'values': values,
-                'bin_count': 5,
-                'x_view': {'min': -5.0, 'max': 15.0},
-            },
-            title='Summary Histogram',
-        )
+        with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
+            spec = _build_plotly_chart_spec(
+                {
+                    'type': 'histogram',
+                    'values': values,
+                    'bin_count': 5,
+                    'x_view': {'min': -5.0, 'max': 15.0},
+                },
+                title='Summary Histogram',
+            )
 
         bins = spec['data'][0]['xbins']
         self.assertEqual(bins['start'], -5.0)
@@ -460,16 +464,17 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual([group['group'] for group in called_payload['groups']], ['A', 'B'])
 
     def test_trend_plotly_spec_sorts_points_and_renders_markers_only(self):
-        spec = _build_plotly_chart_spec(
-            {
-                'type': 'trend',
-                'x_values': [3, 1, 2],
-                'y_values': [30.0, 10.0, 20.0],
-                'labels': ['third', 'first', 'second'],
-                'horizontal_limits': [25.0],
-            },
-            title='Trend',
-        )
+        with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
+            spec = _build_plotly_chart_spec(
+                {
+                    'type': 'trend',
+                    'x_values': [3, 1, 2],
+                    'y_values': [30.0, 10.0, 20.0],
+                    'labels': ['third', 'first', 'second'],
+                    'horizontal_limits': [25.0],
+                },
+                title='Trend',
+            )
 
         self.assertEqual(spec['layout']['hovermode'], 'x unified')
         self.assertEqual(spec['data'][0]['x'], [1.0, 2.0, 3.0])
