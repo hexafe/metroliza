@@ -1700,6 +1700,15 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
     }}
     .chart-stats {{
       margin-top: 10px;
+    }}
+    .chart-stats summary {{
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+      margin-bottom: 8px;
+    }}
+    .chart-stats-grid {{
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
       gap: 10px;
@@ -1747,8 +1756,21 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
     }}
     .stats-section {{
       margin: 0 0 14px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px 14px;
+    }}
+    .stats-section > summary {{
+      cursor: pointer;
+      font-size: 17px;
+      font-weight: 650;
+      list-style-position: inside;
+    }}
+    .stats-section-grid {{
       display: grid;
       gap: 12px;
+      margin-top: 12px;
     }}
     .stats-card {{
       background: var(--panel);
@@ -1761,9 +1783,25 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
       margin: 0 0 10px;
       font-size: 17px;
     }}
-    .stats-card h3 {{
-      margin: 12px 0 8px;
+    .stats-card > summary {{
+      cursor: pointer;
+      font-size: 15px;
+      font-weight: 650;
+      list-style-position: inside;
+    }}
+    .stats-card-body {{
+      margin-top: 10px;
+    }}
+    .stats-subsection {{
+      border-top: 1px solid var(--line);
+      margin-top: 10px;
+      padding-top: 10px;
+    }}
+    .stats-subsection summary {{
+      cursor: pointer;
       font-size: 14px;
+      font-weight: 650;
+      margin-bottom: 8px;
     }}
     table {{
       border-collapse: collapse;
@@ -2010,18 +2048,27 @@ def _render_groupstats(groupstats: dict[str, Any]) -> str:
         if metric.get("skipped"):
             reason = str(metric.get("skip_reason") or "skipped").replace("_", " ")
             cards.append(
-                '<article class="stats-card">'
-                f"<h2>{html.escape(title)}</h2>"
+                '<details class="stats-card">'
+                f"<summary>{html.escape(title)}</summary>"
+                '<div class="stats-card-body">'
                 f"<p>Groupstats skipped: {html.escape(reason)}.</p>"
-                "</article>"
+                "</div>"
+                "</details>"
             )
             continue
-        descriptive = _render_table(
-            metric.get("descriptive_stats"),
+        descriptive_rows = metric.get("descriptive_stats")
+        distribution_rows = metric.get("distribution_rows")
+        omnibus_rows = _groupstats_omnibus_rows(metric.get("omnibus"))
+        pairwise_rows = metric.get("pairwise_rows")
+        posthoc_rows = metric.get("posthoc_rows")
+        descriptive = _render_collapsible_table_section(
+            "Descriptive stats",
+            descriptive_rows,
             columns=("group", "n", "mean", "std", "median", "iqr", "min", "max", "cp", "capability"),
         )
-        distribution = _render_table(
-            metric.get("distribution_rows"),
+        distribution = _render_collapsible_table_section(
+            "Distribution checks",
+            distribution_rows,
             columns=(
                 "group",
                 "n",
@@ -2032,12 +2079,14 @@ def _render_groupstats(groupstats: dict[str, Any]) -> str:
                 "normality_status",
             ),
         )
-        omnibus = _render_table(
-            _groupstats_omnibus_rows(metric.get("omnibus")),
+        omnibus = _render_collapsible_table_section(
+            "Overall group test",
+            omnibus_rows,
             columns=("test_name", "p_value", "effect_size", "effect_type", "significant"),
         )
-        pairwise = _render_table(
-            metric.get("pairwise_rows"),
+        pairwise = _render_collapsible_table_section(
+            "Pairwise tests",
+            pairwise_rows,
             columns=(
                 "group_a",
                 "group_b",
@@ -2050,8 +2099,9 @@ def _render_groupstats(groupstats: dict[str, Any]) -> str:
                 "test_used",
             ),
         )
-        posthoc = _render_table(
-            metric.get("posthoc_rows"),
+        posthoc = _render_collapsible_table_section(
+            "Post-hoc tests",
+            posthoc_rows,
             columns=(
                 "group_a",
                 "group_b",
@@ -2076,24 +2126,27 @@ def _render_groupstats(groupstats: dict[str, Any]) -> str:
             else ""
         )
         cards.append(
-            '<article class="stats-card">'
-            f"<h2>{html.escape(title)}</h2>"
+            '<details class="stats-card">'
+            f"<summary>{html.escape(title)}</summary>"
+            '<div class="stats-card-body">'
             f"{insight_markup}"
-            "<h3>Descriptive stats</h3>"
             f"{descriptive}"
-            "<h3>Distribution checks</h3>"
             f"{distribution}"
-            "<h3>Overall group test</h3>"
             f"{omnibus}"
-            "<h3>Pairwise tests</h3>"
             f"{pairwise}"
-            "<h3>Post-hoc tests</h3>"
             f"{posthoc}"
-            "</article>"
+            "</div>"
+            "</details>"
         )
     if not cards:
         return ""
-    return f'<section class="stats-section">{"".join(cards)}</section>'
+    label = _plural_summary_count(len(cards), "metric")
+    return (
+        '<details class="stats-section">'
+        f"<summary>Groupstats ({html.escape(label)})</summary>"
+        f'<div class="stats-section-grid">{"".join(cards)}</div>'
+        "</details>"
+    )
 
 
 def _groupstats_omnibus_rows(value: Any) -> list[dict[str, Any]]:
@@ -2118,6 +2171,26 @@ def _render_table(rows: Any, *, columns: tuple[str, ...]) -> str:
     if not body_rows:
         return "<p>No rows available.</p>"
     return f"<table><thead><tr>{header}</tr></thead><tbody>{''.join(body_rows)}</tbody></table>"
+
+
+def _row_count(rows: Any) -> int:
+    return len(rows) if isinstance(rows, list) else 0
+
+
+def _render_collapsible_table_section(
+    title: str,
+    rows: Any,
+    *,
+    columns: tuple[str, ...],
+) -> str:
+    row_count = _row_count(rows)
+    label = f"{title} ({_plural_summary_count(row_count, 'row')})"
+    return (
+        '<details class="stats-subsection">'
+        f"<summary>{html.escape(label)}</summary>"
+        f"{_render_table(rows, columns=columns)}"
+        "</details>"
+    )
 
 
 def _table_label(column: str) -> str:
@@ -2218,7 +2291,13 @@ def _render_chart_stats_tables(stats_tables: Any) -> str:
         )
     if not table_markup:
         return ""
-    return f'<div class="chart-stats">{"".join(table_markup)}</div>'
+    label = f"Chart statistics ({_plural_summary_count(len(table_markup), 'table')})"
+    return (
+        '<details class="chart-stats">'
+        f"<summary>{html.escape(label)}</summary>"
+        f'<div class="chart-stats-grid">{"".join(table_markup)}</div>'
+        "</details>"
+    )
 
 
 __all__ = [

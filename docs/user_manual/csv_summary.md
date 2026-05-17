@@ -157,5 +157,5 @@ When processing starts, Metroliza shows a worker/progress dialog with:
 
 If processing completes normally, the app shows where the dashboard and workbook were saved.
 The completion dialog links the generated dashboard and workbook files.
-Dashboard diagnostics are collapsed by default; open the diagnostics section when you need
-technical details.
+Dashboard diagnostics, groupstats sections, detailed statistical-test tables, and chart
+statistics are collapsed by default; open only the sections you need to inspect.

@@ -134,6 +134,8 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     assert 'class="plotly-chart" id="histogram-cycle_time_s"' not in html_text
     assert 'class="chart-image"' in html_text
     assert "Static snapshot" not in html_text
+    assert '<details class="chart-stats">' in html_text
+    assert "<summary>Chart statistics (" in html_text
     assert ".chart-stats th" in html_text
     assert "background: #1f2937" in html_text
     assert "color: #ffffff" in html_text
@@ -726,7 +728,13 @@ def test_groupstats_html_renders_overall_and_ordered_pairwise_rows(tmp_path) -> 
     write_production_dashboard(manifest, output_file)
 
     html_text = output_file.read_text(encoding="utf-8")
+    assert '<details class="stats-section">' in html_text
+    assert "<summary>Groupstats (1 metric)</summary>" in html_text
+    assert '<details class="stats-card">' in html_text
     assert "Overall group test" in html_text
+    assert "<summary>Pairwise tests (3 rows)</summary>" in html_text
+    assert "<summary>Post-hoc tests (1 row)</summary>" in html_text
+    assert "<h3>Pairwise tests</h3>" not in html_text
     assert "Welch ANOVA" in html_text
     assert "Pairwise tests" in html_text
     assert "Post-hoc tests" in html_text
