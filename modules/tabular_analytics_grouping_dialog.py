@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (
 from modules import ui_theme_tokens
 from modules.csv_summary_utils import CsvGroupingIndex
 from modules.help_menu import attach_help_menu_to_layout
-from modules.list_selection_utils import ListSelectionUtils
+from modules.list_selection_utils import GroupingShortcutBindings, ListSelectionUtils
 from modules.export_grouping_utils import set_default_group_label
 from modules.tabular_analytics_service import (
     TABULAR_DEFAULT_GROUP,
@@ -87,6 +87,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._selector_page_offset = 0
         self._selector_total_rows = 0
         self._list_selection_utils = ListSelectionUtils()
+        self._grouping_shortcuts = None
         self.default_group = TABULAR_DEFAULT_GROUP
         self.default_group_color = self._resolve_default_group_color()
         self.group_color_column = "GROUP_COLOR"
@@ -194,6 +195,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         members_column.setSpacing(6)
         members_column.addWidget(QLabel("Rows in selected group"))
         self.group_members_list = QListWidget()
+        self.group_members_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         apply_list_selection_style(self.group_members_list)
         self.group_members_list.setMinimumHeight(120)
         self.group_members_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -255,6 +257,18 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._configure_stretch_panes()
         self._list_selection_utils.connect_shift_range_behavior(self.selector_list)
         self._list_selection_utils.connect_shift_range_behavior(self.group_members_list)
+        self._grouping_shortcuts = GroupingShortcutBindings(
+            source_list=self.selector_list,
+            groups_list=self.groups_list,
+            assigned_list=self.group_members_list,
+            selected_columns_list=self.selected_columns_list,
+            create_group=self.create_group,
+            rename_group=self.rename_group,
+            delete_group=self.delete_group,
+            remove_from_assigned=self.remove_selected_group_members,
+            remove_selected_columns=self.remove_selected_selector_column,
+            qt_namespace=Qt,
+        )
         self._refresh_all()
 
     def _is_sqlite_backed(self) -> bool:
@@ -922,6 +936,15 @@ class TabularAnalyticsGroupingDialog(QDialog):
         selected_group = self._selected_group_name()
         if not selected_group or selected_group == self.default_group:
             return
+        confirmation = QMessageBox.question(
+            self,
+            "Delete group",
+            f"Delete group '{selected_group}' and return its rows to {self.default_group}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirmation != QMessageBox.StandardButton.Yes:
+            return
         selected_mask = self.df["GROUP"] == selected_group
         if self._is_sqlite_backed():
             self.df = self.df.loc[~selected_mask].reset_index(drop=True)
@@ -930,6 +953,27 @@ class TabularAnalyticsGroupingDialog(QDialog):
             self.df.loc[selected_mask, self.group_color_column] = self.default_group_color
         self._ensure_group_color_integrity()
         self._refresh_all(preferred_group=self.default_group)
+
+    def remove_selected_group_members(self) -> None:
+        selected_group = self._selected_group_name()
+        if not selected_group or selected_group == self.default_group:
+            return
+        row_ids = []
+        for item in self.group_members_list.selectedItems():
+            try:
+                row_ids.append(int(item.data(Qt.ItemDataRole.UserRole)))
+            except (TypeError, ValueError):
+                continue
+        if not row_ids:
+            return
+        selected_mask = self.df["REPORT_ID"].isin(row_ids) & (self.df["GROUP"] == selected_group)
+        if self._is_sqlite_backed():
+            self.df = self.df.loc[~selected_mask].reset_index(drop=True)
+        else:
+            self.df.loc[selected_mask, "GROUP"] = self.default_group
+            self.df.loc[selected_mask, self.group_color_column] = self.default_group_color
+        self._ensure_group_color_integrity()
+        self._refresh_all(preferred_group=selected_group)
 
     def _sync_status(self) -> None:
         if not self.selector_columns:
@@ -1092,6 +1136,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         for _index, row in rows.head(_GROUP_MEMBER_PREVIEW_LIMIT).iterrows():
             label = str(row.get("REFERENCE") or row.get("PART_NAME") or row.get("SAMPLE_NUMBER") or "")
             item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, row.get("REPORT_ID"))
             self._apply_item_color(item, self._group_color_for_row(row))
             self.group_members_list.addItem(item)
         if total_rows > _GROUP_MEMBER_PREVIEW_LIMIT:
@@ -1110,33 +1155,21 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._sync_status()
 
     def keyPressEvent(self, event) -> None:
-        pressed_key = event.key() if event is not None and hasattr(event, "key") else None
-        key_enum = getattr(Qt, "Key", None)
-        enter_keys = tuple(
-            key
-            for key in (
-                getattr(key_enum, "Key_Return", None),
-                getattr(key_enum, "Key_Enter", None),
+        shortcut_handler = getattr(self, "_grouping_shortcuts", None)
+        if shortcut_handler is None:
+            shortcut_handler = GroupingShortcutBindings(
+                source_list=self.selector_list,
+                groups_list=self.groups_list,
+                assigned_list=self.group_members_list,
+                selected_columns_list=self.selected_columns_list,
+                create_group=self.create_group,
+                rename_group=self.rename_group,
+                delete_group=self.delete_group,
+                remove_from_assigned=self.remove_selected_group_members,
+                remove_selected_columns=self.remove_selected_selector_column,
+                qt_namespace=Qt,
             )
-            if key is not None
-        )
-        if pressed_key in enter_keys and self._list_or_viewport_has_focus(self.selector_list):
-            self.create_group()
-            if hasattr(event, "accept"):
-                event.accept()
-            return
-        delete_keys = tuple(
-            key
-            for key in (
-                getattr(key_enum, "Key_Delete", None),
-                getattr(key_enum, "Key_Backspace", None),
-            )
-            if key is not None
-        )
-        if pressed_key in delete_keys and self._list_or_viewport_has_focus(self.selected_columns_list):
-            self.remove_selected_selector_column()
-            if hasattr(event, "accept"):
-                event.accept()
+        if shortcut_handler.handle_key_press(event):
             return
         super().keyPressEvent(event)
 

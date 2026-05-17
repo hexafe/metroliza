@@ -300,7 +300,7 @@ def validate_industrial_analytics_request(
 
 
 _ALLOWED_EXPORT_TYPES = {"line", "scatter"}
-_ALLOWED_EXPORT_PRESETS = {"fast_diagnostics", "full_report"}
+_ALLOWED_EXPORT_PRESETS = {"fast_diagnostics", "full_report", "html_dashboard_only"}
 _ALLOWED_EXPORT_TARGETS = {"excel_xlsx", "google_sheets_drive_convert", "html_dashboard"}
 _ALLOWED_BACKEND_TARGETS = {"excel", "google", "html"}
 _BACKEND_TARGET_ALIASES = {"google_sheets": "google", "googlesheets": "google"}

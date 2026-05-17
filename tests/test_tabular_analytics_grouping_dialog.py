@@ -5,7 +5,7 @@ import pytest
 
 try:
     from PyQt6.QtCore import Qt
-    from PyQt6.QtWidgets import QApplication, QLabel, QPushButton
+    from PyQt6.QtWidgets import QApplication, QLabel, QMessageBox, QPushButton
     from modules import ui_theme_tokens
     from modules.list_selection_utils import ListSelectionUtils
     from modules.tabular_analytics_service import (
@@ -729,6 +729,84 @@ def test_double_click_group_item_opens_rename_prompt(monkeypatch) -> None:
             dialog.groups_list.item(index).data(Qt.ItemDataRole.UserRole)
             for index in range(dialog.groups_list.count())
         }
+    finally:
+        dialog.close()
+
+
+def test_delete_key_on_group_list_confirms_and_deletes_custom_group(monkeypatch) -> None:
+    app = _app()
+    frame = pd.DataFrame(
+        {
+            "source_row_number": [1, 2, 3],
+            "tracecode": ["TC-001", "TC-002", "TC-003"],
+            "length_mm": [1.0, 2.0, 3.0],
+        }
+    )
+    dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
+    monkeypatch.setattr(
+        "modules.tabular_analytics_grouping_dialog.QMessageBox.question",
+        lambda *_args, **_kwargs: QMessageBox.StandardButton.Yes,
+    )
+    try:
+        dialog.selector_columns = ["tracecode"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+        dialog.show()
+        app.processEvents()
+
+        dialog.selected_selector_keys = {("TC-001",), ("TC-002",)}
+        dialog.create_group(initial_group_name="Fixture A")
+        group_item = next(
+            dialog.groups_list.item(index)
+            for index in range(dialog.groups_list.count())
+            if dialog.groups_list.item(index).data(Qt.ItemDataRole.UserRole) == "Fixture A"
+        )
+        dialog.groups_list.setCurrentItem(group_item)
+        dialog.groups_list.setFocus()
+        app.processEvents()
+
+        delete_event = _FakeKeyEvent(Qt.Key.Key_Delete)
+        dialog.keyPressEvent(delete_event)
+
+        assignments = dialog.df.set_index("REPORT_ID")["GROUP"].to_dict()
+        assert delete_event.accepted is True
+        assert assignments == {1: "POPULATION", 2: "POPULATION", 3: "POPULATION"}
+    finally:
+        dialog.close()
+
+
+def test_delete_key_on_group_members_removes_selected_rows_from_group() -> None:
+    app = _app()
+    frame = pd.DataFrame(
+        {
+            "source_row_number": [1, 2, 3],
+            "tracecode": ["TC-001", "TC-002", "TC-003"],
+            "length_mm": [1.0, 2.0, 3.0],
+        }
+    )
+    dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
+    try:
+        dialog.selector_columns = ["tracecode"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+        dialog.show()
+        app.processEvents()
+
+        dialog.selected_selector_keys = {("TC-001",), ("TC-002",)}
+        dialog.create_group(initial_group_name="Fixture A")
+        member_item = dialog.group_members_list.item(0)
+        member_item.setSelected(True)
+        dialog.group_members_list.setFocus()
+        app.processEvents()
+
+        delete_event = _FakeKeyEvent(Qt.Key.Key_Delete)
+        dialog.keyPressEvent(delete_event)
+
+        assignments = dialog.df.set_index("REPORT_ID")["GROUP"].to_dict()
+        assert delete_event.accepted is True
+        assert assignments[1] == "POPULATION"
+        assert assignments[2] == "Fixture A"
+        assert assignments[3] == "POPULATION"
     finally:
         dialog.close()
 

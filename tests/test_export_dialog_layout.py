@@ -74,6 +74,11 @@ class TestExportDialogLayout(unittest.TestCase):
                 "toggle_text": dialog.advanced_toggle_button.text(),
                 "google_label": dialog.include_google_sheets_checkbox.text(),
                 "html_label": dialog.generate_html_dashboard_checkbox.text(),
+                "has_html_only_checkbox": hasattr(dialog, "html_dashboard_only_checkbox"),
+                "preset_labels": [
+                    dialog.preset_combobox.itemText(index)
+                    for index in range(dialog.preset_combobox.count())
+                ],
                 "close_label": dialog.close_button.text(),
                 "db_text": dialog.database_text_label.text(),
                 "excel_text": dialog.excel_file_text_label.text(),
@@ -87,7 +92,6 @@ class TestExportDialogLayout(unittest.TestCase):
                     dialog.google_sheets_info_button.width(),
                     dialog.google_sheets_info_button.height(),
                 ],
-                "chart_hint": dialog.chart_analysis_hint_label.text(),
                 "export_accessible_name": dialog.export_button.accessibleName(),
             }, sort_keys=True))
             dialog.close()
@@ -103,6 +107,8 @@ class TestExportDialogLayout(unittest.TestCase):
         self.assertEqual(payload["toggle_text"], "Show advanced options")
         self.assertEqual(payload["google_label"], "Google Sheets")
         self.assertEqual(payload["html_label"], "HTML dashboard")
+        self.assertFalse(payload["has_html_only_checkbox"])
+        self.assertIn("HTML dashboard only", payload["preset_labels"])
         self.assertEqual(payload["close_label"], "Close")
         self.assertEqual(payload["db_text"], "None selected")
         self.assertEqual(payload["excel_text"], "None selected")
@@ -111,7 +117,6 @@ class TestExportDialogLayout(unittest.TestCase):
         self.assertIn("OK results are hidden", payload["hide_ok_tooltip"])
         self.assertGreaterEqual(payload["info_button_size"][0], 24)
         self.assertGreaterEqual(payload["info_button_size"][1], 24)
-        self.assertIn("Group analysis Off/Light/Standard", payload["chart_hint"])
         self.assertEqual(payload["export_accessible_name"], "Start export")
 
     def test_long_paths_do_not_expand_dialog_width(self):
@@ -156,6 +161,46 @@ class TestExportDialogLayout(unittest.TestCase):
         self.assertIn("measurement_database_name_with_really_long_identifier.db", payload["db_tooltip"])
         self.assertIn("measurement_database_name_with_really_long_identifier.xlsx", payload["excel_tooltip"])
         self.assertTrue(payload["export_enabled"])
+
+    def test_html_dashboard_only_preset_owns_dashboard_output_mode(self):
+        payload = self._run_probe(
+            """
+            import json
+            from PyQt6.QtWidgets import QApplication
+            from modules.export_dialog import ExportDialog
+
+            ExportDialog._load_dialog_config = lambda self: {'selected_preset': 'html_dashboard_only'}
+
+            app = QApplication.instance() or QApplication([])
+            dialog = ExportDialog(parent=None, db_file='/tmp/source.db')
+            dialog.excel_file = '/tmp/source.xlsx'
+            dialog._sync_html_dashboard_only_state()
+            dialog.show()
+            app.processEvents()
+
+            print(json.dumps({
+                "selected_preset": dialog.preset_combobox.currentText(),
+                "output_label": dialog.select_excel_label.text(),
+                "output_path": str(dialog.excel_file),
+                "html_checked": dialog.generate_html_dashboard_checkbox.isChecked(),
+                "html_enabled": dialog.generate_html_dashboard_checkbox.isEnabled(),
+                "google_checked": dialog.include_google_sheets_checkbox.isChecked(),
+                "google_enabled": dialog.include_google_sheets_checkbox.isEnabled(),
+                "export_target": dialog._selected_export_target(),
+            }, sort_keys=True))
+            dialog.close()
+            app.processEvents()
+            """
+        )
+
+        self.assertEqual(payload["selected_preset"], "HTML dashboard only")
+        self.assertEqual(payload["output_label"], "Dashboard file:")
+        self.assertTrue(payload["output_path"].endswith("_dashboard.html"))
+        self.assertTrue(payload["html_checked"])
+        self.assertFalse(payload["html_enabled"])
+        self.assertFalse(payload["google_checked"])
+        self.assertFalse(payload["google_enabled"])
+        self.assertEqual(payload["export_target"], "html_dashboard")
 
 
 if __name__ == "__main__":

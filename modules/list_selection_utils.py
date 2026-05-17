@@ -133,6 +133,132 @@ class ListSelectionUtils:
             item.setSelected(True)
 
 
+class GroupingShortcutBindings:
+    """Centralize keyboard behavior for grouping dialogs backed by list widgets."""
+
+    def __init__(
+        self,
+        *,
+        source_list=None,
+        reference_list=None,
+        groups_list=None,
+        assigned_list=None,
+        selected_columns_list=None,
+        create_group=None,
+        create_group_from_reference=None,
+        rename_group=None,
+        delete_group=None,
+        remove_from_source=None,
+        remove_from_assigned=None,
+        remove_selected_columns=None,
+        error_handler=None,
+        qt_namespace=None,
+    ):
+        self.qt = qt_namespace or Qt
+        self.source_list = source_list
+        self.reference_list = reference_list
+        self.groups_list = groups_list
+        self.assigned_list = assigned_list
+        self.selected_columns_list = selected_columns_list
+        self.create_group = create_group
+        self.create_group_from_reference = create_group_from_reference
+        self.rename_group = rename_group
+        self.delete_group = delete_group
+        self.remove_from_source = remove_from_source
+        self.remove_from_assigned = remove_from_assigned
+        self.remove_selected_columns = remove_selected_columns
+        self.error_handler = error_handler
+
+    def handle_key_press(self, event) -> bool:
+        try:
+            pressed_key = event.key() if event is not None and hasattr(event, "key") else None
+            if pressed_key in self._enter_keys():
+                return self._handle_enter(event)
+            if pressed_key in self._delete_keys():
+                return self._handle_delete(event)
+        except Exception as exc:  # pragma: no cover - defensive UI safety path
+            if callable(self.error_handler):
+                self.error_handler(exc)
+                return True
+            raise
+        return False
+
+    def _handle_enter(self, event) -> bool:
+        if self._list_or_viewport_has_focus(self.reference_list):
+            self._call(self.create_group_from_reference)
+            self._accept(event)
+            return True
+        if self._list_or_viewport_has_focus(self.source_list):
+            self._call(self.create_group)
+            self._accept(event)
+            return True
+        if self._list_or_viewport_has_focus(self.groups_list):
+            self._call(self.rename_group)
+            self._accept(event)
+            return True
+        if self._list_or_viewport_has_focus(self.assigned_list):
+            self._accept(event)
+            return True
+        return False
+
+    def _handle_delete(self, event) -> bool:
+        actions = (
+            (self.source_list, self.remove_from_source),
+            (self.assigned_list, self.remove_from_assigned),
+            (self.selected_columns_list, self.remove_selected_columns),
+            (self.groups_list, self.delete_group),
+        )
+        for list_widget, action in actions:
+            if self._list_or_viewport_has_focus(list_widget):
+                self._call(action)
+                self._accept(event)
+                return True
+        return False
+
+    @staticmethod
+    def _call(callback):
+        if callable(callback):
+            callback()
+
+    @staticmethod
+    def _accept(event):
+        if event is not None and hasattr(event, "accept"):
+            event.accept()
+
+    def _enter_keys(self):
+        return self._key_candidates("Key_Return", "Key_Enter")
+
+    def _delete_keys(self):
+        return self._key_candidates("Key_Delete", "Key_Backspace")
+
+    def _key_candidates(self, *names):
+        key_enum = getattr(self.qt, "Key", None)
+        candidates = []
+        for name in names:
+            key = getattr(key_enum, name, None)
+            if key is None:
+                continue
+            candidates.append(key)
+            value = getattr(key, "value", None)
+            if value is not None:
+                candidates.append(value)
+            try:
+                candidates.append(int(key))
+            except (TypeError, ValueError):
+                pass
+        return tuple(candidates)
+
+    @staticmethod
+    def _list_or_viewport_has_focus(list_widget) -> bool:
+        if list_widget is None:
+            return False
+        if hasattr(list_widget, "hasFocus") and list_widget.hasFocus():
+            return True
+        if hasattr(list_widget, "viewport") and list_widget.viewport() is not None:
+            return bool(list_widget.viewport().hasFocus())
+        return False
+
+
 class _ListSelectionEventFilter(QObject):
     def __init__(self, helper: ListSelectionUtils, list_widget):
         super().__init__(list_widget)

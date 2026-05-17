@@ -139,12 +139,17 @@ def test_build_dashboard_plotly_spec_uses_plotstats_metroliza_adapter(monkeypatc
     assert calls["static"] is True
 
 
-def test_plotstats_export_charts_enabled_reads_rollout_env(monkeypatch) -> None:
+def test_plotstats_export_charts_enabled_defaults_on_with_opt_out(monkeypatch) -> None:
     monkeypatch.delenv(PLOTSTATS_EXPORT_CHARTS_ENV_VAR, raising=False)
-    assert plotstats_export_charts_enabled() is False
-
-    monkeypatch.setenv(PLOTSTATS_EXPORT_CHARTS_ENV_VAR, "yes")
     assert plotstats_export_charts_enabled() is True
+
+    for enabled_value in ("1", "true", "yes", "on", "all", "*"):
+        monkeypatch.setenv(PLOTSTATS_EXPORT_CHARTS_ENV_VAR, enabled_value)
+        assert plotstats_export_charts_enabled() is True
+
+    for disabled_value in ("0", "false", "no", "off", "disabled", "metroliza", "legacy"):
+        monkeypatch.setenv(PLOTSTATS_EXPORT_CHARTS_ENV_VAR, disabled_value)
+        assert plotstats_export_charts_enabled() is False
 
 
 def test_build_chart_artifact_uses_plotstats_metroliza_artifact_adapter(monkeypatch) -> None:

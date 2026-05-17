@@ -412,7 +412,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(bins['size'], 4.0)
         self.assertEqual(spec['layout']['xaxis']['range'], [-5.0, 15.0])
 
-    def test_summary_plotly_spec_uses_plotstats_artifact_when_rollout_enabled(self):
+    def test_summary_plotly_spec_uses_plotstats_artifact_when_enabled(self):
         package_spec = {
             'data': [{'type': 'bar', 'x': ['A'], 'y': [1]}],
             'layout': {'title': {'text': 'Package histogram'}},
@@ -431,7 +431,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(spec, package_spec)
         artifact.assert_called_once()
 
-    def test_group_analysis_histogram_uses_plotstats_artifact_when_rollout_enabled(self):
+    def test_group_analysis_histogram_uses_plotstats_artifact_when_enabled(self):
         package_spec = {
             'data': [{'type': 'bar', 'x': ['A'], 'y': [1]}],
             'layout': {'title': {'text': 'Package group histogram'}},

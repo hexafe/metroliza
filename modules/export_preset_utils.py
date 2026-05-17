@@ -7,6 +7,7 @@ logger = logging.getLogger(__name__)
 
 EXPORT_PRESET_FAST_DIAGNOSTICS = "fast_diagnostics"
 EXPORT_PRESET_FULL_REPORT = "full_report"
+EXPORT_PRESET_HTML_DASHBOARD_ONLY = "html_dashboard_only"
 EXPORT_PRESET_DEFAULT = EXPORT_PRESET_FAST_DIAGNOSTICS
 
 _EXPORT_PRESET_DEFINITIONS = {
@@ -16,11 +17,13 @@ _EXPORT_PRESET_DEFINITIONS = {
         'intended_use': 'Use when you need the standard report quickly.',
         'options': {
             'export_type': 'line',
+            'export_target': 'excel_xlsx',
             'sorting_parameter': 'date',
             'violin_plot_min_samplesize': 8,
             'summary_plot_scale': 0,
             'hide_ok_results': False,
             'generate_summary_sheet': False,
+            'generate_html_dashboard': False,
         },
     },
     EXPORT_PRESET_FULL_REPORT: {
@@ -29,11 +32,28 @@ _EXPORT_PRESET_DEFINITIONS = {
         'intended_use': 'Use for deeper analysis and handoff-ready reporting.',
         'options': {
             'export_type': 'line',
+            'export_target': 'excel_xlsx',
             'sorting_parameter': 'date',
             'violin_plot_min_samplesize': 6,
             'summary_plot_scale': 0,
             'hide_ok_results': False,
             'generate_summary_sheet': True,
+            'generate_html_dashboard': False,
+        },
+    },
+    EXPORT_PRESET_HTML_DASHBOARD_ONLY: {
+        'label': 'HTML dashboard only',
+        'description': 'Builds the browser dashboard with extended charts and no workbook.',
+        'intended_use': 'Use when you want a standalone dashboard instead of an .xlsx file.',
+        'options': {
+            'export_type': 'line',
+            'export_target': 'html_dashboard',
+            'sorting_parameter': 'date',
+            'violin_plot_min_samplesize': 6,
+            'summary_plot_scale': 0,
+            'hide_ok_results': False,
+            'generate_summary_sheet': True,
+            'generate_html_dashboard': True,
         },
     },
 }

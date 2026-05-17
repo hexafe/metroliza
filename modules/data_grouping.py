@@ -17,7 +17,7 @@ from modules.data_grouping_service import (
 )
 from modules.export_grouping_utils import set_default_group_label
 from modules.report_schema import ensure_report_schema
-from modules.list_selection_utils import ListSelectionUtils
+from modules.list_selection_utils import GroupingShortcutBindings, ListSelectionUtils
 from modules import ui_theme_tokens
 try:
     from modules import ui_foundation
@@ -77,6 +77,7 @@ class DataGrouping(QDialog):
         )
         self._group_display_to_name = {}
         self._list_selection_utils = ListSelectionUtils()
+        self._grouping_shortcuts = None
 
         self.setup_ui()
         
@@ -311,6 +312,20 @@ class DataGrouping(QDialog):
 
             self._connect_shift_range_for_list(self.part_list)
             self._connect_shift_range_for_list(self.part_group_list)
+            self._grouping_shortcuts = GroupingShortcutBindings(
+                source_list=self.part_list,
+                reference_list=self.reference_list,
+                groups_list=self.groups_list,
+                assigned_list=self.part_group_list,
+                create_group=self.create_group,
+                create_group_from_reference=self._create_group_from_selected_reference,
+                rename_group=self.rename_group,
+                delete_group=self.delete_group,
+                remove_from_source=self._delete_selected_parts_from_part_list,
+                remove_from_assigned=self._delete_selected_parts_from_group,
+                error_handler=self.log_and_exit,
+                qt_namespace=Qt,
+            )
 
             self.create_group_button.clicked.connect(self.create_group)
             self.rename_group_button.clicked.connect(self.rename_group)
@@ -1079,73 +1094,32 @@ class DataGrouping(QDialog):
             return bool(list_widget.viewport().hasFocus())
         return False
 
+    def _create_group_from_selected_reference(self):
+        selected_reference = self._selected_reference_name()
+        if selected_reference:
+            self.create_group(initial_group_name=selected_reference)
+
     def keyPressEvent(self, event):
         """Handle keyboard shortcuts for list-driven grouping workflows."""
 
-        try:
-            pressed_key = event.key() if event is not None and hasattr(event, "key") else None
-            key_enum = getattr(Qt, "Key", None)
-            delete_keys = tuple(
-                key
-                for key in (
-                    getattr(key_enum, "Key_Delete", None),
-                    getattr(key_enum, "Key_Backspace", None),
-                )
-                if key is not None
+        shortcut_handler = getattr(self, "_grouping_shortcuts", None)
+        if shortcut_handler is None:
+            shortcut_handler = GroupingShortcutBindings(
+                source_list=getattr(self, "part_list", None),
+                reference_list=getattr(self, "reference_list", None),
+                groups_list=getattr(self, "groups_list", None),
+                assigned_list=getattr(self, "part_group_list", None),
+                create_group=getattr(self, "create_group", None),
+                create_group_from_reference=getattr(self, "_create_group_from_selected_reference", None),
+                rename_group=getattr(self, "rename_group", None),
+                delete_group=getattr(self, "delete_group", None),
+                remove_from_source=getattr(self, "_delete_selected_parts_from_part_list", None),
+                remove_from_assigned=getattr(self, "_delete_selected_parts_from_group", None),
+                error_handler=getattr(self, "log_and_exit", None),
+                qt_namespace=Qt,
             )
-            enter_keys = tuple(
-                key
-                for key in (
-                    getattr(key_enum, "Key_Return", None),
-                    getattr(key_enum, "Key_Enter", None),
-                )
-                if key is not None
-            )
-
-            if pressed_key in enter_keys and self._list_or_viewport_has_focus(self.reference_list):
-                selected_reference = self._selected_reference_name()
-                if selected_reference:
-                    self.create_group(initial_group_name=selected_reference)
-                    event.accept()
-                    return
-                if event is not None and hasattr(event, "accept"):
-                    event.accept()
-                return
-
-            if pressed_key in enter_keys and self._list_or_viewport_has_focus(self.part_list):
-                self.create_group()
-                if event is not None and hasattr(event, "accept"):
-                    event.accept()
-                return
-
-            if pressed_key in enter_keys and self._list_or_viewport_has_focus(self.groups_list):
-                self.rename_group()
-                if event is not None and hasattr(event, "accept"):
-                    event.accept()
-                return
-
-            if pressed_key in enter_keys and self._list_or_viewport_has_focus(self.part_group_list):
-                if event is not None and hasattr(event, "accept"):
-                    event.accept()
-                return
-
-            if pressed_key in delete_keys:
-                if self._list_or_viewport_has_focus(self.part_list):
-                    self._delete_selected_parts_from_part_list()
-                    event.accept()
-                    return
-
-                if self._list_or_viewport_has_focus(self.part_group_list):
-                    self._delete_selected_parts_from_group()
-                    event.accept()
-                    return
-
-                if self._list_or_viewport_has_focus(self.groups_list):
-                    self.delete_group()
-                    event.accept()
-                    return
-        except Exception as e:
-            self.log_and_exit(e)
+        if shortcut_handler.handle_key_press(event):
+            return
 
         super().keyPressEvent(event)
             

@@ -266,6 +266,7 @@ class ExportDialog(QDialog):
             self.violin_plot_min_samplesize.setText(str(preset_options['violin_plot_min_samplesize']))
             self.summary_plot_scale.setText(str(preset_options['summary_plot_scale']))
             self.hide_ok_results_checkbox.setChecked(bool(preset_options['hide_ok_results']))
+            self._sync_html_dashboard_only_state()
             self._save_dialog_config()
         except Exception as e:
             self.log_and_exit(e)
@@ -335,7 +336,8 @@ class ExportDialog(QDialog):
             self.preset_combobox.currentTextChanged.connect(lambda _: self.apply_selected_preset())
             self.preset_label.setToolTip(
                 "Main plots: exports core charts only.\n"
-                "Extended plots: includes additional summary plots and statistics sheets."
+                "Extended plots: includes additional summary plots and statistics sheets.\n"
+                "HTML dashboard only: creates the browser dashboard without an .xlsx workbook."
             )
             self.preset_combobox.setToolTip(self.preset_label.toolTip())
 
@@ -359,13 +361,6 @@ class ExportDialog(QDialog):
             self.html_dashboard_label.setToolTip(html_dashboard_tooltip)
             self.generate_html_dashboard_checkbox.setToolTip(html_dashboard_tooltip)
             self.html_dashboard_info_button = self._build_info_button(html_dashboard_tooltip)
-            self.html_dashboard_only_checkbox = QCheckBox("HTML only")
-            self.html_dashboard_only_checkbox.setChecked(False)
-            html_only_tooltip = (
-                "Create the browser dashboard without generating an Excel workbook."
-            )
-            self.html_dashboard_only_checkbox.setToolTip(html_only_tooltip)
-            self.html_dashboard_only_checkbox.toggled.connect(self._sync_html_dashboard_only_state)
 
             self.include_industrial_context_checkbox = QCheckBox("Industrial context")
             self.include_industrial_context_checkbox.setChecked(False)
@@ -423,11 +418,6 @@ class ExportDialog(QDialog):
                 "Single-reference and Multi-reference enforce the corresponding scope check for that worksheet."
             )
             self.group_analysis_scope_combobox.setToolTip(self.group_analysis_scope_label.toolTip())
-            self.chart_analysis_hint_label = status_chip(
-                "Line keeps sample numbers visible; Scatter numbers parts sequentially. "
-                "Group analysis Off/Light/Standard controls worksheet detail.",
-                "info",
-            )
             
             # Add textbox to set min samplesize for violin plot
             self.violin_plot_min_samplesize_label = QLabel("Violin min n:")
@@ -573,9 +563,6 @@ class ExportDialog(QDialog):
             content_layout.addWidget(self.group_analysis_scope_combobox, row, 3)
 
             row += 1
-            content_layout.addWidget(self.chart_analysis_hint_label, row, 0, 1, 4)
-
-            row += 1
             content_layout.addWidget(separator(), row, 0, 1, 4)
 
             row += 1
@@ -592,8 +579,6 @@ class ExportDialog(QDialog):
             optional_outputs_layout.addSpacing(4)
             optional_outputs_layout.addWidget(self.generate_html_dashboard_checkbox)
             optional_outputs_layout.addWidget(self.html_dashboard_info_button)
-            optional_outputs_layout.addSpacing(4)
-            optional_outputs_layout.addWidget(self.html_dashboard_only_checkbox)
             optional_outputs_layout.addSpacing(4)
             optional_outputs_layout.addWidget(self.include_industrial_context_checkbox)
             optional_outputs_layout.addWidget(self.industrial_context_info_button)
@@ -641,8 +626,7 @@ class ExportDialog(QDialog):
             self.setTabOrder(self.group_analysis_level_combobox, self.group_analysis_scope_combobox)
             self.setTabOrder(self.group_analysis_scope_combobox, self.include_google_sheets_checkbox)
             self.setTabOrder(self.include_google_sheets_checkbox, self.generate_html_dashboard_checkbox)
-            self.setTabOrder(self.generate_html_dashboard_checkbox, self.html_dashboard_only_checkbox)
-            self.setTabOrder(self.html_dashboard_only_checkbox, self.include_industrial_context_checkbox)
+            self.setTabOrder(self.generate_html_dashboard_checkbox, self.include_industrial_context_checkbox)
             self.setTabOrder(self.include_industrial_context_checkbox, self.advanced_toggle_button)
             self.setTabOrder(self.advanced_toggle_button, self.violin_plot_min_samplesize)
             self.setTabOrder(self.violin_plot_min_samplesize, self.summary_plot_scale)
@@ -667,7 +651,6 @@ class ExportDialog(QDialog):
         configure_accessibility(self.group_analysis_scope_combobox, name="Group analysis scope")
         configure_accessibility(self.include_google_sheets_checkbox, name="Create Google Sheets output")
         configure_accessibility(self.generate_html_dashboard_checkbox, name="Create HTML dashboard")
-        configure_accessibility(self.html_dashboard_only_checkbox, name="Create only an HTML dashboard")
         configure_accessibility(self.include_industrial_context_checkbox, name="Include industrial context")
         configure_accessibility(self.advanced_toggle_button, name="Show advanced export options")
         configure_accessibility(self.violin_plot_min_samplesize, name="Violin plot minimum sample count")
@@ -760,9 +743,14 @@ class ExportDialog(QDialog):
         self.export_button.setEnabled(has_database and has_output)
         self._refresh_path_readiness_state(has_database=has_database, has_output=has_output)
 
+    def _selected_preset_options(self):
+        combobox = getattr(self, "preset_combobox", None)
+        selected_label = combobox.currentText() if combobox is not None else ""
+        selected_preset = get_export_preset_id_for_label(selected_label)
+        return build_export_options_for_preset(selected_preset)
+
     def _is_html_dashboard_only(self):
-        checkbox = getattr(self, "html_dashboard_only_checkbox", None)
-        return bool(checkbox is not None and checkbox.isChecked())
+        return self._selected_preset_options().get("export_target") == "html_dashboard"
 
     def _coerce_output_path_for_mode(self):
         if not str(getattr(self, "excel_file", "") or "").strip():
@@ -785,12 +773,20 @@ class ExportDialog(QDialog):
     def _sync_html_dashboard_only_state(self, _checked=None):
         html_only = self._is_html_dashboard_only()
         if hasattr(self, "generate_html_dashboard_checkbox"):
-            self.generate_html_dashboard_checkbox.setChecked(html_only or self.generate_html_dashboard_checkbox.isChecked())
-            self.generate_html_dashboard_checkbox.setEnabled(not html_only)
+            if html_only:
+                self.generate_html_dashboard_checkbox.setChecked(True)
+            elif (
+                hasattr(self.generate_html_dashboard_checkbox, "isEnabled")
+                and not self.generate_html_dashboard_checkbox.isEnabled()
+            ):
+                self.generate_html_dashboard_checkbox.setChecked(False)
+            if hasattr(self.generate_html_dashboard_checkbox, "setEnabled"):
+                self.generate_html_dashboard_checkbox.setEnabled(not html_only)
         if hasattr(self, "include_google_sheets_checkbox"):
             if html_only:
                 self.include_google_sheets_checkbox.setChecked(False)
-            self.include_google_sheets_checkbox.setEnabled(not html_only)
+            if hasattr(self.include_google_sheets_checkbox, "setEnabled"):
+                self.include_google_sheets_checkbox.setEnabled(not html_only)
         if hasattr(self, "select_excel_label"):
             self.select_excel_label.setText("Dashboard file:" if html_only else "Excel file:")
             self.select_excel_label.setToolTip(

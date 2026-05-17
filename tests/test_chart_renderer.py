@@ -129,6 +129,7 @@ def test_resolve_distribution_backend_falls_back_when_distribution_symbol_is_mis
 def test_build_chart_renderer_native_env_falls_back_to_matplotlib_when_extension_missing(monkeypatch):
     monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "native")
     monkeypatch.delenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", raising=False)
+    monkeypatch.setenv("METROLIZA_PLOTSTATS_EXPORT_CHARTS", "0")
     with (
         mock.patch("modules.chart_renderer._native_render_histogram_png", None),
         mock.patch("modules.chart_renderer._native_render_distribution_png", None),
@@ -142,6 +143,7 @@ def test_build_chart_renderer_native_env_falls_back_to_matplotlib_when_extension
 def test_build_chart_renderer_uses_native_when_native_capability_is_present(monkeypatch):
     monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "native")
     monkeypatch.delenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", raising=False)
+    monkeypatch.setenv("METROLIZA_PLOTSTATS_EXPORT_CHARTS", "0")
     with mock.patch("modules.chart_renderer._native_render_histogram_png", lambda payload: b"png"):
         with mock.patch("warnings.warn") as warn:
             renderer = build_chart_renderer()
@@ -152,6 +154,7 @@ def test_build_chart_renderer_uses_native_when_native_capability_is_present(monk
 def test_build_chart_renderer_uses_native_when_distribution_backend_is_available_in_auto_mode(monkeypatch):
     monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "auto")
     monkeypatch.delenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", raising=False)
+    monkeypatch.setenv("METROLIZA_PLOTSTATS_EXPORT_CHARTS", "0")
     with (
         mock.patch("modules.chart_renderer._native_render_histogram_png", None),
         mock.patch("modules.chart_renderer._native_render_distribution_png", lambda payload: b"png"),
@@ -164,14 +167,21 @@ def test_build_chart_renderer_uses_native_when_distribution_backend_is_available
     assert isinstance(renderer, NativeChartRenderer)
 
 
-def test_build_chart_renderer_matplotlib(monkeypatch):
+def test_build_chart_renderer_wraps_plotstats_by_default(monkeypatch):
     monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "matplotlib")
     monkeypatch.delenv("METROLIZA_PLOTSTATS_EXPORT_CHARTS", raising=False)
+    renderer = build_chart_renderer()
+    assert isinstance(renderer, PlotstatsChartRenderer)
+
+
+def test_build_chart_renderer_matplotlib_when_plotstats_disabled(monkeypatch):
+    monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "matplotlib")
+    monkeypatch.setenv("METROLIZA_PLOTSTATS_EXPORT_CHARTS", "0")
     renderer = build_chart_renderer()
     assert isinstance(renderer, MatplotlibChartRenderer)
 
 
-def test_build_chart_renderer_wraps_plotstats_when_rollout_enabled(monkeypatch):
+def test_build_chart_renderer_wraps_plotstats_when_explicitly_enabled(monkeypatch):
     monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "matplotlib")
     monkeypatch.setenv("METROLIZA_PLOTSTATS_EXPORT_CHARTS", "1")
     renderer = build_chart_renderer()
@@ -198,6 +208,7 @@ def test_build_chart_renderer_wraps_plotstats_when_rollout_enabled(monkeypatch):
 def test_native_rollout_allowlist_enables_only_selected_chart_types(monkeypatch):
     monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "auto")
     monkeypatch.setenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", "distribution,trend")
+    monkeypatch.setenv("METROLIZA_PLOTSTATS_EXPORT_CHARTS", "0")
 
     histogram_payload = build_histogram_native_payload(
         values=[1.0, 1.1, 1.2, 1.3],
@@ -565,6 +576,8 @@ def test_backend_diagnostics_exposes_per_chart_rollout_state(monkeypatch):
     assert summary["distribution_rollout_enabled"] is True
     assert summary["iqr_rollout_enabled"] is False
     assert summary["trend_rollout_enabled"] is True
+    assert summary["plotstats_enabled"] is True
+    assert summary["plotstats_rollout_enabled"] is True
     assert summary["histogram_effective_backend"] == "matplotlib"
     assert summary["distribution_effective_backend"] == "native"
     assert summary["iqr_effective_backend"] == "matplotlib"

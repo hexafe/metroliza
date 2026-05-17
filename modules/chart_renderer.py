@@ -427,7 +427,11 @@ def native_chart_renderer_rollout_enabled_for(chart_kind: str) -> bool:
 
 
 def plotstats_chart_renderer_rollout_enabled() -> bool:
-    """Return whether export chart images should use hexafe-plotstats artifacts."""
+    """Return whether export chart images should use hexafe-plotstats artifacts.
+
+    The function name is retained for older diagnostics/tests; the current
+    policy is plotstats-first by default with an environment opt-out.
+    """
 
     try:
         from modules.hexafe_plotstats_adapter import plotstats_export_charts_enabled

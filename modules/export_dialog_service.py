@@ -33,10 +33,11 @@ def build_export_options_payload(
 ):
     """Build a validated export-options payload from UI field values."""
     preset_options = build_export_options_for_preset(selected_preset)
+    preset_export_target = preset_options.get('export_target') or ExportOptions.export_target
     return ExportOptions(
         preset=selected_preset,
         export_type=export_type or preset_options['export_type'],
-        export_target=export_target or ExportOptions.export_target,
+        export_target=export_target or preset_export_target,
         sorting_parameter=sorting_parameter or preset_options['sorting_parameter'],
         violin_plot_min_samplesize=_int_or_default(
             violin_input,
@@ -48,7 +49,7 @@ def build_export_options_payload(
         ),
         hide_ok_results=bool(hide_ok_results),
         generate_summary_sheet=bool(preset_options['generate_summary_sheet']),
-        generate_html_dashboard=bool(generate_html_dashboard),
+        generate_html_dashboard=bool(generate_html_dashboard or preset_options.get('generate_html_dashboard')),
         include_industrial_context=bool(include_industrial_context),
         group_analysis_level=group_analysis_level,
         group_analysis_scope=group_analysis_scope,

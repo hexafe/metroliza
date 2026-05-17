@@ -7,6 +7,14 @@ from unittest.mock import patch
 import pandas as pd
 
 
+def _fake_db_module():
+    fake_db = types.ModuleType("modules.db")
+    fake_db.read_sql_dataframe = lambda *_args, **_kwargs: None
+    fake_db.execute_with_retry = lambda *_args, **_kwargs: None
+    fake_db.run_transaction_with_retry = lambda *_args, **_kwargs: None
+    return fake_db
+
+
 class _FakeSignal:
     def connect(self, *_args, **_kwargs):
         return None
@@ -235,8 +243,7 @@ class TestDataGroupingDeleteKey(unittest.TestCase):
 
     def test_delete_key_moves_selected_part_group_items_to_population(self):
         pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
-        fake_db = types.ModuleType("modules.db")
-        fake_db.read_sql_dataframe = lambda *_args, **_kwargs: None
+        fake_db = _fake_db_module()
 
         with patch.dict(
             sys.modules,
@@ -271,8 +278,7 @@ class TestDataGroupingDeleteKey(unittest.TestCase):
 
     def test_delete_key_invokes_delete_group_when_groups_list_has_focus(self):
         pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
-        fake_db = types.ModuleType("modules.db")
-        fake_db.read_sql_dataframe = lambda *_args, **_kwargs: None
+        fake_db = _fake_db_module()
 
         with patch.dict(
             sys.modules,
@@ -303,8 +309,7 @@ class TestDataGroupingDeleteKey(unittest.TestCase):
 
     def test_non_delete_key_does_not_invoke_delete_group_for_groups_list_focus(self):
         pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
-        fake_db = types.ModuleType("modules.db")
-        fake_db.read_sql_dataframe = lambda *_args, **_kwargs: None
+        fake_db = _fake_db_module()
 
         with patch.dict(
             sys.modules,
@@ -335,8 +340,7 @@ class TestDataGroupingDeleteKey(unittest.TestCase):
 
     def test_non_delete_key_does_not_reassign_parts(self):
         pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
-        fake_db = types.ModuleType("modules.db")
-        fake_db.read_sql_dataframe = lambda *_args, **_kwargs: None
+        fake_db = _fake_db_module()
 
         with patch.dict(
             sys.modules,
@@ -367,8 +371,7 @@ class TestDataGroupingDeleteKey(unittest.TestCase):
 
     def test_delete_key_reassigns_selected_part_list_items_to_population(self):
         pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
-        fake_db = types.ModuleType("modules.db")
-        fake_db.read_sql_dataframe = lambda *_args, **_kwargs: None
+        fake_db = _fake_db_module()
 
         with patch.dict(
             sys.modules,
@@ -402,8 +405,7 @@ class TestDataGroupingDeleteKey(unittest.TestCase):
 
     def test_enter_key_on_reference_list_opens_create_group_with_reference_prefill(self):
         pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
-        fake_db = types.ModuleType("modules.db")
-        fake_db.read_sql_dataframe = lambda *_args, **_kwargs: None
+        fake_db = _fake_db_module()
 
         with patch.dict(
             sys.modules,
@@ -433,8 +435,7 @@ class TestDataGroupingDeleteKey(unittest.TestCase):
 
     def test_enter_key_outside_reference_list_does_not_open_create_group(self):
         pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
-        fake_db = types.ModuleType("modules.db")
-        fake_db.read_sql_dataframe = lambda *_args, **_kwargs: None
+        fake_db = _fake_db_module()
 
         with patch.dict(
             sys.modules,
@@ -464,8 +465,7 @@ class TestDataGroupingDeleteKey(unittest.TestCase):
 
     def test_enter_key_on_groups_list_calls_rename_group(self):
         pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
-        fake_db = types.ModuleType("modules.db")
-        fake_db.read_sql_dataframe = lambda *_args, **_kwargs: None
+        fake_db = _fake_db_module()
 
         with patch.dict(
             sys.modules,
@@ -496,8 +496,7 @@ class TestDataGroupingDeleteKey(unittest.TestCase):
 
     def test_enter_key_on_part_group_list_is_consumed_without_grouping_action(self):
         pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
-        fake_db = types.ModuleType("modules.db")
-        fake_db.read_sql_dataframe = lambda *_args, **_kwargs: None
+        fake_db = _fake_db_module()
 
         with patch.dict(
             sys.modules,

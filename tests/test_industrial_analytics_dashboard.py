@@ -138,6 +138,11 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     assert "<summary>Chart statistics (" in html_text
     assert ".chart-stats th" in html_text
     assert "background: #1f2937" in html_text
+    assert '<header id="dashboard-start">' in html_text
+    assert '<nav class="section-nav">' in html_text
+    assert '<a class="section-chip" href="#groupstats">Groupstats</a>' in html_text
+    assert 'Back to dashboard start</a>' in html_text
+    assert 'id="chart-time-series-cycle-time-s-aggregated"' in html_text
     assert "color: #ffffff" in html_text
     assert "<th>Statistic</th><th>Value</th>" in html_text
     assert "grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));" in html_text
@@ -178,7 +183,8 @@ def test_write_production_dashboard_collapses_diagnostics_by_default(tmp_path) -
     html_text = output_file.read_text(encoding="utf-8")
     assert '<details class="diagnostics">' in html_text
     assert "<summary>Diagnostics (1)</summary>" in html_text
-    assert "<h2>Diagnostics</h2>" not in html_text
+    assert "<h2>Diagnostics</h2>" in html_text
+    assert '<a class="section-chip" href="#diagnostics">Diagnostics</a>' in html_text
 
 
 def test_time_series_trace_drops_sparse_aggregation_nan_pairs() -> None:

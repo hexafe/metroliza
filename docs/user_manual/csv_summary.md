@@ -126,7 +126,8 @@ series use separate marker-only scatter traces. Multi-group histograms are norma
 show each group's share, so smaller selected groups remain visible next to larger
 populations. Histograms include export-style statistics tables. Workbook time series and
 multi-group histograms use Excel charts where that keeps the data editable; single-group
-histograms, violin plots, and box plots use Metroliza/plotstats-rendered plot images.
+histograms, violin plots, and box plots use plotstats-first rendered images with
+Metroliza/native fallback.
 
 ### 7. Create Analytics
 

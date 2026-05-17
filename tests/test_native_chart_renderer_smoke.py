@@ -25,6 +25,7 @@ from modules.chart_renderer import (
 def test_native_chart_renderer_smoke_covers_all_supported_summary_charts(monkeypatch):
     monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "auto")
     monkeypatch.setenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", "histogram,distribution,iqr,trend")
+    monkeypatch.setenv("METROLIZA_PLOTSTATS_EXPORT_CHARTS", "0")
     renderer = build_chart_renderer()
     assert isinstance(renderer, NativeChartRenderer)
 

@@ -19,6 +19,7 @@ from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE
 configure_headless_matplotlib()
 
 PLOTSTATS_EXPORT_CHARTS_ENV_VAR = "METROLIZA_PLOTSTATS_EXPORT_CHARTS"
+_PLOTSTATS_DISABLED_VALUES = {"0", "false", "no", "off", "disabled", "metroliza", "legacy"}
 
 
 @dataclass(frozen=True)
@@ -56,10 +57,15 @@ class ChartArtifactPngResult:
 
 
 def plotstats_export_charts_enabled() -> bool:
-    """Return whether Metroliza should route export chart artifacts through plotstats."""
+    """Return whether Metroliza should route export chart artifacts through plotstats.
+
+    Plotstats is the default export/dashboard chart path. Operators can set
+    ``METROLIZA_PLOTSTATS_EXPORT_CHARTS=0`` or another disabled value to force
+    the legacy Metroliza/native renderer path for diagnostics or rollback.
+    """
 
     value = os.getenv(PLOTSTATS_EXPORT_CHARTS_ENV_VAR, "").strip().lower()
-    return value in {"1", "true", "yes", "on", "all", "*"}
+    return value not in _PLOTSTATS_DISABLED_VALUES
 
 
 def metroliza_dashboard_plotstats_theme() -> dict[str, Any]:

@@ -10,6 +10,11 @@ from pathlib import Path
 import re
 from typing import Any
 
+from modules.dashboard_navigation import (
+    render_back_to_dashboard_start,
+    render_section_header,
+    render_section_nav,
+)
 from modules.export_summary_utils import resolve_histogram_bin_count
 from modules.hexafe_plotstats_adapter import (
     build_plotstats_dashboard_spec,
@@ -1575,13 +1580,12 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
             "Extended summary charts exported alongside the workbook. Use the interactive view "
             "to inspect results, or compare against the workbook-matching PNG snapshot shown with each chart."
         )
-    nav_chips = [
-        f'<a class="section-chip" href="#{html.escape(section["id"])}">{html.escape(section["header"] or section["id"])}</a>'
+    nav_items = [
+        {"id": str(section["id"]), "label": str(section["header"] or section["id"])}
         for section in sections
     ]
     if group_analysis:
-        nav_chips.append('<a class="section-chip" href="#group-analysis">Group Analysis</a>')
-    section_nav = "".join(nav_chips)
+        nav_items.append({"id": "group-analysis", "label": "Group Analysis"})
     section_blocks = "".join(_render_section(section) for section in sections)
     if not section_blocks and not group_analysis:
         section_blocks = (
@@ -1590,7 +1594,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
         )
     group_analysis_block = _render_group_analysis(group_analysis)
     overview_cards = _render_overview_cards(manifest)
-    nav_markup = f'<nav class="section-nav">{section_nav}</nav>' if section_nav else ""
+    nav_markup = render_section_nav(nav_items)
     plotly_js_path = str(manifest.get("plotly_js_path") or "").strip()
     theme_switch_markup = _render_theme_switch()
     plotly_theme_tokens_json = json.dumps(
@@ -2896,10 +2900,7 @@ def _render_section(section: dict[str, Any]) -> str:
     if section.get("axis"):
         pills.append(f"Axis: {section['axis']}")
     pill_markup = "".join(f'<span class="pill">{html.escape(str(pill))}</span>' for pill in pills)
-    back_button = (
-        '<a class="section-chip section-chip--back" href="#dashboard-start" role="button">'
-        'Back to dashboard start</a>'
-    )
+    back_button = render_back_to_dashboard_start()
     metadata_rows = section.get("metadata_rows") or []
     metadata_panel = ""
     if metadata_rows:
@@ -2917,11 +2918,14 @@ def _render_section(section: dict[str, Any]) -> str:
         )
         summary_table = f'<table class="summary-table">{rows_markup}</table>'
     chart_blocks = "".join(_render_chart_card(chart) for chart in (section.get("charts") or []))
+    section_header = render_section_header(
+        section.get("header") or section["id"],
+        section.get("subtitle") or "Extended summary output",
+        actions=f'<div class="pill-row">{pill_markup}</div>{back_button}',
+    )
     return (
         f'<section id="{html.escape(section["id"])}" class="measurement-section">'
-        f'<div class="section-top"><div><h2>{html.escape(section.get("header") or section["id"])}</h2>'
-        f'<div class="section-meta">{html.escape(section.get("subtitle") or "Extended summary output")}</div></div>'
-        f'<div class="section-actions"><div class="pill-row">{pill_markup}</div>{back_button}</div></div>'
+        f'{section_header}'
         f'{metadata_panel}'
         f'{summary_table}'
         f'<div class="chart-grid">{chart_blocks}</div>'

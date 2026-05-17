@@ -9,6 +9,7 @@ from modules.export_preset_utils import (
     EXPORT_PRESET_DEFAULT,
     EXPORT_PRESET_FAST_DIAGNOSTICS,
     EXPORT_PRESET_FULL_REPORT,
+    EXPORT_PRESET_HTML_DASHBOARD_ONLY,
     build_export_options_for_preset,
     get_export_preset_id_for_label,
     load_export_dialog_config,
@@ -72,9 +73,13 @@ class TestExportPresetOptionMapping(unittest.TestCase):
     def test_preset_option_baselines(self):
         fast = build_export_options_for_preset(EXPORT_PRESET_FAST_DIAGNOSTICS)
         full = build_export_options_for_preset(EXPORT_PRESET_FULL_REPORT)
+        html_only = build_export_options_for_preset(EXPORT_PRESET_HTML_DASHBOARD_ONLY)
 
         self.assertFalse(fast['generate_summary_sheet'])
         self.assertTrue(full['generate_summary_sheet'])
+        self.assertTrue(html_only['generate_summary_sheet'])
+        self.assertTrue(html_only['generate_html_dashboard'])
+        self.assertEqual(html_only['export_target'], 'html_dashboard')
         self.assertGreaterEqual(fast['violin_plot_min_samplesize'], full['violin_plot_min_samplesize'])
 
 
@@ -83,6 +88,7 @@ class TestExportPresetOptionMapping(unittest.TestCase):
 
         self.assertEqual(get_export_preset_label(EXPORT_PRESET_FAST_DIAGNOSTICS), 'Main plots')
         self.assertEqual(get_export_preset_label(EXPORT_PRESET_FULL_REPORT), 'Extended plots')
+        self.assertEqual(get_export_preset_label(EXPORT_PRESET_HTML_DASHBOARD_ONLY), 'HTML dashboard only')
 
     def test_validate_export_options_keeps_preset(self):
         full = build_export_options_for_preset(EXPORT_PRESET_FULL_REPORT)
@@ -91,6 +97,15 @@ class TestExportPresetOptionMapping(unittest.TestCase):
         )
         self.assertEqual(options.preset, EXPORT_PRESET_FULL_REPORT)
         self.assertTrue(options.generate_summary_sheet)
+
+        html_only = build_export_options_for_preset(EXPORT_PRESET_HTML_DASHBOARD_ONLY)
+        html_options = validate_export_options(
+            type('Obj', (), {'preset': EXPORT_PRESET_HTML_DASHBOARD_ONLY, **html_only})()
+        )
+        self.assertEqual(html_options.preset, EXPORT_PRESET_HTML_DASHBOARD_ONLY)
+        self.assertEqual(html_options.export_target, 'html_dashboard')
+        self.assertTrue(html_options.generate_summary_sheet)
+        self.assertTrue(html_options.generate_html_dashboard)
 
 
 class TestExportPresetFlowIntegration(unittest.TestCase):
@@ -585,7 +600,11 @@ class TestExportTargetSelection(unittest.TestCase):
             def isChecked(self):
                 return self._checked
 
-        dialog.html_dashboard_only_checkbox = _Box(True)
+        class _Combo:
+            def currentText(self):
+                return "HTML dashboard only"
+
+        dialog.preset_combobox = _Combo()
         dialog.include_google_sheets_checkbox = _Box(True)
         self.assertEqual(dialog._selected_export_target(), 'html_dashboard')
 
@@ -872,9 +891,9 @@ class TestExportDialogServiceRequestAssembly(unittest.TestCase):
         request = build_validated_export_request(
             db_file='input.db',
             excel_file=Path('dashboard'),
-            selected_preset=EXPORT_PRESET_FAST_DIAGNOSTICS,
+            selected_preset=EXPORT_PRESET_HTML_DASHBOARD_ONLY,
             export_type='Line',
-            export_target='html_dashboard',
+            export_target=None,
             sorting_parameter='Sample #',
             violin_input='6',
             summary_scale_input='0',

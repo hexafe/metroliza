@@ -449,6 +449,7 @@ def test_trend_parity_harness_tracks_metadata_and_coarse_image_parity():
 def test_backend_policy_defaults_to_matplotlib_until_native_is_opted_in(monkeypatch):
     monkeypatch.delenv("METROLIZA_CHART_RENDERER_BACKEND", raising=False)
     monkeypatch.delenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", raising=False)
+    monkeypatch.setenv("METROLIZA_PLOTSTATS_EXPORT_CHARTS", "0")
     with (
         mock.patch("modules.chart_renderer._native_render_histogram_png", lambda payload: b"png"),
         mock.patch("modules.chart_renderer._native_render_distribution_png", lambda payload: b"png"),
@@ -471,6 +472,7 @@ def test_backend_policy_defaults_to_matplotlib_until_native_is_opted_in(monkeypa
 def test_backend_policy_enables_selected_chart_types_with_rollout_allowlist(monkeypatch):
     monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "auto")
     monkeypatch.setenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", "distribution,trend")
+    monkeypatch.setenv("METROLIZA_PLOTSTATS_EXPORT_CHARTS", "0")
     with (
         mock.patch("modules.chart_renderer._native_render_histogram_png", lambda payload: b"png"),
         mock.patch("modules.chart_renderer._native_render_distribution_png", lambda payload: b"png"),

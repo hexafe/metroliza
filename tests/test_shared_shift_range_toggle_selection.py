@@ -285,6 +285,8 @@ class TestSharedShiftRangeToggleSelection(unittest.TestCase):
         pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
         fake_db = types.ModuleType("modules.db")
         fake_db.read_sql_dataframe = lambda *_args, **_kwargs: None
+        fake_db.execute_with_retry = lambda *_args, **_kwargs: None
+        fake_db.run_transaction_with_retry = lambda *_args, **_kwargs: None
 
         with patch.dict(
             sys.modules,
