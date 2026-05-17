@@ -159,13 +159,11 @@ class MainWindow(QMainWindow):
                 5000,
             )
             for failure in failed_modules:
-                CustomLogger(
-                    RuntimeError(
-                        "Feature import warm-up failed for "
-                        f"{failure['module']}: {failure['error_type']}: {failure['message']}"
-                    ),
-                    reraise=False,
+                exception = RuntimeError(
+                    "Feature import warm-up failed for "
+                    f"{failure['module']}: {failure['error_type']}: {failure['message']}"
                 )
+                CustomLogger(exception, reraise=False)
             return
 
         self.statusBar().showMessage("Tools ready", 2000)

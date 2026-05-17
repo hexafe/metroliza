@@ -539,10 +539,10 @@ def test_tabular_data_reuses_dashboard_and_aggregation_path(tmp_path) -> None:
         "box",
     }
     histogram = next(chart for chart in manifest["charts"] if chart["chart_type"] == "histogram")
-    assert "plotly_spec" not in histogram
+    assert histogram["plotly_spec"]["config"].get("staticPlot") is not True
+    assert histogram["plotly_spec"]["layout"]["yaxis"]["title"]["text"] == "Frequency (%)"
     assert histogram["group_labels"] == ["L1", "L2"]
     assert histogram["stats_tables"]
-    assert histogram["image"]["mime_type"] == "image/png"
 
 
 def test_tabular_groupstats_without_specs_runs_overall_and_unique_pairwise_tests() -> None:
