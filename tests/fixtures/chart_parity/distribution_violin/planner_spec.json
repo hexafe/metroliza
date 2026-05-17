@@ -195,6 +195,7 @@
       "axis": "y",
       "color": "#D55E00",
       "dash": null,
+      "label": "LSL",
       "value": 0.9,
       "width": 1.8
     },
@@ -203,6 +204,7 @@
       "axis": "y",
       "color": "#D55E00",
       "dash": null,
+      "label": "USL",
       "value": 1.8,
       "width": 1.8
     }

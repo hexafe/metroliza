@@ -114,6 +114,7 @@
       "axis": "y",
       "color": "#9b1c1c",
       "dash": null,
+      "label": "Limit 1",
       "value": 0.9,
       "width": 2.0
     },
@@ -122,6 +123,7 @@
       "axis": "y",
       "color": "#9b1c1c",
       "dash": null,
+      "label": "Limit 2",
       "value": 1.4,
       "width": 2.0
     }
