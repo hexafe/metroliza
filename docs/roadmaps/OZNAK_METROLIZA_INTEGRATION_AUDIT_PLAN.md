@@ -1,7 +1,7 @@
 # Oznak to Metroliza Integration Audit and Plan
 
 Created: 2026-05-10
-Last updated: 2026-05-10 after non-technical GUI workflow gap review
+Last updated: 2026-05-17 after QA/performance/UX hardening follow-up
 
 ## Execution Tracker
 
@@ -27,6 +27,71 @@ Major-step update policy:
 
 - After every implementation slice below, update this `Execution Tracker` with status, validation commands, failures, and next steps.
 - Keep Oznak work and Metroliza work separated. Metroliza imports only the public `oznak` namespace and only inside `modules/oznak_adapter.py`.
+
+### 2026-05-17 Update: QA/Performance/UX Hardening Follow-up
+
+Implemented:
+
+- Synced CI security-audit sibling checkouts to the same full Git SHAs pinned in
+  `requirements.txt` for `hexafe-groupstats`, `hexafe-plotstats`, and `oznak`.
+- Added requirements hygiene coverage so CI checkout refs cannot silently drift from
+  runtime dependency pins again.
+- Moved writable Matplotlib cache setup ahead of the Matplotlib import/use call to
+  avoid user-home cache warnings in headless export and benchmark paths.
+- Changed industrial analytics to default to dashboard-only output; workbook creation
+  and workbook-specific sheet options are only sent after the explicit
+  `Create workbook` checkbox is enabled.
+- Added PyQt coverage for dashboard-only analytics defaults and the opt-in workbook
+  path, and cleaned SQLite connection warnings in industrial analytics service tests.
+
+Validation:
+
+- `python -m ruff check modules/matplotlib_runtime.py modules/industrial_analytics_dialog.py tests/test_matplotlib_runtime.py tests/test_requirements_hygiene.py tests/test_industrial_analytics_dialog.py tests/test_industrial_analytics_service.py`: passed.
+- `QT_QPA_PLATFORM=offscreen python -m pytest -q tests/test_matplotlib_runtime.py tests/test_requirements_hygiene.py tests/test_industrial_analytics_dialog.py tests/test_industrial_analytics_service.py`: `58 passed`.
+- `QT_QPA_PLATFORM=offscreen python -m pytest -q tests/test_industrial_analytics_dialog.py`: `26 passed` after the workbook-sheet request cleanup.
+- `python scripts/security_audit.py --ci --sibling-root /home/hexaf/Projects`: passed after allowing pip-audit's temporary dependency environment setup; existing Bandit medium findings remain report-only warnings.
+- `python -m ruff check .`: passed.
+- `python scripts/sync_release_metadata.py --check`: passed.
+- `python scripts/check_release_hygiene.py`: passed.
+- `python -m compileall -q -x '^\./\.git/' .`: passed.
+- `QT_QPA_PLATFORM=offscreen python -m pytest -q`: `1454 passed, 126 skipped, 6 warnings, 60 subtests passed`.
+
+Next step:
+
+- Review the remaining Bandit medium SQL-construction baseline separately from this
+  dependency/UX hardening slice.
+
+### 2026-05-17 Update: Oznak 0.2.0rc1 Consumer Refresh
+
+Re-read the local Oznak checkout at `/home/hexaf/Projects/oznak`; it is clean on `main`
+at `46eba3f63eab1d65e3117c238324eade9118d242`, tagged `v0.2.0rc1`.
+
+Implemented in Metroliza:
+
+- Updated the runtime Oznak Git pin to the new full SHA.
+- Extended adapter readiness diagnostics for Oznak `QueryRequest`, chunked fetch,
+  streaming chunk events, cancellation tokens, source diagnostics, chunk queue support,
+  synthetic chunked benchmarks, and `max_workers` support.
+- Extended the live-fetch adapter call path to pass through Oznak's optional
+  `max_workers` and `max_pending_events` keyword arguments when the installed Oznak
+  function supports them, while preserving compatibility with older Oznak call shapes.
+
+Validation:
+
+- `python -m ruff check modules/oznak_adapter.py tests/test_oznak_adapter.py tests/test_requirements_hygiene.py`: passed.
+- `QT_QPA_PLATFORM=offscreen python -m pytest -q tests/test_oznak_adapter.py tests/test_requirements_hygiene.py`: `26 passed`.
+- `env PYTHONPATH=/home/hexaf/Projects/oznak/src python -c "from modules.oznak_adapter import get_oznak_adapter_status; s=get_oznak_adapter_status(); print(s)"`: reported Oznak `0.2.0rc1` with contracts, fetch, chunked fetch, streaming events, cancellation, chunk queue, and benchmark capabilities available.
+- `python -m ruff check modules/oznak_adapter.py modules/industrial_workers.py modules/industrial_sync_dialog.py modules/industrial_export_service.py tests/test_oznak_adapter.py tests/test_industrial_data_dialog.py tests/test_industrial_export_service.py tests/test_requirements_hygiene.py`: passed.
+- `QT_QPA_PLATFORM=offscreen python -m pytest -q tests/test_oznak_adapter.py tests/test_industrial_data_dialog.py tests/test_industrial_export_service.py tests/test_industrial_sync_dialog.py tests/test_industrial_analytics_service.py tests/test_tabular_analytics_service.py tests/test_requirements_hygiene.py`: `101 passed`.
+- `python scripts/security_audit.py --skip-pip-audit --skip-bandit --sibling-root /home/hexaf/Projects`: passed with only reviewed dynamic-import warnings.
+- `python -m compileall -q -x '^\./\.git/' .`: passed.
+- `git diff --check`: passed.
+- `python scripts/sync_release_metadata.py --check`: passed.
+- `python scripts/check_release_hygiene.py`: passed.
+
+Next step:
+
+- Run full compile/test/release hygiene before publishing this integration branch.
 
 ### 2026-05-10 Update: End-User Source Setup Slice
 

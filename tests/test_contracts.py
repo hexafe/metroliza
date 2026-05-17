@@ -161,6 +161,19 @@ class TestValidateExportOptions(unittest.TestCase):
         self.assertEqual(options.export_target, 'google_sheets_drive_convert')
         self.assertEqual(options.backend_target, 'google')
 
+    def test_accepts_html_dashboard_target_and_forces_dashboard_flags(self):
+        options = validate_export_options(
+            ExportOptions(
+                export_target='HTML_Dashboard',
+                generate_summary_sheet=False,
+                generate_html_dashboard=False,
+            )
+        )
+        self.assertEqual(options.export_target, 'html_dashboard')
+        self.assertEqual(options.backend_target, 'html')
+        self.assertTrue(options.generate_summary_sheet)
+        self.assertTrue(options.generate_html_dashboard)
+
     def test_normalizes_group_analysis_options(self):
         options = validate_export_options(
             ExportOptions(
@@ -188,6 +201,14 @@ class TestValidatePaths(unittest.TestCase):
     def test_rejects_non_xlsx_target(self):
         with self.assertRaises(ValueError):
             validate_paths(AppPaths(db_file='test.db', excel_file='out.csv'))
+
+    def test_accepts_html_dashboard_target(self):
+        validated = validate_paths(AppPaths(db_file='test.db', html_dashboard_file='out.html'))
+        self.assertEqual(validated.html_dashboard_file, 'out.html')
+
+    def test_rejects_non_html_dashboard_target(self):
+        with self.assertRaises(ValueError):
+            validate_paths(AppPaths(db_file='test.db', html_dashboard_file='out.xlsx'))
 
 
 class TestValidateGroupingDf(unittest.TestCase):
@@ -227,6 +248,18 @@ class TestValidateExportRequest(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             validate_export_request(request)
+
+    def test_html_dashboard_export_requires_html_path_and_no_workbook_path(self):
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', html_dashboard_file='dashboard.html'),
+            options=ExportOptions(export_target='html_dashboard'),
+        )
+
+        validated = validate_export_request(request)
+
+        self.assertIsNone(validated.paths.excel_file)
+        self.assertEqual(validated.paths.html_dashboard_file, 'dashboard.html')
+        self.assertEqual(validated.options.backend_target, 'html')
 
 
 class TestValidateIndustrialAnalyticsRequest(unittest.TestCase):

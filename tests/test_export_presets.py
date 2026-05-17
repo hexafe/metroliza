@@ -527,6 +527,28 @@ class TestExportCompletionMessaging(unittest.TestCase):
             f'HTML dashboard: {expected_dashboard_uri}'
         )
 
+    def test_completion_message_for_html_only_uses_dashboard_link_only(self):
+        from modules.export_dialog import build_export_completion_message
+
+        metadata = {
+            'html_dashboard_path': 'dashboard.html',
+        }
+        level, title, message = build_export_completion_message(
+            excel_file='dashboard.html',
+            export_target='html_dashboard',
+            completion_metadata=metadata,
+        )
+
+        expected_dashboard_uri = Path('dashboard.html').resolve().as_uri()
+        self.assertEqual(level, 'info')
+        self.assertEqual(title, 'Export successful')
+        self.assertEqual(
+            message,
+            'HTML dashboard exported successfully!\n'
+            '\n'
+            f'HTML dashboard: {expected_dashboard_uri}'
+        )
+
 
 class TestExportTargetSelection(unittest.TestCase):
     @classmethod
@@ -550,6 +572,22 @@ class TestExportTargetSelection(unittest.TestCase):
 
         dialog.include_google_sheets_checkbox = _Box(True)
         self.assertEqual(dialog._selected_export_target(), 'google_sheets_drive_convert')
+
+    def test_selected_export_target_prefers_html_only(self):
+        from modules.export_dialog import ExportDialog
+
+        dialog = ExportDialog.__new__(ExportDialog)
+
+        class _Box:
+            def __init__(self, checked):
+                self._checked = checked
+
+            def isChecked(self):
+                return self._checked
+
+        dialog.html_dashboard_only_checkbox = _Box(True)
+        dialog.include_google_sheets_checkbox = _Box(True)
+        self.assertEqual(dialog._selected_export_target(), 'html_dashboard')
 
 
 class TestRevealFileInExplorer(unittest.TestCase):
@@ -827,6 +865,30 @@ class TestExportDialogServiceRequestAssembly(unittest.TestCase):
         )
 
         self.assertEqual(request.paths.excel_file, 'out.xlsx')
+
+    def test_build_validated_export_request_uses_html_dashboard_path_for_html_only(self):
+        from modules.export_dialog_service import build_validated_export_request
+
+        request = build_validated_export_request(
+            db_file='input.db',
+            excel_file=Path('dashboard'),
+            selected_preset=EXPORT_PRESET_FAST_DIAGNOSTICS,
+            export_type='Line',
+            export_target='html_dashboard',
+            sorting_parameter='Sample #',
+            violin_input='6',
+            summary_scale_input='0',
+            hide_ok_results=False,
+            filter_query='SELECT * FROM T',
+            grouping_df=None,
+            generate_html_dashboard=False,
+        )
+
+        self.assertIsNone(request.paths.excel_file)
+        self.assertEqual(request.paths.html_dashboard_file, 'dashboard.html')
+        self.assertEqual(request.options.backend_target, 'html')
+        self.assertTrue(request.options.generate_summary_sheet)
+        self.assertTrue(request.options.generate_html_dashboard)
 
     def test_build_validated_export_request_rejects_non_xlsx_extension(self):
         from modules.export_dialog_service import build_validated_export_request

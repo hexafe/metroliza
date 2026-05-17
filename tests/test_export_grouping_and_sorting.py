@@ -48,7 +48,11 @@ sys.modules['modules.custom_logger'] = custom_logger_stub
 
 from modules.export_data_thread import ExportDataThread  # noqa: E402
 from modules.contracts import AppPaths, ExportOptions, ExportRequest  # noqa: E402
-from modules.export_grouping_utils import apply_group_assignments, prepare_grouping_dataframe  # noqa: E402
+from modules.export_grouping_utils import (  # noqa: E402
+    apply_group_assignments,
+    prepare_grouping_dataframe,
+    set_default_group_label,
+)
 from modules.chart_render_service import build_violin_payload_vectorized  # noqa: E402
 
 
@@ -132,6 +136,34 @@ class TestExportSortingAndGrouping(unittest.TestCase):
 
         self.assertTrue(applied)
         self.assertEqual(merged['GROUP'].tolist(), ['POPULATION'])
+
+    def test_apply_group_assignments_group_analysis_uses_grouping_default_label_attr(self):
+        header_group = pd.DataFrame(
+            {
+                'REPORT_ID': [1],
+                'REFERENCE': ['R1'],
+                'DATE': ['2024-01-01'],
+                'SAMPLE_NUMBER': ['1'],
+                'MEAS': [1.0],
+            }
+        )
+        grouping_df = pd.DataFrame(
+            {
+                'REPORT_ID': [1],
+                'GROUP': ['   '],
+            }
+        )
+        set_default_group_label(grouping_df, 'All Samples')
+        grouping_df = prepare_grouping_dataframe(grouping_df)
+
+        merged, applied, _, _ = apply_group_assignments(
+            header_group,
+            grouping_df,
+            group_analysis_mode=True,
+        )
+
+        self.assertTrue(applied)
+        self.assertEqual(merged['GROUP'].tolist(), ['All Samples'])
 
     def test_apply_group_assignments_returns_contract_metadata(self):
         header_group = pd.DataFrame(

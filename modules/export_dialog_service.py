@@ -66,6 +66,17 @@ def normalize_excel_export_path(excel_file):
     return str(path)
 
 
+def normalize_html_dashboard_export_path(html_file):
+    """Return an HTML dashboard path string, appending .html when no suffix is provided."""
+    raw_path = str(html_file or "").strip()
+    if not raw_path:
+        return raw_path
+    path = Path(raw_path)
+    if not path.suffix:
+        path = path.with_suffix(".html")
+    return str(path)
+
+
 def build_validated_export_request(*, db_file, excel_file, selected_preset, export_type, export_target, sorting_parameter, violin_input, summary_scale_input, hide_ok_results, filter_query, grouping_df, generate_html_dashboard=False, include_industrial_context=False, group_analysis_level="off", group_analysis_scope="auto"):
     """Build and validate ``ExportRequest`` from raw dialog selections."""
     options = validate_export_options(
@@ -83,10 +94,22 @@ def build_validated_export_request(*, db_file, excel_file, selected_preset, expo
             group_analysis_scope=group_analysis_scope,
         )
     )
+    if options.export_target == "html_dashboard":
+        paths = AppPaths(
+            db_file=db_file,
+            excel_file=None,
+            html_dashboard_file=normalize_html_dashboard_export_path(excel_file),
+        )
+    else:
+        paths = AppPaths(
+            db_file=db_file,
+            excel_file=normalize_excel_export_path(excel_file),
+            html_dashboard_file=None,
+        )
 
     return validate_export_request(
         ExportRequest(
-            paths=AppPaths(db_file=db_file, excel_file=normalize_excel_export_path(excel_file)),
+            paths=paths,
             options=options,
             filter_query=filter_query,
             grouping_df=grouping_df,
@@ -103,6 +126,14 @@ def build_export_completion_message(*, excel_file, export_target, completion_met
     converted_url = str(metadata.get('converted_url', '')).strip()
     export_directory_line = build_export_directory_link_line(excel_file)
     dashboard_file_line = build_export_artifact_link_line('HTML dashboard', metadata.get('html_dashboard_path'))
+    if export_target == 'html_dashboard':
+        message_lines = ["HTML dashboard exported successfully!"]
+        if dashboard_file_line:
+            message_lines.extend(["", dashboard_file_line])
+        if dashboard_warnings:
+            message_lines.extend(["", "HTML dashboard warnings:", *[f"- {warning}" for warning in dashboard_warnings]])
+        return 'info', 'Export successful', "\n".join(message_lines)
+
     base_success_lines = ["Data exported successfully!"]
     artifact_lines = [line for line in (export_directory_line, dashboard_file_line) if line]
     for artifact_line in artifact_lines:

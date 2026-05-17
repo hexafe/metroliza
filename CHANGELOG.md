@@ -1,6 +1,6 @@
 # Changelog (for end users)
 
-## 2026.05 RC2 (build 260515) — current version
+## 2026.05 RC2 (build 260517) — current version
 - CSV Summary can load multiple CSV files and handles large CSV files more reliably.
 - CSV Summary filters and grouping stay in sync with the loaded data, including date filters and numeric-looking group names.
 - Grouped statistics now compare groups overall and pair-by-pair instead of showing only separate group summaries.

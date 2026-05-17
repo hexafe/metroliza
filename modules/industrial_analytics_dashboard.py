@@ -16,7 +16,12 @@ import numpy as np
 import pandas as pd
 
 from modules.export_summary_utils import resolve_histogram_bin_count
-from modules.hexafe_plotstats_adapter import build_histogram_stats_table, render_histogram_png
+from modules.hexafe_plotstats_adapter import (
+    build_dashboard_plotly_spec,
+    build_histogram_stats_table,
+    metroliza_dashboard_plotstats_theme,
+    render_histogram_png,
+)
 from modules.industrial_analytics_service import (
     ProductionAggregationResult,
     ProductionAnalyticsDiagnostic,
@@ -353,8 +358,18 @@ def _build_histogram_chart(
         seed_parts=("histogram", metric.field_name),
     )
     stats_tables = _histogram_stats_tables(metric, groups)
-    image = _render_distribution_image(metric, frame, chart_type="histogram", groups=image_groups)
-    if not stats_tables and not image:
+    plotly_spec = _build_plotstats_histogram_spec(
+        metric,
+        groups,
+        title=f"{metric.display_label} distribution",
+        stats_tables=stats_tables,
+    )
+    image = (
+        None
+        if plotly_spec is not None
+        else _render_distribution_image(metric, frame, chart_type="histogram", groups=image_groups)
+    )
+    if not stats_tables and not image and plotly_spec is None:
         return {}
     chart = _static_chart_payload(
         chart_id=f"histogram-{metric.field_name}",
@@ -365,6 +380,8 @@ def _build_histogram_chart(
         stats_tables=stats_tables,
         notes=([sampling_note] if sampling_note else []),
     )
+    if plotly_spec is not None:
+        chart["plotly_spec"] = plotly_spec
     return chart
 
 
@@ -381,10 +398,20 @@ def _build_distribution_chart(
         metric.field_name,
         seed_parts=(chart_type, metric.field_name),
     )
-    image = _render_distribution_image(metric, frame, chart_type=chart_type, groups=image_groups)
-    if not image:
+    plotly_spec = _build_plotstats_distribution_spec(
+        metric,
+        groups,
+        chart_type=chart_type,
+        title=f"{metric.display_label} {chart_type}",
+    )
+    image = (
+        None
+        if plotly_spec is not None
+        else _render_distribution_image(metric, frame, chart_type=chart_type, groups=image_groups)
+    )
+    if not image and plotly_spec is None:
         return {}
-    return _static_chart_payload(
+    chart = _static_chart_payload(
         chart_id=f"{chart_type}-{metric.field_name}",
         title=f"{metric.display_label} {chart_type}",
         chart_type=chart_type,
@@ -392,6 +419,110 @@ def _build_distribution_chart(
         image=image,
         notes=([sampling_note] if sampling_note else []),
     )
+    if plotly_spec is not None:
+        chart["plotly_spec"] = plotly_spec
+    return chart
+
+
+def _build_plotstats_histogram_spec(
+    metric: ProductionMetricSelection,
+    groups: list[tuple[str, pd.DataFrame]],
+    *,
+    title: str,
+    stats_tables: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if len(groups) != 1:
+        return None
+    _label, group = groups[0]
+    if metric.field_name not in group.columns:
+        return None
+    values = _finite_numeric_values(group[metric.field_name])
+    if not values:
+        return None
+    bin_count = int(resolve_histogram_bin_count(values).get("bin_count") or 0)
+    payload: dict[str, Any] = {
+        "type": "histogram",
+        "title": title,
+        "values": values,
+        "limits": _plotstats_metric_limits(metric),
+        "style": {"axis_label_x": metric.display_label, "axis_label_y": "Count"},
+    }
+    if bin_count > 0:
+        payload["bin_count"] = bin_count
+    if stats_tables:
+        payload["summary_table_rows"] = list(stats_tables[0].get("rows") or [])
+    return build_dashboard_plotly_spec(
+        payload,
+        title=title,
+        theme=metroliza_dashboard_plotstats_theme(),
+        static=True,
+    )
+
+
+def _build_plotstats_distribution_spec(
+    metric: ProductionMetricSelection,
+    groups: list[tuple[str, pd.DataFrame]],
+    *,
+    chart_type: str,
+    title: str,
+) -> dict[str, Any] | None:
+    labels: list[str] = []
+    series: list[list[float]] = []
+    for label, group in groups:
+        if metric.field_name not in group.columns:
+            continue
+        values = _finite_numeric_values(group[metric.field_name])
+        if not values:
+            continue
+        labels.append(str(label))
+        series.append(values)
+    if not series:
+        return None
+
+    if chart_type == "violin":
+        payload_type = "distribution"
+        render_mode = "violin"
+    elif chart_type == "box":
+        payload_type = "iqr"
+        render_mode = "iqr"
+    else:
+        return None
+
+    payload = {
+        "type": payload_type,
+        "render_mode": render_mode,
+        "title": title,
+        "labels": labels,
+        "series": series,
+        "limits": _plotstats_metric_limits(metric),
+    }
+    return build_dashboard_plotly_spec(
+        payload,
+        title=title,
+        theme=metroliza_dashboard_plotstats_theme(),
+        static=True,
+    )
+
+
+def _plotstats_metric_limits(metric: ProductionMetricSelection) -> dict[str, float | None]:
+    lsl = _coerce_optional_float(metric.lsl)
+    usl = _coerce_optional_float(metric.usl)
+    nominal = ((lsl + usl) / 2.0) if lsl is not None and usl is not None and lsl <= usl else None
+    return {"lsl": lsl, "nominal": nominal, "usl": usl}
+
+
+def _coerce_optional_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if np.isfinite(number) else None
+
+
+def _finite_numeric_values(series: pd.Series) -> list[float]:
+    values = pd.to_numeric(series, errors="coerce").dropna().to_numpy(dtype=float)
+    values = values[np.isfinite(values)]
+    return [float(value) for value in values.tolist()]
 
 
 def _build_hybrid_time_series_chart(
@@ -1914,14 +2045,31 @@ def _render_groupstats(groupstats: dict[str, Any]) -> str:
                 "p_value",
                 "adjusted_p_value",
                 "effect_size",
+                "effect_type",
                 "significant",
                 "test_used",
             ),
         )
+        posthoc = _render_table(
+            metric.get("posthoc_rows"),
+            columns=(
+                "group_a",
+                "group_b",
+                "method_name",
+                "family",
+                "adjusted_p_value",
+                "effect_size",
+                "effect_type",
+                "significant",
+            ),
+        )
         insight = metric.get("primary_insight") if isinstance(metric.get("primary_insight"), dict) else {}
-        insight_text = str(
-            insight.get("headline") or insight.get("first_action") or ""
-        ).strip()
+        insight_parts = [
+            str(insight.get("headline") or "").strip(),
+            str(insight.get("why") or "").strip(),
+            str(insight.get("first_action") or "").strip(),
+        ]
+        insight_text = " ".join(part for part in insight_parts if part).strip()
         insight_markup = (
             f"<p>{html.escape(insight_text)}</p>"
             if insight_text
@@ -1939,6 +2087,8 @@ def _render_groupstats(groupstats: dict[str, Any]) -> str:
             f"{omnibus}"
             "<h3>Pairwise tests</h3>"
             f"{pairwise}"
+            "<h3>Post-hoc tests</h3>"
+            f"{posthoc}"
             "</article>"
         )
     if not cards:

@@ -718,6 +718,117 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertEqual(metric['pairwise_strategy'], 'tukey_hsd')
         self.assertEqual(metric['posthoc_method_name'], 'Tukey HSD')
 
+    def test_build_payload_forwards_groupstats_rc3_options_and_rows(self):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1'] * 6,
+                'HEADER - AX': ['M1'] * 6,
+                'GROUP': ['A'] * 3 + ['B'] * 3,
+                'MEAS': [10.0, 10.1, 10.2, 9.7, 9.8, 9.9],
+                'LSL': [9.0] * 6,
+                'NOMINAL': [10.0] * 6,
+                'USL': [11.0] * 6,
+            }
+        )
+        package_analysis = {
+            'spec_status': 'EXACT_MATCH',
+            'spec_payload': {'lsl': 9.0, 'nominal': 10.0, 'usl': 11.0},
+            'analysis_policy': {'include_metric': True, 'allow_pairwise': True, 'allow_capability': True},
+            'descriptive_stats': [
+                {'group': 'A', 'n': 3, 'mean': 10.1, 'std': 0.1, 'median': 10.1, 'iqr': 0.1},
+                {'group': 'B', 'n': 3, 'mean': 9.8, 'std': 0.1, 'median': 9.8, 'iqr': 0.1},
+            ],
+            'pairwise_rows': [
+                {
+                    'metric': 'M1',
+                    'group_a': 'A',
+                    'group_b': 'B',
+                    'p_value': 0.01,
+                    'adjusted_p_value': 0.02,
+                    'effect_size': 0.8,
+                    'effect_type': 'cohens_d',
+                    'test_used': 'Welch t-test',
+                    'method_family': 'parametric',
+                    'comparison_estimate': 0.3,
+                    'comparison_estimate_label': 'mean_difference',
+                    'comparison_ci': (0.1, 0.5),
+                    'effect_size_ci': (0.2, 1.2),
+                    'significant': True,
+                    'warnings': ['approximate_ci'],
+                }
+            ],
+            'posthoc_rows': [
+                {
+                    'group_a': 'A',
+                    'group_b': 'B',
+                    'family': 'parametric',
+                    'method_name': 'Games-Howell',
+                    'adjusted_p_value': 0.02,
+                    'effect_size': 0.8,
+                }
+            ],
+            'capability_rows': [{'group': 'A', 'cpk': 1.4}],
+            'capability': {'status': 'ok', 'capability': 1.4},
+            'metric_summary': {'simulation_validation': {'iterations': 3}},
+            'backend_used': 'python',
+            'selection_detail': 'detail',
+            'posthoc_family': 'parametric',
+            'posthoc_method_name': 'Games-Howell',
+            'pairwise_strategy': 'pairwise Welch t-tests + Benjamini-Hochberg',
+            'posthoc_strategy': 'Games-Howell',
+            'capability_strategy': 'per_group_minimum',
+            'correction_method': 'Benjamini-Hochberg',
+            'correction_policy': 'Exploratory false-discovery control.',
+            'analysis_restriction_label': 'Full analysis',
+            'distribution_flags': ['normality_rejected'],
+            'simulation_validation': {'iterations': 3},
+            'capability_benchmark': 1.5,
+            'posthoc_method': 'games_howell',
+            'backend_requested': 'python',
+            'enable_rust_in_auto': False,
+            'warnings': [],
+        }
+
+        with patch('modules.group_analysis_service.analyze_group_metric', return_value=package_analysis) as mock_analyze, patch(
+            'modules.group_analysis_service.compute_distribution_difference',
+            return_value={'profile_rows': [], 'pairwise_rows': [], 'omnibus_row': None},
+        ):
+            payload = build_group_analysis_payload(
+                grouped_df,
+                requested_scope='auto',
+                analysis_level='light',
+                correction_method='bh',
+                posthoc_method='games_howell',
+                include_effect_size_ci=True,
+                ci_level=0.9,
+                ci_bootstrap_iterations=25,
+                capability_benchmark=1.5,
+                simulation_validation_iterations=3,
+                simulation_random_seed=11,
+                backend='python',
+                enable_rust_in_auto=False,
+                distribution_diagnostics=False,
+            )
+
+        kwargs = mock_analyze.call_args.kwargs
+        self.assertEqual(kwargs['posthoc_method'], 'games_howell')
+        self.assertTrue(kwargs['include_effect_size_ci'])
+        self.assertEqual(kwargs['ci_level'], 0.9)
+        self.assertEqual(kwargs['ci_bootstrap_iterations'], 25)
+        self.assertEqual(kwargs['capability_benchmark'], 1.5)
+        self.assertEqual(kwargs['simulation_validation_iterations'], 3)
+        self.assertEqual(kwargs['simulation_random_seed'], 11)
+        self.assertEqual(kwargs['backend'], 'python')
+        self.assertFalse(kwargs['distribution_diagnostics'])
+
+        metric = payload['metric_rows'][0]
+        self.assertEqual(metric['posthoc_rows'][0]['method_name'], 'Games-Howell')
+        self.assertEqual(metric['capability_rows'][0]['cpk'], 1.4)
+        self.assertEqual(metric['simulation_validation']['iterations'], 3)
+        self.assertEqual(metric['correction_method'], 'Benjamini-Hochberg')
+        self.assertEqual(metric['pairwise_rows'][0]['comparison_estimate_label'], 'mean_difference')
+        self.assertEqual(metric['pairwise_rows'][0]['effect_type'], 'cohens_d')
+
     def test_build_payload_includes_descriptive_pairwise_and_diagnostics(self):
         grouped_df = pd.DataFrame(
             {

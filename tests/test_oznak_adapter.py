@@ -28,9 +28,17 @@ def test_adapter_status_reports_contracts_and_fetch_availability(monkeypatch):
     oznak_module.DatabaseProfile = object
     oznak_module.FetchRequest = object
     oznak_module.FetchResult = object
+    oznak_module.QueryRequest = object
+    oznak_module.CancellationToken = object
+    oznak_module.SourceFetchDiagnostics = object
+    oznak_module.SourceFetchStatus = object
+    oznak_module.fetch_records_chunked = lambda _request, **_kwargs: {"rows": []}
+    oznak_module.iter_records_chunked = lambda _request, **_kwargs: iter(())
+    oznak_module.run_synthetic_chunked_benchmark = lambda: None
 
     fetcher_module = types.ModuleType("oznak.fetcher")
     fetcher_module.fetch_records = lambda _request: {"rows": []}
+    fetcher_module.fetch_records_chunked = lambda _request, **_kwargs: {"rows": []}
 
     def _fake_import(module_name: str):
         if module_name == "oznak":
@@ -46,9 +54,19 @@ def test_adapter_status_reports_contracts_and_fetch_availability(monkeypatch):
     assert status.available is True
     assert status.contracts_available is True
     assert status.fetch_available is True
+    assert status.chunked_fetch_available is True
+    assert status.streaming_fetch_available is True
+    assert status.cancellation_available is True
     assert status.version == "0.4.0a1"
     assert status.module_path == "/tmp/oznak/__init__.py"
     assert status.diagnostics["fetcher_import_path"] == "oznak.fetcher"
+    assert status.diagnostics["query_request_available"] is True
+    assert status.diagnostics["chunked_fetch_available"] is True
+    assert status.diagnostics["streaming_fetch_available"] is True
+    assert status.diagnostics["cancellation_available"] is True
+    assert status.diagnostics["source_diagnostics_available"] is True
+    assert status.diagnostics["chunk_queue_supported"] is True
+    assert status.diagnostics["synthetic_benchmark_available"] is True
 
 
 def test_fetch_reports_not_implemented_without_hard_failure(monkeypatch):
@@ -430,6 +448,8 @@ def test_fetch_source_profile_uses_chunked_reference_batches_by_default(monkeypa
         progress_callback=None,
         read_sql=None,
         engine_factory=None,
+        max_workers=None,
+        max_pending_events=None,
     ):
         references = request.filters[0].value
         calls["chunked"].append(
@@ -437,6 +457,8 @@ def test_fetch_source_profile_uses_chunked_reference_batches_by_default(monkeypa
                 "references": references,
                 "chunk_size": chunk_size,
                 "pagination_column": pagination_column,
+                "max_workers": max_workers,
+                "max_pending_events": max_pending_events,
             }
         )
         return FakeResult(references)
@@ -484,16 +506,32 @@ def test_fetch_source_profile_uses_chunked_reference_batches_by_default(monkeypa
         reference_values=("REF1", "REF2", "REF3"),
         chunk_size=1000,
         reference_batch_size=2,
+        max_workers=4,
+        max_pending_events=8,
     )
 
     assert calls["single"] == 0
     assert calls["chunked"] == [
-        {"references": ("REF1", "REF2"), "chunk_size": 1000, "pagination_column": "event_id"},
-        {"references": ("REF3",), "chunk_size": 1000, "pagination_column": "event_id"},
+        {
+            "references": ("REF1", "REF2"),
+            "chunk_size": 1000,
+            "pagination_column": "event_id",
+            "max_workers": 4,
+            "max_pending_events": 8,
+        },
+        {
+            "references": ("REF3",),
+            "chunk_size": 1000,
+            "pagination_column": "event_id",
+            "max_workers": 4,
+            "max_pending_events": 8,
+        },
     ]
     assert result.row_count == 3
     assert result.diagnostics["fetch_strategy"] == "chunked"
     assert result.diagnostics["reference_batches"] == 2
+    assert result.diagnostics["max_workers"] == 4
+    assert result.diagnostics["max_pending_events"] == 8
     assert {record["reference"] for record in result.records} == {"REF1", "REF2", "REF3"}
 
 

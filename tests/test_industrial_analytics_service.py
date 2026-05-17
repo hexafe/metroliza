@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import closing
 import sqlite3
 
 import pandas as pd
@@ -25,7 +26,7 @@ from tests.industrial_analytics_fixtures import seed_production_analytics_cache
 
 
 def _table_exists(db_path: str, table_name: str) -> bool:
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         row = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
             (table_name,),
@@ -52,7 +53,7 @@ def test_metric_discovery_uses_dynamic_numeric_fields_without_report_metadata(tm
 def test_metric_discovery_includes_fixed_numeric_record_columns(tmp_path) -> None:
     db_path = str(tmp_path / "production_only.db")
     seed_production_analytics_cache(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         conn.execute("ALTER TABLE industrial_records ADD COLUMN machine_speed_rpm REAL")
         conn.execute(
             """
@@ -60,6 +61,7 @@ def test_metric_discovery_includes_fixed_numeric_record_columns(tmp_path) -> Non
             SET machine_speed_rpm = 1200.0 + id
             """
         )
+        conn.commit()
 
     candidates = discover_production_metric_candidates(db_path)
     by_name = {candidate.field_name: candidate for candidate in candidates}

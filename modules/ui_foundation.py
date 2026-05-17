@@ -14,124 +14,142 @@ from PyQt6.QtWidgets import (
 from modules import ui_theme_tokens as tokens
 
 
-def metroliza_stylesheet():
+def _is_dark_widget_palette(widget):
+    try:
+        palette = widget.palette()
+        role = widget.backgroundRole() if hasattr(widget, "backgroundRole") else widget.foregroundRole()
+        color = palette.color(role)
+        color_name = color.name() if hasattr(color, "name") else ""
+    except Exception:
+        return False
+    return tokens.is_dark_mode_base(color_name)
+
+
+def metroliza_stylesheet(dark_mode=False):
     """Return the restrained desktop QSS used by refreshed PyQt surfaces."""
+    palette = tokens.theme_tokens(dark_mode=dark_mode)
+    status_colors = palette["STATUS_COLORS"]
     return f"""
 QWidget {{
-    color: {tokens.TEXT_PRIMARY};
-    background: {tokens.WINDOW_BACKGROUND};
+    color: {palette["TEXT_PRIMARY"]};
+    background: {palette["WINDOW_BACKGROUND"]};
 }}
 QDialog, QMainWindow {{
-    background: {tokens.WINDOW_BACKGROUND};
+    background: {palette["WINDOW_BACKGROUND"]};
 }}
 QLabel[secondary="true"] {{
-    color: {tokens.TEXT_SECONDARY};
+    color: {palette["TEXT_SECONDARY"]};
 }}
 QLabel[sectionLabel="true"] {{
-    color: {tokens.TEXT_PRIMARY};
+    color: {palette["TEXT_PRIMARY"]};
     font-weight: 600;
     padding-top: 2px;
     padding-bottom: 2px;
 }}
 QLabel[statusChip="true"] {{
-    border: 1px solid {tokens.BORDER_SUBTLE};
+    border: 1px solid {palette["BORDER_SUBTLE"]};
     border-radius: {tokens.RADIUS_MD}px;
     padding: 4px 8px;
-    background: {tokens.SURFACE_MUTED_BACKGROUND};
+    background: {palette["SURFACE_MUTED_BACKGROUND"]};
 }}
 QLabel[statusVariant="info"] {{
-    color: {tokens.ACCENT_INFO};
-    background: {tokens.STATUS_COLORS["info"][1]};
+    color: {palette["ACCENT_INFO"]};
+    background: {status_colors["info"][1]};
 }}
 QLabel[statusVariant="success"] {{
-    color: {tokens.ACCENT_SUCCESS};
-    background: {tokens.STATUS_COLORS["success"][1]};
+    color: {palette["ACCENT_SUCCESS"]};
+    background: {status_colors["success"][1]};
 }}
 QLabel[statusVariant="warning"] {{
-    color: {tokens.ACCENT_WARNING};
-    background: {tokens.STATUS_COLORS["warning"][1]};
+    color: {palette["ACCENT_WARNING"]};
+    background: {status_colors["warning"][1]};
 }}
 QLabel[statusVariant="danger"] {{
-    color: {tokens.ACCENT_DANGER};
-    background: {tokens.STATUS_COLORS["danger"][1]};
+    color: {palette["ACCENT_DANGER"]};
+    background: {status_colors["danger"][1]};
 }}
 QPushButton {{
-    background: {tokens.SURFACE_BACKGROUND};
-    border: 1px solid {tokens.BORDER_STRONG};
+    color: {palette["TEXT_PRIMARY"]};
+    background: {palette["SURFACE_BACKGROUND"]};
+    border: 1px solid {palette["BORDER_STRONG"]};
     border-radius: {tokens.RADIUS_MD}px;
     padding: 5px 12px;
     min-height: 24px;
 }}
 QPushButton:hover {{
-    border-color: {tokens.ACCENT_PRIMARY};
-    background: #F9FCFD;
+    border-color: {palette["ACCENT_PRIMARY"]};
+    background: {palette["BUTTON_HOVER_BACKGROUND"]};
 }}
 QPushButton:focus {{
-    border: 1px solid {tokens.FOCUS_RING};
+    border: 1px solid {palette["FOCUS_RING"]};
 }}
 QPushButton:default {{
-    color: #FFFFFF;
-    background: {tokens.ACCENT_PRIMARY};
-    border-color: {tokens.ACCENT_PRIMARY};
+    color: {palette["DEFAULT_BUTTON_TEXT"]};
+    background: {palette["ACCENT_PRIMARY"]};
+    border-color: {palette["ACCENT_PRIMARY"]};
 }}
 QPushButton:default:hover {{
-    background: {tokens.ACCENT_PRIMARY_HOVER};
-    border-color: {tokens.ACCENT_PRIMARY_HOVER};
+    background: {palette["ACCENT_PRIMARY_HOVER"]};
+    border-color: {palette["ACCENT_PRIMARY_HOVER"]};
 }}
 QPushButton:disabled {{
-    color: {tokens.DISABLED_TEXT};
-    background: {tokens.SURFACE_MUTED_BACKGROUND};
-    border-color: {tokens.BORDER_SUBTLE};
+    color: {palette["DISABLED_TEXT"]};
+    background: {palette["SURFACE_MUTED_BACKGROUND"]};
+    border-color: {palette["BORDER_SUBTLE"]};
 }}
 QLineEdit, QComboBox, QDateEdit, QSpinBox, QTextBrowser, QListWidget, QTableWidget {{
-    background: {tokens.SURFACE_BACKGROUND};
-    border: 1px solid {tokens.BORDER_SUBTLE};
+    color: {palette["TEXT_PRIMARY"]};
+    background: {palette["SURFACE_BACKGROUND"]};
+    border: 1px solid {palette["BORDER_SUBTLE"]};
     border-radius: {tokens.RADIUS_SM}px;
     padding: 3px;
     min-height: 22px;
     selection-background-color: {tokens.SELECTED_ROW_BACKGROUND_FALLBACK};
 }}
 QLineEdit:read-only {{
-    background: {tokens.SURFACE_MUTED_BACKGROUND};
-    color: {tokens.TEXT_SECONDARY};
+    background: {palette["SURFACE_MUTED_BACKGROUND"]};
+    color: {palette["TEXT_SECONDARY"]};
 }}
 QLineEdit:focus, QComboBox:focus, QDateEdit:focus, QListWidget:focus, QTableWidget:focus {{
-    border: 1px solid {tokens.FOCUS_RING};
+    border: 1px solid {palette["FOCUS_RING"]};
 }}
 QTableWidget::item:selected, QListWidget::item:selected {{
     background: {tokens.selected_row_background_override(tokens.SELECTED_ROW_BACKGROUND_FALLBACK)};
     color: {tokens.selected_text_color(tokens.SELECTED_ROW_BACKGROUND_FALLBACK)};
 }}
 QHeaderView::section {{
-    background: {tokens.SURFACE_MUTED_BACKGROUND};
+    color: {palette["TEXT_PRIMARY"]};
+    background: {palette["SURFACE_MUTED_BACKGROUND"]};
     border: 0;
-    border-right: 1px solid {tokens.BORDER_SUBTLE};
-    border-bottom: 1px solid {tokens.BORDER_SUBTLE};
+    border-right: 1px solid {palette["BORDER_SUBTLE"]};
+    border-bottom: 1px solid {palette["BORDER_SUBTLE"]};
     padding: 4px 6px;
     font-weight: 600;
 }}
 QProgressBar {{
-    background: {tokens.SURFACE_MUTED_BACKGROUND};
-    border: 1px solid {tokens.BORDER_SUBTLE};
+    color: {palette["TEXT_PRIMARY"]};
+    background: {palette["SURFACE_MUTED_BACKGROUND"]};
+    border: 1px solid {palette["BORDER_SUBTLE"]};
     border-radius: {tokens.RADIUS_SM}px;
     text-align: center;
 }}
 QProgressBar::chunk {{
-    background-color: {tokens.ACCENT_PRIMARY};
+    background-color: {palette["ACCENT_PRIMARY"]};
     border-radius: {tokens.RADIUS_SM}px;
 }}
 QFrame[separator="true"] {{
-    color: {tokens.BORDER_SUBTLE};
-    background: {tokens.BORDER_SUBTLE};
+    color: {palette["BORDER_SUBTLE"]};
+    background: {palette["BORDER_SUBTLE"]};
 }}
 """
 
 
-def apply_metroliza_theme(widget):
+def apply_metroliza_theme(widget, *, dark_mode=None):
     """Apply the shared visual layer to a top-level widget or dialog."""
     if widget is None or not hasattr(widget, "setStyleSheet"):
         return
-    widget.setStyleSheet(metroliza_stylesheet())
+    resolved_dark_mode = _is_dark_widget_palette(widget) if dark_mode is None else bool(dark_mode)
+    widget.setStyleSheet(metroliza_stylesheet(dark_mode=resolved_dark_mode))
 
 
 def configure_window_size(widget, *, minimum=(420, 260), initial=(640, 420), screen_margin=40):

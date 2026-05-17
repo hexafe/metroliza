@@ -101,7 +101,7 @@ class TestExportDialogLayout(unittest.TestCase):
         self.assertFalse(payload["scope_visible"])
         self.assertFalse(payload["scope_enabled"])
         self.assertEqual(payload["toggle_text"], "Show advanced options")
-        self.assertEqual(payload["google_label"], "Google Sheets version")
+        self.assertEqual(payload["google_label"], "Google Sheets")
         self.assertEqual(payload["html_label"], "HTML dashboard")
         self.assertEqual(payload["close_label"], "Close")
         self.assertEqual(payload["db_text"], "None selected")

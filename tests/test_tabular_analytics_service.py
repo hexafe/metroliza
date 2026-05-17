@@ -742,6 +742,7 @@ def test_tabular_workbook_export_includes_groupstats_distribution_rows(tmp_path)
             {
                 "metric": "Length Mm",
                 "primary_insight": {"headline": "Selected group has higher mean."},
+                "metric_summary": {"simulation_validation": {"iterations": 3}},
                 "descriptive_stats": (
                     {
                         "group": "A",
@@ -770,7 +771,28 @@ def test_tabular_workbook_export_includes_groupstats_distribution_rows(tmp_path)
                         "normality_status": "consistent",
                     },
                 ),
+                "capability_rows": (
+                    {
+                        "group": "A",
+                        "n": 3,
+                        "mean": 10.2,
+                        "sigma": 0.1,
+                        "cp": 1.1,
+                        "cpk": 1.0,
+                    },
+                ),
                 "pairwise_rows": (),
+                "posthoc_rows": (
+                    {
+                        "group_a": "A",
+                        "group_b": "B",
+                        "family": "parametric",
+                        "method_name": "Games-Howell",
+                        "adjusted_p_value": 0.03,
+                        "effect_size": 0.7,
+                        "effect_type": "hedges_g",
+                    },
+                ),
             },
         ),
     )
@@ -785,7 +807,12 @@ def test_tabular_workbook_export_includes_groupstats_distribution_rows(tmp_path)
 
     assert "Groupstats" in result.sheet_names
     groupstats_sheet = pd.read_excel(output_file, sheet_name="Groupstats")
-    assert {"insight", "descriptive", "distribution"}.issubset(set(groupstats_sheet["row_type"]))
+    assert {"insight", "descriptive", "distribution", "capability", "posthoc"}.issubset(
+        set(groupstats_sheet["row_type"])
+    )
     distribution = groupstats_sheet[groupstats_sheet["row_type"] == "distribution"].iloc[0]
     assert distribution["normality_test"] == "Shapiro-Wilk"
     assert distribution["skewness"] == 0.2
+    posthoc = groupstats_sheet[groupstats_sheet["row_type"] == "posthoc"].iloc[0]
+    assert posthoc["test_used"] == "Games-Howell"
+    assert posthoc["effect_type"] == "hedges_g"

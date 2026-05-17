@@ -1,14 +1,17 @@
 # Runtime dependencies for running Metroliza.
-cryptography>=46.0.5
+cryptography>=46.0.7
 google-auth-oauthlib>=1.2.0
-hexafe-groupstats[pandas] @ git+https://github.com/hexafe/hexafe-groupstats.git@92327125499f801fcc42f1d1e970c4e55dcd4b3a
-hexafe-plotstats[pandas] @ git+https://github.com/hexafe/hexafe-plotstats.git@168edf1e7ef0838fb9e8f75eca1036d8779e019e
-oznak @ git+https://github.com/hexafe/oznak.git@36bd0c91f2afe94baae33d43b0c77b7c78faa478
+hexafe-groupstats[pandas] @ git+https://github.com/hexafe/hexafe-groupstats.git@ea81205d2618223b754b6a4df41a0b28e5c13cd2
+hexafe-plotstats[pandas] @ git+https://github.com/hexafe/hexafe-plotstats.git@2689231c51f9548de7f8ed50edddc61adb9bc0a5
+oznak @ git+https://github.com/hexafe/oznak.git@46eba3f63eab1d65e3117c238324eade9118d242
 matplotlib>=3.8.1
 numpy>=1.24.3
 pandas>=2.0.1
-PyMuPDF>=1.22.2
-PyQt6>=6.6.1
+Pillow>=12.2.0
+PyMuPDF>=1.27.2.3
+# Stay below the Qt SVG CVE-2026-6210 affected range until PyQt6 wheels ship
+# Qt 6.11.1+ or another fixed Qt payload.
+PyQt6>=6.6.1,<6.7
 PyYAML>=6.0.1
 scipy>=1.10.1
 seaborn>=0.13.0

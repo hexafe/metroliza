@@ -5,6 +5,27 @@ import pandas as pd
 
 _GROUP_KEY_COMPONENTS = ['REPORT_ID']
 _GROUPING_OPTIONAL_COLUMNS = ['REPORT_ID', 'GROUP_COLOR']
+DEFAULT_GROUP_LABEL = 'POPULATION'
+DEFAULT_GROUP_LABEL_ATTR = 'default_group_label'
+
+
+def normalize_default_group_label(value, *, fallback=DEFAULT_GROUP_LABEL):
+    """Return a non-empty default group label for grouped analysis fallbacks."""
+    label = str(value or '').strip()
+    return label or str(fallback or DEFAULT_GROUP_LABEL)
+
+
+def get_default_group_label(df, *, fallback=DEFAULT_GROUP_LABEL):
+    """Read the per-run default group label stored on a grouping DataFrame."""
+    attrs = getattr(df, 'attrs', {}) if df is not None else {}
+    return normalize_default_group_label(attrs.get(DEFAULT_GROUP_LABEL_ATTR), fallback=fallback)
+
+
+def set_default_group_label(df, label):
+    """Attach a per-run default group label to a DataFrame when possible."""
+    if df is not None and hasattr(df, 'attrs'):
+        df.attrs[DEFAULT_GROUP_LABEL_ATTR] = normalize_default_group_label(label)
+    return df
 
 
 def _resolve_column_name(df, column_name):
@@ -69,6 +90,7 @@ def prepare_grouping_dataframe(grouping_df):
 
     available_cols = [column for column in _GROUPING_OPTIONAL_COLUMNS if column in normalized_df.columns]
     prepared = normalized_df[available_cols + ['GROUP']].copy()
+    prepared.attrs.update(getattr(grouping_df, 'attrs', {}))
     return add_group_key(prepared)
 
 
@@ -135,7 +157,7 @@ def apply_group_assignments(header_group, grouping_df, *, group_analysis_mode=Fa
     merged_group = pd.merge(keyed_header, merge_projection, on=merge_keys, how='left')
     missing_group_label = fallback_group_label
     if missing_group_label is None:
-        missing_group_label = 'POPULATION' if group_analysis_mode else 'UNGROUPED'
+        missing_group_label = get_default_group_label(grouping_df) if group_analysis_mode else 'UNGROUPED'
     merged_group['GROUP'] = normalize_group_labels(
         merged_group['GROUP'],
         missing_label=missing_group_label,

@@ -69,7 +69,7 @@ from modules.export_data_thread import (  # noqa: E402
     execute_export_query,
     run_export_steps,
 )
-from modules.export_backends import ExcelExportBackend  # noqa: E402
+from modules.export_backends import ExcelExportBackend, HtmlDashboardExportBackend  # noqa: E402
 from modules.google_drive_export import GoogleDriveConversionResult  # noqa: E402
 from modules.export_google_result_utils import (  # noqa: E402
     build_google_conversion_metadata,
@@ -2516,6 +2516,23 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertEqual(thread.export_target, 'google_sheets_drive_convert')
             self.assertEqual(thread.backend_target, 'google')
             self.assertIsInstance(thread.get_export_backend(), ExcelExportBackend)
+
+    def test_html_dashboard_target_uses_dashboard_backend(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'dashboard.html')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', html_dashboard_file=out_file),
+                options=ExportOptions(export_target='html_dashboard'),
+            )
+            thread = ExportDataThread(request)
+
+            self.assertEqual(thread.export_target, 'html_dashboard')
+            self.assertEqual(thread.backend_target, 'html')
+            self.assertIsNone(thread.excel_file)
+            self.assertEqual(thread.html_dashboard_file, out_file)
+            self.assertIsInstance(thread.get_export_backend(), HtmlDashboardExportBackend)
 
     def test_backend_target_metadata_defaults_to_excel(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest

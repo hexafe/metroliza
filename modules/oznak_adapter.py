@@ -64,6 +64,9 @@ class OznakAdapterStatus:
     module_path: str | None = None
     contracts_available: bool = False
     fetch_available: bool = False
+    chunked_fetch_available: bool = False
+    streaming_fetch_available: bool = False
+    cancellation_available: bool = False
     diagnostics: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
 
@@ -348,6 +351,39 @@ def _construct_with_supported_kwargs(factory: Any, kwargs: dict[str, Any]) -> An
     return factory(**accepted)
 
 
+def _call_with_supported_kwargs(callable_obj: Any, *args: Any, **kwargs: Any) -> Any:
+    """Call an Oznak function while tolerating older optional keyword surfaces."""
+
+    try:
+        signature = inspect.signature(callable_obj)
+    except (TypeError, ValueError):
+        return callable_obj(*args, **kwargs)
+
+    parameters = signature.parameters
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()):
+        return callable_obj(*args, **{key: value for key, value in kwargs.items() if value is not None})
+
+    accepted = {
+        key: value
+        for key, value in kwargs.items()
+        if key in parameters and value is not None
+    }
+    return callable_obj(*args, **accepted)
+
+
+def _callable_accepts_keyword(callable_obj: Any, keyword: str) -> bool:
+    if not callable(callable_obj):
+        return False
+    try:
+        signature = inspect.signature(callable_obj)
+    except (TypeError, ValueError):
+        return False
+    return keyword in signature.parameters or any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    )
+
+
 def _normalize_runtime_columns(
     columns: tuple[str, ...],
     *required_columns: Any,
@@ -426,6 +462,8 @@ def fetch_oznak_records_for_source_profile(
     allow_unbounded: bool = False,
     cancellation_token: Any = None,
     progress_callback: Any = None,
+    max_workers: int | None = None,
+    max_pending_events: int | None = None,
     import_module: Any = None,
 ) -> OznakAdapterFetchResult:
     """Fetch live Oznak rows for one saved Metroliza industrial source profile."""
@@ -571,20 +609,25 @@ def fetch_oznak_records_for_source_profile(
                 },
             )
             if use_chunked_fetch:
-                payload = fetch_records_chunked(
+                payload = _call_with_supported_kwargs(
+                    fetch_records_chunked,
                     request,
                     chunk_size=int(chunk_size),
                     pagination_column=str(pagination_column),
                     credential_provider=credential_provider,
                     cancellation_token=cancellation_token,
                     progress_callback=progress_callback,
+                    max_workers=max_workers,
+                    max_pending_events=max_pending_events,
                 )
             else:
-                payload = fetch_records(
+                payload = _call_with_supported_kwargs(
+                    fetch_records,
                     request,
                     credential_provider=credential_provider,
                     cancellation_token=cancellation_token,
                     progress_callback=progress_callback,
+                    max_workers=max_workers,
                 )
             payloads.append(payload)
             batch_records = map_oznak_rows_to_industrial_records(payload, profile=profile)
@@ -612,6 +655,8 @@ def fetch_oznak_records_for_source_profile(
         "reference_filter_column": reference_filter_column,
         "reference_filter_count": len(normalized_reference_values),
         "order_by_enabled": order_by_enabled,
+        "max_workers": max_workers,
+        "max_pending_events": max_pending_events if use_chunked_fetch else None,
     }
     diagnostics.update(_combine_fetch_diagnostics(payloads))
     errors = diagnostics.get("errors") or ()
@@ -686,11 +731,54 @@ def get_oznak_adapter_status(*, import_module: Any = None) -> OznakAdapterStatus
     )
 
     fetch_available = callable(getattr(oznak_module, "fetch_records", None))
+    root_fetch_records = getattr(oznak_module, "fetch_records", None)
+    root_fetch_records_chunked = getattr(oznak_module, "fetch_records_chunked", None)
+    root_iter_records_chunked = getattr(oznak_module, "iter_records_chunked", None)
+    chunked_fetch_available = callable(root_fetch_records_chunked)
+    streaming_fetch_available = callable(root_iter_records_chunked)
+    cancellation_available = callable(getattr(oznak_module, "CancellationToken", None))
     try:
         fetcher_module = importer(OZNAK_FETCHER_IMPORT_PATH)
-        fetch_available = fetch_available or callable(getattr(fetcher_module, "fetch_records", None))
+        fetcher_fetch_records = getattr(fetcher_module, "fetch_records", None)
+        fetcher_fetch_records_chunked = getattr(fetcher_module, "fetch_records_chunked", None)
+        fetch_available = fetch_available or callable(fetcher_fetch_records)
+        chunked_fetch_available = chunked_fetch_available or callable(fetcher_fetch_records_chunked)
+        diagnostics["max_workers_supported"] = any(
+            _callable_accepts_keyword(candidate, "max_workers")
+            for candidate in (
+                root_fetch_records,
+                root_fetch_records_chunked,
+                fetcher_fetch_records,
+                fetcher_fetch_records_chunked,
+            )
+        )
     except Exception as exc:
         diagnostics["fetcher_import_error"] = _safe_exception_summary(exc)
+        diagnostics["max_workers_supported"] = any(
+            _callable_accepts_keyword(candidate, "max_workers")
+            for candidate in (root_fetch_records, root_fetch_records_chunked)
+        )
+
+    diagnostics.update(
+        {
+            "query_request_available": hasattr(oznak_module, "QueryRequest"),
+            "chunked_fetch_available": chunked_fetch_available,
+            "streaming_fetch_available": streaming_fetch_available,
+            "cancellation_available": cancellation_available,
+            "source_diagnostics_available": all(
+                hasattr(oznak_module, name)
+                for name in ("SourceFetchDiagnostics", "SourceFetchStatus")
+            ),
+            "chunk_queue_supported": _callable_accepts_keyword(
+                root_iter_records_chunked,
+                "max_pending_events",
+            )
+            or _callable_accepts_keyword(root_fetch_records_chunked, "max_pending_events"),
+            "synthetic_benchmark_available": callable(
+                getattr(oznak_module, "run_synthetic_chunked_benchmark", None)
+            ),
+        }
+    )
 
     return OznakAdapterStatus(
         available=True,
@@ -698,6 +786,9 @@ def get_oznak_adapter_status(*, import_module: Any = None) -> OznakAdapterStatus
         module_path=str(module_path) if module_path is not None else None,
         contracts_available=contracts_available,
         fetch_available=fetch_available,
+        chunked_fetch_available=chunked_fetch_available,
+        streaming_fetch_available=streaming_fetch_available,
+        cancellation_available=cancellation_available,
         diagnostics=diagnostics,
         error=None,
     )

@@ -15,6 +15,7 @@ from modules.data_grouping_service import (
     load_grouping_dataframe,
     reassign_group_keys_to_default,
 )
+from modules.export_grouping_utils import set_default_group_label
 from modules.report_schema import ensure_report_schema
 from modules.list_selection_utils import ListSelectionUtils
 from modules import ui_theme_tokens
@@ -1019,6 +1020,10 @@ class DataGrouping(QDialog):
                 # Update the dataframe with the new group name
                 self.df.loc[self.df['GROUP'] == selected_group, 'GROUP'] = new_group_name
                 self.df.loc[self.df['GROUP'] == new_group_name, self.group_color_column] = existing_color
+                if selected_group == self.default_group:
+                    self.default_group = str(new_group_name)
+                    default_color = getattr(self, 'default_group_color', existing_color)
+                    self.df.loc[self.df['GROUP'] == self.default_group, self.group_color_column] = default_color
                 
             self.populate_list_widgets()
             self.remove_from_group_button.setDisabled(True)
@@ -1196,6 +1201,7 @@ class DataGrouping(QDialog):
 
         try:
             self.hide()
+            set_default_group_label(self.df, self.default_group)
             self.parent().set_df_for_grouping(self.df)
             self.parent().set_grouping_applied(True)
         except Exception as e:

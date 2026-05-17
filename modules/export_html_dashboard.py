@@ -244,7 +244,7 @@ def extract_dashboard_chart_details(payload: dict[str, Any] | None) -> dict[str,
 
 def write_export_html_dashboard(
     *,
-    excel_file: str | Path,
+    excel_file: str | Path | None = None,
     output_path: str | Path,
     assets_dir: str | Path,
     sections: list[dict[str, Any]],
@@ -252,6 +252,8 @@ def write_export_html_dashboard(
     backend_diagnostics_lines: list[str] | None = None,
     group_analysis_payload: dict[str, Any] | None = None,
     group_analysis_plot_assets: dict[str, Any] | None = None,
+    source_label: str | None = None,
+    dashboard_mode: str = "workbook_sidecar",
 ) -> dict[str, Any]:
     """Persist an HTML dashboard plus a sibling asset directory."""
 
@@ -326,7 +328,9 @@ def write_export_html_dashboard(
         plotly_runtime_status = "local"
 
     manifest = {
-        "excel_file": str(Path(str(excel_file)).name),
+        "excel_file": str(Path(str(excel_file)).name) if excel_file else "",
+        "source_label": str(source_label or (Path(str(excel_file)).name if excel_file else dashboard_path.name)),
+        "dashboard_mode": str(dashboard_mode or "workbook_sidecar"),
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "section_count": len(section_entries),
         "chart_count": chart_count,
@@ -1520,6 +1524,20 @@ def _render_theme_switch() -> str:
 def _render_dashboard_html(manifest: dict[str, Any]) -> str:
     sections = manifest.get("sections") or []
     group_analysis = manifest.get("group_analysis") or {}
+    dashboard_mode = str(manifest.get("dashboard_mode") or "workbook_sidecar")
+    source_label = str(
+        manifest.get("source_label") or manifest.get("excel_file") or "Metroliza dashboard"
+    )
+    if dashboard_mode == "html_only":
+        lede_text = (
+            "Standalone browser dashboard for reviewing summary charts and group analysis "
+            "without generating an Excel workbook."
+        )
+    else:
+        lede_text = (
+            "Extended summary charts exported alongside the workbook. Use the interactive view "
+            "to inspect results, or compare against the workbook-matching PNG snapshot shown with each chart."
+        )
     nav_chips = [
         f'<a class="section-chip" href="#{html.escape(section["id"])}">{html.escape(section["header"] or section["id"])}</a>'
         for section in sections
@@ -2275,8 +2293,8 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       <div class="hero-top">
         <div class="hero-copy">
           <p class="eyebrow">Metroliza Export Dashboard</p>
-          <h1>{html.escape(str(manifest.get("excel_file") or "Workbook export"))}</h1>
-          <p class="lede">Extended summary charts exported alongside the workbook. Use the interactive view to inspect results, or compare against the workbook-matching PNG snapshot shown with each chart.</p>
+          <h1>{html.escape(source_label)}</h1>
+          <p class="lede">{html.escape(lede_text)}</p>
         </div>
         {theme_switch_markup}
       </div>

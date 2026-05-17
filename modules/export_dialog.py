@@ -340,7 +340,7 @@ class ExportDialog(QDialog):
             self.preset_combobox.setToolTip(self.preset_label.toolTip())
 
             self.export_target_label = QLabel("Additional outputs:")
-            self.include_google_sheets_checkbox = QCheckBox("Google Sheets version")
+            self.include_google_sheets_checkbox = QCheckBox("Google Sheets")
             self.include_google_sheets_checkbox.setChecked(False)
             google_tooltip = (
                 "Keep the local .xlsx workbook and also try to upload and convert it "
@@ -359,6 +359,13 @@ class ExportDialog(QDialog):
             self.html_dashboard_label.setToolTip(html_dashboard_tooltip)
             self.generate_html_dashboard_checkbox.setToolTip(html_dashboard_tooltip)
             self.html_dashboard_info_button = self._build_info_button(html_dashboard_tooltip)
+            self.html_dashboard_only_checkbox = QCheckBox("HTML only")
+            self.html_dashboard_only_checkbox.setChecked(False)
+            html_only_tooltip = (
+                "Create the browser dashboard without generating an Excel workbook."
+            )
+            self.html_dashboard_only_checkbox.setToolTip(html_only_tooltip)
+            self.html_dashboard_only_checkbox.toggled.connect(self._sync_html_dashboard_only_state)
 
             self.include_industrial_context_checkbox = QCheckBox("Industrial context")
             self.include_industrial_context_checkbox.setChecked(False)
@@ -482,6 +489,7 @@ class ExportDialog(QDialog):
 
             self._set_compact_row_label_widths()
             self._update_group_analysis_scope_enabled_state()
+            self._sync_html_dashboard_only_state()
             self._update_export_button_enabled_state()
 
             self.apply_selected_preset()
@@ -578,13 +586,15 @@ class ExportDialog(QDialog):
             optional_outputs_widget = QWidget()
             optional_outputs_layout = QHBoxLayout(optional_outputs_widget)
             optional_outputs_layout.setContentsMargins(0, 0, 0, 0)
-            optional_outputs_layout.setSpacing(12)
+            optional_outputs_layout.setSpacing(6)
             optional_outputs_layout.addWidget(self.include_google_sheets_checkbox)
             optional_outputs_layout.addWidget(self.google_sheets_info_button)
-            optional_outputs_layout.addSpacing(8)
+            optional_outputs_layout.addSpacing(4)
             optional_outputs_layout.addWidget(self.generate_html_dashboard_checkbox)
             optional_outputs_layout.addWidget(self.html_dashboard_info_button)
-            optional_outputs_layout.addSpacing(8)
+            optional_outputs_layout.addSpacing(4)
+            optional_outputs_layout.addWidget(self.html_dashboard_only_checkbox)
+            optional_outputs_layout.addSpacing(4)
             optional_outputs_layout.addWidget(self.include_industrial_context_checkbox)
             optional_outputs_layout.addWidget(self.industrial_context_info_button)
             optional_outputs_layout.addStretch(1)
@@ -631,7 +641,8 @@ class ExportDialog(QDialog):
             self.setTabOrder(self.group_analysis_level_combobox, self.group_analysis_scope_combobox)
             self.setTabOrder(self.group_analysis_scope_combobox, self.include_google_sheets_checkbox)
             self.setTabOrder(self.include_google_sheets_checkbox, self.generate_html_dashboard_checkbox)
-            self.setTabOrder(self.generate_html_dashboard_checkbox, self.include_industrial_context_checkbox)
+            self.setTabOrder(self.generate_html_dashboard_checkbox, self.html_dashboard_only_checkbox)
+            self.setTabOrder(self.html_dashboard_only_checkbox, self.include_industrial_context_checkbox)
             self.setTabOrder(self.include_industrial_context_checkbox, self.advanced_toggle_button)
             self.setTabOrder(self.advanced_toggle_button, self.violin_plot_min_samplesize)
             self.setTabOrder(self.violin_plot_min_samplesize, self.summary_plot_scale)
@@ -656,6 +667,7 @@ class ExportDialog(QDialog):
         configure_accessibility(self.group_analysis_scope_combobox, name="Group analysis scope")
         configure_accessibility(self.include_google_sheets_checkbox, name="Create Google Sheets output")
         configure_accessibility(self.generate_html_dashboard_checkbox, name="Create HTML dashboard")
+        configure_accessibility(self.html_dashboard_only_checkbox, name="Create only an HTML dashboard")
         configure_accessibility(self.include_industrial_context_checkbox, name="Include industrial context")
         configure_accessibility(self.advanced_toggle_button, name="Show advanced export options")
         configure_accessibility(self.violin_plot_min_samplesize, name="Violin plot minimum sample count")
@@ -748,6 +760,49 @@ class ExportDialog(QDialog):
         self.export_button.setEnabled(has_database and has_output)
         self._refresh_path_readiness_state(has_database=has_database, has_output=has_output)
 
+    def _is_html_dashboard_only(self):
+        checkbox = getattr(self, "html_dashboard_only_checkbox", None)
+        return bool(checkbox is not None and checkbox.isChecked())
+
+    def _coerce_output_path_for_mode(self):
+        if not str(getattr(self, "excel_file", "") or "").strip():
+            return
+        path = Path(str(self.excel_file))
+        if self._is_html_dashboard_only():
+            if path.suffix.lower() != ".html":
+                stem = path.stem
+                if not stem.endswith("_dashboard"):
+                    stem = f"{stem}_dashboard"
+                self.excel_file = path.with_name(f"{stem}.html")
+        elif path.suffix.lower() == ".html":
+            stem = path.stem
+            if stem.endswith("_dashboard"):
+                stem = stem[: -len("_dashboard")]
+            self.excel_file = path.with_name(f"{stem or 'export'}.xlsx")
+        if hasattr(self, "excel_file_text_label"):
+            self._set_path_field_value(self.excel_file_text_label, self.excel_file)
+
+    def _sync_html_dashboard_only_state(self, _checked=None):
+        html_only = self._is_html_dashboard_only()
+        if hasattr(self, "generate_html_dashboard_checkbox"):
+            self.generate_html_dashboard_checkbox.setChecked(html_only or self.generate_html_dashboard_checkbox.isChecked())
+            self.generate_html_dashboard_checkbox.setEnabled(not html_only)
+        if hasattr(self, "include_google_sheets_checkbox"):
+            if html_only:
+                self.include_google_sheets_checkbox.setChecked(False)
+            self.include_google_sheets_checkbox.setEnabled(not html_only)
+        if hasattr(self, "select_excel_label"):
+            self.select_excel_label.setText("Dashboard file:" if html_only else "Excel file:")
+            self.select_excel_label.setToolTip(
+                "Choose where the standalone HTML dashboard will be written."
+                if html_only
+                else "Choose where the exported workbook will be written."
+            )
+        if hasattr(self, "select_excel_button"):
+            self.select_excel_button.setToolTip(self.select_excel_label.toolTip())
+        self._coerce_output_path_for_mode()
+        self._update_export_button_enabled_state()
+
     def _refresh_path_readiness_state(self, *, has_database=None, has_output=None):
         label = getattr(self, "path_readiness_label", None)
         if label is None:
@@ -757,19 +812,20 @@ class ExportDialog(QDialog):
         if has_output is None:
             has_output = bool(str(self.excel_file or "").strip())
 
+        output_label = "HTML dashboard" if self._is_html_dashboard_only() else "output workbook"
         if has_database and has_output:
-            label.setText("Database and output workbook selected. Ready for export.")
+            label.setText(f"Database and {output_label} selected. Ready for export.")
             set_status_variant(label, "success")
             return
         if has_database:
-            label.setText("Select an output workbook path to enable export.")
+            label.setText(f"Select an {output_label} path to enable export.")
             set_status_variant(label, "warning")
             return
         if has_output:
             label.setText("Select a database file to enable export.")
             set_status_variant(label, "warning")
             return
-        label.setText("Select both a database file and output workbook path to enable export.")
+        label.setText(f"Select both a database file and {output_label} path to enable export.")
         set_status_variant(label, "warning")
 
     def _show_database_required_warning(self, action_name):
@@ -961,16 +1017,18 @@ class ExportDialog(QDialog):
             self.log_and_exit(e)
 
     def select_excel_file(self):
-        """Prompt for an output workbook path and avoid immediate name collisions."""
+        """Prompt for an output path and avoid immediate name collisions."""
         try:
-            """Open a file dialog to select an excel file"""
+            html_only = self._is_html_dashboard_only()
             if str(self.db_file or "").strip():
-                default_name = self.db_file[:-3]
-                if not default_name.endswith(".xlsx"):
+                default_name = str(Path(str(self.db_file)).with_suffix(""))
+                if html_only:
+                    default_name = f"{default_name}_dashboard.html"
+                elif not default_name.endswith(".xlsx"):
                     default_name += ".xlsx"
                 file_path = Path(default_name)
             else:
-                file_path = Path.home() / "export.xlsx"
+                file_path = Path.home() / ("export_dashboard.html" if html_only else "export.xlsx")
             base_name = file_path.stem
             suffix = file_path.suffix
             directory = file_path.parent
@@ -980,14 +1038,16 @@ class ExportDialog(QDialog):
                 file_path = directory / f"{base_name}_{counter}{suffix}"
                 counter += 1
 
-            filename, _ = QFileDialog.getSaveFileName(self, "Select an Excel file", str(file_path),
-                                                    "Excel workbook (*.xlsx);;All files (*)")#, options=options)
+            dialog_title = "Select an HTML dashboard file" if html_only else "Select an Excel file"
+            file_filter = "HTML dashboard (*.html);;All files (*)" if html_only else "Excel workbook (*.xlsx);;All files (*)"
+            filename, _ = QFileDialog.getSaveFileName(self, dialog_title, str(file_path), file_filter)
 
             if filename:
                 file_path = Path(filename)
-                logger.info("Selected export Excel file: %s", file_path)
+                logger.info("Selected export output file: %s", file_path)
                 self.excel_file = file_path
-                self._set_path_field_value(self.excel_file_text_label, file_path)
+                self._coerce_output_path_for_mode()
+                self._set_path_field_value(self.excel_file_text_label, self.excel_file)
                 self._update_export_button_enabled_state()
         except Exception as e:
             self.log_and_exit(e)
@@ -1011,7 +1071,10 @@ class ExportDialog(QDialog):
                     violin_input=violin_input,
                     summary_scale_input=summary_scale_input,
                     hide_ok_results=self.hide_ok_results_checkbox.isChecked(),
-                    generate_html_dashboard=self.generate_html_dashboard_checkbox.isChecked(),
+                    generate_html_dashboard=(
+                        self.generate_html_dashboard_checkbox.isChecked()
+                        or self._is_html_dashboard_only()
+                    ),
                     include_industrial_context=(
                         self.include_industrial_context_checkbox.isChecked()
                         if hasattr(self, "include_industrial_context_checkbox")
@@ -1027,7 +1090,8 @@ class ExportDialog(QDialog):
                 return
 
             # Normalize user-visible values after validation/coercion.
-            self.excel_file = Path(export_request.paths.excel_file)
+            output_path = export_request.paths.excel_file or export_request.paths.html_dashboard_file
+            self.excel_file = Path(output_path)
             if hasattr(self, "excel_file_text_label"):
                 self._set_path_field_value(self.excel_file_text_label, self.excel_file)
             self.violin_plot_min_samplesize.setText(str(export_request.options.violin_plot_min_samplesize))
@@ -1113,14 +1177,22 @@ class ExportDialog(QDialog):
             if self.export_error_message:
                 QMessageBox.warning(self, "Export failed", self.export_error_message)
             else:
+                export_target = getattr(self.export_thread, 'export_target', 'excel_xlsx')
+                completion_metadata = getattr(self.export_thread, 'completion_metadata', {})
+                result_path = (
+                    completion_metadata.get('html_dashboard_path')
+                    if export_target == 'html_dashboard'
+                    else self.excel_file
+                )
                 level, title, message = build_export_completion_message(
-                    excel_file=self.excel_file,
-                    export_target=getattr(self.export_thread, 'export_target', 'excel_xlsx'),
-                    completion_metadata=getattr(self.export_thread, 'completion_metadata', {}),
+                    excel_file=result_path,
+                    export_target=export_target,
+                    completion_metadata=completion_metadata,
                 )
 
                 try:
-                    show_export_result_message(self, level, title, message, excel_file=self.excel_file)
+                    reveal_path = None if export_target == 'html_dashboard' else self.excel_file
+                    show_export_result_message(self, level, title, message, excel_file=reveal_path)
                 except Exception:
                     logger.exception("Failed to show rich export completion dialog; falling back to basic message box.")
                     QMessageBox.information(
@@ -1145,6 +1217,8 @@ class ExportDialog(QDialog):
         _log_exception(exception, context=f"ExportDialog.{caller}", reraise=False)
 
     def _selected_export_target(self):
+        if self._is_html_dashboard_only():
+            return 'html_dashboard'
         if self.include_google_sheets_checkbox.isChecked():
             return 'google_sheets_drive_convert'
         return 'excel_xlsx'

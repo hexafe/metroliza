@@ -30,6 +30,8 @@ jobs:
           cache: 'pip'
           cache-dependency-path: |
             requirements.txt
+            requirements-ocr.txt
+            requirements-build.txt
             requirements-dev.txt
 
       - name: Install dependencies
@@ -138,6 +140,30 @@ jobs:
 
       - name: Release hygiene scan
         run: python scripts/check_release_hygiene.py
+
+      - name: Checkout pinned hexafe-groupstats for security audit
+        uses: actions/checkout@v4
+        with:
+          repository: hexafe/hexafe-groupstats
+          ref: ea81205d2618223b754b6a4df41a0b28e5c13cd2
+          path: artifacts/security_siblings/hexafe-groupstats
+
+      - name: Checkout pinned hexafe-plotstats for security audit
+        uses: actions/checkout@v4
+        with:
+          repository: hexafe/hexafe-plotstats
+          ref: 2689231c51f9548de7f8ed50edddc61adb9bc0a5
+          path: artifacts/security_siblings/hexafe-plotstats
+
+      - name: Checkout pinned oznak for security audit
+        uses: actions/checkout@v4
+        with:
+          repository: hexafe/oznak
+          ref: 46eba3f63eab1d65e3117c238324eade9118d242
+          path: artifacts/security_siblings/oznak
+
+      - name: Security audit
+        run: python scripts/security_audit.py --ci --sibling-root artifacts/security_siblings
 
   unit-tests:
     name: Unit tests

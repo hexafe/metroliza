@@ -57,6 +57,8 @@ class AppPaths:
         db_file: Database path; required and must be a non-empty string.
         excel_file: Optional Excel output path; when provided it must end in
             ``.xlsx``.
+        html_dashboard_file: Optional standalone HTML dashboard output path;
+            when provided it must end in ``.html``.
 
     Usage notes:
         ``validate_paths`` enforces required/optional path constraints but does not
@@ -65,6 +67,7 @@ class AppPaths:
 
     db_file: str
     excel_file: str | None = None
+    html_dashboard_file: str | None = None
 
 
 @dataclass(frozen=True)
@@ -221,12 +224,18 @@ def validate_export_request(request: ExportRequest) -> ExportRequest:
     if not isinstance(request, ExportRequest):
         raise ValueError("Export request must be provided as an ExportRequest instance.")
 
-    validated_paths = validate_paths(request.paths)
     validated_options = validate_export_options(request.options)
+    validated_paths = validate_paths(request.paths)
     validated_grouping_df = validate_grouping_df(request.grouping_df)
 
     if request.filter_query is not None and not isinstance(request.filter_query, str):
         raise ValueError("Filter query must be a string when provided.")
+
+    if validated_options.export_target == "html_dashboard":
+        if not validated_paths.html_dashboard_file:
+            raise ValueError("HTML dashboard output path is required for HTML-only export.")
+    elif not validated_paths.excel_file:
+        raise ValueError("Excel file path is required for workbook export.")
 
     return ExportRequest(
         paths=validated_paths,
@@ -292,8 +301,8 @@ def validate_industrial_analytics_request(
 
 _ALLOWED_EXPORT_TYPES = {"line", "scatter"}
 _ALLOWED_EXPORT_PRESETS = {"fast_diagnostics", "full_report"}
-_ALLOWED_EXPORT_TARGETS = {"excel_xlsx", "google_sheets_drive_convert"}
-_ALLOWED_BACKEND_TARGETS = {"excel", "google"}
+_ALLOWED_EXPORT_TARGETS = {"excel_xlsx", "google_sheets_drive_convert", "html_dashboard"}
+_ALLOWED_BACKEND_TARGETS = {"excel", "google", "html"}
 _BACKEND_TARGET_ALIASES = {"google_sheets": "google", "googlesheets": "google"}
 _SAMPLE_SORT_ALIASES = {"sample", "sample #", "sample number", "part #", "part number"}
 _GROUP_ANALYSIS_LEVEL_ALIASES = {
@@ -322,19 +331,19 @@ _ANALYTICS_SOURCE_KINDS = {"production_cache", "tabular_file"}
 
 
 def validate_paths(paths: AppPaths) -> AppPaths:
-    """Validate required application paths and optional Excel target constraints.
+    """Validate required application paths and optional output target constraints.
 
     Args:
         paths: Path bundle where ``db_file`` must be a non-empty string and
-            ``excel_file`` is optional but, when provided, must be non-empty.
+            optional output paths must be non-empty strings when provided.
 
     Returns:
         AppPaths: The same ``paths`` instance; values are validated but not copied
         or normalized.
 
     Raises:
-        ValueError: If required fields are missing/empty or if ``excel_file`` has
-        an invalid suffix other than ``.xlsx``.
+        ValueError: If required fields are missing/empty or if output paths use
+        invalid suffixes.
 
     Invariants:
         Performs shape/content checks only and does not mutate path text.
@@ -350,6 +359,16 @@ def validate_paths(paths: AppPaths) -> AppPaths:
         suffix = Path(paths.excel_file).suffix.lower()
         if suffix != ".xlsx":
             raise ValueError("Excel file must use the .xlsx extension.")
+
+    if paths.html_dashboard_file is not None and (
+        not isinstance(paths.html_dashboard_file, str) or not paths.html_dashboard_file.strip()
+    ):
+        raise ValueError("HTML dashboard path must be a non-empty string when provided.")
+
+    if paths.html_dashboard_file:
+        suffix = Path(paths.html_dashboard_file).suffix.lower()
+        if suffix != ".html":
+            raise ValueError("HTML dashboard file must use the .html extension.")
 
     return paths
 
@@ -449,6 +468,8 @@ def validate_export_options(options: ExportOptions) -> ExportOptions:
     backend_target = _BACKEND_TARGET_ALIASES.get(backend_target, backend_target)
     if backend_target not in _ALLOWED_BACKEND_TARGETS:
         backend_target = ExportOptions.backend_target
+    if export_target == "html_dashboard":
+        backend_target = "html"
     if export_target == "google_sheets_drive_convert" and backend_target == ExportOptions.backend_target:
         backend_target = "google"
 
@@ -484,6 +505,14 @@ def validate_export_options(options: ExportOptions) -> ExportOptions:
             f"Unsupported group analysis scope '{getattr(options, 'group_analysis_scope', None)}'."
         )
 
+    generate_html_dashboard = bool(
+        getattr(options, "generate_html_dashboard", ExportOptions.generate_html_dashboard)
+    )
+    generate_summary_sheet = bool(getattr(options, "generate_summary_sheet", ExportOptions.generate_summary_sheet))
+    if export_target == "html_dashboard":
+        generate_html_dashboard = True
+        generate_summary_sheet = True
+
     return ExportOptions(
         preset=preset,
         export_type=export_type,
@@ -493,10 +522,8 @@ def validate_export_options(options: ExportOptions) -> ExportOptions:
         violin_plot_min_samplesize=violin_min,
         summary_plot_scale=summary_scale,
         hide_ok_results=bool(getattr(options, "hide_ok_results", ExportOptions.hide_ok_results)),
-        generate_summary_sheet=bool(getattr(options, "generate_summary_sheet", ExportOptions.generate_summary_sheet)),
-        generate_html_dashboard=bool(
-            getattr(options, "generate_html_dashboard", ExportOptions.generate_html_dashboard)
-        ),
+        generate_summary_sheet=generate_summary_sheet,
+        generate_html_dashboard=generate_html_dashboard,
         include_industrial_context=bool(
             getattr(options, "include_industrial_context", ExportOptions.include_industrial_context)
         ),

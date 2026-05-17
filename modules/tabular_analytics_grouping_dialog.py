@@ -26,6 +26,7 @@ from modules import ui_theme_tokens
 from modules.csv_summary_utils import CsvGroupingIndex
 from modules.help_menu import attach_help_menu_to_layout
 from modules.list_selection_utils import ListSelectionUtils
+from modules.export_grouping_utils import set_default_group_label
 from modules.tabular_analytics_service import (
     TABULAR_DEFAULT_GROUP,
     TabularColumnFilter,
@@ -909,6 +910,11 @@ class TabularAnalyticsGroupingDialog(QDialog):
         selected_mask = self.df["GROUP"] == selected_group
         self.df.loc[selected_mask, "GROUP"] = new_name
         self.df.loc[selected_mask, self.group_color_column] = assigned_color
+        if selected_group == self.default_group:
+            self.default_group = new_name
+            self.df.loc[self.df["GROUP"] == self.default_group, self.group_color_column] = (
+                self.default_group_color
+            )
         self._ensure_group_color_integrity()
         self._refresh_all(preferred_group=new_name)
 
@@ -1146,6 +1152,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
     def use_grouping(self) -> None:
         parent = self.parent()
         if parent is not None:
+            set_default_group_label(self.df, self.default_group)
             parent.set_df_for_grouping(self.df)
             parent.set_grouping_applied(True)
         self.accept()

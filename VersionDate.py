@@ -1,10 +1,10 @@
 RELEASE_VERSION = "2026.05rc2"
-VERSION_DATE = "260515"
+VERSION_DATE = "260517"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = (
     "CSV Summary multi-file analytics, direct Oznak database export, and clearer dashboards."
 )
-PUBLIC_VERSION_LABEL = "2026.05 RC2 (build 260515)"
+PUBLIC_VERSION_LABEL = "2026.05 RC2 (build 260517)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>

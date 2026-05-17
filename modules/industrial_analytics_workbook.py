@@ -173,8 +173,35 @@ def groupstats_result_dataframe(groupstats_result: ProductionGroupstatsResult) -
                     "metric": metric_name,
                     "row_type": "insight",
                     "message": insight_text,
+                    "why": insight.get("why"),
+                    "first_action": insight.get("first_action"),
+                    "status_class": insight.get("status_class"),
                 }
             )
+        metric_summary = metric.get("metric_summary") if isinstance(metric.get("metric_summary"), dict) else {}
+        rows.append(
+            {
+                "metric": metric_name,
+                "row_type": "metric_summary",
+                "backend_used": metric.get("backend_used") or metric_summary.get("backend_used"),
+                "selection_detail": metric.get("selection_detail") or metric_summary.get("selection_detail"),
+                "posthoc_family": metric.get("posthoc_family") or metric_summary.get("posthoc_family"),
+                "posthoc_method_name": metric.get("posthoc_method_name")
+                or metric_summary.get("posthoc_method_name"),
+                "pairwise_strategy": metric.get("pairwise_strategy"),
+                "posthoc_strategy": metric.get("posthoc_strategy") or metric_summary.get("posthoc_strategy"),
+                "capability_strategy": metric.get("capability_strategy")
+                or metric_summary.get("capability_strategy"),
+                "correction_method": metric.get("correction_method") or metric_summary.get("correction_method"),
+                "correction_policy": metric.get("correction_policy") or metric_summary.get("correction_policy"),
+                "analysis_restriction_label": metric.get("analysis_restriction_label")
+                or metric_summary.get("analysis_restriction_label"),
+                "distribution_flags": "; ".join(metric.get("distribution_flags") or []),
+                "simulation_validation": metric.get("simulation_validation")
+                or metric_summary.get("simulation_validation"),
+                "capability_benchmark": metric.get("capability_benchmark"),
+            }
+        )
         for row in metric.get("descriptive_stats") or []:
             rows.append(
                 {
@@ -193,6 +220,28 @@ def groupstats_result_dataframe(groupstats_result: ProductionGroupstatsResult) -
                     "capability": row.get("capability"),
                     "nok_count": row.get("nok_count"),
                     "nok_percent": row.get("nok_percent"),
+                    "warnings": "; ".join(row.get("warnings") or []),
+                }
+            )
+        for row in metric.get("capability_rows") or []:
+            rows.append(
+                {
+                    "metric": metric_name,
+                    "row_type": "capability",
+                    "group": row.get("group"),
+                    "n": row.get("n"),
+                    "mean": row.get("mean"),
+                    "sigma": row.get("sigma"),
+                    "lsl": row.get("lsl"),
+                    "nominal": row.get("nominal"),
+                    "usl": row.get("usl"),
+                    "cp": row.get("cp"),
+                    "cpl": row.get("cpl"),
+                    "cpu": row.get("cpu"),
+                    "cpk": row.get("cpk"),
+                    "cp_ci": row.get("cp_ci"),
+                    "cpk_ci": row.get("cpk_ci"),
+                    "warnings": "; ".join(row.get("warnings") or []),
                 }
             )
         for row in metric.get("distribution_rows") or []:
@@ -207,6 +256,7 @@ def groupstats_result_dataframe(groupstats_result: ProductionGroupstatsResult) -
                     "normality_test": row.get("normality_test"),
                     "normality_p_value": row.get("normality_p_value"),
                     "normality_status": row.get("normality_status"),
+                    "warnings": "; ".join(row.get("warnings") or []),
                 }
             )
         omnibus = metric.get("omnibus") if isinstance(metric.get("omnibus"), dict) else {}
@@ -218,6 +268,7 @@ def groupstats_result_dataframe(groupstats_result: ProductionGroupstatsResult) -
                     "group": "All groups",
                     "p_value": omnibus.get("p_value"),
                     "effect_size": omnibus.get("effect_size"),
+                    "effect_type": omnibus.get("effect_type"),
                     "test_used": omnibus.get("test_name"),
                     "significant": omnibus.get("significant"),
                 }
@@ -232,8 +283,35 @@ def groupstats_result_dataframe(groupstats_result: ProductionGroupstatsResult) -
                     "p_value": row.get("p_value"),
                     "adjusted_p_value": row.get("adjusted_p_value"),
                     "effect_size": row.get("effect_size"),
+                    "effect_type": row.get("effect_type"),
                     "test_used": row.get("test_used"),
+                    "method_family": row.get("method_family"),
+                    "comparison_estimate": row.get("comparison_estimate"),
+                    "comparison_estimate_label": row.get("comparison_estimate_label"),
+                    "comparison_ci": row.get("comparison_ci"),
+                    "effect_size_ci": row.get("effect_size_ci"),
                     "significant": row.get("significant"),
+                    "warnings": "; ".join(row.get("warnings") or []),
+                }
+            )
+        for row in metric.get("posthoc_rows") or []:
+            rows.append(
+                {
+                    "metric": metric_name,
+                    "row_type": "posthoc",
+                    "group": f"{row.get('group_a')} vs {row.get('group_b')}",
+                    "p_value": row.get("raw_p_value"),
+                    "adjusted_p_value": row.get("adjusted_p_value"),
+                    "effect_size": row.get("effect_size"),
+                    "effect_type": row.get("effect_type"),
+                    "test_used": row.get("method_name"),
+                    "method_family": row.get("family"),
+                    "comparison_estimate": row.get("comparison_estimate"),
+                    "comparison_estimate_label": row.get("comparison_estimate_label"),
+                    "comparison_ci": row.get("comparison_ci"),
+                    "effect_size_ci": row.get("effect_size_ci"),
+                    "significant": row.get("significant"),
+                    "warnings": "; ".join(row.get("warnings") or []),
                 }
             )
     if not rows:

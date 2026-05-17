@@ -31,6 +31,18 @@ class TestUiThemeTokens(unittest.TestCase):
         self.assertEqual(ui_theme_tokens.ACCENT_PRIMARY, '#256D85')
         self.assertEqual(ui_theme_tokens.STATUS_COLORS['warning'], ('#B7791F', '#FFF6E5'))
 
+    def test_dark_theme_tokens_keep_dark_surfaces_and_light_text(self):
+        palette = ui_theme_tokens.theme_tokens(dark_mode=True)
+        self.assertEqual(ui_theme_tokens.ideal_text_color(palette['WINDOW_BACKGROUND']), '#FFFFFF')
+        self.assertEqual(ui_theme_tokens.ideal_text_color(palette['SURFACE_BACKGROUND']), '#FFFFFF')
+        self.assertEqual(ui_theme_tokens.ideal_text_color(palette['TEXT_PRIMARY']), '#000000')
+
+    def test_light_theme_tokens_preserve_existing_defaults(self):
+        palette = ui_theme_tokens.theme_tokens(dark_mode=False)
+        self.assertEqual(palette['WINDOW_BACKGROUND'], ui_theme_tokens.WINDOW_BACKGROUND)
+        self.assertEqual(palette['SURFACE_BACKGROUND'], ui_theme_tokens.SURFACE_BACKGROUND)
+        self.assertEqual(palette['ACCENT_PRIMARY'], ui_theme_tokens.ACCENT_PRIMARY)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -14,6 +14,30 @@ class RequirementsHygieneTests(unittest.TestCase):
             entries.append(normalized)
         return entries
 
+    def _runtime_internal_git_pins(self) -> dict[str, str]:
+        pin_pattern = re.compile(
+            r'^[A-Za-z0-9_.-]+(?:\[[^\]]+\])?\s+@\s+'
+            r'git\+https://github\.com/hexafe/(?P<repo>[A-Za-z0-9_.-]+)\.git@'
+            r'(?P<sha>[0-9a-f]{40})$'
+        )
+        pins: dict[str, str] = {}
+        for entry in self._runtime_requirements():
+            match = pin_pattern.match(entry)
+            if match:
+                pins[match.group('repo')] = match.group('sha')
+        return pins
+
+    def _ci_internal_security_checkout_refs(self) -> dict[str, str]:
+        workflow_text = pathlib.Path('.github/workflows/ci.yml').read_text(encoding='utf-8')
+        checkout_pattern = re.compile(
+            r'repository:\s+hexafe/(?P<repo>[A-Za-z0-9_.-]+)\s*\n'
+            r'\s+ref:\s+(?P<sha>[0-9a-f]{40})'
+        )
+        return {
+            match.group('repo'): match.group('sha')
+            for match in checkout_pattern.finditer(workflow_text)
+        }
+
     def test_requirements_files_use_utf8_and_lf(self):
         for path in [
             pathlib.Path('requirements.txt'),
@@ -52,7 +76,7 @@ class RequirementsHygieneTests(unittest.TestCase):
         matches = [entry for entry in runtime_entries if entry.lower().startswith('hexafe-groupstats[pandas] @ ')]
 
         self.assertEqual(matches, [
-            'hexafe-groupstats[pandas] @ git+https://github.com/hexafe/hexafe-groupstats.git@92327125499f801fcc42f1d1e970c4e55dcd4b3a'
+            'hexafe-groupstats[pandas] @ git+https://github.com/hexafe/hexafe-groupstats.git@ea81205d2618223b754b6a4df41a0b28e5c13cd2'
         ])
 
     def test_runtime_requirements_pin_hexafe_plotstats_to_public_git_source(self):
@@ -64,7 +88,7 @@ class RequirementsHygieneTests(unittest.TestCase):
         ]
 
         self.assertEqual(matches, [
-            'hexafe-plotstats[pandas] @ git+https://github.com/hexafe/hexafe-plotstats.git@168edf1e7ef0838fb9e8f75eca1036d8779e019e'
+            'hexafe-plotstats[pandas] @ git+https://github.com/hexafe/hexafe-plotstats.git@2689231c51f9548de7f8ed50edddc61adb9bc0a5'
         ])
 
     def test_runtime_requirements_pin_oznak_to_public_git_source(self):
@@ -72,8 +96,20 @@ class RequirementsHygieneTests(unittest.TestCase):
         matches = [entry for entry in runtime_entries if entry.lower().startswith('oznak @ ')]
 
         self.assertEqual(matches, [
-            'oznak @ git+https://github.com/hexafe/oznak.git@36bd0c91f2afe94baae33d43b0c77b7c78faa478'
+            'oznak @ git+https://github.com/hexafe/oznak.git@46eba3f63eab1d65e3117c238324eade9118d242'
         ])
+
+    def test_ci_security_audit_checks_same_internal_commits_as_runtime_requirements(self):
+        runtime_pins = self._runtime_internal_git_pins()
+        ci_checkout_refs = self._ci_internal_security_checkout_refs()
+        audited_repos = {'hexafe-groupstats', 'hexafe-plotstats', 'oznak'}
+
+        self.assertEqual(audited_repos, set(ci_checkout_refs) & audited_repos)
+        self.assertEqual(audited_repos, set(runtime_pins) & audited_repos)
+        self.assertEqual(
+            {repo: runtime_pins[repo] for repo in sorted(audited_repos)},
+            {repo: ci_checkout_refs[repo] for repo in sorted(audited_repos)},
+        )
 
     def test_runtime_requirements_do_not_rely_on_local_hexafe_groupstats_path(self):
         runtime_text = pathlib.Path('requirements.txt').read_text(encoding='utf-8')

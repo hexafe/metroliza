@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 from modules.characteristic_alias_service import resolve_characteristic_aliases_bulk
-from modules.export_grouping_utils import normalize_group_labels
+from modules.export_grouping_utils import normalize_default_group_label, normalize_group_labels
 from modules.distribution_shape_analysis import compute_distribution_difference, resolve_distribution_fit_policy
 from modules.hexafe_groupstats_adapter import analyze_group_metric
 
@@ -860,6 +860,7 @@ def _build_pairwise_rows_from_source_rows(
                 'delta_mean': delta_mean,
                 'adjusted_p_value': rounded_adj_p,
                 'effect_size': rounded_effect_size,
+                'effect_type': row.get('effect_type'),
                 'difference': difference,
                 'difference_label': _difference_status_label(
                     adjusted_p_value=rounded_adj_p,
@@ -871,6 +872,12 @@ def _build_pairwise_rows_from_source_rows(
                 'metric': metric_identity,
                 'p_value': row.get('p_value'),
                 'test_used': row.get('test_used'),
+                'method_family': row.get('method_family'),
+                'comparison_estimate': row.get('comparison_estimate'),
+                'comparison_estimate_label': row.get('comparison_estimate_label'),
+                'comparison_ci': row.get('comparison_ci'),
+                'effect_size_ci': row.get('effect_size_ci'),
+                'warnings': list(row.get('warnings') or []),
                 'test_rationale': _build_pairwise_test_rationale(group_count=group_count, test_used=row.get('test_used')),
                 'takeaway': _pairwise_takeaway(adjusted_p_value=rounded_adj_p, effect_size=rounded_effect_size, flags=flags_text),
                 'suggested_action': _pairwise_action(adjusted_p_value=rounded_adj_p, effect_size=rounded_effect_size, flags=flags_text),
@@ -1035,7 +1042,14 @@ def compute_pairwise_rows(metric_identity, grouped_values, *, alpha=0.05, correc
                 'p_value': row.get('p_value'),
                 'adjusted_p_value': row.get('adjusted_p_value'),
                 'effect_size': row.get('effect_size'),
+                'effect_type': row.get('effect_type'),
                 'test_used': row.get('test_used'),
+                'method_family': row.get('method_family'),
+                'comparison_estimate': row.get('comparison_estimate'),
+                'comparison_estimate_label': row.get('comparison_estimate_label'),
+                'comparison_ci': row.get('comparison_ci'),
+                'effect_size_ci': row.get('effect_size_ci'),
+                'warnings': list(row.get('warnings') or []),
                 'test_rationale': _build_pairwise_test_rationale(group_count=group_count, test_used=row.get('test_used')),
                 'significant': row.get('significant'),
             }
@@ -1340,11 +1354,16 @@ def _build_unmatched_metrics_summary(metric_frame, *, metric_column, reference_c
     return {'count': len(unmatched_metrics), 'metrics': unmatched_metrics}
 
 
-def _normalize_grouped_working_df(grouped_df, *, alias_db_path=None):
+def _normalize_grouped_working_df(grouped_df, *, alias_db_path=None, default_group_label='POPULATION'):
+    default_group_label = normalize_default_group_label(default_group_label)
     working = grouped_df.copy()
     if 'GROUP' not in working.columns:
-        working['GROUP'] = 'POPULATION'
-    working['GROUP'] = normalize_group_labels(working['GROUP'], missing_label='POPULATION', normalize_blank=True)
+        working['GROUP'] = default_group_label
+    working['GROUP'] = normalize_group_labels(
+        working['GROUP'],
+        missing_label=default_group_label,
+        normalize_blank=True,
+    )
     working['MEAS'] = pd.to_numeric(working.get('MEAS'), errors='coerce')
 
     canonical_metric_series = _build_canonical_metric_series(working)
@@ -1456,6 +1475,16 @@ def _partition_metric_analysis_inputs(
     analysis_level,
     alpha,
     correction_method,
+    posthoc_method,
+    include_effect_size_ci,
+    ci_level,
+    ci_bootstrap_iterations,
+    capability_benchmark,
+    simulation_validation_iterations,
+    simulation_random_seed,
+    backend,
+    enable_rust_in_auto,
+    distribution_diagnostics,
 ):
     reference_value = None
     if effective_scope == 'multi_reference' and reference_column is not None and reference_column in metric_rows_df.columns:
@@ -1473,6 +1502,16 @@ def _partition_metric_analysis_inputs(
         spec_records=_build_metric_spec_records(metric_rows_df, spec_columns),
         alpha=alpha,
         correction_method=correction_method,
+        posthoc_method=posthoc_method,
+        include_effect_size_ci=include_effect_size_ci,
+        ci_level=ci_level,
+        ci_bootstrap_iterations=ci_bootstrap_iterations,
+        capability_benchmark=capability_benchmark,
+        simulation_validation_iterations=simulation_validation_iterations,
+        simulation_random_seed=simulation_random_seed,
+        backend=backend,
+        enable_rust_in_auto=enable_rust_in_auto,
+        distribution_diagnostics=distribution_diagnostics,
     )
     spec_status = package_analysis['spec_status']
     spec_payload = package_analysis['spec_payload']
@@ -1581,23 +1620,35 @@ def _assemble_metric_payload(*, metric_partition, descriptive_stage, pairwise_st
         'pairwise_rows': pairwise_rows,
         'distribution_difference': distribution_omnibus,
         'distribution_pairwise_rows': distribution_stage.get('pairwise_rows', []),
+        'posthoc_rows': list(package_analysis.get('posthoc_rows') or []),
+        'capability_rows': list(package_analysis.get('capability_rows') or []),
+        'metric_summary': package_analysis.get('metric_summary') or {},
         'spec': spec_payload,
         'spec_status': spec_status,
         'spec_status_label': get_spec_status_label(spec_status),
         'analysis_policy': policy,
         'pairwise_allowed': restriction_fields['pairwise_allowed'],
         'capability_allowed': restriction_fields['capability_allowed'],
-        'analysis_restriction_label': restriction_fields['analysis_restriction_label'],
+        'analysis_restriction_label': package_analysis.get('analysis_restriction_label')
+        or restriction_fields['analysis_restriction_label'],
         'capability': descriptive_stage['capability'],
-        'backend_used': metric_partition['package_analysis']['backend_used'],
-        'selection_detail': metric_partition['package_analysis']['selection_detail'],
-        'posthoc_family': metric_partition['package_analysis']['posthoc_family'],
-        'posthoc_method_name': metric_partition['package_analysis']['posthoc_method_name'],
-        'pairwise_strategy': metric_partition['package_analysis']['pairwise_strategy'],
-        'posthoc_strategy': metric_partition['package_analysis']['posthoc_strategy'],
-        'capability_strategy': metric_partition['package_analysis']['capability_strategy'],
-        'warnings': metric_partition['package_analysis']['warnings'],
-        'structured_insights': metric_partition['package_analysis'].get('structured_insights', []),
+        'backend_used': package_analysis.get('backend_used'),
+        'selection_detail': package_analysis.get('selection_detail'),
+        'posthoc_family': package_analysis.get('posthoc_family'),
+        'posthoc_method_name': package_analysis.get('posthoc_method_name'),
+        'pairwise_strategy': package_analysis.get('pairwise_strategy'),
+        'posthoc_strategy': package_analysis.get('posthoc_strategy'),
+        'capability_strategy': package_analysis.get('capability_strategy'),
+        'correction_method': package_analysis.get('correction_method'),
+        'correction_policy': package_analysis.get('correction_policy'),
+        'distribution_flags': list(package_analysis.get('distribution_flags') or []),
+        'simulation_validation': package_analysis.get('simulation_validation'),
+        'capability_benchmark': package_analysis.get('capability_benchmark'),
+        'posthoc_method': package_analysis.get('posthoc_method'),
+        'backend_requested': package_analysis.get('backend_requested'),
+        'enable_rust_in_auto': package_analysis.get('enable_rust_in_auto'),
+        'warnings': list(package_analysis.get('warnings') or []),
+        'structured_insights': package_analysis.get('structured_insights', []),
         'primary_insight': primary_insight,
         'comparability_summary': comparability_summary,
         'plot_eligibility': plot_eligibility,
@@ -1637,11 +1688,23 @@ def build_group_analysis_payload(
     eligible_metrics=None,
     alpha=0.05,
     correction_method='holm',
+    posthoc_method='auto',
+    include_effect_size_ci=False,
+    ci_level=0.95,
+    ci_bootstrap_iterations=1000,
+    capability_benchmark=1.33,
+    simulation_validation_iterations=0,
+    simulation_random_seed=42,
+    backend='auto',
+    enable_rust_in_auto=False,
+    distribution_diagnostics=True,
     analysis_level='light',
     alias_db_path=None,
     distribution_fit_policy=None,
+    default_group_label='POPULATION',
 ):
     """Assemble metric-level Group Analysis payload for writer modules."""
+    default_group_label = normalize_default_group_label(default_group_label)
     if not isinstance(grouped_df, pd.DataFrame):
         grouped_df = pd.DataFrame()
 
@@ -1656,7 +1719,11 @@ def build_group_analysis_payload(
     normalized_level = str(analysis_level or 'light').strip().lower()
 
     if isinstance(grouped_df, pd.DataFrame) and 'GROUP' in grouped_df.columns:
-        grouped_series = normalize_group_labels(grouped_df['GROUP'], missing_label='POPULATION', normalize_blank=True)
+        grouped_series = normalize_group_labels(
+            grouped_df['GROUP'],
+            missing_label=default_group_label,
+            normalize_blank=True,
+        )
         group_count = int(grouped_series.dropna().nunique())
     else:
         group_count = 0
@@ -1686,7 +1753,11 @@ def build_group_analysis_payload(
             'diagnostics': diagnostics,
         }
 
-    working = _normalize_grouped_working_df(grouped_df, alias_db_path=alias_db_path)
+    working = _normalize_grouped_working_df(
+        grouped_df,
+        alias_db_path=alias_db_path,
+        default_group_label=default_group_label,
+    )
     metric_column = '__canonical_metric__'
     reference_column = 'REFERENCE' if 'REFERENCE' in working.columns else None
     spec_columns = {
@@ -1735,6 +1806,16 @@ def build_group_analysis_payload(
             analysis_level=analysis_level,
             alpha=alpha,
             correction_method=correction_method,
+            posthoc_method=posthoc_method,
+            include_effect_size_ci=include_effect_size_ci,
+            ci_level=ci_level,
+            ci_bootstrap_iterations=ci_bootstrap_iterations,
+            capability_benchmark=capability_benchmark,
+            simulation_validation_iterations=simulation_validation_iterations,
+            simulation_random_seed=simulation_random_seed,
+            backend=backend,
+            enable_rust_in_auto=enable_rust_in_auto,
+            distribution_diagnostics=distribution_diagnostics,
         )
         if len(metric_partition['populated_groups']) < 2:
             skipped_metrics.append({'metric': metric_identity, 'reason': 'insufficient_groups', 'group_count': len(metric_partition['populated_groups'])})

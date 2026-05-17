@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from io import BytesIO
 from typing import Any, Iterable
@@ -40,6 +41,71 @@ class HistogramRenderResult:
     png_bytes: bytes
     backend: str
     stats_table: HistogramStatsTable
+
+
+def metroliza_dashboard_plotstats_theme() -> dict[str, Any]:
+    """Return serializable plotstats theme tokens aligned to Metroliza dashboards."""
+
+    return {
+        "name": "metroliza_dashboard",
+        "font_family": 'Aptos, "Segoe UI", "Helvetica Neue", sans-serif',
+        "font_size": 12,
+        "colors": {
+            "background": "#ffffff",
+            "plot_background": "#ffffff",
+            "text": "#1f2933",
+            "muted_text": "#687385",
+            "grid": SUMMARY_PLOT_PALETTE["grid"],
+            "axis": SUMMARY_PLOT_PALETTE["axis_spine"],
+            "bar": SUMMARY_PLOT_PALETTE["distribution_base"],
+            "bar_outline": SUMMARY_PLOT_PALETTE["distribution_foreground"],
+            "fit": SUMMARY_PLOT_PALETTE["central_tendency"],
+            "spec_limit": SUMMARY_PLOT_PALETTE["spec_limit"],
+            "nominal": SUMMARY_PLOT_PALETTE["central_tendency"],
+        },
+    }
+
+
+def build_dashboard_plotly_spec(
+    payload: Mapping[str, Any],
+    *,
+    title: str,
+    theme: str | Mapping[str, Any] | None = None,
+    static: bool = True,
+) -> dict[str, Any] | None:
+    """Build a bounded Plotly spec through hexafe-plotstats dashboard adapters.
+
+    The package dependency is optional at import time for development and tests.
+    Callers keep their existing static-image fallback when this returns ``None``.
+    """
+
+    try:
+        from hexafe_plotstats.adapters import plotly_spec_from_metroliza_dashboard_payload
+    except Exception:
+        return None
+
+    try:
+        spec = plotly_spec_from_metroliza_dashboard_payload(
+            payload,
+            title=title,
+            theme=theme or metroliza_dashboard_plotstats_theme(),
+            static=static,
+        )
+    except Exception:
+        return None
+    if not isinstance(spec, dict):
+        return None
+    data = spec.get("data")
+    if not isinstance(data, list) or not data:
+        return None
+    layout = spec.get("layout") if isinstance(spec.get("layout"), dict) else {}
+    config = spec.get("config") if isinstance(spec.get("config"), dict) else {}
+    return {
+        "data": data,
+        "layout": layout,
+        "config": config,
+        "metadata": spec.get("metadata") if isinstance(spec.get("metadata"), dict) else {},
+    }
 
 
 def build_histogram_stats_table(
@@ -411,6 +477,8 @@ def _resolved_bin_count(values: np.ndarray, *, bin_count: int | None = None) -> 
 __all__ = [
     "HistogramRenderResult",
     "HistogramStatsTable",
+    "build_dashboard_plotly_spec",
     "build_histogram_stats_table",
+    "metroliza_dashboard_plotstats_theme",
     "render_histogram_png",
 ]

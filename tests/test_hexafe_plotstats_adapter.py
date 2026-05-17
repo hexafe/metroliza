@@ -4,7 +4,11 @@ from dataclasses import dataclass
 import sys
 from types import ModuleType, SimpleNamespace
 
-from modules.hexafe_plotstats_adapter import build_histogram_stats_table, render_histogram_png
+from modules.hexafe_plotstats_adapter import (
+    build_dashboard_plotly_spec,
+    build_histogram_stats_table,
+    render_histogram_png,
+)
 
 
 def test_histogram_stats_table_uses_export_style_rows() -> None:
@@ -88,3 +92,44 @@ def test_render_histogram_png_uses_hexafe_plotstats_when_available(monkeypatch) 
     assert calls["spec_limits"] == FakeSpecLimits()
     assert calls["metadata"]["axis_labels"] == {"x": "Cycle Time", "y": "Count"}
     assert any(row.label == "Mean" and row.value == "2.000" for row in calls["table_rows"])
+
+
+def test_build_dashboard_plotly_spec_uses_plotstats_metroliza_adapter(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    def fake_plotly_spec(payload, *, title, theme, static):
+        calls["payload"] = payload
+        calls["title"] = title
+        calls["theme"] = theme
+        calls["static"] = static
+        return {
+            "data": [{"type": "bar", "x": [1], "y": [2]}],
+            "layout": {"title": {"text": title}},
+            "config": {"staticPlot": True},
+            "metadata": {"backend": "plotstats"},
+            "resolved": {"large": "not included in Metroliza manifest"},
+        }
+
+    package = ModuleType("hexafe_plotstats")
+    adapters = ModuleType("hexafe_plotstats.adapters")
+    adapters.plotly_spec_from_metroliza_dashboard_payload = fake_plotly_spec
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats", package)
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats.adapters", adapters)
+
+    spec = build_dashboard_plotly_spec(
+        {"type": "histogram", "values": [1.0, 2.0]},
+        title="Cycle Time",
+        theme="compact_report",
+        static=True,
+    )
+
+    assert spec == {
+        "data": [{"type": "bar", "x": [1], "y": [2]}],
+        "layout": {"title": {"text": "Cycle Time"}},
+        "config": {"staticPlot": True},
+        "metadata": {"backend": "plotstats"},
+    }
+    assert calls["payload"] == {"type": "histogram", "values": [1.0, 2.0]}
+    assert calls["title"] == "Cycle Time"
+    assert calls["theme"] == "compact_report"
+    assert calls["static"] is True

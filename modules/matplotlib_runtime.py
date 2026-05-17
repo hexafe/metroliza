@@ -16,20 +16,18 @@ def configure_headless_matplotlib(*, cache_dir_name: str = "metroliza-mpl") -> N
     """
 
     os.environ.setdefault("MPLBACKEND", "Agg")
+    if not os.environ.get("MPLCONFIGDIR"):
+        cache_dir = Path(tempfile.gettempdir()) / cache_dir_name
+        try:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        else:
+            os.environ["MPLCONFIGDIR"] = str(cache_dir)
+
     try:
         import matplotlib
 
         matplotlib.use(os.environ.get("MPLBACKEND", "Agg"), force=True)
     except Exception:
         pass
-
-    if os.environ.get("MPLCONFIGDIR"):
-        return
-
-    cache_dir = Path(tempfile.gettempdir()) / cache_dir_name
-    try:
-        cache_dir.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        return
-
-    os.environ["MPLCONFIGDIR"] = str(cache_dir)

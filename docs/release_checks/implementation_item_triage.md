@@ -26,4 +26,8 @@ Record the branch, commit SHA, artifact/build ID, and evidence links in the curr
 
 | Implementation item | Gate decision (`must-fix`/`defer`/`informational`) | Owner | Target RC | Evidence / rationale |
 | --- | --- | --- | --- | --- |
-| _No active items recorded in this document._ | `informational` | Release owner | Current RC | Use this table when a current build has live implementation triage. |
+| Final RC2 commit and fresh CI baseline | `must-fix` | Release owner | 2026.05 RC2 | Current local audit worktree is dirty on top of `ae124fc`; release evidence must be refreshed after the final commit is pushed and CI completes. |
+| Packaging smoke evidence for current RC2 build | `must-fix` | Release engineer / QA | 2026.05 RC2 | Run the opt-in packaging smoke workflow or equivalent local build/launch smoke and link the artifact/logs before promotion. |
+| Windows EXE clean-machine launch evidence | `must-fix` | Release engineer / QA | 2026.05 RC2 | Linux local validation cannot prove the Windows user artifact; build the Windows EXE and smoke-launch it in a clean/sandbox Windows environment. |
+| Google conversion smoke evidence for current RC2 build | `must-fix` | QA owner / Release manager | 2026.05 RC2 | [`google_conversion_smoke.md`](./google_conversion_smoke.md) has no RC2 live smoke result yet; green default CI does not satisfy this release gate. |
+| Bandit medium SQL-construction baseline triage | `must-fix` | Dev / Security reviewer | 2026.05 RC2 | `scripts/security_audit.py --ci` currently treats medium Bandit findings as report-only warnings; review B608 SQL-construction findings and record a fix/waiver before Go. |

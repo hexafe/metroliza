@@ -37,7 +37,7 @@ from modules.contracts import ExportRequest, validate_export_request
 import modules.custom_logger as custom_logger
 from modules.db import execute_select_with_columns, read_sql_dataframe, sqlite_connection_scope
 from modules.excel_sheet_utils import unique_sheet_name
-from modules.export_backends import ExcelExportBackend
+from modules.export_backends import ExcelExportBackend, HtmlDashboardExportBackend
 from modules.google_drive_export import (
     GoogleDriveAuthError,
     GoogleDriveCanceledError,
@@ -108,6 +108,7 @@ from modules.report_schema import ensure_report_schema
 from modules.export_grouping_utils import (
     add_group_key as _add_group_key,
     apply_group_assignments as _apply_group_assignments,
+    get_default_group_label as _get_default_group_label,
     keys_have_usable_values as _keys_have_usable_values,
     prepare_grouping_dataframe as _prepare_grouping_dataframe,
     resolve_group_merge_keys as _resolve_group_merge_keys,
@@ -3362,6 +3363,15 @@ class ExportDataThread(QThread):
         validated_request = validate_export_request(export_request)
         self.db_file = validated_request.paths.db_file
         self.excel_file = validated_request.paths.excel_file
+        self.html_dashboard_file = (
+            validated_request.paths.html_dashboard_file
+            or (
+                str(_resolve_html_dashboard_path(self.excel_file))
+                if validated_request.options.generate_html_dashboard and self.excel_file
+                else None
+            )
+        )
+        self._primary_output_file = self.excel_file or self.html_dashboard_file
 
         self.include_industrial_context = validated_request.options.include_industrial_context
         default_filter_query = build_measurement_export_query(
@@ -3405,11 +3415,6 @@ class ExportDataThread(QThread):
             "html_dashboard_assets_path": None,
             "html_dashboard_warnings": [],
         }
-        self.html_dashboard_file = (
-            str(_resolve_html_dashboard_path(self.excel_file))
-            if self.generate_html_dashboard and self.excel_file
-            else None
-        )
         self.html_dashboard_assets_dir = (
             str(_resolve_html_dashboard_assets_dir(self.html_dashboard_file))
             if self.html_dashboard_file
@@ -3531,6 +3536,12 @@ class ExportDataThread(QThread):
                 backend_diagnostics_lines=self.completion_metadata.get('backend_diagnostics_lines', []),
                 group_analysis_payload=self._html_group_analysis_payload,
                 group_analysis_plot_assets=self._html_group_analysis_plot_assets,
+                source_label=(
+                    os.path.basename(self.html_dashboard_file)
+                    if self.export_target == "html_dashboard"
+                    else None
+                ),
+                dashboard_mode="html_only" if self.export_target == "html_dashboard" else "workbook_sidecar",
             )
         except Exception as exc:
             warning_message = f"HTML dashboard export skipped: {exc}"
@@ -4241,6 +4252,25 @@ class ExportDataThread(QThread):
             should_cancel=self._check_canceled,
         )
 
+    def run_html_dashboard_pipeline(self, dashboard_writer):
+        """Build dashboard sections and group analysis without writing an XLSX file."""
+
+        return run_export_steps(
+            [
+                lambda: (
+                    self.update_label.emit(build_three_line_status("Building dashboard...", "Preparing chart sections", "ETA --")),
+                    self._emit_stage_progress('measurement_sheets_charts', 0.0),
+                    self.add_measurements_horizontal_sheet(dashboard_writer),
+                    self._emit_stage_progress('measurement_sheets_charts', 1.0),
+                ),
+                lambda: (
+                    self.update_label.emit(build_three_line_status("Building group analysis...", "Preparing dashboard statistics", "ETA --")),
+                    self._write_group_analysis_outputs(dashboard_writer),
+                ),
+            ],
+            should_cancel=self._check_canceled,
+        )
+
     def get_export_backend(self):
         """Handle `get_export_backend` for `ExportDataThread`.
 
@@ -4256,6 +4286,7 @@ class ExportDataThread(QThread):
         target_to_backend = {
             'excel_xlsx': ExcelExportBackend(),
             'google_sheets_drive_convert': ExcelExportBackend(),
+            'html_dashboard': HtmlDashboardExportBackend(),
         }
         return target_to_backend[self.export_target]
 
@@ -4268,7 +4299,7 @@ class ExportDataThread(QThread):
     def _build_export_context(self, *, stage, fallback_reason=""):
         return _build_export_context_payload(
             export_target=self.export_target,
-            output_path=self.excel_file,
+            output_path=self._primary_output_file,
             stage=stage,
             fallback_reason=fallback_reason,
         )
@@ -4278,7 +4309,7 @@ class ExportDataThread(QThread):
             logger,
             message,
             export_target=self.export_target,
-            output_path=self.excel_file,
+            output_path=self._primary_output_file,
             stage=stage,
             level=level,
             fallback_reason=fallback_reason,
@@ -4289,7 +4320,7 @@ class ExportDataThread(QThread):
         _log_google_issue_message(
             logger,
             context,
-            output_path=self.excel_file,
+            output_path=self._primary_output_file,
             export_target=self.export_target,
             fallback_message=fallback_message,
             warnings=warnings,
@@ -4420,7 +4451,12 @@ class ExportDataThread(QThread):
             self._emit_stage_progress('finalize', 1.0)
             self._update_completion_chart_telemetry()
             self._write_html_dashboard_if_requested()
-            self.update_label.emit(build_three_line_status("Export completed successfully.", "Workbook and metadata finalized", "ETA 0:00"))
+            completion_detail = (
+                "Dashboard finalized"
+                if self.export_target == "html_dashboard"
+                else "Workbook and metadata finalized"
+            )
+            self.update_label.emit(build_three_line_status("Export completed successfully.", completion_detail, "ETA 0:00"))
             self._log_export_stage("Export completed successfully", stage="completed")
             self.finished.emit()
             QCoreApplication.processEvents()
@@ -5122,11 +5158,12 @@ class ExportDataThread(QThread):
 
         grouped_export_df = self._build_export_filtered_dataframe()
         grouped_export_df = self._ensure_sample_number_column(grouped_export_df)
+        default_group_label = _get_default_group_label(self.prepared_grouping_df)
         grouped_export_df, _ = self._apply_group_assignments(
             grouped_export_df,
             self.prepared_grouping_df,
             group_analysis_mode=True,
-            fallback_group_label='POPULATION',
+            fallback_group_label=default_group_label,
         )
 
         requested_scope = str(self.group_analysis_scope or 'auto').strip().lower()
@@ -5135,6 +5172,7 @@ class ExportDataThread(QThread):
             requested_scope=requested_scope,
             analysis_level=mode,
             alias_db_path=self.db_file,
+            default_group_label=default_group_label,
         )
         if self.generate_html_dashboard:
             self._html_group_analysis_payload = payload

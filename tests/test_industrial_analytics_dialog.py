@@ -85,6 +85,9 @@ def test_production_analytics_dialog_loads_cached_metric_candidates(tmp_path) ->
         ]
         assert "Cycle Time S" in metric_labels
         assert "line" in group_values
+        assert not dialog.workbook_checkbox.isChecked()
+        assert not dialog.workbook_button.isEnabled()
+        assert not dialog.parameter_sheets_checkbox.isEnabled()
         assert dialog.start_button.isEnabled()
     finally:
         dialog.close()
@@ -188,10 +191,50 @@ def test_tabular_analytics_dialog_loads_csv_metrics_and_group_columns(tmp_path) 
         assert "line" in group_values
         assert dialog.timestamp_column_combo.currentData() == "time_stamp"
         assert dialog.reference_column_combo.currentData() == "reference_id"
+        assert not dialog.workbook_checkbox.isChecked()
+        assert not dialog.workbook_button.isEnabled()
+        assert not dialog.parameter_sheets_checkbox.isEnabled()
         assert dialog.start_button.isEnabled()
         thread = dialog.create_analytics_thread()
+        assert thread.output_workbook_file == ""
         assert thread.timestamp_column == "time_stamp"
         assert thread.reference_column == "reference_id"
+    finally:
+        dialog.close()
+
+
+def test_tabular_analytics_dialog_uses_workbook_path_only_when_opted_in(tmp_path) -> None:
+    _app()
+    input_file = tmp_path / "table.csv"
+    workbook_file = tmp_path / "table_analytics.xlsx"
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=4, freq="h"),
+            "Reference ID": ["R1", "R1", "R2", "R2"],
+            "Line": ["L1", "L2", "L1", "L2"],
+            "Length mm": [10.0, 10.2, 10.1, 10.4],
+        }
+    ).to_csv(input_file, index=False)
+
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.input_file = str(input_file)
+        dialog.output_dashboard_file = str(tmp_path / "table_analytics.html")
+        dialog.output_workbook_file = str(workbook_file)
+        dialog.load_metrics()
+
+        disabled_thread = dialog.create_analytics_thread()
+        assert disabled_thread.output_workbook_file == ""
+        assert disabled_thread.separate_parameter_sheets is False
+
+        dialog.workbook_checkbox.setChecked(True)
+        dialog._sync_ui_state()
+
+        assert dialog.workbook_button.isEnabled()
+        assert dialog.parameter_sheets_checkbox.isEnabled()
+        enabled_thread = dialog.create_analytics_thread()
+        assert enabled_thread.output_workbook_file == str(workbook_file)
+        assert enabled_thread.separate_parameter_sheets is True
     finally:
         dialog.close()
 
@@ -602,6 +645,37 @@ def test_tabular_groupstats_is_disabled_until_manual_groups_are_available() -> N
         assert dialog.groupstats_checkbox.isEnabled()
         assert dialog.groupstats_checkbox.toolTip() == ""
         assert dialog.groupstats_reason_label.isHidden()
+    finally:
+        dialog.close()
+
+
+def test_tabular_groupstats_toggle_does_not_start_analysis_worker(monkeypatch) -> None:
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.metric_candidates = (ProductionMetricSelection("length_mm", "Length Mm"),)
+        dialog._populate_metrics()
+        grouping_df = pd.DataFrame(
+            {
+                "REPORT_ID": [1, 2],
+                "GROUP": ["Fixture A", "POPULATION"],
+            }
+        )
+        dialog.set_df_for_grouping(grouping_df)
+        dialog.set_grouping_applied(True)
+
+        def _unexpected_worker(*_args, **_kwargs):
+            raise AssertionError("Toggling groupstats should not create an analytics worker")
+
+        monkeypatch.setattr("modules.industrial_analytics_dialog.IndustrialAnalyticsThread", _unexpected_worker)
+
+        dialog.groupstats_checkbox.setChecked(False)
+        dialog._sync_ui_state()
+        dialog.groupstats_checkbox.setChecked(True)
+        dialog._sync_ui_state()
+
+        assert dialog.groupstats_checkbox.isEnabled()
+        assert dialog.analytics_thread is None
     finally:
         dialog.close()
 

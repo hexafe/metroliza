@@ -320,6 +320,207 @@ class XlsxWorkbookAdapter:
         return XlsxChartAdapter(self._workbook.add_chart(chart_spec))
 
 
+class _NullChartAdapter:
+    """No-op chart adapter used when producing a dashboard without a workbook."""
+
+    def add_series(self, series_spec: dict[str, Any]) -> None:
+        return None
+
+    def set_title(self, title_spec: dict[str, Any]) -> None:
+        return None
+
+    def set_x_axis(self, axis_spec: dict[str, Any]) -> None:
+        return None
+
+    def set_y_axis(self, axis_spec: dict[str, Any]) -> None:
+        return None
+
+    def set_legend(self, legend_spec: dict[str, Any]) -> None:
+        return None
+
+    def set_size(self, size_spec: dict[str, Any]) -> None:
+        return None
+
+
+@dataclass
+class _NullWorksheetAdapter:
+    """No-op worksheet adapter that preserves dashboard side effects only."""
+
+    name: str
+
+    def write(self, row: int, col: int, value: Any, cell_format: Any = None) -> None:
+        return None
+
+    def write_formula(self, row: int, col: int, formula: str, cell_format: Any = None) -> None:
+        return None
+
+    def write_url(
+        self,
+        row: int,
+        col: int,
+        url: str,
+        cell_format: Any = None,
+        string: str | None = None,
+        tip: str | None = None,
+    ) -> None:
+        return None
+
+    def write_column(self, row: int, col: int, data: Any) -> None:
+        return None
+
+    def conditional_format(
+        self,
+        first_row: int,
+        first_col: int,
+        last_row: int,
+        last_col: int,
+        options: dict[str, Any],
+    ) -> None:
+        return None
+
+    def set_column(
+        self,
+        first_col: int,
+        last_col: int,
+        width: float | None = None,
+        cell_format: Any = None,
+        options: dict[str, Any] | None = None,
+    ) -> None:
+        return None
+
+    def set_row(
+        self,
+        row: int,
+        height: float | None = None,
+        cell_format: Any = None,
+        options: dict[str, Any] | None = None,
+    ) -> None:
+        return None
+
+    def insert_chart(self, row: int, col: int, chart: ChartContract, options: dict[str, Any] | None = None) -> None:
+        return None
+
+    def insert_image(self, row: int, col: int, filename: str, options: dict[str, Any]) -> None:
+        return None
+
+    def freeze_panes(self, row: int, col: int) -> None:
+        return None
+
+    def autofilter(self, first_row: int, first_col: int, last_row: int, last_col: int) -> None:
+        return None
+
+    def hide_gridlines(self, option: int = 2) -> None:
+        return None
+
+    def merge_range(
+        self,
+        first_row: int,
+        first_col: int,
+        last_row: int,
+        last_col: int,
+        data: Any,
+        cell_format: Any = None,
+    ) -> None:
+        return None
+
+    def set_landscape(self) -> None:
+        return None
+
+    def fit_to_pages(self, width: int, height: int) -> None:
+        return None
+
+    def set_paper(self, paper_type: int) -> None:
+        return None
+
+    def repeat_rows(self, first_row: int, last_row: int) -> None:
+        return None
+
+    def print_area(self, first_row: int, first_col: int, last_row: int, last_col: int) -> None:
+        return None
+
+    def set_footer(self, footer: str) -> None:
+        return None
+
+    def __getattr__(self, name: str) -> Any:
+        def _noop(*_args: Any, **_kwargs: Any) -> None:
+            return None
+
+        return _noop
+
+
+@dataclass
+class _NullWorkbookAdapter:
+    """No-op workbook adapter for HTML-only exports."""
+
+    sheets: dict[str, _NullWorksheetAdapter]
+
+    def add_worksheet(self, name: str) -> _NullWorksheetAdapter:
+        worksheet = _NullWorksheetAdapter(str(name or "Sheet"))
+        self.sheets[worksheet.name] = worksheet
+        return worksheet
+
+    def add_format(self, properties: dict[str, Any]) -> dict[str, Any]:
+        return dict(properties or {})
+
+    def add_chart(self, chart_spec: dict[str, Any]) -> _NullChartAdapter:
+        return _NullChartAdapter()
+
+
+@dataclass
+class _HtmlDashboardWriter:
+    """Minimal writer surface used by dashboard-only export stages."""
+
+    output_path: str
+    workbook: _NullWorkbookAdapter
+    sheets: dict[str, _NullWorksheetAdapter]
+
+
+class HtmlDashboardExportBackend:
+    """Backend that builds the HTML dashboard without creating a workbook."""
+
+    export_target = "html_dashboard"
+
+    def create_writer(self, excel_file: str) -> _HtmlDashboardWriter:
+        """Create a no-op workbook writer surface for dashboard-only generation."""
+        sheets: dict[str, _NullWorksheetAdapter] = {}
+        return _HtmlDashboardWriter(
+            output_path=str(excel_file or ""),
+            workbook=_NullWorkbookAdapter(sheets),
+            sheets=sheets,
+        )
+
+    def close_writer(self, writer: _HtmlDashboardWriter) -> None:
+        """Close a dashboard-only writer; no filesystem handle is opened."""
+        return None
+
+    def write_dataframe(self, writer: _HtmlDashboardWriter, df: pd.DataFrame, sheet_name: str) -> None:
+        """Record a logical sheet name without writing tabular workbook data."""
+        writer.sheets[str(sheet_name)] = _NullWorksheetAdapter(str(sheet_name))
+
+    def list_sheet_names(self, writer: _HtmlDashboardWriter) -> set[str]:
+        """Return logical sheet names created during dashboard planning."""
+        return set(writer.sheets.keys())
+
+    def get_worksheet(self, writer: _HtmlDashboardWriter, sheet_name: str) -> _NullWorksheetAdapter:
+        """Return a no-op worksheet adapter for the requested logical sheet."""
+        name = str(sheet_name)
+        if name not in writer.sheets:
+            writer.sheets[name] = _NullWorksheetAdapter(name)
+        return writer.sheets[name]
+
+    def get_workbook(self, writer: _HtmlDashboardWriter) -> _NullWorkbookAdapter:
+        """Return a no-op workbook adapter for chart and format calls."""
+        return writer.workbook
+
+    def run(self, thread: Any) -> bool:
+        """Run the dashboard-producing export stages without touching an XLSX file."""
+        writer = self.create_writer(getattr(thread, "html_dashboard_file", ""))
+        try:
+            return bool(thread.run_html_dashboard_pipeline(writer))
+        finally:
+            self.close_writer(writer)
+
+
 class ExcelExportBackend:
     """Excel backend that persists exports through pandas + xlsxwriter."""
 

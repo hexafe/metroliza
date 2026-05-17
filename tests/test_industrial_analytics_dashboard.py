@@ -154,11 +154,14 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     )
     assert match is not None
     chart_payload = json.loads(match.group(1))
-    assert len(chart_payload) == 2
-    assert {chart["id"] for chart in chart_payload} == {
-        "time-series-cycle_time_s-aggregated",
-        "time-series-cycle_time_s-raw-aggregate",
-    }
+    chart_ids = {chart["id"] for chart in chart_payload}
+    assert {"time-series-cycle_time_s-aggregated", "time-series-cycle_time_s-raw-aggregate"}.issubset(
+        chart_ids
+    )
+    assert "histogram-cycle_time_s" not in chart_ids
+    for chart in chart_payload:
+        if chart["id"] in {"violin-cycle_time_s", "box-cycle_time_s"}:
+            assert chart["plotly_spec"]["config"].get("staticPlot") is True
 
 
 def test_write_production_dashboard_collapses_diagnostics_by_default(tmp_path) -> None:
@@ -315,8 +318,10 @@ def test_metric_limits_flow_into_dashboard_stats_tables() -> None:
     labels = {row["label"] for row in rows}
     assert {"Cp", "Cpk", "NOK", "NOK %"}.issubset(labels)
     assert any(row["label"] == "NOK" and row["value"].startswith("2") for row in rows)
-    assert "plotly_spec" not in histogram
-    assert histogram["image"]["mime_type"] == "image/png"
+    if "plotly_spec" in histogram:
+        assert histogram["plotly_spec"]["config"].get("staticPlot") is True
+    else:
+        assert histogram["image"]["mime_type"] == "image/png"
 
 
 def test_histogram_stats_rows_without_limits_show_capability_as_not_applicable() -> None:
@@ -351,7 +356,11 @@ def test_histogram_stats_rows_without_limits_show_capability_as_not_applicable()
     assert rows["NOK %"] == "N/A"
 
 
-def test_dashboard_snapshot_rendering_keeps_matplotlib_headless_backend() -> None:
+def test_dashboard_snapshot_rendering_keeps_matplotlib_headless_backend(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "modules.industrial_analytics_dashboard.build_dashboard_plotly_spec",
+        lambda *args, **kwargs: None,
+    )
     frame = pd.DataFrame(
         {
             "process_datetime": pd.date_range("2026-05-10", periods=4, freq="h", tz="UTC"),
@@ -544,7 +553,12 @@ def test_distribution_charts_use_selected_group_field_before_default_columns() -
     for chart_type in {"histogram", "violin", "box"}:
         chart = next(chart for chart in manifest["charts"] if chart["chart_type"] == chart_type)
         assert chart["group_labels"] == ["M1", "M2"]
-        assert "plotly_spec" not in chart
+        if chart_type == "histogram":
+            assert "plotly_spec" not in chart
+        elif "plotly_spec" in chart:
+            assert chart["plotly_spec"]["config"].get("staticPlot") is True
+        else:
+            assert chart["image"]["mime_type"] == "image/png"
 
 
 def test_distribution_charts_force_numeric_group_names_to_categories() -> None:
@@ -576,7 +590,53 @@ def test_distribution_charts_force_numeric_group_names_to_categories() -> None:
     for chart_type in {"violin", "box"}:
         chart = next(chart for chart in manifest["charts"] if chart["chart_type"] == chart_type)
         assert chart["group_labels"] == ["73211", "A", "POPULATION"]
-        assert "plotly_spec" not in chart
+        if "plotly_spec" in chart:
+            assert chart["plotly_spec"]["config"].get("staticPlot") is True
+        else:
+            assert chart["image"]["mime_type"] == "image/png"
+
+
+def test_dashboard_uses_plotstats_static_plotly_specs_when_available(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_plotstats_spec(payload, *, title, theme, static):
+        calls.append({"payload": payload, "title": title, "theme": theme, "static": static})
+        return {
+            "data": [{"type": "scatter", "x": [1.0], "y": [2.0]}],
+            "layout": {"title": {"text": title}},
+            "config": {"staticPlot": True},
+        }
+
+    monkeypatch.setattr(
+        "modules.industrial_analytics_dashboard.build_dashboard_plotly_spec",
+        fake_plotstats_spec,
+    )
+    frame = pd.DataFrame(
+        {
+            "process_datetime": pd.date_range("2026-05-10 08:00", periods=4, freq="h"),
+            "length_mm": [10.0, 10.2, 10.4, 10.6],
+        }
+    )
+
+    manifest = build_production_dashboard_manifest(
+        frame=frame,
+        metric_selection=(ProductionMetricSelection("length_mm", "Length Mm", lsl=9.0, usl=11.0),),
+        chart_selection=ProductionChartSelection(
+            time_series=False,
+            histogram=True,
+            violin=True,
+            box=True,
+            groupstats=False,
+        ),
+    )
+
+    charts = {chart["chart_type"]: chart for chart in manifest["charts"]}
+    assert charts["histogram"]["plotly_spec"]["config"]["staticPlot"] is True
+    assert charts["violin"]["plotly_spec"]["config"]["staticPlot"] is True
+    assert charts["box"]["plotly_spec"]["config"]["staticPlot"] is True
+    assert [call["payload"]["type"] for call in calls] == ["histogram", "distribution", "iqr"]
+    assert all(call["static"] is True for call in calls)
+    assert calls[0]["payload"]["limits"] == {"lsl": 9.0, "nominal": 10.0, "usl": 11.0}
 
 
 def test_groupstats_html_renders_overall_and_ordered_pairwise_rows(tmp_path) -> None:
@@ -634,6 +694,18 @@ def test_groupstats_html_renders_overall_and_ordered_pairwise_rows(tmp_path) -> 
                         "test_used": "Tukey HSD",
                     },
                 ],
+                "posthoc_rows": [
+                    {
+                        "group_a": "POPULATION",
+                        "group_b": "A",
+                        "method_name": "Games-Howell",
+                        "family": "parametric",
+                        "adjusted_p_value": 0.003,
+                        "effect_size": 1.2,
+                        "effect_type": "hedges_g",
+                        "significant": True,
+                    }
+                ],
             },
         ),
     )
@@ -657,6 +729,9 @@ def test_groupstats_html_renders_overall_and_ordered_pairwise_rows(tmp_path) -> 
     assert "Overall group test" in html_text
     assert "Welch ANOVA" in html_text
     assert "Pairwise tests" in html_text
+    assert "Post-hoc tests" in html_text
+    assert "Games-Howell" in html_text
+    assert "hedges_g" in html_text
     assert html_text.index("<td>POPULATION</td><td>A</td>") < html_text.index(
         "<td>POPULATION</td><td>B</td>"
     )

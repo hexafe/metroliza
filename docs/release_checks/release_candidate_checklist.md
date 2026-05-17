@@ -38,7 +38,7 @@ Complete before beginning open testing on an RC build.
 
 - [ ] Feature freeze timestamp is recorded in release tracker and announcement thread. *(Owner: Release manager)*
 - [ ] Active RC branch name is confirmed and documented (for example `release/2026.05-rc1`; PR validation branches such as `codex/*` are not final RC branches). *(Owner: Release engineer)*
-- [x] Build identifier for open testing is published (artifact/version/hash) and linked in tracker. *(Owner: Release engineer)*
+- [ ] Build identifier for open testing is published (artifact/version/hash) and linked in tracker. *(Owner: Release engineer)*
 - [ ] Mandatory CI baseline is completed and linked (build/lint/tests) before open testing starts. *(Owner: Release owner)*
 - [ ] Known-issues document link is prepared and shared with open testers. *(Owner: QA/Product)*
 - [ ] Bug reporting channel is announced (for example issue board + chat channel) and monitored. *(Owner: Release manager/QA)*
@@ -76,9 +76,9 @@ ruff check .
 PYTHONPATH=. python -m pytest tests -q
 ```
 
-- [ ] Compile check passed. *(Owner: Dev)*
-- [ ] Lint check passed. *(Owner: Dev)*
-- [ ] Unit test suite passed. *(Owner: QA/Dev)*
+- [x] Compile check passed locally for the current audit worktree. *(Owner: Dev)*
+- [x] Lint check passed locally for the current audit worktree. *(Owner: Dev)*
+- [x] Unit test suite passed locally for the current audit worktree. *(Owner: QA/Dev)*
 
 ### Required packaging validation (release-blocking)
 
@@ -108,20 +108,27 @@ python -m maturin build --manifest-path modules/native/chart_renderer/Cargo.toml
 - [ ] Coverage visibility output from `unit-tests` is reviewed (job log summary and `unit-test-coverage` artifact `coverage.xml`) as RC confidence evidence; this is informational and not a blocking PR check. *(Owner: Release owner/QA)*
 - [ ] Manual release smoke evidence is linked before open-testing promotion when applicable. Google conversion smoke is release-blocking for promoted RC artifacts; skipped default CI does not satisfy that gate. *(Owner: Release owner)*
 
-### 2026.05 RC1 integration evidence
+### 2026.05 RC2 release-audit evidence
 
 Current validation branch: `codex/oznak-metroliza-integration`.
-Current RC metadata: `2026.05rc1(260512)`.
+Current RC metadata: `2026.05rc2(260517)`.
+Current local base commit before the final audit documentation update:
+`ae124fcb293a74977b9f091d989bd192804642f9`.
 
-- Latest recorded pushed CI baseline before the final audit hardening pass was green:
-  `https://github.com/hexafe/metroliza/actions/runs/25694807782`.
-- Coverage run passed locally: `QT_QPA_PLATFORM=offscreen python -m pytest tests -q --cov=. --cov-report=term --cov-report=xml:coverage.xml` -> 1395 passed, 66 skipped, 95 warnings, 60 subtests passed; total line coverage 81%.
-- `python -m ruff check .` passed.
-- `python -m compileall -q -x '^\./\.git/' .` passed.
-- `python scripts/sync_release_metadata.py --check` passed.
-- `python scripts/check_release_hygiene.py` passed.
-- `git diff --check` passed.
-- Manual packaging and Google conversion smoke jobs were skipped in default CI and are not open-testing promotion evidence.
+- Release audit evidence lives in [`rc2_release_audit_2026-05-17.md`](./rc2_release_audit_2026-05-17.md).
+- Local release gates passed on the current audit worktree:
+  `ruff`, `compileall`, release metadata sync, release hygiene, `git diff --check`,
+  security audit, full pytest, and coverage pytest.
+- Full pytest passed:
+  `1454 passed, 126 skipped, 6 warnings, 60 subtests passed`.
+- Coverage pytest passed:
+  `1454 passed, 126 skipped, 86 warnings, 60 subtests passed`; total line coverage `80%`.
+- Security audit passed after allowing `pip-audit` to create/upgrade its temporary
+  dependency environment; `pip-audit` reported no known vulnerabilities.
+- This worktree has uncommitted release-audit changes, so `ae124fc` is not final RC2 evidence.
+- Fresh GitHub CI for the final commit is not recorded yet.
+- Manual packaging smoke, Windows executable clean-machine launch, and Google conversion
+  smoke are not recorded for this RC2 build yet and remain release blockers.
 
 Optional CI/manual smoke commands (non-blocking for regular PRs/pushes):
 

@@ -408,6 +408,7 @@ class TestDataGroupingGroupLabels(unittest.TestCase):
         mocked_get_text.assert_called_once()
         self.assertIn('All Samples', dialog.df['GROUP'].tolist())
         self.assertNotIn('POPULATION', dialog.df['GROUP'].tolist())
+        self.assertEqual(dialog.default_group, 'All Samples')
 
     def test_delete_group_ignores_default_population_group(self):
         from unittest.mock import patch

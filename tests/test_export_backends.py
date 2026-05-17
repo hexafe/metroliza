@@ -3,7 +3,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from modules.export_backends import ExcelExportBackend
+from modules.export_backends import ExcelExportBackend, HtmlDashboardExportBackend
 
 
 class TestExcelExportBackend(unittest.TestCase):
@@ -103,6 +103,32 @@ class TestExcelExportBackend(unittest.TestCase):
 
             self.assertEqual(target_path.read_text(encoding='utf-8'), 'old workbook')
             self.assertFalse(Path(thread.writer_path).exists())
+
+
+class TestHtmlDashboardExportBackend(unittest.TestCase):
+    def test_run_invokes_dashboard_pipeline_without_creating_workbook(self):
+        backend = HtmlDashboardExportBackend()
+
+        class _Thread:
+            def __init__(self):
+                self.html_dashboard_file = ''
+                self.writer = None
+
+            def run_html_dashboard_pipeline(self, writer):
+                self.writer = writer
+                writer.workbook.add_worksheet('Summary')
+                return True
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target_path = Path(temp_dir) / 'dashboard.html'
+            thread = _Thread()
+            thread.html_dashboard_file = str(target_path)
+
+            self.assertTrue(backend.run(thread))
+
+            self.assertIsNotNone(thread.writer)
+            self.assertEqual(backend.list_sheet_names(thread.writer), {'Summary'})
+            self.assertFalse(target_path.with_suffix('.xlsx').exists())
 
 
 if __name__ == '__main__':

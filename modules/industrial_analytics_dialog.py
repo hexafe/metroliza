@@ -413,7 +413,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.violin_checkbox.setChecked(True)
         self.box_checkbox.setChecked(True)
         self.groupstats_checkbox.setChecked(True)
-        self.workbook_checkbox.setChecked(True)
+        self.workbook_checkbox.setChecked(False)
         self.parameter_sheets_checkbox.setChecked(True)
 
         self.browse_input_button = QPushButton("Browse")
@@ -1567,7 +1567,10 @@ class IndustrialAnalyticsDialog(QDialog):
                 aggregation_state=self._aggregation_state(),
                 cohort_state=self._cohort_state(),
                 chart_selection=self._chart_selection(),
-                separate_parameter_sheets=self.parameter_sheets_checkbox.isChecked(),
+                separate_parameter_sheets=(
+                    self.workbook_checkbox.isChecked()
+                    and self.parameter_sheets_checkbox.isChecked()
+                ),
                 sheet_name=self._selected_sheet_name(),
                 timestamp_column=self._selected_tabular_column(self.timestamp_column_combo),
                 reference_column=self._selected_tabular_column(self.reference_column_combo),
