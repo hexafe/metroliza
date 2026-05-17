@@ -724,6 +724,50 @@ def _apply_plotly_categorical_axis(layout: dict[str, Any], axis_key: str, axis_l
         axis["tickangle"] = -rotation
 
 
+def _apply_plotly_sample_label_axis(
+    layout: dict[str, Any],
+    axis_key: str,
+    positions: list[float],
+    labels: list[str],
+    axis_layout: dict[str, Any] | None,
+) -> None:
+    _apply_plotly_categorical_axis(layout, axis_key, axis_layout)
+
+    axis = layout.setdefault(axis_key, {})
+    if axis.get("tickmode") == "array":
+        return
+
+    tick_values: list[float] = []
+    tick_labels: list[str] = []
+    seen_positions: set[float] = set()
+    for position, label in zip(positions, labels, strict=False):
+        numeric = _coerce_finite_float(position)
+        text = str(label or "").strip()
+        if numeric is None or not text or numeric in seen_positions:
+            continue
+        seen_positions.add(numeric)
+        tick_values.append(float(numeric))
+        tick_labels.append(text)
+
+    if tick_values and len(tick_values) == len(tick_labels):
+        axis.update({"tickmode": "array", "tickvals": tick_values, "ticktext": tick_labels})
+
+
+def _apply_plotly_histogram_axis_readability(layout: dict[str, Any]) -> None:
+    xaxis = layout.setdefault("xaxis", {})
+    xaxis["tickformat"] = ".4~g"
+    xaxis["tickfont"] = {"size": 10}
+    xaxis["tickangle"] = -30
+    xaxis["automargin"] = True
+    title = xaxis.get("title")
+    if isinstance(title, dict):
+        title["standoff"] = max(int(title.get("standoff") or 0), 20)
+    else:
+        xaxis["title"] = {"text": str(title or "Measurement"), "standoff": 20}
+    margin = layout.setdefault("margin", {})
+    margin["b"] = max(int(margin.get("b") or 0), 92)
+
+
 def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str, theme: str = "light") -> dict[str, Any]:
     values = _coerce_finite_float_list(payload.get("values"))
     if not values:
@@ -745,6 +789,7 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str, theme: 
         theme=theme,
     )
     layout["yaxis"]["tickformat"] = ".0%"
+    _apply_plotly_histogram_axis_readability(layout)
     shapes, annotations = _build_vertical_reference_shapes(nominal=nominal, lsl=lsl, usl=usl, theme=theme)
     if mean_value is not None:
         shapes.append(
@@ -841,6 +886,13 @@ def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str, them
             "xaxis",
             payload.get("layout") if isinstance(payload.get("layout"), dict) else None,
         )
+        _apply_plotly_sample_label_axis(
+            layout,
+            "xaxis",
+            x_values,
+            point_labels,
+            payload.get("layout") if isinstance(payload.get("layout"), dict) else None,
+        )
         y_limits = payload.get("y_limits") if isinstance(payload.get("y_limits"), dict) else {}
         y_min = _coerce_finite_float(y_limits.get("min"))
         y_max = _coerce_finite_float(y_limits.get("max"))
@@ -858,7 +910,7 @@ def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str, them
                     "customdata": point_labels,
                     "marker": {"color": tokens["colorway"][0], "size": 8, "opacity": 0.82},
                     "hovertemplate": (
-                        f"Point=%{{customdata}}<br>{x_hover_label}=%{{x:.0f}}<br>"
+                        f"{x_hover_label}=%{{customdata}}<br>"
                         f"{y_hover_label}=%{{y:{y_tick_format}}}<extra></extra>"
                     ),
                 }
@@ -1044,6 +1096,13 @@ def _build_plotly_trend_spec(payload: dict[str, Any], *, title: str, theme: str 
         "xaxis",
         payload.get("layout") if isinstance(payload.get("layout"), dict) else None,
     )
+    _apply_plotly_sample_label_axis(
+        layout,
+        "xaxis",
+        x_values,
+        sample_labels,
+        payload.get("layout") if isinstance(payload.get("layout"), dict) else None,
+    )
     x_limits = payload.get("x_limits") if isinstance(payload.get("x_limits"), dict) else {}
     x_min = _coerce_finite_float(x_limits.get("min"))
     x_max = _coerce_finite_float(x_limits.get("max"))
@@ -1065,7 +1124,7 @@ def _build_plotly_trend_spec(payload: dict[str, Any], *, title: str, theme: str 
             "customdata": sample_labels,
             "marker": {"size": 8, "color": tokens["trend_marker"]},
             "hovertemplate": (
-                f"Sample=%{{customdata}}<br>{x_hover_label}=%{{x:.0f}}<br>"
+                f"{x_hover_label}=%{{customdata}}<br>"
                 f"{y_hover_label}=%{{y:{y_tick_format}}}<extra></extra>"
             ),
         }

@@ -602,6 +602,44 @@ def _draw_reference_lines(
             draw.line((x0, y, x1, y), fill=color, width=width)
 
 
+def _draw_horizontal_reference_labels(
+    image: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    *,
+    rect: tuple[int, int, int, int],
+    lines: list[dict[str, Any]],
+    y_limits: tuple[float, float],
+) -> None:
+    left, top, right, bottom = rect
+    font = _font(8)
+    label_index = 0
+    for line in lines:
+        if not isinstance(line, dict) or str(line.get("axis") or "y").lower() != "y":
+            continue
+        value = _as_float(line.get("value"))
+        if value is None:
+            continue
+        label = str(line.get("label") or "").strip()
+        if not label:
+            continue
+        y = _map_linear(float(value), y_limits[0], y_limits[1], bottom, top)
+        base_y = max(top + 2.0, min(bottom - 18.0, y - 14.0 + ((label_index % 3) * 8.0)))
+        _draw_annotation_box(
+            image,
+            draw,
+            text=f"{label}={float(value):.3f}",
+            anchor_x=right - 8.0,
+            base_y=base_y,
+            color=_hex_rgba(line.get("color") or SUMMARY_PLOT_PALETTE["annotation_text"], float(line.get("alpha") or 1.0)),
+            font=font,
+            plot_left=left,
+            plot_right=right,
+            leader_y=y,
+            align="right",
+        )
+        label_index += 1
+
+
 def _draw_distribution_polygon_body(
     draw: ImageDraw.ImageDraw,
     *,
@@ -1560,6 +1598,13 @@ def render_distribution_png(payload: dict[str, Any]) -> bytes:
                 size=max(4, int(point.get("size") or 6)),
                 fill=_hex_rgba(point.get("color") or SUMMARY_PLOT_PALETTE["distribution_foreground"], float(point.get("alpha") or 1.0)),
             )
+        _draw_horizontal_reference_labels(
+            image,
+            draw,
+            rect=plot_rect,
+            lines=list(reference_lines or []),
+            y_limits=(y_min, y_max),
+        )
         return _encode_png(image)
 
     resolved_violin_bodies = resolved_render_spec.get("violin_bodies") if isinstance(resolved_render_spec.get("violin_bodies"), list) else None
@@ -2089,5 +2134,13 @@ def render_trend_png(payload: dict[str, Any]) -> bytes:
             size=max(4, int(point.get("size") or 6)),
             fill=_hex_rgba(point.get("color") or SUMMARY_PLOT_PALETTE["distribution_foreground"], float(point.get("alpha") or 1.0)),
         )
+
+    _draw_horizontal_reference_labels(
+        image,
+        draw,
+        rect=plot_rect,
+        lines=list(reference_lines or []),
+        y_limits=(y_min, y_max),
+    )
 
     return _encode_png(image)

@@ -95,7 +95,7 @@ class RequirementsHygieneTests(unittest.TestCase):
         ]
 
         self.assertEqual(matches, [
-            'hexafe-plotstats[pandas] @ git+https://github.com/hexafe/hexafe-plotstats.git@af61e020c58ed8922b25e3f5f64bf566109b84ed'
+            'hexafe-plotstats[pandas] @ git+https://github.com/hexafe/hexafe-plotstats.git@3bcb13fca0741cb463f3ab7562c2058d9452b5c2'
         ])
 
     def test_runtime_requirements_pin_oznak_to_public_git_source(self):

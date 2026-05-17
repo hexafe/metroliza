@@ -313,8 +313,74 @@ def test_build_resolved_trend_spec_contains_points_ticks_and_limit_lines():
     assert spec["x_max"] == pytest.approx(3.25)
     assert spec["axes"]["rotation"] == 45
     assert [tick["label"] for tick in spec["axes"]["x_ticks"]] == ["S1", "S3", "S4"]
+    assert [line["label"] for line in spec["reference_lines"]] == ["Limit 1", "Limit 2"]
     assert len(spec["reference_lines"]) == 2
     assert len(spec["points"]) == 4
+
+
+def test_build_resolved_distribution_scatter_spec_uses_sample_ticks_and_reference_labels():
+    payload = {
+        "type": "distribution",
+        "series": [[], []],
+        "labels": ["SN-101", "SN-105"],
+        "title": "Scatter Samples",
+        "render_mode": "scatter",
+        "x_values": [0.0, 1.0],
+        "y_values": [9.8, 10.2],
+        "x_label": "Sample number",
+        "y_label": "Diameter / X",
+        "lsl": 9.5,
+        "usl": 10.5,
+        "mean_line": {"value": 10.0},
+        "x_domain": {"min": -0.2, "max": 1.2},
+        "layout": {
+            "display_positions": [0.0, 1.0],
+            "display_labels": ["SN-101", "SN-105"],
+            "bottom_margin": 0.22,
+        },
+        "canvas": {"width_px": 900, "height_px": 450, "dpi": 150},
+    }
+
+    spec = build_resolved_distribution_spec(payload)
+
+    assert spec["render_mode"] == "scatter"
+    assert [tick["label"] for tick in spec["axes"]["x_ticks"]] == ["SN-101", "SN-105"]
+    assert spec["axes"]["x_label"] == "Sample number"
+    assert [line["label"] for line in spec["reference_lines"]] == ["LSL", "USL", "Mean"]
+    mean_line = spec["reference_lines"][-1]
+    assert mean_line["value"] == pytest.approx(10.0)
+    assert mean_line["color"] == "#E69F00"
+
+
+def test_render_distribution_png_draws_small_reference_label_boxes_for_scatter(monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    def capture_annotation_box(*_args, **kwargs):
+        font = kwargs.get("font")
+        calls.append({"text": kwargs.get("text"), "font_size": getattr(font, "size", 8)})
+
+    payload = {
+        "type": "distribution",
+        "series": [[], []],
+        "labels": ["SN-101", "SN-105"],
+        "title": "Scatter Samples",
+        "render_mode": "scatter",
+        "x_values": [0.0, 1.0],
+        "y_values": [9.8, 10.2],
+        "lsl": 9.5,
+        "usl": 10.5,
+        "mean_line": {"value": 10.0},
+        "x_domain": {"min": -0.2, "max": 1.2},
+        "canvas": {"width_px": 900, "height_px": 450, "dpi": 150},
+    }
+    payload["resolved_render_spec"] = build_resolved_distribution_spec(payload)
+    monkeypatch.setattr(native_chart_compositor, "_draw_annotation_box", capture_annotation_box)
+
+    render_distribution_png(payload)
+
+    rendered_labels = {str(call["text"]) for call in calls}
+    assert {"LSL=9.500", "USL=10.500", "Mean=10.000"}.issubset(rendered_labels)
+    assert all(int(call["font_size"]) <= 8 for call in calls)
 
 
 def test_render_distribution_png_honors_resolved_render_spec_for_title_and_scatter_points():

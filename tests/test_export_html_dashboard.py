@@ -424,6 +424,12 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(bins['size'], 4.0)
         self.assertEqual(spec['layout']['xaxis']['range'], [-5.0, 15.0])
         self.assertEqual(spec['layout']['yaxis']['tickformat'], '.0%')
+        self.assertEqual(spec['layout']['xaxis']['tickformat'], '.4~g')
+        self.assertEqual(spec['layout']['xaxis']['tickfont']['size'], 10)
+        self.assertEqual(spec['layout']['xaxis']['tickangle'], -30)
+        self.assertTrue(spec['layout']['xaxis']['automargin'])
+        self.assertGreaterEqual(spec['layout']['xaxis']['title']['standoff'], 20)
+        self.assertGreaterEqual(spec['layout']['margin']['b'], 92)
         self.assertEqual(spec['data'][0]['histnorm'], 'probability')
         self.assertIn('Frequency=%{y:.2%}', spec['data'][0]['hovertemplate'])
 
@@ -442,9 +448,9 @@ class TestExportHtmlDashboard(unittest.TestCase):
                 {
                     'type': 'distribution',
                     'render_mode': 'scatter',
-                    'x_values': [1.0, 2.0],
+                    'x_values': [0.0, 1.0],
                     'y_values': [10.1234, 10.4325],
-                    'labels': ['S1', 'S2'],
+                    'labels': ['S101', 'S105'],
                     'x_label': 'Sample number',
                     'y_label': 'Diameter / X',
                 },
@@ -453,9 +459,11 @@ class TestExportHtmlDashboard(unittest.TestCase):
 
         self.assertEqual(spec['layout']['xaxis']['title']['text'], 'Sample number')
         self.assertEqual(spec['layout']['yaxis']['title']['text'], 'Diameter / X')
-        self.assertEqual(spec['layout']['xaxis']['tickformat'], '.0f')
+        self.assertEqual(spec['layout']['xaxis']['tickvals'], [0.0, 1.0])
+        self.assertEqual(spec['layout']['xaxis']['ticktext'], ['S101', 'S105'])
         self.assertEqual(spec['layout']['yaxis']['tickformat'], '.4f')
-        self.assertIn('%{x:.0f}', spec['data'][0]['hovertemplate'])
+        self.assertIn('Sample number=%{customdata}', spec['data'][0]['hovertemplate'])
+        self.assertNotIn('%{x', spec['data'][0]['hovertemplate'])
         self.assertIn('%{y:.4f}', spec['data'][0]['hovertemplate'])
 
     def test_summary_plotly_spec_uses_plotstats_artifact_when_enabled(self):
@@ -524,13 +532,15 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(spec['layout']['hovermode'], 'x unified')
         self.assertEqual(spec['layout']['xaxis']['title']['text'], 'Sample number')
         self.assertEqual(spec['layout']['yaxis']['title']['text'], 'Diameter / X')
-        self.assertEqual(spec['layout']['xaxis']['tickformat'], '.0f')
+        self.assertEqual(spec['layout']['xaxis']['tickvals'], [1.0, 2.0, 3.0])
+        self.assertEqual(spec['layout']['xaxis']['ticktext'], ['first', 'second', 'third'])
         self.assertEqual(spec['layout']['yaxis']['tickformat'], '.0f')
         self.assertEqual(spec['data'][0]['x'], [1.0, 2.0, 3.0])
         self.assertEqual(spec['data'][0]['y'], [10.0, 20.0, 30.0])
         self.assertEqual(spec['data'][0]['customdata'], ['first', 'second', 'third'])
         self.assertEqual(spec['data'][0]['mode'], 'markers')
-        self.assertIn('%{x:.0f}', spec['data'][0]['hovertemplate'])
+        self.assertIn('Sample number=%{customdata}', spec['data'][0]['hovertemplate'])
+        self.assertNotIn('%{x', spec['data'][0]['hovertemplate'])
         self.assertIn('%{y:.0f}', spec['data'][0]['hovertemplate'])
         self.assertNotIn('line', spec['data'][0])
         self.assertEqual(spec['data'][1]['mode'], 'lines')

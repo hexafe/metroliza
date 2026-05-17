@@ -233,6 +233,7 @@ def _build_time_series_charts(
         y_column=metric.field_name,
     )
     use_hybrid_raw = raw_point_count > DASHBOARD_RAW_POINT_LIMIT
+    raw_with_markers_x_axis_title = _raw_with_markers_x_axis_title(aggregation)
     if (
         aggregation.is_aggregated
         and not aggregate_frame.empty
@@ -280,7 +281,7 @@ def _build_time_series_charts(
                     chart_id=f"time-series-{metric.field_name}-raw-aggregate",
                     title=f"{metric.display_label} raw values with {method} markers",
                     chart_type="time_series_raw_aggregate",
-                    x_axis_title="Process time",
+                    x_axis_title=raw_with_markers_x_axis_title,
                     y_axis_title=metric.display_label,
                 )
                 if hybrid:
@@ -302,7 +303,7 @@ def _build_time_series_charts(
                         chart_type="time_series_raw_aggregate",
                         data=raw_traces,
                         layout={
-                            "xaxis": {"title": "Process time"},
+                            "xaxis": {"title": raw_with_markers_x_axis_title},
                             "yaxis": {"title": metric.display_label},
                             "hovermode": "closest",
                         },
@@ -467,12 +468,15 @@ def _build_plotstats_histogram_spec(
         payload["bin_count"] = bin_count
     if stats_tables:
         payload["summary_table_rows"] = list(stats_tables[0].get("rows") or [])
-    return build_dashboard_plotly_spec(
+    spec = build_dashboard_plotly_spec(
         payload,
         title=title,
         theme=metroliza_dashboard_plotstats_theme(),
         static=False,
     )
+    if spec:
+        _apply_histogram_tick_readability(spec)
+    return spec
 
 
 def _build_plotstats_distribution_spec(
@@ -528,6 +532,35 @@ def _plotstats_metric_limits(metric: ProductionMetricSelection) -> dict[str, flo
     usl = _coerce_optional_float(metric.usl)
     nominal = ((lsl + usl) / 2.0) if lsl is not None and usl is not None and lsl <= usl else None
     return {"lsl": lsl, "nominal": nominal, "usl": usl}
+
+
+def _raw_with_markers_x_axis_title(aggregation: ProductionAggregationState) -> str:
+    if aggregation.is_aggregated and aggregation.time_bucket != "none":
+        return _bucket_axis_title(aggregation.time_bucket)
+    return "Process time"
+
+
+def _apply_histogram_tick_readability(spec: dict[str, Any]) -> None:
+    layout = spec.setdefault("layout", {})
+    if not isinstance(layout, dict):
+        return
+    xaxis = layout.setdefault("xaxis", {})
+    if not isinstance(xaxis, dict):
+        return
+    xaxis["tickformat"] = ".4~g"
+    xaxis["tickfont"] = {"size": 10}
+    xaxis["tickangle"] = -30
+    xaxis["automargin"] = True
+    title = xaxis.get("title")
+    if isinstance(title, dict):
+        title["standoff"] = max(int(title.get("standoff") or 0), 20)
+    elif title:
+        xaxis["title"] = {"text": str(title), "standoff": 20}
+    else:
+        xaxis["title"] = {"text": "", "standoff": 20}
+    margin = layout.setdefault("margin", {})
+    if isinstance(margin, dict):
+        margin["b"] = max(int(margin.get("b") or 0), 92)
 
 
 def _coerce_optional_float(value: Any) -> float | None:
@@ -1457,6 +1490,8 @@ def _merge_axis_layout(base_layout: dict[str, Any], override: dict[str, Any]) ->
         if key in {"xaxis", "yaxis"} and isinstance(value, dict):
             axis = base_layout.setdefault(key, {})
             axis.update(value)
+            if axis.get("title") is not None and not isinstance(axis.get("title"), dict):
+                axis["title"] = {"text": str(axis.get("title"))}
         elif key in {"shapes", "annotations"} and isinstance(value, list):
             base_layout.setdefault(key, [])
             base_layout[key].extend(value)

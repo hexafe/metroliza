@@ -1235,8 +1235,9 @@ def _build_reference_line_mapping(
     alpha: float,
     width: float,
     dash: tuple[int, int] | None = None,
+    label: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    mapping = {
         "axis": str(axis),
         "value": float(value),
         "color": str(color),
@@ -1244,6 +1245,23 @@ def _build_reference_line_mapping(
         "width": float(width),
         "dash": list(dash) if dash is not None else None,
     }
+    if label:
+        mapping["label"] = str(label)
+    return mapping
+
+
+def _resolve_payload_mean_value(payload: Mapping[str, Any]) -> float | None:
+    mean_line = payload.get("mean_line") if isinstance(payload.get("mean_line"), Mapping) else {}
+    mean_value = _as_float(mean_line.get("value"))
+    if mean_value is not None:
+        return mean_value
+
+    summary = payload.get("summary") if isinstance(payload.get("summary"), Mapping) else {}
+    for key in ("mean", "average"):
+        mean_value = _as_float(summary.get(key))
+        if mean_value is not None:
+            return mean_value
+    return _as_float(payload.get("mean"))
 
 
 def _coerce_finite_series_list(series_list: Iterable[Any]) -> list[list[float]]:
@@ -1553,14 +1571,28 @@ def build_resolved_distribution_spec(payload: Mapping[str, Any]) -> dict[str, An
             alpha=0.82,
             width=1.8,
             dash=(8, 5) if dashed else None,
+            label=label,
         )
-        for limit_value, dashed in (
-            (lsl, False),
-            (usl, False),
-            (nominal if include_nominal else None, True),
+        for label, limit_value, dashed in (
+            ("LSL", lsl, False),
+            ("USL", usl, False),
+            ("Nominal", nominal if include_nominal else None, True),
         )
         if limit_value is not None
     ]
+    mean_value = _resolve_payload_mean_value(payload)
+    if mean_value is not None:
+        reference_lines.append(
+            _build_reference_line_mapping(
+                axis="y",
+                value=float(mean_value),
+                color=SUMMARY_PLOT_PALETTE["central_tendency"],
+                alpha=0.82,
+                width=1.4,
+                dash=(6, 4),
+                label="Mean",
+            )
+        )
 
     axes = _build_axes_mapping(
         x_min=float(x_min),
@@ -1784,8 +1816,9 @@ def build_resolved_trend_spec(payload: Mapping[str, Any]) -> dict[str, Any]:
             color=SUMMARY_PLOT_PALETTE["spec_limit"],
             alpha=0.82,
             width=2.0,
+            label=f"Limit {index}",
         )
-        for limit_value in list(payload.get("horizontal_limits") or [])
+        for index, limit_value in enumerate(list(payload.get("horizontal_limits") or []), start=1)
         if _as_float(limit_value) is not None
     ]
 

@@ -5642,6 +5642,7 @@ class ExportDataThread(QThread):
                                 'x_values': [float(item) for item in list(x_values) if x_values is not None] if x_values is not None else [],
                                 'y_values': [float(item) for item in list(y_values) if y_values is not None] if y_values is not None else [],
                                 'x_domain': {'min': x_domain_min, 'max': x_domain_max},
+                                'mean_line': {'value': float(summary_stats['average'])},
                                 'legend': {'items': []},
                                 'y_limits': _resolve_native_y_limits(
                                     y_values if y_values is not None else [],

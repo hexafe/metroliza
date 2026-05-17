@@ -303,10 +303,12 @@ def test_aggregated_time_series_adds_raw_overlay_with_x_markers() -> None:
         "time_series_raw_aggregate",
     ]
     overlay = manifest["charts"][1]["plotly_spec"]["data"]
+    raw_aggregate_layout = manifest["charts"][1]["plotly_spec"]["layout"]
     aggregate_trace = next(trace for trace in overlay if trace["name"] == "M1 aggregate")
     assert aggregate_trace["x"] == ["2026-01"]
     assert aggregate_trace["marker"]["symbol"] == "x"
     assert aggregate_trace["marker"]["line"]["width"] > 1
+    assert raw_aggregate_layout["xaxis"]["title"]["text"] == "Month"
 
 
 def test_metric_limits_flow_into_dashboard_stats_tables() -> None:
@@ -336,6 +338,13 @@ def test_metric_limits_flow_into_dashboard_stats_tables() -> None:
     assert any(row["label"] == "NOK" and row["value"].startswith("2") for row in rows)
     if "plotly_spec" in histogram:
         assert histogram["plotly_spec"]["config"].get("staticPlot") is not True
+        xaxis = histogram["plotly_spec"]["layout"]["xaxis"]
+        assert xaxis["tickformat"] == ".4~g"
+        assert xaxis["tickfont"]["size"] == 10
+        assert xaxis["tickangle"] == -30
+        assert xaxis["automargin"] is True
+        assert xaxis["title"]["standoff"] >= 20
+        assert histogram["plotly_spec"]["layout"]["margin"]["b"] >= 92
     else:
         assert histogram["image"]["mime_type"] == "image/png"
 
