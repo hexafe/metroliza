@@ -2178,7 +2178,7 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertIn(panel_slots['distribution'], inserted_positions)
         self.assertIn(panel_slots['iqr'], inserted_positions)
 
-    def test_summary_sheet_distribution_scatter_fallback_uses_group_bucket_labels(self):
+    def test_summary_sheet_distribution_scatter_fallback_uses_sample_numbers_when_grouped(self):
         import pandas as pd
 
         import modules.export_data_thread as export_thread_module
@@ -2228,8 +2228,8 @@ class TestExportBackendSmoke(unittest.TestCase):
         finally:
             export_thread_module.apply_shared_x_axis_label_strategy = original_apply_labels
 
-        self.assertEqual(captured['labels'], ['A (n=2)', 'B (n=2)', 'C (n=1)'])
-        self.assertEqual(captured['positions'], [0.0, 1.0, 2.0])
+        self.assertEqual(captured['labels'], ['1', '2', '3', '4', '5'])
+        self.assertEqual(captured['positions'], [1.0, 2.0, 3.0, 4.0, 5.0])
 
     def test_summary_sheet_distribution_scatter_fallback_non_grouped_sample_number_labels(self):
         import pandas as pd
@@ -2278,10 +2278,10 @@ class TestExportBackendSmoke(unittest.TestCase):
         finally:
             export_thread_module.apply_shared_x_axis_label_strategy = original_apply_labels
 
-        self.assertEqual(captured['labels'], ['1', '2', '3'])
-        self.assertEqual(captured['positions'], [0.0, 1.0, 2.0])
+        self.assertEqual(captured['labels'], ['1', '', '2', '', '3', ''])
+        self.assertEqual(captured['positions'], [1.0, 1.0, 2.0, 2.0, 3.0, 3.0])
 
-    def test_summary_sheet_trend_axis_title_uses_group_label_when_grouped(self):
+    def test_summary_sheet_trend_axis_title_uses_sample_number_when_grouped(self):
         import pandas as pd
 
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
@@ -2314,7 +2314,7 @@ class TestExportBackendSmoke(unittest.TestCase):
         grouped_header = header_group.assign(GROUP=['A', 'A', 'B', 'B', 'C', 'C'])
         thread._prepared_grouping_df = pd.DataFrame()
 
-        for grouping_active, expected_label in ((False, 'Sample #'), (True, 'Group')):
+        for grouping_active, expected_label in ((False, 'Sample number'), (True, 'Sample number')):
             with self.subTest(grouping_active=grouping_active):
                 if grouping_active:
                     thread._apply_group_assignments = lambda hg, _gd: (grouped_header.copy(), True)

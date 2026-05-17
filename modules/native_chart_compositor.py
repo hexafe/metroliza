@@ -2024,7 +2024,7 @@ def render_trend_png(payload: dict[str, Any]) -> bytes:
         y_ticks=y_ticks,
         x_limits=(x_min, x_max),
         y_limits=(y_min, y_max),
-        x_label=str(axis_spec.get("x_label") or resolved_render_spec.get("x_label") or payload.get("x_label") or "Sample #"),
+        x_label=str(axis_spec.get("x_label") or resolved_render_spec.get("x_label") or payload.get("x_label") or "Sample number"),
         y_label=str(axis_spec.get("y_label") or resolved_render_spec.get("y_label") or payload.get("y_label") or "Measurement"),
         rotation=int(axis_spec.get("rotation") or layout.get("rotation") or 0),
         grid_axis=str(axis_spec.get("grid_axis") or resolved_render_spec.get("grid_axis") or "y"),

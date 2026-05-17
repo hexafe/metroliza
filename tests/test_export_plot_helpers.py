@@ -1520,8 +1520,8 @@ class TestExportPlotHelpers(unittest.TestCase):
 
             self.assertEqual(len(ax.patches), expected_fd_bins)
             self.assertEqual(len(ax.patches), 3)
-            total_count = sum(patch.get_height() for patch in ax.patches)
-            self.assertAlmostEqual(total_count, len(histogram_data), places=2)
+            total_frequency = sum(patch.get_height() for patch in ax.patches)
+            self.assertAlmostEqual(total_frequency, 1.0, places=2)
             self.assertAlmostEqual(ax.patches[0].get_linewidth(), 0.5)
             self.assertEqual(ax.patches[0].get_edgecolor(), (1.0, 1.0, 1.0, 0.72))
         finally:
@@ -1535,8 +1535,8 @@ class TestExportPlotHelpers(unittest.TestCase):
             render_histogram(ax, pd.DataFrame({'MEAS': [7.0] * 25}))
 
             self.assertEqual(len(ax.patches), 5)
-            total_count = sum(patch.get_height() for patch in ax.patches)
-            self.assertAlmostEqual(total_count, 25.0, places=2)
+            total_frequency = sum(patch.get_height() for patch in ax.patches)
+            self.assertAlmostEqual(total_frequency, 1.0, places=2)
         finally:
             plt.close(fig)
 

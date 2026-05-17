@@ -31,6 +31,7 @@ import matplotlib.pyplot as plt
 import matplotlib.transforms as mtransforms
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
+from matplotlib.ticker import PercentFormatter
 from PyQt6.QtCore import QCoreApplication, QThread, pyqtSignal
 
 from modules.contracts import ExportRequest, validate_export_request
@@ -2543,10 +2544,11 @@ def render_histogram(ax, header_group, *, lsl=None, usl=None, group_column=None)
                 continue
             color = histogram_palette[index % len(histogram_palette)]
             mean_value = float(np.mean(values))
+            weights = np.full(values.shape, 1.0 / float(values.size), dtype=float)
             ax.hist(
                 values,
                 bins=bin_edges,
-                density=False,
+                weights=weights,
                 alpha=0.42,
                 color=color,
                 edgecolor=(1.0, 1.0, 1.0, 0.72),
@@ -2559,7 +2561,7 @@ def render_histogram(ax, header_group, *, lsl=None, usl=None, group_column=None)
         sns.histplot(
             x=histogram_values,
             bins=bin_count,
-            stat='count',
+            stat='probability',
             alpha=0.72,
             color=SUMMARY_PLOT_PALETTE['distribution_base'],
             edgecolor=(1.0, 1.0, 1.0, 0.72),
@@ -2570,13 +2572,14 @@ def render_histogram(ax, header_group, *, lsl=None, usl=None, group_column=None)
         ax.hist(
             histogram_values,
             bins=bin_count,
-            density=False,
+            weights=np.full(histogram_values.shape, 1.0 / float(histogram_values.size), dtype=float),
             alpha=0.72,
             color=SUMMARY_PLOT_PALETTE['distribution_base'],
             edgecolor=(1.0, 1.0, 1.0, 0.72),
             linewidth=0.5,
         )
 
+    ax.yaxis.set_major_formatter(PercentFormatter(xmax=1.0))
     x_view = resolve_histogram_x_view(histogram_values, lsl=lsl, usl=usl)
     ax.set_xlim(x_view['x_min'], x_view['x_max'])
     enforce_minimum_histogram_bar_width(ax)
@@ -2590,7 +2593,7 @@ def render_histogram(ax, header_group, *, lsl=None, usl=None, group_column=None)
     representative_bin_width = float(np.median(bin_widths)) if bin_widths else None
     count_scale_factor = None
     if representative_bin_width is not None and histogram_values.size > 0:
-        count_scale_factor = float(histogram_values.size) * representative_bin_width
+        count_scale_factor = representative_bin_width
 
     return {
         'is_grouped': is_grouped,
@@ -5405,7 +5408,7 @@ class ExportDataThread(QThread):
             grouping_df = self.prepared_grouping_df
             header_group, grouping_applied = self._apply_group_assignments(header_group, grouping_df)
             distribution_key = 'GROUP' if grouping_applied else 'SAMPLE_NUMBER'
-            scatter_key = distribution_key
+            scatter_key = 'SAMPLE_NUMBER'
             normalized_group = _normalize_summary_group_frame_compute(header_group, grouping_key=distribution_key)
             self._record_stage_timing('transform_grouping', time.perf_counter() - grouping_start)
 
@@ -5448,8 +5451,8 @@ class ExportDataThread(QThread):
                     trend_future = self._chart_executor.submit(
                         build_trend_plot_payload,
                         sampled_trend_group,
-                        grouping_active=grouping_applied,
-                        label_column=distribution_key,
+                        grouping_active=False,
+                        label_column='SAMPLE_NUMBER',
                     )
                     if distribution_fit_future is not None:
                         precomputed_distribution_fit = distribution_fit_future.result()
@@ -5503,13 +5506,15 @@ class ExportDataThread(QThread):
             label_positions = None
             x_values = None
             y_values = None
-            distribution_x_axis_label = 'Group' if grouping_applied else 'Sample #'
+            grouped_x_axis_label = 'Group' if grouping_applied else 'Sample number'
+            scatter_x_axis_label = 'Sample number'
             distribution_title = chart_payloads['distribution']['title']
+            characteristic_axis_label = str(header or "Measurement")
             if not can_render_violin:
-                x_values, y_values, distribution_labels = self._build_grouped_summary_scatter_payload(
+                x_values, y_values, distribution_labels = self._build_summary_scatter_payload(
                     sampled_distribution_group,
                     scatter_key,
-                    grouping_active=grouping_applied,
+                    grouping_active=False,
                 )
                 label_positions = list(x_values)
 
@@ -5561,7 +5566,7 @@ class ExportDataThread(QThread):
                     distribution_native_payload = build_distribution_native_payload(
                         values=distribution_values,
                         labels=distribution_labels,
-                        title=build_wrapped_chart_title(distribution_title),
+                        title=build_wrapped_chart_title(header if not can_render_violin else distribution_title),
                         lsl=LSL,
                         usl=USL,
                     )
@@ -5585,8 +5590,8 @@ class ExportDataThread(QThread):
                     distribution_native_payload.update(
                         {
                             'render_mode': 'violin' if can_render_violin else 'scatter',
-                            'x_label': distribution_x_axis_label,
-                            'y_label': 'Measurement',
+                            'x_label': grouped_x_axis_label if can_render_violin else scatter_x_axis_label,
+                            'y_label': 'Measurement' if can_render_violin else characteristic_axis_label,
                             'canvas': distribution_canvas,
                             'layout': distribution_layout,
                         }
@@ -5603,7 +5608,7 @@ class ExportDataThread(QThread):
                             readability_scale=self.summary_plot_scale,
                         )
                         violin_style['show_minmax'] = bool(violin_style.get('show_minmax', True))
-                        violin_style['show_sigma'] = bool(violin_style.get('show_sigma', True))
+                        violin_style['show_sigma'] = False
                         distribution_native_payload.update(
                             {
                                 'positions': distribution_layout_positions,
@@ -5702,9 +5707,12 @@ class ExportDataThread(QThread):
                         current_y_limits = ax.get_ylim()
                         y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
                         ax.set_ylim(y_min, y_max)
-                        ax.set_xlabel(distribution_x_axis_label)
-                        ax.set_ylabel('Measurement')
-                        ax.set_title(build_wrapped_chart_title(distribution_title), pad=20)
+                        ax.set_xlabel(grouped_x_axis_label if can_render_violin else scatter_x_axis_label)
+                        ax.set_ylabel('Measurement' if can_render_violin else characteristic_axis_label)
+                        ax.set_title(
+                            build_wrapped_chart_title(header if not can_render_violin else distribution_title),
+                            pad=20,
+                        )
                         figure_legend = move_legend_to_figure(ax)
                         finalize_extended_chart_layout(fig, ax, legend=figure_legend, strategy=axis_layout)
                         distribution_native_payload['resolved_render_spec'] = extract_distribution_geometry(
@@ -5999,7 +6007,7 @@ class ExportDataThread(QThread):
                             },
                             'style': {
                                 'axis_label_x': 'Measurement',
-                                'axis_label_y': 'Count',
+                                'axis_label_y': 'Frequency (%)',
                                 'grid_axis': 'y',
                             },
                             'mean_line': {
@@ -6218,7 +6226,7 @@ class ExportDataThread(QThread):
                         render_spec_reference_lines(plot_ax, nom, LSL, USL, orientation='vertical', include_nominal=False)
                         plot_ax.set_xlabel('Measurement')
                         if not histogram_render_meta.get('is_grouped'):
-                            plot_ax.set_ylabel('Count')
+                            plot_ax.set_ylabel('Frequency (%)')
                         title_artist = render_histogram_title(
                             plot_ax,
                             build_wrapped_chart_title(header),
@@ -6332,8 +6340,8 @@ class ExportDataThread(QThread):
                         'y_values': trend_y_values.tolist(),
                         'labels': [str(label) for label in unique_labels],
                         'title': trend_title,
-                        'x_label': distribution_x_axis_label,
-                        'y_label': 'Measurement',
+                        'x_label': scatter_x_axis_label,
+                        'y_label': characteristic_axis_label,
                         'horizontal_limits': [
                             float(value)
                             for value in (USL, LSL)
@@ -6368,8 +6376,8 @@ class ExportDataThread(QThread):
                         for line_spec in build_horizontal_limit_line_specs(USL, LSL):
                             ax.axhline(**line_spec)
 
-                        ax.set_xlabel(distribution_x_axis_label)
-                        ax.set_ylabel('Measurement')
+                        ax.set_xlabel(scatter_x_axis_label)
+                        ax.set_ylabel(characteristic_axis_label)
                         ax.set_title(trend_title, pad=20)
                         apply_minimal_axis_style(ax, grid_axis='y')
                         apply_shared_x_axis_label_strategy(

@@ -228,7 +228,7 @@ def extract_dashboard_chart_details(payload: dict[str, Any] | None) -> dict[str,
         "bin_count": payload.get("bin_count"),
         "axis_labels": {
             "x": str(style.get("axis_label_x") or "Measurement"),
-            "y": str(style.get("axis_label_y") or "Count"),
+            "y": str(style.get("axis_label_y") or "Frequency (%)"),
         },
         "limits": _normalize_limits(limits),
         "summary_stats_table": {
@@ -500,6 +500,21 @@ def _coerce_finite_float_list(values: Any) -> list[float]:
     return output
 
 
+def _infer_decimal_places(values: list[float], *, max_decimals: int = 6) -> int:
+    if not values:
+        return 0
+    for decimals in range(max_decimals + 1):
+        tolerance = max(1e-12, 10.0 ** (-(decimals + 3)))
+        if all(math.isclose(value, round(value, decimals), rel_tol=0.0, abs_tol=tolerance) for value in values):
+            return decimals
+    return max_decimals
+
+
+def _plotly_fixed_format(decimals: int) -> str:
+    precision = max(0, min(int(decimals), 8))
+    return ".0f" if precision == 0 else f".{precision}f"
+
+
 def _coerce_xy_points(x_values: Any, y_values: Any, *, labels: Any = None) -> list[tuple[float, float, str]]:
     points: list[tuple[float, float, str]] = []
     raw_labels = labels or []
@@ -729,6 +744,7 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str, theme: 
         y_label=str(((payload.get("style") or {}).get("axis_label_y") if isinstance(payload.get("style"), dict) else "") or "Frequency (%)"),
         theme=theme,
     )
+    layout["yaxis"]["tickformat"] = ".0%"
     shapes, annotations = _build_vertical_reference_shapes(nominal=nominal, lsl=lsl, usl=usl, theme=theme)
     if mean_value is not None:
         shapes.append(
@@ -772,17 +788,17 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str, theme: 
 
     return {
         "data": [
-            {
-                "type": "histogram",
-                "x": values,
-                "histnorm": "percent",
-                "xbins": bins,
-                "bingroup": f"hist-{_slugify(title)[:40]}",
-                "marker": {"color": tokens["colorway"][0], "line": {"color": tokens["bar_outline"], "width": 1}},
-                "opacity": 0.86,
-                "hovertemplate": "Measurement=%{x}<br>Frequency=%{y:.2f}%<extra></extra>",
-            }
-        ],
+                {
+                    "type": "histogram",
+                    "x": values,
+                    "histnorm": "probability",
+                    "xbins": bins,
+                    "bingroup": f"hist-{_slugify(title)[:40]}",
+                    "marker": {"color": tokens["colorway"][0], "line": {"color": tokens["bar_outline"], "width": 1}},
+                    "opacity": 0.86,
+                    "hovertemplate": "Measurement=%{x}<br>Frequency=%{y:.2%}<extra></extra>",
+                }
+            ],
         "layout": layout,
         "config": _build_plotly_config(),
     }
@@ -807,12 +823,16 @@ def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str, them
         x_values = [point[0] for point in points]
         y_values = [point[1] for point in points]
         point_labels = [point[2] or _format_display_value(point[0]) for point in points]
+        y_decimal_places = _infer_decimal_places(y_values)
+        y_tick_format = _plotly_fixed_format(y_decimal_places)
         layout = _build_plotly_base_layout(
             title=title,
-            x_label=str(payload.get("x_label") or "Sample"),
+            x_label=str(payload.get("x_label") or "Sample number"),
             y_label=str(payload.get("y_label") or "Measurement"),
             theme=theme,
         )
+        layout["xaxis"]["tickformat"] = ".0f"
+        layout["yaxis"]["tickformat"] = y_tick_format
         shapes, annotations = _build_horizontal_reference_shapes(nominal=nominal, lsl=lsl, usl=usl, theme=theme)
         layout["shapes"] = shapes
         layout["annotations"] = annotations
@@ -826,6 +846,8 @@ def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str, them
         y_max = _coerce_finite_float(y_limits.get("max"))
         if y_min is not None and y_max is not None and y_min < y_max:
             layout["yaxis"]["range"] = [y_min, y_max]
+        x_hover_label = str(payload.get("x_label") or "Sample number")
+        y_hover_label = str(payload.get("y_label") or "Measurement")
         return {
             "data": [
                 {
@@ -835,7 +857,10 @@ def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str, them
                     "y": y_values,
                     "customdata": point_labels,
                     "marker": {"color": tokens["colorway"][0], "size": 8, "opacity": 0.82},
-                    "hovertemplate": "Point=%{customdata}<br>X=%{x}<br>Measurement=%{y}<extra></extra>",
+                    "hovertemplate": (
+                        f"Point=%{{customdata}}<br>{x_hover_label}=%{{x:.0f}}<br>"
+                        f"{y_hover_label}=%{{y:{y_tick_format}}}<extra></extra>"
+                    ),
                 }
             ],
             "layout": layout,
@@ -964,12 +989,16 @@ def _build_plotly_trend_spec(payload: dict[str, Any], *, title: str, theme: str 
     x_values = [point[0] for point in points]
     y_values = [point[1] for point in points]
     sample_labels = [point[2] or _format_display_value(point[0]) for point in points]
+    y_decimal_places = _infer_decimal_places(y_values)
+    y_tick_format = _plotly_fixed_format(y_decimal_places)
     layout = _build_plotly_base_layout(
         title=title,
-        x_label=str(payload.get("x_label") or "Sample"),
+        x_label=str(payload.get("x_label") or "Sample number"),
         y_label=str(payload.get("y_label") or "Measurement"),
         theme=theme,
     )
+    layout["xaxis"]["tickformat"] = ".0f"
+    layout["yaxis"]["tickformat"] = y_tick_format
     layout["hovermode"] = "x unified"
     limits = payload.get("limits") if isinstance(payload.get("limits"), dict) else {}
     shapes, annotations = _build_horizontal_reference_shapes(
@@ -1025,6 +1054,8 @@ def _build_plotly_trend_spec(payload: dict[str, Any], *, title: str, theme: str 
     y_max = _coerce_finite_float(y_limits.get("max"))
     if y_min is not None and y_max is not None and y_min < y_max:
         layout["yaxis"]["range"] = [y_min, y_max]
+    x_hover_label = str(payload.get("x_label") or "Sample number")
+    y_hover_label = str(payload.get("y_label") or "Measurement")
     traces = [
         {
             "type": "scatter",
@@ -1033,7 +1064,10 @@ def _build_plotly_trend_spec(payload: dict[str, Any], *, title: str, theme: str 
             "y": y_values,
             "customdata": sample_labels,
             "marker": {"size": 8, "color": tokens["trend_marker"]},
-            "hovertemplate": "Sample=%{customdata}<br>Measurement=%{y}<extra></extra>",
+            "hovertemplate": (
+                f"Sample=%{{customdata}}<br>{x_hover_label}=%{{x:.0f}}<br>"
+                f"{y_hover_label}=%{{y:{y_tick_format}}}<extra></extra>"
+            ),
         }
     ]
     trend_trace = _build_subtle_trend_trace(x_values, y_values, theme=theme)
@@ -1157,6 +1191,7 @@ def _build_group_analysis_plotly_spec(
             y_label="Frequency (%)",
             theme=theme,
         )
+        layout["yaxis"]["tickformat"] = ".0%"
         layout["bargap"] = 0.04
         layout["hovermode"] = "x unified"
         shapes, annotations = _build_vertical_reference_shapes(
@@ -1201,7 +1236,7 @@ def _build_group_analysis_plotly_spec(
                     "type": "histogram",
                     "name": label,
                     "x": values,
-                    "histnorm": "percent",
+                    "histnorm": "probability",
                     "xbins": bins,
                     "bingroup": f"group-hist-{_slugify(metric_name)[:32]}",
                     "marker": {
@@ -1209,7 +1244,7 @@ def _build_group_analysis_plotly_spec(
                         "line": {"color": tokens["bar_outline"], "width": 0.8},
                     },
                     "opacity": 0.55,
-                    "hovertemplate": f"{label}<br>Measurement=%{{x}}<br>Frequency=%{{y:.2f}}%<extra></extra>",
+                    "hovertemplate": f"{label}<br>Measurement=%{{x}}<br>Frequency=%{{y:.2%}}<extra></extra>",
                 }
                 for index, (label, values) in enumerate(normalized_groups, start=1)
             ],
@@ -1624,8 +1659,8 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
         lede_text = "Review measurement charts and group analysis in the saved dashboard."
     else:
         lede_text = (
-            "Extended summary charts exported alongside the workbook. Use the interactive view "
-            "to inspect results, or compare against the workbook-matching PNG snapshot shown with each chart."
+            "Extended summary charts exported in this dashboard. Use the interactive view "
+            "to inspect results; snapshot PNG charts are shown with each card."
         )
     nav_items = [
         {"id": str(section["id"]), "label": str(section["header"] or section["id"])}
@@ -1661,7 +1696,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
     if str(manifest.get("plotly_runtime_status") or "") == "snapshot_only":
         plotly_status_notice = (
             '<p class="runtime-note">Interactive charts are unavailable in this export. '
-            'Workbook-matching PNG snapshots are shown instead.</p>'
+            'Snapshot PNG charts are shown instead.</p>'
         )
 
     return f"""<!doctype html>
@@ -3002,7 +3037,7 @@ def _render_chart_snapshot(chart: dict[str, Any], *, interactive_available: bool
 
     title = str(chart.get("title") or chart.get("chart_type") or "chart")
     fallback_note = (
-        '<p class="chart-fallback-note">Workbook-matching PNG snapshot.</p>'
+        '<p class="chart-fallback-note">Snapshot PNG chart.</p>'
         if interactive_available
         else ""
     )
@@ -3177,7 +3212,7 @@ def _render_group_analysis(group_analysis: dict[str, Any]) -> str:
     return (
         '<section id="group-analysis" class="measurement-section">'
         '<div class="section-top"><div><h2>Group Analysis</h2>'
-        '<div class="section-meta">Workbook-level grouped metric comparison data mirrored from the export payload.</div></div>'
+        '<div class="section-meta">Grouped metric analysis data mirrored from the export payload.</div></div>'
         f'<div class="pill-row">{pill_markup}</div></div>'
         f'{skip_message}'
         f'{summary_table}'

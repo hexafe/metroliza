@@ -8,6 +8,7 @@ from modules.export_html_dashboard import (
     _build_group_analysis_plotly_spec,
     _build_plotly_chart_spec,
     _build_plotly_chart_spec_bundle,
+    extract_dashboard_chart_details,
     _render_overview_cards,
     resolve_html_dashboard_assets_dir,
     resolve_html_dashboard_path,
@@ -210,7 +211,8 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn('FEATURE_1', html_text)
             self.assertIn('Interactive Plotly view', html_text)
             self.assertIn('plotly-chart', html_text)
-            self.assertIn('Workbook-matching PNG snapshot.', html_text)
+            self.assertIn('Snapshot PNG chart.', html_text)
+            self.assertNotIn('Workbook-matching PNG snapshot.', html_text)
             self.assertIn('report_dashboard_assets/section_001_diameter-x_histogram_01.png', html_text)
             self.assertIn('data-plotly-spec-light=', html_text)
             self.assertNotIn('Theme-aware Plotly colors follow the current mode.', html_text)
@@ -326,7 +328,8 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertNotIn('data-plotly-spec-light=', html_text)
             self.assertNotIn('data-plotly-spec-dark=', html_text)
             self.assertIn('Interactive charts are unavailable in this export', html_text)
-            self.assertIn('Workbook-matching PNG snapshots are shown instead.', html_text)
+            self.assertIn('Snapshot PNG charts are shown instead.', html_text)
+            self.assertNotIn('Workbook-matching PNG snapshots are shown instead.', html_text)
             self.assertFalse((assets_dir / 'plotly-2.27.0.min.js').exists())
 
     def test_plotly_chart_spec_bundle_exposes_light_and_dark_variants(self):
@@ -367,8 +370,10 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(spec['data'][0]['bingroup'], spec['data'][1]['bingroup'])
         self.assertEqual(spec['data'][0]['xbins'], spec['data'][1]['xbins'])
         self.assertEqual(spec['layout']['yaxis']['title']['text'], 'Frequency (%)')
-        self.assertEqual(spec['data'][0]['histnorm'], 'percent')
-        self.assertEqual(spec['data'][1]['histnorm'], 'percent')
+        self.assertEqual(spec['layout']['yaxis']['tickformat'], '.0%')
+        self.assertEqual(spec['data'][0]['histnorm'], 'probability')
+        self.assertEqual(spec['data'][1]['histnorm'], 'probability')
+        self.assertIn('Frequency=%{y:.2%}', spec['data'][0]['hovertemplate'])
         expected_bin_count = resolve_histogram_bin_count(all_values)['bin_count']
         expected_bin_width = (max(all_values) - min(all_values)) / expected_bin_count
         self.assertAlmostEqual(spec['data'][0]['xbins']['size'], expected_bin_width)
@@ -418,6 +423,40 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(bins['end'], 15.0)
         self.assertEqual(bins['size'], 4.0)
         self.assertEqual(spec['layout']['xaxis']['range'], [-5.0, 15.0])
+        self.assertEqual(spec['layout']['yaxis']['tickformat'], '.0%')
+        self.assertEqual(spec['data'][0]['histnorm'], 'probability')
+        self.assertIn('Frequency=%{y:.2%}', spec['data'][0]['hovertemplate'])
+
+    def test_extract_dashboard_chart_details_uses_frequency_default_axis_label(self):
+        details = extract_dashboard_chart_details(
+            {
+                'type': 'histogram',
+                'values': [1.1, 1.2, 1.3],
+            }
+        )
+        self.assertEqual(details['axis_labels']['y'], 'Frequency (%)')
+
+    def test_distribution_scatter_plotly_spec_preserves_precision_in_hover_and_ticks(self):
+        with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
+            spec = _build_plotly_chart_spec(
+                {
+                    'type': 'distribution',
+                    'render_mode': 'scatter',
+                    'x_values': [1.0, 2.0],
+                    'y_values': [10.1234, 10.4325],
+                    'labels': ['S1', 'S2'],
+                    'x_label': 'Sample number',
+                    'y_label': 'Diameter / X',
+                },
+                title='Diameter / X',
+            )
+
+        self.assertEqual(spec['layout']['xaxis']['title']['text'], 'Sample number')
+        self.assertEqual(spec['layout']['yaxis']['title']['text'], 'Diameter / X')
+        self.assertEqual(spec['layout']['xaxis']['tickformat'], '.0f')
+        self.assertEqual(spec['layout']['yaxis']['tickformat'], '.4f')
+        self.assertIn('%{x:.0f}', spec['data'][0]['hovertemplate'])
+        self.assertIn('%{y:.4f}', spec['data'][0]['hovertemplate'])
 
     def test_summary_plotly_spec_uses_plotstats_artifact_when_enabled(self):
         package_spec = {
@@ -476,15 +515,23 @@ class TestExportHtmlDashboard(unittest.TestCase):
                     'labels': ['third', 'first', 'second'],
                     'horizontal_limits': [25.0],
                     'limits': {'lsl': 12.0, 'usl': 28.0},
+                    'x_label': 'Sample number',
+                    'y_label': 'Diameter / X',
                 },
                 title='Trend',
             )
 
         self.assertEqual(spec['layout']['hovermode'], 'x unified')
+        self.assertEqual(spec['layout']['xaxis']['title']['text'], 'Sample number')
+        self.assertEqual(spec['layout']['yaxis']['title']['text'], 'Diameter / X')
+        self.assertEqual(spec['layout']['xaxis']['tickformat'], '.0f')
+        self.assertEqual(spec['layout']['yaxis']['tickformat'], '.0f')
         self.assertEqual(spec['data'][0]['x'], [1.0, 2.0, 3.0])
         self.assertEqual(spec['data'][0]['y'], [10.0, 20.0, 30.0])
         self.assertEqual(spec['data'][0]['customdata'], ['first', 'second', 'third'])
         self.assertEqual(spec['data'][0]['mode'], 'markers')
+        self.assertIn('%{x:.0f}', spec['data'][0]['hovertemplate'])
+        self.assertIn('%{y:.0f}', spec['data'][0]['hovertemplate'])
         self.assertNotIn('line', spec['data'][0])
         self.assertEqual(spec['data'][1]['mode'], 'lines')
         self.assertLessEqual(spec['data'][1]['opacity'], 0.35)

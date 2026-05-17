@@ -171,8 +171,8 @@ def resolve_sampling_context(
             'sampled_group': sampled_frames['trend'],
             'payload': build_trend_plot_payload(
                 sampled_frames['trend'],
-                grouping_active=grouping_applied,
-                label_column=distribution_key,
+                grouping_active=False,
+                label_column='SAMPLE_NUMBER',
             ),
         },
     }

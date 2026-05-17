@@ -1796,7 +1796,7 @@ def build_resolved_trend_spec(payload: Mapping[str, Any]) -> dict[str, Any]:
         y_max=float(y_max),
         x_ticks=x_ticks,
         y_ticks=y_ticks,
-        x_label=str(payload.get("x_label") or "Sample #"),
+        x_label=str(payload.get("x_label") or "Sample number"),
         y_label=str(payload.get("y_label") or "Measurement"),
         grid_axis="y",
         rotation=int(axis_layout["rotation"]),
