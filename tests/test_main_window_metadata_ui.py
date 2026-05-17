@@ -2,11 +2,13 @@ import unittest
 
 try:
     from PyQt6.QtWidgets import QApplication, QPushButton
-    from modules.main_window import MainWindow
+    from modules.main_window import FEATURE_IMPORT_WARMUP_MODULES, MainWindow, warm_feature_imports
 except ImportError as exc:  # pragma: no cover - environment-dependent import
     QApplication = None
     QPushButton = None
     MainWindow = None
+    FEATURE_IMPORT_WARMUP_MODULES = ()
+    warm_feature_imports = None
     PYQT_IMPORT_ERROR = exc
 else:
     PYQT_IMPORT_ERROR = None
@@ -122,6 +124,37 @@ class TestMainWindowMetadataUi(unittest.TestCase):
             self.assertIn("Select a database", window.metadata_enrichment_status_label.text())
         finally:
             window.close()
+
+    def test_feature_import_warmup_imports_deferred_modules(self):
+        imported_modules = []
+
+        def fake_importer(module_name):
+            imported_modules.append(module_name)
+            return object()
+
+        loaded_modules, failed_modules = warm_feature_imports(importer=fake_importer)
+
+        expected_modules = [module_name for _label, module_name in FEATURE_IMPORT_WARMUP_MODULES]
+        self.assertEqual(imported_modules, expected_modules)
+        self.assertEqual(loaded_modules, expected_modules)
+        self.assertEqual(failed_modules, [])
+
+    def test_feature_import_warmup_keeps_failures_non_fatal(self):
+        expected_modules = [module_name for _label, module_name in FEATURE_IMPORT_WARMUP_MODULES]
+        failing_module = expected_modules[1]
+
+        def fake_importer(module_name):
+            if module_name == failing_module:
+                raise RuntimeError("boom")
+            return object()
+
+        loaded_modules, failed_modules = warm_feature_imports(importer=fake_importer)
+
+        self.assertNotIn(failing_module, loaded_modules)
+        self.assertEqual(len(failed_modules), 1)
+        self.assertEqual(failed_modules[0]["module"], failing_module)
+        self.assertEqual(failed_modules[0]["error_type"], "RuntimeError")
+        self.assertEqual(failed_modules[0]["message"], "boom")
 
 
 if __name__ == "__main__":

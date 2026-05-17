@@ -1,8 +1,10 @@
 import base64
+import importlib
+import threading
 from modules import base64_encoded_files
 from modules.custom_logger import CustomLogger
 from modules.help_menu import build_help_menu
-from PyQt6.QtCore import QByteArray
+from PyQt6.QtCore import QByteArray, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon, QPixmap, QAction
 from PyQt6.QtWidgets import (
     QHBoxLayout,
@@ -24,8 +26,42 @@ from modules.ui_foundation import (
 )
 
 
+FEATURE_IMPORT_WARMUP_DELAY_MS = 1200
+FEATURE_IMPORT_WARMUP_MODULES = (
+    ("Parse Reports", "modules.parsing_dialog"),
+    ("Export Workbook", "modules.export_dialog"),
+    ("CSV Summary", "modules.industrial_analytics_dialog"),
+    ("Industrial Data", "modules.industrial_data_dialog"),
+    ("Metadata Enrichment", "modules.metadata_enrichment_thread"),
+    ("Modify Database", "modules.modify_db"),
+    ("Match Characteristic Names", "modules.characteristic_mapping_dialog"),
+)
+
+
+def warm_feature_imports(importer=importlib.import_module):
+    """Import feature modules after first paint so later launches open immediately."""
+    loaded_modules = []
+    failed_modules = []
+    for _label, module_name in FEATURE_IMPORT_WARMUP_MODULES:
+        try:
+            importer(module_name)
+        except Exception as exc:  # pragma: no cover - exercised through tests with fakes
+            failed_modules.append(
+                {
+                    "module": module_name,
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                }
+            )
+        else:
+            loaded_modules.append(module_name)
+    return loaded_modules, failed_modules
+
+
 class MainWindow(QMainWindow):
     """A main window class that provides the user interface for the Metroliza application."""
+
+    feature_import_warmup_finished = pyqtSignal(object, object)
 
     def __init__(self, version_label, days_until_expiration):
         """Initialize the main window and its components.
@@ -61,6 +97,10 @@ class MainWindow(QMainWindow):
         self.industrial_data_dialog = None
         self.directory = None
         self.db_file = None
+        self._feature_import_warmup_started = False
+        self._feature_import_warmup_completed = False
+        self._feature_import_warmup_thread = None
+        self.feature_import_warmup_finished.connect(self._on_feature_import_warmup_finished)
 
         # Initialize and set up command-center widgets
         self.workflow_label = section_label("Workflow")
@@ -86,6 +126,49 @@ class MainWindow(QMainWindow):
         self.setup_buttons_layout()
         self._sync_context_rows()
         apply_metroliza_theme(self)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._feature_import_warmup_started:
+            QTimer.singleShot(FEATURE_IMPORT_WARMUP_DELAY_MS, self.start_feature_import_warmup)
+
+    def start_feature_import_warmup(self):
+        """Warm heavy feature imports shortly after the main window is visible."""
+        if self._feature_import_warmup_started or self._feature_import_warmup_completed:
+            return
+
+        self._feature_import_warmup_started = True
+        self.statusBar().showMessage("Preparing tools...")
+        self._feature_import_warmup_thread = threading.Thread(
+            target=self._run_feature_import_warmup,
+            name="metroliza-feature-import-warmup",
+            daemon=True,
+        )
+        self._feature_import_warmup_thread.start()
+
+    def _run_feature_import_warmup(self):
+        loaded_modules, failed_modules = warm_feature_imports()
+        self.feature_import_warmup_finished.emit(loaded_modules, failed_modules)
+
+    def _on_feature_import_warmup_finished(self, loaded_modules, failed_modules):
+        self._feature_import_warmup_completed = True
+        self._feature_import_warmup_thread = None
+        if failed_modules:
+            self.statusBar().showMessage(
+                "Some tools will finish loading when opened.",
+                5000,
+            )
+            for failure in failed_modules:
+                CustomLogger(
+                    RuntimeError(
+                        "Feature import warm-up failed for "
+                        f"{failure['module']}: {failure['error_type']}: {failure['message']}"
+                    ),
+                    reraise=False,
+                )
+            return
+
+        self.statusBar().showMessage("Tools ready", 2000)
 
     def decode_icon(self, encoded_icon):
         """Decode the base64 encoded icon and return an QIcon object.
