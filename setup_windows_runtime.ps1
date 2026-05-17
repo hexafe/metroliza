@@ -116,7 +116,7 @@ try {
             Install-VcRedistX64
         }
         else {
-            Write-Warning "Microsoft Visual C++ Redistributable 2015-2022 x64 was not detected. Install it from $vcRedistUrl or rerun this script with -InstallVcRedist."
+            throw "Microsoft Visual C++ Redistributable 2015-2022 x64 was not detected. Install it from $vcRedistUrl or rerun this script with -InstallVcRedist."
         }
     }
 
@@ -146,6 +146,12 @@ try {
         }
         if ($WithBuild) {
             Invoke-Checked -Executable $venvPython -Arguments @('-m', 'pip', 'install', '-r', 'requirements-build.txt')
+        }
+    }
+
+    if (-not $SkipValidation) {
+        Invoke-Step 'Validating Qt runtime' {
+            Invoke-Checked -Executable $venvPython -Arguments @('scripts/validate_qt_runtime.py', '--compact')
         }
     }
 

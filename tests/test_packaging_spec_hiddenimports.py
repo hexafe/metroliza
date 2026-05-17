@@ -90,6 +90,7 @@ def test_windows_runtime_setup_and_diagnostic_scripts_cover_ocr_prerequisites():
     assert "requirements.txt" in setup_text
     assert "requirements-ocr.txt" in setup_text
     assert "vc_redist.x64.exe" in setup_text
+    assert "scripts/validate_qt_runtime.py" in setup_text
     assert "scripts/windows_ocr_runtime_diagnostics.py" in setup_text
     assert "scripts/validate_packaged_pdf_parser.py" in setup_text
     assert "--require-header-ocr" in setup_text

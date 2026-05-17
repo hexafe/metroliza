@@ -1,8 +1,6 @@
 import logging
 from typing import Literal
 
-from PyQt6.QtWidgets import QMessageBox
-
 
 LOG_ONLY = "log_only"
 LOG_AND_DIALOG = "log_and_dialog"
@@ -23,6 +21,16 @@ def log_exception(exception, *, logger_name=None, context="operation"):
 
 def notify_user(*, message, title="Error", parent=None):
     """Show a user-facing error notification dialog."""
+    try:
+        from PyQt6.QtWidgets import QMessageBox
+    except (ImportError, OSError, RuntimeError) as exc:
+        logger.error(
+            "Could not show error dialog because Qt failed to import: %s",
+            exc,
+            exc_info=True,
+        )
+        return
+
     QMessageBox.information(parent, title, message)
 
 

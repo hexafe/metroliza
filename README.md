@@ -46,14 +46,16 @@ Redistributable 2015-2022 x64, and the packages/model files listed above.
 To create or refresh a local Windows runtime venv from the repo root:
 
 ```powershell
-.\setup_windows_runtime.ps1 -Clean
+.\setup_windows_runtime.ps1 -Clean -InstallVcRedist
 ```
 
 The script creates `.venv`, installs `requirements.txt` and `requirements-ocr.txt`,
-checks for the VC++ Redistributable, validates the vendored RapidOCR model files,
-and runs isolated ONNX/OpenCV/RapidOCR smoke tests. If the VC++ Redistributable is
-missing, either install it from `https://aka.ms/vs/17/release/vc_redist.x64.exe`
-or rerun with `-InstallVcRedist`.
+checks for the VC++ Redistributable, validates the PyQt/Qt DLL runtime, validates
+the vendored RapidOCR model files, and runs isolated ONNX/OpenCV/RapidOCR smoke
+tests. If the VC++ Redistributable is missing, either install it from
+`https://aka.ms/vs/17/release/vc_redist.x64.exe` or rerun with `-InstallVcRedist`.
+If startup fails with `DLL load failed while importing QtCore`, run
+`python scripts\validate_qt_runtime.py --compact` inside the activated venv.
 
 To diagnose OCR for one PDF without relying on PowerShell output redirection:
 

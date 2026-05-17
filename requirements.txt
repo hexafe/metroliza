@@ -9,9 +9,10 @@ numpy>=1.24.3
 pandas>=2.0.1
 Pillow>=12.2.0
 PyMuPDF>=1.27.2.3
-# Stay below the Qt SVG CVE-2026-6210 affected range until PyQt6 wheels ship
-# Qt 6.11.1+ or another fixed Qt payload.
-PyQt6>=6.6.1,<6.7
+# Keep the PyQt wrapper and bundled Qt payload pinned to the same safe Qt line.
+# Do not relax this without rerunning the Windows Qt runtime smoke test.
+PyQt6==6.6.1
+PyQt6-Qt6==6.6.1
 PyYAML>=6.0.1
 scipy>=1.10.1
 seaborn>=0.13.0

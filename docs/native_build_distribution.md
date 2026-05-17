@@ -192,6 +192,18 @@ If packaged Windows executables fail at startup with `ImportError: DLL load fail
 - the build interpreter is a full CPython install (not embeddable/minimal),
 - Python runtime DLLs under `<python>/DLLs` (including `libffi*.dll`) are bundled into the executable.
 
+If a source venv or packaged artifact fails with `ImportError: DLL load failed while importing QtCore`, first validate the Windows runtime venv:
+
+```powershell
+.\setup_windows_runtime.ps1 -Clean -InstallVcRedist
+.\.venv\Scripts\python.exe scripts\validate_qt_runtime.py --compact
+```
+
+The Qt validator reports the installed `PyQt6`, `PyQt6-Qt6`, `PyQt6-sip`, Qt
+library paths, and VC++ Redistributable registry status. Do not release a Windows
+artifact from an environment where the PyQt wrapper and bundled Qt payload are
+from different Qt major/minor lines.
+
 PyInstaller onefile remains the closest turnkey single-file distribution for
 non-technical users because it bundles the Python runtime into one artifact.
 For startup-sensitive Windows testing, prefer the onedir artifact: it avoids

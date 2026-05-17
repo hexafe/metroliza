@@ -64,6 +64,13 @@ class RequirementsHygieneTests(unittest.TestCase):
         self.assertIn('openvino', pathlib.Path('requirements-ocr.txt').read_text(encoding='utf-8').lower())
         self.assertIn('opencv-python', pathlib.Path('requirements-ocr.txt').read_text(encoding='utf-8').lower())
 
+    def test_runtime_requirements_pin_pyqt_wrapper_and_qt_payload_together(self):
+        runtime_entries = self._runtime_requirements()
+
+        self.assertIn('PyQt6==6.6.1', runtime_entries)
+        self.assertIn('PyQt6-Qt6==6.6.1', runtime_entries)
+        self.assertNotIn('PyQt6>=6.6.1,<6.7', runtime_entries)
+
     def test_runtime_requirements_do_not_include_google_api_python_client(self):
         runtime_entries = self._runtime_requirements()
         self.assertFalse(
