@@ -86,16 +86,21 @@ Build commands:
 
 ```bash
 pyinstaller packaging/metroliza_onefile.spec
+pyinstaller packaging/metroliza_onedir.spec
 python -m maturin build --manifest-path modules/native/cmm_parser/Cargo.toml --release
 python -m maturin build --manifest-path modules/native/chart_renderer/Cargo.toml --release
 ```
 
 ```powershell
-./packaging/build_nuitka.ps1
+./build_windows_exe.ps1 -Mode both
+./packaging/build_nuitka.ps1 -Mode standalone
+./scripts/measure_windows_startup.ps1 -ArtifactPath <onefile.exe>,<onedir\metroliza.exe>
 ```
 
-- [ ] PyInstaller output exists under `dist/` and launches. *(Owner: Release engineer/QA)*
+- [ ] PyInstaller onefile output exists under `dist/` and launches. *(Owner: Release engineer/QA)*
+- [ ] PyInstaller onedir output exists under `dist/` and launches faster than onefile on the clean Windows test machine. *(Owner: Release engineer/QA)*
 - [ ] Nuitka output executable exists and launches on a clean/sandbox target environment. *(Owner: Release engineer/QA)*
+- [ ] Startup profile JSONL evidence is attached for onefile and onedir launch tests. *(Owner: QA)*
 - [ ] Native wheel build succeeds for release target(s), and `_metroliza_cmm_native` import smoke check passes. *(Owner: Release engineer/QA)*
 - [ ] Native chart wheel build succeeds for release target(s), and `_metroliza_chart_native` histogram render smoke check passes. *(Owner: Release engineer/QA)*
 - [ ] Pure-Python parser fallback works when native module is intentionally unavailable (`METROLIZA_CMM_PARSER_BACKEND=python`). *(Owner: QA)*

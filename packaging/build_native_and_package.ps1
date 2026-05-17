@@ -11,7 +11,10 @@ param(
     [switch]$SkipBackendVerification,
     [switch]$DryRun,
 
+    [ValidateSet('onefile', 'onedir', 'both')]
+    [string]$PyInstallerMode = 'onefile',
     [string]$PyInstallerSpecPath = "$PSScriptRoot/metroliza_onefile.spec",
+    [string]$PyInstallerOnedirSpecPath = "$PSScriptRoot/metroliza_onedir.spec",
     [string]$EntryPoint = 'metroliza.py',
     [string]$OutputName,
     [string]$IconPath = "$PSScriptRoot/metroliza_icon2.ico",
@@ -268,6 +271,17 @@ function Add-ValueArgumentIfBound {
     }
 }
 
+function Get-PyInstallerSpecPathsForMode {
+    $specPaths = @()
+    if ($PyInstallerMode -in @('onefile', 'both')) {
+        $specPaths += $PyInstallerSpecPath
+    }
+    if ($PyInstallerMode -in @('onedir', 'both')) {
+        $specPaths += $PyInstallerOnedirSpecPath
+    }
+    return $specPaths
+}
+
 Push-Location $repoRoot
 try {
     Write-Host '[1/6] Validating toolchain'
@@ -408,11 +422,21 @@ try {
         }
 
         'pyinstaller' {
-            if (-not (Test-Path -LiteralPath $PyInstallerSpecPath)) {
-                throw "PyInstaller spec file not found: $PyInstallerSpecPath"
+            $pyInstallerSpecPaths = @(Get-PyInstallerSpecPathsForMode)
+            foreach ($specPath in $pyInstallerSpecPaths) {
+                if (-not (Test-Path -LiteralPath $specPath)) {
+                    throw "PyInstaller spec file not found: $specPath"
+                }
             }
 
-            Invoke-CheckedPythonCommand -Arguments @('-m', 'PyInstaller', '--noconfirm', $PyInstallerSpecPath) -FailureMessage 'PyInstaller packaging failed.'
+            foreach ($specPath in $pyInstallerSpecPaths) {
+                Invoke-CheckedPythonCommand -Arguments @(
+                    '-m',
+                    'PyInstaller',
+                    '--noconfirm',
+                    $specPath
+                ) -FailureMessage "PyInstaller packaging failed for spec: $specPath"
+            }
         }
     }
 

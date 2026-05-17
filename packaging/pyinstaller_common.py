@@ -1,0 +1,193 @@
+"""Shared PyInstaller collection rules for Metroliza artifacts."""
+
+from __future__ import annotations
+
+from pathlib import Path
+import sys
+
+from PyInstaller.utils.hooks import (
+    collect_data_files,
+    collect_dynamic_libs,
+    collect_submodules,
+    copy_metadata,
+)
+
+
+def read_version_label(root_dir: Path) -> str:
+    """Return the release label used by packaged artifact names."""
+    version_ns: dict[str, str] = {}
+    exec((root_dir / "VersionDate.py").read_text(encoding="utf-8"), version_ns)
+    return f"{version_ns['RELEASE_VERSION']}({version_ns['VERSION_DATE']})"
+
+
+def collect_windows_python_runtime_binaries() -> list[tuple[str, str]]:
+    """Include Python runtime DLLs needed by extension modules like _ctypes."""
+    if sys.platform != "win32":
+        return []
+
+    dll_dir = Path(sys.base_prefix) / "DLLs"
+    if not dll_dir.exists():
+        return []
+
+    runtime_globs = (
+        "libffi*.dll",
+        "python3.dll",
+        "python3*.dll",
+        "vcruntime*.dll",
+        "msvcp*.dll",
+    )
+
+    binaries: list[tuple[str, str]] = []
+    seen_paths: set[Path] = set()
+    for pattern in runtime_globs:
+        for dll_path in dll_dir.glob(pattern):
+            resolved_path = dll_path.resolve()
+            if resolved_path in seen_paths:
+                continue
+            binaries.append((str(resolved_path), "."))
+            seen_paths.add(resolved_path)
+    return binaries
+
+
+def collect_optional_runtime_assets(
+    package_name: str,
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]], list[str]]:
+    """Collect package data, dynamic libraries, and hidden imports if installed."""
+    try:
+        datas = collect_data_files(package_name)
+        binaries = collect_dynamic_libs(package_name)
+        hiddenimports = collect_submodules(package_name)
+    except Exception:
+        return [], [], []
+    return datas, binaries, hiddenimports
+
+
+def collect_optional_distribution_metadata(distribution_name: str) -> list[tuple[str, str]]:
+    """Collect distribution metadata if the package is installed."""
+    try:
+        return copy_metadata(distribution_name)
+    except Exception:
+        return []
+
+
+def collect_optional_vendored_model_data(root_dir: Path) -> list[tuple[str, str]]:
+    """Collect vendored OCR model files from legacy and current locations."""
+    model_roots = (
+        root_dir / "ocr_models",
+        root_dir / "modules" / "ocr_models",
+    )
+    datas: list[tuple[str, str]] = []
+    for model_root in model_roots:
+        if not model_root.exists():
+            continue
+        for file_path in model_root.rglob("*"):
+            if file_path.is_file():
+                datas.append((str(file_path), str(file_path.parent.relative_to(root_dir))))
+    return datas
+
+
+def build_pyinstaller_collection(root_dir: Path) -> dict[str, list]:
+    """Return shared PyInstaller binaries, datas, and hidden imports."""
+    pymupdf_datas, pymupdf_binaries, pymupdf_hiddenimports = collect_optional_runtime_assets(
+        "pymupdf"
+    )
+    fitz_datas, fitz_binaries, fitz_hiddenimports = collect_optional_runtime_assets("fitz")
+    (
+        hexafe_groupstats_datas,
+        hexafe_groupstats_binaries,
+        hexafe_groupstats_hiddenimports,
+    ) = collect_optional_runtime_assets("hexafe_groupstats")
+    (
+        hexafe_plotstats_datas,
+        hexafe_plotstats_binaries,
+        hexafe_plotstats_hiddenimports,
+    ) = collect_optional_runtime_assets("hexafe_plotstats")
+    oznak_datas, oznak_binaries, oznak_hiddenimports = collect_optional_runtime_assets("oznak")
+    rapidocr_datas, rapidocr_binaries, rapidocr_hiddenimports = collect_optional_runtime_assets(
+        "rapidocr"
+    )
+    (
+        onnxruntime_datas,
+        onnxruntime_binaries,
+        onnxruntime_hiddenimports,
+    ) = collect_optional_runtime_assets("onnxruntime")
+    openvino_datas, openvino_binaries, openvino_hiddenimports = collect_optional_runtime_assets(
+        "openvino"
+    )
+    cv2_datas, cv2_binaries, cv2_hiddenimports = collect_optional_runtime_assets("cv2")
+    numpy_datas, numpy_binaries, numpy_hiddenimports = collect_optional_runtime_assets("numpy")
+
+    html_dashboard_datas = [
+        (
+            str(root_dir / "modules" / "html_dashboard_assets" / "plotly-2.27.0.min.js"),
+            "modules/html_dashboard_assets",
+        )
+    ]
+    third_party_notice_datas = [(str(root_dir / "THIRD_PARTY_NOTICES.md"), ".")]
+
+    return {
+        "binaries": (
+            collect_windows_python_runtime_binaries()
+            + pymupdf_binaries
+            + fitz_binaries
+            + hexafe_groupstats_binaries
+            + hexafe_plotstats_binaries
+            + oznak_binaries
+            + rapidocr_binaries
+            + onnxruntime_binaries
+            + openvino_binaries
+            + cv2_binaries
+            + numpy_binaries
+        ),
+        "datas": (
+            third_party_notice_datas
+            + html_dashboard_datas
+            + pymupdf_datas
+            + fitz_datas
+            + hexafe_groupstats_datas
+            + hexafe_plotstats_datas
+            + oznak_datas
+            + rapidocr_datas
+            + onnxruntime_datas
+            + openvino_datas
+            + cv2_datas
+            + numpy_datas
+            + collect_optional_distribution_metadata("rapidocr")
+            + collect_optional_distribution_metadata("onnxruntime")
+            + collect_optional_distribution_metadata("openvino")
+            + collect_optional_distribution_metadata("opencv-python")
+            + collect_optional_distribution_metadata("numpy")
+            + collect_optional_distribution_metadata("hexafe-plotstats")
+            + collect_optional_distribution_metadata("oznak")
+            + collect_optional_vendored_model_data(root_dir)
+        ),
+        "hiddenimports": [
+            "_metroliza_cmm_native",
+            "_metroliza_chart_native",
+            "hexafe_groupstats",
+            "hexafe_plotstats",
+            "oznak",
+            "pymupdf",
+            "fitz",
+            "rapidocr",
+            "onnxruntime",
+            "openvino",
+            "cv2",
+            "numpy",
+            "modules.cmm_report_parser",
+            "modules.header_ocr_backend",
+            "modules.header_ocr_geometry",
+            "modules.header_ocr_corrections",
+            "modules.native_chart_compositor",
+            *hexafe_groupstats_hiddenimports,
+            *hexafe_plotstats_hiddenimports,
+            *oznak_hiddenimports,
+            *pymupdf_hiddenimports,
+            *fitz_hiddenimports,
+            *rapidocr_hiddenimports,
+            *onnxruntime_hiddenimports,
+            *openvino_hiddenimports,
+            *cv2_hiddenimports,
+            *numpy_hiddenimports,
+        ],
+    }

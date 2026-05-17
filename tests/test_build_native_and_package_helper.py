@@ -6,6 +6,9 @@ def test_build_native_and_package_helper_covers_native_build_and_packaging_paths
 
     assert "[ValidateSet('none', 'nuitka', 'pyinstaller')]" in script
     assert "[ValidateSet('all', 'cmm', 'chart', 'group-stats', 'comparison-stats', 'distribution-fit')]" in script
+    assert "[ValidateSet('onefile', 'onedir', 'both')]" in script
+    assert "[string]$PyInstallerMode = 'onefile'" in script
+    assert "metroliza_onedir.spec" in script
     assert "'modules/native/cmm_parser/Cargo.toml'" in script
     assert "'modules/native/chart_renderer/Cargo.toml'" in script
     assert "'modules/native/group_stats_coercion/Cargo.toml'" in script
@@ -21,5 +24,7 @@ def test_build_native_and_package_helper_covers_native_build_and_packaging_paths
     assert "@('-m', 'maturin', 'develop', '--release', '--manifest-path', $target.ManifestPath)" in script
     assert "build_backend_diagnostic_summary" in script
     assert "build_nuitka.ps1" in script
-    assert "@('-m', 'PyInstaller', '--noconfirm', $PyInstallerSpecPath)" in script
+    assert "Get-PyInstallerSpecPathsForMode" in script
+    assert "'PyInstaller'," in script
+    assert "'--noconfirm'," in script
     assert "Windows native packaging is validated primarily on CPython 3.11 x64." in script

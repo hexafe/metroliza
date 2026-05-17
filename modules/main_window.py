@@ -1,17 +1,7 @@
 import base64
 from modules import base64_encoded_files
-from modules.export_dialog import ExportDialog
-from modules.parsing_dialog import ParsingDialog
-from modules.metadata_enrichment_thread import MetadataEnrichmentThread
-from modules.modify_db import ModifyDB
-from modules.about_window import AboutWindow
-from modules.release_notes_dialog import ReleaseNotesDialog
 from modules.custom_logger import CustomLogger
-from modules.characteristic_mapping_dialog import CharacteristicMappingDialog
-from modules.industrial_data_dialog import IndustrialDataDialog
-from modules.industrial_analytics_dialog import IndustrialAnalyticsDialog, SOURCE_TABULAR_FILE
 from modules.help_menu import build_help_menu
-from VersionDate import release_notes
 from PyQt6.QtCore import QByteArray
 from PyQt6.QtGui import QIcon, QPixmap, QAction
 from PyQt6.QtWidgets import (
@@ -204,6 +194,8 @@ class MainWindow(QMainWindow):
     def launch_metadata_enrichment(self):
         """Start modeless OCR metadata enrichment for the selected database."""
         try:
+            from modules.metadata_enrichment_thread import MetadataEnrichmentThread
+
             if not self.db_file:
                 self.metadata_enrichment_status_label.setText("Select a database before enrichment")
                 self.metadata_enrichment_status_label.setVisible(True)
@@ -275,6 +267,8 @@ class MainWindow(QMainWindow):
     def launch_parsing_dialog(self):
         """Launch the parsing dialog and close the other dialogs if they are open."""
         try:
+            from modules.parsing_dialog import ParsingDialog
+
             if self.export_dialog and self.export_dialog.isVisible():
                 self.export_dialog.close()
                 
@@ -288,7 +282,7 @@ class MainWindow(QMainWindow):
                     enrichment_signal.connect(self.start_metadata_enrichment_from_parsing)
                 self.parsing_dialog.show()
         except Exception as e:
-            CustomLogger(e, reraise=False)
+            self.log_and_exit(e)
 
     def start_metadata_enrichment_from_parsing(self, db_file):
         """Receive a successful light import request and start modeless enrichment."""
@@ -301,6 +295,8 @@ class MainWindow(QMainWindow):
             
     def launch_modifydb_dialog(self):
         try:
+            from modules.modify_db import ModifyDB
+
             if self.export_dialog and self.export_dialog.isVisible():
                 self.export_dialog.close()
                 
@@ -318,6 +314,8 @@ class MainWindow(QMainWindow):
 
     def launch_export_dialog(self):
         try:
+            from modules.export_dialog import ExportDialog
+
             if self.parsing_dialog and self.parsing_dialog.isVisible():
                 self.parsing_dialog.close()
                 
@@ -335,6 +333,8 @@ class MainWindow(QMainWindow):
 
     def open_about_window(self):
         try:
+            from modules.about_window import AboutWindow
+
             about_window = AboutWindow(self, days_until_expiration=self.days_until_expiration)
             about_window.exec()
         except Exception as e:
@@ -342,6 +342,9 @@ class MainWindow(QMainWindow):
 
     def open_release_notes_dialog(self):
         try:
+            from VersionDate import release_notes
+            from modules.release_notes_dialog import ReleaseNotesDialog
+
             release_notes_dialog = ReleaseNotesDialog(self, release_notes)
             release_notes_dialog.exec()
         except Exception as e:
@@ -349,6 +352,8 @@ class MainWindow(QMainWindow):
 
     def launch_csv_summary_dialog(self):
         try:
+            from modules.industrial_analytics_dialog import IndustrialAnalyticsDialog, SOURCE_TABULAR_FILE
+
             csv_summary_window = IndustrialAnalyticsDialog(
                 self,
                 source_kind=SOURCE_TABULAR_FILE,
@@ -359,6 +364,8 @@ class MainWindow(QMainWindow):
 
     def launch_industrial_data_dialog(self):
         try:
+            from modules.industrial_data_dialog import IndustrialDataDialog
+
             if not self.industrial_data_dialog or not self.industrial_data_dialog.isVisible():
                 self.industrial_data_dialog = IndustrialDataDialog(self, self.db_file)
                 self.industrial_data_dialog.show()
@@ -370,6 +377,8 @@ class MainWindow(QMainWindow):
 
     def launch_characteristic_mapping_dialog(self):
         try:
+            from modules.characteristic_mapping_dialog import CharacteristicMappingDialog
+
             characteristic_mapping_dialog = CharacteristicMappingDialog(self, self.db_file)
             characteristic_mapping_dialog.exec()
         except Exception as e:

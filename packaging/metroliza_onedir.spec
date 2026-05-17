@@ -11,7 +11,8 @@ sys.path.insert(0, str(SPEC_DIR))
 from pyinstaller_common import build_pyinstaller_collection, read_version_label
 
 VERSION_LABEL = read_version_label(ROOT_DIR)
-OUTPUT_NAME = f"metroliza_P_{VERSION_LABEL}"
+OUTPUT_DIR_NAME = f"metroliza_P_{VERSION_LABEL}_onedir"
+EXE_NAME = "metroliza"
 ICON_PATH = SPEC_DIR / "metroliza_icon2.ico"
 COLLECTION = build_pyinstaller_collection(ROOT_DIR)
 
@@ -36,17 +37,13 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
-    name=OUTPUT_NAME,
+    exclude_binaries=True,
+    name=EXE_NAME,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -54,4 +51,15 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=[str(ICON_PATH)],
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name=OUTPUT_DIR_NAME,
 )

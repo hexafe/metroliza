@@ -54,6 +54,7 @@ These checks are explicitly non-blocking for normal PR CI:
 | Performance benchmark trend check | `perf-benchmarks` | Automatic on PRs and branch pushes after static checks and unit tests pass | **Non-blocking** advisory signal; compares medians with a 12% threshold and 0.100s absolute slowdown floor, reports export stage medians for review, and keeps the PR check green while artifacts preserve the advisory failure details |
 | Packaging smoke build + packaged PDF parser check (release-only) | `packaging-smoke` | Manual `workflow_dispatch` with `run_packaging_smoke=1` | **Non-blocking** for regular PRs and pushes |
 | Google conversion smoke (release-only) | `google-conversion-smoke` | Manual `workflow_dispatch` with `run_google_conversion_smoke=1` | **Non-blocking** for regular PRs and pushes |
+| Windows startup benchmark (release-only) | `windows-startup-benchmark` | Manual `workflow_dispatch` with `run_windows_startup_benchmark=1` | **Non-blocking** for regular PRs and pushes |
 
 ### Packaging smoke parser semantics
 
@@ -64,6 +65,17 @@ These checks are explicitly non-blocking for normal PR CI:
 - The smoke command is bounded with a timeout to prevent hanging CI runners.
 - Startup logs (`stdout`, `stderr`, and discovered `metroliza.log` paths) are gathered into `smoke-artifacts/`.
 - On failure, those artifacts are uploaded as `packaging-smoke-artifacts` for troubleshooting.
+
+### Windows startup benchmark semantics
+
+- The `windows-startup-benchmark` job builds PyInstaller onefile and onedir
+  artifacts through `build_windows_exe.ps1 -Mode both`.
+- It launches both artifacts with `METROLIZA_STARTUP_PROFILE=1` and
+  `METROLIZA_STARTUP_UI_SMOKE=1`, so the app records startup timing JSONL and
+  exits after the first Qt event-loop tick.
+- The job uploads `startup-artifacts/`, including raw profile JSONL files and
+  `startup-summary.json`, as release evidence for onefile-vs-onedir startup
+  comparisons.
 
 ### Performance benchmark trend semantics
 

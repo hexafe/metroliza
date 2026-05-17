@@ -141,7 +141,8 @@ Runtime fallback from native execution errors in forced-`native` modes is intent
 
 ## PyInstaller inclusion rules and smoke checks
 
-`packaging/metroliza_onefile.spec` includes:
+`packaging/metroliza_onefile.spec` and `packaging/metroliza_onedir.spec` share
+the same collection rules through `packaging/pyinstaller_common.py`. They include:
 
 - `hiddenimports=['_metroliza_cmm_native', '_metroliza_chart_native']`
 - Windows Python runtime DLL collection (`libffi`, `python3*.dll`, `vcruntime`, `msvcp`) so onefile startup does not depend on a fragile ambient interpreter layout
@@ -156,8 +157,13 @@ Runtime fallback from native execution errors in forced-`native` modes is intent
 
 Distribution audit status:
 
-- `pyinstaller packaging/metroliza_onefile.spec` produces a single-file artifact (`EXE(...)` with no `COLLECT(...)` stage), so it is configured as a onefile build rather than an onedir bundle.
+- `pyinstaller packaging/metroliza_onefile.spec` produces the single-file
+  convenience artifact.
+- `pyinstaller packaging/metroliza_onedir.spec` produces the faster-starting
+  folder artifact under `dist/metroliza_P_<RELEASE_VERSION>(<VERSION_DATE>)_onedir/`.
 - default PyInstaller output filename follows release metadata: `metroliza_P_<RELEASE_VERSION>(<VERSION_DATE>).exe`
+- the root `build_windows_exe.ps1` wrapper supports
+  `-Mode onefile|onedir|both` and defaults to `both` for RC testing.
 - The spec explicitly preserves the known fragile runtime pieces for this app: optional native parser module, PyMuPDF backends, and Windows CPython runtime DLLs.
 - The root `build_windows_exe.ps1` wrapper installs `requirements-build.txt`, then
   `requirements-ocr.txt`, and runs the packaged-dependency validator with
@@ -173,6 +179,7 @@ Smoke checks after build:
 
 ```bash
 pyinstaller packaging/metroliza_onefile.spec
+pyinstaller packaging/metroliza_onedir.spec
 # smoke import from generated app environment
 python -c "import modules.cmm_native_parser as p; print(p.native_backend_available())"
 ```
@@ -185,7 +192,30 @@ If packaged Windows executables fail at startup with `ImportError: DLL load fail
 - the build interpreter is a full CPython install (not embeddable/minimal),
 - Python runtime DLLs under `<python>/DLLs` (including `libffi*.dll`) are bundled into the executable.
 
-PyInstaller is the closest current path to a turnkey single-file distribution for non-technical users because it bundles the Python runtime into one artifact. Even so, treat "ready for distribution" as contingent on the packaged-artifact smoke run and at least one clean-machine launch check.
+PyInstaller onefile remains the closest turnkey single-file distribution for
+non-technical users because it bundles the Python runtime into one artifact.
+For startup-sensitive Windows testing, prefer the onedir artifact: it avoids
+bootloader extraction of the full scientific/OCR payload on every cold launch
+and gives Windows Defender a more stable file set to cache. Treat both outputs
+as contingent on packaged-artifact smoke runs and at least one clean-machine
+launch check.
+
+Startup profiling:
+
+```powershell
+.\build_windows_exe.ps1 -Mode both
+.\scripts\measure_windows_startup.ps1 `
+  -ArtifactPath .\dist\metroliza_P_<version>.exe,.\dist\metroliza_P_<version>_onedir\metroliza.exe `
+  -Iterations 3 `
+  -WarmupRuns 1
+```
+
+The benchmark helper launches each artifact with `METROLIZA_STARTUP_PROFILE=1`
+and `METROLIZA_STARTUP_UI_SMOKE=1`, writes JSONL timing profiles, and exits after
+the first Qt event-loop tick. Python-side events start at `process_entry`; they
+cannot include PyInstaller/Nuitka bootloader extraction time, so compare the
+helper's wall-clock time against the first profile event to understand onefile
+extraction and antivirus overhead.
 
 
 ## Nuitka inclusion rules and smoke checks
@@ -194,9 +224,12 @@ PyInstaller is the closest current path to a turnkey single-file distribution fo
 
 - default output filename is `metroliza_N_<RELEASE_VERSION>(<VERSION_DATE>).exe` from `VersionDate.py`
 - still supports explicit override with `-OutputName`
-- supports `-CompilerStrategy auto|msvc|clang|gcc` plus opt-in `-AutoInstallCompiler` / `-OpenInstallHelp`
-- prefers MSVC first on Windows, keeps GCC as a lower-priority fallback there, and prefers healthy clang/gcc toolchains on Linux/macOS
-- maps the detected MSVC path to `--msvc=latest` so bundled PyMuPDF avoids the MinGW/SCons assembler failure path seen in some onefile builds
+- supports `-Mode onefile|standalone`; legacy `-FastDev` maps to
+  `-Mode standalone`
+- supports `-CompilerStrategy auto|gcc|clang` plus opt-in `-AutoInstallCompiler`
+  / `-OpenInstallHelp`
+- intentionally avoids MSVC/Visual Studio Build Tools, prefers MinGW-w64 GCC on
+  Windows, and uses Clang as the non-MSVC fallback
 - prints candidate diagnostics, selected compiler, selection reason, and whether an auto-install attempt ran before the build starts
 - can try an opt-in compiler install flow (`winget` on Windows, conventional package-manager flows on Linux/macOS when available), otherwise prints exact install guidance
 - auto-adds `--include-module=_metroliza_cmm_native` only when `_metroliza_cmm_native` is importable
@@ -229,6 +262,7 @@ PyInstaller is the closest current path to a turnkey single-file distribution fo
 Smoke checks after build:
 
 ```powershell
+./packaging/build_nuitka.ps1 -Mode standalone
 ./packaging/build_nuitka.ps1 -FastDev
 # strict mode: require native parser to be present in the build env
 ./packaging/build_nuitka.ps1 -RequireNative
@@ -238,8 +272,8 @@ Smoke checks after build:
 ./packaging/build_nuitka.ps1 -BundleCredentials -CredentialsPath .\sandbox.credentials.json
 # compiler auto-detect (default)
 ./packaging/build_nuitka.ps1 -CompilerStrategy auto
-# force MSVC on Windows and open install guidance if missing
-./packaging/build_nuitka.ps1 -CompilerStrategy msvc -OpenInstallHelp
+# force GCC on Windows and open install guidance if missing
+./packaging/build_nuitka.ps1 -CompilerStrategy gcc -OpenInstallHelp
 # opt-in attempt to install the preferred compiler if none is healthy
 ./packaging/build_nuitka.ps1 -AutoInstallCompiler
 # unsafe diagnostics-only override; never acceptable for release artifacts
@@ -248,9 +282,14 @@ Smoke checks after build:
 ./packaging/build_nuitka.ps1 -AllowMissingHeaderOcrBuild
 ```
 
-If the extension is missing in the executable, parser code must still run in pure-Python mode. PDF parsing remains required for packaged builds, so `packaging/build_nuitka.ps1` still fails fast when PyMuPDF is not importable in the build environment and validates `nuitka-build-report.xml` after the build to confirm the packaged artifact still references PyMuPDF backends. On Windows, the script now auto-detects compiler health, prefers MSVC, and only applies `--msvc=latest` when MSVC is the selected path. If no healthy compiler is available, it either attempts an opt-in install flow or prints actionable guidance for Visual Studio 2022 Build Tools / Desktop development with C++ / MSVC toolset / Windows SDK. If the Nuitka compile step fails, the script throws immediately and does not continue to parser validation or misleading success output.
+If the extension is missing in the executable, parser code must still run in pure-Python mode. PDF parsing remains required for packaged builds, so `packaging/build_nuitka.ps1` still fails fast when PyMuPDF is not importable in the build environment and validates `nuitka-build-report.xml` after the build to confirm the packaged artifact still references PyMuPDF backends. On Windows, the script auto-detects compiler health, prefers MinGW-w64 GCC, and uses Clang as the non-MSVC fallback. If no healthy compiler is available, it either attempts an opt-in install flow or prints actionable guidance for MSYS2/MinGW-w64 or LLVM/Clang. If the Nuitka compile step fails, the script throws immediately and does not continue to parser validation or misleading success output.
 
-Nuitka release mode is also configured as onefile (`--onefile` by default, `--standalone` only for `-FastDev`). However, it is not yet a guaranteed zero-touch Windows distribution path because target machines may still need the Microsoft Visual C++ Redistributable installed. For non-technical-user releases, treat that prerequisite as a deployment risk unless your installer/bootstrapper handles it.
+Nuitka release mode is also configured as onefile (`--onefile` by default,
+`--standalone` for `-Mode standalone` or `-FastDev`). However, it is not yet a
+guaranteed zero-touch Windows distribution path because target machines may
+still need the Microsoft Visual C++ Redistributable installed. For
+non-technical-user releases, treat that prerequisite as a deployment risk unless
+your installer/bootstrapper handles it.
 
 ## Required CI checks for native artifacts
 

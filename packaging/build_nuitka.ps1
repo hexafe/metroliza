@@ -4,6 +4,8 @@ param(
     [string]$IconPath = "$PSScriptRoot/metroliza_icon2.ico",
     [switch]$BundleCredentials,
     [string]$CredentialsPath = "",
+    [ValidateSet('onefile', 'standalone')]
+    [string]$Mode = 'onefile',
     [switch]$FastDev,
     [switch]$RequireNative,
     [switch]$EnableConsole,
@@ -20,6 +22,15 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $credentialsPathWasBound = $PSBoundParameters.ContainsKey('CredentialsPath')
+$modeWasBound = $PSBoundParameters.ContainsKey('Mode')
+
+if ($FastDev -and $modeWasBound -and $Mode -ne 'standalone') {
+    throw '-FastDev is a compatibility alias for -Mode standalone. Do not combine it with -Mode onefile.'
+}
+
+if ($FastDev -and -not $modeWasBound) {
+    $Mode = 'standalone'
+}
 
 if ($credentialsPathWasBound -and -not $BundleCredentials) {
     throw '-CredentialsPath no longer bundles credentials by itself. Re-run with -BundleCredentials -CredentialsPath <path> only for an explicitly approved release build.'
@@ -445,7 +456,11 @@ if ($LASTEXITCODE -eq 0) {
 }
 
 $jobs = if ($env:NUMBER_OF_PROCESSORS) { $env:NUMBER_OF_PROCESSORS } else { 4 }
-$modeLabel = if ($FastDev) { 'standalone (faster dev build)' } else { 'onefile (release-like build)' }
+$modeLabel = if ($Mode -eq 'standalone') {
+    'standalone (faster startup/comparison build)'
+} else {
+    'onefile (release-like build)'
+}
 $nativeModeLabel = if ($RequireNative) { 'required' } else { 'optional' }
 $credentialsPathLabel = if ($BundleCredentials) { $CredentialsPath } else { '(disabled)' }
 $consoleMode = if ($EnableConsole) { 'force' } else { 'disable' }
@@ -460,6 +475,7 @@ Write-Host "      Header OCR gate: $headerOcrGateLabel"
 Write-Host "      Oznak connector gate: $oznakGateLabel"
 Write-Host "      Credentials bundle path: $credentialsPathLabel"
 Write-Host "      Windows console mode: $consoleMode"
+Write-Host "      Nuitka packaging mode: $Mode"
 Write-Host "      Requested compiler strategy: $CompilerStrategy"
 Write-Host "      Auto-install compiler: $($AutoInstallCompiler.IsPresent)"
 Write-Host "      Open install help: $($OpenInstallHelp.IsPresent)"
@@ -718,7 +734,7 @@ if ($BundleCredentials) {
     Write-Host '      Credential bundling disabled; OAuth credentials must remain outside the packaged artifact.'
 }
 
-if (-not $FastDev) {
+if ($Mode -eq 'onefile') {
     $commonArgs += '--onefile'
 } else {
     $commonArgs += '--standalone'

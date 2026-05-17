@@ -13,7 +13,7 @@ def test_configure_headless_matplotlib_sets_writable_config_before_backend_use(
 ) -> None:
     monkeypatch.delenv("MPLBACKEND", raising=False)
     monkeypatch.delenv("MPLCONFIGDIR", raising=False)
-    monkeypatch.setattr(matplotlib_runtime.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
 
     captured: dict[str, object] = {}
 
@@ -26,7 +26,7 @@ def test_configure_headless_matplotlib_sets_writable_config_before_backend_use(
 
     matplotlib_runtime.configure_headless_matplotlib(cache_dir_name="mpl-cache")
 
-    expected_cache = str(tmp_path / "mpl-cache")
+    expected_cache = str(tmp_path / "Metroliza" / "mpl-cache")
     assert os.environ["MPLBACKEND"] == "Agg"
     assert os.environ["MPLCONFIGDIR"] == expected_cache
     assert captured == {

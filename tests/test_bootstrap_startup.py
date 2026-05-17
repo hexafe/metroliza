@@ -52,6 +52,7 @@ class TestBootstrapStartup(unittest.TestCase):
 
         config = metroliza.StartupConfig(
             startup_smoke_mode=False,
+            startup_ui_smoke_mode=False,
             pdf_parser_smoke_fixture=None,
             pdf_parser_smoke_expected_text=None,
             license_verification_enabled=False,
@@ -82,6 +83,7 @@ class TestBootstrapStartup(unittest.TestCase):
             config = metroliza.load_startup_config()
 
         self.assertFalse(config.startup_smoke_mode)
+        self.assertFalse(config.startup_ui_smoke_mode)
         self.assertIsNone(config.pdf_parser_smoke_fixture)
         self.assertIsNone(config.pdf_parser_smoke_expected_text)
         self.assertFalse(config.license_verification_enabled)
@@ -92,12 +94,14 @@ class TestBootstrapStartup(unittest.TestCase):
             {
                 metroliza.LICENSE_MODE_ENV: "false",
                 metroliza.STARTUP_SMOKE_ENV: "0",
+                "METROLIZA_STARTUP_UI_SMOKE": "1",
             },
             clear=True,
         ):
             config = metroliza.load_startup_config()
 
         self.assertFalse(config.license_verification_enabled)
+        self.assertTrue(config.startup_ui_smoke_mode)
 
     def test_validate_license_bootstrap_skips_validation_when_disabled(self):
         with patch("modules.license_bootstrap.verify_license") as verify_mock:
@@ -129,6 +133,7 @@ class TestBootstrapStartup(unittest.TestCase):
     def test_bootstrap_application_uses_smoke_mode_when_enabled(self):
         smoke_config = metroliza.StartupConfig(
             startup_smoke_mode=True,
+            startup_ui_smoke_mode=False,
             pdf_parser_smoke_fixture=None,
             pdf_parser_smoke_expected_text=None,
             license_verification_enabled=True,
@@ -149,6 +154,7 @@ class TestBootstrapStartup(unittest.TestCase):
     def test_bootstrap_application_uses_pdf_parser_smoke_when_fixture_is_set(self):
         smoke_config = metroliza.StartupConfig(
             startup_smoke_mode=False,
+            startup_ui_smoke_mode=False,
             pdf_parser_smoke_fixture='tests/fixtures/pdf/cmm_smoke_fixture.pdf',
             pdf_parser_smoke_expected_text='METROLIZA PDF PARSER SMOKE',
             license_verification_enabled=True,

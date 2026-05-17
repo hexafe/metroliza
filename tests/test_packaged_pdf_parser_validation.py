@@ -220,6 +220,9 @@ def test_build_nuitka_script_fails_closed_by_default_and_names_unsafe_override()
     assert '[switch]$AllowMissingOznakBuild' in script
     assert '[switch]$BundleCredentials' in script
     assert '[string]$CredentialsPath = ""' in script
+    assert "[ValidateSet('onefile', 'standalone')]" in script
+    assert "[string]$Mode = 'onefile'" in script
+    assert '-FastDev is a compatibility alias for -Mode standalone.' in script
     assert '-CredentialsPath no longer bundles credentials by itself.' in script
     assert '-BundleCredentials requires -CredentialsPath <path>.' in script
     assert "[ValidateSet('auto', 'gcc', 'clang')]" in script
@@ -247,7 +250,8 @@ def test_build_nuitka_script_fails_closed_by_default_and_names_unsafe_override()
 def test_build_nuitka_script_defaults_to_release_onefile_and_includes_runtime_packages():
     script = Path('packaging/build_nuitka.ps1').read_text(encoding='utf-8')
 
-    assert "$modeLabel = if ($FastDev) { 'standalone (faster dev build)' } else { 'onefile (release-like build)' }" in script
+    assert "$modeLabel = if ($Mode -eq 'standalone')" in script
+    assert "Nuitka packaging mode: $Mode" in script
     assert "'--include-package=modules'" in script
     assert "'--include-package=hexafe_groupstats'" in script
     assert "'--include-package=hexafe_plotstats'" in script
@@ -306,46 +310,49 @@ def test_build_nuitka_script_defaults_to_release_onefile_and_includes_runtime_pa
 
 def test_pyinstaller_spec_collects_windows_runtime_and_pdf_parser_dependencies():
     spec = Path('packaging/metroliza_onefile.spec').read_text(encoding='utf-8')
+    common = Path('packaging/pyinstaller_common.py').read_text(encoding='utf-8')
 
-    assert 'from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules, copy_metadata' in spec
-    assert 'def _collect_windows_python_runtime_binaries()' in spec
-    assert "pymupdf_datas, pymupdf_binaries, pymupdf_hiddenimports = _collect_optional_runtime_assets('pymupdf')" in spec
-    assert "fitz_datas, fitz_binaries, fitz_hiddenimports = _collect_optional_runtime_assets('fitz')" in spec
-    assert "hexafe_plotstats_datas, hexafe_plotstats_binaries, hexafe_plotstats_hiddenimports = _collect_optional_runtime_assets('hexafe_plotstats')" in spec
-    assert "oznak_datas, oznak_binaries, oznak_hiddenimports = _collect_optional_runtime_assets('oznak')" in spec
-    assert "rapidocr_datas, rapidocr_binaries, rapidocr_hiddenimports = _collect_optional_runtime_assets('rapidocr')" in spec
-    assert "onnxruntime_datas, onnxruntime_binaries, onnxruntime_hiddenimports = _collect_optional_runtime_assets('onnxruntime')" in spec
-    assert "openvino_datas, openvino_binaries, openvino_hiddenimports = _collect_optional_runtime_assets('openvino')" in spec
-    assert "cv2_datas, cv2_binaries, cv2_hiddenimports = _collect_optional_runtime_assets('cv2')" in spec
-    assert "numpy_datas, numpy_binaries, numpy_hiddenimports = _collect_optional_runtime_assets('numpy')" in spec
-    assert "rapidocr_metadata_datas = _collect_optional_distribution_metadata('rapidocr')" in spec
-    assert "onnxruntime_metadata_datas = _collect_optional_distribution_metadata('onnxruntime')" in spec
-    assert "openvino_metadata_datas = _collect_optional_distribution_metadata('openvino')" in spec
-    assert "opencv_python_metadata_datas = _collect_optional_distribution_metadata('opencv-python')" in spec
-    assert "numpy_metadata_datas = _collect_optional_distribution_metadata('numpy')" in spec
-    assert "hexafe_plotstats_metadata_datas = _collect_optional_distribution_metadata('hexafe-plotstats')" in spec
-    assert "oznak_metadata_datas = _collect_optional_distribution_metadata('oznak')" in spec
-    assert 'def _collect_optional_vendored_model_data()' in spec
-    assert "html_dashboard_datas = [(str(ROOT_DIR / 'modules' / 'html_dashboard_assets' / 'plotly-2.27.0.min.js'), 'modules/html_dashboard_assets')]" in spec
-    assert "third_party_notice_datas = [(str(ROOT_DIR / 'THIRD_PARTY_NOTICES.md'), '.')]" in spec
-    assert "binaries=windows_runtime_binaries + pymupdf_binaries + fitz_binaries + hexafe_groupstats_binaries + hexafe_plotstats_binaries + oznak_binaries + rapidocr_binaries + onnxruntime_binaries + openvino_binaries + cv2_binaries + numpy_binaries" in spec
-    assert "datas=third_party_notice_datas + html_dashboard_datas + pymupdf_datas + fitz_datas + hexafe_groupstats_datas + hexafe_plotstats_datas + oznak_datas + rapidocr_datas + onnxruntime_datas + openvino_datas + cv2_datas + numpy_datas + rapidocr_metadata_datas + onnxruntime_metadata_datas + openvino_metadata_datas + opencv_python_metadata_datas + numpy_metadata_datas + hexafe_plotstats_metadata_datas + oznak_metadata_datas + ocr_model_datas" in spec
-    assert "'modules.cmm_report_parser'" in spec
-    assert "'modules.native_chart_compositor'" in spec
-    assert "'rapidocr'" in spec
-    assert "'onnxruntime'" in spec
-    assert "'openvino'" in spec
-    assert "'cv2'" in spec
-    assert "'numpy'" in spec
-    assert "'hexafe_plotstats'" in spec
-    assert "'oznak'" in spec
-    assert '*hexafe_plotstats_hiddenimports' in spec
-    assert '*oznak_hiddenimports' in spec
-    assert '*rapidocr_hiddenimports' in spec
-    assert '*onnxruntime_hiddenimports' in spec
-    assert '*openvino_hiddenimports' in spec
-    assert '*cv2_hiddenimports' in spec
-    assert '*numpy_hiddenimports' in spec
+    assert 'from pyinstaller_common import build_pyinstaller_collection' in spec
+    assert 'from PyInstaller.utils.hooks import (' in common
+    assert 'def collect_windows_python_runtime_binaries()' in common
+    assert 'collect_optional_runtime_assets(\n        "pymupdf"\n    )' in common
+    assert 'collect_optional_runtime_assets("fitz")' in common
+    assert 'collect_optional_runtime_assets("hexafe_plotstats")' in common
+    assert 'collect_optional_runtime_assets("oznak")' in common
+    assert 'collect_optional_runtime_assets(\n        "rapidocr"\n    )' in common
+    assert 'collect_optional_runtime_assets("onnxruntime")' in common
+    assert 'collect_optional_runtime_assets(\n        "openvino"\n    )' in common
+    assert 'collect_optional_runtime_assets("cv2")' in common
+    assert 'collect_optional_runtime_assets("numpy")' in common
+    assert 'collect_optional_distribution_metadata("rapidocr")' in common
+    assert 'collect_optional_distribution_metadata("onnxruntime")' in common
+    assert 'collect_optional_distribution_metadata("openvino")' in common
+    assert 'collect_optional_distribution_metadata("opencv-python")' in common
+    assert 'collect_optional_distribution_metadata("numpy")' in common
+    assert 'collect_optional_distribution_metadata("hexafe-plotstats")' in common
+    assert 'collect_optional_distribution_metadata("oznak")' in common
+    assert 'def collect_optional_vendored_model_data(root_dir: Path)' in common
+    assert 'plotly-2.27.0.min.js' in common
+    assert 'THIRD_PARTY_NOTICES.md' in common
+    assert 'binaries=COLLECTION["binaries"]' in spec
+    assert 'datas=COLLECTION["datas"]' in spec
+    assert 'hiddenimports=COLLECTION["hiddenimports"]' in spec
+    assert '"modules.cmm_report_parser"' in common
+    assert '"modules.native_chart_compositor"' in common
+    assert '"rapidocr"' in common
+    assert '"onnxruntime"' in common
+    assert '"openvino"' in common
+    assert '"cv2"' in common
+    assert '"numpy"' in common
+    assert '"hexafe_plotstats"' in common
+    assert '"oznak"' in common
+    assert '*hexafe_plotstats_hiddenimports' in common
+    assert '*oznak_hiddenimports' in common
+    assert '*rapidocr_hiddenimports' in common
+    assert '*onnxruntime_hiddenimports' in common
+    assert '*openvino_hiddenimports' in common
+    assert '*cv2_hiddenimports' in common
+    assert '*numpy_hiddenimports' in common
     assert "runtime_tmpdir=None" in spec
     assert 'exe = EXE(' in spec
     assert 'COLLECT(' not in spec
