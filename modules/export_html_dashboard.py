@@ -11,7 +11,9 @@ import re
 from typing import Any
 
 from modules.dashboard_navigation import (
+    render_back_to_section,
     render_back_to_dashboard_start,
+    render_section_navigation_css,
     render_section_header,
     render_section_nav,
 )
@@ -1893,27 +1895,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       display: block;
       line-height: 1.15;
     }}
-    .section-nav {{
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-top: 18px;
-    }}
-    .section-chip {{
-      text-decoration: none;
-      color: var(--ink);
-      background: var(--accent-soft);
-      border: 1px solid var(--accent-border);
-      border-radius: 999px;
-      padding: 8px 12px;
-      font-size: 13px;
-      font-weight: 600;
-    }}
-    .section-chip--back {{
-      background: var(--teal-soft);
-      border-color: var(--teal-border);
-      color: var(--teal);
-    }}
+{render_section_navigation_css()}
     .measurement-section, .empty-state {{
       margin-top: 18px;
       background: var(--panel);
@@ -3130,14 +3112,12 @@ def _render_group_analysis(group_analysis: dict[str, Any]) -> str:
 
     metric_nav = ""
     if metrics:
-        metric_nav_chips = "".join(
-            f'<a class="section-chip" href="#{html.escape(str(metric.get("id") or ""))}">'
-            f'{html.escape(str(metric.get("metric") or "Metric"))}</a>'
-            for metric in metrics
-            if str(metric.get("id") or "").strip()
+        metric_nav = render_section_nav(
+            [
+                {"id": str(metric.get("id") or ""), "label": str(metric.get("metric") or "Metric")}
+                for metric in metrics
+            ]
         )
-        if metric_nav_chips:
-            metric_nav = f'<nav class="section-nav">{metric_nav_chips}</nav>'
 
     metrics_markup = "".join(_render_group_analysis_metric(metric) for metric in metrics)
     details_row = ""
@@ -3176,10 +3156,7 @@ def _render_group_analysis_metric(metric: dict[str, Any]) -> str:
     if metric.get("reference"):
         pills.append(f"Reference: {metric['reference']}")
     pill_markup = "".join(f'<span class="pill">{html.escape(item)}</span>' for item in pills)
-    back_button = (
-        '<a class="section-chip section-chip--back" href="#group-analysis" role="button">'
-        'Back to Group Analysis</a>'
-    )
+    back_button = render_back_to_section("group-analysis", "Back to Group Analysis")
 
     summary_panels = []
     if summary_rows:

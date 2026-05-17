@@ -17,6 +17,7 @@ import shutil
 from modules.contracts import ParseRequest, validate_parse_request
 from modules.cmm_schema import ensure_cmm_report_schema
 from modules.db import execute_with_retry, sqlite_connection_scope
+from modules.env_utils import env_bool, env_int
 from modules.log_context import build_parse_log_extra, get_operation_logger
 from modules.progress_status import build_three_line_status
 from modules.report_identity import build_report_identity_hash
@@ -901,10 +902,9 @@ class ParseReportsThread(QThread):
                     telemetry_batch_persistence_backend_counts = {}
                     telemetry_batch_stage_timing_totals = {}
 
-                two_stage_enabled = os.getenv("METROLIZA_PARSE_TWO_STAGE_PIPELINE", "0").strip().lower() in {"1", "true", "yes", "on"}
-                two_stage_workers_raw = os.getenv("METROLIZA_PARSE_TWO_STAGE_WORKERS", "0").strip()
+                two_stage_enabled = env_bool("METROLIZA_PARSE_TWO_STAGE_PIPELINE", default=False)
                 try:
-                    two_stage_workers = int(two_stage_workers_raw or "0") or None
+                    two_stage_workers = env_int("METROLIZA_PARSE_TWO_STAGE_WORKERS", default=0) or None
                 except ValueError:
                     two_stage_workers = None
 

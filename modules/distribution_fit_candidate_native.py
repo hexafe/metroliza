@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Callable, Sequence
 
 import numpy as np
+from modules.env_utils import env_value, parse_choice
 from modules.runtime_backend_policy import should_prefer_python_backend_in_auto_mode
 
 try:
@@ -104,9 +105,11 @@ def native_fit_backend_available() -> bool:
 
 
 def resolve_kernel_mode(explicit_mode: str | None = None) -> str:
-    mode = (explicit_mode or os.getenv('METROLIZA_DISTRIBUTION_FIT_KERNEL') or KERNEL_MODE_AUTO).strip().lower()
-    if mode not in {KERNEL_MODE_PYTHON, KERNEL_MODE_NATIVE, KERNEL_MODE_AUTO}:
-        return KERNEL_MODE_PYTHON
+    mode = parse_choice(
+        explicit_mode or env_value('METROLIZA_DISTRIBUTION_FIT_KERNEL', env=os.environ) or KERNEL_MODE_AUTO,
+        choices=frozenset({KERNEL_MODE_PYTHON, KERNEL_MODE_NATIVE, KERNEL_MODE_AUTO}),
+        default=KERNEL_MODE_PYTHON,
+    )
     if mode == KERNEL_MODE_AUTO and should_prefer_python_backend_in_auto_mode():
         return KERNEL_MODE_PYTHON
     return mode

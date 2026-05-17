@@ -36,11 +36,71 @@ def render_section_nav(items: list[dict[str, str]]) -> str:
     return f'<nav class="section-nav">{"".join(chips)}</nav>' if chips else ""
 
 
-def render_back_to_dashboard_start(label: str = "Back to dashboard start") -> str:
+def render_back_to_section(section_id: str, label: str) -> str:
+    """Return a standard dashboard back-link chip."""
+
+    target = str(section_id or "dashboard-start").strip().lstrip("#") or "dashboard-start"
+    text = str(label or "Back").strip() or "Back"
     return (
-        '<a class="section-chip section-chip--back" href="#dashboard-start" role="button">'
-        f"{html.escape(label)}</a>"
+        f'<a class="section-chip section-chip--back" href="#{html.escape(target)}" role="button">'
+        f"{html.escape(text)}</a>"
     )
+
+
+def render_back_to_dashboard_start(label: str = "Back to dashboard start") -> str:
+    return render_back_to_section("dashboard-start", label)
+
+
+def render_section_navigation_css(variant: str = "standard") -> str:
+    """Return shared CSS for dashboard section navigation chips."""
+
+    if str(variant or "").strip().lower() == "compact":
+        return """
+    .section-nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 14px 0 4px;
+    }
+    .section-chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 5px 10px;
+      color: var(--accent);
+      background: var(--panel);
+      font-size: 12px;
+      font-weight: 650;
+      text-decoration: none;
+    }
+    .section-chip--back {
+      background: transparent;
+    }""".strip()
+
+    return """
+    .section-nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 18px;
+    }
+    .section-chip {
+      text-decoration: none;
+      color: var(--ink);
+      background: var(--accent-soft);
+      border: 1px solid var(--accent-border);
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .section-chip--back {
+      background: var(--teal-soft);
+      border-color: var(--teal-border);
+      color: var(--teal);
+    }""".strip()
 
 
 def render_section_header(title: str, subtitle: str = "", *, actions: str = "") -> str:

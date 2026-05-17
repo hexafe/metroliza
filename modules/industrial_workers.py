@@ -42,6 +42,7 @@ from modules.oznak_adapter import (
     fetch_oznak_records_for_source_profile,
     get_oznak_adapter_status,
 )
+from modules.worker_cancellation import WorkerCancellationMixin
 
 
 def _oznak_warning_detail(diagnostics: dict[str, Any]) -> str | None:
@@ -77,7 +78,7 @@ class IndustrialLinkRefreshThread(QThread):
             self.error_occurred.emit(str(exc))
 
 
-class IndustrialExportThread(QThread):
+class IndustrialExportThread(WorkerCancellationMixin, QThread):
     """Write cached industrial export workbook outside the Qt main thread."""
 
     result_ready = pyqtSignal(object)
@@ -99,14 +100,7 @@ class IndustrialExportThread(QThread):
         self.filter_state = filter_state
         self.grouping_state = grouping_state
         self.include_charts = include_charts
-        self._cancel_requested = False
-
-    def cancel(self) -> None:
-        self._cancel_requested = True
-        self.requestInterruption()
-
-    def _is_cancelled(self) -> bool:
-        return self._cancel_requested or self.isInterruptionRequested()
+        self._init_cancellation_state()
 
     def run(self):
         try:
@@ -126,7 +120,7 @@ class IndustrialExportThread(QThread):
             self.error_occurred.emit(redact_sensitive_text(exc))
 
 
-class IndustrialLiveExportThread(QThread):
+class IndustrialLiveExportThread(WorkerCancellationMixin, QThread):
     """Fetch live Oznak rows and write an industrial workbook outside the Qt main thread."""
 
     result_ready = pyqtSignal(object)
@@ -158,17 +152,7 @@ class IndustrialLiveExportThread(QThread):
         self.grouping_state = grouping_state
         self.include_charts = include_charts
         self.cancellation_token = None
-        self._cancel_requested = False
-
-    def cancel(self) -> None:
-        self._cancel_requested = True
-        token = self.cancellation_token
-        if token is not None and hasattr(token, "cancel"):
-            token.cancel()
-        self.requestInterruption()
-
-    def _is_cancelled(self) -> bool:
-        return self._cancel_requested or self.isInterruptionRequested()
+        self._init_cancellation_state()
 
     def _emit_progress_from_diagnostic(self, diagnostic: Any) -> None:
         message = getattr(diagnostic, "message", None)
@@ -215,7 +199,7 @@ class IndustrialLiveExportThread(QThread):
                 self.error_occurred.emit(redact_sensitive_text(exc))
 
 
-class IndustrialAnalyticsThread(QThread):
+class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
     """Create production/file analytics dashboard and workbook outside the Qt main thread."""
 
     result_ready = pyqtSignal(object)
@@ -290,14 +274,7 @@ class IndustrialAnalyticsThread(QThread):
         self.tabular_filter_keys = validated_request.tabular_filter_keys
         self.tabular_column_filters = validated_request.tabular_column_filters
         self.grouping_df = validated_request.grouping_df
-        self._cancel_requested = False
-
-    def cancel(self) -> None:
-        self._cancel_requested = True
-        self.requestInterruption()
-
-    def _is_cancelled(self) -> bool:
-        return self._cancel_requested or self.isInterruptionRequested()
+        self._init_cancellation_state()
 
     def _emit_progress_message(self, message: str) -> None:
         self.update_label.emit(message)
@@ -348,7 +325,7 @@ class IndustrialAnalyticsThread(QThread):
             self.error_occurred.emit(str(exc))
 
 
-class TabularAnalyticsLoadThread(QThread):
+class TabularAnalyticsLoadThread(WorkerCancellationMixin, QThread):
     """Load CSV/Excel analytics rows and metric candidates outside the Qt main thread."""
 
     result_ready = pyqtSignal(object)
@@ -371,14 +348,7 @@ class TabularAnalyticsLoadThread(QThread):
         self.sheet_name = sheet_name
         self.timestamp_column = timestamp_column
         self.reference_column = reference_column
-        self._cancel_requested = False
-
-    def cancel(self) -> None:
-        self._cancel_requested = True
-        self.requestInterruption()
-
-    def _is_cancelled(self) -> bool:
-        return self._cancel_requested or self.isInterruptionRequested()
+        self._init_cancellation_state()
 
     def run(self):
         try:
@@ -408,7 +378,7 @@ class TabularAnalyticsLoadThread(QThread):
                 self.error_occurred.emit(str(exc))
 
 
-class IndustrialOznakSyncThread(QThread):
+class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
     """Run Oznak connection tests and source sync outside the Qt main thread."""
 
     progress_message = pyqtSignal(str)
@@ -439,13 +409,7 @@ class IndustrialOznakSyncThread(QThread):
         self.reference_values = reference_values
         self.test_only = test_only
         self.cancellation_token = None
-        self._cancel_requested = False
-
-    def cancel(self) -> None:
-        self._cancel_requested = True
-        token = self.cancellation_token
-        if token is not None and hasattr(token, "cancel"):
-            token.cancel()
+        self._init_cancellation_state()
 
     def run(self):
         repository = IndustrialDataRepository(self.db_file)

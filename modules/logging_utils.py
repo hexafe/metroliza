@@ -11,6 +11,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from modules.env_utils import parse_bool
+
 
 LOG_FILE_NAME = "metroliza.log"
 _GLOBAL_LEVEL_ENV = "METROLIZA_LOG_LEVEL"
@@ -38,7 +40,7 @@ class LoggingConfig:
 
 
 def _is_truthy(raw_value: str | None) -> bool:
-    return str(raw_value or "").strip().lower() in {"1", "true", "yes", "on"}
+    return parse_bool(raw_value, default=False)
 
 
 def _parse_level(raw_value: str | None, *, fallback: int) -> int:

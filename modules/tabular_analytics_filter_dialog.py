@@ -21,6 +21,12 @@ from PyQt6.QtWidgets import (
 from modules.csv_summary_utils import CsvGroupingIndex
 from modules.help_menu import attach_help_menu_to_layout
 from modules.list_selection_utils import ListSelectionUtils
+from modules.tabular_column_selection import (
+    column_sequence_text,
+    current_column_from_list,
+    populate_column_list,
+    set_current_column,
+)
 from modules.tabular_analytics_service import (
     TabularColumnFilter,
     apply_tabular_row_filter,
@@ -241,7 +247,7 @@ class TabularAnalyticsFilterDialog(QDialog):
         return label if label else column
 
     def _filter_columns_text(self) -> str:
-        return " | ".join(self._column_label(column) for column in self.filter_columns)
+        return column_sequence_text(self.filter_columns, label_for=self._column_label)
 
     def _load_column_filters(self, column_filters: tuple[TabularColumnFilter, ...]) -> None:
         valid_columns = set(self._source_columns())
@@ -272,11 +278,7 @@ class TabularAnalyticsFilterDialog(QDialog):
             self.date_filters[column] = {"mode": "any", "from": None, "to": None}
 
     def _current_filter_column(self) -> str | None:
-        item = self.selected_columns_list.currentItem()
-        if item is None:
-            return None
-        column = item.data(Qt.ItemDataRole.UserRole)
-        return str(column) if column is not None else None
+        return current_column_from_list(self.selected_columns_list)
 
     def _filter_for_column(self, column: str) -> TabularColumnFilter:
         date_filter = self.date_filters.get(column, {})
@@ -295,37 +297,26 @@ class TabularAnalyticsFilterDialog(QDialog):
         )
 
     def _refresh_available_columns(self) -> None:
-        search = self.column_search.text().strip().casefold()
-        self.column_list.clear()
-        for column in self._available_columns():
-            label = self._column_label(column)
-            if search and search not in label.casefold() and search not in column.casefold():
-                continue
-            self.column_list.addItem(label)
-            item = self.column_list.item(self.column_list.count() - 1)
-            item.setData(Qt.ItemDataRole.UserRole, column)
-        if self.column_list.count():
-            self.column_list.setCurrentRow(0)
+        populate_column_list(
+            self.column_list,
+            self._available_columns(),
+            label_for=self._column_label,
+            search_text=self.column_search.text(),
+            fallback="first",
+        )
         self.add_column_button.setEnabled(self.column_list.count() > 0)
 
     def _refresh_selected_columns(self) -> None:
         current_column = self._current_filter_column()
-        search = self.selected_column_search.text().strip().casefold()
-        self.selected_columns_list.blockSignals(True)
-        self.selected_columns_list.clear()
-        for column in self.filter_columns:
-            label = self._selected_column_label(column)
-            if search and search not in label.casefold() and search not in column.casefold():
-                continue
-            self.selected_columns_list.addItem(label)
-            item = self.selected_columns_list.item(self.selected_columns_list.count() - 1)
-            item.setData(Qt.ItemDataRole.UserRole, column)
-            if column == current_column:
-                item.setSelected(True)
-                self.selected_columns_list.setCurrentItem(item)
-        if self.selected_columns_list.currentItem() is None and self.selected_columns_list.count():
-            self.selected_columns_list.setCurrentRow(0)
-        self.selected_columns_list.blockSignals(False)
+        populate_column_list(
+            self.selected_columns_list,
+            self.filter_columns,
+            label_for=self._selected_column_label,
+            search_text=self.selected_column_search.text(),
+            current_column=current_column,
+            fallback="first",
+            block_signals=True,
+        )
 
     def _selected_column_label(self, column: str) -> str:
         column_filter = self._filter_for_column(column)
@@ -419,11 +410,7 @@ class TabularAnalyticsFilterDialog(QDialog):
         self._schedule_status_sync()
 
     def _set_current_selected_column(self, column: str) -> None:
-        for index in range(self.selected_columns_list.count()):
-            item = self.selected_columns_list.item(index)
-            if item.data(Qt.ItemDataRole.UserRole) == column:
-                self.selected_columns_list.setCurrentItem(item)
-                return
+        set_current_column(self.selected_columns_list, column)
 
     def _value_index(self, column: str) -> CsvGroupingIndex:
         index = self._value_index_by_column.get(column)

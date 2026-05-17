@@ -1,6 +1,7 @@
 from xlsxwriter.utility import xl_range
 
 from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE
+from modules.xlsx_chart_utils import create_workbook_chart, insert_chart
 
 
 DEFAULT_CHART_ANCHOR_ROW = 7  # Excel row 8, zero-based for xlsxwriter.
@@ -181,7 +182,7 @@ def insert_measurement_chart(
     chart_anchor_col,
     cache=None,
 ):
-    chart = workbook.add_chart({'type': chart_type})
+    chart = create_workbook_chart(workbook, chart_type)
     series_specs = build_measurement_chart_series_specs_from_plan(
         header=header,
         sheet_name=sheet_name,
@@ -201,4 +202,11 @@ def insert_measurement_chart(
     chart.set_legend(chart_policy['legend'])
     chart.set_size(chart_policy['size'])
     anchor = chart_policy['anchor']
-    worksheet.insert_chart(anchor['row'], chart_anchor_col, chart, {'x_offset': anchor['x_offset'], 'y_offset': anchor['y_offset']})
+    insert_chart(
+        worksheet,
+        anchor['row'],
+        chart_anchor_col,
+        chart,
+        x_offset=anchor['x_offset'],
+        y_offset=anchor['y_offset'],
+    )

@@ -12,11 +12,11 @@ from importlib import metadata as importlib_metadata
 import importlib.util
 import inspect
 import logging
-import os
 from pathlib import Path
 from typing import Callable, Type
 
 from modules.cmm_report_parser import CMMReportParser
+from modules.env_utils import env_bool
 from modules import parser_plugin_paths
 from modules.parser_plugin_contracts import (
     BaseReportParserPlugin,
@@ -211,8 +211,7 @@ def _safe_probe(
 
 
 def _strict_matching_enabled() -> bool:
-    value = os.getenv("PARSER_STRICT_MATCHING", "true").strip().lower()
-    return value in {"1", "true", "yes", "on"}
+    return env_bool("PARSER_STRICT_MATCHING", default=True)
 
 
 def _minimum_confidence_for_selection() -> int:

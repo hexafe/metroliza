@@ -34,6 +34,7 @@ except ImportError:
 
 from modules.characteristic_alias_service import resolve_characteristic_alias
 from modules.distribution_shape_analysis import compute_distribution_difference
+from modules.xlsx_chart_utils import apply_chart_options, create_workbook_chart, insert_chart
 
 
 SECTION_GAP = 2
@@ -1036,7 +1037,7 @@ def _render_group_comparison_charts(worksheet, start_row, payload):
             worksheet.write(data_header_row + offset, 0, entry['label'], formats['wrapped'])
             worksheet.write(data_header_row + offset, 1, entry['abs_effect_size'], formats['numeric'])
 
-        ranked_chart = workbook.add_chart({'type': 'bar'})
+        ranked_chart = create_workbook_chart(workbook, 'bar')
         ranked_chart.add_series({
             'name': 'Absolute effect size',
             'categories': [worksheet.name, data_header_row + 1, 0, data_header_row + len(ranked_rows), 0],
@@ -1044,12 +1045,15 @@ def _render_group_comparison_charts(worksheet, start_row, payload):
             'fill': {'color': '#4F81BD'},
             'border': {'none': True},
         })
-        ranked_chart.set_title({'name': 'Ranked pairwise effects'})
-        ranked_chart.set_legend({'position': 'none'})
-        ranked_chart.set_size({'width': 520, 'height': 300})
-        ranked_chart.set_x_axis({'name': 'Absolute effect size', 'major_gridlines': {'visible': False}})
-        ranked_chart.set_y_axis({'reverse': True})
-        worksheet.insert_chart(row, 3, ranked_chart, {'x_offset': 8, 'y_offset': 2})
+        apply_chart_options(
+            ranked_chart,
+            title={'name': 'Ranked pairwise effects'},
+            legend={'position': 'none'},
+            size={'width': 520, 'height': 300},
+            x_axis={'name': 'Absolute effect size', 'major_gridlines': {'visible': False}},
+            y_axis={'reverse': True},
+        )
+        insert_chart(worksheet, row, 3, ranked_chart, x_offset=8, y_offset=2)
         next_chart_row = max(next_chart_row, row + chart_height_rows)
 
     if scatter_rows:
@@ -1074,7 +1078,11 @@ def _render_group_comparison_charts(worksheet, start_row, payload):
                 worksheet.write(data_header_row + offset, base_col + 2, entry['abs_effect_size'], formats['numeric'])
                 worksheet.write(data_header_row + offset, base_col + 3, entry['neg_log10_adj_p'], formats['numeric'])
 
-        scatter_chart = workbook.add_chart({'type': 'scatter', 'subtype': 'straight_with_markers'})
+        scatter_chart = create_workbook_chart(
+            workbook,
+            'scatter',
+            subtype='straight_with_markers',
+        )
         for index, (metric, entries) in enumerate(metric_positions.items()):
             base_col = scatter_col + index * 4
             scatter_chart.add_series({
@@ -1084,12 +1092,15 @@ def _render_group_comparison_charts(worksheet, start_row, payload):
                 'marker': {'type': 'circle', 'size': 6},
                 'line': {'none': True},
             })
-        scatter_chart.set_title({'name': 'Effect vs adjusted p'})
-        scatter_chart.set_legend({'position': 'bottom'} if len(metric_positions) > 1 else {'position': 'none'})
-        scatter_chart.set_size({'width': 520, 'height': 300})
-        scatter_chart.set_x_axis({'name': '|effect size|', 'major_gridlines': {'visible': False}})
-        scatter_chart.set_y_axis({'name': '-log10(adj p)'})
-        worksheet.insert_chart(scatter_title_row, scatter_col + 5, scatter_chart, {'x_offset': 8, 'y_offset': 2})
+        apply_chart_options(
+            scatter_chart,
+            title={'name': 'Effect vs adjusted p'},
+            legend={'position': 'bottom'} if len(metric_positions) > 1 else {'position': 'none'},
+            size={'width': 520, 'height': 300},
+            x_axis={'name': '|effect size|', 'major_gridlines': {'visible': False}},
+            y_axis={'name': '-log10(adj p)'},
+        )
+        insert_chart(worksheet, scatter_title_row, scatter_col + 5, scatter_chart, x_offset=8, y_offset=2)
         next_chart_row = max(next_chart_row, scatter_title_row + chart_height_rows)
 
     return next_chart_row + SECTION_GAP

@@ -17,6 +17,7 @@ import pandas as pd
 
 from modules.dashboard_navigation import (
     render_back_to_dashboard_start,
+    render_section_navigation_css,
     render_section_header,
     render_section_nav,
     unique_html_id,
@@ -1697,28 +1698,7 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
       gap: 10px;
       margin: 18px 0;
     }}
-    .section-nav {{
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin: 14px 0 4px;
-    }}
-    .section-chip {{
-      display: inline-flex;
-      align-items: center;
-      min-height: 30px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      padding: 5px 10px;
-      color: var(--accent);
-      background: var(--panel);
-      font-size: 12px;
-      font-weight: 650;
-      text-decoration: none;
-    }}
-    .section-chip--back {{
-      background: transparent;
-    }}
+{render_section_navigation_css("compact")}
     .dashboard-section {{
       margin-bottom: 14px;
       scroll-margin-top: 18px;

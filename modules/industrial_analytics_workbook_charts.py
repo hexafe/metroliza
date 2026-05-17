@@ -16,6 +16,7 @@ from modules.hexafe_plotstats_adapter import render_histogram_png as render_plot
 from modules.industrial_analytics_state import ProductionChartSelection
 from modules.matplotlib_runtime import configure_headless_matplotlib
 from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE
+from modules.xlsx_chart_utils import apply_chart_options, create_workbook_chart, insert_chart
 
 configure_headless_matplotlib()
 
@@ -162,7 +163,7 @@ def _insert_native_time_series_chart(
     if not groups:
         return False
 
-    chart = workbook.add_chart({"type": "scatter"})
+    chart = create_workbook_chart(workbook, "scatter")
     table_col = 8
     for group_index, (label, x_values, y_values) in enumerate(groups):
         x_table_col = table_col + group_index * 2
@@ -200,12 +201,15 @@ def _insert_native_time_series_chart(
                 },
             }
         )
-    chart.set_title({"name": f"{metric.display_label} over time"})
-    chart.set_x_axis({"name": _axis_label(x_column), "major_gridlines": {"visible": False}})
-    chart.set_y_axis({"name": metric.display_label, "major_gridlines": {"visible": True}})
-    chart.set_legend({"none": True} if len(groups) == 1 else {"position": "bottom"})
-    chart.set_style(10)
-    worksheet.insert_chart(row, 0, chart, {"x_scale": 1.35, "y_scale": 1.15})
+    apply_chart_options(
+        chart,
+        title={"name": f"{metric.display_label} over time"},
+        x_axis={"name": _axis_label(x_column), "major_gridlines": {"visible": False}},
+        y_axis={"name": metric.display_label, "major_gridlines": {"visible": True}},
+        legend={"none": True} if len(groups) == 1 else {"position": "bottom"},
+        style=10,
+    )
+    insert_chart(worksheet, row, 0, chart, x_scale=1.35, y_scale=1.15)
     return True
 
 
@@ -301,7 +305,7 @@ def _insert_histogram_chart(
         if not grouped_histogram:
             worksheet.write_number(row + offset, table_col + 1, int(count))
 
-    chart = workbook.add_chart({"type": "column"})
+    chart = create_workbook_chart(workbook, "column")
     if grouped_histogram:
         for group_index, (label, _group_values) in enumerate(groups, start=1):
             color = _plot_color(group_index - 1, label)
@@ -330,18 +334,19 @@ def _insert_histogram_chart(
                 "border": {"color": SUMMARY_PLOT_PALETTE["distribution_foreground"], "width": 1},
             }
         )
-    chart.set_title({"name": f"{metric.display_label} distribution"})
-    chart.set_x_axis({"name": metric.display_label, "label_position": "low"})
-    chart.set_y_axis(
-        {
+    apply_chart_options(
+        chart,
+        title={"name": f"{metric.display_label} distribution"},
+        x_axis={"name": metric.display_label, "label_position": "low"},
+        y_axis={
             "name": "Share of group" if grouped_histogram else "Count",
             "major_gridlines": {"visible": True},
             **({"num_format": "0%"} if grouped_histogram else {}),
-        }
+        },
+        legend={"position": "bottom"} if grouped_histogram else {"none": True},
+        style=10,
     )
-    chart.set_legend({"position": "bottom"} if grouped_histogram else {"none": True})
-    chart.set_style(10)
-    worksheet.insert_chart(row, 0, chart, {"x_scale": 1.35, "y_scale": 1.15})
+    insert_chart(worksheet, row, 0, chart, x_scale=1.35, y_scale=1.15)
     if grouped_histogram:
         _write_histogram_stats_tables(
             worksheet,

@@ -9,6 +9,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from modules.env_utils import parse_bool
+
 STARTUP_PROFILE_ENV = "METROLIZA_STARTUP_PROFILE"
 STARTUP_PROFILE_PATH_ENV = "METROLIZA_STARTUP_PROFILE_PATH"
 STARTUP_UI_SMOKE_ENV = "METROLIZA_STARTUP_UI_SMOKE"
@@ -19,15 +21,7 @@ _PROFILE_PATH: Path | None = None
 
 def parse_env_flag(value: str | None, default: bool = False) -> bool:
     """Parse common truthy/falsy environment values."""
-    if value is None:
-        return default
-
-    normalized = str(value).strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    return default
+    return parse_bool(value, default=default)
 
 
 def profiling_enabled() -> bool:

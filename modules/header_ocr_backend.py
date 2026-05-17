@@ -9,11 +9,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import importlib
-import os
 import sys
 import threading
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+from modules.env_utils import env_bool, env_int, env_value
 
 
 DEFAULT_HEADER_OCR_BACKEND = "rapidocr_latin"
@@ -179,29 +180,15 @@ def missing_rapidocr_latin_model_paths(model_paths: RapidOcrLatinModelPaths) -> 
 
 
 def _env_value(env: Mapping[str, str] | None, name: str) -> str | None:
-    source = os.environ if env is None else env
-    value = source.get(name)
-    if value is None:
-        return None
-    normalized = str(value).strip()
-    return normalized or None
+    return env_value(name, env=env)
 
 
 def _env_bool(env: Mapping[str, str] | None, name: str, default: bool) -> bool:
-    value = _env_value(env, name)
-    if value is None:
-        return default
-    return value.lower() in {"1", "true", "yes", "on"}
+    return env_bool(name, default=default, env=env)
 
 
 def _env_int(env: Mapping[str, str] | None, name: str) -> int | None:
-    value = _env_value(env, name)
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except ValueError as exc:
-        raise ValueError(f"{name} must be an integer, got {value!r}.") from exc
+    return env_int(name, env=env)
 
 
 def _normalize_rapidocr_engine(value: str | None) -> str:

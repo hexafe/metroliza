@@ -5,12 +5,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from io import BytesIO
-import os
 from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
 
+from modules.env_utils import FALSE_VALUES, TRUE_VALUES, env_bool
 from modules.export_chart_payload_helpers import build_histogram_table_data
 from modules.export_summary_utils import resolve_histogram_bin_count
 from modules.matplotlib_runtime import configure_headless_matplotlib
@@ -20,6 +20,7 @@ configure_headless_matplotlib()
 
 PLOTSTATS_EXPORT_CHARTS_ENV_VAR = "METROLIZA_PLOTSTATS_EXPORT_CHARTS"
 _PLOTSTATS_DISABLED_VALUES = {"0", "false", "no", "off", "disabled", "metroliza", "legacy"}
+_PLOTSTATS_ENABLED_VALUES = TRUE_VALUES | frozenset({"all", "*"})
 
 
 @dataclass(frozen=True)
@@ -64,8 +65,12 @@ def plotstats_export_charts_enabled() -> bool:
     the legacy Metroliza/native renderer path for diagnostics or rollback.
     """
 
-    value = os.getenv(PLOTSTATS_EXPORT_CHARTS_ENV_VAR, "").strip().lower()
-    return value not in _PLOTSTATS_DISABLED_VALUES
+    return env_bool(
+        PLOTSTATS_EXPORT_CHARTS_ENV_VAR,
+        default=True,
+        true_values=_PLOTSTATS_ENABLED_VALUES,
+        false_values=FALSE_VALUES | frozenset(_PLOTSTATS_DISABLED_VALUES),
+    )
 
 
 def metroliza_dashboard_plotstats_theme() -> dict[str, Any]:

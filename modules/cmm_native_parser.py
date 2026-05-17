@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import time
 from pathlib import Path
 from threading import Lock
@@ -12,6 +11,7 @@ from modules.cmm_schema import ensure_cmm_report_schema
 from modules.cmm_parsing import parse_raw_lines_to_blocks
 from modules.db import run_transaction_with_retry
 from modules.report_repository import ReportRepository, compute_sha256
+from modules.env_utils import env_choice
 from modules.runtime_backend_policy import should_prefer_python_backend_in_auto_mode
 
 try:
@@ -179,21 +179,25 @@ def _coerce_native_sequence(value: Any) -> Any:
 
 
 def _runtime_backend_choice() -> BackendChoice:
-    choice = os.getenv("METROLIZA_CMM_PARSER_BACKEND", "auto").strip().lower()
-    if choice in {"auto", "native", "python"}:
-        if choice == "auto" and should_prefer_python_backend_in_auto_mode():
-            return "python"
-        return choice
-    return "auto"
+    choice = env_choice(
+        "METROLIZA_CMM_PARSER_BACKEND",
+        choices=frozenset({"auto", "native", "python"}),
+        default="auto",
+    )
+    if choice == "auto" and should_prefer_python_backend_in_auto_mode():
+        return "python"
+    return choice
 
 
 def _runtime_persistence_backend_choice() -> BackendChoice:
-    choice = os.getenv("METROLIZA_CMM_PERSIST_BACKEND", "auto").strip().lower()
-    if choice in {"auto", "native", "python"}:
-        if choice == "auto" and should_prefer_python_backend_in_auto_mode():
-            return "python"
-        return choice
-    return "auto"
+    choice = env_choice(
+        "METROLIZA_CMM_PERSIST_BACKEND",
+        choices=frozenset({"auto", "native", "python"}),
+        default="auto",
+    )
+    if choice == "auto" and should_prefer_python_backend_in_auto_mode():
+        return "python"
+    return choice
 
 
 def resolve_cmm_parser_backend(use_native: bool = False) -> ResolvedBackend:

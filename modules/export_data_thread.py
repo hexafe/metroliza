@@ -36,6 +36,7 @@ from PyQt6.QtCore import QCoreApplication, QThread, pyqtSignal
 from modules.contracts import ExportRequest, validate_export_request
 import modules.custom_logger as custom_logger
 from modules.db import execute_select_with_columns, read_sql_dataframe, sqlite_connection_scope
+from modules.env_utils import env_bool
 from modules.excel_sheet_utils import unique_sheet_name
 from modules.export_backends import ExcelExportBackend, HtmlDashboardExportBackend
 from modules.google_drive_export import (
@@ -272,7 +273,7 @@ _INTERNAL_GROUP_ANALYSIS_DIAGNOSTICS_ENV_VAR = 'METROLIZA_EXPORT_GROUP_ANALYSIS_
 
 def _internal_group_analysis_diagnostics_enabled():
     """Return True when internal-only Group Analysis diagnostics sheet emission is enabled."""
-    return os.getenv(_INTERNAL_GROUP_ANALYSIS_DIAGNOSTICS_ENV_VAR, '').strip().lower() in {'1', 'true', 'yes', 'on'}
+    return env_bool(_INTERNAL_GROUP_ANALYSIS_DIAGNOSTICS_ENV_VAR, default=False)
 
 
 def _uses_symbol_font_fallback(text):
@@ -3449,7 +3450,7 @@ class ExportDataThread(QThread):
             'chart_density_mode': 'full',
             'defer_non_essential_charts': False,
             'summary_sheet_minimum_charts': {'distribution', 'iqr', 'histogram', 'trend'},
-            'enable_chart_multiprocessing': os.getenv('METROLIZA_EXPORT_CHART_MP', '').lower() in {'1', 'true', 'yes', 'on'} and os.name != 'nt',
+            'enable_chart_multiprocessing': env_bool('METROLIZA_EXPORT_CHART_MP', default=False) and os.name != 'nt',
         }
         self._chart_executor = None
         self._summary_prep_executor = None
@@ -4577,7 +4578,7 @@ class ExportDataThread(QThread):
                 header_groups = ref_group.groupby('HEADER - AX', as_index=False)
                 header_count = ref_group['HEADER - AX'].nunique(dropna=False)
                 optimization_cache = {}
-                timing_enabled = os.getenv('METROLIZA_EXPORT_TIMING', '').lower() in {'1', 'true', 'yes', 'on'}
+                timing_enabled = env_bool('METROLIZA_EXPORT_TIMING', default=False)
                 build_bundle_elapsed = 0.0
                 chart_insert_elapsed = 0.0
                 precompute_start = time.perf_counter()

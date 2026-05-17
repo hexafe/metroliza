@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import os
 from typing import Literal, Sequence
 
 import numpy as np
+from modules.env_utils import env_choice
 from modules.runtime_backend_policy import should_prefer_python_backend_in_auto_mode
 
 try:
@@ -21,12 +21,14 @@ BackendChoice = Literal['auto', 'native', 'python']
 
 
 def _runtime_backend_choice() -> BackendChoice:
-    choice = os.getenv('METROLIZA_COMPARISON_STATS_CI_BACKEND', 'auto').strip().lower()
-    if choice in {'auto', 'native', 'python'}:
-        if choice == 'auto' and should_prefer_python_backend_in_auto_mode():
-            return 'python'
-        return choice
-    return 'auto'
+    choice = env_choice(
+        'METROLIZA_COMPARISON_STATS_CI_BACKEND',
+        choices=frozenset({'auto', 'native', 'python'}),
+        default='auto',
+    )
+    if choice == 'auto' and should_prefer_python_backend_in_auto_mode():
+        return 'python'
+    return choice
 
 
 def native_backend_available() -> bool:
@@ -38,12 +40,14 @@ def native_backend_available() -> bool:
 
 
 def _runtime_pairwise_backend_choice() -> BackendChoice:
-    choice = os.getenv('METROLIZA_COMPARISON_STATS_BACKEND', 'auto').strip().lower()
-    if choice in {'auto', 'native', 'python'}:
-        if choice == 'auto' and should_prefer_python_backend_in_auto_mode():
-            return 'python'
-        return choice
-    return 'auto'
+    choice = env_choice(
+        'METROLIZA_COMPARISON_STATS_BACKEND',
+        choices=frozenset({'auto', 'native', 'python'}),
+        default='auto',
+    )
+    if choice == 'auto' and should_prefer_python_backend_in_auto_mode():
+        return 'python'
+    return choice
 
 
 def _normalize_native_groups(groups: Sequence[np.ndarray | list[float]]) -> list[np.ndarray]:

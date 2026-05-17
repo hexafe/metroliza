@@ -7,7 +7,6 @@ for immediate rollback.
 
 from __future__ import annotations
 
-import os
 import statistics
 import warnings
 from abc import ABC, abstractmethod
@@ -20,6 +19,8 @@ configure_headless_matplotlib()
 
 import matplotlib.pyplot as plt
 import numpy as np
+
+from modules.env_utils import env_choice, env_value, parse_bool
 
 BackendChoice = Literal["auto", "native", "matplotlib"]
 ResolvedBackend = Literal["native", "matplotlib", "plotstats"]
@@ -310,10 +311,11 @@ class PlotstatsChartRenderer(ChartRenderer):
 
 
 def _runtime_backend_choice() -> BackendChoice:
-    choice = os.getenv("METROLIZA_CHART_RENDERER_BACKEND", "matplotlib").strip().lower()
-    if choice in {"auto", "native", "matplotlib"}:
-        return choice
-    return "matplotlib"
+    return env_choice(
+        "METROLIZA_CHART_RENDERER_BACKEND",
+        choices=frozenset({"auto", "native", "matplotlib"}),
+        default="matplotlib",
+    )
 
 
 def _runtime_rollout_chart_kinds() -> set[str]:
@@ -327,10 +329,18 @@ def _runtime_rollout_chart_kinds() -> set[str]:
     if bool(NATIVE_CHART_RENDERER_ROLLOUT_ENABLED):
         return set(_NATIVE_CHART_KINDS)
 
-    raw_value = os.getenv(_ROLLOUT_CHARTS_ENV_VAR, "").strip().lower()
-    if raw_value in {"", "1", "true", "yes", "on", "all", "*"}:
+    raw_value = str(env_value(_ROLLOUT_CHARTS_ENV_VAR, default="") or "").lower()
+    if not raw_value or parse_bool(
+        raw_value,
+        default=False,
+        true_values=frozenset({"1", "true", "yes", "on", "all", "*"}),
+    ):
         return set(_NATIVE_CHART_KINDS)
-    if raw_value in {"0", "false", "no", "off", "none"}:
+    if not parse_bool(
+        raw_value,
+        default=True,
+        false_values=frozenset({"0", "false", "no", "off", "none"}),
+    ):
         return set()
 
     enabled: set[str] = set()

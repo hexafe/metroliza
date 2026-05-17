@@ -7,8 +7,9 @@ the process before Python-level exception handlers or log flushing run.
 
 from __future__ import annotations
 
-import os
 import sys
+
+from modules.env_utils import env_bool
 
 
 def is_frozen_runtime() -> bool:
@@ -27,5 +28,4 @@ def should_prefer_python_backend_in_auto_mode() -> bool:
 
     if not is_frozen_runtime():
         return False
-    allow_native = os.getenv("METROLIZA_ENABLE_NATIVE_IN_FROZEN", "").strip().lower()
-    return allow_native not in {"1", "true", "yes", "on"}
+    return not env_bool("METROLIZA_ENABLE_NATIVE_IN_FROZEN", default=False)

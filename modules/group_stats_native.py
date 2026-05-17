@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
+from modules.env_utils import env_choice
 from modules.runtime_backend_policy import should_prefer_python_backend_in_auto_mode
 
 try:
@@ -16,12 +16,14 @@ except Exception:  # pragma: no cover - optional native module
 
 
 def _runtime_backend_choice() -> str:
-    choice = os.getenv("METROLIZA_GROUP_STATS_BACKEND", "auto").strip().lower()
-    if choice in {"auto", "native", "python"}:
-        if choice == "auto" and should_prefer_python_backend_in_auto_mode():
-            return "python"
-        return choice
-    return "python"
+    choice = env_choice(
+        "METROLIZA_GROUP_STATS_BACKEND",
+        choices=frozenset({"auto", "native", "python"}),
+        default="auto",
+    )
+    if choice == "auto" and should_prefer_python_backend_in_auto_mode():
+        return "python"
+    return choice
 
 
 def _coerce_scalar_to_float64_or_nan(value: Any) -> float:

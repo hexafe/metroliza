@@ -16,6 +16,7 @@ from modules.industrial_workflow_state import (
     require_identifier,
 )
 from modules.oznak_adapter import fetch_oznak_records_for_source_profile
+from modules.xlsx_chart_utils import apply_chart_options, create_workbook_chart, insert_chart
 
 CancelCheck = Callable[[], bool]
 
@@ -352,7 +353,7 @@ def _write_industrial_charts(writer: pd.ExcelWriter, summary: pd.DataFrame) -> N
         return
 
     count_col = int(summary.columns.get_loc("record_count"))
-    chart = workbook.add_chart({"type": "column"})
+    chart = create_workbook_chart(workbook, "column")
     last_row = len(summary.index)
     chart.add_series(
         {
@@ -361,11 +362,14 @@ def _write_industrial_charts(writer: pd.ExcelWriter, summary: pd.DataFrame) -> N
             "values": ["Industrial Summary", 1, count_col, last_row, count_col],
         }
     )
-    chart.set_title({"name": "Record count by group"})
-    chart.set_x_axis({"name": "Group"})
-    chart.set_y_axis({"name": "Records"})
-    chart.set_legend({"none": True})
-    chart_sheet.insert_chart(2, 0, chart, {"x_scale": 1.6, "y_scale": 1.25})
+    apply_chart_options(
+        chart,
+        title={"name": "Record count by group"},
+        x_axis={"name": "Group"},
+        y_axis={"name": "Records"},
+        legend={"none": True},
+    )
+    insert_chart(chart_sheet, 2, 0, chart, x_scale=1.6, y_scale=1.25)
 
 
 def _resolve_filter_column(conn, reference_column: str) -> str:

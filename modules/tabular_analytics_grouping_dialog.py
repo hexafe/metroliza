@@ -27,6 +27,11 @@ from modules.csv_summary_utils import CsvGroupingIndex
 from modules.help_menu import attach_help_menu_to_layout
 from modules.list_selection_utils import GroupingShortcutBindings, ListSelectionUtils
 from modules.export_grouping_utils import set_default_group_label
+from modules.tabular_column_selection import (
+    column_sequence_text,
+    current_column_from_list,
+    populate_column_list,
+)
 from modules.tabular_analytics_service import (
     TABULAR_DEFAULT_GROUP,
     TabularColumnFilter,
@@ -478,20 +483,16 @@ class TabularAnalyticsGroupingDialog(QDialog):
         return label if label else column
 
     def _selector_columns_text(self) -> str:
-        return " | ".join(self._column_label(column) for column in self.selector_columns)
+        return column_sequence_text(self.selector_columns, label_for=self._column_label)
 
     def _refresh_available_columns(self) -> None:
-        search = self.column_search.text().strip().casefold()
-        self.available_columns_list.clear()
-        for column in self._available_columns():
-            label = self._column_label(column)
-            if search and search not in label.casefold() and search not in column.casefold():
-                continue
-            self.available_columns_list.addItem(label)
-            item = self.available_columns_list.item(self.available_columns_list.count() - 1)
-            item.setData(Qt.ItemDataRole.UserRole, column)
-        if self.available_columns_list.count():
-            self.available_columns_list.setCurrentRow(0)
+        populate_column_list(
+            self.available_columns_list,
+            self._available_columns(),
+            label_for=self._column_label,
+            search_text=self.column_search.text(),
+            fallback="first",
+        )
 
     def _build_grouping_dataframe(self) -> pd.DataFrame:
         if self._is_sqlite_backed():
@@ -1067,26 +1068,15 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.next_page_button.setEnabled(self._selector_page_offset + len(preview_rows) < total_rows)
 
     def _refresh_selected_columns(self) -> None:
-        current_column = None
-        item = self.selected_columns_list.currentItem()
-        if item is not None:
-            current_column = item.data(Qt.ItemDataRole.UserRole)
-        search = self.selected_column_search.text().strip().casefold()
-        self.selected_columns_list.blockSignals(True)
-        self.selected_columns_list.clear()
-        for column in self.selector_columns:
-            label = self._column_label(column)
-            if search and search not in label.casefold() and search not in column.casefold():
-                continue
-            self.selected_columns_list.addItem(label)
-            new_item = self.selected_columns_list.item(self.selected_columns_list.count() - 1)
-            new_item.setData(Qt.ItemDataRole.UserRole, column)
-            if column == current_column:
-                new_item.setSelected(True)
-                self.selected_columns_list.setCurrentItem(new_item)
-        if self.selected_columns_list.currentItem() is None and self.selected_columns_list.count():
-            self.selected_columns_list.setCurrentRow(self.selected_columns_list.count() - 1)
-        self.selected_columns_list.blockSignals(False)
+        populate_column_list(
+            self.selected_columns_list,
+            self.selector_columns,
+            label_for=self._column_label,
+            search_text=self.selected_column_search.text(),
+            current_column=current_column_from_list(self.selected_columns_list),
+            fallback="last",
+            block_signals=True,
+        )
 
     def _refresh_groups(self, preferred_group: str | None = None) -> None:
         self.groups_list.blockSignals(True)
