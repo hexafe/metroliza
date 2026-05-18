@@ -446,6 +446,8 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
 
         distribution_payload = distribution_call['native_payload']
         self.assertIsInstance(distribution_payload, dict)
+        self.assertIn('limits', distribution_payload)
+        self.assertEqual(set(distribution_payload['limits']), {'lsl', 'usl', 'nominal'})
         distribution_spec = distribution_payload.get('resolved_render_spec')
         self.assertIsInstance(distribution_spec, dict)
         distribution_payload_input = copy.deepcopy(distribution_payload)
@@ -462,8 +464,13 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
 
         trend_payload = trend_call['native_payload']
         self.assertIsInstance(trend_payload, dict)
+        self.assertIn('limits', trend_payload)
+        self.assertEqual(set(trend_payload['limits']), {'lsl', 'usl', 'nominal'})
         trend_spec = trend_payload.get('resolved_render_spec')
         self.assertIsInstance(trend_spec, dict)
+        self.assertIn('LSL', [line.get('label') for line in trend_spec.get('reference_lines', [])])
+        self.assertIn('USL', [line.get('label') for line in trend_spec.get('reference_lines', [])])
+        self.assertNotIn('Limit 1', [line.get('label') for line in trend_spec.get('reference_lines', [])])
         trend_payload_input = copy.deepcopy(trend_payload)
         trend_payload_input.pop('resolved_render_spec', None)
         self.assertEqual(build_resolved_trend_spec(trend_payload_input), trend_spec)

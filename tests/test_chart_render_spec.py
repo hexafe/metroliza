@@ -313,9 +313,25 @@ def test_build_resolved_trend_spec_contains_points_ticks_and_limit_lines():
     assert spec["x_max"] == pytest.approx(3.25)
     assert spec["axes"]["rotation"] == 45
     assert [tick["label"] for tick in spec["axes"]["x_ticks"]] == ["S1", "S3", "S4"]
-    assert [line["label"] for line in spec["reference_lines"]] == ["Limit 1", "Limit 2"]
-    assert len(spec["reference_lines"]) == 2
+    assert [line["label"] for line in spec["reference_lines"]] == ["Limit 1", "Limit 2", "Mean"]
+    assert len(spec["reference_lines"]) == 3
     assert len(spec["points"]) == 4
+
+
+def test_build_resolved_trend_spec_prefers_named_limit_lines():
+    payload = {
+        "type": "trend",
+        "x_values": [0.0, 1.0, 2.0],
+        "y_values": [10.0, 10.2, 10.4],
+        "horizontal_limits": [9.5, 10.5],
+        "limits": {"lsl": 9.5, "nominal": 10.0, "usl": 10.5},
+        "mean_line": {"value": 10.2},
+    }
+
+    spec = build_resolved_trend_spec(payload)
+
+    assert [line["label"] for line in spec["reference_lines"]] == ["LSL", "USL", "Nominal", "Mean"]
+    assert [line["value"] for line in spec["reference_lines"]] == pytest.approx([9.5, 10.5, 10.0, 10.2])
 
 
 def test_build_resolved_distribution_scatter_spec_uses_sample_ticks_and_reference_labels():

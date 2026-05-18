@@ -1809,18 +1809,7 @@ def build_resolved_trend_spec(payload: Mapping[str, Any]) -> dict[str, Any]:
     axis_layout = _resolve_axis_layout(labels, positions=[float(item) for item in positions], layout=layout)
     x_ticks = list(zip(axis_layout["display_positions"], axis_layout["display_labels"]))
     y_ticks = [(tick, _format_tick(tick)) for tick in _nice_axis_ticks(float(y_min), float(y_max), target_steps=6)]
-    reference_lines = [
-        _build_reference_line_mapping(
-            axis="y",
-            value=float(limit_value),
-            color=SUMMARY_PLOT_PALETTE["spec_limit"],
-            alpha=0.82,
-            width=2.0,
-            label=f"Limit {index}",
-        )
-        for index, limit_value in enumerate(list(payload.get("horizontal_limits") or []), start=1)
-        if _as_float(limit_value) is not None
-    ]
+    reference_lines = _build_trend_reference_lines(payload, y_values)
 
     axes = _build_axes_mapping(
         x_min=float(x_min),
@@ -1865,3 +1854,54 @@ def build_resolved_trend_spec(payload: Mapping[str, Any]) -> dict[str, Any]:
             for x_value, y_value in zip(x_values.tolist(), y_values.tolist())
         ],
     }
+
+
+def _build_trend_reference_lines(payload: Mapping[str, Any], y_values: np.ndarray) -> list[dict[str, Any]]:
+    limits = payload.get("limits") if isinstance(payload.get("limits"), Mapping) else {}
+    named_limits = (
+        ("LSL", limits.get("lsl", payload.get("lsl"))),
+        ("USL", limits.get("usl", payload.get("usl"))),
+        ("Nominal", limits.get("nominal", payload.get("nominal"))),
+    )
+    reference_lines = [
+        _build_reference_line_mapping(
+            axis="y",
+            value=float(limit_value),
+            color=SUMMARY_PLOT_PALETTE["spec_limit"],
+            alpha=0.82,
+            width=2.0,
+            label=label,
+        )
+        for label, raw_value in named_limits
+        if (limit_value := _as_float(raw_value)) is not None
+    ]
+    if not reference_lines:
+        reference_lines = [
+            _build_reference_line_mapping(
+                axis="y",
+                value=float(limit_value),
+                color=SUMMARY_PLOT_PALETTE["spec_limit"],
+                alpha=0.82,
+                width=2.0,
+                label=f"Limit {index}",
+            )
+            for index, raw_value in enumerate(list(payload.get("horizontal_limits") or []), start=1)
+            if (limit_value := _as_float(raw_value)) is not None
+        ]
+
+    mean_value = _resolve_payload_mean_value(payload)
+    if mean_value is None and y_values.size:
+        mean_value = float(np.mean(y_values))
+    if mean_value is not None:
+        reference_lines.append(
+            _build_reference_line_mapping(
+                axis="y",
+                value=float(mean_value),
+                color=SUMMARY_PLOT_PALETTE["central_tendency"],
+                alpha=0.82,
+                width=1.4,
+                dash=(6, 4),
+                label="Mean",
+            )
+        )
+    return reference_lines

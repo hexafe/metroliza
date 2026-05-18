@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from io import BytesIO
+import math
+import re
 from typing import Any, Iterable
 
 import numpy as np
@@ -140,12 +142,12 @@ def build_dashboard_plotly_spec(
         return None
     layout = spec.get("layout") if isinstance(spec.get("layout"), dict) else {}
     config = spec.get("config") if isinstance(spec.get("config"), dict) else {}
-    return {
+    return _normalize_dashboard_plotly_spec({
         "data": data,
         "layout": layout,
         "config": config,
         "metadata": spec.get("metadata") if isinstance(spec.get("metadata"), dict) else {},
-    }
+    })
 
 
 def build_chart_artifact(
@@ -615,12 +617,225 @@ def _valid_plotly_spec(spec: Any) -> bool:
 
 
 def _trim_plotly_spec(spec: Mapping[str, Any]) -> dict[str, Any]:
-    return {
+    trimmed = {
         "data": spec.get("data") if isinstance(spec.get("data"), list) else [],
         "layout": spec.get("layout") if isinstance(spec.get("layout"), dict) else {},
         "config": spec.get("config") if isinstance(spec.get("config"), dict) else {},
         "metadata": spec.get("metadata") if isinstance(spec.get("metadata"), dict) else {},
     }
+    return _normalize_dashboard_plotly_spec(trimmed)
+
+
+_REFERENCE_LEGEND_LABELS = {"lsl", "usl", "mean", "median", "q1", "q3"}
+_BIN_RANGE_PATTERN = re.compile(
+    r"^\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s+-\s+"
+    r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _normalize_dashboard_plotly_spec(spec: dict[str, Any]) -> dict[str, Any]:
+    data = [dict(trace) if isinstance(trace, Mapping) else trace for trace in spec.get("data", [])]
+    layout = dict(spec.get("layout") or {})
+    config = dict(spec.get("config") or {})
+    metadata = dict(spec.get("metadata") or {})
+    spec = {"data": data, "layout": layout, "config": config, "metadata": metadata}
+
+    if _is_histogram_plotly_spec(spec):
+        _normalize_histogram_plotly_axes(spec)
+        _normalize_grouped_histogram_bins(spec)
+    _normalize_reference_trace_names_and_annotations(spec)
+    _normalize_plotly_annotation_boxes(spec)
+    return spec
+
+
+def _is_histogram_plotly_spec(spec: Mapping[str, Any]) -> bool:
+    metadata = spec.get("metadata") if isinstance(spec.get("metadata"), Mapping) else {}
+    if str(metadata.get("kind") or "").strip().casefold() == "histogram":
+        return True
+    if str(metadata.get("histogram_y_mode") or "").strip():
+        return True
+    for trace in spec.get("data") or []:
+        if isinstance(trace, Mapping) and str(trace.get("type") or "").strip().casefold() == "histogram":
+            return True
+    return False
+
+
+def _normalize_histogram_plotly_axes(spec: Mapping[str, Any]) -> None:
+    layout = spec.get("layout")
+    if not isinstance(layout, dict):
+        return
+    yaxis = layout.setdefault("yaxis", {})
+    if isinstance(yaxis, dict):
+        yaxis["title"] = {"text": "Frequency (%)"}
+        yaxis["tickformat"] = ".0%"
+        yaxis["range"] = [0.0, 1.0]
+        for key in ("tickmode", "tickvals", "ticktext", "nticks"):
+            yaxis.pop(key, None)
+    xaxis = layout.setdefault("xaxis", {})
+    if isinstance(xaxis, dict):
+        xaxis["tickformat"] = ".4~g"
+        xaxis["automargin"] = True
+        title = xaxis.get("title")
+        if isinstance(title, dict):
+            title["standoff"] = max(int(title.get("standoff") or 0), 20)
+        elif title:
+            xaxis["title"] = {"text": str(title), "standoff": 20}
+    margin = layout.setdefault("margin", {})
+    if isinstance(margin, dict):
+        margin["b"] = max(int(margin.get("b") or 0), 92)
+
+
+def _normalize_grouped_histogram_bins(spec: Mapping[str, Any]) -> None:
+    for trace in spec.get("data") or []:
+        if not isinstance(trace, dict) or str(trace.get("type") or "").casefold() != "bar":
+            continue
+        x_values = trace.get("x")
+        if not isinstance(x_values, list) or not x_values:
+            continue
+        parsed = [_parse_bin_range_label(value) for value in x_values]
+        if not all(item is not None for item in parsed):
+            continue
+        ranges = [(float(start), float(end), str(label)) for start, end, label in parsed if start is not None and end is not None]
+        trace["x"] = [(start + end) / 2.0 for start, end, _label in ranges]
+        trace["width"] = [max(end - start, 0.0) for start, end, _label in ranges]
+        old_customdata = trace.get("customdata") if isinstance(trace.get("customdata"), list) else []
+        customdata = []
+        for index, (start, end, label) in enumerate(ranges):
+            count = None
+            if index < len(old_customdata) and isinstance(old_customdata[index], list) and old_customdata[index]:
+                count = old_customdata[index][0]
+            customdata.append([start, end, count, label])
+        trace["customdata"] = customdata
+        trace["hovertemplate"] = (
+            "bin=%{customdata[0]:.4g}..%{customdata[1]:.4g}<br>"
+            "frequency=%{y:.2%}<br>"
+            "count=%{customdata[2]}<extra></extra>"
+        )
+
+
+def _parse_bin_range_label(value: Any) -> tuple[float, float, str] | None:
+    text = str(value or "").strip()
+    match = _BIN_RANGE_PATTERN.match(text)
+    if match is None:
+        return None
+    try:
+        start = float(match.group(1))
+        end = float(match.group(2))
+    except ValueError:
+        return None
+    if not (math.isfinite(start) and math.isfinite(end) and end > start):
+        return None
+    return start, end, text
+
+
+def _normalize_reference_trace_names_and_annotations(spec: Mapping[str, Any]) -> None:
+    layout = spec.get("layout")
+    if not isinstance(layout, dict):
+        return
+    existing_annotations = layout.get("annotations")
+    annotations_valid = isinstance(existing_annotations, list)
+    annotations = existing_annotations if annotations_valid else []
+    existing_text = {
+        str(annotation.get("text") or "")
+        for annotation in annotations
+        if isinstance(annotation, Mapping)
+    }
+    for trace in spec.get("data") or []:
+        if not isinstance(trace, dict):
+            continue
+        label = str(trace.get("name") or "").strip()
+        label_key = label.casefold()
+        if label_key not in _REFERENCE_LEGEND_LABELS:
+            continue
+        axis, value = _constant_line_axis_and_value(trace)
+        if value is None:
+            continue
+        display = f"{label}={_format_plotly_value(value)}"
+        trace["name"] = display
+        if display in existing_text:
+            continue
+        annotation = _reference_annotation(axis=axis, value=value, text=display, color=_trace_line_color(trace))
+        if annotation is not None:
+            if not annotations_valid:
+                layout["annotations"] = annotations
+                annotations_valid = True
+            annotations.append(annotation)
+            existing_text.add(display)
+
+
+def _constant_line_axis_and_value(trace: Mapping[str, Any]) -> tuple[str, float | None]:
+    x_values = _finite_trace_values(trace.get("x"))
+    y_values = _finite_trace_values(trace.get("y"))
+    if len(x_values) >= 2 and all(math.isclose(value, x_values[0]) for value in x_values):
+        return "x", x_values[0]
+    if len(y_values) >= 2 and all(math.isclose(value, y_values[0]) for value in y_values):
+        return "y", y_values[0]
+    return "", None
+
+
+def _finite_trace_values(values: Any) -> list[float]:
+    if not isinstance(values, list):
+        return []
+    output: list[float] = []
+    for value in values:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(number):
+            output.append(number)
+    return output
+
+
+def _reference_annotation(*, axis: str, value: float, text: str, color: str) -> dict[str, Any] | None:
+    annotation: dict[str, Any] = {
+        "text": text,
+        "showarrow": False,
+        "font": {"size": 11, "color": color},
+        "bgcolor": "#ffffff",
+        "bordercolor": "#cbd5e1",
+        "borderwidth": 1,
+        "borderpad": 3,
+        "opacity": 1.0,
+    }
+    if axis == "x":
+        annotation.update({"xref": "x", "yref": "paper", "x": value, "y": 1.04, "yanchor": "bottom"})
+        return annotation
+    if axis == "y":
+        annotation.update({"xref": "paper", "yref": "y", "x": 1.0, "y": value, "xanchor": "right"})
+        return annotation
+    return None
+
+
+def _trace_line_color(trace: Mapping[str, Any]) -> str:
+    line = trace.get("line") if isinstance(trace.get("line"), Mapping) else {}
+    return str(line.get("color") or "#111827")
+
+
+def _format_plotly_value(value: float) -> str:
+    magnitude = abs(value)
+    if magnitude >= 10_000 or (0.0 < magnitude < 0.001):
+        return f"{value:.4g}"
+    text = f"{value:.6f}".rstrip("0").rstrip(".")
+    return "0" if text in {"", "-0"} else text
+
+
+def _normalize_plotly_annotation_boxes(spec: Mapping[str, Any]) -> None:
+    layout = spec.get("layout")
+    if not isinstance(layout, dict):
+        return
+    annotations = layout.get("annotations")
+    if not isinstance(annotations, list):
+        return
+    for annotation in annotations:
+        if not isinstance(annotation, dict):
+            continue
+        annotation["bgcolor"] = "#ffffff"
+        annotation["bordercolor"] = annotation.get("bordercolor") or "#cbd5e1"
+        annotation["borderwidth"] = max(int(annotation.get("borderwidth") or 0), 1)
+        annotation["borderpad"] = max(int(annotation.get("borderpad") or 0), 3)
+        annotation["opacity"] = 1.0
 
 
 __all__ = [

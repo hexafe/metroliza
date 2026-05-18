@@ -5592,6 +5592,11 @@ class ExportDataThread(QThread):
                             'render_mode': 'violin' if can_render_violin else 'scatter',
                             'x_label': grouped_x_axis_label if can_render_violin else scatter_x_axis_label,
                             'y_label': 'Measurement' if can_render_violin else characteristic_axis_label,
+                            'limits': {
+                                'lsl': None if LSL is None else float(LSL),
+                                'usl': None if USL is None else float(USL),
+                                'nominal': None if nom is None else float(nom),
+                            },
                             'canvas': distribution_canvas,
                             'layout': distribution_layout,
                         }
@@ -6348,6 +6353,12 @@ class ExportDataThread(QThread):
                             for value in (USL, LSL)
                             if value is not None
                         ],
+                        'limits': {
+                            'lsl': None if LSL is None else float(LSL),
+                            'usl': None if USL is None else float(USL),
+                            'nominal': None if nom is None else float(nom),
+                        },
+                        'mean_line': {'value': float(np.mean(trend_y_values))},
                         'canvas': trend_canvas,
                         'layout': {
                             'rotation': int(trend_layout.get('rotation') or 0),

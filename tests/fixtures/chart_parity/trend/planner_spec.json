@@ -126,6 +126,18 @@
       "label": "Limit 2",
       "value": 1.4,
       "width": 2.0
+    },
+    {
+      "alpha": 0.82,
+      "axis": "y",
+      "color": "#E69F00",
+      "dash": [
+        6,
+        4
+      ],
+      "label": "Mean",
+      "value": 1.1625,
+      "width": 1.4
     }
   ],
   "title": {

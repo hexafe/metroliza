@@ -9,6 +9,7 @@ from modules.hexafe_plotstats_adapter import (
     build_chart_artifact,
     build_dashboard_plotly_spec,
     build_histogram_stats_table,
+    build_plotstats_dashboard_spec,
     plotstats_export_charts_enabled,
     render_chart_artifact_png,
     render_histogram_png,
@@ -197,6 +198,80 @@ def test_build_chart_artifact_uses_plotstats_metroliza_artifact_adapter(monkeypa
     assert calls["theme"] == "dark"
     assert calls["include_png"] is True
     assert calls["static"] is False
+
+
+def test_plotstats_dashboard_spec_normalizes_histogram_plotly_semantics(monkeypatch) -> None:
+    def fake_artifact(_payload, **_kwargs):
+        return {
+            "plotly_spec": {
+                "data": [
+                    {
+                        "type": "bar",
+                        "name": "A",
+                        "x": ["123 - 5.97e+03", "5.97e+03 - 1.18e+04"],
+                        "y": [0.4, 0.6],
+                        "customdata": [[4], [6]],
+                    },
+                    {
+                        "type": "scatter",
+                        "mode": "lines",
+                        "name": "LSL",
+                        "x": [123.0, 123.0],
+                        "y": [0.0, 1.0],
+                        "line": {"color": "#dc2626"},
+                    },
+                    {
+                        "type": "scatter",
+                        "mode": "lines",
+                        "name": "Mean",
+                        "x": [1000.0, 1000.0],
+                        "y": [0.0, 1.0],
+                        "line": {"color": "#111827"},
+                    },
+                ],
+                "layout": {
+                    "yaxis": {
+                        "title": {"text": "Density"},
+                        "tickvals": [0.0, 0.5, 1.0],
+                        "ticktext": ["0", "0.5", "1"],
+                        "nticks": 3,
+                    },
+                    "xaxis": {"title": {"text": "Bins"}},
+                    "annotations": [{"text": "legacy", "bgcolor": "rgba(255,255,255,0.4)"}],
+                },
+                "config": {"responsive": True},
+                "metadata": {"kind": "histogram", "histogram_y_mode": "relative_percent"},
+            }
+        }
+
+    package = ModuleType("hexafe_plotstats")
+    adapters = ModuleType("hexafe_plotstats.adapters")
+    adapters.chart_artifact_from_metroliza_payload = fake_artifact
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats", package)
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats.adapters", adapters)
+
+    spec = build_plotstats_dashboard_spec(
+        {"type": "histogram", "values": [1.0, 2.0]},
+        title="Histogram",
+        static=False,
+    )
+
+    assert spec is not None
+    yaxis = spec["layout"]["yaxis"]
+    assert yaxis["title"]["text"] == "Frequency (%)"
+    assert yaxis["tickformat"] == ".0%"
+    assert yaxis["range"] == [0.0, 1.0]
+    assert "tickvals" not in yaxis
+    assert spec["layout"]["xaxis"]["tickformat"] == ".4~g"
+    bar_trace = spec["data"][0]
+    assert bar_trace["x"] == [3046.5, 8885.0]
+    assert bar_trace["width"] == [5847.0, 5830.0]
+    assert bar_trace["customdata"][0] == [123.0, 5970.0, 4, "123 - 5.97e+03"]
+    assert spec["data"][1]["name"] == "LSL=123"
+    assert spec["data"][2]["name"] == "Mean=1000"
+    annotation_texts = {annotation["text"] for annotation in spec["layout"]["annotations"]}
+    assert {"legacy", "LSL=123", "Mean=1000"}.issubset(annotation_texts)
+    assert all(annotation["bgcolor"] == "#ffffff" for annotation in spec["layout"]["annotations"])
 
 
 def test_render_chart_artifact_png_returns_bytes(monkeypatch) -> None:

@@ -436,7 +436,7 @@ def test_trend_parity_harness_tracks_metadata_and_coarse_image_parity():
     reference_image = render_matplotlib_reference(fixture.spec, chart_type=fixture.chart_type)
 
     assert len(fixture.spec["points"]) == 4
-    assert len(fixture.spec["reference_lines"]) == 2
+    assert [line["label"] for line in fixture.spec["reference_lines"]] == ["Limit 1", "Limit 2", "Mean"]
     assert_coarse_parity(
         native_image,
         reference_image,
