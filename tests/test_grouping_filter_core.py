@@ -8,9 +8,11 @@ from modules.grouping_filter_core import (
     TextFilterSpec,
     apply_filter_specs,
     build_filter_mask,
+    looks_like_filter_expression,
     normalize_grouping_key,
     normalized_grouping_key_frame,
     parse_filter_expression,
+    resolve_filter_column,
 )
 
 
@@ -162,14 +164,14 @@ def test_parse_filter_expression_supports_text_number_date_and_or() -> None:
     frame = pd.DataFrame(
         {
             "TimeStamp": ["2026-04-30", "2026-05-02", "2026-05-03"],
-            "Supplier": ["IKD", "WEDRONE", "IKD"],
+            "Supplier": ["OTHER", "SUPPLIER", "OTHER"],
             "Value": [1, 1, 2],
             "Value2": [0, 2, 3],
         }
     )
 
     parsed = parse_filter_expression(
-        "TimeStamp>2026-05-01 AND Supplier=WEDRONE AND Value=1 AND Value2>1",
+        "TimeStamp>2026-05-01 AND Supplier=SUPPLIER AND Value=1 AND Value2>1",
         frame.columns,
     )
     filtered = apply_filter_specs(frame, parsed.specs, match_mode=parsed.match_mode)
@@ -177,8 +179,102 @@ def test_parse_filter_expression_supports_text_number_date_and_or() -> None:
     assert parsed.match_mode == "and"
     assert filtered.index.tolist() == [1]
 
-    parsed_or = parse_filter_expression("Supplier=WEDRONE OR Value2>2", frame.columns)
+    parsed_or = parse_filter_expression("Supplier=SUPPLIER OR Value2>2", frame.columns)
     filtered_or = apply_filter_specs(frame, parsed_or.specs, match_mode=parsed_or.match_mode)
 
     assert parsed_or.match_mode == "or"
     assert filtered_or.index.tolist() == [1, 2]
+
+
+def test_parse_filter_expression_supports_nested_mixed_and_or() -> None:
+    frame = pd.DataFrame(
+        {
+            "Sample": ["S-1", "S-1", "S-2", "S-3"],
+            "Part": ["bolt", "nut", "bolt", "gear"],
+            "Value": [8, 13, 4, 20],
+            "Date": ["2026-05-01", "2026-05-02", "2026-05-03", "2026-05-04"],
+        }
+    )
+
+    parsed = parse_filter_expression(
+        "(Sample = S-1 AND (Part = bolt OR Value >= 12)) OR (Sample = S-3 AND Date > 2026-05-03)",
+        frame.columns,
+    )
+    filtered = apply_filter_specs(frame, parsed.specs, match_mode=parsed.match_mode)
+
+    assert parsed.match_mode == "and"
+    assert filtered.index.tolist() == [0, 1, 3]
+    assert parsed.mask(frame).tolist() == [True, True, False, True]
+
+
+def test_parse_filter_expression_supports_text_wildcard_equality() -> None:
+    frame = pd.DataFrame(
+        {
+            "Part": ["Bolt-01", "bolt-02", "Nut-01", "BOLT-extra", None],
+            "Value": [10, 11, 12, 13, 14],
+        }
+    )
+
+    parsed = parse_filter_expression("Part = bolt-*", frame.columns)
+    filtered = apply_filter_specs(frame, parsed.specs, match_mode=parsed.match_mode)
+
+    assert TextFilterSpec("Part", "equals", "bolt-*").mask(frame).tolist() == [
+        False,
+        False,
+        False,
+        False,
+        False,
+    ]
+    assert filtered["Value"].tolist() == [10, 11, 13]
+
+    parsed_not = parse_filter_expression("Part != bolt-*", frame.columns)
+    filtered_not = apply_filter_specs(frame, parsed_not.specs, match_mode=parsed_not.match_mode)
+
+    assert filtered_not["Value"].tolist() == [12, 14]
+
+
+def test_parse_filter_expression_resolves_display_aliases() -> None:
+    frame = pd.DataFrame(
+        {
+            "sample_id": ["S-1", "S-2", "S-1"],
+            "created_at": ["2026-05-01", "2026-05-02", "2026-05-03"],
+            "part_name": ["Bolt", "Bolt", "Nut"],
+        }
+    )
+    aliases = {"Sample": "sample_id", "Date": "created_at", "Part": "part_name"}
+
+    parsed = parse_filter_expression(
+        "Sample = S-1 AND Date >= 2026-05-02 AND Part = nut",
+        frame.columns,
+        aliases=aliases,
+    )
+    filtered = apply_filter_specs(frame, parsed.specs, match_mode=parsed.match_mode)
+
+    assert resolve_filter_column("sample", frame.columns, aliases=aliases) == "sample_id"
+    assert filtered.index.tolist() == [2]
+
+
+def test_parse_filter_expression_supports_quoted_values_and_delimited_fields() -> None:
+    frame = pd.DataFrame(
+        {
+            "Sample Code": ["A B", "A C", "A B"],
+            "Part Name": ["gear shaft", "gear shaft", "bolt"],
+            "Operator": ["AND team", "OR team", "AND team"],
+        }
+    )
+
+    parsed = parse_filter_expression(
+        "`Sample Code` = 'A B' AND [Part Name] = \"gear shaft\" AND Operator = 'AND team'",
+        frame.columns,
+    )
+    filtered = apply_filter_specs(frame, parsed.specs, match_mode=parsed.match_mode)
+
+    assert looks_like_filter_expression("`Sample Code` = 'A B'")
+    assert filtered.index.tolist() == [0]
+
+
+def test_parse_filter_expression_rejects_unknown_fields() -> None:
+    frame = pd.DataFrame({"Sample": ["S-1"], "Value": [1]})
+
+    with pytest.raises(KeyError, match="Missing"):
+        parse_filter_expression("Missing = S-1", frame.columns)

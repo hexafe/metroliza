@@ -4,7 +4,14 @@ from pathlib import Path
 import zipfile
 
 import pandas as pd
+import pytest
 
+from modules.grouping_filter_core import (
+    NumberFilterSpec,
+    TextFilterSpec,
+    apply_filter_specs,
+    parse_filter_expression,
+)
 from modules.industrial_analytics_dashboard import build_production_dashboard_manifest
 from modules.industrial_analytics_service import (
     ProductionGroupstatsResult,
@@ -19,10 +26,12 @@ from modules.industrial_analytics_state import (
 from modules.tabular_analytics_service import (
     TABULAR_GROUP_COLUMN,
     TabularColumnFilter,
+    TabularSqliteFilterExpression,
     apply_tabular_row_filter,
     apply_tabular_grouping,
     build_tabular_grouping_dataframe,
     cleanup_tabular_load_result,
+    compile_tabular_sqlite_grouping_filter,
     count_tabular_materialized_rows,
     export_tabular_analytics_workbook,
     load_tabular_analytics_file,
@@ -305,6 +314,150 @@ def test_sqlite_group_preview_search_treats_wildcards_literally(tmp_path) -> Non
         assert percent_rows == [{"key": ("100%",), "label": "100%", "row_count": 1}]
         assert underscore_total == 1
         assert underscore_rows == [{"key": ("A_1",), "label": "A_1", "row_count": 1}]
+    finally:
+        cleanup_tabular_load_result(result)
+
+
+def test_sqlite_grouping_filter_expression_applies_to_preview_count_and_row_ids(
+    tmp_path,
+) -> None:
+    input_file = tmp_path / "sqlite_expression_filters.csv"
+    pd.DataFrame(
+        {
+            "Line": ["L1", "L1", "L2", "L1", "L2", "L1"],
+            "Station": ["A", "B", "A", "A", "B", "B"],
+            "Part": ["body-pre", "cap", "body-side", "body-front", "cap", "body-back"],
+            "TimeStamp": [
+                "2026-04-30",
+                "2026-05-02",
+                "2026-05-03",
+                "2026-05-04",
+                "2026-05-05",
+                "2026-05-06",
+            ],
+            "Length mm": [10.0, 10.1, 10.2, 10.3, 10.4, 10.5],
+        }
+    ).to_csv(input_file, index=False)
+
+    result = load_tabular_analytics_file(input_file, force_sqlite=True)
+    try:
+        aliases = {"Part": "part", "TimeStamp": "timestamp", "Length": "length_mm"}
+        expression = "(Part=body* AND TimeStamp>=2026-05-01) OR (Part=cap AND Length<10.2)"
+
+        rows, total = result.sqlite_store.preview_group_rows(
+            ("station",),
+            grouping_filter_expression=expression,
+            grouping_filter_aliases=aliases,
+            limit=20,
+        )
+
+        assert total == 2
+        assert rows == [
+            {"key": ("A",), "label": "A", "row_count": 2},
+            {"key": ("B",), "label": "B", "row_count": 2},
+        ]
+        assert result.sqlite_store.count_rows(
+            grouping_filter_expression=expression,
+            grouping_filter_aliases=aliases,
+        ) == 4
+        assert result.sqlite_store.row_ids(
+            grouping_filter_expression=expression,
+            grouping_filter_aliases=aliases,
+        ) == [2, 3, 4, 6]
+        value_rows, value_total = result.sqlite_store.preview_value_rows(
+            "station",
+            grouping_filter_expression=expression,
+            grouping_filter_aliases=aliases,
+            limit=20,
+        )
+        assert value_total == 2
+        assert value_rows == [
+            {"key": ("A",), "label": "A", "row_count": 2},
+            {"key": ("B",), "label": "B", "row_count": 2},
+        ]
+        parsed = parse_filter_expression(
+            "(part=body* AND timestamp>=2026-05-01) OR (part=cap AND length_mm<10.2)",
+            result.sqlite_store.columns,
+        )
+        assert result.sqlite_store.row_ids(grouping_filter=parsed) == [2, 3, 4, 6]
+        assert result.sqlite_store.row_ids_for_group_keys(
+            ("station",),
+            {("A",)},
+            grouping_filter_expression=expression,
+            grouping_filter_aliases=aliases,
+        ) == [3, 4]
+        assert result.sqlite_store.count_rows_for_group_keys(
+            ("station",),
+            {("A",)},
+            grouping_filter_expression=expression,
+            grouping_filter_aliases=aliases,
+        ) == 2
+    finally:
+        cleanup_tabular_load_result(result)
+
+
+def test_sqlite_shared_filter_specs_match_pandas_and_escape_like_wildcards(tmp_path) -> None:
+    input_file = tmp_path / "sqlite_shared_specs.csv"
+    pd.DataFrame(
+        {
+            "Station": ["A_%", "A_1", "A%2", "Alpha", "Beta"],
+            "Length mm": [10.0, 10.1, 10.2, 10.3, 10.4],
+        }
+    ).to_csv(input_file, index=False)
+
+    result = load_tabular_analytics_file(input_file, force_sqlite=True)
+    try:
+        specs = (
+            TextFilterSpec("station", "contains", "A_%"),
+            NumberFilterSpec("length_mm", "gte", 10),
+        )
+        expected_ids = apply_filter_specs(
+            result.dataframe,
+            specs,
+            match_mode="and",
+        )["source_row_number"].astype(int).tolist()
+        compiled = compile_tabular_sqlite_grouping_filter(result.sqlite_store.columns, specs)
+
+        rows, total = result.sqlite_store.preview_group_rows(
+            ("station",),
+            grouping_filter=compiled,
+            limit=20,
+        )
+
+        assert expected_ids == [1]
+        assert result.sqlite_store.row_ids(grouping_filter=specs) == expected_ids
+        assert result.sqlite_store.count_rows(grouping_filter=compiled) == len(expected_ids)
+        assert total == 1
+        assert rows == [{"key": ("A_%",), "label": "A_%", "row_count": 1}]
+    finally:
+        cleanup_tabular_load_result(result)
+
+
+def test_sqlite_grouping_filter_rejects_unknown_columns_before_execution(tmp_path) -> None:
+    input_file = tmp_path / "sqlite_unknown_filter_column.csv"
+    pd.DataFrame({"Station": ["A", "B"], "Length mm": [10.0, 10.1]}).to_csv(
+        input_file,
+        index=False,
+    )
+
+    result = load_tabular_analytics_file(input_file, force_sqlite=True)
+    try:
+        with pytest.raises(KeyError, match="not allowed"):
+            result.sqlite_store.count_rows(
+                grouping_filter=(TextFilterSpec("missing_column", "contains", "A"),),
+            )
+        with pytest.raises(KeyError, match="not allowed"):
+            result.sqlite_store.row_ids(
+                grouping_filter_expression="Bad Alias = A",
+                grouping_filter_aliases={"Bad Alias": "missing_column"},
+            )
+        with pytest.raises(ValueError, match="bound parameters"):
+            result.sqlite_store.count_rows(
+                grouping_filter=TabularSqliteFilterExpression(
+                    clause='"station" = ?',
+                    columns=("station",),
+                ),
+            )
     finally:
         cleanup_tabular_load_result(result)
 

@@ -124,7 +124,7 @@ class TestDataGroupingPartDisplayLabel(unittest.TestCase):
 
         self.assertEqual(
             label,
-            '42 | 2024-01-15 | Part: Front Plate | Rev: B | Variant: Header Box | Status: NOK (3) | Op: Jane Doe | File: part.csv',
+            'Sample: 42 | Date: 2024-01-15 | Part: Front Plate | Rev: B | Variant: Header Box | Status: NOK (3) | Op: Jane Doe | File: part.csv',
         )
 
     def test_part_display_label_handles_missing_values(self):
@@ -133,7 +133,81 @@ class TestDataGroupingPartDisplayLabel(unittest.TestCase):
 
         label = dialog._part_display_label(row)
 
-        self.assertEqual(label, '7')
+        self.assertEqual(label, 'Sample: 7')
+
+    def test_part_display_label_includes_supplier_when_present(self):
+        dialog = DataGrouping.__new__(DataGrouping)
+        row = {'SAMPLE_NUMBER': 7, 'SUPPLIER': 'SUPPLIER'}
+
+        label = dialog._part_display_label(row)
+
+        self.assertEqual(label, 'Sample: 7 | Supplier: SUPPLIER')
+
+
+class TestDataGroupingScopeFilterAliases(unittest.TestCase):
+    def test_scope_filter_placeholder_uses_clear_aliases(self):
+        placeholder = DataGrouping._scope_filter_placeholder()
+
+        self.assertEqual(placeholder, 'Filter rows, e.g. Supplier=SUPPLIER AND Date>=2026-05-01')
+        self.assertIn('Supplier=SUPPLIER', placeholder)
+        self.assertIn('Date>=2026-05-01', placeholder)
+
+    def test_scope_filter_aliases_include_present_columns(self):
+        aliases = DataGrouping._scope_filter_field_aliases(
+            ['SAMPLE_NUMBER', 'DATE', 'PART_NAME', 'STATUS_CODE', 'Supplier']
+        )
+
+        self.assertEqual(
+            aliases,
+            {
+                'Sample': 'SAMPLE_NUMBER',
+                'Date': 'DATE',
+                'Part': 'PART_NAME',
+                'Status': 'STATUS_CODE',
+                'Supplier': 'Supplier',
+            },
+        )
+
+    def test_scope_filter_aliases_are_rewritten_for_current_parser(self):
+        from modules.grouping_filter_core import apply_filter_specs
+
+        frame = pd.DataFrame(
+            {
+                'SAMPLE_NUMBER': [42, 43],
+                'PART_NAME': ['Body Panel', 'Cover Panel'],
+            }
+        )
+
+        parsed = DataGrouping._parse_scope_filter_expression(
+            'Sample=42 AND Part=Body Panel',
+            frame.columns,
+        )
+        filtered = apply_filter_specs(frame, parsed.specs, match_mode=parsed.match_mode)
+
+        self.assertEqual(filtered.index.tolist(), [0])
+
+    def test_scope_filter_passes_aliases_to_supported_shared_parser(self):
+        from collections import namedtuple
+        from unittest.mock import patch
+
+        Parsed = namedtuple('Parsed', ['specs', 'match_mode'])
+        calls = {}
+
+        def fake_parse_filter_expression(expression, columns, *, aliases=None):
+            calls['expression'] = expression
+            calls['columns'] = tuple(columns)
+            calls['aliases'] = aliases
+            return Parsed(specs=(), match_mode='and')
+
+        with patch.dict(
+            DataGrouping._parse_scope_filter_expression.__globals__,
+            {'parse_filter_expression': fake_parse_filter_expression},
+        ):
+            DataGrouping._parse_scope_filter_expression('Part=body*', ['PART_NAME'])
+
+        self.assertEqual(calls['expression'], 'Part=body*')
+        self.assertEqual(calls['columns'], ('PART_NAME',))
+        self.assertEqual(calls['aliases'], {'Part': 'PART_NAME'})
 
 
 class TestDataGroupingColorAssignments(unittest.TestCase):
@@ -815,7 +889,7 @@ class TestDataGroupingSelectionRetention(unittest.TestCase):
 
         class _TextInput:
             def text(self):
-                return 'DATE>=2026-05-01 AND VALUE2>1'
+                return 'Date>=2026-05-01 AND Sample=2 AND Part=Body'
 
         class _Label:
             def __init__(self):
@@ -835,7 +909,7 @@ class TestDataGroupingSelectionRetention(unittest.TestCase):
                 'GROUP_KEY': ['k1', 'k2', 'k3'],
                 'SAMPLE_NUMBER': [1, 2, 3],
                 'DATE': ['2026-04-30', '2026-05-02', '2026-05-03'],
-                'VALUE2': [5, 2, 0],
+                'PART_NAME': ['Cover', 'Body', 'Body'],
                 'FILENAME': ['a.csv', 'b.csv', 'c.csv'],
                 'GROUP_COLOR': ['#FFFFFF', '#FFFFFF', '#FFFFFF'],
             }

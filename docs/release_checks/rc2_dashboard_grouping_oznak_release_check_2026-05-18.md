@@ -5,6 +5,8 @@ Scope:
 - Plotly dashboard semantics for histogram percent axes, numeric bins, reference legend labels, white annotation boxes, high-cardinality x labels, and raw/aggregate axis alignment.
 - CSV Summary dashboard fast/full detail mode.
 - CSV Summary grouping-scope numeric filters and page navigation.
+- Shared Export and CSV Summary grouping filter syntax in the existing search/filter fields,
+  including nested boolean expressions, aliases, text wildcards, and SQLite-backed assignment.
 - Oznak access-only check and live production export without selecting a Metroliza database.
 - Runtime dependency hygiene for the pinned `hexafe-plotstats` update.
 
@@ -12,7 +14,9 @@ Validation:
 
 - `python -m ruff check .` - passed.
 - `python -m compileall -q -x '^\./\.git/' .` - passed.
-- `QT_QPA_PLATFORM=offscreen python -m pytest -q` - passed: 1514 passed, 142 skipped, 6 warnings, 60 subtests passed.
+- `QT_QPA_PLATFORM=offscreen python -m pytest -q` - passed: 1527 passed, 143 skipped, 6 warnings, 60 subtests passed.
+- `QT_QPA_PLATFORM=offscreen python -m pytest tests/test_grouping_filter_core.py tests/test_data_grouping_filter_query.py tests/test_tabular_analytics_grouping_dialog.py tests/test_tabular_analytics_service.py -q` - passed: 91 passed, 31 skipped.
+- `QT_QPA_PLATFORM=offscreen python -m pytest tests/test_industrial_analytics_workflow.py tests/test_industrial_analytics_dialog.py tests/test_data_grouping_filter_query.py tests/test_tabular_analytics_service.py -q` - passed: 119 passed.
 - `python scripts/sync_release_metadata.py --check` - passed.
 - `python scripts/check_release_hygiene.py` - passed.
 - `python scripts/security_audit.py --ci --sibling-root /home/hexaf/Projects` - passed after rerun with network/tooling access for the pip-audit temporary environment. Remaining Bandit messages are report-only baseline warnings.

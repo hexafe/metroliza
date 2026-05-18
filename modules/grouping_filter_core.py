@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Any, Iterable, Literal, Protocol
+from typing import Any, Iterable, Literal, Mapping, Protocol
 
 import pandas as pd
 
@@ -17,18 +17,25 @@ import pandas as pd
 FilterMatchMode = Literal["and", "or"]
 
 _BLANK_GROUP_VALUE = "(blank)"
-_SYMBOLIC_FILTER_RE = re.compile(
-    r"^\s*(?P<column>.+?)\s*(?P<operator>>=|<=|!=|=|>|<)\s*(?P<value>.+?)\s*$"
-)
-_FILTER_JOIN_RE = re.compile(r"\s+(AND|OR)\s+", flags=re.IGNORECASE)
+
+FilterAliases = Mapping[str, str] | Iterable[tuple[str, str]]
 
 
 @dataclass(frozen=True)
 class ParsedFilterExpression:
-    """Parsed simple filter expression and match mode."""
+    """Parsed filter expression and compatibility flat spec view."""
 
     specs: tuple["DataFrameFilterSpec", ...]
     match_mode: FilterMatchMode
+    expression: "DataFrameFilterSpec | None" = None
+    expression_mode: bool = False
+
+    def mask(self, data_frame: pd.DataFrame) -> pd.Series:
+        """Return the parsed expression mask for ``data_frame``."""
+
+        if self.expression is not None:
+            return self.expression.mask(data_frame)
+        return build_filter_mask(data_frame, self.specs, match_mode=self.match_mode)
 
 
 def normalize_grouping_key(
@@ -277,6 +284,7 @@ class TextFilterSpec:
     operator: str
     value: str | None = None
     case_sensitive: bool = False
+    wildcards: bool = False
 
     def mask(self, data_frame: pd.DataFrame) -> pd.Series:
         _require_column(data_frame, self.column)
@@ -295,8 +303,12 @@ class TextFilterSpec:
         if operator == "not_contains":
             return ~text.str.contains(needle, regex=False, na=False)
         if operator == "equals":
+            if self.wildcards and _has_text_wildcard(needle):
+                return _wildcard_text_mask(text, needle)
             return text.eq(needle).fillna(False)
         if operator == "not_equals":
+            if self.wildcards and _has_text_wildcard(needle):
+                return ~_wildcard_text_mask(text, needle)
             return text.ne(needle).fillna(True)
         if operator == "starts_with":
             return text.str.startswith(needle, na=False)
@@ -433,40 +445,196 @@ def parse_filter_expression(
     columns: Iterable[str],
     *,
     dayfirst: bool = False,
+    aliases: FilterAliases | None = None,
 ) -> ParsedFilterExpression:
-    """Parse simple ``Column >= value AND Other = value`` filter expressions."""
+    """Parse ``Column >= value AND (Other = value OR Third != x*)`` expressions."""
 
     text = str(expression or "").strip()
     if not text:
         return ParsedFilterExpression(specs=(), match_mode="and")
-    parts = _FILTER_JOIN_RE.split(text)
-    terms = parts[0::2]
-    joiners = [part.lower() for part in parts[1::2]]
-    if "and" in joiners and "or" in joiners:
-        raise ValueError("Use only AND or only OR in one grouping filter expression.")
-    match_mode: FilterMatchMode = "or" if "or" in joiners else "and"
-    specs = tuple(
-        _parse_filter_term(term, columns, dayfirst=dayfirst)
-        for term in terms
-        if str(term or "").strip()
+
+    parser = _FilterExpressionParser(
+        _tokenize_filter_expression(text),
+        columns,
+        dayfirst=dayfirst,
+        aliases=aliases,
     )
-    return ParsedFilterExpression(specs=specs, match_mode=match_mode)
+    expression_spec = parser.parse()
+    specs, match_mode = _flatten_filter_expression(expression_spec)
+    return ParsedFilterExpression(
+        specs=specs,
+        match_mode=match_mode,
+        expression=expression_spec,
+        expression_mode=True,
+    )
 
 
-def _parse_filter_term(
-    term: str,
+def looks_like_filter_expression(expression: str) -> bool:
+    """Return whether text appears to contain symbolic filter expression syntax."""
+
+    text = str(expression or "")
+    if not text.strip():
+        return False
+    try:
+        return any(token.kind == "OP" for token in _tokenize_filter_expression(text))
+    except ValueError:
+        return _contains_symbolic_operator(text)
+
+
+def resolve_filter_column(
+    column: str,
+    columns: Iterable[str],
+    *,
+    aliases: FilterAliases | None = None,
+) -> str:
+    """Resolve a typed or displayed filter column name against DataFrame columns."""
+
+    requested = _undelimit_filter_field(str(column or "").strip())
+    column_list = tuple(str(item) for item in columns)
+    resolved = _find_column_match(requested, column_list)
+    if resolved is not None:
+        return resolved
+
+    requested_key = requested.casefold()
+    for alias, target in _iter_filter_aliases(aliases):
+        if str(alias).strip().casefold() != requested_key:
+            continue
+        target_text = str(target).strip()
+        resolved = _find_column_match(target_text, column_list)
+        if resolved is None:
+            raise KeyError(f"Filter alias {alias!r} points to missing DataFrame column: {target}")
+        return resolved
+
+    raise KeyError(f"DataFrame column not found: {requested}")
+
+
+@dataclass(frozen=True)
+class FilterExpressionGroup:
+    """Boolean expression group that can be used wherever a filter spec is accepted."""
+
+    operator: FilterMatchMode
+    children: tuple[DataFrameFilterSpec, ...]
+    column: str = ""
+
+    def mask(self, data_frame: pd.DataFrame) -> pd.Series:
+        return build_filter_mask(data_frame, self.children, match_mode=self.operator)
+
+
+@dataclass(frozen=True)
+class _FilterToken:
+    kind: str
+    value: str
+    position: int
+
+
+class _FilterExpressionParser:
+    def __init__(
+        self,
+        tokens: tuple[_FilterToken, ...],
+        columns: Iterable[str],
+        *,
+        dayfirst: bool,
+        aliases: FilterAliases | None,
+    ) -> None:
+        self._tokens = tokens
+        self._index = 0
+        self._columns = tuple(columns)
+        self._dayfirst = dayfirst
+        self._aliases = aliases
+
+    def parse(self) -> DataFrameFilterSpec:
+        if not self._tokens:
+            raise ValueError("Grouping filter expression is empty.")
+        expression = self._parse_or()
+        if self._peek() is not None:
+            token = self._peek()
+            raise ValueError(f"Unexpected token in grouping filter expression: {token.value}")
+        return expression
+
+    def _parse_or(self) -> DataFrameFilterSpec:
+        node = self._parse_and()
+        children = [node]
+        while self._match("OR") is not None:
+            children.append(self._parse_and())
+        if len(children) == 1:
+            return node
+        return FilterExpressionGroup("or", tuple(children))
+
+    def _parse_and(self) -> DataFrameFilterSpec:
+        node = self._parse_primary()
+        children = [node]
+        while self._match("AND") is not None:
+            children.append(self._parse_primary())
+        if len(children) == 1:
+            return node
+        return FilterExpressionGroup("and", tuple(children))
+
+    def _parse_primary(self) -> DataFrameFilterSpec:
+        if self._match("LPAREN") is not None:
+            expression = self._parse_or()
+            if self._match("RPAREN") is None:
+                raise ValueError("Missing closing ')' in grouping filter expression.")
+            return expression
+        return self._parse_condition()
+
+    def _parse_condition(self) -> DataFrameFilterSpec:
+        field_tokens: list[_FilterToken] = []
+        while (token := self._peek()) is not None and token.kind != "OP":
+            if token.kind in {"AND", "OR", "RPAREN", "LPAREN"}:
+                raise ValueError(f"Invalid grouping filter term near: {token.value}")
+            field_tokens.append(self._advance())
+        if not field_tokens:
+            raise ValueError("Missing field name in grouping filter expression.")
+        operator_token = self._match("OP")
+        if operator_token is None:
+            field = _tokens_to_filter_text(field_tokens)
+            raise ValueError(f"Missing operator for grouping filter field: {field}")
+
+        value_tokens: list[_FilterToken] = []
+        while (token := self._peek()) is not None and token.kind not in {"AND", "OR", "RPAREN"}:
+            if token.kind in {"LPAREN", "OP"}:
+                raise ValueError(f"Invalid grouping filter value near: {token.value}")
+            value_tokens.append(self._advance())
+        if not value_tokens:
+            field = _tokens_to_filter_text(field_tokens)
+            raise ValueError(f"Missing value for grouping filter field: {field}")
+
+        return _parse_filter_condition(
+            _tokens_to_filter_text(field_tokens),
+            operator_token.value,
+            _tokens_to_filter_text(value_tokens),
+            self._columns,
+            dayfirst=self._dayfirst,
+            aliases=self._aliases,
+        )
+
+    def _peek(self) -> _FilterToken | None:
+        if self._index >= len(self._tokens):
+            return None
+        return self._tokens[self._index]
+
+    def _advance(self) -> _FilterToken:
+        token = self._tokens[self._index]
+        self._index += 1
+        return token
+
+    def _match(self, kind: str) -> _FilterToken | None:
+        token = self._peek()
+        if token is None or token.kind != kind:
+            return None
+        return self._advance()
+
+
+def _parse_filter_condition(
+    column_text: str,
+    operator: str,
+    value: str,
     columns: Iterable[str],
     *,
     dayfirst: bool,
+    aliases: FilterAliases | None,
 ) -> DataFrameFilterSpec:
-    match = _SYMBOLIC_FILTER_RE.match(str(term or ""))
-    if match is None:
-        raise ValueError(f"Invalid grouping filter term: {term}")
-    column = _resolve_filter_column(match.group("column"), columns)
-    operator = match.group("operator")
-    value = match.group("value").strip()
-    if not value:
-        raise ValueError(f"Missing value for grouping filter term: {term}")
+    column = resolve_filter_column(column_text, columns, aliases=aliases)
 
     looks_date_like = bool(re.search(r"\d{4}", value) or any(marker in value for marker in ("-", "/", ":")))
     date_value = pd.to_datetime(pd.Series([value]), errors="coerce", dayfirst=dayfirst).iloc[0]
@@ -481,21 +649,222 @@ def _parse_filter_term(
     if not pd.isna(number_value):
         return NumberFilterSpec(column, _symbol_to_number_operator(operator), value)
     if operator in {"=", "!="}:
-        return TextFilterSpec(column, "equals" if operator == "=" else "not_equals", value)
+        return TextFilterSpec(
+            column,
+            "equals" if operator == "=" else "not_equals",
+            value,
+            wildcards=True,
+        )
     raise ValueError(f"Operator {operator} requires a numeric or date-like value.")
 
 
 def _resolve_filter_column(column: str, columns: Iterable[str]) -> str:
-    requested = str(column or "").strip()
-    column_list = tuple(str(item) for item in columns)
-    for candidate in column_list:
+    return resolve_filter_column(column, columns)
+
+
+def _tokenize_filter_expression(expression: str) -> tuple[_FilterToken, ...]:
+    tokens: list[_FilterToken] = []
+    index = 0
+    text = str(expression or "")
+    while index < len(text):
+        char = text[index]
+        if char.isspace():
+            index += 1
+            continue
+        if char == "(":
+            tokens.append(_FilterToken("LPAREN", char, index))
+            index += 1
+            continue
+        if char == ")":
+            tokens.append(_FilterToken("RPAREN", char, index))
+            index += 1
+            continue
+        two_char = text[index : index + 2]
+        if two_char in {">=", "<=", "!="}:
+            tokens.append(_FilterToken("OP", two_char, index))
+            index += 2
+            continue
+        if char in {"=", ">", "<"}:
+            tokens.append(_FilterToken("OP", char, index))
+            index += 1
+            continue
+        if char in {"'", '"'}:
+            value, index = _read_quoted_filter_text(text, index, char, "quoted value")
+            tokens.append(_FilterToken("VALUE", value, index))
+            continue
+        if char == "`":
+            value, index = _read_quoted_filter_text(text, index, char, "backtick field")
+            tokens.append(_FilterToken("IDENT", value, index))
+            continue
+        if char == "[":
+            value, index = _read_bracket_filter_text(text, index)
+            tokens.append(_FilterToken("IDENT", value, index))
+            continue
+
+        start = index
+        while index < len(text):
+            current = text[index]
+            if current.isspace() or current in {"(", ")", "`", "[", "'", '"', "=", ">", "<"}:
+                break
+            if current == "!" and index + 1 < len(text) and text[index + 1] == "=":
+                break
+            index += 1
+        value = text[start:index]
+        if not value:
+            raise ValueError(f"Invalid character in grouping filter expression: {char}")
+        keyword = value.casefold()
+        if keyword == "and":
+            tokens.append(_FilterToken("AND", value, start))
+        elif keyword == "or":
+            tokens.append(_FilterToken("OR", value, start))
+        else:
+            tokens.append(_FilterToken("WORD", value, start))
+    return tuple(tokens)
+
+
+def _read_quoted_filter_text(
+    text: str,
+    start: int,
+    quote: str,
+    label: str,
+) -> tuple[str, int]:
+    value: list[str] = []
+    index = start + 1
+    while index < len(text):
+        char = text[index]
+        if char == "\\" and index + 1 < len(text):
+            value.append(text[index + 1])
+            index += 2
+            continue
+        if char == quote:
+            if index + 1 < len(text) and text[index + 1] == quote:
+                value.append(quote)
+                index += 2
+                continue
+            return "".join(value), index + 1
+        value.append(char)
+        index += 1
+    raise ValueError(f"Unterminated {label} in grouping filter expression.")
+
+
+def _read_bracket_filter_text(text: str, start: int) -> tuple[str, int]:
+    value: list[str] = []
+    index = start + 1
+    while index < len(text):
+        char = text[index]
+        if char == "]":
+            if index + 1 < len(text) and text[index + 1] == "]":
+                value.append(char)
+                index += 2
+                continue
+            return "".join(value), index + 1
+        value.append(char)
+        index += 1
+    raise ValueError("Unterminated bracket field in grouping filter expression.")
+
+
+def _tokens_to_filter_text(tokens: Iterable[_FilterToken]) -> str:
+    return " ".join(token.value for token in tokens).strip()
+
+
+def _flatten_filter_expression(
+    expression: DataFrameFilterSpec,
+) -> tuple[tuple[DataFrameFilterSpec, ...], FilterMatchMode]:
+    if isinstance(expression, FilterExpressionGroup):
+        leaves = _collect_flat_expression_leaves(expression, expression.operator)
+        if leaves is not None:
+            return tuple(leaves), expression.operator
+    return (expression,), "and"
+
+
+def _collect_flat_expression_leaves(
+    expression: DataFrameFilterSpec,
+    operator: FilterMatchMode,
+) -> list[DataFrameFilterSpec] | None:
+    if not isinstance(expression, FilterExpressionGroup):
+        return [expression]
+    if expression.operator != operator:
+        return None
+
+    leaves: list[DataFrameFilterSpec] = []
+    for child in expression.children:
+        child_leaves = _collect_flat_expression_leaves(child, operator)
+        if child_leaves is None:
+            return None
+        leaves.extend(child_leaves)
+    return leaves
+
+
+def _iter_filter_aliases(aliases: FilterAliases | None) -> tuple[tuple[str, str], ...]:
+    if aliases is None:
+        return ()
+    if isinstance(aliases, Mapping):
+        return tuple((str(alias), str(target)) for alias, target in aliases.items())
+    return tuple((str(alias), str(target)) for alias, target in aliases)
+
+
+def _find_column_match(requested: str, columns: Iterable[str]) -> str | None:
+    for candidate in columns:
         if candidate == requested:
             return candidate
     requested_key = requested.casefold()
-    for candidate in column_list:
+    for candidate in columns:
         if candidate.casefold() == requested_key:
             return candidate
-    raise KeyError(f"DataFrame column not found: {requested}")
+    return None
+
+
+def _undelimit_filter_field(field: str) -> str:
+    text = str(field or "").strip()
+    if len(text) >= 2 and text[0] == "`" and text[-1] == "`":
+        return text[1:-1].replace("``", "`").strip()
+    if len(text) >= 2 and text[0] == "[" and text[-1] == "]":
+        return text[1:-1].replace("]]", "]").strip()
+    return text
+
+
+def _contains_symbolic_operator(expression: str) -> bool:
+    in_quote: str | None = None
+    in_backtick = False
+    in_bracket = False
+    for index, char in enumerate(expression):
+        if in_quote is not None:
+            if char == "\\":
+                continue
+            if char == in_quote:
+                in_quote = None
+            continue
+        if in_backtick:
+            if char == "`":
+                in_backtick = False
+            continue
+        if in_bracket:
+            if char == "]":
+                in_bracket = False
+            continue
+        if char in {"'", '"'}:
+            in_quote = char
+            continue
+        if char == "`":
+            in_backtick = True
+            continue
+        if char == "[":
+            in_bracket = True
+            continue
+        if char in {"=", ">", "<"}:
+            return True
+        if char == "!" and index + 1 < len(expression) and expression[index + 1] == "=":
+            return True
+    return False
+
+
+def _has_text_wildcard(value: str) -> bool:
+    return "*" in str(value)
+
+
+def _wildcard_text_mask(text: pd.Series, pattern: str) -> pd.Series:
+    regex = "^" + ".*".join(re.escape(part) for part in str(pattern).split("*")) + "$"
+    return text.str.match(regex, na=False)
 
 
 def _symbol_to_number_operator(operator: str) -> str:

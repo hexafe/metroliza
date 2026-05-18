@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -28,6 +29,13 @@ from modules.industrial_analytics_service import (
 from modules.industrial_analytics_state import ProductionChartSelection
 from modules.industrial_analytics_workbook import groupstats_result_dataframe
 from modules.industrial_analytics_workbook_charts import add_analytics_workbook_charts
+
+try:
+    from modules.grouping_filter_core import (
+        parse_filter_expression as _parse_grouping_filter_expression,
+    )
+except ImportError:  # pragma: no cover - compatibility for older forks without the shared core.
+    _parse_grouping_filter_expression = None
 
 
 _SAFE_COLUMN_RE = re.compile(r"[^A-Za-z0-9_]+")
@@ -62,6 +70,52 @@ TABULAR_SQLITE_PREVIEW_ROWS = 5_000
 _TABULAR_SQLITE_TABLE = "tabular_rows"
 _TABULAR_NUMERIC_OPERATORS = frozenset({"=", "!=", ">", ">=", "<", "<="})
 _TABULAR_DATE_OPERATORS = _TABULAR_NUMERIC_OPERATORS
+_SQLITE_TEXT_FILTER_OPERATORS = frozenset(
+    {
+        "contains",
+        "not_contains",
+        "equals",
+        "eq",
+        "not_equals",
+        "ne",
+        "starts_with",
+        "ends_with",
+        "is_blank",
+        "is_not_blank",
+    }
+)
+_SQLITE_NUMBER_OPERATOR_SQL = {
+    "equals": "=",
+    "eq": "=",
+    "not_equals": "!=",
+    "ne": "!=",
+    "greater_than": ">",
+    "gt": ">",
+    "greater_or_equal": ">=",
+    "gte": ">=",
+    "less_than": "<",
+    "lt": "<",
+    "less_or_equal": "<=",
+    "lte": "<=",
+}
+_SQLITE_DATE_OPERATOR_SQL = {
+    "on": "=",
+    "equals": "=",
+    "eq": "=",
+    "not_on": "!=",
+    "not_equals": "!=",
+    "ne": "!=",
+    "before": "<",
+    "lt": "<",
+    "on_or_before": "<=",
+    "lte": "<=",
+    "after": ">",
+    "gt": ">",
+    "on_or_after": ">=",
+    "gte": ">=",
+}
+_COMPILED_SQLITE_FILTER_SQL_ATTRS = ("clause", "where_sql", "sqlite_where_sql", "sql")
+_COMPILED_SQLITE_FILTER_COLUMN_ATTRS = ("columns", "referenced_columns", "source_columns")
 
 
 @dataclass(frozen=True)
@@ -77,6 +131,21 @@ class TabularSourceSnapshot:
 
 
 @dataclass(frozen=True)
+class TabularSqliteFilterExpression:
+    """Safe SQLite predicate fragment for shared inline grouping filters.
+
+    Expected integration points:
+    - pass this object as ``grouping_filter`` after compiling shared filter specs;
+    - pass a shared ``ParsedFilterExpression`` or spec iterable as ``grouping_filter``;
+    - pass raw ``grouping_filter_expression`` plus aliases and let this module parse it.
+    """
+
+    clause: str = ""
+    params: tuple[Any, ...] = ()
+    columns: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class TabularSqliteStore:
     """File-backed row store for multi-file or large CSV Summary inputs."""
 
@@ -86,6 +155,7 @@ class TabularSqliteStore:
     source_columns: tuple[str, ...]
     row_count: int
     date_filter_columns: dict[str, str] = field(default_factory=dict)
+    _grouping_index_columns: set[str] = field(default_factory=set, init=False, repr=False, compare=False)
 
     def cleanup(self) -> None:
         for candidate in (Path(self.path), Path(f"{self.path}-wal"), Path(f"{self.path}-shm")):
@@ -104,6 +174,9 @@ class TabularSqliteStore:
         column_filter_match_mode: str = "and",
         columns: tuple[str, ...] | list[str] | None = None,
         limit: int | None = None,
+        grouping_filter: Any = None,
+        grouping_filter_expression: str | None = None,
+        grouping_filter_aliases: Mapping[str, str] | None = None,
     ) -> pd.DataFrame:
         select_columns = _normalized_tabular_required_columns(self.columns, columns)
         where_sql, params = self._where_clause(
@@ -112,6 +185,9 @@ class TabularSqliteStore:
             base_column_filters=base_column_filters,
             column_filters=column_filters,
             column_filter_match_mode=column_filter_match_mode,
+            grouping_filter=grouping_filter,
+            grouping_filter_expression=grouping_filter_expression,
+            grouping_filter_aliases=grouping_filter_aliases,
         )
         query = (
             f"SELECT {', '.join(_quote_identifier(column) for column in select_columns)} "
@@ -131,6 +207,9 @@ class TabularSqliteStore:
         base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
         column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
         column_filter_match_mode: str = "and",
+        grouping_filter: Any = None,
+        grouping_filter_expression: str | None = None,
+        grouping_filter_aliases: Mapping[str, str] | None = None,
     ) -> int:
         where_sql, params = self._where_clause(
             filter_columns=filter_columns,
@@ -138,6 +217,9 @@ class TabularSqliteStore:
             base_column_filters=base_column_filters,
             column_filters=column_filters,
             column_filter_match_mode=column_filter_match_mode,
+            grouping_filter=grouping_filter,
+            grouping_filter_expression=grouping_filter_expression,
+            grouping_filter_aliases=grouping_filter_aliases,
         )
         query = f"SELECT COUNT(*) FROM {_quote_identifier(self.table_name)}{where_sql}"
         with sqlite_connection_scope(self.path) as connection:
@@ -152,6 +234,9 @@ class TabularSqliteStore:
         base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
         column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
         column_filter_match_mode: str = "and",
+        grouping_filter: Any = None,
+        grouping_filter_expression: str | None = None,
+        grouping_filter_aliases: Mapping[str, str] | None = None,
     ) -> list[int]:
         where_sql, params = self._where_clause(
             filter_columns=filter_columns,
@@ -159,6 +244,9 @@ class TabularSqliteStore:
             base_column_filters=base_column_filters,
             column_filters=column_filters,
             column_filter_match_mode=column_filter_match_mode,
+            grouping_filter=grouping_filter,
+            grouping_filter_expression=grouping_filter_expression,
+            grouping_filter_aliases=grouping_filter_aliases,
         )
         query = (
             f"SELECT {_quote_identifier('source_row_number')} "
@@ -174,12 +262,23 @@ class TabularSqliteStore:
         *,
         search_text: str = "",
         limit: int | None = None,
+        grouping_filter: Any = None,
+        grouping_filter_expression: str | None = None,
+        grouping_filter_aliases: Mapping[str, str] | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         if column not in self.columns:
             return [], 0
+        self._ensure_grouping_column_indexes((column,))
         value_expr = _sqlite_normalized_value_expr(column)
         where_parts: list[str] = []
-        params: list[Any] = []
+        filter_where, params = self._where_clause(
+            grouping_filter=grouping_filter,
+            grouping_filter_expression=grouping_filter_expression,
+            grouping_filter_aliases=grouping_filter_aliases,
+        )
+        filter_clause = filter_where.removeprefix(" WHERE ")
+        if filter_clause:
+            where_parts.append(filter_clause)
         search = str(search_text or "").strip().casefold()
         if search:
             where_parts.append(f"LOWER({value_expr}) LIKE ? ESCAPE '\\'")
@@ -217,10 +316,14 @@ class TabularSqliteStore:
         base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
         column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
         column_filter_match_mode: str = "and",
+        grouping_filter: Any = None,
+        grouping_filter_expression: str | None = None,
+        grouping_filter_aliases: Mapping[str, str] | None = None,
     ) -> tuple[tuple[str, ...], ...]:
         normalized_columns = tuple(str(column) for column in columns if str(column) in self.columns)
         if not normalized_columns:
             return ()
+        self._ensure_grouping_column_indexes(normalized_columns)
         expressions = [
             f"{_sqlite_normalized_value_expr(column)} AS {_quote_identifier(f'key_{index}')}"
             for index, column in enumerate(normalized_columns)
@@ -229,6 +332,9 @@ class TabularSqliteStore:
             base_column_filters=base_column_filters,
             column_filters=column_filters,
             column_filter_match_mode=column_filter_match_mode,
+            grouping_filter=grouping_filter,
+            grouping_filter_expression=grouping_filter_expression,
+            grouping_filter_aliases=grouping_filter_aliases,
         )
         query = (
             f"SELECT DISTINCT {', '.join(expressions)} "
@@ -251,10 +357,14 @@ class TabularSqliteStore:
         search_text: str = "",
         offset: int = 0,
         limit: int | None = None,
+        grouping_filter: Any = None,
+        grouping_filter_expression: str | None = None,
+        grouping_filter_aliases: Mapping[str, str] | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         normalized_columns = tuple(str(column) for column in columns if str(column) in self.columns)
         if not normalized_columns:
             return [], 0
+        self._ensure_grouping_column_indexes(normalized_columns)
         aliases = tuple(f"key_{index}" for index, _column in enumerate(normalized_columns))
         select_exprs = [
             f"{_sqlite_normalized_value_expr(column)} AS {_quote_identifier(alias)}"
@@ -266,6 +376,9 @@ class TabularSqliteStore:
             base_column_filters=base_column_filters,
             column_filters=column_filters,
             column_filter_match_mode=column_filter_match_mode,
+            grouping_filter=grouping_filter,
+            grouping_filter_expression=grouping_filter_expression,
+            grouping_filter_aliases=grouping_filter_aliases,
         )
         inner_query = (
             f"SELECT {', '.join(select_exprs)} "
@@ -319,6 +432,9 @@ class TabularSqliteStore:
         base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
         column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
         column_filter_match_mode: str = "and",
+        grouping_filter: Any = None,
+        grouping_filter_expression: str | None = None,
+        grouping_filter_aliases: Mapping[str, str] | None = None,
     ) -> list[int]:
         where_sql, params = self._where_clause_for_group_keys(
             columns,
@@ -328,6 +444,9 @@ class TabularSqliteStore:
             base_column_filters=base_column_filters,
             column_filters=column_filters,
             column_filter_match_mode=column_filter_match_mode,
+            grouping_filter=grouping_filter,
+            grouping_filter_expression=grouping_filter_expression,
+            grouping_filter_aliases=grouping_filter_aliases,
         )
         if not where_sql:
             return []
@@ -349,6 +468,9 @@ class TabularSqliteStore:
         base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
         column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
         column_filter_match_mode: str = "and",
+        grouping_filter: Any = None,
+        grouping_filter_expression: str | None = None,
+        grouping_filter_aliases: Mapping[str, str] | None = None,
     ) -> int:
         where_sql, params = self._where_clause_for_group_keys(
             columns,
@@ -358,6 +480,9 @@ class TabularSqliteStore:
             base_column_filters=base_column_filters,
             column_filters=column_filters,
             column_filter_match_mode=column_filter_match_mode,
+            grouping_filter=grouping_filter,
+            grouping_filter_expression=grouping_filter_expression,
+            grouping_filter_aliases=grouping_filter_aliases,
         )
         if not where_sql:
             return 0
@@ -374,6 +499,9 @@ class TabularSqliteStore:
         base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
         column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
         column_filter_match_mode: str = "and",
+        grouping_filter: Any = None,
+        grouping_filter_expression: str | None = None,
+        grouping_filter_aliases: Mapping[str, str] | None = None,
     ) -> int:
         normalized_ids = tuple(
             dict.fromkeys(
@@ -390,6 +518,9 @@ class TabularSqliteStore:
             base_column_filters=base_column_filters,
             column_filters=column_filters,
             column_filter_match_mode=column_filter_match_mode,
+            grouping_filter=grouping_filter,
+            grouping_filter_expression=grouping_filter_expression,
+            grouping_filter_aliases=grouping_filter_aliases,
         )
         filter_clause = filter_where.removeprefix(" WHERE ")
         row_column = _quote_identifier("source_row_number")
@@ -440,20 +571,7 @@ class TabularSqliteStore:
         if column_filter.has_numeric_filter:
             numeric_value = _parse_tabular_filter_number(column_filter.numeric_value)
             if numeric_value is not None and column_filter.numeric_operator in _TABULAR_NUMERIC_OPERATORS:
-                identifier = _quote_identifier(column_filter.column)
-                text_expr = f"TRIM(CAST({identifier} AS TEXT))"
-                json_type_expr = (
-                    f"CASE WHEN json_valid({text_expr}) THEN json_type({text_expr}) ELSE NULL END"
-                )
-                numeric_guard = (
-                    f"{text_expr} != '' AND ("
-                    f"{json_type_expr} IN ('integer', 'real') "
-                    f"OR ({text_expr} NOT GLOB '*[^0-9]*') "
-                    f"OR (substr({text_expr}, 1, 1) IN ('+', '-') "
-                    f"AND substr({text_expr}, 2) != '' "
-                    f"AND substr({text_expr}, 2) NOT GLOB '*[^0-9]*')"
-                    ")"
-                )
+                text_expr, numeric_guard = _sqlite_numeric_text_and_guard(column_filter.column)
                 filter_clauses.append(
                     f"(({numeric_guard}) AND CAST({text_expr} AS REAL) "
                     f"{column_filter.numeric_operator} ?)"
@@ -508,6 +626,9 @@ class TabularSqliteStore:
         base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
         column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
         column_filter_match_mode: str = "and",
+        grouping_filter: Any = None,
+        grouping_filter_expression: str | None = None,
+        grouping_filter_aliases: Mapping[str, str] | None = None,
     ) -> tuple[str, list[Any]]:
         clauses: list[str] = []
         params: list[Any] = []
@@ -536,6 +657,16 @@ class TabularSqliteStore:
                 clauses.append(f"({joiner.join(grouped_clauses)})")
                 params.extend(grouped_params)
 
+        compiled_grouping_filter = self._sqlite_grouping_filter(
+            grouping_filter=grouping_filter,
+            grouping_filter_expression=grouping_filter_expression,
+            grouping_filter_aliases=grouping_filter_aliases,
+        )
+        if compiled_grouping_filter.clause:
+            clauses.append(compiled_grouping_filter.clause)
+            params.extend(compiled_grouping_filter.params)
+            self._ensure_grouping_column_indexes(compiled_grouping_filter.columns)
+
         columns = tuple(str(column) for column in (filter_columns or ()) if str(column) in self.columns)
         selected_keys = tuple(
             tuple(str(part) for part in key)
@@ -543,6 +674,7 @@ class TabularSqliteStore:
             if isinstance(key, (list, tuple)) and len(key) == len(columns)
         )
         if columns and selected_keys:
+            self._ensure_grouping_column_indexes(columns)
             key_clauses: list[str] = []
             for key in selected_keys:
                 parts = []
@@ -563,6 +695,9 @@ class TabularSqliteStore:
         base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
         column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
         column_filter_match_mode: str = "and",
+        grouping_filter: Any = None,
+        grouping_filter_expression: str | None = None,
+        grouping_filter_aliases: Mapping[str, str] | None = None,
     ) -> tuple[str, list[Any]]:
         normalized_columns = tuple(str(column) for column in columns if str(column) in self.columns)
         selected_keys = tuple(
@@ -572,12 +707,16 @@ class TabularSqliteStore:
         )
         if not normalized_columns or not selected_keys:
             return "", []
+        self._ensure_grouping_column_indexes(normalized_columns)
         filter_where, params = self._where_clause(
             filter_columns=filter_columns,
             selected_filter_keys=selected_filter_keys,
             base_column_filters=base_column_filters,
             column_filters=column_filters,
             column_filter_match_mode=column_filter_match_mode,
+            grouping_filter=grouping_filter,
+            grouping_filter_expression=grouping_filter_expression,
+            grouping_filter_aliases=grouping_filter_aliases,
         )
         clauses: list[str] = []
         if filter_where:
@@ -594,6 +733,34 @@ class TabularSqliteStore:
 
     def _sqlite_date_filter_expr(self, column: str) -> str:
         return f"date({_quote_identifier(self.date_filter_columns.get(column, column))})"
+
+    def _sqlite_grouping_filter(
+        self,
+        *,
+        grouping_filter: Any = None,
+        grouping_filter_expression: str | None = None,
+        grouping_filter_aliases: Mapping[str, str] | None = None,
+    ) -> TabularSqliteFilterExpression:
+        return compile_tabular_sqlite_grouping_filter(
+            self.columns,
+            grouping_filter,
+            grouping_filter_expression=grouping_filter_expression,
+            grouping_filter_aliases=grouping_filter_aliases,
+            date_filter_columns=self.date_filter_columns,
+        )
+
+    def _ensure_grouping_column_indexes(self, columns: tuple[str, ...] | list[str]) -> None:
+        normalized_columns = tuple(
+            dict.fromkeys(str(column) for column in columns if str(column) in self.columns)
+        )
+        pending = tuple(
+            column for column in normalized_columns if column not in self._grouping_index_columns
+        )
+        if not pending:
+            return
+        with sqlite_connection_scope(self.path) as connection:
+            _create_sqlite_grouping_indexes(connection, self.table_name, pending)
+        self._grouping_index_columns.update(pending)
 
 
 @dataclass(frozen=True)
@@ -1302,6 +1469,7 @@ def _create_sqlite_indexes(
     columns: tuple[str, ...],
 ) -> None:
     seen: set[str] = set()
+    created = False
     for column in columns:
         if column not in seen:
             seen.add(column)
@@ -1312,6 +1480,33 @@ def _create_sqlite_indexes(
             f"CREATE INDEX IF NOT EXISTS {_quote_identifier(index_name)} "
             f"ON {_quote_identifier(table_name)} ({_quote_identifier(column)})"
         )
+        created = True
+    if created:
+        connection.execute("PRAGMA optimize")
+
+
+def _create_sqlite_grouping_indexes(
+    connection: sqlite3.Connection,
+    table_name: str,
+    columns: tuple[str, ...],
+) -> None:
+    seen: set[str] = set()
+    created = False
+    for column in columns:
+        if column in seen:
+            continue
+        seen.add(column)
+        index_name = (
+            f"idx_{_safe_column_name(table_name, fallback='table')}_"
+            f"group_{_safe_column_name(column, fallback='column')}"
+        )
+        connection.execute(
+            f"CREATE INDEX IF NOT EXISTS {_quote_identifier(index_name)} "
+            f"ON {_quote_identifier(table_name)} ({_sqlite_normalized_value_expr(column)})"
+        )
+        created = True
+    if created:
+        connection.execute("PRAGMA optimize")
 
 
 def _update_metric_stats(
@@ -1758,15 +1953,591 @@ def _quote_identifier(value: str) -> str:
     return f'"{str(value).replace(chr(34), chr(34) * 2)}"'
 
 
-def _sqlite_like_pattern(value: str) -> str:
-    text = str(value or "").casefold()
+def _sqlite_like_pattern(
+    value: str,
+    *,
+    match_mode: str = "contains",
+    casefold: bool = True,
+) -> str:
+    text = str(value or "")
+    if casefold:
+        text = text.casefold()
     escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    if match_mode == "starts_with":
+        return f"{escaped}%"
+    if match_mode == "ends_with":
+        return f"%{escaped}"
     return f"%{escaped}%"
 
 
 def _sqlite_normalized_value_expr(column: str) -> str:
     identifier = _quote_identifier(column)
     return f"COALESCE(NULLIF(TRIM(CAST({identifier} AS TEXT)), ''), '(blank)')"
+
+
+def compile_tabular_sqlite_grouping_filter(
+    available_columns: Iterable[str],
+    grouping_filter: Any = None,
+    *,
+    grouping_filter_expression: str | None = None,
+    grouping_filter_aliases: Mapping[str, str] | None = None,
+    date_filter_columns: Mapping[str, str] | None = None,
+) -> TabularSqliteFilterExpression:
+    """Compile shared grouping filters into a SQLite predicate fragment.
+
+    The returned object contains a WHERE-clause fragment without the ``WHERE`` keyword.
+    Column names are resolved against ``available_columns`` or explicit aliases, and
+    user values are always emitted as bound parameters.
+    """
+
+    columns = tuple(str(column) for column in available_columns)
+    aliases = _normalize_sqlite_filter_aliases(columns, grouping_filter_aliases)
+    compiled_filters: list[TabularSqliteFilterExpression] = []
+
+    if grouping_filter is not None:
+        compiled_filters.extend(
+            _compile_sqlite_grouping_filter_input(
+                grouping_filter,
+                columns=columns,
+                aliases=aliases,
+                date_filter_columns=date_filter_columns,
+            )
+        )
+
+    raw_expression = str(grouping_filter_expression or "").strip()
+    if raw_expression:
+        if _parse_grouping_filter_expression is None:
+            raise RuntimeError(
+                "Raw SQLite grouping filter expressions require "
+                "modules.grouping_filter_core.parse_filter_expression."
+            )
+        parse_columns = tuple(dict.fromkeys((*columns, *aliases.keys())))
+        parsed_filter = _parse_grouping_filter_expression(
+            raw_expression,
+            parse_columns,
+            aliases=aliases,
+        )
+        compiled_filters.extend(
+            _compile_sqlite_grouping_filter_input(
+                parsed_filter,
+                columns=columns,
+                aliases=aliases,
+                date_filter_columns=date_filter_columns,
+            )
+        )
+
+    return _combine_sqlite_filter_expressions(compiled_filters, joiner="AND")
+
+
+def _compile_sqlite_grouping_filter_input(
+    grouping_filter: Any,
+    *,
+    columns: tuple[str, ...],
+    aliases: Mapping[str, str],
+    date_filter_columns: Mapping[str, str] | None,
+) -> tuple[TabularSqliteFilterExpression, ...]:
+    if isinstance(grouping_filter, TabularSqliteFilterExpression):
+        return (
+            _validate_compiled_sqlite_filter(
+                grouping_filter,
+                columns=columns,
+                aliases=aliases,
+                date_filter_columns=date_filter_columns,
+            ),
+        )
+    if isinstance(grouping_filter, str):
+        return (
+            compile_tabular_sqlite_grouping_filter(
+                columns,
+                grouping_filter_expression=grouping_filter,
+                grouping_filter_aliases=aliases,
+                date_filter_columns=date_filter_columns,
+            ),
+        )
+    compiled_sql_filter = _compiled_sqlite_filter_from_object(
+        grouping_filter,
+        columns=columns,
+        aliases=aliases,
+        date_filter_columns=date_filter_columns,
+    )
+    if compiled_sql_filter is not None:
+        return (compiled_sql_filter,)
+
+    if hasattr(grouping_filter, "specs"):
+        expression = getattr(grouping_filter, "expression", None)
+        if expression is not None:
+            return (
+                _compile_sqlite_filter_spec(
+                    expression,
+                    columns=columns,
+                    aliases=aliases,
+                    date_filter_columns=date_filter_columns,
+                ),
+            )
+        return (
+            _compile_sqlite_filter_specs(
+                getattr(grouping_filter, "specs"),
+                match_mode=getattr(grouping_filter, "match_mode", "and"),
+                columns=columns,
+                aliases=aliases,
+                date_filter_columns=date_filter_columns,
+            ),
+        )
+
+    if _is_filter_spec_iterable(grouping_filter):
+        return (
+            _compile_sqlite_filter_specs(
+                grouping_filter,
+                match_mode=getattr(grouping_filter, "match_mode", "and"),
+                columns=columns,
+                aliases=aliases,
+                date_filter_columns=date_filter_columns,
+            ),
+        )
+
+    return (
+        _compile_sqlite_filter_specs(
+            (grouping_filter,),
+            match_mode="and",
+            columns=columns,
+            aliases=aliases,
+            date_filter_columns=date_filter_columns,
+        ),
+    )
+
+
+def _compile_sqlite_filter_specs(
+    specs: Iterable[Any],
+    *,
+    match_mode: str,
+    columns: tuple[str, ...],
+    aliases: Mapping[str, str],
+    date_filter_columns: Mapping[str, str] | None,
+) -> TabularSqliteFilterExpression:
+    compiled_terms: list[TabularSqliteFilterExpression] = []
+    for spec in specs or ():
+        compiled_terms.append(
+            _compile_sqlite_filter_spec(
+                spec,
+                columns=columns,
+                aliases=aliases,
+                date_filter_columns=date_filter_columns,
+            )
+        )
+    mode = "OR" if str(match_mode or "").strip().casefold() == "or" else "AND"
+    return _combine_sqlite_filter_expressions(compiled_terms, joiner=mode)
+
+
+def _compile_sqlite_filter_spec(
+    spec: Any,
+    *,
+    columns: tuple[str, ...],
+    aliases: Mapping[str, str],
+    date_filter_columns: Mapping[str, str] | None,
+) -> TabularSqliteFilterExpression:
+    children = getattr(spec, "children", None)
+    operator = str(getattr(spec, "operator", "")).strip().casefold()
+    if children is not None and operator in {"and", "or"}:
+        compiled_children = [
+            _compile_sqlite_filter_spec(
+                child,
+                columns=columns,
+                aliases=aliases,
+                date_filter_columns=date_filter_columns,
+            )
+            for child in children
+        ]
+        return _combine_sqlite_filter_expressions(
+            compiled_children,
+            joiner="OR" if operator == "or" else "AND",
+        )
+    column = _resolve_sqlite_filter_column(getattr(spec, "column", ""), columns, aliases)
+    spec_type = _sqlite_filter_spec_type(spec, operator)
+    if spec_type == "text":
+        return _compile_sqlite_text_filter_spec(spec, column, operator)
+    if spec_type == "number":
+        return _compile_sqlite_number_filter_spec(spec, column, operator)
+    if spec_type == "date":
+        return _compile_sqlite_date_filter_spec(spec, column, operator, date_filter_columns)
+    raise TypeError(f"Unsupported SQLite grouping filter spec: {type(spec).__name__}")
+
+
+def _compile_sqlite_text_filter_spec(
+    spec: Any,
+    column: str,
+    operator: str,
+) -> TabularSqliteFilterExpression:
+    if operator not in _SQLITE_TEXT_FILTER_OPERATORS:
+        raise ValueError(f"Unsupported text filter operator: {operator}")
+    identifier = _quote_identifier(column)
+    text_expr = f"CAST({identifier} AS TEXT)"
+    case_sensitive = bool(getattr(spec, "case_sensitive", False))
+    compare_expr = text_expr if case_sensitive else f"LOWER({text_expr})"
+    value = "" if getattr(spec, "value", None) is None else str(getattr(spec, "value"))
+    compare_value = value if case_sensitive else value.casefold()
+
+    if operator == "contains":
+        return TabularSqliteFilterExpression(
+            clause=f"({identifier} IS NOT NULL AND {compare_expr} LIKE ? ESCAPE '\\')",
+            params=(
+                _sqlite_like_pattern(compare_value, match_mode="contains", casefold=False),
+            ),
+            columns=(column,),
+        )
+    if operator == "not_contains":
+        return TabularSqliteFilterExpression(
+            clause=f"({identifier} IS NULL OR {compare_expr} NOT LIKE ? ESCAPE '\\')",
+            params=(
+                _sqlite_like_pattern(compare_value, match_mode="contains", casefold=False),
+            ),
+            columns=(column,),
+        )
+    if operator in {"equals", "eq"}:
+        if bool(getattr(spec, "wildcards", False)) and "*" in compare_value:
+            return TabularSqliteFilterExpression(
+                clause=f"({identifier} IS NOT NULL AND {compare_expr} LIKE ? ESCAPE '\\')",
+                params=(_sqlite_wildcard_like_pattern(compare_value),),
+                columns=(column,),
+            )
+        return TabularSqliteFilterExpression(
+            clause=f"({identifier} IS NOT NULL AND {compare_expr} = ?)",
+            params=(compare_value,),
+            columns=(column,),
+        )
+    if operator in {"not_equals", "ne"}:
+        if bool(getattr(spec, "wildcards", False)) and "*" in compare_value:
+            return TabularSqliteFilterExpression(
+                clause=f"({identifier} IS NULL OR {compare_expr} NOT LIKE ? ESCAPE '\\')",
+                params=(_sqlite_wildcard_like_pattern(compare_value),),
+                columns=(column,),
+            )
+        return TabularSqliteFilterExpression(
+            clause=f"({identifier} IS NULL OR {compare_expr} != ?)",
+            params=(compare_value,),
+            columns=(column,),
+        )
+    if operator == "starts_with":
+        return TabularSqliteFilterExpression(
+            clause=f"({identifier} IS NOT NULL AND {compare_expr} LIKE ? ESCAPE '\\')",
+            params=(
+                _sqlite_like_pattern(compare_value, match_mode="starts_with", casefold=False),
+            ),
+            columns=(column,),
+        )
+    if operator == "ends_with":
+        return TabularSqliteFilterExpression(
+            clause=f"({identifier} IS NOT NULL AND {compare_expr} LIKE ? ESCAPE '\\')",
+            params=(
+                _sqlite_like_pattern(compare_value, match_mode="ends_with", casefold=False),
+            ),
+            columns=(column,),
+        )
+    if operator == "is_blank":
+        return TabularSqliteFilterExpression(
+            clause=f"({identifier} IS NULL OR TRIM({text_expr}) = '')",
+            columns=(column,),
+        )
+    return TabularSqliteFilterExpression(
+        clause=f"({identifier} IS NOT NULL AND TRIM({text_expr}) != '')",
+        columns=(column,),
+    )
+
+
+def _compile_sqlite_number_filter_spec(
+    spec: Any,
+    column: str,
+    operator: str,
+) -> TabularSqliteFilterExpression:
+    text_expr, numeric_guard = _sqlite_numeric_text_and_guard(column)
+    if operator == "is_blank":
+        return TabularSqliteFilterExpression(clause=f"(NOT ({numeric_guard}))", columns=(column,))
+    if operator == "is_not_blank":
+        return TabularSqliteFilterExpression(clause=f"({numeric_guard})", columns=(column,))
+
+    if operator == "between":
+        value = _sqlite_filter_number_value(getattr(spec, "value", None), field_name="value")
+        second_value = _sqlite_filter_number_value(
+            getattr(spec, "second_value", None),
+            field_name="second_value",
+        )
+        lower, upper = sorted((value, second_value))
+        return TabularSqliteFilterExpression(
+            clause=f"(({numeric_guard}) AND CAST({text_expr} AS REAL) BETWEEN ? AND ?)",
+            params=(lower, upper),
+            columns=(column,),
+        )
+
+    sql_operator = _SQLITE_NUMBER_OPERATOR_SQL.get(operator)
+    if sql_operator is None:
+        raise ValueError(f"Unsupported number filter operator: {operator}")
+    value = _sqlite_filter_number_value(getattr(spec, "value", None), field_name="value")
+    if sql_operator == "!=":
+        clause = f"((NOT ({numeric_guard})) OR CAST({text_expr} AS REAL) != ?)"
+    else:
+        clause = f"(({numeric_guard}) AND CAST({text_expr} AS REAL) {sql_operator} ?)"
+    return TabularSqliteFilterExpression(clause=clause, params=(value,), columns=(column,))
+
+
+def _compile_sqlite_date_filter_spec(
+    spec: Any,
+    column: str,
+    operator: str,
+    date_filter_columns: Mapping[str, str] | None,
+) -> TabularSqliteFilterExpression:
+    date_expr = _sqlite_date_filter_expr_for_column(column, date_filter_columns)
+    if operator == "is_blank":
+        return TabularSqliteFilterExpression(clause=f"({date_expr} IS NULL)", columns=(column,))
+    if operator == "is_not_blank":
+        return TabularSqliteFilterExpression(clause=f"({date_expr} IS NOT NULL)", columns=(column,))
+
+    dayfirst = bool(getattr(spec, "dayfirst", False))
+    if operator == "between":
+        value = _sqlite_filter_date_value(
+            getattr(spec, "value", None),
+            dayfirst=dayfirst,
+            field_name="value",
+        )
+        second_value = _sqlite_filter_date_value(
+            getattr(spec, "second_value", None),
+            dayfirst=dayfirst,
+            field_name="second_value",
+        )
+        lower, upper = sorted((value, second_value))
+        return TabularSqliteFilterExpression(
+            clause=f"({date_expr} BETWEEN date(?) AND date(?))",
+            params=(lower.isoformat(), upper.isoformat()),
+            columns=(column,),
+        )
+
+    sql_operator = _SQLITE_DATE_OPERATOR_SQL.get(operator)
+    if sql_operator is None:
+        raise ValueError(f"Unsupported date filter operator: {operator}")
+    value = _sqlite_filter_date_value(
+        getattr(spec, "value", None),
+        dayfirst=dayfirst,
+        field_name="value",
+    )
+    if sql_operator == "!=":
+        clause = f"({date_expr} IS NULL OR {date_expr} != date(?))"
+    else:
+        clause = f"({date_expr} {sql_operator} date(?))"
+    return TabularSqliteFilterExpression(
+        clause=clause,
+        params=(value.isoformat(),),
+        columns=(column,),
+    )
+
+
+def _combine_sqlite_filter_expressions(
+    filters: Iterable[TabularSqliteFilterExpression],
+    *,
+    joiner: str,
+) -> TabularSqliteFilterExpression:
+    active = tuple(filter_expr for filter_expr in filters if filter_expr.clause)
+    if not active:
+        return TabularSqliteFilterExpression()
+    params: list[Any] = []
+    columns: list[str] = []
+    clauses: list[str] = []
+    for filter_expr in active:
+        clauses.append(filter_expr.clause)
+        params.extend(filter_expr.params)
+        columns.extend(filter_expr.columns)
+    if len(clauses) == 1:
+        clause = clauses[0]
+    else:
+        joiner_text = f" {joiner} "
+        clause = f"({joiner_text.join(clauses)})"
+    return TabularSqliteFilterExpression(
+        clause=clause,
+        params=tuple(params),
+        columns=tuple(dict.fromkeys(columns)),
+    )
+
+
+def _compiled_sqlite_filter_from_object(
+    grouping_filter: Any,
+    *,
+    columns: tuple[str, ...],
+    aliases: Mapping[str, str],
+    date_filter_columns: Mapping[str, str] | None,
+) -> TabularSqliteFilterExpression | None:
+    clause = None
+    for attr in _COMPILED_SQLITE_FILTER_SQL_ATTRS:
+        value = getattr(grouping_filter, attr, None)
+        if value is not None:
+            clause = str(value)
+            break
+    if clause is None:
+        return None
+
+    params = getattr(grouping_filter, "params", getattr(grouping_filter, "parameters", ()))
+    referenced_columns: tuple[str, ...] = ()
+    for attr in _COMPILED_SQLITE_FILTER_COLUMN_ATTRS:
+        value = getattr(grouping_filter, attr, None)
+        if value:
+            referenced_columns = tuple(str(column) for column in value)
+            break
+    if not referenced_columns:
+        raise ValueError("Compiled SQLite grouping filters must declare referenced columns.")
+    return _validate_compiled_sqlite_filter(
+        TabularSqliteFilterExpression(
+            clause=clause,
+            params=tuple(params or ()),
+            columns=referenced_columns,
+        ),
+        columns=columns,
+        aliases=aliases,
+        date_filter_columns=date_filter_columns,
+    )
+
+
+def _validate_compiled_sqlite_filter(
+    compiled_filter: TabularSqliteFilterExpression,
+    *,
+    columns: tuple[str, ...],
+    aliases: Mapping[str, str],
+    date_filter_columns: Mapping[str, str] | None,
+) -> TabularSqliteFilterExpression:
+    clause = str(compiled_filter.clause or "").strip()
+    if clause.upper().startswith("WHERE "):
+        clause = clause[6:].strip()
+    if not clause:
+        return TabularSqliteFilterExpression()
+    if any(token in clause for token in (";", "--", "/*", "*/")):
+        raise ValueError("Compiled SQLite grouping filter contains unsafe SQL.")
+    if clause.count("?") != len(compiled_filter.params):
+        raise ValueError("Compiled SQLite grouping filter must use bound parameters.")
+
+    resolved_columns = tuple(
+        dict.fromkeys(
+            _resolve_sqlite_filter_column(column, columns, aliases)
+            for column in compiled_filter.columns
+        )
+    )
+    quoted_identifiers = {
+        identifier.replace('""', '"')
+        for identifier in re.findall(r'"((?:[^"]|"")*)"', clause)
+    }
+    allowed_sql_identifiers = {*columns, *(date_filter_columns or {}).values()}
+    unknown_identifiers = quoted_identifiers.difference(allowed_sql_identifiers)
+    if unknown_identifiers:
+        raise KeyError(f"SQLite grouping filter column not allowed: {sorted(unknown_identifiers)[0]}")
+    return TabularSqliteFilterExpression(
+        clause=f"({clause})",
+        params=tuple(compiled_filter.params),
+        columns=resolved_columns,
+    )
+
+
+def _sqlite_filter_spec_type(spec: Any, operator: str) -> str:
+    spec_kind = str(
+        getattr(spec, "kind", getattr(spec, "filter_type", getattr(spec, "value_type", "")))
+    ).casefold()
+    class_name = type(spec).__name__.casefold()
+    if "text" in spec_kind or "text" in class_name or operator in {
+        "contains",
+        "not_contains",
+        "starts_with",
+        "ends_with",
+    }:
+        return "text"
+    if "number" in spec_kind or "numeric" in spec_kind or "number" in class_name:
+        return "number"
+    if "date" in spec_kind or "date" in class_name:
+        return "date"
+    if operator in {"before", "after", "on", "not_on", "on_or_before", "on_or_after"}:
+        return "date"
+    if operator in {"greater_than", "gt", "greater_or_equal", "gte", "less_than", "lt"}:
+        return "number"
+    return ""
+
+
+def _is_filter_spec_iterable(value: Any) -> bool:
+    return not isinstance(value, (str, bytes, Mapping)) and isinstance(value, Iterable)
+
+
+def _normalize_sqlite_filter_aliases(
+    columns: tuple[str, ...],
+    aliases: Mapping[str, str] | None,
+) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    for alias, column in (aliases or {}).items():
+        alias_text = str(alias or "").strip()
+        if not alias_text:
+            continue
+        normalized[alias_text] = _resolve_sqlite_filter_column(str(column), columns, {})
+    return normalized
+
+
+def _resolve_sqlite_filter_column(
+    column: str,
+    columns: tuple[str, ...],
+    aliases: Mapping[str, str],
+) -> str:
+    requested = str(column or "").strip()
+    if requested in aliases:
+        return aliases[requested]
+    if requested in columns:
+        return requested
+    requested_key = requested.casefold()
+    alias_lookup = {alias.casefold(): target for alias, target in aliases.items()}
+    if requested_key in alias_lookup:
+        return alias_lookup[requested_key]
+    column_lookup = {candidate.casefold(): candidate for candidate in columns}
+    if requested_key in column_lookup:
+        return column_lookup[requested_key]
+    safe = _safe_column_name(requested, fallback="column")
+    if safe in column_lookup:
+        return column_lookup[safe]
+    raise KeyError(f"SQLite grouping filter column not allowed: {requested}")
+
+
+def _sqlite_numeric_text_and_guard(column: str) -> tuple[str, str]:
+    identifier = _quote_identifier(column)
+    text_expr = f"TRIM(CAST({identifier} AS TEXT))"
+    json_type_expr = f"CASE WHEN json_valid({text_expr}) THEN json_type({text_expr}) ELSE NULL END"
+    numeric_guard = (
+        f"{text_expr} != '' AND ("
+        f"{json_type_expr} IN ('integer', 'real') "
+        f"OR ({text_expr} NOT GLOB '*[^0-9]*') "
+        f"OR (substr({text_expr}, 1, 1) IN ('+', '-') "
+        f"AND substr({text_expr}, 2) != '' "
+        f"AND substr({text_expr}, 2) NOT GLOB '*[^0-9]*')"
+        ")"
+    )
+    return text_expr, numeric_guard
+
+
+def _sqlite_date_filter_expr_for_column(
+    column: str,
+    date_filter_columns: Mapping[str, str] | None,
+) -> str:
+    storage_column = (date_filter_columns or {}).get(column, column)
+    return f"date({_quote_identifier(storage_column)})"
+
+
+def _sqlite_filter_number_value(value: Any, *, field_name: str) -> float:
+    parsed = _parse_tabular_filter_number(value)
+    if parsed is None:
+        raise ValueError(f"{field_name} must be numeric")
+    return float(parsed)
+
+
+def _sqlite_filter_date_value(value: Any, *, dayfirst: bool, field_name: str) -> date:
+    parsed = pd.to_datetime(pd.Series([value]), errors="coerce", dayfirst=dayfirst).iloc[0]
+    if pd.isna(parsed):
+        raise ValueError(f"{field_name} must be date-like")
+    return parsed.date()
+
+
+def _sqlite_wildcard_like_pattern(value: str) -> str:
+    parts = str(value or "").split("*")
+    escaped_parts = [
+        part.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        for part in parts
+    ]
+    return "%".join(escaped_parts)
 
 
 def _normalized_tabular_filter_series(series: pd.Series) -> pd.Series:
@@ -2302,6 +3073,7 @@ __all__ = [
     "TABULAR_GROUP_COLUMN",
     "TabularAnalyticsLoadResult",
     "TabularSourceSnapshot",
+    "TabularSqliteFilterExpression",
     "TabularSqliteStore",
     "TabularAnalyticsWorkbookResult",
     "TabularColumnFilter",
@@ -2311,6 +3083,7 @@ __all__ = [
     "apply_tabular_grouping",
     "build_tabular_grouping_dataframe",
     "cleanup_tabular_load_result",
+    "compile_tabular_sqlite_grouping_filter",
     "count_tabular_materialized_rows",
     "discover_tabular_metric_candidates",
     "export_tabular_analytics_workbook",

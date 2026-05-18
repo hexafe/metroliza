@@ -79,6 +79,11 @@ The matching list shows each selected column chain as values like `TraceCode | C
 you can select the rows for a named group and leave the remaining rows in **POPULATION**
 for selected-vs-rest comparisons.
 
+Use the matching-row search field either as a normal value search or as a row filter. Plain
+text searches visible value labels. Expressions such as `Supplier=SUPPLIER AND Value > 1`
+filter the source rows, and **Assign all filtered rows** applies that current search or
+filter across all matching pages.
+
 The selected groups are written as the `GROUP` column and are used by aggregation, charts,
 groupstats, and workbook output. Choose a time bucket and aggregation method in the main
 dialog.

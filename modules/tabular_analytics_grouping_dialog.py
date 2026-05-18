@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+import re
+
 import pandas as pd
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtGui import QBrush, QColor, QIntValidator
 from PyQt6.QtWidgets import (
-    QComboBox,
     QDialog,
     QGridLayout,
     QHBoxLayout,
@@ -30,6 +32,7 @@ from modules.grouping_filter_core import (
     NumberFilterSpec,
     TextFilterSpec,
     apply_filter_specs,
+    parse_filter_expression,
 )
 from modules.help_menu import attach_help_menu_to_layout
 from modules.list_selection_utils import GroupingShortcutBindings, ListSelectionUtils
@@ -57,14 +60,47 @@ from modules.ui_foundation import (
 
 _SELECTOR_PAGE_SIZE = 1000
 _GROUP_MEMBER_PREVIEW_LIMIT = 1000
-_GROUP_SCOPE_FILTER_TYPES = (
-    ("Text", "text"),
-    ("Number", "number"),
-    ("Date", "date"),
-)
-_GROUP_SCOPE_TEXT_OPERATORS = ("=",)
-_GROUP_SCOPE_NUMERIC_OPERATORS = ("=", "!=", ">", ">=", "<", "<=")
-_GROUP_SCOPE_DATE_OPERATORS = ("=", "!=", ">", ">=", "<", "<=")
+_SELECTOR_FILTER_EXPRESSION_RE = re.compile(r"\S\s*(?:>=|<=|!=|=|>|<)\s*\S")
+_NUMBER_FILTER_OPERATOR_SYMBOLS = {
+    "equals": "=",
+    "eq": "=",
+    "not_equals": "!=",
+    "ne": "!=",
+    "greater_than": ">",
+    "gt": ">",
+    "greater_or_equal": ">=",
+    "gte": ">=",
+    "less_than": "<",
+    "lt": "<",
+    "less_or_equal": "<=",
+    "lte": "<=",
+}
+_DATE_FILTER_OPERATOR_SYMBOLS = {
+    "on": "=",
+    "equals": "=",
+    "eq": "=",
+    "not_on": "!=",
+    "not_equals": "!=",
+    "ne": "!=",
+    "after": ">",
+    "gt": ">",
+    "on_or_after": ">=",
+    "gte": ">=",
+    "before": "<",
+    "lt": "<",
+    "on_or_before": "<=",
+    "lte": "<=",
+}
+
+
+@dataclass(frozen=True)
+class _SelectorFilterState:
+    text: str
+    mode: str
+    specs: tuple[object, ...] = ()
+    match_mode: str = "and"
+    parsed_filter: object | None = None
+    error: str = ""
 
 
 class TabularAnalyticsGroupingDialog(QDialog):
@@ -108,7 +144,6 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._selector_total_rows = 0
         self._list_selection_utils = ListSelectionUtils()
         self._grouping_shortcuts = None
-        self.group_scope_filter_rows: list[tuple[QComboBox, QComboBox, QComboBox, QLineEdit, QPushButton]] = []
         self.default_group = TABULAR_DEFAULT_GROUP
         self.default_group_color = self._resolve_default_group_color()
         self.group_color_column = "GROUP_COLOR"
@@ -159,45 +194,6 @@ class TabularAnalyticsGroupingDialog(QDialog):
         columns_grid.setColumnStretch(1, 1)
         layout.addWidget(column_area, 1)
 
-        scope_filter_area = QWidget()
-        scope_filter_layout = QVBoxLayout(scope_filter_area)
-        scope_filter_layout.setContentsMargins(0, 0, 0, 0)
-        scope_filter_layout.setSpacing(6)
-        scope_filter_header = QHBoxLayout()
-        scope_filter_header.setSpacing(8)
-        scope_filter_header.addWidget(QLabel("Grouping-scope filters"))
-        self.scope_match_mode_combo = QComboBox()
-        self.scope_match_mode_combo.addItem("AND", "and")
-        self.scope_match_mode_combo.addItem("OR", "or")
-        configure_accessibility(self.scope_match_mode_combo, name="CSV grouping filter match mode")
-        scope_filter_header.addStretch(1)
-        scope_filter_header.addWidget(QLabel("Match"))
-        scope_filter_header.addWidget(self.scope_match_mode_combo)
-        scope_filter_layout.addLayout(scope_filter_header)
-        self.scope_filter_rows_widget = QWidget()
-        self.scope_filter_rows_layout = QGridLayout(self.scope_filter_rows_widget)
-        self.scope_filter_rows_layout.setContentsMargins(0, 0, 0, 0)
-        self.scope_filter_rows_layout.setHorizontalSpacing(8)
-        self.scope_filter_rows_layout.setVerticalSpacing(6)
-        self.scope_filter_rows_layout.addWidget(QLabel("Column"), 0, 0)
-        self.scope_filter_rows_layout.addWidget(QLabel("Type"), 0, 1)
-        self.scope_filter_rows_layout.addWidget(QLabel("Operator"), 0, 2)
-        self.scope_filter_rows_layout.addWidget(QLabel("Value"), 0, 3)
-        scope_filter_layout.addWidget(self.scope_filter_rows_widget)
-        scope_filter_actions = QHBoxLayout()
-        scope_filter_actions.setSpacing(8)
-        self.add_scope_filter_button = QPushButton("Add filter row")
-        self.clear_scope_filters_button = QPushButton("Clear scope filters")
-        configure_accessibility(self.add_scope_filter_button, name="Add CSV grouping-scope filter row")
-        configure_accessibility(self.clear_scope_filters_button, name="Clear CSV grouping-scope filters")
-        scope_filter_actions.addWidget(self.add_scope_filter_button)
-        scope_filter_actions.addWidget(self.clear_scope_filters_button)
-        scope_filter_actions.addStretch(1)
-        scope_filter_layout.addLayout(scope_filter_actions)
-        self.scope_filter_summary_label = status_chip("", "neutral")
-        scope_filter_layout.addWidget(self.scope_filter_summary_label)
-        layout.addWidget(scope_filter_area)
-
         list_splitter = QSplitter(Qt.Orientation.Horizontal)
         list_splitter.setMinimumHeight(220)
 
@@ -208,8 +204,10 @@ class TabularAnalyticsGroupingDialog(QDialog):
         selector_column.setSpacing(6)
         selector_column.addWidget(QLabel("Matching rows"))
         self.selector_search = QLineEdit()
-        self.selector_search.setPlaceholderText("Search matching row values")
-        configure_accessibility(self.selector_search, name="Search CSV grouping row selectors")
+        self.selector_search.setPlaceholderText(
+            "Search values or filter, e.g. Supplier=SUPPLIER AND Value > 1"
+        )
+        configure_accessibility(self.selector_search, name="Search or filter CSV grouping row selectors")
         selector_column.addWidget(self.selector_search)
         self.selector_preview_label = status_chip("", "neutral")
         selector_column.addWidget(self.selector_preview_label)
@@ -300,7 +298,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         )
         configure_accessibility(
             self.assign_filtered_rows_button,
-            name="Assign all rows matching current parent and grouping-scope filters",
+            name="Assign all rows matching current search or filter",
         )
         configure_accessibility(self.rename_group_button, name="Rename selected CSV analytics group")
         configure_accessibility(self.delete_group_button, name="Delete selected CSV analytics group")
@@ -323,9 +321,6 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.selected_columns_list.itemDoubleClicked.connect(self.remove_selected_selector_column)
         self.selected_columns_list.itemSelectionChanged.connect(self._sync_status)
         self.selector_search.textChanged.connect(self._handle_selector_search_changed)
-        self.scope_match_mode_combo.currentIndexChanged.connect(self._handle_scope_filters_changed)
-        self.add_scope_filter_button.clicked.connect(self.add_scope_filter_row)
-        self.clear_scope_filters_button.clicked.connect(self.clear_scope_filter_rows)
         self.first_page_button.clicked.connect(self.first_selector_page)
         self.previous_page_button.clicked.connect(self.previous_selector_page)
         self.next_page_button.clicked.connect(self.next_selector_page)
@@ -360,7 +355,6 @@ class TabularAnalyticsGroupingDialog(QDialog):
             remove_selected_columns=self.remove_selected_selector_column,
             qt_namespace=Qt,
         )
-        self.add_scope_filter_row()
         self._refresh_all()
 
     def _is_sqlite_backed(self) -> bool:
@@ -565,348 +559,174 @@ class TabularAnalyticsGroupingDialog(QDialog):
     def _selector_columns_text(self) -> str:
         return column_sequence_text(self.selector_columns, label_for=self._column_label)
 
-    def _scope_match_mode(self) -> str:
-        combo = vars(self).get("scope_match_mode_combo")
-        if combo is None:
-            return "and"
-        mode = combo.currentData()
-        return "or" if str(mode or "").strip().casefold() == "or" else "and"
-
     def _scope_filter_columns(self) -> list[str]:
         return self._source_columns()
 
-    def _populate_scope_column_combo(self, combo: QComboBox, *, selected_column: str | None = None) -> None:
-        current = str(selected_column or combo.currentData() or "").strip()
-        combo.blockSignals(True)
-        combo.clear()
-        combo.addItem("Select column", "")
-        for column in self._scope_filter_columns():
-            combo.addItem(self._column_label(column), column)
-        if current:
-            index = combo.findData(current)
-            if index >= 0:
-                combo.setCurrentIndex(index)
-        combo.blockSignals(False)
+    def _selector_filter_aliases(self) -> dict[str, str]:
+        aliases: dict[str, str] = {}
+        source_columns = set(self._scope_filter_columns())
+        for normalized, original in self.column_labels.items():
+            if normalized in source_columns:
+                aliases[str(original)] = str(normalized)
+                aliases[str(normalized)] = str(normalized)
+        for column in source_columns:
+            aliases.setdefault(str(column), str(column))
+            aliases.setdefault(str(column).replace("_", " "), str(column))
+        return aliases
 
-    def _infer_scope_filter_type(self, column: str) -> str:
-        column = str(column or "").strip()
-        if not column:
-            return "text"
-        column_key = column.casefold()
-        if any(token in column_key for token in ("date", "time", "timestamp", "created", "updated")):
-            return "date"
-        if self._is_sqlite_backed():
-            sample = self.sqlite_store.read_dataframe(columns=(column,), limit=200)
-            if column in sample.columns:
-                numeric = pd.to_numeric(sample[column], errors="coerce")
-                if len(sample.index) and numeric.notna().mean() >= 0.8:
-                    return "number"
-        elif column in self.source_dataframe.columns and not self.source_dataframe.empty:
-            numeric = pd.to_numeric(self.source_dataframe[column], errors="coerce")
-            if numeric.notna().mean() >= 0.8:
-                return "number"
-        return "text"
+    def _selector_filter_text(self) -> str:
+        selector_search = vars(self).get("selector_search")
+        if selector_search is None or not hasattr(selector_search, "text"):
+            return ""
+        return str(selector_search.text() or "").strip()
 
-    def _scope_filter_type(self, row) -> str:
-        column_combo, type_combo, _operator_combo, _value_edit, _remove_button = row
-        selected_type = str(type_combo.currentData() or "").strip()
-        if selected_type in {"text", "number", "date"}:
-            return selected_type
-        return self._infer_scope_filter_type(str(column_combo.currentData() or ""))
+    @staticmethod
+    def _looks_like_filter_expression(text: str) -> bool:
+        return bool(_SELECTOR_FILTER_EXPRESSION_RE.search(str(text or "")))
 
-    def _populate_scope_operator_combo(
+    def _selector_filter_state(self) -> _SelectorFilterState:
+        text = self._selector_filter_text()
+        if not text:
+            return _SelectorFilterState(text="", mode="none")
+        if not self._looks_like_filter_expression(text):
+            return _SelectorFilterState(text=text, mode="search")
+        try:
+            parsed = parse_filter_expression(
+                text,
+                self._scope_filter_columns(),
+                aliases=self._selector_filter_aliases(),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            return _SelectorFilterState(text=text, mode="invalid", error=str(exc))
+        specs = tuple(parsed.specs)
+        if not specs:
+            return _SelectorFilterState(text=text, mode="search")
+        match_mode = "or" if str(parsed.match_mode).casefold() == "or" else "and"
+        return _SelectorFilterState(
+            text=text,
+            mode="expression",
+            specs=specs,
+            match_mode=match_mode,
+            parsed_filter=parsed,
+        )
+
+    def _tabular_filters_for_expression_specs(
         self,
-        combo: QComboBox,
-        *,
-        selected_type: str,
-        operator: str | None = None,
-    ) -> None:
-        operators = {
-            "text": _GROUP_SCOPE_TEXT_OPERATORS,
-            "date": _GROUP_SCOPE_DATE_OPERATORS,
-        }.get(selected_type, _GROUP_SCOPE_NUMERIC_OPERATORS)
-        current = str(operator or combo.currentData() or "").strip()
-        combo.blockSignals(True)
-        combo.clear()
-        for item in operators:
-            combo.addItem(item, item)
-        index = combo.findData(current)
-        combo.setCurrentIndex(index if index >= 0 else 0)
-        combo.blockSignals(False)
-
-    def _sync_scope_value_placeholder(self, value_edit: QLineEdit, *, selected_type: str) -> None:
-        if selected_type == "date":
-            value_edit.setPlaceholderText("YYYY-MM-DD")
-        elif selected_type == "number":
-            value_edit.setPlaceholderText("Numeric value")
-        else:
-            value_edit.setPlaceholderText("Text value")
-
-    def _handle_scope_filter_column_changed(self, row) -> None:
-        column_combo, type_combo, _operator_combo, _value_edit, _remove_button = row
-        inferred_type = self._infer_scope_filter_type(str(column_combo.currentData() or ""))
-        index = type_combo.findData(inferred_type)
-        if index >= 0 and index != type_combo.currentIndex():
-            type_combo.setCurrentIndex(index)
-            return
-        self._handle_scope_filter_type_changed(row)
-
-    def _handle_scope_filter_type_changed(self, row) -> None:
-        _column_combo, _type_combo, operator_combo, value_edit, _remove_button = row
-        selected_type = self._scope_filter_type(row)
-        self._populate_scope_operator_combo(operator_combo, selected_type=selected_type)
-        self._sync_scope_value_placeholder(value_edit, selected_type=selected_type)
-        self._handle_scope_filters_changed()
-
-    def _layout_scope_filter_rows(self) -> None:
-        for row_index, (column_combo, type_combo, operator_combo, value_edit, remove_button) in enumerate(
-            self.group_scope_filter_rows,
-            start=1,
-        ):
-            self.scope_filter_rows_layout.addWidget(column_combo, row_index, 0)
-            self.scope_filter_rows_layout.addWidget(type_combo, row_index, 1)
-            self.scope_filter_rows_layout.addWidget(operator_combo, row_index, 2)
-            self.scope_filter_rows_layout.addWidget(value_edit, row_index, 3)
-            self.scope_filter_rows_layout.addWidget(remove_button, row_index, 4)
-
-    def _sync_scope_filter_controls(self) -> None:
-        can_remove = len(self.group_scope_filter_rows) > 1
-        for _column_combo, _type_combo, _operator_combo, _value_edit, remove_button in self.group_scope_filter_rows:
-            remove_button.setEnabled(can_remove)
-
-    def _refresh_scope_filter_column_choices(self) -> None:
-        for column_combo, _type_combo, _operator_combo, _value_edit, _remove_button in self.group_scope_filter_rows:
-            self._populate_scope_column_combo(column_combo)
-
-    def add_scope_filter_row(
-        self,
-        *,
-        column: str | None = None,
-        filter_type: str | None = None,
-        operator: str = "=",
-        value: str | float | int | None = None,
-    ) -> None:
-        column_combo = QComboBox()
-        self._populate_scope_column_combo(column_combo, selected_column=column)
-        selected_column = str(column_combo.currentData() or column or "").strip()
-        type_combo = QComboBox()
-        for label, item in _GROUP_SCOPE_FILTER_TYPES:
-            type_combo.addItem(label, item)
-        selected_type = (
-            str(filter_type or "").strip()
-            if str(filter_type or "").strip() in {"text", "number", "date"}
-            else self._infer_scope_filter_type(selected_column)
-        )
-        type_index = type_combo.findData(selected_type)
-        type_combo.setCurrentIndex(type_index if type_index >= 0 else 0)
-        operator_combo = QComboBox()
-        self._populate_scope_operator_combo(operator_combo, selected_type=selected_type, operator=operator)
-        value_edit = QLineEdit()
-        self._sync_scope_value_placeholder(value_edit, selected_type=selected_type)
-        value_edit.setText("" if value is None else str(value))
-        remove_button = QPushButton("Remove")
-        configure_accessibility(column_combo, name="CSV grouping filter column")
-        configure_accessibility(type_combo, name="CSV grouping filter type")
-        configure_accessibility(operator_combo, name="CSV grouping filter operator")
-        configure_accessibility(value_edit, name="CSV grouping filter value")
-        configure_accessibility(remove_button, name="Remove CSV grouping filter row")
-        row = (column_combo, type_combo, operator_combo, value_edit, remove_button)
-        remove_button.clicked.connect(lambda _checked=False, row=row: self._remove_scope_filter_row(row))
-        column_combo.currentIndexChanged.connect(
-            lambda _index, row=row: self._handle_scope_filter_column_changed(row)
-        )
-        type_combo.currentIndexChanged.connect(
-            lambda _index, row=row: self._handle_scope_filter_type_changed(row)
-        )
-        operator_combo.currentIndexChanged.connect(self._handle_scope_filters_changed)
-        value_edit.editingFinished.connect(self._handle_scope_filters_changed)
-        self.group_scope_filter_rows.append(row)
-        self._layout_scope_filter_rows()
-        self._sync_scope_filter_controls()
-        self._handle_scope_filters_changed()
-
-    def _remove_scope_filter_row(self, row) -> None:
-        if row not in self.group_scope_filter_rows:
-            return
-        column_combo, type_combo, operator_combo, value_edit, remove_button = row
-        for widget in (column_combo, type_combo, operator_combo, value_edit, remove_button):
-            self.scope_filter_rows_layout.removeWidget(widget)
-            widget.deleteLater()
-        self.group_scope_filter_rows.remove(row)
-        if not self.group_scope_filter_rows:
-            self.add_scope_filter_row()
-            return
-        self._layout_scope_filter_rows()
-        self._sync_scope_filter_controls()
-        self._handle_scope_filters_changed()
-
-    def clear_scope_filter_rows(self) -> None:
-        rows = list(self.group_scope_filter_rows)
-        for row in rows:
-            self._remove_scope_filter_row(row)
-        if not self.group_scope_filter_rows:
-            self.add_scope_filter_row()
-
-    def _active_scope_filters(self) -> tuple[TabularColumnFilter, ...]:
-        column_lookup = set(self._scope_filter_columns())
+        specs: tuple[object, ...],
+    ) -> tuple[TabularColumnFilter, ...] | None:
         filters: list[TabularColumnFilter] = []
-        for row in vars(self).get(
-            "group_scope_filter_rows",
-            [],
-        ):
-            column_combo, _type_combo, operator_combo, value_edit, _remove_button = row
-            column = str(column_combo.currentData() or "").strip()
-            operator = str(operator_combo.currentData() or "").strip()
-            value = str(value_edit.text() or "").strip()
-            if not column or column not in column_lookup or not value:
-                continue
-            selected_type = self._scope_filter_type(row)
-            if selected_type == "text":
-                filters.append(TabularColumnFilter(column=column, selected_values=(value,)))
-            elif selected_type == "date":
-                filters.append(
-                    TabularColumnFilter(
-                        column=column,
-                        date_operator=operator,
-                        date_value=value,
-                    )
-                )
-            else:
-                filters.append(
-                    TabularColumnFilter(
-                        column=column,
-                        numeric_operator=operator,
-                        numeric_value=value,
-                    )
-                )
+        seen_columns: set[str] = set()
+        for spec in specs:
+            column_filter = self._tabular_filter_for_expression_spec(spec)
+            if column_filter is None or column_filter.column in seen_columns:
+                return None
+            seen_columns.add(column_filter.column)
+            filters.append(column_filter)
         return tuple(filters)
 
-    def _scope_filter_expression(self, filters: tuple[TabularColumnFilter, ...]) -> str:
-        if not filters:
-            return "all rows"
-        joiner = " OR " if self._scope_match_mode() == "or" else " AND "
-        return joiner.join(self._scope_filter_expression_part(item) for item in filters)
-
-    def _scope_filter_expression_part(self, item: TabularColumnFilter) -> str:
-        if item.selected_values:
-            return f"{item.column} = {item.selected_values[0]}"
-        if item.date_operator and item.date_value:
-            return f"{item.column} {item.date_operator} {item.date_value}"
-        return f"{item.column} {item.numeric_operator} {item.numeric_value}"
+    def _tabular_filter_for_expression_spec(self, spec: object) -> TabularColumnFilter | None:
+        if isinstance(spec, TextFilterSpec):
+            operator = str(spec.operator or "").strip().casefold()
+            if operator != "equals":
+                return None
+            return TabularColumnFilter(
+                column=spec.column,
+                selected_values=(str(spec.value or "").strip(),),
+            )
+        if isinstance(spec, NumberFilterSpec):
+            operator = _NUMBER_FILTER_OPERATOR_SYMBOLS.get(
+                str(spec.operator or "").strip().casefold()
+            )
+            if operator is None:
+                return None
+            return TabularColumnFilter(
+                column=spec.column,
+                numeric_operator=operator,
+                numeric_value=spec.value,
+            )
+        if isinstance(spec, DateFilterSpec):
+            operator = _DATE_FILTER_OPERATOR_SYMBOLS.get(
+                str(spec.operator or "").strip().casefold()
+            )
+            if operator is None:
+                return None
+            return TabularColumnFilter(
+                column=spec.column,
+                date_operator=operator,
+                date_value=str(spec.value or "").strip(),
+            )
+        return None
 
     def _sqlite_scope_kwargs(self) -> dict[str, object]:
+        state = self._selector_filter_state()
         return {
             "filter_columns": self.sqlite_filter_columns,
             "selected_filter_keys": self.sqlite_selected_filter_keys,
             "base_column_filters": self.sqlite_column_filters,
-            "column_filters": self._active_scope_filters(),
-            "column_filter_match_mode": self._scope_match_mode(),
+            "column_filters": (),
+            "column_filter_match_mode": "and",
+            "grouping_filter": state.parsed_filter if state.mode == "expression" else None,
+            "grouping_filter_aliases": self._selector_filter_aliases(),
         }
 
     def _scoped_source_dataframe(self) -> pd.DataFrame:
         if self._is_sqlite_backed():
             return pd.DataFrame()
-        filters = self._active_scope_filters()
-        if not filters:
-            return self.source_dataframe
-        specs = self._grouping_filter_specs(filters)
-        if not specs:
+        state = self._selector_filter_state()
+        if state.mode == "invalid":
             return self.source_dataframe.iloc[0:0].copy()
+        if state.mode != "expression":
+            return self.source_dataframe
         try:
             return apply_filter_specs(
                 self.source_dataframe,
-                specs,
-                match_mode=self._scope_match_mode(),
+                (state.parsed_filter,) if state.parsed_filter is not None else state.specs,
+                match_mode=state.match_mode,
             )
         except (KeyError, TypeError, ValueError):
             return self.source_dataframe.iloc[0:0].copy()
 
-    def _grouping_filter_specs(self, filters: tuple[TabularColumnFilter, ...]):
-        specs = []
-        for item in filters:
-            if item.column not in self.source_dataframe.columns:
-                continue
-            if item.selected_values:
-                specs.extend(TextFilterSpec(item.column, "equals", value) for value in item.selected_values)
-            elif item.date_operator and item.date_value:
-                operator = self._grouping_date_operator(item.date_operator)
-                if operator:
-                    specs.append(DateFilterSpec(item.column, operator, item.date_value))
-            elif item.numeric_operator and item.numeric_value is not None:
-                operator = self._grouping_number_operator(item.numeric_operator)
-                if operator:
-                    specs.append(NumberFilterSpec(item.column, operator, item.numeric_value))
-        return tuple(specs)
+    def _selector_label_search_text(self, state: _SelectorFilterState | None = None) -> str:
+        current_state = state or self._selector_filter_state()
+        return current_state.text if current_state.mode == "search" else ""
 
-    @staticmethod
-    def _grouping_number_operator(operator: str | None) -> str | None:
-        return {
-            "=": "equals",
-            "!=": "not_equals",
-            ">": "greater_than",
-            ">=": "greater_or_equal",
-            "<": "less_than",
-            "<=": "less_or_equal",
-        }.get(str(operator or "").strip())
+    def _sqlite_matching_selector_rows_for_search(self, search_text: str) -> list[dict[str, object]]:
+        if not self._is_sqlite_backed() or not self.selector_columns or not search_text:
+            return []
+        rows, _total = self.sqlite_store.preview_group_rows(
+            tuple(self.selector_columns),
+            search_text=search_text,
+            offset=0,
+            limit=None,
+            **self._sqlite_scope_kwargs(),
+        )
+        return rows
 
-    @staticmethod
-    def _grouping_date_operator(operator: str | None) -> str | None:
-        return {
-            "=": "on",
-            "!=": "not_on",
-            ">": "after",
-            ">=": "on_or_after",
-            "<": "before",
-            "<=": "on_or_before",
-        }.get(str(operator or "").strip())
-
-    def _scope_filter_mask(self, item: TabularColumnFilter) -> pd.Series | None:
-        if item.column not in self.source_dataframe.columns:
-            return None
-        if item.selected_values:
-            combined = pd.Series(False, index=self.source_dataframe.index)
-            for value in item.selected_values:
-                combined |= TextFilterSpec(item.column, "equals", value).mask(self.source_dataframe)
-            return combined
-        if item.date_operator and item.date_value:
-            operator = self._grouping_date_operator(item.date_operator)
-            if operator is None:
-                return None
-            return DateFilterSpec(item.column, operator, item.date_value).mask(self.source_dataframe)
-        operator = self._grouping_number_operator(item.numeric_operator)
-        if operator is None:
-            return None
-        return NumberFilterSpec(item.column, operator, item.numeric_value).mask(self.source_dataframe)
+    def _matching_selector_keys_for_search(self, search_text: str) -> tuple[tuple[str, ...], ...]:
+        if not self.selector_columns or not search_text:
+            return ()
+        return self._current_selector_index().matching_keys(search_text=search_text)
 
     def _scope_row_count(self) -> int:
+        state = self._selector_filter_state()
+        if state.mode == "invalid":
+            return 0
+        search_text = self._selector_label_search_text(state)
+        if search_text:
+            if not self.selector_columns:
+                return 0
+            if self._is_sqlite_backed():
+                return int(
+                    sum(
+                        int(row.get("row_count") or 0)
+                        for row in self._sqlite_matching_selector_rows_for_search(search_text)
+                    )
+                )
+            keys = self._matching_selector_keys_for_search(search_text)
+            return int(self._current_selector_index().count_rows(keys)) if keys else 0
         if self._is_sqlite_backed():
             return int(self.sqlite_store.count_rows(**self._sqlite_scope_kwargs()))
         return int(len(self._scoped_source_dataframe().index))
-
-    def _handle_scope_filters_changed(self) -> None:
-        self._selector_index = None
-        self._selector_page_offset = 0
-        self.selected_selector_keys = set()
-        if hasattr(self, "selector_list"):
-            self.selector_list.clearSelection()
-        if hasattr(self, "scope_filter_summary_label"):
-            active_filters = self._active_scope_filters()
-            expression = self._scope_filter_expression(active_filters)
-            scope_text = (
-                f"parent filters + {expression}"
-                if active_filters
-                else "parent filters only"
-            )
-            row_count = self._scope_row_count()
-            self.scope_filter_summary_label.setText(
-                f"Assign-all scope: {scope_text} ({row_count} rows)"
-            )
-            set_status_variant(
-                self.scope_filter_summary_label,
-                "info" if row_count else "warning",
-            )
-        if hasattr(self, "selector_list"):
-            self._refresh_all()
 
     def _refresh_available_columns(self) -> None:
         populate_column_list(
@@ -1073,9 +893,12 @@ class TabularAnalyticsGroupingDialog(QDialog):
     ) -> tuple[list[dict[str, object]], int]:
         if not self._is_sqlite_backed():
             return [], 0
+        state = self._selector_filter_state()
+        if state.mode == "invalid":
+            return [], 0
         return self.sqlite_store.preview_group_rows(
             tuple(self.selector_columns),
-            search_text=self.selector_search.text(),
+            search_text=self._selector_label_search_text(state),
             offset=offset,
             limit=limit,
             **self._sqlite_scope_kwargs(),
@@ -1085,7 +908,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         if not self._is_sqlite_backed():
             return 0
         if not self.selector_columns or not self.selected_selector_keys:
-            return self.sqlite_store.count_rows(**self._sqlite_scope_kwargs())
+            return self._scope_row_count()
         return self.sqlite_store.count_rows_for_group_keys(
             tuple(self.selector_columns),
             self.selected_selector_keys,
@@ -1104,16 +927,22 @@ class TabularAnalyticsGroupingDialog(QDialog):
     def _sqlite_total_grouping_rows(self) -> int:
         if not self._is_sqlite_backed():
             return 0
+        state = self._selector_filter_state()
+        if state.mode == "invalid":
+            return 0
         return self.sqlite_store.count_rows(**self._sqlite_scope_kwargs())
 
     def _sqlite_filters_active(self) -> bool:
+        state = self._selector_filter_state()
         return bool(
             self.sqlite_column_filters
             or (self.sqlite_filter_columns and self.sqlite_selected_filter_keys)
-            or self._active_scope_filters()
+            or state.mode == "expression"
         )
 
     def _sqlite_group_counts(self) -> dict[str, int]:
+        if self._selector_filter_state().mode == "invalid":
+            return {self.default_group: 0}
         total = self._sqlite_total_grouping_rows()
         if self.df.empty or "GROUP" not in self.df.columns or "REPORT_ID" not in self.df.columns:
             return {self.default_group: total}
@@ -1271,6 +1100,30 @@ class TabularAnalyticsGroupingDialog(QDialog):
         return pd.to_numeric(filtered["source_row_number"], errors="coerce").dropna().astype(int).tolist()
 
     def _row_ids_for_scope(self) -> list[int]:
+        state = self._selector_filter_state()
+        if state.mode == "invalid":
+            return []
+        search_text = self._selector_label_search_text(state)
+        if search_text:
+            if not self.selector_columns:
+                return []
+            if self._is_sqlite_backed():
+                rows = self._sqlite_matching_selector_rows_for_search(search_text)
+                keys = tuple(tuple(row["key"]) for row in rows)
+                if not keys:
+                    return []
+                return self.sqlite_store.row_ids_for_group_keys(
+                    tuple(self.selector_columns),
+                    keys,
+                    **self._sqlite_scope_kwargs(),
+                )
+            keys = self._matching_selector_keys_for_search(search_text)
+            if not keys:
+                return []
+            filtered = self._current_selector_index().filter_rows(keys)
+            if "source_row_number" not in filtered.columns:
+                return []
+            return pd.to_numeric(filtered["source_row_number"], errors="coerce").dropna().astype(int).tolist()
         if self._is_sqlite_backed():
             return self.sqlite_store.row_ids(**self._sqlite_scope_kwargs())
         scoped = self._scoped_source_dataframe()
@@ -1363,7 +1216,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
             QMessageBox.information(
                 self,
                 self.windowTitle(),
-                "No rows match the current parent and grouping-scope filters.",
+                "No rows match the current search or filter.",
             )
             return
         selected_group = str(self._selected_group_name() or "").strip()
@@ -1401,8 +1254,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
         return self._selector_index
 
     def _handle_selector_search_changed(self) -> None:
+        self._selector_index = None
         self._selector_page_offset = 0
-        self._refresh_selectors()
+        self._refresh_all()
 
     def rename_group(self) -> None:
         selected_group = self._selected_group_name()
@@ -1476,6 +1330,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._refresh_all(preferred_group=selected_group)
 
     def _sync_status(self) -> None:
+        filter_state = self._selector_filter_state()
         if not self.selector_columns:
             self.selector_status_label.setText("No grouping columns selected")
             set_status_variant(self.selector_status_label, "neutral")
@@ -1492,8 +1347,13 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 )
             else:
                 self.selector_status_label.setText(f"{columns_text}: all rows")
-            set_status_variant(self.selector_status_label, "success")
-        self.create_group_button.setEnabled(bool(self.selector_columns and self.selected_selector_keys))
+            set_status_variant(
+                self.selector_status_label,
+                "warning" if filter_state.mode == "invalid" else "success",
+            )
+        self.create_group_button.setEnabled(
+            bool(self.selector_columns and self.selected_selector_keys and filter_state.mode != "invalid")
+        )
         self.assign_filtered_rows_button.setEnabled(self._scope_row_count() > 0)
         selected_group = self._selected_group_name()
         self.rename_group_button.setEnabled(bool(selected_group))
@@ -1503,14 +1363,17 @@ class TabularAnalyticsGroupingDialog(QDialog):
     def _refresh_selectors(self) -> None:
         self.selector_list.blockSignals(True)
         self.selector_list.clear()
-        if self._is_sqlite_backed():
+        filter_state = self._selector_filter_state()
+        if filter_state.mode == "invalid":
+            preview_rows, total_rows = [], 0
+        elif self._is_sqlite_backed():
             preview_rows, total_rows = self._sqlite_preview_rows(
                 offset=self._selector_page_offset,
                 limit=_SELECTOR_PAGE_SIZE,
             )
         else:
             preview_rows, total_rows = self._current_selector_index().preview_rows(
-                search_text=self.selector_search.text(),
+                search_text=self._selector_label_search_text(filter_state),
                 offset=self._selector_page_offset,
                 limit=_SELECTOR_PAGE_SIZE,
             )
@@ -1527,7 +1390,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 )
             else:
                 preview_rows, total_rows = self._current_selector_index().preview_rows(
-                    search_text=self.selector_search.text(),
+                    search_text=self._selector_label_search_text(filter_state),
                     offset=self._selector_page_offset,
                     limit=_SELECTOR_PAGE_SIZE,
                 )
@@ -1548,7 +1411,10 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.selector_list.blockSignals(False)
         start = 0 if not total_rows else self._selector_page_offset + 1
         end = min(self._selector_page_offset + len(preview_rows), total_rows)
-        if not self.selector_columns:
+        if filter_state.mode == "invalid":
+            self.selector_preview_label.setText(f"Invalid filter: {filter_state.error}")
+            set_status_variant(self.selector_preview_label, "warning")
+        elif not self.selector_columns:
             self.selector_preview_label.setText("Add a grouping column to preview row groups.")
             set_status_variant(self.selector_preview_label, "neutral")
         elif total_rows > len(preview_rows):
@@ -1640,7 +1506,6 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._sync_status()
 
     def _refresh_all(self, preferred_group: str | None = None) -> None:
-        self._refresh_scope_filter_column_choices()
         self._refresh_available_columns()
         self._refresh_selected_columns()
         self._refresh_selectors()

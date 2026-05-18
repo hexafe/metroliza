@@ -100,33 +100,6 @@ def _select_selector_rows(dialog, start: int, stop: int) -> None:
     dialog._store_current_selection()
 
 
-def _set_scope_filter_row(
-    dialog,
-    row_index: int,
-    *,
-    column: str,
-    operator: str,
-    value: str,
-    filter_type: str | None = None,
-) -> None:
-    column_combo, type_combo, operator_combo, value_edit, _remove_button = dialog.group_scope_filter_rows[row_index]
-    column_idx = column_combo.findData(column)
-    if column_idx < 0:
-        raise AssertionError(f"Missing scope filter column option: {column}")
-    column_combo.setCurrentIndex(column_idx)
-    if filter_type is not None:
-        type_idx = type_combo.findData(filter_type)
-        if type_idx < 0:
-            raise AssertionError(f"Missing scope filter type option: {filter_type}")
-        type_combo.setCurrentIndex(type_idx)
-    operator_idx = operator_combo.findData(operator)
-    if operator_idx < 0:
-        raise AssertionError(f"Missing scope filter operator option: {operator}")
-    operator_combo.setCurrentIndex(operator_idx)
-    value_edit.setText(value)
-    dialog._handle_scope_filters_changed()
-
-
 def test_available_grouping_columns_include_tracecode_even_when_reference_is_different() -> None:
     dialog = _dialog_for_frame(
         pd.DataFrame(
@@ -268,11 +241,18 @@ def test_grouping_dialog_uses_double_click_column_selection_without_action_butto
         assert "Create or add" not in button_texts
         assert "Assign all filtered rows..." in button_texts
         assert "Assign selected row values..." in button_texts
+        assert "Add filter row" not in button_texts
+        assert "Clear scope filters" not in button_texts
+        assert not hasattr(dialog, "add_scope_filter_button")
+        assert not hasattr(dialog, "clear_scope_filters_button")
+        assert dialog.selector_search.placeholderText() == (
+            "Search values or filter, e.g. Supplier=SUPPLIER AND Value > 1"
+        )
         assert dialog.create_group_button.accessibleName() == (
             "Assign selected CSV row values to a CSV analytics group"
         )
         assert dialog.assign_filtered_rows_button.accessibleName() == (
-            "Assign all rows matching current parent and grouping-scope filters"
+            "Assign all rows matching current search or filter"
         )
         assert dialog.previous_page_button.accessibleName() == "Previous matching rows page"
         assert dialog.selector_page_label.accessibleName() == "Matching rows page"
@@ -386,13 +366,13 @@ def test_sqlite_group_counts_are_scoped_to_active_filters(tmp_path) -> None:
         cleanup_tabular_load_result(loaded)
 
 
-def test_sqlite_assign_filtered_rows_combines_parent_and_scope_filters(tmp_path) -> None:
+def test_sqlite_assign_filtered_rows_combines_parent_and_search_expression(tmp_path) -> None:
     _app()
     input_file = tmp_path / "sqlite_scope_assign.csv"
     pd.DataFrame(
         {
             "Line": ["A", "A", "B", "B"],
-            "Supplier": ["WEDRONE", "WEDRONE", "IKD", "WEDRONE"],
+            "Supplier": ["SUPPLIER", "SUPPLIER", "OTHER", "SUPPLIER"],
             "TimeStamp": ["2026-04-30", "2026-05-02", "2026-05-03", "2026-05-04"],
             "Value": [1, 2, 1, 2],
             "Value2": [0, 2, 2, 3],
@@ -408,34 +388,58 @@ def test_sqlite_assign_filtered_rows_combines_parent_and_scope_filters(tmp_path)
         column_filters=(TabularColumnFilter("line", selected_values=("A",)),),
     )
     try:
-        _set_scope_filter_row(
-            dialog,
-            0,
-            column="supplier",
-            operator="=",
-            value="WEDRONE",
-            filter_type="text",
-        )
-        dialog.add_scope_filter_row()
-        _set_scope_filter_row(
-            dialog,
-            1,
-            column="timestamp",
-            operator=">",
-            value="2026-05-01",
-            filter_type="date",
-        )
-        dialog.add_scope_filter_row()
-        _set_scope_filter_row(dialog, 2, column="value2", operator=">", value="1", filter_type="number")
-        assert (
-            dialog.scope_filter_summary_label.text()
-            == "Assign-all scope: parent filters + supplier = WEDRONE AND "
-            "timestamp > 2026-05-01 AND value2 > 1 (1 rows)"
-        )
+        dialog.selector_search.setText("Supplier=SUPPLIER AND TimeStamp>2026-05-01 AND Value2>1")
+
+        assert dialog.assign_filtered_rows_button.isEnabled() is True
+        assert dialog.selector_preview_label.text() == "Add a grouping column to preview row groups."
 
         dialog.assign_filtered_rows(initial_group_name="Scoped")
         assert dialog.df["REPORT_ID"].tolist() == [2]
         assert dialog.df["GROUP"].tolist() == ["Scoped"]
+    finally:
+        dialog.close()
+        cleanup_tabular_load_result(loaded)
+
+
+def test_sqlite_search_expression_filters_preview_and_assigns_all_matching_rows(
+    tmp_path,
+) -> None:
+    _app()
+    input_file = tmp_path / "sqlite_expression_selector.csv"
+    pd.DataFrame(
+        {
+            "Line": ["A", "A", "B", "A", "A"],
+            "Supplier": ["SUPPLIER", "SUPPLIER", "SUPPLIER", "OTHER", "SUPPLIER"],
+            "Part": ["body1", "body-side", "body-other", "cap", "bolt"],
+            "Value2": [0, 1, 4, 3, 1],
+            "TraceCode": ["TC-001", "TC-002", "TC-003", "TC-004", "TC-005"],
+        }
+    ).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file, force_sqlite=True)
+
+    dialog = TabularAnalyticsGroupingDialog(
+        dataframe=loaded.dataframe,
+        column_mapping=loaded.column_mapping,
+        sqlite_store=loaded.sqlite_store,
+        column_filters=(TabularColumnFilter("line", selected_values=("A",)),),
+    )
+    try:
+        dialog.selector_columns = ["tracecode"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+        dialog.selector_search.setText("(Part=body* AND Supplier=SUPPLIER) OR Value2>2")
+
+        assert dialog.selector_page_label.text() == "Page 1 of 1"
+        assert dialog.selector_preview_label.text() == "Showing 3 matching group(s)."
+        assert [
+            dialog.selector_list.item(index).data(Qt.ItemDataRole.UserRole)
+            for index in range(dialog.selector_list.count())
+        ] == [("TC-001",), ("TC-002",), ("TC-004",)]
+
+        dialog.assign_filtered_rows(initial_group_name="Expression")
+
+        assert dialog.df.loc[dialog.df["GROUP"] == "Expression", "REPORT_ID"].tolist() == [1, 2, 4]
+        assert dialog.selected_selector_keys == set()
     finally:
         dialog.close()
         cleanup_tabular_load_result(loaded)
@@ -502,6 +506,8 @@ def test_matching_rows_pane_removes_bulk_buttons_and_keeps_compact_pagination_ro
         assert {"Select visible", "Select all matching", "Clear matching"}.isdisjoint(button_texts)
         label_texts = {label.text() for label in dialog.findChildren(QLabel)}
         assert "Grouping columns" not in label_texts
+        assert "Grouping-scope filters" not in label_texts
+        assert "Match" not in label_texts
         assert button_texts.isdisjoint({"Assign filtered rows...", "Assign to group..."})
         assert "Assign all filtered rows..." in button_texts
         assert "Assign selected row values..." in button_texts
@@ -609,13 +615,15 @@ def test_selector_pages_high_cardinality_groups_and_keeps_selection_across_pages
         dialog.close()
 
 
-def test_assign_all_filtered_rows_groups_high_cardinality_scope_without_page_navigation() -> None:
+def test_assign_all_filtered_rows_uses_plain_search_across_pages() -> None:
     _app()
     frame = pd.DataFrame(
         {
             "source_row_number": list(range(1, 2506)),
-            "tracecode": [f"TC-{index:04d}" for index in range(2505)],
-            "line": ["A" if index % 2 == 0 else "B" for index in range(2505)],
+            "tracecode": [
+                f"MATCH-{index:04d}" if index < 1500 else f"OTHER-{index:04d}"
+                for index in range(2505)
+            ],
             "length_mm": [float(index) for index in range(2505)],
         }
     )
@@ -623,16 +631,16 @@ def test_assign_all_filtered_rows_groups_high_cardinality_scope_without_page_nav
     try:
         dialog.selector_columns = ["tracecode"]
         dialog._selector_index = None
-        _set_scope_filter_row(dialog, 0, column="line", operator="=", value="A", filter_type="text")
+        dialog.selector_search.setText("MATCH")
 
         assert dialog.selector_page_label.text() == "Page 1 of 2"
-        assert dialog.selector_list.item(0).data(Qt.ItemDataRole.UserRole) == ("TC-0000",)
+        assert dialog.selector_list.item(0).data(Qt.ItemDataRole.UserRole) == ("MATCH-0000",)
         assert dialog.assign_filtered_rows_button.isEnabled() is True
 
-        dialog.assign_filtered_rows(initial_group_name="Line A")
+        dialog.assign_filtered_rows(initial_group_name="Matched values")
 
-        grouped = dialog.df.loc[dialog.df["GROUP"] == "Line A", "REPORT_ID"].tolist()
-        assert grouped == list(range(1, 2506, 2))
+        grouped = dialog.df.loc[dialog.df["GROUP"] == "Matched values", "REPORT_ID"].tolist()
+        assert grouped == list(range(1, 1501))
         assert dialog.selector_page_label.text() == "Page 1 of 2"
         assert dialog.selected_selector_keys == set()
     finally:
@@ -723,7 +731,7 @@ def test_create_group_uses_selected_keys_from_paged_selector() -> None:
         dialog.close()
 
 
-def test_grouping_scope_numeric_filters_update_summary_and_assign_filtered_rows() -> None:
+def test_search_expression_filters_preview_and_assign_all_rows() -> None:
     _app()
     frame = pd.DataFrame(
         {
@@ -735,72 +743,45 @@ def test_grouping_scope_numeric_filters_update_summary_and_assign_filtered_rows(
     )
     dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
     try:
-        _set_scope_filter_row(dialog, 0, column="value", operator="=", value="1")
-        dialog.add_scope_filter_row()
-        _set_scope_filter_row(dialog, 1, column="value2", operator=">", value="1")
+        dialog.selector_columns = ["tracecode"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+        dialog.selector_search.setText("value=1 AND value2>1")
 
-        assert dialog.scope_filter_summary_label.text() == (
-            "Assign-all scope: parent filters + value = 1 AND value2 > 1 (1 rows)"
-        )
+        assert dialog.selector_list.count() == 1
+        assert dialog.selector_list.item(0).data(Qt.ItemDataRole.UserRole) == ("TC-002",)
+        assert dialog.selector_preview_label.text() == "Showing 1 matching group(s)."
         assert dialog.assign_filtered_rows_button.isEnabled() is True
 
-        dialog.assign_filtered_rows(initial_group_name="Scope AND")
-        grouped = dialog.df.loc[dialog.df["GROUP"] == "Scope AND", "REPORT_ID"].tolist()
+        dialog.assign_filtered_rows(initial_group_name="Expression")
+        grouped = dialog.df.loc[dialog.df["GROUP"] == "Expression", "REPORT_ID"].tolist()
         assert grouped == [2]
-
-        mode_index = dialog.scope_match_mode_combo.findData("or")
-        dialog.scope_match_mode_combo.setCurrentIndex(mode_index)
-        dialog._handle_scope_filters_changed()
-
-        assert dialog.scope_filter_summary_label.text() == (
-            "Assign-all scope: parent filters + value = 1 OR value2 > 1 (3 rows)"
-        )
     finally:
         dialog.close()
 
 
-def test_grouping_scope_text_date_and_numeric_filters_update_summary_and_assign_rows() -> None:
+def test_invalid_search_expression_disables_assign_all_and_preview() -> None:
     _app()
     frame = pd.DataFrame(
         {
             "source_row_number": [1, 2, 3, 4],
             "TraceCode": ["TC-001", "TC-002", "TC-003", "TC-004"],
-            "Supplier": ["WEDRONE", "WEDRONE", "IKD", "WEDRONE"],
+            "Supplier": ["SUPPLIER", "SUPPLIER", "OTHER", "SUPPLIER"],
             "TimeStamp": ["2026-05-01", "2026-05-02", "2026-05-03", "2026-05-04"],
             "Value2": [2, 2, 3, 0],
         }
     )
     dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
     try:
-        _set_scope_filter_row(
-            dialog,
-            0,
-            column="Supplier",
-            operator="=",
-            value="WEDRONE",
-            filter_type="text",
-        )
-        dialog.add_scope_filter_row()
-        _set_scope_filter_row(
-            dialog,
-            1,
-            column="TimeStamp",
-            operator=">",
-            value="2026-05-01",
-            filter_type="date",
-        )
-        dialog.add_scope_filter_row()
-        _set_scope_filter_row(dialog, 2, column="Value2", operator=">", value="1", filter_type="number")
+        dialog.selector_columns = ["TraceCode"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+        dialog.selector_search.setText("MissingColumn=SUPPLIER")
 
-        assert (
-            dialog.scope_filter_summary_label.text()
-            == "Assign-all scope: parent filters + Supplier = WEDRONE AND "
-            "TimeStamp > 2026-05-01 AND Value2 > 1 (1 rows)"
-        )
-
-        dialog.assign_filtered_rows(initial_group_name="Supplier filtered")
-        grouped = dialog.df.loc[dialog.df["GROUP"] == "Supplier filtered", "REPORT_ID"].tolist()
-        assert grouped == [2]
+        assert dialog.selector_list.count() == 0
+        assert dialog.selector_preview_label.text().startswith("Invalid filter:")
+        assert dialog.selector_page_label.text() == "Page 0 of 0"
+        assert dialog.assign_filtered_rows_button.isEnabled() is False
     finally:
         dialog.close()
 

@@ -5,6 +5,7 @@ store, apply, and clear reference/part grouping assignments.
 """
 
 import inspect
+import re
 import sqlite3
 
 import modules.custom_logger as custom_logger
@@ -60,6 +61,18 @@ import pandas as pd
 
 
 _GROUPING_LIST_PREVIEW_LIMIT = 1000
+_SCOPE_FILTER_PLACEHOLDER = "Filter rows, e.g. Supplier=SUPPLIER AND Date>=2026-05-01"
+_SCOPE_FILTER_ALIAS_CANDIDATES = (
+    ("Sample", ("SAMPLE_NUMBER", "sample_number")),
+    ("Date", ("DATE", "date", "report_date")),
+    ("Part", ("PART_NAME", "part_name")),
+    ("Status", ("STATUS_CODE", "status_code")),
+    ("Supplier", ("SUPPLIER", "supplier", "SUPPLIER_NAME", "supplier_name")),
+)
+_SCOPE_FILTER_TERM_SPLIT_RE = re.compile(r"(\s+(?:AND|OR)\s+)", flags=re.IGNORECASE)
+_SCOPE_FILTER_FIELD_RE = re.compile(
+    r"^(?P<leading>\s*)(?P<field>[^<>=!]+?)(?P<operator>\s*(?:>=|<=|!=|=|>|<)\s*)"
+)
 
 
 class DataGrouping(QDialog):
@@ -190,7 +203,7 @@ class DataGrouping(QDialog):
             self.group_summary_label = ui_foundation.status_chip("Group: none", variant="neutral")
             self.selection_summary_label = ui_foundation.status_chip("Selected parts: 0", variant="neutral")
             self.scope_filter_input = QLineEdit()
-            self.scope_filter_input.setPlaceholderText("Filter rows, e.g. DATE>=2026-05-01 AND PART_NAME=WEDRONE")
+            self.scope_filter_input.setPlaceholderText(self._scope_filter_placeholder())
             self.scope_filter_summary_label = ui_foundation.status_chip("Scope: all rows", variant="neutral")
         except Exception as e:
             self.log_and_exit(e)
@@ -618,18 +631,95 @@ class DataGrouping(QDialog):
             return False
         return text.lower() not in {"0", "false", "no", "none"}
 
-    def _status_display_text(self, row):
-        def _field_value(field_name):
-            if hasattr(row, field_name):
-                return getattr(row, field_name)
-            try:
-                return row[field_name]
-            except (AttributeError, KeyError, TypeError):
-                return None
+    @staticmethod
+    def _scope_filter_placeholder():
+        return _SCOPE_FILTER_PLACEHOLDER
 
-        status_code = self._display_text(_field_value('STATUS_CODE'))
-        has_nok = _field_value('HAS_NOK')
-        nok_count = self._display_text(_field_value('NOK_COUNT'))
+    @staticmethod
+    def _row_field_value(row, field_name):
+        if hasattr(row, field_name):
+            return getattr(row, field_name)
+        try:
+            return row[field_name]
+        except (AttributeError, KeyError, TypeError):
+            return None
+
+    @classmethod
+    def _first_row_field_value(cls, row, field_names):
+        for field_name in field_names:
+            value = cls._row_field_value(row, field_name)
+            if cls._display_text(value):
+                return value
+        return None
+
+    @staticmethod
+    def _scope_filter_alias_kw():
+        try:
+            parameters = inspect.signature(parse_filter_expression).parameters
+        except (TypeError, ValueError):
+            return None
+
+        for name in ("aliases", "field_aliases", "column_aliases"):
+            if name in parameters:
+                return name
+        if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()):
+            return "aliases"
+        return None
+
+    @classmethod
+    def _scope_filter_field_aliases(cls, columns):
+        column_lookup = {str(column).casefold(): str(column) for column in columns}
+        aliases = {}
+        for alias, candidate_columns in _SCOPE_FILTER_ALIAS_CANDIDATES:
+            for candidate_column in candidate_columns:
+                resolved_column = column_lookup.get(str(candidate_column).casefold())
+                if resolved_column:
+                    aliases[alias] = resolved_column
+                    break
+        return aliases
+
+    @classmethod
+    def _normalize_scope_filter_aliases(cls, expression, aliases):
+        if not aliases:
+            return expression
+
+        alias_lookup = {str(alias).casefold(): str(column) for alias, column in aliases.items()}
+        parts = _SCOPE_FILTER_TERM_SPLIT_RE.split(str(expression or ""))
+        normalized_parts = []
+        for part in parts:
+            if _SCOPE_FILTER_TERM_SPLIT_RE.fullmatch(part or ""):
+                normalized_parts.append(part)
+                continue
+
+            match = _SCOPE_FILTER_FIELD_RE.match(part or "")
+            if match is None:
+                normalized_parts.append(part)
+                continue
+
+            requested_field = match.group("field").strip()
+            resolved_field = alias_lookup.get(requested_field.casefold())
+            if not resolved_field:
+                normalized_parts.append(part)
+                continue
+
+            normalized_parts.append(
+                f"{match.group('leading')}{resolved_field}{match.group('operator')}{part[match.end():]}"
+            )
+        return "".join(normalized_parts)
+
+    @classmethod
+    def _parse_scope_filter_expression(cls, expression, columns):
+        aliases = cls._scope_filter_field_aliases(columns)
+        alias_kw = cls._scope_filter_alias_kw()
+        if alias_kw:
+            return parse_filter_expression(expression, columns, **{alias_kw: aliases})
+        normalized_expression = cls._normalize_scope_filter_aliases(expression, aliases)
+        return parse_filter_expression(normalized_expression, columns)
+
+    def _status_display_text(self, row):
+        status_code = self._display_text(self._row_field_value(row, 'STATUS_CODE'))
+        has_nok = self._row_field_value(row, 'HAS_NOK')
+        nok_count = self._display_text(self._row_field_value(row, 'NOK_COUNT'))
 
         if status_code:
             status_text = status_code.upper()
@@ -645,32 +735,30 @@ class DataGrouping(QDialog):
         return status_text
 
     def _part_display_label(self, row):
-        def _field_value(field_name):
-            if hasattr(row, field_name):
-                return getattr(row, field_name)
-            try:
-                return row[field_name]
-            except (AttributeError, KeyError, TypeError):
-                return None
-
         tokens = []
-        sample_number = self._display_text(_field_value('SAMPLE_NUMBER'))
+        sample_number = self._display_text(self._row_field_value(row, 'SAMPLE_NUMBER'))
         if sample_number:
-            tokens.append(sample_number)
+            tokens.append(f"Sample: {sample_number}")
 
-        date_value = self._display_text(_field_value('DATE'))
+        date_value = self._display_text(self._row_field_value(row, 'DATE'))
         if date_value:
-            tokens.append(date_value)
+            tokens.append(f"Date: {date_value}")
 
-        part_name = self._display_text(_field_value('PART_NAME'))
+        part_name = self._display_text(self._row_field_value(row, 'PART_NAME'))
         if part_name:
             tokens.append(f"Part: {part_name}")
 
-        revision = self._display_text(_field_value('REVISION'))
+        supplier_name = self._display_text(
+            self._first_row_field_value(row, ('SUPPLIER', 'Supplier', 'supplier', 'SUPPLIER_NAME'))
+        )
+        if supplier_name:
+            tokens.append(f"Supplier: {supplier_name}")
+
+        revision = self._display_text(self._row_field_value(row, 'REVISION'))
         if revision:
             tokens.append(f"Rev: {revision}")
 
-        template_variant = self._display_text(_field_value('TEMPLATE_VARIANT'))
+        template_variant = self._display_text(self._row_field_value(row, 'TEMPLATE_VARIANT'))
         if template_variant:
             tokens.append(f"Variant: {template_variant}")
 
@@ -678,15 +766,15 @@ class DataGrouping(QDialog):
         if status_text:
             tokens.append(f"Status: {status_text}")
 
-        operator_name = self._display_text(_field_value('OPERATOR_NAME'))
+        operator_name = self._display_text(self._row_field_value(row, 'OPERATOR_NAME'))
         if operator_name:
             tokens.append(f"Op: {operator_name}")
 
-        filename = self._display_text(_field_value('FILENAME'))
+        filename = self._display_text(self._row_field_value(row, 'FILENAME'))
         if filename:
             tokens.append(f"File: {filename}")
 
-        row_count = self._display_text(_field_value('ROW_COUNT'))
+        row_count = self._display_text(self._row_field_value(row, 'ROW_COUNT'))
         if row_count and row_count not in {"1", "1.0"}:
             tokens.append(f"Rows: {row_count}")
 
@@ -713,7 +801,7 @@ class DataGrouping(QDialog):
                 summary_label.setText(f"Scope: all rows ({len(df.index)} rows)")
             return df
         try:
-            parsed = parse_filter_expression(expression, df.columns)
+            parsed = self._parse_scope_filter_expression(expression, df.columns)
             filtered = apply_filter_specs(df, parsed.specs, match_mode=parsed.match_mode)
         except (KeyError, TypeError, ValueError) as exc:
             if summary_label is not None and hasattr(summary_label, "setText"):

@@ -46,6 +46,20 @@ You can multi-select parts here.
 
 Double-clicking a part is a shortcut into group creation.
 
+## Filtering rows in the grouping dialog
+
+Use **Filter rows** to narrow the rows shown in the dialog before assigning groups.
+
+The filter accepts clear field names when those fields are available:
+
+- `Sample`
+- `Date`
+- `Part`
+- `Status`
+- `Supplier`
+
+Example: `Supplier=SUPPLIER AND Date>=2026-05-01`
+
 ### GROUPS
 
 This pane lists existing groups.
