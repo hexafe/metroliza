@@ -814,9 +814,13 @@ def _build_groupstats_input_from_prepared(
         )
 
     grouped_values: dict[str, np.ndarray] = {}
-    metric_series = frame[metric.field_name]
+    numeric_values = pd.to_numeric(frame[metric.field_name], errors="coerce").to_numpy(
+        dtype=float,
+        copy=False,
+    )
     for label, positions in prepared.group_indices.items():
-        values = _finite_numeric_array(metric_series.iloc[positions])
+        values = numeric_values[positions]
+        values = values[np.isfinite(values)]
         if values.size:
             grouped_values[label] = values
 

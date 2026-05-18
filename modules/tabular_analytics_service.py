@@ -226,6 +226,32 @@ class TabularSqliteStore:
             value = connection.execute(query, params).fetchone()[0]
         return int(value or 0)
 
+    def has_rows(
+        self,
+        *,
+        filter_columns: tuple[str, ...] | list[str] | None = None,
+        selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+        base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filter_match_mode: str = "and",
+        grouping_filter: Any = None,
+        grouping_filter_expression: str | None = None,
+        grouping_filter_aliases: Mapping[str, str] | None = None,
+    ) -> bool:
+        where_sql, params = self._where_clause(
+            filter_columns=filter_columns,
+            selected_filter_keys=selected_filter_keys,
+            base_column_filters=base_column_filters,
+            column_filters=column_filters,
+            column_filter_match_mode=column_filter_match_mode,
+            grouping_filter=grouping_filter,
+            grouping_filter_expression=grouping_filter_expression,
+            grouping_filter_aliases=grouping_filter_aliases,
+        )
+        query = f"SELECT 1 FROM {_quote_identifier(self.table_name)}{where_sql} LIMIT 1"
+        with sqlite_connection_scope(self.path) as connection:
+            return connection.execute(query, params).fetchone() is not None
+
     def row_ids(
         self,
         *,
@@ -399,7 +425,7 @@ class TabularSqliteStore:
             outer_params.append(_sqlite_like_pattern(search))
         count_query = f"SELECT COUNT(*) FROM ({grouped_query}){outer_where}"
         query = (
-            f"SELECT * FROM ({grouped_query}){outer_where} "
+            f"SELECT *, COUNT(*) OVER () AS __total_rows FROM ({grouped_query}){outer_where} "
             "ORDER BY label COLLATE NOCASE"
         )
         offset = max(0, int(offset or 0))
@@ -408,8 +434,12 @@ class TabularSqliteStore:
         elif offset:
             query = f"{query} LIMIT -1 OFFSET {offset}"
         with sqlite_connection_scope(self.path) as connection:
-            total = int(connection.execute(count_query, [*params, *outer_params]).fetchone()[0] or 0)
             records = connection.execute(query, [*params, *outer_params]).fetchall()
+            total = (
+                int(records[0][len(aliases) + 2] or 0)
+                if records
+                else int(connection.execute(count_query, [*params, *outer_params]).fetchone()[0] or 0)
+            )
         rows: list[dict[str, Any]] = []
         for record in records:
             key = tuple(str(record[index]) for index in range(len(aliases)))
@@ -421,6 +451,168 @@ class TabularSqliteStore:
                 }
             )
         return rows, total
+
+    def count_rows_for_group_search(
+        self,
+        columns: tuple[str, ...] | list[str],
+        *,
+        search_text: str = "",
+        filter_columns: tuple[str, ...] | list[str] | None = None,
+        selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+        base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filter_match_mode: str = "and",
+        grouping_filter: Any = None,
+        grouping_filter_expression: str | None = None,
+        grouping_filter_aliases: Mapping[str, str] | None = None,
+    ) -> int:
+        grouped_query, params = self._grouped_search_query(
+            columns,
+            filter_columns=filter_columns,
+            selected_filter_keys=selected_filter_keys,
+            base_column_filters=base_column_filters,
+            column_filters=column_filters,
+            column_filter_match_mode=column_filter_match_mode,
+            grouping_filter=grouping_filter,
+            grouping_filter_expression=grouping_filter_expression,
+            grouping_filter_aliases=grouping_filter_aliases,
+        )
+        search = str(search_text or "").strip().casefold()
+        if not grouped_query or not search:
+            return self.count_rows(
+                filter_columns=filter_columns,
+                selected_filter_keys=selected_filter_keys,
+                base_column_filters=base_column_filters,
+                column_filters=column_filters,
+                column_filter_match_mode=column_filter_match_mode,
+                grouping_filter=grouping_filter,
+                grouping_filter_expression=grouping_filter_expression,
+                grouping_filter_aliases=grouping_filter_aliases,
+            )
+        query = (
+            f"SELECT COALESCE(SUM(row_count), 0) FROM ({grouped_query}) "
+            "WHERE LOWER(label) LIKE ? ESCAPE '\\'"
+        )
+        with sqlite_connection_scope(self.path) as connection:
+            return int(connection.execute(query, [*params, _sqlite_like_pattern(search)]).fetchone()[0] or 0)
+
+    def has_rows_for_group_search(
+        self,
+        columns: tuple[str, ...] | list[str],
+        *,
+        search_text: str = "",
+        filter_columns: tuple[str, ...] | list[str] | None = None,
+        selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+        base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filter_match_mode: str = "and",
+        grouping_filter: Any = None,
+        grouping_filter_expression: str | None = None,
+        grouping_filter_aliases: Mapping[str, str] | None = None,
+    ) -> bool:
+        grouped_query, params = self._grouped_search_query(
+            columns,
+            filter_columns=filter_columns,
+            selected_filter_keys=selected_filter_keys,
+            base_column_filters=base_column_filters,
+            column_filters=column_filters,
+            column_filter_match_mode=column_filter_match_mode,
+            grouping_filter=grouping_filter,
+            grouping_filter_expression=grouping_filter_expression,
+            grouping_filter_aliases=grouping_filter_aliases,
+        )
+        search = str(search_text or "").strip().casefold()
+        if not grouped_query or not search:
+            return self.has_rows(
+                filter_columns=filter_columns,
+                selected_filter_keys=selected_filter_keys,
+                base_column_filters=base_column_filters,
+                column_filters=column_filters,
+                column_filter_match_mode=column_filter_match_mode,
+                grouping_filter=grouping_filter,
+                grouping_filter_expression=grouping_filter_expression,
+                grouping_filter_aliases=grouping_filter_aliases,
+            )
+        query = f"SELECT 1 FROM ({grouped_query}) WHERE LOWER(label) LIKE ? ESCAPE '\\' LIMIT 1"
+        with sqlite_connection_scope(self.path) as connection:
+            return connection.execute(query, [*params, _sqlite_like_pattern(search)]).fetchone() is not None
+
+    def row_ids_for_group_search(
+        self,
+        columns: tuple[str, ...] | list[str],
+        *,
+        search_text: str = "",
+        filter_columns: tuple[str, ...] | list[str] | None = None,
+        selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+        base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filter_match_mode: str = "and",
+        grouping_filter: Any = None,
+        grouping_filter_expression: str | None = None,
+        grouping_filter_aliases: Mapping[str, str] | None = None,
+    ) -> list[int]:
+        normalized_columns = tuple(str(column) for column in columns if str(column) in self.columns)
+        search = str(search_text or "").strip().casefold()
+        if not normalized_columns:
+            return []
+        if not search:
+            return self.row_ids(
+                filter_columns=filter_columns,
+                selected_filter_keys=selected_filter_keys,
+                base_column_filters=base_column_filters,
+                column_filters=column_filters,
+                column_filter_match_mode=column_filter_match_mode,
+                grouping_filter=grouping_filter,
+                grouping_filter_expression=grouping_filter_expression,
+                grouping_filter_aliases=grouping_filter_aliases,
+            )
+        self._ensure_grouping_column_indexes(normalized_columns)
+        aliases = tuple(f"key_{index}" for index, _column in enumerate(normalized_columns))
+        select_exprs = [
+            f"{_sqlite_normalized_value_expr(column)} AS {_quote_identifier(alias)}"
+            for alias, column in zip(aliases, normalized_columns, strict=False)
+        ]
+        where_sql, params = self._where_clause(
+            filter_columns=filter_columns,
+            selected_filter_keys=selected_filter_keys,
+            base_column_filters=base_column_filters,
+            column_filters=column_filters,
+            column_filter_match_mode=column_filter_match_mode,
+            grouping_filter=grouping_filter,
+            grouping_filter_expression=grouping_filter_expression,
+            grouping_filter_aliases=grouping_filter_aliases,
+        )
+        row_column = _quote_identifier("source_row_number")
+        base_query = (
+            f"SELECT {row_column}, {', '.join(select_exprs)} "
+            f"FROM {_quote_identifier(self.table_name)}{where_sql}"
+        )
+        label_expr = " || ' | ' || ".join(_quote_identifier(alias) for alias in aliases)
+        grouped_keys = ", ".join(_quote_identifier(alias) for alias in aliases)
+        grouped_query = (
+            f"SELECT {grouped_keys}, {label_expr} AS label "
+            f"FROM base_rows GROUP BY {grouped_keys}"
+        )
+        join_clause = " AND ".join(
+            f"base_rows.{_quote_identifier(alias)} = matching_groups.{_quote_identifier(alias)}"
+            for alias in aliases
+        )
+        query = (
+            "WITH base_rows AS ("
+            f"{base_query}"
+            "), matching_groups AS ("
+            f"SELECT {grouped_keys} FROM ({grouped_query}) "
+            "WHERE LOWER(label) LIKE ? ESCAPE '\\'"
+            ") "
+            f"SELECT base_rows.{row_column} "
+            "FROM base_rows JOIN matching_groups ON "
+            f"{join_clause} ORDER BY base_rows.{row_column}"
+        )
+        with sqlite_connection_scope(self.path) as connection:
+            return [
+                int(row[0])
+                for row in connection.execute(query, [*params, _sqlite_like_pattern(search)]).fetchall()
+            ]
 
     def row_ids_for_group_keys(
         self,
@@ -675,14 +867,7 @@ class TabularSqliteStore:
         )
         if columns and selected_keys:
             self._ensure_grouping_column_indexes(columns)
-            key_clauses: list[str] = []
-            for key in selected_keys:
-                parts = []
-                for column, value in zip(columns, key, strict=False):
-                    parts.append(f"{_sqlite_normalized_value_expr(column)} = ?")
-                    params.append(str(value))
-                key_clauses.append(f"({' AND '.join(parts)})")
-            clauses.append(f"({' OR '.join(key_clauses)})")
+            clauses.append(_sqlite_group_key_predicate(columns, selected_keys, params))
         return (f" WHERE {' AND '.join(clauses)}" if clauses else ""), params
 
     def _where_clause_for_group_keys(
@@ -721,18 +906,56 @@ class TabularSqliteStore:
         clauses: list[str] = []
         if filter_where:
             clauses.append(filter_where.removeprefix(" WHERE "))
-        key_clauses: list[str] = []
-        for key in selected_keys:
-            parts = []
-            for column, value in zip(normalized_columns, key, strict=False):
-                parts.append(f"{_sqlite_normalized_value_expr(column)} = ?")
-                params.append(str(value))
-            key_clauses.append(f"({' AND '.join(parts)})")
-        clauses.append(f"({' OR '.join(key_clauses)})")
+        clauses.append(_sqlite_group_key_predicate(normalized_columns, selected_keys, params))
         return f" WHERE {' AND '.join(clauses)}", params
 
     def _sqlite_date_filter_expr(self, column: str) -> str:
         return f"date({_quote_identifier(self.date_filter_columns.get(column, column))})"
+
+    def _grouped_search_query(
+        self,
+        columns: tuple[str, ...] | list[str],
+        *,
+        filter_columns: tuple[str, ...] | list[str] | None = None,
+        selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+        base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filter_match_mode: str = "and",
+        grouping_filter: Any = None,
+        grouping_filter_expression: str | None = None,
+        grouping_filter_aliases: Mapping[str, str] | None = None,
+    ) -> tuple[str, list[Any]]:
+        normalized_columns = tuple(str(column) for column in columns if str(column) in self.columns)
+        if not normalized_columns:
+            return "", []
+        self._ensure_grouping_column_indexes(normalized_columns)
+        aliases = tuple(f"key_{index}" for index, _column in enumerate(normalized_columns))
+        select_exprs = [
+            f"{_sqlite_normalized_value_expr(column)} AS {_quote_identifier(alias)}"
+            for alias, column in zip(aliases, normalized_columns, strict=False)
+        ]
+        where_sql, params = self._where_clause(
+            filter_columns=filter_columns,
+            selected_filter_keys=selected_filter_keys,
+            base_column_filters=base_column_filters,
+            column_filters=column_filters,
+            column_filter_match_mode=column_filter_match_mode,
+            grouping_filter=grouping_filter,
+            grouping_filter_expression=grouping_filter_expression,
+            grouping_filter_aliases=grouping_filter_aliases,
+        )
+        inner_query = (
+            f"SELECT {', '.join(select_exprs)} "
+            f"FROM {_quote_identifier(self.table_name)}{where_sql}"
+        )
+        label_expr = " || ' | ' || ".join(_quote_identifier(alias) for alias in aliases)
+        grouped_query = (
+            f"SELECT {', '.join(_quote_identifier(alias) for alias in aliases)}, "
+            f"COUNT(*) AS row_count, {label_expr} AS label "
+            f"FROM ({inner_query}) "
+            f"GROUP BY {', '.join(_quote_identifier(alias) for alias in aliases)}"
+        )
+        return grouped_query, params
 
     def _sqlite_grouping_filter(
         self,
@@ -1968,6 +2191,32 @@ def _sqlite_like_pattern(
     if match_mode == "ends_with":
         return f"%{escaped}"
     return f"%{escaped}%"
+
+
+def _sqlite_group_key_predicate(
+    columns: tuple[str, ...],
+    selected_keys: tuple[tuple[str, ...], ...],
+    params: list[Any],
+) -> str:
+    if len(columns) == 1:
+        expression = _sqlite_normalized_value_expr(columns[0])
+        values = [str(key[0]) for key in selected_keys]
+        clauses: list[str] = []
+        for start in range(0, len(values), 900):
+            chunk = values[start : start + 900]
+            placeholders = ", ".join("?" for _value in chunk)
+            clauses.append(f"{expression} IN ({placeholders})")
+            params.extend(chunk)
+        return f"({' OR '.join(clauses)})"
+
+    key_clauses: list[str] = []
+    for key in selected_keys:
+        parts = []
+        for column, value in zip(columns, key, strict=False):
+            parts.append(f"{_sqlite_normalized_value_expr(column)} = ?")
+            params.append(str(value))
+        key_clauses.append(f"({' AND '.join(parts)})")
+    return f"({' OR '.join(key_clauses)})"
 
 
 def _sqlite_normalized_value_expr(column: str) -> str:

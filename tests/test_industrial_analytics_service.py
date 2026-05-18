@@ -6,6 +6,7 @@ import sqlite3
 import numpy as np
 import pandas as pd
 
+import modules.industrial_analytics_service as industrial_analytics_service
 from modules.industrial_analytics_service import (
     aggregate_production_frame,
     analyze_production_groupstats,
@@ -461,6 +462,32 @@ def test_groupstats_inputs_support_line_grouping(tmp_path) -> None:
     assert set(inputs.grouped_values) == {"L1", "L2"}
     assert all(len(values) > 0 for values in inputs.grouped_values.values())
     assert all(isinstance(values, np.ndarray) for values in inputs.grouped_values.values())
+
+
+def test_groupstats_inputs_convert_metric_once_per_metric(monkeypatch) -> None:
+    frame = pd.DataFrame(
+        {
+            "GROUP": ["A", "A", "B", "B", "C", "C"],
+            "length_mm": ["1.0", "bad", "2.0", "3.0", None, "4.0"],
+        }
+    )
+    metric = ProductionMetricSelection("length_mm", "Length")
+    original_to_numeric = industrial_analytics_service.pd.to_numeric
+    calls = 0
+
+    def count_to_numeric(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original_to_numeric(*args, **kwargs)
+
+    monkeypatch.setattr(industrial_analytics_service.pd, "to_numeric", count_to_numeric)
+
+    inputs = build_production_groupstats_inputs(frame, metric, group_fields=("GROUP",))
+
+    assert calls == 1
+    assert inputs.grouped_values["A"].tolist() == [1.0]
+    assert inputs.grouped_values["B"].tolist() == [2.0, 3.0]
+    assert inputs.grouped_values["C"].tolist() == [4.0]
 
 
 def test_groupstats_analysis_reuses_prepared_numpy_groups(monkeypatch) -> None:

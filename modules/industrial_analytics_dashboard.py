@@ -370,7 +370,7 @@ def _build_histogram_chart(
     stats_tables = _histogram_stats_tables(metric, groups)
     plotly_spec = _build_plotstats_histogram_spec(
         metric,
-        groups,
+        image_groups,
         title=f"{metric.display_label} distribution",
         stats_tables=stats_tables,
     )
@@ -410,7 +410,7 @@ def _build_distribution_chart(
     )
     plotly_spec = _build_plotstats_distribution_spec(
         metric,
-        groups,
+        image_groups,
         chart_type=chart_type,
         title=f"{metric.display_label} {chart_type}",
     )
@@ -1457,7 +1457,7 @@ def _sample_plot_groups_for_static_image(
         sampled_groups.append((label, sampled))
         sampled_total += len(sampled.index)
     note = (
-        f"Plot image shows {sampled_total:,} randomly sampled points from "
+        f"Plot shows {sampled_total:,} randomly sampled points from "
         f"{total:,} rows; statistics use all rows."
     )
     return sampled_groups, note

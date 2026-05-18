@@ -748,6 +748,43 @@ def test_sqlite_materialization_projects_columns_and_count_uses_pushdown(
         cleanup_tabular_load_result(loaded)
 
 
+def test_sqlite_group_search_counts_and_row_ids_stay_in_sql(tmp_path) -> None:
+    input_file = tmp_path / "group_search_sqlite.csv"
+    pd.DataFrame(
+        {
+            "Line": ["L1", "L1", "L2", "L2", "L1"],
+            "Station": ["A", "B", "A", "A", "A"],
+            "Length mm": [10.0, 10.1, 10.2, 10.3, 10.4],
+        }
+    ).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file, force_sqlite=True)
+    assert loaded.sqlite_store is not None
+    store = loaded.sqlite_store
+
+    try:
+        assert store.count_rows_for_group_search(("line",), search_text="L1") == 3
+        assert store.has_rows_for_group_search(("line",), search_text="L1")
+        assert store.row_ids_for_group_search(("line",), search_text="L1") == [1, 2, 5]
+
+        filtered_count = store.count_rows_for_group_search(
+            ("line",),
+            search_text="L1",
+            column_filters=(TabularColumnFilter("station", selected_values=("A",)),),
+        )
+        filtered_row_ids = store.row_ids_for_group_search(
+            ("line",),
+            search_text="L1",
+            column_filters=(TabularColumnFilter("station", selected_values=("A",)),),
+        )
+
+        assert filtered_count == 2
+        assert filtered_row_ids == [1, 5]
+        assert not store.has_rows_for_group_search(("line",), search_text="missing")
+        assert store.count_rows_for_group_search(("line",), search_text="missing") == 0
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+
 def test_apply_tabular_grouping_keeps_unassigned_rows_in_population(tmp_path) -> None:
     input_file = tmp_path / "table.csv"
     _sample_table().to_csv(input_file, index=False)

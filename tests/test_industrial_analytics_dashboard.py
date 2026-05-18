@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 
 from modules.industrial_analytics_dashboard import (
+    DASHBOARD_RAW_POINT_LIMIT,
     DASHBOARD_SCHEMA,
     build_production_dashboard_manifest,
     write_production_dashboard,
@@ -112,6 +113,46 @@ def test_dashboard_chart_layout_reserves_title_and_legend_spacing(tmp_path) -> N
     assert layout["margin"]["t"] >= 110
     assert layout["legend"]["y"] > 1.0
     assert layout["title"]["y"] >= 0.99
+
+
+def test_distribution_plotly_payloads_are_sampled_for_large_frames() -> None:
+    row_count = DASHBOARD_RAW_POINT_LIMIT + 128
+    frame = pd.DataFrame(
+        {
+            "process_datetime": pd.date_range("2026-05-01", periods=row_count, freq="s", tz="UTC"),
+            "line": ["L1" if index % 2 == 0 else "L2" for index in range(row_count)],
+            "length_mm": [10.0 + (index % 100) * 0.01 for index in range(row_count)],
+        }
+    )
+
+    manifest = build_production_dashboard_manifest(
+        frame=frame,
+        metric_selection=(ProductionMetricSelection("length_mm", "Length Mm"),),
+        aggregation_state=ProductionAggregationState(group_fields=("line",)),
+        chart_selection=ProductionChartSelection(
+            time_series=False,
+            histogram=True,
+            violin=True,
+            box=True,
+            groupstats=False,
+        ),
+    )
+
+    assert {chart["chart_type"] for chart in manifest["charts"]} == {"histogram", "violin", "box"}
+    for chart in manifest["charts"]:
+        assert chart["notes"]
+        assert "statistics use all rows" in chart["notes"][0]
+        if "plotly_spec" not in chart:
+            assert chart["image"]["mime_type"] == "image/png"
+            continue
+        trace_points = 0
+        for trace in chart["plotly_spec"]["data"]:
+            trace_points += max(
+                len(value)
+                for key in ("x", "y")
+                if isinstance((value := trace.get(key)), list)
+            )
+        assert trace_points <= DASHBOARD_RAW_POINT_LIMIT
 
 
 def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None:
