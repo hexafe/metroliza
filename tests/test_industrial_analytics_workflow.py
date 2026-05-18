@@ -174,6 +174,88 @@ def test_run_tabular_file_analytics_uses_loaded_snapshot_without_reloading(
     assert Path(result.html_dashboard_path).exists()
 
 
+def test_run_tabular_file_analytics_fast_detail_samples_dashboard_frame(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    input_file = tmp_path / "detail_table.csv"
+    dashboard_file = tmp_path / "detail_table_analytics.html"
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=6, freq="h"),
+            "Reference ID": [f"R{index}" for index in range(6)],
+            "Length mm": [10.0, 10.2, 10.4, 10.6, 10.8, 11.0],
+        }
+    ).to_csv(input_file, index=False)
+    captured_lengths: list[int] = []
+    monkeypatch.setattr(workflow_module, "TABULAR_FAST_DASHBOARD_ROW_LIMIT", 3)
+
+    def capture_dashboard(**kwargs):
+        captured_lengths.append(len(kwargs["frame"].index))
+        return {
+            "html_dashboard_path": str(dashboard_file),
+            "html_dashboard_assets_path": str(tmp_path / "detail_table_analytics_assets"),
+            "html_dashboard_chart_count": 1,
+        }
+
+    monkeypatch.setattr(workflow_module, "_write_dashboard", capture_dashboard)
+
+    result = run_tabular_file_analytics(
+        input_file=str(input_file),
+        output_dashboard_file=str(dashboard_file),
+        metric_selection=(ProductionMetricSelection("length_mm", display_label="Length mm"),),
+        chart_selection=ProductionChartSelection(time_series=True),
+    )
+
+    assert result.row_count == 6
+    assert captured_lengths == [3]
+    assert any(
+        diagnostic.code == "tabular_dashboard_fast_sample"
+        and diagnostic.context["input_row_count"] == 6
+        and diagnostic.context["dashboard_row_count"] == 3
+        for diagnostic in result.diagnostics
+    )
+
+
+def test_run_tabular_file_analytics_full_detail_uses_full_dashboard_frame(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    input_file = tmp_path / "full_detail_table.csv"
+    dashboard_file = tmp_path / "full_detail_table_analytics.html"
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=6, freq="h"),
+            "Reference ID": [f"R{index}" for index in range(6)],
+            "Length mm": [10.0, 10.2, 10.4, 10.6, 10.8, 11.0],
+        }
+    ).to_csv(input_file, index=False)
+    captured_lengths: list[int] = []
+    monkeypatch.setattr(workflow_module, "TABULAR_FAST_DASHBOARD_ROW_LIMIT", 3)
+
+    def capture_dashboard(**kwargs):
+        captured_lengths.append(len(kwargs["frame"].index))
+        return {
+            "html_dashboard_path": str(dashboard_file),
+            "html_dashboard_assets_path": str(tmp_path / "full_detail_table_analytics_assets"),
+            "html_dashboard_chart_count": 1,
+        }
+
+    monkeypatch.setattr(workflow_module, "_write_dashboard", capture_dashboard)
+
+    result = run_tabular_file_analytics(
+        input_file=str(input_file),
+        output_dashboard_file=str(dashboard_file),
+        metric_selection=(ProductionMetricSelection("length_mm", display_label="Length mm"),),
+        chart_selection=ProductionChartSelection(time_series=True),
+        dashboard_detail_mode="full",
+    )
+
+    assert result.row_count == 6
+    assert captured_lengths == [6]
+    assert not any(diagnostic.code == "tabular_dashboard_fast_sample" for diagnostic in result.diagnostics)
+
+
 def test_run_tabular_file_analytics_uses_sqlite_backed_loaded_snapshot(
     tmp_path,
     monkeypatch,

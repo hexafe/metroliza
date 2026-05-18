@@ -180,6 +180,7 @@ class IndustrialAnalyticsRequest:
 
     source_kind: str
     output_dashboard_file: str
+    dashboard_detail_mode: str = "fast"
     db_file: str = ""
     input_file: str = ""
     output_workbook_file: str = ""
@@ -279,6 +280,7 @@ def validate_industrial_analytics_request(
     return IndustrialAnalyticsRequest(
         source_kind=source_kind,
         output_dashboard_file=output_dashboard_file,
+        dashboard_detail_mode=_normalize_dashboard_detail_mode(request.dashboard_detail_mode),
         db_file=db_file,
         input_file=input_file,
         output_workbook_file=output_workbook_file,
@@ -328,6 +330,7 @@ _PARSE_METADATA_MODE_ALIASES = {
     "standard": "complete",
 }
 _ANALYTICS_SOURCE_KINDS = {"production_cache", "tabular_file"}
+_DASHBOARD_DETAIL_MODES = {"fast", "full"}
 
 
 def validate_paths(paths: AppPaths) -> AppPaths:
@@ -587,6 +590,15 @@ def _normalize_analytics_source_kind(value: object) -> str:
     if source_kind not in _ANALYTICS_SOURCE_KINDS:
         raise ValueError(f"Unsupported analytics source kind: {value}")
     return source_kind
+
+
+def _normalize_dashboard_detail_mode(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError("Dashboard detail mode must be provided as a string.")
+    detail_mode = value.strip().lower()
+    if detail_mode not in _DASHBOARD_DETAIL_MODES:
+        raise ValueError(f"Unsupported dashboard detail mode: {value}")
+    return detail_mode
 
 
 def _normalize_optional_output_path(

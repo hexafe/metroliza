@@ -8,6 +8,7 @@ try:
     import modules.industrial_sync_dialog as industrial_sync_dialog
     from modules.industrial_credentials import IndustrialStoredCredentials
     from modules.industrial_data_repository import IndustrialDataRepository
+    from modules.industrial_source_config import build_source_profile, upsert_source_profile_in_config
     from modules.industrial_sync_dialog import IndustrialSyncDialog
     from modules.industrial_workflow_state import IndustrialFilterState
 except Exception as exc:  # pragma: no cover - depends on local Qt runtime availability.
@@ -15,6 +16,8 @@ except Exception as exc:  # pragma: no cover - depends on local Qt runtime avail
     industrial_sync_dialog = None
     IndustrialDataRepository = None
     IndustrialStoredCredentials = None
+    build_source_profile = None
+    upsert_source_profile_in_config = None
     IndustrialSyncDialog = None
     IndustrialFilterState = None
     PYQT_IMPORT_ERROR = exc
@@ -230,4 +233,37 @@ def test_sync_dialog_validates_session_credentials(tmp_path):
         dialog._read_credentials()
     dialog.password_edit.setText("secret-password")
     assert dialog._read_credentials() == ("operator", "secret-password")
+    dialog.close()
+
+
+def test_sync_dialog_access_only_loads_profiles_from_config(tmp_path):
+    _app()
+    config_path = tmp_path / "industrial_sources.yaml"
+    upsert_source_profile_in_config(
+        config_path,
+        build_source_profile(
+            profile_key="assembly_mes",
+            profile_name="Assembly MES",
+            source_db_alias="assembly_mes",
+            database_type="mssql",
+            host="mes.example.invalid",
+            port=1433,
+            database_name="plantdb",
+            source_object_name="events",
+            allowed_columns=("event_id", "reference"),
+            default_pagination_column="event_id",
+        ),
+    )
+    dialog = IndustrialSyncDialog(
+        db_file=None,
+        config_path=config_path,
+        access_only=True,
+    )
+
+    assert dialog.profile_combo.count() == 1
+    assert dialog.test_connection_button.isEnabled()
+    assert not dialog.sync_now_button.isEnabled()
+    assert not dialog.edit_filter_button.isEnabled()
+    assert "Access-only mode" in dialog.status_label.text()
+    assert "never saves data" in dialog.status_label.text()
     dialog.close()

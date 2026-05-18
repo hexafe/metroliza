@@ -269,7 +269,7 @@ def _build_time_series_charts(
                 y_column=aggregate_metric,
                 group_columns=group_columns,
                 default_name=f"{metric.display_label} aggregate",
-                time_bucket=aggregation.time_bucket,
+                time_bucket=None if use_hybrid_raw else aggregation.time_bucket,
                 aggregate_marker=True,
             )
             if use_hybrid_raw:
@@ -589,7 +589,7 @@ def _build_hybrid_time_series_chart(
     x_axis_title: str,
     y_axis_title: str,
 ) -> dict[str, Any]:
-    raw_layers, sampling_note = _time_series_raw_image_layers(
+    raw_layers, sampling_note, raw_bounds = _time_series_raw_image_layers(
         raw_frame,
         x_column="process_datetime",
         y_column=metric.field_name,
@@ -611,6 +611,12 @@ def _build_hybrid_time_series_chart(
         "yaxis": {"title": y_axis_title},
         "hovermode": "closest",
     }
+    bounds = _hybrid_chart_axis_bounds(raw_bounds=raw_bounds, aggregate_traces=aggregate_traces)
+    if bounds:
+        layout["xaxis"]["range"] = bounds["x_range"]
+        layout["xaxis"]["autorange"] = False
+        layout["yaxis"]["range"] = bounds["y_range"]
+        layout["yaxis"]["autorange"] = False
     if layout_images:
         layout["images"] = layout_images
     chart = _chart_payload(
@@ -702,7 +708,7 @@ def _time_series_raw_image_layers(
     group_columns: list[str],
     default_name: str,
     seed_parts: tuple[str, ...],
-) -> tuple[list[dict[str, Any]], str | None]:
+) -> tuple[list[dict[str, Any]], str | None, dict[str, Any] | None]:
     groups = _grouped_frames(frame, group_columns, default_name=default_name)
     prepared: list[tuple[str, pd.DataFrame]] = []
     total_points = 0
@@ -715,7 +721,7 @@ def _time_series_raw_image_layers(
         total_points += len(xy.index)
         x_modes.add(str(xy["__x_mode"].iloc[0]))
     if not prepared or len(x_modes) != 1:
-        return [], None
+        return [], None, None
 
     mode = next(iter(x_modes))
     x_min = min(float(xy["__x_numeric"].min()) for _label, xy in prepared)
@@ -790,7 +796,83 @@ def _time_series_raw_image_layers(
             f"Raw layer shows {sampled_points:,} randomly sampled points from "
             f"{total_points:,} rows; statistics use all rows."
         )
-    return layers, sampling_note
+    raw_bounds = {
+        "x_mode": mode,
+        "x_min": x_min,
+        "x_max": x_max,
+        "y_min": y_min,
+        "y_max": y_max,
+    }
+    return layers, sampling_note, raw_bounds
+
+
+def _hybrid_chart_axis_bounds(
+    *,
+    raw_bounds: dict[str, Any] | None,
+    aggregate_traces: list[dict[str, Any]],
+) -> dict[str, list[Any]] | None:
+    if not raw_bounds:
+        return None
+    x_mode = str(raw_bounds.get("x_mode") or "")
+    try:
+        x_min = float(raw_bounds["x_min"])
+        x_max = float(raw_bounds["x_max"])
+        y_min = float(raw_bounds["y_min"])
+        y_max = float(raw_bounds["y_max"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not np.isfinite([x_min, x_max, y_min, y_max]).all():
+        return None
+
+    for trace in aggregate_traces:
+        if not isinstance(trace, dict):
+            continue
+        x_values = trace.get("x")
+        y_values = trace.get("y")
+        if isinstance(y_values, list):
+            for value in y_values:
+                try:
+                    number = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if not np.isfinite(number):
+                    continue
+                y_min = min(y_min, number)
+                y_max = max(y_max, number)
+        if isinstance(x_values, list):
+            for value in x_values:
+                x_numeric = _hybrid_trace_x_numeric(value, mode=x_mode)
+                if x_numeric is None:
+                    continue
+                x_min = min(x_min, x_numeric)
+                x_max = max(x_max, x_numeric)
+
+    if np.isclose(x_min, x_max):
+        x_max = x_min + 1.0
+    if np.isclose(y_min, y_max):
+        y_min -= 0.5
+        y_max += 0.5
+
+    x_range = [
+        _display_x_value(x_min, mode=x_mode),
+        _display_x_value(x_max, mode=x_mode),
+    ]
+    return {"x_range": x_range, "y_range": [y_min, y_max]}
+
+
+def _hybrid_trace_x_numeric(value: Any, *, mode: str) -> float | None:
+    if value is None:
+        return None
+    if mode == "date":
+        timestamp = pd.to_datetime(value, errors="coerce", utc=True)
+        if pd.isna(timestamp):
+            return None
+        return float(timestamp.value / 1_000_000.0)
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if np.isfinite(number) else None
 
 
 def _coerce_time_series_xy(
@@ -1163,26 +1245,29 @@ def _chart_payload(
             static=False,
         )
         if spec:
+            _apply_time_series_tick_readability(spec, chart_type=chart_type)
             return {
                 "id": chart_id,
                 "title": title,
                 "chart_type": chart_type,
                 "plotly_spec": spec,
             }
+    spec = {
+        "data": data,
+        "layout": resolved_layout,
+        "config": {
+            "responsive": True,
+            "displaylogo": False,
+            "scrollZoom": False,
+            "modeBarButtonsToRemove": list(PLOTLY_MODEBAR_REMOVE),
+        },
+    }
+    _apply_time_series_tick_readability(spec, chart_type=chart_type)
     return {
         "id": chart_id,
         "title": title,
         "chart_type": chart_type,
-        "plotly_spec": {
-            "data": data,
-            "layout": resolved_layout,
-            "config": {
-                "responsive": True,
-                "displaylogo": False,
-                "scrollZoom": False,
-                "modeBarButtonsToRemove": list(PLOTLY_MODEBAR_REMOVE),
-            },
-        },
+        "plotly_spec": spec,
     }
 
 
@@ -1497,6 +1582,51 @@ def _merge_axis_layout(base_layout: dict[str, Any], override: dict[str, Any]) ->
             base_layout[key].extend(value)
         else:
             base_layout[key] = value
+
+
+def _apply_time_series_tick_readability(spec: dict[str, Any], *, chart_type: str) -> None:
+    if not chart_type.startswith("time_series"):
+        return
+    layout = spec.get("layout")
+    if not isinstance(layout, dict):
+        return
+    xaxis = layout.setdefault("xaxis", {})
+    if not isinstance(xaxis, dict):
+        return
+    unique_count = _plotly_trace_unique_x_count(spec.get("data"))
+    if unique_count < 16:
+        return
+
+    xaxis["automargin"] = True
+    xaxis["tickangle"] = -34 if unique_count < 80 else -40
+    xaxis["tickfont"] = {"size": 10 if unique_count < 200 else 9}
+    xaxis["ticklabeloverflow"] = "hide past div"
+    if unique_count >= 36:
+        xaxis["ticklabelstep"] = max(2, min(8, int(np.ceil(unique_count / 24))))
+        xaxis["nticks"] = max(6, min(12, int(np.ceil(unique_count / max(1, xaxis["ticklabelstep"])))))
+    else:
+        xaxis["nticks"] = max(8, min(14, int(np.ceil(unique_count / 2))))
+
+    margin = layout.setdefault("margin", {})
+    if isinstance(margin, dict):
+        margin["b"] = max(int(margin.get("b") or 0), 86)
+
+
+def _plotly_trace_unique_x_count(traces_payload: Any) -> int:
+    if not isinstance(traces_payload, list):
+        return 0
+    seen: set[str] = set()
+    for trace in traces_payload:
+        if not isinstance(trace, dict):
+            continue
+        x_values = trace.get("x")
+        if not isinstance(x_values, list):
+            continue
+        for value in x_values:
+            if value is None:
+                continue
+            seen.add(str(value))
+    return len(seen)
 
 
 def _metric_reference_markings(
@@ -1920,16 +2050,18 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
       padding: 7px 8px;
       font-size: 12px;
       font-weight: 650;
-      background: #eef2f7;
+      background: #e2e8f0;
+      color: #0f172a;
+      border-bottom: 1px solid #cbd5e1;
     }}
     .chart-stats table {{
       font-size: 12px;
     }}
     .chart-stats th {{
       padding: 6px 7px;
-      background: #1f2937;
-      color: #ffffff;
-      border-bottom: 1px solid #111827;
+      background: #0f172a;
+      color: #f8fafc;
+      border-bottom: 1px solid #020617;
       text-align: left;
     }}
     .chart-stats td {{

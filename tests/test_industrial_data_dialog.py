@@ -553,9 +553,42 @@ def test_launcher_enables_direct_export_when_source_config_exists(tmp_path):
 
     assert dialog.sources_button.isEnabled()
     assert dialog.export_button.isEnabled()
-    assert not dialog.sync_button.isEnabled()
+    assert dialog.sync_button.isEnabled()
+    assert not dialog.links_button.isEnabled()
+    assert not dialog.initialize_button.isEnabled()
+    assert not dialog.refresh_links_button.isEnabled()
     assert not dialog.analyze_button.isEnabled()
     assert "Select a report DB" in dialog.analytics_status_label.text()
+    dialog.close()
+
+
+def test_launcher_opens_access_only_sync_without_metroliza_database(monkeypatch, tmp_path):
+    _app()
+    launched = {}
+
+    class FakeSyncDialog:
+        def __init__(self, parent, *, db_file, config_path, access_only, filter_state):
+            launched["parent"] = parent
+            launched["db_file"] = db_file
+            launched["config_path"] = config_path
+            launched["access_only"] = access_only
+            launched["filter_state"] = filter_state
+
+        def exec(self):
+            launched["executed"] = True
+
+    monkeypatch.setattr(industrial_data_dialog, "IndustrialSyncDialog", FakeSyncDialog)
+    dialog = IndustrialDataDialog(db_file=None)
+    dialog.config_path = tmp_path / "industrial_sources.yaml"
+
+    dialog.open_sync_dialog()
+
+    assert launched["parent"] is dialog
+    assert launched["db_file"] is None
+    assert launched["config_path"] == dialog.config_path
+    assert launched["access_only"] is True
+    assert launched["filter_state"] is dialog.sync_filter_state
+    assert launched["executed"] is True
     dialog.close()
 
 

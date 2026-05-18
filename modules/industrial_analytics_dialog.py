@@ -341,6 +341,14 @@ class IndustrialAnalyticsDialog(QDialog):
             self.output_workbook_file,
             empty_text="No workbook path selected",
         )
+        self.dashboard_detail_row_label = section_label("Dashboard detail")
+        self.dashboard_detail_mode_combo = QComboBox()
+        self.dashboard_detail_mode_combo.addItem("Fast", "fast")
+        self.dashboard_detail_mode_combo.addItem("Full", "full")
+        self.dashboard_detail_mode_combo.setToolTip(
+            "Fast keeps CSV Summary dashboard generation lightweight. "
+            "Full adds richer detail at a higher processing cost."
+        )
         self.readiness_label = status_chip("Load metrics and choose an output path.", "warning")
         self.filter_row_label = section_label("Filters")
         self.filter_summary_label = status_chip(self.filter_state.summary(), "neutral")
@@ -600,6 +608,10 @@ class IndustrialAnalyticsDialog(QDialog):
         grid.addWidget(self.dashboard_button, row, 2)
 
         row += 1
+        grid.addWidget(self.dashboard_detail_row_label, row, 0)
+        grid.addWidget(self.dashboard_detail_mode_combo, row, 1, 1, 2)
+
+        row += 1
         grid.addWidget(section_label("Workbook"), row, 0)
         grid.addWidget(self.workbook_path_field, row, 1)
         grid.addWidget(self.workbook_button, row, 2)
@@ -656,6 +668,11 @@ class IndustrialAnalyticsDialog(QDialog):
             name="Pasted references",
             description=self.references_edit.toolTip(),
         )
+        configure_accessibility(
+            self.dashboard_detail_mode_combo,
+            name="Dashboard detail mode",
+            description=self.dashboard_detail_mode_combo.toolTip(),
+        )
         configure_accessibility(self.groupstats_checkbox, name="Include groupstats output")
         configure_accessibility(self.dashboard_button, name="Select analytics dashboard path")
         configure_accessibility(self.workbook_button, name="Select analytics workbook path")
@@ -685,6 +702,8 @@ class IndustrialAnalyticsDialog(QDialog):
         self._sync_filter_visibility()
         self.filters_button.setText("Filters..." if self.is_production_source else "Filter rows...")
         self.clear_filter_button.setVisible(show_file)
+        self.dashboard_detail_row_label.setVisible(show_file)
+        self.dashboard_detail_mode_combo.setVisible(show_file)
         self.database_row_label.setVisible(self.is_production_source)
         self.database_field.setVisible(self.is_production_source)
         self.grouping_row_label.setText("Group by" if self.is_production_source else "Groups")
@@ -1569,6 +1588,7 @@ class IndustrialAnalyticsDialog(QDialog):
                 db_file=self.db_file,
                 input_file=self.input_file,
                 output_dashboard_file=self.output_dashboard_file,
+                dashboard_detail_mode=str(self.dashboard_detail_mode_combo.currentData() or "fast"),
                 output_workbook_file=(
                     self.output_workbook_file if self.workbook_checkbox.isChecked() else ""
                 ),
@@ -1614,6 +1634,7 @@ class IndustrialAnalyticsDialog(QDialog):
             tabular_filter_columns=request.tabular_filter_columns,
             tabular_filter_keys=request.tabular_filter_keys,
             tabular_column_filters=request.tabular_column_filters,
+            dashboard_detail_mode=request.dashboard_detail_mode,
             grouping_df=request.grouping_df,
         )
 

@@ -60,6 +60,7 @@ TABULAR_SQLITE_ROW_THRESHOLD = 300_000
 TABULAR_SQLITE_CHUNK_ROWS = 50_000
 TABULAR_SQLITE_PREVIEW_ROWS = 5_000
 _TABULAR_SQLITE_TABLE = "tabular_rows"
+_TABULAR_NUMERIC_OPERATORS = frozenset({"=", "!=", ">", ">=", "<", "<="})
 
 
 @dataclass(frozen=True)
@@ -97,13 +98,17 @@ class TabularSqliteStore:
         *,
         filter_columns: tuple[str, ...] | list[str] | None = None,
         selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+        base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
         column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filter_match_mode: str = "and",
         limit: int | None = None,
     ) -> pd.DataFrame:
         where_sql, params = self._where_clause(
             filter_columns=filter_columns,
             selected_filter_keys=selected_filter_keys,
+            base_column_filters=base_column_filters,
             column_filters=column_filters,
+            column_filter_match_mode=column_filter_match_mode,
         )
         query = (
             f"SELECT {', '.join(_quote_identifier(column) for column in self.columns)} "
@@ -120,17 +125,45 @@ class TabularSqliteStore:
         *,
         filter_columns: tuple[str, ...] | list[str] | None = None,
         selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+        base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
         column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filter_match_mode: str = "and",
     ) -> int:
         where_sql, params = self._where_clause(
             filter_columns=filter_columns,
             selected_filter_keys=selected_filter_keys,
+            base_column_filters=base_column_filters,
             column_filters=column_filters,
+            column_filter_match_mode=column_filter_match_mode,
         )
         query = f"SELECT COUNT(*) FROM {_quote_identifier(self.table_name)}{where_sql}"
         with sqlite_connection_scope(self.path) as connection:
             value = connection.execute(query, params).fetchone()[0]
         return int(value or 0)
+
+    def row_ids(
+        self,
+        *,
+        filter_columns: tuple[str, ...] | list[str] | None = None,
+        selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+        base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filter_match_mode: str = "and",
+    ) -> list[int]:
+        where_sql, params = self._where_clause(
+            filter_columns=filter_columns,
+            selected_filter_keys=selected_filter_keys,
+            base_column_filters=base_column_filters,
+            column_filters=column_filters,
+            column_filter_match_mode=column_filter_match_mode,
+        )
+        query = (
+            f"SELECT {_quote_identifier('source_row_number')} "
+            f"FROM {_quote_identifier(self.table_name)}{where_sql} "
+            f"ORDER BY {_quote_identifier('source_row_number')}"
+        )
+        with sqlite_connection_scope(self.path) as connection:
+            return [int(row[0]) for row in connection.execute(query, params).fetchall()]
 
     def preview_value_rows(
         self,
@@ -178,7 +211,9 @@ class TabularSqliteStore:
         self,
         columns: tuple[str, ...] | list[str],
         *,
+        base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
         column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filter_match_mode: str = "and",
     ) -> tuple[tuple[str, ...], ...]:
         normalized_columns = tuple(str(column) for column in columns if str(column) in self.columns)
         if not normalized_columns:
@@ -187,7 +222,11 @@ class TabularSqliteStore:
             f"{_sqlite_normalized_value_expr(column)} AS {_quote_identifier(f'key_{index}')}"
             for index, column in enumerate(normalized_columns)
         ]
-        where_sql, params = self._where_clause(column_filters=column_filters)
+        where_sql, params = self._where_clause(
+            base_column_filters=base_column_filters,
+            column_filters=column_filters,
+            column_filter_match_mode=column_filter_match_mode,
+        )
         query = (
             f"SELECT DISTINCT {', '.join(expressions)} "
             f"FROM {_quote_identifier(self.table_name)}{where_sql} "
@@ -203,7 +242,9 @@ class TabularSqliteStore:
         *,
         filter_columns: tuple[str, ...] | list[str] | None = None,
         selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+        base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
         column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filter_match_mode: str = "and",
         search_text: str = "",
         offset: int = 0,
         limit: int | None = None,
@@ -219,7 +260,9 @@ class TabularSqliteStore:
         where_sql, params = self._where_clause(
             filter_columns=filter_columns,
             selected_filter_keys=selected_filter_keys,
+            base_column_filters=base_column_filters,
             column_filters=column_filters,
+            column_filter_match_mode=column_filter_match_mode,
         )
         inner_query = (
             f"SELECT {', '.join(select_exprs)} "
@@ -270,14 +313,18 @@ class TabularSqliteStore:
         *,
         filter_columns: tuple[str, ...] | list[str] | None = None,
         selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+        base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
         column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filter_match_mode: str = "and",
     ) -> list[int]:
         where_sql, params = self._where_clause_for_group_keys(
             columns,
             selected_group_keys,
             filter_columns=filter_columns,
             selected_filter_keys=selected_filter_keys,
+            base_column_filters=base_column_filters,
             column_filters=column_filters,
+            column_filter_match_mode=column_filter_match_mode,
         )
         if not where_sql:
             return []
@@ -296,14 +343,18 @@ class TabularSqliteStore:
         *,
         filter_columns: tuple[str, ...] | list[str] | None = None,
         selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+        base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
         column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filter_match_mode: str = "and",
     ) -> int:
         where_sql, params = self._where_clause_for_group_keys(
             columns,
             selected_group_keys,
             filter_columns=filter_columns,
             selected_filter_keys=selected_filter_keys,
+            base_column_filters=base_column_filters,
             column_filters=column_filters,
+            column_filter_match_mode=column_filter_match_mode,
         )
         if not where_sql:
             return 0
@@ -317,7 +368,9 @@ class TabularSqliteStore:
         *,
         filter_columns: tuple[str, ...] | list[str] | None = None,
         selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+        base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
         column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filter_match_mode: str = "and",
     ) -> int:
         normalized_ids = tuple(
             dict.fromkeys(
@@ -331,7 +384,9 @@ class TabularSqliteStore:
         filter_where, filter_params = self._where_clause(
             filter_columns=filter_columns,
             selected_filter_keys=selected_filter_keys,
+            base_column_filters=base_column_filters,
             column_filters=column_filters,
+            column_filter_match_mode=column_filter_match_mode,
         )
         filter_clause = filter_where.removeprefix(" WHERE ")
         row_column = _quote_identifier("source_row_number")
@@ -350,6 +405,54 @@ class TabularSqliteStore:
                     connection.execute(query, [*filter_params, *chunk]).fetchone()[0] or 0
                 )
         return total
+
+    def _sqlite_column_filter_clause(
+        self,
+        column_filter: "TabularColumnFilter",
+    ) -> tuple[str, list[Any]]:
+        filter_clauses: list[str] = []
+        params: list[Any] = []
+        if column_filter.selected_values:
+            placeholders = ", ".join("?" for _value in column_filter.selected_values)
+            filter_clauses.append(
+                f"{_sqlite_normalized_value_expr(column_filter.column)} IN ({placeholders})"
+            )
+            params.extend(column_filter.selected_values)
+        if column_filter.has_date_filter:
+            date_expr = self._sqlite_date_filter_expr(column_filter.column)
+            lower = _parse_tabular_filter_date(column_filter.date_from)
+            upper = _parse_tabular_filter_date(column_filter.date_to)
+            if column_filter.date_mode in {"from", "between"} and lower is not None:
+                filter_clauses.append(f"{date_expr} >= date(?)")
+                params.append(lower.isoformat())
+            if column_filter.date_mode in {"to", "between"} and upper is not None:
+                filter_clauses.append(f"{date_expr} <= date(?)")
+                params.append(upper.isoformat())
+        if column_filter.has_numeric_filter:
+            numeric_value = _parse_tabular_filter_number(column_filter.numeric_value)
+            if numeric_value is not None and column_filter.numeric_operator in _TABULAR_NUMERIC_OPERATORS:
+                identifier = _quote_identifier(column_filter.column)
+                text_expr = f"TRIM(CAST({identifier} AS TEXT))"
+                json_type_expr = (
+                    f"CASE WHEN json_valid({text_expr}) THEN json_type({text_expr}) ELSE NULL END"
+                )
+                numeric_guard = (
+                    f"{text_expr} != '' AND ("
+                    f"{json_type_expr} IN ('integer', 'real') "
+                    f"OR ({text_expr} NOT GLOB '*[^0-9]*') "
+                    f"OR (substr({text_expr}, 1, 1) IN ('+', '-') "
+                    f"AND substr({text_expr}, 2) != '' "
+                    f"AND substr({text_expr}, 2) NOT GLOB '*[^0-9]*')"
+                    ")"
+                )
+                filter_clauses.append(
+                    f"(({numeric_guard}) AND CAST({text_expr} AS REAL) "
+                    f"{column_filter.numeric_operator} ?)"
+                )
+                params.append(float(numeric_value))
+        if not filter_clauses:
+            return "", []
+        return f"({' AND '.join(filter_clauses)})", params
 
     def is_date_filterable(self, column: str) -> bool:
         if column not in self.columns:
@@ -393,51 +496,52 @@ class TabularSqliteStore:
         *,
         filter_columns: tuple[str, ...] | list[str] | None = None,
         selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+        base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
         column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filter_match_mode: str = "and",
     ) -> tuple[str, list[Any]]:
         clauses: list[str] = []
         params: list[Any] = []
-        normalized_filters = _normalized_tabular_column_filters_for_columns(
+        normalized_base_filters = _normalized_tabular_column_filters_for_columns(
             self.columns,
-            column_filters,
+            base_column_filters,
         )
+        for column_filter in normalized_base_filters:
+            filter_clause, filter_params = self._sqlite_column_filter_clause(column_filter)
+            if filter_clause:
+                clauses.append(filter_clause)
+                params.extend(filter_params)
+
+        normalized_filters = _normalized_tabular_column_filters_for_columns(self.columns, column_filters)
         if normalized_filters:
+            filter_mode = "or" if str(column_filter_match_mode or "").strip().casefold() == "or" else "and"
+            grouped_clauses: list[str] = []
+            grouped_params: list[Any] = []
             for column_filter in normalized_filters:
-                filter_clauses: list[str] = []
-                if column_filter.selected_values:
-                    placeholders = ", ".join("?" for _value in column_filter.selected_values)
-                    filter_clauses.append(
-                        f"{_sqlite_normalized_value_expr(column_filter.column)} IN ({placeholders})"
-                    )
-                    params.extend(column_filter.selected_values)
-                if column_filter.has_date_filter:
-                    date_expr = self._sqlite_date_filter_expr(column_filter.column)
-                    lower = _parse_tabular_filter_date(column_filter.date_from)
-                    upper = _parse_tabular_filter_date(column_filter.date_to)
-                    if column_filter.date_mode in {"from", "between"} and lower is not None:
-                        filter_clauses.append(f"{date_expr} >= date(?)")
-                        params.append(lower.isoformat())
-                    if column_filter.date_mode in {"to", "between"} and upper is not None:
-                        filter_clauses.append(f"{date_expr} <= date(?)")
-                        params.append(upper.isoformat())
-                if filter_clauses:
-                    clauses.append(f"({' AND '.join(filter_clauses)})")
-        else:
-            columns = tuple(str(column) for column in (filter_columns or ()) if str(column) in self.columns)
-            selected_keys = tuple(
-                tuple(str(part) for part in key)
-                for key in (selected_filter_keys or ())
-                if isinstance(key, (list, tuple)) and len(key) == len(columns)
-            )
-            if columns and selected_keys:
-                key_clauses: list[str] = []
-                for key in selected_keys:
-                    parts = []
-                    for column, value in zip(columns, key, strict=False):
-                        parts.append(f"{_sqlite_normalized_value_expr(column)} = ?")
-                        params.append(str(value))
-                    key_clauses.append(f"({' AND '.join(parts)})")
-                clauses.append(f"({' OR '.join(key_clauses)})")
+                filter_clause, filter_params = self._sqlite_column_filter_clause(column_filter)
+                if filter_clause:
+                    grouped_clauses.append(filter_clause)
+                    grouped_params.extend(filter_params)
+            if grouped_clauses:
+                joiner = " OR " if filter_mode == "or" else " AND "
+                clauses.append(f"({joiner.join(grouped_clauses)})")
+                params.extend(grouped_params)
+
+        columns = tuple(str(column) for column in (filter_columns or ()) if str(column) in self.columns)
+        selected_keys = tuple(
+            tuple(str(part) for part in key)
+            for key in (selected_filter_keys or ())
+            if isinstance(key, (list, tuple)) and len(key) == len(columns)
+        )
+        if columns and selected_keys:
+            key_clauses: list[str] = []
+            for key in selected_keys:
+                parts = []
+                for column, value in zip(columns, key, strict=False):
+                    parts.append(f"{_sqlite_normalized_value_expr(column)} = ?")
+                    params.append(str(value))
+                key_clauses.append(f"({' AND '.join(parts)})")
+            clauses.append(f"({' OR '.join(key_clauses)})")
         return (f" WHERE {' AND '.join(clauses)}" if clauses else ""), params
 
     def _where_clause_for_group_keys(
@@ -447,7 +551,9 @@ class TabularSqliteStore:
         *,
         filter_columns: tuple[str, ...] | list[str] | None = None,
         selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+        base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
         column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filter_match_mode: str = "and",
     ) -> tuple[str, list[Any]]:
         normalized_columns = tuple(str(column) for column in columns if str(column) in self.columns)
         selected_keys = tuple(
@@ -460,7 +566,9 @@ class TabularSqliteStore:
         filter_where, params = self._where_clause(
             filter_columns=filter_columns,
             selected_filter_keys=selected_filter_keys,
+            base_column_filters=base_column_filters,
             column_filters=column_filters,
+            column_filter_match_mode=column_filter_match_mode,
         )
         clauses: list[str] = []
         if filter_where:
@@ -541,6 +649,8 @@ class TabularColumnFilter:
     date_mode: str = "any"
     date_from: str | None = None
     date_to: str | None = None
+    numeric_operator: str | None = None
+    numeric_value: float | int | str | None = None
 
     @property
     def has_value_filter(self) -> bool:
@@ -551,8 +661,15 @@ class TabularColumnFilter:
         return self.date_mode in {"from", "to", "between"} and bool(self.date_from or self.date_to)
 
     @property
+    def has_numeric_filter(self) -> bool:
+        return (
+            str(self.numeric_operator or "").strip() in _TABULAR_NUMERIC_OPERATORS
+            and _parse_tabular_filter_number(self.numeric_value) is not None
+        )
+
+    @property
     def is_active(self) -> bool:
-        return bool(self.column and (self.has_value_filter or self.has_date_filter))
+        return bool(self.column and (self.has_value_filter or self.has_date_filter or self.has_numeric_filter))
 
 
 def _excel_safe_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
@@ -1333,6 +1450,8 @@ def apply_tabular_row_filter(
                 column_mask &= column_values.isin(selected_values)
             if column_filter.has_date_filter:
                 column_mask &= _tabular_date_filter_mask(dataframe[column_filter.column], column_filter)
+            if column_filter.has_numeric_filter:
+                column_mask &= _tabular_numeric_filter_mask(dataframe[column_filter.column], column_filter)
             mask &= column_mask.fillna(False)
         filtered = dataframe.loc[mask].copy()
         output_count = int(len(filtered.index))
@@ -1348,6 +1467,8 @@ def apply_tabular_row_filter(
                         "date_mode": item.date_mode,
                         "date_from": item.date_from,
                         "date_to": item.date_to,
+                        "numeric_operator": item.numeric_operator,
+                        "numeric_value": _parse_tabular_filter_number(item.numeric_value),
                     }
                     for item in normalized_column_filters
                 ],
@@ -1450,6 +1571,8 @@ def materialize_tabular_dataframe(
                     "date_mode": item.date_mode,
                     "date_from": item.date_from,
                     "date_to": item.date_to,
+                    "numeric_operator": item.numeric_operator,
+                    "numeric_value": _parse_tabular_filter_number(item.numeric_value),
                 }
                 for item in normalized_filters
             ]
@@ -1544,12 +1667,18 @@ def _normalized_tabular_column_filters_for_columns(
             )
         )
         date_mode = item.date_mode if item.date_mode in {"from", "to", "between"} else "any"
+        numeric_operator = str(item.numeric_operator or "").strip()
+        if numeric_operator not in _TABULAR_NUMERIC_OPERATORS:
+            numeric_operator = None
+        numeric_value = _parse_tabular_filter_number(item.numeric_value)
         normalized_filter = TabularColumnFilter(
             column=column,
             selected_values=selected_values,
             date_mode=date_mode,
             date_from=str(item.date_from or "").strip() or None,
             date_to=str(item.date_to or "").strip() or None,
+            numeric_operator=numeric_operator,
+            numeric_value=numeric_value,
         )
         if normalized_filter.is_active:
             normalized.append(normalized_filter)
@@ -1602,6 +1731,15 @@ def _parse_tabular_filter_date(value: str | None):
     return parsed.date()
 
 
+def _parse_tabular_filter_number(value: float | int | str | None) -> float | None:
+    if value is None:
+        return None
+    parsed = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(parsed):
+        return None
+    return float(parsed)
+
+
 def _tabular_date_filter_mask(series: pd.Series, column_filter: TabularColumnFilter) -> pd.Series:
     parsed = pd.to_datetime(series, errors="coerce")
     dates = parsed.dt.date
@@ -1612,6 +1750,27 @@ def _tabular_date_filter_mask(series: pd.Series, column_filter: TabularColumnFil
         mask &= dates >= lower
     if column_filter.date_mode in {"to", "between"} and upper is not None:
         mask &= dates <= upper
+    return mask.fillna(False)
+
+
+def _tabular_numeric_filter_mask(series: pd.Series, column_filter: TabularColumnFilter) -> pd.Series:
+    operator = str(column_filter.numeric_operator or "").strip()
+    value = _parse_tabular_filter_number(column_filter.numeric_value)
+    if operator not in _TABULAR_NUMERIC_OPERATORS or value is None:
+        return pd.Series(True, index=series.index)
+    numeric_series = pd.to_numeric(series, errors="coerce")
+    if operator == "=":
+        mask = numeric_series == value
+    elif operator == "!=":
+        mask = numeric_series != value
+    elif operator == ">":
+        mask = numeric_series > value
+    elif operator == ">=":
+        mask = numeric_series >= value
+    elif operator == "<":
+        mask = numeric_series < value
+    else:
+        mask = numeric_series <= value
     return mask.fillna(False)
 
 

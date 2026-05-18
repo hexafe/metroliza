@@ -136,6 +136,7 @@ def test_industrial_analytics_thread_passes_tabular_grouping_to_workflow(
         tabular_filter_columns=("tracecode",),
         tabular_filter_keys=(("TC-001",),),
         tabular_column_filters=(TabularColumnFilter("line", selected_values=("L1",)),),
+        dashboard_detail_mode="full",
         sheet_name="Measurements",
         timestamp_column="time_stamp",
         reference_column="reference_id",
@@ -155,6 +156,7 @@ def test_industrial_analytics_thread_passes_tabular_grouping_to_workflow(
     assert captured["tabular_filter_columns"] == ("tracecode",)
     assert captured["tabular_filter_keys"] == (("TC-001",),)
     assert captured["tabular_column_filters"] == (TabularColumnFilter("line", selected_values=("L1",)),)
+    assert captured["dashboard_detail_mode"] == "full"
     assert captured["sheet_name"] == "Measurements"
     assert captured["timestamp_column"] == "time_stamp"
     assert captured["reference_column"] == "reference_id"

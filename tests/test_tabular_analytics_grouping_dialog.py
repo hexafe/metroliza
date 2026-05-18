@@ -100,6 +100,20 @@ def _select_selector_rows(dialog, start: int, stop: int) -> None:
     dialog._store_current_selection()
 
 
+def _set_scope_filter_row(dialog, row_index: int, *, column: str, operator: str, value: str) -> None:
+    column_combo, operator_combo, value_edit, _remove_button = dialog.group_scope_filter_rows[row_index]
+    column_idx = column_combo.findData(column)
+    if column_idx < 0:
+        raise AssertionError(f"Missing scope filter column option: {column}")
+    operator_idx = operator_combo.findData(operator)
+    if operator_idx < 0:
+        raise AssertionError(f"Missing scope filter operator option: {operator}")
+    column_combo.setCurrentIndex(column_idx)
+    operator_combo.setCurrentIndex(operator_idx)
+    value_edit.setText(value)
+    dialog._handle_scope_filters_changed()
+
+
 def test_available_grouping_columns_include_tracecode_even_when_reference_is_different() -> None:
     dialog = _dialog_for_frame(
         pd.DataFrame(
@@ -353,6 +367,37 @@ def test_sqlite_group_counts_are_scoped_to_active_filters(tmp_path) -> None:
         cleanup_tabular_load_result(loaded)
 
 
+def test_sqlite_assign_filtered_rows_combines_parent_and_scope_filters(tmp_path) -> None:
+    _app()
+    input_file = tmp_path / "sqlite_scope_assign.csv"
+    pd.DataFrame(
+        {
+            "Line": ["A", "A", "B", "B"],
+            "Value": [1, 2, 1, 2],
+            "Value2": [0, 2, 2, 3],
+            "TraceCode": ["TC-001", "TC-002", "TC-003", "TC-004"],
+        }
+    ).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file, force_sqlite=True)
+
+    dialog = TabularAnalyticsGroupingDialog(
+        dataframe=loaded.dataframe,
+        column_mapping=loaded.column_mapping,
+        sqlite_store=loaded.sqlite_store,
+        column_filters=(TabularColumnFilter("line", selected_values=("A",)),),
+    )
+    try:
+        _set_scope_filter_row(dialog, 0, column="value2", operator=">", value="1")
+        assert dialog.scope_filter_summary_label.text() == "Scope: value2 > 1 (1 rows)"
+
+        dialog.assign_filtered_rows(initial_group_name="Scoped")
+        assert dialog.df["REPORT_ID"].tolist() == [2]
+        assert dialog.df["GROUP"].tolist() == ["Scoped"]
+    finally:
+        dialog.close()
+        cleanup_tabular_load_result(loaded)
+
+
 def test_delete_and_backspace_remove_focused_selected_grouping_column() -> None:
     app = _app()
     dialog = TabularAnalyticsGroupingDialog(
@@ -509,6 +554,40 @@ def test_selector_pages_high_cardinality_groups_and_keeps_selection_across_pages
         dialog.close()
 
 
+def test_selector_navigation_supports_first_last_and_page_jump() -> None:
+    _app()
+    frame = pd.DataFrame(
+        {
+            "source_row_number": list(range(1, 2506)),
+            "tracecode": [f"TC-{index:04d}" for index in range(2505)],
+            "length_mm": [float(index) for index in range(2505)],
+        }
+    )
+    dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
+    try:
+        dialog.selector_columns = ["tracecode"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+
+        assert dialog.selector_page_label.text() == "Page 1 of 3"
+        dialog.last_selector_page()
+        assert dialog.selector_page_label.text() == "Page 3 of 3"
+        assert dialog.next_page_button.isEnabled() is False
+        dialog.first_selector_page()
+        assert dialog.selector_page_label.text() == "Page 1 of 3"
+        assert dialog.previous_page_button.isEnabled() is False
+
+        dialog.page_jump_input.setText("2")
+        dialog.jump_selector_page()
+        assert dialog.selector_page_label.text() == "Page 2 of 3"
+
+        dialog.page_jump_input.setText("99")
+        dialog.jump_selector_page()
+        assert dialog.selector_page_label.text() == "Page 3 of 3"
+    finally:
+        dialog.close()
+
+
 def test_standard_selection_can_group_rows_on_later_page() -> None:
     _app()
     frame = pd.DataFrame(
@@ -555,6 +634,38 @@ def test_create_group_uses_selected_keys_from_paged_selector() -> None:
         grouped = dialog.df.loc[dialog.df["GROUP"] == "Paged group", "REPORT_ID"].tolist()
         assert grouped == list(range(1001, 1501))
         assert dialog.groups_list.currentItem().data(Qt.ItemDataRole.UserRole) == "Paged group"
+    finally:
+        dialog.close()
+
+
+def test_grouping_scope_numeric_filters_update_summary_and_assign_filtered_rows() -> None:
+    _app()
+    frame = pd.DataFrame(
+        {
+            "source_row_number": [1, 2, 3, 4, 5],
+            "tracecode": ["TC-001", "TC-002", "TC-003", "TC-004", "TC-005"],
+            "value": [1, 1, 2, "x", None],
+            "value2": [0, 2, 2, "x", 0],
+        }
+    )
+    dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
+    try:
+        _set_scope_filter_row(dialog, 0, column="value", operator="=", value="1")
+        dialog.add_scope_filter_row()
+        _set_scope_filter_row(dialog, 1, column="value2", operator=">", value="1")
+
+        assert dialog.scope_filter_summary_label.text() == "Scope: value = 1 AND value2 > 1 (1 rows)"
+        assert dialog.assign_filtered_rows_button.isEnabled() is True
+
+        dialog.assign_filtered_rows(initial_group_name="Scope AND")
+        grouped = dialog.df.loc[dialog.df["GROUP"] == "Scope AND", "REPORT_ID"].tolist()
+        assert grouped == [2]
+
+        mode_index = dialog.scope_match_mode_combo.findData("or")
+        dialog.scope_match_mode_combo.setCurrentIndex(mode_index)
+        dialog._handle_scope_filters_changed()
+
+        assert dialog.scope_filter_summary_label.text() == "Scope: value = 1 OR value2 > 1 (3 rows)"
     finally:
         dialog.close()
 

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import pandas as pd
 from PyQt6.QtCore import QTimer, Qt
-from PyQt6.QtGui import QBrush, QColor
+from PyQt6.QtGui import QBrush, QColor, QIntValidator
 from PyQt6.QtWidgets import (
+    QComboBox,
     QDialog,
     QGridLayout,
     QHBoxLayout,
@@ -50,6 +51,7 @@ from modules.ui_foundation import (
 
 _SELECTOR_PAGE_SIZE = 1000
 _GROUP_MEMBER_PREVIEW_LIMIT = 1000
+_GROUP_SCOPE_NUMERIC_OPERATORS = ("=", "!=", ">", ">=", "<", "<=")
 
 
 class TabularAnalyticsGroupingDialog(QDialog):
@@ -69,7 +71,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
     ):
         super().__init__(parent)
         self.setWindowTitle("CSV / Excel groups")
-        configure_window_size(self, minimum=(720, 440), initial=(900, 620))
+        configure_window_size(self, minimum=(760, 560), initial=(980, 700))
         self.source_dataframe = dataframe.copy() if isinstance(dataframe, pd.DataFrame) else pd.DataFrame()
         self.sqlite_store = sqlite_store
         self.sqlite_filter_columns = tuple(str(column) for column in (filter_columns or ()))
@@ -93,6 +95,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._selector_total_rows = 0
         self._list_selection_utils = ListSelectionUtils()
         self._grouping_shortcuts = None
+        self.group_scope_filter_rows: list[tuple[QComboBox, QComboBox, QLineEdit, QPushButton]] = []
         self.default_group = TABULAR_DEFAULT_GROUP
         self.default_group_color = self._resolve_default_group_color()
         self.group_color_column = "GROUP_COLOR"
@@ -130,9 +133,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.selected_columns_list = QListWidget()
         for list_widget in (self.available_columns_list, self.selected_columns_list):
             apply_list_selection_style(list_widget)
-            list_widget.setMinimumHeight(120)
+            list_widget.setMinimumHeight(80)
             list_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.selected_columns_list.setMinimumHeight(120)
+        self.selected_columns_list.setMinimumHeight(80)
         configure_accessibility(self.column_search, name="Search CSV grouping columns")
         configure_accessibility(self.selected_column_search, name="Search selected CSV grouping columns")
         configure_accessibility(self.available_columns_list, name="Available CSV grouping columns")
@@ -143,9 +146,49 @@ class TabularAnalyticsGroupingDialog(QDialog):
         columns_grid.setColumnStretch(1, 1)
         layout.addWidget(column_area, 1)
 
+        scope_filter_area = QWidget()
+        scope_filter_layout = QVBoxLayout(scope_filter_area)
+        scope_filter_layout.setContentsMargins(0, 0, 0, 0)
+        scope_filter_layout.setSpacing(6)
+        scope_filter_header = QHBoxLayout()
+        scope_filter_header.setSpacing(8)
+        scope_filter_header.addWidget(QLabel("Grouping-scope filters"))
+        self.scope_match_mode_combo = QComboBox()
+        self.scope_match_mode_combo.addItem("AND", "and")
+        self.scope_match_mode_combo.addItem("OR", "or")
+        configure_accessibility(self.scope_match_mode_combo, name="CSV grouping filter match mode")
+        scope_filter_header.addStretch(1)
+        scope_filter_header.addWidget(QLabel("Match"))
+        scope_filter_header.addWidget(self.scope_match_mode_combo)
+        scope_filter_layout.addLayout(scope_filter_header)
+        self.scope_filter_rows_widget = QWidget()
+        self.scope_filter_rows_layout = QGridLayout(self.scope_filter_rows_widget)
+        self.scope_filter_rows_layout.setContentsMargins(0, 0, 0, 0)
+        self.scope_filter_rows_layout.setHorizontalSpacing(8)
+        self.scope_filter_rows_layout.setVerticalSpacing(6)
+        self.scope_filter_rows_layout.addWidget(QLabel("Column"), 0, 0)
+        self.scope_filter_rows_layout.addWidget(QLabel("Operator"), 0, 1)
+        self.scope_filter_rows_layout.addWidget(QLabel("Value"), 0, 2)
+        scope_filter_layout.addWidget(self.scope_filter_rows_widget)
+        scope_filter_actions = QHBoxLayout()
+        scope_filter_actions.setSpacing(8)
+        self.add_scope_filter_button = QPushButton("Add filter row")
+        self.clear_scope_filters_button = QPushButton("Clear scope filters")
+        configure_accessibility(self.add_scope_filter_button, name="Add CSV grouping-scope filter row")
+        configure_accessibility(self.clear_scope_filters_button, name="Clear CSV grouping-scope filters")
+        scope_filter_actions.addWidget(self.add_scope_filter_button)
+        scope_filter_actions.addWidget(self.clear_scope_filters_button)
+        scope_filter_actions.addStretch(1)
+        scope_filter_layout.addLayout(scope_filter_actions)
+        self.scope_filter_summary_label = status_chip("", "neutral")
+        scope_filter_layout.addWidget(self.scope_filter_summary_label)
+        layout.addWidget(scope_filter_area)
+
         list_splitter = QSplitter(Qt.Orientation.Horizontal)
+        list_splitter.setMinimumHeight(220)
 
         selector_widget = QWidget()
+        selector_widget.setMinimumHeight(190)
         selector_column = QVBoxLayout(selector_widget)
         selector_column.setContentsMargins(0, 0, 0, 0)
         selector_column.setSpacing(6)
@@ -159,22 +202,37 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.selector_list = QListWidget()
         self.selector_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         apply_list_selection_style(self.selector_list)
-        self.selector_list.setMinimumHeight(80)
+        self.selector_list.setMinimumHeight(48)
         self.selector_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         configure_accessibility(self.selector_list, name="CSV grouping row selectors")
         selector_column.addWidget(self.selector_list, 1)
         selector_paging = QHBoxLayout()
         selector_paging.setSpacing(8)
+        self.first_page_button = QPushButton("First")
         self.previous_page_button = QPushButton("Previous")
         self.next_page_button = QPushButton("Next")
+        self.last_page_button = QPushButton("Last")
+        self.page_jump_input = QLineEdit()
+        self.page_jump_input.setPlaceholderText("Page")
+        self.page_jump_input.setFixedWidth(64)
+        self.page_jump_input.setValidator(QIntValidator(1, 999_999, self))
+        self.jump_page_button = QPushButton("Go")
         self.selector_page_label = status_chip("", "neutral")
+        configure_accessibility(self.first_page_button, name="First matching rows page")
         configure_accessibility(self.previous_page_button, name="Previous matching rows page")
         configure_accessibility(self.next_page_button, name="Next matching rows page")
+        configure_accessibility(self.last_page_button, name="Last matching rows page")
+        configure_accessibility(self.page_jump_input, name="Jump to matching rows page")
+        configure_accessibility(self.jump_page_button, name="Jump to matching rows page button")
         configure_accessibility(self.selector_page_label, name="Matching rows page")
         selector_paging.addStretch(1)
+        selector_paging.addWidget(self.first_page_button)
         selector_paging.addWidget(self.previous_page_button)
         selector_paging.addWidget(self.selector_page_label)
         selector_paging.addWidget(self.next_page_button)
+        selector_paging.addWidget(self.last_page_button)
+        selector_paging.addWidget(self.page_jump_input)
+        selector_paging.addWidget(self.jump_page_button)
         selector_paging.addStretch(1)
         selector_column.addLayout(selector_paging)
         selector_column.setStretch(3, 1)
@@ -216,6 +274,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         footer = QHBoxLayout()
         footer.setSpacing(8)
         self.create_group_button = QPushButton("Assign to group...")
+        self.assign_filtered_rows_button = QPushButton("Assign filtered rows...")
         self.rename_group_button = QPushButton("Rename group")
         self.delete_group_button = QPushButton("Delete group")
         self.clear_selection_button = QPushButton("Clear selection")
@@ -225,12 +284,17 @@ class TabularAnalyticsGroupingDialog(QDialog):
             self.create_group_button,
             name="Assign selected rows to a CSV analytics group",
         )
+        configure_accessibility(
+            self.assign_filtered_rows_button,
+            name="Assign filtered CSV rows to a CSV analytics group",
+        )
         configure_accessibility(self.rename_group_button, name="Rename selected CSV analytics group")
         configure_accessibility(self.delete_group_button, name="Delete selected CSV analytics group")
         configure_accessibility(self.clear_selection_button, name="Clear selected matching rows")
         configure_accessibility(self.dont_use_grouping_button, name="Clear CSV analytics grouping")
         configure_accessibility(self.use_grouping_button, name="Use CSV analytics grouping")
         footer.addWidget(self.create_group_button)
+        footer.addWidget(self.assign_filtered_rows_button)
         footer.addWidget(self.rename_group_button)
         footer.addWidget(self.delete_group_button)
         footer.addWidget(self.clear_selection_button)
@@ -245,13 +309,21 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.selected_columns_list.itemDoubleClicked.connect(self.remove_selected_selector_column)
         self.selected_columns_list.itemSelectionChanged.connect(self._sync_status)
         self.selector_search.textChanged.connect(self._handle_selector_search_changed)
+        self.scope_match_mode_combo.currentIndexChanged.connect(self._handle_scope_filters_changed)
+        self.add_scope_filter_button.clicked.connect(self.add_scope_filter_row)
+        self.clear_scope_filters_button.clicked.connect(self.clear_scope_filter_rows)
+        self.first_page_button.clicked.connect(self.first_selector_page)
         self.previous_page_button.clicked.connect(self.previous_selector_page)
         self.next_page_button.clicked.connect(self.next_selector_page)
+        self.last_page_button.clicked.connect(self.last_selector_page)
+        self.jump_page_button.clicked.connect(self.jump_selector_page)
+        self.page_jump_input.returnPressed.connect(self.jump_selector_page)
         self.selector_list.itemSelectionChanged.connect(self._store_current_selection)
         self.selector_list.itemDoubleClicked.connect(self._assign_matching_rows_from_item)
         self.groups_list.itemSelectionChanged.connect(self._populate_group_members)
         self.groups_list.itemDoubleClicked.connect(lambda _item: self.rename_group())
         self.create_group_button.clicked.connect(lambda: self.create_group())
+        self.assign_filtered_rows_button.clicked.connect(self.assign_filtered_rows)
         self.rename_group_button.clicked.connect(self.rename_group)
         self.delete_group_button.clicked.connect(self.delete_group)
         self.clear_selection_button.clicked.connect(self.clear_selection)
@@ -274,17 +346,11 @@ class TabularAnalyticsGroupingDialog(QDialog):
             remove_selected_columns=self.remove_selected_selector_column,
             qt_namespace=Qt,
         )
+        self.add_scope_filter_row()
         self._refresh_all()
 
     def _is_sqlite_backed(self) -> bool:
         return vars(self).get("sqlite_store") is not None
-
-    def _sqlite_filter_kwargs(self) -> dict[str, object]:
-        return {
-            "filter_columns": self.sqlite_filter_columns,
-            "selected_filter_keys": self.sqlite_selected_filter_keys,
-            "column_filters": self.sqlite_column_filters,
-        }
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -485,6 +551,204 @@ class TabularAnalyticsGroupingDialog(QDialog):
     def _selector_columns_text(self) -> str:
         return column_sequence_text(self.selector_columns, label_for=self._column_label)
 
+    def _scope_match_mode(self) -> str:
+        combo = vars(self).get("scope_match_mode_combo")
+        if combo is None:
+            return "and"
+        mode = combo.currentData()
+        return "or" if str(mode or "").strip().casefold() == "or" else "and"
+
+    def _scope_filter_columns(self) -> list[str]:
+        return self._source_columns()
+
+    def _populate_scope_column_combo(self, combo: QComboBox, *, selected_column: str | None = None) -> None:
+        current = str(selected_column or combo.currentData() or "").strip()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("Select column", "")
+        for column in self._scope_filter_columns():
+            combo.addItem(self._column_label(column), column)
+        if current:
+            index = combo.findData(current)
+            if index >= 0:
+                combo.setCurrentIndex(index)
+        combo.blockSignals(False)
+
+    def _layout_scope_filter_rows(self) -> None:
+        for row_index, (column_combo, operator_combo, value_edit, remove_button) in enumerate(
+            self.group_scope_filter_rows,
+            start=1,
+        ):
+            self.scope_filter_rows_layout.addWidget(column_combo, row_index, 0)
+            self.scope_filter_rows_layout.addWidget(operator_combo, row_index, 1)
+            self.scope_filter_rows_layout.addWidget(value_edit, row_index, 2)
+            self.scope_filter_rows_layout.addWidget(remove_button, row_index, 3)
+
+    def _sync_scope_filter_controls(self) -> None:
+        can_remove = len(self.group_scope_filter_rows) > 1
+        for _column_combo, _operator_combo, _value_edit, remove_button in self.group_scope_filter_rows:
+            remove_button.setEnabled(can_remove)
+
+    def _refresh_scope_filter_column_choices(self) -> None:
+        for column_combo, _operator_combo, _value_edit, _remove_button in self.group_scope_filter_rows:
+            self._populate_scope_column_combo(column_combo)
+
+    def add_scope_filter_row(
+        self,
+        *,
+        column: str | None = None,
+        operator: str = "=",
+        value: str | float | int | None = None,
+    ) -> None:
+        column_combo = QComboBox()
+        self._populate_scope_column_combo(column_combo, selected_column=column)
+        operator_combo = QComboBox()
+        for item in _GROUP_SCOPE_NUMERIC_OPERATORS:
+            operator_combo.addItem(item, item)
+        operator_index = operator_combo.findData(operator)
+        operator_combo.setCurrentIndex(operator_index if operator_index >= 0 else 0)
+        value_edit = QLineEdit()
+        value_edit.setPlaceholderText("Numeric value")
+        value_edit.setText("" if value is None else str(value))
+        remove_button = QPushButton("Remove")
+        configure_accessibility(column_combo, name="CSV grouping filter column")
+        configure_accessibility(operator_combo, name="CSV grouping filter operator")
+        configure_accessibility(value_edit, name="CSV grouping filter value")
+        configure_accessibility(remove_button, name="Remove CSV grouping filter row")
+        row = (column_combo, operator_combo, value_edit, remove_button)
+        remove_button.clicked.connect(lambda _checked=False, row=row: self._remove_scope_filter_row(row))
+        column_combo.currentIndexChanged.connect(self._handle_scope_filters_changed)
+        operator_combo.currentIndexChanged.connect(self._handle_scope_filters_changed)
+        value_edit.editingFinished.connect(self._handle_scope_filters_changed)
+        self.group_scope_filter_rows.append(row)
+        self._layout_scope_filter_rows()
+        self._sync_scope_filter_controls()
+        self._handle_scope_filters_changed()
+
+    def _remove_scope_filter_row(self, row) -> None:
+        if row not in self.group_scope_filter_rows:
+            return
+        column_combo, operator_combo, value_edit, remove_button = row
+        for widget in (column_combo, operator_combo, value_edit, remove_button):
+            self.scope_filter_rows_layout.removeWidget(widget)
+            widget.deleteLater()
+        self.group_scope_filter_rows.remove(row)
+        if not self.group_scope_filter_rows:
+            self.add_scope_filter_row()
+            return
+        self._layout_scope_filter_rows()
+        self._sync_scope_filter_controls()
+        self._handle_scope_filters_changed()
+
+    def clear_scope_filter_rows(self) -> None:
+        rows = list(self.group_scope_filter_rows)
+        for row in rows:
+            self._remove_scope_filter_row(row)
+        if not self.group_scope_filter_rows:
+            self.add_scope_filter_row()
+
+    def _active_scope_filters(self) -> tuple[TabularColumnFilter, ...]:
+        column_lookup = set(self._scope_filter_columns())
+        filters: list[TabularColumnFilter] = []
+        for column_combo, operator_combo, value_edit, _remove_button in vars(self).get(
+            "group_scope_filter_rows",
+            [],
+        ):
+            column = str(column_combo.currentData() or "").strip()
+            operator = str(operator_combo.currentData() or "").strip()
+            value = str(value_edit.text() or "").strip()
+            if not column or column not in column_lookup or not value:
+                continue
+            filters.append(
+                TabularColumnFilter(
+                    column=column,
+                    numeric_operator=operator,
+                    numeric_value=value,
+                )
+            )
+        return tuple(filters)
+
+    def _scope_filter_expression(self, filters: tuple[TabularColumnFilter, ...]) -> str:
+        if not filters:
+            return "all rows"
+        joiner = " OR " if self._scope_match_mode() == "or" else " AND "
+        return joiner.join(
+            f"{item.column} {item.numeric_operator} {item.numeric_value}"
+            for item in filters
+        )
+
+    def _sqlite_scope_kwargs(self) -> dict[str, object]:
+        return {
+            "filter_columns": self.sqlite_filter_columns,
+            "selected_filter_keys": self.sqlite_selected_filter_keys,
+            "base_column_filters": self.sqlite_column_filters,
+            "column_filters": self._active_scope_filters(),
+            "column_filter_match_mode": self._scope_match_mode(),
+        }
+
+    def _scoped_source_dataframe(self) -> pd.DataFrame:
+        if self._is_sqlite_backed():
+            return pd.DataFrame()
+        filters = self._active_scope_filters()
+        if not filters:
+            return self.source_dataframe
+        match_mode = self._scope_match_mode()
+        mask_by_filter: list[pd.Series] = []
+        for item in filters:
+            numeric_series = pd.to_numeric(self.source_dataframe[item.column], errors="coerce")
+            numeric_value = pd.to_numeric(pd.Series([item.numeric_value]), errors="coerce").iloc[0]
+            if pd.isna(numeric_value):
+                continue
+            operator = str(item.numeric_operator or "").strip()
+            if operator == "=":
+                mask = numeric_series == float(numeric_value)
+            elif operator == "!=":
+                mask = numeric_series != float(numeric_value)
+            elif operator == ">":
+                mask = numeric_series > float(numeric_value)
+            elif operator == ">=":
+                mask = numeric_series >= float(numeric_value)
+            elif operator == "<":
+                mask = numeric_series < float(numeric_value)
+            elif operator == "<=":
+                mask = numeric_series <= float(numeric_value)
+            else:
+                continue
+            mask_by_filter.append(mask.fillna(False))
+        if not mask_by_filter:
+            return self.source_dataframe.iloc[0:0].copy()
+        if match_mode == "or":
+            combined_mask = pd.Series(False, index=self.source_dataframe.index)
+            for mask in mask_by_filter:
+                combined_mask |= mask
+        else:
+            combined_mask = pd.Series(True, index=self.source_dataframe.index)
+            for mask in mask_by_filter:
+                combined_mask &= mask
+        return self.source_dataframe.loc[combined_mask.fillna(False)].copy()
+
+    def _scope_row_count(self) -> int:
+        if self._is_sqlite_backed():
+            return int(self.sqlite_store.count_rows(**self._sqlite_scope_kwargs()))
+        return int(len(self._scoped_source_dataframe().index))
+
+    def _handle_scope_filters_changed(self) -> None:
+        self._selector_index = None
+        self._selector_page_offset = 0
+        self.selected_selector_keys = set()
+        if hasattr(self, "selector_list"):
+            self.selector_list.clearSelection()
+        if hasattr(self, "scope_filter_summary_label"):
+            expression = self._scope_filter_expression(self._active_scope_filters())
+            row_count = self._scope_row_count()
+            self.scope_filter_summary_label.setText(f"Scope: {expression} ({row_count} rows)")
+            set_status_variant(
+                self.scope_filter_summary_label,
+                "info" if row_count else "warning",
+            )
+        if hasattr(self, "selector_list"):
+            self._refresh_all()
+
     def _refresh_available_columns(self) -> None:
         populate_column_list(
             self.available_columns_list,
@@ -655,18 +919,18 @@ class TabularAnalyticsGroupingDialog(QDialog):
             search_text=self.selector_search.text(),
             offset=offset,
             limit=limit,
-            **self._sqlite_filter_kwargs(),
+            **self._sqlite_scope_kwargs(),
         )
 
     def _sqlite_selector_row_count(self) -> int:
         if not self._is_sqlite_backed():
             return 0
         if not self.selector_columns or not self.selected_selector_keys:
-            return self.sqlite_store.count_rows(**self._sqlite_filter_kwargs())
+            return self.sqlite_store.count_rows(**self._sqlite_scope_kwargs())
         return self.sqlite_store.count_rows_for_group_keys(
             tuple(self.selector_columns),
             self.selected_selector_keys,
-            **self._sqlite_filter_kwargs(),
+            **self._sqlite_scope_kwargs(),
         )
 
     def _sqlite_row_ids_for_selected_keys(self) -> list[int]:
@@ -675,18 +939,19 @@ class TabularAnalyticsGroupingDialog(QDialog):
         return self.sqlite_store.row_ids_for_group_keys(
             tuple(self.selector_columns),
             self.selected_selector_keys,
-            **self._sqlite_filter_kwargs(),
+            **self._sqlite_scope_kwargs(),
         )
 
     def _sqlite_total_grouping_rows(self) -> int:
         if not self._is_sqlite_backed():
             return 0
-        return self.sqlite_store.count_rows(**self._sqlite_filter_kwargs())
+        return self.sqlite_store.count_rows(**self._sqlite_scope_kwargs())
 
     def _sqlite_filters_active(self) -> bool:
         return bool(
             self.sqlite_column_filters
             or (self.sqlite_filter_columns and self.sqlite_selected_filter_keys)
+            or self._active_scope_filters()
         )
 
     def _sqlite_group_counts(self) -> dict[str, int]:
@@ -707,7 +972,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         for group_name, group_rows in custom_assignments.groupby("GROUP", dropna=False, sort=True):
             row_ids = group_rows["REPORT_ID"].astype(int).tolist()
             count = (
-                self.sqlite_store.count_source_row_numbers(row_ids, **self._sqlite_filter_kwargs())
+                self.sqlite_store.count_source_row_numbers(row_ids, **self._sqlite_scope_kwargs())
                 if self._sqlite_filters_active()
                 else len(set(row_ids))
             )
@@ -770,6 +1035,12 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.selector_list.clearSelection()
         self._sync_status()
 
+    def first_selector_page(self) -> None:
+        if self._selector_page_offset <= 0:
+            return
+        self._selector_page_offset = 0
+        self._refresh_selectors()
+
     def previous_selector_page(self) -> None:
         if self._selector_page_offset <= 0:
             return
@@ -781,6 +1052,33 @@ class TabularAnalyticsGroupingDialog(QDialog):
         if next_offset >= self._selector_total_rows:
             return
         self._selector_page_offset = next_offset
+        self._refresh_selectors()
+
+    def last_selector_page(self) -> None:
+        if self._selector_total_rows <= 0:
+            return
+        last_offset = ((self._selector_total_rows - 1) // _SELECTOR_PAGE_SIZE) * _SELECTOR_PAGE_SIZE
+        if self._selector_page_offset == last_offset:
+            return
+        self._selector_page_offset = last_offset
+        self._refresh_selectors()
+
+    def jump_selector_page(self) -> None:
+        page_text = str(self.page_jump_input.text() or "").strip()
+        if not page_text:
+            return
+        try:
+            requested_page = max(1, int(page_text))
+        except ValueError:
+            return
+        total_pages = ((self._selector_total_rows - 1) // _SELECTOR_PAGE_SIZE + 1) if self._selector_total_rows else 0
+        if total_pages <= 0:
+            return
+        requested_page = min(requested_page, total_pages)
+        offset = (requested_page - 1) * _SELECTOR_PAGE_SIZE
+        if offset == self._selector_page_offset:
+            return
+        self._selector_page_offset = offset
         self._refresh_selectors()
 
     def _rebuild_preserving_groups(self) -> None:
@@ -812,6 +1110,14 @@ class TabularAnalyticsGroupingDialog(QDialog):
         if "source_row_number" not in filtered.columns:
             return []
         return pd.to_numeric(filtered["source_row_number"], errors="coerce").dropna().astype(int).tolist()
+
+    def _row_ids_for_scope(self) -> list[int]:
+        if self._is_sqlite_backed():
+            return self.sqlite_store.row_ids(**self._sqlite_scope_kwargs())
+        scoped = self._scoped_source_dataframe()
+        if "source_row_number" not in scoped.columns:
+            return []
+        return pd.to_numeric(scoped["source_row_number"], errors="coerce").dropna().astype(int).tolist()
 
     def _assign_matching_rows_from_item(self, item: QListWidgetItem | None) -> None:
         if item is None:
@@ -892,13 +1198,47 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.selector_list.clearSelection()
         self._refresh_all(preferred_group=group_name)
 
+    def assign_filtered_rows(self, initial_group_name: str | None = None) -> None:
+        row_ids = self._row_ids_for_scope()
+        if not row_ids:
+            QMessageBox.information(
+                self,
+                self.windowTitle(),
+                "No rows match the current parent and grouping-scope filters.",
+            )
+            return
+        selected_group = str(self._selected_group_name() or "").strip()
+        default_name = str(initial_group_name or "").strip()
+        if not default_name and selected_group and selected_group != self.default_group:
+            default_name = selected_group
+        if initial_group_name is None:
+            group_name, accepted = QInputDialog.getText(
+                self,
+                "Assign filtered rows",
+                "Group name:",
+                text=default_name,
+            )
+            group_name = str(group_name or "").strip()
+            if not accepted or not group_name:
+                return
+        else:
+            group_name = default_name
+            if not group_name:
+                return
+        self._assign_rows_to_group(row_ids, group_name)
+        self.selected_selector_keys = set()
+        self.selector_list.clearSelection()
+        self._refresh_all(preferred_group=group_name)
+
     def _current_selector_index(self) -> CsvGroupingIndex:
         selector_index = vars(self).get("_selector_index")
+        source_frame = self._scoped_source_dataframe()
         if (
             selector_index is None
             or tuple(self.selector_columns) != selector_index.grouping_columns
+            or selector_index.row_count != int(len(source_frame.index))
         ):
-            self._selector_index = CsvGroupingIndex(self.source_dataframe, self.selector_columns)
+            self._selector_index = CsvGroupingIndex(source_frame, self.selector_columns)
         return self._selector_index
 
     def _handle_selector_search_changed(self) -> None:
@@ -995,6 +1335,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 self.selector_status_label.setText(f"{columns_text}: all rows")
             set_status_variant(self.selector_status_label, "success")
         self.create_group_button.setEnabled(bool(self.selector_columns and self.selected_selector_keys))
+        self.assign_filtered_rows_button.setEnabled(self._scope_row_count() > 0)
         selected_group = self._selected_group_name()
         self.rename_group_button.setEnabled(bool(selected_group))
         self.delete_group_button.setEnabled(bool(selected_group and selected_group != self.default_group))
@@ -1059,13 +1400,16 @@ class TabularAnalyticsGroupingDialog(QDialog):
         else:
             self.selector_preview_label.setText(f"Showing {total_rows} matching group(s).")
             set_status_variant(self.selector_preview_label, "info" if total_rows else "warning")
-        self.selector_page_label.setText(
-            f"Page {self._selector_page_offset // _SELECTOR_PAGE_SIZE + 1 if total_rows else 0} "
-            f"of {((total_rows - 1) // _SELECTOR_PAGE_SIZE + 1) if total_rows else 0}"
-        )
+        current_page = self._selector_page_offset // _SELECTOR_PAGE_SIZE + 1 if total_rows else 0
+        total_pages = ((total_rows - 1) // _SELECTOR_PAGE_SIZE + 1) if total_rows else 0
+        self.selector_page_label.setText(f"Page {current_page} of {total_pages}")
         set_status_variant(self.selector_page_label, "neutral")
+        self.first_page_button.setEnabled(self._selector_page_offset > 0)
         self.previous_page_button.setEnabled(self._selector_page_offset > 0)
         self.next_page_button.setEnabled(self._selector_page_offset + len(preview_rows) < total_rows)
+        self.last_page_button.setEnabled(bool(total_rows) and (self._selector_page_offset + len(preview_rows) < total_rows))
+        self.page_jump_input.setEnabled(bool(total_pages))
+        self.jump_page_button.setEnabled(bool(total_pages))
 
     def _refresh_selected_columns(self) -> None:
         populate_column_list(
@@ -1137,6 +1481,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._sync_status()
 
     def _refresh_all(self, preferred_group: str | None = None) -> None:
+        self._refresh_scope_filter_column_choices()
         self._refresh_available_columns()
         self._refresh_selected_columns()
         self._refresh_selectors()

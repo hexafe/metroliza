@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from modules.contracts import IndustrialAnalyticsRequest, validate_industrial_analytics_request
 from modules.industrial_analytics_dashboard import (
+    DASHBOARD_RAW_POINT_LIMIT,
     build_production_dashboard_manifest,
     write_production_dashboard,
 )
@@ -48,6 +49,7 @@ from modules.tabular_analytics_service import (
 AnalyticsSourceKind = Literal["production_cache", "tabular_file"]
 CancelCheck = Callable[[], bool]
 ProgressCallback = Callable[[str], None]
+TABULAR_FAST_DASHBOARD_ROW_LIMIT = DASHBOARD_RAW_POINT_LIMIT
 
 
 class AnalyticsCancelled(RuntimeError):
@@ -245,6 +247,7 @@ def run_tabular_file_analytics(
     tabular_filter_columns: tuple[str, ...] | list[str] | None = None,
     tabular_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
     tabular_column_filters: tuple[TabularColumnFilter, ...] | list[TabularColumnFilter] | None = None,
+    dashboard_detail_mode: str = "fast",
     grouping_df=None,
     aggregation_state: ProductionAggregationState | None = None,
     cohort_state: ReferenceCohortState | None = None,
@@ -274,6 +277,7 @@ def run_tabular_file_analytics(
             tabular_filter_columns=tabular_filter_columns or (),
             tabular_filter_keys=tabular_filter_keys or (),
             tabular_column_filters=tabular_column_filters or (),
+            dashboard_detail_mode=dashboard_detail_mode,
             grouping_df=grouping_df,
         ),
         require_runnable=True,
@@ -371,16 +375,25 @@ def run_tabular_file_analytics(
         + aggregated.diagnostics
         + groupstats.diagnostics
     )
+    dashboard_frame, dashboard_diagnostics = _tabular_dashboard_frame_for_detail_mode(
+        cohorted.dataframe,
+        detail_mode=request.dashboard_detail_mode,
+    )
+    diagnostics = diagnostics + dashboard_diagnostics
     _emit_progress(
         progress_callback,
         "Writing dashboard...",
-        "Rendering HTML dashboard and chart payloads",
+        (
+            "Rendering full-detail HTML dashboard and chart payloads"
+            if request.dashboard_detail_mode == "full"
+            else "Rendering fast HTML dashboard and bounded chart payloads"
+        ),
         step=5,
         total_steps=total_steps,
         start_time=start_time,
     )
     dashboard = _write_dashboard(
-        frame=cohorted.dataframe,
+        frame=dashboard_frame,
         metrics=metrics,
         aggregation=aggregation,
         aggregated=aggregated,
@@ -435,6 +448,38 @@ def run_tabular_file_analytics(
         groupstats_metric_count=groupstats.analyzed_metric_count,
         diagnostics=diagnostics,
     )
+
+
+def _tabular_dashboard_frame_for_detail_mode(
+    dataframe,
+    *,
+    detail_mode: str,
+) -> tuple[object, tuple[ProductionAnalyticsDiagnostic, ...]]:
+    if str(detail_mode or "").strip().casefold() != "fast":
+        return dataframe, ()
+    row_count = int(len(getattr(dataframe, "index", ())))
+    limit = int(TABULAR_FAST_DASHBOARD_ROW_LIMIT)
+    if row_count <= limit:
+        return dataframe, ()
+    sampled = (
+        dataframe.sample(n=limit, random_state=20260518)
+        .sort_index(kind="stable")
+        .reset_index(drop=True)
+    )
+    diagnostic = ProductionAnalyticsDiagnostic(
+        severity="info",
+        code="tabular_dashboard_fast_sample",
+        message=(
+            f"Fast CSV/Excel dashboard detail rendered {len(sampled.index):,} sampled rows "
+            f"from {row_count:,}; aggregate tables, groupstats, and workbook output use all rows."
+        ),
+        context={
+            "detail_mode": "fast",
+            "input_row_count": row_count,
+            "dashboard_row_count": int(len(sampled.index)),
+        },
+    )
+    return sampled, (diagnostic,)
 
 
 def _emit_progress(

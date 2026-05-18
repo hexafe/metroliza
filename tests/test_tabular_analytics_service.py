@@ -469,6 +469,69 @@ def test_apply_tabular_row_filter_combines_column_scoped_filters_and_date_bounds
     assert filtered.diagnostics[0].context["column_filters"][2]["date_mode"] == "between"
 
 
+def test_apply_tabular_row_filter_supports_numeric_comparisons_and_ignores_non_numeric_values(
+    tmp_path,
+) -> None:
+    input_file = tmp_path / "numeric_filters.csv"
+    pd.DataFrame(
+        {
+            "Value": [1, "1", "2", "x", None],
+            "Value2": [0, 2, 2, "x", 2],
+            "TraceCode": ["TC-001", "TC-002", "TC-003", "TC-004", "TC-005"],
+        }
+    ).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file)
+
+    filtered = apply_tabular_row_filter(
+        loaded.dataframe,
+        column_filters=(
+            TabularColumnFilter("value", numeric_operator="=", numeric_value="1"),
+            TabularColumnFilter("value2", numeric_operator=">", numeric_value="1"),
+        ),
+    )
+
+    assert filtered.applied is True
+    assert filtered.output_row_count == 1
+    assert filtered.dataframe["source_row_number"].tolist() == [2]
+    assert filtered.diagnostics[0].context["column_filters"][0]["numeric_operator"] == "="
+    assert filtered.diagnostics[0].context["column_filters"][1]["numeric_operator"] == ">"
+
+
+def test_sqlite_tabular_numeric_filters_match_expected_rows(tmp_path) -> None:
+    input_file = tmp_path / "numeric_filters_sqlite.csv"
+    pd.DataFrame(
+        {
+            "Value": [1, "1", "2", "x", None],
+            "Value2": [0, 2, 2, "x", 2],
+            "TraceCode": ["TC-001", "TC-002", "TC-003", "TC-004", "TC-005"],
+        }
+    ).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file, force_sqlite=True)
+    try:
+        equals_and_gt = materialize_tabular_dataframe(
+            loaded,
+            column_filters=(
+                TabularColumnFilter("value", numeric_operator="=", numeric_value="1"),
+                TabularColumnFilter("value2", numeric_operator=">", numeric_value="1"),
+            ),
+        )
+        gt_only = materialize_tabular_dataframe(
+            loaded,
+            column_filters=(TabularColumnFilter("value2", numeric_operator=">", numeric_value="1"),),
+        )
+
+        assert equals_and_gt.output_row_count == 1
+        assert equals_and_gt.dataframe["source_row_number"].tolist() == [2]
+        assert gt_only.output_row_count == 3
+        assert gt_only.dataframe["source_row_number"].tolist() == [2, 3, 5]
+        assert count_tabular_materialized_rows(
+            loaded,
+            column_filters=(TabularColumnFilter("value2", numeric_operator=">", numeric_value="1"),),
+        ) == 3
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+
 def test_apply_tabular_grouping_keeps_unassigned_rows_in_population(tmp_path) -> None:
     input_file = tmp_path / "table.csv"
     _sample_table().to_csv(input_file, index=False)

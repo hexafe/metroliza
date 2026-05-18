@@ -237,7 +237,7 @@ class IndustrialDataDialog(QDialog):
             set_status_variant(self.analytics_status_label, "warning")
             self._set_action_buttons_enabled(db_available=False)
             self.status_label.setText(
-                "Configure production sources and use Export to fetch directly. Select a Metroliza report database only when you want cache sync, links, or analytics."
+                "Configure production sources, then use Check access / sync for access-only checks or use Export to fetch directly. Select a Metroliza report database when you want cache sync, links, or analytics."
             )
             set_status_variant(self.status_label, "warning")
             return
@@ -328,6 +328,8 @@ class IndustrialDataDialog(QDialog):
         self.sync_window = IndustrialSyncDialog(
             self,
             db_file=self.db_file,
+            config_path=self.config_path,
+            access_only=not bool(self.db_file),
             filter_state=self.sync_filter_state,
         )
         self.sync_window.exec()
@@ -427,10 +429,11 @@ class IndustrialDataDialog(QDialog):
             return False
 
     def _set_action_buttons_enabled(self, *, db_available: bool) -> None:
+        access_only_sync_available = (not self.db_file) and self._has_configured_sources()
         self.select_database_button.setEnabled(True)
         self.sources_button.setEnabled(True)
         self.initialize_button.setEnabled(db_available)
-        self.sync_button.setEnabled(db_available)
+        self.sync_button.setEnabled(db_available or access_only_sync_available)
         self.links_button.setEnabled(db_available)
         self.export_button.setEnabled(db_available or self._has_configured_sources())
         self.analyze_button.setEnabled(db_available)

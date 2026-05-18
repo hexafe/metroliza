@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from PyQt6.QtWidgets import (
@@ -26,8 +27,13 @@ from modules.industrial_data_repository import (
 )
 from modules.industrial_credentials import load_industrial_credentials, save_industrial_credentials
 from modules.industrial_filter_dialog import IndustrialFilterDialog
+from modules.industrial_source_config import (
+    IndustrialSourceConfigError,
+    default_industrial_source_config_path,
+    load_source_profiles_from_config,
+)
 from modules.industrial_workflow_state import IndustrialFilterState
-from modules.industrial_workers import IndustrialOznakSyncThread
+from modules.industrial_workers import IndustrialOznakAccessCheckThread, IndustrialOznakSyncThread
 from modules.ui_foundation import (
     apply_metroliza_theme,
     configure_window_size,
@@ -45,10 +51,14 @@ class IndustrialSyncDialog(QDialog):
         parent=None,
         *,
         db_file: str | None = None,
+        config_path: str | Path | None = None,
+        access_only: bool | None = None,
         filter_state: IndustrialFilterState | None = None,
     ):
         super().__init__(parent)
         self.db_file = db_file
+        self.config_path = Path(config_path or default_industrial_source_config_path()).expanduser()
+        self.access_only = bool(access_only) if access_only is not None else not bool(db_file)
         self.filter_state = filter_state or IndustrialFilterState()
         self.filter_window = None
         self.oznak_sync_thread = None
@@ -103,6 +113,10 @@ class IndustrialSyncDialog(QDialog):
         self._build_layout()
         self.reload_profiles()
         self._sync_filter_status()
+        if self.access_only:
+            self.sync_now_button.setToolTip(
+                "Sync now requires a selected Metroliza report database with initialized industrial cache."
+            )
         apply_metroliza_theme(self)
 
     def _build_layout(self) -> None:
@@ -142,31 +156,54 @@ class IndustrialSyncDialog(QDialog):
         layout.addLayout(actions)
 
     def reload_profiles(self) -> None:
-        if not self.db_file or self._loading_profiles:
+        if self._loading_profiles:
+            return
+        self._loading_profiles = True
+        self.profile_combo.clear()
+        profiles: list[IndustrialSourceProfile]
+        if self.access_only:
+            try:
+                profiles = load_source_profiles_from_config(self.config_path)
+            except (IndustrialSourceConfigError, OSError) as exc:
+                profiles = []
+                self.status_label.setText(f"Could not load sources from config: {exc}")
+                set_status_variant(self.status_label, "warning")
+        elif not self.db_file:
+            profiles = []
             self._set_ready_state(
                 False,
                 "Select a Metroliza report database first so synced production rows have a local cache.",
             )
-            return
-        self._loading_profiles = True
-        self.profile_combo.clear()
-        try:
-            profiles = IndustrialDataRepository(self.db_file).list_source_profiles()
-        except Exception as exc:
-            profiles = []
-            self.status_label.setText(f"Could not load sources: {exc}")
-            set_status_variant(self.status_label, "warning")
+        else:
+            try:
+                profiles = IndustrialDataRepository(self.db_file).list_source_profiles()
+            except Exception as exc:
+                profiles = []
+                self.status_label.setText(f"Could not load sources: {exc}")
+                set_status_variant(self.status_label, "warning")
         for profile in profiles:
             self.profile_combo.addItem(profile.profile_name, profile)
         self._loading_profiles = False
         if profiles:
-            self._set_ready_state(
-                True,
-                "Production source selected. Check access with a one-row read or sync selected reference/ID values.",
-            )
+            if self.access_only:
+                self._set_ready_state(
+                    True,
+                    "Access-only mode: Check access reads up to one row and never saves data. Select a Metroliza report database to enable Sync now.",
+                )
+            else:
+                self._set_ready_state(
+                    True,
+                    "Production source selected. Check access with a one-row read or sync selected reference/ID values.",
+                )
             self._load_stored_credentials_for_current_profile()
         else:
-            self._set_ready_state(False, "Create a production source before syncing.")
+            if self.access_only:
+                self._set_ready_state(
+                    False,
+                    "Access-only mode: configure at least one production source before checking access.",
+                )
+            else:
+                self._set_ready_state(False, "Create a production source before syncing.")
 
     def _set_ready_state(self, enabled: bool, message: str) -> None:
         self.status_label.setText(message)
@@ -221,9 +258,10 @@ class IndustrialSyncDialog(QDialog):
 
     def _sync_filter_status(self) -> None:
         self.filter_status_label.setText(self.filter_state.summary())
+        idle_variant = "neutral" if self.access_only else "warning"
         set_status_variant(
             self.filter_status_label,
-            "success" if self.filter_state.is_applied else "warning",
+            "success" if self.filter_state.is_applied else idle_variant,
         )
         self._sync_action_buttons()
 
@@ -252,6 +290,10 @@ class IndustrialSyncDialog(QDialog):
         try:
             profile = self._profile_for_current_filter()
             username, password = self._read_credentials()
+            if self.access_only and not test_only:
+                raise ValueError(
+                    "Access-only mode supports Check access only. Select a Metroliza report database to enable Sync now."
+                )
             if not test_only:
                 self.filter_state.validate_for_sync()
             if self.remember_credentials_checkbox.isChecked():
@@ -269,17 +311,27 @@ class IndustrialSyncDialog(QDialog):
         set_status_variant(self.status_label, "neutral")
         self._set_action_buttons_enabled(False)
         self.cancel_sync_button.setEnabled(True)
-        self.oznak_sync_thread = IndustrialOznakSyncThread(
-            db_file=str(self.db_file),
-            profile=profile,
-            username=username,
-            password=password,
-            limit=self.limit_spin.value(),
-            timeout_seconds=self.timeout_spin.value(),
-            reference_filter_column=self.filter_state.reference_column if self.filter_state.references else None,
-            reference_values=self.filter_state.references,
-            test_only=test_only,
-        )
+        if self.access_only:
+            self.oznak_sync_thread = IndustrialOznakAccessCheckThread(
+                profile=profile,
+                username=username,
+                password=password,
+                timeout_seconds=self.timeout_spin.value(),
+            )
+        else:
+            self.oznak_sync_thread = IndustrialOznakSyncThread(
+                db_file=str(self.db_file),
+                profile=profile,
+                username=username,
+                password=password,
+                limit=self.limit_spin.value(),
+                timeout_seconds=self.timeout_spin.value(),
+                reference_filter_column=self.filter_state.reference_column
+                if self.filter_state.references
+                else None,
+                reference_values=self.filter_state.references,
+                test_only=test_only,
+            )
         self.oznak_sync_thread.progress_message.connect(self.on_oznak_progress)
         self.oznak_sync_thread.result_ready.connect(self.on_oznak_result)
         self.oznak_sync_thread.error_occurred.connect(self.on_oznak_error)
@@ -387,9 +439,11 @@ class IndustrialSyncDialog(QDialog):
             self.sync_now_button.setEnabled(False)
             return
         has_source = self.current_profile() is not None
-        self.edit_filter_button.setEnabled(has_source)
+        self.edit_filter_button.setEnabled(has_source and not self.access_only)
         self.test_connection_button.setEnabled(has_source)
-        self.sync_now_button.setEnabled(has_source and self.filter_state.is_applied)
+        self.sync_now_button.setEnabled(
+            has_source and (not self.access_only) and self.filter_state.is_applied
+        )
 
     def _format_failed_result_status(self, result: dict[str, Any]) -> str:
         if result.get("status") == "cancelled":

@@ -124,7 +124,7 @@ def build_dashboard_plotly_spec(
     try:
         from hexafe_plotstats.adapters import plotly_spec_from_metroliza_dashboard_payload
     except Exception:
-        return None
+        return _fallback_dashboard_plotly_spec(payload, title=title, static=static)
 
     try:
         spec = plotly_spec_from_metroliza_dashboard_payload(
@@ -134,20 +134,198 @@ def build_dashboard_plotly_spec(
             static=static,
         )
     except Exception:
-        return None
+        return _fallback_dashboard_plotly_spec(payload, title=title, static=static)
     if not isinstance(spec, dict):
-        return None
+        return _fallback_dashboard_plotly_spec(payload, title=title, static=static)
     data = spec.get("data")
     if not isinstance(data, list) or not data:
-        return None
+        return _fallback_dashboard_plotly_spec(payload, title=title, static=static)
     layout = spec.get("layout") if isinstance(spec.get("layout"), dict) else {}
     config = spec.get("config") if isinstance(spec.get("config"), dict) else {}
-    return _normalize_dashboard_plotly_spec({
+    raw_spec = {
         "data": data,
         "layout": layout,
         "config": config,
         "metadata": spec.get("metadata") if isinstance(spec.get("metadata"), dict) else {},
-    })
+    }
+    _normalize_payload_limit_trace_labels(raw_spec, payload)
+    return _normalize_dashboard_plotly_spec(raw_spec)
+
+
+def _fallback_dashboard_plotly_spec(
+    payload: Mapping[str, Any],
+    *,
+    title: str,
+    static: bool,
+) -> dict[str, Any] | None:
+    payload_type = str(payload.get("type") or "").strip().casefold()
+    if payload_type == "histogram":
+        return _fallback_histogram_plotly_spec(payload, title=title, static=static)
+    return None
+
+
+def _fallback_histogram_plotly_spec(
+    payload: Mapping[str, Any],
+    *,
+    title: str,
+    static: bool,
+) -> dict[str, Any] | None:
+    groups = _histogram_payload_groups(payload)
+    all_values = np.concatenate([values for _label, values in groups]) if groups else np.asarray([])
+    all_values = all_values[np.isfinite(all_values)]
+    if not groups or all_values.size == 0:
+        return None
+
+    bin_count = _resolved_bin_count(all_values, bin_count=_payload_int(payload.get("bin_count")))
+    _counts, bin_edges = np.histogram(all_values, bins=max(1, bin_count))
+    centers = ((bin_edges[:-1] + bin_edges[1:]) / 2.0).tolist()
+    widths = np.diff(bin_edges).tolist()
+    traces: list[dict[str, Any]] = []
+    for label, values in groups:
+        counts, _edges = np.histogram(values, bins=bin_edges)
+        denominator = max(int(values.size), 1)
+        y_values = (counts / denominator).astype(float).tolist()
+        customdata = [
+            [float(start), float(end), int(count), f"{start:.4g}..{end:.4g}"]
+            for start, end, count in zip(bin_edges[:-1], bin_edges[1:], counts, strict=False)
+        ]
+        traces.append(
+            {
+                "type": "bar",
+                "name": str(label),
+                "x": centers,
+                "y": y_values,
+                "width": widths,
+                "opacity": 0.72 if len(groups) > 1 else 0.9,
+                "customdata": customdata,
+                "hovertemplate": (
+                    "bin=%{customdata[0]:.4g}..%{customdata[1]:.4g}<br>"
+                    "frequency=%{y:.2%}<br>"
+                    "count=%{customdata[2]}<extra></extra>"
+                ),
+            }
+        )
+    traces.extend(_histogram_reference_traces(all_values, limits=payload.get("limits")))
+
+    style = payload.get("style") if isinstance(payload.get("style"), Mapping) else {}
+    x_label = str(style.get("axis_label_x") or payload.get("x_label") or "Value")
+    spec = {
+        "data": traces,
+        "layout": {
+            "title": {"text": title},
+            "barmode": "overlay" if len(groups) > 1 else "relative",
+            "xaxis": {"title": {"text": x_label}},
+            "yaxis": {"title": {"text": "Frequency (%)"}},
+            "legend": {"orientation": "h"},
+        },
+        "config": {"responsive": True, "displaylogo": False, "staticPlot": bool(static)},
+        "metadata": {"kind": "histogram", "histogram_y_mode": "percent"},
+    }
+    return _normalize_dashboard_plotly_spec(spec)
+
+
+def _histogram_payload_groups(payload: Mapping[str, Any]) -> list[tuple[str, np.ndarray]]:
+    raw_groups = payload.get("groups")
+    groups: list[tuple[str, np.ndarray]] = []
+    if isinstance(raw_groups, list):
+        for index, item in enumerate(raw_groups, start=1):
+            if not isinstance(item, Mapping):
+                continue
+            values = _finite_values(item.get("values") or ())
+            if values.size:
+                groups.append((str(item.get("group") or f"Group {index}"), values))
+        return groups
+    values = _finite_values(payload.get("values") or ())
+    return [("Frequency", values)] if values.size else []
+
+
+def _histogram_reference_traces(
+    values: np.ndarray,
+    *,
+    limits: Any,
+) -> list[dict[str, Any]]:
+    traces: list[dict[str, Any]] = []
+    limits_mapping = limits if isinstance(limits, Mapping) else {}
+    reference_values: list[tuple[str, float | None, str]] = [
+        ("LSL", _optional_float(limits_mapping.get("lsl")), "#b91c1c"),
+        ("USL", _optional_float(limits_mapping.get("usl")), "#b91c1c"),
+        ("mean", float(np.mean(values)), "#2563eb"),
+        ("median", float(np.median(values)), "#0f766e"),
+        ("Q1", float(np.quantile(values, 0.25)), "#7c3aed"),
+        ("Q3", float(np.quantile(values, 0.75)), "#7c3aed"),
+    ]
+    for label, value, color in reference_values:
+        if value is None or not math.isfinite(value):
+            continue
+        traces.append(
+            {
+                "type": "scatter",
+                "mode": "lines",
+                "name": label,
+                "x": [value, value],
+                "y": [0.0, 1.0],
+                "line": {"color": color, "width": 1.5, "dash": "dash"},
+                "hovertemplate": f"{label}={_format_plotly_value(value)}<extra></extra>",
+            }
+        )
+    return traces
+
+
+def _payload_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _optional_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _normalize_payload_limit_trace_labels(spec: Mapping[str, Any], payload: Mapping[str, Any]) -> None:
+    limits = payload.get("limits") if isinstance(payload.get("limits"), Mapping) else {}
+    if not limits:
+        return
+    limit_values = {
+        "LSL": _optional_float(limits.get("lsl")),
+        "USL": _optional_float(limits.get("usl")),
+    }
+    data = spec.get("data")
+    if not isinstance(data, list):
+        return
+    for trace in data:
+        if not isinstance(trace, dict):
+            continue
+        label = str(trace.get("name") or "").strip()
+        label_key = label.casefold().replace("_", " ")
+        if not label_key.startswith("limit"):
+            continue
+        _axis, value = _constant_line_axis_and_value(trace)
+        matched_label = _matching_limit_label(value, limit_values)
+        if matched_label is None:
+            if "1" in label_key and limit_values.get("LSL") is not None:
+                matched_label = "LSL"
+            elif "2" in label_key and limit_values.get("USL") is not None:
+                matched_label = "USL"
+        if matched_label is not None:
+            trace["name"] = matched_label
+
+
+def _matching_limit_label(
+    value: float | None,
+    limit_values: Mapping[str, float | None],
+) -> str | None:
+    if value is None:
+        return None
+    for label, limit_value in limit_values.items():
+        if limit_value is not None and math.isclose(value, limit_value, rel_tol=1e-9, abs_tol=1e-9):
+            return label
+    return None
 
 
 def build_chart_artifact(

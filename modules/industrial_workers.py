@@ -228,6 +228,7 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
         tabular_filter_columns: tuple[str, ...] | list[str] | None = None,
         tabular_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
         tabular_column_filters: tuple[TabularColumnFilter, ...] | list[TabularColumnFilter] | None = None,
+        dashboard_detail_mode: str = "fast",
         grouping_df=None,
     ):
         super().__init__()
@@ -251,6 +252,7 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
                 tabular_filter_columns=tabular_filter_columns or (),
                 tabular_filter_keys=tabular_filter_keys or (),
                 tabular_column_filters=tabular_column_filters or (),
+                dashboard_detail_mode=dashboard_detail_mode,
                 grouping_df=grouping_df,
             )
         )
@@ -273,6 +275,7 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
         self.tabular_filter_columns = validated_request.tabular_filter_columns
         self.tabular_filter_keys = validated_request.tabular_filter_keys
         self.tabular_column_filters = validated_request.tabular_column_filters
+        self.dashboard_detail_mode = validated_request.dashboard_detail_mode
         self.grouping_df = validated_request.grouping_df
         self._init_cancellation_state()
 
@@ -294,6 +297,7 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
                     tabular_filter_columns=self.tabular_filter_columns,
                     tabular_filter_keys=self.tabular_filter_keys,
                     tabular_column_filters=self.tabular_column_filters,
+                    dashboard_detail_mode=self.dashboard_detail_mode,
                     grouping_df=self.grouping_df,
                     aggregation_state=self.aggregation_state,
                     cohort_state=self.cohort_state,
@@ -508,6 +512,89 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                 except Exception:
                     pass
             self.error_occurred.emit(sanitized_error)
+
+    def _emit_progress_from_diagnostic(self, diagnostic: Any) -> None:
+        message = getattr(diagnostic, "message", None)
+        if not message:
+            source = getattr(diagnostic, "source_alias", "")
+            status = getattr(getattr(diagnostic, "status", None), "value", None) or getattr(
+                diagnostic, "status", ""
+            )
+            message = f"{source}: {status}".strip(": ")
+        self.progress_message.emit(str(message))
+
+
+class IndustrialOznakAccessCheckThread(WorkerCancellationMixin, QThread):
+    """Run a bounded one-row Oznak access check without local cache dependencies."""
+
+    progress_message = pyqtSignal(str)
+    result_ready = pyqtSignal(object)
+    error_occurred = pyqtSignal(str)
+
+    def __init__(
+        self,
+        *,
+        profile: IndustrialSourceProfile,
+        username: str,
+        password: str,
+        timeout_seconds: int,
+    ):
+        super().__init__()
+        self.profile = profile
+        self.username = username
+        self.password = password
+        self.timeout_seconds = timeout_seconds
+        self.cancellation_token = None
+        self._init_cancellation_state()
+
+    def run(self):
+        try:
+            status = get_oznak_adapter_status()
+            if status.available:
+                try:
+                    self.cancellation_token = create_oznak_cancellation_token()
+                except Exception:
+                    self.cancellation_token = None
+            result = fetch_oznak_records_for_source_profile(
+                self.profile,
+                username=self.username,
+                password=self.password,
+                limit=1,
+                timeout_seconds=self.timeout_seconds,
+                reference_filter_column=None,
+                reference_values=(),
+                cancellation_token=self.cancellation_token,
+                progress_callback=self._emit_progress_from_diagnostic,
+            )
+
+            warning_detail = _oznak_warning_detail(result.diagnostics)
+            if self._cancel_requested:
+                final_status = "cancelled"
+                error = "Access check cancelled by user."
+            elif result.error and not result.records:
+                final_status = "failed"
+                error = redact_sensitive_text(result.error)
+            elif warning_detail or result.error:
+                final_status = "completed_with_warnings"
+                error = warning_detail or redact_sensitive_text(result.error)
+            else:
+                final_status = "succeeded"
+                error = None
+
+            self.result_ready.emit(
+                {
+                    "test_only": True,
+                    "access_check_method": "bounded_fetch",
+                    "status": final_status,
+                    "error": error,
+                    "row_count": result.row_count,
+                    "upsert_summary": {},
+                    "link_summary": None,
+                    "diagnostics": result.diagnostics,
+                }
+            )
+        except Exception as exc:
+            self.error_occurred.emit(redact_sensitive_text(exc))
 
     def _emit_progress_from_diagnostic(self, diagnostic: Any) -> None:
         message = getattr(diagnostic, "message", None)

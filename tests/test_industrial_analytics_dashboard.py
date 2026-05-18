@@ -146,13 +146,15 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     assert 'id="chart-lightbox-plotly"' in html_text
     assert "const chartById = new Map" in html_text
     assert ".chart-stats th" in html_text
-    assert "background: #1f2937" in html_text
+    assert "background: #0f172a" in html_text
     assert '<header id="dashboard-start">' in html_text
     assert '<nav class="section-nav">' in html_text
     assert '<a class="section-chip" href="#groupstats">Groupstats</a>' in html_text
     assert 'Back to dashboard start</a>' in html_text
     assert 'id="chart-time-series-cycle-time-s-aggregated"' in html_text
-    assert "color: #ffffff" in html_text
+    assert "color: #f8fafc" in html_text
+    assert ".chart-stats-title" in html_text
+    assert "color: #0f172a" in html_text
     assert "<th>Statistic</th><th>Value</th>" in html_text
     assert "grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));" in html_text
     assert '<div class="card-label">Rows after aggregation</div>' in html_text
@@ -485,11 +487,90 @@ def test_large_time_series_uses_compact_marker_style() -> None:
         ),
     )
 
-    marker = manifest["charts"][0]["plotly_spec"]["data"][0]["marker"]
+    chart_spec = manifest["charts"][0]["plotly_spec"]
+    marker = chart_spec["data"][0]["marker"]
+    xaxis = chart_spec["layout"]["xaxis"]
 
     assert marker["size"] <= 3.5
     assert marker["opacity"] <= 0.55
     assert marker["line"]["width"] == 0.0
+    assert xaxis["automargin"] is True
+    assert xaxis["tickangle"] <= -34
+    assert xaxis["tickfont"]["size"] <= 10
+    assert xaxis["ticklabeloverflow"] == "hide past div"
+    assert xaxis["ticklabelstep"] >= 2
+    assert xaxis["nticks"] <= 12
+
+
+def test_very_large_aggregated_time_series_hybrid_keeps_raw_and_mean_axes_aligned() -> None:
+    row_count = 60_000
+    frame = pd.DataFrame(
+        {
+            "process_datetime": pd.date_range(
+                "2026-01-15 00:00",
+                periods=row_count,
+                freq="h",
+                tz="UTC",
+            ),
+            "machine": ["M1" if index % 2 == 0 else "M2" for index in range(row_count)],
+            "length_mm": [10.0 + float(index % 30) / 3.0 for index in range(row_count)],
+        }
+    )
+    aggregate_frame = pd.DataFrame(
+        {
+            "time_bucket_start": [
+                pd.Timestamp("2026-01-01T00:00:00Z"),
+                pd.Timestamp("2026-01-01T00:00:00Z"),
+                pd.Timestamp("2026-02-01T00:00:00Z"),
+                pd.Timestamp("2026-02-01T00:00:00Z"),
+                pd.Timestamp("2026-03-01T00:00:00Z"),
+                pd.Timestamp("2026-03-01T00:00:00Z"),
+            ],
+            "machine": ["M1", "M2", "M1", "M2", "M1", "M2"],
+            "length_mm__mean": [14.0, 14.8, 15.4, 16.1, 24.0, 23.6],
+            "raw_row_count": [5_000, 5_000, 5_000, 5_000, 5_000, 5_000],
+        }
+    )
+
+    manifest = build_production_dashboard_manifest(
+        frame=frame,
+        metric_selection=(ProductionMetricSelection("length_mm", "Length Mm"),),
+        aggregation_state=ProductionAggregationState(
+            time_bucket="month",
+            aggregation_methods=("mean",),
+            group_fields=("machine",),
+        ),
+        aggregation_result=ProductionAggregationResult(
+            dataframe=aggregate_frame,
+            source_row_count=row_count,
+            output_row_count=len(aggregate_frame.index),
+            is_aggregated=True,
+        ),
+        chart_selection=ProductionChartSelection(
+            time_series=True,
+            histogram=False,
+            violin=False,
+            box=False,
+            groupstats=False,
+        ),
+    )
+
+    hybrid_chart = manifest["charts"][1]
+    spec = hybrid_chart["plotly_spec"]
+    layout = spec["layout"]
+    aggregate_traces = [trace for trace in spec["data"] if trace["name"].endswith("aggregate")]
+
+    assert hybrid_chart["chart_type"] == "time_series_raw_aggregate"
+    assert layout["images"]
+    assert layout["xaxis"]["autorange"] is False
+    assert layout["yaxis"]["autorange"] is False
+    assert pd.Timestamp(layout["xaxis"]["range"][0], tz="UTC") <= pd.Timestamp(
+        "2026-01-01T00:00:00Z"
+    )
+    assert float(layout["yaxis"]["range"][1]) >= 24.0
+    assert aggregate_traces
+    assert all("T00:00:00+00:00" in str(trace["x"][0]) for trace in aggregate_traces if trace["x"])
+    assert all("-" in str(trace["x"][0]) for trace in aggregate_traces if trace["x"])
 
 
 def test_very_large_time_series_uses_sampled_raw_image_layers(tmp_path) -> None:

@@ -263,6 +263,37 @@ class TestValidateExportRequest(unittest.TestCase):
 
 
 class TestValidateIndustrialAnalyticsRequest(unittest.TestCase):
+    def test_defaults_dashboard_detail_mode_to_fast(self):
+        validated = validate_industrial_analytics_request(
+            IndustrialAnalyticsRequest(
+                source_kind='production_cache',
+                output_dashboard_file='dashboard.html',
+            )
+        )
+
+        self.assertEqual(validated.dashboard_detail_mode, 'fast')
+
+    def test_normalizes_dashboard_detail_mode(self):
+        validated = validate_industrial_analytics_request(
+            IndustrialAnalyticsRequest(
+                source_kind='production_cache',
+                output_dashboard_file='dashboard.html',
+                dashboard_detail_mode=' Full ',
+            )
+        )
+
+        self.assertEqual(validated.dashboard_detail_mode, 'full')
+
+    def test_rejects_unknown_dashboard_detail_mode(self):
+        with self.assertRaisesRegex(ValueError, 'Unsupported dashboard detail mode'):
+            validate_industrial_analytics_request(
+                IndustrialAnalyticsRequest(
+                    source_kind='production_cache',
+                    output_dashboard_file='dashboard.html',
+                    dashboard_detail_mode='deep',
+                )
+            )
+
     def test_normalizes_tabular_request_paths_filters_and_grouping(self):
         grouping_df = pd.DataFrame({'REPORT_ID': [1], 'GROUP': ['POPULATION']})
         request = IndustrialAnalyticsRequest(

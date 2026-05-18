@@ -6,6 +6,7 @@ from types import ModuleType, SimpleNamespace
 
 from modules.hexafe_plotstats_adapter import (
     PLOTSTATS_EXPORT_CHARTS_ENV_VAR,
+    _fallback_dashboard_plotly_spec,
     build_chart_artifact,
     build_dashboard_plotly_spec,
     build_histogram_stats_table,
@@ -272,6 +273,79 @@ def test_plotstats_dashboard_spec_normalizes_histogram_plotly_semantics(monkeypa
     annotation_texts = {annotation["text"] for annotation in spec["layout"]["annotations"]}
     assert {"legacy", "LSL=123", "Mean=1000"}.issubset(annotation_texts)
     assert all(annotation["bgcolor"] == "#ffffff" for annotation in spec["layout"]["annotations"])
+
+
+def test_dashboard_plotly_fallback_builds_percent_histogram_with_reference_values() -> None:
+    spec = _fallback_dashboard_plotly_spec(
+        {
+            "type": "histogram",
+            "values": [1.0, 2.0, 3.0, 4.0],
+            "limits": {"lsl": 1.5, "usl": 3.5},
+            "style": {"axis_label_x": "Length"},
+        },
+        title="Length distribution",
+        static=False,
+    )
+
+    assert spec is not None
+    assert spec["layout"]["yaxis"]["title"]["text"] == "Frequency (%)"
+    assert spec["layout"]["yaxis"]["range"] == [0.0, 1.0]
+    assert spec["layout"]["xaxis"]["title"]["text"] == "Length"
+    assert spec["config"]["staticPlot"] is False
+    histogram_trace = spec["data"][0]
+    assert histogram_trace["type"] == "bar"
+    assert all(isinstance(value, float) for value in histogram_trace["x"])
+    assert histogram_trace["hovertemplate"].startswith("bin=%{customdata[0]:.4g}")
+    trace_names = {trace["name"] for trace in spec["data"][1:]}
+    assert {"LSL=1.5", "USL=3.5", "mean=2.5", "median=2.5", "Q1=1.75", "Q3=3.25"}.issubset(
+        trace_names
+    )
+    annotation_texts = {annotation["text"] for annotation in spec["layout"]["annotations"]}
+    assert {"LSL=1.5", "USL=3.5", "mean=2.5"}.issubset(annotation_texts)
+    assert all(annotation["bgcolor"] == "#ffffff" for annotation in spec["layout"]["annotations"])
+
+
+def test_dashboard_plotly_spec_renames_generic_limit_traces(monkeypatch) -> None:
+    def fake_spec(_payload, *, title, theme, static):
+        return {
+            "data": [
+                {"type": "bar", "x": [1.0], "y": [1.0]},
+                {
+                    "type": "scatter",
+                    "mode": "lines",
+                    "name": "Limit 1",
+                    "x": [1.5, 1.5],
+                    "y": [0.0, 1.0],
+                },
+                {
+                    "type": "scatter",
+                    "mode": "lines",
+                    "name": "Limit 2",
+                    "x": [3.5, 3.5],
+                    "y": [0.0, 1.0],
+                },
+            ],
+            "layout": {},
+            "config": {"staticPlot": static},
+            "metadata": {"kind": "histogram"},
+        }
+
+    package = ModuleType("hexafe_plotstats")
+    adapters = ModuleType("hexafe_plotstats.adapters")
+    adapters.plotly_spec_from_metroliza_dashboard_payload = fake_spec
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats", package)
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats.adapters", adapters)
+
+    spec = build_dashboard_plotly_spec(
+        {"type": "histogram", "values": [1.0, 2.0], "limits": {"lsl": 1.5, "usl": 3.5}},
+        title="Histogram",
+        static=False,
+    )
+
+    assert spec is not None
+    assert {trace["name"] for trace in spec["data"][1:]} == {"LSL=1.5", "USL=3.5"}
+    annotation_texts = {annotation["text"] for annotation in spec["layout"]["annotations"]}
+    assert {"LSL=1.5", "USL=3.5"}.issubset(annotation_texts)
 
 
 def test_render_chart_artifact_png_returns_bytes(monkeypatch) -> None:

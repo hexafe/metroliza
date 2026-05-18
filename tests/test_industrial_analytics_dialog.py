@@ -252,6 +252,23 @@ def test_tabular_analytics_dialog_uses_part_id_wording_and_delimiters() -> None:
         dialog.close()
 
 
+def test_tabular_analytics_dialog_dashboard_detail_mode_is_selectable_and_in_request() -> None:
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        assert not dialog.dashboard_detail_mode_combo.isHidden()
+        assert dialog.dashboard_detail_mode_combo.currentData() == "fast"
+
+        dialog.dashboard_detail_mode_combo.setCurrentIndex(
+            dialog.dashboard_detail_mode_combo.findData("full")
+        )
+        request = dialog._build_analytics_request()
+
+        assert request.dashboard_detail_mode == "full"
+    finally:
+        dialog.close()
+
+
 def test_tabular_analytics_dialog_auto_loads_metrics_after_file_selection(
     tmp_path,
     monkeypatch,
