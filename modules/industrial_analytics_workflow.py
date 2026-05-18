@@ -312,11 +312,30 @@ def run_tabular_file_analytics(
             timestamp_column=request.timestamp_column,
             reference_column=request.reference_column,
         )
+    metrics = request.metric_selection or tuple(
+        candidate.to_selection() for candidate in loaded.metric_candidates[:5]
+    )
+    required_columns = (
+        None
+        if request.output_workbook_file
+        else _tabular_required_columns_for_analytics(
+            metrics=metrics,
+            aggregation_state=request.aggregation_state,
+            filter_columns=request.tabular_filter_columns,
+            column_filters=request.tabular_column_filters,
+            grouping_df=request.grouping_df,
+        )
+    )
     filtered = materialize_tabular_dataframe(
         loaded,
         filter_columns=request.tabular_filter_columns,
         selected_filter_keys=request.tabular_filter_keys,
         column_filters=request.tabular_column_filters,
+        required_columns=required_columns,
+    )
+    projection_diagnostic = _tabular_projection_diagnostic(
+        loaded=loaded,
+        required_columns=required_columns,
     )
     grouped = apply_tabular_grouping(filtered.dataframe, request.grouping_df)
     _emit_progress(
@@ -328,9 +347,6 @@ def run_tabular_file_analytics(
         start_time=start_time,
     )
     _raise_if_cancelled(cancel_check)
-    metrics = request.metric_selection or tuple(
-        candidate.to_selection() for candidate in loaded.metric_candidates[:5]
-    )
     aggregation = _aggregation_with_tabular_grouping(
         request.aggregation_state,
         grouping_applied=grouped.applied,
@@ -369,6 +385,7 @@ def run_tabular_file_analytics(
     _raise_if_cancelled(cancel_check)
     diagnostics = (
         loaded.diagnostics
+        + projection_diagnostic
         + filtered.diagnostics
         + grouped.diagnostics
         + cohorted.diagnostics
@@ -561,6 +578,60 @@ def _aggregation_with_tabular_grouping(
     if TABULAR_GROUP_COLUMN in aggregation.group_fields:
         return aggregation
     return replace(aggregation, group_fields=(TABULAR_GROUP_COLUMN, *aggregation.group_fields))
+
+
+def _tabular_required_columns_for_analytics(
+    *,
+    metrics: tuple[ProductionMetricSelection, ...],
+    aggregation_state: ProductionAggregationState,
+    filter_columns: tuple[str, ...] | list[str] | None,
+    column_filters: tuple[TabularColumnFilter, ...] | list[TabularColumnFilter] | None,
+    grouping_df,
+) -> tuple[str, ...]:
+    required: list[str] = [
+        "source_row_number",
+        "source_file",
+        "source_sheet",
+        "process_datetime",
+        "reference",
+    ]
+    required.extend(metric.field_name for metric in metrics)
+    required.extend(aggregation_state.group_fields)
+    required.extend(str(column) for column in (filter_columns or ()))
+    for column_filter in column_filters or ():
+        if isinstance(column_filter, TabularColumnFilter):
+            required.append(column_filter.column)
+    if grouping_df is not None:
+        required.append("source_row_number")
+    return tuple(dict.fromkeys(column for column in required if str(column or "").strip()))
+
+
+def _tabular_projection_diagnostic(
+    *,
+    loaded: TabularAnalyticsLoadResult,
+    required_columns: tuple[str, ...] | None,
+) -> tuple[ProductionAnalyticsDiagnostic, ...]:
+    if required_columns is None or loaded.sqlite_store is None:
+        return ()
+    available_count = int(len(loaded.sqlite_store.columns))
+    projected_count = int(len(required_columns))
+    if projected_count >= available_count:
+        return ()
+    return (
+        ProductionAnalyticsDiagnostic(
+            severity="info",
+            code="tabular_sqlite_column_pruning",
+            message=(
+                "CSV/Excel analytics projected a reduced SQLite column set before "
+                "materialization to keep large-data runs responsive."
+            ),
+            context={
+                "available_column_count": available_count,
+                "projected_column_count": projected_count,
+                "projected_columns": list(required_columns),
+            },
+        ),
+    )
 
 
 def _validate_tabular_load_snapshot(

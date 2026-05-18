@@ -770,6 +770,96 @@ class TestDataGroupingSelectionRetention(unittest.TestCase):
         self.assertEqual(dialog._selected_group_name(), 'Ops Team')
         self.assertEqual(captured_group['value'], 'Ops Team')
 
+    def test_populate_list_widgets_uses_counted_reference_labels_with_canonical_selection(self):
+        from unittest.mock import patch
+
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.default_group = 'POPULATION'
+        dialog.default_group_color = '#FFFFFF'
+        dialog.group_color_column = 'GROUP_COLOR'
+        dialog.df = pd.DataFrame(
+            {
+                'REFERENCE': ['REF-1', 'REF-1', 'REF-2'],
+                'GROUP': ['POPULATION', 'POPULATION', 'POPULATION'],
+                'GROUP_KEY': ['k1', 'k2', 'k3'],
+                'SAMPLE_NUMBER': [1, 2, 3],
+                'DATE': ['2024-01-01', '2024-01-02', '2024-01-03'],
+                'FILENAME': ['a.csv', 'b.csv', 'c.csv'],
+                'GROUP_COLOR': ['#FFFFFF', '#FFFFFF', '#FFFFFF'],
+            }
+        )
+        dialog._group_display_to_name = {}
+        dialog._reference_display_to_name = {}
+        dialog.reference_list = _PopulateListWidget()
+        dialog.part_list = _PopulateListWidget()
+        dialog.all_parts_list = _PopulateListWidget()
+        dialog.groups_list = _PopulateListWidget()
+        dialog.part_group_list = _PopulateListWidget()
+        dialog._ensure_group_color_integrity = lambda: None
+        dialog._apply_item_color = lambda item, color: None
+        dialog._apply_list_theme_styles = lambda: None
+        dialog._refresh_selection_summary = lambda: None
+        captured_reference = {'value': None}
+        dialog._populate_part_list = lambda selected_reference: captured_reference.update(value=selected_reference)
+        dialog._populate_part_group_list = lambda selected_group: None
+
+        with patch.dict(DataGrouping.populate_list_widgets.__globals__, {'QListWidgetItem': _PopulateListItem}):
+            dialog.populate_list_widgets(preferred_reference_name='REF-1')
+
+        self.assertEqual(dialog.reference_list._items[0].text(), 'REF-1 (n=2)')
+        self.assertEqual(dialog._selected_reference_name(), 'REF-1')
+        self.assertEqual(captured_reference['value'], 'REF-1')
+
+    def test_populate_list_widgets_applies_shared_scope_filter_expression(self):
+        from unittest.mock import patch
+
+        class _TextInput:
+            def text(self):
+                return 'DATE>=2026-05-01 AND VALUE2>1'
+
+        class _Label:
+            def __init__(self):
+                self.value = ''
+
+            def setText(self, value):
+                self.value = value
+
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.default_group = 'POPULATION'
+        dialog.default_group_color = '#FFFFFF'
+        dialog.group_color_column = 'GROUP_COLOR'
+        dialog.df = pd.DataFrame(
+            {
+                'REFERENCE': ['REF-1', 'REF-1', 'REF-2'],
+                'GROUP': ['POPULATION', 'POPULATION', 'POPULATION'],
+                'GROUP_KEY': ['k1', 'k2', 'k3'],
+                'SAMPLE_NUMBER': [1, 2, 3],
+                'DATE': ['2026-04-30', '2026-05-02', '2026-05-03'],
+                'VALUE2': [5, 2, 0],
+                'FILENAME': ['a.csv', 'b.csv', 'c.csv'],
+                'GROUP_COLOR': ['#FFFFFF', '#FFFFFF', '#FFFFFF'],
+            }
+        )
+        dialog._group_display_to_name = {}
+        dialog._reference_display_to_name = {}
+        dialog.reference_list = _PopulateListWidget()
+        dialog.part_list = _PopulateListWidget()
+        dialog.all_parts_list = _PopulateListWidget()
+        dialog.groups_list = _PopulateListWidget()
+        dialog.part_group_list = _PopulateListWidget()
+        dialog.scope_filter_input = _TextInput()
+        dialog.scope_filter_summary_label = _Label()
+        dialog._ensure_group_color_integrity = lambda: None
+        dialog._apply_item_color = lambda item, color: None
+        dialog._apply_list_theme_styles = lambda: None
+        dialog._refresh_selection_summary = lambda: None
+
+        with patch.dict(DataGrouping.populate_list_widgets.__globals__, {'QListWidgetItem': _PopulateListItem}):
+            dialog.populate_list_widgets()
+
+        self.assertEqual([item.text() for item in dialog.reference_list._items], ['REF-1 (n=1)'])
+        self.assertEqual(dialog.scope_filter_summary_label.value, 'Scope: 1 of 3 rows')
+
     def test_populate_list_widgets_falls_back_to_first_when_group_missing(self):
         from unittest.mock import patch
 

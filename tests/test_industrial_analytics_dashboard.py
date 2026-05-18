@@ -157,7 +157,7 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     assert "color: #0f172a" in html_text
     assert "<th>Statistic</th><th>Value</th>" in html_text
     assert "grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));" in html_text
-    assert '<div class="card-label">Rows after aggregation</div>' in html_text
+    assert '<div class="card-label">Aggregated output points</div>' in html_text
     assert '<div class="card-label">Groups</div>' in html_text
     assert "Pasted reference cohorts" in html_text
     assert '<div class="card-label">Pasted references</div>' in html_text
@@ -558,10 +558,12 @@ def test_very_large_aggregated_time_series_hybrid_keeps_raw_and_mean_axes_aligne
     hybrid_chart = manifest["charts"][1]
     spec = hybrid_chart["plotly_spec"]
     layout = spec["layout"]
+    raw_layer_traces = [trace for trace in spec["data"] if "metroliza_raw_layer_index" in trace]
     aggregate_traces = [trace for trace in spec["data"] if trace["name"].endswith("aggregate")]
 
     assert hybrid_chart["chart_type"] == "time_series_raw_aggregate"
     assert layout["images"]
+    assert raw_layer_traces
     assert layout["xaxis"]["autorange"] is False
     assert layout["yaxis"]["autorange"] is False
     assert pd.Timestamp(layout["xaxis"]["range"][0], tz="UTC") <= pd.Timestamp(
@@ -569,6 +571,7 @@ def test_very_large_aggregated_time_series_hybrid_keeps_raw_and_mean_axes_aligne
     )
     assert float(layout["yaxis"]["range"][1]) >= 24.0
     assert aggregate_traces
+    assert all(trace["marker"]["symbol"] == "x" for trace in aggregate_traces)
     assert all("T00:00:00+00:00" in str(trace["x"][0]) for trace in aggregate_traces if trace["x"])
     assert all("-" in str(trace["x"][0]) for trace in aggregate_traces if trace["x"])
 

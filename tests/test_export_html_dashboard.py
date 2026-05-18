@@ -466,6 +466,52 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertNotIn('%{x', spec['data'][0]['hovertemplate'])
         self.assertIn('%{y:.4f}', spec['data'][0]['hovertemplate'])
 
+    def test_distribution_scatter_plotly_spec_thins_dense_sample_labels(self):
+        x_values = [float(index) for index in range(80)]
+        labels = [f'S{index:03d}' for index in range(80)]
+        with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
+            spec = _build_plotly_chart_spec(
+                {
+                    'type': 'distribution',
+                    'render_mode': 'scatter',
+                    'x_values': x_values,
+                    'y_values': [10.0 + index * 0.01 for index in range(80)],
+                    'labels': labels,
+                    'x_label': 'Sample number',
+                    'y_label': 'Diameter / X',
+                },
+                title='Dense labels',
+            )
+
+        tickvals = spec['layout']['xaxis']['tickvals']
+        ticktext = spec['layout']['xaxis']['ticktext']
+        self.assertLess(len(tickvals), len(x_values))
+        self.assertEqual(tickvals[0], 0.0)
+        self.assertEqual(ticktext[0], 'S000')
+        self.assertEqual(tickvals[-1], 79.0)
+        self.assertEqual(ticktext[-1], 'S079')
+
+    def test_summary_histogram_plotly_spec_adds_reference_legend_traces_and_white_annotations(self):
+        with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
+            spec = _build_plotly_chart_spec(
+                {
+                    'type': 'histogram',
+                    'values': [9.9, 10.0, 10.1, 10.2],
+                    'limits': {'lsl': 9.8, 'usl': 10.2},
+                },
+                title='Histogram refs',
+            )
+
+        self.assertEqual(spec['layout']['yaxis']['tickformat'], '.0%')
+        names = [trace.get('name') for trace in spec['data'] if trace.get('type') == 'scatter']
+        self.assertTrue(any(str(name).startswith('LSL=') for name in names))
+        self.assertTrue(any(str(name).startswith('USL=') for name in names))
+        self.assertTrue(any(str(name).startswith('Mean=') for name in names))
+        self.assertTrue(any(str(name).startswith('Median=') for name in names))
+        self.assertTrue(any(str(name).startswith('Q1=') for name in names))
+        self.assertTrue(any(str(name).startswith('Q3=') for name in names))
+        self.assertTrue(all(item.get('bgcolor') == '#ffffff' for item in spec['layout']['annotations']))
+
     def test_summary_plotly_spec_uses_plotstats_artifact_when_enabled(self):
         package_spec = {
             'data': [{'type': 'bar', 'x': ['A'], 'y': [1]}],

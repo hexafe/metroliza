@@ -62,7 +62,7 @@ The launcher opens separate workflows:
 - **Production sources...** edits non-secret production line connection setup such as database type, host, database name, table/view, columns, record key, and timestamp column. This stays available even before a Metroliza report database is selected.
 - **Connect / check / sync...** asks for the production database username/password for the current session, lets you edit the reference/ID values to fetch, checks production database access with a one-row read that saves nothing, syncs selected rows into the local Metroliza cache, and can cancel a running sync.
 - **Production links...** lets you manually link a Metroliza report to a cached production row when both systems use different reference values.
-- **Export...** creates a cached industrial workbook with filter/grouping summaries and an explicit **Include plots** option.
+- **Export...** creates a cached industrial workbook when a Metroliza report database is selected. If no report database is selected, it can fetch live production rows directly from a configured source and create a production workbook without writing to the local cache.
 - **Analyze...** creates dashboards, grouped statistics, time-bucket summaries, and optional
   workbooks from cached production rows without requiring CMM measurements. The analytics
   setup includes production filters, pasted-reference cohorts, grouping, time buckets, and
@@ -78,7 +78,7 @@ Each production source can disable server-side `ORDER BY` for limited SQL reads.
 
 Metroliza stores the source setup, cache rows, sync diagnostics, and links in the selected Metroliza report database. It does not store the production database username or password in the report database or config file.
 
-Export never connects to the production line database directly. Live production database access happens only when the user explicitly runs **Check access** or **Sync now** in the sync dialog opened from **Connect / check / sync...**.
+Industrial export from cached data does not connect directly to the production line database. Live production database access happens only when the user explicitly runs **Check access** or **Sync now** in the sync dialog opened from **Connect / check / sync...**, or starts **Export...** without a selected Metroliza report database to create a live production workbook.
 
 **Check access** reads up to one production row to verify credentials, table, columns, and query access. It does not save rows into the Metroliza cache.
 

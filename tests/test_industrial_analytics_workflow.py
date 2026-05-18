@@ -288,7 +288,94 @@ def test_run_tabular_file_analytics_uses_sqlite_backed_loaded_snapshot(
         cleanup_tabular_load_result(loaded)
 
     assert result.row_count == 2
+
+
+def test_run_tabular_file_analytics_reports_sqlite_column_pruning_for_large_projection(
+    tmp_path,
+) -> None:
+    input_file = tmp_path / "wide_large_table.csv"
+    row_count = 25000
+    dataframe = pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=row_count, freq="min"),
+            "Reference ID": [f"R{index % 200}" for index in range(row_count)],
+            "Line": [f"L{index % 8}" for index in range(row_count)],
+            "Length mm": [10.0 + (index % 11) * 0.01 for index in range(row_count)],
+            "Width mm": [5.0 + (index % 7) * 0.01 for index in range(row_count)],
+            "Meta A": [f"A{index % 50}" for index in range(row_count)],
+            "Meta B": [f"B{index % 30}" for index in range(row_count)],
+            "Meta C": [f"C{index % 20}" for index in range(row_count)],
+            "Meta D": [f"D{index % 10}" for index in range(row_count)],
+            "Meta E": [f"E{index % 15}" for index in range(row_count)],
+        }
+    )
+    dataframe.to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file, force_sqlite=True)
+    try:
+        result = run_tabular_file_analytics(
+            input_file=str(input_file),
+            output_dashboard_file=str(tmp_path / "wide_large_table_analytics.html"),
+            tabular_load_result=loaded,
+            metric_selection=(ProductionMetricSelection("length_mm", display_label="Length mm"),),
+            chart_selection=ProductionChartSelection(time_series=True, groupstats=False),
+            tabular_column_filters=(TabularColumnFilter("line", selected_values=("L1", "L2")),),
+        )
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+    pruning_diagnostic = next(
+        (item for item in result.diagnostics if item.code == "tabular_sqlite_column_pruning"),
+        None,
+    )
+    assert pruning_diagnostic is not None
+    assert pruning_diagnostic.context["projected_column_count"] < pruning_diagnostic.context[
+        "available_column_count"
+    ]
+    assert "length_mm" in pruning_diagnostic.context["projected_columns"]
+    assert "line" in pruning_diagnostic.context["projected_columns"]
     assert Path(result.html_dashboard_path).exists()
+
+
+def test_run_tabular_file_analytics_prunes_columns_for_dashboard_only_path(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    input_file = tmp_path / "projected_table.csv"
+    dashboard_file = tmp_path / "projected_table_analytics.html"
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=4, freq="h"),
+            "Line": ["A", "B", "A", "B"],
+            "Length mm": [10.0, 10.2, 10.4, 10.6],
+            "Unused Text": ["alpha", "beta", "gamma", "delta"],
+        }
+    ).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file, force_sqlite=True)
+    captured_required_columns = []
+    original_materialize = workflow_module.materialize_tabular_dataframe
+
+    def capture_materialize(*args, **kwargs):
+        captured_required_columns.append(tuple(kwargs.get("required_columns") or ()))
+        return original_materialize(*args, **kwargs)
+
+    monkeypatch.setattr(workflow_module, "materialize_tabular_dataframe", capture_materialize)
+    try:
+        result = run_tabular_file_analytics(
+            input_file=str(input_file),
+            output_dashboard_file=str(dashboard_file),
+            tabular_load_result=loaded,
+            metric_selection=(ProductionMetricSelection("length_mm", display_label="Length mm"),),
+            tabular_column_filters=(TabularColumnFilter("line", selected_values=("A",)),),
+            chart_selection=ProductionChartSelection(time_series=True),
+        )
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+    assert result.row_count == 2
+    assert captured_required_columns
+    assert "length_mm" in captured_required_columns[0]
+    assert "line" in captured_required_columns[0]
+    assert "unused_text" not in captured_required_columns[0]
 
 
 def test_run_tabular_file_analytics_rejects_stale_loaded_snapshot(tmp_path) -> None:

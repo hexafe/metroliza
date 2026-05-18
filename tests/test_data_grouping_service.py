@@ -4,6 +4,7 @@ import pandas as pd
 
 from modules.data_grouping_service import (
     build_grouping_query,
+    build_grouping_row_index,
     compute_group_key_for_df,
     load_grouping_dataframe,
     reassign_group_keys_to_default,
@@ -69,6 +70,47 @@ def test_compute_group_key_for_df_avoids_delimiter_collisions():
     keys = compute_group_key_for_df(df)
 
     assert keys.iloc[0] != keys.iloc[1]
+
+
+def test_build_grouping_row_index_groups_duplicate_keys_with_counts():
+    df = pd.DataFrame(
+        [
+            {
+                "REPORT_ID": 1,
+                "REFERENCE": "REF-1",
+                "SAMPLE_NUMBER": "A",
+                "GROUP_KEY": "k1",
+                "GROUP": "POPULATION",
+                "GROUP_COLOR": "#FFFFFF",
+                "FILENAME": "a.csv",
+            },
+            {
+                "REPORT_ID": 1,
+                "REFERENCE": "REF-1",
+                "SAMPLE_NUMBER": "A",
+                "GROUP_KEY": "k1",
+                "GROUP": "POPULATION",
+                "GROUP_COLOR": "#FFFFFF",
+                "FILENAME": "a.csv",
+            },
+            {
+                "REPORT_ID": 2,
+                "REFERENCE": "REF-2",
+                "SAMPLE_NUMBER": "B",
+                "GROUP_KEY": "k2",
+                "GROUP": "CUSTOM",
+                "GROUP_COLOR": "#ABCDEF",
+                "FILENAME": "b.csv",
+            },
+        ]
+    )
+
+    indexed = build_grouping_row_index(df)
+
+    assert indexed["GROUP_KEY"].tolist() == ["k1", "k2"]
+    assert indexed["ROW_COUNT"].tolist() == [2, 1]
+    assert indexed.loc[indexed["GROUP_KEY"] == "k1", "REFERENCE"].iloc[0] == "REF-1"
+    assert len(df.index) == 3
 
 
 def test_reassign_group_keys_to_default_updates_only_selected_custom_rows():

@@ -750,7 +750,32 @@ def _apply_plotly_sample_label_axis(
         tick_labels.append(text)
 
     if tick_values and len(tick_values) == len(tick_labels):
-        axis.update({"tickmode": "array", "tickvals": tick_values, "ticktext": tick_labels})
+        thinned_values, thinned_labels = _thin_plotly_tick_labels(
+            tick_values,
+            tick_labels,
+            max_ticks=24,
+        )
+        axis.update({"tickmode": "array", "tickvals": thinned_values, "ticktext": thinned_labels})
+
+
+def _thin_plotly_tick_labels(
+    tick_values: list[float],
+    tick_labels: list[str],
+    *,
+    max_ticks: int,
+) -> tuple[list[float], list[str]]:
+    if len(tick_values) <= max_ticks or len(tick_values) != len(tick_labels):
+        return tick_values, tick_labels
+
+    stride = max(1, math.ceil(len(tick_values) / max_ticks))
+    selected_indexes = list(range(0, len(tick_values), stride))
+    if selected_indexes[-1] != len(tick_values) - 1:
+        selected_indexes.append(len(tick_values) - 1)
+    selected_indexes = sorted(set(selected_indexes))
+    return (
+        [tick_values[index] for index in selected_indexes],
+        [tick_labels[index] for index in selected_indexes],
+    )
 
 
 def _apply_plotly_histogram_axis_readability(layout: dict[str, Any]) -> None:
@@ -816,6 +841,7 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str, theme: 
                 "bgcolor": tokens["annotation_bg"],
             }
         )
+    _apply_histogram_annotation_contrast(annotations)
     layout["shapes"] = shapes
     layout["annotations"] = annotations
     x_view = payload.get("x_view") if isinstance(payload.get("x_view"), dict) else {}
@@ -831,22 +857,148 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str, theme: 
         x_max=x_max,
     )
 
+    traces: list[dict[str, Any]] = [
+        {
+            "type": "histogram",
+            "x": values,
+            "histnorm": "probability",
+            "xbins": bins,
+            "bingroup": f"hist-{_slugify(title)[:40]}",
+            "marker": {"color": tokens["colorway"][0], "line": {"color": tokens["bar_outline"], "width": 1}},
+            "opacity": 0.86,
+            "hovertemplate": "Measurement=%{x}<br>Frequency=%{y:.2%}<extra></extra>",
+        }
+    ]
+    traces.extend(
+        _build_histogram_reference_legend_traces(
+            payload=payload,
+            lsl=lsl,
+            usl=usl,
+            mean_value=mean_value,
+            theme=theme,
+        )
+    )
+
     return {
-        "data": [
-                {
-                    "type": "histogram",
-                    "x": values,
-                    "histnorm": "probability",
-                    "xbins": bins,
-                    "bingroup": f"hist-{_slugify(title)[:40]}",
-                    "marker": {"color": tokens["colorway"][0], "line": {"color": tokens["bar_outline"], "width": 1}},
-                    "opacity": 0.86,
-                    "hovertemplate": "Measurement=%{x}<br>Frequency=%{y:.2%}<extra></extra>",
-                }
-            ],
+        "data": traces,
         "layout": layout,
         "config": _build_plotly_config(),
     }
+
+
+def _apply_histogram_annotation_contrast(annotations: list[dict[str, Any]]) -> None:
+    for annotation in annotations:
+        if isinstance(annotation, dict):
+            annotation["bgcolor"] = "#ffffff"
+
+
+def _build_histogram_reference_legend_traces(
+    *,
+    payload: dict[str, Any],
+    lsl: Any,
+    usl: Any,
+    mean_value: float | None,
+    theme: str,
+) -> list[dict[str, Any]]:
+    tokens = _build_plotly_theme_tokens(theme)
+    reference_values = _collect_histogram_reference_values(payload, lsl=lsl, usl=usl, mean_value=mean_value)
+    traces: list[dict[str, Any]] = []
+    for label, numeric, color, dash in (
+        ("LSL", reference_values.get("lsl"), tokens["reference_limit"], "dash"),
+        ("USL", reference_values.get("usl"), tokens["reference_limit"], "dash"),
+        ("Mean", reference_values.get("mean"), tokens["mean_line"], "dashdot"),
+        ("Median", reference_values.get("median"), tokens["reference_nominal"], "dot"),
+        ("Q1", reference_values.get("q1"), tokens["reference_nominal"], "dot"),
+        ("Q3", reference_values.get("q3"), tokens["reference_nominal"], "dot"),
+    ):
+        if numeric is None:
+            continue
+        traces.append(
+            {
+                "type": "scatter",
+                "mode": "lines",
+                "name": f"{label}={numeric:.3f}",
+                "x": [numeric, numeric],
+                "y": [0.0, 1.0],
+                "line": {"color": color, "width": 2, "dash": dash},
+                "hovertemplate": f"{label}={numeric:.3f}<extra></extra>",
+            }
+        )
+    return traces
+
+
+def _collect_histogram_reference_values(
+    payload: dict[str, Any],
+    *,
+    lsl: Any,
+    usl: Any,
+    mean_value: float | None,
+) -> dict[str, float | None]:
+    resolved = {
+        "lsl": _coerce_finite_float(lsl),
+        "usl": _coerce_finite_float(usl),
+        "mean": _coerce_finite_float(mean_value),
+        "median": None,
+        "q1": None,
+        "q3": None,
+    }
+
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    resolved["median"] = _coerce_finite_float(summary.get("median"))
+    resolved["q1"] = _coerce_finite_float(summary.get("q1"))
+    resolved["q3"] = _coerce_finite_float(summary.get("q3"))
+
+    visual_metadata = payload.get("visual_metadata") if isinstance(payload.get("visual_metadata"), dict) else {}
+    summary_stats_table = (
+        visual_metadata.get("summary_stats_table")
+        if isinstance(visual_metadata.get("summary_stats_table"), dict)
+        else {}
+    )
+    for row in summary_stats_table.get("rows") or []:
+        label: str
+        value: Any
+        if isinstance(row, dict):
+            label = str(row.get("label") or "").strip().lower()
+            value = row.get("value")
+        elif isinstance(row, (list, tuple)) and len(row) >= 2:
+            label = str(row[0] or "").strip().lower()
+            value = row[1]
+        else:
+            continue
+        numeric = _coerce_finite_float(value)
+        if numeric is None:
+            continue
+        if label == "median" and resolved["median"] is None:
+            resolved["median"] = numeric
+        elif label in {"q1", "quartile 1", "first quartile"} and resolved["q1"] is None:
+            resolved["q1"] = numeric
+        elif label in {"q3", "quartile 3", "third quartile"} and resolved["q3"] is None:
+            resolved["q3"] = numeric
+
+    values = sorted(_coerce_finite_float_list(payload.get("values")))
+    if values:
+        if resolved["median"] is None:
+            resolved["median"] = _percentile_sorted(values, 0.5)
+        if resolved["q1"] is None:
+            resolved["q1"] = _percentile_sorted(values, 0.25)
+        if resolved["q3"] is None:
+            resolved["q3"] = _percentile_sorted(values, 0.75)
+
+    return resolved
+
+
+def _percentile_sorted(values: list[float], fraction: float) -> float | None:
+    if not values:
+        return None
+    if len(values) == 1:
+        return float(values[0])
+    position = max(0.0, min(1.0, float(fraction))) * (len(values) - 1)
+    lower_index = int(math.floor(position))
+    upper_index = int(math.ceil(position))
+    if lower_index == upper_index:
+        return float(values[lower_index])
+    weight = position - lower_index
+    return float(values[lower_index] * (1.0 - weight) + values[upper_index] * weight)
 
 
 def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str, theme: str = "light") -> dict[str, Any]:
@@ -1286,6 +1438,7 @@ def _build_group_analysis_plotly_spec(
                     "bgcolor": tokens["annotation_bg"],
                 }
             )
+        _apply_histogram_annotation_contrast(annotations)
         layout["shapes"] = shapes
         layout["annotations"] = annotations
         bins = _resolve_plotly_histogram_bins(all_values)

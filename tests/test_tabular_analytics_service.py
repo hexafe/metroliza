@@ -171,6 +171,7 @@ def test_load_tabular_analytics_files_combines_multiple_csvs_in_sqlite(tmp_path)
         filtered = materialize_tabular_dataframe(
             result,
             column_filters=(TabularColumnFilter("line", selected_values=("A",)),),
+            required_columns=("source_row_number", "length_mm"),
         )
 
         assert filtered.applied is True
@@ -180,6 +181,7 @@ def test_load_tabular_analytics_files_combines_multiple_csvs_in_sqlite(tmp_path)
             result,
             column_filters=(TabularColumnFilter("line", selected_values=("A",)),),
         ) == 3
+        assert filtered.dataframe.columns.tolist() == ["source_row_number", "length_mm"]
         assert filtered.dataframe["source_row_number"].tolist() == [1, 2, 5]
     finally:
         cleanup_tabular_load_result(result)
@@ -528,6 +530,67 @@ def test_sqlite_tabular_numeric_filters_match_expected_rows(tmp_path) -> None:
             loaded,
             column_filters=(TabularColumnFilter("value2", numeric_operator=">", numeric_value="1"),),
         ) == 3
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+
+def test_sqlite_materialization_projects_columns_and_count_uses_pushdown(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    input_file = tmp_path / "wide_sqlite_projection.csv"
+    row_count = 20000
+    dataframe = pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=row_count, freq="min"),
+            "Line": [f"L{index % 6}" for index in range(row_count)],
+            "Station": [f"S{index % 4}" for index in range(row_count)],
+            "Length mm": [10.0 + (index % 10) * 0.01 for index in range(row_count)],
+            "Width mm": [5.0 + (index % 8) * 0.01 for index in range(row_count)],
+            "Meta A": [f"A{index % 100}" for index in range(row_count)],
+            "Meta B": [f"B{index % 80}" for index in range(row_count)],
+            "Meta C": [f"C{index % 60}" for index in range(row_count)],
+            "Meta D": [f"D{index % 40}" for index in range(row_count)],
+        }
+    )
+    dataframe.to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file, force_sqlite=True)
+    assert loaded.sqlite_store is not None
+
+    requested_columns: list[tuple[str, ...] | None] = []
+    store_type = type(loaded.sqlite_store)
+    original_read_dataframe = store_type.read_dataframe
+
+    def capture_read_dataframe(self, *args, **kwargs):
+        columns = kwargs.get("columns")
+        requested_columns.append(tuple(columns) if columns is not None else None)
+        return original_read_dataframe(self, *args, **kwargs)
+
+    monkeypatch.setattr(store_type, "read_dataframe", capture_read_dataframe)
+    try:
+        filtered = materialize_tabular_dataframe(
+            loaded,
+            column_filters=(TabularColumnFilter("line", selected_values=("L1", "L2")),),
+            required_columns=("source_row_number", "line", "length_mm"),
+        )
+
+        assert filtered.applied is True
+        assert filtered.input_row_count == row_count
+        assert filtered.output_row_count > 0
+        assert filtered.dataframe.columns.tolist() == ["source_row_number", "line", "length_mm"]
+        assert requested_columns == [("source_row_number", "line", "length_mm")]
+
+        monkeypatch.setattr(
+            store_type,
+            "read_dataframe",
+            lambda self, *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("count should use sqlite count pushdown, not read_dataframe")
+            ),
+        )
+        assert count_tabular_materialized_rows(
+            loaded,
+            column_filters=(TabularColumnFilter("line", selected_values=("L1", "L2")),),
+        ) == filtered.output_row_count
     finally:
         cleanup_tabular_load_result(loaded)
 

@@ -56,11 +56,12 @@ _INTERNAL_COLUMNS = frozenset(
     }
 )
 TABULAR_SQLITE_SIZE_THRESHOLD_BYTES = 150 * 1024 * 1024
-TABULAR_SQLITE_ROW_THRESHOLD = 300_000
+TABULAR_SQLITE_ROW_THRESHOLD = 150_000
 TABULAR_SQLITE_CHUNK_ROWS = 50_000
 TABULAR_SQLITE_PREVIEW_ROWS = 5_000
 _TABULAR_SQLITE_TABLE = "tabular_rows"
 _TABULAR_NUMERIC_OPERATORS = frozenset({"=", "!=", ">", ">=", "<", "<="})
+_TABULAR_DATE_OPERATORS = _TABULAR_NUMERIC_OPERATORS
 
 
 @dataclass(frozen=True)
@@ -101,8 +102,10 @@ class TabularSqliteStore:
         base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
         column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
         column_filter_match_mode: str = "and",
+        columns: tuple[str, ...] | list[str] | None = None,
         limit: int | None = None,
     ) -> pd.DataFrame:
+        select_columns = _normalized_tabular_required_columns(self.columns, columns)
         where_sql, params = self._where_clause(
             filter_columns=filter_columns,
             selected_filter_keys=selected_filter_keys,
@@ -111,7 +114,7 @@ class TabularSqliteStore:
             column_filter_match_mode=column_filter_match_mode,
         )
         query = (
-            f"SELECT {', '.join(_quote_identifier(column) for column in self.columns)} "
+            f"SELECT {', '.join(_quote_identifier(column) for column in select_columns)} "
             f"FROM {_quote_identifier(self.table_name)}{where_sql}"
         )
         if limit is not None and int(limit) >= 0:
@@ -420,14 +423,20 @@ class TabularSqliteStore:
             params.extend(column_filter.selected_values)
         if column_filter.has_date_filter:
             date_expr = self._sqlite_date_filter_expr(column_filter.column)
-            lower = _parse_tabular_filter_date(column_filter.date_from)
-            upper = _parse_tabular_filter_date(column_filter.date_to)
-            if column_filter.date_mode in {"from", "between"} and lower is not None:
-                filter_clauses.append(f"{date_expr} >= date(?)")
-                params.append(lower.isoformat())
-            if column_filter.date_mode in {"to", "between"} and upper is not None:
-                filter_clauses.append(f"{date_expr} <= date(?)")
-                params.append(upper.isoformat())
+            date_operator = str(column_filter.date_operator or "").strip()
+            date_value = _parse_tabular_filter_date(column_filter.date_value)
+            if date_operator in _TABULAR_DATE_OPERATORS and date_value is not None:
+                filter_clauses.append(f"{date_expr} {date_operator} date(?)")
+                params.append(date_value.isoformat())
+            else:
+                lower = _parse_tabular_filter_date(column_filter.date_from)
+                upper = _parse_tabular_filter_date(column_filter.date_to)
+                if column_filter.date_mode in {"from", "between"} and lower is not None:
+                    filter_clauses.append(f"{date_expr} >= date(?)")
+                    params.append(lower.isoformat())
+                if column_filter.date_mode in {"to", "between"} and upper is not None:
+                    filter_clauses.append(f"{date_expr} <= date(?)")
+                    params.append(upper.isoformat())
         if column_filter.has_numeric_filter:
             numeric_value = _parse_tabular_filter_number(column_filter.numeric_value)
             if numeric_value is not None and column_filter.numeric_operator in _TABULAR_NUMERIC_OPERATORS:
@@ -649,6 +658,8 @@ class TabularColumnFilter:
     date_mode: str = "any"
     date_from: str | None = None
     date_to: str | None = None
+    date_operator: str | None = None
+    date_value: str | None = None
     numeric_operator: str | None = None
     numeric_value: float | int | str | None = None
 
@@ -658,7 +669,12 @@ class TabularColumnFilter:
 
     @property
     def has_date_filter(self) -> bool:
-        return self.date_mode in {"from", "to", "between"} and bool(self.date_from or self.date_to)
+        has_range = self.date_mode in {"from", "to", "between"} and bool(self.date_from or self.date_to)
+        has_operator = (
+            str(self.date_operator or "").strip() in _TABULAR_DATE_OPERATORS
+            and _parse_tabular_filter_date(self.date_value) is not None
+        )
+        return has_range or has_operator
 
     @property
     def has_numeric_filter(self) -> bool:
@@ -1432,6 +1448,7 @@ def apply_tabular_row_filter(
     filter_columns: tuple[str, ...] | list[str] | None = None,
     selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
     column_filters: tuple[TabularColumnFilter, ...] | list[TabularColumnFilter] | None = None,
+    required_columns: tuple[str, ...] | list[str] | None = None,
 ) -> TabularFilterResult:
     """Filter normalized CSV/Excel analytics rows by selected column-value keys."""
 
@@ -1467,6 +1484,8 @@ def apply_tabular_row_filter(
                         "date_mode": item.date_mode,
                         "date_from": item.date_from,
                         "date_to": item.date_to,
+                        "date_operator": item.date_operator,
+                        "date_value": item.date_value,
                         "numeric_operator": item.numeric_operator,
                         "numeric_value": _parse_tabular_filter_number(item.numeric_value),
                     }
@@ -1477,7 +1496,7 @@ def apply_tabular_row_filter(
             },
         )
         return TabularFilterResult(
-            dataframe=filtered.reset_index(drop=True),
+            dataframe=_project_tabular_dataframe(filtered, required_columns).reset_index(drop=True),
             diagnostics=(diagnostic,),
             applied=True,
             input_row_count=input_count,
@@ -1492,7 +1511,7 @@ def apply_tabular_row_filter(
     )
     if not columns or not selected_keys:
         return TabularFilterResult(
-            dataframe=dataframe.copy(),
+            dataframe=_project_tabular_dataframe(dataframe, required_columns),
             applied=False,
             input_row_count=input_count,
             output_row_count=input_count,
@@ -1512,7 +1531,7 @@ def apply_tabular_row_filter(
         },
     )
     return TabularFilterResult(
-        dataframe=filtered.reset_index(drop=True),
+        dataframe=_project_tabular_dataframe(filtered, required_columns).reset_index(drop=True),
         diagnostics=(diagnostic,),
         applied=True,
         input_row_count=input_count,
@@ -1526,6 +1545,7 @@ def materialize_tabular_dataframe(
     filter_columns: tuple[str, ...] | list[str] | None = None,
     selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
     column_filters: tuple[TabularColumnFilter, ...] | list[TabularColumnFilter] | None = None,
+    required_columns: tuple[str, ...] | list[str] | None = None,
 ) -> TabularFilterResult:
     """Return rows for analytics, using SQLite pushdown when the load result has a store."""
 
@@ -1535,6 +1555,7 @@ def materialize_tabular_dataframe(
             filter_columns=filter_columns,
             selected_filter_keys=selected_filter_keys,
             column_filters=column_filters,
+            required_columns=required_columns,
         )
 
     normalized_filters = _normalized_tabular_column_filters_for_columns(
@@ -1554,6 +1575,7 @@ def materialize_tabular_dataframe(
         filter_columns=legacy_columns,
         selected_filter_keys=legacy_keys,
         column_filters=normalized_filters,
+        columns=required_columns,
     )
     input_count = int(loaded.sqlite_store.row_count)
     output_count = int(len(dataframe.index))
@@ -1571,6 +1593,8 @@ def materialize_tabular_dataframe(
                     "date_mode": item.date_mode,
                     "date_from": item.date_from,
                     "date_to": item.date_to,
+                    "date_operator": item.date_operator,
+                    "date_value": item.date_value,
                     "numeric_operator": item.numeric_operator,
                     "numeric_value": _parse_tabular_filter_number(item.numeric_value),
                 }
@@ -1667,6 +1691,9 @@ def _normalized_tabular_column_filters_for_columns(
             )
         )
         date_mode = item.date_mode if item.date_mode in {"from", "to", "between"} else "any"
+        date_operator = str(item.date_operator or "").strip()
+        if date_operator not in _TABULAR_DATE_OPERATORS:
+            date_operator = None
         numeric_operator = str(item.numeric_operator or "").strip()
         if numeric_operator not in _TABULAR_NUMERIC_OPERATORS:
             numeric_operator = None
@@ -1677,6 +1704,8 @@ def _normalized_tabular_column_filters_for_columns(
             date_mode=date_mode,
             date_from=str(item.date_from or "").strip() or None,
             date_to=str(item.date_to or "").strip() or None,
+            date_operator=date_operator,
+            date_value=str(item.date_value or "").strip() or None,
             numeric_operator=numeric_operator,
             numeric_value=numeric_value,
         )
@@ -1684,6 +1713,30 @@ def _normalized_tabular_column_filters_for_columns(
             normalized.append(normalized_filter)
             seen.add(column)
     return tuple(normalized)
+
+
+def _normalized_tabular_required_columns(
+    available_columns,
+    required_columns: tuple[str, ...] | list[str] | None,
+) -> tuple[str, ...]:
+    available = tuple(str(column) for column in available_columns)
+    if required_columns is None:
+        return available
+    available_lookup = set(available)
+    selected = tuple(
+        dict.fromkeys(str(column) for column in required_columns if str(column) in available_lookup)
+    )
+    return selected or available
+
+
+def _project_tabular_dataframe(
+    dataframe: pd.DataFrame,
+    required_columns: tuple[str, ...] | list[str] | None,
+) -> pd.DataFrame:
+    if required_columns is None:
+        return dataframe.copy()
+    columns = _normalized_tabular_required_columns(dataframe.columns, required_columns)
+    return dataframe.loc[:, list(columns)].copy()
 
 
 def _restore_sqlite_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
@@ -1744,6 +1797,22 @@ def _tabular_date_filter_mask(series: pd.Series, column_filter: TabularColumnFil
     parsed = pd.to_datetime(series, errors="coerce")
     dates = parsed.dt.date
     mask = pd.Series(True, index=series.index)
+    date_operator = str(column_filter.date_operator or "").strip()
+    date_value = _parse_tabular_filter_date(column_filter.date_value)
+    if date_operator in _TABULAR_DATE_OPERATORS and date_value is not None:
+        if date_operator == "=":
+            mask &= dates == date_value
+        elif date_operator == "!=":
+            mask &= dates != date_value
+        elif date_operator == ">":
+            mask &= dates > date_value
+        elif date_operator == ">=":
+            mask &= dates >= date_value
+        elif date_operator == "<":
+            mask &= dates < date_value
+        else:
+            mask &= dates <= date_value
+        return mask.fillna(False)
     lower = _parse_tabular_filter_date(column_filter.date_from)
     upper = _parse_tabular_filter_date(column_filter.date_to)
     if column_filter.date_mode in {"from", "between"} and lower is not None:

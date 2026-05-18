@@ -97,24 +97,24 @@ def build_production_dashboard_manifest(
     for metric in metric_selection:
         if metric.field_name not in frame.columns:
             continue
-        metric_frame = frame[frame[metric.field_name].notna()].copy()
+        metric_frame = frame.loc[frame[metric.field_name].notna()]
         if metric_frame.empty:
             continue
+        chart_group_columns = _chart_group_columns(metric_frame, aggregation)
         if charts.time_series:
-            group_columns = _chart_group_columns(metric_frame, aggregation)
             specs = _build_time_series_charts(
                 metric,
                 raw_frame=metric_frame,
                 aggregate_frame=aggregate_frame,
                 aggregation=aggregation,
-                group_columns=group_columns,
+                group_columns=chart_group_columns,
             )
             chart_specs.extend(spec for spec in specs if spec)
         if charts.histogram:
             spec = _build_histogram_chart(
                 metric,
                 metric_frame,
-                group_columns=_chart_group_columns(metric_frame, aggregation),
+                group_columns=chart_group_columns,
             )
             if spec:
                 chart_specs.append(spec)
@@ -123,7 +123,7 @@ def build_production_dashboard_manifest(
                 metric,
                 metric_frame,
                 chart_type="violin",
-                group_columns=_chart_group_columns(metric_frame, aggregation),
+                group_columns=chart_group_columns,
             )
             if spec:
                 chart_specs.append(spec)
@@ -132,7 +132,7 @@ def build_production_dashboard_manifest(
                 metric,
                 metric_frame,
                 chart_type="box",
-                group_columns=_chart_group_columns(metric_frame, aggregation),
+                group_columns=chart_group_columns,
             )
             if spec:
                 chart_specs.append(spec)
@@ -2410,7 +2410,7 @@ def _summary_card_rows(summary: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
     ]
     aggregate_rows = _summary_int(summary.get("aggregate_rows"))
     if aggregate_rows and aggregate_rows > 0:
-        rows.append(("Rows after aggregation", aggregate_rows))
+        rows.append(("Aggregated output points", aggregate_rows))
     rows.extend(
         [
             ("Metrics", summary.get("metric_count")),

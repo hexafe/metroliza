@@ -10,12 +10,14 @@ import sqlite3
 import modules.custom_logger as custom_logger
 from modules.db import read_sql_dataframe
 from modules.data_grouping_service import (
+    build_grouping_row_index,
     build_grouping_query as _build_grouping_query,
     compute_group_key_for_df as _compute_group_key_for_df,
     load_grouping_dataframe,
     reassign_group_keys_to_default,
 )
 from modules.export_grouping_utils import set_default_group_label
+from modules.grouping_filter_core import apply_filter_specs, parse_filter_expression
 from modules.report_schema import ensure_report_schema
 from modules.list_selection_utils import GroupingShortcutBindings, ListSelectionUtils
 from modules import ui_theme_tokens
@@ -57,6 +59,9 @@ from PyQt6.QtWidgets import(
 import pandas as pd
 
 
+_GROUPING_LIST_PREVIEW_LIMIT = 1000
+
+
 class DataGrouping(QDialog):
     """DataGrouping public interface used by export and UI workflows."""
 
@@ -76,6 +81,7 @@ class DataGrouping(QDialog):
             dark_mode=self._is_dark_mode_base(self.default_group_color)
         )
         self._group_display_to_name = {}
+        self._reference_display_to_name = {}
         self._list_selection_utils = ListSelectionUtils()
         self._grouping_shortcuts = None
 
@@ -183,6 +189,9 @@ class DataGrouping(QDialog):
             self.reference_summary_label = ui_foundation.status_chip("Reference: none", variant="neutral")
             self.group_summary_label = ui_foundation.status_chip("Group: none", variant="neutral")
             self.selection_summary_label = ui_foundation.status_chip("Selected parts: 0", variant="neutral")
+            self.scope_filter_input = QLineEdit()
+            self.scope_filter_input.setPlaceholderText("Filter rows, e.g. DATE>=2026-05-01 AND PART_NAME=WEDRONE")
+            self.scope_filter_summary_label = ui_foundation.status_chip("Scope: all rows", variant="neutral")
         except Exception as e:
             self.log_and_exit(e)
 
@@ -212,6 +221,8 @@ class DataGrouping(QDialog):
             summary_row.addWidget(self.reference_summary_label, 1)
             summary_row.addWidget(self.group_summary_label, 1)
             summary_row.addWidget(self.selection_summary_label, 1)
+            summary_row.addWidget(self.scope_filter_input, 2)
+            summary_row.addWidget(self.scope_filter_summary_label, 1)
             self.layout.addLayout(summary_row, 0, 0, 1, 4)
 
             self.layout.addWidget(self.reference_label, 1, 0)
@@ -294,6 +305,7 @@ class DataGrouping(QDialog):
             self.part_search_input.textChanged.connect(lambda: self.search_list_widgets(self.part_list, self.part_search_input.text()))
             self.group_search_input.textChanged.connect(lambda: self.search_list_widgets(self.groups_list, self.group_search_input.text()))
             self.part_group_search_input.textChanged.connect(lambda: self.search_list_widgets(self.part_group_list, self.part_group_search_input.text()))
+            self.scope_filter_input.textChanged.connect(self._handle_scope_filter_changed)
             
             # Connect the itemSelectionChanged signal of the "REFERENCE" list to the on_reference_selection_changed method
             self.reference_list.itemSelectionChanged.connect(self.on_reference_selection_changed)
@@ -674,37 +686,104 @@ class DataGrouping(QDialog):
         if filename:
             tokens.append(f"File: {filename}")
 
+        row_count = self._display_text(_field_value('ROW_COUNT'))
+        if row_count and row_count not in {"1", "1.0"}:
+            tokens.append(f"Rows: {row_count}")
+
         return " | ".join(tokens)
 
-    def _populate_part_list(self, selected_reference=None):
-        rows_df = self.df if not selected_reference else self.df[self.df['REFERENCE'] == selected_reference]
-        rows_df = rows_df.drop_duplicates(subset=['GROUP_KEY'])
+    def _scope_filter_text(self):
+        scope_filter_input = self._safe_attr(self, "scope_filter_input")
+        if scope_filter_input is None or not hasattr(scope_filter_input, "text"):
+            return ""
+        return str(scope_filter_input.text() or "").strip()
+
+    def _handle_scope_filter_changed(self):
+        try:
+            self.populate_list_widgets()
+        except Exception as e:
+            self.log_and_exit(e)
+
+    def _filtered_grouping_dataframe(self):
+        df = self.df if isinstance(self.df, pd.DataFrame) else pd.DataFrame()
+        expression = self._scope_filter_text()
+        summary_label = self._safe_attr(self, "scope_filter_summary_label")
+        if not expression:
+            if summary_label is not None and hasattr(summary_label, "setText"):
+                summary_label.setText(f"Scope: all rows ({len(df.index)} rows)")
+            return df
+        try:
+            parsed = parse_filter_expression(expression, df.columns)
+            filtered = apply_filter_specs(df, parsed.specs, match_mode=parsed.match_mode)
+        except (KeyError, TypeError, ValueError) as exc:
+            if summary_label is not None and hasattr(summary_label, "setText"):
+                summary_label.setText(f"Scope: invalid filter ({exc})")
+            return df.iloc[0:0].copy()
+        if summary_label is not None and hasattr(summary_label, "setText"):
+            summary_label.setText(f"Scope: {len(filtered.index)} of {len(df.index)} rows")
+        return filtered
+
+    def _grouping_row_index(self, *, selected_reference=None, selected_group=None, row_index=None):
+        if row_index is None:
+            rows_df = build_grouping_row_index(
+                self._filtered_grouping_dataframe(),
+                group_color_column=self.group_color_column,
+            )
+        else:
+            rows_df = row_index.copy()
+        if rows_df is None or rows_df.empty:
+            return rows_df
+        if selected_reference:
+            rows_df = rows_df[rows_df['REFERENCE'].astype(str) == str(selected_reference)]
+        if selected_group:
+            rows_df = rows_df[rows_df['GROUP'].astype(str) == str(selected_group)]
+        return rows_df
+
+    def _add_list_limit_marker(self, list_widget, total_rows):
+        remaining = int(total_rows) - _GROUPING_LIST_PREVIEW_LIMIT
+        if remaining <= 0:
+            return
+        item = QListWidgetItem(f"... {remaining} more matching row(s). Narrow the filter/search.")
+        item.setData(Qt.ItemDataRole.UserRole, None)
+        list_widget.addItem(item)
+
+    def _populate_part_list(self, selected_reference=None, *, row_index=None):
+        rows_df = self._grouping_row_index(selected_reference=selected_reference, row_index=row_index)
 
         self._apply_list_theme_styles()
 
         self.part_list.clear()
+        total_rows = int(len(rows_df.index)) if isinstance(rows_df, pd.DataFrame) else 0
+        rows_df = rows_df.head(_GROUPING_LIST_PREVIEW_LIMIT)
         for row in rows_df.itertuples(index=False):
             item = QListWidgetItem(self._part_display_label(row))
             item.setData(Qt.ItemDataRole.UserRole, row.GROUP_KEY)
             self._apply_item_color(item, self._group_color_for_row(row))
             self.part_list.addItem(item)
+        self._add_list_limit_marker(self.part_list, total_rows)
 
-    def _populate_part_group_list(self, selected_group=None):
-        rows_df = self.df if not selected_group else self.df[self.df['GROUP'] == selected_group]
-        rows_df = rows_df.drop_duplicates(subset=['GROUP_KEY'])
+    def _populate_part_group_list(self, selected_group=None, *, row_index=None):
+        rows_df = self._grouping_row_index(selected_group=selected_group, row_index=row_index)
 
         self._apply_list_theme_styles()
 
         self.part_group_list.clear()
+        total_rows = int(len(rows_df.index)) if isinstance(rows_df, pd.DataFrame) else 0
+        rows_df = rows_df.head(_GROUPING_LIST_PREVIEW_LIMIT)
         for row in rows_df.itertuples(index=False):
             item = QListWidgetItem(self._part_display_label(row))
             item.setData(Qt.ItemDataRole.UserRole, row.GROUP_KEY)
             self._apply_item_color(item, self._group_color_for_row(row))
             self.part_group_list.addItem(item)
+        self._add_list_limit_marker(self.part_group_list, total_rows)
 
     @staticmethod
     def _group_display_label(group_name, sample_size):
         return f"{group_name} (n={sample_size})"
+
+    @staticmethod
+    def _reference_display_label(reference_name, sample_size):
+        return f"{reference_name} (n={sample_size})"
 
     def _selected_group_name(self):
         groups_list = self._safe_attr(self, "groups_list")
@@ -732,7 +811,16 @@ class DataGrouping(QDialog):
         selected = reference_list.currentItem()
         if selected is None:
             return None
-        return selected.text()
+
+        item_data_role = getattr(Qt, "ItemDataRole", None)
+        user_role = getattr(item_data_role, "UserRole", None)
+        canonical_name = selected.data(user_role) if user_role is not None and hasattr(selected, "data") else None
+        if canonical_name:
+            return str(canonical_name)
+
+        display_name = selected.text()
+        reference_display_to_name = getattr(self, "_reference_display_to_name", {})
+        return reference_display_to_name.get(display_name, display_name)
 
     def _reassign_group_keys_to_default(self, selected_part_keys, preferred_group_name=None, preferred_reference_name=None):
         did_reassign = reassign_group_keys_to_default(
@@ -769,40 +857,65 @@ class DataGrouping(QDialog):
 
         try:
             self._apply_list_theme_styles()
-            unique_references = list(map(str, self.df["REFERENCE"].unique()))
             self._ensure_group_color_integrity()
-            unique_groups = self.df["GROUP"].unique()
+            row_index = self._grouping_row_index()
+            unique_groups = row_index["GROUP"].unique()
             self._group_display_to_name = {}
+            self._reference_display_to_name = {}
 
             # Populate reference_list
             self.reference_list.clear()
-            self.reference_list.addItems(unique_references)
+            reference_counts = (
+                row_index.groupby("REFERENCE", sort=False, dropna=False)["GROUP_KEY"]
+                .nunique()
+                .reset_index(name="sample_size")
+            )
+            unique_references = list(map(str, reference_counts["REFERENCE"].tolist()))
+            for record in reference_counts.head(_GROUPING_LIST_PREVIEW_LIMIT).itertuples(index=False):
+                reference_name = str(record.REFERENCE)
+                display_label = self._reference_display_label(reference_name, int(record.sample_size))
+                item = QListWidgetItem(display_label)
+                item.setData(Qt.ItemDataRole.UserRole, reference_name)
+                self._reference_display_to_name[display_label] = reference_name
+                self.reference_list.addItem(item)
+            self._add_list_limit_marker(self.reference_list, len(reference_counts.index))
             
             # Select the first item in the reference_list by default
             if self.reference_list.count() > 0:
                 preferred_reference_index = 0
                 if preferred_reference_name in unique_references:
                     preferred_reference_index = unique_references.index(preferred_reference_name)
+                if preferred_reference_index >= self.reference_list.count():
+                    preferred_reference_index = 0
                 self.reference_list.setCurrentRow(preferred_reference_index)
 
             # Use clear and addItems for the rest of the lists
-            selected_reference = self.reference_list.currentItem().text() if self.reference_list.currentItem() else None
-            self._populate_part_list(selected_reference)
+            selected_reference = self._selected_reference_name()
+            try:
+                self._populate_part_list(selected_reference, row_index=row_index)
+            except TypeError:
+                self._populate_part_list(selected_reference)
 
             self.all_parts_list.clear()
-            self.all_parts_list.addItems(map(str, self.df['SAMPLE_NUMBER'].astype(str).unique()))
+            if 'SAMPLE_NUMBER' in row_index.columns:
+                sample_counts = row_index.groupby("SAMPLE_NUMBER", sort=False, dropna=False)["GROUP_KEY"].nunique()
+                self.all_parts_list.addItems(
+                    f"{sample_number} (n={int(sample_size)})"
+                    for sample_number, sample_size in sample_counts.head(_GROUPING_LIST_PREVIEW_LIMIT).items()
+                )
+                self._add_list_limit_marker(self.all_parts_list, len(sample_counts.index))
 
             group_names = list(map(str, unique_groups))
             self.groups_list.clear()
             for group_name in group_names:
-                sample_size = int(self.df[self.df['GROUP'] == group_name]['GROUP_KEY'].nunique())
+                sample_size = int(row_index[row_index['GROUP'] == group_name]['GROUP_KEY'].nunique())
                 display_label = self._group_display_label(group_name, sample_size)
                 item = QListWidgetItem(display_label)
                 item.setData(Qt.ItemDataRole.UserRole, group_name)
                 self._group_display_to_name[display_label] = group_name
                 group_color = self.default_group_color
                 if group_name != self.default_group:
-                    group_rows = self.df[self.df['GROUP'] == group_name]
+                    group_rows = row_index[row_index['GROUP'] == group_name]
                     if not group_rows.empty:
                         group_color = str(group_rows[self.group_color_column].iloc[-1])
                 self._apply_item_color(item, group_color)
@@ -815,7 +928,10 @@ class DataGrouping(QDialog):
                     preferred_group_index = group_names.index(preferred_group_name)
                 self.groups_list.setCurrentRow(preferred_group_index)
             selected_group = self._selected_group_name()
-            self._populate_part_group_list(selected_group)
+            try:
+                self._populate_part_group_list(selected_group, row_index=row_index)
+            except TypeError:
+                self._populate_part_group_list(selected_group)
             self._refresh_selection_summary()
         except Exception as e:
             self.log_and_exit(e)
@@ -976,14 +1092,19 @@ class DataGrouping(QDialog):
         try:
             # Get the selected items from the list widgets
             selected_reference = self._selected_reference_name()
-            selected_part_keys = [item.data(Qt.ItemDataRole.UserRole) for item in self.part_list.selectedItems()]
+            selected_part_keys = [
+                item.data(Qt.ItemDataRole.UserRole)
+                for item in self.part_list.selectedItems()
+                if item.data(Qt.ItemDataRole.UserRole)
+            ]
             if selected_part_keys:
                 target_group_keys = selected_part_keys
             else:
                 target_group_keys = []
                 if selected_reference:
-                    target_group_keys = self.df.loc[
-                        self.df['REFERENCE'] == selected_reference,
+                    scoped_df = self._filtered_grouping_dataframe()
+                    target_group_keys = scoped_df.loc[
+                        scoped_df['REFERENCE'].astype(str) == str(selected_reference),
                         'GROUP_KEY',
                     ].dropna().unique().tolist()
 
@@ -1070,7 +1191,11 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
 
     def _delete_selected_parts_from_group(self):
-        selected_part_keys = [item.data(Qt.ItemDataRole.UserRole) for item in self.part_group_list.selectedItems()]
+        selected_part_keys = [
+            item.data(Qt.ItemDataRole.UserRole)
+            for item in self.part_group_list.selectedItems()
+            if item.data(Qt.ItemDataRole.UserRole)
+        ]
         selected_group = self._selected_group_name()
         selected_reference = self._selected_reference_name()
 
@@ -1084,7 +1209,11 @@ class DataGrouping(QDialog):
         )
 
     def _delete_selected_parts_from_part_list(self):
-        selected_part_keys = [item.data(Qt.ItemDataRole.UserRole) for item in self.part_list.selectedItems()]
+        selected_part_keys = [
+            item.data(Qt.ItemDataRole.UserRole)
+            for item in self.part_list.selectedItems()
+            if item.data(Qt.ItemDataRole.UserRole)
+        ]
         return self._reassign_group_keys_to_default(
             selected_part_keys,
             preferred_group_name=self._selected_group_name(),

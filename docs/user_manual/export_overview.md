@@ -161,11 +161,13 @@ If the report reference and production reference are not the same value, open **
 
 Export uses only local cached industrial rows from the Metroliza report database. It does not connect to production line databases or query Oznak while the workbook is being created. The chain is: Oznak sync fills the local cache, automatic link refresh or manual links create accepted local links, and normal export joins one accepted production link per report, prioritizing manual links. If no industrial rows have been synced or no report links exist yet, the normal export still works, but no industrial context is added.
 
-The industrial data launcher can also open dedicated cached Oznak export and analytics
-dialogs. **Export...** creates a workbook from cached rows only. **Analyze...** creates an
-HTML dashboard and optional workbook from cached production rows, with grouping, time
-buckets, reference marking, histograms, time series, violin plots, box plots, and grouped
-statistics.
+The industrial data launcher can also open dedicated Oznak export and analytics dialogs.
+With a selected Metroliza report database, **Export...** creates a workbook from cached
+rows only. Without a selected report database, **Export...** can fetch live production rows
+directly from a configured source and create a production workbook without filling the
+local cache. **Analyze...** creates an HTML dashboard and optional workbook from cached
+production rows, with grouping, time buckets, reference marking, histograms, time series,
+violin plots, box plots, and grouped statistics.
 
 ### Chart type
 
