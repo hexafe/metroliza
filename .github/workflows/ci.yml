@@ -149,7 +149,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: hexafe/hexafe-groupstats
-          ref: 41661065fbc8d1bb338f0edb701c9268216e71b8
+          ref: 14cc60e7412fa2647a8906f3f8833d0d789fc552
           path: artifacts/security_siblings/hexafe-groupstats
 
       - name: Checkout pinned hexafe-plotstats for security audit

@@ -83,7 +83,7 @@ class RequirementsHygieneTests(unittest.TestCase):
         matches = [entry for entry in runtime_entries if entry.lower().startswith('hexafe-groupstats[pandas] @ ')]
 
         self.assertEqual(matches, [
-            'hexafe-groupstats[pandas] @ git+https://github.com/hexafe/hexafe-groupstats.git@41661065fbc8d1bb338f0edb701c9268216e71b8'
+            'hexafe-groupstats[pandas] @ git+https://github.com/hexafe/hexafe-groupstats.git@14cc60e7412fa2647a8906f3f8833d0d789fc552'
         ])
 
     def test_runtime_requirements_pin_hexafe_plotstats_to_public_git_source(self):
