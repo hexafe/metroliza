@@ -72,9 +72,9 @@ Expected stage-level timings include:
   `write_only_worksheet_ops`, and `workbook_close`.
 - High-header-cardinality path: before/after sampling and chart-payload
   timings for distribution, histogram, and trend payloads.
-- CSV summary path: `transform_grouping`, `detail_sheet_to_excel`,
-  `worksheet_writes`, `chart_generation`, `overview_sheet_write`,
-  `workbook_write`, and `workbook_close`.
+- CSV summary path: `groupstats_analysis`, `transform_grouping`,
+  `detail_sheet_to_excel`, `worksheet_writes`, `chart_generation`,
+  `overview_sheet_write`, `workbook_write`, and `workbook_close`.
 
 CI trend reporting uses `scripts/benchmark_trend_compare.py
 --export-stage-metrics` to include these export stage keys in the uploaded

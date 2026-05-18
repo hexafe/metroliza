@@ -205,13 +205,6 @@ def _descriptive_rows(result) -> list[dict[str, Any]]:
 
 
 def _pairwise_rows(result, grouped_values: Mapping[str, Sequence[Any]]) -> list[dict[str, Any]]:
-    means = {}
-    for group_name, values in grouped_values.items():
-        arr = np.asarray(values, dtype=float)
-        arr = arr[np.isfinite(arr)]
-        if arr.size:
-            means[str(group_name)] = float(np.mean(arr))
-
     package_rows = _package_rows(_package_pairwise_rows, result)
     if not package_rows:
         package_rows = [
@@ -234,6 +227,21 @@ def _pairwise_rows(result, grouped_values: Mapping[str, Sequence[Any]]) -> list[
             }
             for row in result.pairwise_results
         ]
+
+    needs_group_mean_delta = any(
+        not (
+            row.get('comparison_estimate_label') == 'mean_difference'
+            and row.get('comparison_estimate') is not None
+        )
+        for row in package_rows
+    )
+    means = {}
+    if needs_group_mean_delta:
+        for group_name, values in grouped_values.items():
+            arr = np.asarray(values, dtype=float)
+            arr = arr[np.isfinite(arr)]
+            if arr.size:
+                means[str(group_name)] = float(np.mean(arr))
 
     rows = []
     for row in package_rows:
@@ -359,18 +367,34 @@ def _metric_summary_row(result) -> dict[str, Any]:
     }
 
 
+def _pooled_mean_sigma(result) -> tuple[float | None, float | None]:
+    rows = [
+        row
+        for row in getattr(result, 'descriptive_stats', ())
+        if int(getattr(row, 'n', 0) or 0) > 0
+    ]
+    total_n = sum(int(row.n) for row in rows)
+    if total_n <= 0:
+        return None, None
+    mean_value = sum(float(row.n) * float(row.mean) for row in rows) / float(total_n)
+    if total_n == 1:
+        return mean_value, 0.0
+    sum_squares = 0.0
+    for row in rows:
+        n = int(row.n)
+        row_std = _coerce_float(row.std)
+        within = 0.0 if row_std is None or n < 2 else float(n - 1) * (row_std**2)
+        between = float(n) * ((float(row.mean) - mean_value) ** 2)
+        sum_squares += within + between
+    sigma = float(np.sqrt(sum_squares / float(total_n - 1))) if sum_squares >= 0 else None
+    return mean_value, sigma
+
+
 def _metric_capability_payload(result, grouped_values: Mapping[str, Sequence[Any]], spec_payload: Mapping[str, Any]) -> dict[str, Any]:
-    all_values = (
-        np.concatenate([np.asarray(values, dtype=float) for values in grouped_values.values()])
-        if grouped_values
-        else np.asarray([], dtype=float)
-    )
-    all_values = all_values[np.isfinite(all_values)]
-    sigma = float(np.std(all_values, ddof=1)) if all_values.size > 1 else (0.0 if all_values.size == 1 else None)
-    mean_value = float(np.mean(all_values)) if all_values.size else None
     capability_mode = _capability_mode(spec_payload)
 
     if not result.capability_results:
+        mean_value, sigma = _pooled_mean_sigma(result)
         return {
             'cp': None,
             'capability': None,

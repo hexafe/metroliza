@@ -141,7 +141,17 @@ class ProductionGroupstatsInputResult:
     """Grouped numeric values prepared for one production metric."""
 
     metric: ProductionMetricSelection
-    grouped_values: dict[str, tuple[float, ...]]
+    grouped_values: dict[str, np.ndarray]
+    group_fields: tuple[str, ...] = ()
+    diagnostics: tuple[ProductionAnalyticsDiagnostic, ...] = ()
+
+
+@dataclass(frozen=True)
+class _PreparedProductionGroupstatsGrouping:
+    """Group labels and row positions shared by all selected production metrics."""
+
+    dataframe: pd.DataFrame
+    group_indices: dict[str, np.ndarray]
     group_fields: tuple[str, ...] = ()
     diagnostics: tuple[ProductionAnalyticsDiagnostic, ...] = ()
 
@@ -681,30 +691,41 @@ def build_production_groupstats_inputs(
 ) -> ProductionGroupstatsInputResult:
     """Build grouped finite numeric values for one production metric."""
 
-    frame = dataframe.copy()
+    prepared = _prepare_production_groupstats_grouping(
+        dataframe,
+        group_fields=group_fields,
+        aggregation_state=aggregation_state,
+        cohort_state=cohort_state,
+    )
+    return _build_groupstats_input_from_prepared(prepared, metric)
+
+
+def _prepare_production_groupstats_grouping(
+    dataframe: pd.DataFrame,
+    *,
+    group_fields: tuple[str, ...] = (),
+    aggregation_state: ProductionAggregationState | None = None,
+    cohort_state: ReferenceCohortState | None = None,
+) -> _PreparedProductionGroupstatsGrouping:
+    """Prepare group labels and dataframe row positions once for groupstats metrics."""
+
     diagnostics: list[ProductionAnalyticsDiagnostic] = []
-    if metric.field_name not in frame.columns:
-        diagnostics.append(
-            ProductionAnalyticsDiagnostic(
-                severity="warning",
-                code="groupstats_missing_metric",
-                message=f"Groupstats skipped missing metric: {metric.display_label}.",
-                context={"metric": metric.field_name},
-            )
-        )
-        return ProductionGroupstatsInputResult(
-            metric=metric,
-            grouped_values={},
-            diagnostics=tuple(diagnostics),
+    if not isinstance(dataframe, pd.DataFrame):
+        return _PreparedProductionGroupstatsGrouping(
+            dataframe=pd.DataFrame(),
+            group_indices={},
         )
 
     aggregation = aggregation_state or ProductionAggregationState()
     requested_group_fields = tuple(group_fields or aggregation.group_fields)
     resolved_group_fields: list[str] = []
+    active_positions = np.arange(len(dataframe.index), dtype=np.intp)
+    key_columns: dict[str, Any] = {}
 
     if aggregation.time_bucket != "none":
-        frame["time_bucket_start"] = _time_bucket_series(frame, aggregation.time_bucket)
-        bad_bucket_count = int(frame["time_bucket_start"].isna().sum())
+        time_bucket_start = _time_bucket_series(dataframe, aggregation.time_bucket)
+        valid_bucket_mask = time_bucket_start.notna().to_numpy(dtype=bool, na_value=False)
+        bad_bucket_count = int((~valid_bucket_mask).sum())
         if bad_bucket_count:
             diagnostics.append(
                 ProductionAnalyticsDiagnostic(
@@ -717,39 +738,87 @@ def build_production_groupstats_inputs(
                     context={"bad_timestamp_count": bad_bucket_count},
                 )
             )
-        frame = frame[frame["time_bucket_start"].notna()].copy()
+        active_positions = active_positions[valid_bucket_mask]
+        key_columns["time_bucket_start"] = time_bucket_start.iloc[active_positions].to_numpy(
+            copy=False
+        )
         resolved_group_fields.append("time_bucket_start")
 
     cohort = cohort_state or ReferenceCohortState()
     if (
         cohort.is_applied
         and cohort.mode in {"compare_rest", "group_selected"}
-        and "reference_cohort" in frame.columns
+        and "reference_cohort" in dataframe.columns
     ):
+        key_columns["reference_cohort"] = dataframe["reference_cohort"].iloc[
+            active_positions
+        ].to_numpy(copy=False)
         resolved_group_fields.append("reference_cohort")
 
     for field_name in requested_group_fields:
         if field_name in resolved_group_fields:
             continue
-        if field_name not in frame.columns:
+        if field_name not in dataframe.columns:
             diagnostics.append(_missing_filter_field_diagnostic(field_name, code="missing_group_field"))
             continue
+        key_columns[field_name] = dataframe[field_name].iloc[active_positions].to_numpy(copy=False)
         resolved_group_fields.append(field_name)
 
-    grouped_values: dict[str, tuple[float, ...]] = {}
     if resolved_group_fields:
-        grouped_frames = frame.groupby(resolved_group_fields, dropna=False, sort=True)
-        iterator = (
-            (_groupstats_label(key, time_bucket=aggregation.time_bucket), group)
-            for key, group in grouped_frames
+        key_frame = pd.DataFrame(
+            {field_name: key_columns[field_name] for field_name in resolved_group_fields}
         )
+        grouped_indices = {
+            _groupstats_label(key, time_bucket=aggregation.time_bucket): active_positions[
+                np.asarray(positions, dtype=np.intp)
+            ]
+            for key, positions in key_frame.groupby(
+                list(resolved_group_fields),
+                dropna=False,
+                sort=True,
+            ).indices.items()
+        }
     else:
-        iterator = (("All production rows", frame),)
+        grouped_indices = {"All production rows": active_positions}
 
-    for label, group in iterator:
-        values = _finite_numeric_values(group[metric.field_name])
-        if values:
-            grouped_values[label] = tuple(values)
+    return _PreparedProductionGroupstatsGrouping(
+        dataframe=dataframe,
+        group_indices=grouped_indices,
+        group_fields=tuple(resolved_group_fields),
+        diagnostics=tuple(diagnostics),
+    )
+
+
+def _build_groupstats_input_from_prepared(
+    prepared: _PreparedProductionGroupstatsGrouping,
+    metric: ProductionMetricSelection,
+) -> ProductionGroupstatsInputResult:
+    """Build grouped finite metric arrays from a prepared grouping."""
+
+    diagnostics: list[ProductionAnalyticsDiagnostic] = list(prepared.diagnostics)
+    frame = prepared.dataframe
+    if metric.field_name not in frame.columns:
+        diagnostics.append(
+            ProductionAnalyticsDiagnostic(
+                severity="warning",
+                code="groupstats_missing_metric",
+                message=f"Groupstats skipped missing metric: {metric.display_label}.",
+                context={"metric": metric.field_name},
+            )
+        )
+        return ProductionGroupstatsInputResult(
+            metric=metric,
+            grouped_values={},
+            group_fields=prepared.group_fields,
+            diagnostics=tuple(diagnostics),
+        )
+
+    grouped_values: dict[str, np.ndarray] = {}
+    metric_series = frame[metric.field_name]
+    for label, positions in prepared.group_indices.items():
+        values = _finite_numeric_array(metric_series.iloc[positions])
+        if values.size:
+            grouped_values[label] = values
 
     if not grouped_values:
         diagnostics.append(
@@ -794,7 +863,7 @@ def build_production_groupstats_inputs(
     return ProductionGroupstatsInputResult(
         metric=metric,
         grouped_values=grouped_values,
-        group_fields=tuple(resolved_group_fields),
+        group_fields=prepared.group_fields,
         diagnostics=tuple(diagnostics),
     )
 
@@ -823,14 +892,14 @@ def analyze_production_groupstats(
 
     metrics: list[dict[str, Any]] = []
     diagnostics: list[ProductionAnalyticsDiagnostic] = []
+    prepared_grouping = _prepare_production_groupstats_grouping(
+        dataframe,
+        group_fields=group_fields,
+        aggregation_state=aggregation_state,
+        cohort_state=cohort_state,
+    )
     for metric in metric_selection:
-        input_result = build_production_groupstats_inputs(
-            dataframe,
-            metric,
-            group_fields=group_fields,
-            aggregation_state=aggregation_state,
-            cohort_state=cohort_state,
-        )
+        input_result = _build_groupstats_input_from_prepared(prepared_grouping, metric)
         diagnostics.extend(input_result.diagnostics)
         if len(input_result.grouped_values) < 2:
             metrics.append(_skipped_groupstats_metric_payload(input_result, "insufficient_groups"))
@@ -1127,10 +1196,9 @@ def _format_time_bucket_label(value: Any, time_bucket: str) -> str:
     return timestamp.isoformat()
 
 
-def _finite_numeric_values(series: pd.Series) -> list[float]:
-    values = pd.to_numeric(series, errors="coerce").dropna()
-    values = values[np.isfinite(values)]
-    return [float(value) for value in values.tolist()]
+def _finite_numeric_array(series: pd.Series) -> np.ndarray:
+    values = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float, copy=False)
+    return values[np.isfinite(values)]
 
 
 def _coerce_float(value: Any) -> float | None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import closing
 import sqlite3
 
+import numpy as np
 import pandas as pd
 
 from modules.industrial_analytics_service import (
@@ -458,7 +459,58 @@ def test_groupstats_inputs_support_line_grouping(tmp_path) -> None:
 
     assert inputs.group_fields == ("line",)
     assert set(inputs.grouped_values) == {"L1", "L2"}
-    assert all(values for values in inputs.grouped_values.values())
+    assert all(len(values) > 0 for values in inputs.grouped_values.values())
+    assert all(isinstance(values, np.ndarray) for values in inputs.grouped_values.values())
+
+
+def test_groupstats_analysis_reuses_prepared_numpy_groups(monkeypatch) -> None:
+    frame = pd.DataFrame(
+        {
+            "GROUP": ["A", "A", "A", "B", "B", "B"],
+            "length_mm": [1.0, "2.0", "bad", 4.0, 5.0, 6.0],
+            "width_mm": [10.0, 11.0, 12.0, 20.0, None, 22.0],
+        }
+    )
+    calls: list[tuple[str, dict[str, np.ndarray]]] = []
+
+    def fake_analyze_group_metric(metric_identity, grouped_values, **_kwargs):
+        calls.append((metric_identity, grouped_values))
+        return {
+            "spec_status": "no_spec",
+            "descriptive_stats": [
+                {"group": label, "n": len(values)}
+                for label, values in grouped_values.items()
+            ],
+            "pairwise_rows": [],
+            "posthoc_rows": [],
+            "capability_rows": [],
+            "metric_summary": {"metric": metric_identity},
+            "capability": {},
+        }
+
+    monkeypatch.setattr(
+        "modules.industrial_analytics_service.analyze_group_metric",
+        fake_analyze_group_metric,
+    )
+
+    result = analyze_production_groupstats(
+        frame,
+        (
+            ProductionMetricSelection("length_mm", "Length"),
+            ProductionMetricSelection("width_mm", "Width"),
+        ),
+        group_fields=("GROUP",),
+    )
+
+    assert result.analyzed_metric_count == 2
+    assert [metric["metric"] for metric in result.metrics] == ["Length", "Width"]
+    assert [identity for identity, _grouped_values in calls] == ["Length", "Width"]
+    for _identity, grouped_values in calls:
+        assert set(grouped_values) == {"A", "B"}
+        assert all(isinstance(values, np.ndarray) for values in grouped_values.values())
+        assert all(values.dtype.kind == "f" for values in grouped_values.values())
+    assert calls[0][1]["A"].tolist() == [1.0, 2.0]
+    assert calls[1][1]["B"].tolist() == [20.0, 22.0]
 
 
 def test_groupstats_reference_cohort_compares_selected_against_rest(tmp_path) -> None:

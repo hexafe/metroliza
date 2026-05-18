@@ -892,6 +892,12 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
     output_html = temp_dir / 'summary_dashboard.html'
     output_xlsx = temp_dir / 'summary_output.xlsx'
     fixture_metrics = _create_csv_fixture(csv_path, row_count=row_count, data_columns=data_columns)
+    grouping_df = pd.DataFrame(
+        {
+            'REPORT_ID': np.arange(1, row_count + 1, dtype=int),
+            'GROUP': [f'Group {index % 3 + 1}' for index in range(row_count)],
+        }
+    )
 
     progress_messages: list[str] = []
     progress_events: list[tuple[float, str]] = []
@@ -905,12 +911,13 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
         input_file=str(csv_path),
         output_dashboard_file=str(output_html),
         reference_column='PART',
+        grouping_df=grouping_df,
         chart_selection=ProductionChartSelection(
             time_series=True,
             histogram=True,
             violin=True,
             box=True,
-            groupstats=False,
+            groupstats=True,
         ),
         output_workbook_file=str(output_xlsx),
         separate_parameter_sheets=True,
@@ -923,8 +930,14 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
         if message.strip()
     }
     chart_start_s = progress_marks.get('Writing dashboard...')
+    groupstats_start_s = progress_marks.get('Running statistical analysis...')
     workbook_start_s = progress_marks.get('Writing workbook...')
     complete_s = progress_marks.get('Analytics complete', run_s)
+    groupstats_analysis_s = (
+        max(0.0, (chart_start_s if chart_start_s is not None else complete_s) - groupstats_start_s)
+        if groupstats_start_s is not None
+        else 0.0
+    )
     chart_generation_s = (
         max(0.0, (workbook_start_s if workbook_start_s is not None else complete_s) - chart_start_s)
         if chart_start_s is not None
@@ -941,6 +954,7 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
         wall_time_s=run_s,
         stage_timings_s={
             'shared_analytics_total': run_s,
+            'groupstats_analysis': groupstats_analysis_s,
             'chart_generation': chart_generation_s,
             'workbook_write': workbook_write_s,
             'workbook_close': 0.0,
@@ -954,6 +968,7 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
             'workbook_bytes': output_xlsx.stat().st_size if output_xlsx.exists() else 0,
             'analytics_rows': result.row_count,
             'analytics_metrics': result.metric_count,
+            'groupstats_metric_count': result.groupstats_metric_count,
         },
     )
 

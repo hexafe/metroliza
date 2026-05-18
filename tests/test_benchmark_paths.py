@@ -1,4 +1,4 @@
-from scripts.benchmark_paths import build_benchmark_run_summary
+from scripts.benchmark_paths import benchmark_csv_summary_path, build_benchmark_run_summary
 
 
 def test_build_benchmark_run_summary_includes_contract_keys():
@@ -40,3 +40,11 @@ def test_build_benchmark_run_summary_includes_contract_keys():
     assert summary['chart_backend_distribution']['counts'] == {'native': 2, 'matplotlib': 6}
     assert summary['per_chart_type_timing_medians_s']['histogram'] == 0.6
     assert summary['high_header_cardinality_scenario_timing_s']['speedup_ratio'] == 2.0
+
+
+def test_csv_summary_benchmark_runs_groupstats_path(tmp_path):
+    result = benchmark_csv_summary_path(tmp_path, row_count=18, data_columns=2)
+
+    assert result.scenario == 'csv_summary_export_path'
+    assert result.stage_timings_s['groupstats_analysis'] > 0.0
+    assert result.input_metrics['groupstats_metric_count'] == 2
