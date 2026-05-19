@@ -16,20 +16,12 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertEqual(metadata.public_version_label, "2026.05 RC3 (build 260519)")
         self.assertTrue(metadata.highlight)
 
-    def test_in_app_current_release_notes_stay_user_facing(self):
+    def test_in_app_current_release_notes_show_current_version_only(self):
         import VersionDate
 
         current_section = VersionDate.release_notes.split("<br><b>Archive:</b><br>", 1)[0]
 
-        expected_bullets = [
-            "- CSV Summary and Export grouping filters now apply after pressing Enter, keeping large row sets responsive while typing<br>",
-            "- Export grouping filters now narrow Reference and Parts lists without hiding existing groups<br>",
-            "- CSV Summary can assign all rows matching the active filter, including rows outside the visible page<br>",
-            "- HTML dashboard annotations for limits and means stay visible on Plotly charts<br>",
-            "- Interactive histogram legends and overlays now use clearer names and percent-axis scaling<br>",
-        ]
-        for expected_bullet in expected_bullets:
-            self.assertIn(expected_bullet, current_section)
+        self.assertIn(f"Current version {VersionDate.PUBLIC_VERSION_LABEL}", current_section)
         for technical_term in (
             "loading animation",
             "PyInstaller",
@@ -53,7 +45,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
             for line in current_section.splitlines()
             if line.strip().startswith("- ")
         ]
-        self.assertEqual(current_bullets, expected_bullets)
+        self.assertEqual(current_bullets, [])
         changelog_bullets = [
             line.strip()
             for line in sync_release_metadata.CHANGELOG_PATH.read_text(encoding="utf-8").splitlines()

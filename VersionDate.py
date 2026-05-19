@@ -8,11 +8,6 @@ PUBLIC_VERSION_LABEL = "2026.05 RC3 (build 260519)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
-    - CSV Summary and Export grouping filters now apply after pressing Enter, keeping large row sets responsive while typing<br>
-    - Export grouping filters now narrow Reference and Parts lists without hiding existing groups<br>
-    - CSV Summary can assign all rows matching the active filter, including rows outside the visible page<br>
-    - HTML dashboard annotations for limits and means stay visible on Plotly charts<br>
-    - Interactive histogram legends and overlays now use clearer names and percent-axis scaling<br>
 
     <br><b>Archive:</b><br>
 
