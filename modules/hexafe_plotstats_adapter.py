@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
 import math
 import re
@@ -1287,7 +1288,8 @@ def _format_plotly_stat_value(value: float | None) -> str:
     magnitude = abs(number)
     if magnitude >= 10_000 or (0.0 < magnitude < 0.001):
         return f"{number:.4g}"
-    text = f"{number:.3f}".rstrip("0").rstrip(".")
+    rounded = Decimal(str(round(number, 12))).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+    text = f"{rounded:f}".rstrip("0").rstrip(".")
     return "0" if text in {"", "-0"} else text
 
 

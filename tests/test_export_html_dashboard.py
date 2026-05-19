@@ -386,7 +386,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(len(group_mean_annotations), 2)
         self.assertEqual(
             {item['text'] for item in group_mean_annotations},
-            {'A mean=10.012', 'B mean=10.123'},
+            {'A mean=10.013', 'B mean=10.123'},
         )
         self.assertTrue(all(item.get('bgcolor') == '#ffffff' for item in group_mean_annotations))
         trace_colors = [trace['marker']['color'] for trace in spec['data']]
