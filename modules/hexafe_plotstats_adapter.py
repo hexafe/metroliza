@@ -249,8 +249,8 @@ def _histogram_reference_traces(
     reference_values: list[tuple[str, float | None, str]] = [
         ("LSL", _optional_float(limits_mapping.get("lsl")), "#b91c1c"),
         ("USL", _optional_float(limits_mapping.get("usl")), "#b91c1c"),
-        ("mean", float(np.mean(values)), "#2563eb"),
-        ("median", float(np.median(values)), "#0f766e"),
+        ("Mean", float(np.mean(values)), "#2563eb"),
+        ("Median", float(np.median(values)), "#0f766e"),
         ("Q1", float(np.quantile(values, 0.25)), "#7c3aed"),
         ("Q3", float(np.quantile(values, 0.75)), "#7c3aed"),
     ]
@@ -389,6 +389,7 @@ def build_plotstats_dashboard_spec(
     spec = artifact.get("plotly_spec")
     if not _valid_plotly_spec(spec):
         return None
+    _normalize_payload_limit_trace_labels(spec, payload)
     return _trim_plotly_spec(spec)
 
 
@@ -805,6 +806,14 @@ def _trim_plotly_spec(spec: Mapping[str, Any]) -> dict[str, Any]:
 
 
 _REFERENCE_LEGEND_LABELS = {"lsl", "usl", "mean", "median", "q1", "q3"}
+_REFERENCE_LEGEND_DISPLAY_LABELS = {
+    "lsl": "LSL",
+    "usl": "USL",
+    "mean": "Mean",
+    "median": "Median",
+    "q1": "Q1",
+    "q3": "Q3",
+}
 _BIN_RANGE_PATTERN = re.compile(
     r"^\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s+-\s+"
     r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s*$",
@@ -822,6 +831,7 @@ def _normalize_dashboard_plotly_spec(spec: dict[str, Any]) -> dict[str, Any]:
     if _is_histogram_plotly_spec(spec):
         _normalize_histogram_plotly_axes(spec)
         _normalize_grouped_histogram_bins(spec)
+        _normalize_histogram_overlay_traces(spec)
     _normalize_reference_trace_names_and_annotations(spec)
     _normalize_plotly_annotation_boxes(spec)
     return spec
@@ -847,8 +857,7 @@ def _normalize_histogram_plotly_axes(spec: Mapping[str, Any]) -> None:
     if isinstance(yaxis, dict):
         yaxis["title"] = {"text": "Frequency (%)"}
         yaxis["tickformat"] = ".0%"
-        yaxis["range"] = [0.0, 1.0]
-        for key in ("tickmode", "tickvals", "ticktext", "nticks"):
+        for key in ("range", "tickmode", "tickvals", "ticktext", "nticks"):
             yaxis.pop(key, None)
     xaxis = layout.setdefault("xaxis", {})
     if isinstance(xaxis, dict):
@@ -892,6 +901,95 @@ def _normalize_grouped_histogram_bins(spec: Mapping[str, Any]) -> None:
         )
 
 
+_GENERIC_OVERLAY_NAME_PATTERN = re.compile(r"^(?:curve\s+)?overlay\s*\d*$", re.IGNORECASE)
+
+
+def _normalize_histogram_overlay_traces(spec: Mapping[str, Any]) -> None:
+    data = spec.get("data")
+    if not isinstance(data, list):
+        return
+    bin_width = _representative_histogram_bin_width(data)
+    overlay_index = 0
+    for trace in data:
+        if not isinstance(trace, dict) or not _is_histogram_overlay_trace(trace):
+            continue
+        overlay_index += 1
+        trace["name"] = _histogram_overlay_trace_name(trace, overlay_index)
+        if bin_width is not None:
+            _scale_overlay_trace_to_probability(trace, bin_width)
+
+
+def _representative_histogram_bin_width(data: list[Any]) -> float | None:
+    widths: list[float] = []
+    for trace in data:
+        if not isinstance(trace, Mapping):
+            continue
+        trace_type = str(trace.get("type") or "").strip().casefold()
+        if trace_type == "bar":
+            raw_width = trace.get("width")
+            if isinstance(raw_width, list):
+                widths.extend(_finite_positive_values(raw_width))
+            else:
+                width = _optional_float(raw_width)
+                if width is not None and width > 0:
+                    widths.append(width)
+        elif trace_type == "histogram":
+            xbins = trace.get("xbins") if isinstance(trace.get("xbins"), Mapping) else {}
+            width = _optional_float(xbins.get("size"))
+            if width is not None and width > 0:
+                widths.append(width)
+    if not widths:
+        return None
+    return float(np.median(np.asarray(widths, dtype=float)))
+
+
+def _finite_positive_values(values: Any) -> list[float]:
+    output: list[float] = []
+    if not isinstance(values, list):
+        return output
+    for value in values:
+        numeric = _optional_float(value)
+        if numeric is not None and numeric > 0:
+            output.append(numeric)
+    return output
+
+
+def _is_histogram_overlay_trace(trace: Mapping[str, Any]) -> bool:
+    if str(trace.get("type") or "").strip().casefold() != "scatter":
+        return False
+    axis, value = _constant_line_axis_and_value(trace)
+    if axis and value is not None:
+        return False
+    name = str(trace.get("name") or "").strip()
+    return bool(_GENERIC_OVERLAY_NAME_PATTERN.match(name))
+
+
+def _histogram_overlay_trace_name(trace: Mapping[str, Any], overlay_index: int) -> str:
+    line = trace.get("line") if isinstance(trace.get("line"), Mapping) else {}
+    dash = str(line.get("dash") or trace.get("dash") or "").strip().casefold()
+    fill = str(trace.get("fill") or "").strip().casefold()
+    if fill and fill != "none":
+        return "Tail shading"
+    if dash and dash not in {"solid", "none"}:
+        return "KDE reference"
+    return "Selected model curve" if overlay_index == 1 else f"Model curve {overlay_index}"
+
+
+def _scale_overlay_trace_to_probability(trace: dict[str, Any], bin_width: float) -> None:
+    y_values = _finite_trace_values(trace.get("y"))
+    if not y_values:
+        return
+    y_array = np.asarray(y_values, dtype=float)
+    if y_array.size == 0 or float(np.nanmax(y_array)) <= 1.0:
+        return
+    scaled = y_array * float(bin_width)
+    max_scaled = float(np.nanmax(scaled)) if scaled.size else 0.0
+    if max_scaled > 1.0:
+        scaled = scaled / max_scaled
+    trace["y"] = [float(min(max(value, 0.0), 1.0)) for value in scaled.tolist()]
+    trace["hovertemplate"] = str(trace.get("hovertemplate") or "%{x}<br>%{y:.2%}<extra></extra>")
+
+
 def _parse_bin_range_label(value: Any) -> tuple[float, float, str] | None:
     text = str(value or "").strip()
     match = _BIN_RANGE_PATTERN.match(text)
@@ -929,7 +1027,8 @@ def _normalize_reference_trace_names_and_annotations(spec: Mapping[str, Any]) ->
         axis, value = _constant_line_axis_and_value(trace)
         if value is None:
             continue
-        display = f"{label}={_format_plotly_value(value)}"
+        display_label = _REFERENCE_LEGEND_DISPLAY_LABELS.get(label_key, label)
+        display = f"{display_label}={_format_plotly_value(value)}"
         trace["name"] = display
         if display in existing_text:
             continue
@@ -981,7 +1080,17 @@ def _reference_annotation(*, axis: str, value: float, text: str, color: str) -> 
         annotation.update({"xref": "x", "yref": "paper", "x": value, "y": 1.04, "yanchor": "bottom"})
         return annotation
     if axis == "y":
-        annotation.update({"xref": "paper", "yref": "y", "x": 1.0, "y": value, "xanchor": "right"})
+        annotation.update(
+            {
+                "xref": "paper",
+                "yref": "y",
+                "x": 1.0,
+                "y": value,
+                "xanchor": "right",
+                "yanchor": "top",
+                "yshift": -4,
+            }
+        )
         return annotation
     return None
 

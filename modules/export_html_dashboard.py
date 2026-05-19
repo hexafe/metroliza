@@ -542,20 +542,12 @@ def _resolve_plotly_histogram_bins(
     values: list[float],
     *,
     preferred: Any = None,
-    x_min: Any = None,
-    x_max: Any = None,
 ) -> dict[str, float]:
     if not values:
         return {}
 
-    range_min = _coerce_finite_float(x_min)
-    range_max = _coerce_finite_float(x_max)
-    if range_min is not None and range_max is not None and range_min < range_max:
-        minimum = range_min
-        maximum = range_max
-    else:
-        minimum = min(values)
-        maximum = max(values)
+    minimum = min(values)
+    maximum = max(values)
     if math.isclose(minimum, maximum, rel_tol=1e-9, abs_tol=1e-9):
         padding = max(abs(minimum) * 0.01, 0.5)
         minimum -= padding
@@ -657,7 +649,11 @@ def _build_vertical_reference_shapes(
                 "text": f"{label}={numeric:.3f}",
                 "showarrow": False,
                 "font": {"size": 11, "color": color},
-                "bgcolor": tokens["annotation_bg"],
+                "bgcolor": "#ffffff",
+                "bordercolor": "#cbd5e1",
+                "borderwidth": 1,
+                "borderpad": 3,
+                "opacity": 1.0,
             }
         )
     return shapes, annotations
@@ -700,10 +696,16 @@ def _build_horizontal_reference_shapes(
                 "x": 1.0,
                 "y": numeric,
                 "xanchor": "right",
+                "yanchor": "top",
+                "yshift": -4,
                 "text": f"{label}={numeric:.3f}",
                 "showarrow": False,
                 "font": {"size": 11, "color": color},
-                "bgcolor": tokens["annotation_bg"],
+                "bgcolor": "#ffffff",
+                "bordercolor": "#cbd5e1",
+                "borderwidth": 1,
+                "borderpad": 3,
+                "opacity": 1.0,
             }
         )
     return shapes, annotations
@@ -838,7 +840,11 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str, theme: 
                 "text": f"Mean={mean_value:.3f}",
                 "showarrow": False,
                 "font": {"size": 11, "color": tokens["mean_line"]},
-                "bgcolor": tokens["annotation_bg"],
+                "bgcolor": "#ffffff",
+                "bordercolor": "#cbd5e1",
+                "borderwidth": 1,
+                "borderpad": 3,
+                "opacity": 1.0,
             }
         )
     _apply_histogram_annotation_contrast(annotations)
@@ -853,8 +859,6 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str, theme: 
     bins = _resolve_plotly_histogram_bins(
         values,
         preferred=payload.get("bin_count"),
-        x_min=x_min,
-        x_max=x_max,
     )
 
     traces: list[dict[str, Any]] = [
@@ -890,6 +894,10 @@ def _apply_histogram_annotation_contrast(annotations: list[dict[str, Any]]) -> N
     for annotation in annotations:
         if isinstance(annotation, dict):
             annotation["bgcolor"] = "#ffffff"
+            annotation["bordercolor"] = annotation.get("bordercolor") or "#cbd5e1"
+            annotation["borderwidth"] = max(int(annotation.get("borderwidth") or 0), 1)
+            annotation["borderpad"] = max(int(annotation.get("borderpad") or 0), 3)
+            annotation["opacity"] = 1.0
 
 
 def _build_histogram_reference_legend_traces(
@@ -2789,8 +2797,11 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
             if (!annotation || typeof annotation !== 'object') {{
               return annotation;
             }}
+            const annotationBgcolor = Object.prototype.hasOwnProperty.call(annotation, 'bgcolor')
+              ? annotation.bgcolor
+              : theme.annotationBgcolor;
             return Object.assign({{}}, annotation, {{
-              bgcolor: theme.annotationBgcolor,
+              bgcolor: annotationBgcolor,
               font: Object.assign({{}}, annotation.font || {{}}, {{
                 color: remapPlotlyColor(
                   (annotation.font && annotation.font.color) || theme.annotationFontColor,

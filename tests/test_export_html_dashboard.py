@@ -225,6 +225,10 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn('metroliza-dashboard-theme', html_text)
             self.assertIn('prefers-color-scheme: dark', html_text)
             self.assertIn('window.Plotly.react', html_text)
+            self.assertIn(
+                "const annotationBgcolor = Object.prototype.hasOwnProperty.call(annotation, 'bgcolor')",
+                html_text,
+            )
             self.assertIn('plotly-expand-trigger', html_text)
             self.assertIn('Increase size', html_text)
             self.assertIn('Enlarge interactive chart: Diameter / X', html_text)
@@ -405,7 +409,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
             )
         )
 
-    def test_summary_histogram_plotly_spec_uses_matplotlib_bin_range(self):
+    def test_summary_histogram_plotly_spec_uses_data_bins_and_x_view_axis_range(self):
         values = [0.0, 2.0, 4.0, 6.0, 8.0, 10.0]
         with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
             spec = _build_plotly_chart_spec(
@@ -419,9 +423,9 @@ class TestExportHtmlDashboard(unittest.TestCase):
             )
 
         bins = spec['data'][0]['xbins']
-        self.assertEqual(bins['start'], -5.0)
-        self.assertEqual(bins['end'], 15.0)
-        self.assertEqual(bins['size'], 4.0)
+        self.assertEqual(bins['start'], 0.0)
+        self.assertEqual(bins['end'], 10.0)
+        self.assertEqual(bins['size'], 2.0)
         self.assertEqual(spec['layout']['xaxis']['range'], [-5.0, 15.0])
         self.assertEqual(spec['layout']['yaxis']['tickformat'], '.0%')
         self.assertEqual(spec['layout']['xaxis']['tickformat'], '.4~g')
@@ -465,6 +469,29 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertIn('Sample number=%{customdata}', spec['data'][0]['hovertemplate'])
         self.assertNotIn('%{x', spec['data'][0]['hovertemplate'])
         self.assertIn('%{y:.4f}', spec['data'][0]['hovertemplate'])
+
+    def test_distribution_scatter_plotly_spec_keeps_limit_annotations_visible(self):
+        with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
+            spec = _build_plotly_chart_spec(
+                {
+                    'type': 'distribution',
+                    'render_mode': 'scatter',
+                    'x_values': [0.0, 1.0],
+                    'y_values': [10.0, 10.5],
+                    'limits': {'lsl': 9.5, 'usl': 10.5},
+                    'y_limits': {'min': 9.5, 'max': 10.5},
+                },
+                title='Scatter limits',
+            )
+
+        annotations = spec['layout']['annotations']
+        usl_annotation = next(item for item in annotations if item['text'].startswith('USL='))
+        self.assertEqual(usl_annotation['bgcolor'], '#ffffff')
+        self.assertEqual(usl_annotation['bordercolor'], '#cbd5e1')
+        self.assertGreaterEqual(usl_annotation['borderwidth'], 1)
+        self.assertEqual(usl_annotation['opacity'], 1.0)
+        self.assertEqual(usl_annotation['yanchor'], 'top')
+        self.assertLess(usl_annotation['yshift'], 0)
 
     def test_distribution_scatter_plotly_spec_thins_dense_sample_labels(self):
         x_values = [float(index) for index in range(80)]
@@ -511,6 +538,9 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertTrue(any(str(name).startswith('Q1=') for name in names))
         self.assertTrue(any(str(name).startswith('Q3=') for name in names))
         self.assertTrue(all(item.get('bgcolor') == '#ffffff' for item in spec['layout']['annotations']))
+        self.assertTrue(all(item.get('bordercolor') == '#cbd5e1' for item in spec['layout']['annotations']))
+        self.assertTrue(all(item.get('borderwidth') >= 1 for item in spec['layout']['annotations']))
+        self.assertTrue(all(item.get('opacity') == 1.0 for item in spec['layout']['annotations']))
 
     def test_summary_plotly_spec_uses_plotstats_artifact_when_enabled(self):
         package_spec = {

@@ -121,6 +121,7 @@ from modules.export_data_thread import (  # noqa: E402
     apply_minimal_axis_style,
     _build_distribution_fit_info_note,
     _build_distribution_fit_table_rows,
+    _build_histogram_native_visual_metadata,
     _build_unified_histogram_dashboard_rows,
     _apply_non_normal_cpk_reference_label,
     _build_compact_histogram_note_lines,
@@ -3887,6 +3888,55 @@ class TestExportPlotHelpers(unittest.TestCase):
             self.assertGreaterEqual(artist.get_position()[1], 0.0)
         finally:
             plt.close(fig)
+
+    def test_histogram_native_visual_metadata_labels_plotly_scaled_overlays(self):
+        visual_metadata = _build_histogram_native_visual_metadata(
+            summary_stats={
+                'minimum': 9.0,
+                'maximum': 11.0,
+                'average': 10.0,
+                'median': 10.0,
+                'sigma': 0.25,
+                'cp': 1.0,
+                'cpk': 1.0,
+                'sample_size': 20,
+                'nok_pct': 0.0,
+                'nok_count': 0,
+                'observed_nok_below_lsl_count': 0,
+                'observed_nok_above_usl_count': 0,
+                'lsl': 9.5,
+                'usl': 10.5,
+            },
+            lsl=9.5,
+            usl=10.5,
+            nominal=10.0,
+            distribution_fit_result={
+                'selected_model_pdf': {
+                    'x': [9.0, 9.5, 10.0, 10.5, 11.0],
+                    'y': [0.1, 0.2, 0.4, 0.2, 0.1],
+                },
+                'kde_reference_pdf': {
+                    'x': [9.0, 9.5, 10.0, 10.5, 11.0],
+                    'y': [0.2, 0.3, 0.5, 0.3, 0.2],
+                },
+                'fit_quality': {'label': 'strong'},
+            },
+            count_scale_factor=10.0,
+        )
+
+        overlay_rows = visual_metadata['modeled_overlays']['rows']
+        curve_rows = [row for row in overlay_rows if row.get('kind') == 'curve']
+        labels = [row.get('label') for row in curve_rows]
+
+        self.assertIn('Selected model curve', labels)
+        self.assertIn('KDE reference', labels)
+        self.assertIn('Tail shading', labels)
+        self.assertNotIn('overlay 1', {str(label).casefold() for label in labels})
+
+        selected_curve = next(row for row in curve_rows if row.get('label') == 'Selected model curve')
+        self.assertEqual(selected_curve['plotly_y_unit'], 'probability')
+        self.assertAlmostEqual(max(selected_curve['y']), 4.0)
+        self.assertAlmostEqual(max(selected_curve['plotly_y']), 0.2)
 
 
     def test_distribution_fit_table_rows_use_small_probability_notation(self):

@@ -13,6 +13,7 @@ from modules.db import read_sql_dataframe
 from modules.data_grouping_service import (
     build_grouping_row_index,
     build_grouping_query as _build_grouping_query,
+    build_grouping_scope_query_from_filter_state,
     compute_group_key_for_df as _compute_group_key_for_df,
     load_grouping_dataframe,
     reassign_group_keys_to_default,
@@ -97,6 +98,10 @@ class DataGrouping(QDialog):
         self._reference_display_to_name = {}
         self._list_selection_utils = ListSelectionUtils()
         self._grouping_shortcuts = None
+        self._applied_scope_filter_text = ""
+        self._cached_filtered_grouping_dataframe = None
+        self._cached_grouping_row_index = None
+        self._cached_full_grouping_row_index = None
 
         self.setup_ui()
         
@@ -314,11 +319,11 @@ class DataGrouping(QDialog):
         """
 
         try:
-            self.reference_search_input.textChanged.connect(lambda: self.search_list_widgets(self.reference_list, self.reference_search_input.text()))
-            self.part_search_input.textChanged.connect(lambda: self.search_list_widgets(self.part_list, self.part_search_input.text()))
-            self.group_search_input.textChanged.connect(lambda: self.search_list_widgets(self.groups_list, self.group_search_input.text()))
-            self.part_group_search_input.textChanged.connect(lambda: self.search_list_widgets(self.part_group_list, self.part_group_search_input.text()))
-            self.scope_filter_input.textChanged.connect(self._handle_scope_filter_changed)
+            self.reference_search_input.returnPressed.connect(lambda: self.search_list_widgets(self.reference_list, self.reference_search_input.text()))
+            self.part_search_input.returnPressed.connect(lambda: self.search_list_widgets(self.part_list, self.part_search_input.text()))
+            self.group_search_input.returnPressed.connect(lambda: self.search_list_widgets(self.groups_list, self.group_search_input.text()))
+            self.part_group_search_input.returnPressed.connect(lambda: self.search_list_widgets(self.part_group_list, self.part_group_search_input.text()))
+            self.scope_filter_input.returnPressed.connect(self._apply_scope_filter)
             
             # Connect the itemSelectionChanged signal of the "REFERENCE" list to the on_reference_selection_changed method
             self.reference_list.itemSelectionChanged.connect(self.on_reference_selection_changed)
@@ -432,13 +437,27 @@ class DataGrouping(QDialog):
         """
 
         try:
-            filter_query = self.parent().get_filter_query() if self.parent() else None
+            initial_filter_query = getattr(self, "_initial_grouping_filter_query", None)
+            filter_query = initial_filter_query() if callable(initial_filter_query) else None
             ensure_report_schema(self.db_file)
             self.df = load_grouping_dataframe(read_sql_dataframe, self.db_file, filter_query)
+            self._invalidate_grouping_cache()
         except (sqlite3.Error, ValueError, TypeError) as e:
             self.log_and_exit(e)
         except Exception as e:
             self.log_and_exit(e, reraise=True)
+
+    def _initial_grouping_filter_query(self):
+        parent = self.parent()
+        if parent is None:
+            return None
+        filter_state = getattr(parent, "filter_state", None)
+        if filter_state is not None:
+            return build_grouping_scope_query_from_filter_state(filter_state)
+        get_filter_query = getattr(parent, "get_filter_query", None)
+        if callable(get_filter_query):
+            return get_filter_query()
+        return None
 
     @staticmethod
     def _build_grouping_query(filter_query):
@@ -460,6 +479,7 @@ class DataGrouping(QDialog):
             self.read_data_to_df()
             self.add_default_group()
             self._restore_saved_grouping_state()
+            self._invalidate_grouping_cache()
             self.populate_list_widgets()
         except Exception as e:
             self.log_and_exit(e, reraise=True)
@@ -480,6 +500,7 @@ class DataGrouping(QDialog):
             self.df["GROUP"] = self.default_group
             self.df[self.group_color_column] = self.default_group_color
             self.df["GROUP_KEY"] = self._compute_group_key_for_df(self.df)
+            self._invalidate_grouping_cache()
         except Exception as e:
             self.log_and_exit(e)
 
@@ -502,6 +523,7 @@ class DataGrouping(QDialog):
             else:
                 self.df[self.group_color_column] = self.default_group_color
             self._ensure_group_color_integrity()
+            self._invalidate_grouping_cache()
         except Exception as e:
             self.log_and_exit(e)
 
@@ -786,19 +808,30 @@ class DataGrouping(QDialog):
             return ""
         return str(scope_filter_input.text() or "").strip()
 
-    def _handle_scope_filter_changed(self):
+    def _invalidate_grouping_cache(self):
+        self._cached_filtered_grouping_dataframe = None
+        self._cached_grouping_row_index = None
+        self._cached_full_grouping_row_index = None
+
+    def _apply_scope_filter(self):
         try:
+            self._applied_scope_filter_text = self._scope_filter_text()
+            self._invalidate_grouping_cache()
             self.populate_list_widgets()
         except Exception as e:
             self.log_and_exit(e)
 
     def _filtered_grouping_dataframe(self):
+        cached = getattr(self, "_cached_filtered_grouping_dataframe", None)
+        if isinstance(cached, pd.DataFrame):
+            return cached
         df = self.df if isinstance(self.df, pd.DataFrame) else pd.DataFrame()
-        expression = self._scope_filter_text()
+        expression = str(getattr(self, "_applied_scope_filter_text", "") or "").strip()
         summary_label = self._safe_attr(self, "scope_filter_summary_label")
         if not expression:
             if summary_label is not None and hasattr(summary_label, "setText"):
                 summary_label.setText(f"Scope: all rows ({len(df.index)} rows)")
+            self._cached_filtered_grouping_dataframe = df
             return df
         try:
             parsed = self._parse_scope_filter_expression(expression, df.columns)
@@ -806,17 +839,49 @@ class DataGrouping(QDialog):
         except (KeyError, TypeError, ValueError) as exc:
             if summary_label is not None and hasattr(summary_label, "setText"):
                 summary_label.setText(f"Scope: invalid filter ({exc})")
-            return df.iloc[0:0].copy()
+            filtered = df.iloc[0:0].copy()
+            self._cached_filtered_grouping_dataframe = filtered
+            return filtered
         if summary_label is not None and hasattr(summary_label, "setText"):
             summary_label.setText(f"Scope: {len(filtered.index)} of {len(df.index)} rows")
+        self._cached_filtered_grouping_dataframe = filtered
         return filtered
+
+    def _current_grouping_row_index(self):
+        cached = getattr(self, "_cached_grouping_row_index", None)
+        if isinstance(cached, pd.DataFrame):
+            return cached
+        row_index = build_grouping_row_index(
+            self._filtered_grouping_dataframe(),
+            group_color_column=self.group_color_column,
+        )
+        self._cached_grouping_row_index = row_index
+        return row_index
+
+    def _current_full_grouping_row_index(self):
+        cached = getattr(self, "_cached_full_grouping_row_index", None)
+        if isinstance(cached, pd.DataFrame):
+            return cached
+        df = self.df if isinstance(self.df, pd.DataFrame) else pd.DataFrame()
+        row_index = build_grouping_row_index(
+            df,
+            group_color_column=self.group_color_column,
+        )
+        self._cached_full_grouping_row_index = row_index
+        return row_index
+
+    def _cached_grouping_row_index_for_selection(self, *, filtered=True):
+        cache_name = "_cached_grouping_row_index" if filtered else "_cached_full_grouping_row_index"
+        cached = getattr(self, cache_name, None)
+        if isinstance(cached, pd.DataFrame):
+            return cached
+        if isinstance(getattr(self, "df", None), pd.DataFrame):
+            return self._current_grouping_row_index() if filtered else self._current_full_grouping_row_index()
+        return None
 
     def _grouping_row_index(self, *, selected_reference=None, selected_group=None, row_index=None):
         if row_index is None:
-            rows_df = build_grouping_row_index(
-                self._filtered_grouping_dataframe(),
-                group_color_column=self.group_color_column,
-            )
+            rows_df = self._current_grouping_row_index()
         else:
             rows_df = row_index.copy()
         if rows_df is None or rows_df.empty:
@@ -946,8 +1011,10 @@ class DataGrouping(QDialog):
         try:
             self._apply_list_theme_styles()
             self._ensure_group_color_integrity()
+            self._invalidate_grouping_cache()
             row_index = self._grouping_row_index()
-            unique_groups = row_index["GROUP"].unique()
+            group_row_index = self._current_full_grouping_row_index()
+            unique_groups = group_row_index["GROUP"].unique()
             self._group_display_to_name = {}
             self._reference_display_to_name = {}
 
@@ -996,14 +1063,14 @@ class DataGrouping(QDialog):
             group_names = list(map(str, unique_groups))
             self.groups_list.clear()
             for group_name in group_names:
-                sample_size = int(row_index[row_index['GROUP'] == group_name]['GROUP_KEY'].nunique())
+                sample_size = int(group_row_index[group_row_index['GROUP'] == group_name]['GROUP_KEY'].nunique())
                 display_label = self._group_display_label(group_name, sample_size)
                 item = QListWidgetItem(display_label)
                 item.setData(Qt.ItemDataRole.UserRole, group_name)
                 self._group_display_to_name[display_label] = group_name
                 group_color = self.default_group_color
                 if group_name != self.default_group:
-                    group_rows = row_index[row_index['GROUP'] == group_name]
+                    group_rows = group_row_index[group_row_index['GROUP'] == group_name]
                     if not group_rows.empty:
                         group_color = str(group_rows[self.group_color_column].iloc[-1])
                 self._apply_item_color(item, group_color)
@@ -1017,7 +1084,7 @@ class DataGrouping(QDialog):
                 self.groups_list.setCurrentRow(preferred_group_index)
             selected_group = self._selected_group_name()
             try:
-                self._populate_part_group_list(selected_group, row_index=row_index)
+                self._populate_part_group_list(selected_group, row_index=group_row_index)
             except TypeError:
                 self._populate_part_group_list(selected_group)
             self._refresh_selection_summary()
@@ -1060,8 +1127,15 @@ class DataGrouping(QDialog):
         """
 
         try:
-            selected_reference = self.reference_list.currentItem().text() if self.reference_list.currentItem() else None
-            self._populate_part_list(selected_reference)
+            selected_reference = self._selected_reference_name()
+            row_index = self._cached_grouping_row_index_for_selection(filtered=True)
+            try:
+                if row_index is None:
+                    self._populate_part_list(selected_reference)
+                else:
+                    self._populate_part_list(selected_reference, row_index=row_index)
+            except TypeError:
+                self._populate_part_list(selected_reference)
             has_part_selection = bool(self.part_list.selectedItems()) if hasattr(self.part_list, 'selectedItems') else False
             self.create_group_button.setEnabled(bool(selected_reference) or has_part_selection)
             self._refresh_selection_summary()
@@ -1122,7 +1196,14 @@ class DataGrouping(QDialog):
 
         try:
             selected_group_name = self._selected_group_name()
-            self._populate_part_group_list(selected_group_name)
+            row_index = self._cached_grouping_row_index_for_selection(filtered=False)
+            try:
+                if row_index is None:
+                    self._populate_part_group_list(selected_group_name)
+                else:
+                    self._populate_part_group_list(selected_group_name, row_index=row_index)
+            except TypeError:
+                self._populate_part_group_list(selected_group_name)
 
             selected_group = self.groups_list.currentItem() is not None
             is_default_group = selected_group_name == self.default_group
@@ -1217,6 +1298,7 @@ class DataGrouping(QDialog):
                     self.df['GROUP_KEY'].isin(target_group_keys),
                     self.group_color_column
                 ] = assigned_color
+                self._invalidate_grouping_cache()
 
             preferred_group_name = new_group_name if ok_pressed and target_group_keys and new_group_name else None
             try:

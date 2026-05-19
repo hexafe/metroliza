@@ -1,6 +1,13 @@
 # Changelog (for end users)
 
-## 2026.05 RC2 (build 260517) — current version
+## 2026.05 RC3 (build 260519) — current version
+- CSV Summary and Export grouping filters now apply after pressing Enter, keeping large row sets responsive while typing.
+- Export grouping filters now narrow Reference and Parts lists without hiding existing groups.
+- CSV Summary can assign all rows matching the active filter, including rows outside the visible page.
+- HTML dashboard annotations for limits and means stay visible on Plotly charts.
+- Interactive histogram legends and overlays now use clearer names and percent-axis scaling.
+
+## 2026.05 RC2 (build 260517)
 - CSV Summary can load multiple CSV files and handles large CSV files more reliably.
 - CSV Summary filters and grouping stay in sync with the loaded data, including date filters and numeric-looking group names.
 - Grouped statistics now compare groups overall and pair-by-pair instead of showing only separate group summaries.

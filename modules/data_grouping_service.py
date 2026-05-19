@@ -6,9 +6,15 @@ import json
 import pandas as pd
 
 try:
-    from modules.report_query_service import build_grouping_query as _shared_build_grouping_query
+    from modules.report_query_service import (
+        build_grouping_query as _shared_build_grouping_query,
+        build_grouping_scope_query_from_filter_state,
+    )
 except Exception:  # pragma: no cover - compatibility for test stubs/forked workspaces
     _shared_build_grouping_query = None
+
+    def build_grouping_scope_query_from_filter_state(_filter_state=None):
+        return None
 
 try:
     from modules.grouping_filter_core import DataFrameGroupingIndex as _SharedDataFrameGroupingIndex

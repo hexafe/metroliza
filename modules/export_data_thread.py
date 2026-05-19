@@ -1557,6 +1557,40 @@ def _build_histogram_native_visual_metadata(*, summary_stats, lsl, usl, nominal,
             }
         )
 
+    sample_size = int(summary_stats.get('sample_size') or 0) if isinstance(summary_stats, dict) else 0
+    parsed_count_scale_factor = None
+    try:
+        if count_scale_factor is not None:
+            parsed_count_scale_factor = float(count_scale_factor)
+    except (TypeError, ValueError):
+        parsed_count_scale_factor = None
+    probability_scale_factor = None
+    if parsed_count_scale_factor is not None and sample_size > 0:
+        probability_scale_factor = parsed_count_scale_factor / float(sample_size)
+
+    def _scaled_overlay_y(raw_y):
+        y_array = np.asarray(raw_y, dtype=float)
+        count_y = y_array
+        probability_y = None
+        if parsed_count_scale_factor is not None:
+            count_y = y_array * parsed_count_scale_factor
+        if probability_scale_factor is not None:
+            probability_y = y_array * probability_scale_factor
+        return count_y, probability_y
+
+    def _overlay_payload(*, label, x, y, probability_y=None, **kwargs):
+        payload = {
+            'kind': 'curve',
+            'label': label,
+            'x': x.tolist(),
+            'y': y.tolist(),
+            **kwargs,
+        }
+        if probability_y is not None:
+            payload['plotly_y'] = probability_y.tolist()
+            payload['plotly_y_unit'] = 'probability'
+        return payload
+
     overlay_rows = []
     fit_result = distribution_fit_result or {}
     if fit_result:
@@ -1564,18 +1598,18 @@ def _build_histogram_native_visual_metadata(*, summary_stats, lsl, usl, nominal,
         model_x = np.asarray(selected_model_curve.get('x', []), dtype=float)
         model_y = np.asarray(selected_model_curve.get('y', []), dtype=float)
         if model_x.size > 1 and model_y.size == model_x.size:
-            if count_scale_factor is not None:
-                model_y = model_y * float(count_scale_factor)
+            model_y, model_plotly_y = _scaled_overlay_y(model_y)
             model_style = resolve_selected_model_curve_style(fit_result)
             overlay_rows.append(
-                {
-                    'kind': 'curve',
-                    'x': model_x.tolist(),
-                    'y': model_y.tolist(),
-                    'color': SUMMARY_PLOT_PALETTE['density_line'],
-                    'alpha': float(model_style['alpha']),
-                    'linewidth': float(model_style['linewidth']),
-                }
+                _overlay_payload(
+                    label='Selected model curve',
+                    x=model_x,
+                    y=model_y,
+                    probability_y=model_plotly_y,
+                    color=SUMMARY_PLOT_PALETTE['density_line'],
+                    alpha=float(model_style['alpha']),
+                    linewidth=float(model_style['linewidth']),
+                )
             )
             for limit_value, mask in (
                 (lsl, model_x <= float(lsl) if lsl is not None else None),
@@ -1584,40 +1618,41 @@ def _build_histogram_native_visual_metadata(*, summary_stats, lsl, usl, nominal,
                 if limit_value is None or mask is None or np.count_nonzero(mask) < 2:
                     continue
                 overlay_rows.append(
-                    {
-                        'kind': 'curve',
-                        'x': model_x[mask].tolist(),
-                        'y': model_y[mask].tolist(),
-                        'color': SUMMARY_PLOT_PALETTE['spec_limit'],
-                        'fill_color': SUMMARY_PLOT_PALETTE['spec_limit'],
-                        'fill_alpha': 0.12,
-                        'fill_to_baseline': True,
-                        'alpha': 0.0,
-                        'linewidth': 1.0,
-                    }
+                    _overlay_payload(
+                        label='Tail shading',
+                        x=model_x[mask],
+                        y=model_y[mask],
+                        probability_y=model_plotly_y[mask] if model_plotly_y is not None else None,
+                        color=SUMMARY_PLOT_PALETTE['spec_limit'],
+                        fill_color=SUMMARY_PLOT_PALETTE['spec_limit'],
+                        fill_alpha=0.12,
+                        fill_to_baseline=True,
+                        alpha=0.0,
+                        linewidth=1.0,
+                    )
                 )
 
         kde_reference_curve = fit_result.get('kde_reference_pdf') or {}
         kde_x = np.asarray(kde_reference_curve.get('x', []), dtype=float)
         kde_y = np.asarray(kde_reference_curve.get('y', []), dtype=float)
         if kde_x.size > 1 and kde_y.size == kde_x.size:
-            if count_scale_factor is not None:
-                kde_y = kde_y * float(count_scale_factor)
+            kde_y, kde_plotly_y = _scaled_overlay_y(kde_y)
             overlay_rows.append(
-                {
-                    'kind': 'curve',
-                    'x': kde_x.tolist(),
-                    'y': kde_y.tolist(),
-                    'color': SUMMARY_PLOT_PALETTE['density_line'],
-                    'alpha': 0.22,
-                    'linewidth': 1.0,
-                    'dash': [5, 4],
-                }
+                _overlay_payload(
+                    label='KDE reference',
+                    x=kde_x,
+                    y=kde_y,
+                    probability_y=kde_plotly_y,
+                    color=SUMMARY_PLOT_PALETTE['density_line'],
+                    alpha=0.22,
+                    linewidth=1.0,
+                    dash=[5, 4],
+                )
             )
             overlay_rows.append(
                 {
                     'kind': 'curve_note',
-                    'label': 'Dashed KDE: descriptive only',
+                    'label': 'KDE reference: descriptive only',
                 }
             )
 

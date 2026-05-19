@@ -286,11 +286,11 @@ Examples of metric availability by spec type:
 
 ## Release metadata
 
-Current release highlight (`2026.05 RC2 (build 260517)`): CSV Summary multi-file analytics, direct Oznak database export, and clearer dashboards.
+Current release highlight (`2026.05 RC3 (build 260519)`): Faster grouping filters, corrected filtered-row assignment, and clearer Plotly dashboards.
 
 Canonical release metadata is in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, `CURRENT_RELEASE_HIGHLIGHT`).
 
-### Changelog highlights (release `2026.05 RC2 (build 260517)`)
+### Changelog highlights (release `2026.05 RC3 (build 260519)`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 

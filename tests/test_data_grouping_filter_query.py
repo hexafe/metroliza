@@ -90,6 +90,30 @@ class TestDataGroupingFilterQuery(unittest.TestCase):
         self.assertIn(filter_query, query)
         self.assertIn('"REPORT_ID" AS REPORT_ID', query)
 
+    def test_initial_grouping_scope_uses_filter_state_reference_and_part_only(self):
+        from modules.filter_state import FilterState
+
+        class _Parent:
+            filter_state = FilterState(
+                ax_values=('AX1',),
+                reference_values=('REF-1',),
+                part_name_values=('Part A',),
+                has_nok_only=True,
+            )
+
+            def get_filter_query(self):
+                raise AssertionError('full export filter should not be read')
+
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.parent = lambda: _Parent()
+
+        query = dialog._initial_grouping_filter_query()
+
+        self.assertIn("reference IN ('REF-1')", query)
+        self.assertIn("part_name IN ('Part A')", query)
+        self.assertNotIn('ax', query.lower())
+        self.assertNotIn('has_nok =', query.lower())
+
 
 class TestDataGroupingPartDisplayLabel(unittest.TestCase):
     def test_part_display_label_accepts_namedtuple_row(self):
@@ -905,13 +929,13 @@ class TestDataGroupingSelectionRetention(unittest.TestCase):
         dialog.df = pd.DataFrame(
             {
                 'REFERENCE': ['REF-1', 'REF-1', 'REF-2'],
-                'GROUP': ['POPULATION', 'POPULATION', 'POPULATION'],
+                'GROUP': ['POPULATION', 'POPULATION', 'Reviewed'],
                 'GROUP_KEY': ['k1', 'k2', 'k3'],
                 'SAMPLE_NUMBER': [1, 2, 3],
                 'DATE': ['2026-04-30', '2026-05-02', '2026-05-03'],
                 'PART_NAME': ['Cover', 'Body', 'Body'],
                 'FILENAME': ['a.csv', 'b.csv', 'c.csv'],
-                'GROUP_COLOR': ['#FFFFFF', '#FFFFFF', '#FFFFFF'],
+                'GROUP_COLOR': ['#FFFFFF', '#FFFFFF', '#ABCDEF'],
             }
         )
         dialog._group_display_to_name = {}
@@ -922,6 +946,9 @@ class TestDataGroupingSelectionRetention(unittest.TestCase):
         dialog.groups_list = _PopulateListWidget()
         dialog.part_group_list = _PopulateListWidget()
         dialog.scope_filter_input = _TextInput()
+        dialog._applied_scope_filter_text = dialog.scope_filter_input.text()
+        dialog._cached_filtered_grouping_dataframe = None
+        dialog._cached_grouping_row_index = None
         dialog.scope_filter_summary_label = _Label()
         dialog._ensure_group_color_integrity = lambda: None
         dialog._apply_item_color = lambda item, color: None
@@ -932,6 +959,10 @@ class TestDataGroupingSelectionRetention(unittest.TestCase):
             dialog.populate_list_widgets()
 
         self.assertEqual([item.text() for item in dialog.reference_list._items], ['REF-1 (n=1)'])
+        self.assertEqual(
+            [item.text() for item in dialog.groups_list._items],
+            ['POPULATION (n=2)', 'Reviewed (n=1)'],
+        )
         self.assertEqual(dialog.scope_filter_summary_label.value, 'Scope: 1 of 3 rows')
 
     def test_populate_list_widgets_falls_back_to_first_when_group_missing(self):

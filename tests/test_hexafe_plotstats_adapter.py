@@ -261,7 +261,7 @@ def test_plotstats_dashboard_spec_normalizes_histogram_plotly_semantics(monkeypa
     yaxis = spec["layout"]["yaxis"]
     assert yaxis["title"]["text"] == "Frequency (%)"
     assert yaxis["tickformat"] == ".0%"
-    assert yaxis["range"] == [0.0, 1.0]
+    assert "range" not in yaxis
     assert "tickvals" not in yaxis
     assert spec["layout"]["xaxis"]["tickformat"] == ".4~g"
     bar_trace = spec["data"][0]
@@ -273,6 +273,9 @@ def test_plotstats_dashboard_spec_normalizes_histogram_plotly_semantics(monkeypa
     annotation_texts = {annotation["text"] for annotation in spec["layout"]["annotations"]}
     assert {"legacy", "LSL=123", "Mean=1000"}.issubset(annotation_texts)
     assert all(annotation["bgcolor"] == "#ffffff" for annotation in spec["layout"]["annotations"])
+    assert all(annotation["bordercolor"] == "#cbd5e1" for annotation in spec["layout"]["annotations"])
+    assert all(annotation["borderwidth"] >= 1 for annotation in spec["layout"]["annotations"])
+    assert all(annotation["opacity"] == 1.0 for annotation in spec["layout"]["annotations"])
 
 
 def test_dashboard_plotly_fallback_builds_percent_histogram_with_reference_values() -> None:
@@ -289,7 +292,7 @@ def test_dashboard_plotly_fallback_builds_percent_histogram_with_reference_value
 
     assert spec is not None
     assert spec["layout"]["yaxis"]["title"]["text"] == "Frequency (%)"
-    assert spec["layout"]["yaxis"]["range"] == [0.0, 1.0]
+    assert "range" not in spec["layout"]["yaxis"]
     assert spec["layout"]["xaxis"]["title"]["text"] == "Length"
     assert spec["config"]["staticPlot"] is False
     histogram_trace = spec["data"][0]
@@ -297,12 +300,75 @@ def test_dashboard_plotly_fallback_builds_percent_histogram_with_reference_value
     assert all(isinstance(value, float) for value in histogram_trace["x"])
     assert histogram_trace["hovertemplate"].startswith("bin=%{customdata[0]:.4g}")
     trace_names = {trace["name"] for trace in spec["data"][1:]}
-    assert {"LSL=1.5", "USL=3.5", "mean=2.5", "median=2.5", "Q1=1.75", "Q3=3.25"}.issubset(
+    assert {"LSL=1.5", "USL=3.5", "Mean=2.5", "Median=2.5", "Q1=1.75", "Q3=3.25"}.issubset(
         trace_names
     )
     annotation_texts = {annotation["text"] for annotation in spec["layout"]["annotations"]}
-    assert {"LSL=1.5", "USL=3.5", "mean=2.5"}.issubset(annotation_texts)
+    assert {"LSL=1.5", "USL=3.5", "Mean=2.5"}.issubset(annotation_texts)
     assert all(annotation["bgcolor"] == "#ffffff" for annotation in spec["layout"]["annotations"])
+    assert all(annotation["bordercolor"] == "#cbd5e1" for annotation in spec["layout"]["annotations"])
+    assert all(annotation["borderwidth"] >= 1 for annotation in spec["layout"]["annotations"])
+    assert all(annotation["opacity"] == 1.0 for annotation in spec["layout"]["annotations"])
+
+
+def test_plotstats_dashboard_spec_normalizes_generic_histogram_overlays(monkeypatch) -> None:
+    def fake_artifact(_payload, **_kwargs):
+        return {
+            "plotly_spec": {
+                "data": [
+                    {"type": "bar", "x": [1.0, 2.0], "y": [0.4, 0.6], "width": [0.5, 0.5]},
+                    {
+                        "type": "scatter",
+                        "mode": "lines",
+                        "name": "overlay 1",
+                        "x": [1.0, 1.5, 2.0],
+                        "y": [0.2, 3.0, 0.2],
+                    },
+                    {
+                        "type": "scatter",
+                        "mode": "lines",
+                        "name": "overlay 2",
+                        "x": [1.0, 1.5, 2.0],
+                        "y": [0.1, 2.0, 0.1],
+                        "line": {"dash": "dash"},
+                    },
+                    {
+                        "type": "scatter",
+                        "mode": "lines",
+                        "name": "Limit 1",
+                        "x": [1.25, 1.25],
+                        "y": [0.0, 1.0],
+                    },
+                ],
+                "layout": {"yaxis": {"range": [0.0, 1.0]}},
+                "config": {"responsive": True},
+                "metadata": {"kind": "histogram"},
+            }
+        }
+
+    package = ModuleType("hexafe_plotstats")
+    adapters = ModuleType("hexafe_plotstats.adapters")
+    adapters.chart_artifact_from_metroliza_payload = fake_artifact
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats", package)
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats.adapters", adapters)
+
+    spec = build_plotstats_dashboard_spec(
+        {"type": "histogram", "values": [1.0, 2.0], "limits": {"lsl": 1.25}},
+        title="Histogram",
+        static=False,
+    )
+
+    assert spec is not None
+    trace_names = [trace.get("name") for trace in spec["data"]]
+    assert "overlay 1" not in trace_names
+    assert "overlay 2" not in trace_names
+    assert "Selected model curve" in trace_names
+    assert "KDE reference" in trace_names
+    assert "LSL=1.25" in trace_names
+    assert "range" not in spec["layout"]["yaxis"]
+    for trace in spec["data"]:
+        if trace.get("name") in {"Selected model curve", "KDE reference"}:
+            assert max(trace["y"]) <= 1.0
 
 
 def test_dashboard_plotly_spec_renames_generic_limit_traces(monkeypatch) -> None:

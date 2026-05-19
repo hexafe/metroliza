@@ -143,6 +143,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._selector_page_offset = 0
         self._selector_total_rows = 0
         self._last_group_counts: dict[str, int] = {}
+        self._applied_column_search_text = ""
+        self._applied_selected_column_search_text = ""
+        self._applied_selector_filter_text = ""
         self._list_selection_utils = ListSelectionUtils()
         self._grouping_shortcuts = None
         self.default_group = TABULAR_DEFAULT_GROUP
@@ -316,12 +319,14 @@ class TabularAnalyticsGroupingDialog(QDialog):
         footer.addWidget(self.use_grouping_button)
         layout.addLayout(footer)
 
-        self.column_search.textChanged.connect(self._refresh_available_columns)
-        self.selected_column_search.textChanged.connect(self._refresh_selected_columns)
+        self.column_search.returnPressed.connect(self._apply_column_search)
+        self.selected_column_search.returnPressed.connect(self._apply_selected_column_search)
         self.available_columns_list.itemDoubleClicked.connect(lambda _item: self.add_selector_column())
         self.selected_columns_list.itemDoubleClicked.connect(self.remove_selected_selector_column)
-        self.selected_columns_list.itemSelectionChanged.connect(self._sync_status)
-        self.selector_search.textChanged.connect(self._handle_selector_search_changed)
+        self.selected_columns_list.itemSelectionChanged.connect(
+            lambda: self._sync_status(recompute_counts=False, recompute_scope=False)
+        )
+        self.selector_search.returnPressed.connect(self._apply_selector_filter)
         self.first_page_button.clicked.connect(self.first_selector_page)
         self.previous_page_button.clicked.connect(self.previous_selector_page)
         self.next_page_button.clicked.connect(self.next_selector_page)
@@ -576,6 +581,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
         return aliases
 
     def _selector_filter_text(self) -> str:
+        return str(getattr(self, "_applied_selector_filter_text", "") or "").strip()
+
+    def _selector_filter_input_text(self) -> str:
         selector_search = vars(self).get("selector_search")
         if selector_search is None or not hasattr(selector_search, "text"):
             return ""
@@ -753,9 +761,13 @@ class TabularAnalyticsGroupingDialog(QDialog):
             self.available_columns_list,
             self._available_columns(),
             label_for=self._column_label,
-            search_text=self.column_search.text(),
+            search_text=getattr(self, "_applied_column_search_text", ""),
             fallback="first",
         )
+
+    def _apply_column_search(self) -> None:
+        self._applied_column_search_text = str(self.column_search.text() or "").strip()
+        self._refresh_available_columns()
 
     def _build_grouping_dataframe(self) -> pd.DataFrame:
         if self._is_sqlite_backed():
@@ -1079,7 +1091,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
     def clear_selection(self) -> None:
         self.selected_selector_keys = set()
         self.selector_list.clearSelection()
-        self._sync_status()
+        self._sync_status(recompute_counts=False, recompute_scope=False)
 
     def first_selector_page(self) -> None:
         if self._selector_page_offset <= 0:
@@ -1145,7 +1157,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
             for item in self.selector_list.selectedItems()
         }
         self.selected_selector_keys = (self.selected_selector_keys - visible_keys) | selected_visible_keys
-        self._sync_status()
+        self._sync_status(recompute_counts=False, recompute_scope=False)
 
     def _row_ids_for_selected_keys(self) -> list[int]:
         if not self.selector_columns or not self.selected_selector_keys:
@@ -1299,7 +1311,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
             self._selector_index = CsvGroupingIndex(source_frame, self.selector_columns)
         return self._selector_index
 
-    def _handle_selector_search_changed(self) -> None:
+    def _apply_selector_filter(self) -> None:
+        self._applied_selector_filter_text = self._selector_filter_input_text()
         self._selector_index = None
         self._selector_page_offset = 0
         self._refresh_all()
@@ -1375,22 +1388,32 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._ensure_group_color_integrity()
         self._refresh_all(preferred_group=selected_group)
 
-    def _sync_status(self) -> None:
+    def _sync_status(
+        self,
+        *,
+        recompute_counts: bool = True,
+        recompute_scope: bool = True,
+    ) -> None:
         filter_state = self._selector_filter_state()
         if not self.selector_columns:
             self.selector_status_label.setText("No grouping columns selected")
             set_status_variant(self.selector_status_label, "neutral")
         else:
-            row_count = (
-                self._sqlite_selector_row_count()
-                if self._is_sqlite_backed()
-                else self._current_selector_index().count_rows(self.selected_selector_keys)
-            )
             columns_text = self._selector_columns_text()
             if self.selected_selector_keys:
-                self.selector_status_label.setText(
-                    f"{columns_text}: {len(self.selected_selector_keys)} selected group(s), {row_count} rows"
-                )
+                if recompute_counts:
+                    row_count = (
+                        self._sqlite_selector_row_count()
+                        if self._is_sqlite_backed()
+                        else self._current_selector_index().count_rows(self.selected_selector_keys)
+                    )
+                    self.selector_status_label.setText(
+                        f"{columns_text}: {len(self.selected_selector_keys)} selected group(s), {row_count} rows"
+                    )
+                else:
+                    self.selector_status_label.setText(
+                        f"{columns_text}: {len(self.selected_selector_keys)} selected group(s)"
+                    )
             else:
                 self.selector_status_label.setText(f"{columns_text}: all rows")
             set_status_variant(
@@ -1400,7 +1423,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.create_group_button.setEnabled(
             bool(self.selector_columns and self.selected_selector_keys and filter_state.mode != "invalid")
         )
-        self.assign_filtered_rows_button.setEnabled(self._scope_has_rows())
+        if recompute_scope:
+            self.assign_filtered_rows_button.setEnabled(self._scope_has_rows())
         selected_group = self._selected_group_name()
         self.rename_group_button.setEnabled(bool(selected_group))
         self.delete_group_button.setEnabled(bool(selected_group and selected_group != self.default_group))
@@ -1487,11 +1511,17 @@ class TabularAnalyticsGroupingDialog(QDialog):
             self.selected_columns_list,
             self.selector_columns,
             label_for=self._column_label,
-            search_text=self.selected_column_search.text(),
+            search_text=getattr(self, "_applied_selected_column_search_text", ""),
             current_column=current_column_from_list(self.selected_columns_list),
             fallback="last",
             block_signals=True,
         )
+
+    def _apply_selected_column_search(self) -> None:
+        self._applied_selected_column_search_text = str(
+            self.selected_column_search.text() or ""
+        ).strip()
+        self._refresh_selected_columns()
 
     def _refresh_groups(self, preferred_group: str | None = None) -> None:
         self.groups_list.blockSignals(True)
@@ -1521,11 +1551,14 @@ class TabularAnalyticsGroupingDialog(QDialog):
             self.groups_list.setCurrentRow(0)
         self.groups_list.blockSignals(False)
 
-    def _populate_group_members(self) -> None:
+    def _populate_group_members(self, *, recompute_status_counts: bool = False) -> None:
         self.group_members_list.clear()
         selected_group = self._selected_group_name()
         if not selected_group:
-            self._sync_status()
+            self._sync_status(
+                recompute_counts=recompute_status_counts,
+                recompute_scope=recompute_status_counts,
+            )
             return
         rows = self.df[self.df["GROUP"] == selected_group]
         total_rows = len(rows.index)
@@ -1538,7 +1571,10 @@ class TabularAnalyticsGroupingDialog(QDialog):
             )
             self._apply_item_color(item, self.default_group_color)
             self.group_members_list.addItem(item)
-            self._sync_status()
+            self._sync_status(
+                recompute_counts=recompute_status_counts,
+                recompute_scope=recompute_status_counts,
+            )
             return
         for _index, row in rows.head(_GROUP_MEMBER_PREVIEW_LIMIT).iterrows():
             label = str(row.get("REFERENCE") or row.get("PART_NAME") or row.get("SAMPLE_NUMBER") or "")
@@ -1553,14 +1589,17 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 f"Showing first {_GROUP_MEMBER_PREVIEW_LIMIT} of {total_rows} row(s)."
             )
             self.group_members_list.addItem(item)
-        self._sync_status()
+        self._sync_status(
+            recompute_counts=recompute_status_counts,
+            recompute_scope=recompute_status_counts,
+        )
 
     def _refresh_all(self, preferred_group: str | None = None) -> None:
         self._refresh_available_columns()
         self._refresh_selected_columns()
         self._refresh_selectors()
         self._refresh_groups(preferred_group=preferred_group)
-        self._populate_group_members()
+        self._populate_group_members(recompute_status_counts=True)
 
     def keyPressEvent(self, event) -> None:
         shortcut_handler = getattr(self, "_grouping_shortcuts", None)

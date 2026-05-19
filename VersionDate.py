@@ -1,13 +1,22 @@
-RELEASE_VERSION = "2026.05rc2"
-VERSION_DATE = "260517"
+RELEASE_VERSION = "2026.05rc3"
+VERSION_DATE = "260519"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = (
-    "CSV Summary multi-file analytics, direct Oznak database export, and clearer dashboards."
+    "Faster grouping filters, corrected filtered-row assignment, and clearer Plotly dashboards."
 )
-PUBLIC_VERSION_LABEL = "2026.05 RC2 (build 260517)"
+PUBLIC_VERSION_LABEL = "2026.05 RC3 (build 260519)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
+    - CSV Summary and Export grouping filters now apply after pressing Enter, keeping large row sets responsive while typing<br>
+    - Export grouping filters now narrow Reference and Parts lists without hiding existing groups<br>
+    - CSV Summary can assign all rows matching the active filter, including rows outside the visible page<br>
+    - HTML dashboard annotations for limits and means stay visible on Plotly charts<br>
+    - Interactive histogram legends and overlays now use clearer names and percent-axis scaling<br>
+
+    <br><b>Archive:</b><br>
+
+    <br><b>Version 2026.05rc2 (build 260517):</b><br>
     - CSV Summary can load multiple CSV files and handles large CSV files more reliably<br>
     - CSV Summary filters and grouping stay in sync with the loaded data, including date filters and numeric-looking group names<br>
     - Grouped statistics now compare groups overall and pair-by-pair instead of showing only separate group summaries<br>
@@ -15,8 +24,6 @@ release_notes = f"""
     - Oznak integration can fetch and export industrial database data directly without selecting a Metroliza database first<br>
     - Database credentials can be remembered locally after a successful Oznak export<br>
     - Export, parsing, filtering, and grouping screens were tightened so routine actions fit more cleanly in compact windows<br>
-
-    <br><b>Archive:</b><br>
 
     <br><b>Version 2026.05rc1 (build 260512):</b><br>
     - CSV Summary revamp<br>

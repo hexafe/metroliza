@@ -71,6 +71,34 @@ def _build_in_clause(column_name, values):
     return f'{column_name} IN ({", ".join(cleaned_values)})'
 
 
+def build_grouping_scope_query_from_filter_state(filter_state=None):
+    """Build the export-grouping initial scope from Reference and Part filters only."""
+
+    if filter_state is None:
+        return None
+
+    where_clauses = []
+    reference_clause = _build_in_clause("reference", getattr(filter_state, "reference_values", ()))
+    part_clause = _build_in_clause("part_name", getattr(filter_state, "part_name_values", ()))
+    if reference_clause is not None:
+        where_clauses.append(reference_clause)
+    if part_clause is not None:
+        where_clauses.append(part_clause)
+    if not where_clauses:
+        return None
+
+    select_clause = (
+        "report_id AS REPORT_ID, reference AS REFERENCE, report_date AS DATE, "
+        "sample_number AS SAMPLE_NUMBER, part_name AS PART_NAME, revision AS REVISION, "
+        "template_variant AS TEMPLATE_VARIANT, has_nok AS HAS_NOK, nok_count AS NOK_COUNT, "
+        "file_name AS FILENAME"
+    )
+    return (
+        f"SELECT {select_clause} FROM {_GROUPING_REPORT_VIEW} "
+        f"WHERE {' AND '.join(where_clauses)}"
+    )
+
+
 _MEASUREMENT_EXPORT_SELECT_FROM_VIEW = (
     "report_id AS REPORT_ID, measurement_id AS MEASUREMENT_ID, reference AS REFERENCE, report_date AS DATE, "
     "report_time AS TIME, part_name AS PART_NAME, revision AS REVISION, "

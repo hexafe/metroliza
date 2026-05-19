@@ -100,6 +100,11 @@ def _select_selector_rows(dialog, start: int, stop: int) -> None:
     dialog._store_current_selection()
 
 
+def _apply_selector_search(dialog, text: str) -> None:
+    dialog.selector_search.setText(text)
+    dialog._apply_selector_filter()
+
+
 def test_available_grouping_columns_include_tracecode_even_when_reference_is_different() -> None:
     dialog = _dialog_for_frame(
         pd.DataFrame(
@@ -388,7 +393,7 @@ def test_sqlite_assign_filtered_rows_combines_parent_and_search_expression(tmp_p
         column_filters=(TabularColumnFilter("line", selected_values=("A",)),),
     )
     try:
-        dialog.selector_search.setText("Supplier=SUPPLIER AND TimeStamp>2026-05-01 AND Value2>1")
+        _apply_selector_search(dialog, "Supplier=SUPPLIER AND TimeStamp>2026-05-01 AND Value2>1")
 
         assert dialog.assign_filtered_rows_button.isEnabled() is True
         assert dialog.selector_preview_label.text() == "Add a grouping column to preview row groups."
@@ -427,7 +432,7 @@ def test_sqlite_search_expression_filters_preview_and_assigns_all_matching_rows(
         dialog.selector_columns = ["tracecode"]
         dialog._selector_index = None
         dialog._refresh_all()
-        dialog.selector_search.setText("(Part=body* AND Supplier=SUPPLIER) OR Value2>2")
+        _apply_selector_search(dialog, "(Part=body* AND Supplier=SUPPLIER) OR Value2>2")
 
         assert dialog.selector_page_label.text() == "Page 1 of 1"
         assert dialog.selector_preview_label.text() == "Showing 3 matching group(s)."
@@ -631,7 +636,7 @@ def test_assign_all_filtered_rows_uses_plain_search_across_pages() -> None:
     try:
         dialog.selector_columns = ["tracecode"]
         dialog._selector_index = None
-        dialog.selector_search.setText("MATCH")
+        _apply_selector_search(dialog, "MATCH")
 
         assert dialog.selector_page_label.text() == "Page 1 of 2"
         assert dialog.selector_list.item(0).data(Qt.ItemDataRole.UserRole) == ("MATCH-0000",)
@@ -643,6 +648,66 @@ def test_assign_all_filtered_rows_uses_plain_search_across_pages() -> None:
         assert grouped == list(range(1, 1501))
         assert dialog.selector_page_label.text() == "Page 1 of 2"
         assert dialog.selected_selector_keys == set()
+    finally:
+        dialog.close()
+
+
+def test_selector_search_waits_for_explicit_apply() -> None:
+    _app()
+    frame = pd.DataFrame(
+        {
+            "source_row_number": [1, 2, 3],
+            "tracecode": ["MATCH-1", "OTHER-1", "MATCH-2"],
+            "length_mm": [1.0, 2.0, 3.0],
+        }
+    )
+    dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
+    try:
+        dialog.selector_columns = ["tracecode"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+
+        dialog.selector_search.setText("MATCH")
+
+        assert dialog.selector_list.count() == 3
+        assert dialog.selector_preview_label.text() == "Showing 3 matching group(s)."
+
+        dialog._apply_selector_filter()
+
+        assert dialog.selector_list.count() == 2
+        assert [
+            dialog.selector_list.item(index).data(Qt.ItemDataRole.UserRole)
+            for index in range(dialog.selector_list.count())
+        ] == [("MATCH-1",), ("MATCH-2",)]
+    finally:
+        dialog.close()
+
+
+def test_selection_change_does_not_recount_matching_rows(monkeypatch) -> None:
+    _app()
+    frame = pd.DataFrame(
+        {
+            "source_row_number": [1, 2, 3],
+            "tracecode": ["TC-001", "TC-002", "TC-003"],
+            "length_mm": [1.0, 2.0, 3.0],
+        }
+    )
+    dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
+    try:
+        dialog.selector_columns = ["tracecode"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+
+        monkeypatch.setattr(
+            dialog,
+            "_current_selector_index",
+            lambda: (_ for _ in ()).throw(AssertionError("selection should not recount")),
+        )
+        dialog.selector_list.item(0).setSelected(True)
+        dialog._store_current_selection()
+
+        assert dialog.selected_selector_keys == {("TC-001",)}
+        assert dialog.selector_status_label.text() == "tracecode: 1 selected group(s)"
     finally:
         dialog.close()
 
@@ -746,7 +811,7 @@ def test_search_expression_filters_preview_and_assign_all_rows() -> None:
         dialog.selector_columns = ["tracecode"]
         dialog._selector_index = None
         dialog._refresh_all()
-        dialog.selector_search.setText("value=1 AND value2>1")
+        _apply_selector_search(dialog, "value=1 AND value2>1")
 
         assert dialog.selector_list.count() == 1
         assert dialog.selector_list.item(0).data(Qt.ItemDataRole.UserRole) == ("TC-002",)
@@ -776,7 +841,7 @@ def test_invalid_search_expression_disables_assign_all_and_preview() -> None:
         dialog.selector_columns = ["TraceCode"]
         dialog._selector_index = None
         dialog._refresh_all()
-        dialog.selector_search.setText("MissingColumn=SUPPLIER")
+        _apply_selector_search(dialog, "MissingColumn=SUPPLIER")
 
         assert dialog.selector_list.count() == 0
         assert dialog.selector_preview_label.text().startswith("Invalid filter:")

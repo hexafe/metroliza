@@ -4,11 +4,13 @@ import pandas as pd
 
 from modules.data_grouping_service import (
     build_grouping_query,
+    build_grouping_scope_query_from_filter_state,
     build_grouping_row_index,
     compute_group_key_for_df,
     load_grouping_dataframe,
     reassign_group_keys_to_default,
 )
+from modules.filter_state import FilterState
 
 
 def test_build_grouping_query_defaults_without_filter():
@@ -47,6 +49,30 @@ def test_build_grouping_query_strips_trailing_semicolons_from_filter_query():
 
     assert rows == []
     assert 'FROM vw_grouping_reports;' not in query
+
+
+def test_build_grouping_scope_query_uses_only_reference_and_part_filters():
+    query = build_grouping_scope_query_from_filter_state(
+        FilterState(
+            ax_values=("AX1",),
+            reference_values=("REF-1",),
+            part_name_values=("Part A",),
+            has_nok_only=True,
+            date_from="2026-05-01",
+        )
+    )
+
+    assert query is not None
+    assert "FROM vw_grouping_reports" in query
+    assert "reference IN ('REF-1')" in query
+    assert "part_name IN ('Part A')" in query
+    assert "ax" not in query.lower()
+    assert "has_nok =" not in query.lower()
+    assert "report_date >=" not in query.lower()
+
+
+def test_build_grouping_scope_query_returns_none_without_reference_or_part_filters():
+    assert build_grouping_scope_query_from_filter_state(FilterState(ax_values=("AX1",))) is None
 
 
 
