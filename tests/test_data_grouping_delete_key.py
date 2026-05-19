@@ -139,6 +139,21 @@ class _FakeButton:
         self.disabled = bool(disabled)
 
 
+class _FakeLineEdit:
+    def __init__(self, text=""):
+        self._text = text
+        self._has_focus = False
+
+    def text(self):
+        return self._text
+
+    def setFocus(self):
+        self._has_focus = True
+
+    def hasFocus(self):
+        return self._has_focus
+
+
 class _FakeKeyEvent:
     def __init__(self, key):
         self._key = key
@@ -403,7 +418,7 @@ class TestDataGroupingDeleteKey(unittest.TestCase):
             self.assertEqual(untouched["GROUP"], "CUSTOM")
 
 
-    def test_enter_key_on_reference_list_opens_create_group_with_reference_prefill(self):
+    def test_enter_key_on_reference_list_is_consumed_without_create_group(self):
         pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
         fake_db = _fake_db_module()
 
@@ -431,7 +446,44 @@ class TestDataGroupingDeleteKey(unittest.TestCase):
             data_grouping_module.DataGrouping.keyPressEvent(dialog, event)
 
             self.assertTrue(event.accepted)
-            self.assertEqual(captured["value"], "REF1")
+            self.assertIsNone(captured["value"])
+
+    def test_enter_key_in_scope_filter_applies_filter_without_create_shortcut(self):
+        pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
+        fake_db = _fake_db_module()
+
+        with patch.dict(
+            sys.modules,
+            {
+                "PyQt6": pyqt6,
+                "PyQt6.QtCore": qtcore,
+                "PyQt6.QtWidgets": qtwidgets,
+                "PyQt6.QtGui": qtgui,
+                "modules.db": fake_db,
+            },
+            clear=False,
+        ):
+            data_grouping_module = self._load_data_grouping_module()
+            data_grouping_module.Qt = _FakeQt
+            setattr(data_grouping_module.DataGrouping.__mro__[1], "keyPressEvent", lambda *_args, **_kwargs: None)
+            dialog = self._build_dialog(data_grouping_module)
+            dialog.part_list.setFocus()
+            dialog.reference_search_input = _FakeLineEdit()
+            dialog.part_search_input = _FakeLineEdit()
+            dialog.group_search_input = _FakeLineEdit()
+            dialog.part_group_search_input = _FakeLineEdit()
+            dialog.scope_filter_input = _FakeLineEdit("Supplier=SUPPLIER")
+            dialog.scope_filter_input.setFocus()
+
+            calls = {"create": 0, "apply": 0}
+            dialog.create_group = lambda initial_group_name="": calls.__setitem__("create", calls["create"] + 1)
+            dialog._apply_scope_filter = lambda: calls.__setitem__("apply", calls["apply"] + 1)
+
+            event = _FakeKeyEvent(_FakeQtKey.Key_Return)
+            data_grouping_module.DataGrouping.keyPressEvent(dialog, event)
+
+            self.assertTrue(event.accepted)
+            self.assertEqual(calls, {"create": 0, "apply": 1})
 
     def test_enter_key_outside_reference_list_does_not_open_create_group(self):
         pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()

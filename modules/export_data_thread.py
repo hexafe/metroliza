@@ -5079,6 +5079,8 @@ class ExportDataThread(QThread):
                 all_values = np.concatenate(grouped_values)
                 binning = resolve_histogram_bin_count(all_values)
                 bin_edges = np.histogram_bin_edges(all_values, bins=int(binning['bin_count']))
+                bin_widths = np.diff(bin_edges)
+                representative_bin_width = float(np.median(bin_widths)) if bin_widths.size else 1.0
                 # Use a high-contrast, colorblind-safe group cycle so overlapping
                 # histogram bars remain distinguishable in workbook exports.
                 histogram_palette = [
@@ -5093,9 +5095,11 @@ class ExportDataThread(QThread):
                     color = histogram_palette[index % len(histogram_palette)]
                     mean_value = float(np.mean(values))
                     std_value = float(np.std(values, ddof=1)) if values.size > 1 else 0.0
+                    weights = np.full(values.shape, 1.0 / float(values.size), dtype=float)
                     ax.hist(
                         values,
                         bins=bin_edges,
+                        weights=weights,
                         edgecolor='black',
                         linewidth=0.75,
                         alpha=0.58,
@@ -5109,6 +5113,25 @@ class ExportDataThread(QThread):
                         linewidth=1.15,
                         alpha=0.92,
                     )
+                    if values.size > 1 and std_value > 0.0 and representative_bin_width > 0.0:
+                        curve_x = np.linspace(float(bin_edges[0]), float(bin_edges[-1]), 160)
+                        z = (curve_x - mean_value) / std_value
+                        curve_y = (
+                            np.exp(-0.5 * np.square(z))
+                            / (std_value * math.sqrt(2.0 * math.pi))
+                        ) * representative_bin_width
+                        curve_peak = float(np.nanmax(curve_y)) if curve_y.size else 0.0
+                        if curve_peak > 1.0:
+                            curve_y = curve_y / curve_peak
+                        curve_y = np.clip(curve_y, 0.0, 1.0)
+                        ax.plot(
+                            curve_x,
+                            curve_y,
+                            color=color,
+                            linestyle='-',
+                            linewidth=1.1,
+                            alpha=0.82,
+                        )
                 ax.legend(loc='upper left', frameon=True, fontsize=7.0, title='Group (n, mean, σ)', title_fontsize=7.0)
                 histogram_note_lines = ['Dash-dot lines show group means', 'Legend includes per-group n, μ, and σ']
                 if capability_context.get('callout_lines'):
@@ -5141,6 +5164,8 @@ class ExportDataThread(QThread):
                         ax.axvline(float(limit_value), linewidth=1.0, alpha=0.9, **style)
 
                 ax.set_title(f"{metric_row.get('metric')} - Histogram")
+                ax.set_ylabel('Frequency (%)')
+                ax.yaxis.set_major_formatter(PercentFormatter(xmax=1.0))
             else:
                 return {}
 

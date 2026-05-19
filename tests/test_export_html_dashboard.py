@@ -378,6 +378,15 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(spec['data'][0]['histnorm'], 'probability')
         self.assertEqual(spec['data'][1]['histnorm'], 'probability')
         self.assertIn('Frequency=%{y:.2%}', spec['data'][0]['hovertemplate'])
+        group_mean_annotations = [
+            item for item in spec['layout']['annotations']
+            if str(item.get('text') or '').startswith(('A μ=', 'B μ='))
+        ]
+        self.assertEqual(len(group_mean_annotations), 2)
+        self.assertTrue(all(item.get('bgcolor') == '#ffffff' for item in group_mean_annotations))
+        trace_colors = [trace['marker']['color'] for trace in spec['data']]
+        annotation_colors = [item['font']['color'] for item in group_mean_annotations]
+        self.assertEqual(annotation_colors, trace_colors)
         expected_bin_count = resolve_histogram_bin_count(all_values)['bin_count']
         expected_bin_width = (max(all_values) - min(all_values)) / expected_bin_count
         self.assertAlmostEqual(spec['data'][0]['xbins']['size'], expected_bin_width)
@@ -400,13 +409,43 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(xaxis['type'], 'category')
         self.assertEqual(xaxis['categoryorder'], 'array')
         self.assertEqual(xaxis['categoryarray'], ['73211', 'A', 'POPULATION'])
-        self.assertEqual([trace['name'] for trace in spec['data']], ['73211', 'A', 'POPULATION'])
+        trace_names = [trace['name'] for trace in spec['data']]
+        self.assertIn(
+            '73211 (n=3, min=9.990, Q1=10.000, mean=10.010, Q3=10.020, max=10.030)',
+            trace_names,
+        )
+        self.assertIn(
+            'A (n=3, min=10.080, Q1=10.095, mean=10.117, Q3=10.135, max=10.160)',
+            trace_names,
+        )
         self.assertTrue(
             all(
                 isinstance(x_value, str)
                 for trace in spec['data']
                 for x_value in trace['x']
             )
+        )
+
+    def test_group_analysis_iqr_plotly_spec_includes_group_statistics_in_legend_names(self):
+        with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
+            spec = _build_plotly_chart_spec(
+                {
+                    'type': 'iqr',
+                    'labels': ['A', 'B'],
+                    'series': [[1.0, 2.0, 3.0], [10.0, 12.0, 16.0]],
+                },
+                title='IQR stats',
+            )
+
+        self.assertEqual(spec['layout']['xaxis']['categoryarray'], ['A', 'B'])
+        self.assertEqual(spec['data'][0]['x'], ['A', 'A', 'A'])
+        self.assertEqual(
+            spec['data'][0]['name'],
+            'A (n=3, min=1.000, Q1=1.500, mean=2.000, Q3=2.500, max=3.000)',
+        )
+        self.assertEqual(
+            spec['data'][1]['name'],
+            'B (n=3, min=10.000, Q1=11.000, mean=12.667, Q3=14.000, max=16.000)',
         )
 
     def test_summary_histogram_plotly_spec_uses_data_bins_and_x_view_axis_range(self):
@@ -423,9 +462,10 @@ class TestExportHtmlDashboard(unittest.TestCase):
             )
 
         bins = spec['data'][0]['xbins']
+        expected_bin_count = resolve_histogram_bin_count(values)['bin_count']
         self.assertEqual(bins['start'], 0.0)
         self.assertEqual(bins['end'], 10.0)
-        self.assertEqual(bins['size'], 2.0)
+        self.assertEqual(bins['size'], 10.0 / expected_bin_count)
         self.assertEqual(spec['layout']['xaxis']['range'], [-5.0, 15.0])
         self.assertEqual(spec['layout']['yaxis']['tickformat'], '.0%')
         self.assertEqual(spec['layout']['xaxis']['tickformat'], '.4~g')

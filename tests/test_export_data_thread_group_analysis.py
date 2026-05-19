@@ -869,6 +869,14 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
         ax.axhline.assert_not_called()
         histogram_labels = [kwargs.get('label') for _args, kwargs in ax.hist.call_args_list]
         self.assertEqual(histogram_labels, ['A (n=3, μ=1.020, σ=0.010)', 'B (n=3, μ=1.010, σ=0.010)'])
+        for _args, kwargs in ax.hist.call_args_list:
+            weights = kwargs.get('weights')
+            self.assertIsNotNone(weights)
+            self.assertAlmostEqual(float(sum(weights)), 1.0)
+        self.assertGreaterEqual(ax.plot.call_count, 2)
+        for _args, kwargs in ax.plot.call_args_list:
+            self.assertIn(kwargs.get('color'), ['#0072B2', '#D55E00'])
+        ax.set_ylabel.assert_any_call('Frequency (%)')
         _legend_args, legend_kwargs = ax.legend.call_args
         self.assertEqual(legend_kwargs.get('title'), 'Group (n, mean, σ)')
         histogram_note_texts = [args[2] for args, _kwargs in ax.text.call_args_list if len(args) >= 3]

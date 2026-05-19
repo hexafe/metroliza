@@ -259,6 +259,17 @@ def test_grouping_dialog_uses_double_click_column_selection_without_action_butto
         assert dialog.assign_filtered_rows_button.accessibleName() == (
             "Assign all rows matching current search or filter"
         )
+        action_buttons = (
+            dialog.assign_filtered_rows_button,
+            dialog.create_group_button,
+            dialog.rename_group_button,
+            dialog.delete_group_button,
+            dialog.clear_selection_button,
+            dialog.dont_use_grouping_button,
+            dialog.use_grouping_button,
+        )
+        assert [button.isDefault() for button in action_buttons] == [False] * len(action_buttons)
+        assert [button.autoDefault() for button in action_buttons] == [False] * len(action_buttons)
         assert dialog.previous_page_button.accessibleName() == "Previous matching rows page"
         assert dialog.selector_page_label.accessibleName() == "Matching rows page"
 
@@ -334,7 +345,7 @@ def test_sqlite_grouping_dialog_uses_preview_rows_and_sparse_assignments(tmp_pat
         cleanup_tabular_load_result(loaded)
 
 
-def test_sqlite_group_counts_are_scoped_to_active_filters(tmp_path) -> None:
+def test_sqlite_source_filters_do_not_narrow_group_counts(tmp_path) -> None:
     _app()
     input_file = tmp_path / "filtered_group_counts.csv"
     pd.DataFrame(
@@ -365,7 +376,7 @@ def test_sqlite_group_counts_are_scoped_to_active_filters(tmp_path) -> None:
             for index in range(dialog.groups_list.count())
         }
 
-        assert group_labels == {"POPULATION (n=2)"}
+        assert group_labels == {"POPULATION (n=2)", "Line B (n=2)"}
     finally:
         dialog.close()
         cleanup_tabular_load_result(loaded)
@@ -679,6 +690,40 @@ def test_selector_search_waits_for_explicit_apply() -> None:
             dialog.selector_list.item(index).data(Qt.ItemDataRole.UserRole)
             for index in range(dialog.selector_list.count())
         ] == [("MATCH-1",), ("MATCH-2",)]
+    finally:
+        dialog.close()
+
+
+def test_enter_in_selector_search_applies_empty_filter_without_group_shortcut() -> None:
+    app = _app()
+    frame = pd.DataFrame(
+        {
+            "source_row_number": [1, 2, 3],
+            "tracecode": ["MATCH-1", "OTHER-1", "MATCH-2"],
+            "length_mm": [1.0, 2.0, 3.0],
+        }
+    )
+    dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
+    try:
+        dialog.selector_columns = ["tracecode"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+        _apply_selector_search(dialog, "MATCH")
+        assert dialog.selector_list.count() == 2
+
+        dialog.show()
+        app.processEvents()
+        dialog.selector_search.setText("")
+        dialog.selector_search.setFocus()
+        app.processEvents()
+
+        enter_event = _FakeKeyEvent(Qt.Key.Key_Return)
+        dialog.keyPressEvent(enter_event)
+
+        assert enter_event.accepted is True
+        assert dialog._applied_selector_filter_text == ""
+        assert dialog.selector_list.count() == 3
+        assert (dialog.df["GROUP"] == "POPULATION").all()
     finally:
         dialog.close()
 

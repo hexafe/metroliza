@@ -129,13 +129,18 @@ def test_build_dashboard_plotly_spec_uses_plotstats_metroliza_adapter(monkeypatc
         static=True,
     )
 
-    assert spec == {
-        "data": [{"type": "bar", "x": [1], "y": [2]}],
-        "layout": {"title": {"text": "Cycle Time"}},
-        "config": {"staticPlot": True},
-        "metadata": {"backend": "plotstats"},
+    assert spec["data"][0]["type"] == "bar"
+    assert spec["data"][0]["y"] == [1.0]
+    assert spec["layout"]["title"]["text"] == "Cycle Time"
+    assert spec["layout"]["yaxis"]["title"]["text"] == "Frequency (%)"
+    assert spec["layout"]["yaxis"]["tickformat"] == ".0%"
+    assert spec["config"] == {"staticPlot": True}
+    assert spec["metadata"] == {
+        "backend": "plotstats",
+        "kind": "histogram",
+        "histogram_y_mode": "percent",
     }
-    assert calls["payload"] == {"type": "histogram", "values": [1.0, 2.0]}
+    assert calls["payload"] == {"type": "histogram", "values": [1.0, 2.0], "bin_count": 3}
     assert calls["title"] == "Cycle Time"
     assert calls["theme"] == "compact_report"
     assert calls["static"] is True
@@ -316,7 +321,7 @@ def test_plotstats_dashboard_spec_normalizes_generic_histogram_overlays(monkeypa
         return {
             "plotly_spec": {
                 "data": [
-                    {"type": "bar", "x": [1.0, 2.0], "y": [0.4, 0.6], "width": [0.5, 0.5]},
+                    {"type": "bar", "x": [1.0, 2.0], "y": [4, 6], "width": [0.5, 0.5]},
                     {
                         "type": "scatter",
                         "mode": "lines",
@@ -366,9 +371,134 @@ def test_plotstats_dashboard_spec_normalizes_generic_histogram_overlays(monkeypa
     assert "KDE reference" in trace_names
     assert "LSL=1.25" in trace_names
     assert "range" not in spec["layout"]["yaxis"]
+    assert spec["data"][0]["y"] == [0.4, 0.6]
     for trace in spec["data"]:
         if trace.get("name") in {"Selected model curve", "KDE reference"}:
             assert max(trace["y"]) <= 1.0
+
+
+def test_plotstats_dashboard_spec_scales_low_raw_density_overlays_by_bin_width(monkeypatch) -> None:
+    def fake_artifact(_payload, **_kwargs):
+        return {
+            "plotly_spec": {
+                "data": [
+                    {"type": "bar", "x": [1.0, 2.0], "y": [0.5, 0.5], "width": [0.25, 0.25]},
+                    {
+                        "type": "scatter",
+                        "mode": "lines",
+                        "name": "overlay 1",
+                        "x": [1.0, 1.5, 2.0],
+                        "y": [0.2, 0.8, 0.2],
+                    },
+                ],
+                "layout": {"yaxis": {"range": [0.0, 1.0]}},
+                "metadata": {"kind": "histogram"},
+            }
+        }
+
+    package = ModuleType("hexafe_plotstats")
+    adapters = ModuleType("hexafe_plotstats.adapters")
+    adapters.chart_artifact_from_metroliza_payload = fake_artifact
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats", package)
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats.adapters", adapters)
+
+    spec = build_plotstats_dashboard_spec(
+        {"type": "histogram", "values": [1.0, 2.0]},
+        title="Histogram",
+        static=False,
+    )
+
+    curve = next(trace for trace in spec["data"] if trace.get("name") == "Selected model curve")
+    assert curve["y"] == [0.05, 0.2, 0.05]
+    assert "range" not in spec["layout"]["yaxis"]
+
+
+def test_plotstats_dashboard_spec_adds_group_mean_annotations_with_matching_colors(monkeypatch) -> None:
+    def fake_artifact(_payload, **_kwargs):
+        return {
+            "plotly_spec": {
+                "data": [
+                    {
+                        "type": "bar",
+                        "name": "A",
+                        "x": [1.0, 2.0],
+                        "y": [2, 2],
+                        "width": [0.5, 0.5],
+                        "marker": {"color": "#0072B2"},
+                    },
+                    {
+                        "type": "bar",
+                        "name": "B",
+                        "x": [1.0, 2.0],
+                        "y": [1, 3],
+                        "width": [0.5, 0.5],
+                        "marker": {"color": "#D55E00"},
+                    },
+                ],
+                "layout": {"annotations": []},
+                "metadata": {"kind": "histogram"},
+            }
+        }
+
+    package = ModuleType("hexafe_plotstats")
+    adapters = ModuleType("hexafe_plotstats.adapters")
+    adapters.chart_artifact_from_metroliza_payload = fake_artifact
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats", package)
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats.adapters", adapters)
+
+    spec = build_plotstats_dashboard_spec(
+        {
+            "type": "histogram",
+            "groups": [
+                {"group": "A", "values": [1.0, 2.0]},
+                {"group": "B", "values": [2.0, 4.0]},
+            ],
+        },
+        title="Grouped histogram",
+        static=False,
+    )
+
+    annotations = spec["layout"]["annotations"]
+    by_text = {annotation["text"]: annotation for annotation in annotations}
+    assert by_text["A mean=1.5"]["bgcolor"] == "#ffffff"
+    assert by_text["A mean=1.5"]["font"]["color"] == "#0072B2"
+    assert by_text["B mean=3"]["font"]["color"] == "#D55E00"
+
+
+def test_plotstats_dashboard_spec_adds_distribution_group_stats_to_legend(monkeypatch) -> None:
+    def fake_artifact(_payload, **_kwargs):
+        return {
+            "plotly_spec": {
+                "data": [
+                    {"type": "violin", "name": "A", "y": [1.0, 2.0, 3.0]},
+                    {"type": "violin", "name": "B", "y": [10.0, 12.0, 16.0]},
+                ],
+                "layout": {},
+            }
+        }
+
+    package = ModuleType("hexafe_plotstats")
+    adapters = ModuleType("hexafe_plotstats.adapters")
+    adapters.chart_artifact_from_metroliza_payload = fake_artifact
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats", package)
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats.adapters", adapters)
+
+    spec = build_plotstats_dashboard_spec(
+        {
+            "type": "distribution",
+            "labels": ["A", "B"],
+            "series": [[1.0, 2.0, 3.0], [10.0, 12.0, 16.0]],
+        },
+        title="Violin",
+        static=False,
+    )
+
+    assert spec["data"][0]["name"] == (
+        "A (n=3, min=1.000, Q1=1.500, mean=2.000, Q3=2.500, max=3.000)"
+    )
+    assert spec["data"][1]["name"] == (
+        "B (n=3, min=10.000, Q1=11.000, mean=12.667, Q3=14.000, max=16.000)"
+    )
 
 
 def test_dashboard_plotly_spec_renames_generic_limit_traces(monkeypatch) -> None:

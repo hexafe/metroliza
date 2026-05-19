@@ -111,6 +111,8 @@ def build_dashboard_plotly_spec(
     Callers keep their existing static-image fallback when this returns ``None``.
     """
 
+    payload = _payload_with_resolved_histogram_bin_count(payload)
+
     if plotstats_export_charts_enabled():
         spec = build_plotstats_dashboard_spec(
             payload,
@@ -149,6 +151,9 @@ def build_dashboard_plotly_spec(
         "metadata": spec.get("metadata") if isinstance(spec.get("metadata"), dict) else {},
     }
     _normalize_payload_limit_trace_labels(raw_spec, payload)
+    _apply_payload_histogram_bins_to_spec(raw_spec, payload)
+    _normalize_payload_group_stat_trace_names(raw_spec, payload)
+    _ensure_group_histogram_mean_annotations(raw_spec, payload)
     return _normalize_dashboard_plotly_spec(raw_spec)
 
 
@@ -373,6 +378,7 @@ def build_plotstats_dashboard_spec(
 ) -> dict[str, Any] | None:
     """Build an HTML-dashboard Plotly spec through the new artifact contract."""
 
+    payload = _payload_with_resolved_histogram_bin_count(payload)
     dashboard_theme = metroliza_dashboard_plotstats_theme()
     dashboard_theme["dashboard_theme"] = str(theme or "light")
     artifact = build_chart_artifact(
@@ -390,6 +396,9 @@ def build_plotstats_dashboard_spec(
     if not _valid_plotly_spec(spec):
         return None
     _normalize_payload_limit_trace_labels(spec, payload)
+    _apply_payload_histogram_bins_to_spec(spec, payload)
+    _normalize_payload_group_stat_trace_names(spec, payload)
+    _ensure_group_histogram_mean_annotations(spec, payload)
     return _trim_plotly_spec(spec)
 
 
@@ -830,11 +839,155 @@ def _normalize_dashboard_plotly_spec(spec: dict[str, Any]) -> dict[str, Any]:
 
     if _is_histogram_plotly_spec(spec):
         _normalize_histogram_plotly_axes(spec)
+        _normalize_histogram_bar_trace_y_values(spec)
         _normalize_grouped_histogram_bins(spec)
         _normalize_histogram_overlay_traces(spec)
     _normalize_reference_trace_names_and_annotations(spec)
     _normalize_plotly_annotation_boxes(spec)
     return spec
+
+
+def _payload_with_resolved_histogram_bin_count(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    if str(payload.get("type") or "").strip().casefold() != "histogram":
+        return payload
+    groups = _histogram_payload_groups(payload)
+    all_values = np.concatenate([values for _label, values in groups]) if groups else np.asarray([])
+    all_values = all_values[np.isfinite(all_values)]
+    if all_values.size == 0:
+        return payload
+    resolved = max(1, int(resolve_histogram_bin_count(all_values).get("bin_count") or 1))
+    next_payload = dict(payload)
+    next_payload["bin_count"] = resolved
+    return next_payload
+
+
+def _apply_payload_histogram_bins_to_spec(spec: Mapping[str, Any], payload: Mapping[str, Any]) -> None:
+    if str(payload.get("type") or "").strip().casefold() != "histogram":
+        return
+    if isinstance(spec, dict):
+        metadata = spec.setdefault("metadata", {})
+        if isinstance(metadata, dict):
+            metadata["kind"] = "histogram"
+            metadata["histogram_y_mode"] = "percent"
+    groups = _histogram_payload_groups(payload)
+    all_values = np.concatenate([values for _label, values in groups]) if groups else np.asarray([])
+    all_values = all_values[np.isfinite(all_values)]
+    if all_values.size == 0:
+        return
+    data_min = float(np.min(all_values))
+    data_max = float(np.max(all_values))
+    if math.isclose(data_min, data_max, rel_tol=1e-9, abs_tol=1e-9):
+        padding = max(abs(data_min) * 0.01, 0.5)
+        data_min -= padding
+        data_max += padding
+    bin_count = _resolved_bin_count(all_values, bin_count=_payload_int(payload.get("bin_count")))
+    bin_size = (data_max - data_min) / max(bin_count, 1)
+    if not math.isfinite(bin_size) or bin_size <= 0:
+        return
+    for trace in spec.get("data") or []:
+        if not isinstance(trace, dict) or str(trace.get("type") or "").strip().casefold() != "histogram":
+            continue
+        trace["histnorm"] = "probability"
+        trace["xbins"] = {"start": data_min, "end": data_max, "size": bin_size}
+
+
+def _normalize_payload_group_stat_trace_names(spec: Mapping[str, Any], payload: Mapping[str, Any]) -> None:
+    payload_type = str(payload.get("type") or "").strip().casefold()
+    if payload_type not in {"distribution", "iqr"}:
+        return
+    labels = [str(item) for item in (payload.get("labels") or [])]
+    series_list = payload.get("series") or []
+    stat_names: list[str] = []
+    for index, (label, series) in enumerate(zip(labels, series_list), start=1):
+        values = _finite_trace_values(series)
+        if not values:
+            stat_names.append(label or f"Group {index}")
+            continue
+        stat_names.append(_format_group_statistics_trace_name(label or f"Group {index}", values))
+    for trace, stat_name in zip(spec.get("data") or [], stat_names, strict=False):
+        if isinstance(trace, dict) and str(trace.get("type") or "").strip().casefold() in {"violin", "box"}:
+            trace["name"] = stat_name
+
+
+def _ensure_group_histogram_mean_annotations(spec: Mapping[str, Any], payload: Mapping[str, Any]) -> None:
+    if str(payload.get("type") or "").strip().casefold() != "histogram":
+        return
+    groups = _histogram_payload_groups(payload)
+    if len(groups) <= 1:
+        return
+    layout = spec.get("layout")
+    if not isinstance(layout, dict):
+        return
+    annotations = layout.setdefault("annotations", [])
+    if not isinstance(annotations, list):
+        annotations = []
+        layout["annotations"] = annotations
+    shapes = layout.setdefault("shapes", [])
+    if not isinstance(shapes, list):
+        shapes = []
+        layout["shapes"] = shapes
+    existing_text = {
+        str(annotation.get("text") or "")
+        for annotation in annotations
+        if isinstance(annotation, Mapping)
+    }
+    trace_colors = _histogram_trace_colors_by_name(spec)
+    for label, values in groups:
+        finite_values = values[np.isfinite(values)]
+        if finite_values.size == 0:
+            continue
+        mean_value = float(np.mean(finite_values))
+        color = trace_colors.get(str(label)) or "#2563eb"
+        text = f"{label} mean={_format_plotly_value(mean_value)}"
+        shapes.append(
+            {
+                "type": "line",
+                "xref": "x",
+                "yref": "paper",
+                "x0": mean_value,
+                "x1": mean_value,
+                "y0": 0,
+                "y1": 1,
+                "line": {"color": color, "width": 2, "dash": "dashdot"},
+            }
+        )
+        if text in existing_text:
+            continue
+        annotations.append(
+            {
+                "xref": "x",
+                "yref": "paper",
+                "x": mean_value,
+                "y": 1.08,
+                "text": text,
+                "showarrow": False,
+                "font": {"size": 11, "color": color},
+                "bgcolor": "#ffffff",
+                "bordercolor": "#cbd5e1",
+                "borderwidth": 1,
+                "borderpad": 3,
+                "opacity": 1.0,
+            }
+        )
+        existing_text.add(text)
+
+
+def _histogram_trace_colors_by_name(spec: Mapping[str, Any]) -> dict[str, str]:
+    colors: dict[str, str] = {}
+    for trace in spec.get("data") or []:
+        if not isinstance(trace, Mapping):
+            continue
+        marker = trace.get("marker") if isinstance(trace.get("marker"), Mapping) else {}
+        color = marker.get("color")
+        if isinstance(color, list):
+            color = color[0] if color else None
+        if color is None:
+            line = trace.get("line") if isinstance(trace.get("line"), Mapping) else {}
+            color = line.get("color")
+        name = str(trace.get("name") or "").strip()
+        if name and color:
+            colors[name] = str(color)
+    return colors
 
 
 def _is_histogram_plotly_spec(spec: Mapping[str, Any]) -> bool:
@@ -898,6 +1051,32 @@ def _normalize_grouped_histogram_bins(spec: Mapping[str, Any]) -> None:
             "bin=%{customdata[0]:.4g}..%{customdata[1]:.4g}<br>"
             "frequency=%{y:.2%}<br>"
             "count=%{customdata[2]}<extra></extra>"
+        )
+
+
+def _normalize_histogram_bar_trace_y_values(spec: Mapping[str, Any]) -> None:
+    for trace in spec.get("data") or []:
+        if not isinstance(trace, dict):
+            continue
+        trace_type = str(trace.get("type") or "").strip().casefold()
+        if trace_type == "histogram":
+            trace["histnorm"] = "probability"
+        if trace_type not in {"bar", "histogram"}:
+            continue
+        y_values = _finite_trace_values(trace.get("y"))
+        if not y_values:
+            continue
+        total = float(sum(value for value in y_values if value > 0.0))
+        max_value = float(max(y_values))
+        if total > 1.0 + 1e-9 or max_value > 1.0 + 1e-9:
+            denominator = total if total > 0.0 else max_value
+            normalized = [float(max(value, 0.0) / denominator) for value in y_values]
+        else:
+            normalized = [float(max(value, 0.0)) for value in y_values]
+        trace["y"] = [float(min(value, 1.0)) for value in normalized]
+        trace["hovertemplate"] = str(
+            trace.get("hovertemplate")
+            or "bin=%{x}<br>frequency=%{y:.2%}<extra></extra>"
         )
 
 
@@ -980,7 +1159,7 @@ def _scale_overlay_trace_to_probability(trace: dict[str, Any], bin_width: float)
     if not y_values:
         return
     y_array = np.asarray(y_values, dtype=float)
-    if y_array.size == 0 or float(np.nanmax(y_array)) <= 1.0:
+    if y_array.size == 0:
         return
     scaled = y_array * float(bin_width)
     max_scaled = float(np.nanmax(scaled)) if scaled.size else 0.0
@@ -988,6 +1167,34 @@ def _scale_overlay_trace_to_probability(trace: dict[str, Any], bin_width: float)
         scaled = scaled / max_scaled
     trace["y"] = [float(min(max(value, 0.0), 1.0)) for value in scaled.tolist()]
     trace["hovertemplate"] = str(trace.get("hovertemplate") or "%{x}<br>%{y:.2%}<extra></extra>")
+
+
+def _format_group_statistics_trace_name(label: str, values: list[float]) -> str:
+    if not values:
+        return str(label)
+    sorted_values = sorted(float(value) for value in values)
+    mean_value = float(sum(sorted_values) / len(sorted_values))
+    q1_value = _percentile_sorted(sorted_values, 0.25)
+    q3_value = _percentile_sorted(sorted_values, 0.75)
+    return (
+        f"{label} (n={len(sorted_values)}, min={min(sorted_values):.3f}, "
+        f"Q1={q1_value:.3f}, mean={mean_value:.3f}, "
+        f"Q3={q3_value:.3f}, max={max(sorted_values):.3f})"
+    )
+
+
+def _percentile_sorted(values: list[float], fraction: float) -> float:
+    if not values:
+        return float("nan")
+    if len(values) == 1:
+        return float(values[0])
+    position = (len(values) - 1) * fraction
+    lower = int(math.floor(position))
+    upper = int(math.ceil(position))
+    if lower == upper:
+        return float(values[lower])
+    weight = position - lower
+    return float(values[lower] * (1.0 - weight) + values[upper] * weight)
 
 
 def _parse_bin_range_label(value: Any) -> tuple[float, float, str] | None:
@@ -1052,10 +1259,14 @@ def _constant_line_axis_and_value(trace: Mapping[str, Any]) -> tuple[str, float 
 
 
 def _finite_trace_values(values: Any) -> list[float]:
-    if not isinstance(values, list):
+    if isinstance(values, np.ndarray):
+        iterable = values.tolist()
+    elif isinstance(values, (list, tuple)):
+        iterable = values
+    else:
         return []
     output: list[float] = []
-    for value in values:
+    for value in iterable:
         try:
             number = float(value)
         except (TypeError, ValueError):

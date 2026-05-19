@@ -105,6 +105,24 @@ class TestDataGroupingLayout(unittest.TestCase):
                 "use_grouping_auto_default": dialog.use_grouping_button.autoDefault(),
                 "clear_grouping_is_default": dialog.dont_use_grouping_button.isDefault(),
                 "clear_grouping_auto_default": dialog.dont_use_grouping_button.autoDefault(),
+                "action_buttons_default": [
+                    button.isDefault()
+                    for button in (
+                        dialog.create_group_button,
+                        dialog.rename_group_button,
+                        dialog.remove_from_group_button,
+                        dialog.delete_group_button,
+                    )
+                ],
+                "action_buttons_auto_default": [
+                    button.autoDefault()
+                    for button in (
+                        dialog.create_group_button,
+                        dialog.rename_group_button,
+                        dialog.remove_from_group_button,
+                        dialog.delete_group_button,
+                    )
+                ],
                 "summary_labels": [
                     hasattr(dialog, "reference_summary_label"),
                     hasattr(dialog, "group_summary_label"),
@@ -134,6 +152,8 @@ class TestDataGroupingLayout(unittest.TestCase):
         self.assertFalse(payload["use_grouping_auto_default"])
         self.assertFalse(payload["clear_grouping_is_default"])
         self.assertFalse(payload["clear_grouping_auto_default"])
+        self.assertEqual(payload["action_buttons_default"], [False, False, False, False])
+        self.assertEqual(payload["action_buttons_auto_default"], [False, False, False, False])
         self.assertEqual(payload["summary_labels"], [True, True, True])
         self.assertTrue(payload["summary_texts"][0].startswith("Reference:"))
         self.assertTrue(payload["summary_texts"][1].startswith("Group:"))

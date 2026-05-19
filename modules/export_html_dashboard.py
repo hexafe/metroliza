@@ -531,11 +531,12 @@ def _coerce_xy_points(x_values: Any, y_values: Any, *, labels: Any = None) -> li
 
 
 def _resolve_plotly_histogram_bin_count(values: list[float], *, preferred: Any = None) -> int:
-    preferred_count = int(preferred or 0) if _coerce_finite_float(preferred) is not None else 0
-    if preferred_count > 0:
-        return preferred_count
     binning = resolve_histogram_bin_count(values)
-    return max(1, int(binning.get("bin_count") or 1))
+    resolved_count = int(binning.get("bin_count") or 0)
+    if resolved_count > 0:
+        return resolved_count
+    preferred_count = int(preferred or 0) if _coerce_finite_float(preferred) is not None else 0
+    return max(1, preferred_count)
 
 
 def _resolve_plotly_histogram_bins(
@@ -1082,16 +1083,20 @@ def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str, them
     labels = [str(item) for item in (payload.get("labels") or [])]
     series_list = payload.get("series") or []
     traces = []
+    category_labels = []
     for index, (label, series) in enumerate(zip(labels, series_list), start=1):
         values = _coerce_finite_float_list(series)
         if not values:
             continue
+        group_label = label or f"Group {index}"
+        trace_name = _format_group_statistics_trace_name(group_label, values)
+        category_labels.append(group_label)
         traces.append(
             {
                 "type": "violin",
-                "name": label or f"Group {index}",
+                "name": trace_name,
                 "y": values,
-                "x": [label or f"Group {index}"] * len(values),
+                "x": [group_label] * len(values),
                 "box": {"visible": True},
                 "meanline": {"visible": True},
                 "line": {"width": 1.2},
@@ -1099,7 +1104,7 @@ def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str, them
                 "points": False,
                 "scalemode": "count",
                 "spanmode": "hard",
-                "hovertemplate": f"{label or f'Group {index}'}<br>Measurement=%{{y}}<extra></extra>",
+                "hovertemplate": f"{trace_name}<br>Measurement=%{{y}}<extra></extra>",
             }
         )
     if not traces:
@@ -1111,7 +1116,6 @@ def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str, them
         y_label=str(payload.get("y_label") or "Measurement"),
         theme=theme,
     )
-    category_labels = [str(trace["name"]) for trace in traces]
     layout["xaxis"].update(
         {
             "type": "category",
@@ -1139,19 +1143,24 @@ def _build_plotly_iqr_spec(payload: dict[str, Any], *, title: str, theme: str = 
     labels = [str(item) for item in (payload.get("labels") or [])]
     series_list = payload.get("series") or []
     traces = []
+    category_labels = []
     for index, (label, series) in enumerate(zip(labels, series_list), start=1):
         values = _coerce_finite_float_list(series)
         if not values:
             continue
+        group_label = label or f"Group {index}"
+        trace_name = _format_group_statistics_trace_name(group_label, values)
+        category_labels.append(group_label)
         traces.append(
             {
                 "type": "box",
-                "name": label or f"Group {index}",
+                "name": trace_name,
+                "x": [group_label] * len(values),
                 "y": values,
                 "boxpoints": False,
                 "boxmean": True,
                 "marker": {"color": tokens["colorway"][(index - 1) % len(tokens["colorway"])]},
-                "hovertemplate": f"{label or f'Group {index}'}<br>Measurement=%{{y}}<extra></extra>",
+                "hovertemplate": f"{trace_name}<br>Measurement=%{{y}}<extra></extra>",
             }
         )
     if not traces:
@@ -1176,6 +1185,14 @@ def _build_plotly_iqr_spec(payload: dict[str, Any], *, title: str, theme: str = 
         "xaxis",
         payload.get("layout") if isinstance(payload.get("layout"), dict) else None,
     )
+    if category_labels:
+        layout["xaxis"].update(
+            {
+                "type": "category",
+                "categoryorder": "array",
+                "categoryarray": category_labels,
+            }
+        )
     y_limits = payload.get("y_limits") if isinstance(payload.get("y_limits"), dict) else {}
     y_min = _coerce_finite_float(y_limits.get("min"))
     y_max = _coerce_finite_float(y_limits.get("max"))
@@ -1186,6 +1203,20 @@ def _build_plotly_iqr_spec(payload: dict[str, Any], *, title: str, theme: str = 
         "layout": layout,
         "config": _build_plotly_config(),
     }
+
+
+def _format_group_statistics_trace_name(label: str, values: list[float]) -> str:
+    if not values:
+        return str(label)
+    sorted_values = sorted(float(value) for value in values)
+    mean_value = float(sum(sorted_values) / len(sorted_values))
+    q1_value = _percentile_sorted(sorted_values, 0.25)
+    q3_value = _percentile_sorted(sorted_values, 0.75)
+    return (
+        f"{label} (n={len(sorted_values)}, min={min(sorted_values):.3f}, "
+        f"Q1={q1_value:.3f}, mean={mean_value:.3f}, "
+        f"Q3={q3_value:.3f}, max={max(sorted_values):.3f})"
+    )
 
 
 def _build_plotly_trend_spec(payload: dict[str, Any], *, title: str, theme: str = "light") -> dict[str, Any]:

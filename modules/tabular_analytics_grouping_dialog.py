@@ -140,6 +140,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.selector_columns: list[str] = []
         self.selected_selector_keys: set[tuple[str, ...]] = set()
         self._selector_index: CsvGroupingIndex | None = None
+        self._selector_index_source_frame: pd.DataFrame | None = None
+        self._selector_preview_cache: dict[tuple[object, ...], tuple[list[dict[str, object]], int]] = {}
         self._selector_page_offset = 0
         self._selector_total_rows = 0
         self._last_group_counts: dict[str, int] = {}
@@ -296,6 +298,19 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.clear_selection_button = QPushButton("Clear selection")
         self.use_grouping_button = QPushButton("Use grouping")
         self.dont_use_grouping_button = QPushButton("Clear grouping")
+        for button in (
+            self.assign_filtered_rows_button,
+            self.create_group_button,
+            self.rename_group_button,
+            self.delete_group_button,
+            self.clear_selection_button,
+            self.use_grouping_button,
+            self.dont_use_grouping_button,
+        ):
+            if hasattr(button, "setDefault"):
+                button.setDefault(False)
+            if hasattr(button, "setAutoDefault"):
+                button.setAutoDefault(False)
         configure_accessibility(
             self.create_group_button,
             name="Assign selected CSV row values to a CSV analytics group",
@@ -359,6 +374,12 @@ class TabularAnalyticsGroupingDialog(QDialog):
             delete_group=self.delete_group,
             remove_from_assigned=self.remove_selected_group_members,
             remove_selected_columns=self.remove_selected_selector_column,
+            focused_line_edits=(
+                (self.column_search, self._apply_column_search),
+                (self.selected_column_search, self._apply_selected_column_search),
+                (self.selector_search, self._apply_selector_filter),
+                (self.page_jump_input, self.jump_selector_page),
+            ),
             qt_namespace=Qt,
         )
         self._refresh_all()
@@ -940,6 +961,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         if not column or column in self.selector_columns:
             return
         self.selector_columns.append(str(column))
+        self._invalidate_selector_cache()
         if self._is_sqlite_backed():
             self.selected_selector_keys = set()
         else:
@@ -950,7 +972,6 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 self.selected_selector_keys = child_index.child_keys_for_selected(self.selected_selector_keys)
             else:
                 self.selected_selector_keys = set()
-        self._selector_index = None
         self._selector_page_offset = 0
         self._rebuild_preserving_groups()
         self._refresh_all()
@@ -1011,9 +1032,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         )
 
     def _sqlite_group_counts(self) -> dict[str, int]:
-        if self._selector_filter_state().mode == "invalid":
-            return {self.default_group: 0}
-        total = self._sqlite_total_grouping_rows()
+        total = int(self.sqlite_store.count_rows())
         if self.df.empty or "GROUP" not in self.df.columns or "REPORT_ID" not in self.df.columns:
             return {self.default_group: total}
         assigned = self.df.loc[:, ["REPORT_ID", "GROUP"]].copy()
@@ -1029,11 +1048,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         group_counts: dict[str, int] = {}
         for group_name, group_rows in custom_assignments.groupby("GROUP", dropna=False, sort=True):
             row_ids = group_rows["REPORT_ID"].astype(int).tolist()
-            count = (
-                self.sqlite_store.count_source_row_numbers(row_ids, **self._sqlite_scope_kwargs())
-                if self._sqlite_filters_active()
-                else len(set(row_ids))
-            )
+            count = len(set(row_ids))
             if count:
                 group_counts[str(group_name)] = int(count)
         assigned_custom_count = int(sum(group_counts.values()))
@@ -1075,7 +1090,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 for key in self.selected_selector_keys
                 if len(key) >= len(previous) and len(projection_indexes) == len(self.selector_columns)
             }
-        self._selector_index = None
+        self._invalidate_selector_cache()
         self._selector_page_offset = 0
         self._rebuild_preserving_groups()
         self._refresh_all()
@@ -1083,7 +1098,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
     def clear_selector_columns(self) -> None:
         self.selector_columns = []
         self.selected_selector_keys = set()
-        self._selector_index = None
+        self._invalidate_selector_cache()
         self._selector_page_offset = 0
         self._rebuild_preserving_groups()
         self._refresh_all()
@@ -1234,11 +1249,13 @@ class TabularAnalyticsGroupingDialog(QDialog):
             existing = self.df.loc[~self.df["REPORT_ID"].isin(row_ids)] if not self.df.empty else self.df
             self.df = pd.concat([existing, incoming], ignore_index=True)
             self._ensure_group_color_integrity()
+            self._selector_preview_cache.clear()
             return
         row_mask = self.df["REPORT_ID"].isin(row_ids)
         self.df.loc[row_mask, "GROUP"] = group_name
         self.df.loc[row_mask, self.group_color_column] = assigned_color
         self._ensure_group_color_integrity()
+        self._selector_preview_cache.clear()
 
     def create_group(self, initial_group_name: str | None = None) -> None:
         row_ids = self._row_ids_for_selected_keys()
@@ -1305,17 +1322,50 @@ class TabularAnalyticsGroupingDialog(QDialog):
         source_frame = self._scoped_source_dataframe()
         if (
             selector_index is None
+            or self._selector_index_source_frame is None
             or tuple(self.selector_columns) != selector_index.grouping_columns
             or selector_index.row_count != int(len(source_frame.index))
+            or not source_frame.index.equals(self._selector_index_source_frame.index)
         ):
             self._selector_index = CsvGroupingIndex(source_frame, self.selector_columns)
+            self._selector_index_source_frame = source_frame
         return self._selector_index
+
+    def _invalidate_selector_cache(self) -> None:
+        self._selector_index = None
+        self._selector_index_source_frame = None
+        self._selector_preview_cache.clear()
 
     def _apply_selector_filter(self) -> None:
         self._applied_selector_filter_text = self._selector_filter_input_text()
-        self._selector_index = None
+        self._invalidate_selector_cache()
         self._selector_page_offset = 0
         self._refresh_all()
+
+    def _cached_selector_preview_rows(
+        self,
+        *,
+        filter_state: _SelectorFilterState,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[dict[str, object]], int]:
+        cache_key = (
+            tuple(self.selector_columns),
+            filter_state.mode,
+            filter_state.text,
+            int(offset),
+            int(limit),
+        )
+        cached = self._selector_preview_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        preview = self._current_selector_index().preview_rows(
+            search_text=self._selector_label_search_text(filter_state),
+            offset=offset,
+            limit=limit,
+        )
+        self._selector_preview_cache[cache_key] = preview
+        return preview
 
     def rename_group(self) -> None:
         selected_group = self._selected_group_name()
@@ -1343,6 +1393,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 self.default_group_color
             )
         self._ensure_group_color_integrity()
+        self._selector_preview_cache.clear()
         self._refresh_all(preferred_group=new_name)
 
     def delete_group(self) -> None:
@@ -1365,6 +1416,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
             self.df.loc[selected_mask, "GROUP"] = self.default_group
             self.df.loc[selected_mask, self.group_color_column] = self.default_group_color
         self._ensure_group_color_integrity()
+        self._selector_preview_cache.clear()
         self._refresh_all(preferred_group=self.default_group)
 
     def remove_selected_group_members(self) -> None:
@@ -1386,6 +1438,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
             self.df.loc[selected_mask, "GROUP"] = self.default_group
             self.df.loc[selected_mask, self.group_color_column] = self.default_group_color
         self._ensure_group_color_integrity()
+        self._selector_preview_cache.clear()
         self._refresh_all(preferred_group=selected_group)
 
     def _sync_status(
@@ -1442,8 +1495,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 limit=_SELECTOR_PAGE_SIZE,
             )
         else:
-            preview_rows, total_rows = self._current_selector_index().preview_rows(
-                search_text=self._selector_label_search_text(filter_state),
+            preview_rows, total_rows = self._cached_selector_preview_rows(
+                filter_state=filter_state,
                 offset=self._selector_page_offset,
                 limit=_SELECTOR_PAGE_SIZE,
             )
@@ -1459,8 +1512,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
                     limit=_SELECTOR_PAGE_SIZE,
                 )
             else:
-                preview_rows, total_rows = self._current_selector_index().preview_rows(
-                    search_text=self._selector_label_search_text(filter_state),
+                preview_rows, total_rows = self._cached_selector_preview_rows(
+                    filter_state=filter_state,
                     offset=self._selector_page_offset,
                     limit=_SELECTOR_PAGE_SIZE,
                 )
@@ -1614,6 +1667,12 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 delete_group=self.delete_group,
                 remove_from_assigned=self.remove_selected_group_members,
                 remove_selected_columns=self.remove_selected_selector_column,
+                focused_line_edits=(
+                    (self.column_search, self._apply_column_search),
+                    (self.selected_column_search, self._apply_selected_column_search),
+                    (self.selector_search, self._apply_selector_filter),
+                    (self.page_jump_input, self.jump_selector_page),
+                ),
                 qt_namespace=Qt,
             )
         if shortcut_handler.handle_key_press(event):

@@ -196,14 +196,18 @@ class DataGrouping(QDialog):
             
             self.use_grouping_button = QPushButton("Use grouping")
             self.dont_use_grouping_button = QPushButton("Clear grouping")
-            if hasattr(self.use_grouping_button, "setDefault"):
-                self.use_grouping_button.setDefault(False)
-            if hasattr(self.use_grouping_button, "setAutoDefault"):
-                self.use_grouping_button.setAutoDefault(False)
-            if hasattr(self.dont_use_grouping_button, "setDefault"):
-                self.dont_use_grouping_button.setDefault(False)
-            if hasattr(self.dont_use_grouping_button, "setAutoDefault"):
-                self.dont_use_grouping_button.setAutoDefault(False)
+            for button in (
+                self.create_group_button,
+                self.rename_group_button,
+                self.remove_from_group_button,
+                self.delete_group_button,
+                self.use_grouping_button,
+                self.dont_use_grouping_button,
+            ):
+                if hasattr(button, "setDefault"):
+                    button.setDefault(False)
+                if hasattr(button, "setAutoDefault"):
+                    button.setAutoDefault(False)
             self.reference_summary_label = ui_foundation.status_chip("Reference: none", variant="neutral")
             self.group_summary_label = ui_foundation.status_chip("Group: none", variant="neutral")
             self.selection_summary_label = ui_foundation.status_chip("Selected parts: 0", variant="neutral")
@@ -348,11 +352,41 @@ class DataGrouping(QDialog):
                 groups_list=self.groups_list,
                 assigned_list=self.part_group_list,
                 create_group=self.create_group,
-                create_group_from_reference=self._create_group_from_selected_reference,
                 rename_group=self.rename_group,
                 delete_group=self.delete_group,
                 remove_from_source=self._delete_selected_parts_from_part_list,
                 remove_from_assigned=self._delete_selected_parts_from_group,
+                focused_line_edits=(
+                    (
+                        self.reference_search_input,
+                        lambda: self.search_list_widgets(
+                            self.reference_list,
+                            self.reference_search_input.text(),
+                        ),
+                    ),
+                    (
+                        self.part_search_input,
+                        lambda: self.search_list_widgets(
+                            self.part_list,
+                            self.part_search_input.text(),
+                        ),
+                    ),
+                    (
+                        self.group_search_input,
+                        lambda: self.search_list_widgets(
+                            self.groups_list,
+                            self.group_search_input.text(),
+                        ),
+                    ),
+                    (
+                        self.part_group_search_input,
+                        lambda: self.search_list_widgets(
+                            self.part_group_list,
+                            self.part_group_search_input.text(),
+                        ),
+                    ),
+                    (self.scope_filter_input, self._apply_scope_filter),
+                ),
                 error_handler=self.log_and_exit,
                 qt_namespace=Qt,
             )
@@ -423,6 +457,9 @@ class DataGrouping(QDialog):
             summary_text += f" | Selected in group: {selected_group_part_count}"
         if selection_label is not None and hasattr(selection_label, "setText"):
             selection_label.setText(summary_text)
+        create_button = self._safe_attr(self, "create_group_button")
+        if create_button is not None and hasattr(create_button, "setEnabled"):
+            create_button.setEnabled(self._has_groupable_selection())
 
     def read_data_to_df(self):
         """Handle `read_data_to_df` for `DataGrouping`.
@@ -808,15 +845,17 @@ class DataGrouping(QDialog):
             return ""
         return str(scope_filter_input.text() or "").strip()
 
-    def _invalidate_grouping_cache(self):
-        self._cached_filtered_grouping_dataframe = None
-        self._cached_grouping_row_index = None
-        self._cached_full_grouping_row_index = None
+    def _invalidate_grouping_cache(self, *, filtered=True, full=True):
+        if filtered:
+            self._cached_filtered_grouping_dataframe = None
+            self._cached_grouping_row_index = None
+        if full:
+            self._cached_full_grouping_row_index = None
 
     def _apply_scope_filter(self):
         try:
             self._applied_scope_filter_text = self._scope_filter_text()
-            self._invalidate_grouping_cache()
+            self._invalidate_grouping_cache(filtered=True, full=False)
             self.populate_list_widgets()
         except Exception as e:
             self.log_and_exit(e)
@@ -983,6 +1022,8 @@ class DataGrouping(QDialog):
             group_color_column=self.group_color_column,
             default_group_color=self.default_group_color,
         )
+        if did_reassign:
+            self._invalidate_grouping_cache()
 
         try:
             self.populate_list_widgets(
@@ -1011,7 +1052,6 @@ class DataGrouping(QDialog):
         try:
             self._apply_list_theme_styles()
             self._ensure_group_color_integrity()
-            self._invalidate_grouping_cache()
             row_index = self._grouping_row_index()
             group_row_index = self._current_full_grouping_row_index()
             unique_groups = group_row_index["GROUP"].unique()
@@ -1136,8 +1176,7 @@ class DataGrouping(QDialog):
                     self._populate_part_list(selected_reference, row_index=row_index)
             except TypeError:
                 self._populate_part_list(selected_reference)
-            has_part_selection = bool(self.part_list.selectedItems()) if hasattr(self.part_list, 'selectedItems') else False
-            self.create_group_button.setEnabled(bool(selected_reference) or has_part_selection)
+            self.create_group_button.setEnabled(self._has_groupable_selection())
             self._refresh_selection_summary()
         except Exception as e:
             self.log_and_exit(e)
@@ -1155,9 +1194,7 @@ class DataGrouping(QDialog):
         """
 
         try:
-            selected_part = bool(self.part_list.selectedItems()) if hasattr(self.part_list, 'selectedItems') else (self.part_list.currentItem() is not None)
-            selected_reference = self._selected_reference_name()
-            self.create_group_button.setEnabled(selected_part or bool(selected_reference))
+            self.create_group_button.setEnabled(self._has_groupable_selection())
             self._refresh_selection_summary()
         except Exception as e:
             self.log_and_exit(e)
@@ -1173,12 +1210,10 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
 
     def on_reference_item_double_clicked(self, item):
-        """Open create-group flow prefilled with the double-clicked reference."""
+        """Keep reference double-clicks navigation-only."""
 
         try:
-            if item is None:
-                return
-            self.create_group(initial_group_name=item.text())
+            return
         except Exception as e:
             self.log_and_exit(e)
     
@@ -1242,9 +1277,31 @@ class DataGrouping(QDialog):
             selected_part_group = self.part_group_list.currentItem() is not None
             selected_group_name = self._selected_group_name()
             self.remove_from_group_button.setEnabled(selected_part_group and selected_group_name != self.default_group)
+            self.create_group_button.setEnabled(self._has_groupable_selection())
             self._refresh_selection_summary()
         except Exception as e:
             self.log_and_exit(e)
+
+    def _selected_part_keys_from_list(self, list_widget):
+        if list_widget is None or not hasattr(list_widget, "selectedItems"):
+            return []
+        return [
+            item.data(Qt.ItemDataRole.UserRole)
+            for item in list_widget.selectedItems()
+            if item.data(Qt.ItemDataRole.UserRole)
+        ]
+
+    def _selected_groupable_part_keys(self):
+        part_keys = self._selected_part_keys_from_list(self._safe_attr(self, "part_list"))
+        group_part_keys = self._selected_part_keys_from_list(self._safe_attr(self, "part_group_list"))
+        if self._list_or_viewport_has_focus(self._safe_attr(self, "part_group_list")) and group_part_keys:
+            return group_part_keys
+        if part_keys:
+            return part_keys
+        return group_part_keys
+
+    def _has_groupable_selection(self):
+        return bool(self._selected_groupable_part_keys())
             
     def create_group(self, initial_group_name=""):
         """Handle `create_group` for `DataGrouping`.
@@ -1259,23 +1316,10 @@ class DataGrouping(QDialog):
         """
 
         try:
-            # Get the selected items from the list widgets
             selected_reference = self._selected_reference_name()
-            selected_part_keys = [
-                item.data(Qt.ItemDataRole.UserRole)
-                for item in self.part_list.selectedItems()
-                if item.data(Qt.ItemDataRole.UserRole)
-            ]
-            if selected_part_keys:
-                target_group_keys = selected_part_keys
-            else:
-                target_group_keys = []
-                if selected_reference:
-                    scoped_df = self._filtered_grouping_dataframe()
-                    target_group_keys = scoped_df.loc[
-                        scoped_df['REFERENCE'].astype(str) == str(selected_reference),
-                        'GROUP_KEY',
-                    ].dropna().unique().tolist()
+            target_group_keys = self._selected_groupable_part_keys()
+            if not target_group_keys:
+                return
 
             default_name = (initial_group_name or "").strip()
             new_group_name, ok_pressed = QInputDialog.getText(
@@ -1337,6 +1381,7 @@ class DataGrouping(QDialog):
                     self.default_group = str(new_group_name)
                     default_color = getattr(self, 'default_group_color', existing_color)
                     self.df.loc[self.df['GROUP'] == self.default_group, self.group_color_column] = default_color
+                self._invalidate_grouping_cache()
                 
             self.populate_list_widgets()
             self.remove_from_group_button.setDisabled(True)
@@ -1401,9 +1446,7 @@ class DataGrouping(QDialog):
         return False
 
     def _create_group_from_selected_reference(self):
-        selected_reference = self._selected_reference_name()
-        if selected_reference:
-            self.create_group(initial_group_name=selected_reference)
+        return None
 
     def keyPressEvent(self, event):
         """Handle keyboard shortcuts for list-driven grouping workflows."""
@@ -1416,11 +1459,41 @@ class DataGrouping(QDialog):
                 groups_list=getattr(self, "groups_list", None),
                 assigned_list=getattr(self, "part_group_list", None),
                 create_group=getattr(self, "create_group", None),
-                create_group_from_reference=getattr(self, "_create_group_from_selected_reference", None),
                 rename_group=getattr(self, "rename_group", None),
                 delete_group=getattr(self, "delete_group", None),
                 remove_from_source=getattr(self, "_delete_selected_parts_from_part_list", None),
                 remove_from_assigned=getattr(self, "_delete_selected_parts_from_group", None),
+                focused_line_edits=(
+                    (
+                        getattr(self, "reference_search_input", None),
+                        lambda: self.search_list_widgets(
+                            self.reference_list,
+                            self.reference_search_input.text(),
+                        ),
+                    ),
+                    (
+                        getattr(self, "part_search_input", None),
+                        lambda: self.search_list_widgets(
+                            self.part_list,
+                            self.part_search_input.text(),
+                        ),
+                    ),
+                    (
+                        getattr(self, "group_search_input", None),
+                        lambda: self.search_list_widgets(
+                            self.groups_list,
+                            self.group_search_input.text(),
+                        ),
+                    ),
+                    (
+                        getattr(self, "part_group_search_input", None),
+                        lambda: self.search_list_widgets(
+                            self.part_group_list,
+                            self.part_group_search_input.text(),
+                        ),
+                    ),
+                    (getattr(self, "scope_filter_input", None), getattr(self, "_apply_scope_filter", None)),
+                ),
                 error_handler=getattr(self, "log_and_exit", None),
                 qt_namespace=Qt,
             )
@@ -1460,6 +1533,7 @@ class DataGrouping(QDialog):
                 # Update the dataframe with the default group value for the selected group
                 self.df.loc[self.df['GROUP'] == selected_group, 'GROUP'] = self.default_group
                 self.df.loc[self.df['GROUP'] == self.default_group, self.group_color_column] = self.default_group_color
+                self._invalidate_grouping_cache()
             
             # Repopulate the list widgets after updating the dataframe
             self.populate_list_widgets()

@@ -716,23 +716,23 @@ class TestDataGroupingCreateGroupSelectionPriority(unittest.TestCase):
         dialog._next_group_color = lambda: '#ABC123'
         dialog.populate_list_widgets = lambda: None
         dialog.remove_from_group_button = _FakeButton()
+        dialog.part_group_list = _FakeListWidget([])
         return dialog
 
-    def test_create_group_uses_selected_reference_when_no_parts_selected(self):
+    def test_create_group_ignores_reference_only_selection(self):
         from unittest.mock import patch
 
         dialog = self._base_dialog()
         dialog.part_list = _FakeListWidget([])
         dialog.part_list.selectedItems = lambda: []
+        dialog.part_group_list = _FakeListWidget([])
 
         input_dialog_cls = DataGrouping.create_group.__globals__['QInputDialog']
-        with patch.object(input_dialog_cls, 'getText', return_value=('Ref Group', True), create=True):
+        with patch.object(input_dialog_cls, 'getText', return_value=('Ref Group', True), create=True) as mocked_get_text:
             dialog.create_group()
 
-        ref1_groups = dialog.df.loc[dialog.df['REFERENCE'] == 'REF-1', 'GROUP'].tolist()
-        ref2_group = dialog.df.loc[dialog.df['REFERENCE'] == 'REF-2', 'GROUP'].iloc[0]
-        self.assertEqual(ref1_groups, ['Ref Group', 'Ref Group'])
-        self.assertEqual(ref2_group, 'POPULATION')
+        mocked_get_text.assert_not_called()
+        self.assertTrue((dialog.df['GROUP'] == 'POPULATION').all())
 
     def test_create_group_prefers_explicit_part_selection_over_reference(self):
         from unittest.mock import patch
@@ -740,6 +740,7 @@ class TestDataGroupingCreateGroupSelectionPriority(unittest.TestCase):
         dialog = self._base_dialog()
         dialog.part_list = _FakeListWidget([_FakeListItem(user_role='k2')])
         dialog.part_list.selectedItems = lambda: [_FakeListItem(user_role='k2')]
+        dialog.part_group_list = _FakeListWidget([])
 
         input_dialog_cls = DataGrouping.create_group.__globals__['QInputDialog']
         with patch.object(input_dialog_cls, 'getText', return_value=('Single Part Group', True), create=True):
@@ -750,12 +751,33 @@ class TestDataGroupingCreateGroupSelectionPriority(unittest.TestCase):
         self.assertEqual(selected_part_group, 'Single Part Group')
         self.assertEqual(sibling_part_group, 'POPULATION')
 
+    def test_create_group_can_reassign_selected_group_member(self):
+        from unittest.mock import patch
+
+        dialog = self._base_dialog()
+        dialog.df.loc[dialog.df['GROUP_KEY'] == 'k2', 'GROUP'] = 'Reviewed'
+        dialog.df.loc[dialog.df['GROUP_KEY'] == 'k2', 'GROUP_COLOR'] = '#ABCDEF'
+        dialog.part_list = _FakeListWidget([])
+        dialog.part_list.selectedItems = lambda: []
+        dialog.part_group_list = _FakeListWidget([_FakeListItem(user_role='k2')])
+        dialog.part_group_list.selectedItems = lambda: [_FakeListItem(user_role='k2')]
+
+        input_dialog_cls = DataGrouping.create_group.__globals__['QInputDialog']
+        with patch.object(input_dialog_cls, 'getText', return_value=('Reassigned', True), create=True):
+            dialog.create_group()
+
+        self.assertEqual(
+            dialog.df.loc[dialog.df['GROUP_KEY'] == 'k2', 'GROUP'].iloc[0],
+            'Reassigned',
+        )
+
     def test_create_group_restores_selected_reference_after_refresh(self):
         from unittest.mock import patch
 
         dialog = self._base_dialog()
         dialog.part_list = _FakeListWidget([_FakeListItem(user_role='k2')])
         dialog.part_list.selectedItems = lambda: [_FakeListItem(user_role='k2')]
+        dialog.part_group_list = _FakeListWidget([])
         refresh_args = {}
         dialog.populate_list_widgets = lambda **kwargs: refresh_args.update(kwargs)
 
@@ -772,6 +794,7 @@ class TestDataGroupingCreateGroupSelectionPriority(unittest.TestCase):
         dialog = self._base_dialog()
         dialog.part_list = _FakeListWidget([_FakeListItem(user_role='k1')])
         dialog.part_list.selectedItems = lambda: [_FakeListItem(user_role='k1')]
+        dialog.part_group_list = _FakeListWidget([])
 
         input_dialog_cls = DataGrouping.create_group.__globals__['QInputDialog']
         with patch.object(input_dialog_cls, 'getText', return_value=('   ', True), create=True):
@@ -783,8 +806,9 @@ class TestDataGroupingCreateGroupSelectionPriority(unittest.TestCase):
         from unittest.mock import patch
 
         dialog = self._base_dialog()
-        dialog.part_list = _FakeListWidget([])
-        dialog.part_list.selectedItems = lambda: []
+        dialog.part_list = _FakeListWidget([_FakeListItem(user_role='k1')])
+        dialog.part_list.selectedItems = lambda: [_FakeListItem(user_role='k1')]
+        dialog.part_group_list = _FakeListWidget([])
 
         input_dialog_cls = DataGrouping.create_group.__globals__['QInputDialog']
         with patch.object(input_dialog_cls, 'getText', return_value=('REF-1', False), create=True) as mocked_get_text:
@@ -794,7 +818,7 @@ class TestDataGroupingCreateGroupSelectionPriority(unittest.TestCase):
 
 
 class TestDataGroupingReferenceDoubleClick(unittest.TestCase):
-    def test_reference_double_click_opens_create_group_with_reference_name(self):
+    def test_reference_double_click_is_navigation_only(self):
         dialog = DataGrouping.__new__(DataGrouping)
         captured = {'initial_group_name': None}
 
@@ -805,7 +829,7 @@ class TestDataGroupingReferenceDoubleClick(unittest.TestCase):
 
         dialog.on_reference_item_double_clicked(_FakeListItem(text='REF-42'))
 
-        self.assertEqual(captured['initial_group_name'], 'REF-42')
+        self.assertIsNone(captured['initial_group_name'])
 
 
 class TestDataGroupingPartDoubleClick(unittest.TestCase):
@@ -964,6 +988,57 @@ class TestDataGroupingSelectionRetention(unittest.TestCase):
             ['POPULATION (n=2)', 'Reviewed (n=1)'],
         )
         self.assertEqual(dialog.scope_filter_summary_label.value, 'Scope: 1 of 3 rows')
+
+    def test_populate_list_widgets_reuses_cached_row_indexes_without_filter_or_data_change(self):
+        from modules.data_grouping_service import build_grouping_row_index as real_build_grouping_row_index
+        from unittest.mock import patch
+
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.default_group = 'POPULATION'
+        dialog.default_group_color = '#FFFFFF'
+        dialog.group_color_column = 'GROUP_COLOR'
+        dialog.df = pd.DataFrame(
+            {
+                'REFERENCE': ['REF-1', 'REF-2'],
+                'GROUP': ['POPULATION', 'Reviewed'],
+                'GROUP_KEY': ['k1', 'k2'],
+                'SAMPLE_NUMBER': [1, 2],
+                'DATE': ['2026-05-01', '2026-05-02'],
+                'PART_NAME': ['Cover', 'Body'],
+                'FILENAME': ['a.csv', 'b.csv'],
+                'GROUP_COLOR': ['#FFFFFF', '#ABCDEF'],
+            }
+        )
+        dialog._group_display_to_name = {}
+        dialog._reference_display_to_name = {}
+        dialog._applied_scope_filter_text = ''
+        dialog._cached_filtered_grouping_dataframe = None
+        dialog._cached_grouping_row_index = None
+        dialog._cached_full_grouping_row_index = None
+        dialog.reference_list = _PopulateListWidget()
+        dialog.part_list = _PopulateListWidget()
+        dialog.all_parts_list = _PopulateListWidget()
+        dialog.groups_list = _PopulateListWidget()
+        dialog.part_group_list = _PopulateListWidget()
+        dialog._ensure_group_color_integrity = lambda: None
+        dialog._apply_item_color = lambda item, color: None
+        dialog._apply_list_theme_styles = lambda: None
+        dialog._refresh_selection_summary = lambda: None
+
+        calls = {'count': 0}
+
+        def counted_build(*args, **kwargs):
+            calls['count'] += 1
+            return real_build_grouping_row_index(*args, **kwargs)
+
+        with (
+            patch.dict(DataGrouping.populate_list_widgets.__globals__, {'QListWidgetItem': _PopulateListItem}),
+            patch.dict(DataGrouping._current_grouping_row_index.__globals__, {'build_grouping_row_index': counted_build}),
+        ):
+            dialog.populate_list_widgets()
+            dialog.populate_list_widgets()
+
+        self.assertEqual(calls['count'], 2)
 
     def test_populate_list_widgets_falls_back_to_first_when_group_missing(self):
         from unittest.mock import patch

@@ -151,6 +151,7 @@ class GroupingShortcutBindings:
         remove_from_source=None,
         remove_from_assigned=None,
         remove_selected_columns=None,
+        focused_line_edits=None,
         error_handler=None,
         qt_namespace=None,
     ):
@@ -167,6 +168,7 @@ class GroupingShortcutBindings:
         self.remove_from_source = remove_from_source
         self.remove_from_assigned = remove_from_assigned
         self.remove_selected_columns = remove_selected_columns
+        self.focused_line_edits = tuple(focused_line_edits or ())
         self.error_handler = error_handler
 
     def handle_key_press(self, event) -> bool:
@@ -184,6 +186,11 @@ class GroupingShortcutBindings:
         return False
 
     def _handle_enter(self, event) -> bool:
+        line_edit_matched, line_edit_action = self._line_edit_action_for_focus()
+        if line_edit_matched:
+            self._call(line_edit_action)
+            self._accept(event)
+            return True
         if self._list_or_viewport_has_focus(self.reference_list):
             self._call(self.create_group_from_reference)
             self._accept(event)
@@ -200,6 +207,18 @@ class GroupingShortcutBindings:
             self._accept(event)
             return True
         return False
+
+    def _line_edit_action_for_focus(self):
+        for entry in self.focused_line_edits:
+            if isinstance(entry, (tuple, list)):
+                widget = entry[0] if entry else None
+                action = entry[1] if len(entry) > 1 else None
+            else:
+                widget = entry
+                action = None
+            if self._widget_has_focus(widget):
+                return True, action
+        return False, None
 
     def _handle_delete(self, event) -> bool:
         actions = (
@@ -252,11 +271,15 @@ class GroupingShortcutBindings:
     def _list_or_viewport_has_focus(list_widget) -> bool:
         if list_widget is None:
             return False
-        if hasattr(list_widget, "hasFocus") and list_widget.hasFocus():
+        if GroupingShortcutBindings._widget_has_focus(list_widget):
             return True
         if hasattr(list_widget, "viewport") and list_widget.viewport() is not None:
             return bool(list_widget.viewport().hasFocus())
         return False
+
+    @staticmethod
+    def _widget_has_focus(widget) -> bool:
+        return bool(widget is not None and hasattr(widget, "hasFocus") and widget.hasFocus())
 
 
 class _ListSelectionEventFilter(QObject):
