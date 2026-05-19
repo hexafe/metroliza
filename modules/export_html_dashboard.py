@@ -901,6 +901,51 @@ def _apply_histogram_annotation_contrast(annotations: list[dict[str, Any]]) -> N
             annotation["opacity"] = 1.0
 
 
+def _stagger_histogram_mean_annotations(
+    layout: dict[str, Any],
+    mean_annotations: list[tuple[dict[str, Any], float]],
+    *,
+    bin_width: float | None = None,
+) -> None:
+    if len(mean_annotations) <= 1:
+        return
+    sorted_annotations = sorted(
+        mean_annotations,
+        key=lambda item: (item[1], str(item[0].get("text") or "")),
+    )
+    x_values = [x_value for _annotation, x_value in sorted_annotations]
+    span = max(x_values) - min(x_values)
+    threshold = 0.0
+    if bin_width is not None and math.isfinite(bin_width) and bin_width > 0:
+        threshold = max(threshold, bin_width * 0.75)
+    if span > 0:
+        threshold = max(threshold, span * 0.03)
+    threshold = max(threshold, 1e-9)
+
+    clusters: list[list[tuple[dict[str, Any], float]]] = []
+    for item in sorted_annotations:
+        if not clusters or abs(item[1] - clusters[-1][-1][1]) > threshold:
+            clusters.append([item])
+        else:
+            clusters[-1].append(item)
+
+    max_y = 1.08
+    for cluster in clusters:
+        if len(cluster) <= 1:
+            cluster[0][0]["y"] = 1.08
+            continue
+        for offset, (annotation, _x_value) in enumerate(cluster):
+            y_value = 1.08 + (offset * 0.08)
+            annotation["y"] = y_value
+            max_y = max(max_y, y_value)
+
+    if max_y > 1.08:
+        margin = layout.setdefault("margin", {})
+        if isinstance(margin, dict):
+            extra_steps = int(round((max_y - 1.08) / 0.08))
+            margin["t"] = max(int(margin.get("t") or 0), 78 + extra_steps * 22)
+
+
 def _build_histogram_reference_legend_traces(
     *,
     payload: dict[str, Any],
@@ -1213,10 +1258,21 @@ def _format_group_statistics_trace_name(label: str, values: list[float]) -> str:
     q1_value = _percentile_sorted(sorted_values, 0.25)
     q3_value = _percentile_sorted(sorted_values, 0.75)
     return (
-        f"{label} (n={len(sorted_values)}, min={min(sorted_values):.3f}, "
-        f"Q1={q1_value:.3f}, mean={mean_value:.3f}, "
-        f"Q3={q3_value:.3f}, max={max(sorted_values):.3f})"
+        f"{label} (N={len(sorted_values)}, Min={_format_plotly_stat_value(min(sorted_values))}, "
+        f"Q1={_format_plotly_stat_value(q1_value)}, Mean={_format_plotly_stat_value(mean_value)}, "
+        f"Q3={_format_plotly_stat_value(q3_value)}, Max={_format_plotly_stat_value(max(sorted_values))})"
     )
+
+
+def _format_plotly_stat_value(value: float | None) -> str:
+    if value is None or not math.isfinite(float(value)):
+        return ""
+    number = float(value)
+    magnitude = abs(number)
+    if magnitude >= 10_000 or (0.0 < magnitude < 0.001):
+        return f"{number:.4g}"
+    text = f"{number:.3f}".rstrip("0").rstrip(".")
+    return "0" if text in {"", "-0"} else text
 
 
 def _build_plotly_trend_spec(payload: dict[str, Any], *, title: str, theme: str = "light") -> dict[str, Any]:
@@ -1450,6 +1506,8 @@ def _build_group_analysis_plotly_spec(
             usl=spec_limits.get("usl"),
             theme=theme,
         )
+        bins = _resolve_plotly_histogram_bins(all_values)
+        mean_annotations: list[tuple[dict[str, Any], float]] = []
         for index, (label, values) in enumerate(normalized_groups, start=1):
             mean_value = float(sum(values) / len(values))
             color = tokens["colorway"][(index - 1) % len(tokens["colorway"])]
@@ -1465,22 +1523,26 @@ def _build_group_analysis_plotly_spec(
                     "line": {"color": color, "width": 2, "dash": "dashdot"},
                 }
             )
-            annotations.append(
-                {
-                    "xref": "x",
-                    "yref": "paper",
-                    "x": mean_value,
-                    "y": 1.08,
-                    "text": f"{label} μ={mean_value:.3f}",
-                    "showarrow": False,
-                    "font": {"size": 11, "color": color},
-                    "bgcolor": tokens["annotation_bg"],
-                }
-            )
+            annotation = {
+                "xref": "x",
+                "yref": "paper",
+                "x": mean_value,
+                "y": 1.08,
+                "text": f"{label} mean={_format_plotly_stat_value(mean_value)}",
+                "showarrow": False,
+                "font": {"size": 11, "color": color},
+                "bgcolor": tokens["annotation_bg"],
+            }
+            annotations.append(annotation)
+            mean_annotations.append((annotation, mean_value))
         _apply_histogram_annotation_contrast(annotations)
+        _stagger_histogram_mean_annotations(
+            layout,
+            mean_annotations,
+            bin_width=_coerce_finite_float(bins.get("size")) if isinstance(bins, dict) else None,
+        )
         layout["shapes"] = shapes
         layout["annotations"] = annotations
-        bins = _resolve_plotly_histogram_bins(all_values)
         return {
             "data": [
                 {

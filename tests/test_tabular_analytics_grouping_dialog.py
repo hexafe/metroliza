@@ -5,8 +5,9 @@ import pytest
 
 try:
     from PyQt6.QtCore import Qt
-    from PyQt6.QtWidgets import QApplication, QLabel, QMessageBox, QPushButton
+    from PyQt6.QtWidgets import QApplication, QLabel, QMessageBox, QPushButton, QWidget
     from modules import ui_theme_tokens
+    from modules.grouping_filter_core import DataFrameGroupingIndex
     from modules.list_selection_utils import ListSelectionUtils
     from modules.tabular_analytics_service import (
         TabularColumnFilter,
@@ -17,7 +18,9 @@ try:
 except ImportError as exc:  # pragma: no cover - depends on PyQt collection order
     Qt = None
     QApplication = None
+    QWidget = None
     TabularColumnFilter = None
+    DataFrameGroupingIndex = None
     cleanup_tabular_load_result = None
     load_tabular_analytics_file = None
     ListSelectionUtils = None
@@ -45,10 +48,17 @@ def _dialog_for_frame(frame: pd.DataFrame):
     dialog.column_labels = {}
     dialog.selector_columns = []
     dialog.selected_selector_keys = set()
+    dialog._selector_index = None
+    dialog._selector_index_source_frame = None
+    dialog._selector_preview_cache = {}
+    dialog._applied_selector_filter_text = ""
     dialog.default_group = "POPULATION"
     dialog.default_group_color = ui_theme_tokens.DEFAULT_GROUP_COLOR
     dialog.group_color_column = "GROUP_COLOR"
     dialog.group_palette = ui_theme_tokens.themed_group_palette()
+    dialog.sqlite_store = None
+    dialog._temp_group_assignments = {}
+    dialog._base_grouping_dataframe_cache = None
     return dialog
 
 
@@ -105,6 +115,33 @@ def _apply_selector_search(dialog, text: str) -> None:
     dialog._apply_selector_filter()
 
 
+def _temporary_groups(dialog) -> dict[int, str]:
+    return {
+        int(row_id): group_name
+        for row_id, (group_name, _color) in dialog._temp_group_assignments.items()
+    }
+
+
+def _temporary_colors(dialog) -> dict[int, str]:
+    return {
+        int(row_id): color
+        for row_id, (_group_name, color) in dialog._temp_group_assignments.items()
+    }
+
+
+class _GroupingParent(QWidget if QWidget is not None else object):
+    def __init__(self):
+        super().__init__()
+        self.grouping_frames: list[pd.DataFrame | None] = []
+        self.grouping_applied: list[bool] = []
+
+    def set_df_for_grouping(self, frame):
+        self.grouping_frames.append(frame)
+
+    def set_grouping_applied(self, applied: bool):
+        self.grouping_applied.append(bool(applied))
+
+
 def test_available_grouping_columns_include_tracecode_even_when_reference_is_different() -> None:
     dialog = _dialog_for_frame(
         pd.DataFrame(
@@ -138,6 +175,28 @@ def test_selected_tracecode_keys_resolve_source_rows_independent_of_reference() 
     dialog.selected_selector_keys = {("TC-001",), ("TC-003",)}
 
     assert dialog._row_ids_for_selected_keys() == [1, 3]
+
+
+def test_dataframe_grouping_index_caches_row_ids_by_selected_keys() -> None:
+    if DataFrameGroupingIndex is None:
+        pytest.skip(f"PyQt6 is unavailable in this environment: {PYQT_IMPORT_ERROR}")
+    index = DataFrameGroupingIndex(
+        pd.DataFrame(
+            {
+                "source_row_number": [1, 2, 3, 4],
+                "line": ["L1", "L1", "L2", "L1"],
+                "station": ["A", "B", "A", "A"],
+            }
+        ),
+        ("line", "station"),
+    )
+
+    assert index.row_ids_for_keys({("L1", "A")}) == [1, 4]
+    assert index.row_ids_by_key({("L1", "A"), ("L2", "A")}) == {
+        ("L1", "A"): (1, 4),
+        ("L2", "A"): (3,),
+    }
+    assert index.row_ids_for_keys({("missing", "A")}) == []
 
 
 def test_grouping_dataframe_labels_rows_with_selected_column_chain() -> None:
@@ -192,7 +251,6 @@ def test_removing_middle_grouping_column_projects_selected_keys_by_column_name()
         ("TC-001", "C1", "F1"),
         ("TC-002", "C2", "F2"),
     }
-    dialog.df = dialog._build_grouping_dataframe()
     dialog._rebuild_preserving_groups = lambda: None
     dialog._refresh_all = lambda: None
 
@@ -320,9 +378,8 @@ def test_sqlite_grouping_dialog_uses_preview_rows_and_sparse_assignments(tmp_pat
         dialog._store_current_selection()
         dialog.create_group(initial_group_name="Line A")
 
-        assert dialog.df["REPORT_ID"].tolist() == [1, 3]
-        assert dialog.df["GROUP"].tolist() == ["Line A", "Line A"]
-        assert "POPULATION" not in set(dialog.df["GROUP"])
+        assert dialog.df.empty
+        assert _temporary_groups(dialog) == {1: "Line A", 3: "Line A"}
         group_labels = {
             dialog.groups_list.item(index).text()
             for index in range(dialog.groups_list.count())
@@ -340,9 +397,122 @@ def test_sqlite_grouping_dialog_uses_preview_rows_and_sparse_assignments(tmp_pat
             for index in range(dialog.groups_list.count())
         }
         assert group_labels == {"Line A (n=2)", "Line B (n=2)"}
+
+        materialized = dialog._materialize_grouping_dataframe()
+        assert materialized["REPORT_ID"].tolist() == [1, 2, 3, 4]
+        assert materialized["GROUP"].tolist() == ["Line A", "Line B", "Line A", "Line B"]
     finally:
         dialog.close()
         cleanup_tabular_load_result(loaded)
+
+
+def test_grouping_parent_is_updated_only_after_use_grouping() -> None:
+    _app()
+    parent = _GroupingParent()
+    dialog = TabularAnalyticsGroupingDialog(
+        parent,
+        dataframe=pd.DataFrame(
+            {
+                "source_row_number": [1, 2, 3],
+                "tracecode": ["TC-001", "TC-002", "TC-003"],
+                "length_mm": [1.0, 2.0, 3.0],
+            }
+        ),
+    )
+    try:
+        dialog.selector_columns = ["tracecode"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+        _select_selector_rows(dialog, 0, 2)
+        dialog.create_group(initial_group_name="Fixture A")
+
+        assert parent.grouping_frames == []
+        assert parent.grouping_applied == []
+        assert dialog.df.empty
+        assert _temporary_groups(dialog) == {1: "Fixture A", 2: "Fixture A"}
+
+        dialog.use_grouping()
+
+        assert parent.grouping_applied == [True]
+        materialized = parent.grouping_frames[0]
+        assert materialized["GROUP"].tolist() == ["Fixture A", "Fixture A", "POPULATION"]
+        assert dialog.df is materialized
+    finally:
+        dialog.close()
+        parent.close()
+
+
+def test_sqlite_use_grouping_materializes_sparse_temp_assignments(tmp_path) -> None:
+    _app()
+    input_file = tmp_path / "sqlite_use_grouping.csv"
+    pd.DataFrame(
+        {
+            "Line": ["A", "B", "A"],
+            "TraceCode": ["TC-001", "TC-002", "TC-003"],
+            "Length mm": [10.0, 10.1, 10.2],
+        }
+    ).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file, force_sqlite=True)
+    parent = _GroupingParent()
+    dialog = TabularAnalyticsGroupingDialog(
+        parent,
+        dataframe=loaded.dataframe,
+        column_mapping=loaded.column_mapping,
+        sqlite_store=loaded.sqlite_store,
+    )
+    try:
+        dialog.selector_columns = ["line"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+        a_item = _item_for_data(dialog.selector_list, ("A",))
+        dialog.selector_list.setCurrentItem(a_item)
+        a_item.setSelected(True)
+        dialog._store_current_selection()
+        dialog.create_group(initial_group_name="Line A")
+
+        assert parent.grouping_frames == []
+        assert dialog.df.empty
+
+        dialog.use_grouping()
+
+        materialized = parent.grouping_frames[0]
+        assert parent.grouping_applied == [True]
+        assert materialized["REPORT_ID"].tolist() == [1, 3]
+        assert materialized["GROUP"].tolist() == ["Line A", "Line A"]
+    finally:
+        dialog.close()
+        parent.close()
+        cleanup_tabular_load_result(loaded)
+
+
+def test_clear_grouping_discards_temporary_assignments_without_materializing() -> None:
+    _app()
+    parent = _GroupingParent()
+    dialog = TabularAnalyticsGroupingDialog(
+        parent,
+        dataframe=pd.DataFrame(
+            {
+                "source_row_number": [1, 2],
+                "tracecode": ["TC-001", "TC-002"],
+            }
+        ),
+    )
+    try:
+        dialog.selector_columns = ["tracecode"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+        _select_selector_rows(dialog, 0, 1)
+        dialog.create_group(initial_group_name="Fixture A")
+
+        dialog.dont_use_grouping()
+
+        assert dialog._temp_group_assignments == {}
+        assert dialog.df.empty
+        assert parent.grouping_frames == [None]
+        assert parent.grouping_applied == [False]
+    finally:
+        dialog.close()
+        parent.close()
 
 
 def test_sqlite_source_filters_do_not_narrow_group_counts(tmp_path) -> None:
@@ -410,8 +580,8 @@ def test_sqlite_assign_filtered_rows_combines_parent_and_search_expression(tmp_p
         assert dialog.selector_preview_label.text() == "Add a grouping column to preview row groups."
 
         dialog.assign_filtered_rows(initial_group_name="Scoped")
-        assert dialog.df["REPORT_ID"].tolist() == [2]
-        assert dialog.df["GROUP"].tolist() == ["Scoped"]
+        assert dialog.df.empty
+        assert _temporary_groups(dialog) == {2: "Scoped"}
     finally:
         dialog.close()
         cleanup_tabular_load_result(loaded)
@@ -454,7 +624,7 @@ def test_sqlite_search_expression_filters_preview_and_assigns_all_matching_rows(
 
         dialog.assign_filtered_rows(initial_group_name="Expression")
 
-        assert dialog.df.loc[dialog.df["GROUP"] == "Expression", "REPORT_ID"].tolist() == [1, 2, 4]
+        assert _temporary_groups(dialog) == {1: "Expression", 2: "Expression", 4: "Expression"}
         assert dialog.selected_selector_keys == set()
     finally:
         dialog.close()
@@ -655,7 +825,11 @@ def test_assign_all_filtered_rows_uses_plain_search_across_pages() -> None:
 
         dialog.assign_filtered_rows(initial_group_name="Matched values")
 
-        grouped = dialog.df.loc[dialog.df["GROUP"] == "Matched values", "REPORT_ID"].tolist()
+        grouped = [
+            row_id
+            for row_id, group_name in sorted(_temporary_groups(dialog).items())
+            if group_name == "Matched values"
+        ]
         assert grouped == list(range(1, 1501))
         assert dialog.selector_page_label.text() == "Page 1 of 2"
         assert dialog.selected_selector_keys == set()
@@ -694,6 +868,32 @@ def test_selector_search_waits_for_explicit_apply() -> None:
         dialog.close()
 
 
+def test_selector_filter_does_not_clear_temporary_assignments() -> None:
+    _app()
+    frame = pd.DataFrame(
+        {
+            "source_row_number": [1, 2, 3],
+            "tracecode": ["MATCH-1", "OTHER-1", "MATCH-2"],
+            "length_mm": [1.0, 2.0, 3.0],
+        }
+    )
+    dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
+    try:
+        dialog.selector_columns = ["tracecode"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+        _select_selector_rows(dialog, 0, 1)
+        dialog.create_group(initial_group_name="Matched")
+
+        _apply_selector_search(dialog, "OTHER")
+
+        assert _temporary_groups(dialog) == {1: "Matched"}
+        assert dialog.selector_list.count() == 1
+        assert dialog.selector_list.item(0).data(Qt.ItemDataRole.UserRole) == ("OTHER-1",)
+    finally:
+        dialog.close()
+
+
 def test_enter_in_selector_search_applies_empty_filter_without_group_shortcut() -> None:
     app = _app()
     frame = pd.DataFrame(
@@ -723,7 +923,7 @@ def test_enter_in_selector_search_applies_empty_filter_without_group_shortcut() 
         assert enter_event.accepted is True
         assert dialog._applied_selector_filter_text == ""
         assert dialog.selector_list.count() == 3
-        assert (dialog.df["GROUP"] == "POPULATION").all()
+        assert dialog._temp_group_assignments == {}
     finally:
         dialog.close()
 
@@ -834,7 +1034,11 @@ def test_create_group_uses_selected_keys_from_paged_selector() -> None:
 
         dialog.create_group(initial_group_name="Paged group")
 
-        grouped = dialog.df.loc[dialog.df["GROUP"] == "Paged group", "REPORT_ID"].tolist()
+        grouped = [
+            row_id
+            for row_id, group_name in sorted(_temporary_groups(dialog).items())
+            if group_name == "Paged group"
+        ]
         assert grouped == list(range(1001, 1501))
         assert dialog.groups_list.currentItem().data(Qt.ItemDataRole.UserRole) == "Paged group"
     finally:
@@ -864,8 +1068,7 @@ def test_search_expression_filters_preview_and_assign_all_rows() -> None:
         assert dialog.assign_filtered_rows_button.isEnabled() is True
 
         dialog.assign_filtered_rows(initial_group_name="Expression")
-        grouped = dialog.df.loc[dialog.df["GROUP"] == "Expression", "REPORT_ID"].tolist()
-        assert grouped == [2]
+        assert _temporary_groups(dialog) == {2: "Expression"}
     finally:
         dialog.close()
 
@@ -923,9 +1126,9 @@ def test_create_or_add_prompts_each_time_so_second_group_can_be_created(monkeypa
         _select_selector_rows(dialog, 1, 2)
         dialog.create_group_button.click()
 
-        assignments = dialog.df.set_index("REPORT_ID")["GROUP"].to_dict()
-        assert assignments == {1: "Fixture A", 2: "Fixture B", 3: "POPULATION"}
-        colors = dialog.df.set_index("REPORT_ID")["GROUP_COLOR"].to_dict()
+        assignments = _temporary_groups(dialog)
+        assert assignments == {1: "Fixture A", 2: "Fixture B"}
+        colors = _temporary_colors(dialog)
         assert colors[1] != dialog.default_group_color
         assert colors[2] != dialog.default_group_color
         assert colors[1] != colors[2]
@@ -995,8 +1198,7 @@ def test_enter_in_matching_rows_opens_group_prompt_and_assigns_rows(monkeypatch)
         dialog.keyPressEvent(enter_event)
 
         assert enter_event.accepted is True
-        assignments = dialog.df.set_index("REPORT_ID")["GROUP"].to_dict()
-        assert assignments == {1: "Fixture A", 2: "Fixture A", 3: "POPULATION"}
+        assert _temporary_groups(dialog) == {1: "Fixture A", 2: "Fixture A"}
     finally:
         dialog.close()
 
@@ -1025,8 +1227,7 @@ def test_double_click_matching_rows_opens_group_prompt_and_assigns_selection(mon
         _select_selector_rows(dialog, 0, 2)
         dialog.selector_list.itemDoubleClicked.emit(dialog.selector_list.item(1))
 
-        assignments = dialog.df.set_index("REPORT_ID")["GROUP"].to_dict()
-        assert assignments == {1: "Fixture A", 2: "Fixture A", 3: "POPULATION"}
+        assert _temporary_groups(dialog) == {1: "Fixture A", 2: "Fixture A"}
     finally:
         dialog.close()
 
@@ -1060,7 +1261,7 @@ def test_double_click_group_item_opens_rename_prompt(monkeypatch) -> None:
         dialog.groups_list.setCurrentItem(group_item)
         dialog.groups_list.itemDoubleClicked.emit(group_item)
 
-        assignments = dialog.df.set_index("REPORT_ID")["GROUP"].to_dict()
+        assignments = _temporary_groups(dialog)
         assert assignments[1] == "Fixture B"
         assert "Fixture B" in {
             dialog.groups_list.item(index).data(Qt.ItemDataRole.UserRole)
@@ -1105,9 +1306,8 @@ def test_delete_key_on_group_list_confirms_and_deletes_custom_group(monkeypatch)
         delete_event = _FakeKeyEvent(Qt.Key.Key_Delete)
         dialog.keyPressEvent(delete_event)
 
-        assignments = dialog.df.set_index("REPORT_ID")["GROUP"].to_dict()
         assert delete_event.accepted is True
-        assert assignments == {1: "POPULATION", 2: "POPULATION", 3: "POPULATION"}
+        assert _temporary_groups(dialog) == {}
     finally:
         dialog.close()
 
@@ -1139,11 +1339,8 @@ def test_delete_key_on_group_members_removes_selected_rows_from_group() -> None:
         delete_event = _FakeKeyEvent(Qt.Key.Key_Delete)
         dialog.keyPressEvent(delete_event)
 
-        assignments = dialog.df.set_index("REPORT_ID")["GROUP"].to_dict()
         assert delete_event.accepted is True
-        assert assignments[1] == "POPULATION"
-        assert assignments[2] == "Fixture A"
-        assert assignments[3] == "POPULATION"
+        assert _temporary_groups(dialog) == {2: "Fixture A"}
     finally:
         dialog.close()
 
@@ -1165,15 +1362,15 @@ def test_add_to_existing_group_reuses_color_and_refreshes_colored_panes() -> Non
 
         dialog.selected_selector_keys = {("TC-001",)}
         dialog.create_group(initial_group_name="Fixture A")
-        group_color = dialog.df.loc[dialog.df["REPORT_ID"] == 1, "GROUP_COLOR"].iloc[0]
+        group_color = _temporary_colors(dialog)[1]
 
         dialog.selected_selector_keys = {("TC-002",)}
         dialog._refresh_selectors()
         dialog.create_group(initial_group_name="Fixture A")
 
-        grouped = dialog.df.loc[dialog.df["GROUP"] == "Fixture A", ["REPORT_ID", "GROUP_COLOR"]]
-        assert grouped["REPORT_ID"].tolist() == [1, 2]
-        assert set(grouped["GROUP_COLOR"]) == {group_color}
+        grouped = _temporary_groups(dialog)
+        assert grouped == {1: "Fixture A", 2: "Fixture A"}
+        assert set(_temporary_colors(dialog).values()) == {group_color}
         assert dialog.selected_selector_keys == set()
         assert dialog.selector_list.selectedItems() == []
 
@@ -1264,7 +1461,6 @@ def test_existing_grouping_assignments_are_preserved_when_dialog_reopens() -> No
             }
         )
     )
-    dialog.df = dialog._build_grouping_dataframe()
     assignments = dialog._group_assignments(
         pd.DataFrame(
             {
@@ -1277,5 +1473,9 @@ def test_existing_grouping_assignments_are_preserved_when_dialog_reopens() -> No
 
     dialog._apply_group_assignments(assignments)
 
-    assert dialog.df["GROUP"].tolist() == ["Fixture A", "POPULATION", "Fixture B"]
-    assert dialog.df["GROUP_COLOR"].tolist() == ["#ABCDEF", "#FFFFFF", "#FEDCBA"]
+    assert _temporary_groups(dialog) == {1: "Fixture A", 3: "Fixture B"}
+    assert _temporary_colors(dialog) == {1: "#ABCDEF", 3: "#FEDCBA"}
+
+    materialized = dialog._materialize_grouping_dataframe()
+    assert materialized["GROUP"].tolist() == ["Fixture A", "POPULATION", "Fixture B"]
+    assert materialized["GROUP_COLOR"].tolist() == ["#ABCDEF", "#FFFFFF", "#FEDCBA"]

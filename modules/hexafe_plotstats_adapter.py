@@ -926,18 +926,22 @@ def _ensure_group_histogram_mean_annotations(spec: Mapping[str, Any], payload: M
     if not isinstance(shapes, list):
         shapes = []
         layout["shapes"] = shapes
-    existing_text = {
-        str(annotation.get("text") or "")
+    existing_by_text = {
+        str(annotation.get("text") or ""): annotation
         for annotation in annotations
-        if isinstance(annotation, Mapping)
+        if isinstance(annotation, dict)
     }
-    trace_colors = _histogram_trace_colors_by_name(spec)
-    for label, values in groups:
+    trace_colors_by_name = _histogram_trace_colors_by_name(spec)
+    trace_colors = _histogram_trace_colors(spec)
+    mean_annotations: list[tuple[dict[str, Any], float]] = []
+    for index, (label, values) in enumerate(groups):
         finite_values = values[np.isfinite(values)]
         if finite_values.size == 0:
             continue
         mean_value = float(np.mean(finite_values))
-        color = trace_colors.get(str(label)) or "#2563eb"
+        color = trace_colors_by_name.get(str(label)) or (
+            trace_colors[index] if index < len(trace_colors) else "#2563eb"
+        )
         text = f"{label} mean={_format_plotly_value(mean_value)}"
         shapes.append(
             {
@@ -951,10 +955,9 @@ def _ensure_group_histogram_mean_annotations(spec: Mapping[str, Any], payload: M
                 "line": {"color": color, "width": 2, "dash": "dashdot"},
             }
         )
-        if text in existing_text:
-            continue
-        annotations.append(
-            {
+        annotation = existing_by_text.get(text)
+        if annotation is None:
+            annotation = {
                 "xref": "x",
                 "yref": "paper",
                 "x": mean_value,
@@ -968,8 +971,38 @@ def _ensure_group_histogram_mean_annotations(spec: Mapping[str, Any], payload: M
                 "borderpad": 3,
                 "opacity": 1.0,
             }
-        )
-        existing_text.add(text)
+            annotations.append(annotation)
+            existing_by_text[text] = annotation
+        else:
+            annotation.update(
+                {
+                    "xref": "x",
+                    "yref": "paper",
+                    "x": mean_value,
+                    "text": text,
+                    "showarrow": False,
+                    "font": {"size": 11, "color": color},
+                    "bgcolor": "#ffffff",
+                    "bordercolor": "#cbd5e1",
+                    "borderwidth": max(int(annotation.get("borderwidth") or 0), 1),
+                    "borderpad": max(int(annotation.get("borderpad") or 0), 3),
+                    "opacity": 1.0,
+                }
+            )
+        mean_annotations.append((annotation, mean_value))
+    all_values = np.concatenate([values for _label, values in groups]) if groups else np.asarray([])
+    all_values = all_values[np.isfinite(all_values)]
+    bin_width = None
+    if all_values.size:
+        bin_count = _resolved_bin_count(all_values, bin_count=_payload_int(payload.get("bin_count")))
+        data_min = float(np.min(all_values))
+        data_max = float(np.max(all_values))
+        if math.isclose(data_min, data_max, rel_tol=1e-9, abs_tol=1e-9):
+            padding = max(abs(data_min) * 0.01, 0.5)
+            data_min -= padding
+            data_max += padding
+        bin_width = (data_max - data_min) / max(bin_count, 1)
+    _stagger_histogram_mean_annotations(layout, mean_annotations, bin_width=bin_width)
 
 
 def _histogram_trace_colors_by_name(spec: Mapping[str, Any]) -> dict[str, str]:
@@ -988,6 +1021,70 @@ def _histogram_trace_colors_by_name(spec: Mapping[str, Any]) -> dict[str, str]:
         if name and color:
             colors[name] = str(color)
     return colors
+
+
+def _histogram_trace_colors(spec: Mapping[str, Any]) -> list[str]:
+    colors: list[str] = []
+    for trace in spec.get("data") or []:
+        if not isinstance(trace, Mapping):
+            continue
+        if str(trace.get("type") or "").strip().casefold() not in {"bar", "histogram"}:
+            continue
+        marker = trace.get("marker") if isinstance(trace.get("marker"), Mapping) else {}
+        color = marker.get("color")
+        if isinstance(color, list):
+            color = color[0] if color else None
+        if color is None:
+            line = trace.get("line") if isinstance(trace.get("line"), Mapping) else {}
+            color = line.get("color")
+        if color:
+            colors.append(str(color))
+    return colors
+
+
+def _stagger_histogram_mean_annotations(
+    layout: dict[str, Any],
+    mean_annotations: list[tuple[dict[str, Any], float]],
+    *,
+    bin_width: float | None = None,
+) -> None:
+    if len(mean_annotations) <= 1:
+        return
+    sorted_annotations = sorted(
+        mean_annotations,
+        key=lambda item: (item[1], str(item[0].get("text") or "")),
+    )
+    x_values = [x_value for _annotation, x_value in sorted_annotations]
+    span = max(x_values) - min(x_values)
+    threshold = 0.0
+    if bin_width is not None and math.isfinite(bin_width) and bin_width > 0:
+        threshold = max(threshold, bin_width * 0.75)
+    if span > 0:
+        threshold = max(threshold, span * 0.03)
+    threshold = max(threshold, 1e-9)
+
+    clusters: list[list[tuple[dict[str, Any], float]]] = []
+    for item in sorted_annotations:
+        if not clusters or abs(item[1] - clusters[-1][-1][1]) > threshold:
+            clusters.append([item])
+        else:
+            clusters[-1].append(item)
+
+    max_y = 1.08
+    for cluster in clusters:
+        if len(cluster) <= 1:
+            cluster[0][0]["y"] = 1.08
+            continue
+        for offset, (annotation, _x_value) in enumerate(cluster):
+            y_value = 1.08 + (offset * 0.08)
+            annotation["y"] = y_value
+            max_y = max(max_y, y_value)
+
+    if max_y > 1.08:
+        margin = layout.setdefault("margin", {})
+        if isinstance(margin, dict):
+            extra_steps = int(round((max_y - 1.08) / 0.08))
+            margin["t"] = max(int(margin.get("t") or 0), 78 + extra_steps * 22)
 
 
 def _is_histogram_plotly_spec(spec: Mapping[str, Any]) -> bool:
@@ -1177,10 +1274,21 @@ def _format_group_statistics_trace_name(label: str, values: list[float]) -> str:
     q1_value = _percentile_sorted(sorted_values, 0.25)
     q3_value = _percentile_sorted(sorted_values, 0.75)
     return (
-        f"{label} (n={len(sorted_values)}, min={min(sorted_values):.3f}, "
-        f"Q1={q1_value:.3f}, mean={mean_value:.3f}, "
-        f"Q3={q3_value:.3f}, max={max(sorted_values):.3f})"
+        f"{label} (N={len(sorted_values)}, Min={_format_plotly_stat_value(min(sorted_values))}, "
+        f"Q1={_format_plotly_stat_value(q1_value)}, Mean={_format_plotly_stat_value(mean_value)}, "
+        f"Q3={_format_plotly_stat_value(q3_value)}, Max={_format_plotly_stat_value(max(sorted_values))})"
     )
+
+
+def _format_plotly_stat_value(value: float | None) -> str:
+    if value is None or not math.isfinite(float(value)):
+        return ""
+    number = float(value)
+    magnitude = abs(number)
+    if magnitude >= 10_000 or (0.0 < magnitude < 0.001):
+        return f"{number:.4g}"
+    text = f"{number:.3f}".rstrip("0").rstrip(".")
+    return "0" if text in {"", "-0"} else text
 
 
 def _percentile_sorted(values: list[float], fraction: float) -> float:

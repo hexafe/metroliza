@@ -451,7 +451,7 @@ def test_plotstats_dashboard_spec_adds_group_mean_annotations_with_matching_colo
             "type": "histogram",
             "groups": [
                 {"group": "A", "values": [1.0, 2.0]},
-                {"group": "B", "values": [2.0, 4.0]},
+                {"group": "B", "values": [1.0, 2.0]},
             ],
         },
         title="Grouped histogram",
@@ -462,7 +462,11 @@ def test_plotstats_dashboard_spec_adds_group_mean_annotations_with_matching_colo
     by_text = {annotation["text"]: annotation for annotation in annotations}
     assert by_text["A mean=1.5"]["bgcolor"] == "#ffffff"
     assert by_text["A mean=1.5"]["font"]["color"] == "#0072B2"
-    assert by_text["B mean=3"]["font"]["color"] == "#D55E00"
+    assert by_text["B mean=1.5"]["bgcolor"] == "#ffffff"
+    assert by_text["B mean=1.5"]["font"]["color"] == "#D55E00"
+    assert by_text["A mean=1.5"]["y"] != by_text["B mean=1.5"]["y"]
+    assert spec["layout"]["margin"]["t"] >= 100
+    assert [trace["name"] for trace in spec["data"] if trace["type"] == "bar"] == ["A", "B"]
 
 
 def test_plotstats_dashboard_spec_adds_distribution_group_stats_to_legend(monkeypatch) -> None:
@@ -494,11 +498,43 @@ def test_plotstats_dashboard_spec_adds_distribution_group_stats_to_legend(monkey
     )
 
     assert spec["data"][0]["name"] == (
-        "A (n=3, min=1.000, Q1=1.500, mean=2.000, Q3=2.500, max=3.000)"
+        "A (N=3, Min=1, Q1=1.5, Mean=2, Q3=2.5, Max=3)"
     )
     assert spec["data"][1]["name"] == (
-        "B (n=3, min=10.000, Q1=11.000, mean=12.667, Q3=14.000, max=16.000)"
+        "B (N=3, Min=10, Q1=11, Mean=12.667, Q3=14, Max=16)"
     )
+
+
+def test_plotstats_dashboard_spec_adds_iqr_group_stats_to_legend(monkeypatch) -> None:
+    def fake_artifact(_payload, **_kwargs):
+        return {
+            "plotly_spec": {
+                "data": [
+                    {"type": "box", "name": "A", "y": [1.0, 2.0, 3.0]},
+                    {"type": "box", "name": "B", "y": [10.0, 12.0, 16.0]},
+                ],
+                "layout": {},
+            }
+        }
+
+    package = ModuleType("hexafe_plotstats")
+    adapters = ModuleType("hexafe_plotstats.adapters")
+    adapters.chart_artifact_from_metroliza_payload = fake_artifact
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats", package)
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats.adapters", adapters)
+
+    spec = build_plotstats_dashboard_spec(
+        {
+            "type": "iqr",
+            "labels": ["A", "B"],
+            "series": [[1.0, 2.0, 3.0], [10.0, 12.0, 16.0]],
+        },
+        title="IQR",
+        static=False,
+    )
+
+    assert spec["data"][0]["name"] == "A (N=3, Min=1, Q1=1.5, Mean=2, Q3=2.5, Max=3)"
+    assert spec["data"][1]["name"] == "B (N=3, Min=10, Q1=11, Mean=12.667, Q3=14, Max=16)"
 
 
 def test_dashboard_plotly_spec_renames_generic_limit_traces(monkeypatch) -> None:

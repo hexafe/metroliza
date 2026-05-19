@@ -105,6 +105,7 @@ class DataFrameGroupingIndex:
         )
         self._grouped_preview: pd.DataFrame | None = None
         self._row_index: pd.MultiIndex | None = None
+        self._row_ids_by_key_cache: dict[str, dict[tuple[str, ...], tuple[int, ...]]] = {}
 
     @property
     def active(self) -> bool:
@@ -178,6 +179,39 @@ class DataFrameGroupingIndex:
                 total += int(counts.loc[lookup_key])
         return total
 
+    def row_ids_for_keys(
+        self,
+        selected_group_keys: Iterable[Iterable[Any]] | None,
+        *,
+        row_id_column: str = "source_row_number",
+    ) -> list[int]:
+        """Return source row ids for selected grouping keys using a cached key lookup."""
+
+        selected_keys = self._valid_selected_keys(selected_group_keys)
+        if not self.active or not selected_keys:
+            return []
+        lookup = self._row_ids_by_key_lookup(row_id_column)
+        row_ids: list[int] = []
+        for key in sorted(selected_keys):
+            row_ids.extend(lookup.get(key, ()))
+        return row_ids
+
+    def row_ids_by_key(
+        self,
+        selected_group_keys: Iterable[Iterable[Any]] | None = None,
+        *,
+        row_id_column: str = "source_row_number",
+    ) -> dict[tuple[str, ...], tuple[int, ...]]:
+        """Return cached source row ids keyed by normalized grouping key."""
+
+        if not self.active:
+            return {}
+        lookup = self._row_ids_by_key_lookup(row_id_column)
+        if selected_group_keys is None:
+            return dict(lookup)
+        selected_keys = self._valid_selected_keys(selected_group_keys)
+        return {key: lookup.get(key, ()) for key in selected_keys if key in lookup}
+
     def child_keys_for_selected(
         self,
         selected_group_keys: Iterable[Iterable[Any]] | None,
@@ -236,6 +270,31 @@ class DataFrameGroupingIndex:
                 self.key_frame.loc[:, list(self.grouping_columns)]
             )
         return self._row_index
+
+    def _row_ids_by_key_lookup(self, row_id_column: str) -> dict[tuple[str, ...], tuple[int, ...]]:
+        column = str(row_id_column)
+        if column in self._row_ids_by_key_cache:
+            return self._row_ids_by_key_cache[column]
+        if not self.active or column not in self.data_frame.columns or self.key_frame.empty:
+            self._row_ids_by_key_cache[column] = {}
+            return self._row_ids_by_key_cache[column]
+
+        row_numbers = pd.to_numeric(self.data_frame[column], errors="coerce")
+        valid_mask = row_numbers.notna()
+        lookup: dict[tuple[str, ...], list[int]] = {}
+        key_rows = self.key_frame.loc[valid_mask, list(self.grouping_columns)].itertuples(
+            index=False,
+            name=None,
+        )
+        row_ids = row_numbers.loc[valid_mask].astype(int).tolist()
+        for key_values, row_id in zip(key_rows, row_ids, strict=False):
+            key = tuple(str(value) for value in key_values)
+            lookup.setdefault(key, []).append(int(row_id))
+        self._row_ids_by_key_cache[column] = {
+            key: tuple(sorted(dict.fromkeys(row_ids)))
+            for key, row_ids in lookup.items()
+        }
+        return self._row_ids_by_key_cache[column]
 
     def _records_to_rows(self, frame: pd.DataFrame) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []

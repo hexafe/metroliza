@@ -378,11 +378,16 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(spec['data'][0]['histnorm'], 'probability')
         self.assertEqual(spec['data'][1]['histnorm'], 'probability')
         self.assertIn('Frequency=%{y:.2%}', spec['data'][0]['hovertemplate'])
+        self.assertEqual([trace['name'] for trace in spec['data']], ['A', 'B'])
         group_mean_annotations = [
             item for item in spec['layout']['annotations']
-            if str(item.get('text') or '').startswith(('A μ=', 'B μ='))
+            if str(item.get('text') or '').startswith(('A mean=', 'B mean='))
         ]
         self.assertEqual(len(group_mean_annotations), 2)
+        self.assertEqual(
+            {item['text'] for item in group_mean_annotations},
+            {'A mean=10.012', 'B mean=10.123'},
+        )
         self.assertTrue(all(item.get('bgcolor') == '#ffffff' for item in group_mean_annotations))
         trace_colors = [trace['marker']['color'] for trace in spec['data']]
         annotation_colors = [item['font']['color'] for item in group_mean_annotations]
@@ -390,6 +395,27 @@ class TestExportHtmlDashboard(unittest.TestCase):
         expected_bin_count = resolve_histogram_bin_count(all_values)['bin_count']
         expected_bin_width = (max(all_values) - min(all_values)) / expected_bin_count
         self.assertAlmostEqual(spec['data'][0]['xbins']['size'], expected_bin_width)
+
+    def test_group_analysis_histogram_plotly_spec_staggers_close_mean_annotations(self):
+        with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
+            spec = _build_group_analysis_plotly_spec(
+                'FEATURE_1',
+                'histogram',
+                {
+                    'groups': [
+                        {'group': 'A', 'values': [1.0, 2.0]},
+                        {'group': 'B', 'values': [1.0, 2.0]},
+                    ],
+                },
+            )
+
+        group_mean_annotations = [
+            item for item in spec['layout']['annotations']
+            if str(item.get('text') or '').startswith(('A mean=', 'B mean='))
+        ]
+        self.assertEqual([item['text'] for item in group_mean_annotations], ['A mean=1.5', 'B mean=1.5'])
+        self.assertNotEqual(group_mean_annotations[0]['y'], group_mean_annotations[1]['y'])
+        self.assertGreaterEqual(spec['layout']['margin']['t'], 100)
 
     def test_group_analysis_violin_plotly_spec_treats_numeric_labels_as_categories(self):
         with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
@@ -411,11 +437,11 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(xaxis['categoryarray'], ['73211', 'A', 'POPULATION'])
         trace_names = [trace['name'] for trace in spec['data']]
         self.assertIn(
-            '73211 (n=3, min=9.990, Q1=10.000, mean=10.010, Q3=10.020, max=10.030)',
+            '73211 (N=3, Min=9.99, Q1=10, Mean=10.01, Q3=10.02, Max=10.03)',
             trace_names,
         )
         self.assertIn(
-            'A (n=3, min=10.080, Q1=10.095, mean=10.117, Q3=10.135, max=10.160)',
+            'A (N=3, Min=10.08, Q1=10.095, Mean=10.117, Q3=10.135, Max=10.16)',
             trace_names,
         )
         self.assertTrue(
@@ -441,11 +467,11 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(spec['data'][0]['x'], ['A', 'A', 'A'])
         self.assertEqual(
             spec['data'][0]['name'],
-            'A (n=3, min=1.000, Q1=1.500, mean=2.000, Q3=2.500, max=3.000)',
+            'A (N=3, Min=1, Q1=1.5, Mean=2, Q3=2.5, Max=3)',
         )
         self.assertEqual(
             spec['data'][1]['name'],
-            'B (n=3, min=10.000, Q1=11.000, mean=12.667, Q3=14.000, max=16.000)',
+            'B (N=3, Min=10, Q1=11, Mean=12.667, Q3=14, Max=16)',
         )
 
     def test_summary_histogram_plotly_spec_uses_data_bins_and_x_view_axis_range(self):

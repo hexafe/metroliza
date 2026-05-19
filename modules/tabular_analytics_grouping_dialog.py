@@ -157,7 +157,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
             dark_mode=self._is_dark_mode_base(self.default_group_color)
         )
         self._initial_group_assignments = self._group_assignments(grouping_dataframe)
-        self.df = self._build_grouping_dataframe()
+        self._temp_group_assignments: dict[int, tuple[str, str]] = {}
+        self._base_grouping_dataframe_cache: pd.DataFrame | None = None
+        self.df = self._empty_grouping_dataframe()
         self._apply_group_assignments(self._initial_group_assignments)
 
         layout = QVBoxLayout(self)
@@ -432,14 +434,11 @@ class TabularAnalyticsGroupingDialog(QDialog):
         )
 
     def _next_group_color(self) -> str:
-        used = set()
-        if self.group_color_column in self.df.columns and "GROUP" in self.df.columns:
-            used = set(
-                self.df.loc[self.df["GROUP"] != self.default_group, self.group_color_column]
-                .dropna()
-                .astype(str)
-                .tolist()
-            )
+        used = {
+            self._normalized_group_color(color)
+            for group_name, color in self._temp_assignments().values()
+            if group_name != self.default_group and str(color or "").strip()
+        }
         for color in self.group_palette:
             if color not in used:
                 return color
@@ -449,41 +448,38 @@ class TabularAnalyticsGroupingDialog(QDialog):
         )
 
     def _ensure_group_color_integrity(self) -> None:
-        if self.group_color_column not in self.df.columns:
-            self.df[self.group_color_column] = self.default_group_color
-        if "GROUP" not in self.df.columns:
+        assignments = self._temp_assignments()
+        if not assignments:
             return
-        self.df[self.group_color_column] = self.df[self.group_color_column].fillna(
-            self.default_group_color
-        )
-        self.df.loc[self.df["GROUP"] == self.default_group, self.group_color_column] = (
-            self.default_group_color
-        )
-
-        for group_name in self.df["GROUP"].dropna().astype(str).unique():
+        group_colors: dict[str, str] = {}
+        for group_name, color in assignments.values():
             if group_name == self.default_group:
                 continue
-            existing = self.df.loc[
-                self.df["GROUP"] == group_name,
-                self.group_color_column,
-            ].dropna().astype(str)
-            assigned_color = next(
-                (
-                    self._normalized_group_color(value)
-                    for value in existing
-                    if value and value != self.default_group_color
-                ),
-                None,
-            )
+            normalized = self._normalized_group_color(color)
+            if normalized != self.default_group_color:
+                group_colors.setdefault(group_name, normalized)
+        for row_id, (group_name, color) in list(assignments.items()):
+            group_name = str(group_name or self.default_group).strip() or self.default_group
+            if group_name == self.default_group:
+                assignments.pop(row_id, None)
+                continue
+            assigned_color = group_colors.get(group_name)
             if assigned_color is None:
                 assigned_color = self._next_group_color()
-            self.df.loc[self.df["GROUP"] == group_name, self.group_color_column] = assigned_color
+                group_colors[group_name] = assigned_color
+            assignments[int(row_id)] = (group_name, assigned_color)
 
     def _group_color_for_group(self, group_name: str | None) -> str:
-        if not group_name or group_name == self.default_group or self.group_color_column not in self.df:
+        if not group_name or group_name == self.default_group:
             return self.default_group_color
-        rows = self.df.loc[self.df["GROUP"] == group_name, self.group_color_column].dropna().astype(str)
-        color = next((value for value in rows if value), self.default_group_color)
+        color = next(
+            (
+                assignment_color
+                for assignment_group, assignment_color in self._temp_assignments().values()
+                if assignment_group == group_name and str(assignment_color or "").strip()
+            ),
+            self.default_group_color,
+        )
         return self._normalized_group_color(color)
 
     def _group_color_for_row(self, row) -> str:
@@ -510,55 +506,27 @@ class TabularAnalyticsGroupingDialog(QDialog):
             not preview_rows
             or not self.selector_columns
             or self.source_dataframe.empty
-            or "source_row_number" not in self.source_dataframe.columns
-            or "REPORT_ID" not in self.df.columns
-            or self.group_color_column not in self.df.columns
         ):
             return {}, set()
 
         visible_keys = {tuple(row["key"]) for row in preview_rows}
-        selector_index = self._current_selector_index()
-        key_frame = selector_index.key_frame
-        if key_frame.empty:
+        row_ids_by_key = self._current_selector_index().row_ids_by_key(visible_keys)
+        if not row_ids_by_key:
             return {}, set()
-
-        if len(selector_index.grouping_columns) == 1:
-            key_series = key_frame[selector_index.grouping_columns[0]].map(lambda value: (str(value),))
-        else:
-            key_series = pd.Series(
-                list(key_frame.loc[:, list(selector_index.grouping_columns)].itertuples(index=False, name=None)),
-                index=key_frame.index,
-            )
-        row_numbers = pd.to_numeric(self.source_dataframe["source_row_number"], errors="coerce")
-        selector_rows = pd.DataFrame({"__key": key_series, "REPORT_ID": row_numbers}).dropna(
-            subset=["REPORT_ID"]
-        )
-        if selector_rows.empty:
-            return {}, set()
-        selector_rows["REPORT_ID"] = selector_rows["REPORT_ID"].astype(int)
-        selector_rows = selector_rows[selector_rows["__key"].isin(visible_keys)]
-        if selector_rows.empty:
-            return {}, set()
-
-        assignments = self.df.loc[:, ["REPORT_ID", "GROUP", self.group_color_column]].copy()
-        assignments["REPORT_ID"] = pd.to_numeric(assignments["REPORT_ID"], errors="coerce")
-        assignments = assignments.dropna(subset=["REPORT_ID"])
-        assignments["REPORT_ID"] = assignments["REPORT_ID"].astype(int)
-        merged = selector_rows.merge(assignments, on="REPORT_ID", how="left")
-        merged["GROUP"] = merged["GROUP"].fillna(self.default_group).astype(str)
-        merged[self.group_color_column] = merged[self.group_color_column].fillna(
-            self.default_group_color
-        )
 
         color_map: dict[tuple[str, ...], str] = {}
         mixed_keys: set[tuple[str, ...]] = set()
-        for key, rows in merged.groupby("__key", sort=False):
-            key_tuple = tuple(key)
-            groups = {str(value) for value in rows["GROUP"].dropna().astype(str)}
-            colors = {
-                self._normalized_group_color(value)
-                for value in rows[self.group_color_column].dropna().astype(str)
-            }
+        assignments = self._temp_assignments()
+        for key_tuple, row_ids in row_ids_by_key.items():
+            groups: set[str] = set()
+            colors: set[str] = set()
+            for row_id in row_ids:
+                group_name, color = assignments.get(
+                    int(row_id),
+                    (self.default_group, self.default_group_color),
+                )
+                groups.add(str(group_name))
+                colors.add(self._normalized_group_color(color))
             if len(groups) == 1 and len(colors) == 1:
                 color_map[key_tuple] = next(iter(colors))
             elif len(groups) > 1:
@@ -792,19 +760,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
 
     def _build_grouping_dataframe(self) -> pd.DataFrame:
         if self._is_sqlite_backed():
-            return pd.DataFrame(
-                columns=[
-                    "REPORT_ID",
-                    "REFERENCE",
-                    "DATE",
-                    "SAMPLE_NUMBER",
-                    "PART_NAME",
-                    "FILENAME",
-                    "GROUP",
-                    self.group_color_column,
-                    "GROUP_KEY",
-                ]
-            )
+            return self._empty_grouping_dataframe()
         frame = build_tabular_grouping_dataframe(
             self.source_dataframe,
             selector_columns=tuple(self.selector_columns),
@@ -821,6 +777,47 @@ class TabularAnalyticsGroupingDialog(QDialog):
             )
         frame["GROUP_KEY"] = pd.to_numeric(frame["REPORT_ID"], errors="coerce").astype("Int64")
         return frame
+
+    def _empty_grouping_dataframe(self) -> pd.DataFrame:
+        return pd.DataFrame(
+            columns=[
+                "REPORT_ID",
+                "REFERENCE",
+                "DATE",
+                "SAMPLE_NUMBER",
+                "PART_NAME",
+                "FILENAME",
+                "GROUP",
+                self.group_color_column,
+                "GROUP_KEY",
+            ]
+        )
+
+    def _base_grouping_dataframe(self) -> pd.DataFrame:
+        if self._is_sqlite_backed():
+            return self._empty_grouping_dataframe()
+        cached = vars(self).get("_base_grouping_dataframe_cache")
+        if cached is None:
+            cached = self._build_grouping_dataframe()
+            self._base_grouping_dataframe_cache = cached
+        return cached
+
+    def _temp_assignments(self) -> dict[int, tuple[str, str]]:
+        assignments = vars(self).get("_temp_group_assignments")
+        if assignments is None:
+            assignments = {}
+            self._temp_group_assignments = assignments
+        return assignments
+
+    def _source_row_ids(self) -> set[int]:
+        if self._is_sqlite_backed() or "source_row_number" not in self.source_dataframe.columns:
+            return set()
+        return set(
+            pd.to_numeric(self.source_dataframe["source_row_number"], errors="coerce")
+            .dropna()
+            .astype(int)
+            .tolist()
+        )
 
     def _group_assignments(self, dataframe: pd.DataFrame | None) -> dict[int, tuple[str, str | None]]:
         if (
@@ -895,51 +892,53 @@ class TabularAnalyticsGroupingDialog(QDialog):
         ]
 
     def _apply_group_assignments(self, assignments: dict[int, tuple[str, str | None]]) -> None:
-        if not assignments:
-            return
-        if self._is_sqlite_backed():
-            row_ids: list[int] = []
-            group_names: list[str] = []
-            colors: list[str] = []
-            for report_id, assignment in assignments.items():
-                if isinstance(assignment, tuple):
-                    group_name, color = assignment
-                else:
-                    group_name, color = str(assignment), None
-                group_name = str(group_name or self.default_group).strip() or self.default_group
-                if group_name == self.default_group:
-                    continue
-                row_ids.append(int(report_id))
-                group_names.append(group_name)
-                colors.append(self._normalized_group_color(color or self.default_group_color))
-            if row_ids:
-                self.df = self._sqlite_assignment_dataframe(
-                    row_ids,
-                    group_names=group_names,
-                    colors=colors,
-                )
-                self._ensure_group_color_integrity()
-            return
-        if "REPORT_ID" not in self.df.columns:
-            return
-        group_assignments = {}
-        color_assignments = {}
+        temp_assignments = self._temp_assignments()
+        temp_assignments.clear()
         for report_id, assignment in assignments.items():
             if isinstance(assignment, tuple):
                 group_name, color = assignment
             else:
                 group_name, color = str(assignment), None
-            group_assignments[int(report_id)] = str(group_name or self.default_group)
-            if color is not None and str(color).strip():
-                color_assignments[int(report_id)] = str(color)
-        report_ids = pd.to_numeric(self.df["REPORT_ID"], errors="coerce")
-        self.df["GROUP"] = report_ids.map(group_assignments).fillna(self.default_group).astype(str)
-        if self.group_color_column not in self.df.columns:
-            self.df[self.group_color_column] = self.default_group_color
-        self.df[self.group_color_column] = (
+            group_name = str(group_name or self.default_group).strip() or self.default_group
+            if group_name == self.default_group:
+                continue
+            temp_assignments[int(report_id)] = (
+                group_name,
+                self._normalized_group_color(color or self.default_group_color),
+            )
+        self._ensure_group_color_integrity()
+
+    def _materialize_grouping_dataframe(self) -> pd.DataFrame:
+        assignments = self._temp_assignments()
+        if self._is_sqlite_backed():
+            row_ids: list[int] = []
+            group_names: list[str] = []
+            colors: list[str] = []
+            for report_id, (group_name, color) in sorted(assignments.items()):
+                row_ids.append(int(report_id))
+                group_names.append(group_name)
+                colors.append(self._normalized_group_color(color))
+            return self._sqlite_assignment_dataframe(
+                row_ids,
+                group_names=group_names,
+                colors=colors,
+            )
+
+        frame = self._base_grouping_dataframe().copy()
+        if frame.empty or "REPORT_ID" not in frame.columns:
+            return frame
+        group_assignments = {row_id: group for row_id, (group, _color) in assignments.items()}
+        color_assignments = {row_id: color for row_id, (_group, color) in assignments.items()}
+        report_ids = pd.to_numeric(frame["REPORT_ID"], errors="coerce")
+        frame["GROUP"] = report_ids.map(group_assignments).fillna(self.default_group).astype(str)
+        frame[self.group_color_column] = (
             report_ids.map(color_assignments).fillna(self.default_group_color).astype(str)
         )
-        self._ensure_group_color_integrity()
+        frame.loc[frame["GROUP"] == self.default_group, self.group_color_column] = (
+            self.default_group_color
+        )
+        frame["GROUP_KEY"] = report_ids.astype("Int64")
+        return frame
 
     def _selected_group_name(self) -> str | None:
         item = self.groups_list.currentItem()
@@ -1033,24 +1032,11 @@ class TabularAnalyticsGroupingDialog(QDialog):
 
     def _sqlite_group_counts(self) -> dict[str, int]:
         total = int(self.sqlite_store.count_rows())
-        if self.df.empty or "GROUP" not in self.df.columns or "REPORT_ID" not in self.df.columns:
-            return {self.default_group: total}
-        assigned = self.df.loc[:, ["REPORT_ID", "GROUP"]].copy()
-        assigned["REPORT_ID"] = pd.to_numeric(assigned["REPORT_ID"], errors="coerce")
-        assigned = assigned.dropna(subset=["REPORT_ID"])
-        if assigned.empty:
-            return {self.default_group: total}
-        assigned["REPORT_ID"] = assigned["REPORT_ID"].astype(int)
-        labels = assigned["GROUP"].fillna(self.default_group).astype(str).str.strip()
-        assigned["GROUP"] = labels.mask(labels == "", self.default_group)
-        assigned = assigned.drop_duplicates(subset=["REPORT_ID"], keep="last")
-        custom_assignments = assigned[assigned["GROUP"] != self.default_group]
         group_counts: dict[str, int] = {}
-        for group_name, group_rows in custom_assignments.groupby("GROUP", dropna=False, sort=True):
-            row_ids = group_rows["REPORT_ID"].astype(int).tolist()
-            count = len(set(row_ids))
-            if count:
-                group_counts[str(group_name)] = int(count)
+        for row_id, (group_name, _color) in self._temp_assignments().items():
+            if group_name == self.default_group:
+                continue
+            group_counts[str(group_name)] = group_counts.get(str(group_name), 0) + 1
         assigned_custom_count = int(sum(group_counts.values()))
         default_count = max(0, total - assigned_custom_count)
         if default_count or not group_counts:
@@ -1155,12 +1141,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._refresh_selectors()
 
     def _rebuild_preserving_groups(self) -> None:
-        if self._is_sqlite_backed():
-            self._ensure_group_color_integrity()
-            return
-        assignments = self._group_assignments(self.df)
-        self.df = self._build_grouping_dataframe()
-        self._apply_group_assignments(assignments)
+        self._base_grouping_dataframe_cache = None
+        self._ensure_group_color_integrity()
 
     def _store_current_selection(self) -> None:
         visible_keys = {
@@ -1179,10 +1161,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
             return []
         if self._is_sqlite_backed():
             return self._sqlite_row_ids_for_selected_keys()
-        filtered = self._current_selector_index().filter_rows(self.selected_selector_keys)
-        if "source_row_number" not in filtered.columns:
-            return []
-        return pd.to_numeric(filtered["source_row_number"], errors="coerce").dropna().astype(int).tolist()
+        return self._current_selector_index().row_ids_for_keys(self.selected_selector_keys)
 
     def _row_ids_for_scope(self) -> list[int]:
         state = self._selector_filter_state()
@@ -1201,10 +1180,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
             keys = self._matching_selector_keys_for_search(search_text)
             if not keys:
                 return []
-            filtered = self._current_selector_index().filter_rows(keys)
-            if "source_row_number" not in filtered.columns:
-                return []
-            return pd.to_numeric(filtered["source_row_number"], errors="coerce").dropna().astype(int).tolist()
+            return self._current_selector_index().row_ids_for_keys(keys)
         if self._is_sqlite_backed():
             return self.sqlite_store.row_ids(**self._sqlite_scope_kwargs())
         scoped = self._scoped_source_dataframe()
@@ -1238,24 +1214,15 @@ class TabularAnalyticsGroupingDialog(QDialog):
     def _assign_rows_to_group(self, row_ids: list[int], group_name: str) -> None:
         if not row_ids or not group_name:
             return
-        group_exists = bool((self.df["GROUP"] == group_name).any())
+        assignments = self._temp_assignments()
+        group_exists = any(group == group_name for group, _color in assignments.values())
         assigned_color = self._group_color_for_group(group_name) if group_exists else self._next_group_color()
-        if self._is_sqlite_backed():
-            incoming = self._sqlite_assignment_dataframe(
-                row_ids,
-                group_name,
-                assigned_color,
-            )
-            existing = self.df.loc[~self.df["REPORT_ID"].isin(row_ids)] if not self.df.empty else self.df
-            self.df = pd.concat([existing, incoming], ignore_index=True)
-            self._ensure_group_color_integrity()
-            self._selector_preview_cache.clear()
-            return
-        row_mask = self.df["REPORT_ID"].isin(row_ids)
-        self.df.loc[row_mask, "GROUP"] = group_name
-        self.df.loc[row_mask, self.group_color_column] = assigned_color
+        for row_id in dict.fromkeys(int(row_id) for row_id in row_ids):
+            if group_name == self.default_group:
+                assignments.pop(row_id, None)
+            else:
+                assignments[row_id] = (group_name, assigned_color)
         self._ensure_group_color_integrity()
-        self._selector_preview_cache.clear()
 
     def create_group(self, initial_group_name: str | None = None) -> None:
         row_ids = self._row_ids_for_selected_keys()
@@ -1379,21 +1346,18 @@ class TabularAnalyticsGroupingDialog(QDialog):
         new_name = str(new_name or "").strip()
         if not accepted or not new_name:
             return
+        assignments = self._temp_assignments()
         assigned_color = (
             self._group_color_for_group(new_name)
-            if (self.df["GROUP"] == new_name).any()
+            if any(group == new_name for group, _color in assignments.values())
             else self._group_color_for_group(selected_group)
         )
-        selected_mask = self.df["GROUP"] == selected_group
-        self.df.loc[selected_mask, "GROUP"] = new_name
-        self.df.loc[selected_mask, self.group_color_column] = assigned_color
+        for row_id, (group_name, _color) in list(assignments.items()):
+            if group_name == selected_group:
+                assignments[row_id] = (new_name, assigned_color)
         if selected_group == self.default_group:
             self.default_group = new_name
-            self.df.loc[self.df["GROUP"] == self.default_group, self.group_color_column] = (
-                self.default_group_color
-            )
         self._ensure_group_color_integrity()
-        self._selector_preview_cache.clear()
         self._refresh_all(preferred_group=new_name)
 
     def delete_group(self) -> None:
@@ -1409,14 +1373,11 @@ class TabularAnalyticsGroupingDialog(QDialog):
         )
         if confirmation != QMessageBox.StandardButton.Yes:
             return
-        selected_mask = self.df["GROUP"] == selected_group
-        if self._is_sqlite_backed():
-            self.df = self.df.loc[~selected_mask].reset_index(drop=True)
-        else:
-            self.df.loc[selected_mask, "GROUP"] = self.default_group
-            self.df.loc[selected_mask, self.group_color_column] = self.default_group_color
+        assignments = self._temp_assignments()
+        for row_id, (group_name, _color) in list(assignments.items()):
+            if group_name == selected_group:
+                assignments.pop(row_id, None)
         self._ensure_group_color_integrity()
-        self._selector_preview_cache.clear()
         self._refresh_all(preferred_group=self.default_group)
 
     def remove_selected_group_members(self) -> None:
@@ -1431,14 +1392,11 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 continue
         if not row_ids:
             return
-        selected_mask = self.df["REPORT_ID"].isin(row_ids) & (self.df["GROUP"] == selected_group)
-        if self._is_sqlite_backed():
-            self.df = self.df.loc[~selected_mask].reset_index(drop=True)
-        else:
-            self.df.loc[selected_mask, "GROUP"] = self.default_group
-            self.df.loc[selected_mask, self.group_color_column] = self.default_group_color
+        assignments = self._temp_assignments()
+        for row_id in row_ids:
+            if assignments.get(int(row_id), (None, None))[0] == selected_group:
+                assignments.pop(int(row_id), None)
         self._ensure_group_color_integrity()
-        self._selector_preview_cache.clear()
         self._refresh_all(preferred_group=selected_group)
 
     def _sync_status(
@@ -1579,15 +1537,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
     def _refresh_groups(self, preferred_group: str | None = None) -> None:
         self.groups_list.blockSignals(True)
         self.groups_list.clear()
-        group_counts = (
-            self._sqlite_group_counts()
-            if self._is_sqlite_backed()
-            else (
-                self.df.groupby("GROUP", dropna=False)["REPORT_ID"].nunique().sort_index().to_dict()
-                if not self.df.empty
-                else {}
-            )
-        )
+        group_counts = self._group_counts()
         if not group_counts:
             group_counts[self.default_group] = 0
         self._last_group_counts = {str(group): int(count) for group, count in group_counts.items()}
@@ -1604,6 +1554,25 @@ class TabularAnalyticsGroupingDialog(QDialog):
             self.groups_list.setCurrentRow(0)
         self.groups_list.blockSignals(False)
 
+    def _group_counts(self) -> dict[str, int]:
+        if self._is_sqlite_backed():
+            return self._sqlite_group_counts()
+        total = int(len(self.source_dataframe.index))
+        valid_row_ids = self._source_row_ids()
+        assigned_ids: set[int] = set()
+        group_counts: dict[str, int] = {}
+        for row_id, (group_name, _color) in self._temp_assignments().items():
+            if group_name == self.default_group:
+                continue
+            if valid_row_ids and int(row_id) not in valid_row_ids:
+                continue
+            assigned_ids.add(int(row_id))
+            group_counts[str(group_name)] = group_counts.get(str(group_name), 0) + 1
+        default_count = max(0, total - len(assigned_ids))
+        if default_count or not group_counts:
+            group_counts[self.default_group] = default_count
+        return group_counts
+
     def _populate_group_members(self, *, recompute_status_counts: bool = False) -> None:
         self.group_members_list.clear()
         selected_group = self._selected_group_name()
@@ -1613,10 +1582,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 recompute_scope=recompute_status_counts,
             )
             return
-        rows = self.df[self.df["GROUP"] == selected_group]
-        total_rows = len(rows.index)
-        if self._is_sqlite_backed() and selected_group == self.default_group:
-            group_counts = self._last_group_counts or self._sqlite_group_counts()
+        if selected_group == self.default_group:
+            group_counts = self._last_group_counts or self._group_counts()
             total_rows = group_counts.get(self.default_group, 0)
             item = QListWidgetItem(
                 f"{self.default_group} contains {total_rows} unassigned row(s). "
@@ -1629,6 +1596,13 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 recompute_scope=recompute_status_counts,
             )
             return
+        row_ids = [
+            row_id
+            for row_id, (group_name, _color) in sorted(self._temp_assignments().items())
+            if group_name == selected_group
+        ]
+        rows = self._group_member_rows(row_ids, selected_group)
+        total_rows = len(row_ids)
         for _index, row in rows.head(_GROUP_MEMBER_PREVIEW_LIMIT).iterrows():
             label = str(row.get("REFERENCE") or row.get("PART_NAME") or row.get("SAMPLE_NUMBER") or "")
             if not label:
@@ -1646,6 +1620,21 @@ class TabularAnalyticsGroupingDialog(QDialog):
             recompute_counts=recompute_status_counts,
             recompute_scope=recompute_status_counts,
         )
+
+    def _group_member_rows(self, row_ids: list[int], group_name: str) -> pd.DataFrame:
+        if not row_ids:
+            return self._empty_grouping_dataframe()
+        color = self._group_color_for_group(group_name)
+        if self._is_sqlite_backed():
+            return self._sqlite_assignment_dataframe(row_ids, group_name, color)
+        frame = self._base_grouping_dataframe()
+        if frame.empty or "REPORT_ID" not in frame.columns:
+            return self._empty_grouping_dataframe()
+        report_ids = pd.to_numeric(frame["REPORT_ID"], errors="coerce")
+        rows = frame.loc[report_ids.isin(row_ids)].copy()
+        rows["GROUP"] = group_name
+        rows[self.group_color_column] = color
+        return rows
 
     def _refresh_all(self, preferred_group: str | None = None) -> None:
         self._refresh_available_columns()
@@ -1690,14 +1679,18 @@ class TabularAnalyticsGroupingDialog(QDialog):
 
     def use_grouping(self) -> None:
         parent = self.parent()
+        materialized = self._materialize_grouping_dataframe()
+        set_default_group_label(materialized, self.default_group)
+        self.df = materialized
         if parent is not None:
-            set_default_group_label(self.df, self.default_group)
-            parent.set_df_for_grouping(self.df)
+            parent.set_df_for_grouping(materialized)
             parent.set_grouping_applied(True)
         self.accept()
 
     def dont_use_grouping(self) -> None:
         parent = self.parent()
+        self._temp_assignments().clear()
+        self.df = self._empty_grouping_dataframe()
         if parent is not None:
             parent.set_df_for_grouping(None)
             parent.set_grouping_applied(False)
