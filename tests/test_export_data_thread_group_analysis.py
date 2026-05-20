@@ -535,6 +535,31 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             )
             self.assertNotIn('Metric index', analysis_values)
 
+    def test_group_analysis_matches_integer_like_grouping_report_ids(self):
+        def _float_like_merge_keys(grouping_df):
+            normalized = grouping_df.copy()
+            normalized['REPORT_ID'] = normalized['REPORT_ID'].astype(float)
+            return normalized
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            out_path = self._run_export(
+                temp_dir,
+                level='light',
+                grouping_df_transform=_float_like_merge_keys,
+            )
+
+            sheet_names = _xlsx_sheet_names(out_path)
+            self.assertIn('Group Analysis', sheet_names)
+            analysis_values = _xlsx_sheet_text_values(out_path, 'Group Analysis')
+            self.assertIn('Group Analysis', analysis_values)
+            self.assertIn('Metric index', analysis_values)
+            self.assertIn('Descriptive stats', analysis_values)
+            self.assertNotIn(
+                'Group Analysis skipped: grouping assignments could not be matched '
+                'to the exported measurement rows.',
+                analysis_values,
+            )
+
     def test_light_mode_exports_group_analysis_only_without_default_debug_sheets(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             out_path = self._run_export(temp_dir, level='light')

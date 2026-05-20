@@ -192,6 +192,74 @@ def test_selected_tracecode_keys_resolve_source_rows_independent_of_reference() 
     assert dialog._row_ids_for_selected_keys() == [1, 3]
 
 
+def test_scoped_dataframe_for_applied_filter_is_cached(monkeypatch) -> None:
+    dialog = _dialog_for_frame(
+        pd.DataFrame(
+            {
+                "source_row_number": [1, 2, 3, 4],
+                "TimeStamp": ["2026-05-01", "2026-05-02", "2026-05-03", "2026-05-04"],
+                "Value": [1, 2, 3, 4],
+            }
+        )
+    )
+    dialog._applied_selector_filter_text = "TimeStamp >= 2026-05-02 AND Value > 2"
+    calls = 0
+    original_apply_filter_specs = (
+        TabularAnalyticsGroupingDialog._scoped_source_dataframe.__globals__["apply_filter_specs"]
+    )
+
+    def spy_apply_filter_specs(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original_apply_filter_specs(*args, **kwargs)
+
+    monkeypatch.setitem(
+        TabularAnalyticsGroupingDialog._scoped_source_dataframe.__globals__,
+        "apply_filter_specs",
+        spy_apply_filter_specs,
+    )
+
+    first = dialog._scoped_source_dataframe()
+    second = dialog._scoped_source_dataframe()
+    dialog.selector_columns = ["TimeStamp", "Value"]
+    dialog._current_selector_index()
+    dialog._current_selector_index()
+
+    assert first is second
+    assert first["source_row_number"].tolist() == [3, 4]
+    assert calls == 1
+
+
+def test_apply_selector_filter_refreshes_selector_scope_without_full_refresh() -> None:
+    dialog = _dialog_for_frame(
+        pd.DataFrame(
+            {
+                "source_row_number": [1],
+                "Value": [1],
+            }
+        )
+    )
+
+    class _Search:
+        def text(self):
+            return "Value > 0"
+
+    calls: list[object] = []
+    dialog.selector_search = _Search()
+    dialog._refresh_all = lambda *args, **kwargs: calls.append("full-refresh")
+    dialog._refresh_selectors = lambda *args, **kwargs: calls.append("selectors")
+    dialog._sync_status = lambda **kwargs: calls.append(("status", kwargs))
+
+    dialog._apply_selector_filter()
+
+    assert dialog._applied_selector_filter_text == "Value > 0"
+    assert "full-refresh" not in calls
+    assert calls == [
+        "selectors",
+        ("status", {"recompute_counts": False, "recompute_scope": True}),
+    ]
+
+
 def test_dataframe_grouping_index_caches_row_ids_by_selected_keys() -> None:
     if DataFrameGroupingIndex is None:
         pytest.skip(f"PyQt6 is unavailable in this environment: {PYQT_IMPORT_ERROR}")

@@ -645,6 +645,82 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertNotIn('%{x', spec['data'][0]['hovertemplate'])
         self.assertIn('%{y:.4f}', spec['data'][0]['hovertemplate'])
 
+    def test_distribution_violin_plotly_spec_accepts_values_payload_for_stat_legend(self):
+        with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
+            spec = _build_plotly_chart_spec(
+                {
+                    'type': 'distribution',
+                    'render_mode': 'violin',
+                    'labels': ['A'],
+                    'values': [[6.469, 6.495, 6.501, 6.687]],
+                    'limits': {'nominal': 6.5},
+                },
+                title='Violin values',
+            )
+
+        trace_names = {trace.get('name') for trace in spec['data']}
+        self.assertIn('A (n=4)', trace_names)
+        self.assertIn('Q1=6.489', trace_names)
+        self.assertIn('Median=6.498', trace_names)
+        self.assertIn('Mean=6.5380', trace_names)
+        self.assertIn('Q3=6.548', trace_names)
+        self.assertIn('Nominal=6.500', trace_names)
+
+    def test_distribution_violin_plotly_spec_rounds_stat_legend_values_half_up(self):
+        with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
+            spec = _build_plotly_chart_spec(
+                {
+                    'type': 'distribution',
+                    'render_mode': 'violin',
+                    'labels': ['A'],
+                    'values': [[1.2345, 1.2345, 1.2345]],
+                },
+                title='Violin rounding',
+            )
+
+        trace_names = {trace.get('name') for trace in spec['data']}
+        self.assertIn('Min=1.235', trace_names)
+        self.assertIn('Mean=1.2345', trace_names)
+
+    def test_iqr_plotly_spec_normalizes_raw_package_semantic_legend_items(self):
+        raw_package_spec = {
+            'data': [
+                {'type': 'box', 'name': 'A', 'y': [6.469, 6.495, 6.501, 6.687]},
+                {'type': 'scatter', 'mode': 'markers', 'name': 'Minimum', 'y': [6.469]},
+                {'type': 'scatter', 'mode': 'markers', 'name': 'Mean', 'y': [6.538]},
+                {'type': 'scatter', 'mode': 'markers', 'name': 'Maximum', 'y': [6.687]},
+            ],
+            'layout': {},
+            'config': {'responsive': True},
+        }
+        with (
+            patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=True),
+            patch(
+                'modules.export_html_dashboard.build_plotstats_dashboard_spec',
+                return_value=raw_package_spec,
+            ),
+        ):
+            spec = _build_plotly_chart_spec(
+                {
+                    'type': 'iqr',
+                    'labels': ['A'],
+                    'series': [[6.469, 6.495, 6.501, 6.687]],
+                    'limits': {'nominal': 6.5},
+                },
+                title='IQR values',
+            )
+
+        visible_legend_names = {
+            trace.get('name')
+            for trace in spec['data']
+            if trace.get('showlegend', True) is not False
+        }
+        self.assertIn('A (n=4)', visible_legend_names)
+        self.assertIn('Min=6.469', visible_legend_names)
+        self.assertIn('Mean=6.5380', visible_legend_names)
+        self.assertIn('Max=6.687', visible_legend_names)
+        self.assertTrue({'Minimum', 'Mean', 'Maximum'}.isdisjoint(visible_legend_names))
+
     def test_distribution_scatter_plotly_spec_keeps_limit_annotations_visible(self):
         with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
             spec = _build_plotly_chart_spec(
@@ -698,20 +774,30 @@ class TestExportHtmlDashboard(unittest.TestCase):
             spec = _build_plotly_chart_spec(
                 {
                     'type': 'histogram',
-                    'values': [9.9, 10.0, 10.1, 10.2],
-                    'limits': {'lsl': 9.8, 'usl': 10.2},
+                    'values': [9.99, 10.0, 10.1, 10.11],
+                    'limits': {'lsl': 10.02, 'nominal': 10.04, 'usl': 10.06},
                 },
                 title='Histogram refs',
             )
 
         self.assertEqual(spec['layout']['yaxis']['tickformat'], '.0%')
         names = [trace.get('name') for trace in spec['data'] if trace.get('type') == 'scatter']
+        reference_traces = [trace for trace in spec['data'] if trace.get('type') == 'scatter']
         self.assertTrue(any(str(name).startswith('LSL=') for name in names))
         self.assertTrue(any(str(name).startswith('USL=') for name in names))
+        self.assertTrue(any(str(name).startswith('Nominal=') for name in names))
         self.assertTrue(any(str(name).startswith('Mean=') for name in names))
         self.assertTrue(any(str(name).startswith('Median=') for name in names))
         self.assertTrue(any(str(name).startswith('Q1=') for name in names))
         self.assertTrue(any(str(name).startswith('Q3=') for name in names))
+        self.assertTrue(all(trace.get('visible') == 'legendonly' for trace in reference_traces))
+        self.assertTrue(all(trace.get('y') == [0.0, 0.0] for trace in reference_traces))
+        reference_annotations = [
+            item
+            for item in spec['layout']['annotations']
+            if str(item.get('text') or '').startswith(('LSL=', 'Nominal=', 'USL=', 'Mean='))
+        ]
+        self.assertGreater(len({item.get('y') for item in reference_annotations}), 1)
         self.assertTrue(all(item.get('bgcolor') == '#ffffff' for item in spec['layout']['annotations']))
         self.assertTrue(all(item.get('bordercolor') == '#cbd5e1' for item in spec['layout']['annotations']))
         self.assertTrue(all(item.get('borderwidth') >= 1 for item in spec['layout']['annotations']))

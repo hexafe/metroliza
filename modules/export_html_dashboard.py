@@ -23,6 +23,7 @@ from modules.dashboard_navigation import (
 from modules.export_summary_utils import resolve_histogram_bin_count
 from modules.hexafe_plotstats_adapter import (
     build_plotstats_dashboard_spec,
+    normalize_distribution_stat_legend,
     plotstats_export_charts_enabled,
 )
 
@@ -1048,6 +1049,10 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str, theme: 
     mean_value = _coerce_finite_float(((payload.get("summary") or {}).get("mean") if isinstance(payload.get("summary"), dict) else None))
     if mean_value is None and values:
         mean_value = float(sum(values) / len(values))
+    bins = _resolve_plotly_histogram_bins(
+        values,
+        preferred=payload.get("bin_count"),
+    )
 
     layout = _build_plotly_base_layout(
         title=title,
@@ -1088,6 +1093,11 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str, theme: 
             }
         )
     _apply_histogram_annotation_contrast(annotations)
+    _stagger_histogram_annotations(
+        layout,
+        _histogram_annotation_positions(annotations),
+        bin_width=_coerce_finite_float(bins.get("size")) if isinstance(bins, dict) else None,
+    )
     layout["shapes"] = shapes
     layout["annotations"] = annotations
     x_view = payload.get("x_view") if isinstance(payload.get("x_view"), dict) else {}
@@ -1096,10 +1106,6 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str, theme: 
     if x_min is not None and x_max is not None and x_min < x_max:
         layout["xaxis"]["range"] = [x_min, x_max]
     layout["bargap"] = 0.04
-    bins = _resolve_plotly_histogram_bins(
-        values,
-        preferred=payload.get("bin_count"),
-    )
 
     traces: list[dict[str, Any]] = [
         {
@@ -1140,16 +1146,32 @@ def _apply_histogram_annotation_contrast(annotations: list[dict[str, Any]]) -> N
             annotation["opacity"] = 1.0
 
 
-def _stagger_histogram_mean_annotations(
+def _histogram_annotation_positions(annotations: list[dict[str, Any]]) -> list[tuple[dict[str, Any], float]]:
+    positions: list[tuple[dict[str, Any], float]] = []
+    for annotation in annotations:
+        if not isinstance(annotation, dict):
+            continue
+        if str(annotation.get("xref") or "").strip().casefold() != "x":
+            continue
+        if str(annotation.get("yref") or "").strip().casefold() != "paper":
+            continue
+        x_value = _coerce_finite_float(annotation.get("x"))
+        if x_value is None:
+            continue
+        positions.append((annotation, x_value))
+    return positions
+
+
+def _stagger_histogram_annotations(
     layout: dict[str, Any],
-    mean_annotations: list[tuple[dict[str, Any], float]],
+    annotations: list[tuple[dict[str, Any], float]],
     *,
     bin_width: float | None = None,
 ) -> None:
-    if len(mean_annotations) <= 1:
+    if len(annotations) <= 1:
         return
     sorted_annotations = sorted(
-        mean_annotations,
+        annotations,
         key=lambda item: (item[1], str(item[0].get("text") or "")),
     )
     x_values = [x_value for _annotation, x_value in sorted_annotations]
@@ -1216,9 +1238,12 @@ def _build_histogram_reference_legend_traces(
                 "mode": "lines",
                 "name": f"{label}={formatted}",
                 "x": [numeric, numeric],
-                "y": [0.0, 1.0],
+                "y": [0.0, 0.0],
                 "line": {"color": color, "width": 2, "dash": dash},
+                "hoverinfo": "skip",
                 "hovertemplate": f"{label}={formatted}<extra></extra>",
+                "visible": "legendonly",
+                "showlegend": True,
             }
         )
     return traces
@@ -1376,7 +1401,7 @@ def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str, them
         }
 
     labels = [str(item) for item in (payload.get("labels") or [])]
-    series_list = payload.get("series") or []
+    series_list = _payload_distribution_series(payload)
     traces = []
     category_labels = []
     for index, (label, series) in enumerate(zip(labels, series_list), start=1):
@@ -1444,7 +1469,7 @@ def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str, them
 def _build_plotly_iqr_spec(payload: dict[str, Any], *, title: str, theme: str = "light") -> dict[str, Any]:
     tokens = _build_plotly_theme_tokens(theme)
     labels = [str(item) for item in (payload.get("labels") or [])]
-    series_list = payload.get("series") or []
+    series_list = _payload_distribution_series(payload)
     traces = []
     category_labels = []
     for index, (label, series) in enumerate(zip(labels, series_list), start=1):
@@ -1522,6 +1547,16 @@ def _format_group_statistics_trace_name(label: str, values: list[float]) -> str:
     return f"{label} (n={len(values)})"
 
 
+def _payload_distribution_series(payload: dict[str, Any]) -> list[Any]:
+    series = payload.get("series")
+    if isinstance(series, list):
+        return series
+    values = payload.get("values")
+    if isinstance(values, list):
+        return values
+    return []
+
+
 def _build_distribution_stat_legend_traces(
     *,
     labels: list[str],
@@ -1595,7 +1630,9 @@ def _format_metrology_legend_value(label: str, value: float | None) -> str:
     if value is None or not math.isfinite(float(value)):
         return ""
     precision = 4 if label.strip().casefold() == "mean" else 3
-    return f"{float(value):.{precision}f}"
+    quantizer = Decimal("1").scaleb(-precision)
+    rounded = Decimal(str(round(float(value), 12))).quantize(quantizer, rounding=ROUND_HALF_UP)
+    return f"{rounded:.{precision}f}"
 
 
 def _format_plotly_stat_value(value: float | None) -> str:
@@ -1842,7 +1879,6 @@ def _build_group_analysis_plotly_spec(
             theme=theme,
         )
         bins = _resolve_plotly_histogram_bins(all_values)
-        mean_annotations: list[tuple[dict[str, Any], float]] = []
         for index, (label, values) in enumerate(normalized_groups, start=1):
             mean_value = float(sum(values) / len(values))
             color = tokens["colorway"][(index - 1) % len(tokens["colorway"])]
@@ -1869,11 +1905,10 @@ def _build_group_analysis_plotly_spec(
                 "bgcolor": tokens["annotation_bg"],
             }
             annotations.append(annotation)
-            mean_annotations.append((annotation, mean_value))
         _apply_histogram_annotation_contrast(annotations)
-        _stagger_histogram_mean_annotations(
+        _stagger_histogram_annotations(
             layout,
-            mean_annotations,
+            _histogram_annotation_positions(annotations),
             bin_width=_coerce_finite_float(bins.get("size")) if isinstance(bins, dict) else None,
         )
         layout["shapes"] = shapes
@@ -1911,13 +1946,15 @@ def _build_plotly_chart_spec(payload: dict[str, Any] | None, *, title: str, them
     if plotstats_export_charts_enabled():
         spec = build_plotstats_dashboard_spec(payload, title=title, theme=theme, static=False)
         if spec:
-            return spec
+            return normalize_distribution_stat_legend(spec, payload)
     if chart_type == "histogram":
         return _build_plotly_histogram_spec(payload, title=title, theme=theme)
     if chart_type == "distribution":
-        return _build_plotly_distribution_spec(payload, title=title, theme=theme)
+        spec = _build_plotly_distribution_spec(payload, title=title, theme=theme)
+        return normalize_distribution_stat_legend(spec, payload) if spec else spec
     if chart_type == "iqr":
-        return _build_plotly_iqr_spec(payload, title=title, theme=theme)
+        spec = _build_plotly_iqr_spec(payload, title=title, theme=theme)
+        return normalize_distribution_stat_legend(spec, payload) if spec else spec
     if chart_type == "trend":
         return _build_plotly_trend_spec(payload, title=title, theme=theme)
     return {}

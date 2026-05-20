@@ -977,14 +977,14 @@ def _coerce_number(value: float | int | str | None, *, field_name: str) -> float
 def _coerce_date(value: Any, *, dayfirst: bool, field_name: str) -> pd.Timestamp:
     if value is None:
         raise ValueError(f"{field_name} is required for this date filter")
-    parsed = _coerce_date_series(pd.Series([value]), dayfirst=dayfirst).iloc[0]
+    parsed = pd.to_datetime(value, errors="coerce", dayfirst=dayfirst, format="mixed")
     if pd.isna(parsed):
         raise ValueError(f"{field_name} must be date-like")
-    return parsed
+    return pd.Timestamp(parsed).normalize()
 
 
 def _coerce_date_series(series: pd.Series, *, dayfirst: bool) -> pd.Series:
-    return series.map(lambda value: pd.to_datetime(value, errors="coerce", dayfirst=dayfirst)).dt.normalize()
+    return pd.to_datetime(series, errors="coerce", dayfirst=dayfirst, format="mixed").dt.normalize()
 
 
 def _normalize_match_mode(match_mode: str) -> FilterMatchMode:

@@ -223,15 +223,15 @@ def test_plotstats_dashboard_spec_normalizes_histogram_plotly_semantics(monkeypa
                         "mode": "lines",
                         "name": "LSL",
                         "x": [123.0, 123.0],
-                        "y": [0.0, 1.0],
+                        "y": [0.0, 60.0],
                         "line": {"color": "#dc2626"},
                     },
                     {
                         "type": "scatter",
                         "mode": "lines",
                         "name": "Mean",
-                        "x": [1000.0, 1000.0],
-                        "y": [0.0, 1.0],
+                        "x": [124.0, 124.0],
+                        "y": [0.0, 60.0],
                         "line": {"color": "#111827"},
                     },
                 ],
@@ -274,9 +274,20 @@ def test_plotstats_dashboard_spec_normalizes_histogram_plotly_semantics(monkeypa
     assert bar_trace["width"] == [5847.0, 5830.0]
     assert bar_trace["customdata"][0] == [123.0, 5970.0, 4, "123 - 5.97e+03"]
     assert spec["data"][1]["name"] == "LSL=123.000"
-    assert spec["data"][2]["name"] == "Mean=1000.0000"
-    annotation_texts = {annotation["text"] for annotation in spec["layout"]["annotations"]}
-    assert {"legacy", "LSL=123.000", "Mean=1000.0000"}.issubset(annotation_texts)
+    assert spec["data"][1]["visible"] == "legendonly"
+    assert spec["data"][1]["y"] == [0.0, 0.0]
+    assert spec["data"][2]["name"] == "Mean=124.0000"
+    assert spec["data"][2]["visible"] == "legendonly"
+    assert spec["data"][2]["y"] == [0.0, 0.0]
+    reference_shapes = [
+        shape for shape in spec["layout"]["shapes"]
+        if shape.get("xref") == "x" and shape.get("yref") == "paper"
+    ]
+    assert any(shape["x0"] == 123.0 and shape["x1"] == 123.0 for shape in reference_shapes)
+    assert any(shape["x0"] == 124.0 and shape["x1"] == 124.0 for shape in reference_shapes)
+    annotations_by_text = {annotation["text"]: annotation for annotation in spec["layout"]["annotations"]}
+    assert {"legacy", "LSL=123.000", "Mean=124.0000"}.issubset(annotations_by_text)
+    assert annotations_by_text["LSL=123.000"]["y"] != annotations_by_text["Mean=124.0000"]["y"]
     assert all(annotation["bgcolor"] == "#ffffff" for annotation in spec["layout"]["annotations"])
     assert all(annotation["bordercolor"] == "#cbd5e1" for annotation in spec["layout"]["annotations"])
     assert all(annotation["borderwidth"] >= 1 for annotation in spec["layout"]["annotations"])
@@ -315,6 +326,8 @@ def test_dashboard_plotly_fallback_builds_percent_histogram_with_reference_value
         "LSL=1.500",
         "USL=3.500",
     }.issubset(trace_names)
+    assert all(trace["visible"] == "legendonly" for trace in spec["data"][1:])
+    assert all(trace["y"] == [0.0, 0.0] for trace in spec["data"][1:])
     annotation_texts = {annotation["text"] for annotation in spec["layout"]["annotations"]}
     assert {"LSL=1.500", "USL=3.500", "Mean=2.5000"}.issubset(annotation_texts)
     assert all(annotation["bgcolor"] == "#ffffff" for annotation in spec["layout"]["annotations"])
@@ -483,6 +496,7 @@ def test_plotstats_dashboard_spec_adds_distribution_group_stats_to_legend(monkey
                 "data": [
                     {"type": "violin", "name": "A", "y": [1.0, 2.0, 3.0]},
                     {"type": "violin", "name": "B", "y": [10.0, 12.0, 16.0]},
+                    {"type": "scatter", "mode": "markers", "name": "Mean", "y": [2.0, 12.6667]},
                 ],
                 "layout": {},
             }
@@ -498,7 +512,7 @@ def test_plotstats_dashboard_spec_adds_distribution_group_stats_to_legend(monkey
         {
             "type": "distribution",
             "labels": ["A", "B"],
-            "series": [[1.0, 2.0, 3.0], [10.0, 12.0, 16.0]],
+            "values": [[1.0, 2.0, 3.0], [10.0, 12.0, 16.0]],
         },
         title="Violin",
         static=False,
@@ -510,11 +524,55 @@ def test_plotstats_dashboard_spec_adds_distribution_group_stats_to_legend(monkey
     assert {"A Mean=2.0000", "A Q1=1.500", "B Mean=12.6667", "B Max=16.000"}.issubset(
         trace_names
     )
+    assert spec["data"][2]["name"] == "Mean"
+    assert spec["data"][2]["showlegend"] is False
     assert all(
         trace["visible"] == "legendonly"
-        for trace in spec["data"][2:]
+        for trace in spec["data"][3:]
         if trace["name"].startswith(("A ", "B "))
     )
+
+
+def test_plotstats_dashboard_spec_values_existing_distribution_semantic_legend_items(
+    monkeypatch,
+) -> None:
+    def fake_artifact(_payload, **_kwargs):
+        return {
+            "plotly_spec": {
+                "data": [
+                    {"type": "violin", "name": "A", "y": [6.469, 6.495, 6.501, 6.687]},
+                    {"type": "scatter", "mode": "markers", "name": "Q1", "y": [6.495]},
+                    {"type": "scatter", "mode": "markers", "name": "Median", "y": [6.501]},
+                    {"type": "scatter", "mode": "markers", "name": "Mean", "y": [6.538]},
+                    {"type": "scatter", "mode": "markers", "name": "Q3", "y": [6.594]},
+                ],
+                "layout": {},
+            }
+        }
+
+    package = ModuleType("hexafe_plotstats")
+    adapters = ModuleType("hexafe_plotstats.adapters")
+    adapters.chart_artifact_from_metroliza_payload = fake_artifact
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats", package)
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats.adapters", adapters)
+
+    spec = build_plotstats_dashboard_spec(
+        {
+            "type": "distribution",
+            "labels": ["A"],
+            "values": [[6.469, 6.495, 6.501, 6.687]],
+        },
+        title="Violin",
+        static=False,
+    )
+
+    trace_names = {trace["name"] for trace in spec["data"]}
+    assert "A (n=4)" in trace_names
+    assert "Q1=6.489" in trace_names
+    assert "Median=6.498" in trace_names
+    assert "Mean=6.5380" in trace_names
+    assert "Q3=6.548" in trace_names
+    assert {"Q1", "Median", "Mean", "Q3"}.isdisjoint(trace_names)
 
 
 def test_plotstats_dashboard_spec_adds_iqr_group_stats_to_legend(monkeypatch) -> None:
@@ -524,6 +582,9 @@ def test_plotstats_dashboard_spec_adds_iqr_group_stats_to_legend(monkeypatch) ->
                 "data": [
                     {"type": "box", "name": "A", "y": [1.0, 2.0, 3.0]},
                     {"type": "box", "name": "B", "y": [10.0, 12.0, 16.0]},
+                    {"type": "scatter", "mode": "markers", "name": "Minimum", "y": [1.0, 10.0]},
+                    {"type": "scatter", "mode": "markers", "name": "Mean", "y": [2.0, 12.6667]},
+                    {"type": "scatter", "mode": "markers", "name": "Maximum", "y": [3.0, 16.0]},
                 ],
                 "layout": {},
             }
@@ -551,6 +612,12 @@ def test_plotstats_dashboard_spec_adds_iqr_group_stats_to_legend(monkeypatch) ->
     assert {"A Median=2.000", "A Mean=2.0000", "B Q3=14.000", "B Max=16.000"}.issubset(
         trace_names
     )
+    visible_legend_names = {
+        trace["name"]
+        for trace in spec["data"]
+        if trace.get("showlegend", True) is not False
+    }
+    assert {"Minimum", "Mean", "Maximum"}.isdisjoint(visible_legend_names)
 
 
 def test_plotstats_dashboard_spec_values_existing_single_group_semantic_legend_items(
@@ -593,13 +660,61 @@ def test_plotstats_dashboard_spec_values_existing_single_group_semantic_legend_i
     )
 
     trace_names = {trace["name"] for trace in spec["data"]}
+    visible_trace_names = [
+        trace["name"]
+        for trace in spec["data"]
+        if trace.get("showlegend", True) is not False
+    ]
     assert "A (n=4)" in trace_names
     assert "Min=6.469" in trace_names
     assert "Mean=6.5380" in trace_names
     assert "Max=6.687" in trace_names
     assert "Nominal=6.500" in trace_names
+    assert visible_trace_names.count("Nominal=6.500") == 1
     assert "Minimum" not in trace_names
     assert "Maximum" not in trace_names
+
+
+def test_plotstats_dashboard_spec_normalizes_valued_stat_labels_and_hides_duplicates(
+    monkeypatch,
+) -> None:
+    def fake_artifact(_payload, **_kwargs):
+        return {
+            "plotly_spec": {
+                "data": [
+                    {"type": "violin", "name": "A", "y": [1.2345, 1.2345, 1.2345]},
+                    {"type": "scatter", "mode": "markers", "name": "Mean=1.2345", "y": [1.2345]},
+                    {"type": "scatter", "mode": "markers", "name": "Mean=1.2345", "y": [1.2345]},
+                    {"type": "scatter", "mode": "markers", "name": "Minimum=1.234", "y": [1.2345]},
+                ],
+                "layout": {},
+            }
+        }
+
+    package = ModuleType("hexafe_plotstats")
+    adapters = ModuleType("hexafe_plotstats.adapters")
+    adapters.chart_artifact_from_metroliza_payload = fake_artifact
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats", package)
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats.adapters", adapters)
+
+    spec = build_plotstats_dashboard_spec(
+        {
+            "type": "distribution",
+            "labels": ["A"],
+            "values": [[1.2345, 1.2345, 1.2345]],
+        },
+        title="Violin",
+        static=False,
+    )
+
+    visible_trace_names = [
+        trace["name"]
+        for trace in spec["data"]
+        if trace.get("showlegend", True) is not False
+    ]
+    assert visible_trace_names.count("Mean=1.2345") == 1
+    assert visible_trace_names.count("Min=1.235") == 1
+    assert "Minimum=1.234" not in visible_trace_names
 
 
 def test_dashboard_plotly_spec_renames_generic_limit_traces(monkeypatch) -> None:

@@ -192,6 +192,31 @@ class TestExportSortingAndGrouping(unittest.TestCase):
         self.assertEqual(merged['GROUP'].tolist(), ['G1'])
         self.assertEqual(merged['GROUP_COLOR'].tolist(), ['#FDE2E4'])
 
+    def test_apply_group_assignments_matches_integer_like_report_id_variants(self):
+        header_group = pd.DataFrame(
+            {
+                'REPORT_ID': [1, 2],
+                'REFERENCE': ['R1', 'R1'],
+                'DATE': ['2024-01-01', '2024-01-02'],
+                'SAMPLE_NUMBER': ['1', '2'],
+                'MEAS': [1.0, 2.0],
+            }
+        )
+        grouping_df = pd.DataFrame(
+            {
+                'REPORT_ID': [1.0, '2.0'],
+                'GROUP': ['A', 'B'],
+            }
+        )
+        grouping_df = prepare_grouping_dataframe(grouping_df)
+
+        merged, applied, merge_keys, duplicate_count = apply_group_assignments(header_group, grouping_df)
+
+        self.assertTrue(applied)
+        self.assertEqual(merge_keys, ['GROUP_KEY'])
+        self.assertEqual(duplicate_count, 0)
+        self.assertEqual(merged['GROUP'].tolist(), ['A', 'B'])
+
     def test_apply_group_assignments_returns_false_when_grouping_is_missing(self):
         header_group = pd.DataFrame(
             {

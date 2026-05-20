@@ -1,4 +1,5 @@
 import hashlib
+from decimal import Decimal, InvalidOperation
 
 import pandas as pd
 
@@ -72,11 +73,36 @@ def add_group_key(df):
         return df
 
     keyed_df = normalized_df.copy()
-    raw_key = keyed_df[[report_id_column]].fillna('').astype(str).agg('|'.join, axis=1)
+    raw_key = keyed_df[report_id_column].map(_normalize_grouping_identity_component)
     keyed_df['GROUP_KEY'] = raw_key.apply(
         lambda value: hashlib.sha1(value.encode('utf-8'), usedforsecurity=False).hexdigest()
     )
     return keyed_df
+
+
+def _normalize_grouping_identity_component(value):
+    """Normalize report identity values before hashing them into grouping keys."""
+    try:
+        if pd.isna(value):
+            return ''
+    except (TypeError, ValueError):
+        pass
+    text = str(value).strip()
+    if not text:
+        return ''
+    try:
+        decimal_value = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return text
+    if not decimal_value.is_finite():
+        return text
+    integral_value = decimal_value.to_integral_value()
+    if decimal_value == integral_value:
+        return str(int(integral_value))
+    normalized = format(decimal_value.normalize(), 'f')
+    if '.' in normalized:
+        normalized = normalized.rstrip('0').rstrip('.')
+    return '0' if normalized in {'', '-0'} else normalized
 
 
 def prepare_grouping_dataframe(grouping_df):

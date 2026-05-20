@@ -82,6 +82,29 @@ def test_apply_filter_specs_combines_text_number_and_date_with_and() -> None:
     assert filtered["tracecode"].tolist() == ["TC-001", "TC-002"]
 
 
+def test_date_filter_parses_source_series_vectorized(monkeypatch) -> None:
+    frame = pd.DataFrame(
+        {
+            "created_at": pd.date_range("2026-05-01 08:00", periods=5000, freq="min").strftime(
+                "%Y-%m-%d %H:%M:%S"
+            ),
+        }
+    )
+    original_to_datetime = pd.to_datetime
+    calls: list[str] = []
+
+    def spy_to_datetime(arg, *args, **kwargs):
+        calls.append(type(arg).__name__)
+        return original_to_datetime(arg, *args, **kwargs)
+
+    monkeypatch.setattr("modules.grouping_filter_core.pd.to_datetime", spy_to_datetime)
+
+    mask = DateFilterSpec("created_at", "on_or_after", "2026-05-03").mask(frame)
+
+    assert mask.sum() == 2600
+    assert calls == ["Series", "str"]
+
+
 def test_apply_filter_specs_combines_filters_with_or() -> None:
     frame = pd.DataFrame(
         {

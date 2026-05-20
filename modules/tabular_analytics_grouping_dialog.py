@@ -240,6 +240,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._applied_column_search_text = ""
         self._applied_selected_column_search_text = ""
         self._applied_selector_filter_text = ""
+        self._selector_filter_state_cache: tuple[tuple[object, ...], _SelectorFilterState] | None = None
+        self._scoped_source_dataframe_cache: tuple[tuple[object, ...], pd.DataFrame] | None = None
         self._list_selection_utils = ListSelectionUtils()
         self._grouping_shortcuts = None
         self.default_group = TABULAR_DEFAULT_GROUP
@@ -700,29 +702,45 @@ class TabularAnalyticsGroupingDialog(QDialog):
 
     def _selector_filter_state(self) -> _SelectorFilterState:
         text = self._selector_filter_text()
+        columns = tuple(self._scope_filter_columns())
+        aliases = tuple(sorted(self._selector_filter_aliases().items()))
+        cache_key = (text, columns, aliases)
+        cached = vars(self).get("_selector_filter_state_cache")
+        if cached is not None and cached[0] == cache_key:
+            return cached[1]
         if not text:
-            return _SelectorFilterState(text="", mode="none")
+            state = _SelectorFilterState(text="", mode="none")
+            self._selector_filter_state_cache = (cache_key, state)
+            return state
         if not self._looks_like_filter_expression(text):
-            return _SelectorFilterState(text=text, mode="search")
+            state = _SelectorFilterState(text=text, mode="search")
+            self._selector_filter_state_cache = (cache_key, state)
+            return state
         try:
             parsed = parse_filter_expression(
                 text,
-                self._scope_filter_columns(),
-                aliases=self._selector_filter_aliases(),
+                columns,
+                aliases=dict(aliases),
             )
         except (KeyError, TypeError, ValueError) as exc:
-            return _SelectorFilterState(text=text, mode="invalid", error=str(exc))
+            state = _SelectorFilterState(text=text, mode="invalid", error=str(exc))
+            self._selector_filter_state_cache = (cache_key, state)
+            return state
         specs = tuple(parsed.specs)
         if not specs:
-            return _SelectorFilterState(text=text, mode="search")
+            state = _SelectorFilterState(text=text, mode="search")
+            self._selector_filter_state_cache = (cache_key, state)
+            return state
         match_mode = "or" if str(parsed.match_mode).casefold() == "or" else "and"
-        return _SelectorFilterState(
+        state = _SelectorFilterState(
             text=text,
             mode="expression",
             specs=specs,
             match_mode=match_mode,
             parsed_filter=parsed,
         )
+        self._selector_filter_state_cache = (cache_key, state)
+        return state
 
     def _tabular_filters_for_expression_specs(
         self,
@@ -980,18 +998,27 @@ class TabularAnalyticsGroupingDialog(QDialog):
         if self._is_sqlite_backed():
             return pd.DataFrame()
         state = self._selector_filter_state()
+        cache_key = (state.text, state.mode, state.match_mode, state.specs, state.parsed_filter)
+        cached = vars(self).get("_scoped_source_dataframe_cache")
+        if cached is not None and cached[0] == cache_key:
+            return cached[1]
         if state.mode == "invalid":
-            return self.source_dataframe.iloc[0:0].copy()
+            scoped = self.source_dataframe.iloc[0:0].copy()
+            self._scoped_source_dataframe_cache = (cache_key, scoped)
+            return scoped
         if state.mode != "expression":
+            self._scoped_source_dataframe_cache = (cache_key, self.source_dataframe)
             return self.source_dataframe
         try:
-            return apply_filter_specs(
+            scoped = apply_filter_specs(
                 self.source_dataframe,
                 (state.parsed_filter,) if state.parsed_filter is not None else state.specs,
                 match_mode=state.match_mode,
             )
         except (KeyError, TypeError, ValueError):
-            return self.source_dataframe.iloc[0:0].copy()
+            scoped = self.source_dataframe.iloc[0:0].copy()
+        self._scoped_source_dataframe_cache = (cache_key, scoped)
+        return scoped
 
     def _selector_label_search_text(self, state: _SelectorFilterState | None = None) -> str:
         current_state = state or self._selector_filter_state()
@@ -1858,12 +1885,15 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._selector_index = None
         self._selector_index_source_frame = None
         self._selector_preview_cache.clear()
+        self._selector_filter_state_cache = None
+        self._scoped_source_dataframe_cache = None
 
     def _apply_selector_filter(self) -> None:
         self._applied_selector_filter_text = self._selector_filter_input_text()
         self._invalidate_selector_cache()
         self._selector_page_offset = 0
-        self._refresh_all()
+        self._refresh_selectors()
+        self._sync_status(recompute_counts=False, recompute_scope=True)
 
     def _cached_selector_preview_rows(
         self,
@@ -2189,13 +2219,31 @@ class TabularAnalyticsGroupingDialog(QDialog):
             ]
             total_rows = len(row_ids)
         rows = self._group_member_rows(row_ids, selected_group)
-        for _index, row in rows.head(_GROUP_MEMBER_PREVIEW_LIMIT).iterrows():
-            label = str(row.get("REFERENCE") or row.get("PART_NAME") or row.get("SAMPLE_NUMBER") or "")
+        preview = rows.head(_GROUP_MEMBER_PREVIEW_LIMIT)
+        column_positions = {str(column): index for index, column in enumerate(preview.columns)}
+
+        def _row_value(values: tuple[object, ...], column: str) -> object:
+            position = column_positions.get(column)
+            if position is None or position >= len(values):
+                return None
+            return values[position]
+
+        for values in preview.itertuples(index=False, name=None):
+            label = str(
+                _row_value(values, "REFERENCE")
+                or _row_value(values, "PART_NAME")
+                or _row_value(values, "SAMPLE_NUMBER")
+                or ""
+            )
             if not label:
-                label = f"Row {row.get('REPORT_ID')}"
+                label = f"Row {_row_value(values, 'REPORT_ID')}"
             item = QListWidgetItem(label)
-            item.setData(Qt.ItemDataRole.UserRole, row.get("REPORT_ID"))
-            self._apply_item_color(item, self._group_color_for_row(row))
+            item.setData(Qt.ItemDataRole.UserRole, _row_value(values, "REPORT_ID"))
+            color = _row_value(values, self.group_color_column)
+            self._apply_item_color(
+                item,
+                self.default_group_color if pd.isna(color) or not str(color).strip() else str(color),
+            )
             self.group_members_list.addItem(item)
         if total_rows > _GROUP_MEMBER_PREVIEW_LIMIT:
             item = QListWidgetItem(

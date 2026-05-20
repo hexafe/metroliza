@@ -417,6 +417,18 @@ def build_plotstats_dashboard_spec(
     return _trim_plotly_spec(spec)
 
 
+def normalize_distribution_stat_legend(
+    spec: Mapping[str, Any],
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Ensure distribution/IQR Plotly legends expose values for semantic stat items."""
+
+    normalized = dict(spec)
+    _normalize_payload_group_stat_trace_names(normalized, payload)
+    _dedupe_visible_stat_legend_items(normalized)
+    return normalized
+
+
 def render_chart_artifact_png(
     payload: Mapping[str, Any],
     *,
@@ -877,7 +889,10 @@ def _normalize_dashboard_plotly_spec(spec: dict[str, Any]) -> dict[str, Any]:
         _normalize_grouped_histogram_bins(spec)
         _normalize_histogram_overlay_traces(spec)
     _normalize_reference_trace_names_and_annotations(spec)
+    _dedupe_visible_stat_legend_items(spec)
     _normalize_plotly_annotation_boxes(spec)
+    if _is_histogram_plotly_spec(spec):
+        _stagger_histogram_x_annotations(spec)
     return spec
 
 
@@ -930,7 +945,7 @@ def _normalize_payload_group_stat_trace_names(spec: Mapping[str, Any], payload: 
     if payload_type not in {"distribution", "iqr"}:
         return
     labels = [str(item) for item in (payload.get("labels") or [])]
-    series_list = payload.get("series") or []
+    series_list = _payload_distribution_series(payload)
     stat_names: list[str] = []
     for index, (label, series) in enumerate(zip(labels, series_list), start=1):
         values = _finite_trace_values(series)
@@ -952,7 +967,7 @@ def _ensure_payload_distribution_stat_legend_traces(
     if not isinstance(data, list):
         return
     labels = [str(item) for item in (payload.get("labels") or [])]
-    series_list = payload.get("series") or []
+    series_list = _payload_distribution_series(payload)
     existing_names = {
         str(trace.get("name") or "")
         for trace in data
@@ -961,6 +976,7 @@ def _ensure_payload_distribution_stat_legend_traces(
     populated_count = sum(1 for series in series_list if _finite_trace_values(series))
     traces: list[dict[str, Any]] = []
     single_group_stats: dict[str, float] = {}
+    group_stats: dict[str, dict[str, float]] = {}
     for label, series in zip(labels, series_list, strict=False):
         values = sorted(_finite_trace_values(series))
         if not values:
@@ -975,6 +991,7 @@ def _ensure_payload_distribution_stat_legend_traces(
             "Q3": _percentile_sorted(values, 0.75),
             "Max": max(values),
         }
+        group_stats[group_label] = dict(stats)
         if populated_count == 1:
             single_group_stats = dict(stats)
         for stat_label, value in stats.items():
@@ -1007,18 +1024,31 @@ def _ensure_payload_distribution_stat_legend_traces(
     _normalize_existing_semantic_stat_traces(
         data,
         stats=single_group_stats,
+        group_stats=group_stats,
         existing_names=existing_names,
     )
     data.extend(traces)
+
+
+def _payload_distribution_series(payload: Mapping[str, Any]) -> list[Any]:
+    series = payload.get("series")
+    if isinstance(series, list):
+        return series
+    values = payload.get("values")
+    if isinstance(values, list):
+        return values
+    return []
 
 
 def _normalize_existing_semantic_stat_traces(
     data: list[Any],
     *,
     stats: Mapping[str, float],
+    group_stats: Mapping[str, Mapping[str, float]] | None = None,
     existing_names: set[str],
 ) -> None:
-    if not stats:
+    group_stats = group_stats or {}
+    if not stats and not group_stats:
         return
     label_to_stat = {
         "min": "Min",
@@ -1033,21 +1063,78 @@ def _normalize_existing_semantic_stat_traces(
         "q1": "Q1",
         "q3": "Q3",
     }
+    visible_names: set[str] = set()
     for trace in data:
         if not isinstance(trace, dict):
             continue
         label = str(trace.get("name") or "").strip()
-        stat_label = label_to_stat.get(label.casefold())
-        value = stats.get(stat_label) if stat_label else None
-        if value is None:
+        stat_label, value, prefix = _semantic_stat_trace_value(
+            label,
+            stats=stats,
+            group_stats=group_stats,
+            label_to_stat=label_to_stat,
+        )
+        if stat_label is None:
+            if _is_semantic_stat_trace_label(label, label_to_stat):
+                trace["showlegend"] = False
             continue
-        name = f"{stat_label}={_format_metrology_legend_value(stat_label, value)}"
+        if value is None:
+            if _is_semantic_stat_trace_label(label, label_to_stat):
+                trace["showlegend"] = False
+            continue
+        name = f"{prefix}{stat_label}={_format_metrology_legend_value(stat_label, value)}"
+        if name in visible_names:
+            trace["name"] = name
+            trace["showlegend"] = False
+            continue
         if name in existing_names and name != label:
             trace["name"] = name
             trace["showlegend"] = False
             continue
         trace["name"] = name
         existing_names.add(name)
+        if trace.get("showlegend", True) is not False:
+            visible_names.add(name)
+
+
+def _semantic_stat_trace_value(
+    label: str,
+    *,
+    stats: Mapping[str, float],
+    group_stats: Mapping[str, Mapping[str, float]],
+    label_to_stat: Mapping[str, str],
+) -> tuple[str | None, float | None, str]:
+    label_base = _semantic_trace_label_base(label)
+    label_key = label_base.casefold()
+    stat_label = label_to_stat.get(label_key)
+    if stat_label is not None:
+        return stat_label, stats.get(stat_label), ""
+
+    for group_label, values in group_stats.items():
+        group_prefix = f"{group_label} "
+        group_key = str(group_label).strip().casefold()
+        for raw_label, canonical_label in label_to_stat.items():
+            candidate_keys = {
+                f"{group_key} {raw_label}",
+                f"{group_key} {raw_label} marker",
+            }
+            if label_key in candidate_keys:
+                return canonical_label, values.get(canonical_label), group_prefix
+    return None, None, ""
+
+
+def _is_semantic_stat_trace_label(label: str, label_to_stat: Mapping[str, str]) -> bool:
+    label_key = _semantic_trace_label_base(label).casefold()
+    if label_key in label_to_stat:
+        return True
+    return any(
+        label_key.endswith(f" {raw_label}") or label_key.endswith(f" {raw_label} marker")
+        for raw_label in label_to_stat
+    )
+
+
+def _semantic_trace_label_base(label: str) -> str:
+    return str(label or "").split("=", 1)[0].strip()
 
 
 def _legend_only_reference_trace(*, name: str, value: float | None, color: str, dash: str) -> dict[str, Any]:
@@ -1266,6 +1353,32 @@ def _stagger_histogram_mean_annotations(
             margin["t"] = max(int(margin.get("t") or 0), 78 + extra_steps * 22)
 
 
+def _stagger_histogram_x_annotations(spec: Mapping[str, Any]) -> None:
+    layout = spec.get("layout")
+    if not isinstance(layout, dict):
+        return
+    raw_annotations = layout.get("annotations")
+    if not isinstance(raw_annotations, list):
+        return
+    annotations: list[tuple[dict[str, Any], float]] = []
+    for annotation in raw_annotations:
+        if not isinstance(annotation, dict):
+            continue
+        if str(annotation.get("xref") or "").strip().casefold() != "x":
+            continue
+        if str(annotation.get("yref") or "").strip().casefold() != "paper":
+            continue
+        x_value = _optional_float(annotation.get("x"))
+        if x_value is None:
+            continue
+        annotations.append((annotation, x_value))
+    if not annotations:
+        return
+    data = spec.get("data")
+    bin_width = _representative_histogram_bin_width(data) if isinstance(data, list) else None
+    _stagger_histogram_mean_annotations(layout, annotations, bin_width=bin_width)
+
+
 def _is_histogram_plotly_spec(spec: Mapping[str, Any]) -> bool:
     metadata = spec.get("metadata") if isinstance(spec.get("metadata"), Mapping) else {}
     if str(metadata.get("kind") or "").strip().casefold() == "histogram":
@@ -1467,7 +1580,36 @@ def _format_metrology_legend_value(label: str, value: float | None) -> str:
     if value is None or not math.isfinite(float(value)):
         return ""
     precision = 4 if label.strip().casefold() == "mean" else 3
-    return f"{float(value):.{precision}f}"
+    quantizer = Decimal("1").scaleb(-precision)
+    rounded = Decimal(str(round(float(value), 12))).quantize(quantizer, rounding=ROUND_HALF_UP)
+    return f"{rounded:.{precision}f}"
+
+
+def _dedupe_visible_stat_legend_items(spec: Mapping[str, Any]) -> None:
+    data = spec.get("data")
+    if not isinstance(data, list):
+        return
+    seen: set[str] = set()
+    for trace in data:
+        if not isinstance(trace, dict):
+            continue
+        if trace.get("showlegend", True) is False:
+            continue
+        name = str(trace.get("name") or "").strip()
+        if not _is_canonical_stat_legend_item_name(name):
+            continue
+        if name in seen:
+            trace["showlegend"] = False
+            continue
+        seen.add(name)
+
+
+def _is_canonical_stat_legend_item_name(name: str) -> bool:
+    left, separator, value = str(name or "").partition("=")
+    if not separator or not value.strip():
+        return False
+    label = left.strip().split(" ")[-1].casefold()
+    return label in _REFERENCE_LEGEND_LABELS
 
 
 def _percentile_sorted(values: list[float], fraction: float) -> float:
@@ -1503,6 +1645,7 @@ def _normalize_reference_trace_names_and_annotations(spec: Mapping[str, Any]) ->
     layout = spec.get("layout")
     if not isinstance(layout, dict):
         return
+    is_histogram = _is_histogram_plotly_spec(spec)
     existing_annotations = layout.get("annotations")
     annotations_valid = isinstance(existing_annotations, list)
     annotations = existing_annotations if annotations_valid else []
@@ -1524,6 +1667,8 @@ def _normalize_reference_trace_names_and_annotations(spec: Mapping[str, Any]) ->
         display_label = _REFERENCE_LEGEND_DISPLAY_LABELS.get(label_key, label)
         display = f"{display_label}={_format_metrology_legend_value(display_label, value)}"
         trace["name"] = display
+        if is_histogram and axis == "x":
+            _promote_histogram_reference_trace_to_shape(layout, trace, value)
         if display in existing_text:
             continue
         annotation = _reference_annotation(axis=axis, value=value, text=display, color=_trace_line_color(trace))
@@ -1533,6 +1678,65 @@ def _normalize_reference_trace_names_and_annotations(spec: Mapping[str, Any]) ->
                 annotations_valid = True
             annotations.append(annotation)
             existing_text.add(display)
+
+
+def _promote_histogram_reference_trace_to_shape(
+    layout: dict[str, Any],
+    trace: dict[str, Any],
+    value: float,
+) -> None:
+    line = trace.get("line") if isinstance(trace.get("line"), Mapping) else {}
+    color = str(line.get("color") or "#111827")
+    width = _optional_float(line.get("width")) or 2
+    dash = str(line.get("dash") or "dash")
+    shapes = layout.setdefault("shapes", [])
+    if not isinstance(shapes, list):
+        shapes = []
+        layout["shapes"] = shapes
+    if not _has_histogram_reference_shape(shapes, value):
+        shapes.append(
+            {
+                "type": "line",
+                "xref": "x",
+                "yref": "paper",
+                "x0": value,
+                "x1": value,
+                "y0": 0,
+                "y1": 1,
+                "line": {"color": color, "width": width, "dash": dash},
+            }
+        )
+    trace["type"] = "scatter"
+    trace["mode"] = "lines"
+    trace["x"] = [value, value]
+    trace["y"] = [0.0, 0.0]
+    trace["visible"] = "legendonly"
+    trace["showlegend"] = True
+    trace["hoverinfo"] = "skip"
+
+
+def _has_histogram_reference_shape(shapes: list[Any], value: float) -> bool:
+    for shape in shapes:
+        if not isinstance(shape, Mapping):
+            continue
+        if str(shape.get("type") or "").strip().casefold() != "line":
+            continue
+        if str(shape.get("xref") or "").strip().casefold() != "x":
+            continue
+        if str(shape.get("yref") or "").strip().casefold() != "paper":
+            continue
+        x0 = _optional_float(shape.get("x0"))
+        x1 = _optional_float(shape.get("x1"))
+        if x0 is None or x1 is None:
+            continue
+        if math.isclose(x0, value, rel_tol=1e-9, abs_tol=1e-12) and math.isclose(
+            x1,
+            value,
+            rel_tol=1e-9,
+            abs_tol=1e-12,
+        ):
+            return True
+    return False
 
 
 def _constant_line_axis_and_value(trace: Mapping[str, Any]) -> tuple[str, float | None]:
@@ -1633,6 +1837,7 @@ __all__ = [
     "build_histogram_stats_table",
     "build_plotstats_dashboard_spec",
     "metroliza_dashboard_plotstats_theme",
+    "normalize_distribution_stat_legend",
     "plotstats_export_charts_enabled",
     "render_chart_artifact_png",
     "render_histogram_png",
