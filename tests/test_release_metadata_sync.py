@@ -13,7 +13,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}(?:rc\d+)?$")
         self.assertRegex(metadata.build, r"^\d{6}$")
         self.assertEqual(metadata.version_label, f"{metadata.release_version}({metadata.build})")
-        self.assertEqual(metadata.public_version_label, "2026.05 RC3 (build 260519)")
+        self.assertEqual(metadata.public_version_label, "2026.05 RC4 (build 260520)")
         self.assertTrue(metadata.highlight)
 
     def test_in_app_current_release_notes_show_current_version_only(self):
@@ -45,7 +45,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
             for line in current_section.splitlines()
             if line.strip().startswith("- ")
         ]
-        self.assertEqual(current_bullets, [])
+        self.assertEqual(current_bullets, ["- Optimizations<br>"])
         changelog_bullets = [
             line.strip()
             for line in sync_release_metadata.CHANGELOG_PATH.read_text(encoding="utf-8").splitlines()
@@ -70,7 +70,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
             updated = temp_readme.read_text(encoding="utf-8")
             self.assertIn(f"Current release highlight (`{metadata.public_version_label}`):", updated)
             self.assertIn(f"### Changelog highlights (release `{metadata.public_version_label}`)", updated)
-            self.assertIn("RC3", updated)
+            self.assertIn("RC4", updated)
             self.assertNotIn("rc1", updated)
 
     def test_sync_changelog_writes_current_header(self):

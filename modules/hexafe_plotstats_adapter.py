@@ -24,6 +24,14 @@ configure_headless_matplotlib()
 PLOTSTATS_EXPORT_CHARTS_ENV_VAR = "METROLIZA_PLOTSTATS_EXPORT_CHARTS"
 _PLOTSTATS_DISABLED_VALUES = {"0", "false", "no", "off", "disabled", "metroliza", "legacy"}
 _PLOTSTATS_ENABLED_VALUES = TRUE_VALUES | frozenset({"all", "*"})
+_PLOTLY_GROUP_COLORWAY = (
+    SUMMARY_PLOT_PALETTE["distribution_foreground"],
+    "#D55E00",
+    "#009E73",
+    SUMMARY_PLOT_PALETTE["outlier"],
+    SUMMARY_PLOT_PALETTE["central_tendency"],
+    SUMMARY_PLOT_PALETTE["distribution_base"],
+)
 
 
 @dataclass(frozen=True)
@@ -187,7 +195,7 @@ def _fallback_histogram_plotly_spec(
     centers = ((bin_edges[:-1] + bin_edges[1:]) / 2.0).tolist()
     widths = np.diff(bin_edges).tolist()
     traces: list[dict[str, Any]] = []
-    for label, values in groups:
+    for index, (label, values) in enumerate(groups):
         counts, _edges = np.histogram(values, bins=bin_edges)
         denominator = max(int(values.size), 1)
         y_values = (counts / denominator).astype(float).tolist()
@@ -203,6 +211,7 @@ def _fallback_histogram_plotly_spec(
                 "y": y_values,
                 "width": widths,
                 "opacity": 0.72 if len(groups) > 1 else 0.9,
+                "marker": {"color": _PLOTLY_GROUP_COLORWAY[index % len(_PLOTLY_GROUP_COLORWAY)]},
                 "customdata": customdata,
                 "hovertemplate": (
                     "bin=%{customdata[0]:.4g}..%{customdata[1]:.4g}<br>"
@@ -227,6 +236,7 @@ def _fallback_histogram_plotly_spec(
         "config": {"responsive": True, "displaylogo": False, "staticPlot": bool(static)},
         "metadata": {"kind": "histogram", "histogram_y_mode": "percent"},
     }
+    _ensure_group_histogram_mean_annotations(spec, payload)
     return _normalize_dashboard_plotly_spec(spec)
 
 
@@ -1077,17 +1087,13 @@ def _ensure_group_histogram_mean_annotations(spec: Mapping[str, Any], payload: M
         for annotation in annotations
         if isinstance(annotation, dict)
     }
-    trace_colors_by_name = _histogram_trace_colors_by_name(spec)
-    trace_colors = _histogram_trace_colors(spec)
     mean_annotations: list[tuple[dict[str, Any], float]] = []
     for index, (label, values) in enumerate(groups):
         finite_values = values[np.isfinite(values)]
         if finite_values.size == 0:
             continue
         mean_value = float(np.mean(finite_values))
-        color = trace_colors_by_name.get(str(label)) or (
-            trace_colors[index] if index < len(trace_colors) else "#2563eb"
-        )
+        color = _ensure_histogram_group_trace_color(spec, str(label), index)
         text = f"{label} mean={_format_metrology_legend_value('Mean', mean_value)}"
         shapes.append(
             {
@@ -1149,6 +1155,33 @@ def _ensure_group_histogram_mean_annotations(spec: Mapping[str, Any], payload: M
             data_max += padding
         bin_width = (data_max - data_min) / max(bin_count, 1)
     _stagger_histogram_mean_annotations(layout, mean_annotations, bin_width=bin_width)
+
+
+def _ensure_histogram_group_trace_color(spec: Mapping[str, Any], label: str, index: int) -> str:
+    fallback_color = _PLOTLY_GROUP_COLORWAY[index % len(_PLOTLY_GROUP_COLORWAY)]
+    for trace in spec.get("data") or []:
+        if not isinstance(trace, dict):
+            continue
+        if str(trace.get("type") or "").strip().casefold() not in {"bar", "histogram"}:
+            continue
+        if str(trace.get("name") or "").strip() != label:
+            continue
+        marker = trace.get("marker") if isinstance(trace.get("marker"), dict) else {}
+        color = marker.get("color")
+        if isinstance(color, list):
+            color = color[0] if color else None
+        if color:
+            return str(color)
+        line = trace.get("line") if isinstance(trace.get("line"), Mapping) else {}
+        line_color = line.get("color")
+        if line_color:
+            return str(line_color)
+        marker = trace.setdefault("marker", {})
+        if isinstance(marker, dict):
+            marker["color"] = fallback_color
+        return fallback_color
+    trace_colors = _histogram_trace_colors(spec)
+    return trace_colors[index] if index < len(trace_colors) else fallback_color
 
 
 def _histogram_trace_colors_by_name(spec: Mapping[str, Any]) -> dict[str, str]:

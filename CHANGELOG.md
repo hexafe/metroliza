@@ -1,6 +1,9 @@
 # Changelog (for end users)
 
-## 2026.05 RC3 (build 260519) — current version
+## 2026.05 RC4 (build 260520) — current version
+- Optimizations.
+
+## 2026.05 RC3 (build 260519)
 - CSV Summary and Export grouping filters now apply after pressing Enter, keeping large row sets responsive while typing.
 - Export grouping filters now narrow Reference and Parts lists without hiding existing groups.
 - CSV Summary can assign all rows matching the active filter, including rows outside the visible page.

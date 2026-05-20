@@ -1,13 +1,12 @@
-RELEASE_VERSION = "2026.05rc3"
-VERSION_DATE = "260519"
+RELEASE_VERSION = "2026.05rc4"
+VERSION_DATE = "260520"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
-CURRENT_RELEASE_HIGHLIGHT = (
-    "Faster grouping filters, corrected filtered-row assignment, and clearer Plotly dashboards."
-)
-PUBLIC_VERSION_LABEL = "2026.05 RC3 (build 260519)"
+CURRENT_RELEASE_HIGHLIGHT = "Optimizations."
+PUBLIC_VERSION_LABEL = "2026.05 RC4 (build 260520)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
+    - Optimizations<br>
 
     <br><b>Archive:</b><br>
 

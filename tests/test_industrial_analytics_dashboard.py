@@ -829,6 +829,94 @@ def test_dashboard_uses_plotstats_interactive_plotly_specs_when_available(monkey
     assert calls[0]["payload"]["limits"] == {"lsl": 9.0, "nominal": 10.0, "usl": 11.0}
 
 
+def test_csv_summary_dashboard_plotly_specs_include_stat_values_and_colored_group_means(
+    monkeypatch,
+) -> None:
+    def fake_chart_artifact(payload, **_kwargs):
+        payload_type = str(payload.get("type") or "")
+        if payload_type == "histogram":
+            data = [
+                {
+                    "type": "bar",
+                    "name": str(group["group"]),
+                    "x": [6.5],
+                    "y": [1.0],
+                }
+                for group in payload["groups"]
+            ]
+        elif payload_type in {"distribution", "iqr"}:
+            trace_type = "violin" if payload_type == "distribution" else "box"
+            data = [
+                {"type": trace_type, "name": label, "y": series}
+                for label, series in zip(payload["labels"], payload["series"], strict=True)
+            ]
+        else:
+            data = []
+        return {
+            "plotly_spec": {
+                "data": data,
+                "layout": {},
+                "config": {"responsive": True},
+            }
+        }
+
+    monkeypatch.setattr(
+        "modules.hexafe_plotstats_adapter.build_chart_artifact",
+        fake_chart_artifact,
+    )
+    frame = pd.DataFrame(
+        {
+            "process_datetime": pd.date_range("2026-05-10 08:00", periods=8, freq="h"),
+            "line": ["A"] * 4 + ["B"] * 4,
+            "length_mm": [6.469, 6.495, 6.501, 6.687, 7.0, 7.2, 7.4, 7.8],
+        }
+    )
+
+    manifest = build_production_dashboard_manifest(
+        frame=frame,
+        metric_selection=(ProductionMetricSelection("length_mm", "Length Mm", lsl=6.2, usl=6.8),),
+        aggregation_state=ProductionAggregationState(group_fields=("line",)),
+        chart_selection=ProductionChartSelection(
+            time_series=False,
+            histogram=True,
+            violin=True,
+            box=True,
+            groupstats=False,
+        ),
+    )
+
+    charts = {chart["chart_type"]: chart for chart in manifest["charts"]}
+    histogram_spec = charts["histogram"]["plotly_spec"]
+    histogram_traces = {
+        trace["name"]: trace
+        for trace in histogram_spec["data"]
+        if trace.get("type") == "bar"
+    }
+    annotations_by_text = {
+        annotation["text"]: annotation
+        for annotation in histogram_spec["layout"]["annotations"]
+    }
+
+    assert annotations_by_text["A mean=6.5380"]["bgcolor"] == "#ffffff"
+    assert annotations_by_text["A mean=6.5380"]["font"]["color"] == histogram_traces["A"]["marker"]["color"]
+    assert annotations_by_text["B mean=7.3500"]["bgcolor"] == "#ffffff"
+    assert annotations_by_text["B mean=7.3500"]["font"]["color"] == histogram_traces["B"]["marker"]["color"]
+
+    violin_trace_names = {trace["name"] for trace in charts["violin"]["plotly_spec"]["data"]}
+    assert "A (n=4)" in violin_trace_names
+    assert "B (n=4)" in violin_trace_names
+    assert "A Mean=6.5380" in violin_trace_names
+    assert "B Max=7.800" in violin_trace_names
+    assert "Nominal=6.500" in violin_trace_names
+
+    box_trace_names = {trace["name"] for trace in charts["box"]["plotly_spec"]["data"]}
+    assert "A (n=4)" in box_trace_names
+    assert "B (n=4)" in box_trace_names
+    assert "A Mean=6.5380" in box_trace_names
+    assert "B Max=7.800" in box_trace_names
+    assert "Nominal=6.500" in box_trace_names
+
+
 def test_groupstats_html_renders_overall_and_ordered_pairwise_rows(tmp_path) -> None:
     frame = pd.DataFrame(
         {
