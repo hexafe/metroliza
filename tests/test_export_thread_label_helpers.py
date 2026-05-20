@@ -310,6 +310,36 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
         self.assertEqual(second_block['header_row'], 20)
         self.assertEqual(second_block['image_row'], 21)
 
+    def test_calculate_column_width_samples_large_columns(self):
+        import pandas as pd
+
+        class CountingText:
+            calls = 0
+
+            def __init__(self, value):
+                self.value = value
+
+            def __str__(self):
+                CountingText.calls += 1
+                return self.value
+
+        thread = ExportDataThread.__new__(ExportDataThread)
+        values = [CountingText('short') for _ in range(5000)]
+
+        width = thread.calculate_column_width(pd.Series(values))
+
+        self.assertEqual(width, 12)
+        self.assertLessEqual(CountingText.calls, 2048)
+
+    def test_calculate_column_width_caps_sampled_large_values(self):
+        import pandas as pd
+
+        thread = ExportDataThread.__new__(ExportDataThread)
+
+        width = thread.calculate_column_width(pd.Series(['x' * 100, 'short']))
+
+        self.assertEqual(width, 40)
+
 
 class TestExportThreadProgressLabelFormatting(unittest.TestCase):
     def test_measurement_label_uses_three_rows_with_eta_placeholder_early(self):

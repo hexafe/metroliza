@@ -18,6 +18,7 @@ from modules.group_analysis_service import (
     classify_metric_spec_status,
     compute_capability_payload,
     get_spec_status_label,
+    GroupAnalysisCancelled,
     normalize_metric_identity,
     normalize_spec_limits,
     evaluate_group_analysis_readiness,
@@ -1324,6 +1325,108 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertEqual(metric['descriptive_stats'][0]['fit_quality'], 'not run')
         self.assertTrue(metric['distribution_pairwise_rows'])
         self.assertIsNotNone(metric['distribution_pairwise_rows'][0]['Wasserstein distance'])
+
+    def test_build_group_analysis_payload_reports_progress_and_can_skip_chart_payloads(self):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1'] * 8,
+                'HEADER - AX': ['M1'] * 4 + ['M2'] * 4,
+                'GROUP': ['A', 'A', 'B', 'B'] * 2,
+                'MEAS': [10.0, 10.1, 9.9, 9.8, 20.0, 20.1, 19.9, 19.8],
+                'LSL': [9.0] * 4 + [19.0] * 4,
+                'NOMINAL': [10.0] * 4 + [20.0] * 4,
+                'USL': [11.0] * 4 + [21.0] * 4,
+            }
+        )
+        progress_messages = []
+
+        with patch(
+            'modules.group_analysis_service.compute_distribution_difference',
+            return_value={'profile_rows': [], 'pairwise_rows': [], 'omnibus_row': None},
+        ):
+            payload = build_group_analysis_payload(
+                grouped_df,
+                requested_scope='auto',
+                analysis_level='light',
+                progress_callback=progress_messages.append,
+                include_chart_payloads=False,
+            )
+
+        self.assertEqual(payload['status'], 'ready')
+        self.assertEqual(len(payload['metric_rows']), 2)
+        self.assertTrue(any('Analyzing metric 1/2: M1' in message for message in progress_messages))
+        self.assertTrue(any('Fitting distribution shape 2/2: M2' in message for message in progress_messages))
+        self.assertTrue(any('Completed metric 2/2: M2' in message for message in progress_messages))
+        self.assertTrue(all(row['chart_payload'] is None for row in payload['metric_rows']))
+
+    def test_build_group_analysis_payload_cancels_between_metric_groups(self):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1'] * 8,
+                'HEADER - AX': ['M1'] * 4 + ['M2'] * 4,
+                'GROUP': ['A', 'A', 'B', 'B'] * 2,
+                'MEAS': [10.0, 10.1, 9.9, 9.8, 20.0, 20.1, 19.9, 19.8],
+                'LSL': [9.0] * 4 + [19.0] * 4,
+                'NOMINAL': [10.0] * 4 + [20.0] * 4,
+                'USL': [11.0] * 4 + [21.0] * 4,
+            }
+        )
+        progress_messages = []
+
+        def cancel_after_first_metric():
+            return any('Completed metric 1/2: M1' in message for message in progress_messages)
+
+        with patch('modules.group_analysis_service.analyze_group_metric') as mock_analyze, patch(
+            'modules.group_analysis_service.compute_distribution_difference',
+            return_value={'profile_rows': [], 'pairwise_rows': [], 'omnibus_row': None},
+        ):
+            mock_analyze.side_effect = lambda *args, **kwargs: {
+                'spec_status': 'EXACT_MATCH',
+                'spec_payload': {'lsl': 9.0, 'nominal': 10.0, 'usl': 11.0},
+                'analysis_policy': {
+                    'include_metric': True,
+                    'allow_pairwise': True,
+                    'allow_capability': True,
+                },
+                'descriptive_stats': [
+                    {'group': 'A', 'n': 2, 'mean': 10.05, 'std': 0.1, 'median': 10.05, 'iqr': 0.05},
+                    {'group': 'B', 'n': 2, 'mean': 9.85, 'std': 0.1, 'median': 9.85, 'iqr': 0.05},
+                ],
+                'pairwise_rows': [],
+                'posthoc_rows': [],
+                'capability_rows': [],
+                'capability': {'status': 'ok', 'capability': 1.2},
+                'metric_summary': {},
+                'warnings': [],
+            }
+
+            with self.assertRaises(GroupAnalysisCancelled):
+                build_group_analysis_payload(
+                    grouped_df,
+                    requested_scope='auto',
+                    analysis_level='light',
+                    progress_callback=progress_messages.append,
+                    should_cancel=cancel_after_first_metric,
+                )
+
+        self.assertEqual(mock_analyze.call_count, 1)
+        self.assertTrue(any('Completed metric 1/2: M1' in message for message in progress_messages))
+
+    def test_build_group_analysis_payload_supports_cancel_check_alias(self):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1'] * 4,
+                'HEADER - AX': ['M1'] * 4,
+                'GROUP': ['A', 'A', 'B', 'B'],
+                'MEAS': [10.0, 10.1, 9.9, 9.8],
+                'LSL': [9.0] * 4,
+                'NOMINAL': [10.0] * 4,
+                'USL': [11.0] * 4,
+            }
+        )
+
+        with self.assertRaises(GroupAnalysisCancelled):
+            build_group_analysis_payload(grouped_df, cancel_check=lambda: True)
 
 
 if __name__ == '__main__':

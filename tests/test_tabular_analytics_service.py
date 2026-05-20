@@ -26,6 +26,7 @@ from modules.industrial_analytics_state import (
 from modules.tabular_analytics_service import (
     TABULAR_GROUP_COLUMN,
     TabularColumnFilter,
+    TabularLoadCancelled,
     TabularSqliteFilterExpression,
     apply_tabular_row_filter,
     apply_tabular_grouping,
@@ -234,6 +235,61 @@ def test_load_tabular_analytics_file_can_use_sqlite_for_single_csv_filters(tmp_p
         ]
     finally:
         cleanup_tabular_load_result(result)
+
+
+def test_sqlite_csv_loading_reports_progress(tmp_path) -> None:
+    input_file = tmp_path / "progress.csv"
+    pd.DataFrame(
+        {
+            "Station": ["A", "B", "A"],
+            "Length mm": [10.0, 10.1, 10.2],
+        }
+    ).to_csv(input_file, index=False)
+    progress_events: list[dict[str, object]] = []
+
+    result = load_tabular_analytics_file(
+        input_file,
+        force_sqlite=True,
+        progress_callback=progress_events.append,
+    )
+    try:
+        stages = [event["stage"] for event in progress_events]
+
+        assert "sampling" in stages
+        assert "chunk_loaded" in stages
+        assert "indexing" in stages
+        assert progress_events[-1]["stage"] == "complete"
+        assert progress_events[-1]["rows_loaded"] == 3
+    finally:
+        cleanup_tabular_load_result(result)
+
+
+def test_sqlite_csv_loading_can_cancel_between_chunks(tmp_path, monkeypatch) -> None:
+    input_file = tmp_path / "cancel.csv"
+    pd.DataFrame(
+        {
+            "Station": ["A", "B", "C", "D", "E"],
+            "Length mm": [10.0, 10.1, 10.2, 10.3, 10.4],
+        }
+    ).to_csv(input_file, index=False)
+    progress_events: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "modules.tabular_analytics_service.TABULAR_SQLITE_CHUNK_ROWS",
+        2,
+    )
+
+    def cancel_after_first_chunk() -> bool:
+        return any(event.get("stage") == "chunk_loaded" for event in progress_events)
+
+    with pytest.raises(TabularLoadCancelled):
+        load_tabular_analytics_file(
+            input_file,
+            force_sqlite=True,
+            progress_callback=progress_events.append,
+            cancel_check=cancel_after_first_chunk,
+        )
+
+    assert [event["stage"] for event in progress_events].count("chunk_loaded") == 1
 
 
 def test_sqlite_group_preview_and_selection_respect_column_filters(tmp_path) -> None:

@@ -34,12 +34,12 @@ def test_grouping_index_preview_filter_count_and_child_keys() -> None:
 
     assert total == 4
     assert [row["key"] for row in rows] == [
-        ("(blank)", "(blank)"),
         ("R1", "A"),
         ("R1", "B"),
         ("R2", "A"),
+        ("(blank)", "(blank)"),
     ]
-    assert rows[3]["row_count"] == 2
+    assert rows[2]["row_count"] == 2
     assert search_total == 1
     assert search_rows[0]["key"] == ("R2", "A")
     assert index.matching_keys(search_text="blank") == (("(blank)", "(blank)"),)

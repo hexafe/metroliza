@@ -13,11 +13,13 @@ from scipy.stats import anderson_ksamp, ks_2samp, wasserstein_distance
 from modules.comparison_stats import _adjust_pvalues
 from modules.distribution_fit_service import (
     fit_measurement_distribution as _fit_measurement_distribution,
+    fit_measurement_distribution_batch as _fit_measurement_distribution_batch,
     measurement_fingerprint,
 )
 
 # Backward-compatible module attribute for patch-based tests/callers.
 fit_measurement_distribution = _fit_measurement_distribution
+fit_measurement_distribution_batch = _fit_measurement_distribution_batch
 
 
 DEFAULT_DISTRIBUTION_FIT_POLICY = {
@@ -164,6 +166,29 @@ def _run_anderson_ksamp(samples):
         return anderson_ksamp(samples, **kwargs)
 
 
+def _fit_profile_distributions_by_group(numeric_by_group, *, fit_cache=None, fingerprints=None):
+    ordered_groups = sorted(numeric_by_group)
+
+    if fit_measurement_distribution is _fit_measurement_distribution:
+        try:
+            return fit_measurement_distribution_batch(
+                {group_name: numeric_by_group[group_name] for group_name in ordered_groups},
+                memoization_cache=fit_cache,
+                fingerprints_by_group=fingerprints,
+            )
+        except Exception:
+            pass
+
+    return {
+        group_name: fit_measurement_distribution(
+            numeric_by_group[group_name],
+            memoization_cache=fit_cache,
+            measurement_signature=None if fingerprints is None else fingerprints[group_name],
+        )
+        for group_name in ordered_groups
+    }
+
+
 def build_distribution_profile_rows_compact(metric, grouped_values, *, fit_cache=None, values_are_clean=False):
     numeric_by_group = {
         group_name: np.ascontiguousarray(np.asarray(values, dtype=float) if values_are_clean else _clean_numeric(values))
@@ -171,14 +196,11 @@ def build_distribution_profile_rows_compact(metric, grouped_values, *, fit_cache
     }
     ordered_groups = sorted(numeric_by_group)
     fingerprints = {group_name: _sample_fingerprint(numeric_by_group[group_name]) for group_name in ordered_groups}
-    fits_by_group = {
-        group_name: fit_measurement_distribution(
-            numeric_by_group[group_name],
-            memoization_cache=fit_cache,
-            measurement_signature=fingerprints[group_name],
-        )
-        for group_name in ordered_groups
-    }
+    fits_by_group = _fit_profile_distributions_by_group(
+        numeric_by_group,
+        fit_cache=fit_cache,
+        fingerprints=fingerprints,
+    )
     return [
         _build_profile_compact_entry(metric, group_name, numeric_by_group[group_name], fits_by_group[group_name])
         for group_name in ordered_groups

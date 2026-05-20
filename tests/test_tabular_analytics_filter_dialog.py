@@ -253,6 +253,51 @@ def test_filter_dialog_uses_sqlite_store_for_value_preview_and_counts(tmp_path) 
         cleanup_tabular_load_result(loaded)
 
 
+def test_filter_dialog_sqlite_value_search_waits_for_enter(tmp_path, monkeypatch) -> None:
+    _app()
+    input_file = tmp_path / "sqlite_filter_search.csv"
+    pd.DataFrame(
+        {
+            "Line": ["L1", "L2", "L1", "L3"],
+            "Length mm": [10.0, 10.2, 10.4, 10.6],
+        }
+    ).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file, force_sqlite=True)
+    original_preview = type(loaded.sqlite_store).preview_value_rows
+    searches: list[str] = []
+
+    def preview_spy(store, column, **kwargs):
+        searches.append(str(kwargs.get("search_text") or ""))
+        return original_preview(store, column, **kwargs)
+
+    dialog = TabularAnalyticsFilterDialog(
+        dataframe=loaded.dataframe,
+        column_mapping=loaded.column_mapping,
+        sqlite_store=loaded.sqlite_store,
+    )
+    try:
+        monkeypatch.setattr(type(loaded.sqlite_store), "preview_value_rows", preview_spy)
+        _select_available_column(dialog, "line")
+        dialog.add_filter_column()
+        searches.clear()
+
+        dialog.matching_search.setText("L2")
+
+        assert searches == []
+        assert dialog.matching_status_label.text() == "Press Enter to search values."
+
+        dialog.matching_search.returnPressed.emit()
+
+        assert searches == ["L2"]
+        assert [
+            dialog.matching_list.item(index).data(Qt.ItemDataRole.UserRole)
+            for index in range(dialog.matching_list.count())
+        ] == ["L2"]
+    finally:
+        dialog.close()
+        cleanup_tabular_load_result(loaded)
+
+
 def test_filter_dialog_supports_per_column_values_and_calendar_date_bounds(tmp_path) -> None:
     _app()
     loaded = _sample_loaded_table(tmp_path)

@@ -53,7 +53,6 @@ from modules.tabular_analytics_service import (
     cleanup_tabular_load_result,
     count_tabular_materialized_rows,
     list_tabular_excel_sheets,
-    load_tabular_analytics_files,
     materialize_tabular_dataframe,
     tabular_load_result_row_count,
 )
@@ -946,7 +945,8 @@ class IndustrialAnalyticsDialog(QDialog):
 
     def open_tabular_filter_dialog(self) -> None:
         if self.tabular_load_result is None:
-            self.load_metrics()
+            self.show_tabular_load_screen()
+            return
         if self.tabular_load_result is None or self.tabular_load_result.dataframe.empty:
             QMessageBox.warning(self, self.windowTitle(), "Load CSV/Excel metrics before filtering rows.")
             return
@@ -1016,17 +1016,8 @@ class IndustrialAnalyticsDialog(QDialog):
                 self.source_label.setText(self._cache_summary())
                 self._sync_filter_summary()
             else:
-                input_files = self._selected_input_files()
-                if not input_files:
-                    raise ValueError("Select a CSV or Excel file first.")
-                sheet_name = self._selected_sheet_name()
-                loaded = load_tabular_analytics_files(
-                    input_files,
-                    sheet_name=sheet_name,
-                    timestamp_column=self._selected_tabular_column(self.timestamp_column_combo),
-                    reference_column=self._selected_tabular_column(self.reference_column_combo),
-                )
-                self._apply_tabular_load_result(loaded, populate_metrics=False)
+                self.show_tabular_load_screen()
+                return
         except Exception as exc:
             QMessageBox.warning(self, self.windowTitle(), f"Could not load metrics: {exc}")
             self._sync_ui_state()

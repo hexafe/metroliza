@@ -59,6 +59,27 @@ _FLAG_SEVERELY_IMBALANCED_N = 'SEVERELY IMBALANCED N'
 _FLAG_SPEC_QUESTION = 'SPEC?'
 
 
+class GroupAnalysisCancelled(RuntimeError):
+    """Raised when cooperative Group Analysis cancellation is requested."""
+
+
+def _emit_progress(progress_callback, message):
+    if callable(progress_callback):
+        progress_callback(message)
+
+
+def _cancel_requested(*callbacks):
+    for callback in callbacks:
+        if callable(callback) and callback():
+            return True
+    return False
+
+
+def _check_cancelled(*, should_cancel=None, cancel_check=None):
+    if _cancel_requested(should_cancel, cancel_check):
+        raise GroupAnalysisCancelled('Group Analysis was canceled.')
+
+
 def _join_flags(flags):
     ordered_unique = []
     for flag in (_FLAG_LOW_N, _FLAG_SEVERELY_IMBALANCED_N, _FLAG_IMBALANCED_N, _FLAG_SPEC_QUESTION):
@@ -1571,7 +1592,15 @@ def _build_metric_distribution_stage(*, metric_partition, alpha, correction_meth
     )
 
 
-def _assemble_metric_payload(*, metric_partition, descriptive_stage, pairwise_stage, distribution_stage, normalized_level):
+def _assemble_metric_payload(
+    *,
+    metric_partition,
+    descriptive_stage,
+    pairwise_stage,
+    distribution_stage,
+    normalized_level,
+    include_chart_payloads=True,
+):
     descriptive_stats = descriptive_stage['descriptive_stats']
     pairwise_rows = pairwise_stage['pairwise_rows']
     distribution_omnibus = distribution_stage.get('omnibus_row')
@@ -1652,9 +1681,13 @@ def _assemble_metric_payload(*, metric_partition, descriptive_stage, pairwise_st
         'primary_insight': primary_insight,
         'comparability_summary': comparability_summary,
         'plot_eligibility': plot_eligibility,
-        'chart_payload': _build_metric_chart_payload(
-            grouped_values=metric_partition['grouped_values'],
-            spec_payload=spec_payload,
+        'chart_payload': (
+            _build_metric_chart_payload(
+                grouped_values=metric_partition['grouped_values'],
+                spec_payload=spec_payload,
+            )
+            if include_chart_payloads
+            else None
         ),
         'diagnostics_comment': diagnostics_comment,
         'metric_flags': metric_level_flags,
@@ -1702,11 +1735,18 @@ def build_group_analysis_payload(
     alias_db_path=None,
     distribution_fit_policy=None,
     default_group_label='POPULATION',
+    progress_callback=None,
+    should_cancel=None,
+    cancel_check=None,
+    include_chart_payloads=True,
 ):
     """Assemble metric-level Group Analysis payload for writer modules."""
     default_group_label = normalize_default_group_label(default_group_label)
     if not isinstance(grouped_df, pd.DataFrame):
         grouped_df = pd.DataFrame()
+
+    _check_cancelled(should_cancel=should_cancel, cancel_check=cancel_check)
+    _emit_progress(progress_callback, 'Preparing Group Analysis...')
 
     readiness = evaluate_group_analysis_readiness(
         grouped_df,
@@ -1714,6 +1754,7 @@ def build_group_analysis_payload(
         eligible_metrics=eligible_metrics,
         alias_db_path=alias_db_path,
     )
+    _check_cancelled(should_cancel=should_cancel, cancel_check=cancel_check)
     reference_count = int(grouped_df.get('REFERENCE', pd.Series(dtype=object)).dropna().nunique())
     effective_scope = readiness['effective_scope']
     normalized_level = str(analysis_level or 'light').strip().lower()
@@ -1729,6 +1770,7 @@ def build_group_analysis_payload(
         group_count = 0
 
     if not readiness['runnable']:
+        _emit_progress(progress_callback, 'Group Analysis skipped.')
         diagnostics = build_group_analysis_diagnostics_payload(
             effective_scope=effective_scope,
             requested_scope=requested_scope,
@@ -1789,14 +1831,19 @@ def build_group_analysis_payload(
 
     distribution_fit_policy = resolve_distribution_fit_policy(distribution_fit_policy)
     distribution_fit_cache = {}
+    metric_groups = list(metric_frame.groupby(grouping_columns, dropna=False, sort=True))
+    total_metrics = len(metric_groups)
 
-    for key_tuple, metric_rows_df in metric_frame.groupby(grouping_columns, dropna=False, sort=True):
+    for metric_index, (key_tuple, metric_rows_df) in enumerate(metric_groups, start=1):
+        _check_cancelled(should_cancel=should_cancel, cancel_check=cancel_check)
         if not isinstance(key_tuple, tuple):
             key_tuple = (key_tuple,)
         metric_name = key_tuple[0]
         reference_value = key_tuple[1] if len(key_tuple) > 1 else None
         metric_identity = normalize_metric_identity(metric_name, reference_value, scope=effective_scope)
 
+        _emit_progress(progress_callback, f'Analyzing metric {metric_index}/{total_metrics}: {metric_identity}')
+        _check_cancelled(should_cancel=should_cancel, cancel_check=cancel_check)
         metric_partition = _partition_metric_analysis_inputs(
             metric_rows_df,
             metric_identity=metric_identity,
@@ -1817,20 +1864,28 @@ def build_group_analysis_payload(
             enable_rust_in_auto=enable_rust_in_auto,
             distribution_diagnostics=distribution_diagnostics,
         )
+        _check_cancelled(should_cancel=should_cancel, cancel_check=cancel_check)
         if len(metric_partition['populated_groups']) < 2:
             skipped_metrics.append({'metric': metric_identity, 'reason': 'insufficient_groups', 'group_count': len(metric_partition['populated_groups'])})
+            _emit_progress(progress_callback, f'Skipped metric {metric_index}/{total_metrics}: {metric_identity}')
             continue
 
         if not metric_partition['analysis_policy']['include_metric']:
             skipped_metrics.append({'metric': metric_identity, 'reason': metric_partition['spec_status'].lower(), 'group_count': len(metric_partition['populated_groups'])})
+            _emit_progress(progress_callback, f'Skipped metric {metric_index}/{total_metrics}: {metric_identity}')
             continue
 
+        _emit_progress(progress_callback, f'Building descriptive rows {metric_index}/{total_metrics}: {metric_identity}')
         descriptive_stage = _build_metric_descriptive_stage(metric_partition=metric_partition)
+        _check_cancelled(should_cancel=should_cancel, cancel_check=cancel_check)
+        _emit_progress(progress_callback, f'Building pairwise rows {metric_index}/{total_metrics}: {metric_identity}')
         pairwise_stage = _build_metric_pairwise_stage(
             metric_partition=metric_partition,
             alpha=alpha,
             correction_method=correction_method,
         )
+        _check_cancelled(should_cancel=should_cancel, cancel_check=cancel_check)
+        _emit_progress(progress_callback, f'Fitting distribution shape {metric_index}/{total_metrics}: {metric_identity}')
         distribution_stage = _build_metric_distribution_stage(
             metric_partition=metric_partition,
             alpha=alpha,
@@ -1838,6 +1893,8 @@ def build_group_analysis_payload(
             fit_cache=distribution_fit_cache,
             fit_policy=distribution_fit_policy,
         )
+        _check_cancelled(should_cancel=should_cancel, cancel_check=cancel_check)
+        _emit_progress(progress_callback, f'Assembling metric payload {metric_index}/{total_metrics}: {metric_identity}')
         metrics.append(
             _assemble_metric_payload(
                 metric_partition=metric_partition,
@@ -1845,9 +1902,12 @@ def build_group_analysis_payload(
                 pairwise_stage=pairwise_stage,
                 distribution_stage=distribution_stage,
                 normalized_level=normalized_level,
+                include_chart_payloads=include_chart_payloads,
             )
         )
+        _emit_progress(progress_callback, f'Completed metric {metric_index}/{total_metrics}: {metric_identity}')
 
+    _check_cancelled(should_cancel=should_cancel, cancel_check=cancel_check)
     diagnostics = build_group_analysis_diagnostics_payload(
         effective_scope=effective_scope,
         requested_scope=requested_scope,

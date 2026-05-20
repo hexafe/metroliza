@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -116,6 +116,12 @@ _SQLITE_DATE_OPERATOR_SQL = {
 }
 _COMPILED_SQLITE_FILTER_SQL_ATTRS = ("clause", "where_sql", "sqlite_where_sql", "sql")
 _COMPILED_SQLITE_FILTER_COLUMN_ATTRS = ("columns", "referenced_columns", "source_columns")
+TabularProgressCallback = Callable[[dict[str, Any]], None]
+TabularCancelCheck = Callable[[], bool]
+
+
+class TabularLoadCancelled(Exception):
+    """Raised when a cancellable CSV/Excel analytics load is stopped by the caller."""
 
 
 @dataclass(frozen=True)
@@ -1131,6 +1137,8 @@ def load_tabular_analytics_files(
     numeric_threshold: float = 0.8,
     min_numeric_count: int = 2,
     force_sqlite: bool | None = None,
+    progress_callback: TabularProgressCallback | None = None,
+    cancel_check: TabularCancelCheck | None = None,
 ) -> TabularAnalyticsLoadResult:
     """Load one or more tabular analytics files.
 
@@ -1139,6 +1147,7 @@ def load_tabular_analytics_files(
     """
 
     paths = tuple(Path(path) for path in input_files or ())
+    _raise_if_tabular_load_cancelled(cancel_check)
     if not paths:
         raise ValueError("Select at least one CSV or Excel file.")
     for path in paths:
@@ -1154,6 +1163,8 @@ def load_tabular_analytics_files(
             numeric_threshold=numeric_threshold,
             min_numeric_count=min_numeric_count,
             force_sqlite=False,
+            progress_callback=progress_callback,
+            cancel_check=cancel_check,
         )
 
     if any(path.suffix.lower() != ".csv" for path in paths):
@@ -1165,6 +1176,8 @@ def load_tabular_analytics_files(
         reference_column=reference_column,
         numeric_threshold=numeric_threshold,
         min_numeric_count=min_numeric_count,
+        progress_callback=progress_callback,
+        cancel_check=cancel_check,
     )
 
 
@@ -1177,10 +1190,13 @@ def load_tabular_analytics_file(
     numeric_threshold: float = 0.8,
     min_numeric_count: int = 2,
     force_sqlite: bool | None = None,
+    progress_callback: TabularProgressCallback | None = None,
+    cancel_check: TabularCancelCheck | None = None,
 ) -> TabularAnalyticsLoadResult:
     """Load CSV/Excel data and normalize it to the production analytics dataframe shape."""
 
     path = Path(input_file)
+    _raise_if_tabular_load_cancelled(cancel_check)
     if not path.exists():
         raise FileNotFoundError(str(path))
     source_stat = path.stat()
@@ -1196,6 +1212,8 @@ def load_tabular_analytics_file(
                 reference_column=reference_column,
                 numeric_threshold=numeric_threshold,
                 min_numeric_count=min_numeric_count,
+                progress_callback=progress_callback,
+                cancel_check=cancel_check,
             )
         raw_frame, csv_config = load_csv_with_fallbacks(path)
         resolved_sheet_name = None
@@ -1341,6 +1359,8 @@ def _load_csv_files_into_sqlite(
     reference_column: str | None,
     numeric_threshold: float,
     min_numeric_count: int,
+    progress_callback: TabularProgressCallback | None = None,
+    cancel_check: TabularCancelCheck | None = None,
 ) -> TabularAnalyticsLoadResult:
     diagnostics: list[ProductionAnalyticsDiagnostic] = []
     file_specs: list[dict[str, Any]] = []
@@ -1351,6 +1371,14 @@ def _load_csv_files_into_sqlite(
     reference_field: str | None = None
 
     for path in paths:
+        _raise_if_tabular_load_cancelled(cancel_check)
+        _emit_tabular_load_progress(
+            progress_callback,
+            stage="sampling",
+            file=str(path),
+            file_name=path.name,
+            rows_loaded=0,
+        )
         csv_config = _detect_csv_config(path)
         sample_frame = pd.read_csv(
             path,
@@ -1438,11 +1466,21 @@ def _load_csv_files_into_sqlite(
     try:
         with sqlite_connection_scope(str(db_path)) as connection:
             _create_sqlite_table(connection, _TABULAR_SQLITE_TABLE, storage_columns)
-            for spec in file_specs:
+            for file_index, spec in enumerate(file_specs, start=1):
+                _raise_if_tabular_load_cancelled(cancel_check)
                 path = spec["path"]
                 csv_config = spec["csv_config"]
                 mapping = spec["mapping"]
                 file_row_count = 0
+                _emit_tabular_load_progress(
+                    progress_callback,
+                    stage="loading_file",
+                    file=str(path),
+                    file_name=path.name,
+                    file_index=file_index,
+                    file_count=len(file_specs),
+                    rows_loaded=row_number,
+                )
                 chunk_iter = pd.read_csv(
                     path,
                     delimiter=csv_config["delimiter"],
@@ -1451,6 +1489,7 @@ def _load_csv_files_into_sqlite(
                     chunksize=TABULAR_SQLITE_CHUNK_ROWS,
                 )
                 for raw_chunk in chunk_iter:
+                    _raise_if_tabular_load_cancelled(cancel_check)
                     normalized_chunk = raw_chunk.rename(columns=mapping)
                     output_chunk = pd.DataFrame(index=normalized_chunk.index)
                     chunk_row_count = int(len(normalized_chunk.index))
@@ -1510,6 +1549,18 @@ def _load_csv_files_into_sqlite(
                     )
                     row_number += chunk_row_count
                     file_row_count += chunk_row_count
+                    _emit_tabular_load_progress(
+                        progress_callback,
+                        stage="chunk_loaded",
+                        file=str(path),
+                        file_name=path.name,
+                        file_index=file_index,
+                        file_count=len(file_specs),
+                        chunk_rows=chunk_row_count,
+                        file_rows_loaded=file_row_count,
+                        rows_loaded=row_number,
+                    )
+                    _raise_if_tabular_load_cancelled(cancel_check)
 
                 source_stat = path.stat()
                 snapshots.append(
@@ -1522,6 +1573,13 @@ def _load_csv_files_into_sqlite(
                         csv_config=csv_config,
                     )
                 )
+            _raise_if_tabular_load_cancelled(cancel_check)
+            _emit_tabular_load_progress(
+                progress_callback,
+                stage="indexing",
+                rows_loaded=row_number,
+                file_count=len(file_specs),
+            )
             _create_sqlite_indexes(
                 connection,
                 _TABULAR_SQLITE_TABLE,
@@ -1535,6 +1593,7 @@ def _load_csv_files_into_sqlite(
                 ),
             )
 
+        _raise_if_tabular_load_cancelled(cancel_check)
         if timestamp_field is not None and bad_timestamp_count:
             diagnostics.append(
                 ProductionAnalyticsDiagnostic(
@@ -1583,7 +1642,21 @@ def _load_csv_files_into_sqlite(
             row_count=row_number,
             date_filter_columns=dict(date_filter_columns),
         )
+        _emit_tabular_load_progress(
+            progress_callback,
+            stage="preview",
+            rows_loaded=row_number,
+            file_count=len(file_specs),
+        )
+        _raise_if_tabular_load_cancelled(cancel_check)
         preview = store.read_dataframe(limit=TABULAR_SQLITE_PREVIEW_ROWS)
+        _emit_tabular_load_progress(
+            progress_callback,
+            stage="complete",
+            rows_loaded=row_number,
+            file_count=len(file_specs),
+            sqlite_path=str(db_path),
+        )
         first_snapshot = snapshots[0] if len(snapshots) == 1 else None
         csv_config: dict[str, Any]
         if len(snapshots) == 1:
@@ -1623,6 +1696,20 @@ def _load_csv_files_into_sqlite(
 def _detect_csv_config(path: Path) -> dict[str, Any]:
     best_config = detect_csv_read_configs(path)[0]
     return {"delimiter": best_config["delimiter"], "decimal": best_config["decimal"]}
+
+
+def _raise_if_tabular_load_cancelled(cancel_check: TabularCancelCheck | None) -> None:
+    if cancel_check is not None and cancel_check():
+        raise TabularLoadCancelled("CSV/Excel loading was canceled.")
+
+
+def _emit_tabular_load_progress(
+    progress_callback: TabularProgressCallback | None,
+    **payload: Any,
+) -> None:
+    if progress_callback is None:
+        return
+    progress_callback(dict(payload))
 
 
 def _sqlite_date_filter_source_columns(
@@ -1831,17 +1918,11 @@ def build_tabular_grouping_dataframe(
         if column in frame.columns
     ]
     if selectors:
-        selector_labels = [
-            " | ".join(
-                _display_text(row.get(column), fallback="")
-                for column in selectors
-            ).strip()
-            for _index, row in frame[selectors].iterrows()
-        ]
-        selector_labels = [
-            label if label else f"Row {row_number}"
-            for label, row_number in zip(selector_labels, row_numbers, strict=False)
-        ]
+        selector_labels = _selector_display_labels(
+            frame,
+            selectors=tuple(selectors),
+            row_numbers=row_numbers,
+        )
     else:
         selector_labels = [
             reference if reference else f"Row {row_number}"
@@ -1858,6 +1939,31 @@ def build_tabular_grouping_dataframe(
         },
         columns=columns,
     )
+
+
+def _selector_display_labels(
+    frame: pd.DataFrame,
+    *,
+    selectors: tuple[str, ...],
+    row_numbers: list[int],
+) -> list[str]:
+    if not selectors:
+        return [f"Row {row_number}" for row_number in row_numbers]
+    labels = pd.Series("", index=frame.index, dtype="string")
+    for column in selectors:
+        values = frame[column].where(~frame[column].isna(), "").astype(str).str.strip()
+        values = values.mask(values == "", "")
+        has_label = labels.str.len().fillna(0).gt(0)
+        has_value = values.str.len().fillna(0).gt(0)
+        labels = labels.mask(has_label & has_value, labels + " | " + values)
+        labels = labels.mask(~has_label & has_value, values)
+    fallback = pd.Series(
+        [f"Row {row_number}" for row_number in row_numbers],
+        index=frame.index,
+        dtype="string",
+    )
+    selector_labels = labels.where(labels.str.len().fillna(0).gt(0), fallback).tolist()
+    return [str(label) for label in selector_labels]
 
 
 def apply_tabular_row_filter(
@@ -3322,6 +3428,7 @@ __all__ = [
     "TABULAR_GROUP_COLUMN",
     "TabularAnalyticsLoadResult",
     "TabularSourceSnapshot",
+    "TabularLoadCancelled",
     "TabularSqliteFilterExpression",
     "TabularSqliteStore",
     "TabularAnalyticsWorkbookResult",

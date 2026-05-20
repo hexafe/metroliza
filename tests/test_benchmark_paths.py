@@ -1,4 +1,8 @@
-from scripts.benchmark_paths import benchmark_csv_summary_path, build_benchmark_run_summary
+from scripts.benchmark_paths import (
+    benchmark_csv_summary_large_data_probe,
+    benchmark_csv_summary_path,
+    build_benchmark_run_summary,
+)
 
 
 def test_build_benchmark_run_summary_includes_contract_keys():
@@ -48,3 +52,19 @@ def test_csv_summary_benchmark_runs_groupstats_path(tmp_path):
     assert result.scenario == 'csv_summary_export_path'
     assert result.stage_timings_s['groupstats_analysis'] > 0.0
     assert result.input_metrics['groupstats_metric_count'] == 2
+
+
+def test_csv_summary_large_data_probe_smoke(tmp_path):
+    result = benchmark_csv_summary_large_data_probe(
+        tmp_path,
+        row_count=24,
+        data_columns=3,
+        search_text='P-00',
+        materialize_columns=2,
+    )
+
+    assert result.scenario == 'csv_summary_large_data_probe'
+    assert result.stage_timings_s['csv_load'] >= 0.0
+    assert result.stage_timings_s['group_preview'] >= 0.0
+    assert result.input_metrics['rows'] == 24
+    assert result.input_metrics['materialized_columns'] >= 3

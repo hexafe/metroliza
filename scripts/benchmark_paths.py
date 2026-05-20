@@ -973,6 +973,113 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
     )
 
 
+def benchmark_csv_summary_large_data_probe(
+    temp_dir: Path,
+    *,
+    row_count: int,
+    data_columns: int,
+    search_text: str,
+    materialize_columns: int,
+) -> ScenarioResult:
+    """Probe CSV Summary load/group/filter/materialization costs for release-scale data.
+
+    This scenario is intentionally opt-in. CI can run it with small row counts, while
+    release checks can use --large-csv-rows 1000000 --large-csv-columns 20.
+    """
+
+    from modules.grouping_filter_core import DataFrameGroupingIndex
+    from modules.tabular_analytics_service import (
+        build_tabular_grouping_dataframe,
+        load_tabular_analytics_files,
+        materialize_tabular_dataframe,
+    )
+
+    csv_path = temp_dir / 'summary_large_probe.csv'
+    fixture_metrics = _create_csv_fixture(csv_path, row_count=row_count, data_columns=data_columns)
+    search = str(search_text or '').strip()
+
+    load_start = time.perf_counter()
+    loaded = load_tabular_analytics_files((str(csv_path),), reference_column='PART')
+    load_s = time.perf_counter() - load_start
+
+    metric_columns = tuple(
+        candidate.field_name
+        for candidate in tuple(getattr(loaded, 'metric_candidates', ()))[: max(1, materialize_columns)]
+    )
+    required_columns = ('source_row_number', 'reference', *metric_columns)
+    materialize_start = time.perf_counter()
+    materialized = materialize_tabular_dataframe(loaded, required_columns=required_columns)
+    materialize_s = time.perf_counter() - materialize_start
+
+    preview_value_rows = 0
+    preview_group_total = 0
+    row_id_count = 0
+    grouping_build_s = 0.0
+    value_preview_s = 0.0
+    group_preview_s = 0.0
+    row_ids_s = 0.0
+
+    sqlite_store = getattr(loaded, 'sqlite_store', None)
+    if sqlite_store is not None:
+        value_start = time.perf_counter()
+        values, _total_values = sqlite_store.preview_value_rows('reference', search_text=search, limit=100)
+        value_preview_s = time.perf_counter() - value_start
+        preview_value_rows = len(values)
+
+        group_start = time.perf_counter()
+        _group_rows, preview_group_total = sqlite_store.preview_group_rows(
+            ('reference',),
+            search_text=search,
+            limit=100,
+        )
+        group_preview_s = time.perf_counter() - group_start
+
+        row_id_start = time.perf_counter()
+        row_ids = sqlite_store.row_ids_for_group_search(('reference',), search_text=search)
+        row_ids_s = time.perf_counter() - row_id_start
+        row_id_count = len(row_ids)
+    else:
+        grouping_start = time.perf_counter()
+        grouping_frame = build_tabular_grouping_dataframe(loaded.dataframe, selector_columns=('reference',))
+        grouping_build_s = time.perf_counter() - grouping_start
+
+        group_start = time.perf_counter()
+        index = DataFrameGroupingIndex(grouping_frame, ('PART_NAME',))
+        group_rows, preview_group_total = index.preview_rows(search_text=search, limit=100)
+        group_preview_s = time.perf_counter() - group_start
+        preview_value_rows = len(group_rows)
+
+        row_id_start = time.perf_counter()
+        keys = {tuple(row['key']) for row in group_rows}
+        row_ids = index.row_ids_for_keys(keys)
+        row_ids_s = time.perf_counter() - row_id_start
+        row_id_count = len(row_ids)
+
+    total_s = load_s + materialize_s + grouping_build_s + value_preview_s + group_preview_s + row_ids_s
+    return ScenarioResult(
+        scenario='csv_summary_large_data_probe',
+        wall_time_s=total_s,
+        stage_timings_s={
+            'csv_load': load_s,
+            'materialize_required_columns': materialize_s,
+            'grouping_dataframe_build': grouping_build_s,
+            'value_preview': value_preview_s,
+            'group_preview': group_preview_s,
+            'row_ids_for_search': row_ids_s,
+        },
+        input_metrics={
+            'rows': fixture_metrics['rows'],
+            'headers': fixture_metrics['headers'],
+            'storage_mode_sqlite': 1 if sqlite_store is not None else 0,
+            'materialized_rows': int(len(materialized.dataframe.index)),
+            'materialized_columns': int(len(materialized.dataframe.columns)),
+            'preview_value_rows': preview_value_rows,
+            'preview_group_total': int(preview_group_total),
+            'row_ids_for_search': row_id_count,
+        },
+    )
+
+
 def benchmark_chart_render_budget_path(temp_dir: Path, *, iterations: int, histogram_points: int) -> ScenarioResult:
     import matplotlib.pyplot as plt
     from modules.chart_renderer import (
@@ -1180,6 +1287,10 @@ def main() -> int:
     parser.add_argument('--headers-per-report', type=int, default=10)
     parser.add_argument('--csv-rows', type=int, default=1500)
     parser.add_argument('--csv-columns', type=int, default=8)
+    parser.add_argument('--large-csv-rows', type=int, default=1_000_000)
+    parser.add_argument('--large-csv-columns', type=int, default=20)
+    parser.add_argument('--large-csv-search', default='P-00')
+    parser.add_argument('--large-csv-materialize-columns', type=int, default=5)
     parser.add_argument('--fit-group-count', type=int, default=40)
     parser.add_argument('--fit-sample-size', type=int, default=120)
     parser.add_argument('--fit-monte-carlo-samples', type=int, default=250)
@@ -1216,6 +1327,7 @@ def main() -> int:
             'excel_export_write_vs_shape_path',
             'excel_export_high_header_cardinality_compare',
             'csv_summary_export_path',
+            'csv_summary_large_data_probe',
             'distribution_fit_monte_carlo_path',
             'group_preprocess_mixed_types_compare',
             'cmm_parser_backend_compare',
@@ -1241,6 +1353,13 @@ def main() -> int:
         ),
         'csv_summary_export_path': lambda temp_path: benchmark_csv_summary_path(
             temp_path, row_count=args.csv_rows, data_columns=args.csv_columns
+        ),
+        'csv_summary_large_data_probe': lambda temp_path: benchmark_csv_summary_large_data_probe(
+            temp_path,
+            row_count=max(1, args.large_csv_rows),
+            data_columns=max(1, args.large_csv_columns),
+            search_text=args.large_csv_search,
+            materialize_columns=max(1, args.large_csv_materialize_columns),
         ),
         'distribution_fit_monte_carlo_path': lambda temp_path: benchmark_distribution_fit_monte_carlo_path(
             temp_path,
@@ -1270,7 +1389,10 @@ def main() -> int:
             iterations=max(1, args.chart_type_benchmark_iterations),
         ),
     }
-    selected_scenarios = args.scenarios or list(scenario_runners.keys())
+    manual_scenarios = {'csv_summary_large_data_probe'}
+    selected_scenarios = args.scenarios or [
+        scenario for scenario in scenario_runners if scenario not in manual_scenarios
+    ]
 
     with tempfile.TemporaryDirectory(prefix='metroliza-bench-') as temp_dir:
         temp_path = Path(temp_dir)

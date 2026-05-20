@@ -5,14 +5,20 @@ import pandas as pd
 try:
     from modules import industrial_workers
     from modules.industrial_analytics_workflow import AnalyticsCancelled
-    from modules.industrial_workers import IndustrialAnalyticsThread
-    from modules.tabular_analytics_service import TabularAnalyticsLoadResult, TabularColumnFilter
+    from modules.industrial_workers import IndustrialAnalyticsThread, TabularAnalyticsLoadThread
+    from modules.tabular_analytics_service import (
+        TabularAnalyticsLoadResult,
+        TabularColumnFilter,
+        TabularLoadCancelled,
+    )
 except ImportError as exc:  # pragma: no cover - environment/order dependent
     industrial_workers = None
     AnalyticsCancelled = None
     IndustrialAnalyticsThread = None
+    TabularAnalyticsLoadThread = None
     TabularAnalyticsLoadResult = None
     TabularColumnFilter = None
+    TabularLoadCancelled = None
     PYQT_IMPORT_ERROR = exc
 else:
     PYQT_IMPORT_ERROR = None
@@ -160,3 +166,67 @@ def test_industrial_analytics_thread_passes_tabular_grouping_to_workflow(
     assert captured["sheet_name"] == "Measurements"
     assert captured["timestamp_column"] == "time_stamp"
     assert captured["reference_column"] == "reference_id"
+
+
+def test_tabular_analytics_load_thread_passes_progress_and_cancel_hooks(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    _skip_if_pyqt_unavailable()
+
+    result = object()
+    captured = {}
+
+    def load_files(paths, **kwargs):
+        captured["paths"] = paths
+        captured.update(kwargs)
+        kwargs["progress_callback"]({"stage": "chunk_loaded", "file_name": "table.csv", "rows_loaded": 42})
+        assert callable(kwargs["cancel_check"])
+        return result
+
+    monkeypatch.setattr(industrial_workers, "load_tabular_analytics_files", load_files)
+    thread = TabularAnalyticsLoadThread(
+        input_file=str(tmp_path / "table.csv"),
+        input_files=(str(tmp_path / "table.csv"),),
+        timestamp_column="TimeStamp",
+        reference_column="PART",
+    )
+    labels: list[str] = []
+    results: list[object] = []
+    errors: list[str] = []
+    _capture_signal(thread.update_label, labels)
+    _capture_signal(thread.result_ready, results)
+    _capture_signal(thread.error_occurred, errors)
+
+    thread.run()
+
+    assert results == [result]
+    assert errors == []
+    assert captured["timestamp_column"] == "TimeStamp"
+    assert captured["reference_column"] == "PART"
+    assert any("42 rows loaded" in label for label in labels)
+
+
+def test_tabular_analytics_load_thread_emits_cancelled_for_service_cancel(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    _skip_if_pyqt_unavailable()
+
+    def raise_cancelled(*args, **kwargs):
+        raise TabularLoadCancelled("CSV/Excel loading was canceled.")
+
+    monkeypatch.setattr(industrial_workers, "load_tabular_analytics_file", raise_cancelled)
+    thread = TabularAnalyticsLoadThread(input_file=str(tmp_path / "table.csv"))
+    cancelled: list[str] = []
+    results: list[object] = []
+    errors: list[str] = []
+    _capture_signal(thread.cancelled, cancelled)
+    _capture_signal(thread.result_ready, results)
+    _capture_signal(thread.error_occurred, errors)
+
+    thread.run()
+
+    assert cancelled == ["CSV/Excel loading was canceled."]
+    assert results == []
+    assert errors == []

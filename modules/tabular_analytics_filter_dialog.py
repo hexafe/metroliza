@@ -81,6 +81,7 @@ class TabularAnalyticsFilterDialog(QDialog):
         self._filter_date_series_by_column: dict[str, pd.Series] = {}
         self._list_selection_utils = ListSelectionUtils()
         self._syncing_current_filter = False
+        self._applied_matching_search_text = ""
         self._status_timer = QTimer(self)
         self._status_timer.setSingleShot(True)
         self._status_timer.setInterval(80)
@@ -218,7 +219,8 @@ class TabularAnalyticsFilterDialog(QDialog):
         self.clear_filter_button.clicked.connect(self.clear_filter)
         self.cancel_button.clicked.connect(self.reject)
         self.apply_button.clicked.connect(self._accept_filter)
-        self.matching_search.textChanged.connect(self._refresh_values)
+        self.matching_search.textChanged.connect(self._handle_matching_search_text_changed)
+        self.matching_search.returnPressed.connect(self._apply_matching_search)
         self.matching_list.itemSelectionChanged.connect(self._store_current_selection)
         self.date_mode_combo.currentIndexChanged.connect(self._store_current_date_filter)
         self.date_from_calendar.dateChanged.connect(self._store_current_date_filter)
@@ -409,6 +411,23 @@ class TabularAnalyticsFilterDialog(QDialog):
         self._sync_date_controls()
         self._schedule_status_sync()
 
+    def _matching_search_text(self) -> str:
+        if self.sqlite_store is not None:
+            return str(self._applied_matching_search_text or "")
+        return str(self.matching_search.text() or "")
+
+    def _handle_matching_search_text_changed(self) -> None:
+        if self.sqlite_store is not None:
+            if str(self.matching_search.text() or "") != str(self._applied_matching_search_text or ""):
+                self.matching_status_label.setText("Press Enter to search values.")
+                set_status_variant(self.matching_status_label, "neutral")
+            return
+        self._refresh_values()
+
+    def _apply_matching_search(self) -> None:
+        self._applied_matching_search_text = str(self.matching_search.text() or "").strip()
+        self._refresh_values()
+
     def _set_current_selected_column(self, column: str) -> None:
         set_current_column(self.selected_columns_list, column)
 
@@ -452,12 +471,12 @@ class TabularAnalyticsFilterDialog(QDialog):
         if self.sqlite_store is not None:
             preview_rows, total_rows = self.sqlite_store.preview_value_rows(
                 column,
-                search_text=self.matching_search.text(),
+                search_text=self._matching_search_text(),
                 limit=_MAX_VISIBLE_MATCHES,
             )
         else:
             preview_rows, total_rows = self._value_index(column).preview_rows(
-                search_text=self.matching_search.text(),
+                search_text=self._matching_search_text(),
                 limit=_MAX_VISIBLE_MATCHES,
             )
         selected_values = set(self.value_filters.get(column, set()))

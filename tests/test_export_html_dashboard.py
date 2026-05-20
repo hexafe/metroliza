@@ -290,6 +290,11 @@ class TestExportHtmlDashboard(unittest.TestCase):
             plotly_asset = Path(result['html_dashboard_assets_path']) / 'plotly-2.27.0.min.js'
             self.assertTrue(plotly_asset.exists())
             self.assertGreater(plotly_asset.stat().st_size, 1_000_000)
+            timings = result['html_dashboard_timings_s']
+            self.assertIn('plotly_spec_generation', timings)
+            self.assertIn('html_write', timings)
+            self.assertGreaterEqual(timings['total'], timings['plotly_spec_generation'])
+            self.assertEqual(result['html_dashboard_plotly_spec_count'], 3)
 
     def test_write_export_html_dashboard_falls_back_to_png_only_when_plotly_bundle_missing(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -352,6 +357,40 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(bundle['light']['layout']['font']['color'], '#162330')
         self.assertEqual(bundle['dark']['layout']['font']['color'], '#edf3fb')
         self.assertNotEqual(bundle['light']['layout']['colorway'], bundle['dark']['layout']['colorway'])
+
+    def test_plotly_chart_spec_bundle_builds_data_once_and_derives_dark_theme(self):
+        package_spec = {
+            'data': [
+                {
+                    'type': 'scatter',
+                    'x': [1, 2, 3],
+                    'y': [4, 5, 6],
+                    'marker': {'color': '#245a5a', 'line': {'color': '#ffffff'}},
+                }
+            ],
+            'layout': {
+                'font': {'color': '#162330'},
+                'colorway': ['#245a5a'],
+                'xaxis': {'gridcolor': '#d9e2ec'},
+                'shapes': [{'line': {'color': '#b45309'}}],
+            },
+            'config': {'responsive': True},
+        }
+        with (
+            patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=True),
+            patch('modules.export_html_dashboard.build_plotstats_dashboard_spec', return_value=package_spec) as artifact,
+        ):
+            bundle = _build_plotly_chart_spec_bundle(
+                {'type': 'histogram', 'values': [1.0, 2.0, 3.0]},
+                title='Summary Histogram',
+            )
+
+        artifact.assert_called_once()
+        self.assertEqual(bundle['light'], package_spec)
+        self.assertEqual(bundle['dark']['data'][0]['x'], [1, 2, 3])
+        self.assertEqual(bundle['dark']['layout']['font']['color'], '#edf3fb')
+        self.assertNotEqual(bundle['dark']['data'][0]['marker']['color'], '#245a5a')
+        self.assertNotEqual(bundle['dark']['layout']['shapes'][0]['line']['color'], '#b45309')
 
     def test_group_analysis_histogram_plotly_spec_uses_shared_bins_for_overlay(self):
         all_values = [9.99, 10.01, 10.02, 10.03, 10.08, 10.11, 10.14, 10.16]

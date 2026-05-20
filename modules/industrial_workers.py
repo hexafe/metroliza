@@ -27,6 +27,7 @@ from modules.industrial_analytics_workflow import (
 from modules.tabular_analytics_service import (
     TabularAnalyticsLoadResult,
     TabularColumnFilter,
+    TabularLoadCancelled,
     load_tabular_analytics_file,
     load_tabular_analytics_files,
 )
@@ -354,6 +355,30 @@ class TabularAnalyticsLoadThread(WorkerCancellationMixin, QThread):
         self.reference_column = reference_column
         self._init_cancellation_state()
 
+    def _emit_tabular_load_progress(self, payload: dict[str, Any]) -> None:
+        stage = str(payload.get("stage") or "").strip()
+        rows_loaded = payload.get("rows_loaded")
+        file_name = str(payload.get("file_name") or "").strip()
+        file_index = payload.get("file_index")
+        file_count = payload.get("file_count")
+        stage_labels = {
+            "sampling": "Inspecting CSV/Excel data...",
+            "loading_file": "Loading CSV/Excel data...",
+            "chunk_loaded": "Loading CSV/Excel data...",
+            "indexing": "Indexing loaded rows...",
+            "preview": "Preparing preview...",
+            "complete": "CSV/Excel loading complete",
+        }
+        detail_parts: list[str] = []
+        if file_name:
+            detail_parts.append(file_name)
+        if file_index is not None and file_count is not None:
+            detail_parts.append(f"file {int(file_index)} of {int(file_count)}")
+        if rows_loaded is not None:
+            detail_parts.append(f"{int(rows_loaded):,} rows loaded")
+        detail = " | ".join(detail_parts) if detail_parts else "Reading rows and detecting metrics"
+        self.update_label.emit(f"{stage_labels.get(stage, 'Loading CSV/Excel data...')}\n{detail}\nETA --")
+
     def run(self):
         try:
             self.update_label.emit("Loading CSV/Excel data...\nReading rows and detecting metrics\nETA --")
@@ -363,6 +388,8 @@ class TabularAnalyticsLoadThread(WorkerCancellationMixin, QThread):
                     sheet_name=self.sheet_name,
                     timestamp_column=self.timestamp_column,
                     reference_column=self.reference_column,
+                    progress_callback=self._emit_tabular_load_progress,
+                    cancel_check=self._is_cancelled,
                 )
             else:
                 result = load_tabular_analytics_file(
@@ -370,11 +397,15 @@ class TabularAnalyticsLoadThread(WorkerCancellationMixin, QThread):
                     sheet_name=self.sheet_name,
                     timestamp_column=self.timestamp_column,
                     reference_column=self.reference_column,
+                    progress_callback=self._emit_tabular_load_progress,
+                    cancel_check=self._is_cancelled,
                 )
             if self._is_cancelled():
                 self.cancelled.emit("CSV/Excel loading was canceled.")
                 return
             self.result_ready.emit(result)
+        except TabularLoadCancelled as exc:
+            self.cancelled.emit(str(exc))
         except Exception as exc:
             if self._is_cancelled():
                 self.cancelled.emit("CSV/Excel loading was canceled.")

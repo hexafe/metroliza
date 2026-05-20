@@ -115,7 +115,7 @@ from modules.export_grouping_utils import (
     prepare_grouping_dataframe as _prepare_grouping_dataframe,
     resolve_group_merge_keys as _resolve_group_merge_keys,
 )
-from modules.group_analysis_service import build_group_analysis_payload
+from modules.group_analysis_service import GroupAnalysisCancelled, build_group_analysis_payload
 from modules.group_analysis_writer import (
     write_group_analysis_diagnostics_sheet as _write_internal_group_analysis_diagnostics_sheet,
     write_group_analysis_plots_sheet,
@@ -270,6 +270,7 @@ def _native_extended_trend_export_available() -> bool:
 
 
 _INTERNAL_GROUP_ANALYSIS_DIAGNOSTICS_ENV_VAR = 'METROLIZA_EXPORT_GROUP_ANALYSIS_DIAGNOSTICS'
+_COLUMN_WIDTH_SAMPLE_LIMIT = 2048
 
 
 def _internal_group_analysis_diagnostics_enabled():
@@ -3470,6 +3471,12 @@ class ExportDataThread(QThread):
             'worksheet_write_planning': 0.0,
             'worksheet_writes': 0.0,
             'chart_rendering': 0.0,
+            'group_analysis_payload': 0.0,
+            'html_dashboard_total': 0.0,
+            'html_dashboard_plotly_spec_generation': 0.0,
+            'html_dashboard_asset_writes': 0.0,
+            'html_dashboard_html_rendering': 0.0,
+            'html_dashboard_html_write': 0.0,
         }
         self._chart_render_backend_counts = {'native': 0, 'matplotlib': 0}
         self._chart_render_backend_counts_by_type = {
@@ -3565,6 +3572,7 @@ class ExportDataThread(QThread):
     def _write_html_dashboard_if_requested(self):
         if not self.generate_html_dashboard or not self.html_dashboard_file or not self.html_dashboard_assets_dir:
             return
+        dashboard_start = time.perf_counter()
         try:
             dashboard_result = _write_export_html_dashboard(
                 excel_file=self.excel_file,
@@ -3583,6 +3591,7 @@ class ExportDataThread(QThread):
                 dashboard_mode="html_only" if self.export_target == "html_dashboard" else "workbook_sidecar",
             )
         except Exception as exc:
+            self._record_stage_timing('html_dashboard_total', time.perf_counter() - dashboard_start)
             warning_message = f"HTML dashboard export skipped: {exc}"
             logger.warning(warning_message, exc_info=True)
             self.completion_metadata.setdefault('html_dashboard_warnings', []).append(warning_message)
@@ -3594,12 +3603,44 @@ class ExportDataThread(QThread):
             )
             return
 
+        dashboard_timings = dashboard_result.get('html_dashboard_timings_s')
+        if isinstance(dashboard_timings, dict):
+            self._record_stage_timing(
+                'html_dashboard_plotly_spec_generation',
+                dashboard_timings.get('plotly_spec_generation', 0.0),
+            )
+            self._record_stage_timing(
+                'html_dashboard_asset_writes',
+                float(dashboard_timings.get('image_asset_writes', 0.0))
+                + float(dashboard_timings.get('plotly_runtime_asset', 0.0)),
+            )
+            self._record_stage_timing(
+                'html_dashboard_html_rendering',
+                dashboard_timings.get('html_rendering', 0.0),
+            )
+            self._record_stage_timing(
+                'html_dashboard_html_write',
+                dashboard_timings.get('html_write', 0.0),
+            )
+            self._record_stage_timing('html_dashboard_total', dashboard_timings.get('total', 0.0))
+            self.completion_metadata['html_dashboard_timings_s'] = {
+                str(key): float(value)
+                for key, value in dashboard_timings.items()
+            }
+        else:
+            self._record_stage_timing('html_dashboard_total', time.perf_counter() - dashboard_start)
+
         self.completion_metadata.update(dashboard_result)
         self._log_export_stage(
             "HTML dashboard generated",
             stage="dashboard_completed",
             html_dashboard_path=dashboard_result.get('html_dashboard_path'),
             html_dashboard_chart_count=dashboard_result.get('html_dashboard_chart_count', 0),
+            html_dashboard_plotly_spec_generation_s=(
+                dashboard_result.get('html_dashboard_timings_s', {}).get('plotly_spec_generation')
+                if isinstance(dashboard_result.get('html_dashboard_timings_s'), dict)
+                else None
+            ),
         )
 
     def _ensure_chart_executor(self):
@@ -3793,9 +3834,8 @@ class ExportDataThread(QThread):
 
         return {
             'stage_timings_s': {
-                'chart_payload_preparation': float(self._stage_timings.get('chart_payload_preparation', 0.0)),
-                'chart_rendering': float(self._stage_timings.get('chart_rendering', 0.0)),
-                'worksheet_writes': float(self._stage_timings.get('worksheet_writes', 0.0)),
+                str(stage_name): float(elapsed)
+                for stage_name, elapsed in self._stage_timings.items()
             },
             'chart_backend_distribution': chart_backend_distribution,
             'per_chart_type_timing_medians_s': per_chart_type_timing_medians_s,
@@ -5231,13 +5271,33 @@ class ExportDataThread(QThread):
         )
 
         requested_scope = str(self.group_analysis_scope or 'auto').strip().lower()
-        payload = build_group_analysis_payload(
-            grouped_export_df,
-            requested_scope=requested_scope,
-            analysis_level=mode,
-            alias_db_path=self.db_file,
-            default_group_label=default_group_label,
-        )
+
+        def emit_group_analysis_progress(message):
+            self.update_label.emit(
+                build_three_line_status(
+                    "Building group analysis...",
+                    str(message or "Analyzing selected groups"),
+                    "ETA --",
+                )
+            )
+
+        payload_start = time.perf_counter()
+        try:
+            payload = build_group_analysis_payload(
+                grouped_export_df,
+                requested_scope=requested_scope,
+                analysis_level=mode,
+                alias_db_path=self.db_file,
+                default_group_label=default_group_label,
+                progress_callback=emit_group_analysis_progress,
+                should_cancel=self._check_canceled,
+                include_chart_payloads=(mode == 'standard'),
+            )
+        except GroupAnalysisCancelled:
+            self._check_canceled()
+            return
+        finally:
+            self._record_stage_timing('group_analysis_payload', time.perf_counter() - payload_start)
         if self.generate_html_dashboard:
             self._html_group_analysis_payload = payload
             self._html_group_analysis_plot_assets = {'metrics': {}}
@@ -5391,6 +5451,17 @@ class ExportDataThread(QThread):
         except Exception as e:
             self.log_and_exit(e)
 
+    @staticmethod
+    def _sample_column_for_width(data, *, sample_limit=_COLUMN_WIDTH_SAMPLE_LIMIT):
+        row_count = len(data)
+        sample_limit = max(1, int(sample_limit or 1))
+        if row_count <= sample_limit:
+            return data
+
+        head_count = sample_limit // 2
+        tail_count = sample_limit - head_count
+        return pd.concat([data.iloc[:head_count], data.iloc[-tail_count:]])
+
     def calculate_column_width(self, data):
         """Handle `calculate_column_width` for `ExportDataThread`.
 
@@ -5408,8 +5479,8 @@ class ExportDataThread(QThread):
             if data.empty:
                 return 12  # Return a default width 12 if the data is empty
 
-            # Vectorized string-length calculation for improved performance on large exports.
-            column_width = data.astype(str).str.len().max()
+            width_sample = self._sample_column_for_width(data)
+            column_width = width_sample.astype(str).str.len().max()
             column_width = min(column_width, 40)
             column_width = max(column_width, 12)
             return column_width

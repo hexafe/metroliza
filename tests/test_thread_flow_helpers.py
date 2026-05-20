@@ -1762,6 +1762,41 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertTrue(summary['high_header_cardinality_scenario']['detected'])
         self.assertEqual(summary['high_header_cardinality_scenario']['max_headers_per_partition'], 80)
 
+    def test_html_dashboard_write_timings_are_recorded_in_export_metadata(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_html_dashboard=True),
+        )
+        thread = ExportDataThread(request)
+        dashboard_timings = {
+            'plotly_spec_generation': 1.5,
+            'image_asset_writes': 0.2,
+            'plotly_runtime_asset': 0.3,
+            'html_rendering': 0.4,
+            'html_write': 0.1,
+            'total': 2.5,
+        }
+
+        with mock.patch(
+            'modules.export_data_thread._write_export_html_dashboard',
+            return_value={
+                'html_dashboard_path': 'out_dashboard.html',
+                'html_dashboard_assets_path': 'out_dashboard_assets',
+                'html_dashboard_chart_count': 4,
+                'html_dashboard_timings_s': dashboard_timings,
+            },
+        ):
+            thread._write_html_dashboard_if_requested()
+
+        self.assertEqual(thread._stage_timings['html_dashboard_plotly_spec_generation'], 1.5)
+        self.assertEqual(thread._stage_timings['html_dashboard_asset_writes'], 0.5)
+        self.assertEqual(thread._stage_timings['html_dashboard_html_rendering'], 0.4)
+        self.assertEqual(thread._stage_timings['html_dashboard_html_write'], 0.1)
+        self.assertEqual(thread._stage_timings['html_dashboard_total'], 2.5)
+        self.assertEqual(thread.completion_metadata['html_dashboard_timings_s'], dashboard_timings)
+
     def test_export_observability_summary_handles_header_count_lookup_failures(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 

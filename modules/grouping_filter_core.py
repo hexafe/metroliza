@@ -253,7 +253,7 @@ class DataFrameGroupingIndex:
             self._grouped_preview = pd.DataFrame()
             return self._grouped_preview
         grouped = (
-            self.key_frame.groupby(list(self.grouping_columns), dropna=False, sort=True)
+            self.key_frame.groupby(list(self.grouping_columns), dropna=False, sort=False)
             .size()
             .reset_index(name="_row_count")
         )

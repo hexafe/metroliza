@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
+import copy
 import html
 import json
 import math
 from pathlib import Path
 import re
+from time import perf_counter
 from typing import Any
 
 from modules.dashboard_navigation import (
@@ -50,6 +52,19 @@ _PLOTLY_MODEBAR_REMOVE = [
     "autoScale2d",
     "toggleSpikelines",
 ]
+
+
+def _new_dashboard_timing_summary() -> dict[str, float]:
+    return {
+        "image_asset_writes": 0.0,
+        "payload_metadata": 0.0,
+        "plotly_spec_generation": 0.0,
+        "group_analysis_normalization": 0.0,
+        "plotly_runtime_asset": 0.0,
+        "html_rendering": 0.0,
+        "html_write": 0.0,
+        "total": 0.0,
+    }
 
 
 def resolve_html_dashboard_path(excel_file: str | Path) -> Path:
@@ -269,6 +284,9 @@ def write_export_html_dashboard(
 ) -> dict[str, Any]:
     """Persist an HTML dashboard plus a sibling asset directory."""
 
+    total_start = perf_counter()
+    timings_s = _new_dashboard_timing_summary()
+    plotly_spec_count = 0
     dashboard_path = Path(str(output_path))
     asset_directory = Path(str(assets_dir))
     dashboard_path.parent.mkdir(parents=True, exist_ok=True)
@@ -285,7 +303,21 @@ def write_export_html_dashboard(
                 f"{_slugify(raw_chart.get('chart_type') or 'chart')}_{chart_index:02d}.png"
             )
             image_path = asset_directory / image_name
+            asset_start = perf_counter()
             image_path.write_bytes(image_bytes)
+            timings_s["image_asset_writes"] += perf_counter() - asset_start
+            metadata_start = perf_counter()
+            payload_summary = summarize_dashboard_chart_payload(raw_chart.get("payload"))
+            payload_details = extract_dashboard_chart_details(raw_chart.get("payload"))
+            timings_s["payload_metadata"] += perf_counter() - metadata_start
+            spec_start = perf_counter()
+            plotly_spec = _build_plotly_chart_spec_bundle(
+                raw_chart.get("payload"),
+                title=str(raw_chart.get("title") or raw_chart.get("chart_type") or "Chart"),
+            )
+            timings_s["plotly_spec_generation"] += perf_counter() - spec_start
+            if plotly_spec:
+                plotly_spec_count += 1
             charts.append(
                 {
                     "chart_type": str(raw_chart.get("chart_type") or ""),
@@ -293,12 +325,9 @@ def write_export_html_dashboard(
                     "backend": str(raw_chart.get("backend") or ""),
                     "note": str(raw_chart.get("note") or ""),
                     "image_path": f"{asset_directory.name}/{image_name}",
-                    "payload_summary": summarize_dashboard_chart_payload(raw_chart.get("payload")),
-                    "payload_details": extract_dashboard_chart_details(raw_chart.get("payload")),
-                    "plotly_spec": _build_plotly_chart_spec_bundle(
-                        raw_chart.get("payload"),
-                        title=str(raw_chart.get("title") or raw_chart.get("chart_type") or "Chart"),
-                    ),
+                    "payload_summary": payload_summary,
+                    "payload_details": payload_details,
+                    "plotly_spec": plotly_spec,
                 }
             )
             chart_count += 1
@@ -319,19 +348,25 @@ def write_export_html_dashboard(
             }
         )
 
+    group_analysis_start = perf_counter()
     normalized_group_analysis = _normalize_group_analysis_manifest(
         group_analysis_payload,
         group_analysis_plot_assets,
         asset_directory=asset_directory,
+        timings_s=timings_s,
     )
+    timings_s["group_analysis_normalization"] += perf_counter() - group_analysis_start
     chart_count += int(normalized_group_analysis.get("plot_count") or 0) if normalized_group_analysis else 0
     interactive_chart_count = _count_plotly_specs(section_entries, normalized_group_analysis)
+    plotly_spec_count = interactive_chart_count
     plotly_runtime_status = "not_needed"
+    runtime_asset_start = perf_counter()
     plotly_js_path = (
         _copy_plotly_runtime_asset(asset_directory)
         if interactive_chart_count > 0
         else None
     )
+    timings_s["plotly_runtime_asset"] += perf_counter() - runtime_asset_start
     if interactive_chart_count > 0 and not plotly_js_path:
         _drop_plotly_specs(section_entries, normalized_group_analysis)
         interactive_chart_count = 0
@@ -339,6 +374,7 @@ def write_export_html_dashboard(
     elif plotly_js_path:
         plotly_runtime_status = "local"
 
+    timings_s["total"] = perf_counter() - total_start
     manifest = {
         "excel_file": str(Path(str(excel_file)).name) if excel_file else "",
         "source_label": str(source_label or (Path(str(excel_file)).name if excel_file else dashboard_path.name)),
@@ -354,12 +390,21 @@ def write_export_html_dashboard(
         "chart_observability_summary": chart_observability_summary or {},
         "backend_diagnostics_lines": [str(line) for line in (backend_diagnostics_lines or []) if str(line).strip()],
     }
-    dashboard_path.write_text(_render_dashboard_html(manifest), encoding="utf-8")
+    render_start = perf_counter()
+    html_text = _render_dashboard_html(manifest)
+    timings_s["html_rendering"] += perf_counter() - render_start
+    write_start = perf_counter()
+    dashboard_path.write_text(html_text, encoding="utf-8")
+    timings_s["html_write"] += perf_counter() - write_start
+    timings_s["total"] = perf_counter() - total_start
     return {
         "html_dashboard_path": str(dashboard_path),
         "html_dashboard_assets_path": str(asset_directory),
         "html_dashboard_section_count": int(len(section_entries)),
         "html_dashboard_chart_count": int(chart_count),
+        "html_dashboard_interactive_chart_count": int(interactive_chart_count),
+        "html_dashboard_plotly_spec_count": int(plotly_spec_count),
+        "html_dashboard_timings_s": {key: float(value) for key, value in timings_s.items()},
     }
 
 
@@ -610,6 +655,160 @@ def _build_plotly_config() -> dict[str, Any]:
         "displaylogo": False,
         "modeBarButtonsToRemove": list(_PLOTLY_MODEBAR_REMOVE),
     }
+
+
+def _plotly_theme_color_remap(tokens: dict[str, Any]) -> dict[str, Any]:
+    colorway = tokens.get("colorway") if isinstance(tokens.get("colorway"), list) else []
+    return {
+        "#245a5a": tokens.get("mean_line"),
+        "#d66e2f": tokens.get("trend_marker"),
+        "#476f95": colorway[2] if len(colorway) > 2 else "#476f95",
+        "#7a8f3d": colorway[3] if len(colorway) > 3 else "#7a8f3d",
+        "#b2503c": colorway[4] if len(colorway) > 4 else "#b2503c",
+        "#6a5f85": colorway[5] if len(colorway) > 5 else "#6a5f85",
+        "#b45309": tokens.get("reference_limit"),
+        "#0f766e": tokens.get("reference_nominal"),
+        "#162330": tokens.get("text"),
+        "#ffffff": tokens.get("bar_outline"),
+    }
+
+
+def _remap_plotly_theme_color(value: Any, color_remap: dict[str, Any]) -> Any:
+    if not isinstance(value, str):
+        return value
+    return color_remap.get(value.strip().lower(), value)
+
+
+def _retint_plotly_trace_for_theme(trace: Any, color_remap: dict[str, Any]) -> Any:
+    if not isinstance(trace, dict):
+        return trace
+
+    next_trace = dict(trace)
+    line = next_trace.get("line")
+    if isinstance(line, dict):
+        next_trace["line"] = {
+            **line,
+            "color": _remap_plotly_theme_color(line.get("color"), color_remap),
+        }
+
+    marker = next_trace.get("marker")
+    if isinstance(marker, dict):
+        next_marker = dict(marker)
+        if isinstance(next_marker.get("color"), str):
+            next_marker["color"] = _remap_plotly_theme_color(next_marker.get("color"), color_remap)
+        marker_line = next_marker.get("line")
+        if isinstance(marker_line, dict):
+            next_marker["line"] = {
+                **marker_line,
+                "color": _remap_plotly_theme_color(marker_line.get("color"), color_remap),
+            }
+        next_trace["marker"] = next_marker
+
+    if isinstance(next_trace.get("fillcolor"), str):
+        next_trace["fillcolor"] = _remap_plotly_theme_color(next_trace.get("fillcolor"), color_remap)
+    return next_trace
+
+
+def _derive_plotly_spec_theme(spec: dict[str, Any], *, theme: str) -> dict[str, Any]:
+    """Create an alternate themed spec without rebuilding chart data arrays."""
+
+    themed_spec = copy.deepcopy(spec)
+    if not isinstance(themed_spec, dict):
+        return {}
+    layout = themed_spec.get("layout")
+    if not isinstance(layout, dict):
+        layout = {}
+    tokens = _build_plotly_theme_tokens(theme)
+    color_remap = _plotly_theme_color_remap(tokens)
+
+    layout["paper_bgcolor"] = tokens["paper_bg"]
+    layout["plot_bgcolor"] = tokens["plot_bg"]
+    layout["colorway"] = list(tokens["colorway"])
+    layout["font"] = {**(layout.get("font") if isinstance(layout.get("font"), dict) else {}), "color": tokens["text"]}
+    title = layout.get("title")
+    if isinstance(title, dict):
+        title_font = title.get("font") if isinstance(title.get("font"), dict) else {}
+        layout["title"] = {**title, "font": {**title_font, "color": tokens["text"]}}
+    hoverlabel = layout.get("hoverlabel") if isinstance(layout.get("hoverlabel"), dict) else {}
+    hover_font = hoverlabel.get("font") if isinstance(hoverlabel.get("font"), dict) else {}
+    layout["hoverlabel"] = {
+        **hoverlabel,
+        "bgcolor": tokens["hover_bg"],
+        "font": {**hover_font, "color": tokens["hover_text"]},
+    }
+    legend = layout.get("legend") if isinstance(layout.get("legend"), dict) else {}
+    legend_font = legend.get("font") if isinstance(legend.get("font"), dict) else {}
+    layout["legend"] = {
+        **legend,
+        "bgcolor": tokens["legend_bg"],
+        "bordercolor": tokens["legend_border"],
+        "font": {**legend_font, "color": tokens["text"]},
+    }
+
+    for axis_key, axis in list(layout.items()):
+        if not (
+            isinstance(axis_key, str)
+            and (axis_key.startswith("xaxis") or axis_key.startswith("yaxis"))
+            and isinstance(axis, dict)
+        ):
+            continue
+        axis_title = axis.get("title") if isinstance(axis.get("title"), dict) else {}
+        axis_title_font = axis_title.get("font") if isinstance(axis_title.get("font"), dict) else {}
+        layout[axis_key] = {
+            **axis,
+            "gridcolor": tokens["grid"],
+            "zerolinecolor": tokens["zero"],
+            "linecolor": tokens["axis"],
+            "color": tokens["text"],
+            "title": {**axis_title, "font": {**axis_title_font, "color": tokens["text"]}},
+        }
+
+    annotations = layout.get("annotations")
+    if isinstance(annotations, list):
+        themed_annotations = []
+        for annotation in annotations:
+            if not isinstance(annotation, dict):
+                themed_annotations.append(annotation)
+                continue
+            font = annotation.get("font") if isinstance(annotation.get("font"), dict) else {}
+            themed_annotations.append(
+                {
+                    **annotation,
+                    "font": {
+                        **font,
+                        "color": _remap_plotly_theme_color(
+                            font.get("color", tokens["text"]),
+                            color_remap,
+                        ),
+                    },
+                }
+            )
+        layout["annotations"] = themed_annotations
+
+    shapes = layout.get("shapes")
+    if isinstance(shapes, list):
+        themed_shapes = []
+        for shape in shapes:
+            if not isinstance(shape, dict) or not isinstance(shape.get("line"), dict):
+                themed_shapes.append(shape)
+                continue
+            line = shape["line"]
+            themed_shapes.append(
+                {
+                    **shape,
+                    "line": {
+                        **line,
+                        "color": _remap_plotly_theme_color(line.get("color"), color_remap),
+                    },
+                }
+            )
+        layout["shapes"] = themed_shapes
+
+    data = themed_spec.get("data")
+    if isinstance(data, list):
+        themed_spec["data"] = [_retint_plotly_trace_for_theme(trace, color_remap) for trace in data]
+    themed_spec["layout"] = layout
+    return themed_spec
 
 
 def _build_vertical_reference_shapes(
@@ -1594,7 +1793,7 @@ def _build_plotly_chart_spec_bundle(payload: dict[str, Any] | None, *, title: st
     light_spec = _build_plotly_chart_spec(payload, title=title, theme="light")
     if not light_spec:
         return {}
-    dark_spec = _build_plotly_chart_spec(payload, title=title, theme="dark")
+    dark_spec = _derive_plotly_spec_theme(light_spec, theme="dark")
     return {"light": light_spec, "dark": dark_spec or light_spec}
 
 
@@ -1606,7 +1805,7 @@ def _build_group_analysis_plotly_spec_bundle(
     light_spec = _build_group_analysis_plotly_spec(metric_name, plot_key, chart_payload, theme="light")
     if not light_spec:
         return {}
-    dark_spec = _build_group_analysis_plotly_spec(metric_name, plot_key, chart_payload, theme="dark")
+    dark_spec = _derive_plotly_spec_theme(light_spec, theme="dark")
     return {"light": light_spec, "dark": dark_spec or light_spec}
 
 
@@ -1668,6 +1867,7 @@ def _normalize_group_analysis_manifest(
     plot_assets: dict[str, Any] | None,
     *,
     asset_directory: Path,
+    timings_s: dict[str, float] | None = None,
 ) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
@@ -1698,14 +1898,26 @@ def _normalize_group_analysis_manifest(
         for plot_key in ("violin", "histogram"):
             plot_asset = per_metric_assets.get(plot_key) if isinstance(per_metric_assets, dict) else {}
             image_buffer = plot_asset.get("image_data") if isinstance(plot_asset, dict) else None
+            spec_start = perf_counter()
             plotly_spec = _build_group_analysis_plotly_spec_bundle(metric_name, plot_key, chart_payload)
+            if timings_s is not None:
+                timings_s["plotly_spec_generation"] = (
+                    float(timings_s.get("plotly_spec_generation", 0.0))
+                    + (perf_counter() - spec_start)
+                )
             if image_buffer is None and not plotly_spec:
                 continue
             image_relative_path = ""
             if image_buffer is not None:
                 image_name = f"group_metric_{metric_index:03d}_{_slugify(metric_name)}_{plot_key}.png"
                 image_path = asset_directory / image_name
+                asset_start = perf_counter()
                 image_path.write_bytes(_coerce_image_bytes(image_buffer))
+                if timings_s is not None:
+                    timings_s["image_asset_writes"] = (
+                        float(timings_s.get("image_asset_writes", 0.0))
+                        + (perf_counter() - asset_start)
+                    )
                 image_relative_path = f"{asset_directory.name}/{image_name}"
             plots.append(
                 {

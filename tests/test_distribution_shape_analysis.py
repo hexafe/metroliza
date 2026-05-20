@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import numpy as np
 
+import modules.distribution_shape_analysis as distribution_shape_analysis
 from modules.distribution_shape_analysis import (
     build_distribution_profile_rows,
     build_distribution_profile_rows_compact,
@@ -137,7 +138,7 @@ class TestDistributionShapeAnalysis(unittest.TestCase):
         self.assertEqual([entry[0] for entry in compact], [row['Metric'] for row in expanded])
         self.assertEqual([entry[1] for entry in compact], [row['Group'] for row in expanded])
 
-    def test_profile_rows_calls_single_fit_per_group_with_precomputed_signatures(self):
+    def test_profile_rows_uses_batch_fit_with_precomputed_signatures(self):
         grouped_values = {
             'A': np.array([1.0, 1.1, 1.2, 1.3], dtype=float),
             'B': np.array([2.0, 2.1, 2.2, 2.3], dtype=float),
@@ -153,14 +154,33 @@ class TestDistributionShapeAnalysis(unittest.TestCase):
             'notes': [],
         }
 
-        with patch('modules.distribution_shape_analysis.fit_measurement_distribution', return_value=fit_payload) as mock_fit:
+        with patch(
+            'modules.distribution_shape_analysis.fit_measurement_distribution_batch',
+            return_value={'A': fit_payload, 'B': fit_payload},
+        ) as mock_fit:
             rows = build_distribution_profile_rows('M-batch', grouped_values, values_are_clean=True)
 
-        self.assertEqual(mock_fit.call_count, 2)
-        for call in mock_fit.call_args_list:
-            self.assertIn('measurement_signature', call.kwargs)
-            self.assertIsNotNone(call.kwargs['measurement_signature'])
+        mock_fit.assert_called_once()
+        self.assertIn('fingerprints_by_group', mock_fit.call_args.kwargs)
+        self.assertEqual(set(mock_fit.call_args.kwargs['fingerprints_by_group']), {'A', 'B'})
         self.assertEqual(len(rows), 2)
+
+    def test_batch_profile_rows_match_single_fit_fallback_projection(self):
+        rng = np.random.default_rng(11)
+        grouped_values = {
+            'A': rng.normal(loc=0.0, scale=0.5, size=20),
+            'B': rng.normal(loc=1.0, scale=0.7, size=20),
+        }
+
+        batch_rows = build_distribution_profile_rows('M-parity', grouped_values, values_are_clean=True)
+
+        with patch(
+            'modules.distribution_shape_analysis.fit_measurement_distribution',
+            side_effect=distribution_shape_analysis._fit_measurement_distribution,
+        ):
+            single_rows = build_distribution_profile_rows('M-parity', grouped_values, values_are_clean=True)
+
+        self.assertEqual(batch_rows, single_rows)
 
 if __name__ == '__main__':
     unittest.main()
