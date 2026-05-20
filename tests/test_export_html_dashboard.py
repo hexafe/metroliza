@@ -472,7 +472,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(len(group_mean_annotations), 2)
         self.assertEqual(
             {item['text'] for item in group_mean_annotations},
-            {'A mean=10.013', 'B mean=10.123'},
+            {'A mean=10.0125', 'B mean=10.1225'},
         )
         self.assertTrue(all(item.get('bgcolor') == '#ffffff' for item in group_mean_annotations))
         trace_colors = [trace['marker']['color'] for trace in spec['data']]
@@ -499,7 +499,10 @@ class TestExportHtmlDashboard(unittest.TestCase):
             item for item in spec['layout']['annotations']
             if str(item.get('text') or '').startswith(('A mean=', 'B mean='))
         ]
-        self.assertEqual([item['text'] for item in group_mean_annotations], ['A mean=1.5', 'B mean=1.5'])
+        self.assertEqual(
+            [item['text'] for item in group_mean_annotations],
+            ['A mean=1.5000', 'B mean=1.5000'],
+        )
         self.assertNotEqual(group_mean_annotations[0]['y'], group_mean_annotations[1]['y'])
         self.assertGreaterEqual(spec['layout']['margin']['t'], 100)
 
@@ -522,18 +525,19 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(xaxis['categoryorder'], 'array')
         self.assertEqual(xaxis['categoryarray'], ['73211', 'A', 'POPULATION'])
         trace_names = [trace['name'] for trace in spec['data']]
-        self.assertIn(
-            '73211 (N=3, Min=9.99, Q1=10, Mean=10.01, Q3=10.02, Max=10.03)',
-            trace_names,
-        )
-        self.assertIn(
-            'A (N=3, Min=10.08, Q1=10.095, Mean=10.117, Q3=10.135, Max=10.16)',
-            trace_names,
-        )
+        self.assertIn('73211 (n=3)', trace_names)
+        self.assertIn('A (n=3)', trace_names)
+        self.assertIn('POPULATION (n=3)', trace_names)
+        self.assertIn('73211 Mean=10.0100', trace_names)
+        self.assertIn('A Q1=10.095', trace_names)
+        self.assertIn('POPULATION Median=10.000', trace_names)
+        stat_traces = [trace for trace in spec['data'] if trace.get('visible') == 'legendonly']
+        self.assertTrue(stat_traces)
         self.assertTrue(
             all(
                 isinstance(x_value, str)
                 for trace in spec['data']
+                if trace.get('type') == 'violin'
                 for x_value in trace['x']
             )
         )
@@ -551,14 +555,33 @@ class TestExportHtmlDashboard(unittest.TestCase):
 
         self.assertEqual(spec['layout']['xaxis']['categoryarray'], ['A', 'B'])
         self.assertEqual(spec['data'][0]['x'], ['A', 'A', 'A'])
-        self.assertEqual(
-            spec['data'][0]['name'],
-            'A (N=3, Min=1, Q1=1.5, Mean=2, Q3=2.5, Max=3)',
-        )
-        self.assertEqual(
-            spec['data'][1]['name'],
-            'B (N=3, Min=10, Q1=11, Mean=12.667, Q3=14, Max=16)',
-        )
+        self.assertEqual(spec['data'][0]['name'], 'A (n=3)')
+        self.assertEqual(spec['data'][1]['name'], 'B (n=3)')
+        trace_names = {trace['name'] for trace in spec['data']}
+        self.assertIn('A Mean=2.0000', trace_names)
+        self.assertIn('A Median=2.000', trace_names)
+        self.assertIn('B Mean=12.6667', trace_names)
+        self.assertIn('B Max=16.000', trace_names)
+
+    def test_group_analysis_iqr_single_group_legend_stats_do_not_repeat_group_name(self):
+        with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
+            spec = _build_plotly_chart_spec(
+                {
+                    'type': 'iqr',
+                    'labels': ['A'],
+                    'series': [[6.469, 6.495, 6.501, 6.687]],
+                    'limits': {'lsl': 6.2, 'nominal': 6.5, 'usl': 6.8},
+                },
+                title='IQR stats',
+            )
+
+        trace_names = {trace['name'] for trace in spec['data']}
+        self.assertIn('A (n=4)', trace_names)
+        self.assertIn('Min=6.469', trace_names)
+        self.assertIn('Mean=6.5380', trace_names)
+        self.assertIn('Max=6.687', trace_names)
+        self.assertIn('Nominal=6.500', trace_names)
+        self.assertNotIn('A Min=6.469', trace_names)
 
     def test_summary_histogram_plotly_spec_uses_data_bins_and_x_view_axis_range(self):
         values = [0.0, 2.0, 4.0, 6.0, 8.0, 10.0]

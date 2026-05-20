@@ -150,11 +150,16 @@ def apply_group_assignments(header_group, grouping_df, *, group_analysis_mode=Fa
     duplicated_mask = grouping_df.duplicated(subset=merge_keys, keep=False)
     duplicate_count = int(duplicated_mask.sum())
     deduped_grouping_df = grouping_df.drop_duplicates(subset=merge_keys, keep='last')
+    match_marker_column = '__METROLIZA_GROUP_ASSIGNMENT_MATCHED'
     projected_columns = merge_keys + ['GROUP']
     if 'GROUP_COLOR' in deduped_grouping_df.columns:
         projected_columns.append('GROUP_COLOR')
-    merge_projection = deduped_grouping_df[projected_columns]
+    merge_projection = deduped_grouping_df[projected_columns].copy()
+    merge_projection[match_marker_column] = True
     merged_group = pd.merge(keyed_header, merge_projection, on=merge_keys, how='left')
+    matched_assignments = merged_group[match_marker_column].eq(True)
+    grouping_applied = bool(matched_assignments.any())
+    merged_group = merged_group.drop(columns=[match_marker_column])
     missing_group_label = fallback_group_label
     if missing_group_label is None:
         missing_group_label = get_default_group_label(grouping_df) if group_analysis_mode else 'UNGROUPED'
@@ -163,4 +168,4 @@ def apply_group_assignments(header_group, grouping_df, *, group_analysis_mode=Fa
         missing_label=missing_group_label,
         normalize_blank=group_analysis_mode,
     )
-    return merged_group, True, merge_keys, duplicate_count
+    return merged_group, grouping_applied, merge_keys, duplicate_count

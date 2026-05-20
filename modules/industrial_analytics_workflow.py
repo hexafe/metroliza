@@ -65,6 +65,14 @@ class IndustrialAnalyticsRunResult:
     html_dashboard_path: str
     html_dashboard_assets_path: str
     html_dashboard_chart_count: int
+    html_dashboard_interactive_chart_count: int = 0
+    html_dashboard_plotly_spec_count: int = 0
+    html_dashboard_embedded_plotly_spec_count: int = 0
+    html_dashboard_plotly_serialized_json_bytes: int = 0
+    html_dashboard_embedded_plotly_serialized_json_bytes: int = 0
+    html_dashboard_html_bytes: int = 0
+    html_dashboard_plotly_budget_status: str = "within_budget"
+    html_dashboard_plotly_budget_reason: str = ""
     workbook_path: str = ""
     workbook_sheet_names: tuple[str, ...] = ()
     parameter_sheet_count: int = 0
@@ -902,11 +910,32 @@ def _run_result(
         workbook_path = str(workbook.output_file)
         workbook_sheet_names = tuple(workbook.sheet_names)
         parameter_sheet_count = int(workbook.parameter_sheet_count)
+    budget = (
+        dashboard.get("html_dashboard_plotly_budget")
+        if isinstance(dashboard.get("html_dashboard_plotly_budget"), dict)
+        else {}
+    )
     return IndustrialAnalyticsRunResult(
         source_kind=source_kind,
         html_dashboard_path=str(dashboard.get("html_dashboard_path") or ""),
         html_dashboard_assets_path=str(dashboard.get("html_dashboard_assets_path") or ""),
         html_dashboard_chart_count=int(dashboard.get("html_dashboard_chart_count") or 0),
+        html_dashboard_interactive_chart_count=int(
+            dashboard.get("html_dashboard_interactive_chart_count") or 0
+        ),
+        html_dashboard_plotly_spec_count=int(dashboard.get("html_dashboard_plotly_spec_count") or 0),
+        html_dashboard_embedded_plotly_spec_count=int(
+            dashboard.get("html_dashboard_embedded_plotly_spec_count") or 0
+        ),
+        html_dashboard_plotly_serialized_json_bytes=int(
+            dashboard.get("html_dashboard_plotly_serialized_json_bytes") or 0
+        ),
+        html_dashboard_embedded_plotly_serialized_json_bytes=int(
+            dashboard.get("html_dashboard_embedded_plotly_serialized_json_bytes") or 0
+        ),
+        html_dashboard_html_bytes=int(dashboard.get("html_dashboard_html_bytes") or 0),
+        html_dashboard_plotly_budget_status=str(budget.get("status") or "within_budget"),
+        html_dashboard_plotly_budget_reason=str(budget.get("reason") or ""),
         workbook_path=workbook_path,
         workbook_sheet_names=workbook_sheet_names,
         parameter_sheet_count=parameter_sheet_count,

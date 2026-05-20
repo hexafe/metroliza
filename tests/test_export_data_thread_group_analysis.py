@@ -384,14 +384,28 @@ def _seed_grouped_measurements(db_path):
 
 
 class TestExportDataThreadGroupAnalysis(unittest.TestCase):
-    def _run_export(self, temp_dir, *, level, generate_summary_sheet=False):
+    def _run_export(
+        self,
+        temp_dir,
+        *,
+        level,
+        generate_summary_sheet=False,
+        group_analysis_scope='auto',
+        grouping_df_transform=None,
+    ):
         db_path = str(Path(temp_dir) / 'metroliza.sqlite')
         out_path = str(Path(temp_dir) / f'export_{level}.xlsx')
         grouping_df = _seed_grouped_measurements(db_path)
+        if grouping_df_transform is not None:
+            grouping_df = grouping_df_transform(grouping_df)
 
         request = ExportRequest(
             paths=AppPaths(db_file=db_path, excel_file=out_path),
-            options=ExportOptions(generate_summary_sheet=generate_summary_sheet, group_analysis_level=level),
+            options=ExportOptions(
+                generate_summary_sheet=generate_summary_sheet,
+                group_analysis_level=level,
+                group_analysis_scope=group_analysis_scope,
+            ),
             grouping_df=grouping_df,
         )
         thread = ExportDataThread(request)
@@ -482,6 +496,44 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             self.assertNotIn('Group Analysis', sheet_names)
             self.assertNotIn('Group Comparison', sheet_names)
             self.assertNotIn('Diagnostics', sheet_names)
+
+    def test_forced_multi_reference_scope_writes_group_analysis_skip_message(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            out_path = self._run_export(temp_dir, level='light', group_analysis_scope='multi_reference')
+
+            sheet_names = _xlsx_sheet_names(out_path)
+            self.assertIn('Group Analysis', sheet_names)
+            analysis_values = _xlsx_sheet_text_values(out_path, 'Group Analysis')
+            self.assertIn('Group Analysis', analysis_values)
+            self.assertIn(
+                'Multi-reference group analysis skipped: grouped rows span only one reference.',
+                analysis_values,
+            )
+            self.assertNotIn('Metric index', analysis_values)
+
+    def test_group_analysis_skips_when_grouping_assignments_cannot_be_matched(self):
+        def _mismatch_merge_keys(grouping_df):
+            unmatched = grouping_df.copy()
+            unmatched['REPORT_ID'] = unmatched['REPORT_ID'].astype(int) + 1000
+            return unmatched
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            out_path = self._run_export(
+                temp_dir,
+                level='light',
+                grouping_df_transform=_mismatch_merge_keys,
+            )
+
+            sheet_names = _xlsx_sheet_names(out_path)
+            self.assertIn('Group Analysis', sheet_names)
+            analysis_values = _xlsx_sheet_text_values(out_path, 'Group Analysis')
+            self.assertIn('Group Analysis', analysis_values)
+            self.assertIn(
+                'Group Analysis skipped: grouping assignments could not be matched '
+                'to the exported measurement rows.',
+                analysis_values,
+            )
+            self.assertNotIn('Metric index', analysis_values)
 
     def test_light_mode_exports_group_analysis_only_without_default_debug_sheets(self):
         with tempfile.TemporaryDirectory() as temp_dir:

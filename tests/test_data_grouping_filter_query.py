@@ -809,12 +809,73 @@ class TestDataGroupingCreateGroupSelectionPriority(unittest.TestCase):
         dialog.part_list = _FakeListWidget([_FakeListItem(user_role='k1')])
         dialog.part_list.selectedItems = lambda: [_FakeListItem(user_role='k1')]
         dialog.part_group_list = _FakeListWidget([])
+        dialog._selected_group_name = lambda: 'Reviewed'
 
         input_dialog_cls = DataGrouping.create_group.__globals__['QInputDialog']
         with patch.object(input_dialog_cls, 'getText', return_value=('REF-1', False), create=True) as mocked_get_text:
             dialog.create_group(initial_group_name='REF-1')
 
         self.assertEqual(mocked_get_text.call_args.kwargs.get('text'), 'REF-1')
+
+    def test_create_group_prefills_dialog_with_selected_non_default_group(self):
+        from unittest.mock import patch
+
+        dialog = self._base_dialog()
+        dialog.part_list = _FakeListWidget([_FakeListItem(user_role='k1')])
+        dialog.part_list.selectedItems = lambda: [_FakeListItem(user_role='k1')]
+        dialog.part_group_list = _FakeListWidget([])
+        dialog._selected_group_name = lambda: 'Reviewed'
+
+        input_dialog_cls = DataGrouping.create_group.__globals__['QInputDialog']
+        with patch.object(input_dialog_cls, 'getText', return_value=('Reviewed', False), create=True) as mocked_get_text:
+            dialog.create_group()
+
+        self.assertEqual(mocked_get_text.call_args.kwargs.get('text'), 'Reviewed')
+
+    def test_create_group_prefills_dialog_with_selected_group_when_qt_passes_checked_false(self):
+        from unittest.mock import patch
+
+        dialog = self._base_dialog()
+        dialog.part_list = _FakeListWidget([_FakeListItem(user_role='k1')])
+        dialog.part_list.selectedItems = lambda: [_FakeListItem(user_role='k1')]
+        dialog.part_group_list = _FakeListWidget([])
+        dialog._selected_group_name = lambda: 'Reviewed'
+
+        input_dialog_cls = DataGrouping.create_group.__globals__['QInputDialog']
+        with patch.object(input_dialog_cls, 'getText', return_value=('Reviewed', False), create=True) as mocked_get_text:
+            dialog.create_group(False)
+
+        self.assertEqual(mocked_get_text.call_args.kwargs.get('text'), 'Reviewed')
+
+    def test_create_group_keeps_blank_prefill_for_selected_default_group(self):
+        from unittest.mock import patch
+
+        dialog = self._base_dialog()
+        dialog.part_list = _FakeListWidget([_FakeListItem(user_role='k1')])
+        dialog.part_list.selectedItems = lambda: [_FakeListItem(user_role='k1')]
+        dialog.part_group_list = _FakeListWidget([])
+        dialog._selected_group_name = lambda: 'POPULATION'
+
+        input_dialog_cls = DataGrouping.create_group.__globals__['QInputDialog']
+        with patch.object(input_dialog_cls, 'getText', return_value=('', False), create=True) as mocked_get_text:
+            dialog.create_group()
+
+        self.assertEqual(mocked_get_text.call_args.kwargs.get('text'), '')
+
+    def test_create_group_keeps_blank_prefill_when_no_group_is_selected(self):
+        from unittest.mock import patch
+
+        dialog = self._base_dialog()
+        dialog.part_list = _FakeListWidget([_FakeListItem(user_role='k1')])
+        dialog.part_list.selectedItems = lambda: [_FakeListItem(user_role='k1')]
+        dialog.part_group_list = _FakeListWidget([])
+        dialog._selected_group_name = lambda: ''
+
+        input_dialog_cls = DataGrouping.create_group.__globals__['QInputDialog']
+        with patch.object(input_dialog_cls, 'getText', return_value=('', False), create=True) as mocked_get_text:
+            dialog.create_group()
+
+        self.assertEqual(mocked_get_text.call_args.kwargs.get('text'), '')
 
 
 class TestDataGroupingReferenceDoubleClick(unittest.TestCase):

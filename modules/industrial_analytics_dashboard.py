@@ -67,6 +67,8 @@ PLOT_COLORWAY = (
 _MANUAL_GROUP_FIELD_NAMES = {"group", "group_name", "csv_group", "tabular_group"}
 DASHBOARD_RAW_POINT_LIMIT = 50_000
 DASHBOARD_AGGREGATE_TRACE_TARGET_POINTS = 2_500
+DEFAULT_PLOTLY_SPEC_COUNT_BUDGET = 160
+DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET = 8_000_000
 
 
 def build_production_dashboard_manifest(
@@ -182,6 +184,8 @@ def write_production_dashboard(
     output_path: str | Path,
     *,
     assets_dir: str | Path | None = None,
+    plotly_spec_count_budget: int = DEFAULT_PLOTLY_SPEC_COUNT_BUDGET,
+    plotly_serialized_json_bytes_budget: int = DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET,
 ) -> dict[str, Any]:
     """Write an offline production analytics dashboard and local Plotly asset."""
 
@@ -194,25 +198,144 @@ def write_production_dashboard(
         if assets_dir is not None
         else destination.with_name(f"{destination.stem}_assets")
     )
-    requires_plotly = _manifest_requires_plotly(manifest)
+    plotly_spec_count = _count_plotly_specs(manifest)
+    plotly_serialized_json_bytes = _measure_plotly_specs_json_bytes(manifest)
+    count_budget = max(0, int(plotly_spec_count_budget))
+    json_bytes_budget = max(0, int(plotly_serialized_json_bytes_budget))
+    over_count_budget = plotly_spec_count > count_budget
+    over_json_budget = plotly_serialized_json_bytes > json_bytes_budget
+    plotly_budget_status = "within_budget"
+    plotly_budget_reason = ""
+    dashboard_manifest = _copy_manifest_for_render(manifest)
+    if plotly_spec_count > 0 and (over_count_budget or over_json_budget):
+        dashboard_manifest = _copy_manifest_without_plotly_specs(manifest)
+        plotly_budget_status = "over_budget"
+        reasons = []
+        if over_count_budget:
+            reasons.append(f"spec_count>{count_budget}")
+        if over_json_budget:
+            reasons.append(f"serialized_json_bytes>{json_bytes_budget}")
+        plotly_budget_reason = ",".join(reasons)
+
+    requires_plotly = _manifest_requires_plotly(dashboard_manifest)
+    embedded_plotly_spec_count = _count_plotly_specs(dashboard_manifest)
+    embedded_plotly_serialized_json_bytes = _measure_plotly_specs_json_bytes(dashboard_manifest)
+    _apply_plotly_budget_summary(
+        dashboard_manifest,
+        status=plotly_budget_status,
+        reason=plotly_budget_reason,
+    )
     asset_directory.mkdir(parents=True, exist_ok=True)
     if requires_plotly:
         plotly_target = asset_directory / PLOTLY_ASSET_NAME
         if not plotly_target.exists():
             shutil.copy2(PLOTLY_ASSET_SOURCE, plotly_target)
 
-    html_text = _render_dashboard_html(manifest, asset_directory_name=asset_directory.name)
+    html_text = _render_dashboard_html(dashboard_manifest, asset_directory_name=asset_directory.name)
+    html_bytes = len(html_text.encode("utf-8"))
     destination.write_text(html_text, encoding="utf-8")
     return {
         "html_dashboard_path": str(destination),
         "html_dashboard_assets_path": str(asset_directory),
-        "html_dashboard_chart_count": len(manifest.get("charts") or []),
+        "html_dashboard_chart_count": len(dashboard_manifest.get("charts") or []),
+        "html_dashboard_interactive_chart_count": int(embedded_plotly_spec_count),
+        "html_dashboard_plotly_spec_count": int(plotly_spec_count),
+        "html_dashboard_embedded_plotly_spec_count": int(embedded_plotly_spec_count),
+        "html_dashboard_plotly_serialized_json_bytes": int(plotly_serialized_json_bytes),
+        "html_dashboard_embedded_plotly_serialized_json_bytes": int(
+            embedded_plotly_serialized_json_bytes
+        ),
+        "html_dashboard_html_bytes": int(html_bytes),
+        "html_dashboard_plotly_budget": {
+            "status": plotly_budget_status,
+            "reason": plotly_budget_reason,
+            "spec_count_budget": int(count_budget),
+            "serialized_json_bytes_budget": int(json_bytes_budget),
+        },
     }
 
 
 def _manifest_requires_plotly(manifest: dict[str, Any]) -> bool:
     charts = manifest.get("charts") if isinstance(manifest.get("charts"), list) else []
     return any(isinstance(chart, dict) and isinstance(chart.get("plotly_spec"), dict) for chart in charts)
+
+
+def _copy_manifest_for_render(manifest: dict[str, Any]) -> dict[str, Any]:
+    manifest_copy = dict(manifest)
+    summary = manifest.get("summary")
+    if isinstance(summary, dict):
+        manifest_copy["summary"] = dict(summary)
+    return manifest_copy
+
+
+def _iter_plotly_specs(manifest: dict[str, Any]):
+    charts = manifest.get("charts") if isinstance(manifest.get("charts"), list) else []
+    for chart in charts:
+        if not isinstance(chart, dict):
+            continue
+        plotly_spec = chart.get("plotly_spec")
+        if isinstance(plotly_spec, dict) and plotly_spec:
+            yield plotly_spec
+
+
+def _count_plotly_specs(manifest: dict[str, Any]) -> int:
+    return sum(1 for _spec in _iter_plotly_specs(manifest))
+
+
+def _measure_plotly_specs_json_bytes(manifest: dict[str, Any]) -> int:
+    total = 0
+    for plotly_spec in _iter_plotly_specs(manifest):
+        total += len(
+            json.dumps(
+                plotly_spec,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+    return int(total)
+
+
+def _copy_manifest_without_plotly_specs(manifest: dict[str, Any]) -> dict[str, Any]:
+    pruned_manifest = dict(manifest)
+    summary = manifest.get("summary")
+    if isinstance(summary, dict):
+        pruned_manifest["summary"] = dict(summary)
+    charts = manifest.get("charts") if isinstance(manifest.get("charts"), list) else []
+    pruned_charts: list[Any] = []
+    for chart in charts:
+        if not isinstance(chart, dict):
+            pruned_charts.append(chart)
+            continue
+        chart_copy = dict(chart)
+        if not isinstance(chart.get("plotly_spec"), dict):
+            pruned_charts.append(chart_copy)
+            continue
+        chart_copy.pop("plotly_spec", None)
+        raw_notes = chart_copy.get("notes")
+        notes = list(raw_notes) if isinstance(raw_notes, list) else []
+        chart_copy["notes"] = notes
+        if isinstance(notes, list):
+            notes.append(
+                "Interactive chart omitted because the Plotly payload exceeded the dashboard "
+                "budget; summary/statistics remain available."
+            )
+        pruned_charts.append(chart_copy)
+    pruned_manifest["charts"] = pruned_charts
+    return pruned_manifest
+
+
+def _apply_plotly_budget_summary(
+    manifest: dict[str, Any],
+    *,
+    status: str,
+    reason: str,
+) -> None:
+    summary = manifest.get("summary")
+    if not isinstance(summary, dict):
+        return
+    summary["plotly_budget_status"] = status
+    if reason:
+        summary["plotly_budget_reason"] = reason
 
 
 def _build_time_series_charts(
@@ -1785,6 +1908,13 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
     dashboard_subtitle = str(
         summary.get("dashboard_subtitle") or "Cached production data dashboard generated by Metroliza."
     )
+    plotly_budget_notice = ""
+    if str(summary.get("plotly_budget_status") or "") == "over_budget":
+        plotly_budget_notice = (
+            '<p class="runtime-note">Interactive charts are unavailable in this dashboard because '
+            'the Plotly payload exceeded the saved-dashboard budget. Snapshot and summary content '
+            'is shown instead.</p>'
+        )
     used_section_ids = {"dashboard-start", "diagnostics", "groupstats"}
     nav_items: list[dict[str, str]] = []
     if diagnostics_markup:
@@ -1867,6 +1997,12 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
     .subtitle {{
       color: var(--muted);
       font-size: 14px;
+    }}
+    .runtime-note {{
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
     }}
     .cards {{
       display: grid;
@@ -2169,6 +2305,7 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
   <header id="dashboard-start">
     <h1>{html.escape(dashboard_title)}</h1>
     <div class="subtitle">{html.escape(dashboard_subtitle)}</div>
+    {plotly_budget_notice}
     {cards}
     {nav_markup}
   </header>

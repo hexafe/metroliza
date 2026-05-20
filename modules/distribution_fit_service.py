@@ -109,6 +109,11 @@ _DISTRIBUTION_BY_NAME = {
 # Output: nll, aic, bic, ad_statistic, ks_statistic, and kernel error flags (consumed internally for fallback).
 
 _MONTE_CARLO_PVALUE_CACHE_NAMESPACE = '__distribution_fit_ad_monte_carlo_pvalue__'
+_FIT_PAYLOAD_CACHE_NAMESPACE = '__distribution_fit_payload__'
+_MONTE_CARLO_VECTOR_TARGET_FLOATS = 2_000_000
+_DEFAULT_GOF_MAX_SAMPLE_SIZE = 2_000
+_GOF_SAMPLE_POLICIES = frozenset({'auto', 'full', 'subsampled'})
+_GOF_SUBSAMPLE_METHODS = frozenset({'quantile_stratified'})
 _CACHE_MISS = object()
 
 
@@ -231,24 +236,27 @@ def _measurement_fingerprint(values: np.ndarray):
 
 def _fit_cache_key(
     *,
-    values: np.ndarray,
-    lsl,
-    usl,
+    fit_signature: tuple[int, str],
     point_count: int,
     include_kde_reference: bool,
     gof_acceptance_alpha: float,
     monte_carlo_gof_samples: int,
     monte_carlo_seed: int | None,
+    gof_sample_policy: str,
+    gof_max_sample_size: int,
+    gof_subsample_method: str,
 ):
     return (
-        _measurement_fingerprint(values),
-        _safe_float(lsl),
-        _safe_float(usl),
+        _FIT_PAYLOAD_CACHE_NAMESPACE,
+        fit_signature,
         int(point_count),
         bool(include_kde_reference),
         float(gof_acceptance_alpha),
         int(monte_carlo_gof_samples),
         None if monte_carlo_seed is None else int(monte_carlo_seed),
+        str(gof_sample_policy),
+        int(gof_max_sample_size),
+        str(gof_subsample_method),
     )
 
 
@@ -283,6 +291,28 @@ def clone_fit_payload(payload: dict | None):
         cloned['model_candidates'] = [dict(item) if isinstance(item, dict) else item for item in payload['model_candidates']]
     if isinstance(payload.get('notes'), list):
         cloned['notes'] = list(payload['notes'])
+    return cloned
+
+
+def _clone_fit_payload_for_spec(payload: dict | None, *, lsl, usl):
+    cloned = clone_fit_payload(payload)
+    if not isinstance(cloned, dict):
+        return cloned
+
+    selected_model = cloned.get('selected_model') or {}
+    model_name = selected_model.get('name') or selected_model.get('model')
+    params = selected_model.get('params')
+    dist = _DISTRIBUTION_BY_NAME.get(model_name)
+    if dist is None or not params:
+        return cloned
+
+    cloned['risk_estimates'] = _compute_tail_risk(
+        dist,
+        params,
+        lsl,
+        usl,
+        inferred_support_mode=cloned.get('inferred_support_mode'),
+    )
     return cloned
 
 
@@ -333,6 +363,130 @@ def _ad_statistic(sample: np.ndarray, cdf: Callable[[np.ndarray], np.ndarray]) -
     return float(stat)
 
 
+def _ad_statistic_batch(samples: np.ndarray, cdf: Callable[[np.ndarray], np.ndarray]) -> np.ndarray:
+    sorted_values = np.sort(samples, axis=1)
+    n = sorted_values.shape[1]
+    probs = np.clip(cdf(sorted_values), 1e-12, 1.0 - 1e-12)
+    reverse_probs = np.clip(1.0 - probs[:, ::-1], 1e-12, 1.0)
+    idx = np.arange(1, n + 1, dtype=float)
+    weights = (2.0 * idx - 1.0)[None, :]
+    stats = -n - np.sum(weights * (np.log(probs) + np.log(reverse_probs)), axis=1) / n
+    return np.asarray(stats, dtype=float)
+
+
+def _normalize_gof_sample_policy(policy: str | None) -> str:
+    normalized = str(policy or 'auto').strip().lower()
+    if normalized not in _GOF_SAMPLE_POLICIES:
+        raise ValueError(f"Unsupported GOF sample policy: {policy!r}")
+    return normalized
+
+
+def _normalize_gof_subsample_method(method: str | None) -> str:
+    normalized = str(method or 'quantile_stratified').strip().lower()
+    if normalized not in _GOF_SUBSAMPLE_METHODS:
+        raise ValueError(f"Unsupported GOF subsample method: {method!r}")
+    return normalized
+
+
+def _normalize_gof_max_sample_size(max_sample_size: int | None) -> int:
+    if max_sample_size is None:
+        return _DEFAULT_GOF_MAX_SAMPLE_SIZE
+    try:
+        parsed = int(max_sample_size)
+    except (TypeError, ValueError):
+        return _DEFAULT_GOF_MAX_SAMPLE_SIZE
+    return max(3, parsed)
+
+
+def _quantile_stratified_sample(values: np.ndarray, target_size: int) -> np.ndarray:
+    target_size = max(3, min(int(target_size), int(values.size)))
+    if target_size >= values.size:
+        return values
+    sorted_values = np.sort(values)
+    indices = np.linspace(0, values.size - 1, target_size, dtype=np.int64)
+    return np.ascontiguousarray(sorted_values[indices], dtype=np.float64)
+
+
+def _resolve_gof_sample(
+    values: np.ndarray,
+    *,
+    policy: str | None,
+    max_sample_size: int | None,
+    subsample_method: str | None,
+) -> tuple[np.ndarray, dict]:
+    requested_policy = _normalize_gof_sample_policy(policy)
+    resolved_method = _normalize_gof_subsample_method(subsample_method)
+    resolved_max_sample_size = _normalize_gof_max_sample_size(max_sample_size)
+    full_sample_size = int(values.size)
+
+    use_subsample = requested_policy == 'subsampled' or (
+        requested_policy == 'auto' and full_sample_size > resolved_max_sample_size
+    )
+    if use_subsample:
+        effective_values = _quantile_stratified_sample(values, resolved_max_sample_size)
+        effective_policy = 'subsampled' if effective_values.size < full_sample_size else 'full'
+        sample_method = resolved_method if effective_policy == 'subsampled' else 'full'
+    else:
+        effective_values = values
+        effective_policy = 'full'
+        sample_method = 'full'
+
+    metadata = {
+        'ad_requested_sample_policy': requested_policy,
+        'ad_sample_policy': effective_policy,
+        'ad_subsample_method': sample_method,
+        'ad_full_sample_size': full_sample_size,
+        'ad_effective_sample_size': int(effective_values.size),
+        'ad_max_sample_size': resolved_max_sample_size,
+    }
+    return effective_values, metadata
+
+
+def _estimate_ad_pvalue_monte_carlo_vectorized(
+    *,
+    dist,
+    params: tuple,
+    sample_size: int,
+    observed_stat: float,
+    iterations: int,
+    random_seed: int | None,
+):
+    try:
+        rng = np.random.default_rng(random_seed)
+        max_chunk_iterations = max(
+            1,
+            min(
+                int(iterations),
+                _MONTE_CARLO_VECTOR_TARGET_FLOATS // max(1, int(sample_size)),
+            ),
+        )
+        exceed_count = 0
+        valid_trials = 0
+        for start in range(0, int(iterations), max_chunk_iterations):
+            chunk_iterations = min(max_chunk_iterations, int(iterations) - start)
+            simulated = np.asarray(
+                dist.rvs(*params, size=(chunk_iterations, int(sample_size)), random_state=rng),
+                dtype=float,
+            )
+            if simulated.shape != (chunk_iterations, int(sample_size)):
+                simulated = np.reshape(simulated, (chunk_iterations, int(sample_size)))
+            finite_mask = np.isfinite(simulated).all(axis=1)
+            if not bool(finite_mask.any()):
+                continue
+            sim_stats = _ad_statistic_batch(
+                simulated[finite_mask],
+                lambda x: dist.cdf(x, *params),
+            )
+            sim_stats = sim_stats[np.isfinite(sim_stats)]
+            valid_trials += int(sim_stats.size)
+            exceed_count += int(np.count_nonzero(sim_stats >= float(observed_stat)))
+        if valid_trials == 0:
+            return None
+        return float((exceed_count + 1) / (valid_trials + 1))
+    except Exception:
+        return _CACHE_MISS
+
+
 def _estimate_ad_pvalue_monte_carlo(
     *,
     dist,
@@ -357,6 +511,17 @@ def _estimate_ad_pvalue_monte_carlo(
     if native_result is not None:
         p_value, _valid_trials = native_result
         return p_value
+
+    vectorized_result = _estimate_ad_pvalue_monte_carlo_vectorized(
+        dist=dist,
+        params=params,
+        sample_size=sample_size,
+        observed_stat=observed_stat,
+        iterations=iterations,
+        random_seed=random_seed,
+    )
+    if vectorized_result is not _CACHE_MISS:
+        return vectorized_result
 
     rng = np.random.default_rng(random_seed)
     exceed_count = 0
@@ -836,6 +1001,9 @@ def fit_measurement_distribution(
     gof_acceptance_alpha: float = 0.05,
     monte_carlo_gof_samples: int = 0,
     monte_carlo_seed: int | None = None,
+    gof_sample_policy: str = 'auto',
+    gof_max_sample_size: int = _DEFAULT_GOF_MAX_SAMPLE_SIZE,
+    gof_subsample_method: str = 'quantile_stratified',
     candidate_kernel_mode: str | None = None,
     memoization_cache: MutableMapping | None = None,
     measurement_signature: tuple[int, str] | None = None,
@@ -850,23 +1018,29 @@ def fit_measurement_distribution(
 
     values = _coerce_measurements_array(measurements)
     sample_size = int(values.size)
+    lsl_value = _safe_float(lsl)
+    usl_value = _safe_float(usl)
+    resolved_gof_sample_policy = _normalize_gof_sample_policy(gof_sample_policy)
+    resolved_gof_max_sample_size = _normalize_gof_max_sample_size(gof_max_sample_size)
+    resolved_gof_subsample_method = _normalize_gof_subsample_method(gof_subsample_method)
 
     cache_key = None
     if memoization_cache is not None and sample_size > 0:
         fit_signature = measurement_signature if measurement_signature is not None else _measurement_fingerprint(values)
-        cache_key = (
-            fit_signature,
-            _safe_float(lsl),
-            _safe_float(usl),
-            int(point_count),
-            bool(include_kde_reference),
-            float(gof_acceptance_alpha),
-            int(monte_carlo_gof_samples),
-            None if monte_carlo_seed is None else int(monte_carlo_seed),
+        cache_key = _fit_cache_key(
+            fit_signature=fit_signature,
+            point_count=point_count,
+            include_kde_reference=include_kde_reference,
+            gof_acceptance_alpha=gof_acceptance_alpha,
+            monte_carlo_gof_samples=monte_carlo_gof_samples,
+            monte_carlo_seed=monte_carlo_seed,
+            gof_sample_policy=resolved_gof_sample_policy,
+            gof_max_sample_size=resolved_gof_max_sample_size,
+            gof_subsample_method=resolved_gof_subsample_method,
         )
         cached = memoization_cache.get(cache_key)
         if cached is not None:
-            return clone_fit_payload(cached)
+            return _clone_fit_payload_for_spec(cached, lsl=lsl_value, usl=usl_value)
 
     inferred_mode = 'unknown'
     if sample_size >= 1:
@@ -888,10 +1062,15 @@ def fit_measurement_distribution(
             warning='Distribution fit unavailable: measurements are effectively constant.',
         )
 
-    lsl_value = _safe_float(lsl)
-    usl_value = _safe_float(usl)
-
     x_values = _resolve_curve_x_values(values, point_count=point_count)
+    gof_values, gof_sample_metadata = _resolve_gof_sample(
+        values,
+        policy=resolved_gof_sample_policy if monte_carlo_gof_samples > 0 else 'full',
+        max_sample_size=resolved_gof_max_sample_size,
+        subsample_method=resolved_gof_subsample_method,
+    )
+    if monte_carlo_gof_samples <= 0:
+        gof_sample_metadata['ad_requested_sample_policy'] = resolved_gof_sample_policy
 
     notes: list[str] = []
     candidates = []
@@ -905,21 +1084,45 @@ def fit_measurement_distribution(
                 fitted = dict(fitted)
                 fitted['metrics'] = dict(fitted.get('metrics') or {})
                 fitted['gof'] = dict(fitted.get('gof') or {})
+            fitted['gof'].update(gof_sample_metadata)
             if monte_carlo_gof_samples > 0:
+                observed_stat = fitted['gof']['ad_statistic']
+                if gof_sample_metadata['ad_sample_policy'] == 'subsampled':
+                    observed_stat = _ad_statistic(
+                        gof_values,
+                        lambda x: candidate.scipy_dist.cdf(x, *fitted['params']),
+                    )
+                    fitted['gof']['ad_full_sample_statistic'] = fitted['gof']['ad_statistic']
+                    fitted['gof']['ad_effective_sample_statistic'] = float(observed_stat)
+                else:
+                    fitted['gof']['ad_full_sample_statistic'] = fitted['gof']['ad_statistic']
+                    fitted['gof']['ad_effective_sample_statistic'] = fitted['gof']['ad_statistic']
                 fitted['gof']['ad_pvalue'] = _estimate_ad_pvalue_monte_carlo_cached(
                     dist=candidate.scipy_dist,
                     distribution_name=candidate.name,
                     params=fitted['params'],
-                    sample_size=sample_size,
-                    observed_stat=fitted['gof']['ad_statistic'],
+                    sample_size=gof_sample_metadata['ad_effective_sample_size'],
+                    observed_stat=observed_stat,
                     iterations=monte_carlo_gof_samples,
                     random_seed=monte_carlo_seed,
                     memoization_cache=memoization_cache,
                 )
-                fitted['gof']['ad_pvalue_method'] = 'ad_parametric_bootstrap'
+                fitted['gof']['ad_pvalue_method'] = (
+                    'ad_parametric_bootstrap_subsampled'
+                    if gof_sample_metadata['ad_sample_policy'] == 'subsampled'
+                    else 'ad_parametric_bootstrap'
+                )
+                if gof_sample_metadata['ad_sample_policy'] == 'subsampled':
+                    notes.append(
+                        'AD p-value estimated with quantile-stratified GOF subsample '
+                        f"(n={gof_sample_metadata['ad_effective_sample_size']} of "
+                        f"{gof_sample_metadata['ad_full_sample_size']})."
+                    )
             else:
                 fitted['gof']['ad_pvalue'] = fitted['gof']['ks_pvalue']
                 fitted['gof']['ad_pvalue_method'] = 'ks_proxy'
+                fitted['gof']['ad_full_sample_statistic'] = fitted['gof']['ad_statistic']
+                fitted['gof']['ad_effective_sample_statistic'] = fitted['gof']['ad_statistic']
                 notes.append('AD p-value estimated via KS proxy; set monte_carlo_gof_samples>0 for bootstrap.')
             candidates.append(fitted)
         except Exception as exc:
@@ -984,6 +1187,11 @@ def fit_measurement_distribution(
                 'ad_statistic': c['gof']['ad_statistic'],
                 'ad_pvalue': c['gof']['ad_pvalue'],
                 'ad_pvalue_method': c['gof']['ad_pvalue_method'],
+                'ad_sample_policy': c['gof'].get('ad_sample_policy'),
+                'ad_effective_sample_size': c['gof'].get('ad_effective_sample_size'),
+                'ad_full_sample_size': c['gof'].get('ad_full_sample_size'),
+                'ad_subsample_method': c['gof'].get('ad_subsample_method'),
+                'ad_effective_sample_statistic': c['gof'].get('ad_effective_sample_statistic'),
                 'ks_statistic': c['gof']['ks_statistic'],
                 'ks_pvalue': c['gof']['ks_pvalue'],
                 'is_acceptable_gof': c['gof']['is_acceptable'],
@@ -1017,6 +1225,9 @@ def fit_measurement_distribution_batch(
     gof_acceptance_alpha: float = 0.05,
     monte_carlo_gof_samples: int = 0,
     monte_carlo_seed: int | None = None,
+    gof_sample_policy: str = 'auto',
+    gof_max_sample_size: int = _DEFAULT_GOF_MAX_SAMPLE_SIZE,
+    gof_subsample_method: str = 'quantile_stratified',
     candidate_kernel_mode: str | None = None,
     candidate_fit_batch_mode: str = 'native',
     memoization_cache: MutableMapping | None = None,
@@ -1050,6 +1261,9 @@ def fit_measurement_distribution_batch(
             gof_acceptance_alpha=gof_acceptance_alpha,
             monte_carlo_gof_samples=monte_carlo_gof_samples,
             monte_carlo_seed=monte_carlo_seed,
+            gof_sample_policy=gof_sample_policy,
+            gof_max_sample_size=gof_max_sample_size,
+            gof_subsample_method=gof_subsample_method,
             candidate_kernel_mode=candidate_kernel_mode,
             memoization_cache=memoization_cache,
             measurement_signature=None if fingerprints_by_group is None else fingerprints_by_group.get(group_name),

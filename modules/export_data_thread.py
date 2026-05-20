@@ -5325,7 +5325,7 @@ class ExportDataThread(QThread):
         grouped_export_df = self._build_export_filtered_dataframe()
         grouped_export_df = self._ensure_sample_number_column(grouped_export_df)
         default_group_label = _get_default_group_label(self.prepared_grouping_df)
-        grouped_export_df, _ = self._apply_group_assignments(
+        grouped_export_df, grouping_applied = self._apply_group_assignments(
             grouped_export_df,
             self.prepared_grouping_df,
             group_analysis_mode=True,
@@ -5333,6 +5333,44 @@ class ExportDataThread(QThread):
         )
 
         requested_scope = str(self.group_analysis_scope or 'auto').strip().lower()
+        if self.prepared_grouping_df is not None and not grouping_applied:
+            message = (
+                'Group Analysis skipped: grouping assignments could not be matched '
+                'to the exported measurement rows.'
+            )
+            group_sheet_name = unique_sheet_name('Group Analysis', used_sheet_names)
+            group_worksheet = workbook.add_worksheet(group_sheet_name)
+            self._record_exported_sheet_name(group_sheet_name)
+            self._write_group_analysis_message_sheet(group_worksheet, message)
+            if self.generate_html_dashboard:
+                self._html_group_analysis_payload = {
+                    'status': 'skipped',
+                    'analysis_level': mode,
+                    'effective_scope': requested_scope,
+                    'skip_reason': {
+                        'code': 'grouping_not_applied',
+                        'message': message,
+                    },
+                    'readiness': {
+                        'ready': False,
+                        'skip_reason': {
+                            'code': 'grouping_not_applied',
+                            'message': message,
+                        },
+                    },
+                    'diagnostics': {
+                        'metric_count': 0,
+                        'group_count': 0,
+                        'reference_count': 0,
+                        'warning_summary': {
+                            'count': 1,
+                            'messages': [message],
+                        },
+                    },
+                    'metric_rows': [],
+                }
+                self._html_group_analysis_plot_assets = {'metrics': {}}
+            return
 
         def emit_group_analysis_progress(message):
             self.update_label.emit(

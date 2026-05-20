@@ -253,16 +253,20 @@ def _histogram_reference_traces(
     traces: list[dict[str, Any]] = []
     limits_mapping = limits if isinstance(limits, Mapping) else {}
     reference_values: list[tuple[str, float | None, str]] = [
-        ("LSL", _optional_float(limits_mapping.get("lsl")), "#b91c1c"),
-        ("USL", _optional_float(limits_mapping.get("usl")), "#b91c1c"),
-        ("Mean", float(np.mean(values)), "#2563eb"),
-        ("Median", float(np.median(values)), "#0f766e"),
+        ("Min", float(np.min(values)), "#7c3aed"),
         ("Q1", float(np.quantile(values, 0.25)), "#7c3aed"),
+        ("Median", float(np.median(values)), "#0f766e"),
+        ("Mean", float(np.mean(values)), "#2563eb"),
         ("Q3", float(np.quantile(values, 0.75)), "#7c3aed"),
+        ("Max", float(np.max(values)), "#7c3aed"),
+        ("LSL", _optional_float(limits_mapping.get("lsl")), "#b91c1c"),
+        ("Nominal", _optional_float(limits_mapping.get("nominal")), "#0f766e"),
+        ("USL", _optional_float(limits_mapping.get("usl")), "#b91c1c"),
     ]
     for label, value, color in reference_values:
         if value is None or not math.isfinite(value):
             continue
+        formatted = _format_metrology_legend_value(label, value)
         traces.append(
             {
                 "type": "scatter",
@@ -271,7 +275,7 @@ def _histogram_reference_traces(
                 "x": [value, value],
                 "y": [0.0, 1.0],
                 "line": {"color": color, "width": 1.5, "dash": "dash"},
-                "hovertemplate": f"{label}={_format_plotly_value(value)}<extra></extra>",
+                "hovertemplate": f"{label}={formatted}<extra></extra>",
             }
         )
     return traces
@@ -815,14 +819,33 @@ def _trim_plotly_spec(spec: Mapping[str, Any]) -> dict[str, Any]:
     return _normalize_dashboard_plotly_spec(trimmed)
 
 
-_REFERENCE_LEGEND_LABELS = {"lsl", "usl", "mean", "median", "q1", "q3"}
+_REFERENCE_LEGEND_LABELS = {
+    "lsl",
+    "nom",
+    "nominal",
+    "usl",
+    "mean",
+    "median",
+    "q1",
+    "q3",
+    "min",
+    "minimum",
+    "max",
+    "maximum",
+}
 _REFERENCE_LEGEND_DISPLAY_LABELS = {
     "lsl": "LSL",
+    "nom": "Nominal",
+    "nominal": "Nominal",
     "usl": "USL",
     "mean": "Mean",
     "median": "Median",
     "q1": "Q1",
     "q3": "Q3",
+    "min": "Min",
+    "minimum": "Min",
+    "max": "Max",
+    "maximum": "Max",
 }
 _BIN_RANGE_PATTERN = re.compile(
     r"^\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s+-\s+"
@@ -908,6 +931,128 @@ def _normalize_payload_group_stat_trace_names(spec: Mapping[str, Any], payload: 
     for trace, stat_name in zip(spec.get("data") or [], stat_names, strict=False):
         if isinstance(trace, dict) and str(trace.get("type") or "").strip().casefold() in {"violin", "box"}:
             trace["name"] = stat_name
+    _ensure_payload_distribution_stat_legend_traces(spec, payload)
+
+
+def _ensure_payload_distribution_stat_legend_traces(
+    spec: Mapping[str, Any],
+    payload: Mapping[str, Any],
+) -> None:
+    data = spec.get("data")
+    if not isinstance(data, list):
+        return
+    labels = [str(item) for item in (payload.get("labels") or [])]
+    series_list = payload.get("series") or []
+    existing_names = {
+        str(trace.get("name") or "")
+        for trace in data
+        if isinstance(trace, Mapping)
+    }
+    populated_count = sum(1 for series in series_list if _finite_trace_values(series))
+    traces: list[dict[str, Any]] = []
+    single_group_stats: dict[str, float] = {}
+    for label, series in zip(labels, series_list, strict=False):
+        values = sorted(_finite_trace_values(series))
+        if not values:
+            continue
+        group_label = label or f"Group {len(traces) + 1}"
+        prefix = "" if populated_count == 1 else f"{group_label} "
+        stats = {
+            "Min": min(values),
+            "Q1": _percentile_sorted(values, 0.25),
+            "Median": _percentile_sorted(values, 0.5),
+            "Mean": sum(values) / len(values),
+            "Q3": _percentile_sorted(values, 0.75),
+            "Max": max(values),
+        }
+        if populated_count == 1:
+            single_group_stats = dict(stats)
+        for stat_label, value in stats.items():
+            name = f"{prefix}{stat_label}={_format_metrology_legend_value(stat_label, value)}"
+            if name in existing_names:
+                continue
+            traces.append(
+                _legend_only_reference_trace(
+                    name=name,
+                    value=value,
+                    color="#2563eb" if stat_label == "Mean" else "#7c3aed",
+                    dash="dashdot" if stat_label == "Mean" else "dot",
+                )
+            )
+            existing_names.add(name)
+    limits = payload.get("limits") if isinstance(payload.get("limits"), Mapping) else payload
+    for label, key, color, dash in (
+        ("LSL", "lsl", "#b91c1c", "dash"),
+        ("Nominal", "nominal", "#0f766e", "solid"),
+        ("USL", "usl", "#b91c1c", "dash"),
+    ):
+        value = _optional_float(limits.get(key)) if isinstance(limits, Mapping) else None
+        if value is None:
+            continue
+        name = f"{label}={_format_metrology_legend_value(label, value)}"
+        if name in existing_names:
+            continue
+        traces.append(_legend_only_reference_trace(name=name, value=value, color=color, dash=dash))
+        existing_names.add(name)
+    _normalize_existing_semantic_stat_traces(
+        data,
+        stats=single_group_stats,
+        existing_names=existing_names,
+    )
+    data.extend(traces)
+
+
+def _normalize_existing_semantic_stat_traces(
+    data: list[Any],
+    *,
+    stats: Mapping[str, float],
+    existing_names: set[str],
+) -> None:
+    if not stats:
+        return
+    label_to_stat = {
+        "min": "Min",
+        "minimum": "Min",
+        "min marker": "Min",
+        "max": "Max",
+        "maximum": "Max",
+        "max marker": "Max",
+        "mean": "Mean",
+        "mean marker": "Mean",
+        "median": "Median",
+        "q1": "Q1",
+        "q3": "Q3",
+    }
+    for trace in data:
+        if not isinstance(trace, dict):
+            continue
+        label = str(trace.get("name") or "").strip()
+        stat_label = label_to_stat.get(label.casefold())
+        value = stats.get(stat_label) if stat_label else None
+        if value is None:
+            continue
+        name = f"{stat_label}={_format_metrology_legend_value(stat_label, value)}"
+        if name in existing_names and name != label:
+            trace["name"] = name
+            trace["showlegend"] = False
+            continue
+        trace["name"] = name
+        existing_names.add(name)
+
+
+def _legend_only_reference_trace(*, name: str, value: float | None, color: str, dash: str) -> dict[str, Any]:
+    numeric = 0.0 if value is None else float(value)
+    return {
+        "type": "scatter",
+        "mode": "lines",
+        "name": name,
+        "x": [0, 1],
+        "y": [numeric, numeric],
+        "line": {"color": color, "width": 2, "dash": dash},
+        "hoverinfo": "skip",
+        "visible": "legendonly",
+        "showlegend": True,
+    }
 
 
 def _ensure_group_histogram_mean_annotations(spec: Mapping[str, Any], payload: Mapping[str, Any]) -> None:
@@ -943,7 +1088,7 @@ def _ensure_group_histogram_mean_annotations(spec: Mapping[str, Any], payload: M
         color = trace_colors_by_name.get(str(label)) or (
             trace_colors[index] if index < len(trace_colors) else "#2563eb"
         )
-        text = f"{label} mean={_format_plotly_value(mean_value)}"
+        text = f"{label} mean={_format_metrology_legend_value('Mean', mean_value)}"
         shapes.append(
             {
                 "type": "line",
@@ -1270,15 +1415,7 @@ def _scale_overlay_trace_to_probability(trace: dict[str, Any], bin_width: float)
 def _format_group_statistics_trace_name(label: str, values: list[float]) -> str:
     if not values:
         return str(label)
-    sorted_values = sorted(float(value) for value in values)
-    mean_value = float(sum(sorted_values) / len(sorted_values))
-    q1_value = _percentile_sorted(sorted_values, 0.25)
-    q3_value = _percentile_sorted(sorted_values, 0.75)
-    return (
-        f"{label} (N={len(sorted_values)}, Min={_format_plotly_stat_value(min(sorted_values))}, "
-        f"Q1={_format_plotly_stat_value(q1_value)}, Mean={_format_plotly_stat_value(mean_value)}, "
-        f"Q3={_format_plotly_stat_value(q3_value)}, Max={_format_plotly_stat_value(max(sorted_values))})"
-    )
+    return f"{label} (n={len(values)})"
 
 
 def _format_plotly_stat_value(value: float | None) -> str:
@@ -1291,6 +1428,13 @@ def _format_plotly_stat_value(value: float | None) -> str:
     rounded = Decimal(str(round(number, 12))).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
     text = f"{rounded:f}".rstrip("0").rstrip(".")
     return "0" if text in {"", "-0"} else text
+
+
+def _format_metrology_legend_value(label: str, value: float | None) -> str:
+    if value is None or not math.isfinite(float(value)):
+        return ""
+    precision = 4 if label.strip().casefold() == "mean" else 3
+    return f"{float(value):.{precision}f}"
 
 
 def _percentile_sorted(values: list[float], fraction: float) -> float:
@@ -1345,7 +1489,7 @@ def _normalize_reference_trace_names_and_annotations(spec: Mapping[str, Any]) ->
         if value is None:
             continue
         display_label = _REFERENCE_LEGEND_DISPLAY_LABELS.get(label_key, label)
-        display = f"{display_label}={_format_plotly_value(value)}"
+        display = f"{display_label}={_format_metrology_legend_value(display_label, value)}"
         trace["name"] = display
         if display in existing_text:
             continue

@@ -163,7 +163,18 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
 
     html_path = Path(result["html_dashboard_path"])
     assets_path = Path(result["html_dashboard_assets_path"])
+    assert "plotly_budget_status" not in manifest["summary"]
     assert result["html_dashboard_chart_count"] == 5
+    assert result["html_dashboard_interactive_chart_count"] == result[
+        "html_dashboard_embedded_plotly_spec_count"
+    ]
+    assert result["html_dashboard_plotly_spec_count"] >= 2
+    assert result["html_dashboard_plotly_serialized_json_bytes"] > 0
+    assert result["html_dashboard_embedded_plotly_serialized_json_bytes"] == result[
+        "html_dashboard_plotly_serialized_json_bytes"
+    ]
+    assert result["html_dashboard_html_bytes"] > 0
+    assert result["html_dashboard_plotly_budget"]["status"] == "within_budget"
     assert html_path.exists()
     assert (assets_path / "plotly-2.27.0.min.js").exists()
 
@@ -220,6 +231,35 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     for chart in chart_payload:
         if chart["id"] in {"histogram-cycle_time_s", "violin-cycle_time_s", "box-cycle_time_s"}:
             assert chart["plotly_spec"]["config"].get("staticPlot") is not True
+
+
+def test_write_production_dashboard_omits_plotly_when_payload_exceeds_budget(tmp_path) -> None:
+    manifest = _production_dashboard_fixture(tmp_path)
+    output_file = tmp_path / "production_dashboard.html"
+
+    result = write_production_dashboard(
+        manifest,
+        output_file,
+        plotly_spec_count_budget=0,
+        plotly_serialized_json_bytes_budget=10_000_000,
+    )
+
+    html_text = output_file.read_text(encoding="utf-8")
+    assert result["html_dashboard_chart_count"] == 5
+    assert result["html_dashboard_plotly_spec_count"] > 0
+    assert result["html_dashboard_interactive_chart_count"] == 0
+    assert result["html_dashboard_embedded_plotly_spec_count"] == 0
+    assert result["html_dashboard_plotly_serialized_json_bytes"] > 0
+    assert result["html_dashboard_embedded_plotly_serialized_json_bytes"] == 0
+    assert result["html_dashboard_html_bytes"] > 0
+    assert result["html_dashboard_plotly_budget"]["status"] == "over_budget"
+    assert "spec_count>0" in result["html_dashboard_plotly_budget"]["reason"]
+    assert "production-dashboard-charts" not in html_text
+    assert "plotly-2.27.0.min.js" not in html_text
+    assert "Interactive charts are unavailable in this dashboard" in html_text
+    assert "Interactive chart omitted because the Plotly payload exceeded" in html_text
+    assert not (Path(result["html_dashboard_assets_path"]) / "plotly-2.27.0.min.js").exists()
+    assert any("plotly_spec" in chart for chart in manifest["charts"])
 
 
 def test_write_production_dashboard_collapses_diagnostics_by_default(tmp_path) -> None:

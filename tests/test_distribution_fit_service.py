@@ -268,6 +268,72 @@ class TestDistributionFitService(unittest.TestCase):
         self.assertIsNot(first, second)
         self.assertIsNot(first['selected_model_pdf'], second['selected_model_pdf'])
 
+    def test_fit_measurement_distribution_spec_refit_reuses_cached_fit_and_recomputes_risk(self):
+        measurements = [1.0, 1.2, 1.1, 1.3, 0.9, 1.05, 1.15]
+        memo = {}
+
+        with mock.patch.object(
+            distribution_fit_service,
+            '_fit_candidate',
+            wraps=distribution_fit_service._fit_candidate,
+        ) as wrapped_fit, mock.patch.object(
+            distribution_fit_service,
+            '_build_density_curve',
+            wraps=distribution_fit_service._build_density_curve,
+        ) as wrapped_pdf, mock.patch.object(
+            distribution_fit_service,
+            '_build_cdf_curve',
+            wraps=distribution_fit_service._build_cdf_curve,
+        ) as wrapped_cdf, mock.patch.object(
+            distribution_fit_service,
+            '_build_kde_reference_curve',
+            wraps=distribution_fit_service._build_kde_reference_curve,
+        ) as wrapped_kde:
+            first = fit_measurement_distribution(
+                measurements,
+                lsl=0.75,
+                usl=1.45,
+                memoization_cache=memo,
+            )
+            first_fit_calls = wrapped_fit.call_count
+            first_pdf_calls = wrapped_pdf.call_count
+            first_cdf_calls = wrapped_cdf.call_count
+            first_kde_calls = wrapped_kde.call_count
+
+            second = fit_measurement_distribution(
+                measurements,
+                lsl=0.95,
+                usl=1.25,
+                memoization_cache=memo,
+            )
+
+        self.assertEqual(first['status'], 'ok')
+        self.assertEqual(second['status'], 'ok')
+        self.assertEqual(wrapped_fit.call_count, first_fit_calls)
+        self.assertEqual(wrapped_pdf.call_count, first_pdf_calls)
+        self.assertEqual(wrapped_cdf.call_count, first_cdf_calls)
+        self.assertEqual(wrapped_kde.call_count, first_kde_calls)
+        self.assertEqual(first_fit_calls, len(_BILATERAL_CANDIDATES))
+        self.assertEqual(len(memo), 1)
+        self.assertIsNot(first, second)
+        self.assertIsNot(first['selected_model_pdf'], second['selected_model_pdf'])
+        self.assertEqual(first['selected_model'], second['selected_model'])
+        self.assertEqual(first['ranking_metrics'], second['ranking_metrics'])
+        self.assertNotEqual(
+            first['risk_estimates']['outside_probability'],
+            second['risk_estimates']['outside_probability'],
+        )
+
+        selected_dist = distribution_fit_service._DISTRIBUTION_BY_NAME[second['selected_model']['name']]
+        expected_risk = _compute_tail_risk(
+            selected_dist,
+            second['selected_model']['params'],
+            0.95,
+            1.25,
+            inferred_support_mode=second['inferred_support_mode'],
+        )
+        self.assertEqual(second['risk_estimates'], expected_risk)
+
     def test_one_sided_zero_bound_forces_loc_zero_for_positive_candidates(self):
         result = fit_measurement_distribution([0.0, 0.05, 0.2, 0.4, 0.8, 1.1, 1.5, 2.0], usl=2.5)
 
@@ -669,6 +735,168 @@ class TestDistributionFitService(unittest.TestCase):
         self.assertEqual(monte_carlo_stub.call_count, first_call_count)
         self.assertEqual(first['gof_metrics']['ad_pvalue_method'], 'ad_parametric_bootstrap')
         self.assertEqual(second['gof_metrics']['ad_pvalue_method'], 'ad_parametric_bootstrap')
+
+    def test_auto_gof_policy_subsamples_large_monte_carlo_pvalue_path(self):
+        rng = np.random.default_rng(20260520)
+        measurements = np.ascontiguousarray(rng.normal(loc=10.0, scale=0.35, size=300).astype(float))
+
+        with mock.patch.object(
+            distribution_fit_service,
+            '_estimate_ad_pvalue_monte_carlo',
+            return_value=0.42,
+        ) as monte_carlo_stub:
+            result = fit_measurement_distribution(
+                measurements,
+                include_kde_reference=False,
+                monte_carlo_gof_samples=11,
+                monte_carlo_seed=2026,
+                gof_max_sample_size=50,
+            )
+
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(result['gof_metrics']['ad_pvalue_method'], 'ad_parametric_bootstrap_subsampled')
+        self.assertEqual(result['gof_metrics']['ad_sample_policy'], 'subsampled')
+        self.assertEqual(result['gof_metrics']['ad_subsample_method'], 'quantile_stratified')
+        self.assertEqual(result['gof_metrics']['ad_full_sample_size'], 300)
+        self.assertEqual(result['gof_metrics']['ad_effective_sample_size'], 50)
+        self.assertTrue(
+            all(call.kwargs['sample_size'] == 50 for call in monte_carlo_stub.call_args_list)
+        )
+        self.assertTrue(
+            all(metric['ad_effective_sample_size'] == 50 for metric in result['ranking_metrics'])
+        )
+        self.assertIn('GOF subsample', ' '.join(result['notes']))
+
+    def test_full_gof_policy_preserves_full_monte_carlo_sample_size(self):
+        rng = np.random.default_rng(20260521)
+        measurements = np.ascontiguousarray(rng.normal(loc=10.0, scale=0.35, size=120).astype(float))
+
+        with mock.patch.object(
+            distribution_fit_service,
+            '_estimate_ad_pvalue_monte_carlo',
+            return_value=0.42,
+        ) as monte_carlo_stub:
+            result = fit_measurement_distribution(
+                measurements,
+                include_kde_reference=False,
+                monte_carlo_gof_samples=11,
+                monte_carlo_seed=2026,
+                gof_sample_policy='full',
+                gof_max_sample_size=50,
+            )
+
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(result['gof_metrics']['ad_pvalue_method'], 'ad_parametric_bootstrap')
+        self.assertEqual(result['gof_metrics']['ad_sample_policy'], 'full')
+        self.assertEqual(result['gof_metrics']['ad_effective_sample_size'], 120)
+        self.assertTrue(
+            all(call.kwargs['sample_size'] == 120 for call in monte_carlo_stub.call_args_list)
+        )
+
+    def test_ks_proxy_path_does_not_report_effective_subsample(self):
+        rng = np.random.default_rng(20260522)
+        measurements = np.ascontiguousarray(rng.normal(loc=10.0, scale=0.35, size=300).astype(float))
+
+        result = fit_measurement_distribution(
+            measurements,
+            include_kde_reference=False,
+            monte_carlo_gof_samples=0,
+            gof_max_sample_size=50,
+        )
+
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(result['gof_metrics']['ad_pvalue_method'], 'ks_proxy')
+        self.assertEqual(result['gof_metrics']['ad_requested_sample_policy'], 'auto')
+        self.assertEqual(result['gof_metrics']['ad_sample_policy'], 'full')
+        self.assertEqual(result['gof_metrics']['ad_effective_sample_size'], 300)
+
+    def test_fit_measurement_distribution_batch_propagates_gof_sample_policy(self):
+        rng = np.random.default_rng(20260523)
+        grouped = {
+            'A': np.ascontiguousarray(rng.normal(loc=10.0, scale=0.3, size=120).astype(float)),
+            'B': np.ascontiguousarray(rng.normal(loc=11.0, scale=0.4, size=120).astype(float)),
+        }
+
+        with mock.patch.object(
+            distribution_fit_service,
+            '_estimate_ad_pvalue_monte_carlo',
+            return_value=0.42,
+        ):
+            result = fit_measurement_distribution_batch(
+                grouped,
+                include_kde_reference=False,
+                monte_carlo_gof_samples=9,
+                monte_carlo_seed=2026,
+                gof_max_sample_size=30,
+            )
+
+        self.assertEqual(result['A']['gof_metrics']['ad_pvalue_method'], 'ad_parametric_bootstrap_subsampled')
+        self.assertEqual(result['B']['gof_metrics']['ad_pvalue_method'], 'ad_parametric_bootstrap_subsampled')
+        self.assertEqual(result['A']['gof_metrics']['ad_effective_sample_size'], 30)
+        self.assertEqual(result['B']['gof_metrics']['ad_effective_sample_size'], 30)
+
+    def test_fit_payload_cache_separates_gof_sample_policies(self):
+        rng = np.random.default_rng(20260524)
+        measurements = np.ascontiguousarray(rng.normal(loc=10.0, scale=0.35, size=120).astype(float))
+        memo = {}
+
+        with mock.patch.object(
+            distribution_fit_service,
+            '_estimate_ad_pvalue_monte_carlo',
+            return_value=0.42,
+        ) as monte_carlo_stub:
+            auto_result = fit_measurement_distribution(
+                measurements,
+                include_kde_reference=False,
+                monte_carlo_gof_samples=9,
+                monte_carlo_seed=2026,
+                gof_sample_policy='auto',
+                gof_max_sample_size=30,
+                memoization_cache=memo,
+            )
+            auto_call_count = monte_carlo_stub.call_count
+            full_result = fit_measurement_distribution(
+                measurements,
+                include_kde_reference=False,
+                monte_carlo_gof_samples=9,
+                monte_carlo_seed=2026,
+                gof_sample_policy='full',
+                gof_max_sample_size=30,
+                memoization_cache=memo,
+            )
+
+        self.assertEqual(auto_result['gof_metrics']['ad_pvalue_method'], 'ad_parametric_bootstrap_subsampled')
+        self.assertEqual(full_result['gof_metrics']['ad_pvalue_method'], 'ad_parametric_bootstrap')
+        self.assertGreater(monte_carlo_stub.call_count, auto_call_count)
+
+    def test_python_monte_carlo_fallback_vectorizes_trials(self):
+        class CountingNormal:
+            def __init__(self):
+                self.rvs_calls = 0
+
+            def rvs(self, loc, scale, *, size, random_state):
+                self.rvs_calls += 1
+                return random_state.normal(loc=loc, scale=scale, size=size)
+
+            def cdf(self, values, loc, scale):
+                return norm.cdf(values, loc=loc, scale=scale)
+
+        dist = CountingNormal()
+        with mock.patch.object(distribution_fit_service, 'estimate_ad_pvalue_monte_carlo_native', return_value=None):
+            p_value = distribution_fit_service._estimate_ad_pvalue_monte_carlo(
+                dist=dist,
+                distribution_name='norm',
+                params=(0.0, 1.0),
+                sample_size=10,
+                observed_stat=0.6,
+                iterations=25,
+                random_seed=2026,
+            )
+
+        self.assertIsNotNone(p_value)
+        self.assertGreaterEqual(p_value, 0.0)
+        self.assertLessEqual(p_value, 1.0)
+        self.assertEqual(dist.rvs_calls, 1)
 
 if __name__ == '__main__':
     unittest.main()

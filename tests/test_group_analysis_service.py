@@ -1363,6 +1363,75 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertTrue(any('Completed metric 2/2: M2' in message for message in progress_messages))
         self.assertTrue(all(row['chart_payload'] is None for row in payload['metric_rows']))
 
+    def test_build_group_analysis_payload_streams_metric_groups_without_eager_list(self):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1'] * 8,
+                'HEADER - AX': ['M1'] * 4 + ['M2'] * 4,
+                'GROUP': ['A', 'A', 'B', 'B'] * 2,
+                'MEAS': [10.0, 10.1, 9.9, 9.8, 20.0, 20.1, 19.9, 19.8],
+                'LSL': [9.0] * 4 + [19.0] * 4,
+                'NOMINAL': [10.0] * 4 + [20.0] * 4,
+                'USL': [11.0] * 4 + [21.0] * 4,
+            }
+        )
+
+        def empty_distribution(*_args, **_kwargs):
+            return {'profile_rows': [], 'pairwise_rows': [], 'omnibus_row': None}
+
+        with patch(
+            'modules.group_analysis_service.compute_distribution_difference',
+            side_effect=empty_distribution,
+        ):
+            expected = build_group_analysis_payload(
+                grouped_df,
+                requested_scope='auto',
+                analysis_level='light',
+                include_chart_payloads=False,
+            )
+
+        original_groupby = pd.DataFrame.groupby
+
+        class NoLengthGroupBy:
+            def __init__(self, wrapped):
+                self._wrapped = wrapped
+
+            @property
+            def ngroups(self):
+                return self._wrapped.ngroups
+
+            def __iter__(self):
+                return iter(self._wrapped)
+
+            def __getattr__(self, name):
+                return getattr(self._wrapped, name)
+
+            def __len__(self):
+                raise AssertionError('metric groupby was eagerly materialized')
+
+        def guarded_groupby(frame, by=None, *args, **kwargs):
+            grouped = original_groupby(frame, by=by, *args, **kwargs)
+            if by == ['__canonical_metric__']:
+                return NoLengthGroupBy(grouped)
+            return grouped
+
+        progress_messages = []
+        with patch.object(pd.DataFrame, 'groupby', guarded_groupby), patch(
+            'modules.group_analysis_service.compute_distribution_difference',
+            side_effect=empty_distribution,
+        ):
+            actual = build_group_analysis_payload(
+                grouped_df,
+                requested_scope='auto',
+                analysis_level='light',
+                progress_callback=progress_messages.append,
+                include_chart_payloads=False,
+            )
+
+        self.assertEqual(actual, expected)
+        self.assertTrue(any('Analyzing metric 1/2: M1' in message for message in progress_messages))
+        self.assertTrue(any('Completed metric 2/2: M2' in message for message in progress_messages))
+
     def test_build_group_analysis_payload_cancels_between_metric_groups(self):
         grouped_df = pd.DataFrame(
             {

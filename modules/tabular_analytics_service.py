@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import sqlite3
 import tempfile
+import time
 from typing import Any
 
 import pandas as pd
@@ -892,6 +893,10 @@ class TabularSqliteStore:
             self.columns,
             base_column_filters,
         )
+        if normalized_base_filters:
+            self._ensure_grouping_column_indexes(
+                tuple(column_filter.column for column_filter in normalized_base_filters)
+            )
         for column_filter in normalized_base_filters:
             filter_clause, filter_params = self._sqlite_column_filter_clause(column_filter)
             if filter_clause:
@@ -900,6 +905,9 @@ class TabularSqliteStore:
 
         normalized_filters = _normalized_tabular_column_filters_for_columns(self.columns, column_filters)
         if normalized_filters:
+            self._ensure_grouping_column_indexes(
+                tuple(column_filter.column for column_filter in normalized_filters)
+            )
             filter_mode = "or" if str(column_filter_match_mode or "").strip().casefold() == "or" else "and"
             grouped_clauses: list[str] = []
             grouped_params: list[Any] = []
@@ -1070,6 +1078,7 @@ class TabularAnalyticsLoadResult:
     storage_mode: str = "dataframe"
     sqlite_store: TabularSqliteStore | None = None
     row_count: int | None = None
+    load_timings_s: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1420,6 +1429,12 @@ def _load_csv_files_into_sqlite(
     progress_callback: TabularProgressCallback | None = None,
     cancel_check: TabularCancelCheck | None = None,
 ) -> TabularAnalyticsLoadResult:
+    load_started_at = time.perf_counter()
+    load_timings: dict[str, float] = {}
+
+    def _record_load_timing(name: str, started_at: float) -> None:
+        load_timings[name] = load_timings.get(name, 0.0) + (time.perf_counter() - started_at)
+
     diagnostics: list[ProductionAnalyticsDiagnostic] = []
     file_specs: list[dict[str, Any]] = []
     global_mapping: dict[str, str] = {}
@@ -1429,6 +1444,7 @@ def _load_csv_files_into_sqlite(
     reference_field: str | None = None
 
     for path in paths:
+        sampling_started_at = time.perf_counter()
         _raise_if_tabular_load_cancelled(cancel_check)
         _emit_tabular_load_progress(
             progress_callback,
@@ -1484,7 +1500,9 @@ def _load_csv_files_into_sqlite(
                 "reference_field": file_reference_field,
             }
         )
+        _record_load_timing("sampling", sampling_started_at)
 
+    sqlite_setup_started_at = time.perf_counter()
     if timestamp_field is None:
         diagnostics.append(
             ProductionAnalyticsDiagnostic(
@@ -1524,6 +1542,7 @@ def _load_csv_files_into_sqlite(
     try:
         with sqlite_connection_scope(str(db_path)) as connection:
             _create_sqlite_table(connection, _TABULAR_SQLITE_TABLE, storage_columns)
+            _record_load_timing("sqlite_setup", sqlite_setup_started_at)
             for file_index, spec in enumerate(file_specs, start=1):
                 _raise_if_tabular_load_cancelled(cancel_check)
                 path = spec["path"]
@@ -1539,6 +1558,7 @@ def _load_csv_files_into_sqlite(
                     file_count=len(file_specs),
                     rows_loaded=row_number,
                 )
+                chunk_read_started_at = time.perf_counter()
                 chunk_iter = pd.read_csv(
                     path,
                     delimiter=csv_config["delimiter"],
@@ -1547,8 +1567,12 @@ def _load_csv_files_into_sqlite(
                     chunksize=TABULAR_SQLITE_CHUNK_ROWS,
                 )
                 for raw_chunk in chunk_iter:
+                    _record_load_timing("chunk_read", chunk_read_started_at)
                     _raise_if_tabular_load_cancelled(cancel_check)
+                    chunk_normalize_started_at = time.perf_counter()
                     normalized_chunk = raw_chunk.rename(columns=mapping)
+                    _record_load_timing("chunk_normalize", chunk_normalize_started_at)
+                    chunk_build_started_at = time.perf_counter()
                     output_chunk = pd.DataFrame(index=normalized_chunk.index)
                     chunk_row_count = int(len(normalized_chunk.index))
                     output_chunk["source_row_number"] = range(
@@ -1589,6 +1613,8 @@ def _load_csv_files_into_sqlite(
                             output_chunk[storage_column] = _sqlite_datetime_text(parsed_dates)
                         else:
                             output_chunk[storage_column] = None
+                    _record_load_timing("chunk_build_rows", chunk_build_started_at)
+                    metric_stats_started_at = time.perf_counter()
                     _update_metric_stats(
                         metric_stats,
                         output_chunk,
@@ -1599,12 +1625,15 @@ def _load_csv_files_into_sqlite(
                             if column is not None
                         ),
                     )
+                    _record_load_timing("metric_stats", metric_stats_started_at)
+                    sqlite_write_started_at = time.perf_counter()
                     output_chunk.loc[:, list(storage_columns)].to_sql(
                         _TABULAR_SQLITE_TABLE,
                         connection,
                         if_exists="append",
                         index=False,
                     )
+                    _record_load_timing("sqlite_write", sqlite_write_started_at)
                     row_number += chunk_row_count
                     file_row_count += chunk_row_count
                     _emit_tabular_load_progress(
@@ -1619,6 +1648,7 @@ def _load_csv_files_into_sqlite(
                         rows_loaded=row_number,
                     )
                     _raise_if_tabular_load_cancelled(cancel_check)
+                    chunk_read_started_at = time.perf_counter()
 
                 source_stat = path.stat()
                 snapshots.append(
@@ -1638,18 +1668,27 @@ def _load_csv_files_into_sqlite(
                 rows_loaded=row_number,
                 file_count=len(file_specs),
             )
+            indexing_started_at = time.perf_counter()
             _create_sqlite_indexes(
                 connection,
                 _TABULAR_SQLITE_TABLE,
-                (
-                    "source_row_number",
-                    "source_file",
-                    "process_datetime",
-                    "reference",
-                    *source_columns[:32],
-                    *date_filter_columns.values(),
+                tuple(
+                    dict.fromkeys(
+                        column
+                        for column in (
+                            "source_row_number",
+                            "source_file",
+                            "process_datetime",
+                            "reference",
+                            *date_filter_columns.values(),
+                            timestamp_field,
+                            reference_field,
+                        )
+                        if column is not None
+                    )
                 ),
             )
+            _record_load_timing("indexing", indexing_started_at)
 
         _raise_if_tabular_load_cancelled(cancel_check)
         if timestamp_field is not None and bad_timestamp_count:
@@ -1679,11 +1718,13 @@ def _load_csv_files_into_sqlite(
                 },
             )
         )
+        metric_candidates_started_at = time.perf_counter()
         metric_candidates = _metric_candidates_from_stats(
             metric_stats,
             numeric_threshold=numeric_threshold,
             min_numeric_count=min_numeric_count,
         )
+        _record_load_timing("metric_candidates", metric_candidates_started_at)
         if not metric_candidates:
             diagnostics.append(
                 ProductionAnalyticsDiagnostic(
@@ -1707,7 +1748,9 @@ def _load_csv_files_into_sqlite(
             file_count=len(file_specs),
         )
         _raise_if_tabular_load_cancelled(cancel_check)
+        preview_started_at = time.perf_counter()
         preview = store.read_dataframe(limit=TABULAR_SQLITE_PREVIEW_ROWS)
+        _record_load_timing("preview", preview_started_at)
         _emit_tabular_load_progress(
             progress_callback,
             stage="complete",
@@ -1724,6 +1767,7 @@ def _load_csv_files_into_sqlite(
                 "files": {snapshot.path: dict(snapshot.csv_config) for snapshot in snapshots},
                 "storage": "sqlite",
             }
+        load_timings["total"] = time.perf_counter() - load_started_at
         return TabularAnalyticsLoadResult(
             dataframe=preview,
             metric_candidates=metric_candidates,
@@ -1741,6 +1785,7 @@ def _load_csv_files_into_sqlite(
             storage_mode="sqlite",
             sqlite_store=store,
             row_count=row_number,
+            load_timings_s=dict(load_timings),
         )
     except Exception:
         for candidate in (db_path, Path(f"{db_path}-wal"), Path(f"{db_path}-shm")):
@@ -1898,23 +1943,40 @@ def _update_metric_stats(
         values = dataframe[column].dropna()
         if values.empty:
             continue
-        text_values = values.astype(str).str.strip()
-        values = values[text_values != ""]
-        if values.empty:
-            continue
-        numeric_values = pd.to_numeric(values, errors="coerce")
         stats = metric_stats.setdefault(
             column,
-            {"non_null_count": 0, "numeric_count": 0, "sample_values": []},
+            {"non_null_count": 0, "numeric_count": 0, "sample_values": [], "sample_value_set": set()},
         )
+        if pd.api.types.is_numeric_dtype(values):
+            non_null_count = int(len(values.index))
+            stats["non_null_count"] += non_null_count
+            stats["numeric_count"] += non_null_count
+            _append_metric_sample_values(stats, values)
+            continue
+
+        text_values = values.astype(str).str.strip()
+        non_blank_mask = text_values != ""
+        if not bool(non_blank_mask.any()):
+            continue
+        values = values[non_blank_mask]
+        numeric_values = pd.to_numeric(values, errors="coerce")
         stats["non_null_count"] += int(len(values.index))
         stats["numeric_count"] += int(numeric_values.notna().sum())
-        sample_values = stats["sample_values"]
-        for value in values.astype(str).tolist():
-            if value not in sample_values:
-                sample_values.append(value)
-            if len(sample_values) >= 5:
-                break
+        _append_metric_sample_values(stats, values)
+
+
+def _append_metric_sample_values(stats: dict[str, Any], values: pd.Series) -> None:
+    sample_values = stats["sample_values"]
+    if len(sample_values) >= 5:
+        return
+    sample_value_set = stats.setdefault("sample_value_set", set(sample_values))
+    for value in values:
+        text = str(value)
+        if text not in sample_value_set:
+            sample_values.append(text)
+            sample_value_set.add(text)
+        if len(sample_values) >= 5:
+            return
 
 
 def _metric_candidates_from_stats(

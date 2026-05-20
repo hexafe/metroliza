@@ -10,9 +10,10 @@ import sys
 import tempfile
 import time
 import types
+from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -253,6 +254,54 @@ def _run_excel_export_with_close_timing(thread: Any) -> tuple[bool, dict[str, fl
     finally:
         thread._active_backend = previous_backend
     return bool(completed), dict(backend.timings)
+
+
+def _run_with_pandas_excel_writer_close_timing(
+    operation: Callable[[], Any],
+) -> tuple[Any, dict[str, float]]:
+    original_excel_writer = pd.ExcelWriter
+    original_to_excel = pd.DataFrame.to_excel
+    timings = {
+        'workbook_sheet_writes': 0.0,
+        'workbook_close': 0.0,
+    }
+    sheet_write_count = 0
+
+    class TimingExcelWriter:
+        def __init__(self, *args, **kwargs):
+            self._inner = original_excel_writer(*args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        def __enter__(self):
+            return self._inner.__enter__()
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            close_start = time.perf_counter()
+            try:
+                return self._inner.__exit__(exc_type, exc_value, traceback)
+            finally:
+                timings['workbook_close'] += time.perf_counter() - close_start
+
+    def timed_to_excel(self, *args, **kwargs):
+        nonlocal sheet_write_count
+        write_start = time.perf_counter()
+        try:
+            return original_to_excel(self, *args, **kwargs)
+        finally:
+            timings['workbook_sheet_writes'] += time.perf_counter() - write_start
+            sheet_write_count += 1
+
+    pd.ExcelWriter = TimingExcelWriter
+    pd.DataFrame.to_excel = timed_to_excel
+    try:
+        result = operation()
+    finally:
+        pd.ExcelWriter = original_excel_writer
+        pd.DataFrame.to_excel = original_to_excel
+    timings['workbook_sheet_write_count'] = float(sheet_write_count)
+    return result, dict(timings)
 
 
 def benchmark_parse_path(temp_dir: Path, pdf_count: int) -> ScenarioResult:
@@ -757,6 +806,14 @@ def benchmark_distribution_fit_monte_carlo_path(temp_dir: Path, *, group_count: 
         _MONTE_CARLO_PVALUE_CACHE_NAMESPACE,
         fit_measurement_distribution,
     )
+    from modules.distribution_fit_candidate_native import (
+        native_fit_backend_available,
+        native_metrics_backend_available,
+    )
+    from modules.distribution_fit_native import (
+        native_ad_ks_backend_available,
+        native_monte_carlo_backend_available,
+    )
 
     del temp_dir
     rng = np.random.default_rng(314159)
@@ -820,8 +877,157 @@ def benchmark_distribution_fit_monte_carlo_path(temp_dir: Path, *, group_count: 
             'headers': group_count,
             'chart_count': group_count,
             'monte_carlo_cache_entries': monte_carlo_cache_entries,
+            'native_monte_carlo_available': int(native_monte_carlo_backend_available()),
+            'native_ad_ks_available': int(native_ad_ks_backend_available()),
+            'native_candidate_metrics_available': int(native_metrics_backend_available()),
+            'native_candidate_fit_available': int(native_fit_backend_available()),
         },
     )
+
+
+def _collect_distribution_gof_metrics(results: list[dict[str, Any]], *, prefix: str) -> dict[str, int]:
+    selected_methods: Counter[str] = Counter()
+    selected_policies: Counter[str] = Counter()
+    ranking_methods: Counter[str] = Counter()
+    effective_sizes: list[int] = []
+
+    for result in results:
+        gof_metrics = result.get('gof_metrics') or {}
+        selected_methods[str(gof_metrics.get('ad_pvalue_method') or 'unknown')] += 1
+        selected_policies[str(gof_metrics.get('ad_sample_policy') or 'unknown')] += 1
+        effective_size = gof_metrics.get('ad_effective_sample_size')
+        if effective_size is not None:
+            effective_sizes.append(int(effective_size))
+        for metric in result.get('ranking_metrics') or []:
+            ranking_methods[str(metric.get('ad_pvalue_method') or 'unknown')] += 1
+
+    metrics: dict[str, int] = {
+        f'{prefix}_selected_count': len(results),
+        f'{prefix}_effective_gof_sample_size_min': min(effective_sizes) if effective_sizes else 0,
+        f'{prefix}_effective_gof_sample_size_max': max(effective_sizes) if effective_sizes else 0,
+    }
+    for method, count in selected_methods.items():
+        metrics[f'{prefix}_selected_method_{method}'] = int(count)
+    for policy, count in selected_policies.items():
+        metrics[f'{prefix}_selected_policy_{policy}'] = int(count)
+    for method, count in ranking_methods.items():
+        metrics[f'{prefix}_ranking_method_{method}'] = int(count)
+    return metrics
+
+
+def benchmark_distribution_fit_gof_policy_compare(
+    temp_dir: Path,
+    *,
+    group_count: int,
+    sample_size: int,
+    monte_carlo_samples: int,
+    gof_max_sample_size: int,
+) -> ScenarioResult:
+    from modules.distribution_fit_service import fit_measurement_distribution
+    from modules.distribution_fit_candidate_native import (
+        native_fit_backend_available,
+        native_metrics_backend_available,
+    )
+    from modules.distribution_fit_native import (
+        native_ad_ks_backend_available,
+        native_monte_carlo_backend_available,
+    )
+
+    del temp_dir
+    rng = np.random.default_rng(271828)
+    groups = [
+        np.asarray(
+            rng.normal(loc=10.0 + (idx * 0.04), scale=0.3 + ((idx % 5) * 0.04), size=sample_size),
+            dtype=float,
+        )
+        for idx in range(group_count)
+    ]
+
+    full_start = time.perf_counter()
+    full_results = [
+        fit_measurement_distribution(
+            values,
+            include_kde_reference=False,
+            monte_carlo_gof_samples=monte_carlo_samples,
+            monte_carlo_seed=2026,
+            gof_sample_policy='full',
+            gof_max_sample_size=gof_max_sample_size,
+        )
+        for values in groups
+    ]
+    full_s = time.perf_counter() - full_start
+
+    auto_start = time.perf_counter()
+    auto_results = [
+        fit_measurement_distribution(
+            values,
+            include_kde_reference=False,
+            monte_carlo_gof_samples=monte_carlo_samples,
+            monte_carlo_seed=2026,
+            gof_sample_policy='auto',
+            gof_max_sample_size=gof_max_sample_size,
+        )
+        for values in groups
+    ]
+    auto_s = time.perf_counter() - auto_start
+
+    memoization_cache: dict[Any, Any] = {}
+    auto_cache_warm_start = time.perf_counter()
+    for values in groups:
+        fit_measurement_distribution(
+            values,
+            include_kde_reference=False,
+            monte_carlo_gof_samples=monte_carlo_samples,
+            monte_carlo_seed=2026,
+            gof_sample_policy='auto',
+            gof_max_sample_size=gof_max_sample_size,
+            memoization_cache=memoization_cache,
+        )
+    auto_cache_warm_s = time.perf_counter() - auto_cache_warm_start
+
+    auto_cached_refit_start = time.perf_counter()
+    for values in groups:
+        usl = float(np.mean(values) + (3.0 * np.std(values)))
+        fit_measurement_distribution(
+            values,
+            usl=usl,
+            include_kde_reference=False,
+            monte_carlo_gof_samples=monte_carlo_samples,
+            monte_carlo_seed=2026,
+            gof_sample_policy='auto',
+            gof_max_sample_size=gof_max_sample_size,
+            memoization_cache=memoization_cache,
+        )
+    auto_cached_refit_s = time.perf_counter() - auto_cached_refit_start
+
+    input_metrics = {
+        'rows': group_count * sample_size,
+        'headers': group_count,
+        'chart_count': group_count,
+        'full_sample_size': sample_size,
+        'requested_gof_max_sample_size': int(gof_max_sample_size),
+        'native_monte_carlo_available': int(native_monte_carlo_backend_available()),
+        'native_ad_ks_available': int(native_ad_ks_backend_available()),
+        'native_candidate_metrics_available': int(native_metrics_backend_available()),
+        'native_candidate_fit_available': int(native_fit_backend_available()),
+    }
+    input_metrics.update(_collect_distribution_gof_metrics(full_results, prefix='full'))
+    input_metrics.update(_collect_distribution_gof_metrics(auto_results, prefix='auto'))
+
+    return ScenarioResult(
+        scenario='distribution_fit_gof_policy_compare',
+        wall_time_s=full_s + auto_s + auto_cache_warm_s + auto_cached_refit_s,
+        stage_timings_s={
+            'full_monte_carlo_path': full_s,
+            'auto_gof_policy_path': auto_s,
+            'auto_cache_warm_path': auto_cache_warm_s,
+            'auto_cached_refit_path': auto_cached_refit_s,
+            'auto_policy_speedup_ratio': (full_s / auto_s) if auto_s > 0 else 0.0,
+            'auto_cached_refit_vs_auto_ratio': (auto_cached_refit_s / auto_s) if auto_s > 0 else 0.0,
+        },
+        input_metrics=input_metrics,
+    )
+
 
 def _coerce_legacy(values: list[Any]) -> np.ndarray:
     numeric_values = np.asarray(values, dtype=object)
@@ -886,7 +1092,7 @@ def benchmark_group_preprocess_mixed_types_path(temp_dir: Path, *, group_count: 
 
 def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int) -> ScenarioResult:
     from modules.industrial_analytics_state import ProductionChartSelection
-    from modules.industrial_analytics_workflow import run_tabular_file_analytics
+    import modules.industrial_analytics_workflow as workflow_module
 
     csv_path = temp_dir / 'summary_fixture.csv'
     output_html = temp_dir / 'summary_dashboard.html'
@@ -901,28 +1107,88 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
 
     progress_messages: list[str] = []
     progress_events: list[tuple[float, str]] = []
+    direct_timings = {
+        'dashboard_manifest': 0.0,
+        'dashboard_html_write': 0.0,
+        'dashboard_write': 0.0,
+        'workbook_export': 0.0,
+    }
+
+    original_write_dashboard = workflow_module._write_dashboard
+    original_export_tabular_workbook = workflow_module._export_tabular_workbook_with_temp
+    original_build_dashboard_manifest = workflow_module.build_production_dashboard_manifest
+    original_write_production_dashboard = workflow_module.write_production_dashboard
+
+    def timed_write_dashboard(*args, **kwargs):
+        stage_start = time.perf_counter()
+        manifest_timing_start = 0.0
+        html_write_timing_start = 0.0
+
+        def timed_build_dashboard_manifest(*manifest_args, **manifest_kwargs):
+            nonlocal manifest_timing_start
+            manifest_timing_start = time.perf_counter()
+            try:
+                return original_build_dashboard_manifest(*manifest_args, **manifest_kwargs)
+            finally:
+                direct_timings['dashboard_manifest'] += (
+                    time.perf_counter() - manifest_timing_start
+                )
+
+        def timed_write_production_dashboard(*dashboard_args, **dashboard_kwargs):
+            nonlocal html_write_timing_start
+            html_write_timing_start = time.perf_counter()
+            try:
+                return original_write_production_dashboard(*dashboard_args, **dashboard_kwargs)
+            finally:
+                direct_timings['dashboard_html_write'] += (
+                    time.perf_counter() - html_write_timing_start
+                )
+
+        workflow_module.build_production_dashboard_manifest = timed_build_dashboard_manifest
+        workflow_module.write_production_dashboard = timed_write_production_dashboard
+        try:
+            return original_write_dashboard(*args, **kwargs)
+        finally:
+            direct_timings['dashboard_write'] += time.perf_counter() - stage_start
+            workflow_module.build_production_dashboard_manifest = original_build_dashboard_manifest
+            workflow_module.write_production_dashboard = original_write_production_dashboard
+
+    def timed_export_tabular_workbook(*args, **kwargs):
+        stage_start = time.perf_counter()
+        try:
+            return original_export_tabular_workbook(*args, **kwargs)
+        finally:
+            direct_timings['workbook_export'] += time.perf_counter() - stage_start
 
     def record_progress(message: str) -> None:
         progress_messages.append(str(message))
         progress_events.append((time.perf_counter(), str(message)))
 
     run_start = time.perf_counter()
-    result = run_tabular_file_analytics(
-        input_file=str(csv_path),
-        output_dashboard_file=str(output_html),
-        reference_column='PART',
-        grouping_df=grouping_df,
-        chart_selection=ProductionChartSelection(
-            time_series=True,
-            histogram=True,
-            violin=True,
-            box=True,
-            groupstats=True,
-        ),
-        output_workbook_file=str(output_xlsx),
-        separate_parameter_sheets=True,
-        progress_callback=record_progress,
-    )
+    workflow_module._write_dashboard = timed_write_dashboard
+    workflow_module._export_tabular_workbook_with_temp = timed_export_tabular_workbook
+    try:
+        result, writer_timings = _run_with_pandas_excel_writer_close_timing(
+            lambda: workflow_module.run_tabular_file_analytics(
+                input_file=str(csv_path),
+                output_dashboard_file=str(output_html),
+                reference_column='PART',
+                grouping_df=grouping_df,
+                chart_selection=ProductionChartSelection(
+                    time_series=True,
+                    histogram=True,
+                    violin=True,
+                    box=True,
+                    groupstats=True,
+                ),
+                output_workbook_file=str(output_xlsx),
+                separate_parameter_sheets=True,
+                progress_callback=record_progress,
+            )
+        )
+    finally:
+        workflow_module._write_dashboard = original_write_dashboard
+        workflow_module._export_tabular_workbook_with_temp = original_export_tabular_workbook
     run_s = time.perf_counter() - run_start
     progress_marks: dict[str, float] = {}
     for event_time, message in progress_events:
@@ -958,7 +1224,24 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
             'groupstats_analysis': groupstats_analysis_s,
             'chart_generation': chart_generation_s,
             'workbook_write': workbook_write_s,
-            'workbook_close': 0.0,
+            'dashboard_manifest': float(direct_timings['dashboard_manifest']),
+            'dashboard_html_write': float(direct_timings['dashboard_html_write']),
+            'dashboard_write': float(direct_timings['dashboard_write']),
+            'dashboard_write_overhead': max(
+                0.0,
+                float(direct_timings['dashboard_write'])
+                - float(direct_timings['dashboard_manifest'])
+                - float(direct_timings['dashboard_html_write']),
+            ),
+            'workbook_export': float(direct_timings['workbook_export']),
+            'workbook_sheet_writes': float(writer_timings.get('workbook_sheet_writes', 0.0)),
+            'workbook_close': float(writer_timings.get('workbook_close', 0.0)),
+            'workbook_export_overhead': max(
+                0.0,
+                float(direct_timings['workbook_export'])
+                - float(writer_timings.get('workbook_sheet_writes', 0.0))
+                - float(writer_timings.get('workbook_close', 0.0)),
+            ),
             'progress_messages': float(len(progress_messages)),
         },
         input_metrics={
@@ -966,10 +1249,174 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
             'headers': fixture_metrics['headers'],
             'chart_count': min(data_columns, 5) * 4,
             'dashboard_bytes': output_html.stat().st_size if output_html.exists() else 0,
+            'dashboard_html_bytes': result.html_dashboard_html_bytes,
+            'dashboard_interactive_chart_count': result.html_dashboard_interactive_chart_count,
+            'dashboard_plotly_spec_count': result.html_dashboard_plotly_spec_count,
+            'dashboard_embedded_plotly_spec_count': result.html_dashboard_embedded_plotly_spec_count,
+            'dashboard_plotly_serialized_json_bytes': (
+                result.html_dashboard_plotly_serialized_json_bytes
+            ),
+            'dashboard_embedded_plotly_serialized_json_bytes': (
+                result.html_dashboard_embedded_plotly_serialized_json_bytes
+            ),
+            'dashboard_plotly_budget_over': int(
+                result.html_dashboard_plotly_budget_status == 'over_budget'
+            ),
             'workbook_bytes': output_xlsx.stat().st_size if output_xlsx.exists() else 0,
+            'workbook_sheet_write_count': int(writer_timings.get('workbook_sheet_write_count', 0)),
             'analytics_rows': result.row_count,
             'analytics_metrics': result.metric_count,
             'groupstats_metric_count': result.groupstats_metric_count,
+        },
+    )
+
+
+def benchmark_production_dashboard_workbook_path(
+    temp_dir: Path,
+    *,
+    row_count: int,
+    metric_count: int,
+) -> ScenarioResult:
+    from modules.industrial_analytics_dashboard import (
+        build_production_dashboard_manifest,
+        write_production_dashboard,
+    )
+    from modules.industrial_analytics_service import aggregate_production_frame
+    from modules.industrial_analytics_state import (
+        ProductionAggregationState,
+        ProductionChartSelection,
+        ProductionMetricSelection,
+    )
+    from modules.industrial_analytics_workbook import export_production_analytics_workbook
+
+    rng = np.random.default_rng(20260520)
+    safe_row_count = max(1, int(row_count))
+    safe_metric_count = max(1, int(metric_count))
+    data: dict[str, Any] = {
+        'process_datetime': pd.date_range(
+            '2026-05-01 00:00',
+            periods=safe_row_count,
+            freq='min',
+            tz='UTC',
+        ),
+        'reference': [f'REF-{index % 32:03d}' for index in range(safe_row_count)],
+        'line': [f'L{index % 4 + 1}' for index in range(safe_row_count)],
+        'station': [f'S{index % 8 + 1}' for index in range(safe_row_count)],
+    }
+    metrics: list[ProductionMetricSelection] = []
+    for metric_index in range(1, safe_metric_count + 1):
+        field_name = f'metric_{metric_index:02d}'
+        center = 10.0 + metric_index
+        data[field_name] = np.round(
+            rng.normal(center, 0.25 + (metric_index * 0.02), size=safe_row_count),
+            5,
+        )
+        metrics.append(
+            ProductionMetricSelection(
+                field_name,
+                display_label=f'Metric {metric_index:02d}',
+                lsl=center - 0.8,
+                usl=center + 0.8,
+            )
+        )
+    dataframe = pd.DataFrame(data)
+    metric_selection = tuple(metrics)
+    aggregation = ProductionAggregationState(
+        time_bucket='hour',
+        aggregation_methods=('mean',),
+        group_fields=('line',),
+    )
+    chart_selection = ProductionChartSelection(
+        time_series=True,
+        histogram=True,
+        violin=True,
+        box=True,
+        groupstats=False,
+    )
+
+    aggregate_start = time.perf_counter()
+    aggregated = aggregate_production_frame(dataframe, aggregation, metric_selection)
+    aggregate_s = time.perf_counter() - aggregate_start
+
+    manifest_start = time.perf_counter()
+    manifest = build_production_dashboard_manifest(
+        frame=dataframe,
+        metric_selection=metric_selection,
+        aggregation_state=aggregation,
+        aggregation_result=aggregated,
+        chart_selection=chart_selection,
+        dashboard_title='Production Analytics Benchmark',
+        dashboard_subtitle='Synthetic production dashboard benchmark.',
+    )
+    manifest_s = time.perf_counter() - manifest_start
+
+    dashboard_start = time.perf_counter()
+    dashboard_result = write_production_dashboard(
+        manifest,
+        temp_dir / 'production_dashboard.html',
+    )
+    dashboard_s = time.perf_counter() - dashboard_start
+
+    workbook_start = time.perf_counter()
+    workbook_result, writer_timings = _run_with_pandas_excel_writer_close_timing(
+        lambda: export_production_analytics_workbook(
+            dataframe=dataframe,
+            metric_selection=metric_selection,
+            output_file=temp_dir / 'production_analytics.xlsx',
+            aggregation_result=aggregated,
+            chart_selection=chart_selection,
+            separate_parameter_sheets=True,
+            group_fields=aggregation.group_fields,
+        )
+    )
+    workbook_s = time.perf_counter() - workbook_start
+
+    budget = dashboard_result.get('html_dashboard_plotly_budget') or {}
+    return ScenarioResult(
+        scenario='production_dashboard_workbook_path',
+        wall_time_s=aggregate_s + manifest_s + dashboard_s + workbook_s,
+        stage_timings_s={
+            'aggregation': aggregate_s,
+            'dashboard_manifest': manifest_s,
+            'dashboard_html_write': dashboard_s,
+            'dashboard_write': dashboard_s,
+            'workbook_export': workbook_s,
+            'workbook_sheet_writes': float(writer_timings.get('workbook_sheet_writes', 0.0)),
+            'workbook_close': float(writer_timings.get('workbook_close', 0.0)),
+            'workbook_export_overhead': max(
+                0.0,
+                workbook_s
+                - float(writer_timings.get('workbook_sheet_writes', 0.0))
+                - float(writer_timings.get('workbook_close', 0.0)),
+            ),
+        },
+        input_metrics={
+            'rows': safe_row_count,
+            'headers': safe_metric_count,
+            'chart_count': int(dashboard_result.get('html_dashboard_chart_count') or 0),
+            'dashboard_html_bytes': int(dashboard_result.get('html_dashboard_html_bytes') or 0),
+            'dashboard_interactive_chart_count': int(
+                dashboard_result.get('html_dashboard_interactive_chart_count') or 0
+            ),
+            'dashboard_plotly_spec_count': int(
+                dashboard_result.get('html_dashboard_plotly_spec_count') or 0
+            ),
+            'dashboard_embedded_plotly_spec_count': int(
+                dashboard_result.get('html_dashboard_embedded_plotly_spec_count') or 0
+            ),
+            'dashboard_plotly_serialized_json_bytes': int(
+                dashboard_result.get('html_dashboard_plotly_serialized_json_bytes') or 0
+            ),
+            'dashboard_embedded_plotly_serialized_json_bytes': int(
+                dashboard_result.get('html_dashboard_embedded_plotly_serialized_json_bytes') or 0
+            ),
+            'dashboard_plotly_budget_over': int(
+                isinstance(budget, dict) and budget.get('status') == 'over_budget'
+            ),
+            'workbook_sheets': len(workbook_result.sheet_names),
+            'workbook_parameter_sheets': int(workbook_result.parameter_sheet_count),
+            'workbook_sheet_write_count': int(writer_timings.get('workbook_sheet_write_count', 0)),
+            'workbook_bytes': Path(workbook_result.output_file).stat().st_size,
         },
     )
 
@@ -1003,6 +1450,34 @@ def benchmark_csv_summary_large_data_probe(
     load_start = time.perf_counter()
     loaded = load_tabular_analytics_files((str(csv_path),), reference_column='PART', force_sqlite=True)
     load_s = time.perf_counter() - load_start
+    load_timings = dict(getattr(loaded, 'load_timings_s', {}) or {})
+
+    def load_timing(name: str) -> float:
+        return float(load_timings.get(name, 0.0) or 0.0)
+
+    csv_load_read_file_s = load_timing('sampling') + load_timing('chunk_read')
+    csv_load_normalize_columns_s = (
+        load_timing('chunk_normalize') + load_timing('chunk_build_rows')
+    )
+    csv_load_sqlite_ingest_s = (
+        load_timing('sqlite_setup') + load_timing('sqlite_write') + load_timing('indexing')
+    )
+    csv_load_recorded_s = sum(
+        load_timing(name)
+        for name in (
+            'sampling',
+            'sqlite_setup',
+            'chunk_read',
+            'chunk_normalize',
+            'chunk_build_rows',
+            'metric_stats',
+            'sqlite_write',
+            'indexing',
+            'metric_candidates',
+            'preview',
+        )
+    )
+    csv_load_unattributed_s = max(0.0, load_s - csv_load_recorded_s)
 
     metric_columns = tuple(
         candidate.field_name
@@ -1123,6 +1598,21 @@ def benchmark_csv_summary_large_data_probe(
         wall_time_s=total_s,
         stage_timings_s={
             'csv_load': load_s,
+            'csv_load_read_file': csv_load_read_file_s,
+            'csv_load_sampling': load_timing('sampling'),
+            'csv_load_chunk_read': load_timing('chunk_read'),
+            'csv_load_normalize_columns': csv_load_normalize_columns_s,
+            'csv_load_chunk_normalize': load_timing('chunk_normalize'),
+            'csv_load_chunk_build_rows': load_timing('chunk_build_rows'),
+            'csv_load_metric_stats': load_timing('metric_stats'),
+            'csv_load_sqlite_ingest': csv_load_sqlite_ingest_s,
+            'csv_load_sqlite_setup': load_timing('sqlite_setup'),
+            'csv_load_sqlite_write': load_timing('sqlite_write'),
+            'csv_load_indexing': load_timing('indexing'),
+            'csv_load_metric_candidates': load_timing('metric_candidates'),
+            'csv_load_preview': load_timing('preview'),
+            'csv_load_internal_total': load_timing('total'),
+            'csv_load_unattributed': csv_load_unattributed_s,
             'materialize_required_columns': materialize_s,
             'grouping_dataframe_build': grouping_build_s,
             'value_preview': value_preview_s,
@@ -1136,6 +1626,7 @@ def benchmark_csv_summary_large_data_probe(
         input_metrics={
             'rows': fixture_metrics['rows'],
             'headers': fixture_metrics['headers'],
+            'csv_load_substage_available': 1 if load_timings else 0,
             'storage_mode_sqlite': 1 if sqlite_store is not None else 0,
             'materialized_rows': int(len(materialized.dataframe.index)),
             'materialized_columns': int(len(materialized.dataframe.columns)),
@@ -1294,6 +1785,8 @@ def build_benchmark_run_summary(results: list[dict[str, Any]]) -> dict[str, Any]
         'trend': [],
     }
     high_header_timing = {}
+    csv_summary_timing = {}
+    production_dashboard_workbook_timing = {}
     for result in results:
         metrics = result.get('input_metrics') or {}
         native_count += int(metrics.get('chart_backend_native_count', 0))
@@ -1306,6 +1799,10 @@ def build_benchmark_run_summary(results: list[dict[str, Any]]) -> dict[str, Any]
 
         if result.get('scenario') == 'excel_export_high_header_cardinality_compare':
             high_header_timing = dict(result.get('stage_timings_s') or {})
+        if result.get('scenario') == 'csv_summary_export_path':
+            csv_summary_timing = dict(result.get('stage_timings_s') or {})
+        if result.get('scenario') == 'production_dashboard_workbook_path':
+            production_dashboard_workbook_timing = dict(result.get('stage_timings_s') or {})
 
     total = native_count + matplotlib_count
     return {
@@ -1321,6 +1818,8 @@ def build_benchmark_run_summary(results: list[dict[str, Any]]) -> dict[str, Any]
             for chart_type, samples in chart_type_samples.items()
         },
         'high_header_cardinality_scenario_timing_s': high_header_timing,
+        'csv_summary_dashboard_workbook_timing_s': csv_summary_timing,
+        'production_dashboard_workbook_timing_s': production_dashboard_workbook_timing,
     }
 
 
@@ -1355,6 +1854,8 @@ def main() -> int:
     parser.add_argument('--headers-per-report', type=int, default=10)
     parser.add_argument('--csv-rows', type=int, default=1500)
     parser.add_argument('--csv-columns', type=int, default=8)
+    parser.add_argument('--production-rows', type=int, default=1500)
+    parser.add_argument('--production-metrics', type=int, default=3)
     parser.add_argument('--large-csv-rows', type=int, default=1_000_000)
     parser.add_argument('--large-csv-columns', type=int, default=20)
     parser.add_argument('--large-csv-search', default='P-00')
@@ -1362,6 +1863,7 @@ def main() -> int:
     parser.add_argument('--fit-group-count', type=int, default=40)
     parser.add_argument('--fit-sample-size', type=int, default=120)
     parser.add_argument('--fit-monte-carlo-samples', type=int, default=250)
+    parser.add_argument('--fit-gof-max-sample-size', type=int, default=2000)
     parser.add_argument('--group-preprocess-groups', type=int, default=48)
     parser.add_argument('--group-preprocess-values', type=int, default=20000)
     parser.add_argument('--cmm-bench-report-count', type=int, default=180)
@@ -1395,8 +1897,10 @@ def main() -> int:
             'excel_export_write_vs_shape_path',
             'excel_export_high_header_cardinality_compare',
             'csv_summary_export_path',
+            'production_dashboard_workbook_path',
             'csv_summary_large_data_probe',
             'distribution_fit_monte_carlo_path',
+            'distribution_fit_gof_policy_compare',
             'group_preprocess_mixed_types_compare',
             'cmm_parser_backend_compare',
             'chart_render_budget_path',
@@ -1422,6 +1926,11 @@ def main() -> int:
         'csv_summary_export_path': lambda temp_path: benchmark_csv_summary_path(
             temp_path, row_count=args.csv_rows, data_columns=args.csv_columns
         ),
+        'production_dashboard_workbook_path': lambda temp_path: benchmark_production_dashboard_workbook_path(
+            temp_path,
+            row_count=max(1, args.production_rows),
+            metric_count=max(1, args.production_metrics),
+        ),
         'csv_summary_large_data_probe': lambda temp_path: benchmark_csv_summary_large_data_probe(
             temp_path,
             row_count=max(1, args.large_csv_rows),
@@ -1434,6 +1943,13 @@ def main() -> int:
             group_count=args.fit_group_count,
             sample_size=args.fit_sample_size,
             monte_carlo_samples=max(1, args.fit_monte_carlo_samples),
+        ),
+        'distribution_fit_gof_policy_compare': lambda temp_path: benchmark_distribution_fit_gof_policy_compare(
+            temp_path,
+            group_count=args.fit_group_count,
+            sample_size=args.fit_sample_size,
+            monte_carlo_samples=max(1, args.fit_monte_carlo_samples),
+            gof_max_sample_size=max(3, args.fit_gof_max_sample_size),
         ),
         'group_preprocess_mixed_types_compare': lambda temp_path: benchmark_group_preprocess_mixed_types_path(
             temp_path,

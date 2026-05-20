@@ -192,6 +192,79 @@ class TestExportSortingAndGrouping(unittest.TestCase):
         self.assertEqual(merged['GROUP'].tolist(), ['G1'])
         self.assertEqual(merged['GROUP_COLOR'].tolist(), ['#FDE2E4'])
 
+    def test_apply_group_assignments_returns_false_when_grouping_is_missing(self):
+        header_group = pd.DataFrame(
+            {
+                'REPORT_ID': [1],
+                'REFERENCE': ['R1'],
+                'DATE': ['2024-01-01'],
+                'SAMPLE_NUMBER': ['1'],
+                'MEAS': [1.0],
+            }
+        )
+
+        merged, applied, merge_keys, duplicate_count = apply_group_assignments(header_group, None)
+
+        self.assertFalse(applied)
+        self.assertIsNone(merge_keys)
+        self.assertEqual(duplicate_count, 0)
+        self.assertEqual(merged['REPORT_ID'].tolist(), [1])
+        self.assertNotIn('GROUP_KEY', merged.columns)
+        self.assertNotIn('GROUP', merged.columns)
+
+    def test_apply_group_assignments_returns_false_when_no_merge_key_is_usable(self):
+        header_group = pd.DataFrame(
+            {
+                'REPORT_ID': [1],
+                'REFERENCE': ['R1'],
+                'DATE': ['2024-01-01'],
+                'SAMPLE_NUMBER': ['1'],
+                'MEAS': [1.0],
+            }
+        )
+        grouping_df = prepare_grouping_dataframe(
+            pd.DataFrame(
+                {
+                    'GROUP': ['G1'],
+                }
+            )
+        )
+
+        merged, applied, merge_keys, duplicate_count = apply_group_assignments(header_group, grouping_df)
+
+        self.assertFalse(applied)
+        self.assertIsNone(merge_keys)
+        self.assertEqual(duplicate_count, 0)
+        self.assertEqual(merged['REPORT_ID'].tolist(), [1])
+        self.assertIn('GROUP_KEY', merged.columns)
+        self.assertNotIn('GROUP', merged.columns)
+
+    def test_apply_group_assignments_returns_false_when_no_rows_match_grouping(self):
+        header_group = pd.DataFrame(
+            {
+                'REPORT_ID': [1],
+                'REFERENCE': ['R1'],
+                'DATE': ['2024-01-01'],
+                'SAMPLE_NUMBER': ['1'],
+                'MEAS': [1.0],
+            }
+        )
+        grouping_df = prepare_grouping_dataframe(
+            pd.DataFrame(
+                {
+                    'REPORT_ID': [999],
+                    'GROUP': ['G1'],
+                }
+            )
+        )
+
+        merged, applied, merge_keys, duplicate_count = apply_group_assignments(header_group, grouping_df)
+
+        self.assertFalse(applied)
+        self.assertEqual(merge_keys, ['GROUP_KEY'])
+        self.assertEqual(duplicate_count, 0)
+        self.assertEqual(merged['GROUP'].tolist(), ['UNGROUPED'])
+
     def test_constructor_accepts_export_request_contract(self):
         request = ExportRequest(
             paths=AppPaths(db_file=':memory:', excel_file='dummy.xlsx'),

@@ -886,7 +886,7 @@ def _build_vertical_reference_shapes(
                 "yref": "paper",
                 "x": numeric,
                 "y": 1.02,
-                "text": f"{label}={numeric:.3f}",
+                "text": f"{label}={_format_metrology_legend_value(label, numeric)}",
                 "showarrow": False,
                 "font": {"size": 11, "color": color},
                 "bgcolor": "#ffffff",
@@ -938,7 +938,7 @@ def _build_horizontal_reference_shapes(
                 "xanchor": "right",
                 "yanchor": "top",
                 "yshift": -4,
-                "text": f"{label}={numeric:.3f}",
+                "text": f"{label}={_format_metrology_legend_value(label, numeric)}",
                 "showarrow": False,
                 "font": {"size": 11, "color": color},
                 "bgcolor": "#ffffff",
@@ -1077,7 +1077,7 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str, theme: 
                 "yref": "paper",
                 "x": mean_value,
                 "y": 1.10,
-                "text": f"Mean={mean_value:.3f}",
+                "text": f"Mean={_format_metrology_legend_value('Mean', mean_value)}",
                 "showarrow": False,
                 "font": {"size": 11, "color": tokens["mean_line"]},
                 "bgcolor": "#ffffff",
@@ -1197,24 +1197,28 @@ def _build_histogram_reference_legend_traces(
     reference_values = _collect_histogram_reference_values(payload, lsl=lsl, usl=usl, mean_value=mean_value)
     traces: list[dict[str, Any]] = []
     for label, numeric, color, dash in (
-        ("LSL", reference_values.get("lsl"), tokens["reference_limit"], "dash"),
-        ("USL", reference_values.get("usl"), tokens["reference_limit"], "dash"),
-        ("Mean", reference_values.get("mean"), tokens["mean_line"], "dashdot"),
-        ("Median", reference_values.get("median"), tokens["reference_nominal"], "dot"),
+        ("Min", reference_values.get("min"), tokens["reference_nominal"], "dot"),
         ("Q1", reference_values.get("q1"), tokens["reference_nominal"], "dot"),
+        ("Median", reference_values.get("median"), tokens["reference_nominal"], "dot"),
+        ("Mean", reference_values.get("mean"), tokens["mean_line"], "dashdot"),
         ("Q3", reference_values.get("q3"), tokens["reference_nominal"], "dot"),
+        ("Max", reference_values.get("max"), tokens["reference_nominal"], "dot"),
+        ("LSL", reference_values.get("lsl"), tokens["reference_limit"], "dash"),
+        ("Nominal", reference_values.get("nominal"), tokens["reference_nominal"], "solid"),
+        ("USL", reference_values.get("usl"), tokens["reference_limit"], "dash"),
     ):
         if numeric is None:
             continue
+        formatted = _format_metrology_legend_value(label, numeric)
         traces.append(
             {
                 "type": "scatter",
                 "mode": "lines",
-                "name": f"{label}={numeric:.3f}",
+                "name": f"{label}={formatted}",
                 "x": [numeric, numeric],
                 "y": [0.0, 1.0],
                 "line": {"color": color, "width": 2, "dash": dash},
-                "hovertemplate": f"{label}={numeric:.3f}<extra></extra>",
+                "hovertemplate": f"{label}={formatted}<extra></extra>",
             }
         )
     return traces
@@ -1230,11 +1234,16 @@ def _collect_histogram_reference_values(
     resolved = {
         "lsl": _coerce_finite_float(lsl),
         "usl": _coerce_finite_float(usl),
+        "nominal": None,
         "mean": _coerce_finite_float(mean_value),
         "median": None,
         "q1": None,
         "q3": None,
+        "min": None,
+        "max": None,
     }
+    limits = payload.get("limits") if isinstance(payload.get("limits"), dict) else {}
+    resolved["nominal"] = _coerce_finite_float(limits.get("nominal", payload.get("nominal")))
 
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     resolved["median"] = _coerce_finite_float(summary.get("median"))
@@ -1270,6 +1279,8 @@ def _collect_histogram_reference_values(
 
     values = sorted(_coerce_finite_float_list(payload.get("values")))
     if values:
+        resolved["min"] = min(values)
+        resolved["max"] = max(values)
         if resolved["median"] is None:
             resolved["median"] = _percentile_sorted(values, 0.5)
         if resolved["q1"] is None:
@@ -1415,6 +1426,14 @@ def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str, them
     y_max = _coerce_finite_float(y_limits.get("max"))
     if y_min is not None and y_max is not None and y_min < y_max:
         layout["yaxis"]["range"] = [y_min, y_max]
+    traces.extend(
+        _build_distribution_stat_legend_traces(
+            labels=category_labels,
+            series_list=[trace["y"] for trace in traces if trace.get("type") == "violin"],
+            limits={"lsl": lsl, "nominal": nominal, "usl": usl},
+            tokens=tokens,
+        )
+    )
     return {
         "data": traces,
         "layout": layout,
@@ -1482,6 +1501,14 @@ def _build_plotly_iqr_spec(payload: dict[str, Any], *, title: str, theme: str = 
     y_max = _coerce_finite_float(y_limits.get("max"))
     if y_min is not None and y_max is not None and y_min < y_max:
         layout["yaxis"]["range"] = [y_min, y_max]
+    traces.extend(
+        _build_distribution_stat_legend_traces(
+            labels=category_labels,
+            series_list=[trace["y"] for trace in traces if trace.get("type") == "box"],
+            limits=payload.get("limits") if isinstance(payload.get("limits"), dict) else payload,
+            tokens=tokens,
+        )
+    )
     return {
         "data": traces,
         "layout": layout,
@@ -1492,15 +1519,83 @@ def _build_plotly_iqr_spec(payload: dict[str, Any], *, title: str, theme: str = 
 def _format_group_statistics_trace_name(label: str, values: list[float]) -> str:
     if not values:
         return str(label)
-    sorted_values = sorted(float(value) for value in values)
-    mean_value = float(sum(sorted_values) / len(sorted_values))
-    q1_value = _percentile_sorted(sorted_values, 0.25)
-    q3_value = _percentile_sorted(sorted_values, 0.75)
-    return (
-        f"{label} (N={len(sorted_values)}, Min={_format_plotly_stat_value(min(sorted_values))}, "
-        f"Q1={_format_plotly_stat_value(q1_value)}, Mean={_format_plotly_stat_value(mean_value)}, "
-        f"Q3={_format_plotly_stat_value(q3_value)}, Max={_format_plotly_stat_value(max(sorted_values))})"
-    )
+    return f"{label} (n={len(values)})"
+
+
+def _build_distribution_stat_legend_traces(
+    *,
+    labels: list[str],
+    series_list: list[list[float]],
+    limits: dict[str, Any],
+    tokens: dict[str, Any],
+) -> list[dict[str, Any]]:
+    traces: list[dict[str, Any]] = []
+    populated_count = sum(1 for series in series_list if _coerce_finite_float_list(series))
+    for label, series in zip(labels, series_list, strict=False):
+        values = sorted(_coerce_finite_float_list(series))
+        if not values:
+            continue
+        prefix = "" if populated_count == 1 else f"{label} "
+        stats = {
+            "Min": min(values),
+            "Q1": _percentile_sorted(values, 0.25),
+            "Median": _percentile_sorted(values, 0.5),
+            "Mean": sum(values) / len(values),
+            "Q3": _percentile_sorted(values, 0.75),
+            "Max": max(values),
+        }
+        for stat_label, value in stats.items():
+            traces.append(
+                _legend_only_reference_trace(
+                    name=f"{prefix}{stat_label}={_format_metrology_legend_value(stat_label, value)}",
+                    value=value,
+                    color=(
+                        tokens["mean_line"]
+                        if stat_label == "Mean"
+                        else tokens["reference_nominal"]
+                    ),
+                    dash="dashdot" if stat_label == "Mean" else "dot",
+                )
+            )
+    for label, key in (("LSL", "lsl"), ("Nominal", "nominal"), ("USL", "usl")):
+        value = _coerce_finite_float(limits.get(key))
+        if value is None:
+            continue
+        traces.append(
+            _legend_only_reference_trace(
+                name=f"{label}={_format_metrology_legend_value(label, value)}",
+                value=value,
+                color=(
+                    tokens["reference_nominal"]
+                    if label == "Nominal"
+                    else tokens["reference_limit"]
+                ),
+                dash="solid" if label == "Nominal" else "dash",
+            )
+        )
+    return traces
+
+
+def _legend_only_reference_trace(*, name: str, value: float | None, color: str, dash: str) -> dict[str, Any]:
+    numeric = 0.0 if value is None else float(value)
+    return {
+        "type": "scatter",
+        "mode": "lines",
+        "name": name,
+        "x": [0, 1],
+        "y": [numeric, numeric],
+        "line": {"color": color, "width": 2, "dash": dash},
+        "hoverinfo": "skip",
+        "visible": "legendonly",
+        "showlegend": True,
+    }
+
+
+def _format_metrology_legend_value(label: str, value: float | None) -> str:
+    if value is None or not math.isfinite(float(value)):
+        return ""
+    precision = 4 if label.strip().casefold() == "mean" else 3
+    return f"{float(value):.{precision}f}"
 
 
 def _format_plotly_stat_value(value: float | None) -> str:
@@ -1768,7 +1863,7 @@ def _build_group_analysis_plotly_spec(
                 "yref": "paper",
                 "x": mean_value,
                 "y": 1.08,
-                "text": f"{label} mean={_format_plotly_stat_value(mean_value)}",
+                "text": f"{label} mean={_format_metrology_legend_value('Mean', mean_value)}",
                 "showarrow": False,
                 "font": {"size": 11, "color": color},
                 "bgcolor": tokens["annotation_bg"],

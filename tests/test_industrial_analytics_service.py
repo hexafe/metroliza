@@ -542,6 +542,106 @@ def test_groupstats_analysis_reuses_prepared_numpy_groups(monkeypatch) -> None:
     assert calls[1][1]["B"].tolist() == [20.0, 22.0]
 
 
+def test_groupstats_analysis_coerces_duplicate_metric_field_once(monkeypatch) -> None:
+    frame = pd.DataFrame(
+        {
+            "GROUP": ["A", "A", "B", "B"],
+            "length_mm": ["1.0", "2.0", "3.0", "4.0"],
+        }
+    )
+    original_to_numeric = industrial_analytics_service.pd.to_numeric
+    to_numeric_calls = 0
+    analysis_calls: list[tuple[str, dict[str, np.ndarray]]] = []
+
+    def count_to_numeric(*args, **kwargs):
+        nonlocal to_numeric_calls
+        to_numeric_calls += 1
+        return original_to_numeric(*args, **kwargs)
+
+    def fake_analyze_group_metric(metric_identity, grouped_values, **_kwargs):
+        analysis_calls.append((metric_identity, grouped_values))
+        return {
+            "spec_status": "no_spec",
+            "descriptive_stats": [
+                {"group": label, "n": len(values)}
+                for label, values in grouped_values.items()
+            ],
+            "pairwise_rows": [],
+            "posthoc_rows": [],
+            "capability_rows": [],
+            "metric_summary": {"metric": metric_identity},
+            "capability": {},
+        }
+
+    monkeypatch.setattr(industrial_analytics_service.pd, "to_numeric", count_to_numeric)
+    monkeypatch.setattr(
+        "modules.industrial_analytics_service.analyze_group_metric",
+        fake_analyze_group_metric,
+    )
+
+    result = analyze_production_groupstats(
+        frame,
+        (
+            ProductionMetricSelection("length_mm", "Length"),
+            ProductionMetricSelection("length_mm", "Length copy"),
+        ),
+        group_fields=("GROUP",),
+    )
+
+    assert result.analyzed_metric_count == 2
+    assert to_numeric_calls == 1
+    assert [identity for identity, _grouped_values in analysis_calls] == ["Length", "Length copy"]
+    assert analysis_calls[0][1]["A"].tolist() == [1.0, 2.0]
+    assert analysis_calls[1][1]["B"].tolist() == [3.0, 4.0]
+
+
+def test_groupstats_analysis_skips_to_numeric_for_numeric_metric_columns(monkeypatch) -> None:
+    frame = pd.DataFrame(
+        {
+            "GROUP": ["A", "A", "B", "B"],
+            "length_mm": [1.0, 2.0, 3.0, 4.0],
+            "width_mm": [10.0, 11.0, 20.0, 21.0],
+        }
+    )
+    analysis_calls: list[str] = []
+
+    def fail_to_numeric(*_args, **_kwargs):
+        raise AssertionError("numeric groupstats metrics should not be coerced again")
+
+    def fake_analyze_group_metric(metric_identity, grouped_values, **_kwargs):
+        analysis_calls.append(metric_identity)
+        return {
+            "spec_status": "no_spec",
+            "descriptive_stats": [
+                {"group": label, "n": len(values)}
+                for label, values in grouped_values.items()
+            ],
+            "pairwise_rows": [],
+            "posthoc_rows": [],
+            "capability_rows": [],
+            "metric_summary": {"metric": metric_identity},
+            "capability": {},
+        }
+
+    monkeypatch.setattr(industrial_analytics_service.pd, "to_numeric", fail_to_numeric)
+    monkeypatch.setattr(
+        "modules.industrial_analytics_service.analyze_group_metric",
+        fake_analyze_group_metric,
+    )
+
+    result = analyze_production_groupstats(
+        frame,
+        (
+            ProductionMetricSelection("length_mm", "Length"),
+            ProductionMetricSelection("width_mm", "Width"),
+        ),
+        group_fields=("GROUP",),
+    )
+
+    assert result.analyzed_metric_count == 2
+    assert analysis_calls == ["Length", "Width"]
+
+
 def test_groupstats_reports_progress_and_cancels_between_metrics(monkeypatch) -> None:
     frame = pd.DataFrame(
         {

@@ -56,6 +56,17 @@ def _sample_table() -> pd.DataFrame:
     )
 
 
+def _sqlite_index_names(store) -> set[str]:
+    with sqlite3.connect(store.path) as connection:
+        return {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ?",
+                (store.table_name,),
+            ).fetchall()
+        }
+
+
 def test_load_tabular_analytics_file_detects_csv_metrics_and_contract_columns(tmp_path) -> None:
     input_file = tmp_path / "table.csv"
     _sample_table().to_csv(input_file, index=False)
@@ -342,6 +353,72 @@ def test_sqlite_group_preview_and_selection_respect_column_filters(tmp_path) -> 
             [1, 4],
             column_filters=filters,
         ) == 1
+    finally:
+        cleanup_tabular_load_result(result)
+
+
+def test_sqlite_load_defers_source_column_indexes_until_preview_filter(tmp_path) -> None:
+    input_file = tmp_path / "lazy_indexes.csv"
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=5, freq="D"),
+            "Reference ID": ["R1", "R1", "R2", "R2", "R3"],
+            "Line": ["L1", "L1", "L2", "L1", "L2"],
+            "Station": ["A", "B", "A", "A", "B"],
+            "Length mm": [10.0, 10.1, 10.2, 10.3, 10.4],
+        }
+    ).to_csv(input_file, index=False)
+
+    result = load_tabular_analytics_file(input_file, force_sqlite=True)
+    assert result.sqlite_store is not None
+    store = result.sqlite_store
+
+    try:
+        initial_indexes = _sqlite_index_names(store)
+        load_timings = result.load_timings_s
+
+        assert load_timings["total"] > 0.0
+        assert load_timings["sampling"] >= 0.0
+        assert load_timings["chunk_read"] >= 0.0
+        assert load_timings["chunk_normalize"] >= 0.0
+        assert load_timings["chunk_build_rows"] >= 0.0
+        assert load_timings["metric_stats"] >= 0.0
+        assert load_timings["sqlite_write"] >= 0.0
+        assert load_timings["indexing"] >= 0.0
+        assert load_timings["metric_candidates"] >= 0.0
+        assert load_timings["preview"] >= 0.0
+        assert {
+            "idx_tabular_rows_source_row_number",
+            "idx_tabular_rows_source_file",
+            "idx_tabular_rows_process_datetime",
+            "idx_tabular_rows_reference",
+            "idx_tabular_rows_date_filter_time_stamp",
+            "idx_tabular_rows_time_stamp",
+            "idx_tabular_rows_reference_id",
+        }.issubset(initial_indexes)
+        assert "idx_tabular_rows_line" not in initial_indexes
+        assert "idx_tabular_rows_station" not in initial_indexes
+        assert "idx_tabular_rows_length_mm" not in initial_indexes
+        assert "idx_tabular_rows_group_line" not in initial_indexes
+        assert "idx_tabular_rows_group_station" not in initial_indexes
+
+        rows, total = store.preview_group_rows(
+            ("station",),
+            column_filters=(TabularColumnFilter("line", selected_values=("L1",)),),
+            limit=20,
+        )
+        lazy_indexes = _sqlite_index_names(store)
+
+        assert total == 2
+        assert rows == [
+            {"key": ("A",), "label": "A", "row_count": 2},
+            {"key": ("B",), "label": "B", "row_count": 1},
+        ]
+        assert "idx_tabular_rows_group_line" in lazy_indexes
+        assert "idx_tabular_rows_group_station" in lazy_indexes
+        assert "idx_tabular_rows_line" not in lazy_indexes
+        assert "idx_tabular_rows_station" not in lazy_indexes
+        assert "idx_tabular_rows_length_mm" not in lazy_indexes
     finally:
         cleanup_tabular_load_result(result)
 
@@ -851,6 +928,73 @@ def test_sqlite_materialization_projects_columns_and_count_uses_pushdown(
             loaded,
             column_filters=(TabularColumnFilter("line", selected_values=("L1", "L2")),),
         ) == filtered.output_row_count
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+
+def test_sqlite_metric_detection_preserves_chunked_numeric_candidates(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    input_file = tmp_path / "chunked_metrics.csv"
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=5, freq="h"),
+            "Reference ID": ["R1", "R1", "R2", "R2", "R3"],
+            "Line": ["L1", "L1", "L2", "L2", "L3"],
+            "Length mm": [10.0, 10.1, 10.2, 10.3, 10.4],
+            "Width mm": ["5.0", "5.1", "5.2", "bad", "5.4"],
+            "Comment": ["ok", "ok", "review", "ok", "hold"],
+        }
+    ).to_csv(input_file, index=False)
+    monkeypatch.setattr("modules.tabular_analytics_service.TABULAR_SQLITE_CHUNK_ROWS", 2)
+
+    loaded = load_tabular_analytics_file(input_file, force_sqlite=True)
+    try:
+        by_name = {candidate.field_name: candidate for candidate in loaded.metric_candidates}
+
+        assert {"length_mm", "width_mm"}.issubset(by_name)
+        assert "line" not in by_name
+        assert "time_stamp" not in by_name
+        assert "reference_id" not in by_name
+        assert by_name["width_mm"].numeric_count == 4
+        assert by_name["width_mm"].warning_flags == ("contains_non_numeric_values",)
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+
+def test_sqlite_metric_detection_preserves_counts_warnings_and_samples(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    input_file = tmp_path / "metric_contracts.csv"
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=8, freq="h"),
+            "Reference ID": [f"R{index}" for index in range(8)],
+            "Pure mm": [1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7],
+            "Mixed mm": ["1", "2", "bad", "3", "4", "", None, " "],
+            "Blank mm": ["1", " ", "", "2", None, "   ", "3", "4"],
+            "Sample mm": [10, 11, 12, 13, 14, 15, 16, 17],
+        }
+    ).to_csv(input_file, index=False)
+    monkeypatch.setattr("modules.tabular_analytics_service.TABULAR_SQLITE_CHUNK_ROWS", 3)
+
+    loaded = load_tabular_analytics_file(input_file, force_sqlite=True)
+    try:
+        by_name = {candidate.field_name: candidate for candidate in loaded.metric_candidates}
+
+        assert {"pure_mm", "mixed_mm", "blank_mm", "sample_mm"}.issubset(by_name)
+        assert by_name["pure_mm"].non_null_count == 8
+        assert by_name["pure_mm"].numeric_count == 8
+        assert by_name["mixed_mm"].non_null_count == 5
+        assert by_name["mixed_mm"].numeric_count == 4
+        assert by_name["mixed_mm"].numeric_ratio == 0.8
+        assert by_name["mixed_mm"].warning_flags == ("contains_non_numeric_values",)
+        assert by_name["blank_mm"].non_null_count == 4
+        assert by_name["blank_mm"].numeric_count == 4
+        assert by_name["blank_mm"].warning_flags == ()
+        assert len(by_name["sample_mm"].sample_values) == 5
     finally:
         cleanup_tabular_load_result(loaded)
 

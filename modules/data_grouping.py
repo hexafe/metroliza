@@ -1322,6 +1322,10 @@ class DataGrouping(QDialog):
                 return
 
             default_name = (initial_group_name or "").strip()
+            if not default_name:
+                selected_group = (self._selected_group_name() or "").strip()
+                if selected_group and selected_group != self.default_group:
+                    default_name = selected_group
             new_group_name, ok_pressed = QInputDialog.getText(
                 self,
                 "New group",

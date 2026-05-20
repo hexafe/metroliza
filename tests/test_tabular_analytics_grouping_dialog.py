@@ -394,7 +394,11 @@ def test_sqlite_grouping_dialog_uses_preview_rows_and_sparse_assignments(tmp_pat
         dialog.create_group(initial_group_name="Line A")
 
         assert dialog.df.empty
-        assert _temporary_groups(dialog) == {1: "Line A", 3: "Line A"}
+        assert _temporary_groups(dialog) == {}
+        assert [operation.kind for operation in dialog._sqlite_assignment_operations] == ["scope"]
+        first_operation = dialog._sqlite_assignment_operations[0]
+        assert first_operation.scope is not None
+        assert first_operation.scope.selected_group_keys == (("A",),)
         group_labels = {
             dialog.groups_list.item(index).text()
             for index in range(dialog.groups_list.count())
@@ -407,6 +411,11 @@ def test_sqlite_grouping_dialog_uses_preview_rows_and_sparse_assignments(tmp_pat
         dialog._store_current_selection()
         dialog.create_group(initial_group_name="Line B")
 
+        assert _temporary_groups(dialog) == {}
+        assert [operation.kind for operation in dialog._sqlite_assignment_operations] == [
+            "scope",
+            "scope",
+        ]
         group_labels = {
             dialog.groups_list.item(index).text()
             for index in range(dialog.groups_list.count())
@@ -518,6 +527,10 @@ def test_sqlite_use_grouping_materializes_sparse_temp_assignments(tmp_path) -> N
 
         assert parent.grouping_frames == []
         assert dialog.df.empty
+        assert _temporary_groups(dialog) == {}
+        assert [operation.kind for operation in dialog._sqlite_assignment_operations] == ["scope"]
+        assert dialog._sqlite_assignment_operations[0].scope is not None
+        assert dialog._sqlite_assignment_operations[0].scope.selected_group_keys == (("A",),)
 
         dialog.use_grouping()
 
@@ -732,6 +745,72 @@ def test_sqlite_assign_filtered_rows_defers_row_id_expansion_until_materializati
         materialized = dialog._materialize_grouping_dataframe()
         assert materialized["REPORT_ID"].tolist() == [1, 2, 4]
         assert materialized["GROUP"].tolist() == ["Matches", "Matches", "Matches"]
+    finally:
+        dialog.close()
+        cleanup_tabular_load_result(loaded)
+
+
+def test_sqlite_create_group_defers_selected_key_row_id_expansion_until_materialization(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _app()
+    input_file = tmp_path / "sqlite_deferred_selected_key_assign.csv"
+    pd.DataFrame(
+        {
+            "Line": ["A", "A", "B", "A"],
+            "Station": ["S1", "S2", "S1", "S3"],
+            "TraceCode": ["TC-001", "TC-002", "TC-003", "TC-004"],
+            "Length mm": [10.0, 10.1, 10.2, 10.3],
+        }
+    ).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file, force_sqlite=True)
+    assert loaded.sqlite_store is not None
+
+    def fail_row_id_expansion(*_args, **_kwargs):
+        raise AssertionError("selected-key assignment should not eagerly fetch row ids")
+
+    store_type = type(loaded.sqlite_store)
+    monkeypatch.setattr(store_type, "row_ids_for_group_keys", fail_row_id_expansion)
+
+    dialog = TabularAnalyticsGroupingDialog(
+        dataframe=loaded.dataframe,
+        column_mapping=loaded.column_mapping,
+        sqlite_store=loaded.sqlite_store,
+    )
+    try:
+        dialog.selector_columns = ["line"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+        a_item = _item_for_data(dialog.selector_list, ("A",))
+        dialog.selector_list.setCurrentItem(a_item)
+        a_item.setSelected(True)
+        dialog._store_current_selection()
+
+        dialog.create_group(initial_group_name="Line A")
+
+        assert _temporary_groups(dialog) == {}
+        assert len(dialog._sqlite_assignment_operations) == 1
+        operation = dialog._sqlite_assignment_operations[0]
+        assert operation.kind == "scope"
+        assert operation.group_name == "Line A"
+        assert operation.scope is not None
+        assert operation.scope.selector_columns == ("line",)
+        assert operation.scope.selected_group_keys == (("A",),)
+        assert operation.scope.search_text == ""
+
+        group_item = _item_for_data(dialog.groups_list, "Line A")
+        assert _background_hex(group_item) == operation.color.upper()
+        assert dialog.group_members_list.count() == 3
+        assert [
+            dialog.group_members_list.item(index).data(Qt.ItemDataRole.UserRole)
+            for index in range(dialog.group_members_list.count())
+        ] == [1, 2, 4]
+
+        materialized = dialog._materialize_grouping_dataframe()
+        assert materialized["REPORT_ID"].tolist() == [1, 2, 4]
+        assert materialized["GROUP"].tolist() == ["Line A", "Line A", "Line A"]
+        assert materialized["GROUP_COLOR"].tolist() == [operation.color] * 3
     finally:
         dialog.close()
         cleanup_tabular_load_result(loaded)
@@ -1238,6 +1317,170 @@ def test_create_or_add_prompts_each_time_so_second_group_can_be_created(monkeypa
         assert colors[1] != dialog.default_group_color
         assert colors[2] != dialog.default_group_color
         assert colors[1] != colors[2]
+    finally:
+        dialog.close()
+
+
+def test_create_group_prefills_prompt_with_selected_custom_group(monkeypatch) -> None:
+    _app()
+    frame = pd.DataFrame(
+        {
+            "source_row_number": [1, 2, 3],
+            "tracecode": ["TC-001", "TC-002", "TC-003"],
+            "length_mm": [1.0, 2.0, 3.0],
+        }
+    )
+    dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
+    prompt_defaults: list[str | None] = []
+
+    def capture_prompt(*_args, **kwargs):
+        prompt_defaults.append(kwargs.get("text"))
+        return "", False
+
+    monkeypatch.setattr(
+        "modules.tabular_analytics_grouping_dialog.QInputDialog.getText",
+        capture_prompt,
+    )
+    try:
+        dialog.selector_columns = ["tracecode"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+        _select_selector_rows(dialog, 0, 1)
+        dialog.create_group(initial_group_name="Fixture A")
+
+        fixture_item = next(
+            dialog.groups_list.item(index)
+            for index in range(dialog.groups_list.count())
+            if dialog.groups_list.item(index).data(Qt.ItemDataRole.UserRole) == "Fixture A"
+        )
+        dialog.groups_list.setCurrentItem(fixture_item)
+        _select_selector_rows(dialog, 1, 2)
+
+        dialog.create_group()
+
+        assert prompt_defaults == ["Fixture A"]
+    finally:
+        dialog.close()
+
+
+@pytest.mark.parametrize("selected_group_name", [None, "POPULATION", ""])
+def test_create_group_does_not_prefill_prompt_for_default_or_blank_selection(
+    monkeypatch,
+    selected_group_name,
+) -> None:
+    _app()
+    frame = pd.DataFrame(
+        {
+            "source_row_number": [1, 2],
+            "tracecode": ["TC-001", "TC-002"],
+            "length_mm": [1.0, 2.0],
+        }
+    )
+    dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
+    prompt_defaults: list[str | None] = []
+
+    def capture_prompt(*_args, **kwargs):
+        prompt_defaults.append(kwargs.get("text"))
+        return "", False
+
+    monkeypatch.setattr(
+        "modules.tabular_analytics_grouping_dialog.QInputDialog.getText",
+        capture_prompt,
+    )
+    try:
+        dialog.selector_columns = ["tracecode"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+        _select_selector_rows(dialog, 0, 1)
+        if selected_group_name is None:
+            dialog.groups_list.setCurrentItem(None)
+        else:
+            monkeypatch.setattr(dialog, "_selected_group_name", lambda: selected_group_name)
+
+        dialog.create_group()
+
+        assert prompt_defaults == [""]
+    finally:
+        dialog.close()
+
+
+def test_assign_filtered_rows_prefills_prompt_with_selected_custom_group(monkeypatch) -> None:
+    _app()
+    frame = pd.DataFrame(
+        {
+            "source_row_number": [1, 2, 3],
+            "tracecode": ["TC-001", "TC-002", "TC-003"],
+            "length_mm": [1.0, 2.0, 3.0],
+        }
+    )
+    dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
+    prompt_defaults: list[str | None] = []
+
+    def capture_prompt(*_args, **kwargs):
+        prompt_defaults.append(kwargs.get("text"))
+        return "", False
+
+    monkeypatch.setattr(
+        "modules.tabular_analytics_grouping_dialog.QInputDialog.getText",
+        capture_prompt,
+    )
+    try:
+        dialog.selector_columns = ["tracecode"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+        _select_selector_rows(dialog, 0, 1)
+        dialog.create_group(initial_group_name="Fixture A")
+
+        fixture_item = next(
+            dialog.groups_list.item(index)
+            for index in range(dialog.groups_list.count())
+            if dialog.groups_list.item(index).data(Qt.ItemDataRole.UserRole) == "Fixture A"
+        )
+        dialog.groups_list.setCurrentItem(fixture_item)
+
+        dialog.assign_filtered_rows()
+
+        assert prompt_defaults == ["Fixture A"]
+    finally:
+        dialog.close()
+
+
+@pytest.mark.parametrize("selected_group_name", [None, "POPULATION", ""])
+def test_assign_filtered_rows_does_not_prefill_prompt_for_default_or_blank_selection(
+    monkeypatch,
+    selected_group_name,
+) -> None:
+    _app()
+    frame = pd.DataFrame(
+        {
+            "source_row_number": [1, 2],
+            "tracecode": ["TC-001", "TC-002"],
+            "length_mm": [1.0, 2.0],
+        }
+    )
+    dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
+    prompt_defaults: list[str | None] = []
+
+    def capture_prompt(*_args, **kwargs):
+        prompt_defaults.append(kwargs.get("text"))
+        return "", False
+
+    monkeypatch.setattr(
+        "modules.tabular_analytics_grouping_dialog.QInputDialog.getText",
+        capture_prompt,
+    )
+    try:
+        dialog.selector_columns = ["tracecode"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+        if selected_group_name is None:
+            dialog.groups_list.setCurrentItem(None)
+        else:
+            monkeypatch.setattr(dialog, "_selected_group_name", lambda: selected_group_name)
+
+        dialog.assign_filtered_rows()
+
+        assert prompt_defaults == [""]
     finally:
         dialog.close()
 

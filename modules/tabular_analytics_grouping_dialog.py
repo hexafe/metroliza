@@ -102,6 +102,11 @@ _ASYNC_SQLITE_SELECTOR_PREVIEW_ROWS = 250_000
 _DETACHED_SELECTOR_PREVIEW_THREADS: list[QThread] = []
 
 
+def _quote_sqlite_identifier(identifier: str) -> str:
+    escaped = str(identifier).replace('"', '""')
+    return f'"{escaped}"'
+
+
 def _release_detached_selector_preview_thread(thread: QThread) -> None:
     if thread in _DETACHED_SELECTOR_PREVIEW_THREADS:
         _DETACHED_SELECTOR_PREVIEW_THREADS.remove(thread)
@@ -126,6 +131,7 @@ class _PendingSqliteScope:
     selected_filter_keys: tuple[tuple[str, ...], ...]
     base_column_filters: tuple[TabularColumnFilter, ...]
     grouping_filter: object | None
+    selected_group_keys: tuple[tuple[str, ...], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -526,6 +532,20 @@ class TabularAnalyticsGroupingDialog(QDialog):
             for group_name, color in self._temp_assignments().values()
             if group_name != self.default_group and str(color or "").strip()
         }
+        used.update(
+            self._normalized_group_color(operation.color)
+            for operation in getattr(self, "_sqlite_assignment_operations", ())
+            if operation.kind in {"rows", "scope"}
+            and operation.group_name != self.default_group
+            and str(operation.color or "").strip()
+        )
+        used.update(
+            self._normalized_group_color(operation.replacement_color)
+            for operation in getattr(self, "_sqlite_assignment_operations", ())
+            if operation.kind == "rename_group"
+            and operation.replacement_group_name != self.default_group
+            and str(operation.replacement_color or "").strip()
+        )
         for color in self.group_palette:
             if color not in used:
                 return color
@@ -774,7 +794,24 @@ class TabularAnalyticsGroupingDialog(QDialog):
             grouping_filter=current_state.parsed_filter if current_state.mode == "expression" else None,
         )
 
+    def _pending_sqlite_selected_keys_scope(
+        self,
+        state: _SelectorFilterState | None = None,
+    ) -> _PendingSqliteScope:
+        current_state = state or self._selector_filter_state()
+        return _PendingSqliteScope(
+            selector_columns=tuple(self.selector_columns),
+            search_text="",
+            filter_columns=self.sqlite_filter_columns,
+            selected_filter_keys=self.sqlite_selected_filter_keys,
+            base_column_filters=self.sqlite_column_filters,
+            grouping_filter=current_state.parsed_filter if current_state.mode == "expression" else None,
+            selected_group_keys=tuple(sorted(self.selected_selector_keys)),
+        )
+
     def _sqlite_scope_query(self, scope: _PendingSqliteScope) -> tuple[str, list[object]]:
+        if scope.selected_group_keys:
+            return self._sqlite_selected_group_keys_query(scope)
         if scope.search_text:
             return self.sqlite_store.source_row_number_query_for_group_search(
                 scope.selector_columns,
@@ -790,6 +827,29 @@ class TabularAnalyticsGroupingDialog(QDialog):
             base_column_filters=scope.base_column_filters,
             grouping_filter=scope.grouping_filter,
         )
+
+    def _sqlite_selected_group_keys_query(
+        self,
+        scope: _PendingSqliteScope,
+    ) -> tuple[str, list[object]]:
+        if not scope.selector_columns or not scope.selected_group_keys:
+            return "", []
+        where_builder = getattr(self.sqlite_store, "_where_clause_for_group_keys", None)
+        if where_builder is None:
+            return "", []
+        where_sql, params = where_builder(
+            scope.selector_columns,
+            scope.selected_group_keys,
+            filter_columns=scope.filter_columns,
+            selected_filter_keys=scope.selected_filter_keys,
+            base_column_filters=scope.base_column_filters,
+            grouping_filter=scope.grouping_filter,
+        )
+        if not where_sql:
+            return "", []
+        row_column = _quote_sqlite_identifier("source_row_number")
+        table_name = _quote_sqlite_identifier(self.sqlite_store.table_name)
+        return f"SELECT {row_column} FROM {table_name}{where_sql}", params
 
     def _sqlite_effective_assignment_required(self) -> bool:
         return any(
@@ -1644,14 +1704,20 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.selected_selector_keys = (self.selected_selector_keys - visible_keys) | selected_visible_keys
         self.create_group()
 
-    def _assign_rows_to_group(self, row_ids: list[int], group_name: str) -> None:
-        if not row_ids or not group_name:
-            return
+    def _assignment_color_for_group(self, group_name: str) -> str:
+        if group_name == self.default_group:
+            return self.default_group_color
         assignments = self._temp_assignments()
         group_exists = any(group == group_name for group, _color in assignments.values()) or bool(
             self._sqlite_assignment_operation_colors(group_name)
         )
-        assigned_color = self._group_color_for_group(group_name) if group_exists else self._next_group_color()
+        return self._group_color_for_group(group_name) if group_exists else self._next_group_color()
+
+    def _assign_rows_to_group(self, row_ids: list[int], group_name: str) -> None:
+        if not row_ids or not group_name:
+            return
+        assignments = self._temp_assignments()
+        assigned_color = self._assignment_color_for_group(group_name)
         for row_id in dict.fromkeys(int(row_id) for row_id in row_ids):
             if group_name == self.default_group:
                 assignments.pop(row_id, None)
@@ -1660,9 +1726,45 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._append_sqlite_row_assignment_operation(row_ids, group_name, assigned_color)
         self._ensure_group_color_integrity()
 
+    def _sqlite_selected_keys_have_rows(self) -> bool:
+        state = self._selector_filter_state()
+        if (
+            state.mode == "invalid"
+            or not self._is_sqlite_backed()
+            or not self.selector_columns
+            or not self.selected_selector_keys
+        ):
+            return False
+        return bool(
+            self.sqlite_store.count_rows_for_group_keys(
+                tuple(self.selector_columns),
+                self.selected_selector_keys,
+                **self._sqlite_scope_kwargs(),
+            )
+        )
+
+    def _assign_sqlite_selected_keys_to_group(self, group_name: str) -> None:
+        if not group_name or not self._is_sqlite_backed() or not self.selected_selector_keys:
+            return
+        assigned_color = self._assignment_color_for_group(group_name)
+        self._sqlite_assignment_operations.append(
+            _SqliteAssignmentOperation(
+                kind="scope",
+                group_name=group_name,
+                color=assigned_color,
+                scope=self._pending_sqlite_selected_keys_scope(),
+            )
+        )
+        self._ensure_group_color_integrity()
+
     def create_group(self, initial_group_name: str | None = None) -> None:
-        row_ids = self._row_ids_for_selected_keys()
-        if not row_ids:
+        if self._is_sqlite_backed():
+            row_ids: list[int] = []
+            has_rows = self._sqlite_selected_keys_have_rows()
+        else:
+            row_ids = self._row_ids_for_selected_keys()
+            has_rows = bool(row_ids)
+        if not has_rows:
             QMessageBox.information(self, self.windowTitle(), "Select matching rows before creating a group.")
             return
         selected_group = str(self._selected_group_name() or "").strip()
@@ -1683,7 +1785,10 @@ class TabularAnalyticsGroupingDialog(QDialog):
             group_name = default_name
             if not group_name:
                 return
-        self._assign_rows_to_group(row_ids, group_name)
+        if self._is_sqlite_backed():
+            self._assign_sqlite_selected_keys_to_group(group_name)
+        else:
+            self._assign_rows_to_group(row_ids, group_name)
         self.selected_selector_keys = set()
         self.selector_list.clearSelection()
         self._refresh_all(preferred_group=group_name)
@@ -1720,11 +1825,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
             if not group_name:
                 return
         if self._is_sqlite_backed():
-            group_exists = bool(
-                self._sqlite_assignment_operation_colors(group_name)
-                or any(group == group_name for group, _color in self._temp_assignments().values())
-            )
-            assigned_color = self._group_color_for_group(group_name) if group_exists else self._next_group_color()
+            assigned_color = self._assignment_color_for_group(group_name)
             self._sqlite_assignment_operations.append(
                 _SqliteAssignmentOperation(
                     kind="scope",

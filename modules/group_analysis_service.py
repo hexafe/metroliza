@@ -1836,8 +1836,8 @@ def build_group_analysis_payload(
 
     distribution_fit_policy = resolve_distribution_fit_policy(distribution_fit_policy)
     distribution_fit_cache = {}
-    metric_groups = list(metric_frame.groupby(grouping_columns, dropna=False, sort=True))
-    total_metrics = len(metric_groups)
+    metric_groups = metric_frame.groupby(grouping_columns, dropna=False, sort=True)
+    total_metrics = int(metric_groups.ngroups)
 
     for metric_index, (key_tuple, metric_rows_df) in enumerate(metric_groups, start=1):
         _check_cancelled(should_cancel=should_cancel, cancel_check=cancel_check)

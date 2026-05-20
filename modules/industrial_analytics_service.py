@@ -161,6 +161,7 @@ class _PreparedProductionGroupstatsGrouping:
     dataframe: pd.DataFrame
     group_indices: dict[str, np.ndarray]
     group_fields: tuple[str, ...] = ()
+    numeric_values_by_metric: dict[str, np.ndarray] = field(default_factory=dict)
     diagnostics: tuple[ProductionAnalyticsDiagnostic, ...] = ()
 
 
@@ -704,6 +705,7 @@ def build_production_groupstats_inputs(
         group_fields=group_fields,
         aggregation_state=aggregation_state,
         cohort_state=cohort_state,
+        metric_selection=(metric,),
     )
     return _build_groupstats_input_from_prepared(prepared, metric)
 
@@ -714,6 +716,7 @@ def _prepare_production_groupstats_grouping(
     group_fields: tuple[str, ...] = (),
     aggregation_state: ProductionAggregationState | None = None,
     cohort_state: ReferenceCohortState | None = None,
+    metric_selection: tuple[ProductionMetricSelection, ...] = (),
 ) -> _PreparedProductionGroupstatsGrouping:
     """Prepare group labels and dataframe row positions once for groupstats metrics."""
 
@@ -793,8 +796,24 @@ def _prepare_production_groupstats_grouping(
         dataframe=dataframe,
         group_indices=grouped_indices,
         group_fields=tuple(resolved_group_fields),
+        numeric_values_by_metric=_prepare_groupstats_numeric_values(dataframe, metric_selection),
         diagnostics=tuple(diagnostics),
     )
+
+
+def _prepare_groupstats_numeric_values(
+    dataframe: pd.DataFrame,
+    metric_selection: tuple[ProductionMetricSelection, ...],
+) -> dict[str, np.ndarray]:
+    """Prepare each selected production metric column once for groupstats."""
+
+    numeric_values: dict[str, np.ndarray] = {}
+    for metric in metric_selection:
+        field_name = metric.field_name
+        if field_name in numeric_values or field_name not in dataframe.columns:
+            continue
+        numeric_values[field_name] = _coerce_groupstats_metric_values(dataframe[field_name])
+    return numeric_values
 
 
 def _build_groupstats_input_from_prepared(
@@ -822,10 +841,9 @@ def _build_groupstats_input_from_prepared(
         )
 
     grouped_values: dict[str, np.ndarray] = {}
-    numeric_values = pd.to_numeric(frame[metric.field_name], errors="coerce").to_numpy(
-        dtype=float,
-        copy=False,
-    )
+    numeric_values = prepared.numeric_values_by_metric.get(metric.field_name)
+    if numeric_values is None:
+        numeric_values = _coerce_groupstats_metric_values(frame[metric.field_name])
     for label, positions in prepared.group_indices.items():
         values = numeric_values[positions]
         values = values[np.isfinite(values)]
@@ -925,6 +943,7 @@ def analyze_production_groupstats(
         group_fields=group_fields,
         aggregation_state=aggregation_state,
         cohort_state=cohort_state,
+        metric_selection=metric_selection,
     )
     total_metrics = len(metric_selection)
     for metric_index, metric in enumerate(metric_selection, start=1):
@@ -1247,6 +1266,15 @@ def _format_time_bucket_label(value: Any, time_bucket: str) -> str:
 def _finite_numeric_array(series: pd.Series) -> np.ndarray:
     values = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float, copy=False)
     return values[np.isfinite(values)]
+
+
+def _coerce_groupstats_metric_values(series: pd.Series) -> np.ndarray:
+    if pd.api.types.is_numeric_dtype(series.dtype):
+        try:
+            return series.to_numpy(dtype=float, copy=False, na_value=np.nan)
+        except TypeError:
+            return series.to_numpy(dtype=float, copy=False)
+    return pd.to_numeric(series, errors="coerce").to_numpy(dtype=float, copy=False)
 
 
 def _coerce_float(value: Any) -> float | None:
