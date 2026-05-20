@@ -5,9 +5,11 @@ import sqlite3
 
 import numpy as np
 import pandas as pd
+import pytest
 
 import modules.industrial_analytics_service as industrial_analytics_service
 from modules.industrial_analytics_service import (
+    ProductionGroupstatsCancelled,
     aggregate_production_frame,
     analyze_production_groupstats,
     apply_production_filters,
@@ -538,6 +540,58 @@ def test_groupstats_analysis_reuses_prepared_numpy_groups(monkeypatch) -> None:
         assert all(values.dtype.kind == "f" for values in grouped_values.values())
     assert calls[0][1]["A"].tolist() == [1.0, 2.0]
     assert calls[1][1]["B"].tolist() == [20.0, 22.0]
+
+
+def test_groupstats_reports_progress_and_cancels_between_metrics(monkeypatch) -> None:
+    frame = pd.DataFrame(
+        {
+            "GROUP": ["A", "A", "B", "B"] * 2,
+            "length_mm": [1.0, 2.0, 3.0, 4.0, 1.5, 2.5, 3.5, 4.5],
+            "width_mm": [10.0, 12.0, 14.0, 16.0, 11.0, 13.0, 15.0, 17.0],
+        }
+    )
+    calls: list[str] = []
+    progress_messages: list[str] = []
+
+    def fake_analyze_group_metric(metric_identity, grouped_values, **_kwargs):
+        calls.append(metric_identity)
+        return {
+            "spec_status": "no_spec",
+            "descriptive_stats": [
+                {"group": label, "n": len(values)}
+                for label, values in grouped_values.items()
+            ],
+            "pairwise_rows": [],
+            "posthoc_rows": [],
+            "capability_rows": [],
+            "metric_summary": {"metric": metric_identity},
+            "capability": {},
+        }
+
+    def cancel_after_first_metric() -> bool:
+        return any("Completed metric 1/2: Length" in message for message in progress_messages)
+
+    monkeypatch.setattr(
+        "modules.industrial_analytics_service.analyze_group_metric",
+        fake_analyze_group_metric,
+    )
+
+    with pytest.raises(ProductionGroupstatsCancelled):
+        analyze_production_groupstats(
+            frame,
+            (
+                ProductionMetricSelection("length_mm", "Length"),
+                ProductionMetricSelection("width_mm", "Width"),
+            ),
+            group_fields=("GROUP",),
+            progress_callback=progress_messages.append,
+            cancel_check=cancel_after_first_metric,
+        )
+
+    assert calls == ["Length"]
+    assert any("Analyzing metric 1/2: Length" in message for message in progress_messages)
+    assert any("Completed metric 1/2: Length" in message for message in progress_messages)
+    assert not any("Analyzing metric 2/2: Width" in message for message in progress_messages)
 
 
 def test_groupstats_reference_cohort_compares_selected_against_rest(tmp_path) -> None:

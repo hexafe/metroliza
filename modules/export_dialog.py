@@ -47,7 +47,12 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from modules.worker_progress_dialog import create_worker_progress_dialog
+try:
+    from modules.worker_progress_dialog import (
+        create_delayed_worker_progress_dialog as create_worker_progress_dialog,
+    )
+except ImportError:  # pragma: no cover - compatibility with lightweight test stubs.
+    from modules.worker_progress_dialog import create_worker_progress_dialog
 from modules.help_menu import attach_help_menu_to_layout
 from modules.report_query_service import build_measurement_export_query
 from modules.filter_state import NOT_APPLIED_LABEL, summarize_filter_state
@@ -1103,9 +1108,8 @@ class ExportDialog(QDialog):
                 on_cancel=self.stop_exporting,
             )
 
-            # Disable the export button and show the progress dialog
+            # Disable the export button before the worker starts.
             self.export_button.setDisabled(True)
-            self.loading_dialog.show()
 
             # Start the exporting thread with validated options
             self._cancel_requested = False
@@ -1116,6 +1120,7 @@ class ExportDialog(QDialog):
             self.export_thread.finished.connect(self.on_export_finished)
             self.export_thread.canceled.connect(self.on_export_canceled)
             self.export_thread.start()
+            self.loading_dialog.show()
         except Exception as e:
             self.log_and_exit(e)
 

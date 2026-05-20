@@ -341,6 +341,53 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertNotIn('Workbook-matching PNG snapshots are shown instead.', html_text)
             self.assertFalse((assets_dir / 'plotly-2.27.0.min.js').exists())
 
+    def test_write_export_html_dashboard_falls_back_to_png_when_plotly_payload_exceeds_budget(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            excel_file = Path(tmpdir) / 'report.xlsx'
+            html_path = resolve_html_dashboard_path(excel_file)
+            assets_dir = resolve_html_dashboard_assets_dir(html_path)
+
+            result = write_export_html_dashboard(
+                excel_file=excel_file,
+                output_path=html_path,
+                assets_dir=assets_dir,
+                sections=[
+                    {
+                        'header': 'Diameter / X',
+                        'charts': [
+                            {
+                                'chart_type': 'histogram',
+                                'title': 'Diameter / X',
+                                'backend': 'native',
+                                'image_buffer': BytesIO(b'png-bytes'),
+                                'payload': {
+                                    'type': 'histogram',
+                                    'values': [9.9, 10.0, 10.1],
+                                    'lsl': 9.8,
+                                    'usl': 10.2,
+                                },
+                            }
+                        ],
+                    }
+                ],
+                plotly_spec_count_budget=0,
+                plotly_serialized_json_bytes_budget=10_000_000,
+            )
+
+            html_text = html_path.read_text(encoding='utf-8')
+            self.assertEqual(result['html_dashboard_plotly_spec_count'], 1)
+            self.assertEqual(result['html_dashboard_interactive_chart_count'], 0)
+            self.assertEqual(result['html_dashboard_embedded_plotly_spec_count'], 0)
+            self.assertGreater(result['html_dashboard_plotly_serialized_json_bytes'], 0)
+            self.assertEqual(result['html_dashboard_embedded_plotly_serialized_json_bytes'], 0)
+            self.assertGreater(result['html_dashboard_html_bytes'], 0)
+            self.assertEqual(result['html_dashboard_plotly_budget']['status'], 'over_budget')
+            self.assertIn('spec_count>0', result['html_dashboard_plotly_budget']['reason'])
+            self.assertNotIn('<div class="plotly-shell">', html_text)
+            self.assertNotIn('data-plotly-spec-light=', html_text)
+            self.assertIn('Interactive charts are unavailable in this export', html_text)
+            self.assertFalse((assets_dir / 'plotly-2.27.0.min.js').exists())
+
     def test_plotly_chart_spec_bundle_exposes_light_and_dark_variants(self):
         with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
             bundle = _build_plotly_chart_spec_bundle(

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
+import sqlite3
 import zipfile
 
 import pandas as pd
@@ -370,6 +372,55 @@ def test_sqlite_group_preview_search_treats_wildcards_literally(tmp_path) -> Non
         assert percent_rows == [{"key": ("100%",), "label": "100%", "row_count": 1}]
         assert underscore_total == 1
         assert underscore_rows == [{"key": ("A_1",), "label": "A_1", "row_count": 1}]
+    finally:
+        cleanup_tabular_load_result(result)
+
+
+def test_sqlite_value_preview_uses_window_total_without_extra_group_count(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    input_file = tmp_path / "value_preview_total.csv"
+    pd.DataFrame(
+        {
+            "Station": ["A", "A", "B", "C"],
+            "Length mm": [10.0, 10.1, 10.2, 10.3],
+        }
+    ).to_csv(input_file, index=False)
+
+    result = load_tabular_analytics_file(input_file, force_sqlite=True)
+    assert result.sqlite_store is not None
+    store = result.sqlite_store
+    store._ensure_grouping_column_indexes(("station",))
+    executed_sql: list[str] = []
+
+    class CountingConnection:
+        def __init__(self, connection):
+            self.connection = connection
+
+        def execute(self, sql, params=()):
+            executed_sql.append(str(sql))
+            return self.connection.execute(sql, params)
+
+    @contextmanager
+    def counting_scope(path):
+        connection = sqlite3.connect(path)
+        try:
+            yield CountingConnection(connection)
+        finally:
+            connection.close()
+
+    monkeypatch.setattr(
+        "modules.tabular_analytics_service.sqlite_connection_scope",
+        counting_scope,
+    )
+    try:
+        rows, total = store.preview_value_rows("station", limit=1)
+
+        assert total == 3
+        assert rows == [{"key": ("A",), "label": "A", "row_count": 2}]
+        assert len(executed_sql) == 1
+        assert "COUNT(*) OVER ()" in executed_sql[0]
     finally:
         cleanup_tabular_load_result(result)
 

@@ -270,6 +270,33 @@ class TabularSqliteStore:
         grouping_filter_expression: str | None = None,
         grouping_filter_aliases: Mapping[str, str] | None = None,
     ) -> list[int]:
+        query, params = self.source_row_number_query(
+            filter_columns=filter_columns,
+            selected_filter_keys=selected_filter_keys,
+            base_column_filters=base_column_filters,
+            column_filters=column_filters,
+            column_filter_match_mode=column_filter_match_mode,
+            grouping_filter=grouping_filter,
+            grouping_filter_expression=grouping_filter_expression,
+            grouping_filter_aliases=grouping_filter_aliases,
+            order_by=True,
+        )
+        with sqlite_connection_scope(self.path) as connection:
+            return [int(row[0]) for row in connection.execute(query, params).fetchall()]
+
+    def source_row_number_query(
+        self,
+        *,
+        filter_columns: tuple[str, ...] | list[str] | None = None,
+        selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+        base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filter_match_mode: str = "and",
+        grouping_filter: Any = None,
+        grouping_filter_expression: str | None = None,
+        grouping_filter_aliases: Mapping[str, str] | None = None,
+        order_by: bool = False,
+    ) -> tuple[str, list[Any]]:
         where_sql, params = self._where_clause(
             filter_columns=filter_columns,
             selected_filter_keys=selected_filter_keys,
@@ -280,13 +307,14 @@ class TabularSqliteStore:
             grouping_filter_expression=grouping_filter_expression,
             grouping_filter_aliases=grouping_filter_aliases,
         )
+        row_column = _quote_identifier("source_row_number")
         query = (
-            f"SELECT {_quote_identifier('source_row_number')} "
-            f"FROM {_quote_identifier(self.table_name)}{where_sql} "
-            f"ORDER BY {_quote_identifier('source_row_number')}"
+            f"SELECT {row_column} "
+            f"FROM {_quote_identifier(self.table_name)}{where_sql}"
         )
-        with sqlite_connection_scope(self.path) as connection:
-            return [int(row[0]) for row in connection.execute(query, params).fetchall()]
+        if order_by:
+            query = f"{query} ORDER BY {row_column}"
+        return query, params
 
     def preview_value_rows(
         self,
@@ -316,28 +344,27 @@ class TabularSqliteStore:
             where_parts.append(f"LOWER({value_expr}) LIKE ? ESCAPE '\\'")
             params.append(_sqlite_like_pattern(search))
         where_sql = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
-        count_query = (
-            f"SELECT COUNT(*) FROM ("
-            f"SELECT {value_expr} AS label FROM {_quote_identifier(self.table_name)}"
-            f"{where_sql} GROUP BY label)"
-        )
-        query = (
+        grouped_query = (
             f"SELECT {value_expr} AS label, COUNT(*) AS row_count "
             f"FROM {_quote_identifier(self.table_name)}{where_sql} "
-            f"GROUP BY label ORDER BY label COLLATE NOCASE"
+            "GROUP BY label"
+        )
+        query = (
+            "SELECT label, row_count, COUNT(*) OVER () AS __total_rows "
+            f"FROM ({grouped_query}) ORDER BY label COLLATE NOCASE"
         )
         if limit is not None and int(limit) >= 0:
             query = f"{query} LIMIT {int(limit)}"
         with sqlite_connection_scope(self.path) as connection:
-            total = int(connection.execute(count_query, params).fetchone()[0] or 0)
             records = connection.execute(query, params).fetchall()
+        total = int(records[0][2] or 0) if records else 0
         rows = [
             {
                 "key": (str(label),),
                 "label": str(label),
                 "row_count": int(row_count or 0),
             }
-            for label, row_count in records
+            for label, row_count, _total_rows in records
         ]
         return rows, total
 
@@ -557,12 +584,45 @@ class TabularSqliteStore:
         grouping_filter_expression: str | None = None,
         grouping_filter_aliases: Mapping[str, str] | None = None,
     ) -> list[int]:
+        query, params = self.source_row_number_query_for_group_search(
+            columns,
+            search_text=search_text,
+            filter_columns=filter_columns,
+            selected_filter_keys=selected_filter_keys,
+            base_column_filters=base_column_filters,
+            column_filters=column_filters,
+            column_filter_match_mode=column_filter_match_mode,
+            grouping_filter=grouping_filter,
+            grouping_filter_expression=grouping_filter_expression,
+            grouping_filter_aliases=grouping_filter_aliases,
+            order_by=True,
+        )
+        if not query:
+            return []
+        with sqlite_connection_scope(self.path) as connection:
+            return [int(row[0]) for row in connection.execute(query, params).fetchall()]
+
+    def source_row_number_query_for_group_search(
+        self,
+        columns: tuple[str, ...] | list[str],
+        *,
+        search_text: str = "",
+        filter_columns: tuple[str, ...] | list[str] | None = None,
+        selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+        base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filter_match_mode: str = "and",
+        grouping_filter: Any = None,
+        grouping_filter_expression: str | None = None,
+        grouping_filter_aliases: Mapping[str, str] | None = None,
+        order_by: bool = False,
+    ) -> tuple[str, list[Any]]:
         normalized_columns = tuple(str(column) for column in columns if str(column) in self.columns)
         search = str(search_text or "").strip().casefold()
         if not normalized_columns:
-            return []
+            return "", []
         if not search:
-            return self.row_ids(
+            return self.source_row_number_query(
                 filter_columns=filter_columns,
                 selected_filter_keys=selected_filter_keys,
                 base_column_filters=base_column_filters,
@@ -571,6 +631,7 @@ class TabularSqliteStore:
                 grouping_filter=grouping_filter,
                 grouping_filter_expression=grouping_filter_expression,
                 grouping_filter_aliases=grouping_filter_aliases,
+                order_by=order_by,
             )
         self._ensure_grouping_column_indexes(normalized_columns)
         aliases = tuple(f"key_{index}" for index, _column in enumerate(normalized_columns))
@@ -603,6 +664,7 @@ class TabularSqliteStore:
             f"base_rows.{_quote_identifier(alias)} = matching_groups.{_quote_identifier(alias)}"
             for alias in aliases
         )
+        order_sql = f" ORDER BY base_rows.{row_column}" if order_by else ""
         query = (
             "WITH base_rows AS ("
             f"{base_query}"
@@ -612,13 +674,9 @@ class TabularSqliteStore:
             ") "
             f"SELECT base_rows.{row_column} "
             "FROM base_rows JOIN matching_groups ON "
-            f"{join_clause} ORDER BY base_rows.{row_column}"
+            f"{join_clause}{order_sql}"
         )
-        with sqlite_connection_scope(self.path) as connection:
-            return [
-                int(row[0])
-                for row in connection.execute(query, [*params, _sqlite_like_pattern(search)]).fetchall()
-            ]
+        return query, [*params, _sqlite_like_pattern(search)]
 
     def row_ids_for_group_keys(
         self,

@@ -52,6 +52,8 @@ _PLOTLY_MODEBAR_REMOVE = [
     "autoScale2d",
     "toggleSpikelines",
 ]
+_DEFAULT_PLOTLY_SPEC_COUNT_BUDGET = 160
+_DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET = 8_000_000
 
 
 def _new_dashboard_timing_summary() -> dict[str, float]:
@@ -281,6 +283,8 @@ def write_export_html_dashboard(
     group_analysis_plot_assets: dict[str, Any] | None = None,
     source_label: str | None = None,
     dashboard_mode: str = "workbook_sidecar",
+    plotly_spec_count_budget: int = _DEFAULT_PLOTLY_SPEC_COUNT_BUDGET,
+    plotly_serialized_json_bytes_budget: int = _DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET,
 ) -> dict[str, Any]:
     """Persist an HTML dashboard plus a sibling asset directory."""
 
@@ -359,6 +363,26 @@ def write_export_html_dashboard(
     chart_count += int(normalized_group_analysis.get("plot_count") or 0) if normalized_group_analysis else 0
     interactive_chart_count = _count_plotly_specs(section_entries, normalized_group_analysis)
     plotly_spec_count = interactive_chart_count
+    plotly_serialized_json_bytes = _measure_plotly_specs_json_bytes(
+        section_entries,
+        normalized_group_analysis,
+    )
+    plotly_budget_status = "within_budget"
+    plotly_budget_reason = ""
+    count_budget = max(0, int(plotly_spec_count_budget))
+    json_bytes_budget = max(0, int(plotly_serialized_json_bytes_budget))
+    over_count_budget = plotly_spec_count > count_budget
+    over_json_budget = plotly_serialized_json_bytes > json_bytes_budget
+    if interactive_chart_count > 0 and (over_count_budget or over_json_budget):
+        _drop_plotly_specs(section_entries, normalized_group_analysis)
+        interactive_chart_count = 0
+        plotly_budget_status = "over_budget"
+        reasons = []
+        if over_count_budget:
+            reasons.append(f"spec_count>{count_budget}")
+        if over_json_budget:
+            reasons.append(f"serialized_json_bytes>{json_bytes_budget}")
+        plotly_budget_reason = ",".join(reasons)
     plotly_runtime_status = "not_needed"
     runtime_asset_start = perf_counter()
     plotly_js_path = (
@@ -371,6 +395,8 @@ def write_export_html_dashboard(
         _drop_plotly_specs(section_entries, normalized_group_analysis)
         interactive_chart_count = 0
         plotly_runtime_status = "snapshot_only"
+    elif plotly_spec_count > 0 and plotly_budget_status == "over_budget":
+        plotly_runtime_status = "budget_snapshot_only"
     elif plotly_js_path:
         plotly_runtime_status = "local"
 
@@ -393,6 +419,7 @@ def write_export_html_dashboard(
     render_start = perf_counter()
     html_text = _render_dashboard_html(manifest)
     timings_s["html_rendering"] += perf_counter() - render_start
+    html_bytes = len(html_text.encode("utf-8"))
     write_start = perf_counter()
     dashboard_path.write_text(html_text, encoding="utf-8")
     timings_s["html_write"] += perf_counter() - write_start
@@ -404,6 +431,18 @@ def write_export_html_dashboard(
         "html_dashboard_chart_count": int(chart_count),
         "html_dashboard_interactive_chart_count": int(interactive_chart_count),
         "html_dashboard_plotly_spec_count": int(plotly_spec_count),
+        "html_dashboard_embedded_plotly_spec_count": int(interactive_chart_count),
+        "html_dashboard_plotly_serialized_json_bytes": int(plotly_serialized_json_bytes),
+        "html_dashboard_embedded_plotly_serialized_json_bytes": (
+            int(plotly_serialized_json_bytes) if interactive_chart_count else 0
+        ),
+        "html_dashboard_html_bytes": int(html_bytes),
+        "html_dashboard_plotly_budget": {
+            "status": plotly_budget_status,
+            "reason": plotly_budget_reason,
+            "spec_count_budget": int(count_budget),
+            "serialized_json_bytes_budget": int(json_bytes_budget),
+        },
         "html_dashboard_timings_s": {key: float(value) for key, value in timings_s.items()},
     }
 
@@ -2145,6 +2184,32 @@ def _count_plotly_specs(sections: list[dict[str, Any]], group_analysis: dict[str
     return count
 
 
+def _iter_plotly_specs(sections: list[dict[str, Any]], group_analysis: dict[str, Any]):
+    for section in sections:
+        for chart in section.get("charts") or []:
+            plotly_spec = chart.get("plotly_spec")
+            if isinstance(plotly_spec, dict) and plotly_spec:
+                yield plotly_spec
+    for metric in (group_analysis or {}).get("metrics") or []:
+        for chart in metric.get("plots") or []:
+            plotly_spec = chart.get("plotly_spec")
+            if isinstance(plotly_spec, dict) and plotly_spec:
+                yield plotly_spec
+
+
+def _measure_plotly_specs_json_bytes(sections: list[dict[str, Any]], group_analysis: dict[str, Any]) -> int:
+    total = 0
+    for plotly_spec in _iter_plotly_specs(sections, group_analysis):
+        total += len(
+            json.dumps(
+                plotly_spec,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+    return int(total)
+
+
 def _drop_plotly_specs(sections: list[dict[str, Any]], group_analysis: dict[str, Any]) -> None:
     for section in sections:
         for chart in section.get("charts") or []:
@@ -2220,7 +2285,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
         else ""
     )
     plotly_status_notice = ""
-    if str(manifest.get("plotly_runtime_status") or "") == "snapshot_only":
+    if str(manifest.get("plotly_runtime_status") or "") in {"snapshot_only", "budget_snapshot_only"}:
         plotly_status_notice = (
             '<p class="runtime-note">Interactive charts are unavailable in this export. '
             'Snapshot PNG charts are shown instead.</p>'

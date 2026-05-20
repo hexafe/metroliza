@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import time
 import tempfile
 from typing import Any, Protocol
 
@@ -597,7 +598,16 @@ class ExcelExportBackend:
             try:
                 completed = thread.run_export_pipeline(excel_writer)
             finally:
-                self.close_writer(excel_writer)
+                begin_close = getattr(thread, "_begin_workbook_close", None)
+                if callable(begin_close):
+                    begin_close()
+                close_start = time.perf_counter()
+                try:
+                    self.close_writer(excel_writer)
+                finally:
+                    complete_close = getattr(thread, "_complete_workbook_close", None)
+                    if callable(complete_close):
+                        complete_close(time.perf_counter() - close_start)
         except BaseException:
             self.remove_temporary_workbook(temp_path)
             raise

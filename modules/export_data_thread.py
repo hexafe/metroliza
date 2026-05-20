@@ -115,7 +115,11 @@ from modules.export_grouping_utils import (
     prepare_grouping_dataframe as _prepare_grouping_dataframe,
     resolve_group_merge_keys as _resolve_group_merge_keys,
 )
-from modules.group_analysis_service import GroupAnalysisCancelled, build_group_analysis_payload
+from modules.group_analysis_service import (
+    LARGE_EXPORT_DISTRIBUTION_FIT_POLICY,
+    GroupAnalysisCancelled,
+    build_group_analysis_payload,
+)
 from modules.group_analysis_writer import (
     write_group_analysis_diagnostics_sheet as _write_internal_group_analysis_diagnostics_sheet,
     write_group_analysis_plots_sheet,
@@ -3454,6 +3458,14 @@ class ExportDataThread(QThread):
             "html_dashboard_path": None,
             "html_dashboard_assets_path": None,
             "html_dashboard_warnings": [],
+            "html_dashboard_plotly_spec_count": 0,
+            "html_dashboard_embedded_plotly_spec_count": 0,
+            "html_dashboard_plotly_serialized_json_bytes": 0,
+            "html_dashboard_embedded_plotly_serialized_json_bytes": 0,
+            "html_dashboard_html_bytes": 0,
+            "html_dashboard_timings_s": {},
+            "dashboard_finalization_s": 0.0,
+            "workbook_close_s": 0.0,
         }
         self.html_dashboard_assets_dir = (
             str(_resolve_html_dashboard_assets_dir(self.html_dashboard_file))
@@ -3472,6 +3484,8 @@ class ExportDataThread(QThread):
             'worksheet_writes': 0.0,
             'chart_rendering': 0.0,
             'group_analysis_payload': 0.0,
+            'workbook_close': 0.0,
+            'dashboard_finalization': 0.0,
             'html_dashboard_total': 0.0,
             'html_dashboard_plotly_spec_generation': 0.0,
             'html_dashboard_asset_writes': 0.0,
@@ -3573,6 +3587,14 @@ class ExportDataThread(QThread):
         if not self.generate_html_dashboard or not self.html_dashboard_file or not self.html_dashboard_assets_dir:
             return
         dashboard_start = time.perf_counter()
+        self.update_label.emit(
+            build_three_line_status(
+                "Writing HTML dashboard...",
+                "Finalizing dashboard assets and interactive views",
+                "ETA --",
+            )
+        )
+        self._emit_stage_progress('finalize', 0.45)
         try:
             dashboard_result = _write_export_html_dashboard(
                 excel_file=self.excel_file,
@@ -3591,7 +3613,9 @@ class ExportDataThread(QThread):
                 dashboard_mode="html_only" if self.export_target == "html_dashboard" else "workbook_sidecar",
             )
         except Exception as exc:
-            self._record_stage_timing('html_dashboard_total', time.perf_counter() - dashboard_start)
+            elapsed = time.perf_counter() - dashboard_start
+            self._record_stage_timing('dashboard_finalization', elapsed)
+            self._record_stage_timing('html_dashboard_total', elapsed)
             warning_message = f"HTML dashboard export skipped: {exc}"
             logger.warning(warning_message, exc_info=True)
             self.completion_metadata.setdefault('html_dashboard_warnings', []).append(warning_message)
@@ -3623,24 +3647,59 @@ class ExportDataThread(QThread):
                 dashboard_timings.get('html_write', 0.0),
             )
             self._record_stage_timing('html_dashboard_total', dashboard_timings.get('total', 0.0))
+            self._record_stage_timing('dashboard_finalization', dashboard_timings.get('total', 0.0))
             self.completion_metadata['html_dashboard_timings_s'] = {
                 str(key): float(value)
                 for key, value in dashboard_timings.items()
             }
         else:
-            self._record_stage_timing('html_dashboard_total', time.perf_counter() - dashboard_start)
+            elapsed = time.perf_counter() - dashboard_start
+            self._record_stage_timing('html_dashboard_total', elapsed)
+            self._record_stage_timing('dashboard_finalization', elapsed)
 
         self.completion_metadata.update(dashboard_result)
+        self.completion_metadata['dashboard_finalization_s'] = float(
+            self._stage_timings.get('dashboard_finalization', 0.0)
+        )
+        self._emit_stage_progress('finalize', 0.85)
         self._log_export_stage(
             "HTML dashboard generated",
             stage="dashboard_completed",
             html_dashboard_path=dashboard_result.get('html_dashboard_path'),
             html_dashboard_chart_count=dashboard_result.get('html_dashboard_chart_count', 0),
+            html_dashboard_html_bytes=dashboard_result.get('html_dashboard_html_bytes', 0),
+            html_dashboard_plotly_serialized_json_bytes=dashboard_result.get(
+                'html_dashboard_plotly_serialized_json_bytes',
+                0,
+            ),
             html_dashboard_plotly_spec_generation_s=(
                 dashboard_result.get('html_dashboard_timings_s', {}).get('plotly_spec_generation')
                 if isinstance(dashboard_result.get('html_dashboard_timings_s'), dict)
                 else None
             ),
+        )
+
+    def _begin_workbook_close(self):
+        self.update_label.emit(
+            build_three_line_status(
+                "Finalizing workbook...",
+                "Closing workbook file",
+                "ETA --",
+            )
+        )
+        self._emit_stage_progress('finalize', 0.15)
+        self._log_export_stage("Workbook close started", stage="workbook_close")
+
+    def _complete_workbook_close(self, elapsed):
+        self._record_stage_timing('workbook_close', elapsed)
+        self.completion_metadata['workbook_close_s'] = float(
+            self._stage_timings.get('workbook_close', 0.0)
+        )
+        self._emit_stage_progress('finalize', 0.30)
+        self._log_export_stage(
+            "Workbook close completed",
+            stage="workbook_close",
+            workbook_close_s=self.completion_metadata['workbook_close_s'],
         )
 
     def _ensure_chart_executor(self):
@@ -4527,9 +4586,10 @@ class ExportDataThread(QThread):
                         ),
                     )
 
-            self._emit_stage_progress('finalize', 1.0)
             self._update_completion_chart_telemetry()
             self._write_html_dashboard_if_requested()
+            self._update_completion_chart_telemetry()
+            self._emit_stage_progress('finalize', 1.0)
             completion_detail = (
                 "Dashboard finalized"
                 if self.export_target == "html_dashboard"
@@ -4550,6 +4610,8 @@ class ExportDataThread(QThread):
                 self.update_label.emit(build_three_line_status(f"Warning: {e}", "Exporting data...", "ETA --"))
                 self._update_completion_chart_telemetry()
                 self._write_html_dashboard_if_requested()
+                self._update_completion_chart_telemetry()
+                self._emit_stage_progress('finalize', 1.0)
                 self.update_label.emit(build_three_line_status("Export completed successfully.", "Workbook and metadata finalized", "ETA 0:00"))
                 self._log_export_stage("Export completed with local fallback after Google conversion failure", stage="fallback", level="warning", fallback_reason=self.completion_metadata["fallback_message"])
                 self.finished.emit()
@@ -5289,6 +5351,7 @@ class ExportDataThread(QThread):
                 analysis_level=mode,
                 alias_db_path=self.db_file,
                 default_group_label=default_group_label,
+                distribution_fit_policy=LARGE_EXPORT_DISTRIBUTION_FIT_POLICY,
                 progress_callback=emit_group_analysis_progress,
                 should_cancel=self._check_canceled,
                 include_chart_payloads=(mode == 'standard'),

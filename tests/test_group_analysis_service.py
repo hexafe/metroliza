@@ -10,6 +10,7 @@ from modules.characteristic_alias_service import (
     upsert_characteristic_alias,
 )
 from modules.group_analysis_service import (
+    LARGE_EXPORT_DISTRIBUTION_FIT_POLICY,
     _resolve_canonical_metric_aliases,
     build_group_analysis_payload,
     build_metric_insights,
@@ -1317,7 +1318,10 @@ class TestGroupAnalysisService(unittest.TestCase):
             grouped_df,
             requested_scope='auto',
             analysis_level='light',
-            distribution_fit_policy={'mode': 'skip_large_exports', 'max_fit_samples_per_metric': 100},
+            distribution_fit_policy={
+                **LARGE_EXPORT_DISTRIBUTION_FIT_POLICY,
+                'max_fit_samples_per_metric': 100,
+            },
         )
 
         metric = payload['metric_rows'][0]

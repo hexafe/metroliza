@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pandas as pd
-from PyQt6.QtCore import QDate, Qt, QTimer
+from PyQt6.QtCore import QDate, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
     QDateEdit,
@@ -41,9 +41,46 @@ from modules.ui_foundation import (
     set_status_variant,
     status_chip,
 )
+try:
+    from modules.worker_progress_dialog import create_delayed_worker_progress_dialog
+except ImportError:  # pragma: no cover - compatibility with lightweight test stubs.
+    from modules.worker_progress_dialog import (
+        create_worker_progress_dialog as create_delayed_worker_progress_dialog,
+    )
 
 
 _MAX_VISIBLE_MATCHES = 1000
+_DETACHED_PREVIEW_THREADS: list[QThread] = []
+
+
+def _release_detached_preview_thread(thread: QThread) -> None:
+    if thread in _DETACHED_PREVIEW_THREADS:
+        _DETACHED_PREVIEW_THREADS.remove(thread)
+    thread.deleteLater()
+
+
+class _SqliteValuePreviewThread(QThread):
+    result_ready = pyqtSignal(int, str, list, int)
+    error_occurred = pyqtSignal(int, str, str)
+
+    def __init__(self, *, request_id: int, sqlite_store, column: str, search_text: str, limit: int):
+        super().__init__()
+        self.request_id = request_id
+        self.sqlite_store = sqlite_store
+        self.column = column
+        self.search_text = search_text
+        self.limit = limit
+
+    def run(self) -> None:
+        try:
+            preview_rows, total_rows = self.sqlite_store.preview_value_rows(
+                self.column,
+                search_text=self.search_text,
+                limit=self.limit,
+            )
+            self.result_ready.emit(self.request_id, self.column, list(preview_rows), int(total_rows))
+        except Exception as exc:
+            self.error_occurred.emit(self.request_id, self.column, str(exc))
 
 
 class TabularAnalyticsFilterDialog(QDialog):
@@ -82,6 +119,12 @@ class TabularAnalyticsFilterDialog(QDialog):
         self._list_selection_utils = ListSelectionUtils()
         self._syncing_current_filter = False
         self._applied_matching_search_text = ""
+        self._preview_request_id = 0
+        self._preview_threads: list[_SqliteValuePreviewThread] = []
+        self._preview_loading_dialog = None
+        self._preview_loading_label = None
+        self._preview_loading_bar = None
+        self._preview_loading_gif = None
         self._status_timer = QTimer(self)
         self._status_timer.setSingleShot(True)
         self._status_timer.setInterval(80)
@@ -469,16 +512,19 @@ class TabularAnalyticsFilterDialog(QDialog):
             self._syncing_current_filter = False
             return
         if self.sqlite_store is not None:
-            preview_rows, total_rows = self.sqlite_store.preview_value_rows(
-                column,
-                search_text=self._matching_search_text(),
-                limit=_MAX_VISIBLE_MATCHES,
-            )
-        else:
-            preview_rows, total_rows = self._value_index(column).preview_rows(
-                search_text=self._matching_search_text(),
-                limit=_MAX_VISIBLE_MATCHES,
-            )
+            self._start_sqlite_value_preview(column)
+            self.matching_list.blockSignals(False)
+            self._syncing_current_filter = False
+            return
+        preview_rows, total_rows = self._value_index(column).preview_rows(
+            search_text=self._matching_search_text(),
+            limit=_MAX_VISIBLE_MATCHES,
+        )
+        self._apply_value_preview(column, preview_rows, total_rows)
+        self.matching_list.blockSignals(False)
+        self._syncing_current_filter = False
+
+    def _apply_value_preview(self, column: str, preview_rows, total_rows: int) -> None:
         selected_values = set(self.value_filters.get(column, set()))
         for row in preview_rows:
             self.matching_list.addItem(f"{row['label']} (n={row['row_count']})")
@@ -487,8 +533,6 @@ class TabularAnalyticsFilterDialog(QDialog):
             item.setData(Qt.ItemDataRole.UserRole, value)
             if value in selected_values:
                 item.setSelected(True)
-        self.matching_list.blockSignals(False)
-        self._syncing_current_filter = False
         if total_rows > len(preview_rows):
             self.matching_status_label.setText(
                 f"Showing {len(preview_rows)} of {total_rows} value(s). Search to narrow."
@@ -497,6 +541,124 @@ class TabularAnalyticsFilterDialog(QDialog):
         else:
             self.matching_status_label.setText(f"Showing {total_rows} value(s).")
             set_status_variant(self.matching_status_label, "info" if total_rows else "warning")
+
+    def _start_sqlite_value_preview(self, column: str) -> None:
+        self._preview_request_id += 1
+        request_id = self._preview_request_id
+        search_text = self._matching_search_text()
+        self.matching_status_label.setText("Loading matching values...")
+        set_status_variant(self.matching_status_label, "neutral")
+        self._close_preview_loading_dialog()
+        (
+            self._preview_loading_dialog,
+            self._preview_loading_label,
+            self._preview_loading_bar,
+            self._preview_loading_gif,
+        ) = create_delayed_worker_progress_dialog(
+            self,
+            window_title="Loading CSV / Excel values...",
+            initial_status_text="Loading matching values...\nReading SQLite preview rows\nETA --",
+            on_cancel=self._cancel_sqlite_value_preview,
+        )
+        self._preview_loading_bar.setRange(0, 0)
+        thread = _SqliteValuePreviewThread(
+            request_id=request_id,
+            sqlite_store=self.sqlite_store,
+            column=column,
+            search_text=search_text,
+            limit=_MAX_VISIBLE_MATCHES,
+        )
+        self._preview_threads.append(thread)
+        thread.result_ready.connect(self._on_sqlite_value_preview_ready)
+        thread.error_occurred.connect(self._on_sqlite_value_preview_error)
+        thread.finished.connect(lambda thread=thread: self._on_sqlite_value_preview_stopped(thread))
+        thread.start()
+        self._preview_loading_dialog.show()
+
+    def _cancel_sqlite_value_preview(self) -> None:
+        self._preview_request_id += 1
+        for thread in tuple(self._preview_threads):
+            thread.requestInterruption()
+        if self._preview_loading_label is not None:
+            self._preview_loading_label.setText(
+                "Canceling value preview...\nWaiting for the current SQLite read to stop\nETA --"
+            )
+        self.matching_status_label.setText("Value preview canceled.")
+        set_status_variant(self.matching_status_label, "warning")
+        self._close_preview_loading_dialog()
+
+    def _close_preview_loading_dialog(self) -> None:
+        if self._preview_loading_dialog is not None:
+            self._preview_loading_dialog.close()
+        self._preview_loading_dialog = None
+        self._preview_loading_label = None
+        self._preview_loading_bar = None
+        self._preview_loading_gif = None
+
+    def _on_sqlite_value_preview_ready(
+        self,
+        request_id: int,
+        column: str,
+        preview_rows: list,
+        total_rows: int,
+    ) -> None:
+        if request_id != self._preview_request_id or column != self._current_filter_column():
+            return
+        self.matching_list.blockSignals(True)
+        self.matching_list.clear()
+        self._syncing_current_filter = True
+        self._apply_value_preview(column, preview_rows, total_rows)
+        self._syncing_current_filter = False
+        self.matching_list.blockSignals(False)
+
+    def _on_sqlite_value_preview_error(self, request_id: int, column: str, message: str) -> None:
+        if request_id != self._preview_request_id or column != self._current_filter_column():
+            return
+        self.matching_status_label.setText(f"Could not load values: {message}")
+        set_status_variant(self.matching_status_label, "danger")
+
+    def _on_sqlite_value_preview_stopped(self, thread: _SqliteValuePreviewThread) -> None:
+        if thread in self._preview_threads:
+            self._preview_threads.remove(thread)
+        if thread.request_id == self._preview_request_id:
+            self._close_preview_loading_dialog()
+        thread.deleteLater()
+
+    def _detach_sqlite_value_preview_threads(self) -> None:
+        self._preview_request_id += 1
+        self._close_preview_loading_dialog()
+        for thread in tuple(self._preview_threads):
+            try:
+                thread.result_ready.disconnect(self._on_sqlite_value_preview_ready)
+            except TypeError:
+                pass
+            try:
+                thread.error_occurred.disconnect(self._on_sqlite_value_preview_error)
+            except TypeError:
+                pass
+            try:
+                thread.finished.disconnect()
+            except TypeError:
+                pass
+            thread.requestInterruption()
+            self._preview_threads.remove(thread)
+            if not thread.isRunning():
+                thread.deleteLater()
+                continue
+            _DETACHED_PREVIEW_THREADS.append(thread)
+            thread.finished.connect(lambda thread=thread: _release_detached_preview_thread(thread))
+
+    def accept(self) -> None:
+        self._detach_sqlite_value_preview_threads()
+        super().accept()
+
+    def reject(self) -> None:
+        self._detach_sqlite_value_preview_threads()
+        super().reject()
+
+    def closeEvent(self, event) -> None:
+        self._detach_sqlite_value_preview_threads()
+        super().closeEvent(event)
 
     def _is_date_filterable(self, column: str | None) -> bool:
         if self.sqlite_store is not None:

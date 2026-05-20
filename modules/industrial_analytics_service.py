@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import sqlite3
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -66,6 +66,14 @@ class ProductionAnalyticsDiagnostic:
     code: str
     message: str
     context: dict[str, Any] = field(default_factory=dict)
+
+
+ProductionGroupstatsProgressCallback = Callable[[str], None]
+ProductionGroupstatsCancelCheck = Callable[[], bool]
+
+
+class ProductionGroupstatsCancelled(RuntimeError):
+    """Raised when cooperative production groupstats cancellation is requested."""
 
 
 @dataclass(frozen=True)
@@ -872,6 +880,19 @@ def _build_groupstats_input_from_prepared(
     )
 
 
+def _emit_groupstats_progress(
+    progress_callback: ProductionGroupstatsProgressCallback | None,
+    message: str,
+) -> None:
+    if progress_callback is not None:
+        progress_callback(message)
+
+
+def _raise_if_groupstats_cancelled(cancel_check: ProductionGroupstatsCancelCheck | None) -> None:
+    if cancel_check is not None and cancel_check():
+        raise ProductionGroupstatsCancelled("Production groupstats analysis was canceled.")
+
+
 def analyze_production_groupstats(
     dataframe: pd.DataFrame,
     metric_selection: tuple[ProductionMetricSelection, ...],
@@ -891,23 +912,37 @@ def analyze_production_groupstats(
     backend: str = "auto",
     enable_rust_in_auto: bool = False,
     distribution_diagnostics: bool = True,
+    progress_callback: ProductionGroupstatsProgressCallback | None = None,
+    cancel_check: ProductionGroupstatsCancelCheck | None = None,
 ) -> ProductionGroupstatsResult:
     """Analyze selected production metrics with the hexafe-groupstats adapter."""
 
     metrics: list[dict[str, Any]] = []
     diagnostics: list[ProductionAnalyticsDiagnostic] = []
+    _raise_if_groupstats_cancelled(cancel_check)
     prepared_grouping = _prepare_production_groupstats_grouping(
         dataframe,
         group_fields=group_fields,
         aggregation_state=aggregation_state,
         cohort_state=cohort_state,
     )
-    for metric in metric_selection:
+    total_metrics = len(metric_selection)
+    for metric_index, metric in enumerate(metric_selection, start=1):
+        _raise_if_groupstats_cancelled(cancel_check)
+        _emit_groupstats_progress(
+            progress_callback,
+            f"Analyzing metric {metric_index}/{total_metrics}: {metric.display_label}",
+        )
         input_result = _build_groupstats_input_from_prepared(prepared_grouping, metric)
         diagnostics.extend(input_result.diagnostics)
         if len(input_result.grouped_values) < 2:
             metrics.append(_skipped_groupstats_metric_payload(input_result, "insufficient_groups"))
+            _emit_groupstats_progress(
+                progress_callback,
+                f"Skipped metric {metric_index}/{total_metrics}: {metric.display_label}",
+            )
             continue
+        _raise_if_groupstats_cancelled(cancel_check)
         try:
             raw_payload = analyze_group_metric(
                 metric.display_label,
@@ -936,9 +971,18 @@ def analyze_production_groupstats(
                 )
             )
             metrics.append(_skipped_groupstats_metric_payload(input_result, "analysis_failed"))
+            _emit_groupstats_progress(
+                progress_callback,
+                f"Skipped metric {metric_index}/{total_metrics}: {metric.display_label}",
+            )
             continue
         metrics.append(_groupstats_metric_payload(input_result, raw_payload))
+        _emit_groupstats_progress(
+            progress_callback,
+            f"Completed metric {metric_index}/{total_metrics}: {metric.display_label}",
+        )
 
+    _raise_if_groupstats_cancelled(cancel_check)
     if not metric_selection:
         diagnostics.append(
             ProductionAnalyticsDiagnostic(
@@ -1556,6 +1600,7 @@ __all__ = [
     "ProductionCohortResult",
     "ProductionFilterResult",
     "ProductionGroupstatsInputResult",
+    "ProductionGroupstatsCancelled",
     "ProductionGroupstatsResult",
     "ProductionMetricCandidate",
     "aggregate_production_frame",

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 import pandas as pd
 import pytest
 
@@ -40,6 +42,18 @@ def _app():
     return _APP
 
 
+def _process_events_until(predicate, *, timeout_ms: int = 1500) -> bool:
+    app = _app()
+    deadline = time.monotonic() + timeout_ms / 1000
+    while time.monotonic() < deadline:
+        app.processEvents()
+        if predicate():
+            return True
+        time.sleep(0.01)
+    app.processEvents()
+    return bool(predicate())
+
+
 def _dialog_for_frame(frame: pd.DataFrame):
     if TabularAnalyticsGroupingDialog is None:
         pytest.skip(f"PyQt6 is unavailable in this environment: {PYQT_IMPORT_ERROR}")
@@ -58,6 +72,7 @@ def _dialog_for_frame(frame: pd.DataFrame):
     dialog.group_palette = ui_theme_tokens.themed_group_palette()
     dialog.sqlite_store = None
     dialog._temp_group_assignments = {}
+    dialog._sqlite_assignment_operations = []
     dialog._base_grouping_dataframe_cache = None
     return dialog
 
@@ -406,6 +421,37 @@ def test_sqlite_grouping_dialog_uses_preview_rows_and_sparse_assignments(tmp_pat
         cleanup_tabular_load_result(loaded)
 
 
+def test_sqlite_grouping_dialog_loads_large_multi_column_preview_async(tmp_path) -> None:
+    _app()
+    input_file = tmp_path / "grouping_async.csv"
+    pd.DataFrame(
+        {
+            "Line": ["A", "B", "A", "B"],
+            "Station": ["S1", "S1", "S2", "S2"],
+            "Length mm": [10.0, 10.2, 10.4, 10.6],
+        }
+    ).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file, force_sqlite=True)
+    object.__setattr__(loaded.sqlite_store, "row_count", 300_000)
+
+    dialog = TabularAnalyticsGroupingDialog(
+        dataframe=loaded.dataframe,
+        column_mapping=loaded.column_mapping,
+        sqlite_store=loaded.sqlite_store,
+    )
+    try:
+        dialog.selector_columns = ["line", "station"]
+        dialog._refresh_selectors()
+
+        assert dialog.selector_preview_label.text() == "Loading matching groups..."
+        assert _process_events_until(lambda: dialog.selector_list.count() == 4)
+        assert dialog._selector_total_rows == 4
+        assert dialog.selector_preview_label.text() == "Showing 4 matching group(s)."
+    finally:
+        dialog.close()
+        cleanup_tabular_load_result(loaded)
+
+
 def test_grouping_parent_is_updated_only_after_use_grouping() -> None:
     _app()
     parent = _GroupingParent()
@@ -581,7 +627,11 @@ def test_sqlite_assign_filtered_rows_combines_parent_and_search_expression(tmp_p
 
         dialog.assign_filtered_rows(initial_group_name="Scoped")
         assert dialog.df.empty
-        assert _temporary_groups(dialog) == {2: "Scoped"}
+        assert _temporary_groups(dialog) == {}
+        assert [operation.kind for operation in dialog._sqlite_assignment_operations] == ["scope"]
+        materialized = dialog._materialize_grouping_dataframe()
+        assert materialized["REPORT_ID"].tolist() == [2]
+        assert materialized["GROUP"].tolist() == ["Scoped"]
     finally:
         dialog.close()
         cleanup_tabular_load_result(loaded)
@@ -624,8 +674,64 @@ def test_sqlite_search_expression_filters_preview_and_assigns_all_matching_rows(
 
         dialog.assign_filtered_rows(initial_group_name="Expression")
 
-        assert _temporary_groups(dialog) == {1: "Expression", 2: "Expression", 4: "Expression"}
+        assert _temporary_groups(dialog) == {}
+        assert [operation.kind for operation in dialog._sqlite_assignment_operations] == ["scope"]
+        materialized = dialog._materialize_grouping_dataframe()
+        assert materialized["REPORT_ID"].tolist() == [1, 2, 4]
+        assert materialized["GROUP"].tolist() == ["Expression", "Expression", "Expression"]
         assert dialog.selected_selector_keys == set()
+    finally:
+        dialog.close()
+        cleanup_tabular_load_result(loaded)
+
+
+def test_sqlite_assign_filtered_rows_defers_row_id_expansion_until_materialization(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _app()
+    input_file = tmp_path / "sqlite_deferred_scope_assign.csv"
+    pd.DataFrame(
+        {
+            "Line": ["A", "A", "B", "A"],
+            "TraceCode": ["MATCH-001", "MATCH-002", "OTHER-003", "MATCH-004"],
+            "Length mm": [10.0, 10.1, 10.2, 10.3],
+        }
+    ).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file, force_sqlite=True)
+    assert loaded.sqlite_store is not None
+
+    def fail_row_id_expansion(*_args, **_kwargs):
+        raise AssertionError("assign-all should not eagerly fetch every matching row id")
+
+    store_type = type(loaded.sqlite_store)
+    monkeypatch.setattr(store_type, "row_ids", fail_row_id_expansion)
+    monkeypatch.setattr(store_type, "row_ids_for_group_search", fail_row_id_expansion)
+
+    dialog = TabularAnalyticsGroupingDialog(
+        dataframe=loaded.dataframe,
+        column_mapping=loaded.column_mapping,
+        sqlite_store=loaded.sqlite_store,
+    )
+    try:
+        dialog.selector_columns = ["tracecode"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+        _apply_selector_search(dialog, "MATCH")
+
+        dialog.assign_filtered_rows(initial_group_name="Matches")
+
+        assert _temporary_groups(dialog) == {}
+        assert [operation.kind for operation in dialog._sqlite_assignment_operations] == ["scope"]
+        group_labels = {
+            dialog.groups_list.item(index).text()
+            for index in range(dialog.groups_list.count())
+        }
+        assert group_labels == {"POPULATION (n=1)", "Matches (n=3)"}
+
+        materialized = dialog._materialize_grouping_dataframe()
+        assert materialized["REPORT_ID"].tolist() == [1, 2, 4]
+        assert materialized["GROUP"].tolist() == ["Matches", "Matches", "Matches"]
     finally:
         dialog.close()
         cleanup_tabular_load_result(loaded)

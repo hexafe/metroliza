@@ -66,7 +66,12 @@ from modules.ui_foundation import (
     status_chip,
     update_path_field,
 )
-from modules.worker_progress_dialog import create_worker_progress_dialog
+try:
+    from modules.worker_progress_dialog import (
+        create_delayed_worker_progress_dialog as create_worker_progress_dialog,
+    )
+except ImportError:  # pragma: no cover - compatibility with lightweight test stubs.
+    from modules.worker_progress_dialog import create_worker_progress_dialog
 
 SOURCE_PRODUCTION_CACHE = "production_cache"
 SOURCE_TABULAR_FILE = "tabular_file"

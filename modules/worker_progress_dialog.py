@@ -7,6 +7,11 @@ import base64
 from modules import base64_encoded_files
 from modules.ui_foundation import apply_metroliza_theme, configure_window_size, secondary_label
 
+try:
+    from PyQt6.QtCore import QTimer
+except ImportError:  # pragma: no cover - compatibility with lightweight test stubs.
+    QTimer = None
+
 
 def _scaled_loading_gif_size(source_size):
     """Return an aspect-preserving presentation size for the loading GIF."""
@@ -92,3 +97,81 @@ def create_worker_progress_dialog(parent, *, window_title, initial_status_text, 
 
     loading_dialog._loading_gif_buffer = loading_gif_buffer
     return loading_dialog, loading_label, loading_bar, loading_gif
+
+
+def create_delayed_worker_progress_dialog(
+    parent,
+    *,
+    window_title,
+    initial_status_text,
+    on_cancel,
+    delay_ms=1000,
+):
+    """Create a worker progress dialog whose first show is delayed.
+
+    Worker flows can create the widgets immediately, connect progress signals, start the
+    worker, and call ``show()``. The actual dialog appears only if the operation is still
+    running after ``delay_ms``. Closing, accepting, or rejecting before the timer fires
+    cancels the pending show.
+    """
+    loading_dialog, loading_label, loading_bar, loading_gif = create_worker_progress_dialog(
+        parent,
+        window_title=window_title,
+        initial_status_text=initial_status_text,
+        on_cancel=on_cancel,
+    )
+    _install_delayed_show(loading_dialog, delay_ms=delay_ms)
+    return loading_dialog, loading_label, loading_bar, loading_gif
+
+
+def _install_delayed_show(dialog, *, delay_ms: int) -> None:
+    if QTimer is None:
+        return
+
+    delay_ms = max(0, int(delay_ms))
+    original_show = dialog.show
+    original_close = dialog.close
+    original_accept = dialog.accept
+    original_reject = dialog.reject
+    timer = QTimer(dialog)
+    timer.setSingleShot(True)
+    state = {"finished": False, "shown": False}
+
+    def _show_now() -> None:
+        if state["finished"]:
+            return
+        state["shown"] = True
+        original_show()
+
+    def delayed_show() -> None:
+        if state["finished"] or state["shown"]:
+            return
+        if delay_ms <= 0:
+            _show_now()
+            return
+        if not timer.isActive():
+            timer.start(delay_ms)
+
+    def finish() -> None:
+        state["finished"] = True
+        if timer.isActive():
+            timer.stop()
+
+    def close() -> bool:
+        finish()
+        return original_close()
+
+    def accept() -> None:
+        finish()
+        original_accept()
+
+    def reject() -> None:
+        finish()
+        original_reject()
+
+    timer.timeout.connect(_show_now)
+    dialog.show = delayed_show
+    dialog.close = close
+    dialog.accept = accept
+    dialog.reject = reject
+    dialog._delayed_show_timer = timer

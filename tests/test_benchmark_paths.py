@@ -65,6 +65,13 @@ def test_csv_summary_large_data_probe_smoke(tmp_path):
 
     assert result.scenario == 'csv_summary_large_data_probe'
     assert result.stage_timings_s['csv_load'] >= 0.0
+    assert result.stage_timings_s['sqlite_value_preview'] >= 0.0
+    assert result.stage_timings_s['sqlite_multi_column_group_preview'] >= 0.0
+    assert result.stage_timings_s['sqlite_assign_filtered_scope'] >= 0.0
+    assert result.stage_timings_s['sqlite_use_grouping_sparse_assignment'] >= 0.0
     assert result.stage_timings_s['group_preview'] >= 0.0
     assert result.input_metrics['rows'] == 24
+    assert result.input_metrics['storage_mode_sqlite'] == 1
     assert result.input_metrics['materialized_columns'] >= 3
+    assert result.input_metrics['preview_multi_column_group_total'] >= 1
+    assert result.input_metrics['assign_filtered_scope_rows'] >= 1

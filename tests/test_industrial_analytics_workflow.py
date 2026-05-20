@@ -91,6 +91,59 @@ def test_default_analytics_paths_add_collision_suffixes(tmp_path) -> None:
     assert default_workbook_path(source_file) == str(tmp_path / "table_analytics_1.xlsx")
 
 
+def test_groupstats_workflow_boundary_forwards_progress_and_cancel(monkeypatch) -> None:
+    frame = pd.DataFrame({"length_mm": [1.0, 2.0], "GROUP": ["A", "B"]})
+    metrics = (ProductionMetricSelection("length_mm", "Length"),)
+    progress_messages: list[str] = []
+
+    def never_cancel() -> bool:
+        return False
+
+    def fake_analyze(dataframe, metric_selection, **kwargs):
+        assert dataframe is frame
+        assert metric_selection == metrics
+        assert kwargs["cancel_check"] is never_cancel
+        kwargs["progress_callback"]("Analyzing metric 1/1: Length")
+        return workflow_module.ProductionGroupstatsResult(metrics=({"metric": "Length"},))
+
+    monkeypatch.setattr(workflow_module, "analyze_production_groupstats", fake_analyze)
+
+    result = workflow_module._analyze_groupstats_if_enabled(
+        frame,
+        metrics,
+        aggregation_state=ProductionAggregationState(group_fields=("GROUP",)),
+        cohort_state=ReferenceCohortState(),
+        chart_selection=ProductionChartSelection(groupstats=True),
+        cancel_check=never_cancel,
+        progress_callback=progress_messages.append,
+        start_time=0.0,
+        step=4,
+        total_steps=5,
+    )
+
+    assert result.analyzed_metric_count == 1
+    assert any("Analyzing metric 1/1: Length" in message for message in progress_messages)
+    assert all("ETA" in message for message in progress_messages)
+
+
+def test_groupstats_workflow_boundary_maps_groupstats_cancel(monkeypatch) -> None:
+    frame = pd.DataFrame({"length_mm": [1.0, 2.0], "GROUP": ["A", "B"]})
+
+    def fake_analyze(*_args, **_kwargs):
+        raise workflow_module.ProductionGroupstatsCancelled("stop")
+
+    monkeypatch.setattr(workflow_module, "analyze_production_groupstats", fake_analyze)
+
+    with pytest.raises(AnalyticsCancelled):
+        workflow_module._analyze_groupstats_if_enabled(
+            frame,
+            (ProductionMetricSelection("length_mm", "Length"),),
+            aggregation_state=ProductionAggregationState(group_fields=("GROUP",)),
+            cohort_state=ReferenceCohortState(),
+            chart_selection=ProductionChartSelection(groupstats=True),
+        )
+
+
 def test_run_tabular_file_analytics_reuses_shared_dashboard_and_parameter_workbook(tmp_path) -> None:
     input_file = tmp_path / "table.csv"
     dashboard_file = tmp_path / "table_analytics.html"

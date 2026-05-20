@@ -6,6 +6,7 @@ import sys
 import tempfile
 import types
 import unittest
+from pathlib import Path
 from unittest import mock
 
 
@@ -1785,9 +1786,18 @@ class TestExportBackendSmoke(unittest.TestCase):
                 'html_dashboard_path': 'out_dashboard.html',
                 'html_dashboard_assets_path': 'out_dashboard_assets',
                 'html_dashboard_chart_count': 4,
+                'html_dashboard_plotly_spec_count': 3,
+                'html_dashboard_embedded_plotly_spec_count': 3,
+                'html_dashboard_plotly_serialized_json_bytes': 1234,
+                'html_dashboard_embedded_plotly_serialized_json_bytes': 1234,
+                'html_dashboard_html_bytes': 5678,
                 'html_dashboard_timings_s': dashboard_timings,
             },
         ):
+            progress_values = []
+            emitted_labels = []
+            thread.update_progress.emit = lambda value: progress_values.append(value)
+            thread.update_label.emit = lambda text: emitted_labels.append(text)
             thread._write_html_dashboard_if_requested()
 
         self.assertEqual(thread._stage_timings['html_dashboard_plotly_spec_generation'], 1.5)
@@ -1795,7 +1805,57 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertEqual(thread._stage_timings['html_dashboard_html_rendering'], 0.4)
         self.assertEqual(thread._stage_timings['html_dashboard_html_write'], 0.1)
         self.assertEqual(thread._stage_timings['html_dashboard_total'], 2.5)
+        self.assertEqual(thread._stage_timings['dashboard_finalization'], 2.5)
         self.assertEqual(thread.completion_metadata['html_dashboard_timings_s'], dashboard_timings)
+        self.assertEqual(thread.completion_metadata['dashboard_finalization_s'], 2.5)
+        self.assertEqual(thread.completion_metadata['html_dashboard_plotly_spec_count'], 3)
+        self.assertEqual(thread.completion_metadata['html_dashboard_html_bytes'], 5678)
+        self.assertTrue(any('Writing HTML dashboard...' in label for label in emitted_labels))
+        self.assertTrue(progress_values)
+        self.assertLess(max(progress_values), 100)
+
+    def test_excel_backend_records_workbook_close_timing_and_status(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _Backend(ExcelExportBackend):
+            def create_temporary_workbook_path(self, _excel_file):
+                return Path('temporary.xlsx')
+
+            def create_writer(self, _excel_file):
+                return object()
+
+            def close_writer(self, _writer):
+                return None
+
+            def replace_workbook(self, _temp_path, _target_path):
+                return None
+
+            def remove_temporary_workbook(self, _temp_path):
+                return None
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(),
+        )
+        thread = ExportDataThread(request)
+        thread.run_export_pipeline = lambda _writer: True
+
+        labels = []
+        progress_values = []
+        thread.update_label.emit = lambda text: labels.append(text)
+        thread.update_progress.emit = lambda value: progress_values.append(value)
+
+        self.assertTrue(_Backend().run(thread))
+
+        self.assertIn('workbook_close', thread._stage_timings)
+        self.assertGreaterEqual(thread._stage_timings['workbook_close'], 0.0)
+        self.assertEqual(
+            thread.completion_metadata['workbook_close_s'],
+            thread._stage_timings['workbook_close'],
+        )
+        self.assertTrue(any('Finalizing workbook...' in label for label in labels))
+        self.assertTrue(progress_values)
+        self.assertLess(max(progress_values), 100)
 
     def test_export_observability_summary_handles_header_count_lookup_failures(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest

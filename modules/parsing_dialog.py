@@ -15,7 +15,12 @@ from PyQt6.QtWidgets import (
 )
 import logging
 from modules.contracts import ParseRequest, validate_parse_request
-from modules.worker_progress_dialog import create_worker_progress_dialog
+try:
+    from modules.worker_progress_dialog import (
+        create_delayed_worker_progress_dialog as create_worker_progress_dialog,
+    )
+except ImportError:  # pragma: no cover - compatibility with lightweight test stubs.
+    from modules.worker_progress_dialog import create_worker_progress_dialog
 from modules.help_menu import attach_help_menu_to_layout
 from modules.ui_foundation import (
     apply_metroliza_theme,
@@ -343,9 +348,8 @@ class ParsingDialog(QDialog):
                 on_cancel=self.stop_parsing,
             )
 
-            # Disable the parse button and show the progress dialog
+            # Disable the parse button before the worker starts.
             self.parse_button.setEnabled(False)
-            self.loading_dialog.show()
             self.parsing_canceled = False
             self.parse_error_message = None
 
@@ -370,6 +374,7 @@ class ParsingDialog(QDialog):
             self.parse_thread.error_occurred.connect(self.on_parse_error)
             self.parse_thread.finished.connect(self.on_parse_finished)
             self.parse_thread.start()
+            self.loading_dialog.show()
         except Exception as e:
             self.log_and_exit(e)
 

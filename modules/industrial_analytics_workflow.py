@@ -16,6 +16,7 @@ from modules.industrial_analytics_dashboard import (
 )
 from modules.industrial_analytics_service import (
     ProductionAnalyticsDiagnostic,
+    ProductionGroupstatsCancelled,
     ProductionGroupstatsResult,
     aggregate_production_frame,
     analyze_production_groupstats,
@@ -165,6 +166,11 @@ def run_production_cache_analytics(
         aggregation_state=aggregation,
         cohort_state=cohort,
         chart_selection=charts,
+        cancel_check=cancel_check,
+        progress_callback=progress_callback,
+        start_time=start_time,
+        step=4,
+        total_steps=total_steps,
     )
     _raise_if_cancelled(cancel_check)
     diagnostics = (
@@ -381,6 +387,11 @@ def run_tabular_file_analytics(
         aggregation_state=aggregation,
         cohort_state=cohort,
         chart_selection=charts,
+        cancel_check=cancel_check,
+        progress_callback=progress_callback,
+        start_time=start_time,
+        step=4,
+        total_steps=total_steps,
     )
     _raise_if_cancelled(cancel_check)
     diagnostics = (
@@ -699,15 +710,36 @@ def _analyze_groupstats_if_enabled(
     aggregation_state: ProductionAggregationState,
     cohort_state: ReferenceCohortState,
     chart_selection: ProductionChartSelection,
+    cancel_check: CancelCheck | None = None,
+    progress_callback: ProgressCallback | None = None,
+    start_time: float | None = None,
+    step: int = 4,
+    total_steps: int = 5,
 ) -> ProductionGroupstatsResult:
     if not chart_selection.groupstats:
         return ProductionGroupstatsResult()
-    return analyze_production_groupstats(
-        dataframe,
-        metrics,
-        aggregation_state=aggregation_state,
-        cohort_state=cohort_state,
-    )
+
+    def emit_metric_progress(message: str) -> None:
+        _emit_progress(
+            progress_callback,
+            "Running statistical analysis...",
+            str(message or "Analyzing selected metrics"),
+            step=step,
+            total_steps=total_steps,
+            start_time=start_time if start_time is not None else time.perf_counter(),
+        )
+
+    try:
+        return analyze_production_groupstats(
+            dataframe,
+            metrics,
+            aggregation_state=aggregation_state,
+            cohort_state=cohort_state,
+            progress_callback=emit_metric_progress,
+            cancel_check=cancel_check,
+        )
+    except ProductionGroupstatsCancelled as exc:
+        raise AnalyticsCancelled("Analytics run was canceled.") from exc
 
 
 def _write_dashboard(

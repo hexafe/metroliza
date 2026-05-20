@@ -53,6 +53,11 @@ _PLOT_SKIP_REASON_MESSAGES = {
     'eligible': 'Eligible',
 }
 
+LARGE_EXPORT_DISTRIBUTION_FIT_POLICY = {
+    'mode': 'skip_large_exports',
+    'max_fit_samples_per_metric': 10000,
+}
+
 _FLAG_LOW_N = 'LOW N'
 _FLAG_IMBALANCED_N = 'IMBALANCED N'
 _FLAG_SEVERELY_IMBALANCED_N = 'SEVERELY IMBALANCED N'

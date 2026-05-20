@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 import pandas as pd
 import pytest
 
@@ -35,6 +37,16 @@ def _app():
     global _APP
     _APP = QApplication.instance() or _APP or QApplication([])
     return _APP
+
+
+def _wait_for_value_preview(dialog: TabularAnalyticsFilterDialog, *, timeout_seconds: float = 3.0) -> None:
+    app = _app()
+    deadline = time.monotonic() + timeout_seconds
+    while getattr(dialog, "_preview_threads", None) and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    app.processEvents()
+    assert not getattr(dialog, "_preview_threads", None)
 
 
 def _sample_loaded_table(tmp_path):
@@ -179,6 +191,7 @@ def test_filter_dialog_keeps_independent_value_choices_per_selected_column(tmp_p
     try:
         _select_available_column(dialog, "line")
         dialog.add_filter_column()
+        _wait_for_value_preview(dialog)
         _select_values(dialog, {"L1"})
 
         _select_available_column(dialog, "tracecode")
@@ -215,6 +228,7 @@ def test_filter_dialog_status_count_uses_cached_debounced_path(tmp_path, monkeyp
     try:
         _select_available_column(dialog, "line")
         dialog.add_filter_column()
+        _wait_for_value_preview(dialog)
         _select_values(dialog, {"L1"})
 
         assert calls["apply"] == 0
@@ -243,6 +257,7 @@ def test_filter_dialog_uses_sqlite_store_for_value_preview_and_counts(tmp_path) 
     try:
         _select_available_column(dialog, "line")
         dialog.add_filter_column()
+        _wait_for_value_preview(dialog)
         _select_values(dialog, {"L1"})
 
         assert dialog.status_label.text() == "1 column filter(s), 2 rows"
@@ -279,6 +294,7 @@ def test_filter_dialog_sqlite_value_search_waits_for_enter(tmp_path, monkeypatch
         monkeypatch.setattr(type(loaded.sqlite_store), "preview_value_rows", preview_spy)
         _select_available_column(dialog, "line")
         dialog.add_filter_column()
+        _wait_for_value_preview(dialog)
         searches.clear()
 
         dialog.matching_search.setText("L2")
@@ -287,6 +303,7 @@ def test_filter_dialog_sqlite_value_search_waits_for_enter(tmp_path, monkeypatch
         assert dialog.matching_status_label.text() == "Press Enter to search values."
 
         dialog.matching_search.returnPressed.emit()
+        _wait_for_value_preview(dialog)
 
         assert searches == ["L2"]
         assert [

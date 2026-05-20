@@ -924,11 +924,12 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
         progress_callback=record_progress,
     )
     run_s = time.perf_counter() - run_start
-    progress_marks = {
-        message.splitlines()[0].strip(): event_time - run_start
-        for event_time, message in progress_events
-        if message.strip()
-    }
+    progress_marks: dict[str, float] = {}
+    for event_time, message in progress_events:
+        if not message.strip():
+            continue
+        stage_label = message.splitlines()[0].strip()
+        progress_marks.setdefault(stage_label, event_time - run_start)
     chart_start_s = progress_marks.get('Writing dashboard...')
     groupstats_start_s = progress_marks.get('Running statistical analysis...')
     workbook_start_s = progress_marks.get('Writing workbook...')
@@ -993,13 +994,14 @@ def benchmark_csv_summary_large_data_probe(
         load_tabular_analytics_files,
         materialize_tabular_dataframe,
     )
+    from modules.db import sqlite_connection_scope
 
     csv_path = temp_dir / 'summary_large_probe.csv'
     fixture_metrics = _create_csv_fixture(csv_path, row_count=row_count, data_columns=data_columns)
     search = str(search_text or '').strip()
 
     load_start = time.perf_counter()
-    loaded = load_tabular_analytics_files((str(csv_path),), reference_column='PART')
+    loaded = load_tabular_analytics_files((str(csv_path),), reference_column='PART', force_sqlite=True)
     load_s = time.perf_counter() - load_start
 
     metric_columns = tuple(
@@ -1018,6 +1020,9 @@ def benchmark_csv_summary_large_data_probe(
     value_preview_s = 0.0
     group_preview_s = 0.0
     row_ids_s = 0.0
+    sqlite_multi_column_group_preview_s = 0.0
+    sqlite_assign_filtered_scope_s = 0.0
+    sqlite_use_grouping_sparse_assignment_s = 0.0
 
     sqlite_store = getattr(loaded, 'sqlite_store', None)
     if sqlite_store is not None:
@@ -1034,10 +1039,55 @@ def benchmark_csv_summary_large_data_probe(
         )
         group_preview_s = time.perf_counter() - group_start
 
+        multi_column_start = time.perf_counter()
+        multi_group_columns = (
+            ('reference', 'dim_01') if 'dim_01' in sqlite_store.columns else ('reference',)
+        )
+        _multi_group_rows, multi_group_total = sqlite_store.preview_group_rows(
+            multi_group_columns,
+            search_text=search,
+            limit=100,
+        )
+        sqlite_multi_column_group_preview_s = time.perf_counter() - multi_column_start
+
         row_id_start = time.perf_counter()
         row_ids = sqlite_store.row_ids_for_group_search(('reference',), search_text=search)
         row_ids_s = time.perf_counter() - row_id_start
         row_id_count = len(row_ids)
+
+        assign_scope_start = time.perf_counter()
+        scope_query, scope_params = sqlite_store.source_row_number_query_for_group_search(
+            ('reference',),
+            search_text=search,
+        )
+        with sqlite_connection_scope(sqlite_store.path) as connection:
+            connection.execute(
+                'CREATE TEMP TABLE IF NOT EXISTS bench_group_assignment_scope '
+                '(row_id INTEGER PRIMARY KEY)'
+            )
+            connection.execute('DELETE FROM bench_group_assignment_scope')
+            if scope_query:
+                connection.execute(
+                    'INSERT OR IGNORE INTO bench_group_assignment_scope (row_id) '
+                    f'SELECT source_row_number FROM ({scope_query})',
+                    scope_params,
+                )
+            assign_scope_count = int(
+                connection.execute('SELECT COUNT(*) FROM bench_group_assignment_scope').fetchone()[0]
+                or 0
+            )
+        sqlite_assign_filtered_scope_s = time.perf_counter() - assign_scope_start
+
+        sparse_start = time.perf_counter()
+        sparse_row_ids = row_ids[: min(len(row_ids), 100)]
+        sparse_grouping = pd.DataFrame(
+            {
+                'REPORT_ID': sparse_row_ids,
+                'GROUP': ['BENCH'] * len(sparse_row_ids),
+            }
+        )
+        sparse_grouping['GROUP_KEY'] = sparse_grouping['REPORT_ID']
+        sqlite_use_grouping_sparse_assignment_s = time.perf_counter() - sparse_start
     else:
         grouping_start = time.perf_counter()
         grouping_frame = build_tabular_grouping_dataframe(loaded.dataframe, selector_columns=('reference',))
@@ -1054,8 +1104,20 @@ def benchmark_csv_summary_large_data_probe(
         row_ids = index.row_ids_for_keys(keys)
         row_ids_s = time.perf_counter() - row_id_start
         row_id_count = len(row_ids)
+        multi_group_total = preview_group_total
+        assign_scope_count = row_id_count
 
-    total_s = load_s + materialize_s + grouping_build_s + value_preview_s + group_preview_s + row_ids_s
+    total_s = (
+        load_s
+        + materialize_s
+        + grouping_build_s
+        + value_preview_s
+        + group_preview_s
+        + sqlite_multi_column_group_preview_s
+        + row_ids_s
+        + sqlite_assign_filtered_scope_s
+        + sqlite_use_grouping_sparse_assignment_s
+    )
     return ScenarioResult(
         scenario='csv_summary_large_data_probe',
         wall_time_s=total_s,
@@ -1064,8 +1126,12 @@ def benchmark_csv_summary_large_data_probe(
             'materialize_required_columns': materialize_s,
             'grouping_dataframe_build': grouping_build_s,
             'value_preview': value_preview_s,
+            'sqlite_value_preview': value_preview_s if sqlite_store is not None else 0.0,
             'group_preview': group_preview_s,
+            'sqlite_multi_column_group_preview': sqlite_multi_column_group_preview_s,
             'row_ids_for_search': row_ids_s,
+            'sqlite_assign_filtered_scope': sqlite_assign_filtered_scope_s,
+            'sqlite_use_grouping_sparse_assignment': sqlite_use_grouping_sparse_assignment_s,
         },
         input_metrics={
             'rows': fixture_metrics['rows'],
@@ -1075,7 +1141,9 @@ def benchmark_csv_summary_large_data_probe(
             'materialized_columns': int(len(materialized.dataframe.columns)),
             'preview_value_rows': preview_value_rows,
             'preview_group_total': int(preview_group_total),
+            'preview_multi_column_group_total': int(multi_group_total),
             'row_ids_for_search': row_id_count,
+            'assign_filtered_scope_rows': int(assign_scope_count),
         },
     )
 
