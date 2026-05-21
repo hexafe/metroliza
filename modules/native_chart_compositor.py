@@ -1111,11 +1111,6 @@ def render_histogram_png(payload: dict[str, Any]) -> bytes:
     if use_resolved_y_limits:
         max_count = float(y_max)
     else:
-        for overlay in overlay_rows:
-            if str(overlay.get("kind")) == "curve":
-                curve_y = _finite_array(overlay.get("y") or [])
-                if curve_y.size:
-                    max_count = max(max_count, float(np.max(curve_y)))
         max_count *= 1.08
         y_min = 0.0
         y_max = max_count

@@ -2658,12 +2658,6 @@ def lock_histogram_y_axis_to_bar_heights(ax, *, top_padding_ratio=0.08):
         if np.isfinite(height) and height >= 0:
             y_candidates.append(float(height))
 
-    for line in ax.lines:
-        y_data = np.asarray(line.get_ydata(), dtype=float)
-        finite_y = y_data[np.isfinite(y_data)]
-        if finite_y.size > 0:
-            y_candidates.append(float(np.max(finite_y)))
-
     if not y_candidates:
         return
 

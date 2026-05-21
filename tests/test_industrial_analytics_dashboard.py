@@ -905,15 +905,15 @@ def test_csv_summary_dashboard_plotly_specs_include_stat_values_and_colored_grou
     violin_trace_names = {trace["name"] for trace in charts["violin"]["plotly_spec"]["data"]}
     assert "A (n=4)" in violin_trace_names
     assert "B (n=4)" in violin_trace_names
-    assert "A Mean=6.5380" in violin_trace_names
-    assert "B Max=7.800" in violin_trace_names
+    assert "(A) Mean=6.5380" in violin_trace_names
+    assert "(B) Max=7.800" in violin_trace_names
     assert "Nominal=6.500" in violin_trace_names
 
     box_trace_names = {trace["name"] for trace in charts["box"]["plotly_spec"]["data"]}
     assert "A (n=4)" in box_trace_names
     assert "B (n=4)" in box_trace_names
-    assert "A Mean=6.5380" in box_trace_names
-    assert "B Max=7.800" in box_trace_names
+    assert "(A) Mean=6.5380" in box_trace_names
+    assert "(B) Max=7.800" in box_trace_names
     assert "Nominal=6.500" in box_trace_names
 
 

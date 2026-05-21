@@ -996,7 +996,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             plt.close(fig)
 
 
-    def test_histogram_y_axis_autoscales_to_include_overlay_curve_when_count_scaled(self):
+    def test_histogram_y_axis_stays_locked_to_bars_when_overlay_curve_is_tall(self):
         import pandas as pd
 
         values = [1.0] * 14 + [1.25] * 12 + [1.5] * 10 + [1.75] * 8 + [2.0] * 6
@@ -1012,11 +1012,10 @@ class TestExportPlotHelpers(unittest.TestCase):
 
             lock_histogram_y_axis_to_bar_heights(ax)
             bar_ylim_after_overlay = ax.get_ylim()
-            self.assertGreater(bar_ylim_after_overlay[1], bar_ylim_before_overlay[1])
-
             max_bar_height = max((patch.get_height() for patch in ax.patches), default=0.0)
             self.assertGreater(max_bar_height, 0.0)
-            self.assertGreaterEqual(bar_ylim_after_overlay[1], max_bar_height)
+            self.assertAlmostEqual(bar_ylim_after_overlay[1], max_bar_height * 1.08)
+            self.assertAlmostEqual(bar_ylim_after_overlay[1], bar_ylim_before_overlay[1])
         finally:
             plt.close(fig)
 

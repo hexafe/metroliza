@@ -88,6 +88,33 @@ def test_build_histogram_render_spec_exposes_layout_title_and_axes_contract():
     assert spec.y_max > 0.0
 
 
+def test_build_histogram_render_spec_y_max_ignores_overlay_curve_height():
+    payload = build_histogram_native_payload(
+        values=[1.0, 1.0, 2.0, 2.0],
+        lsl=None,
+        usl=None,
+        title="Histogram Overlay",
+        bin_count=2,
+    )
+    payload["visual_metadata"]["modeled_overlays"] = {
+        "advanced_annotations_enabled": True,
+        "overlays_enabled": True,
+        "rows": [
+            {
+                "kind": "curve",
+                "label": "KDE reference",
+                "x": [1.0, 1.5, 2.0],
+                "y": [50.0, 100.0, 50.0],
+            }
+        ],
+    }
+
+    spec = build_resolved_histogram_spec(payload)
+
+    assert spec.y_max == 2.0 * 1.08
+    assert spec.overlay_curves[0].y_values == [50.0, 100.0, 50.0]
+
+
 def test_render_histogram_png_honors_resolved_render_spec_title_and_panel_geometry():
     payload = build_histogram_native_payload(
         values=[1.0, 1.05, 1.1, 1.2, 1.25, 1.35, 1.4],

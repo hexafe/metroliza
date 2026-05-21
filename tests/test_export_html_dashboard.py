@@ -1,3 +1,6 @@
+import html
+import json
+import re
 import tempfile
 import unittest
 from io import BytesIO
@@ -15,6 +18,13 @@ from modules.export_html_dashboard import (
     write_export_html_dashboard,
 )
 from modules.export_summary_utils import resolve_histogram_bin_count
+
+
+def _embedded_plotly_specs(html_text: str) -> list[dict]:
+    specs = []
+    for match in re.finditer(r'data-plotly-spec-light="([^"]+)"', html_text):
+        specs.append(json.loads(html.unescape(match.group(1))))
+    return specs
 
 
 class TestExportHtmlDashboard(unittest.TestCase):
@@ -215,6 +225,21 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertNotIn('Workbook-matching PNG snapshot.', html_text)
             self.assertIn('report_dashboard_assets/section_001_diameter-x_histogram_01.png', html_text)
             self.assertIn('data-plotly-spec-light=', html_text)
+            embedded_specs = _embedded_plotly_specs(html_text)
+            self.assertEqual(len(embedded_specs), 3)
+            histogram_specs = [
+                spec
+                for spec in embedded_specs
+                if spec.get('layout', {}).get('yaxis', {}).get('title', {}).get('text') == 'Frequency (%)'
+            ]
+            self.assertTrue(histogram_specs)
+            self.assertTrue(
+                any(
+                    trace.get('histnorm') == 'probability' or trace.get('type') == 'bar'
+                    for spec in histogram_specs
+                    for trace in spec.get('data', [])
+                )
+            )
             self.assertNotIn('Theme-aware Plotly colors follow the current mode.', html_text)
             self.assertIn('theme-switch', html_text)
             self.assertIn('report_dashboard_assets/plotly-2.27.0.min.js', html_text)
@@ -528,9 +553,9 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertIn('73211 (n=3)', trace_names)
         self.assertIn('A (n=3)', trace_names)
         self.assertIn('POPULATION (n=3)', trace_names)
-        self.assertIn('73211 Mean=10.0100', trace_names)
-        self.assertIn('A Q1=10.095', trace_names)
-        self.assertIn('POPULATION Median=10.000', trace_names)
+        self.assertIn('(73211) Mean=10.010', trace_names)
+        self.assertIn('(A) Q1=10.095', trace_names)
+        self.assertIn('(POPULATION) Median=10.000', trace_names)
         stat_traces = [trace for trace in spec['data'] if trace.get('visible') == 'legendonly']
         self.assertTrue(stat_traces)
         self.assertTrue(
@@ -558,10 +583,13 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(spec['data'][0]['name'], 'A (n=3)')
         self.assertEqual(spec['data'][1]['name'], 'B (n=3)')
         trace_names = {trace['name'] for trace in spec['data']}
-        self.assertIn('A Mean=2.0000', trace_names)
-        self.assertIn('A Median=2.000', trace_names)
-        self.assertIn('B Mean=12.6667', trace_names)
-        self.assertIn('B Max=16.000', trace_names)
+        self.assertIn('(A) Mean=2.0', trace_names)
+        self.assertIn('(A) Median=2.000', trace_names)
+        self.assertIn('(B) Mean=12.7', trace_names)
+        self.assertIn('(B) Max=16.000', trace_names)
+        stat_trace = next(trace for trace in spec['data'] if trace['name'] == '(A) Mean=2.0')
+        self.assertEqual(stat_trace['x'], ['A', 'B'])
+        self.assertEqual(stat_trace['line']['color'], spec['data'][0]['marker']['color'])
 
     def test_group_analysis_iqr_single_group_legend_stats_do_not_repeat_group_name(self):
         with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
@@ -582,6 +610,39 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertIn('Max=6.687', trace_names)
         self.assertIn('Nominal=6.500', trace_names)
         self.assertNotIn('A Min=6.469', trace_names)
+
+    def test_summary_iqr_nested_limits_create_full_width_shapes_and_safe_legend_traces(self):
+        with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
+            spec = _build_plotly_chart_spec(
+                {
+                    'type': 'iqr',
+                    'labels': ['A (n=16)', 'B (n=12)'],
+                    'series': [[6.469, 6.495, 6.501], [6.6, 6.7, 6.8]],
+                    'limits': {'lsl': 6.2, 'nominal': 6.5, 'usl': 6.9},
+                },
+                title='IQR limits',
+            )
+
+        self.assertEqual(spec['data'][0]['name'], 'A (n=16)')
+        trace_names = {trace['name'] for trace in spec['data']}
+        self.assertIn('(A) Min=6.469', trace_names)
+        self.assertIn('LSL=6.200', trace_names)
+        self.assertTrue(
+            any(
+                shape.get('xref') == 'paper'
+                and shape.get('x0') == 0
+                and shape.get('x1') == 1
+                and shape.get('y0') == 6.2
+                for shape in spec['layout']['shapes']
+            )
+        )
+        self.assertTrue(
+            all(
+                trace.get('x') != [0, 1]
+                for trace in spec['data']
+                if trace.get('visible') == 'legendonly'
+            )
+        )
 
     def test_summary_histogram_plotly_spec_uses_data_bins_and_x_view_axis_range(self):
         values = [0.0, 2.0, 4.0, 6.0, 8.0, 10.0]
@@ -680,7 +741,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
 
         trace_names = {trace.get('name') for trace in spec['data']}
         self.assertIn('Min=1.235', trace_names)
-        self.assertIn('Mean=1.2345', trace_names)
+        self.assertIn('Mean=1.23450', trace_names)
 
     def test_iqr_plotly_spec_normalizes_raw_package_semantic_legend_items(self):
         raw_package_spec = {

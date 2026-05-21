@@ -567,14 +567,7 @@ def build_resolved_histogram_spec(payload: Mapping[str, Any]) -> ResolvedHistogr
     plot_rect = _mapping_to_rect(panel_rects["plot_rect"])
     table_rect = None if compact_mode else _mapping_to_rect(panel_rects["right_container_rect"])
 
-    overlay_rows = list(((visual_metadata.get("modeled_overlays") or {}).get("rows") or []))
     max_count = float(max(1, int(np.max(counts)) if counts.size else 1))
-    for overlay in overlay_rows:
-        if str(overlay.get("kind") or "").strip().lower() != "curve":
-            continue
-        curve_y = _finite_array(overlay.get("y") or [])
-        if curve_y.size:
-            max_count = max(max_count, float(np.max(curve_y)))
     max_count *= 1.08
 
     x_ticks = [TickSpec(position=tick, label=_format_tick(tick)) for tick in _line_ticks(x_min, x_max, count=6)]
@@ -622,6 +615,7 @@ def build_resolved_histogram_spec(payload: Mapping[str, Any]) -> ResolvedHistogr
         and (line_value := _as_float(line_meta.get("value"))) is not None
     ]
 
+    overlay_rows = list(((visual_metadata.get("modeled_overlays") or {}).get("rows") or []))
     overlay_curves: list[HistogramCurveSpec] = []
     note = None
     for overlay in overlay_rows:

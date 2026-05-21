@@ -55,6 +55,15 @@ _PLOTLY_MODEBAR_REMOVE = [
 ]
 _DEFAULT_PLOTLY_SPEC_COUNT_BUDGET = 160
 _DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET = 8_000_000
+_GROUP_COUNT_SUFFIX_PATTERN = re.compile(r"\s*\(n\s*=\s*\d+\)\s*$", re.IGNORECASE)
+_STAT_DASH_BY_LABEL = {
+    "Min": "dot",
+    "Q1": "dash",
+    "Median": "solid",
+    "Mean": "dashdot",
+    "Q3": "dash",
+    "Max": "dot",
+}
 
 
 def _new_dashboard_timing_summary() -> dict[str, float]:
@@ -601,6 +610,54 @@ def _plotly_fixed_format(decimals: int) -> str:
     return ".0f" if precision == 0 else f".{precision}f"
 
 
+def _group_label_has_count_suffix(label: str) -> bool:
+    return bool(_GROUP_COUNT_SUFFIX_PATTERN.search(str(label or "").strip()))
+
+
+def _strip_group_count_suffix(label: str) -> str:
+    stripped = _GROUP_COUNT_SUFFIX_PATTERN.sub("", str(label or "").strip()).strip()
+    return stripped or str(label or "").strip()
+
+
+def _stat_legend_prefix(group_label: str, *, populated_count: int) -> str:
+    if populated_count <= 1:
+        return ""
+    return f"({_strip_group_count_suffix(group_label)}) "
+
+
+def _legend_line_x_values(category_labels: list[str]) -> list[Any]:
+    if len(category_labels) >= 2:
+        return [category_labels[0], category_labels[-1]]
+    if len(category_labels) == 1:
+        return [category_labels[0], category_labels[0]]
+    return [None, None]
+
+
+def _mean_precision_from_values(values: list[float]) -> int:
+    decimals = _infer_decimal_places(values) if values else None
+    return 4 if decimals is None else max(0, min(decimals + 1, 8))
+
+
+def _mean_precision_from_payload(payload: dict[str, Any]) -> int:
+    chart_type = str(payload.get("type") or "").strip().casefold()
+    values: list[float] = []
+    if chart_type in {"distribution", "iqr"}:
+        for series in _payload_distribution_series(payload):
+            values.extend(_coerce_finite_float_list(series))
+    else:
+        values.extend(_coerce_finite_float_list(payload.get("values")))
+    return _mean_precision_from_values(values)
+
+
+def _resolve_limit_values(payload: dict[str, Any]) -> dict[str, Any]:
+    limits = payload.get("limits") if isinstance(payload.get("limits"), dict) else {}
+    return {
+        "lsl": limits.get("lsl", payload.get("lsl")),
+        "nominal": limits.get("nominal", payload.get("nominal")),
+        "usl": limits.get("usl", payload.get("usl")),
+    }
+
+
 def _coerce_xy_points(x_values: Any, y_values: Any, *, labels: Any = None) -> list[tuple[float, float, str]]:
     points: list[tuple[float, float, str]] = []
     raw_labels = labels or []
@@ -1042,10 +1099,11 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str, theme: 
         return {}
     tokens = _build_plotly_theme_tokens(theme)
 
-    limits = payload.get("limits") if isinstance(payload.get("limits"), dict) else {}
-    lsl = limits.get("lsl", payload.get("lsl")) if isinstance(limits, dict) else payload.get("lsl")
-    usl = limits.get("usl", payload.get("usl")) if isinstance(limits, dict) else payload.get("usl")
-    nominal = limits.get("nominal") if isinstance(limits, dict) else None
+    limits = _resolve_limit_values(payload)
+    lsl = limits.get("lsl")
+    usl = limits.get("usl")
+    nominal = limits.get("nominal")
+    mean_precision = _mean_precision_from_values(values)
     mean_value = _coerce_finite_float(((payload.get("summary") or {}).get("mean") if isinstance(payload.get("summary"), dict) else None))
     if mean_value is None and values:
         mean_value = float(sum(values) / len(values))
@@ -1082,7 +1140,7 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str, theme: 
                 "yref": "paper",
                 "x": mean_value,
                 "y": 1.10,
-                "text": f"Mean={_format_metrology_legend_value('Mean', mean_value)}",
+                "text": f"Mean={_format_metrology_legend_value('Mean', mean_value, mean_precision=mean_precision)}",
                 "showarrow": False,
                 "font": {"size": 11, "color": tokens["mean_line"]},
                 "bgcolor": "#ffffff",
@@ -1126,6 +1184,7 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str, theme: 
             usl=usl,
             mean_value=mean_value,
             theme=theme,
+            mean_precision=mean_precision,
         )
     )
 
@@ -1214,6 +1273,7 @@ def _build_histogram_reference_legend_traces(
     usl: Any,
     mean_value: float | None,
     theme: str,
+    mean_precision: int | None = None,
 ) -> list[dict[str, Any]]:
     tokens = _build_plotly_theme_tokens(theme)
     reference_values = _collect_histogram_reference_values(payload, lsl=lsl, usl=usl, mean_value=mean_value)
@@ -1231,7 +1291,7 @@ def _build_histogram_reference_legend_traces(
     ):
         if numeric is None:
             continue
-        formatted = _format_metrology_legend_value(label, numeric)
+        formatted = _format_metrology_legend_value(label, numeric, mean_precision=mean_precision)
         traces.append(
             {
                 "type": "scatter",
@@ -1333,10 +1393,10 @@ def _percentile_sorted(values: list[float], fraction: float) -> float | None:
 def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str, theme: str = "light") -> dict[str, Any]:
     render_mode = str(payload.get("render_mode") or "violin").strip().lower()
     tokens = _build_plotly_theme_tokens(theme)
-    limits = payload.get("limits") if isinstance(payload.get("limits"), dict) else {}
-    lsl = limits.get("lsl", payload.get("lsl")) if isinstance(limits, dict) else payload.get("lsl")
-    usl = limits.get("usl", payload.get("usl")) if isinstance(limits, dict) else payload.get("usl")
-    nominal = limits.get("nominal", payload.get("nominal")) if isinstance(limits, dict) else payload.get("nominal")
+    limits = _resolve_limit_values(payload)
+    lsl = limits.get("lsl")
+    usl = limits.get("usl")
+    nominal = limits.get("nominal")
 
     if render_mode == "scatter":
         points = _coerce_xy_points(
@@ -1410,6 +1470,7 @@ def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str, them
             continue
         group_label = label or f"Group {index}"
         trace_name = _format_group_statistics_trace_name(group_label, values)
+        group_color = tokens["colorway"][(index - 1) % len(tokens["colorway"])]
         category_labels.append(group_label)
         traces.append(
             {
@@ -1419,7 +1480,9 @@ def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str, them
                 "x": [group_label] * len(values),
                 "box": {"visible": True},
                 "meanline": {"visible": True},
-                "line": {"width": 1.2},
+                "line": {"color": group_color, "width": 1.2},
+                "marker": {"color": group_color},
+                "fillcolor": group_color,
                 "opacity": 0.84,
                 "points": False,
                 "scalemode": "count",
@@ -1457,6 +1520,8 @@ def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str, them
             series_list=[trace["y"] for trace in traces if trace.get("type") == "violin"],
             limits={"lsl": lsl, "nominal": nominal, "usl": usl},
             tokens=tokens,
+            group_colors=_group_colors_from_traces(traces, category_labels, tokens),
+            mean_precision=_mean_precision_from_payload(payload),
         )
     )
     return {
@@ -1468,6 +1533,7 @@ def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str, them
 
 def _build_plotly_iqr_spec(payload: dict[str, Any], *, title: str, theme: str = "light") -> dict[str, Any]:
     tokens = _build_plotly_theme_tokens(theme)
+    limits = _resolve_limit_values(payload)
     labels = [str(item) for item in (payload.get("labels") or [])]
     series_list = _payload_distribution_series(payload)
     traces = []
@@ -1478,6 +1544,7 @@ def _build_plotly_iqr_spec(payload: dict[str, Any], *, title: str, theme: str = 
             continue
         group_label = label or f"Group {index}"
         trace_name = _format_group_statistics_trace_name(group_label, values)
+        group_color = tokens["colorway"][(index - 1) % len(tokens["colorway"])]
         category_labels.append(group_label)
         traces.append(
             {
@@ -1487,7 +1554,8 @@ def _build_plotly_iqr_spec(payload: dict[str, Any], *, title: str, theme: str = 
                 "y": values,
                 "boxpoints": False,
                 "boxmean": True,
-                "marker": {"color": tokens["colorway"][(index - 1) % len(tokens["colorway"])]},
+                "marker": {"color": group_color},
+                "line": {"color": group_color},
                 "hovertemplate": f"{trace_name}<br>Measurement=%{{y}}<extra></extra>",
             }
         )
@@ -1501,9 +1569,9 @@ def _build_plotly_iqr_spec(payload: dict[str, Any], *, title: str, theme: str = 
         theme=theme,
     )
     shapes, annotations = _build_horizontal_reference_shapes(
-        nominal=payload.get("nominal"),
-        lsl=payload.get("lsl"),
-        usl=payload.get("usl"),
+        nominal=limits.get("nominal"),
+        lsl=limits.get("lsl"),
+        usl=limits.get("usl"),
         theme=theme,
     )
     layout["shapes"] = shapes
@@ -1530,8 +1598,10 @@ def _build_plotly_iqr_spec(payload: dict[str, Any], *, title: str, theme: str = 
         _build_distribution_stat_legend_traces(
             labels=category_labels,
             series_list=[trace["y"] for trace in traces if trace.get("type") == "box"],
-            limits=payload.get("limits") if isinstance(payload.get("limits"), dict) else payload,
+            limits=limits,
             tokens=tokens,
+            group_colors=_group_colors_from_traces(traces, category_labels, tokens),
+            mean_precision=_mean_precision_from_payload(payload),
         )
     )
     return {
@@ -1543,6 +1613,8 @@ def _build_plotly_iqr_spec(payload: dict[str, Any], *, title: str, theme: str = 
 
 def _format_group_statistics_trace_name(label: str, values: list[float]) -> str:
     if not values:
+        return str(label)
+    if _group_label_has_count_suffix(label):
         return str(label)
     return f"{label} (n={len(values)})"
 
@@ -1563,14 +1635,19 @@ def _build_distribution_stat_legend_traces(
     series_list: list[list[float]],
     limits: dict[str, Any],
     tokens: dict[str, Any],
+    group_colors: dict[str, str] | None = None,
+    mean_precision: int | None = None,
 ) -> list[dict[str, Any]]:
     traces: list[dict[str, Any]] = []
     populated_count = sum(1 for series in series_list if _coerce_finite_float_list(series))
+    group_colors = group_colors or {}
+    legend_x = _legend_line_x_values(labels)
     for label, series in zip(labels, series_list, strict=False):
         values = sorted(_coerce_finite_float_list(series))
         if not values:
             continue
-        prefix = "" if populated_count == 1 else f"{label} "
+        stat_group_label = _strip_group_count_suffix(label)
+        prefix = _stat_legend_prefix(stat_group_label, populated_count=populated_count)
         stats = {
             "Min": min(values),
             "Q1": _percentile_sorted(values, 0.25),
@@ -1582,14 +1659,14 @@ def _build_distribution_stat_legend_traces(
         for stat_label, value in stats.items():
             traces.append(
                 _legend_only_reference_trace(
-                    name=f"{prefix}{stat_label}={_format_metrology_legend_value(stat_label, value)}",
-                    value=value,
-                    color=(
-                        tokens["mean_line"]
-                        if stat_label == "Mean"
-                        else tokens["reference_nominal"]
+                    name=(
+                        f"{prefix}{stat_label}="
+                        f"{_format_metrology_legend_value(stat_label, value, mean_precision=mean_precision)}"
                     ),
-                    dash="dashdot" if stat_label == "Mean" else "dot",
+                    value=value,
+                    color=group_colors.get(stat_group_label, tokens["mean_line"]),
+                    dash=_STAT_DASH_BY_LABEL.get(stat_label, "dot"),
+                    x_values=legend_x,
                 )
             )
     for label, key in (("LSL", "lsl"), ("Nominal", "nominal"), ("USL", "usl")):
@@ -1598,7 +1675,7 @@ def _build_distribution_stat_legend_traces(
             continue
         traces.append(
             _legend_only_reference_trace(
-                name=f"{label}={_format_metrology_legend_value(label, value)}",
+                name=f"{label}={_format_metrology_legend_value(label, value, mean_precision=mean_precision)}",
                 value=value,
                 color=(
                     tokens["reference_nominal"]
@@ -1606,18 +1683,27 @@ def _build_distribution_stat_legend_traces(
                     else tokens["reference_limit"]
                 ),
                 dash="solid" if label == "Nominal" else "dash",
+                x_values=legend_x,
             )
         )
     return traces
 
 
-def _legend_only_reference_trace(*, name: str, value: float | None, color: str, dash: str) -> dict[str, Any]:
+def _legend_only_reference_trace(
+    *,
+    name: str,
+    value: float | None,
+    color: str,
+    dash: str,
+    x_values: list[Any] | None = None,
+) -> dict[str, Any]:
     numeric = 0.0 if value is None else float(value)
+    resolved_x = list(x_values) if x_values else [None, None]
     return {
         "type": "scatter",
         "mode": "lines",
         "name": name,
-        "x": [0, 1],
+        "x": resolved_x,
         "y": [numeric, numeric],
         "line": {"color": color, "width": 2, "dash": dash},
         "hoverinfo": "skip",
@@ -1626,13 +1712,46 @@ def _legend_only_reference_trace(*, name: str, value: float | None, color: str, 
     }
 
 
-def _format_metrology_legend_value(label: str, value: float | None) -> str:
+def _format_metrology_legend_value(
+    label: str,
+    value: float | None,
+    *,
+    mean_precision: int | None = None,
+) -> str:
     if value is None or not math.isfinite(float(value)):
         return ""
-    precision = 4 if label.strip().casefold() == "mean" else 3
+    if label.strip().casefold() == "mean":
+        precision = int(mean_precision) if mean_precision is not None else 4
+    else:
+        precision = 3
+    precision = max(0, min(precision, 8))
     quantizer = Decimal("1").scaleb(-precision)
     rounded = Decimal(str(round(float(value), 12))).quantize(quantizer, rounding=ROUND_HALF_UP)
     return f"{rounded:.{precision}f}"
+
+
+def _group_colors_from_traces(
+    traces: list[dict[str, Any]],
+    labels: list[str],
+    tokens: dict[str, Any],
+) -> dict[str, str]:
+    colors = {
+        _strip_group_count_suffix(label): tokens["colorway"][index % len(tokens["colorway"])]
+        for index, label in enumerate(labels)
+    }
+    for index, trace in enumerate(traces):
+        trace_type = str(trace.get("type") or "").strip().casefold()
+        if trace_type not in {"violin", "box"}:
+            continue
+        group_label = _strip_group_count_suffix(str(trace.get("name") or ""))
+        if not group_label and index < len(labels):
+            group_label = _strip_group_count_suffix(labels[index])
+        marker = trace.get("marker") if isinstance(trace.get("marker"), dict) else {}
+        line = trace.get("line") if isinstance(trace.get("line"), dict) else {}
+        color = marker.get("color") or line.get("color") or trace.get("fillcolor")
+        if isinstance(color, str) and color:
+            colors[group_label] = color
+    return colors
 
 
 def _format_plotly_stat_value(value: float | None) -> str:
