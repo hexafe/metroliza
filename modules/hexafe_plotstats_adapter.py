@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
 import math
 import re
-from typing import Any, Iterable
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -175,7 +175,9 @@ def build_dashboard_plotly_spec(
     _apply_payload_histogram_bins_to_spec(raw_spec, payload)
     _normalize_payload_group_stat_trace_names(raw_spec, payload)
     _ensure_group_histogram_mean_annotations(raw_spec, payload)
-    return _normalize_dashboard_plotly_spec(raw_spec)
+    normalized = _normalize_dashboard_plotly_spec(raw_spec)
+    _normalize_scatter_trend_dashboard_spec(normalized, payload)
+    return normalized
 
 
 def _fallback_dashboard_plotly_spec(
@@ -455,6 +457,7 @@ def build_plotstats_dashboard_spec(
     _ensure_group_histogram_mean_annotations(spec, payload)
     normalized = _trim_plotly_spec(spec)
     _apply_payload_histogram_overlay_plotly_y(normalized, payload)
+    _normalize_scatter_trend_dashboard_spec(normalized, payload)
     return normalized
 
 
@@ -929,6 +932,7 @@ _STAT_DASH_BY_LABEL = {
     "Max": "dot",
 }
 _HISTOGRAM_VISIBLE_REFERENCE_LABELS = {"Mean", "LSL", "Nominal", "USL"}
+_SCATTER_TREND_PAYLOAD_TYPES = {"scatter", "trend"}
 
 
 def _normalize_dashboard_plotly_spec(spec: dict[str, Any]) -> dict[str, Any]:
@@ -953,6 +957,244 @@ def _normalize_dashboard_plotly_spec(spec: dict[str, Any]) -> dict[str, Any]:
         _apply_histogram_y_range_from_bar_heights(spec)
         _normalize_histogram_reference_line_heights(spec)
     return spec
+
+
+def _normalize_scatter_trend_dashboard_spec(
+    spec: Mapping[str, Any],
+    payload: Mapping[str, Any],
+) -> None:
+    payload_type = str(payload.get("type") or payload.get("chart_type") or "").strip().casefold()
+    if payload_type == "distribution":
+        render_mode = str(payload.get("render_mode") or "").strip().casefold()
+        if render_mode != "scatter":
+            return
+    elif payload_type not in _SCATTER_TREND_PAYLOAD_TYPES:
+        return
+    layout = spec.get("layout")
+    data = spec.get("data")
+    if not isinstance(layout, dict) or not isinstance(data, list):
+        return
+
+    x_range = _payload_axis_limits(payload, "x")
+    y_range = _payload_axis_limits(payload, "y")
+    if x_range is not None:
+        _set_layout_axis_range(layout, "xaxis", x_range)
+    if y_range is not None:
+        _set_layout_axis_range(layout, "yaxis", y_range)
+
+    displayed_x_range = _layout_axis_range(layout, "xaxis") or _scatter_trace_x_range(data)
+    if displayed_x_range is not None:
+        _normalize_horizontal_reference_trace_extents(data, displayed_x_range)
+    reference_y_values = _scatter_reference_y_values(payload, data)
+    _drop_scatter_trend_reference_shapes_and_annotations(layout, reference_y_values)
+
+
+def _payload_axis_limits(payload: Mapping[str, Any], axis: str) -> tuple[float, float] | None:
+    axes = payload.get("axes") if isinstance(payload.get("axes"), Mapping) else {}
+    candidates = (
+        payload.get(f"{axis}_limits"),
+        payload.get(f"{axis}_domain"),
+        payload.get(f"{axis}_range"),
+        axes.get(f"{axis}_limits") if isinstance(axes, Mapping) else None,
+        axes.get(f"{axis}_domain") if isinstance(axes, Mapping) else None,
+        axes.get(f"{axis}_range") if isinstance(axes, Mapping) else None,
+    )
+    for candidate in candidates:
+        axis_range = _axis_range_from_value(candidate)
+        if axis_range is not None:
+            return axis_range
+    return None
+
+
+def _axis_range_from_value(value: Any) -> tuple[float, float] | None:
+    if isinstance(value, Mapping):
+        start = _optional_float(value.get("min", value.get("minimum")))
+        end = _optional_float(value.get("max", value.get("maximum")))
+    elif isinstance(value, list | tuple) and len(value) >= 2:
+        start = _optional_float(value[0])
+        end = _optional_float(value[1])
+    else:
+        return None
+    if start is None or end is None or end <= start:
+        return None
+    return float(start), float(end)
+
+
+def _set_layout_axis_range(
+    layout: dict[str, Any],
+    axis_name: str,
+    axis_range: tuple[float, float],
+) -> None:
+    axis = layout.get(axis_name)
+    if not isinstance(axis, dict):
+        axis = {}
+        layout[axis_name] = axis
+    axis["range"] = [float(axis_range[0]), float(axis_range[1])]
+
+
+def _layout_axis_range(layout: Mapping[str, Any], axis_name: str) -> tuple[float, float] | None:
+    axis = layout.get(axis_name)
+    if not isinstance(axis, Mapping):
+        return None
+    return _axis_range_from_value(axis.get("range"))
+
+
+def _scatter_trace_x_range(data: list[Any]) -> tuple[float, float] | None:
+    values: list[float] = []
+    for trace in data:
+        if not isinstance(trace, Mapping) or _horizontal_reference_trace_value(trace) is not None:
+            continue
+        values.extend(_finite_trace_values(trace.get("x")))
+    if not values:
+        return None
+    start = min(values)
+    end = max(values)
+    return (start, end) if end > start else None
+
+
+def _normalize_horizontal_reference_trace_extents(
+    data: list[Any],
+    x_range: tuple[float, float],
+) -> None:
+    for trace in data:
+        if not isinstance(trace, dict):
+            continue
+        value = _horizontal_reference_trace_value(trace)
+        if value is None:
+            continue
+        trace["type"] = "scatter"
+        trace["mode"] = "lines"
+        trace["x"] = [float(x_range[0]), float(x_range[1])]
+        trace["y"] = [float(value), float(value)]
+        trace["showlegend"] = True
+        if trace.get("visible") is False:
+            trace["visible"] = "legendonly"
+        if not trace.get("hovertemplate"):
+            trace["hovertemplate"] = f"{trace.get('name') or 'Reference'}<extra></extra>"
+
+
+def _horizontal_reference_trace_value(trace: Mapping[str, Any]) -> float | None:
+    if str(trace.get("type") or "").strip().casefold() not in {"scatter", "scattergl"}:
+        return None
+    mode = str(trace.get("mode") or "").strip().casefold()
+    if "lines" not in mode:
+        return None
+    axis, value = _constant_line_axis_and_value(trace)
+    if axis != "y" or value is None:
+        return None
+    if _is_reference_trace(trace):
+        return float(value)
+    return None
+
+
+def _is_reference_trace(trace: Mapping[str, Any]) -> bool:
+    meta = trace.get("meta") if isinstance(trace.get("meta"), Mapping) else {}
+    kind = str(meta.get("kind") or "").strip().casefold()
+    if kind.startswith("reference"):
+        return True
+    name = str(trace.get("name") or "").strip()
+    if _parse_valued_legend_label(name) is not None:
+        return True
+    return _canonical_legend_label(_semantic_trace_label_base(name)) is not None
+
+
+def _scatter_reference_y_values(payload: Mapping[str, Any], data: list[Any]) -> list[float]:
+    values: list[float] = []
+    limits = payload.get("limits") if isinstance(payload.get("limits"), Mapping) else payload
+    if isinstance(limits, Mapping):
+        for key in ("lsl", "nominal", "usl"):
+            value = _optional_float(limits.get(key))
+            if value is not None:
+                values.append(value)
+    mean_line = payload.get("mean_line")
+    if isinstance(mean_line, Mapping):
+        value = _optional_float(mean_line.get("value", mean_line.get("y")))
+        if value is not None:
+            values.append(value)
+    horizontal_limits = payload.get("horizontal_limits")
+    if isinstance(horizontal_limits, Iterable) and not isinstance(horizontal_limits, str | bytes):
+        horizontal_values = horizontal_limits
+    else:
+        horizontal_values = ()
+    for value in horizontal_values:
+        numeric = _optional_float(value)
+        if numeric is not None:
+            values.append(numeric)
+    for trace in data:
+        if not isinstance(trace, Mapping):
+            continue
+        value = _horizontal_reference_trace_value(trace)
+        if value is not None:
+            values.append(value)
+    return values
+
+
+def _drop_scatter_trend_reference_shapes_and_annotations(
+    layout: dict[str, Any],
+    reference_y_values: list[float],
+) -> None:
+    shapes = layout.get("shapes")
+    if isinstance(shapes, list):
+        kept_shapes = [
+            shape
+            for shape in shapes
+            if not _is_horizontal_reference_shape(shape, reference_y_values)
+        ]
+        if kept_shapes:
+            layout["shapes"] = kept_shapes
+        else:
+            layout.pop("shapes", None)
+
+    annotations = layout.get("annotations")
+    if isinstance(annotations, list):
+        kept_annotations = [
+            annotation
+            for annotation in annotations
+            if not _is_horizontal_reference_annotation(annotation, reference_y_values)
+        ]
+        if kept_annotations:
+            layout["annotations"] = kept_annotations
+        else:
+            layout.pop("annotations", None)
+
+
+def _is_horizontal_reference_shape(shape: Any, reference_y_values: list[float]) -> bool:
+    if not isinstance(shape, Mapping):
+        return False
+    if str(shape.get("type") or "").strip().casefold() != "line":
+        return False
+    yref = str(shape.get("yref") or "y").strip().casefold()
+    if yref != "y":
+        return False
+    y0 = _optional_float(shape.get("y0"))
+    y1 = _optional_float(shape.get("y1"))
+    if y0 is None or y1 is None or not math.isclose(y0, y1, rel_tol=1e-9, abs_tol=1e-12):
+        return False
+    return _matches_reference_value(y0, reference_y_values)
+
+
+def _is_horizontal_reference_annotation(
+    annotation: Any,
+    reference_y_values: list[float],
+) -> bool:
+    if not isinstance(annotation, Mapping):
+        return False
+    if str(annotation.get("xref") or "").strip().casefold() != "paper":
+        return False
+    if str(annotation.get("yref") or "").strip().casefold() != "y":
+        return False
+    text = str(annotation.get("text") or "").strip()
+    if _parse_valued_legend_label(text) is not None:
+        return True
+    y_value = _optional_float(annotation.get("y"))
+    return y_value is not None and _matches_reference_value(y_value, reference_y_values)
+
+
+def _matches_reference_value(value: float, reference_values: list[float]) -> bool:
+    return any(
+        math.isclose(float(value), float(reference), rel_tol=1e-9, abs_tol=1e-12)
+        for reference in reference_values
+    )
 
 
 def _payload_with_resolved_histogram_bin_count(payload: Mapping[str, Any]) -> Mapping[str, Any]:

@@ -1003,6 +1003,248 @@ def test_dashboard_plotly_spec_renames_generic_limit_traces(monkeypatch) -> None
     assert "shapes" not in spec["layout"]
 
 
+def test_plotstats_dashboard_spec_preserves_trend_axis_limits_and_legend_references(
+    monkeypatch,
+) -> None:
+    def fake_artifact(_payload, **_kwargs):
+        return {
+            "plotly_spec": {
+                "data": [
+                    {
+                        "type": "scattergl",
+                        "mode": "markers",
+                        "name": "Measurements",
+                        "x": [0.0, 1.0, 2.0, 3.0],
+                        "y": [10.0, 10.2, 10.4, 10.3],
+                    },
+                    {
+                        "type": "scatter",
+                        "mode": "lines",
+                        "name": "LSL=9.5",
+                        "x": [0.0, 3.0],
+                        "y": [9.5, 9.5],
+                        "showlegend": False,
+                        "meta": {"kind": "reference_lsl"},
+                    },
+                    {
+                        "type": "scatter",
+                        "mode": "lines",
+                        "name": "Nominal",
+                        "x": [0.0, 3.0],
+                        "y": [10.0, 10.0],
+                        "meta": {"kind": "reference_nominal"},
+                    },
+                    {
+                        "type": "scatter",
+                        "mode": "lines",
+                        "name": "Trend",
+                        "x": [0.0, 3.0],
+                        "y": [9.9, 10.4],
+                        "meta": {"kind": "trend"},
+                    },
+                ],
+                "layout": {
+                    "xaxis": {"range": [-0.18, 3.18]},
+                    "yaxis": {"range": [9.0, 11.0]},
+                    "annotations": [
+                        {"xref": "paper", "yref": "y", "x": 1.0, "y": 9.5, "text": "LSL=9.5"},
+                        {
+                            "xref": "paper",
+                            "yref": "y",
+                            "x": 1.0,
+                            "y": 10.0,
+                            "text": "Nominal=10.0",
+                        },
+                        {"xref": "paper", "yref": "paper", "x": 0.5, "y": 1.1, "text": "keep"},
+                    ],
+                    "shapes": [
+                        {
+                            "type": "line",
+                            "xref": "paper",
+                            "x0": 0,
+                            "x1": 1,
+                            "yref": "y",
+                            "y0": 9.5,
+                            "y1": 9.5,
+                        },
+                        {
+                            "type": "line",
+                            "xref": "x",
+                            "x0": 1.0,
+                            "x1": 1.0,
+                            "yref": "paper",
+                            "y0": 0,
+                            "y1": 1,
+                        },
+                    ],
+                },
+                "metadata": {"kind": "scatter"},
+            }
+        }
+
+    package = ModuleType("hexafe_plotstats")
+    adapters = ModuleType("hexafe_plotstats.adapters")
+    adapters.chart_artifact_from_metroliza_payload = fake_artifact
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats", package)
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats.adapters", adapters)
+
+    spec = build_plotstats_dashboard_spec(
+        {
+            "type": "trend",
+            "x_values": [0.0, 1.0, 2.0, 3.0],
+            "y_values": [10.0, 10.2, 10.4, 10.3],
+            "limits": {"lsl": 9.5, "nominal": 10.0, "usl": 10.5},
+            "x_limits": {"min": -0.25, "max": 3.25},
+            "y_limits": {"min": 9.0, "max": 11.0},
+        },
+        title="Trend",
+        static=False,
+    )
+
+    assert spec is not None
+    assert spec["layout"]["xaxis"]["range"] == [-0.25, 3.25]
+    assert spec["layout"]["yaxis"]["range"] == [9.0, 11.0]
+    lsl_trace = next(trace for trace in spec["data"] if trace.get("name") == "LSL=9.500")
+    nominal_trace = next(trace for trace in spec["data"] if trace.get("name") == "Nominal=10.000")
+    assert lsl_trace["x"] == [-0.25, 3.25]
+    assert nominal_trace["x"] == [-0.25, 3.25]
+    assert lsl_trace["showlegend"] is True
+    assert nominal_trace["showlegend"] is True
+    assert [annotation["text"] for annotation in spec["layout"]["annotations"]] == ["keep"]
+    assert spec["layout"]["shapes"] == [
+        {
+            "type": "line",
+            "xref": "x",
+            "x0": 1.0,
+            "x1": 1.0,
+            "yref": "paper",
+            "y0": 0,
+            "y1": 1,
+        }
+    ]
+
+
+def test_plotstats_dashboard_spec_uses_scatter_layout_range_for_horizontal_limits(
+    monkeypatch,
+) -> None:
+    def fake_artifact(_payload, **_kwargs):
+        return {
+            "plotly_spec": {
+                "data": [
+                    {"type": "scattergl", "mode": "markers", "x": [0.0, 1.0, 2.0], "y": [1, 2, 3]},
+                    {
+                        "type": "scatter",
+                        "mode": "lines",
+                        "name": "Limit 1",
+                        "x": [0.0, 2.0],
+                        "y": [2.5, 2.5],
+                        "showlegend": False,
+                        "meta": {"kind": "reference_limit_1"},
+                    },
+                ],
+                "layout": {
+                    "xaxis": {"range": [-1.0, 4.0]},
+                    "annotations": [{"xref": "paper", "yref": "y", "y": 2.5, "text": "Limit 1"}],
+                    "shapes": [
+                        {
+                            "type": "line",
+                            "xref": "paper",
+                            "x0": 0,
+                            "x1": 1,
+                            "yref": "y",
+                            "y0": 2.5,
+                            "y1": 2.5,
+                        }
+                    ],
+                },
+                "metadata": {"kind": "scatter"},
+            }
+        }
+
+    package = ModuleType("hexafe_plotstats")
+    adapters = ModuleType("hexafe_plotstats.adapters")
+    adapters.chart_artifact_from_metroliza_payload = fake_artifact
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats", package)
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats.adapters", adapters)
+
+    spec = build_plotstats_dashboard_spec(
+        {"type": "scatter", "x": [0.0, 1.0, 2.0], "y": [1, 2, 3], "horizontal_limits": [2.5]},
+        title="Scatter",
+        static=False,
+    )
+
+    assert spec is not None
+    limit_trace = next(trace for trace in spec["data"] if trace.get("name") == "Limit 1")
+    assert limit_trace["x"] == [-1.0, 4.0]
+    assert limit_trace["y"] == [2.5, 2.5]
+    assert limit_trace["showlegend"] is True
+    assert "annotations" not in spec["layout"]
+    assert "shapes" not in spec["layout"]
+
+
+def test_plotstats_dashboard_spec_normalizes_distribution_scatter_references(
+    monkeypatch,
+) -> None:
+    def fake_artifact(_payload, **_kwargs):
+        return {
+            "plotly_spec": {
+                "data": [
+                    {"type": "scattergl", "mode": "markers", "x": [1.0, 2.0, 3.0], "y": [10, 11, 12]},
+                    {
+                        "type": "scatter",
+                        "mode": "lines",
+                        "name": "LSL=9.5",
+                        "x": [1.0, 3.0],
+                        "y": [9.5, 9.5],
+                        "meta": {"kind": "reference_lsl"},
+                    },
+                ],
+                "layout": {
+                    "annotations": [{"xref": "paper", "yref": "y", "y": 9.5, "text": "LSL=9.5"}],
+                    "shapes": [
+                        {
+                            "type": "line",
+                            "xref": "paper",
+                            "x0": 0,
+                            "x1": 1,
+                            "yref": "y",
+                            "y0": 9.5,
+                            "y1": 9.5,
+                        }
+                    ],
+                },
+                "metadata": {"kind": "scatter"},
+            }
+        }
+
+    package = ModuleType("hexafe_plotstats")
+    adapters = ModuleType("hexafe_plotstats.adapters")
+    adapters.chart_artifact_from_metroliza_payload = fake_artifact
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats", package)
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats.adapters", adapters)
+
+    spec = build_plotstats_dashboard_spec(
+        {
+            "type": "distribution",
+            "render_mode": "scatter",
+            "x_values": [1.0, 2.0, 3.0],
+            "y_values": [10, 11, 12],
+            "limits": {"lsl": 9.5},
+            "x_domain": {"min": 0.5, "max": 3.5},
+        },
+        title="Scatter distribution",
+        static=False,
+    )
+
+    assert spec is not None
+    lsl_trace = next(trace for trace in spec["data"] if trace.get("name") == "LSL=9.500")
+    assert spec["layout"]["xaxis"]["range"] == [0.5, 3.5]
+    assert lsl_trace["x"] == [0.5, 3.5]
+    assert lsl_trace["showlegend"] is True
+    assert "annotations" not in spec["layout"]
+    assert "shapes" not in spec["layout"]
+
+
 def test_render_chart_artifact_png_returns_bytes(monkeypatch) -> None:
     def fake_artifact(payload, **_kwargs):
         return {

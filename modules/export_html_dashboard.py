@@ -1039,6 +1039,80 @@ def _build_horizontal_reference_shapes(
     return shapes, annotations
 
 
+def _finite_axis_range_from_mapping(value: Any) -> tuple[float, float] | None:
+    if not isinstance(value, dict):
+        return None
+    minimum = _coerce_finite_float(value.get("min"))
+    maximum = _coerce_finite_float(value.get("max"))
+    if minimum is None or maximum is None or minimum >= maximum:
+        return None
+    return minimum, maximum
+
+
+def _horizontal_reference_x_values(
+    layout: dict[str, Any],
+    x_values: list[float],
+    *,
+    payload: dict[str, Any] | None = None,
+) -> list[float]:
+    xaxis = layout.get("xaxis") if isinstance(layout.get("xaxis"), dict) else {}
+    axis_range = xaxis.get("range") if isinstance(xaxis, dict) else None
+    if isinstance(axis_range, list | tuple) and len(axis_range) >= 2:
+        start = _coerce_finite_float(axis_range[0])
+        end = _coerce_finite_float(axis_range[1])
+        if start is not None and end is not None and start < end:
+            return [start, end]
+
+    if isinstance(payload, dict):
+        explicit_range = _finite_axis_range_from_mapping(payload.get("x_domain"))
+        if explicit_range is None:
+            explicit_range = _finite_axis_range_from_mapping(payload.get("x_limits"))
+        if explicit_range is not None:
+            return [explicit_range[0], explicit_range[1]]
+
+    finite_x = [float(value) for value in x_values if math.isfinite(float(value))]
+    if not finite_x:
+        return [0.0, 1.0]
+    minimum = min(finite_x)
+    maximum = max(finite_x)
+    if math.isclose(minimum, maximum):
+        return [minimum - 0.5, maximum + 0.5]
+    return [minimum, maximum]
+
+
+def _build_horizontal_reference_traces(
+    *,
+    x_values: list[float],
+    reference_values: list[tuple[str, Any, str, str]],
+    theme: str,
+    mean_precision: int | None = None,
+) -> list[dict[str, Any]]:
+    traces: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for label, raw_value, color, dash in reference_values:
+        numeric = _coerce_finite_float(raw_value)
+        if numeric is None:
+            continue
+        formatted = _format_metrology_legend_value(label, numeric, mean_precision=mean_precision)
+        name = f"{label}={formatted}"
+        if name in seen:
+            continue
+        seen.add(name)
+        traces.append(
+            {
+                "type": "scatter",
+                "mode": "lines",
+                "name": name,
+                "x": list(x_values),
+                "y": [numeric, numeric],
+                "line": {"color": color, "width": 2, "dash": dash},
+                "hovertemplate": f"{name}<extra></extra>",
+                "showlegend": True,
+            }
+        )
+    return traces
+
+
 def _apply_plotly_categorical_axis(layout: dict[str, Any], axis_key: str, axis_layout: dict[str, Any] | None) -> None:
     if not isinstance(axis_layout, dict):
         return
@@ -1514,9 +1588,6 @@ def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str, them
         )
         layout["xaxis"]["tickformat"] = ".0f"
         layout["yaxis"]["tickformat"] = y_tick_format
-        shapes, annotations = _build_horizontal_reference_shapes(nominal=nominal, lsl=lsl, usl=usl, theme=theme)
-        layout["shapes"] = shapes
-        layout["annotations"] = annotations
         _apply_plotly_categorical_axis(
             layout,
             "xaxis",
@@ -1529,6 +1600,9 @@ def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str, them
             point_labels,
             payload.get("layout") if isinstance(payload.get("layout"), dict) else None,
         )
+        x_domain = _finite_axis_range_from_mapping(payload.get("x_domain"))
+        if x_domain is not None:
+            layout["xaxis"]["range"] = [x_domain[0], x_domain[1]]
         y_limits = payload.get("y_limits") if isinstance(payload.get("y_limits"), dict) else {}
         y_min = _coerce_finite_float(y_limits.get("min"))
         y_max = _coerce_finite_float(y_limits.get("max"))
@@ -1536,11 +1610,26 @@ def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str, them
             layout["yaxis"]["range"] = [y_min, y_max]
         x_hover_label = str(payload.get("x_label") or "Sample number")
         y_hover_label = str(payload.get("y_label") or "Measurement")
+        mean_line = payload.get("mean_line") if isinstance(payload.get("mean_line"), dict) else {}
+        mean_value = _coerce_finite_float(mean_line.get("value"))
+        reference_x = _horizontal_reference_x_values(layout, x_values, payload=payload)
+        reference_traces = _build_horizontal_reference_traces(
+            x_values=reference_x,
+            reference_values=[
+                ("LSL", lsl, tokens["reference_limit"], "dash"),
+                ("Nominal", nominal, tokens["reference_nominal"], "solid"),
+                ("USL", usl, tokens["reference_limit"], "dash"),
+                ("Mean", mean_value, tokens["mean_line"], "dashdot"),
+            ],
+            theme=theme,
+            mean_precision=_mean_precision_from_values(y_values),
+        )
         return {
             "data": [
                 {
                     "type": "scatter",
                     "mode": "markers",
+                    "name": "Measurements",
                     "x": x_values,
                     "y": y_values,
                     "customdata": point_labels,
@@ -1549,8 +1638,10 @@ def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str, them
                         f"{x_hover_label}=%{{customdata}}<br>"
                         f"{y_hover_label}=%{{y:{y_tick_format}}}<extra></extra>"
                     ),
+                    "showlegend": True,
                 }
-            ],
+            ]
+            + reference_traces,
             "layout": layout,
             "config": _build_plotly_config(),
         }
@@ -1886,44 +1977,6 @@ def _build_plotly_trend_spec(payload: dict[str, Any], *, title: str, theme: str 
     layout["yaxis"]["tickformat"] = y_tick_format
     layout["hovermode"] = "x unified"
     limits = payload.get("limits") if isinstance(payload.get("limits"), dict) else {}
-    shapes, annotations = _build_horizontal_reference_shapes(
-        nominal=limits.get("nominal"),
-        lsl=limits.get("lsl"),
-        usl=limits.get("usl"),
-        theme=theme,
-    )
-    if not shapes:
-        for index, limit in enumerate(payload.get("horizontal_limits") or [], start=1):
-            numeric_limit = _coerce_finite_float(limit)
-            if numeric_limit is None:
-                continue
-            shapes.append(
-                {
-                    "type": "line",
-                    "xref": "paper",
-                    "yref": "y",
-                    "x0": 0,
-                    "x1": 1,
-                    "y0": numeric_limit,
-                    "y1": numeric_limit,
-                    "line": {"color": tokens["reference_limit"], "width": 1, "dash": "dash"},
-                }
-            )
-            annotations.append(
-                {
-                    "xref": "paper",
-                    "yref": "y",
-                    "x": 1.0,
-                    "y": numeric_limit,
-                    "xanchor": "right",
-                    "text": f"Limit {index}={numeric_limit:.3f}",
-                    "showarrow": False,
-                    "font": {"size": 11, "color": tokens["reference_limit"]},
-                    "bgcolor": tokens["annotation_bg"],
-                }
-            )
-    layout["shapes"] = shapes
-    layout["annotations"] = annotations
     _apply_plotly_categorical_axis(
         layout,
         "xaxis",
@@ -1948,10 +2001,35 @@ def _build_plotly_trend_spec(payload: dict[str, Any], *, title: str, theme: str 
         layout["yaxis"]["range"] = [y_min, y_max]
     x_hover_label = str(payload.get("x_label") or "Sample number")
     y_hover_label = str(payload.get("y_label") or "Measurement")
+    named_reference_values = [
+        ("LSL", limits.get("lsl"), tokens["reference_limit"], "dash"),
+        ("Nominal", limits.get("nominal"), tokens["reference_nominal"], "solid"),
+        ("USL", limits.get("usl"), tokens["reference_limit"], "dash"),
+    ]
+    if not any(_coerce_finite_float(value) is not None for _label, value, _color, _dash in named_reference_values):
+        named_reference_values = [
+            (f"Limit {index}", limit, tokens["reference_limit"], "dash")
+            for index, limit in enumerate(payload.get("horizontal_limits") or [], start=1)
+        ]
+    mean_line = payload.get("mean_line") if isinstance(payload.get("mean_line"), dict) else {}
+    mean_value = _coerce_finite_float(mean_line.get("value"))
+    if mean_value is None and y_values:
+        mean_value = float(sum(y_values) / len(y_values))
+    reference_x = _horizontal_reference_x_values(layout, x_values, payload=payload)
+    reference_traces = _build_horizontal_reference_traces(
+        x_values=reference_x,
+        reference_values=[
+            *named_reference_values,
+            ("Mean", mean_value, tokens["mean_line"], "dashdot"),
+        ],
+        theme=theme,
+        mean_precision=_mean_precision_from_values(y_values),
+    )
     traces = [
         {
             "type": "scatter",
             "mode": "markers",
+            "name": "Measurements",
             "x": x_values,
             "y": y_values,
             "customdata": sample_labels,
@@ -1960,11 +2038,13 @@ def _build_plotly_trend_spec(payload: dict[str, Any], *, title: str, theme: str 
                 f"{x_hover_label}=%{{customdata}}<br>"
                 f"{y_hover_label}=%{{y:{y_tick_format}}}<extra></extra>"
             ),
+            "showlegend": True,
         }
     ]
     trend_trace = _build_subtle_trend_trace(x_values, y_values, theme=theme)
     if trend_trace:
         traces.append(trend_trace)
+    traces.extend(reference_traces)
     return {
         "data": traces,
         "layout": layout,
@@ -2005,6 +2085,7 @@ def _build_subtle_trend_trace(
         "line": {"color": tokens["trend_marker"], "width": 1.1, "dash": "dash"},
         "opacity": 0.35,
         "hovertemplate": "Trend<extra></extra>",
+        "showlegend": True,
     }
 
 

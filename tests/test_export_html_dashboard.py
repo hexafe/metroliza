@@ -27,6 +27,14 @@ def _embedded_plotly_specs(html_text: str) -> list[dict]:
     return specs
 
 
+def _trace_by_name(spec: dict, name: str) -> dict:
+    for trace in spec.get('data', []):
+        if trace.get('name') == name:
+            return trace
+    available = [trace.get('name') for trace in spec.get('data', [])]
+    raise AssertionError(f'Missing trace {name!r}; available traces: {available!r}')
+
+
 class TestExportHtmlDashboard(unittest.TestCase):
     def test_render_overview_cards_formats_generated_as_date_and_time_lines(self):
         html_markup = _render_overview_cards(
@@ -817,28 +825,54 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertIn('Max=6.687', visible_legend_names)
         self.assertTrue({'Minimum', 'Mean', 'Maximum'}.isdisjoint(visible_legend_names))
 
-    def test_distribution_scatter_plotly_spec_keeps_limit_annotations_visible(self):
+    def test_distribution_scatter_plotly_spec_uses_trace_controlled_reference_lines(self):
         with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
             spec = _build_plotly_chart_spec(
                 {
                     'type': 'distribution',
                     'render_mode': 'scatter',
-                    'x_values': [0.0, 1.0],
-                    'y_values': [10.0, 10.5],
-                    'limits': {'lsl': 9.5, 'usl': 10.5},
-                    'y_limits': {'min': 9.5, 'max': 10.5},
+                    'x_values': [0.0, 1.5, 3.0],
+                    'y_values': [10.1234, 10.4325, 10.5555],
+                    'labels': ['S101', 'S105', 'S108'],
+                    'limits': {'lsl': 10.1, 'nominal': 10.35, 'usl': 10.6},
+                    'mean_line': {'value': 10.370466666666666},
+                    'y_limits': {'min': 10.0, 'max': 10.7},
+                    'x_label': 'Sample number',
+                    'y_label': 'Diameter / X',
                 },
                 title='Scatter limits',
             )
 
-        annotations = spec['layout']['annotations']
-        usl_annotation = next(item for item in annotations if item['text'].startswith('USL='))
-        self.assertEqual(usl_annotation['bgcolor'], '#ffffff')
-        self.assertEqual(usl_annotation['bordercolor'], '#cbd5e1')
-        self.assertGreaterEqual(usl_annotation['borderwidth'], 1)
-        self.assertEqual(usl_annotation['opacity'], 1.0)
-        self.assertEqual(usl_annotation['yanchor'], 'top')
-        self.assertLess(usl_annotation['yshift'], 0)
+        self.assertNotIn('shapes', spec['layout'])
+        self.assertNotIn('annotations', spec['layout'])
+        self.assertEqual(spec['layout']['yaxis']['tickformat'], '.4f')
+        self.assertEqual(spec['layout']['yaxis']['range'], [10.0, 10.7])
+
+        measurement_trace = spec['data'][0]
+        self.assertEqual(measurement_trace['name'], 'Measurements')
+        self.assertTrue(measurement_trace.get('showlegend'))
+        self.assertEqual(measurement_trace['mode'], 'markers')
+        self.assertNotIn('line', measurement_trace)
+        self.assertEqual(measurement_trace['x'], [0.0, 1.5, 3.0])
+        self.assertEqual(measurement_trace['y'], [10.1234, 10.4325, 10.5555])
+        self.assertEqual(measurement_trace['customdata'], ['S101', 'S105', 'S108'])
+        self.assertIn('Sample number=%{customdata}', measurement_trace['hovertemplate'])
+        self.assertIn('%{y:.4f}', measurement_trace['hovertemplate'])
+
+        expected_references = {
+            'LSL=10.100': 10.1,
+            'Nominal=10.350': 10.35,
+            'USL=10.600': 10.6,
+            'Mean=10.37047': 10.370466666666666,
+        }
+        for name, y_value in expected_references.items():
+            trace = _trace_by_name(spec, name)
+            self.assertEqual(trace['type'], 'scatter')
+            self.assertEqual(trace['mode'], 'lines')
+            self.assertEqual(trace['x'], [0.0, 3.0])
+            self.assertEqual(trace['y'], [y_value, y_value])
+            self.assertTrue(trace.get('showlegend'))
+            self.assertNotEqual(trace.get('visible'), 'legendonly')
 
     def test_distribution_scatter_plotly_spec_thins_dense_sample_labels(self):
         x_values = [float(index) for index in range(80)]
@@ -959,10 +993,11 @@ class TestExportHtmlDashboard(unittest.TestCase):
                 {
                     'type': 'trend',
                     'x_values': [3, 1, 2],
-                    'y_values': [30.0, 10.0, 20.0],
+                    'y_values': [30.125, 10.625, 20.375],
                     'labels': ['third', 'first', 'second'],
-                    'horizontal_limits': [25.0],
-                    'limits': {'lsl': 12.0, 'usl': 28.0},
+                    'limits': {'lsl': 12.125, 'nominal': 21.125, 'usl': 28.875},
+                    'x_limits': {'min': 0.5, 'max': 3.5},
+                    'y_limits': {'min': 10.0, 'max': 31.0},
                     'x_label': 'Sample number',
                     'y_label': 'Diameter / X',
                 },
@@ -974,19 +1009,43 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(spec['layout']['yaxis']['title']['text'], 'Diameter / X')
         self.assertEqual(spec['layout']['xaxis']['tickvals'], [1.0, 2.0, 3.0])
         self.assertEqual(spec['layout']['xaxis']['ticktext'], ['first', 'second', 'third'])
-        self.assertEqual(spec['layout']['yaxis']['tickformat'], '.0f')
+        self.assertEqual(spec['layout']['xaxis']['range'], [0.5, 3.5])
+        self.assertEqual(spec['layout']['yaxis']['range'], [10.0, 31.0])
+        self.assertEqual(spec['layout']['yaxis']['tickformat'], '.3f')
+        self.assertNotIn('shapes', spec['layout'])
+        self.assertNotIn('annotations', spec['layout'])
+
         self.assertEqual(spec['data'][0]['x'], [1.0, 2.0, 3.0])
-        self.assertEqual(spec['data'][0]['y'], [10.0, 20.0, 30.0])
+        self.assertEqual(spec['data'][0]['y'], [10.625, 20.375, 30.125])
         self.assertEqual(spec['data'][0]['customdata'], ['first', 'second', 'third'])
+        self.assertEqual(spec['data'][0]['name'], 'Measurements')
+        self.assertTrue(spec['data'][0].get('showlegend'))
         self.assertEqual(spec['data'][0]['mode'], 'markers')
         self.assertIn('Sample number=%{customdata}', spec['data'][0]['hovertemplate'])
         self.assertNotIn('%{x', spec['data'][0]['hovertemplate'])
-        self.assertIn('%{y:.0f}', spec['data'][0]['hovertemplate'])
+        self.assertIn('%{y:.3f}', spec['data'][0]['hovertemplate'])
         self.assertNotIn('line', spec['data'][0])
-        self.assertEqual(spec['data'][1]['mode'], 'lines')
-        self.assertLessEqual(spec['data'][1]['opacity'], 0.35)
-        self.assertTrue(any(item['text'].startswith('LSL=') for item in spec['layout']['annotations']))
-        self.assertTrue(any(item['text'].startswith('USL=') for item in spec['layout']['annotations']))
+
+        trend_trace = _trace_by_name(spec, 'Trend')
+        self.assertEqual(trend_trace['mode'], 'lines')
+        self.assertEqual(trend_trace['line']['dash'], 'dash')
+        self.assertLessEqual(trend_trace['line']['width'], 1.1)
+        self.assertLessEqual(trend_trace['opacity'], 0.35)
+
+        expected_references = {
+            'LSL=12.125': 12.125,
+            'Nominal=21.125': 21.125,
+            'USL=28.875': 28.875,
+            'Mean=20.3750': 20.375,
+        }
+        for name, y_value in expected_references.items():
+            trace = _trace_by_name(spec, name)
+            self.assertEqual(trace['type'], 'scatter')
+            self.assertEqual(trace['mode'], 'lines')
+            self.assertEqual(trace['x'], [0.5, 3.5])
+            self.assertEqual(trace['y'], [y_value, y_value])
+            self.assertTrue(trace.get('showlegend'))
+            self.assertNotEqual(trace.get('visible'), 'legendonly')
 
 
 if __name__ == '__main__':
