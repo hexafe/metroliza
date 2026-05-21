@@ -276,20 +276,14 @@ def test_plotstats_dashboard_spec_normalizes_histogram_plotly_semantics(monkeypa
     assert bar_trace["width"] == [5847.0, 5830.0]
     assert bar_trace["customdata"][0] == [123.0, 5970.0, 4, "123 - 5.97e+03"]
     assert spec["data"][1]["name"] == "LSL=123.000"
-    assert spec["data"][1]["visible"] == "legendonly"
-    assert spec["data"][1]["y"] == [0.0, 0.0]
+    assert spec["data"][1].get("visible") != "legendonly"
+    assert spec["data"][1]["y"] == [0.0, 0.6]
     assert spec["data"][2]["name"] == "Mean=124.0"
-    assert spec["data"][2]["visible"] == "legendonly"
-    assert spec["data"][2]["y"] == [0.0, 0.0]
-    reference_shapes = [
-        shape for shape in spec["layout"]["shapes"]
-        if shape.get("xref") == "x" and shape.get("yref") == "paper"
-    ]
-    assert any(shape["x0"] == 123.0 and shape["x1"] == 123.0 for shape in reference_shapes)
-    assert any(shape["x0"] == 124.0 and shape["x1"] == 124.0 for shape in reference_shapes)
+    assert spec["data"][2].get("visible") != "legendonly"
+    assert spec["data"][2]["y"] == [0.0, 0.6]
+    assert "shapes" not in spec["layout"]
     annotations_by_text = {annotation["text"]: annotation for annotation in spec["layout"]["annotations"]}
-    assert {"legacy", "LSL=123.000", "Mean=124.0"}.issubset(annotations_by_text)
-    assert annotations_by_text["LSL=123.000"]["y"] != annotations_by_text["Mean=124.0"]["y"]
+    assert set(annotations_by_text) == {"legacy"}
     assert all(annotation["bgcolor"] == "#ffffff" for annotation in spec["layout"]["annotations"])
     assert all(annotation["bordercolor"] == "#cbd5e1" for annotation in spec["layout"]["annotations"])
     assert all(annotation["borderwidth"] >= 1 for annotation in spec["layout"]["annotations"])
@@ -345,10 +339,10 @@ def test_plotstats_dashboard_spec_promotes_valued_histogram_reference_traces(mon
     assert names.count("LSL=1.500") == 1
     assert names.count("USL=3.500") == 1
     assert names.count("Mean=2.0") == 1
-    assert all(trace["visible"] == "legendonly" for trace in spec["data"][1:])
-    assert all(trace["y"] == [0.0, 0.0] for trace in spec["data"][1:])
+    assert all(trace.get("visible") != "legendonly" for trace in spec["data"][1:])
+    assert all(trace["y"] == [0.0, 0.75] for trace in spec["data"][1:])
     assert spec["layout"]["yaxis"]["range"] == [0.0, 0.81]
-    assert all(shape["yref"] == "paper" for shape in spec["layout"]["shapes"])
+    assert "shapes" not in spec["layout"]
 
 
 def test_dashboard_plotly_fallback_builds_percent_histogram_with_reference_values() -> None:
@@ -383,14 +377,20 @@ def test_dashboard_plotly_fallback_builds_percent_histogram_with_reference_value
         "LSL=1.500",
         "USL=3.500",
     }.issubset(trace_names)
-    assert all(trace["visible"] == "legendonly" for trace in spec["data"][1:])
-    assert all(trace["y"] == [0.0, 0.0] for trace in spec["data"][1:])
-    annotation_texts = {annotation["text"] for annotation in spec["layout"]["annotations"]}
-    assert {"LSL=1.500", "USL=3.500", "Mean=2.5"}.issubset(annotation_texts)
-    assert all(annotation["bgcolor"] == "#ffffff" for annotation in spec["layout"]["annotations"])
-    assert all(annotation["bordercolor"] == "#cbd5e1" for annotation in spec["layout"]["annotations"])
-    assert all(annotation["borderwidth"] >= 1 for annotation in spec["layout"]["annotations"])
-    assert all(annotation["opacity"] == 1.0 for annotation in spec["layout"]["annotations"])
+    visible_default_prefixes = ("Mean=", "LSL=", "Nominal=", "USL=")
+    assert all(
+        trace.get("visible") != "legendonly"
+        for trace in spec["data"][1:]
+        if str(trace["name"]).startswith(visible_default_prefixes)
+    )
+    assert all(
+        trace.get("visible") == "legendonly"
+        for trace in spec["data"][1:]
+        if not str(trace["name"]).startswith(visible_default_prefixes)
+    )
+    assert all(trace["y"] == [0.0, 0.5] for trace in spec["data"][1:])
+    assert "annotations" not in spec["layout"]
+    assert "shapes" not in spec["layout"]
 
 
 def test_dashboard_plotly_fallback_builds_distribution_and_iqr_with_full_width_legend_lines() -> None:
@@ -523,7 +523,7 @@ def test_plotstats_dashboard_spec_scales_low_raw_density_overlays_by_bin_width(m
     assert spec["layout"]["yaxis"]["range"] == [0.0, 0.54]
 
 
-def test_plotstats_dashboard_spec_adds_group_mean_annotations_with_matching_colors(monkeypatch) -> None:
+def test_plotstats_dashboard_spec_adds_group_mean_lines_with_matching_colors(monkeypatch) -> None:
     def fake_artifact(_payload, **_kwargs):
         return {
             "plotly_spec": {
@@ -568,14 +568,17 @@ def test_plotstats_dashboard_spec_adds_group_mean_annotations_with_matching_colo
         static=False,
     )
 
-    annotations = spec["layout"]["annotations"]
-    by_text = {annotation["text"]: annotation for annotation in annotations}
-    assert by_text["A mean=1.5000"]["bgcolor"] == "#ffffff"
-    assert by_text["A mean=1.5000"]["font"]["color"] == "#0072B2"
-    assert by_text["B mean=1.5000"]["bgcolor"] == "#ffffff"
-    assert by_text["B mean=1.5000"]["font"]["color"] == "#D55E00"
-    assert by_text["A mean=1.5000"]["y"] != by_text["B mean=1.5000"]["y"]
-    assert spec["layout"]["margin"]["t"] >= 100
+    mean_traces = [
+        trace for trace in spec["data"]
+        if str(trace.get("name") or "").startswith(("(A) Mean=", "(B) Mean="))
+    ]
+    by_name = {trace["name"]: trace for trace in mean_traces}
+    assert by_name["(A) Mean=1.5"]["line"]["color"] == "#0072B2"
+    assert by_name["(B) Mean=1.5"]["line"]["color"] == "#D55E00"
+    assert by_name["(A) Mean=1.5"]["y"] == [0.0, 0.75]
+    assert by_name["(B) Mean=1.5"]["y"] == [0.0, 0.75]
+    assert "annotations" not in spec["layout"]
+    assert "shapes" not in spec["layout"]
     assert [trace["name"] for trace in spec["data"] if trace["type"] == "bar"] == ["A", "B"]
 
 
@@ -849,8 +852,10 @@ def test_dashboard_plotly_spec_renames_generic_limit_traces(monkeypatch) -> None
 
     assert spec is not None
     assert {trace["name"] for trace in spec["data"][1:]} == {"LSL=1.500", "USL=3.500"}
-    annotation_texts = {annotation["text"] for annotation in spec["layout"]["annotations"]}
-    assert {"LSL=1.500", "USL=3.500"}.issubset(annotation_texts)
+    assert all(trace.get("visible") != "legendonly" for trace in spec["data"][1:])
+    assert all(trace["y"] == [0.0, 1.0] for trace in spec["data"][1:])
+    assert "annotations" not in spec["layout"]
+    assert "shapes" not in spec["layout"]
 
 
 def test_render_chart_artifact_png_returns_bytes(monkeypatch) -> None:

@@ -710,6 +710,34 @@ def _resolve_plotly_histogram_bins(
     }
 
 
+def _plotly_histogram_probability_max(values: list[float], bins: dict[str, Any]) -> float | None:
+    if not values:
+        return None
+    start = _coerce_finite_float(bins.get("start"))
+    end = _coerce_finite_float(bins.get("end"))
+    size = _coerce_finite_float(bins.get("size"))
+    if start is None or end is None or size is None or size <= 0 or end <= start:
+        return None
+    bin_count = max(1, int(math.ceil((end - start) / size)))
+    counts = [0] * bin_count
+    for value in values:
+        if value < start or value > end:
+            continue
+        index = min(bin_count - 1, max(0, int((value - start) / size)))
+        counts[index] += 1
+    if not counts:
+        return None
+    return float(max(counts) / max(len(values), 1))
+
+
+def _apply_plotly_histogram_y_range(layout: dict[str, Any], max_height: float | None) -> None:
+    if max_height is None or not math.isfinite(float(max_height)) or max_height <= 0:
+        return
+    yaxis = layout.setdefault("yaxis", {})
+    if isinstance(yaxis, dict):
+        yaxis["range"] = [0.0, max(float(max_height) * 1.08, 1e-9)]
+
+
 def _build_plotly_base_layout(*, title: str, x_label: str, y_label: str, theme: str = "light") -> dict[str, Any]:
     tokens = _build_plotly_theme_tokens(theme)
     return {
@@ -1103,7 +1131,6 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str, theme: 
     limits = _resolve_limit_values(payload)
     lsl = limits.get("lsl")
     usl = limits.get("usl")
-    nominal = limits.get("nominal")
     mean_precision = _mean_precision_from_values(values)
     mean_value = _coerce_finite_float(((payload.get("summary") or {}).get("mean") if isinstance(payload.get("summary"), dict) else None))
     if mean_value is None and values:
@@ -1121,44 +1148,8 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str, theme: 
     )
     layout["yaxis"]["tickformat"] = ".0%"
     _apply_plotly_histogram_axis_readability(layout)
-    shapes, annotations = _build_vertical_reference_shapes(nominal=nominal, lsl=lsl, usl=usl, theme=theme)
-    if mean_value is not None:
-        shapes.append(
-            {
-                "type": "line",
-                "xref": "x",
-                "yref": "paper",
-                "x0": mean_value,
-                "x1": mean_value,
-                "y0": 0,
-                "y1": 1,
-                "line": {"color": tokens["mean_line"], "width": 2, "dash": "dashdot"},
-            }
-        )
-        annotations.append(
-            {
-                "xref": "x",
-                "yref": "paper",
-                "x": mean_value,
-                "y": 1.10,
-                "text": f"Mean={_format_metrology_legend_value('Mean', mean_value, mean_precision=mean_precision)}",
-                "showarrow": False,
-                "font": {"size": 11, "color": tokens["mean_line"]},
-                "bgcolor": "#ffffff",
-                "bordercolor": "#cbd5e1",
-                "borderwidth": 1,
-                "borderpad": 3,
-                "opacity": 1.0,
-            }
-        )
-    _apply_histogram_annotation_contrast(annotations)
-    _stagger_histogram_annotations(
-        layout,
-        _histogram_annotation_positions(annotations),
-        bin_width=_coerce_finite_float(bins.get("size")) if isinstance(bins, dict) else None,
-    )
-    layout["shapes"] = shapes
-    layout["annotations"] = annotations
+    histogram_max_height = _plotly_histogram_probability_max(values, bins)
+    _apply_plotly_histogram_y_range(layout, histogram_max_height)
     x_view = payload.get("x_view") if isinstance(payload.get("x_view"), dict) else {}
     x_min = _coerce_finite_float(x_view.get("min"))
     x_max = _coerce_finite_float(x_view.get("max"))
@@ -1169,6 +1160,7 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str, theme: 
     traces: list[dict[str, Any]] = [
         {
             "type": "histogram",
+            "name": "Frequency",
             "x": values,
             "histnorm": "probability",
             "xbins": bins,
@@ -1186,6 +1178,7 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str, theme: 
             mean_value=mean_value,
             theme=theme,
             mean_precision=mean_precision,
+            line_height=histogram_max_height,
         )
     )
 
@@ -1275,9 +1268,11 @@ def _build_histogram_reference_legend_traces(
     mean_value: float | None,
     theme: str,
     mean_precision: int | None = None,
+    line_height: float | None = None,
 ) -> list[dict[str, Any]]:
     tokens = _build_plotly_theme_tokens(theme)
     reference_values = _collect_histogram_reference_values(payload, lsl=lsl, usl=usl, mean_value=mean_value)
+    height = float(line_height) if line_height is not None and math.isfinite(float(line_height)) else 0.0
     traces: list[dict[str, Any]] = []
     for label, numeric, color, dash in (
         ("Min", reference_values.get("min"), tokens["reference_nominal"], "dot"),
@@ -1299,14 +1294,14 @@ def _build_histogram_reference_legend_traces(
                 "mode": "lines",
                 "name": f"{label}={formatted}",
                 "x": [numeric, numeric],
-                "y": [0.0, 0.0],
+                "y": [0.0, height],
                 "line": {"color": color, "width": 2, "dash": dash},
-                "hoverinfo": "skip",
                 "hovertemplate": f"{label}={formatted}<extra></extra>",
-                "visible": "legendonly",
                 "showlegend": True,
             }
         )
+        if label not in {"Mean", "LSL", "Nominal", "USL"}:
+            traces[-1]["visible"] = "legendonly"
     return traces
 
 
@@ -1992,47 +1987,55 @@ def _build_group_analysis_plotly_spec(
         layout["yaxis"]["tickformat"] = ".0%"
         layout["bargap"] = 0.04
         layout["hovermode"] = "x unified"
-        shapes, annotations = _build_vertical_reference_shapes(
-            nominal=spec_limits.get("nominal"),
+        bins = _resolve_plotly_histogram_bins(all_values)
+        histogram_max_height = max(
+            (
+                height
+                for _label, values in normalized_groups
+                if (height := _plotly_histogram_probability_max(values, bins)) is not None
+            ),
+            default=None,
+        )
+        _apply_plotly_histogram_y_range(layout, histogram_max_height)
+        reference_payload = {
+            "values": [],
+            "limits": dict(spec_limits),
+        }
+        reference_traces = _build_histogram_reference_legend_traces(
+            payload=reference_payload,
             lsl=spec_limits.get("lsl"),
             usl=spec_limits.get("usl"),
+            mean_value=None,
             theme=theme,
+            mean_precision=_mean_precision_from_values(all_values),
+            line_height=histogram_max_height,
         )
-        bins = _resolve_plotly_histogram_bins(all_values)
+        line_height = (
+            float(histogram_max_height)
+            if histogram_max_height is not None and math.isfinite(float(histogram_max_height))
+            else 0.0
+        )
+        group_mean_precision = _mean_precision_from_values(all_values)
         for index, (label, values) in enumerate(normalized_groups, start=1):
             mean_value = float(sum(values) / len(values))
             color = tokens["colorway"][(index - 1) % len(tokens["colorway"])]
-            shapes.append(
+            formatted = _format_metrology_legend_value(
+                "Mean",
+                mean_value,
+                mean_precision=group_mean_precision,
+            )
+            reference_traces.append(
                 {
-                    "type": "line",
-                    "xref": "x",
-                    "yref": "paper",
-                    "x0": mean_value,
-                    "x1": mean_value,
-                    "y0": 0,
-                    "y1": 1,
+                    "type": "scatter",
+                    "mode": "lines",
+                    "name": f"({label}) Mean={formatted}",
+                    "x": [mean_value, mean_value],
+                    "y": [0.0, line_height],
                     "line": {"color": color, "width": 2, "dash": "dashdot"},
+                    "hovertemplate": f"({label}) Mean={formatted}<extra></extra>",
+                    "showlegend": True,
                 }
             )
-            annotation = {
-                "xref": "x",
-                "yref": "paper",
-                "x": mean_value,
-                "y": 1.08,
-                "text": f"{label} mean={_format_metrology_legend_value('Mean', mean_value)}",
-                "showarrow": False,
-                "font": {"size": 11, "color": color},
-                "bgcolor": tokens["annotation_bg"],
-            }
-            annotations.append(annotation)
-        _apply_histogram_annotation_contrast(annotations)
-        _stagger_histogram_annotations(
-            layout,
-            _histogram_annotation_positions(annotations),
-            bin_width=_coerce_finite_float(bins.get("size")) if isinstance(bins, dict) else None,
-        )
-        layout["shapes"] = shapes
-        layout["annotations"] = annotations
         return {
             "data": [
                 {
@@ -2050,7 +2053,8 @@ def _build_group_analysis_plotly_spec(
                     "hovertemplate": f"{label}<br>Measurement=%{{x}}<br>Frequency=%{{y:.2%}}<extra></extra>",
                 }
                 for index, (label, values) in enumerate(normalized_groups, start=1)
-            ],
+            ]
+            + reference_traces,
             "layout": {**layout, "barmode": "overlay"},
             "config": _build_plotly_config(),
         }

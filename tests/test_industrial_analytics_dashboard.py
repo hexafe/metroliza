@@ -93,11 +93,10 @@ def test_build_production_dashboard_manifest_contains_requested_chart_families(t
     histogram = next(chart for chart in manifest["charts"] if chart["chart_type"] == "histogram")
     assert histogram["group_labels"] == ["Other references", "Selected references"]
     assert histogram["stats_tables"]
+    assert histogram["image"]["mime_type"] == "image/png"
     if "plotly_spec" in histogram:
         assert histogram["plotly_spec"]["config"].get("staticPlot") is not True
         assert histogram["plotly_spec"]["layout"]["yaxis"]["title"]["text"] == "Frequency (%)"
-    else:
-        assert histogram["image"]["mime_type"] == "image/png"
     assert any(
         row["label"] == "Samples"
         for table in histogram["stats_tables"]
@@ -259,6 +258,9 @@ def test_write_production_dashboard_omits_plotly_when_payload_exceeds_budget(tmp
     assert "production-dashboard-charts" not in html_text
     assert "plotly-2.27.0.min.js" not in html_text
     assert 'class="chart-image"' in html_text
+    histogram = next(chart for chart in manifest["charts"] if chart["chart_type"] == "histogram")
+    assert histogram["image"]["mime_type"] == "image/png"
+    assert "Cycle Time S distribution" in html_text
     assert "Cycle Time S violin" in html_text
     assert "Cycle Time S box" in html_text
     assert "Interactive charts are unavailable in this dashboard" in html_text
@@ -433,8 +435,7 @@ def test_metric_limits_flow_into_dashboard_stats_tables() -> None:
         assert xaxis["automargin"] is True
         assert xaxis["title"]["standoff"] >= 20
         assert histogram["plotly_spec"]["layout"]["margin"]["b"] >= 92
-    else:
-        assert histogram["image"]["mime_type"] == "image/png"
+    assert histogram["image"]["mime_type"] == "image/png"
 
 
 def test_histogram_stats_rows_without_limits_show_capability_as_not_applicable() -> None:
@@ -897,15 +898,18 @@ def test_csv_summary_dashboard_plotly_specs_include_stat_values_and_colored_grou
         for trace in histogram_spec["data"]
         if trace.get("type") == "bar"
     }
-    annotations_by_text = {
-        annotation["text"]: annotation
-        for annotation in histogram_spec["layout"]["annotations"]
+    histogram_mean_traces = {
+        trace["name"]: trace
+        for trace in histogram_spec["data"]
+        if str(trace.get("name") or "").startswith(("(A) Mean=", "(B) Mean="))
     }
+    assert "annotations" not in histogram_spec["layout"]
+    assert "shapes" not in histogram_spec["layout"]
 
-    assert annotations_by_text["A mean=6.5380"]["bgcolor"] == "#ffffff"
-    assert annotations_by_text["A mean=6.5380"]["font"]["color"] == histogram_traces["A"]["marker"]["color"]
-    assert annotations_by_text["B mean=7.3500"]["bgcolor"] == "#ffffff"
-    assert annotations_by_text["B mean=7.3500"]["font"]["color"] == histogram_traces["B"]["marker"]["color"]
+    assert histogram_mean_traces["(A) Mean=6.5380"]["line"]["color"] == histogram_traces["A"]["marker"]["color"]
+    assert histogram_mean_traces["(B) Mean=7.3500"]["line"]["color"] == histogram_traces["B"]["marker"]["color"]
+    assert histogram_mean_traces["(A) Mean=6.5380"].get("visible") != "legendonly"
+    assert histogram_mean_traces["(B) Mean=7.3500"].get("visible") != "legendonly"
 
     violin_trace_names = {trace["name"] for trace in charts["violin"]["plotly_spec"]["data"]}
     assert "A (n=4)" in violin_trace_names

@@ -310,17 +310,23 @@ def _histogram_reference_traces(
         if value is None or not math.isfinite(value):
             continue
         formatted = _format_metrology_legend_value(label, value, mean_precision=mean_precision)
-        traces.append(
-            {
-                "type": "scatter",
-                "mode": "lines",
-                "name": label,
-                "x": [value, value],
-                "y": [0.0, 1.0],
-                "line": {"color": color, "width": 1.5, "dash": "dash"},
-                "hovertemplate": f"{label}={formatted}<extra></extra>",
-            }
-        )
+        trace = {
+            "type": "scatter",
+            "mode": "lines",
+            "name": f"{label}={formatted}",
+            "x": [value, value],
+            "y": [0.0, 0.0],
+            "line": {
+                "color": color,
+                "width": 1.5,
+                "dash": "solid" if label == "Nominal" else _STAT_DASH_BY_LABEL.get(label, "dash"),
+            },
+            "hovertemplate": f"{label}={formatted}<extra></extra>",
+            "showlegend": True,
+        }
+        if label not in _HISTOGRAM_VISIBLE_REFERENCE_LABELS:
+            trace["visible"] = "legendonly"
+        traces.append(trace)
     return traces
 
 
@@ -920,6 +926,7 @@ _STAT_DASH_BY_LABEL = {
     "Q3": "dash",
     "Max": "dot",
 }
+_HISTOGRAM_VISIBLE_REFERENCE_LABELS = {"Mean", "LSL", "Nominal", "USL"}
 
 
 def _normalize_dashboard_plotly_spec(spec: dict[str, Any]) -> dict[str, Any]:
@@ -936,10 +943,13 @@ def _normalize_dashboard_plotly_spec(spec: dict[str, Any]) -> dict[str, Any]:
         _normalize_histogram_overlay_traces(spec)
     _normalize_reference_trace_names_and_annotations(spec)
     _dedupe_visible_stat_legend_items(spec)
+    if _is_histogram_plotly_spec(spec):
+        _drop_histogram_reference_shapes_and_annotations(spec)
     _normalize_plotly_annotation_boxes(spec)
     if _is_histogram_plotly_spec(spec):
         _stagger_histogram_x_annotations(spec)
         _apply_histogram_y_range_from_bar_heights(spec)
+        _normalize_histogram_reference_line_heights(spec)
     return spec
 
 
@@ -1269,87 +1279,35 @@ def _ensure_group_histogram_mean_annotations(spec: Mapping[str, Any], payload: M
     layout = spec.get("layout")
     if not isinstance(layout, dict):
         return
-    annotations = layout.setdefault("annotations", [])
-    if not isinstance(annotations, list):
-        annotations = []
-        layout["annotations"] = annotations
-    shapes = layout.setdefault("shapes", [])
-    if not isinstance(shapes, list):
-        shapes = []
-        layout["shapes"] = shapes
-    existing_by_text = {
-        str(annotation.get("text") or ""): annotation
-        for annotation in annotations
-        if isinstance(annotation, dict)
-    }
-    mean_annotations: list[tuple[dict[str, Any], float]] = []
+    data = spec.get("data")
+    if not isinstance(data, list):
+        return
+    existing_names = {str(trace.get("name") or "") for trace in data if isinstance(trace, Mapping)}
     for index, (label, values) in enumerate(groups):
         finite_values = values[np.isfinite(values)]
         if finite_values.size == 0:
             continue
         mean_value = float(np.mean(finite_values))
         color = _ensure_histogram_group_trace_color(spec, str(label), index)
-        text = f"{label} mean={_format_metrology_legend_value('Mean', mean_value)}"
-        shapes.append(
+        name = (
+            f"{_stat_legend_prefix(str(label), populated_count=len(groups))}Mean="
+            f"{_format_metrology_legend_value('Mean', mean_value, mean_precision=_mean_precision_from_payload(payload))}"
+        )
+        if name in existing_names:
+            continue
+        data.append(
             {
-                "type": "line",
-                "xref": "x",
-                "yref": "paper",
-                "x0": mean_value,
-                "x1": mean_value,
-                "y0": 0,
-                "y1": 1,
+                "type": "scatter",
+                "mode": "lines",
+                "name": name,
+                "x": [mean_value, mean_value],
+                "y": [0.0, 0.0],
                 "line": {"color": color, "width": 2, "dash": "dashdot"},
+                "hovertemplate": f"{name}<extra></extra>",
+                "showlegend": True,
             }
         )
-        annotation = existing_by_text.get(text)
-        if annotation is None:
-            annotation = {
-                "xref": "x",
-                "yref": "paper",
-                "x": mean_value,
-                "y": 1.08,
-                "text": text,
-                "showarrow": False,
-                "font": {"size": 11, "color": color},
-                "bgcolor": "#ffffff",
-                "bordercolor": "#cbd5e1",
-                "borderwidth": 1,
-                "borderpad": 3,
-                "opacity": 1.0,
-            }
-            annotations.append(annotation)
-            existing_by_text[text] = annotation
-        else:
-            annotation.update(
-                {
-                    "xref": "x",
-                    "yref": "paper",
-                    "x": mean_value,
-                    "text": text,
-                    "showarrow": False,
-                    "font": {"size": 11, "color": color},
-                    "bgcolor": "#ffffff",
-                    "bordercolor": "#cbd5e1",
-                    "borderwidth": max(int(annotation.get("borderwidth") or 0), 1),
-                    "borderpad": max(int(annotation.get("borderpad") or 0), 3),
-                    "opacity": 1.0,
-                }
-            )
-        mean_annotations.append((annotation, mean_value))
-    all_values = np.concatenate([values for _label, values in groups]) if groups else np.asarray([])
-    all_values = all_values[np.isfinite(all_values)]
-    bin_width = None
-    if all_values.size:
-        bin_count = _resolved_bin_count(all_values, bin_count=_payload_int(payload.get("bin_count")))
-        data_min = float(np.min(all_values))
-        data_max = float(np.max(all_values))
-        if math.isclose(data_min, data_max, rel_tol=1e-9, abs_tol=1e-9):
-            padding = max(abs(data_min) * 0.01, 0.5)
-            data_min -= padding
-            data_max += padding
-        bin_width = (data_max - data_min) / max(bin_count, 1)
-    _stagger_histogram_mean_annotations(layout, mean_annotations, bin_width=bin_width)
+        existing_names.add(name)
 
 
 def _ensure_histogram_group_trace_color(spec: Mapping[str, Any], label: str, index: int) -> str:
@@ -2049,7 +2007,8 @@ def _normalize_reference_trace_names_and_annotations(spec: Mapping[str, Any]) ->
         )
         trace["name"] = display
         if is_histogram and axis == "x":
-            _promote_histogram_reference_trace_to_shape(layout, trace, value)
+            _normalize_histogram_reference_trace(trace, value=value, label=display_label, display=display)
+            continue
         if display in existing_text:
             continue
         annotation = _reference_annotation(axis=axis, value=value, text=display, color=_trace_line_color(trace))
@@ -2061,63 +2020,121 @@ def _normalize_reference_trace_names_and_annotations(spec: Mapping[str, Any]) ->
             existing_text.add(display)
 
 
-def _promote_histogram_reference_trace_to_shape(
-    layout: dict[str, Any],
+def _normalize_histogram_reference_trace(
     trace: dict[str, Any],
+    *,
     value: float,
+    label: str,
+    display: str,
 ) -> None:
-    line = trace.get("line") if isinstance(trace.get("line"), Mapping) else {}
-    color = str(line.get("color") or "#111827")
-    width = _optional_float(line.get("width")) or 2
-    dash = str(line.get("dash") or "dash")
-    shapes = layout.setdefault("shapes", [])
-    if not isinstance(shapes, list):
-        shapes = []
-        layout["shapes"] = shapes
-    if not _has_histogram_reference_shape(shapes, value):
-        shapes.append(
-            {
-                "type": "line",
-                "xref": "x",
-                "yref": "paper",
-                "x0": value,
-                "x1": value,
-                "y0": 0,
-                "y1": 1,
-                "line": {"color": color, "width": width, "dash": dash},
-            }
-        )
     trace["type"] = "scatter"
     trace["mode"] = "lines"
+    trace["name"] = display
     trace["x"] = [value, value]
     trace["y"] = [0.0, 0.0]
-    trace["visible"] = "legendonly"
     trace["showlegend"] = True
-    trace["hoverinfo"] = "skip"
+    trace["hovertemplate"] = f"{display}<extra></extra>"
+    if label in _HISTOGRAM_VISIBLE_REFERENCE_LABELS:
+        trace.pop("visible", None)
+    else:
+        trace["visible"] = "legendonly"
 
 
-def _has_histogram_reference_shape(shapes: list[Any], value: float) -> bool:
-    for shape in shapes:
-        if not isinstance(shape, Mapping):
+def _drop_histogram_reference_shapes_and_annotations(spec: Mapping[str, Any]) -> None:
+    layout = spec.get("layout")
+    if not isinstance(layout, dict):
+        return
+    shapes = layout.get("shapes")
+    if isinstance(shapes, list):
+        kept_shapes = [shape for shape in shapes if not _is_histogram_vertical_line_shape(shape)]
+        if kept_shapes:
+            layout["shapes"] = kept_shapes
+        else:
+            layout.pop("shapes", None)
+    annotations = layout.get("annotations")
+    if isinstance(annotations, list):
+        kept_annotations = [
+            annotation
+            for annotation in annotations
+            if not _is_histogram_reference_annotation(annotation)
+        ]
+        if kept_annotations:
+            layout["annotations"] = kept_annotations
+        else:
+            layout.pop("annotations", None)
+
+
+def _is_histogram_vertical_line_shape(shape: Any) -> bool:
+    if not isinstance(shape, Mapping):
+        return False
+    if str(shape.get("type") or "").strip().casefold() != "line":
+        return False
+    if str(shape.get("xref") or "").strip().casefold() != "x":
+        return False
+    if str(shape.get("yref") or "").strip().casefold() != "paper":
+        return False
+    x0 = _optional_float(shape.get("x0"))
+    x1 = _optional_float(shape.get("x1"))
+    return x0 is not None and x1 is not None and math.isclose(x0, x1, rel_tol=1e-9, abs_tol=1e-12)
+
+
+def _is_histogram_reference_annotation(annotation: Any) -> bool:
+    if not isinstance(annotation, Mapping):
+        return False
+    if str(annotation.get("xref") or "").strip().casefold() != "x":
+        return False
+    if str(annotation.get("yref") or "").strip().casefold() != "paper":
+        return False
+    text = str(annotation.get("text") or "").strip()
+    parsed = _parse_valued_legend_label(text)
+    return parsed is not None
+
+
+def _normalize_histogram_reference_line_heights(spec: Mapping[str, Any]) -> None:
+    max_height = _histogram_bar_max_height(spec.get("data") or [])
+    height = float(max_height) if max_height is not None and math.isfinite(float(max_height)) else 0.0
+    data = spec.get("data")
+    if not isinstance(data, list):
+        return
+    for trace in data:
+        if not isinstance(trace, dict):
             continue
-        if str(shape.get("type") or "").strip().casefold() != "line":
+        label, value = _histogram_reference_trace_label_and_value(trace)
+        if label is None or value is None:
             continue
-        if str(shape.get("xref") or "").strip().casefold() != "x":
-            continue
-        if str(shape.get("yref") or "").strip().casefold() != "paper":
-            continue
-        x0 = _optional_float(shape.get("x0"))
-        x1 = _optional_float(shape.get("x1"))
-        if x0 is None or x1 is None:
-            continue
-        if math.isclose(x0, value, rel_tol=1e-9, abs_tol=1e-12) and math.isclose(
-            x1,
-            value,
-            rel_tol=1e-9,
-            abs_tol=1e-12,
-        ):
-            return True
-    return False
+        trace["type"] = "scatter"
+        trace["mode"] = "lines"
+        trace["x"] = [value, value]
+        trace["y"] = [0.0, height]
+        trace["showlegend"] = True
+        if not trace.get("hovertemplate"):
+            trace["hovertemplate"] = f"{trace.get('name') or label}<extra></extra>"
+        if label in _HISTOGRAM_VISIBLE_REFERENCE_LABELS:
+            trace.pop("visible", None)
+        else:
+            trace["visible"] = "legendonly"
+
+
+def _histogram_reference_trace_label_and_value(trace: Mapping[str, Any]) -> tuple[str | None, float | None]:
+    if str(trace.get("type") or "").strip().casefold() != "scatter":
+        return None, None
+    mode = str(trace.get("mode") or "").strip().casefold()
+    if "lines" not in mode:
+        return None, None
+    name = str(trace.get("name") or "").strip()
+    parsed = _parse_valued_legend_label(name)
+    parsed_label: str | None = None
+    parsed_value: float | None = None
+    if parsed is not None:
+        parsed_label, parsed_value = parsed
+    axis, axis_value = _constant_line_axis_and_value(trace)
+    if axis and axis != "x":
+        return None, None
+    label = parsed_label or _canonical_legend_label(_semantic_trace_label_base(name))
+    value = axis_value if axis_value is not None else parsed_value
+    if label is None or value is None:
+        return None, None
+    return label, value
 
 
 def _constant_line_axis_and_value(trace: Mapping[str, Any]) -> tuple[str, float | None]:

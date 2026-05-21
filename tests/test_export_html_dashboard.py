@@ -481,7 +481,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
 
         self.assertEqual(spec['layout']['barmode'], 'overlay')
         self.assertEqual(spec['layout']['hovermode'], 'x unified')
-        self.assertEqual(len(spec['data']), 2)
+        self.assertEqual([trace['name'] for trace in spec['data'][:2]], ['A', 'B'])
         self.assertEqual(spec['data'][0]['bingroup'], spec['data'][1]['bingroup'])
         self.assertEqual(spec['data'][0]['xbins'], spec['data'][1]['xbins'])
         self.assertEqual(spec['layout']['yaxis']['title']['text'], 'Frequency (%)')
@@ -489,25 +489,19 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(spec['data'][0]['histnorm'], 'probability')
         self.assertEqual(spec['data'][1]['histnorm'], 'probability')
         self.assertIn('Frequency=%{y:.2%}', spec['data'][0]['hovertemplate'])
-        self.assertEqual([trace['name'] for trace in spec['data']], ['A', 'B'])
-        group_mean_annotations = [
-            item for item in spec['layout']['annotations']
-            if str(item.get('text') or '').startswith(('A mean=', 'B mean='))
-        ]
-        self.assertEqual(len(group_mean_annotations), 2)
-        self.assertEqual(
-            {item['text'] for item in group_mean_annotations},
-            {'A mean=10.0125', 'B mean=10.1225'},
-        )
-        self.assertTrue(all(item.get('bgcolor') == '#ffffff' for item in group_mean_annotations))
-        trace_colors = [trace['marker']['color'] for trace in spec['data']]
-        annotation_colors = [item['font']['color'] for item in group_mean_annotations]
-        self.assertEqual(annotation_colors, trace_colors)
+        trace_colors = [trace['marker']['color'] for trace in spec['data'][:2]]
+        mean_traces = [trace for trace in spec['data'] if str(trace.get('name') or '').startswith(('(A) Mean=', '(B) Mean='))]
+        self.assertEqual({trace['name'] for trace in mean_traces}, {'(A) Mean=10.013', '(B) Mean=10.123'})
+        self.assertEqual([trace['line']['color'] for trace in mean_traces], trace_colors[:2])
+        self.assertTrue(all(trace.get('visible') != 'legendonly' for trace in mean_traces))
+        self.assertTrue(all(trace['y'] == [0.0, 1.0] for trace in mean_traces))
+        self.assertNotIn('shapes', spec['layout'])
+        self.assertNotIn('annotations', spec['layout'])
         expected_bin_count = resolve_histogram_bin_count(all_values)['bin_count']
         expected_bin_width = (max(all_values) - min(all_values)) / expected_bin_count
         self.assertAlmostEqual(spec['data'][0]['xbins']['size'], expected_bin_width)
 
-    def test_group_analysis_histogram_plotly_spec_staggers_close_mean_annotations(self):
+    def test_group_analysis_histogram_plotly_spec_keeps_close_mean_lines_trace_controlled(self):
         with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
             spec = _build_group_analysis_plotly_spec(
                 'FEATURE_1',
@@ -520,16 +514,18 @@ class TestExportHtmlDashboard(unittest.TestCase):
                 },
             )
 
-        group_mean_annotations = [
-            item for item in spec['layout']['annotations']
-            if str(item.get('text') or '').startswith(('A mean=', 'B mean='))
+        group_mean_traces = [
+            trace for trace in spec['data']
+            if str(trace.get('name') or '').startswith(('(A) Mean=', '(B) Mean='))
         ]
         self.assertEqual(
-            [item['text'] for item in group_mean_annotations],
-            ['A mean=1.5000', 'B mean=1.5000'],
+            [trace['name'] for trace in group_mean_traces],
+            ['(A) Mean=1.5', '(B) Mean=1.5'],
         )
-        self.assertNotEqual(group_mean_annotations[0]['y'], group_mean_annotations[1]['y'])
-        self.assertGreaterEqual(spec['layout']['margin']['t'], 100)
+        self.assertTrue(all(trace['x'] == [1.5, 1.5] for trace in group_mean_traces))
+        self.assertTrue(all(trace['y'] == [0.0, 0.5] for trace in group_mean_traces))
+        self.assertNotIn('shapes', spec['layout'])
+        self.assertNotIn('annotations', spec['layout'])
 
     def test_group_analysis_violin_plotly_spec_treats_numeric_labels_as_categories(self):
         with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
@@ -829,7 +825,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(tickvals[-1], 79.0)
         self.assertEqual(ticktext[-1], 'S079')
 
-    def test_summary_histogram_plotly_spec_adds_reference_legend_traces_and_white_annotations(self):
+    def test_summary_histogram_plotly_spec_adds_trace_controlled_reference_lines(self):
         with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
             spec = _build_plotly_chart_spec(
                 {
@@ -841,6 +837,9 @@ class TestExportHtmlDashboard(unittest.TestCase):
             )
 
         self.assertEqual(spec['layout']['yaxis']['tickformat'], '.0%')
+        self.assertEqual(spec['layout']['yaxis']['range'], [0.0, 0.54])
+        self.assertNotIn('shapes', spec['layout'])
+        self.assertNotIn('annotations', spec['layout'])
         names = [trace.get('name') for trace in spec['data'] if trace.get('type') == 'scatter']
         reference_traces = [trace for trace in spec['data'] if trace.get('type') == 'scatter']
         self.assertTrue(any(str(name).startswith('LSL=') for name in names))
@@ -850,18 +849,22 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertTrue(any(str(name).startswith('Median=') for name in names))
         self.assertTrue(any(str(name).startswith('Q1=') for name in names))
         self.assertTrue(any(str(name).startswith('Q3=') for name in names))
-        self.assertTrue(all(trace.get('visible') == 'legendonly' for trace in reference_traces))
-        self.assertTrue(all(trace.get('y') == [0.0, 0.0] for trace in reference_traces))
-        reference_annotations = [
-            item
-            for item in spec['layout']['annotations']
-            if str(item.get('text') or '').startswith(('LSL=', 'Nominal=', 'USL=', 'Mean='))
-        ]
-        self.assertGreater(len({item.get('y') for item in reference_annotations}), 1)
-        self.assertTrue(all(item.get('bgcolor') == '#ffffff' for item in spec['layout']['annotations']))
-        self.assertTrue(all(item.get('bordercolor') == '#cbd5e1' for item in spec['layout']['annotations']))
-        self.assertTrue(all(item.get('borderwidth') >= 1 for item in spec['layout']['annotations']))
-        self.assertTrue(all(item.get('opacity') == 1.0 for item in spec['layout']['annotations']))
+        visible_default_prefixes = ('LSL=', 'Nominal=', 'USL=', 'Mean=')
+        self.assertTrue(
+            all(
+                trace.get('visible') != 'legendonly'
+                for trace in reference_traces
+                if str(trace.get('name') or '').startswith(visible_default_prefixes)
+            )
+        )
+        self.assertTrue(
+            all(
+                trace.get('visible') == 'legendonly'
+                for trace in reference_traces
+                if not str(trace.get('name') or '').startswith(visible_default_prefixes)
+            )
+        )
+        self.assertTrue(all(trace.get('y') == [0.0, 0.5] for trace in reference_traces))
 
     def test_summary_plotly_spec_uses_plotstats_artifact_when_enabled(self):
         package_spec = {

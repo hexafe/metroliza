@@ -497,11 +497,7 @@ def _build_histogram_chart(
         title=f"{metric.display_label} distribution",
         stats_tables=stats_tables,
     )
-    image = (
-        None
-        if plotly_spec is not None
-        else _render_distribution_image(metric, frame, chart_type="histogram", groups=image_groups)
-    )
+    image = _render_distribution_image(metric, frame, chart_type="histogram", groups=image_groups)
     if not stats_tables and not image and plotly_spec is None:
         return {}
     chart = _static_chart_payload(
