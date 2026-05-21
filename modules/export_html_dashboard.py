@@ -634,9 +634,10 @@ def _legend_line_x_values(category_labels: list[str]) -> list[Any]:
     return [None, None]
 
 
-def _mean_precision_from_values(values: list[float]) -> int:
+def _mean_precision_from_values(values: list[float], *, max_precision: int = 8) -> int:
     decimals = _infer_decimal_places(values) if values else None
-    return 4 if decimals is None else max(0, min(decimals + 1, 8))
+    cap = max(0, int(max_precision))
+    return min(4, cap) if decimals is None else max(0, min(decimals + 1, cap))
 
 
 def _mean_precision_from_payload(payload: dict[str, Any]) -> int:
@@ -647,7 +648,7 @@ def _mean_precision_from_payload(payload: dict[str, Any]) -> int:
             values.extend(_coerce_finite_float_list(series))
     else:
         values.extend(_coerce_finite_float_list(payload.get("values")))
-    return _mean_precision_from_values(values)
+    return _mean_precision_from_values(values, max_precision=4 if chart_type == "histogram" else 8)
 
 
 def _resolve_limit_values(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1131,7 +1132,7 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str, theme: 
     limits = _resolve_limit_values(payload)
     lsl = limits.get("lsl")
     usl = limits.get("usl")
-    mean_precision = _mean_precision_from_values(values)
+    mean_precision = _mean_precision_from_values(values, max_precision=4)
     mean_value = _coerce_finite_float(((payload.get("summary") or {}).get("mean") if isinstance(payload.get("summary"), dict) else None))
     if mean_value is None and values:
         mean_value = float(sum(values) / len(values))
@@ -1179,6 +1180,12 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str, theme: 
             theme=theme,
             mean_precision=mean_precision,
             line_height=histogram_max_height,
+        )
+    )
+    traces.extend(
+        _build_histogram_overlay_traces(
+            payload=payload,
+            theme=theme,
         )
     )
 
@@ -1303,6 +1310,98 @@ def _build_histogram_reference_legend_traces(
         if label not in {"Mean", "LSL", "Nominal", "USL"}:
             traces[-1]["visible"] = "legendonly"
     return traces
+
+
+def _build_histogram_overlay_traces(
+    *,
+    payload: dict[str, Any],
+    theme: str,
+) -> list[dict[str, Any]]:
+    tokens = _build_plotly_theme_tokens(theme)
+    rows = _histogram_modeled_overlay_rows(payload)
+    traces: list[dict[str, Any]] = []
+    for index, row in enumerate(rows, start=1):
+        if not isinstance(row, dict):
+            continue
+        kind = str(row.get("kind") or "").strip().casefold()
+        if kind and kind != "curve":
+            continue
+        points = _histogram_overlay_points(row)
+        if len(points) < 2:
+            continue
+        label = _histogram_overlay_row_label(row, index=index)
+        dash = row.get("dash") if isinstance(row.get("dash"), (list, tuple)) else []
+        trace: dict[str, Any] = {
+            "type": "scatter",
+            "mode": "lines",
+            "name": label,
+            "x": [x_value for x_value, _y_value in points],
+            "y": [y_value for _x_value, y_value in points],
+            "line": {
+                "color": str(row.get("color") or tokens["mean_line"]),
+                "width": float(row.get("linewidth") or row.get("stroke_width") or 1.5),
+                "dash": _plotly_dash_name(dash),
+            },
+            "opacity": float(row.get("alpha") if _coerce_finite_float(row.get("alpha")) is not None else 1.0),
+            "hovertemplate": f"{label}<br>x=%{{x}}<br>frequency=%{{y:.2%}}<extra></extra>",
+            "showlegend": True,
+        }
+        if row.get("fill_to_baseline"):
+            trace["fill"] = "tozeroy"
+            trace["fillcolor"] = str(row.get("fill_color") or row.get("color") or tokens["reference_limit"])
+        traces.append(trace)
+    return traces
+
+
+def _histogram_modeled_overlay_rows(payload: dict[str, Any]) -> list[Any]:
+    visual_metadata = payload.get("visual_metadata") if isinstance(payload.get("visual_metadata"), dict) else {}
+    modeled_overlays = (
+        visual_metadata.get("modeled_overlays")
+        if isinstance(visual_metadata.get("modeled_overlays"), dict)
+        else {}
+    )
+    rows = modeled_overlays.get("rows") if isinstance(modeled_overlays, dict) else None
+    if isinstance(rows, list):
+        return rows
+    rows = payload.get("modeled_overlay_rows")
+    return rows if isinstance(rows, list) else []
+
+
+def _histogram_overlay_points(row: dict[str, Any]) -> list[tuple[float, float]]:
+    x_values = _coerce_finite_float_list(row.get("x"))
+    y_values = _coerce_finite_float_list(row.get("plotly_y"))
+    if len(y_values) != len(x_values):
+        y_values = _coerce_finite_float_list(row.get("y"))
+    return [
+        (float(x_value), max(float(y_value), 0.0))
+        for x_value, y_value in zip(x_values, y_values, strict=False)
+        if math.isfinite(float(x_value)) and math.isfinite(float(y_value))
+    ]
+
+
+def _histogram_overlay_row_label(row: dict[str, Any], *, index: int) -> str:
+    explicit = str(row.get("label") or row.get("text") or "").strip()
+    if explicit:
+        return explicit
+    if row.get("fill_to_baseline"):
+        return "Tail shading"
+    dash = row.get("dash")
+    if isinstance(dash, (list, tuple)) and dash:
+        return "KDE reference"
+    return "Selected model curve" if index == 1 else f"Model curve {index}"
+
+
+def _plotly_dash_name(dash: Any) -> str:
+    if not isinstance(dash, (list, tuple)) or not dash:
+        return "solid"
+    if len(dash) >= 2:
+        first = _coerce_finite_float(dash[0])
+        second = _coerce_finite_float(dash[1])
+        if first is not None and second is not None:
+            if first <= second:
+                return "dash"
+            return "longdash"
+    return "dash"
 
 
 def _collect_histogram_reference_values(
@@ -2007,7 +2106,7 @@ def _build_group_analysis_plotly_spec(
             usl=spec_limits.get("usl"),
             mean_value=None,
             theme=theme,
-            mean_precision=_mean_precision_from_values(all_values),
+            mean_precision=_mean_precision_from_values(all_values, max_precision=4),
             line_height=histogram_max_height,
         )
         line_height = (
@@ -2015,7 +2114,7 @@ def _build_group_analysis_plotly_spec(
             if histogram_max_height is not None and math.isfinite(float(histogram_max_height))
             else 0.0
         )
-        group_mean_precision = _mean_precision_from_values(all_values)
+        group_mean_precision = _mean_precision_from_values(all_values, max_precision=4)
         for index, (label, values) in enumerate(normalized_groups, start=1):
             mean_value = float(sum(values) / len(values))
             color = tokens["colorway"][(index - 1) % len(tokens["colorway"])]

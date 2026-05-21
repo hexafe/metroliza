@@ -1510,7 +1510,7 @@ def _build_iqr_native_legend_items():
     ]
 
 
-def _build_histogram_native_visual_metadata(*, summary_stats, lsl, usl, nominal, rendered_rows=None, row_badges=None, capability_badge=None, distribution_fit_result=None, count_scale_factor=None):
+def _build_histogram_native_visual_metadata(*, summary_stats, lsl, usl, nominal, rendered_rows=None, row_badges=None, capability_badge=None, distribution_fit_result=None, count_scale_factor=None, probability_scale_factor=None):
     """Build stable visual-metadata payload contract for native histogram rendering."""
     histogram_table_payload = _build_histogram_table_data(summary_stats)
     if rendered_rows is None:
@@ -1569,9 +1569,14 @@ def _build_histogram_native_visual_metadata(*, summary_stats, lsl, usl, nominal,
             parsed_count_scale_factor = float(count_scale_factor)
     except (TypeError, ValueError):
         parsed_count_scale_factor = None
-    probability_scale_factor = None
-    if parsed_count_scale_factor is not None and sample_size > 0:
-        probability_scale_factor = parsed_count_scale_factor / float(sample_size)
+    parsed_probability_scale_factor = None
+    try:
+        if probability_scale_factor is not None:
+            parsed_probability_scale_factor = float(probability_scale_factor)
+    except (TypeError, ValueError):
+        parsed_probability_scale_factor = None
+    if parsed_probability_scale_factor is None and parsed_count_scale_factor is not None and sample_size > 0:
+        parsed_probability_scale_factor = parsed_count_scale_factor / float(sample_size)
 
     def _scaled_overlay_y(raw_y):
         y_array = np.asarray(raw_y, dtype=float)
@@ -1579,8 +1584,8 @@ def _build_histogram_native_visual_metadata(*, summary_stats, lsl, usl, nominal,
         probability_y = None
         if parsed_count_scale_factor is not None:
             count_y = y_array * parsed_count_scale_factor
-        if probability_scale_factor is not None:
-            probability_y = y_array * probability_scale_factor
+        if parsed_probability_scale_factor is not None:
+            probability_y = y_array * parsed_probability_scale_factor
         return count_y, probability_y
 
     def _overlay_payload(*, label, x, y, probability_y=None, **kwargs):
@@ -6196,6 +6201,22 @@ class ExportDataThread(QThread):
                     span = max(float(histogram_x_view['x_max']) - float(histogram_x_view['x_min']), 1e-12)
                     representative_bin_width = span / max(int(histogram_bin_count or 1), 1)
                     native_count_scale_factor = float(len(histogram_values)) * float(representative_bin_width)
+                    try:
+                        plotly_bin_edges = np.histogram_bin_edges(
+                            histogram_values,
+                            bins=max(int(histogram_bin_count or 1), 1),
+                        )
+                        plotly_bin_widths = np.diff(plotly_bin_edges)
+                        plotly_bin_widths = plotly_bin_widths[
+                            np.isfinite(plotly_bin_widths) & (plotly_bin_widths > 0)
+                        ]
+                        plotly_probability_scale_factor = (
+                            float(np.median(plotly_bin_widths))
+                            if plotly_bin_widths.size
+                            else None
+                        )
+                    except (TypeError, ValueError):
+                        plotly_probability_scale_factor = None
                     native_canvas = _build_native_canvas(
                         figure_width=base_histogram_figsize[0],
                         figure_height=base_histogram_figsize[1],
@@ -6210,6 +6231,7 @@ class ExportDataThread(QThread):
                         capability_badge=capability_badge,
                         distribution_fit_result=distribution_fit_result,
                         count_scale_factor=native_count_scale_factor,
+                        probability_scale_factor=plotly_probability_scale_factor,
                     )
                     histogram_native_payload = build_histogram_native_payload(
                         values=histogram_values,

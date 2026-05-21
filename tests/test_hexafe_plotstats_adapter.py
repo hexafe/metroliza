@@ -523,6 +523,151 @@ def test_plotstats_dashboard_spec_scales_low_raw_density_overlays_by_bin_width(m
     assert spec["layout"]["yaxis"]["range"] == [0.0, 0.54]
 
 
+def test_plotstats_dashboard_spec_keeps_probability_scaled_resolved_overlays(monkeypatch) -> None:
+    def fake_artifact(_payload, **_kwargs):
+        return {
+            "plotly_spec": {
+                "data": [
+                    {"type": "bar", "x": [1.0, 2.0], "y": [0.5, 0.5], "width": [0.25, 0.25]},
+                    {
+                        "type": "scatter",
+                        "mode": "lines",
+                        "name": "Selected model curve",
+                        "x": [1.0, 1.5, 2.0],
+                        "y": [0.2, 0.8, 0.2],
+                        "meta": {"data_policy": "resolved_curve"},
+                    },
+                ],
+                "layout": {"yaxis": {"range": [0.0, 1.0]}},
+                "metadata": {"kind": "histogram"},
+            }
+        }
+
+    package = ModuleType("hexafe_plotstats")
+    adapters = ModuleType("hexafe_plotstats.adapters")
+    adapters.chart_artifact_from_metroliza_payload = fake_artifact
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats", package)
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats.adapters", adapters)
+
+    spec = build_plotstats_dashboard_spec(
+        {"type": "histogram", "values": [1.0, 2.0]},
+        title="Histogram",
+        static=False,
+    )
+
+    curve = next(trace for trace in spec["data"] if trace.get("name") == "Selected model curve")
+    assert curve["y"] == [0.2, 0.8, 0.2]
+    assert spec["layout"]["yaxis"]["range"] == [0.0, 0.54]
+
+
+def test_plotstats_dashboard_spec_prefers_payload_plotly_overlay_y(monkeypatch) -> None:
+    def fake_artifact(_payload, **_kwargs):
+        return {
+            "plotly_spec": {
+                "data": [
+                    {"type": "bar", "x": [1.0, 2.0], "y": [0.5, 0.5], "width": [0.25, 0.25]},
+                    {
+                        "type": "scatter",
+                        "mode": "lines",
+                        "name": "Selected model curve",
+                        "x": [1.0, 1.5, 2.0],
+                        "y": [4.0, 8.0, 4.0],
+                        "meta": {"data_policy": "resolved_curve"},
+                    },
+                    {
+                        "type": "scatter",
+                        "mode": "lines",
+                        "name": "KDE reference",
+                        "x": [1.0, 1.5, 2.0],
+                        "y": [2.0, 6.0, 2.0],
+                        "line": {"dash": "dash"},
+                        "meta": {"data_policy": "resolved_curve"},
+                    },
+                ],
+                "layout": {"yaxis": {"range": [0.0, 1.0]}},
+                "metadata": {"kind": "histogram"},
+            }
+        }
+
+    package = ModuleType("hexafe_plotstats")
+    adapters = ModuleType("hexafe_plotstats.adapters")
+    adapters.chart_artifact_from_metroliza_payload = fake_artifact
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats", package)
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats.adapters", adapters)
+
+    spec = build_plotstats_dashboard_spec(
+        {
+            "type": "histogram",
+            "values": [1.0, 2.0],
+            "visual_metadata": {
+                "modeled_overlays": {
+                    "rows": [
+                        {
+                            "kind": "curve",
+                            "label": "Selected model curve",
+                            "x": [1.0, 1.5, 2.0],
+                            "y": [4.0, 8.0, 4.0],
+                            "plotly_y": [0.1, 0.2, 0.1],
+                        },
+                        {
+                            "kind": "curve",
+                            "label": "KDE reference",
+                            "x": [1.0, 1.5, 2.0],
+                            "y": [2.0, 6.0, 2.0],
+                            "plotly_y": [0.05, 0.15, 0.05],
+                            "dash": [5, 4],
+                        },
+                    ]
+                }
+            },
+        },
+        title="Histogram",
+        static=False,
+    )
+
+    selected = next(trace for trace in spec["data"] if trace.get("name") == "Selected model curve")
+    kde = next(trace for trace in spec["data"] if trace.get("name") == "KDE reference")
+    assert selected["y"] == [0.1, 0.2, 0.1]
+    assert kde["y"] == [0.05, 0.15, 0.05]
+    assert spec["layout"]["yaxis"]["range"] == [0.0, 0.54]
+
+
+def test_histogram_mean_precision_is_capped_at_four_decimal_places(monkeypatch) -> None:
+    def fake_artifact(_payload, **_kwargs):
+        return {
+            "plotly_spec": {
+                "data": [
+                    {"type": "bar", "x": [1.2345], "y": [1.0], "width": [0.1]},
+                    {
+                        "type": "scatter",
+                        "mode": "lines",
+                        "name": "Mean=1.23450",
+                        "x": [1.2345, 1.2345],
+                        "y": [0.0, 1.0],
+                    },
+                ],
+                "layout": {"yaxis": {"range": [0.0, 1.0]}},
+                "metadata": {"kind": "histogram", "mean_precision": 8},
+            }
+        }
+
+    package = ModuleType("hexafe_plotstats")
+    adapters = ModuleType("hexafe_plotstats.adapters")
+    adapters.chart_artifact_from_metroliza_payload = fake_artifact
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats", package)
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats.adapters", adapters)
+
+    spec = build_plotstats_dashboard_spec(
+        {"type": "histogram", "values": [1.2345, 1.2345, 1.2345]},
+        title="Histogram",
+        static=False,
+    )
+
+    trace_names = {trace.get("name") for trace in spec["data"]}
+    assert "Mean=1.2345" in trace_names
+    assert "Mean=1.23450" not in trace_names
+
+
 def test_plotstats_dashboard_spec_adds_group_mean_lines_with_matching_colors(monkeypatch) -> None:
     def fake_artifact(_payload, **_kwargs):
         return {

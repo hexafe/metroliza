@@ -1242,6 +1242,49 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         self.assertIsNone(payload)
 
+    def test_histogram_native_visual_metadata_uses_data_bin_width_for_plotly_overlay_scale(self):
+        metadata = _build_histogram_native_visual_metadata(
+            summary_stats={
+                'sample_size': 10,
+                'average': 2.0,
+                'median': 2.0,
+                'sigma': 0.5,
+                'minimum': 0.0,
+                'maximum': 4.0,
+                'cp': 'N/A',
+                'cpk': 'N/A',
+                'lsl': 0.0,
+                'usl': 4.0,
+                'nok_count': 0,
+                'nok_pct': 0.0,
+                'observed_nok_count': 0,
+                'observed_nok_below_lsl_count': 0,
+                'observed_nok_above_usl_count': 0,
+                'observed_nok_pct': 0.0,
+                'estimated_nok_pct': None,
+                'estimated_nok_ppm': None,
+                'estimated_yield_pct': None,
+            },
+            lsl=0.0,
+            usl=4.0,
+            nominal=None,
+            distribution_fit_result={
+                'selected_model_pdf': {'x': [0.0, 2.0, 4.0], 'y': [0.2, 0.6, 0.2]},
+                'kde_reference_pdf': {'x': [0.0, 2.0, 4.0], 'y': [0.1, 0.5, 0.1]},
+            },
+            count_scale_factor=7.5,
+            probability_scale_factor=0.25,
+        )
+
+        overlays = metadata['modeled_overlays']['rows']
+        selected = next(row for row in overlays if row.get('label') == 'Selected model curve')
+        kde = next(row for row in overlays if row.get('label') == 'KDE reference')
+
+        self.assertEqual(selected['y'], [1.5, 4.5, 1.5])
+        self.assertEqual(selected['plotly_y'], [0.05, 0.15, 0.05])
+        self.assertEqual(kde['y'], [0.75, 3.75, 0.75])
+        self.assertEqual(kde['plotly_y'], [0.025, 0.125, 0.025])
+
     def test_render_histogram_sets_xlim_beyond_variable_data_min_max(self):
         fig, ax = plt.subplots()
         values = [10.0, 12.5, 15.0, 20.0]

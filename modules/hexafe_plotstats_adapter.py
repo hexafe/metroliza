@@ -453,7 +453,9 @@ def build_plotstats_dashboard_spec(
     _apply_payload_histogram_bins_to_spec(spec, payload)
     _normalize_payload_group_stat_trace_names(spec, payload)
     _ensure_group_histogram_mean_annotations(spec, payload)
-    return _trim_plotly_spec(spec)
+    normalized = _trim_plotly_spec(spec)
+    _apply_payload_histogram_overlay_plotly_y(normalized, payload)
+    return normalized
 
 
 def normalize_distribution_stat_legend(
@@ -1549,7 +1551,7 @@ def _normalize_histogram_overlay_traces(spec: Mapping[str, Any]) -> None:
             continue
         overlay_index += 1
         trace["name"] = _histogram_overlay_trace_name(trace, overlay_index)
-        if bin_width is not None:
+        if bin_width is not None and not _histogram_overlay_trace_is_probability_scaled(trace):
             _scale_overlay_trace_to_probability(trace, bin_width)
 
 
@@ -1620,6 +1622,19 @@ def _histogram_overlay_trace_name(trace: Mapping[str, Any], overlay_index: int) 
     return "Selected model curve" if overlay_index == 1 else f"Model curve {overlay_index}"
 
 
+def _histogram_overlay_trace_is_probability_scaled(trace: Mapping[str, Any]) -> bool:
+    meta = trace.get("meta") if isinstance(trace.get("meta"), Mapping) else {}
+    if str(meta.get("data_policy") or "").strip().casefold() == "resolved_curve":
+        return True
+    if str(meta.get("y_unit") or "").strip().casefold() in {"probability", "relative_percent", "percent"}:
+        return True
+    return str(trace.get("y_unit") or "").strip().casefold() in {
+        "probability",
+        "relative_percent",
+        "percent",
+    }
+
+
 def _scale_overlay_trace_to_probability(trace: dict[str, Any], bin_width: float) -> None:
     y_values = _finite_trace_values(trace.get("y"))
     if not y_values:
@@ -1630,6 +1645,124 @@ def _scale_overlay_trace_to_probability(trace: dict[str, Any], bin_width: float)
     scaled = y_array * float(bin_width)
     trace["y"] = [float(max(value, 0.0)) for value in scaled.tolist()]
     trace["hovertemplate"] = str(trace.get("hovertemplate") or "%{x}<br>%{y:.2%}<extra></extra>")
+
+
+def _apply_payload_histogram_overlay_plotly_y(
+    spec: Mapping[str, Any],
+    payload: Mapping[str, Any],
+) -> None:
+    """Prefer dashboard-scaled overlay curves supplied by Metroliza visual metadata.
+
+    Static histogram metadata carries curve ``y`` values in Matplotlib's rendered
+    coordinate space. The companion ``plotly_y`` values are already normalized to
+    the interactive histogram's probability scale and must win after generic
+    package normalization.
+    """
+
+    if str(payload.get("type") or "").strip().casefold() != "histogram":
+        return
+    data = spec.get("data")
+    if not isinstance(data, list):
+        return
+    overlay_rows = _histogram_plotly_overlay_rows(payload)
+    if not overlay_rows:
+        return
+    used: set[int] = set()
+    overlay_index = 0
+    for trace in data:
+        if not isinstance(trace, dict) or not _is_histogram_overlay_trace(trace):
+            continue
+        overlay_index += 1
+        trace_label = _histogram_overlay_trace_name(trace, overlay_index)
+        row_index = _matching_histogram_overlay_row_index(trace_label, overlay_rows, used)
+        if row_index is None:
+            row_index = _next_unused_histogram_overlay_row_index(overlay_rows, used)
+        if row_index is None:
+            continue
+        used.add(row_index)
+        _row_label, y_values = overlay_rows[row_index]
+        x_values = _finite_trace_values(trace.get("x"))
+        if x_values and len(y_values) != len(x_values):
+            continue
+        trace["y"] = list(y_values)
+        trace["hovertemplate"] = str(trace.get("hovertemplate") or "%{x}<br>%{y:.2%}<extra></extra>")
+
+
+def _histogram_plotly_overlay_rows(payload: Mapping[str, Any]) -> list[tuple[str, list[float]]]:
+    rows = _histogram_modeled_overlay_rows(payload)
+    output: list[tuple[str, list[float]]] = []
+    for index, row in enumerate(rows, start=1):
+        if not isinstance(row, Mapping):
+            continue
+        kind = str(row.get("kind") or "").strip().casefold()
+        if kind and kind != "curve":
+            continue
+        y_values = _finite_trace_values(row.get("plotly_y"))
+        if len(y_values) < 2:
+            continue
+        output.append((_histogram_overlay_row_label(row, index=index), y_values))
+    return output
+
+
+def _histogram_modeled_overlay_rows(payload: Mapping[str, Any]) -> list[Any]:
+    visual_metadata = payload.get("visual_metadata") if isinstance(payload.get("visual_metadata"), Mapping) else {}
+    modeled_overlays = (
+        visual_metadata.get("modeled_overlays")
+        if isinstance(visual_metadata.get("modeled_overlays"), Mapping)
+        else {}
+    )
+    rows = modeled_overlays.get("rows") if isinstance(modeled_overlays, Mapping) else None
+    if isinstance(rows, list):
+        return rows
+    rows = payload.get("modeled_overlay_rows")
+    return rows if isinstance(rows, list) else []
+
+
+def _histogram_overlay_row_label(row: Mapping[str, Any], *, index: int) -> str:
+    explicit = str(row.get("label") or row.get("text") or "").strip()
+    if explicit:
+        return explicit
+    if row.get("fill_to_baseline"):
+        return "Tail shading"
+    dash = row.get("dash")
+    if isinstance(dash, list | tuple) and dash:
+        return "KDE reference"
+    return "Selected model curve" if index == 1 else f"Model curve {index}"
+
+
+def _matching_histogram_overlay_row_index(
+    trace_label: str,
+    overlay_rows: list[tuple[str, list[float]]],
+    used: set[int],
+) -> int | None:
+    normalized_trace_label = _normalized_histogram_overlay_label(trace_label)
+    for index, (row_label, _y_values) in enumerate(overlay_rows):
+        if index in used:
+            continue
+        if _normalized_histogram_overlay_label(row_label) == normalized_trace_label:
+            return index
+    return None
+
+
+def _next_unused_histogram_overlay_row_index(
+    overlay_rows: list[tuple[str, list[float]]],
+    used: set[int],
+) -> int | None:
+    for index, _row in enumerate(overlay_rows):
+        if index not in used:
+            return index
+    return None
+
+
+def _normalized_histogram_overlay_label(label: str) -> str:
+    text = str(label or "").strip().casefold()
+    if "kde" in text:
+        return "kde reference"
+    if "tail" in text:
+        return "tail shading"
+    if "selected model" in text or "best fit" in text or "model curve" in text:
+        return "selected model curve"
+    return text
 
 
 def _format_group_statistics_trace_name(label: str, values: list[float]) -> str:
@@ -1794,10 +1927,12 @@ def _infer_decimal_places(values: list[float], *, max_decimals: int = 6) -> int 
 def _mean_precision_from_payload(payload: Mapping[str, Any]) -> int:
     payload_type = str(payload.get("type") or "").strip().casefold()
     values: list[float] = []
+    max_precision = 8
     if payload_type in {"distribution", "iqr"}:
         for series in _payload_distribution_series(payload):
             values.extend(_finite_trace_values(series))
     elif payload_type == "histogram":
+        max_precision = 4
         groups = _histogram_payload_groups(payload)
         for _label, series in groups:
             values.extend(float(value) for value in series.tolist())
@@ -1805,8 +1940,8 @@ def _mean_precision_from_payload(payload: Mapping[str, Any]) -> int:
         values.extend(_finite_trace_values(payload.get("values")))
     decimals = _infer_decimal_places(values)
     if decimals is None:
-        return 4
-    return max(0, min(decimals + 1, 8))
+        return min(4, max_precision)
+    return max(0, min(decimals + 1, max_precision))
 
 
 def _parse_valued_legend_label(name: str) -> tuple[str, float] | None:
@@ -1934,7 +2069,8 @@ def _spec_mean_precision(spec: Mapping[str, Any]) -> int | None:
         precision = int(raw_precision)
     except (TypeError, ValueError):
         return None
-    return max(0, min(precision, 8))
+    max_precision = 4 if _is_histogram_plotly_spec(spec) else 8
+    return max(0, min(precision, max_precision))
 
 
 def _percentile_sorted(values: list[float], fraction: float) -> float:

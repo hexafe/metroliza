@@ -648,6 +648,27 @@ class TestExportHtmlDashboard(unittest.TestCase):
                     'values': values,
                     'bin_count': 5,
                     'x_view': {'min': -5.0, 'max': 15.0},
+                    'visual_metadata': {
+                        'modeled_overlays': {
+                            'rows': [
+                                {
+                                    'kind': 'curve',
+                                    'label': 'Selected model curve',
+                                    'x': [0.0, 5.0, 10.0],
+                                    'y': [4.0, 8.0, 4.0],
+                                    'plotly_y': [0.10, 0.20, 0.10],
+                                },
+                                {
+                                    'kind': 'curve',
+                                    'label': 'KDE reference',
+                                    'x': [0.0, 5.0, 10.0],
+                                    'y': [3.0, 6.0, 3.0],
+                                    'plotly_y': [0.075, 0.15, 0.075],
+                                    'dash': [5, 4],
+                                },
+                            ]
+                        }
+                    },
                 },
                 title='Summary Histogram',
             )
@@ -665,8 +686,27 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertTrue(spec['layout']['xaxis']['automargin'])
         self.assertGreaterEqual(spec['layout']['xaxis']['title']['standoff'], 20)
         self.assertGreaterEqual(spec['layout']['margin']['b'], 92)
+        self.assertEqual(spec['layout']['yaxis']['range'], [0.0, 0.36])
         self.assertEqual(spec['data'][0]['histnorm'], 'probability')
         self.assertIn('Frequency=%{y:.2%}', spec['data'][0]['hovertemplate'])
+        selected_curve = next(trace for trace in spec['data'] if trace.get('name') == 'Selected model curve')
+        kde_curve = next(trace for trace in spec['data'] if trace.get('name') == 'KDE reference')
+        self.assertEqual(selected_curve['y'], [0.1, 0.2, 0.1])
+        self.assertEqual(kde_curve['y'], [0.075, 0.15, 0.075])
+
+    def test_summary_histogram_mean_legend_precision_is_capped_at_four_decimals(self):
+        with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
+            spec = _build_plotly_chart_spec(
+                {
+                    'type': 'histogram',
+                    'values': [1.2345, 1.2345, 1.2345],
+                },
+                title='Summary Histogram',
+            )
+
+        trace_names = {trace.get('name') for trace in spec['data']}
+        self.assertIn('Mean=1.2345', trace_names)
+        self.assertNotIn('Mean=1.23450', trace_names)
 
     def test_extract_dashboard_chart_details_uses_frequency_default_axis_label(self):
         details = extract_dashboard_chart_details(
