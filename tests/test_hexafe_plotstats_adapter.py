@@ -393,6 +393,38 @@ def test_dashboard_plotly_fallback_builds_percent_histogram_with_reference_value
     assert all(annotation["opacity"] == 1.0 for annotation in spec["layout"]["annotations"])
 
 
+def test_dashboard_plotly_fallback_builds_distribution_and_iqr_with_full_width_legend_lines() -> None:
+    payload = {
+        "labels": ["A", "B"],
+        "series": [[6.469, 6.495, 6.501, 6.687], [7.0, 7.2, 7.4, 7.8]],
+        "limits": {"lsl": 6.2, "nominal": 6.5, "usl": 6.8},
+        "x_label": "Groups",
+        "y_label": "Length",
+    }
+
+    for payload_type, trace_type in (("distribution", "violin"), ("iqr", "box")):
+        spec = _fallback_dashboard_plotly_spec(
+            {"type": payload_type, **payload},
+            title="Length grouped",
+            static=False,
+        )
+
+        assert spec is not None
+        assert spec["config"]["staticPlot"] is False
+        assert spec["layout"]["xaxis"]["range"] == [0.5, 2.5]
+        assert spec["layout"]["xaxis"]["ticktext"] == ["A", "B"]
+        assert "shapes" not in spec["layout"]
+        assert spec["data"][0]["type"] == trace_type
+        assert spec["data"][0]["x"] == [1, 1, 1, 1]
+        assert "(A) Mean=6.5380" in {trace["name"] for trace in spec["data"]}
+        stat_trace = next(trace for trace in spec["data"] if trace["name"] == "(A) Mean=6.5380")
+        assert stat_trace["visible"] == "legendonly"
+        assert stat_trace["x"] == [0.5, 2.5]
+        lsl_trace = next(trace for trace in spec["data"] if trace["name"] == "LSL=6.200")
+        assert lsl_trace.get("visible") != "legendonly"
+        assert lsl_trace["x"] == [0.5, 2.5]
+
+
 def test_plotstats_dashboard_spec_normalizes_generic_histogram_overlays(monkeypatch) -> None:
     def fake_artifact(_payload, **_kwargs):
         return {
@@ -590,7 +622,7 @@ def test_plotstats_dashboard_spec_adds_distribution_group_stats_to_legend(monkey
         if trace["name"].startswith(("(A) ", "(B) "))
     )
     stat_trace = next(trace for trace in spec["data"] if trace["name"] == "(A) Mean=2.0")
-    assert stat_trace["x"] == ["A", "B"]
+    assert stat_trace["x"] == [0.5, 2.5]
     assert stat_trace["line"]["color"] == "#0072B2"
 
 

@@ -537,11 +537,7 @@ def _build_distribution_chart(
         chart_type=chart_type,
         title=f"{metric.display_label} {chart_type}",
     )
-    image = (
-        None
-        if plotly_spec is not None
-        else _render_distribution_image(metric, frame, chart_type=chart_type, groups=image_groups)
-    )
+    image = _render_distribution_image(metric, frame, chart_type=chart_type, groups=image_groups)
     if not image and plotly_spec is None:
         return {}
     chart = _static_chart_payload(

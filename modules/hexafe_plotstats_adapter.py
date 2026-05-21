@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 from modules.env_utils import FALSE_VALUES, TRUE_VALUES, env_bool
+from modules.distribution_iqr_plotly_specs import build_distribution_iqr_plotly_spec
 from modules.export_chart_payload_helpers import build_histogram_table_data
 from modules.export_summary_utils import resolve_histogram_bin_count
 from modules.matplotlib_runtime import configure_headless_matplotlib
@@ -121,6 +122,17 @@ def build_dashboard_plotly_spec(
     """
 
     payload = _payload_with_resolved_histogram_bin_count(payload)
+    payload_type = str(payload.get("type") or "").strip().casefold()
+    if payload_type in {"distribution", "iqr"}:
+        spec = build_distribution_iqr_plotly_spec(
+            payload,
+            title=title,
+            chart_type=payload_type,
+            static=static,
+            theme=theme,
+        )
+        if spec:
+            return _normalize_dashboard_plotly_spec(spec)
 
     if plotstats_export_charts_enabled():
         spec = build_plotstats_dashboard_spec(
@@ -175,6 +187,15 @@ def _fallback_dashboard_plotly_spec(
     payload_type = str(payload.get("type") or "").strip().casefold()
     if payload_type == "histogram":
         return _fallback_histogram_plotly_spec(payload, title=title, static=static)
+    if payload_type in {"distribution", "iqr"}:
+        spec = build_distribution_iqr_plotly_spec(
+            payload,
+            title=title,
+            chart_type=payload_type,
+            static=static,
+            theme=metroliza_dashboard_plotstats_theme(),
+        )
+        return _normalize_dashboard_plotly_spec(spec) if spec else None
     return None
 
 
@@ -984,8 +1005,13 @@ def _normalize_payload_group_stat_trace_names(spec: Mapping[str, Any], payload: 
             stat_names.append(label or f"Group {index}")
             continue
         stat_names.append(_format_group_statistics_trace_name(label or f"Group {index}", values))
+    group_count = len([series for series in series_list if _finite_trace_values(series)])
     for trace, stat_name in zip(spec.get("data") or [], stat_names, strict=False):
-        if isinstance(trace, dict) and str(trace.get("type") or "").strip().casefold() in {"violin", "box"}:
+        if (
+            isinstance(trace, dict)
+            and str(trace.get("type") or "").strip().casefold() in {"violin", "box"}
+            and not _is_aggregate_box_trace(trace, group_count=group_count)
+        ):
             trace["name"] = stat_name
     _ensure_payload_distribution_stat_legend_traces(spec, payload)
 
@@ -1013,7 +1039,7 @@ def _ensure_payload_distribution_stat_legend_traces(
     group_stats: dict[str, dict[str, float]] = {}
     category_labels = [_strip_group_count_suffix(label or f"Group {index}") for index, label in enumerate(labels, start=1)]
     group_colors = _group_trace_colors(data, category_labels)
-    legend_x = _legend_line_x_values(category_labels)
+    legend_x = _distribution_axis_line_x_values(spec, category_labels)
     mean_precision = _mean_precision_from_payload(payload)
     for label, series in zip(labels, series_list, strict=False):
         values = sorted(_finite_trace_values(series))
@@ -1729,11 +1755,42 @@ def _stat_legend_prefix(group_label: str, *, populated_count: int) -> str:
 
 
 def _legend_line_x_values(category_labels: list[str]) -> list[Any]:
-    if len(category_labels) >= 2:
-        return [category_labels[0], category_labels[-1]]
-    if len(category_labels) == 1:
-        return [category_labels[0], category_labels[0]]
+    if category_labels:
+        return [0.5, len(category_labels) + 0.5]
     return [None, None]
+
+
+def _distribution_axis_line_x_values(spec: Mapping[str, Any], category_labels: list[str]) -> list[Any]:
+    layout = spec.get("layout")
+    if isinstance(layout, Mapping):
+        xaxis = layout.get("xaxis")
+        if isinstance(xaxis, Mapping):
+            axis_range = xaxis.get("range")
+            if isinstance(axis_range, list | tuple) and len(axis_range) >= 2:
+                start = _optional_float(axis_range[0])
+                end = _optional_float(axis_range[1])
+                if start is not None and end is not None and end > start:
+                    return [start, end]
+            tickvals = xaxis.get("tickvals")
+            if isinstance(tickvals, list | tuple):
+                numeric_ticks = [
+                    value
+                    for raw_tick in tickvals
+                    if (value := _optional_float(raw_tick)) is not None
+                ]
+                if numeric_ticks:
+                    return [min(numeric_ticks) - 0.5, max(numeric_ticks) + 0.5]
+    return _legend_line_x_values(category_labels)
+
+
+def _is_aggregate_box_trace(trace: Mapping[str, Any], *, group_count: int) -> bool:
+    if group_count <= 1 or str(trace.get("type") or "").strip().casefold() != "box":
+        return False
+    for key in ("q1", "median", "q3", "lowerfence", "upperfence", "mean"):
+        values = trace.get(key)
+        if isinstance(values, list | tuple) and len(values) > 1:
+            return True
+    return False
 
 
 def _trace_primary_color(trace: Mapping[str, Any]) -> str | None:

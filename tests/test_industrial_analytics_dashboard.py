@@ -147,6 +147,8 @@ def test_distribution_plotly_payloads_are_sampled_for_large_frames() -> None:
             continue
         trace_points = 0
         for trace in chart["plotly_spec"]["data"]:
+            if chart["chart_type"] in {"violin", "box"} and trace.get("type") == "scatter":
+                continue
             trace_points += max(
                 len(value)
                 for key in ("x", "y")
@@ -190,7 +192,7 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
         'class="plotly-chart" id="histogram-cycle_time_s"' in html_text
         or 'class="chart-image"' in html_text
     )
-    assert "Static snapshot" not in html_text
+    assert "Static snapshot" in html_text
     assert '<details class="chart-stats">' in html_text
     assert "<summary>Chart statistics (" in html_text
     assert 'class="plotly-expand-trigger"' in html_text
@@ -256,6 +258,9 @@ def test_write_production_dashboard_omits_plotly_when_payload_exceeds_budget(tmp
     assert "spec_count>0" in result["html_dashboard_plotly_budget"]["reason"]
     assert "production-dashboard-charts" not in html_text
     assert "plotly-2.27.0.min.js" not in html_text
+    assert 'class="chart-image"' in html_text
+    assert "Cycle Time S violin" in html_text
+    assert "Cycle Time S box" in html_text
     assert "Interactive charts are unavailable in this dashboard" in html_text
     assert "Interactive chart omitted because the Plotly payload exceeded" in html_text
     assert not (Path(result["html_dashboard_assets_path"]) / "plotly-2.27.0.min.js").exists()
@@ -743,10 +748,9 @@ def test_distribution_charts_use_selected_group_field_before_default_columns() -
     for chart_type in {"histogram", "violin", "box"}:
         chart = next(chart for chart in manifest["charts"] if chart["chart_type"] == chart_type)
         assert chart["group_labels"] == ["M1", "M2"]
-        if "plotly_spec" in chart:
-            assert chart["plotly_spec"]["config"].get("staticPlot") is not True
-            if chart_type == "histogram":
-                assert chart["plotly_spec"]["layout"]["yaxis"]["title"]["text"] == "Frequency (%)"
+        assert chart["plotly_spec"]["config"].get("staticPlot") is not True
+        if chart_type == "histogram":
+            assert chart["plotly_spec"]["layout"]["yaxis"]["title"]["text"] == "Frequency (%)"
         else:
             assert chart["image"]["mime_type"] == "image/png"
 
@@ -780,10 +784,11 @@ def test_distribution_charts_force_numeric_group_names_to_categories() -> None:
     for chart_type in {"violin", "box"}:
         chart = next(chart for chart in manifest["charts"] if chart["chart_type"] == chart_type)
         assert chart["group_labels"] == ["73211", "A", "POPULATION"]
-        if "plotly_spec" in chart:
-            assert chart["plotly_spec"]["config"].get("staticPlot") is not True
-        else:
-            assert chart["image"]["mime_type"] == "image/png"
+        assert chart["plotly_spec"]["config"].get("staticPlot") is not True
+        xaxis = chart["plotly_spec"]["layout"]["xaxis"]
+        assert xaxis["type"] == "linear"
+        assert xaxis["tickvals"] == [1, 2, 3]
+        assert xaxis["ticktext"] == ["73211", "A", "POPULATION"]
 
 
 def test_dashboard_uses_plotstats_interactive_plotly_specs_when_available(monkeypatch) -> None:

@@ -578,8 +578,10 @@ class TestExportHtmlDashboard(unittest.TestCase):
                 title='IQR stats',
             )
 
-        self.assertEqual(spec['layout']['xaxis']['categoryarray'], ['A', 'B'])
-        self.assertEqual(spec['data'][0]['x'], ['A', 'A', 'A'])
+        self.assertEqual(spec['layout']['xaxis']['tickvals'], [1, 2])
+        self.assertEqual(spec['layout']['xaxis']['ticktext'], ['A', 'B'])
+        self.assertEqual(spec['layout']['xaxis']['range'], [0.5, 2.5])
+        self.assertEqual(spec['data'][0]['x'], [1, 1, 1])
         self.assertEqual(spec['data'][0]['name'], 'A (n=3)')
         self.assertEqual(spec['data'][1]['name'], 'B (n=3)')
         trace_names = {trace['name'] for trace in spec['data']}
@@ -588,7 +590,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertIn('(B) Mean=12.7', trace_names)
         self.assertIn('(B) Max=16.000', trace_names)
         stat_trace = next(trace for trace in spec['data'] if trace['name'] == '(A) Mean=2.0')
-        self.assertEqual(stat_trace['x'], ['A', 'B'])
+        self.assertEqual(stat_trace['x'], [0.5, 2.5])
         self.assertEqual(stat_trace['line']['color'], spec['data'][0]['marker']['color'])
 
     def test_group_analysis_iqr_single_group_legend_stats_do_not_repeat_group_name(self):
@@ -627,18 +629,15 @@ class TestExportHtmlDashboard(unittest.TestCase):
         trace_names = {trace['name'] for trace in spec['data']}
         self.assertIn('(A) Min=6.469', trace_names)
         self.assertIn('LSL=6.200', trace_names)
-        self.assertTrue(
-            any(
-                shape.get('xref') == 'paper'
-                and shape.get('x0') == 0
-                and shape.get('x1') == 1
-                and shape.get('y0') == 6.2
-                for shape in spec['layout']['shapes']
-            )
-        )
+        self.assertNotIn('shapes', spec['layout'])
+        lsl_trace = next(trace for trace in spec['data'] if trace['name'] == 'LSL=6.200')
+        self.assertEqual(lsl_trace['x'], [0.5, 2.5])
+        self.assertEqual(lsl_trace['y'], [6.2, 6.2])
+        self.assertTrue(lsl_trace.get('showlegend'))
+        self.assertNotEqual(lsl_trace.get('visible'), 'legendonly')
         self.assertTrue(
             all(
-                trace.get('x') != [0, 1]
+                trace.get('x') == [0.5, 2.5]
                 for trace in spec['data']
                 if trace.get('visible') == 'legendonly'
             )

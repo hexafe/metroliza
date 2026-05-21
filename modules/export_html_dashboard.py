@@ -20,6 +20,7 @@ from modules.dashboard_navigation import (
     render_section_header,
     render_section_nav,
 )
+from modules.distribution_iqr_plotly_specs import build_distribution_iqr_plotly_spec
 from modules.export_summary_utils import resolve_histogram_bin_count
 from modules.hexafe_plotstats_adapter import (
     build_plotstats_dashboard_spec,
@@ -2062,6 +2063,16 @@ def _build_plotly_chart_spec(payload: dict[str, Any] | None, *, title: str, them
         return {}
 
     chart_type = str(payload.get("type") or "").strip().lower()
+    if chart_type in {"distribution", "iqr"}:
+        spec = build_distribution_iqr_plotly_spec(
+            payload,
+            title=title,
+            chart_type=chart_type,
+            static=False,
+            theme=theme,
+        )
+        if spec:
+            return spec
     if plotstats_export_charts_enabled():
         spec = build_plotstats_dashboard_spec(payload, title=title, theme=theme, static=False)
         if spec:
