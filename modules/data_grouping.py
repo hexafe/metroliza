@@ -62,7 +62,7 @@ import pandas as pd
 
 
 _GROUPING_LIST_PREVIEW_LIMIT = 1000
-_SCOPE_FILTER_PLACEHOLDER = "Filter rows, e.g. Supplier=SUPPLIER AND Date>=2026-05-01"
+_SCOPE_FILTER_PLACEHOLDER = "Filter rows, e.g. Supplier IN (SUPPLIER, Partner*) AND Date>=2026-05-01"
 _SCOPE_FILTER_ALIAS_CANDIDATES = (
     ("Sample", ("SAMPLE_NUMBER", "sample_number")),
     ("Date", ("DATE", "date", "report_date")),
@@ -72,7 +72,8 @@ _SCOPE_FILTER_ALIAS_CANDIDATES = (
 )
 _SCOPE_FILTER_TERM_SPLIT_RE = re.compile(r"(\s+(?:AND|OR)\s+)", flags=re.IGNORECASE)
 _SCOPE_FILTER_FIELD_RE = re.compile(
-    r"^(?P<leading>\s*)(?P<field>[^<>=!]+?)(?P<operator>\s*(?:>=|<=|!=|=|>|<)\s*)"
+    r"^(?P<leading>\s*)(?P<field>.+?)(?P<operator>\s*(?:>=|<=|!=|=|>|<|\bNOT\s+IN\b|\bIN\b)\s*)",
+    flags=re.IGNORECASE,
 )
 
 

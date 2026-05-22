@@ -60,6 +60,9 @@ The filter accepts clear field names when those fields are available:
 
 Example: `Supplier=SUPPLIER AND Date>=2026-05-01`
 
+Use `*` as a text wildcard and `IN` for multiple allowed values. For example:
+`Supplier IN (SUPPLIER, Partner*) AND Part IN (body*, cap)`.
+
 ### GROUPS
 
 This pane lists existing groups.

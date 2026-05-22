@@ -172,8 +172,11 @@ class TestDataGroupingScopeFilterAliases(unittest.TestCase):
     def test_scope_filter_placeholder_uses_clear_aliases(self):
         placeholder = DataGrouping._scope_filter_placeholder()
 
-        self.assertEqual(placeholder, 'Filter rows, e.g. Supplier=SUPPLIER AND Date>=2026-05-01')
-        self.assertIn('Supplier=SUPPLIER', placeholder)
+        self.assertEqual(
+            placeholder,
+            'Filter rows, e.g. Supplier IN (SUPPLIER, Partner*) AND Date>=2026-05-01',
+        )
+        self.assertIn('Supplier IN', placeholder)
         self.assertIn('Date>=2026-05-01', placeholder)
 
     def test_scope_filter_aliases_include_present_columns(self):
@@ -209,6 +212,41 @@ class TestDataGroupingScopeFilterAliases(unittest.TestCase):
         filtered = apply_filter_specs(frame, parsed.specs, match_mode=parsed.match_mode)
 
         self.assertEqual(filtered.index.tolist(), [0])
+
+    def test_scope_filter_aliases_support_membership_and_wildcards(self):
+        from modules.grouping_filter_core import apply_filter_specs
+
+        frame = pd.DataFrame(
+            {
+                'SAMPLE_NUMBER': [42, 43, 44],
+                'PART_NAME': ['Body Panel', 'Cover', 'Nut'],
+            }
+        )
+
+        parsed = DataGrouping._parse_scope_filter_expression(
+            'Part IN (Body*, Cover)',
+            frame.columns,
+        )
+        filtered = apply_filter_specs(frame, parsed.specs, match_mode=parsed.match_mode)
+
+        self.assertEqual(filtered.index.tolist(), [0, 1])
+
+    def test_scope_filter_supports_quoted_commas_in_membership_values(self):
+        from modules.grouping_filter_core import apply_filter_specs
+
+        frame = pd.DataFrame(
+            {
+                'PART_NAME': ['Body, LH', 'Cover', 'Body RH'],
+            }
+        )
+
+        parsed = DataGrouping._parse_scope_filter_expression(
+            'Part IN ("Body, LH", Cover)',
+            frame.columns,
+        )
+        filtered = apply_filter_specs(frame, parsed.specs, match_mode=parsed.match_mode)
+
+        self.assertEqual(filtered.index.tolist(), [0, 1])
 
     def test_scope_filter_passes_aliases_to_supported_shared_parser(self):
         from collections import namedtuple
@@ -1049,6 +1087,31 @@ class TestDataGroupingSelectionRetention(unittest.TestCase):
             ['POPULATION (n=2)', 'Reviewed (n=1)'],
         )
         self.assertEqual(dialog.scope_filter_summary_label.value, 'Scope: 1 of 3 rows')
+
+    def test_invalid_scope_membership_filter_yields_empty_frame_and_summary(self):
+        class _Label:
+            def __init__(self):
+                self.value = ''
+
+            def setText(self, value):
+                self.value = value
+
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.df = pd.DataFrame(
+            {
+                'REFERENCE': ['REF-1', 'REF-2'],
+                'GROUP': ['POPULATION', 'Reviewed'],
+                'PART_NAME': ['Body', 'Cover'],
+            }
+        )
+        dialog._applied_scope_filter_text = 'Part IN ()'
+        dialog._cached_filtered_grouping_dataframe = None
+        dialog.scope_filter_summary_label = _Label()
+
+        filtered = dialog._filtered_grouping_dataframe()
+
+        self.assertTrue(filtered.empty)
+        self.assertTrue(dialog.scope_filter_summary_label.value.startswith('Scope: invalid filter'))
 
     def test_populate_list_widgets_reuses_cached_row_indexes_without_filter_or_data_change(self):
         from modules.data_grouping_service import build_grouping_row_index as real_build_grouping_row_index

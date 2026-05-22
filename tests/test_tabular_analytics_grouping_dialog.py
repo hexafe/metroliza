@@ -144,6 +144,17 @@ def _temporary_colors(dialog) -> dict[int, str]:
     }
 
 
+def test_selector_search_recognizes_in_expression_without_breaking_plain_search() -> None:
+    if TabularAnalyticsGroupingDialog is None:
+        pytest.skip(f"PyQt6 is unavailable in this environment: {PYQT_IMPORT_ERROR}")
+
+    assert TabularAnalyticsGroupingDialog._looks_like_filter_expression("Part IN (body*, cap)")
+    assert TabularAnalyticsGroupingDialog._looks_like_filter_expression(
+        "Supplier NOT IN (OTHER, TEST*)"
+    )
+    assert not TabularAnalyticsGroupingDialog._looks_like_filter_expression("bearing insert")
+
+
 class _GroupingParent(QWidget if QWidget is not None else object):
     def __init__(self):
         super().__init__()
@@ -766,6 +777,47 @@ def test_sqlite_search_expression_filters_preview_and_assigns_all_matching_rows(
         cleanup_tabular_load_result(loaded)
 
 
+def test_sqlite_search_membership_expression_filters_preview_and_assigns_rows(
+    tmp_path,
+) -> None:
+    _app()
+    input_file = tmp_path / "sqlite_membership_selector.csv"
+    pd.DataFrame(
+        {
+            "Line": ["A", "A", "B", "A"],
+            "Supplier": ["SUPPLIER", "SUPPLIER", "OTHER", "SUPPLIER"],
+            "Part": ["body1", "body-side", "cap", "bolt"],
+            "TraceCode": ["TC-001", "TC-002", "TC-003", "TC-004"],
+        }
+    ).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file, force_sqlite=True)
+
+    dialog = TabularAnalyticsGroupingDialog(
+        dataframe=loaded.dataframe,
+        column_mapping=loaded.column_mapping,
+        sqlite_store=loaded.sqlite_store,
+        column_filters=(TabularColumnFilter("line", selected_values=("A",)),),
+    )
+    try:
+        dialog.selector_columns = ["tracecode"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+        _apply_selector_search(dialog, "Part IN (body*, cap) AND Supplier IN (SUPPLIER)")
+
+        assert [
+            dialog.selector_list.item(index).data(Qt.ItemDataRole.UserRole)
+            for index in range(dialog.selector_list.count())
+        ] == [("TC-001",), ("TC-002",)]
+
+        dialog.assign_filtered_rows(initial_group_name="Membership")
+        materialized = dialog._materialize_grouping_dataframe()
+        assert materialized["REPORT_ID"].tolist() == [1, 2]
+        assert materialized["GROUP"].tolist() == ["Membership", "Membership"]
+    finally:
+        dialog.close()
+        cleanup_tabular_load_result(loaded)
+
+
 def test_sqlite_assign_filtered_rows_defers_row_id_expansion_until_materialization(
     tmp_path,
     monkeypatch,
@@ -1322,6 +1374,34 @@ def test_search_expression_filters_preview_and_assign_all_rows() -> None:
 
         dialog.assign_filtered_rows(initial_group_name="Expression")
         assert _temporary_groups(dialog) == {2: "Expression"}
+    finally:
+        dialog.close()
+
+
+def test_search_membership_expression_filters_preview_and_assign_all_rows() -> None:
+    _app()
+    frame = pd.DataFrame(
+        {
+            "source_row_number": [1, 2, 3, 4, 5],
+            "tracecode": ["TC-001", "TC-002", "TC-003", "TC-004", "TC-005"],
+            "part": ["body1", "cap", "body-side", "nut", "gear"],
+            "value2": [0, 2, 3, "x", 0],
+        }
+    )
+    dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
+    try:
+        dialog.selector_columns = ["tracecode"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+        _apply_selector_search(dialog, "part IN (body*, cap)")
+
+        assert [
+            dialog.selector_list.item(index).data(Qt.ItemDataRole.UserRole)
+            for index in range(dialog.selector_list.count())
+        ] == [("TC-001",), ("TC-002",), ("TC-003",)]
+
+        dialog.assign_filtered_rows(initial_group_name="Membership")
+        assert _temporary_groups(dialog) == {1: "Membership", 2: "Membership", 3: "Membership"}
     finally:
         dialog.close()
 

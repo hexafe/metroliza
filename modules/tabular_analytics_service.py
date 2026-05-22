@@ -2630,6 +2630,8 @@ def _compile_sqlite_filter_spec(
     spec_type = _sqlite_filter_spec_type(spec, operator)
     if spec_type == "text":
         return _compile_sqlite_text_filter_spec(spec, column, operator)
+    if spec_type == "membership":
+        return _compile_sqlite_membership_filter_spec(spec, column, operator, date_filter_columns)
     if spec_type == "number":
         return _compile_sqlite_number_filter_spec(spec, column, operator)
     if spec_type == "date":
@@ -2716,6 +2718,126 @@ def _compile_sqlite_text_filter_spec(
         clause=f"({identifier} IS NOT NULL AND TRIM({text_expr}) != '')",
         columns=(column,),
     )
+
+
+def _compile_sqlite_membership_filter_spec(
+    spec: Any,
+    column: str,
+    operator: str,
+    date_filter_columns: Mapping[str, str] | None,
+) -> TabularSqliteFilterExpression:
+    values = _sqlite_membership_values(getattr(spec, "values", ()))
+    if not values:
+        raise ValueError("IN filters require at least one value")
+    negate = bool(getattr(spec, "negate", False)) or operator == "not_in"
+    value_kind = _sqlite_membership_value_kind(
+        values,
+        dayfirst=bool(getattr(spec, "dayfirst", False)),
+    )
+    if value_kind == "number":
+        return _compile_sqlite_numeric_membership_filter_spec(spec, column, values, negate)
+    if value_kind == "date":
+        return _compile_sqlite_date_membership_filter_spec(
+            spec,
+            column,
+            values,
+            negate,
+            date_filter_columns,
+        )
+    return _compile_sqlite_text_membership_filter_spec(spec, column, values, negate)
+
+
+def _compile_sqlite_text_membership_filter_spec(
+    spec: Any,
+    column: str,
+    values: tuple[Any, ...],
+    negate: bool,
+) -> TabularSqliteFilterExpression:
+    identifier = _quote_identifier(column)
+    text_expr = f"CAST({identifier} AS TEXT)"
+    case_sensitive = bool(getattr(spec, "case_sensitive", False))
+    compare_expr = text_expr if case_sensitive else f"LOWER({text_expr})"
+    normalized_values = tuple(str(value) for value in values)
+    if not case_sensitive:
+        normalized_values = tuple(value.casefold() for value in normalized_values)
+    use_wildcards = bool(getattr(spec, "wildcards", True))
+    exact_values = tuple(
+        value for value in normalized_values if not (use_wildcards and "*" in value)
+    )
+    wildcard_values = tuple(value for value in normalized_values if use_wildcards and "*" in value)
+
+    params: list[Any] = []
+    terms: list[str] = []
+    if exact_values:
+        in_clause, in_params = _sqlite_membership_in_predicate(
+            compare_expr,
+            exact_values,
+            negate=negate,
+        )
+        terms.append(in_clause)
+        params.extend(in_params)
+    like_operator = "NOT LIKE" if negate else "LIKE"
+    for value in wildcard_values:
+        terms.append(f"{compare_expr} {like_operator} ? ESCAPE '\\'")
+        params.append(_sqlite_wildcard_like_pattern(value))
+
+    if not terms:
+        clause = f"{identifier} IS NULL" if negate else "0"
+    elif negate:
+        clause = f"({identifier} IS NULL OR ({' AND '.join(terms)}))"
+    else:
+        clause = f"({identifier} IS NOT NULL AND ({' OR '.join(terms)}))"
+    return TabularSqliteFilterExpression(clause=clause, params=tuple(params), columns=(column,))
+
+
+def _compile_sqlite_numeric_membership_filter_spec(
+    spec: Any,
+    column: str,
+    values: tuple[Any, ...],
+    negate: bool,
+) -> TabularSqliteFilterExpression:
+    del spec
+    text_expr, numeric_guard = _sqlite_numeric_text_and_guard(column)
+    parsed_values = tuple(
+        _sqlite_filter_number_value(value, field_name="IN value")
+        for value in values
+    )
+    predicate, params = _sqlite_membership_in_predicate(
+        f"CAST({text_expr} AS REAL)",
+        parsed_values,
+        negate=negate,
+    )
+    if negate:
+        clause = f"((NOT ({numeric_guard})) OR {predicate})"
+    else:
+        clause = f"(({numeric_guard}) AND {predicate})"
+    return TabularSqliteFilterExpression(clause=clause, params=tuple(params), columns=(column,))
+
+
+def _compile_sqlite_date_membership_filter_spec(
+    spec: Any,
+    column: str,
+    values: tuple[Any, ...],
+    negate: bool,
+    date_filter_columns: Mapping[str, str] | None,
+) -> TabularSqliteFilterExpression:
+    dayfirst = bool(getattr(spec, "dayfirst", False))
+    parsed_values = tuple(
+        _sqlite_filter_date_value(value, dayfirst=dayfirst, field_name="IN value").isoformat()
+        for value in values
+    )
+    date_expr = _sqlite_date_filter_expr_for_column(column, date_filter_columns)
+    predicate, params = _sqlite_membership_in_predicate(
+        date_expr,
+        parsed_values,
+        negate=negate,
+        placeholder_sql="date(?)",
+    )
+    if negate:
+        clause = f"({date_expr} IS NULL OR {predicate})"
+    else:
+        clause = f"({predicate})"
+    return TabularSqliteFilterExpression(clause=clause, params=tuple(params), columns=(column,))
 
 
 def _compile_sqlite_number_filter_spec(
@@ -2910,6 +3032,8 @@ def _sqlite_filter_spec_type(spec: Any, operator: str) -> str:
         getattr(spec, "kind", getattr(spec, "filter_type", getattr(spec, "value_type", "")))
     ).casefold()
     class_name = type(spec).__name__.casefold()
+    if "membership" in spec_kind or "membership" in class_name or operator in {"in", "not_in"}:
+        return "membership"
     if "text" in spec_kind or "text" in class_name or operator in {
         "contains",
         "not_contains",
@@ -3004,6 +3128,52 @@ def _sqlite_filter_date_value(value: Any, *, dayfirst: bool, field_name: str) ->
     if pd.isna(parsed):
         raise ValueError(f"{field_name} must be date-like")
     return parsed.date()
+
+
+def _sqlite_membership_values(values: Iterable[Any]) -> tuple[Any, ...]:
+    normalized: list[Any] = []
+    for value in values or ():
+        text = str(value).strip()
+        if text:
+            normalized.append(value)
+    return tuple(normalized)
+
+
+def _sqlite_membership_value_kind(values: tuple[Any, ...], *, dayfirst: bool) -> str:
+    if values and all(_sqlite_membership_value_looks_date_like(value) for value in values):
+        parsed_dates = pd.to_datetime(pd.Series(list(values)), errors="coerce", dayfirst=dayfirst)
+        if parsed_dates.notna().all():
+            return "date"
+    parsed_numbers = pd.to_numeric(pd.Series(list(values)), errors="coerce")
+    if values and parsed_numbers.notna().all():
+        return "number"
+    return "text"
+
+
+def _sqlite_membership_value_looks_date_like(value: Any) -> bool:
+    text = str(value or "").strip()
+    return bool(re.search(r"\d{4}", text) or any(marker in text for marker in ("/", ":")))
+
+
+def _sqlite_membership_in_predicate(
+    expression: str,
+    values: tuple[Any, ...],
+    *,
+    negate: bool,
+    placeholder_sql: str = "?",
+) -> tuple[str, list[Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    operator = "NOT IN" if negate else "IN"
+    for start in range(0, len(values), 900):
+        chunk = values[start : start + 900]
+        placeholders = ", ".join(placeholder_sql for _value in chunk)
+        clauses.append(f"{expression} {operator} ({placeholders})")
+        params.extend(chunk)
+    joiner = " AND " if negate else " OR "
+    if len(clauses) == 1:
+        return clauses[0], params
+    return f"({joiner.join(clauses)})", params
 
 
 def _sqlite_wildcard_like_pattern(value: str) -> str:

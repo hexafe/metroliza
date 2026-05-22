@@ -81,8 +81,9 @@ for selected-vs-rest comparisons.
 
 Use the matching-row search field either as a normal value search or as a row filter. Plain
 text searches visible value labels. Expressions such as `Supplier=SUPPLIER AND Value > 1`
-filter the source rows, and **Assign all filtered rows** applies that current search or
-filter across all matching pages.
+filter the source rows. Text filters support `*` wildcards, and `IN` lists can match
+several values at once, such as `Part IN (body*, cap)` or `Sample IN (1, 2, 3)`.
+**Assign all filtered rows** applies that current search or filter across all matching pages.
 
 The selected groups are written as the `GROUP` column and are used by aggregation, charts,
 groupstats, and workbook output. Choose a time bucket and aggregation method in the main

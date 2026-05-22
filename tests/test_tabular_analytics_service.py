@@ -580,6 +580,122 @@ def test_sqlite_grouping_filter_expression_applies_to_preview_count_and_row_ids(
         cleanup_tabular_load_result(result)
 
 
+def test_sqlite_grouping_filter_expression_supports_membership_lists(tmp_path) -> None:
+    input_file = tmp_path / "sqlite_membership_filters.csv"
+    pd.DataFrame(
+        {
+            "Station": ["A", "B", "A", "B", "A", "B"],
+            "Part": ["body-pre", "cap", "nut", "body-side", "gear shaft", None],
+            "TimeStamp": [
+                "2026-05-01",
+                "2026-05-02",
+                "2026-05-03",
+                "2026-05-04",
+                "2026-05-05",
+                "",
+            ],
+            "Length mm": [10.0, 10.1, 10.2, 10.3, 10.4, 10.5],
+        }
+    ).to_csv(input_file, index=False)
+
+    result = load_tabular_analytics_file(input_file, force_sqlite=True)
+    try:
+        aliases = {"Part": "part", "Length": "length_mm", "Time": "timestamp"}
+        expression = 'Part IN (body*, "gear shaft") AND Length IN (10, 10.3, 10.4)'
+        parsed = parse_filter_expression(
+            'part IN (body*, "gear shaft") AND length_mm IN (10, 10.3, 10.4)',
+            result.sqlite_store.columns,
+        )
+        expected_ids = result.dataframe.loc[parsed.mask(result.dataframe), "source_row_number"].tolist()
+
+        assert expected_ids == [1, 4, 5]
+        assert result.sqlite_store.row_ids(
+            grouping_filter_expression=expression,
+            grouping_filter_aliases=aliases,
+        ) == expected_ids
+        assert result.sqlite_store.count_rows(
+            grouping_filter_expression=expression,
+            grouping_filter_aliases=aliases,
+        ) == 3
+        rows, total = result.sqlite_store.preview_group_rows(
+            ("station",),
+            grouping_filter_expression=expression,
+            grouping_filter_aliases=aliases,
+            limit=20,
+        )
+        assert total == 2
+        assert rows == [
+            {"key": ("A",), "label": "A", "row_count": 2},
+            {"key": ("B",), "label": "B", "row_count": 1},
+        ]
+        assert result.sqlite_store.row_ids_for_group_keys(
+            ("station",),
+            {("A",)},
+            grouping_filter_expression=expression,
+            grouping_filter_aliases=aliases,
+        ) == [1, 5]
+
+        assert result.sqlite_store.row_ids(
+            grouping_filter_expression="Part NOT IN (body*, cap)",
+            grouping_filter_aliases=aliases,
+        ) == [3, 5, 6]
+        assert result.sqlite_store.row_ids(
+            grouping_filter_expression="Time IN (2026-05-02, 2026-05-05)",
+            grouping_filter_aliases=aliases,
+        ) == [2, 5]
+    finally:
+        cleanup_tabular_load_result(result)
+
+
+def test_sqlite_membership_filter_escapes_wildcard_like_metacharacters(tmp_path) -> None:
+    input_file = tmp_path / "sqlite_membership_escape.csv"
+    pd.DataFrame(
+        {
+            "Station": ["A_%", "Axx_%", "Axx12", "A%2", "Alpha"],
+            "Length mm": [10.0, 10.1, 10.2, 10.3, 10.4],
+        }
+    ).to_csv(input_file, index=False)
+
+    result = load_tabular_analytics_file(input_file, force_sqlite=True)
+    try:
+        parsed = parse_filter_expression("station IN (A*_%, A%2)", result.sqlite_store.columns)
+        expected_ids = result.dataframe.loc[parsed.mask(result.dataframe), "source_row_number"].tolist()
+
+        assert expected_ids == [1, 2, 4]
+        assert result.sqlite_store.row_ids(grouping_filter=parsed) == expected_ids
+        rows, total = result.sqlite_store.preview_group_rows(
+            ("station",),
+            grouping_filter_expression="station IN (A*_%, A%2)",
+            limit=20,
+        )
+        assert total == 3
+        assert rows == [
+            {"key": ("A%2",), "label": "A%2", "row_count": 1},
+            {"key": ("A_%",), "label": "A_%", "row_count": 1},
+            {"key": ("Axx_%",), "label": "Axx_%", "row_count": 1},
+        ]
+    finally:
+        cleanup_tabular_load_result(result)
+
+
+def test_sqlite_membership_filter_chunks_large_value_lists(tmp_path) -> None:
+    input_file = tmp_path / "sqlite_membership_large_list.csv"
+    pd.DataFrame(
+        {
+            "Code": ["P-000", "P-904", "P-999"],
+            "Length mm": [10.0, 10.1, 10.2],
+        }
+    ).to_csv(input_file, index=False)
+    expression = "Code IN (" + ", ".join(f"P-{index:03d}" for index in range(905)) + ")"
+
+    result = load_tabular_analytics_file(input_file, force_sqlite=True)
+    try:
+        assert result.sqlite_store.row_ids(grouping_filter_expression=expression) == [1, 2]
+        assert result.sqlite_store.count_rows(grouping_filter_expression=expression) == 2
+    finally:
+        cleanup_tabular_load_result(result)
+
+
 def test_sqlite_shared_filter_specs_match_pandas_and_escape_like_wildcards(tmp_path) -> None:
     input_file = tmp_path / "sqlite_shared_specs.csv"
     pd.DataFrame(

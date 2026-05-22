@@ -463,6 +463,57 @@ class DateFilterSpec:
         raise ValueError(f"Unsupported date filter operator: {self.operator}")
 
 
+@dataclass(frozen=True)
+class MembershipFilterSpec:
+    """Membership filter for one DataFrame column."""
+
+    column: str
+    values: tuple[Any, ...]
+    negate: bool = False
+    case_sensitive: bool = False
+    wildcards: bool = True
+    dayfirst: bool = False
+    operator: str = "in"
+
+    def mask(self, data_frame: pd.DataFrame) -> pd.Series:
+        _require_column(data_frame, self.column)
+        values = tuple(value for value in self.values if str(value).strip() != "")
+        if not values:
+            raise ValueError("IN filters require at least one value")
+
+        value_kind = _membership_value_kind(values, dayfirst=self.dayfirst)
+        if value_kind == "number":
+            numbers = pd.to_numeric(data_frame[self.column], errors="coerce")
+            parsed_values = [_coerce_number(value, field_name="IN value") for value in values]
+            mask = numbers.isin(parsed_values).fillna(False)
+        elif value_kind == "date":
+            dates = _coerce_date_series(data_frame[self.column], dayfirst=self.dayfirst)
+            parsed_dates = [
+                _coerce_date(value, dayfirst=self.dayfirst, field_name="IN value")
+                for value in values
+            ]
+            mask = dates.isin(parsed_dates).fillna(False)
+        else:
+            text = data_frame[self.column].astype("string")
+            normalized_values = tuple(str(value) for value in values)
+            if not self.case_sensitive:
+                text = text.str.casefold()
+                normalized_values = tuple(value.casefold() for value in normalized_values)
+            exact_values = {
+                value for value in normalized_values if not (self.wildcards and _has_text_wildcard(value))
+            }
+            mask = text.isin(exact_values).fillna(False) if exact_values else pd.Series(
+                False,
+                index=data_frame.index,
+            )
+            if self.wildcards:
+                for pattern in normalized_values:
+                    if _has_text_wildcard(pattern):
+                        mask |= _wildcard_text_mask(text, pattern)
+        negate = self.negate or str(self.operator or "").strip().casefold() == "not_in"
+        return ~mask if negate else mask
+
+
 def build_filter_mask(
     data_frame: pd.DataFrame,
     filter_specs: Iterable[DataFrameFilterSpec] | None,
@@ -535,7 +586,8 @@ def looks_like_filter_expression(expression: str) -> bool:
     if not text.strip():
         return False
     try:
-        return any(token.kind == "OP" for token in _tokenize_filter_expression(text))
+        tokens = _tokenize_filter_expression(text)
+        return any(token.kind == "OP" for token in tokens) or _contains_membership_operator_tokens(tokens)
     except ValueError:
         return _contains_symbolic_operator(text)
 
@@ -638,20 +690,34 @@ class _FilterExpressionParser:
 
     def _parse_condition(self) -> DataFrameFilterSpec:
         field_tokens: list[_FilterToken] = []
-        while (token := self._peek()) is not None and token.kind != "OP":
-            if token.kind in {"AND", "OR", "RPAREN", "LPAREN"}:
+        while (
+            (token := self._peek()) is not None
+            and token.kind != "OP"
+            and not self._is_membership_operator_start()
+        ):
+            if token.kind in {"AND", "OR", "RPAREN", "LPAREN", "COMMA"}:
                 raise ValueError(f"Invalid grouping filter term near: {token.value}")
             field_tokens.append(self._advance())
         if not field_tokens:
             raise ValueError("Missing field name in grouping filter expression.")
         operator_token = self._match("OP")
         if operator_token is None:
+            membership_operator = self._match_membership_operator()
             field = _tokens_to_filter_text(field_tokens)
-            raise ValueError(f"Missing operator for grouping filter field: {field}")
+            if membership_operator is None:
+                raise ValueError(f"Missing operator for grouping filter field: {field}")
+            return _parse_membership_condition(
+                field,
+                membership_operator,
+                self._parse_membership_values(field),
+                self._columns,
+                dayfirst=self._dayfirst,
+                aliases=self._aliases,
+            )
 
         value_tokens: list[_FilterToken] = []
         while (token := self._peek()) is not None and token.kind not in {"AND", "OR", "RPAREN"}:
-            if token.kind in {"LPAREN", "OP"}:
+            if token.kind in {"LPAREN", "OP", "COMMA"}:
                 raise ValueError(f"Invalid grouping filter value near: {token.value}")
             value_tokens.append(self._advance())
         if not value_tokens:
@@ -666,6 +732,68 @@ class _FilterExpressionParser:
             dayfirst=self._dayfirst,
             aliases=self._aliases,
         )
+
+    def _is_membership_operator_start(self) -> bool:
+        token = self._peek()
+        if token is None or token.kind != "WORD":
+            return False
+        keyword = token.value.casefold()
+        if keyword == "in":
+            return True
+        if keyword != "not":
+            return False
+        next_index = self._index + 1
+        if next_index >= len(self._tokens):
+            return False
+        next_token = self._tokens[next_index]
+        return next_token.kind == "WORD" and next_token.value.casefold() == "in"
+
+    def _match_membership_operator(self) -> str | None:
+        token = self._peek()
+        if token is None or token.kind != "WORD":
+            return None
+        keyword = token.value.casefold()
+        if keyword == "in":
+            self._advance()
+            return "in"
+        if keyword != "not":
+            return None
+        self._advance()
+        next_token = self._peek()
+        if next_token is None or next_token.kind != "WORD" or next_token.value.casefold() != "in":
+            raise ValueError("Expected IN after NOT in grouping filter expression.")
+        self._advance()
+        return "not_in"
+
+    def _parse_membership_values(self, field: str) -> tuple[str, ...]:
+        if self._match("LPAREN") is None:
+            raise ValueError(f"IN filter for grouping filter field {field} requires a parenthesized list.")
+        values: list[str] = []
+        while True:
+            token = self._peek()
+            if token is None:
+                raise ValueError("Missing closing ')' in grouping filter IN list.")
+            if token.kind == "RPAREN":
+                if not values:
+                    raise ValueError(f"IN filter for grouping filter field {field} requires at least one value.")
+                self._advance()
+                return tuple(values)
+
+            value_tokens: list[_FilterToken] = []
+            while (token := self._peek()) is not None and token.kind not in {"COMMA", "RPAREN"}:
+                if token.kind in {"AND", "OR", "LPAREN", "OP"}:
+                    raise ValueError(f"Invalid grouping filter IN value near: {token.value}")
+                value_tokens.append(self._advance())
+            value = _tokens_to_filter_text(value_tokens)
+            if not value:
+                raise ValueError(f"IN filter for grouping filter field {field} contains an empty value.")
+            values.append(value)
+            if self._match("COMMA") is not None:
+                if self._peek() is None or self._peek().kind == "RPAREN":
+                    raise ValueError(f"IN filter for grouping filter field {field} has a trailing comma.")
+                continue
+            if self._match("RPAREN") is not None:
+                return tuple(values)
 
     def _peek(self) -> _FilterToken | None:
         if self._index >= len(self._tokens):
@@ -717,6 +845,26 @@ def _parse_filter_condition(
     raise ValueError(f"Operator {operator} requires a numeric or date-like value.")
 
 
+def _parse_membership_condition(
+    column_text: str,
+    operator: str,
+    values: tuple[str, ...],
+    columns: Iterable[str],
+    *,
+    dayfirst: bool,
+    aliases: FilterAliases | None,
+) -> MembershipFilterSpec:
+    column = resolve_filter_column(column_text, columns, aliases=aliases)
+    return MembershipFilterSpec(
+        column,
+        values,
+        negate=operator == "not_in",
+        wildcards=True,
+        dayfirst=dayfirst,
+        operator=operator,
+    )
+
+
 def _resolve_filter_column(column: str, columns: Iterable[str]) -> str:
     return resolve_filter_column(column, columns)
 
@@ -736,6 +884,10 @@ def _tokenize_filter_expression(expression: str) -> tuple[_FilterToken, ...]:
             continue
         if char == ")":
             tokens.append(_FilterToken("RPAREN", char, index))
+            index += 1
+            continue
+        if char == ",":
+            tokens.append(_FilterToken("COMMA", char, index))
             index += 1
             continue
         two_char = text[index : index + 2]
@@ -763,7 +915,7 @@ def _tokenize_filter_expression(expression: str) -> tuple[_FilterToken, ...]:
         start = index
         while index < len(text):
             current = text[index]
-            if current.isspace() or current in {"(", ")", "`", "[", "'", '"', "=", ">", "<"}:
+            if current.isspace() or current in {"(", ")", ",", "`", "[", "'", '"', "=", ">", "<"}:
                 break
             if current == "!" and index + 1 < len(text) and text[index + 1] == "=":
                 break
@@ -914,7 +1066,30 @@ def _contains_symbolic_operator(expression: str) -> bool:
             return True
         if char == "!" and index + 1 < len(expression) and expression[index + 1] == "=":
             return True
+    return bool(re.search(r"\b(?:not\s+)?in\s*\(", expression, flags=re.IGNORECASE))
+
+
+def _contains_membership_operator_tokens(tokens: tuple[_FilterToken, ...]) -> bool:
+    for index, token in enumerate(tokens):
+        if token.kind != "WORD":
+            continue
+        keyword = token.value.casefold()
+        if keyword == "in" and _next_non_word_membership_token_is_list(tokens, index):
+            return True
+        if keyword == "not" and index + 1 < len(tokens):
+            next_token = tokens[index + 1]
+            if (
+                next_token.kind == "WORD"
+                and next_token.value.casefold() == "in"
+                and _next_non_word_membership_token_is_list(tokens, index + 1)
+            ):
+                return True
     return False
+
+
+def _next_non_word_membership_token_is_list(tokens: tuple[_FilterToken, ...], index: int) -> bool:
+    next_index = index + 1
+    return next_index < len(tokens) and tokens[next_index].kind == "LPAREN"
 
 
 def _has_text_wildcard(value: str) -> bool:
@@ -924,6 +1099,22 @@ def _has_text_wildcard(value: str) -> bool:
 def _wildcard_text_mask(text: pd.Series, pattern: str) -> pd.Series:
     regex = "^" + ".*".join(re.escape(part) for part in str(pattern).split("*")) + "$"
     return text.str.match(regex, na=False)
+
+
+def _membership_value_kind(values: tuple[Any, ...], *, dayfirst: bool) -> str:
+    if values and all(_looks_date_like(value) for value in values):
+        parsed_dates = pd.to_datetime(pd.Series(list(values)), errors="coerce", dayfirst=dayfirst)
+        if parsed_dates.notna().all():
+            return "date"
+    parsed_numbers = pd.to_numeric(pd.Series(list(values)), errors="coerce")
+    if values and parsed_numbers.notna().all():
+        return "number"
+    return "text"
+
+
+def _looks_date_like(value: Any) -> bool:
+    text = str(value or "").strip()
+    return bool(re.search(r"\d{4}", text) or any(marker in text for marker in ("/", ":")))
 
 
 def _symbol_to_number_operator(operator: str) -> str:

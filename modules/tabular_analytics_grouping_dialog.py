@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import re
 
 import pandas as pd
 from PyQt6.QtCore import QThread, QTimer, Qt, pyqtSignal
@@ -33,6 +32,7 @@ from modules.grouping_filter_core import (
     NumberFilterSpec,
     TextFilterSpec,
     apply_filter_specs,
+    looks_like_filter_expression,
     parse_filter_expression,
 )
 from modules.help_menu import attach_help_menu_to_layout
@@ -67,7 +67,6 @@ except ImportError:  # pragma: no cover - compatibility with lightweight test st
 
 _SELECTOR_PAGE_SIZE = 1000
 _GROUP_MEMBER_PREVIEW_LIMIT = 1000
-_SELECTOR_FILTER_EXPRESSION_RE = re.compile(r"\S\s*(?:>=|<=|!=|=|>|<)\s*\S")
 _NUMBER_FILTER_OPERATOR_SYMBOLS = {
     "equals": "=",
     "eq": "=",
@@ -698,7 +697,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
 
     @staticmethod
     def _looks_like_filter_expression(text: str) -> bool:
-        return bool(_SELECTOR_FILTER_EXPRESSION_RE.search(str(text or "")))
+        return looks_like_filter_expression(text)
 
     def _selector_filter_state(self) -> _SelectorFilterState:
         text = self._selector_filter_text()

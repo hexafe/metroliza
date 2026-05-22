@@ -4,6 +4,7 @@ import pytest
 from modules.grouping_filter_core import (
     DataFrameGroupingIndex,
     DateFilterSpec,
+    MembershipFilterSpec,
     NumberFilterSpec,
     TextFilterSpec,
     apply_filter_specs,
@@ -256,6 +257,81 @@ def test_parse_filter_expression_supports_text_wildcard_equality() -> None:
     assert filtered_not["Value"].tolist() == [12, 14]
 
 
+def test_parse_filter_expression_supports_in_membership_and_wildcards() -> None:
+    frame = pd.DataFrame(
+        {
+            "Part": ["Body-01", "cap", "gear shaft", "bolt", None],
+            "Sample": [1, 2, 3, 10, 123],
+            "Created": ["2026-05-01", "2026-05-02", "2026-05-03", "2026-05-04", ""],
+        }
+    )
+
+    parsed = parse_filter_expression('Part IN (body*, cap, "gear shaft")', frame.columns)
+    filtered = apply_filter_specs(frame, parsed.specs, match_mode=parsed.match_mode)
+
+    assert looks_like_filter_expression("Part IN (body*, cap)")
+    assert filtered["Part"].tolist() == ["Body-01", "cap", "gear shaft"]
+    assert MembershipFilterSpec("Part", ("body*", "cap")).mask(frame).tolist() == [
+        True,
+        True,
+        False,
+        False,
+        False,
+    ]
+
+    numeric_parsed = parse_filter_expression("Sample IN (1, 2, 10, 123)", frame.columns)
+    assert numeric_parsed.mask(frame).tolist() == [True, True, False, True, True]
+
+    date_parsed = parse_filter_expression(
+        "Created IN (2026-05-01, 2026-05-03)",
+        frame.columns,
+    )
+    assert date_parsed.mask(frame).tolist() == [True, False, True, False, False]
+
+    parsed_not = parse_filter_expression("Part NOT IN (body*, cap)", frame.columns)
+    assert parsed_not.mask(frame).tolist() == [False, False, True, True, True]
+    assert MembershipFilterSpec("Part", ("body*", "cap"), operator="not_in").mask(frame).tolist() == [
+        False,
+        False,
+        True,
+        True,
+        True,
+    ]
+
+
+def test_parse_filter_expression_preserves_membership_boolean_precedence() -> None:
+    frame = pd.DataFrame(
+        {
+            "Line": ["A", "A", "B", "B"],
+            "Part": ["body1", "nut", "cap", "bolt"],
+            "Supplier": ["Main", "Main", "Main", "Other"],
+        }
+    )
+
+    parsed = parse_filter_expression(
+        "Line=A AND Part IN (body*, cap) OR Supplier=Other",
+        frame.columns,
+    )
+
+    assert parsed.mask(frame).tolist() == [True, False, False, True]
+
+
+def test_parse_filter_expression_supports_quoted_commas_in_membership_lists() -> None:
+    frame = pd.DataFrame(
+        {
+            "Part Name": ["Body, LH", "Cover", "Body RH"],
+            "Supplier": ["A", "B", "A"],
+        }
+    )
+
+    parsed = parse_filter_expression(
+        "`Part Name` IN ('Body, LH', Cover) AND Supplier IN (A)",
+        frame.columns,
+    )
+
+    assert parsed.mask(frame).tolist() == [True, False, False]
+
+
 def test_parse_filter_expression_resolves_display_aliases() -> None:
     frame = pd.DataFrame(
         {
@@ -301,3 +377,14 @@ def test_parse_filter_expression_rejects_unknown_fields() -> None:
 
     with pytest.raises(KeyError, match="Missing"):
         parse_filter_expression("Missing = S-1", frame.columns)
+
+
+def test_parse_filter_expression_rejects_invalid_membership_lists() -> None:
+    frame = pd.DataFrame({"Part": ["A"], "Value": [1]})
+
+    with pytest.raises(ValueError, match="requires at least one value"):
+        parse_filter_expression("Part IN ()", frame.columns)
+    with pytest.raises(ValueError, match="requires a parenthesized list"):
+        parse_filter_expression("Part IN A", frame.columns)
+    with pytest.raises(ValueError, match="trailing comma"):
+        parse_filter_expression("Part IN (A,)", frame.columns)
