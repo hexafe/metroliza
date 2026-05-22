@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from modules.export_html_dashboard import (
     _build_group_analysis_plotly_spec,
+    _build_group_analysis_plotly_spec_bundle,
     _build_plotly_chart_spec,
     _build_plotly_chart_spec_bundle,
     extract_dashboard_chart_details,
@@ -471,6 +472,105 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(bundle['dark']['layout']['font']['color'], '#edf3fb')
         self.assertNotEqual(bundle['dark']['data'][0]['marker']['color'], '#245a5a')
         self.assertNotEqual(bundle['dark']['layout']['shapes'][0]['line']['color'], '#b45309')
+
+    def test_plotly_visual_settings_recolor_histogram_and_preserve_dark_theme(self):
+        settings = {
+            'series': {
+                'palette': ['#123456'],
+                'opacity': {'histogram': 0.42},
+                'patterns': ['/'],
+                'always_distinguish': True,
+                'outline_color': '#654321',
+                'outline_width': 2,
+            }
+        }
+        with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
+            bundle = _build_plotly_chart_spec_bundle(
+                {
+                    'type': 'histogram',
+                    'values': [9.9, 10.0, 10.1, 10.2],
+                    'limits': {'lsl': 9.8, 'nominal': 10.0, 'usl': 10.2},
+                },
+                title='Diameter / X',
+                plotly_visual_settings=settings,
+            )
+
+        for variant in ('light', 'dark'):
+            trace = bundle[variant]['data'][0]
+            self.assertEqual(trace['marker']['color'], '#123456')
+            self.assertEqual(trace['marker']['line']['color'], '#654321')
+            self.assertEqual(trace['marker']['line']['width'], 2)
+            self.assertEqual(trace['marker']['pattern']['shape'], '/')
+            self.assertEqual(trace['opacity'], 0.42)
+            self.assertEqual(bundle[variant]['layout']['colorway'], ['#123456'])
+        self.assertEqual(bundle['dark']['layout']['font']['color'], '#edf3fb')
+        self.assertNotIn('shapes', bundle['light']['layout'])
+
+    def test_plotly_visual_settings_apply_group_histogram_patterns_and_mean_colors(self):
+        settings = {
+            'series': {
+                'palette': ['#111111', '#111122'],
+                'opacity': {'grouped_histogram': 0.44},
+                'patterns': ['/', '\\'],
+                'auto_distinguish': True,
+            },
+            'stat_lines': {'accent_by_stat': True},
+        }
+        with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
+            bundle = _build_group_analysis_plotly_spec_bundle(
+                'FEATURE_1',
+                'histogram',
+                {
+                    'groups': [
+                        {'group': 'A', 'values': [1.0, 2.0, 3.0]},
+                        {'group': 'B', 'values': [1.1, 2.1, 3.1]},
+                    ],
+                },
+                plotly_visual_settings=settings,
+            )
+
+        light = bundle['light']
+        bars = [trace for trace in light['data'] if trace.get('type') == 'histogram']
+        self.assertEqual([trace['marker']['color'] for trace in bars], ['#111111', '#111122'])
+        self.assertEqual([trace['marker']['pattern']['shape'] for trace in bars], ['/', '\\'])
+        self.assertTrue(all(trace['opacity'] == 0.44 for trace in bars))
+        mean_traces = [
+            trace for trace in light['data']
+            if str(trace.get('name') or '').startswith(('(A) Mean=', '(B) Mean='))
+        ]
+        self.assertEqual(len(mean_traces), 2)
+        self.assertTrue(all(trace.get('showlegend') is True for trace in mean_traces))
+        self.assertNotEqual(mean_traces[0]['line']['color'], '#111111')
+        self.assertNotIn('shapes', light['layout'])
+        self.assertNotIn('annotations', light['layout'])
+
+    def test_plotly_visual_settings_apply_scatter_marker_symbols(self):
+        settings = {
+            'series': {
+                'palette': ['#345678'],
+                'opacity': {'trend': 0.61},
+                'marker_symbols': ['diamond'],
+                'always_distinguish': True,
+                'marker_size': 11,
+            }
+        }
+        with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
+            bundle = _build_plotly_chart_spec_bundle(
+                {
+                    'type': 'trend',
+                    'x_values': [1, 2, 3],
+                    'y_values': [10.0, 10.2, 10.4],
+                },
+                title='Trend',
+                plotly_visual_settings=settings,
+            )
+
+        measurements = _trace_by_name(bundle['light'], 'Measurements')
+        self.assertEqual(measurements['marker']['color'], '#345678')
+        self.assertEqual(measurements['marker']['symbol'], 'diamond')
+        self.assertEqual(measurements['marker']['size'], 11)
+        self.assertEqual(measurements['opacity'], 0.61)
+        self.assertEqual(_trace_by_name(bundle['dark'], 'Measurements')['marker']['color'], '#345678')
 
     def test_group_analysis_histogram_plotly_spec_uses_shared_bins_for_overlay(self):
         all_values = [9.99, 10.01, 10.02, 10.03, 10.08, 10.11, 10.14, 10.16]

@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 from modules.env_utils import FALSE_VALUES, TRUE_VALUES, env_bool
+from modules.dashboard_plotly_visuals import apply_dashboard_visual_settings
 from modules.distribution_iqr_plotly_specs import build_distribution_iqr_plotly_spec
 from modules.export_chart_payload_helpers import build_histogram_table_data
 from modules.export_summary_utils import resolve_histogram_bin_count
@@ -104,6 +105,26 @@ def metroliza_dashboard_plotstats_theme() -> dict[str, Any]:
             "fit": SUMMARY_PLOT_PALETTE["central_tendency"],
             "spec_limit": SUMMARY_PLOT_PALETTE["spec_limit"],
             "nominal": SUMMARY_PLOT_PALETTE["central_tendency"],
+            "colorway": list(_PLOTLY_GROUP_COLORWAY),
+        },
+        "visual": {
+            "series": {
+                "palette": list(_PLOTLY_GROUP_COLORWAY),
+                "opacity": {
+                    "histogram": 0.86,
+                    "grouped_histogram": 0.55,
+                    "distribution": 0.84,
+                    "iqr": 0.62,
+                    "scatter": 0.82,
+                    "trend": 0.35,
+                },
+                "marker_symbols": [],
+                "patterns": [],
+                "auto_distinguish": False,
+            },
+            "stat_lines": {
+                "accent_by_stat": False,
+            },
         },
     }
 
@@ -132,7 +153,9 @@ def build_dashboard_plotly_spec(
             theme=theme,
         )
         if spec:
-            return _normalize_dashboard_plotly_spec(spec)
+            normalized = _normalize_dashboard_plotly_spec(spec)
+            apply_dashboard_visual_settings(normalized, payload=payload, theme=theme)
+            return normalized
 
     if plotstats_export_charts_enabled():
         spec = build_plotstats_dashboard_spec(
@@ -177,6 +200,7 @@ def build_dashboard_plotly_spec(
     _ensure_group_histogram_mean_annotations(raw_spec, payload)
     normalized = _normalize_dashboard_plotly_spec(raw_spec)
     _normalize_scatter_trend_dashboard_spec(normalized, payload)
+    apply_dashboard_visual_settings(normalized, payload=payload, theme=theme)
     return normalized
 
 
@@ -458,6 +482,7 @@ def build_plotstats_dashboard_spec(
     normalized = _trim_plotly_spec(spec)
     _apply_payload_histogram_overlay_plotly_y(normalized, payload)
     _normalize_scatter_trend_dashboard_spec(normalized, payload)
+    apply_dashboard_visual_settings(normalized, payload=payload, theme=dashboard_theme)
     return normalized
 
 

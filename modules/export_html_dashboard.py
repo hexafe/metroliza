@@ -21,6 +21,7 @@ from modules.dashboard_navigation import (
     render_section_nav,
 )
 from modules.distribution_iqr_plotly_specs import build_distribution_iqr_plotly_spec
+from modules.dashboard_plotly_visuals import apply_dashboard_visual_settings
 from modules.export_summary_utils import resolve_histogram_bin_count
 from modules.hexafe_plotstats_adapter import (
     build_plotstats_dashboard_spec,
@@ -296,6 +297,7 @@ def write_export_html_dashboard(
     dashboard_mode: str = "workbook_sidecar",
     plotly_spec_count_budget: int = _DEFAULT_PLOTLY_SPEC_COUNT_BUDGET,
     plotly_serialized_json_bytes_budget: int = _DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET,
+    plotly_visual_settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Persist an HTML dashboard plus a sibling asset directory."""
 
@@ -329,6 +331,7 @@ def write_export_html_dashboard(
             plotly_spec = _build_plotly_chart_spec_bundle(
                 raw_chart.get("payload"),
                 title=str(raw_chart.get("title") or raw_chart.get("chart_type") or "Chart"),
+                plotly_visual_settings=plotly_visual_settings,
             )
             timings_s["plotly_spec_generation"] += perf_counter() - spec_start
             if plotly_spec:
@@ -369,6 +372,7 @@ def write_export_html_dashboard(
         group_analysis_plot_assets,
         asset_directory=asset_directory,
         timings_s=timings_s,
+        plotly_visual_settings=plotly_visual_settings,
     )
     timings_s["group_analysis_normalization"] += perf_counter() - group_analysis_start
     chart_count += int(normalized_group_analysis.get("plot_count") or 0) if normalized_group_analysis else 0
@@ -811,27 +815,33 @@ def _retint_plotly_trace_for_theme(trace: Any, color_remap: dict[str, Any]) -> A
         return trace
 
     next_trace = dict(trace)
+    meta = next_trace.get("meta") if isinstance(next_trace.get("meta"), dict) else {}
+    preserve_color = bool(meta.get("dashboard_visual_preserve_color"))
     line = next_trace.get("line")
     if isinstance(line, dict):
         next_trace["line"] = {
             **line,
-            "color": _remap_plotly_theme_color(line.get("color"), color_remap),
+            "color": line.get("color")
+            if preserve_color
+            else _remap_plotly_theme_color(line.get("color"), color_remap),
         }
 
     marker = next_trace.get("marker")
     if isinstance(marker, dict):
         next_marker = dict(marker)
-        if isinstance(next_marker.get("color"), str):
+        if isinstance(next_marker.get("color"), str) and not preserve_color:
             next_marker["color"] = _remap_plotly_theme_color(next_marker.get("color"), color_remap)
         marker_line = next_marker.get("line")
         if isinstance(marker_line, dict):
             next_marker["line"] = {
                 **marker_line,
-                "color": _remap_plotly_theme_color(marker_line.get("color"), color_remap),
+                "color": marker_line.get("color")
+                if preserve_color
+                else _remap_plotly_theme_color(marker_line.get("color"), color_remap),
             }
         next_trace["marker"] = next_marker
 
-    if isinstance(next_trace.get("fillcolor"), str):
+    if isinstance(next_trace.get("fillcolor"), str) and not preserve_color:
         next_trace["fillcolor"] = _remap_plotly_theme_color(next_trace.get("fillcolor"), color_remap)
     return next_trace
 
@@ -850,7 +860,9 @@ def _derive_plotly_spec_theme(spec: dict[str, Any], *, theme: str) -> dict[str, 
 
     layout["paper_bgcolor"] = tokens["paper_bg"]
     layout["plot_bgcolor"] = tokens["plot_bg"]
-    layout["colorway"] = list(tokens["colorway"])
+    layout_meta = layout.get("meta") if isinstance(layout.get("meta"), dict) else {}
+    if not bool(layout_meta.get("dashboard_visual_preserve_colorway")):
+        layout["colorway"] = list(tokens["colorway"])
     layout["font"] = {**(layout.get("font") if isinstance(layout.get("font"), dict) else {}), "color": tokens["text"]}
     title = layout.get("title")
     if isinstance(title, dict):
@@ -2242,11 +2254,18 @@ def _build_group_analysis_plotly_spec(
     return {}
 
 
-def _build_plotly_chart_spec(payload: dict[str, Any] | None, *, title: str, theme: str = "light") -> dict[str, Any]:
+def _build_plotly_chart_spec(
+    payload: dict[str, Any] | None,
+    *,
+    title: str,
+    theme: str = "light",
+    plotly_visual_settings: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return {}
 
     chart_type = str(payload.get("type") or "").strip().lower()
+    spec: dict[str, Any] = {}
     if chart_type in {"distribution", "iqr"}:
         spec = build_distribution_iqr_plotly_spec(
             payload,
@@ -2256,26 +2275,50 @@ def _build_plotly_chart_spec(payload: dict[str, Any] | None, *, title: str, them
             theme=theme,
         )
         if spec:
-            return spec
+            return apply_dashboard_visual_settings(
+                spec,
+                payload=payload,
+                visual_settings=plotly_visual_settings,
+            )
     if plotstats_export_charts_enabled():
         spec = build_plotstats_dashboard_spec(payload, title=title, theme=theme, static=False)
         if spec:
-            return normalize_distribution_stat_legend(spec, payload)
+            return apply_dashboard_visual_settings(
+                normalize_distribution_stat_legend(spec, payload),
+                payload=payload,
+                visual_settings=plotly_visual_settings,
+            )
     if chart_type == "histogram":
-        return _build_plotly_histogram_spec(payload, title=title, theme=theme)
+        spec = _build_plotly_histogram_spec(payload, title=title, theme=theme)
     if chart_type == "distribution":
         spec = _build_plotly_distribution_spec(payload, title=title, theme=theme)
-        return normalize_distribution_stat_legend(spec, payload) if spec else spec
-    if chart_type == "iqr":
+        spec = normalize_distribution_stat_legend(spec, payload) if spec else spec
+    elif chart_type == "iqr":
         spec = _build_plotly_iqr_spec(payload, title=title, theme=theme)
-        return normalize_distribution_stat_legend(spec, payload) if spec else spec
-    if chart_type == "trend":
-        return _build_plotly_trend_spec(payload, title=title, theme=theme)
-    return {}
+        spec = normalize_distribution_stat_legend(spec, payload) if spec else spec
+    elif chart_type == "trend":
+        spec = _build_plotly_trend_spec(payload, title=title, theme=theme)
+    if not spec:
+        return {}
+    return apply_dashboard_visual_settings(
+        spec,
+        payload=payload,
+        visual_settings=plotly_visual_settings,
+    )
 
 
-def _build_plotly_chart_spec_bundle(payload: dict[str, Any] | None, *, title: str) -> dict[str, Any]:
-    light_spec = _build_plotly_chart_spec(payload, title=title, theme="light")
+def _build_plotly_chart_spec_bundle(
+    payload: dict[str, Any] | None,
+    *,
+    title: str,
+    plotly_visual_settings: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    light_spec = _build_plotly_chart_spec(
+        payload,
+        title=title,
+        theme="light",
+        plotly_visual_settings=plotly_visual_settings,
+    )
     if not light_spec:
         return {}
     dark_spec = _derive_plotly_spec_theme(light_spec, theme="dark")
@@ -2286,12 +2329,37 @@ def _build_group_analysis_plotly_spec_bundle(
     metric_name: str,
     plot_key: str,
     chart_payload: dict[str, Any] | None,
+    *,
+    plotly_visual_settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     light_spec = _build_group_analysis_plotly_spec(metric_name, plot_key, chart_payload, theme="light")
     if not light_spec:
         return {}
+    light_spec = apply_dashboard_visual_settings(
+        light_spec,
+        payload=_group_analysis_plotly_payload_for_visuals(plot_key, chart_payload),
+        visual_settings=plotly_visual_settings,
+    )
     dark_spec = _derive_plotly_spec_theme(light_spec, theme="dark")
     return {"light": light_spec, "dark": dark_spec or light_spec}
+
+
+def _group_analysis_plotly_payload_for_visuals(
+    plot_key: str,
+    chart_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(chart_payload, dict):
+        return {}
+    groups = chart_payload.get("groups") if isinstance(chart_payload.get("groups"), list) else []
+    return {
+        "type": "histogram" if str(plot_key or "").strip().casefold() == "histogram" else "distribution",
+        "groups": groups,
+        "labels": [
+            str(group.get("group") or f"Group {index}")
+            for index, group in enumerate(groups, start=1)
+            if isinstance(group, dict)
+        ],
+    }
 
 
 def _format_ci_interval(interval: Any, *, digits: int = 3) -> str:
@@ -2353,6 +2421,7 @@ def _normalize_group_analysis_manifest(
     *,
     asset_directory: Path,
     timings_s: dict[str, float] | None = None,
+    plotly_visual_settings: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
@@ -2384,7 +2453,12 @@ def _normalize_group_analysis_manifest(
             plot_asset = per_metric_assets.get(plot_key) if isinstance(per_metric_assets, dict) else {}
             image_buffer = plot_asset.get("image_data") if isinstance(plot_asset, dict) else None
             spec_start = perf_counter()
-            plotly_spec = _build_group_analysis_plotly_spec_bundle(metric_name, plot_key, chart_payload)
+            plotly_spec = _build_group_analysis_plotly_spec_bundle(
+                metric_name,
+                plot_key,
+                chart_payload,
+                plotly_visual_settings=plotly_visual_settings,
+            )
             if timings_s is not None:
                 timings_s["plotly_spec_generation"] = (
                     float(timings_s.get("plotly_spec_generation", 0.0))
@@ -3549,23 +3623,29 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
         }}
 
         const nextTrace = Object.assign({{}}, trace);
+        const meta = (nextTrace.meta && typeof nextTrace.meta === 'object') ? nextTrace.meta : {{}};
+        const preserveColor = Boolean(meta.dashboard_visual_preserve_color);
         if (nextTrace.line && typeof nextTrace.line === 'object') {{
           nextTrace.line = Object.assign({{}}, nextTrace.line, {{
-            color: remapPlotlyColor(nextTrace.line.color, colorRemap),
+            color: preserveColor
+              ? nextTrace.line.color
+              : remapPlotlyColor(nextTrace.line.color, colorRemap),
           }});
         }}
         if (nextTrace.marker && typeof nextTrace.marker === 'object') {{
           nextTrace.marker = Object.assign({{}}, nextTrace.marker);
-          if (typeof nextTrace.marker.color === 'string') {{
+          if (typeof nextTrace.marker.color === 'string' && !preserveColor) {{
             nextTrace.marker.color = remapPlotlyColor(nextTrace.marker.color, colorRemap);
           }}
           if (nextTrace.marker.line && typeof nextTrace.marker.line === 'object') {{
             nextTrace.marker.line = Object.assign({{}}, nextTrace.marker.line, {{
-              color: remapPlotlyColor(nextTrace.marker.line.color, colorRemap),
+              color: preserveColor
+                ? nextTrace.marker.line.color
+                : remapPlotlyColor(nextTrace.marker.line.color, colorRemap),
             }});
           }}
         }}
-        if (typeof nextTrace.fillcolor === 'string') {{
+        if (typeof nextTrace.fillcolor === 'string' && !preserveColor) {{
           nextTrace.fillcolor = remapPlotlyColor(nextTrace.fillcolor, colorRemap);
         }}
         return nextTrace;
@@ -3579,7 +3659,10 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
 
         layout.paper_bgcolor = theme.paperBgcolor;
         layout.plot_bgcolor = theme.plotBgcolor;
-        layout.colorway = Array.isArray(theme.colorway) ? theme.colorway.slice() : layout.colorway;
+        const layoutMeta = (layout.meta && typeof layout.meta === 'object') ? layout.meta : {{}};
+        if (!layoutMeta.dashboard_visual_preserve_colorway) {{
+          layout.colorway = Array.isArray(theme.colorway) ? theme.colorway.slice() : layout.colorway;
+        }}
         layout.font = Object.assign({{}}, layout.font || {{}}, {{ color: theme.fontColor }});
         layout.title = Object.assign({{}}, layout.title || {{}}, {{
           font: Object.assign({{}}, ((layout.title || {{}}).font || {{}}), {{ color: theme.fontColor }}),

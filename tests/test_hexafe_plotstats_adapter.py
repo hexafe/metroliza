@@ -11,10 +11,21 @@ from modules.hexafe_plotstats_adapter import (
     build_dashboard_plotly_spec,
     build_histogram_stats_table,
     build_plotstats_dashboard_spec,
+    metroliza_dashboard_plotstats_theme,
     plotstats_export_charts_enabled,
     render_chart_artifact_png,
     render_histogram_png,
 )
+
+
+def test_metroliza_dashboard_plotstats_theme_includes_visual_settings() -> None:
+    theme = metroliza_dashboard_plotstats_theme()
+
+    assert theme["colors"]["colorway"]
+    assert theme["visual"]["series"]["palette"] == theme["colors"]["colorway"]
+    assert theme["visual"]["series"]["opacity"]["grouped_histogram"] == 0.55
+    assert "marker_symbols" in theme["visual"]["series"]
+    assert "patterns" in theme["visual"]["series"]
 
 
 def test_histogram_stats_table_uses_export_style_rows() -> None:
