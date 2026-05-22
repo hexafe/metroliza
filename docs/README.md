@@ -26,6 +26,7 @@ This directory contains active operational, maintenance, and end-user documentat
 - `parser_plugins/non_technical_workflow.md` — non-technical step-by-step workflow for adding a new supplier report parser.
 - `roadmaps/2026_03_rc2_stabilization_execution.md` — RC2 stabilization closeout/reference tracker for the completed parity-first slice.
 - `roadmaps/OCR_BENCHMARKING_MASTER.md` — canonical OCR benchmarking, acceleration, privacy, and next-session handoff.
+- `roadmaps/PLOTSTATS_CENTRALIZATION_IMPLEMENTATION_PLAN.md` — future implementation plan for moving reusable Metroliza plot definitions into `hexafe-plotstats`.
 - `roadmaps/exporter_audit_2026_03.md` — focused exporter-path follow-up audit with the remaining structural refactor backlog.
 - `roadmaps/rust_acceleration_scope.md` — native-acceleration scope and promotion-gate decision record.
 
