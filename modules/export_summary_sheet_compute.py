@@ -134,10 +134,14 @@ def resolve_sampling_context(
 
     distribution_key = 'GROUP' if grouping_applied else 'SAMPLE_NUMBER'
     scatter_key = distribution_key
-    sampled_frames = {
-        chart_type: sample_frame_for_chart(header_group, chart_type, sampling_policy)
-        for chart_type in ('distribution', 'iqr', 'histogram', 'trend')
-    }
+    sampled_frames = {}
+    for chart_type in ('distribution', 'iqr', 'histogram', 'trend'):
+        sampled_frames[chart_type] = sample_frame_for_chart(
+            header_group,
+            chart_type,
+            sampling_policy,
+            grouping_key=distribution_key if grouping_applied and chart_type in {'distribution', 'iqr'} else None,
+        )
 
     distribution_labels, distribution_values, can_render_violin = build_violin_payload_vectorized(
         sampled_frames['distribution'],

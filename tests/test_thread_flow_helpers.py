@@ -2306,7 +2306,9 @@ class TestExportBackendSmoke(unittest.TestCase):
         )
         grouped_header = header_group.assign(GROUP=['A', 'A', 'B', 'B', 'C'])
         thread._prepared_grouping_df = pd.DataFrame()
-        thread._apply_group_assignments = lambda hg, _gd: (grouped_header.copy(), True)
+        thread._apply_group_assignments = (
+            lambda hg, _gd, **_kwargs: (grouped_header.copy(), True)
+        )
 
         captured = {}
         original_apply_labels = export_thread_module.apply_shared_x_axis_label_strategy
@@ -2412,9 +2414,11 @@ class TestExportBackendSmoke(unittest.TestCase):
         for grouping_active, expected_label in ((False, 'Sample number'), (True, 'Sample number')):
             with self.subTest(grouping_active=grouping_active):
                 if grouping_active:
-                    thread._apply_group_assignments = lambda hg, _gd: (grouped_header.copy(), True)
+                    thread._apply_group_assignments = (
+                        lambda hg, _gd, **_kwargs: (grouped_header.copy(), True)
+                    )
                 else:
-                    thread._apply_group_assignments = lambda hg, _gd: (hg, False)
+                    thread._apply_group_assignments = lambda hg, _gd, **_kwargs: (hg, False)
 
                 captured_labels = []
                 original_set_xlabel = __import__('matplotlib.axes', fromlist=['Axes']).Axes.set_xlabel
@@ -3412,7 +3416,9 @@ class TestExportBackendSmoke(unittest.TestCase):
         )
         grouped_header = header_group.assign(GROUP=['A', 'A', 'B', 'B', 'B'])
         thread._prepared_grouping_df = pd.DataFrame()
-        thread._apply_group_assignments = lambda hg, _gd: (grouped_header.copy(), True)
+        thread._apply_group_assignments = (
+            lambda hg, _gd, **_kwargs: (grouped_header.copy(), True)
+        )
 
         captured = {}
         original_render_violin = export_thread_module.render_violin
@@ -3602,7 +3608,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             captured_group_columns.append(kwargs.get('group_column'))
             return original_render_histogram(*args, **kwargs)
 
-        def _fake_apply_group_assignments(frame, _grouping_df):
+        def _fake_apply_group_assignments(frame, _grouping_df, **_kwargs):
             grouped = frame.copy()
             grouped['GROUP'] = ['A', 'A', 'B', 'B', 'A', 'B']
             return grouped, True

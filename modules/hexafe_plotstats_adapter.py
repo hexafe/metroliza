@@ -503,12 +503,14 @@ def render_chart_artifact_png(
     *,
     target: str = "workbook_image",
     backend: str = "auto",
+    theme: str | Mapping[str, Any] | None = None,
 ) -> ChartArtifactPngResult | None:
     """Render a chart PNG through plotstats artifact API when available."""
 
     artifact = build_chart_artifact(
         payload,
         target=target,
+        theme=theme,
         backend=backend,
         include_plotly=False,
         include_png=True,

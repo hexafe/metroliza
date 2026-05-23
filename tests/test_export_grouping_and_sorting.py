@@ -137,6 +137,34 @@ class TestExportSortingAndGrouping(unittest.TestCase):
         self.assertTrue(applied)
         self.assertEqual(merged['GROUP'].tolist(), ['POPULATION'])
 
+    def test_apply_group_assignments_can_use_population_fallback_for_summary_charts(self):
+        thread = ExportDataThread(export_request=ExportRequest(paths=AppPaths(db_file=':memory:', excel_file='dummy.xlsx'), options=ExportOptions()))
+        header_group = pd.DataFrame(
+            {
+                'REPORT_ID': [1, 2],
+                'REFERENCE': ['R1', 'R1'],
+                'DATE': ['2024-01-01', '2024-01-01'],
+                'SAMPLE_NUMBER': ['1', '2'],
+                'MEAS': [1.0, 1.2],
+            }
+        )
+        grouping_df = pd.DataFrame(
+            {
+                'REPORT_ID': [1],
+                'GROUP': ['A'],
+            }
+        )
+        grouping_df = prepare_grouping_dataframe(grouping_df)
+
+        merged, applied = thread._apply_group_assignments(
+            header_group,
+            grouping_df,
+            fallback_group_label='POPULATION',
+        )
+
+        self.assertTrue(applied)
+        self.assertEqual(merged['GROUP'].tolist(), ['A', 'POPULATION'])
+
     def test_apply_group_assignments_group_analysis_uses_grouping_default_label_attr(self):
         header_group = pd.DataFrame(
             {

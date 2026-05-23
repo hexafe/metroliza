@@ -1,6 +1,6 @@
 import pandas as pd
 
-from modules.chart_render_service import resolve_chart_sampling_policy
+from modules.chart_render_service import ChartSamplingPolicy, resolve_chart_sampling_policy
 from modules.export_summary_sheet_compute import (
     build_summary_worksheet_plan,
     normalize_summary_group_frame,
@@ -55,6 +55,44 @@ def test_resolve_sampling_context_normalizes_numeric_measurements_once_and_retur
     assert context['distribution_payload']['can_render_violin'] is True
     assert context['distribution_payload']['labels'] == ['A', 'B']
     assert context['iqr_payload']['values'] == [[1.0, 2.0], [3.5, 4.5]]
+
+
+def test_resolve_sampling_context_preserves_middle_population_group_under_sampling():
+    frame = normalize_summary_group_frame(
+        pd.DataFrame(
+            {
+                'REFERENCE': ['R1'] * 12,
+                'HEADER': ['H1'] * 12,
+                'AX': ['X'] * 12,
+                'SAMPLE_NUMBER': [str(index + 1) for index in range(12)],
+                'GROUP': ['A'] * 5 + ['POPULATION'] * 2 + ['B'] * 5,
+                'MEAS': [1.0, 1.1, 1.2, 1.3, 1.4, 9.0, 9.1, 2.0, 2.1, 2.2, 2.3, 2.4],
+                'NOM': [2.5] * 12,
+                '+TOL': [1.0] * 12,
+                '-TOL': [-1.0] * 12,
+            }
+        ),
+        grouping_key='GROUP',
+    )
+
+    context = resolve_sampling_context(
+        frame,
+        grouping_applied=True,
+        sampling_policy=ChartSamplingPolicy(
+            distribution_limit=4,
+            iqr_limit=4,
+            histogram_limit=4,
+            trend_limit=4,
+        ),
+        violin_plot_min_samplesize=1,
+    )
+
+    assert len(context['sampled_frames']['distribution'].index) <= 4
+    assert len(context['sampled_frames']['iqr'].index) <= 4
+    assert context['distribution_payload']['labels'] == ['A', 'POPULATION', 'B']
+    assert context['iqr_payload']['labels'] == ['A', 'POPULATION', 'B']
+    assert context['distribution_payload']['values'][1] == [9.0]
+    assert context['iqr_payload']['values'][1] == [9.0]
 
 
 def test_prepare_summary_chart_payloads_keeps_group_count_labels_and_titles_stable():

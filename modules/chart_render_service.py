@@ -145,7 +145,103 @@ def deterministic_downsample_frame(df: pd.DataFrame, sample_limit: int, *, prese
     return df.iloc[ordered_indexes].copy()
 
 
-def sample_frame_for_chart(df: pd.DataFrame, chart_type: str, policy: ChartSamplingPolicy) -> pd.DataFrame:
+def deterministic_grouped_downsample_frame(
+    df: pd.DataFrame,
+    sample_limit: int,
+    *,
+    grouping_key: str,
+    value_column: str | None = 'MEAS',
+) -> pd.DataFrame:
+    """Deterministically downsample while preserving visible groups when possible."""
+
+    if sample_limit <= 0 or len(df) <= sample_limit:
+        return df
+    if grouping_key not in df.columns:
+        return deterministic_downsample_frame(df, sample_limit, value_column=value_column or 'MEAS')
+
+    group_positions: OrderedDict[str, list[int]] = OrderedDict()
+    numeric_values = None
+    if value_column and value_column in df.columns:
+        numeric_values = pd.to_numeric(df[value_column], errors='coerce').to_numpy(dtype=float, copy=False)
+
+    group_values = df[grouping_key].to_numpy(dtype=object, copy=False)
+    for position, group_value in enumerate(group_values):
+        if pd.isna(group_value):
+            continue
+        label = str(group_value).strip()
+        if not label:
+            continue
+        if numeric_values is not None and not np.isfinite(numeric_values[position]):
+            continue
+        group_positions.setdefault(label, []).append(position)
+
+    if not group_positions:
+        return deterministic_downsample_frame(df, sample_limit, value_column=value_column or 'MEAS')
+
+    allocations = _grouped_sample_allocations([len(positions) for positions in group_positions.values()], sample_limit)
+    selected_positions: set[int] = set()
+    for positions, allocation in zip(group_positions.values(), allocations, strict=False):
+        if allocation <= 0:
+            continue
+        if allocation >= len(positions):
+            selected_positions.update(positions)
+            continue
+        selected_offsets = np.linspace(0, len(positions) - 1, allocation, dtype=int)
+        selected_positions.update(positions[int(offset)] for offset in selected_offsets)
+
+    if not selected_positions:
+        return deterministic_downsample_frame(df, sample_limit, value_column=value_column or 'MEAS')
+    return df.iloc[sorted(selected_positions)].copy()
+
+
+def _grouped_sample_allocations(group_counts: list[int], sample_limit: int) -> list[int]:
+    positive_counts = [max(0, int(count)) for count in group_counts]
+    total = sum(positive_counts)
+    if total <= 0 or sample_limit <= 0:
+        return [0 for _count in positive_counts]
+    if total <= sample_limit:
+        return positive_counts
+
+    allocations = [1 if count > 0 else 0 for count in positive_counts]
+    if sum(allocations) > sample_limit:
+        limited = [0 for _count in positive_counts]
+        for index, count in enumerate(positive_counts):
+            if count <= 0 or sum(limited) >= sample_limit:
+                break
+            limited[index] = 1
+        return limited
+
+    remaining = sample_limit - sum(allocations)
+    fractional_targets = []
+    for index, count in enumerate(positive_counts):
+        if count <= 0:
+            continue
+        target = (count / total) * sample_limit
+        fractional_targets.append((target - int(target), count, index))
+    fractional_targets.sort(key=lambda item: (item[0], item[1]), reverse=True)
+
+    while remaining > 0:
+        added = False
+        for _fraction, _count, index in fractional_targets:
+            if remaining <= 0:
+                break
+            if allocations[index] >= positive_counts[index]:
+                continue
+            allocations[index] += 1
+            remaining -= 1
+            added = True
+        if not added:
+            break
+    return allocations
+
+
+def sample_frame_for_chart(
+    df: pd.DataFrame,
+    chart_type: str,
+    policy: ChartSamplingPolicy,
+    *,
+    grouping_key: str | None = None,
+) -> pd.DataFrame:
     """Sample a frame using the limit associated with a chart type.
 
     Args:
@@ -163,11 +259,15 @@ def sample_frame_for_chart(df: pd.DataFrame, chart_type: str, policy: ChartSampl
         'histogram': policy.histogram_limit,
         'trend': policy.trend_limit,
     }
-    return deterministic_downsample_frame(
-        df,
-        limit_by_chart.get(chart_type, policy.distribution_limit),
-        preserve_extrema=chart_type == 'trend',
-    )
+    sample_limit = limit_by_chart.get(chart_type, policy.distribution_limit)
+    if chart_type in {'distribution', 'iqr'} and grouping_key:
+        return deterministic_grouped_downsample_frame(
+            df,
+            sample_limit,
+            grouping_key=grouping_key,
+            value_column='MEAS',
+        )
+    return deterministic_downsample_frame(df, sample_limit, preserve_extrema=chart_type == 'trend')
 
 
 def build_violin_payload_vectorized(sampled_group: pd.DataFrame, grouping_key: str, min_samplesize: int) -> tuple[list[str], list[list[float]], bool]:

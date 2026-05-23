@@ -231,6 +231,7 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
         tabular_column_filters: tuple[TabularColumnFilter, ...] | list[TabularColumnFilter] | None = None,
         dashboard_detail_mode: str = "fast",
         grouping_df=None,
+        dashboard_visual_settings: dict | None = None,
     ):
         super().__init__()
         validated_request = validate_industrial_analytics_request(
@@ -255,6 +256,7 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
                 tabular_column_filters=tabular_column_filters or (),
                 dashboard_detail_mode=dashboard_detail_mode,
                 grouping_df=grouping_df,
+                dashboard_visual_settings=dashboard_visual_settings,
             )
         )
         self.request = validated_request
@@ -278,6 +280,7 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
         self.tabular_column_filters = validated_request.tabular_column_filters
         self.dashboard_detail_mode = validated_request.dashboard_detail_mode
         self.grouping_df = validated_request.grouping_df
+        self.dashboard_visual_settings = validated_request.dashboard_visual_settings
         self._init_cancellation_state()
 
     def _emit_progress_message(self, message: str) -> None:
@@ -304,6 +307,7 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
                     cohort_state=self.cohort_state,
                     chart_selection=self.chart_selection,
                     separate_parameter_sheets=self.separate_parameter_sheets,
+                    dashboard_visual_settings=self.dashboard_visual_settings,
                     cancel_check=self._is_cancelled,
                     progress_callback=self._emit_progress_message,
                 )
@@ -318,6 +322,7 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
                     cohort_state=self.cohort_state,
                     chart_selection=self.chart_selection,
                     separate_parameter_sheets=self.separate_parameter_sheets,
+                    dashboard_visual_settings=self.dashboard_visual_settings,
                     cancel_check=self._is_cancelled,
                     progress_callback=self._emit_progress_message,
                 )

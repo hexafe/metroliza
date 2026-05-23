@@ -20,6 +20,11 @@ from modules.export_preset_utils import (
     migrate_export_dialog_config,
     save_export_dialog_config,
 )
+from modules.dashboard_visual_options import (
+    dashboard_visual_settings_summary,
+    dashboard_visual_swatch_palette,
+    load_dashboard_visual_settings,
+)
 from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import(
@@ -219,6 +224,7 @@ class ExportDialog(QDialog):
         self._cancel_requested = False
         self.config_path = Path.home() / '.metroliza' / '.export_dialog_config.json'
         self.config = self._load_dialog_config()
+        self.dashboard_visual_settings = load_dashboard_visual_settings()
 
         self.init_widgets()
         self.init_layout()
@@ -366,6 +372,15 @@ class ExportDialog(QDialog):
             self.html_dashboard_label.setToolTip(html_dashboard_tooltip)
             self.generate_html_dashboard_checkbox.setToolTip(html_dashboard_tooltip)
             self.html_dashboard_info_button = self._build_info_button(html_dashboard_tooltip)
+            self.generate_html_dashboard_checkbox.stateChanged.connect(
+                lambda _state: self._sync_dashboard_visual_controls()
+            )
+            self.dashboard_visuals_summary_label = status_chip("", "neutral")
+            self.dashboard_visuals_button = QPushButton("Dashboard visuals...")
+            self.dashboard_visuals_button.setToolTip(
+                "Adjust HTML dashboard colors, opacity, markers, and reference/stat lines."
+            )
+            self.dashboard_visuals_button.clicked.connect(self.open_dashboard_visual_options)
 
             self.include_industrial_context_checkbox = QCheckBox("Industrial context")
             self.include_industrial_context_checkbox.setChecked(False)
@@ -485,6 +500,7 @@ class ExportDialog(QDialog):
             self._set_compact_row_label_widths()
             self._update_group_analysis_scope_enabled_state()
             self._sync_html_dashboard_only_state()
+            self._sync_dashboard_visual_controls()
             self._update_export_button_enabled_state()
 
             self.apply_selected_preset()
@@ -576,18 +592,19 @@ class ExportDialog(QDialog):
             row += 1
             content_layout.addWidget(self.export_target_label, row, 0)
             optional_outputs_widget = QWidget()
-            optional_outputs_layout = QHBoxLayout(optional_outputs_widget)
+            optional_outputs_layout = QGridLayout(optional_outputs_widget)
             optional_outputs_layout.setContentsMargins(0, 0, 0, 0)
-            optional_outputs_layout.setSpacing(6)
-            optional_outputs_layout.addWidget(self.include_google_sheets_checkbox)
-            optional_outputs_layout.addWidget(self.google_sheets_info_button)
-            optional_outputs_layout.addSpacing(4)
-            optional_outputs_layout.addWidget(self.generate_html_dashboard_checkbox)
-            optional_outputs_layout.addWidget(self.html_dashboard_info_button)
-            optional_outputs_layout.addSpacing(4)
-            optional_outputs_layout.addWidget(self.include_industrial_context_checkbox)
-            optional_outputs_layout.addWidget(self.industrial_context_info_button)
-            optional_outputs_layout.addStretch(1)
+            optional_outputs_layout.setHorizontalSpacing(6)
+            optional_outputs_layout.setVerticalSpacing(4)
+            optional_outputs_layout.addWidget(self.include_google_sheets_checkbox, 0, 0)
+            optional_outputs_layout.addWidget(self.google_sheets_info_button, 0, 1)
+            optional_outputs_layout.addWidget(self.generate_html_dashboard_checkbox, 0, 2)
+            optional_outputs_layout.addWidget(self.html_dashboard_info_button, 0, 3)
+            optional_outputs_layout.addWidget(self.dashboard_visuals_summary_label, 0, 4)
+            optional_outputs_layout.addWidget(self.dashboard_visuals_button, 0, 5)
+            optional_outputs_layout.addWidget(self.include_industrial_context_checkbox, 1, 0)
+            optional_outputs_layout.addWidget(self.industrial_context_info_button, 1, 1)
+            optional_outputs_layout.setColumnStretch(6, 1)
             content_layout.addWidget(optional_outputs_widget, row, 1, 1, 3)
 
             row += 1
@@ -631,7 +648,8 @@ class ExportDialog(QDialog):
             self.setTabOrder(self.group_analysis_level_combobox, self.group_analysis_scope_combobox)
             self.setTabOrder(self.group_analysis_scope_combobox, self.include_google_sheets_checkbox)
             self.setTabOrder(self.include_google_sheets_checkbox, self.generate_html_dashboard_checkbox)
-            self.setTabOrder(self.generate_html_dashboard_checkbox, self.include_industrial_context_checkbox)
+            self.setTabOrder(self.generate_html_dashboard_checkbox, self.dashboard_visuals_button)
+            self.setTabOrder(self.dashboard_visuals_button, self.include_industrial_context_checkbox)
             self.setTabOrder(self.include_industrial_context_checkbox, self.advanced_toggle_button)
             self.setTabOrder(self.advanced_toggle_button, self.violin_plot_min_samplesize)
             self.setTabOrder(self.violin_plot_min_samplesize, self.summary_plot_scale)
@@ -656,6 +674,7 @@ class ExportDialog(QDialog):
         configure_accessibility(self.group_analysis_scope_combobox, name="Group analysis scope")
         configure_accessibility(self.include_google_sheets_checkbox, name="Create Google Sheets output")
         configure_accessibility(self.generate_html_dashboard_checkbox, name="Create HTML dashboard")
+        configure_accessibility(self.dashboard_visuals_button, name="Edit dashboard visuals")
         configure_accessibility(self.include_industrial_context_checkbox, name="Include industrial context")
         configure_accessibility(self.advanced_toggle_button, name="Show advanced export options")
         configure_accessibility(self.violin_plot_min_samplesize, name="Violin plot minimum sample count")
@@ -802,6 +821,7 @@ class ExportDialog(QDialog):
         if hasattr(self, "select_excel_button"):
             self.select_excel_button.setToolTip(self.select_excel_label.toolTip())
         self._coerce_output_path_for_mode()
+        self._sync_dashboard_visual_controls()
         self._update_export_button_enabled_state()
 
     def _refresh_path_readiness_state(self, *, has_database=None, has_output=None):
@@ -1085,6 +1105,7 @@ class ExportDialog(QDialog):
                     grouping_df=self.df_for_grouping,
                     group_analysis_level=self._selected_group_analysis_level(),
                     group_analysis_scope=self._selected_group_analysis_scope(),
+                    dashboard_visual_settings=getattr(self, "dashboard_visual_settings", None),
                 )
             except ValueError as validation_error:
                 QMessageBox.warning(self, "Export validation failed", str(validation_error))
@@ -1223,6 +1244,51 @@ class ExportDialog(QDialog):
         if self.include_google_sheets_checkbox.isChecked():
             return 'google_sheets_drive_convert'
         return 'excel_xlsx'
+
+    def _dashboard_visuals_enabled(self):
+        if self._is_html_dashboard_only():
+            return True
+        checkbox = getattr(self, "generate_html_dashboard_checkbox", None)
+        return bool(checkbox is not None and checkbox.isChecked())
+
+    def _sync_dashboard_visual_controls(self):
+        if not hasattr(self, "dashboard_visuals_button"):
+            return
+        enabled = self._dashboard_visuals_enabled()
+        self.dashboard_visuals_summary_label.setVisible(True)
+        self.dashboard_visuals_summary_label.setEnabled(True)
+        self.dashboard_visuals_button.setVisible(True)
+        self.dashboard_visuals_button.setEnabled(True)
+        self.dashboard_visuals_button.setToolTip(
+            "Adjust HTML dashboard colors, opacity, markers, and reference/stat lines."
+            if enabled
+            else "Adjust visuals now; these settings apply when HTML dashboard output is enabled."
+        )
+        settings = getattr(self, "dashboard_visual_settings", None)
+        summary = dashboard_visual_settings_summary(settings)
+        palette = dashboard_visual_swatch_palette(settings, count=6)
+        self.dashboard_visuals_summary_label.setText(summary)
+        summary_tooltip = " ".join(palette)
+        if not enabled:
+            summary_tooltip = (
+                "HTML dashboard output is currently off. Saved visual settings will be used "
+                f"when it is enabled. Palette: {summary_tooltip}"
+            )
+        self.dashboard_visuals_summary_label.setToolTip(summary_tooltip)
+
+    def open_dashboard_visual_options(self):
+        try:
+            from modules.dashboard_visual_options_dialog import DashboardVisualOptionsDialog
+
+            dialog = DashboardVisualOptionsDialog(
+                self,
+                settings=getattr(self, "dashboard_visual_settings", None),
+            )
+            if dialog.exec():
+                self.dashboard_visual_settings = dialog.visual_settings()
+                self._sync_dashboard_visual_controls()
+        except Exception as exc:
+            QMessageBox.warning(self, "Dashboard visuals", f"Could not open dashboard visuals: {exc}")
 
     def _selected_group_analysis_level(self):
         combobox = getattr(self, "group_analysis_level_combobox", None)

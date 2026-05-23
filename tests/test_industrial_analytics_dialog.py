@@ -178,6 +178,7 @@ def test_tabular_analytics_dialog_loads_csv_metrics_and_group_columns(tmp_path) 
         dialog.output_dashboard_file = str(tmp_path / "table_analytics.html")
         dialog.output_workbook_file = str(tmp_path / "table_analytics.xlsx")
         dialog.load_metrics()
+        _wait_for_tabular_load(dialog)
 
         metric_labels = [
             dialog.metrics_list.item(index).text()
@@ -222,6 +223,7 @@ def test_tabular_analytics_dialog_uses_workbook_path_only_when_opted_in(tmp_path
         dialog.output_dashboard_file = str(tmp_path / "table_analytics.html")
         dialog.output_workbook_file = str(workbook_file)
         dialog.load_metrics()
+        _wait_for_tabular_load(dialog)
 
         disabled_thread = dialog.create_analytics_thread()
         assert disabled_thread.output_workbook_file == ""
@@ -265,6 +267,73 @@ def test_tabular_analytics_dialog_dashboard_detail_mode_is_selectable_and_in_req
         request = dialog._build_analytics_request()
 
         assert request.dashboard_detail_mode == "full"
+    finally:
+        dialog.close()
+
+
+def test_analytics_dashboard_visuals_button_is_visible_for_production_and_tabular(monkeypatch) -> None:
+    app = _app()
+    monkeypatch.setattr(
+        "modules.industrial_analytics_dialog.load_dashboard_visual_settings",
+        lambda: {"preset": "auto"},
+    )
+    dialogs = [
+        IndustrialAnalyticsDialog(source_kind=SOURCE_PRODUCTION_CACHE),
+        IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE),
+    ]
+    try:
+        for dialog in dialogs:
+            dialog.show()
+        app.processEvents()
+
+        for dialog in dialogs:
+            assert dialog.dashboard_visuals_button.isVisible()
+            assert dialog.dashboard_visuals_button.isEnabled()
+            assert dialog.dashboard_visuals_button.text() == "Dashboard visuals..."
+            assert dialog.dashboard_visuals_summary_label.text() == "Auto"
+            assert "Adjust dashboard colors" in dialog.dashboard_visuals_button.toolTip()
+    finally:
+        for dialog in dialogs:
+            dialog.close()
+
+
+def test_analytics_dashboard_visuals_button_launches_dialog(monkeypatch) -> None:
+    _app()
+    monkeypatch.setattr(
+        "modules.industrial_analytics_dialog.load_dashboard_visual_settings",
+        lambda: {"preset": "auto"},
+    )
+    calls = {}
+
+    class FakeDashboardVisualOptionsDialog:
+        def __init__(self, parent=None, *, settings=None):
+            calls["parent"] = parent
+            calls["settings"] = settings
+
+        def exec(self):
+            calls["exec_called"] = True
+            return QDialog.DialogCode.Accepted
+
+        def visual_settings(self):
+            return {"preset": "distinct"}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "modules.dashboard_visual_options_dialog",
+        types.SimpleNamespace(DashboardVisualOptionsDialog=FakeDashboardVisualOptionsDialog),
+    )
+
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        assert dialog.dashboard_visuals_button.isEnabled()
+
+        dialog.open_dashboard_visual_options()
+
+        assert calls["parent"] is dialog
+        assert calls["settings"]["preset"] == "auto"
+        assert calls["exec_called"] is True
+        assert dialog.dashboard_visual_settings["preset"] == "distinct"
+        assert dialog.dashboard_visuals_summary_label.text() == "Distinct groups"
     finally:
         dialog.close()
 
@@ -480,6 +549,7 @@ def test_tabular_analytics_dialog_lists_excel_sheets_after_file_selection(
         dialog.sheet_name_combo.setCurrentIndex(1)
         assert dialog.metric_candidates == ()
         dialog.load_metrics()
+        _wait_for_tabular_load(dialog)
 
         assert dialog.metrics_list.count() == 1
         assert dialog.metrics_list.item(0).text() == "Width Mm"
@@ -523,6 +593,7 @@ def test_tabular_row_filter_is_summarized_passed_to_worker_and_used_for_grouping
     try:
         dialog.input_file = str(input_file)
         dialog.load_metrics()
+        _wait_for_tabular_load(dialog)
         dialog.tabular_filter_columns = ("tracecode",)
         dialog.tabular_filter_keys = (("TC-001",), ("TC-003",))
         dialog.tabular_column_filters = (TabularColumnFilter("tracecode", selected_values=("TC-001", "TC-003")),)
@@ -584,6 +655,7 @@ def test_tabular_filter_dialog_accept_uses_column_filters_without_legacy_keys(
     try:
         dialog.input_file = str(input_file)
         dialog.load_metrics()
+        _wait_for_tabular_load(dialog)
         dialog.open_tabular_filter_dialog()
 
         assert dialog.tabular_column_filters == (
@@ -751,6 +823,7 @@ def test_tabular_clear_controls_reset_filters_and_groups(tmp_path) -> None:
     try:
         dialog.input_file = str(input_file)
         dialog.load_metrics()
+        _wait_for_tabular_load(dialog)
         grouping_df = pd.DataFrame(
             {
                 "REPORT_ID": [1, 2],
@@ -833,6 +906,7 @@ def test_tabular_grouping_dialog_reopens_with_existing_groups_and_column_labels(
     try:
         dialog.input_file = str(input_file)
         dialog.load_metrics()
+        _wait_for_tabular_load(dialog)
         existing_grouping = pd.DataFrame(
             {
                 "REPORT_ID": [1, 3],

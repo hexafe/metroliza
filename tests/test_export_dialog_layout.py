@@ -47,9 +47,12 @@ class TestExportDialogLayout(unittest.TestCase):
             """
             import json
             from PyQt6.QtWidgets import QApplication
+            import modules.export_dialog as export_dialog_module
             from modules.export_dialog import ExportDialog
 
             ExportDialog._load_dialog_config = lambda self: {'selected_preset': 'fast_diagnostics'}
+            ExportDialog._save_dialog_config = lambda self: None
+            export_dialog_module.load_dashboard_visual_settings = lambda: {"preset": "auto"}
 
             app = QApplication.instance() or QApplication([])
             dialog = ExportDialog(parent=None, db_file="")
@@ -74,6 +77,15 @@ class TestExportDialogLayout(unittest.TestCase):
                 "toggle_text": dialog.advanced_toggle_button.text(),
                 "google_label": dialog.include_google_sheets_checkbox.text(),
                 "html_label": dialog.generate_html_dashboard_checkbox.text(),
+                "dashboard_visuals_text": dialog.dashboard_visuals_button.text(),
+                "dashboard_visuals_visible": dialog.dashboard_visuals_button.isVisible(),
+                "dashboard_visuals_enabled": dialog.dashboard_visuals_button.isEnabled(),
+                "dashboard_visuals_summary": dialog.dashboard_visuals_summary_label.text(),
+                "dashboard_visuals_tooltip": dialog.dashboard_visuals_button.toolTip(),
+                "dashboard_visuals_next_in_tab_order": (
+                    dialog.generate_html_dashboard_checkbox.nextInFocusChain()
+                    is dialog.dashboard_visuals_button
+                ),
                 "has_html_only_checkbox": hasattr(dialog, "html_dashboard_only_checkbox"),
                 "preset_labels": [
                     dialog.preset_combobox.itemText(index)
@@ -107,6 +119,12 @@ class TestExportDialogLayout(unittest.TestCase):
         self.assertEqual(payload["toggle_text"], "Show advanced options")
         self.assertEqual(payload["google_label"], "Google Sheets")
         self.assertEqual(payload["html_label"], "HTML dashboard")
+        self.assertEqual(payload["dashboard_visuals_text"], "Dashboard visuals...")
+        self.assertTrue(payload["dashboard_visuals_visible"])
+        self.assertTrue(payload["dashboard_visuals_enabled"])
+        self.assertEqual(payload["dashboard_visuals_summary"], "Auto")
+        self.assertIn("apply when HTML dashboard output is enabled", payload["dashboard_visuals_tooltip"])
+        self.assertTrue(payload["dashboard_visuals_next_in_tab_order"])
         self.assertFalse(payload["has_html_only_checkbox"])
         self.assertIn("HTML dashboard only", payload["preset_labels"])
         self.assertEqual(payload["close_label"], "Close")
@@ -124,9 +142,12 @@ class TestExportDialogLayout(unittest.TestCase):
             """
             import json
             from PyQt6.QtWidgets import QApplication
+            import modules.export_dialog as export_dialog_module
             from modules.export_dialog import ExportDialog
 
             ExportDialog._load_dialog_config = lambda self: {'selected_preset': 'fast_diagnostics'}
+            ExportDialog._save_dialog_config = lambda self: None
+            export_dialog_module.load_dashboard_visual_settings = lambda: {"preset": "auto"}
 
             app = QApplication.instance() or QApplication([])
             long_db = '/synthetic/metroliza/very/' + '/'.join(['deeply_nested_directory_name'] * 6) + '/measurement_database_name_with_really_long_identifier.db'
@@ -167,9 +188,12 @@ class TestExportDialogLayout(unittest.TestCase):
             """
             import json
             from PyQt6.QtWidgets import QApplication
+            import modules.export_dialog as export_dialog_module
             from modules.export_dialog import ExportDialog
 
             ExportDialog._load_dialog_config = lambda self: {'selected_preset': 'html_dashboard_only'}
+            ExportDialog._save_dialog_config = lambda self: None
+            export_dialog_module.load_dashboard_visual_settings = lambda: {"preset": "auto"}
 
             app = QApplication.instance() or QApplication([])
             dialog = ExportDialog(parent=None, db_file='/tmp/source.db')
@@ -184,6 +208,9 @@ class TestExportDialogLayout(unittest.TestCase):
                 "output_path": str(dialog.excel_file),
                 "html_checked": dialog.generate_html_dashboard_checkbox.isChecked(),
                 "html_enabled": dialog.generate_html_dashboard_checkbox.isEnabled(),
+                "dashboard_visuals_visible": dialog.dashboard_visuals_button.isVisible(),
+                "dashboard_visuals_enabled": dialog.dashboard_visuals_button.isEnabled(),
+                "dashboard_visuals_tooltip": dialog.dashboard_visuals_button.toolTip(),
                 "google_checked": dialog.include_google_sheets_checkbox.isChecked(),
                 "google_enabled": dialog.include_google_sheets_checkbox.isEnabled(),
                 "export_target": dialog._selected_export_target(),
@@ -198,9 +225,71 @@ class TestExportDialogLayout(unittest.TestCase):
         self.assertTrue(payload["output_path"].endswith("_dashboard.html"))
         self.assertTrue(payload["html_checked"])
         self.assertFalse(payload["html_enabled"])
+        self.assertTrue(payload["dashboard_visuals_visible"])
+        self.assertTrue(payload["dashboard_visuals_enabled"])
+        self.assertIn("Adjust HTML dashboard", payload["dashboard_visuals_tooltip"])
         self.assertFalse(payload["google_checked"])
         self.assertFalse(payload["google_enabled"])
         self.assertEqual(payload["export_target"], "html_dashboard")
+
+    def test_dashboard_visuals_button_launches_dialog_before_html_dashboard_is_checked(self):
+        payload = self._run_probe(
+            """
+            import json
+            import sys
+            import types
+            from PyQt6.QtWidgets import QApplication, QDialog
+            import modules.export_dialog as export_dialog_module
+            from modules.export_dialog import ExportDialog
+
+            ExportDialog._load_dialog_config = lambda self: {'selected_preset': 'fast_diagnostics'}
+            ExportDialog._save_dialog_config = lambda self: None
+            export_dialog_module.load_dashboard_visual_settings = lambda: {"preset": "auto"}
+
+            calls = {}
+
+            class FakeDashboardVisualOptionsDialog:
+                def __init__(self, parent=None, *, settings=None):
+                    calls["parent_is_dialog"] = isinstance(parent, ExportDialog)
+                    calls["settings"] = settings
+
+                def exec(self):
+                    calls["exec_called"] = True
+                    return QDialog.DialogCode.Accepted
+
+                def visual_settings(self):
+                    return {"preset": "distinct"}
+
+            fake_module = types.SimpleNamespace(
+                DashboardVisualOptionsDialog=FakeDashboardVisualOptionsDialog
+            )
+            sys.modules["modules.dashboard_visual_options_dialog"] = fake_module
+
+            app = QApplication.instance() or QApplication([])
+            dialog = ExportDialog(parent=None, db_file="")
+            dialog.show()
+            app.processEvents()
+            dialog.open_dashboard_visual_options()
+
+            print(json.dumps({
+                "button_visible": dialog.dashboard_visuals_button.isVisible(),
+                "button_enabled": dialog.dashboard_visuals_button.isEnabled(),
+                "html_checked": dialog.generate_html_dashboard_checkbox.isChecked(),
+                "exec_called": calls.get("exec_called", False),
+                "parent_is_dialog": calls.get("parent_is_dialog", False),
+                "settings_preset": dialog.dashboard_visual_settings["preset"],
+            }, sort_keys=True))
+            dialog.close()
+            app.processEvents()
+            """
+        )
+
+        self.assertTrue(payload["button_visible"])
+        self.assertTrue(payload["button_enabled"])
+        self.assertFalse(payload["html_checked"])
+        self.assertTrue(payload["exec_called"])
+        self.assertTrue(payload["parent_is_dialog"])
+        self.assertEqual(payload["settings_preset"], "distinct")
 
 
 if __name__ == "__main__":

@@ -199,6 +199,7 @@ from modules.export_html_dashboard import (
     resolve_html_dashboard_path as _resolve_html_dashboard_path,
     write_export_html_dashboard as _write_export_html_dashboard,
 )
+from modules.dashboard_visual_options import dashboard_visual_settings_to_plotly_settings
 from modules.stats_utils import is_one_sided_geometric_tolerance
 # Canonical violin payload builder lives in `modules/chart_render_service.py`.
 from modules.chart_render_service import (
@@ -3437,6 +3438,9 @@ class ExportDataThread(QThread):
         self.hide_ok_results = validated_request.options.hide_ok_results
         self.generate_summary_sheet = validated_request.options.generate_summary_sheet
         self.generate_html_dashboard = validated_request.options.generate_html_dashboard
+        self.dashboard_plotly_visual_settings = dashboard_visual_settings_to_plotly_settings(
+            validated_request.options.dashboard_visual_settings
+        )
         self.allow_non_essential_chart_skipping = validated_request.options.allow_non_essential_chart_skipping
         self.chart_worker_count = validated_request.options.chart_worker_count
         self.chart_worker_queue_size = validated_request.options.chart_worker_queue_size
@@ -3610,6 +3614,7 @@ class ExportDataThread(QThread):
                     else None
                 ),
                 dashboard_mode="html_only" if self.export_target == "html_dashboard" else "workbook_sidecar",
+                plotly_visual_settings=self.dashboard_plotly_visual_settings,
             )
         except Exception as exc:
             elapsed = time.perf_counter() - dashboard_start
@@ -5637,7 +5642,11 @@ class ExportDataThread(QThread):
 
             grouping_start = time.perf_counter()
             grouping_df = self.prepared_grouping_df
-            header_group, grouping_applied = self._apply_group_assignments(header_group, grouping_df)
+            header_group, grouping_applied = self._apply_group_assignments(
+                header_group,
+                grouping_df,
+                fallback_group_label=_get_default_group_label(grouping_df),
+            )
             distribution_key = 'GROUP' if grouping_applied else 'SAMPLE_NUMBER'
             scatter_key = 'SAMPLE_NUMBER'
             normalized_group = _normalize_summary_group_frame_compute(header_group, grouping_key=distribution_key)

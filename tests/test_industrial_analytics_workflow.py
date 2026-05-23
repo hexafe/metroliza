@@ -278,6 +278,55 @@ def test_run_tabular_file_analytics_fast_detail_samples_dashboard_frame(
     )
 
 
+def test_run_tabular_file_analytics_fast_detail_preserves_middle_population_group(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    input_file = tmp_path / "grouped_detail_table.csv"
+    dashboard_file = tmp_path / "grouped_detail_table_analytics.html"
+    row_count = 12
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=row_count, freq="h"),
+            "Reference ID": [f"R{index}" for index in range(row_count)],
+            "Length mm": [10.0 + index * 0.1 for index in range(row_count)],
+        }
+    ).to_csv(input_file, index=False)
+    grouping_df = pd.DataFrame(
+        {
+            "REPORT_ID": list(range(1, row_count + 1)),
+            "GROUP": ["A"] * 5 + ["POPULATION"] * 2 + ["B"] * 5,
+        }
+    )
+    captured_frames: list[pd.DataFrame] = []
+    monkeypatch.setattr(workflow_module, "TABULAR_FAST_DASHBOARD_ROW_LIMIT", 4)
+
+    def capture_dashboard(**kwargs):
+        captured_frames.append(kwargs["frame"].copy())
+        return {
+            "html_dashboard_path": str(dashboard_file),
+            "html_dashboard_assets_path": str(tmp_path / "grouped_detail_table_analytics_assets"),
+            "html_dashboard_chart_count": 1,
+        }
+
+    monkeypatch.setattr(workflow_module, "_write_dashboard", capture_dashboard)
+
+    result = run_tabular_file_analytics(
+        input_file=str(input_file),
+        output_dashboard_file=str(dashboard_file),
+        metric_selection=(ProductionMetricSelection("length_mm", display_label="Length mm"),),
+        grouping_df=grouping_df,
+        aggregation_state=ProductionAggregationState(time_bucket="none", aggregation_methods=("mean",)),
+        chart_selection=ProductionChartSelection(violin=True, box=True, groupstats=False),
+    )
+
+    assert result.row_count == row_count
+    assert captured_frames
+    assert len(captured_frames[0].index) <= 4
+    assert set(captured_frames[0]["GROUP"]) == {"A", "POPULATION", "B"}
+    assert captured_frames[0].loc[captured_frames[0]["GROUP"] == "POPULATION", "length_mm"].notna().any()
+
+
 def test_run_tabular_file_analytics_full_detail_uses_full_dashboard_frame(
     tmp_path,
     monkeypatch,

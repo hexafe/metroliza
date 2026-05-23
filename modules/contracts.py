@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import pandas as pd
 
+from modules.dashboard_visual_options import normalize_dashboard_visual_settings
 from modules.industrial_analytics_state import (
     ProductionAggregationState,
     ProductionChartSelection,
@@ -128,6 +129,7 @@ class ExportOptions:
     chart_worker_queue_size: int = 4
     group_analysis_level: str = "off"
     group_analysis_scope: str = "auto"
+    dashboard_visual_settings: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -198,6 +200,7 @@ class IndustrialAnalyticsRequest:
     tabular_filter_keys: tuple[tuple[str, ...], ...] = ()
     tabular_column_filters: tuple[TabularColumnFilter, ...] = ()
     grouping_df: pd.DataFrame | None = None
+    dashboard_visual_settings: dict | None = None
 
 
 def validate_export_request(request: ExportRequest) -> ExportRequest:
@@ -298,6 +301,9 @@ def validate_industrial_analytics_request(
         tabular_filter_keys=_normalize_filter_keys(request.tabular_filter_keys),
         tabular_column_filters=_normalize_column_filters(request.tabular_column_filters),
         grouping_df=validate_grouping_df(request.grouping_df),
+        dashboard_visual_settings=normalize_dashboard_visual_settings(
+            request.dashboard_visual_settings
+        ),
     )
 
 
@@ -541,6 +547,9 @@ def validate_export_options(options: ExportOptions) -> ExportOptions:
         chart_worker_queue_size=worker_queue_size,
         group_analysis_level=group_analysis_level,
         group_analysis_scope=group_analysis_scope,
+        dashboard_visual_settings=normalize_dashboard_visual_settings(
+            getattr(options, "dashboard_visual_settings", ExportOptions.dashboard_visual_settings)
+        ),
     )
 
 

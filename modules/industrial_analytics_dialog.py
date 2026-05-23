@@ -29,6 +29,11 @@ from PyQt6.QtWidgets import (
 )
 
 from modules.contracts import IndustrialAnalyticsRequest, validate_industrial_analytics_request
+from modules.dashboard_visual_options import (
+    dashboard_visual_settings_summary,
+    dashboard_visual_swatch_palette,
+    load_dashboard_visual_settings,
+)
 from modules.help_menu import attach_help_menu_to_layout
 from modules.industrial_analytics_service import discover_production_metric_candidates
 from modules.industrial_analytics_filter_dialog import IndustrialAnalyticsFilterDialog
@@ -317,6 +322,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.tabular_load_thread = None
         self.metric_candidates: tuple[ProductionMetricSelection, ...] = ()
         self.metric_spec_limits: dict[str, tuple[float | None, float | None]] = {}
+        self.dashboard_visual_settings = load_dashboard_visual_settings()
         self.filter_state = ProductionFilterState()
         self.tabular_load_result = None
         self.tabular_filter_columns: tuple[str, ...] = ()
@@ -353,6 +359,12 @@ class IndustrialAnalyticsDialog(QDialog):
             "Fast keeps CSV Summary dashboard generation lightweight. "
             "Full adds richer detail at a higher processing cost."
         )
+        self.dashboard_visuals_summary_label = status_chip("", "neutral")
+        self.dashboard_visuals_button = QPushButton("Dashboard visuals...")
+        self.dashboard_visuals_button.setToolTip(
+            "Adjust dashboard colors, opacity, markers, and reference/stat lines."
+        )
+        self.dashboard_visuals_button.clicked.connect(self.open_dashboard_visual_options)
         self.readiness_label = status_chip("Load metrics and choose an output path.", "warning")
         self.filter_row_label = section_label("Filters")
         self.filter_summary_label = status_chip(self.filter_state.summary(), "neutral")
@@ -599,6 +611,9 @@ class IndustrialAnalyticsDialog(QDialog):
             self.groupstats_checkbox,
         ):
             chart_actions.addWidget(checkbox)
+        chart_actions.addSpacing(6)
+        chart_actions.addWidget(self.dashboard_visuals_summary_label)
+        chart_actions.addWidget(self.dashboard_visuals_button)
         chart_actions.addStretch(1)
         grid.addWidget(section_label("Outputs"), row, 0)
         grid.addLayout(chart_actions, row, 1, 1, 2)
@@ -678,6 +693,7 @@ class IndustrialAnalyticsDialog(QDialog):
             description=self.dashboard_detail_mode_combo.toolTip(),
         )
         configure_accessibility(self.groupstats_checkbox, name="Include groupstats output")
+        configure_accessibility(self.dashboard_visuals_button, name="Edit dashboard visuals")
         configure_accessibility(self.dashboard_button, name="Select analytics dashboard path")
         configure_accessibility(self.workbook_button, name="Select analytics workbook path")
         configure_accessibility(self.close_button, name="Close analytics dialog")
@@ -716,6 +732,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.edit_groups_button.setVisible(show_file)
         self.clear_groups_button.setVisible(show_file)
         self._sync_filter_summary()
+        self._sync_dashboard_visual_controls()
 
     def _sync_filter_summary(self) -> None:
         if self.is_production_source:
@@ -732,6 +749,25 @@ class IndustrialAnalyticsDialog(QDialog):
         self.filter_summary_label.setVisible(show_filter)
         self.filters_button.setVisible(show_filter)
         self.clear_filter_button.setVisible(show_filter and not self.is_production_source)
+
+    def _sync_dashboard_visual_controls(self) -> None:
+        if not hasattr(self, "dashboard_visuals_summary_label"):
+            return
+        summary = dashboard_visual_settings_summary(self.dashboard_visual_settings)
+        palette = dashboard_visual_swatch_palette(self.dashboard_visual_settings, count=6)
+        self.dashboard_visuals_summary_label.setText(summary)
+        self.dashboard_visuals_summary_label.setToolTip(" ".join(palette))
+
+    def open_dashboard_visual_options(self) -> None:
+        try:
+            from modules.dashboard_visual_options_dialog import DashboardVisualOptionsDialog
+
+            dialog = DashboardVisualOptionsDialog(self, settings=self.dashboard_visual_settings)
+            if dialog.exec():
+                self.dashboard_visual_settings = dialog.visual_settings()
+                self._sync_dashboard_visual_controls()
+        except Exception as exc:
+            QMessageBox.warning(self, self.windowTitle(), f"Could not open dashboard visuals: {exc}")
 
     def _handle_tabular_source_changed(self, _text: str = "") -> None:
         if self.is_production_source:
@@ -1605,6 +1641,7 @@ class IndustrialAnalyticsDialog(QDialog):
                 tabular_filter_keys=self.tabular_filter_keys,
                 tabular_column_filters=self.tabular_column_filters,
                 grouping_df=self.df_for_grouping if self.grouping_applied else None,
+                dashboard_visual_settings=self.dashboard_visual_settings,
             ),
             require_runnable=require_runnable,
         )
@@ -1632,6 +1669,7 @@ class IndustrialAnalyticsDialog(QDialog):
             tabular_column_filters=request.tabular_column_filters,
             dashboard_detail_mode=request.dashboard_detail_mode,
             grouping_df=request.grouping_df,
+            dashboard_visual_settings=request.dashboard_visual_settings,
         )
 
     def show_loading_screen(self) -> None:
