@@ -3438,6 +3438,9 @@ class ExportDataThread(QThread):
         self.hide_ok_results = validated_request.options.hide_ok_results
         self.generate_summary_sheet = validated_request.options.generate_summary_sheet
         self.generate_html_dashboard = validated_request.options.generate_html_dashboard
+        self.dashboard_visual_settings = dict(
+            validated_request.options.dashboard_visual_settings or {}
+        )
         self.dashboard_plotly_visual_settings = dashboard_visual_settings_to_plotly_settings(
             validated_request.options.dashboard_visual_settings
         )
@@ -3615,6 +3618,7 @@ class ExportDataThread(QThread):
                 ),
                 dashboard_mode="html_only" if self.export_target == "html_dashboard" else "workbook_sidecar",
                 plotly_visual_settings=self.dashboard_plotly_visual_settings,
+                dashboard_visual_settings=self.dashboard_visual_settings,
             )
         except Exception as exc:
             elapsed = time.perf_counter() - dashboard_start

@@ -215,6 +215,7 @@ def run_production_cache_analytics(
         plotly_visual_settings=dashboard_visual_settings_to_plotly_settings(
             request.dashboard_visual_settings
         ),
+        dashboard_visual_settings=request.dashboard_visual_settings,
     )
     workbook = None
     if request.output_workbook_file:
@@ -457,6 +458,7 @@ def run_tabular_file_analytics(
         plotly_visual_settings=dashboard_visual_settings_to_plotly_settings(
             request.dashboard_visual_settings
         ),
+        dashboard_visual_settings=request.dashboard_visual_settings,
     )
     workbook = None
     if request.output_workbook_file:
@@ -801,6 +803,7 @@ def _write_dashboard(
     dashboard_subtitle: str,
     cancel_check: CancelCheck | None,
     plotly_visual_settings: dict[str, object] | None = None,
+    dashboard_visual_settings: dict[str, object] | None = None,
 ) -> dict[str, object]:
     manifest = build_production_dashboard_manifest(
         frame=frame,
@@ -823,6 +826,7 @@ def _write_dashboard(
             manifest,
             temp_path,
             assets_dir=_dashboard_assets_dir(target_path),
+            dashboard_visual_settings=dashboard_visual_settings,
         )
         _raise_if_cancelled(cancel_check)
         Path(dashboard["html_dashboard_path"]).replace(target_path)

@@ -18,6 +18,15 @@ from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE
 
 
 DASHBOARD_VISUAL_PRESETS = ("auto", "distinct", "print", "custom")
+DASHBOARD_VISUAL_RECIPES = ("auto", "distinct", "print", "highlight_gradient", "custom")
+DASHBOARD_VISUAL_COLOR_SOURCES = (
+    "default",
+    "preset",
+    "custom",
+    "gradient",
+    "highlight",
+    "print",
+)
 DASHBOARD_VISUAL_PALETTE_MODES = ("fixed", "auto_gradient", "highlight_gradient")
 DASHBOARD_VISUAL_GRADIENT_SPREADS = ("narrow", "normal", "wide")
 DASHBOARD_VISUAL_DISTINGUISH_MODES = ("color_only", "when_similar", "always")
@@ -201,10 +210,14 @@ _PALETTE_PRESETS: dict[str, dict[str, Any]] = {
 }
 DASHBOARD_VISUAL_PALETTE_PRESET_IDS = tuple(_PALETTE_PRESETS.keys()) + ("custom",)
 _PRESET_LABELS = {
-    "auto": "Auto",
+    "auto": "Default",
     "distinct": "Distinct groups",
     "print": "Print friendly",
     "custom": "Custom",
+}
+_RECIPE_LABELS = {
+    **_PRESET_LABELS,
+    "highlight_gradient": "Highlight gradient",
 }
 _GROUP_COUNT_SUFFIX_PATTERN = re.compile(r"\s*\(n\s*=\s*\d+\)\s*$", re.IGNORECASE)
 
@@ -216,6 +229,8 @@ def default_dashboard_visual_settings() -> dict[str, Any]:
         "theme_id": "",
         "theme_name": "",
         "preset": "auto",
+        "recipe": "auto",
+        "color_source": "default",
         "palette_preset": "metroliza",
         "palette_mode": "fixed",
         "palette": list(DEFAULT_DASHBOARD_PALETTE),
@@ -247,6 +262,67 @@ def dashboard_visual_palette_presets() -> dict[str, dict[str, Any]]:
     """Return built-in palette preset metadata."""
 
     return copy.deepcopy(_PALETTE_PRESETS)
+
+
+def dashboard_visual_recipe_settings(
+    recipe: str,
+    *,
+    base: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return a complete visual-settings state for a top-level visual recipe.
+
+    UI controls should treat recipes as atomic choices: selecting one recipe
+    updates the dependent color source, swatches, distinguishers, line defaults,
+    and per-element overrides together.
+    """
+
+    recipe_id = _choice(recipe, DASHBOARD_VISUAL_RECIPES, "auto")
+    baseline = normalize_dashboard_visual_settings(base) if base is not None else default_dashboard_visual_settings()
+    if recipe_id == "custom":
+        custom = copy.deepcopy(baseline)
+        custom["preset"] = "custom"
+        custom["recipe"] = "custom"
+        custom["theme_id"] = ""
+        if not custom.get("theme_name"):
+            custom["theme_name"] = ""
+        if custom.get("palette_preset") != "custom":
+            custom["palette"] = dashboard_visual_swatch_palette(custom, count=6)
+            custom["palette_preset"] = "custom"
+            custom["palette_mode"] = "fixed"
+        custom["color_source"] = _color_source_for_settings(custom)
+        return normalize_dashboard_visual_settings(custom)
+
+    output = default_dashboard_visual_settings()
+    output["theme_id"] = ""
+    output["theme_name"] = ""
+    output.update(_visual_recipe_payload(recipe_id))
+    return normalize_dashboard_visual_settings(output)
+
+
+def dashboard_visual_color_source(settings: Any) -> str:
+    """Return the canonical color source used by a visual-settings payload."""
+
+    normalized = normalize_dashboard_visual_settings(settings)
+    return _color_source_for_settings(normalized)
+
+
+def dashboard_visual_resolved_palette_info(settings: Any, *, count: int = 6) -> dict[str, Any]:
+    """Return parity-friendly palette details for UI and browser runtimes."""
+
+    normalized = normalize_dashboard_visual_settings(settings)
+    palette = _resolved_palette(normalized, count=max(1, int(count)))
+    preset_meta = _PALETTE_PRESETS.get(str(normalized.get("palette_preset") or ""))
+    return {
+        "recipe": normalized["recipe"],
+        "color_source": normalized["color_source"],
+        "palette": palette,
+        "palette_preset": normalized["palette_preset"],
+        "palette_label": str(preset_meta.get("label") or "") if preset_meta else "",
+        "palette_kind": str(preset_meta.get("kind") or "") if preset_meta else "",
+        "palette_mode": normalized["palette_mode"],
+        "anchor_color": normalized["anchor_color"],
+        "gradient_spread": normalized["gradient_spread"],
+    }
 
 
 def default_dashboard_visual_theme_library() -> dict[str, Any]:
@@ -436,6 +512,18 @@ def normalize_dashboard_visual_settings(settings: Any) -> dict[str, Any]:
     defaults = default_dashboard_visual_settings()
     if not isinstance(settings, Mapping):
         return defaults
+    recipe_was_explicit = "visual_recipe" in settings or (
+        "recipe" in settings and "color_source" not in settings
+    )
+    explicit_recipe = _choice(
+        settings.get("recipe") or settings.get("visual_recipe"),
+        DASHBOARD_VISUAL_RECIPES,
+        "",
+    )
+    if recipe_was_explicit and explicit_recipe and explicit_recipe != "custom":
+        merged_settings = dict(settings)
+        merged_settings.update(_visual_recipe_payload(explicit_recipe))
+        settings = merged_settings
     normalized = copy.deepcopy(defaults)
     normalized["theme_id"] = _text(settings.get("theme_id"), defaults["theme_id"])
     normalized["theme_name"] = _text(settings.get("theme_name"), defaults["theme_name"])
@@ -500,6 +588,8 @@ def normalize_dashboard_visual_settings(settings: Any) -> dict[str, Any]:
             key: _normalize_reference_style(reference_lines.get(key), defaults["reference_lines"][key])
             for key in ("lsl", "usl", "nominal")
         }
+    normalized["recipe"] = _recipe_for_settings(settings, normalized)
+    normalized["color_source"] = _color_source_for_settings(normalized)
     return normalized
 
 
@@ -507,9 +597,9 @@ def dashboard_visual_settings_summary(settings: Any) -> str:
     """Return short user-facing summary text for a visual-settings payload."""
 
     normalized = normalize_dashboard_visual_settings(settings)
-    preset = normalized["preset"]
-    if preset != "custom":
-        return _PRESET_LABELS[preset]
+    recipe = normalized["recipe"]
+    if recipe != "custom":
+        return _RECIPE_LABELS[recipe]
     palette_preset = normalized.get("palette_preset")
     if palette_preset and palette_preset != "custom":
         preset_meta = _PALETTE_PRESETS.get(str(palette_preset))
@@ -542,6 +632,10 @@ def dashboard_visual_settings_to_plotly_settings(settings: Any) -> dict[str, Any
     always_distinguish = distinguish == "always" or normalized["preset"] == "print"
     use_distinguishers = distinguish != "color_only" or normalized["preset"] == "print"
     return {
+        "schema": "metroliza.dashboard_plotly_visuals.v1",
+        "recipe": normalized["recipe"],
+        "color_source": normalized["color_source"],
+        "resolved_palette": list(palette),
         "preserve_colors_on_theme": True,
         "series": {
             "palette": palette,
@@ -829,6 +923,8 @@ def _resolved_palette(settings: Mapping[str, Any], *, count: int) -> list[str]:
     preset = settings["preset"]
     if preset == "print":
         return list(PRINT_DASHBOARD_PALETTE[:count])
+    if preset == "distinct":
+        return _expand_palette(_PALETTE_PRESETS["okabe_ito"]["colors"], count=count)
     palette_mode = settings["palette_mode"]
     if palette_mode in {"auto_gradient", "highlight_gradient"}:
         preset_meta = _PALETTE_PRESETS.get(str(settings.get("palette_preset") or ""))
@@ -845,9 +941,99 @@ def _resolved_palette(settings: Mapping[str, Any], *, count: int) -> list[str]:
         preset_meta = _PALETTE_PRESETS.get(palette_preset)
         if preset_meta:
             return _expand_palette(preset_meta.get("colors"), count=count)
-    if preset == "distinct":
-        return list(DEFAULT_DASHBOARD_PALETTE[:count])
     return _palette(settings.get("palette"), fallback=DEFAULT_DASHBOARD_PALETTE)[:count]
+
+
+def _visual_recipe_payload(recipe: str) -> dict[str, Any]:
+    recipe_id = _choice(recipe, DASHBOARD_VISUAL_RECIPES, "auto")
+    if recipe_id == "distinct":
+        return {
+            "preset": "distinct",
+            "recipe": "distinct",
+            "palette_preset": "okabe_ito",
+            "palette_mode": "fixed",
+            "palette": _expand_palette(_PALETTE_PRESETS["okabe_ito"]["colors"], count=6),
+            "distinguish": "always",
+            "series_overrides": {},
+            "stat_line_overrides": {},
+        }
+    if recipe_id == "print":
+        return {
+            "preset": "print",
+            "recipe": "print",
+            "palette_preset": "custom",
+            "palette_mode": "fixed",
+            "palette": list(PRINT_DASHBOARD_PALETTE),
+            "distinguish": "always",
+            "opacity": {
+                **dict(DEFAULT_OPACITY),
+                "grouped_histogram": 0.72,
+                "distribution": 0.74,
+                "iqr": 0.70,
+                "scatter": 0.78,
+                "trend": 0.55,
+                "model_curve": 0.72,
+            },
+            "stat_lines": {"accent_by_stat": False, "width": 2.25},
+            "series_overrides": {},
+            "stat_line_overrides": {},
+        }
+    if recipe_id == "highlight_gradient":
+        return {
+            "preset": "custom",
+            "recipe": "highlight_gradient",
+            "palette_preset": "custom",
+            "palette_mode": "highlight_gradient",
+            "anchor_color": DEFAULT_HIGHLIGHT_ANCHOR,
+            "gradient_spread": "normal",
+            "distinguish": "always",
+            "series_overrides": {},
+            "stat_line_overrides": {},
+        }
+    return {
+        "preset": "auto",
+        "recipe": "auto",
+        "palette_preset": "metroliza",
+        "palette_mode": "fixed",
+        "palette": list(DEFAULT_DASHBOARD_PALETTE),
+        "anchor_color": DEFAULT_HIGHLIGHT_ANCHOR,
+        "gradient_spread": "normal",
+        "distinguish": "when_similar",
+        "series_overrides": {},
+        "stat_line_overrides": {},
+    }
+
+
+def _recipe_for_settings(raw_settings: Mapping[str, Any], settings: Mapping[str, Any]) -> str:
+    explicit_recipe = _choice(
+        raw_settings.get("recipe") or raw_settings.get("visual_recipe"),
+        DASHBOARD_VISUAL_RECIPES,
+        "",
+    )
+    if explicit_recipe:
+        return explicit_recipe
+    preset = str(settings.get("preset") or "auto")
+    if preset in {"auto", "distinct", "print"}:
+        return preset
+    if str(settings.get("palette_mode") or "") == "highlight_gradient":
+        return "highlight_gradient"
+    return "custom"
+
+
+def _color_source_for_settings(settings: Mapping[str, Any]) -> str:
+    preset = str(settings.get("preset") or "auto")
+    if preset == "auto":
+        return "default"
+    if preset == "print":
+        return "print"
+    if preset == "distinct":
+        return "preset"
+    palette_mode = str(settings.get("palette_mode") or "fixed")
+    if palette_mode == "highlight_gradient":
+        return "highlight"
+    if palette_mode == "auto_gradient":
+        return "gradient"
+    return "custom" if str(settings.get("palette_preset") or "") == "custom" else "preset"
 
 
 def _expand_palette(value: Any, *, count: int) -> list[str]:
@@ -1599,18 +1785,23 @@ def _strip_preview_label(label: str) -> str:
 
 __all__ = [
     "DASHBOARD_VISUAL_CHART_TYPES",
+    "DASHBOARD_VISUAL_COLOR_SOURCES",
     "DASHBOARD_VISUAL_DISTINGUISH_MODES",
     "DASHBOARD_VISUAL_GRADIENT_SPREADS",
     "DASHBOARD_VISUAL_PALETTE_MODES",
     "DASHBOARD_VISUAL_PALETTE_PRESET_IDS",
     "DASHBOARD_VISUAL_PRESETS",
+    "DASHBOARD_VISUAL_RECIPES",
     "DASHBOARD_VISUAL_THEME_LIBRARY_VERSION",
     "DEFAULT_DASHBOARD_PALETTE",
     "DEFAULT_HIGHLIGHT_ANCHOR",
     "build_dashboard_visual_preview_html",
     "build_dashboard_visual_preview_png",
     "build_dashboard_visual_preview_spec",
+    "dashboard_visual_color_source",
     "dashboard_visual_palette_presets",
+    "dashboard_visual_recipe_settings",
+    "dashboard_visual_resolved_palette_info",
     "dashboard_visual_settings_summary",
     "dashboard_visual_settings_to_plotly_settings",
     "dashboard_visual_swatch_palette",

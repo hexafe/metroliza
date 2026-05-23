@@ -22,6 +22,26 @@ def _qapp():
     return _APP
 
 
+def _stub_preview_builders(monkeypatch, dialog_module, captured_settings: list[dict] | None = None):
+    monkeypatch.setattr(
+        dialog_module,
+        "build_dashboard_visual_preview_spec",
+        lambda settings, *, chart_type: {"data": [], "layout": {}, "config": {}},
+    )
+    monkeypatch.setattr(
+        dialog_module,
+        "build_dashboard_visual_preview_html",
+        lambda _spec, **_kwargs: "",
+    )
+
+    def fake_preview_png(settings, *, chart_type):
+        if captured_settings is not None:
+            captured_settings.append(settings)
+        return None
+
+    monkeypatch.setattr(dialog_module, "build_dashboard_visual_preview_png", fake_preview_png)
+
+
 def test_dashboard_visual_dialog_preview_uses_current_palette_color(monkeypatch) -> None:
     _qapp()
     try:
@@ -32,18 +52,12 @@ def test_dashboard_visual_dialog_preview_uses_current_palette_color(monkeypatch)
 
     captured_palette: list[str] = []
 
+    _stub_preview_builders(monkeypatch, dialog_module)
     monkeypatch.setattr(
         dialog_module,
-        "build_dashboard_visual_preview_spec",
-        lambda _settings, *, chart_type: {"data": [], "layout": {}, "config": {}},
+        "build_dashboard_visual_preview_png",
+        lambda settings, *, chart_type: captured_palette.append(settings["palette"][0]) or None,
     )
-    monkeypatch.setattr(dialog_module, "build_dashboard_visual_preview_html", lambda _spec: "")
-
-    def fake_preview_png(settings, *, chart_type):
-        captured_palette.append(settings["palette"][0])
-        return None
-
-    monkeypatch.setattr(dialog_module, "build_dashboard_visual_preview_png", fake_preview_png)
     dialog = dialog_module.DashboardVisualOptionsDialog(
         settings={
             "preset": "custom",
@@ -73,13 +87,7 @@ def test_dashboard_visual_dialog_preserves_per_reference_widths_when_unchanged(m
         pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
     import modules.dashboard_visual_options_dialog as dialog_module
 
-    monkeypatch.setattr(
-        dialog_module,
-        "build_dashboard_visual_preview_spec",
-        lambda _settings, *, chart_type: {"data": [], "layout": {}, "config": {}},
-    )
-    monkeypatch.setattr(dialog_module, "build_dashboard_visual_preview_html", lambda _spec: "")
-    monkeypatch.setattr(dialog_module, "build_dashboard_visual_preview_png", lambda _settings, *, chart_type: None)
+    _stub_preview_builders(monkeypatch, dialog_module)
     dialog = dialog_module.DashboardVisualOptionsDialog(
         settings={
             "preset": "custom",
@@ -103,6 +111,185 @@ def test_dashboard_visual_dialog_preserves_per_reference_widths_when_unchanged(m
         assert settings["reference_lines"]["lsl"]["width"] == 2.0
         assert settings["reference_lines"]["usl"]["width"] == 2.0
         assert settings["reference_lines"]["nominal"]["width"] == 2.0
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+
+
+def test_dashboard_visual_dialog_recipe_updates_controls_and_preview_swatches(monkeypatch) -> None:
+    _qapp()
+    try:
+        from PyQt6.QtCore import Qt  # noqa: F401
+    except Exception as exc:
+        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
+    import modules.dashboard_visual_options_dialog as dialog_module
+
+    _stub_preview_builders(monkeypatch, dialog_module)
+    dialog = dialog_module.DashboardVisualOptionsDialog(persist_on_accept=False)
+    try:
+        dialog._preview_timer.stop()
+        initial_swatches = [button.property("color") for button in dialog._preview_color_buttons]
+
+        dialog._set_combo_data(dialog.preset_combo, "print")
+        print_settings = dialog.visual_settings()
+        print_swatches = [button.property("color") for button in dialog._preview_color_buttons]
+        assert print_settings["preset"] == "print"
+        assert dialog.palette_preset_combo.currentData() == "custom"
+        assert dialog.distinguish_combo.currentData() == "always"
+        assert print_swatches == dialog_module.dashboard_visual_swatch_palette(
+            print_settings,
+            count=len(dialog._preview_color_buttons),
+        )
+        assert print_swatches != initial_swatches
+
+        dialog._set_combo_data(dialog.preset_combo, "distinct")
+        distinct_settings = dialog.visual_settings()
+        distinct_swatches = [button.property("color") for button in dialog._preview_color_buttons]
+        assert distinct_settings["preset"] == "distinct"
+        assert dialog.palette_preset_combo.currentData() == "okabe_ito"
+        assert distinct_swatches == dialog_module.dashboard_visual_swatch_palette(
+            distinct_settings,
+            count=len(dialog._preview_color_buttons),
+        )
+        assert distinct_swatches != print_swatches
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+
+
+def test_dashboard_visual_dialog_manual_edit_switches_recipe_to_custom(monkeypatch) -> None:
+    _qapp()
+    try:
+        from PyQt6.QtCore import Qt  # noqa: F401
+    except Exception as exc:
+        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
+    import modules.dashboard_visual_options_dialog as dialog_module
+
+    _stub_preview_builders(monkeypatch, dialog_module)
+    dialog = dialog_module.DashboardVisualOptionsDialog(
+        settings={"preset": "print"},
+        persist_on_accept=False,
+    )
+    try:
+        dialog._preview_timer.stop()
+        assert dialog.visual_settings()["preset"] == "print"
+        print_swatches = [button.property("color") for button in dialog._preview_color_buttons]
+
+        dialog.marker_size_spin.setValue(dialog.marker_size_spin.value() + 0.5)
+
+        assert dialog.preset_combo.currentData() == "custom"
+        assert dialog.visual_settings()["preset"] == "custom"
+        assert dialog.palette_preset_combo.currentData() == "custom"
+        assert [button.property("color") for button in dialog._preview_color_buttons] == print_swatches
+        assert dialog._preview_timer.isActive()
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+
+
+def test_dashboard_visual_dialog_selected_controls_are_role_aware(monkeypatch) -> None:
+    _qapp()
+    try:
+        from PyQt6.QtCore import Qt  # noqa: F401
+    except Exception as exc:
+        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
+    import modules.dashboard_visual_options_dialog as dialog_module
+
+    _stub_preview_builders(monkeypatch, dialog_module)
+    dialog = dialog_module.DashboardVisualOptionsDialog(
+        settings={"preset": "custom"},
+        persist_on_accept=False,
+    )
+    try:
+        dialog._preview_timer.stop()
+        dialog._preview_targets = [
+            {
+                "target": "series:histogram",
+                "role": "series",
+                "label": "Histogram",
+                "capabilities": ["color", "opacity", "pattern_shape"],
+                "style": {"color": "#123456", "opacity": 0.5},
+            },
+            {
+                "target": "model_curve:kde",
+                "role": "model_curve",
+                "label": "KDE",
+                "capabilities": ["color", "opacity", "width", "dash"],
+                "style": {"color": "#654321", "opacity": 0.75, "width": 3.0, "dash": "dot"},
+            },
+            {
+                "target": "stat:group 1::mean",
+                "role": "stat",
+                "group": "Group 1",
+                "stat": "mean",
+                "label": "(Group 1) Mean=6.5",
+                "capabilities": ["color", "opacity", "width", "dash"],
+                "style": {"color": "#abcdef"},
+            },
+        ]
+        dialog._populate_element_combo()
+
+        dialog._set_combo_data(dialog.element_combo, "series:histogram")
+        assert dialog.element_color_button.property("color") == "#123456"
+        assert not dialog.element_width_spin.isEnabled()
+        assert not dialog.element_dash_combo.isEnabled()
+        assert not dialog.element_marker_size_spin.isEnabled()
+        assert dialog.element_pattern_combo.isEnabled()
+
+        dialog._set_combo_data(dialog.element_combo, "model_curve:kde")
+        assert dialog.element_color_button.property("color") == "#654321"
+        assert dialog.element_width_spin.isEnabled()
+        assert dialog.element_dash_combo.isEnabled()
+        assert not dialog.element_marker_size_spin.isEnabled()
+        assert not dialog.element_pattern_combo.isEnabled()
+
+        dialog._set_combo_data(dialog.element_combo, "stat:group 1::mean")
+        assert dialog.element_stat_accent_checkbox.isEnabled()
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+
+
+def test_dashboard_visual_dialog_selected_series_override_only_writes_supported_styles(
+    monkeypatch,
+) -> None:
+    _qapp()
+    try:
+        from PyQt6.QtCore import Qt  # noqa: F401
+    except Exception as exc:
+        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
+    import modules.dashboard_visual_options_dialog as dialog_module
+
+    _stub_preview_builders(monkeypatch, dialog_module)
+    dialog = dialog_module.DashboardVisualOptionsDialog(
+        settings={"preset": "custom"},
+        persist_on_accept=False,
+    )
+    try:
+        dialog._preview_timer.stop()
+        dialog._selected_target = {
+            "target": "series:histogram",
+            "role": "series",
+            "label": "Histogram",
+            "capabilities": ["color", "opacity", "pattern_shape"],
+            "style": {"color": "#123456"},
+        }
+        dialog._load_selected_element_controls()
+        dialog._sync_custom_controls()
+        dialog._set_button_color(dialog.element_color_button, "#abcdef")
+        dialog.element_width_spin.setValue(4.0)
+        dialog._set_combo_data(dialog.element_dash_combo, "dash")
+        dialog.element_marker_size_spin.setValue(12.0)
+        dialog._set_combo_data(dialog.element_pattern_combo, "/")
+
+        dialog._apply_selected_element_style()
+
+        override = dialog.visual_settings()["series_overrides"]["histogram"]
+        assert override["color"] == "#abcdef"
+        assert override["pattern_shape"] == "/"
+        assert "width" not in override
+        assert "dash" not in override
+        assert "marker_size" not in override
     finally:
         dialog.close()
         dialog.deleteLater()

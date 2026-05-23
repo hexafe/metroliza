@@ -28,6 +28,9 @@ _STAT_ACCENT_FACTORS = {
     "max": 1.36,
 }
 _DEFAULT_SIMILARITY_THRESHOLD = 42.0
+_TRACE_SCHEMA_VERSION = "metroliza.plotly_trace.v1"
+_LINE_STYLE_CAPABILITIES = ("color", "opacity", "width", "dash")
+_PATTERN_STYLE_CAPABILITY = "pattern_shape"
 
 
 def dashboard_visual_settings_from_theme(theme: Any) -> dict[str, Any]:
@@ -48,6 +51,57 @@ def merge_dashboard_visual_settings(*settings: Any) -> dict[str, Any]:
             continue
         _deep_merge(merged, setting)
     return merged
+
+
+def tag_plotly_visual_trace(
+    trace: dict[str, Any],
+    *,
+    role: str,
+    target_id: str,
+    label: str,
+    capabilities: Sequence[str],
+    chart_kind: str | None = None,
+    series_id: str | None = None,
+    stat_id: str | None = None,
+    reference_id: str | None = None,
+    preserve_color: bool = False,
+) -> dict[str, Any]:
+    """Attach stable Metroliza visual metadata to a styleable Plotly trace."""
+
+    if not isinstance(trace, dict):
+        return trace
+    clean_role = _normalize_label_key(role).replace(" ", "_") or "series"
+    clean_target = str(target_id or "").strip() or clean_role
+    meta = trace.setdefault("meta", {})
+    if not isinstance(meta, dict):
+        meta = {}
+        trace["meta"] = meta
+    capability_list = _unique_strings(capabilities)
+    meta.update(
+        {
+            "dashboard_visual_role": clean_role,
+            "dashboard_visual_target": clean_target,
+            "dashboard_visual_capabilities": capability_list,
+            "metroliza_trace_schema": _TRACE_SCHEMA_VERSION,
+            "metroliza_role": clean_role,
+            "metroliza_target_id": clean_target,
+            "metroliza_visual_target_id": clean_target,
+            "metroliza_style_capabilities": capability_list,
+            "metroliza_legend_label": str(label or clean_target),
+        }
+    )
+    if chart_kind:
+        meta["dashboard_visual_chart_kind"] = chart_kind
+        meta["metroliza_chart_kind"] = chart_kind
+    if series_id:
+        meta["metroliza_series_id"] = series_id
+    if stat_id:
+        meta["metroliza_stat_id"] = stat_id
+    if reference_id:
+        meta["metroliza_reference_id"] = reference_id
+    if preserve_color:
+        meta["dashboard_visual_preserve_color"] = True
+    return trace
 
 
 def apply_dashboard_visual_settings(
@@ -398,20 +452,17 @@ def _apply_series_trace_style(
                 if resolved_outline_color:
                     line["color"] = resolved_outline_color
 
-    meta = trace.setdefault("meta", {})
-    if isinstance(meta, dict):
-        role = chart_kind if chart_kind == "model_curve" else ("trend" if is_trend_line else "series")
-        meta["dashboard_visual_role"] = role
-        meta["dashboard_visual_target"] = f"{role}:{_normalize_label_key(label)}"
-        meta["metroliza_trace_schema"] = "metroliza.plotly_trace.v1"
-        meta["metroliza_role"] = role
-        meta["metroliza_target_id"] = meta["dashboard_visual_target"]
-        meta["metroliza_series_id"] = _normalize_label_key(label)
-        meta["metroliza_legend_label"] = label
-        if color and preserve_color:
-            meta["dashboard_visual_preserve_color"] = True
-        meta["dashboard_visual_chart_kind"] = chart_kind
-        meta["metroliza_chart_kind"] = chart_kind
+    role = chart_kind if chart_kind == "model_curve" else ("trend" if is_trend_line else "series")
+    tag_plotly_visual_trace(
+        trace,
+        role=role,
+        target_id=f"{role}:{_normalize_label_key(label)}",
+        label=label,
+        capabilities=_style_capabilities_for_series_trace(trace, role),
+        chart_kind=chart_kind,
+        series_id=_normalize_label_key(label),
+        preserve_color=bool(color and preserve_color),
+    )
 
 
 def _apply_stat_trace_style(
@@ -452,18 +503,16 @@ def _apply_stat_trace_style(
     opacity = _finite_float(override.get("opacity"))
     if opacity is not None:
         trace["opacity"] = max(0.0, min(1.0, opacity))
-    meta = trace.setdefault("meta", {})
-    if isinstance(meta, dict):
-        meta["dashboard_visual_role"] = "stat"
-        meta["dashboard_visual_target"] = f"stat:{_stat_override_key(group_label, stat_label)}"
-        meta["metroliza_trace_schema"] = "metroliza.plotly_trace.v1"
-        meta["metroliza_role"] = "stat"
-        meta["metroliza_target_id"] = meta["dashboard_visual_target"]
-        meta["metroliza_series_id"] = _normalize_label_key(group_label)
-        meta["metroliza_stat_id"] = _normalize_label_key(stat_label)
-        meta["metroliza_legend_label"] = str(trace.get("name") or stat_label)
-        if color and preserve_color:
-            meta["dashboard_visual_preserve_color"] = True
+    tag_plotly_visual_trace(
+        trace,
+        role="stat",
+        target_id=f"stat:{_stat_override_key(group_label, stat_label)}",
+        label=str(trace.get("name") or stat_label),
+        capabilities=_LINE_STYLE_CAPABILITIES,
+        series_id=_normalize_label_key(group_label),
+        stat_id=_normalize_label_key(stat_label),
+        preserve_color=bool(color and preserve_color),
+    )
 
 
 def _apply_reference_trace_style(
@@ -489,15 +538,14 @@ def _apply_reference_trace_style(
         line["width"] = max(0.0, width)
     if opacity is not None:
         trace["opacity"] = max(0.0, min(1.0, opacity))
-    meta = trace.setdefault("meta", {})
-    if isinstance(meta, dict):
-        meta["dashboard_visual_role"] = "reference"
-        meta["dashboard_visual_target"] = f"reference:{reference_key}"
-        meta["metroliza_trace_schema"] = "metroliza.plotly_trace.v1"
-        meta["metroliza_role"] = "reference"
-        meta["metroliza_target_id"] = meta["dashboard_visual_target"]
-        meta["metroliza_reference_id"] = reference_key
-        meta["metroliza_legend_label"] = str(trace.get("name") or reference_key.upper())
+    tag_plotly_visual_trace(
+        trace,
+        role="reference",
+        target_id=f"reference:{reference_key}",
+        label=str(trace.get("name") or reference_key.upper()),
+        capabilities=_LINE_STYLE_CAPABILITIES,
+        reference_id=reference_key,
+    )
 
 
 def _series_label_for_trace(trace: Mapping[str, Any], labels: Sequence[str]) -> str | None:
@@ -509,6 +557,17 @@ def _series_label_for_trace(trace: Mapping[str, Any], labels: Sequence[str]) -> 
     if not labels and name:
         return name
     return None
+
+
+def _style_capabilities_for_series_trace(trace: Mapping[str, Any], role: str) -> tuple[str, ...]:
+    if role in {"trend", "model_curve"}:
+        return _LINE_STYLE_CAPABILITIES
+    capabilities = ["color", "opacity", "outline_width", "outline_color"]
+    if _trace_has_markers(trace):
+        capabilities.extend(("marker_size", "marker_symbol"))
+    if str(trace.get("type") or "").casefold() in {"bar", "histogram"}:
+        capabilities.append(_PATTERN_STYLE_CAPABILITY)
+    return tuple(capabilities)
 
 
 def _set_trace_color(trace: dict[str, Any], color: str) -> None:
@@ -647,6 +706,18 @@ def _unique(values: Sequence[str]) -> list[str]:
             continue
         seen.add(key)
         output.append(value)
+    return output
+
+
+def _unique_strings(values: Sequence[str]) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        output.append(text)
     return output
 
 

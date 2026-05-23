@@ -306,6 +306,7 @@ def write_export_html_dashboard(
     plotly_spec_count_budget: int = _DEFAULT_PLOTLY_SPEC_COUNT_BUDGET,
     plotly_serialized_json_bytes_budget: int = _DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET,
     plotly_visual_settings: dict[str, Any] | None = None,
+    dashboard_visual_settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Persist an HTML dashboard plus a sibling asset directory."""
 
@@ -440,7 +441,10 @@ def write_export_html_dashboard(
         "backend_diagnostics_lines": [str(line) for line in (backend_diagnostics_lines or []) if str(line).strip()],
     }
     render_start = perf_counter()
-    html_text = _render_dashboard_html(manifest)
+    html_text = _render_dashboard_html(
+        manifest,
+        dashboard_visual_settings=dashboard_visual_settings,
+    )
     timings_s["html_rendering"] += perf_counter() - render_start
     html_bytes = len(html_text.encode("utf-8"))
     write_start = perf_counter()
@@ -2616,7 +2620,11 @@ def _drop_plotly_specs(sections: list[dict[str, Any]], group_analysis: dict[str,
             chart.pop("plotly_spec", None)
 
 
-def _render_dashboard_html(manifest: dict[str, Any]) -> str:
+def _render_dashboard_html(
+    manifest: dict[str, Any],
+    *,
+    dashboard_visual_settings: dict[str, Any] | None = None,
+) -> str:
     sections = manifest.get("sections") or []
     group_analysis = manifest.get("group_analysis") or {}
     dashboard_mode = str(manifest.get("dashboard_mode") or "workbook_sidecar")
@@ -2653,7 +2661,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
     dashboard_controls_css = render_dashboard_controls_css()
     visual_dialog_markup = render_dashboard_visual_dialog() if interactive_plotly_available else ""
     visual_runtime_js = (
-        render_dashboard_visual_runtime_js()
+        render_dashboard_visual_runtime_js(initial_settings=dashboard_visual_settings)
         if interactive_plotly_available
         else ""
     )

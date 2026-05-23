@@ -182,7 +182,16 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     manifest = _production_dashboard_fixture(tmp_path)
     output_file = tmp_path / "production_dashboard.html"
 
-    result = write_production_dashboard(manifest, output_file)
+    result = write_production_dashboard(
+        manifest,
+        output_file,
+        dashboard_visual_settings={
+            "preset": "custom",
+            "palette_preset": "custom",
+            "palette_mode": "fixed",
+            "palette": ["#123456", "#abcdef"],
+        },
+    )
 
     html_path = Path(result["html_dashboard_path"])
     assets_path = Path(result["html_dashboard_assets_path"])
@@ -219,6 +228,10 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     assert "dashboard-visual-dialog" in html_text
     assert "metroliza-dashboard-visuals" in html_text
     assert "applyDashboardVisualsToPlotlySpec(baseSpec)" in html_text
+    assert '"initialSettings":{' in html_text
+    assert '"preset":"custom"' in html_text
+    assert '"palette_preset":"custom"' in html_text
+    assert "#123456" in html_text
     assert "initializeDashboardVisualControls();" in html_text
     assert "refreshOpenLightboxPlotly();" in html_text
     assert "raw_record_json" not in html_text

@@ -122,7 +122,7 @@ class TestExportDialogLayout(unittest.TestCase):
         self.assertEqual(payload["dashboard_visuals_text"], "Dashboard visuals...")
         self.assertTrue(payload["dashboard_visuals_visible"])
         self.assertTrue(payload["dashboard_visuals_enabled"])
-        self.assertEqual(payload["dashboard_visuals_summary"], "Auto")
+        self.assertEqual(payload["dashboard_visuals_summary"], "Default")
         self.assertIn("apply when HTML dashboard output is enabled", payload["dashboard_visuals_tooltip"])
         self.assertTrue(payload["dashboard_visuals_next_in_tab_order"])
         self.assertFalse(payload["has_html_only_checkbox"])

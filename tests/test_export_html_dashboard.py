@@ -74,6 +74,12 @@ class TestExportHtmlDashboard(unittest.TestCase):
                 excel_file=excel_file,
                 output_path=html_path,
                 assets_dir=assets_dir,
+                dashboard_visual_settings={
+                    'preset': 'custom',
+                    'palette_preset': 'custom',
+                    'palette_mode': 'fixed',
+                    'palette': ['#123456', '#abcdef'],
+                },
                 sections=[
                     {
                         'header': 'Diameter / X',
@@ -269,6 +275,10 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn('delete lightboxPlotly.__metrolizaVisualSelectionHandlers;', html_text)
             self.assertIn('preservePlotlyTraceVisibility(container, data);', html_text)
             self.assertIn('applyDashboardVisualsToPlotlySpec(baseSpec)', html_text)
+            self.assertIn('"initialSettings":{', html_text)
+            self.assertIn('"preset":"custom"', html_text)
+            self.assertIn('"palette_preset":"custom"', html_text)
+            self.assertIn('#123456', html_text)
             self.assertIn('initializeDashboardVisualControls();', html_text)
             self.assertIn('refreshOpenLightboxPlotly();', html_text)
             self.assertIn(

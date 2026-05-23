@@ -11,7 +11,9 @@ from modules.dashboard_visual_options import (
     DEFAULT_OPACITY,
     PRINT_DASHBOARD_PALETTE,
     dashboard_visual_palette_presets,
+    dashboard_visual_recipe_settings,
     default_dashboard_visual_settings,
+    normalize_dashboard_visual_settings,
 )
 
 
@@ -121,6 +123,16 @@ def render_dashboard_visual_dialog() -> str:
         )
         for key, label in opacity_controls
     )
+    group_color_chips = "".join(
+        (
+            '<span class="visual-color-chip" data-visual-group-chip '
+            f'data-visual-chip-index="{index}">'
+            '<span class="visual-color-chip-swatch"></span>'
+            f'<span class="visual-color-chip-label">{html.escape(label)}</span>'
+            "</span>"
+        )
+        for index, label in enumerate(("Group 1", "Group 2", "Group 3", "Group 4", "Population points"))
+    )
     return (
         '<dialog id="dashboard-visual-dialog" class="visual-dialog" aria-label="Plot visual settings">'
         '<form method="dialog" class="visual-panel">'
@@ -139,21 +151,23 @@ def render_dashboard_visual_dialog() -> str:
         '</div>'
         '</section>'
         '<section class="visual-section">'
-        '<div class="visual-segmented" role="group" aria-label="Visual preset">'
-        '<button type="button" data-visual-preset="auto" aria-pressed="true">Auto</button>'
+        '<div class="visual-section-title">Visual recipe</div>'
+        '<div class="visual-segmented" role="group" aria-label="Visual recipe">'
+        '<button type="button" data-visual-preset="auto" aria-pressed="true">Default</button>'
         '<button type="button" data-visual-preset="distinct" aria-pressed="false">Distinct</button>'
         '<button type="button" data-visual-preset="print" aria-pressed="false">Print</button>'
         '<button type="button" data-visual-preset="custom" aria-pressed="false">Custom</button>'
         '</div>'
+        f'<div class="visual-palette-preview" aria-label="Resolved group colors">{group_color_chips}</div>'
         '</section>'
         '<section class="visual-section visual-grid">'
-        '<label class="visual-field"><span>Palette preset</span>'
+        '<label class="visual-field"><span>Color set</span>'
         f'<select id="dashboard-visual-palette-preset">{palette_preset_options}</select></label>'
-        '<label class="visual-field"><span>Palette</span>'
+        '<label class="visual-field"><span>Color generation</span>'
         '<select id="dashboard-visual-palette-mode">'
-        '<option value="fixed">Fixed</option>'
-        '<option value="auto_gradient">Auto gradient</option>'
-        '<option value="highlight_gradient">Highlight gradient</option>'
+        '<option value="fixed">Use color set</option>'
+        '<option value="auto_gradient">Generate gradient</option>'
+        '<option value="highlight_gradient">Around highlight</option>'
         '</select></label>'
         '<label class="visual-field"><span>Anchor</span>'
         f'<input type="color" id="dashboard-visual-anchor" value="{DEFAULT_HIGHLIGHT_ANCHOR}"></label>'
@@ -185,16 +199,24 @@ def render_dashboard_visual_dialog() -> str:
         '<section class="visual-section visual-grid">'
         '<label class="visual-field"><span>Selected element</span>'
         '<select id="dashboard-visual-element"><option value="">Click a plot element</option></select></label>'
-        '<label class="visual-field"><span>Element color</span>'
+        '<label class="visual-field" data-visual-selected-field="color"><span>Element color</span>'
         '<input type="color" id="dashboard-visual-element-color" value="#245a5a"></label>'
-        '<label class="visual-field"><span>Element opacity</span>'
+        '<label class="visual-field" data-visual-selected-field="opacity"><span>Element opacity</span>'
         '<input type="range" min="0.05" max="1" step="0.01" id="dashboard-visual-element-opacity" value="1"></label>'
-        '<label class="visual-field"><span>Line width</span>'
+        '<label class="visual-field" data-visual-selected-field="width"><span>Line width</span>'
         '<input type="range" min="0.5" max="8" step="0.25" id="dashboard-visual-element-width" value="2"></label>'
-        '<label class="visual-field"><span>Dash</span>'
+        '<label class="visual-field" data-visual-selected-field="dash"><span>Dash</span>'
         '<select id="dashboard-visual-element-dash">'
         '<option value="solid">Solid</option><option value="dash">Dash</option>'
         '<option value="dot">Dot</option><option value="dashdot">Dash-dot</option>'
+        '</select></label>'
+        '<label class="visual-field" data-visual-selected-field="marker_size"><span>Marker size</span>'
+        '<input type="range" min="2" max="18" step="0.5" id="dashboard-visual-element-marker-size" value="7"></label>'
+        '<label class="visual-field" data-visual-selected-field="pattern_shape"><span>Pattern</span>'
+        '<select id="dashboard-visual-element-pattern">'
+        '<option value="">None</option><option value="/">Slash</option>'
+        '<option value="\\\\">Backslash</option><option value="x">Cross</option>'
+        '<option value=".">Dot</option><option value="-">Dash</option>'
         '</select></label>'
         '<div class="visual-actions visual-actions-inline">'
         '<button type="button" id="dashboard-visual-element-reset">Reset element</button>'
@@ -202,7 +224,6 @@ def render_dashboard_visual_dialog() -> str:
         '</section>'
         '<section class="visual-section visual-actions">'
         '<button type="button" id="dashboard-visual-reset">Reset</button>'
-        '<button type="button" id="dashboard-visual-apply">Apply</button>'
         '</section>'
         '</form>'
         '</dialog>'
@@ -321,6 +342,14 @@ def render_dashboard_controls_css() -> str:
       padding-top: 12px;
       margin-top: 12px;
     }
+    .visual-section-title {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+    }
     .visual-segmented {
       display: inline-flex;
       flex-wrap: wrap;
@@ -378,6 +407,13 @@ def render_dashboard_controls_css() -> str:
       letter-spacing: 0;
       font-weight: 600;
     }
+    .visual-field[data-disabled="1"] {
+      opacity: 0.46;
+    }
+    .visual-field[data-disabled="1"] select,
+    .visual-field[data-disabled="1"] input {
+      cursor: not-allowed;
+    }
     .visual-check {
       display: flex;
       align-items: center;
@@ -403,6 +439,42 @@ def render_dashboard_controls_css() -> str:
       background: transparent;
       cursor: pointer;
     }
+    .visual-swatch[data-disabled="1"] input {
+      cursor: not-allowed;
+      opacity: 0.72;
+    }
+    .visual-palette-preview {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .visual-color-chip {
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      display: inline-flex;
+      gap: 8px;
+      min-width: 0;
+      padding: 7px 8px;
+      background: var(--panel, #ffffff);
+      color: var(--ink, var(--text));
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .visual-color-chip-swatch {
+      border: 1px solid rgba(15, 23, 42, 0.28);
+      border-radius: 999px;
+      display: inline-block;
+      flex: 0 0 18px;
+      height: 18px;
+      width: 18px;
+    }
+    .visual-color-chip-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     .visual-actions {
       display: flex;
       justify-content: flex-end;
@@ -421,14 +493,21 @@ def render_dashboard_controls_css() -> str:
     """
 
 
-def dashboard_visual_runtime_config_json() -> str:
+def dashboard_visual_runtime_config_json(initial_settings: dict | None = None) -> str:
     """Return shared defaults as compact JSON for browser runtime."""
 
+    normalized_initial_settings = normalize_dashboard_visual_settings(initial_settings)
     return json.dumps(
         {
             "storageKey": DASHBOARD_VISUAL_STORAGE_KEY,
             "themeStorageKey": DASHBOARD_VISUAL_THEME_STORAGE_KEY,
+            "storageVersion": 1,
             "defaults": default_dashboard_visual_settings(),
+            "initialSettings": normalized_initial_settings,
+            "recipes": {
+                key: dashboard_visual_recipe_settings(key)
+                for key in ("auto", "distinct", "print", "custom")
+            },
             "defaultPalette": list(DEFAULT_DASHBOARD_PALETTE),
             "printPalette": list(PRINT_DASHBOARD_PALETTE),
             "palettePresets": {
@@ -447,17 +526,39 @@ def dashboard_visual_runtime_config_json() -> str:
     )
 
 
-def render_dashboard_visual_runtime_js(config_var: str = "dashboardVisualConfig") -> str:
+def render_dashboard_visual_runtime_js(
+    config_var: str = "dashboardVisualConfig",
+    *,
+    initial_settings: dict | None = None,
+) -> str:
     """Return browser functions for applying dashboard visual settings to Plotly specs."""
 
     return f"""
-      const {config_var} = {dashboard_visual_runtime_config_json()};
-      const visualStorageKey = {config_var}.storageKey;
+      const {config_var} = {dashboard_visual_runtime_config_json(initial_settings)};
+      const visualStorageBaseKey = {config_var}.storageKey;
       const visualThemeStorageKey = {config_var}.themeStorageKey;
       let dashboardVisualState = null;
       let dashboardVisualThemeLibrary = null;
       let dashboardVisualSelectedTarget = null;
       let visualRefreshTimer = 0;
+
+      const dashboardVisualScope = () => {{
+        const explicitScope = document.documentElement.getAttribute('data-dashboard-visual-scope')
+          || (document.body ? document.body.getAttribute('data-dashboard-visual-scope') : '')
+          || '';
+        const locationScope = window.location
+          ? `${{window.location.pathname || ''}}${{window.location.search || ''}}`
+          : '';
+        return String(explicitScope || locationScope || document.title || 'dashboard')
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9._/-]+/g, '-')
+          .replace(/^-+|-+$/g, '')
+          .slice(0, 180) || 'dashboard';
+      }};
+
+      const visualStorageKey = `${{visualStorageBaseKey}}:${{dashboardVisualScope()}}`;
+      window.metrolizaDashboardVisualStorageKey = visualStorageKey;
 
       const visualChoice = (value, allowed, fallback) => (
         allowed.includes(value) ? value : fallback
@@ -570,9 +671,9 @@ def render_dashboard_visual_runtime_js(config_var: str = "dashboardVisualConfig"
       const readStoredVisualState = () => {{
         try {{
           const raw = window.localStorage.getItem(visualStorageKey);
-          return sanitizeVisualState(raw ? JSON.parse(raw) : null);
+          return sanitizeVisualState(raw ? JSON.parse(raw) : ({config_var}.initialSettings || {config_var}.defaults));
         }} catch (_error) {{
-          return sanitizeVisualState(null);
+          return sanitizeVisualState({config_var}.initialSettings || {config_var}.defaults);
         }}
       }};
 
@@ -722,6 +823,35 @@ def render_dashboard_visual_runtime_js(config_var: str = "dashboardVisualConfig"
           output.push(clean[index % clean.length]);
         }}
         return output;
+      }};
+
+      const applyVisualRecipe = (recipe, currentState = dashboardVisualState) => {{
+        const defaults = sanitizeVisualState({config_var}.initialSettings || {config_var}.defaults);
+        const state = sanitizeVisualState(Object.assign({{}}, currentState || defaults));
+        const configuredRecipes = {config_var}.recipes || {{}};
+        const configured = configuredRecipes[recipe] ? sanitizeVisualState(configuredRecipes[recipe]) : null;
+        const preservedTheme = {{
+          theme_id: state.theme_id || '',
+          theme_name: state.theme_name || '',
+        }};
+        const next = recipe === 'custom'
+          ? state
+          : sanitizeVisualState(Object.assign({{}}, defaults, configured || {{}}, preservedTheme));
+        next.preset = visualChoice(recipe, ['auto', 'distinct', 'print', 'custom'], 'auto');
+        if (recipe === 'custom' && next.palette_preset !== 'custom') {{
+          next.palette = resolvedVisualPalette(state, 6);
+          next.palette_preset = 'custom';
+          next.palette_mode = 'fixed';
+        }}
+        next.series_overrides = recipe === 'custom' ? clonePlotlySpec(state.series_overrides || {{}}) : {{}};
+        next.stat_line_overrides = recipe === 'custom' ? clonePlotlySpec(state.stat_line_overrides || {{}}) : {{}};
+        next.reference_lines = recipe === 'custom'
+          ? clonePlotlySpec(state.reference_lines || defaults.reference_lines)
+          : clonePlotlySpec(defaults.reference_lines);
+        if (next.preset === 'custom') {{
+          next.preset = 'custom';
+        }}
+        return sanitizeVisualState(next);
       }};
 
       const lowLevelVisualSettings = (state) => {{
@@ -988,6 +1118,8 @@ def render_dashboard_visual_runtime_js(config_var: str = "dashboardVisualConfig"
               metroliza_series_id: normalizeLabelKey(groupLabel),
               metroliza_stat_id: normalizeLabelKey(stat.stat),
               metroliza_legend_label: name,
+              dashboard_visual_capabilities: ['color', 'opacity', 'width', 'dash'],
+              metroliza_style_capabilities: ['color', 'opacity', 'width', 'dash'],
             }});
             return;
           }}
@@ -1008,6 +1140,8 @@ def render_dashboard_visual_runtime_js(config_var: str = "dashboardVisualConfig"
               metroliza_target_id: `reference:${{referenceKey}}`,
               metroliza_reference_id: referenceKey,
               metroliza_legend_label: name,
+              dashboard_visual_capabilities: ['color', 'opacity', 'width', 'dash'],
+              metroliza_style_capabilities: ['color', 'opacity', 'width', 'dash'],
             }});
             return;
           }}
@@ -1072,6 +1206,9 @@ def render_dashboard_visual_runtime_js(config_var: str = "dashboardVisualConfig"
             }}
           }}
           const role = traceChartKind === 'model_curve' ? 'model_curve' : (isTrendLine ? 'trend' : 'series');
+          const visualCapabilities = ['trend', 'model_curve'].includes(role)
+            ? ['color', 'opacity', 'width', 'dash']
+            : ['color', 'opacity', 'marker_size', 'marker_symbol', 'pattern_shape'];
           trace.meta = Object.assign({{}}, trace.meta || {{}}, {{
             dashboard_visual_role: role,
             dashboard_visual_target: `${{role}}:${{normalizeLabelKey(label)}}`,
@@ -1083,12 +1220,58 @@ def render_dashboard_visual_runtime_js(config_var: str = "dashboardVisualConfig"
             metroliza_series_id: normalizeLabelKey(label),
             metroliza_chart_kind: traceChartKind,
             metroliza_legend_label: label,
+            dashboard_visual_capabilities: visualCapabilities,
+            metroliza_style_capabilities: visualCapabilities,
           }});
         }});
         spec.metadata = Object.assign({{}}, spec.metadata || {{}}, {{
           dashboard_visual_settings_applied: true,
         }});
         return spec;
+      }};
+
+      const setVisualFieldAvailability = (selectorOrId, enabled) => {{
+        const control = selectorOrId.startsWith('#')
+          ? document.querySelector(selectorOrId)
+          : document.getElementById(selectorOrId);
+        if (!control) return;
+        control.disabled = !enabled;
+        const field = control.closest('.visual-field');
+        if (field) field.dataset.disabled = enabled ? '0' : '1';
+      }};
+
+      const syncVisualControlAvailability = (state) => {{
+        const printLocked = state.preset === 'print';
+        const customSwatches = state.preset === 'custom'
+          && state.palette_preset === 'custom'
+          && state.palette_mode === 'fixed';
+        const gradientMode = state.palette_mode === 'auto_gradient' || state.palette_mode === 'highlight_gradient';
+        setVisualFieldAvailability('dashboard-visual-palette-preset', !printLocked);
+        setVisualFieldAvailability('dashboard-visual-palette-mode', !printLocked);
+        setVisualFieldAvailability('dashboard-visual-anchor', !printLocked && gradientMode);
+        setVisualFieldAvailability('dashboard-visual-gradient-spread', !printLocked && gradientMode);
+        document.querySelectorAll('[data-visual-palette-index]').forEach((input) => {{
+          input.disabled = !customSwatches;
+          const field = input.closest('.visual-swatch');
+          if (field) field.dataset.disabled = customSwatches ? '0' : '1';
+        }});
+      }};
+
+      const refreshResolvedPalettePreview = (state) => {{
+        const palette = resolvedVisualPalette(state, 6);
+        document.querySelectorAll('[data-visual-group-chip]').forEach((chip) => {{
+          const index = Number(chip.getAttribute('data-visual-chip-index'));
+          const color = palette[index % Math.max(1, palette.length)] || '#245a5a';
+          const swatch = chip.querySelector('.visual-color-chip-swatch');
+          if (swatch) swatch.style.backgroundColor = color;
+          chip.setAttribute('data-visual-chip-color', color);
+        }});
+        document.querySelectorAll('[data-visual-palette-index]').forEach((input) => {{
+          const index = Number(input.getAttribute('data-visual-palette-index'));
+          if (Number.isInteger(index)) {{
+            input.value = normalizeColor(palette[index % Math.max(1, palette.length)], '#245a5a');
+          }}
+        }});
       }};
 
       const applyVisualStateToControls = (state) => {{
@@ -1112,21 +1295,19 @@ def render_dashboard_visual_runtime_js(config_var: str = "dashboardVisualConfig"
         setValue('dashboard-visual-stat-width', state.stat_lines.width);
         const statAccent = document.getElementById('dashboard-visual-stat-accent');
         if (statAccent) statAccent.checked = Boolean(state.stat_lines.accent_by_stat);
-        document.querySelectorAll('[data-visual-palette-index]').forEach((input) => {{
-          const index = Number(input.getAttribute('data-visual-palette-index'));
-          if (Number.isInteger(index) && state.palette[index]) input.value = state.palette[index];
-        }});
         document.querySelectorAll('[data-visual-opacity]').forEach((input) => {{
           const key = input.getAttribute('data-visual-opacity');
           if (key && Object.prototype.hasOwnProperty.call(state.opacity, key)) input.value = state.opacity[key];
         }});
+        refreshResolvedPalettePreview(state);
+        syncVisualControlAvailability(state);
       }};
 
       const collectVisualStateFromControls = (presetOverride = null) => {{
         const state = sanitizeVisualState(dashboardVisualState);
         if (presetOverride) {{
-          state.preset = presetOverride;
-        }} else if (state.preset !== 'print' && state.preset !== 'distinct') {{
+          return applyVisualRecipe(presetOverride, state);
+        }} else {{
           state.preset = 'custom';
         }}
         const valueOf = (id, fallback) => {{
@@ -1144,10 +1325,12 @@ def render_dashboard_visual_runtime_js(config_var: str = "dashboardVisualConfig"
         state.stat_lines.width = Number(valueOf('dashboard-visual-stat-width', state.stat_lines.width));
         const statAccent = document.getElementById('dashboard-visual-stat-accent');
         if (statAccent) state.stat_lines.accent_by_stat = Boolean(statAccent.checked);
-        document.querySelectorAll('[data-visual-palette-index]').forEach((input) => {{
-          const index = Number(input.getAttribute('data-visual-palette-index'));
-          if (Number.isInteger(index)) state.palette[index] = input.value;
-        }});
+        if (state.palette_preset === 'custom' && state.palette_mode === 'fixed') {{
+          document.querySelectorAll('[data-visual-palette-index]').forEach((input) => {{
+            const index = Number(input.getAttribute('data-visual-palette-index'));
+            if (Number.isInteger(index)) state.palette[index] = input.value;
+          }});
+        }}
         document.querySelectorAll('[data-visual-opacity]').forEach((input) => {{
           const key = input.getAttribute('data-visual-opacity');
           if (key) state.opacity[key] = Number(input.value);
@@ -1193,32 +1376,104 @@ def render_dashboard_visual_runtime_js(config_var: str = "dashboardVisualConfig"
         select.value = current;
       }};
 
+      const traceStyleForSelection = (trace) => {{
+        const marker = trace && trace.marker && typeof trace.marker === 'object' ? trace.marker : {{}};
+        const line = trace && trace.line && typeof trace.line === 'object' ? trace.line : {{}};
+        const pattern = marker.pattern && typeof marker.pattern === 'object' ? marker.pattern : {{}};
+        return {{
+          color: traceColor(trace) || '#245a5a',
+          opacity: Number.isFinite(Number(trace && trace.opacity)) ? Number(trace.opacity) : 1,
+          width: Number.isFinite(Number(line.width)) ? Number(line.width) : 2,
+          dash: typeof line.dash === 'string' ? line.dash : 'solid',
+          marker_size: Number.isFinite(Number(marker.size)) ? Number(marker.size) : 7,
+          pattern_shape: typeof pattern.shape === 'string' ? pattern.shape : '',
+        }};
+      }};
+
+      const traceCapabilitiesForSelection = (trace, role) => {{
+        const meta = trace && trace.meta && typeof trace.meta === 'object' ? trace.meta : {{}};
+        const taggedCapabilities = meta.metroliza_style_capabilities
+          || meta.dashboard_visual_capabilities
+          || meta.metroliza_visual_capabilities;
+        if (Array.isArray(taggedCapabilities)) {{
+          const caps = {{}};
+          taggedCapabilities.forEach((name) => {{
+            caps[String(name)] = true;
+          }});
+          return Object.assign(
+            {{ color: false, opacity: false, width: false, dash: false, marker_size: false, pattern_shape: false }},
+            caps
+          );
+        }}
+        const type = String(trace && trace.type || '').toLowerCase();
+        const mode = String(trace && trace.mode || '').toLowerCase();
+        const lineLike = ['reference', 'stat', 'trend', 'model_curve'].includes(role)
+          || mode.includes('lines');
+        const markerLike = traceHasMarkers(trace);
+        const patternLike = ['bar', 'histogram'].includes(type);
+        return {{
+          color: true,
+          opacity: true,
+          width: lineLike,
+          dash: lineLike,
+          marker_size: markerLike,
+          pattern_shape: patternLike,
+        }};
+      }};
+
       const selectedTargetFromTrace = (trace, curveNumber = -1) => {{
         if (!trace || typeof trace !== 'object') return null;
         const meta = trace.meta && typeof trace.meta === 'object' ? trace.meta : {{}};
+        const roleFromMeta = meta.metroliza_role || meta.dashboard_visual_role || 'series';
         if (meta.metroliza_target_id || meta.dashboard_visual_target) {{
           return {{
             target: meta.metroliza_target_id || meta.dashboard_visual_target,
-            role: meta.metroliza_role || meta.dashboard_visual_role || 'series',
+            role: roleFromMeta,
             label: meta.metroliza_legend_label || trace.name || meta.metroliza_target_id,
             group: meta.metroliza_series_id || '',
             stat: meta.metroliza_stat_id || '',
             key: meta.metroliza_reference_id || '',
+            style: traceStyleForSelection(trace),
+            capabilities: traceCapabilitiesForSelection(trace, roleFromMeta),
             curveNumber,
           }};
         }}
         const name = String(trace.name || '').trim();
         const reference = name.split('=')[0].trim().toLowerCase();
         if (['lsl', 'usl', 'nominal'].includes(reference)) {{
-          return {{ target: `reference:${{reference}}`, role: 'reference', key: reference, label: name, curveNumber }};
+          return {{
+            target: `reference:${{reference}}`,
+            role: 'reference',
+            key: reference,
+            label: name,
+            style: traceStyleForSelection(trace),
+            capabilities: traceCapabilitiesForSelection(trace, 'reference'),
+            curveNumber,
+          }};
         }}
         const stat = groupStatMatch(name);
         if (stat) {{
-          return {{ target: `stat:${{statOverrideKey(stat.group, stat.stat)}}`, role: 'stat', group: stat.group, stat: stat.stat, label: name, curveNumber }};
+          return {{
+            target: `stat:${{statOverrideKey(stat.group, stat.stat)}}`,
+            role: 'stat',
+            group: stat.group,
+            stat: stat.stat,
+            label: name,
+            style: traceStyleForSelection(trace),
+            capabilities: traceCapabilitiesForSelection(trace, 'stat'),
+            curveNumber,
+          }};
         }}
         if (name) {{
           const role = traceLooksLikeModelCurve(trace) ? 'model_curve' : (traceLooksLikeTrend(trace) ? 'trend' : 'series');
-          return {{ target: `${{role}}:${{normalizeLabelKey(name)}}`, role, label: name, curveNumber }};
+          return {{
+            target: `${{role}}:${{normalizeLabelKey(name)}}`,
+            role,
+            label: name,
+            style: traceStyleForSelection(trace),
+            capabilities: traceCapabilitiesForSelection(trace, role),
+            curveNumber,
+          }};
         }}
         return null;
       }};
@@ -1248,6 +1503,26 @@ def render_dashboard_visual_runtime_js(config_var: str = "dashboardVisualConfig"
         select.value = current;
       }};
 
+      const selectedTargetOverrideKey = (target) => (
+        normalizeLabelKey(target.group || target.label || target.target)
+      );
+
+      const setSelectedElementFieldAvailability = (name, enabled) => {{
+        const field = document.querySelector(`[data-visual-selected-field="${{name}}"]`);
+        if (!field) return;
+        field.dataset.disabled = enabled ? '0' : '1';
+        field.querySelectorAll('input, select').forEach((control) => {{
+          control.disabled = !enabled;
+        }});
+      }};
+
+      const syncSelectedElementControls = (target) => {{
+        const caps = target && target.capabilities ? target.capabilities : {{}};
+        ['color', 'opacity', 'width', 'dash', 'marker_size', 'pattern_shape'].forEach((name) => {{
+          setSelectedElementFieldAvailability(name, Boolean(target && caps[name]));
+        }});
+      }};
+
       const applySelectedVisualTargetToControls = (target) => {{
         dashboardVisualSelectedTarget = target;
         refreshVisualElementControls();
@@ -1255,20 +1530,26 @@ def render_dashboard_visual_runtime_js(config_var: str = "dashboardVisualConfig"
         const opacity = document.getElementById('dashboard-visual-element-opacity');
         const width = document.getElementById('dashboard-visual-element-width');
         const dash = document.getElementById('dashboard-visual-element-dash');
+        const markerSize = document.getElementById('dashboard-visual-element-marker-size');
+        const pattern = document.getElementById('dashboard-visual-element-pattern');
+        syncSelectedElementControls(target);
         if (!target) return;
         const state = sanitizeVisualState(dashboardVisualState);
+        const currentStyle = target.style && typeof target.style === 'object' ? target.style : {{}};
         let style = {{}};
         if (target.role === 'reference' && target.key && state.reference_lines[target.key]) {{
           style = state.reference_lines[target.key];
         }} else if (target.role === 'stat') {{
           style = state.stat_line_overrides[statOverrideKey(target.group, target.stat)] || {{}};
         }} else {{
-          style = state.series_overrides[normalizeLabelKey(target.label)] || {{}};
+          style = state.series_overrides[selectedTargetOverrideKey(target)] || {{}};
         }}
-        if (color) color.value = normalizeColor(style.color, resolvedVisualPalette(state, 1)[0] || '#245a5a');
-        if (opacity) opacity.value = Number.isFinite(Number(style.opacity)) ? style.opacity : 1;
-        if (width) width.value = Number.isFinite(Number(style.width)) ? style.width : 2;
-        if (dash) dash.value = style.dash || 'solid';
+        if (color) color.value = normalizeColor(style.color, normalizeColor(currentStyle.color, '#245a5a'));
+        if (opacity) opacity.value = Number.isFinite(Number(style.opacity)) ? style.opacity : (currentStyle.opacity ?? 1);
+        if (width) width.value = Number.isFinite(Number(style.width)) ? style.width : (currentStyle.width ?? 2);
+        if (dash) dash.value = style.dash || currentStyle.dash || 'solid';
+        if (markerSize) markerSize.value = Number.isFinite(Number(style.marker_size)) ? style.marker_size : (currentStyle.marker_size ?? state.marker_size);
+        if (pattern) pattern.value = typeof style.pattern_shape === 'string' ? style.pattern_shape : (currentStyle.pattern_shape || '');
       }};
 
       const applySelectedElementStyle = () => {{
@@ -1276,22 +1557,26 @@ def render_dashboard_visual_runtime_js(config_var: str = "dashboardVisualConfig"
         const state = sanitizeVisualState(dashboardVisualState);
         state.preset = 'custom';
         const target = dashboardVisualSelectedTarget;
+        const caps = target.capabilities || {{}};
         const color = document.getElementById('dashboard-visual-element-color');
         const opacity = document.getElementById('dashboard-visual-element-opacity');
         const width = document.getElementById('dashboard-visual-element-width');
         const dash = document.getElementById('dashboard-visual-element-dash');
-        const style = {{
-          color: color ? color.value : '#245a5a',
-          opacity: opacity ? Number(opacity.value) : 1,
-          width: width ? Number(width.value) : 2,
-          dash: dash ? dash.value : 'solid',
-        }};
+        const markerSize = document.getElementById('dashboard-visual-element-marker-size');
+        const pattern = document.getElementById('dashboard-visual-element-pattern');
+        const style = {{}};
+        if (caps.color && color) style.color = color.value;
+        if (caps.opacity && opacity) style.opacity = Number(opacity.value);
+        if (caps.width && width) style.width = Number(width.value);
+        if (caps.dash && dash) style.dash = dash.value;
+        if (caps.marker_size && markerSize) style.marker_size = Number(markerSize.value);
+        if (caps.pattern_shape && pattern) style.pattern_shape = pattern.value;
         if (target.role === 'reference' && target.key && state.reference_lines[target.key]) {{
           state.reference_lines[target.key] = Object.assign({{}}, state.reference_lines[target.key], style);
         }} else if (target.role === 'stat') {{
           state.stat_line_overrides[statOverrideKey(target.group, target.stat)] = style;
         }} else {{
-          state.series_overrides[normalizeLabelKey(target.label)] = style;
+          state.series_overrides[selectedTargetOverrideKey(target)] = style;
         }}
         setDashboardVisualState(state);
       }};
@@ -1305,7 +1590,7 @@ def render_dashboard_visual_runtime_js(config_var: str = "dashboardVisualConfig"
         }} else if (target.role === 'stat') {{
           delete state.stat_line_overrides[statOverrideKey(target.group, target.stat)];
         }} else {{
-          delete state.series_overrides[normalizeLabelKey(target.label)];
+          delete state.series_overrides[selectedTargetOverrideKey(target)];
         }}
         setDashboardVisualState(state);
         applySelectedVisualTargetToControls(target);
@@ -1336,7 +1621,6 @@ def render_dashboard_visual_runtime_js(config_var: str = "dashboardVisualConfig"
         const dialog = document.getElementById('dashboard-visual-dialog');
         const openButton = document.getElementById('dashboard-visuals-open');
         const closeButton = document.getElementById('dashboard-visuals-close');
-        const applyButton = document.getElementById('dashboard-visual-apply');
         const resetButton = document.getElementById('dashboard-visual-reset');
         const themeSelect = document.getElementById('dashboard-visual-theme');
         const saveThemeButton = document.getElementById('dashboard-visual-theme-save');
@@ -1353,14 +1637,8 @@ def render_dashboard_visual_runtime_js(config_var: str = "dashboardVisualConfig"
         if (closeButton && dialog) {{
           closeButton.addEventListener('click', () => dialog.close ? dialog.close() : dialog.removeAttribute('open'));
         }}
-        if (applyButton && dialog) {{
-          applyButton.addEventListener('click', () => {{
-            setDashboardVisualState(collectVisualStateFromControls());
-            if (dialog.close) dialog.close();
-          }});
-        }}
         if (resetButton) {{
-          resetButton.addEventListener('click', () => setDashboardVisualState(sanitizeVisualState(null)));
+          resetButton.addEventListener('click', () => setDashboardVisualState(applyVisualRecipe('auto', sanitizeVisualState({config_var}.initialSettings || {config_var}.defaults))));
         }}
         if (themeSelect) {{
           themeSelect.addEventListener('change', () => {{
@@ -1409,7 +1687,14 @@ def render_dashboard_visual_runtime_js(config_var: str = "dashboardVisualConfig"
             }}
           }});
         }}
-        ['dashboard-visual-element-color', 'dashboard-visual-element-opacity', 'dashboard-visual-element-width', 'dashboard-visual-element-dash'].forEach((id) => {{
+        [
+          'dashboard-visual-element-color',
+          'dashboard-visual-element-opacity',
+          'dashboard-visual-element-width',
+          'dashboard-visual-element-dash',
+          'dashboard-visual-element-marker-size',
+          'dashboard-visual-element-pattern',
+        ].forEach((id) => {{
           const control = document.getElementById(id);
           if (control) {{
             control.addEventListener('input', applySelectedElementStyle);
@@ -1421,7 +1706,7 @@ def render_dashboard_visual_runtime_js(config_var: str = "dashboardVisualConfig"
         }}
         document.querySelectorAll('[data-visual-preset]').forEach((button) => {{
           button.addEventListener('click', () => {{
-            setDashboardVisualState(collectVisualStateFromControls(button.getAttribute('data-visual-preset') || 'auto'));
+            setDashboardVisualState(applyVisualRecipe(button.getAttribute('data-visual-preset') || 'auto'));
           }});
         }});
         document.querySelectorAll(
@@ -1432,5 +1717,6 @@ def render_dashboard_visual_runtime_js(config_var: str = "dashboardVisualConfig"
           control.addEventListener('input', () => setDashboardVisualState(collectVisualStateFromControls()));
           control.addEventListener('change', () => setDashboardVisualState(collectVisualStateFromControls()));
         }});
+        syncSelectedElementControls(dashboardVisualSelectedTarget);
       }};
     """

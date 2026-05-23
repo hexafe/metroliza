@@ -17,7 +17,10 @@ from modules.contracts import (
 from modules.dashboard_visual_options import (
     build_dashboard_visual_preview_png,
     build_dashboard_visual_preview_spec,
+    dashboard_visual_color_source,
     dashboard_visual_palette_presets,
+    dashboard_visual_recipe_settings,
+    dashboard_visual_resolved_palette_info,
     dashboard_visual_settings_to_plotly_settings,
     dashboard_visual_swatch_palette,
     normalize_dashboard_visual_settings,
@@ -84,6 +87,90 @@ def test_dashboard_visual_palette_presets_include_researched_data_viz_palettes()
     assert len(presets["tableau_10"]["colors"]) >= 10
 
 
+def test_dashboard_visual_recipe_settings_update_dependent_color_sources() -> None:
+    distinct = dashboard_visual_recipe_settings(
+        "distinct",
+        base={
+            "theme_id": "saved",
+            "palette_preset": "viridis",
+            "palette_mode": "highlight_gradient",
+            "palette": ["#111111", "#222222"],
+            "series_overrides": {"Group 1": {"color": "#123456"}},
+        },
+    )
+    print_friendly = dashboard_visual_recipe_settings("print")
+    highlight = dashboard_visual_recipe_settings("highlight_gradient")
+
+    assert distinct["preset"] == "distinct"
+    assert distinct["recipe"] == "distinct"
+    assert distinct["palette_preset"] == "okabe_ito"
+    assert distinct["palette_mode"] == "fixed"
+    assert distinct["color_source"] == "preset"
+    assert distinct["series_overrides"] == {}
+    assert dashboard_visual_swatch_palette(distinct, count=4) == [
+        "#0072b2",
+        "#d55e00",
+        "#009e73",
+        "#cc79a7",
+    ]
+
+    assert print_friendly["preset"] == "print"
+    assert print_friendly["color_source"] == "print"
+    assert dashboard_visual_swatch_palette(print_friendly, count=3) == [
+        "#111827",
+        "#4b5563",
+        "#737373",
+    ]
+
+    assert highlight["preset"] == "custom"
+    assert highlight["recipe"] == "highlight_gradient"
+    assert highlight["palette_mode"] == "highlight_gradient"
+    assert highlight["color_source"] == "highlight"
+    assert len(set(dashboard_visual_swatch_palette(highlight, count=6))) == 6
+
+
+def test_dashboard_visual_resolved_palette_info_covers_each_color_source() -> None:
+    stale_distinct = normalize_dashboard_visual_settings(
+        {
+            "preset": "distinct",
+            "palette_preset": "viridis",
+            "palette_mode": "highlight_gradient",
+            "anchor_color": "#ff00ff",
+        }
+    )
+    custom = normalize_dashboard_visual_settings(
+        {
+            "preset": "custom",
+            "palette_preset": "custom",
+            "palette": ["#111111", "#222222", "#333333"],
+        }
+    )
+    gradient = normalize_dashboard_visual_settings(
+        {"preset": "custom", "palette_mode": "auto_gradient", "anchor_color": "#facc15"}
+    )
+
+    assert dashboard_visual_color_source(stale_distinct) == "preset"
+    assert dashboard_visual_resolved_palette_info(stale_distinct, count=2) == {
+        "recipe": "distinct",
+        "color_source": "preset",
+        "palette": ["#0072b2", "#d55e00"],
+        "palette_preset": "viridis",
+        "palette_label": "Viridis",
+        "palette_kind": "sequential",
+        "palette_mode": "highlight_gradient",
+        "anchor_color": "#ff00ff",
+        "gradient_spread": "normal",
+    }
+    assert dashboard_visual_color_source(custom) == "custom"
+    assert dashboard_visual_resolved_palette_info(custom, count=3)["palette"] == [
+        "#111111",
+        "#222222",
+        "#333333",
+    ]
+    assert dashboard_visual_color_source(gradient) == "gradient"
+    assert len(set(dashboard_visual_resolved_palette_info(gradient, count=5)["palette"])) == 5
+
+
 def test_dashboard_visual_named_theme_library_upserts_normalized_settings() -> None:
     library, theme = upsert_dashboard_visual_theme(
         None,
@@ -114,6 +201,10 @@ def test_dashboard_visual_settings_convert_overrides_to_plotly_contract() -> Non
         }
     )
 
+    assert settings["schema"] == "metroliza.dashboard_plotly_visuals.v1"
+    assert settings["recipe"] == "custom"
+    assert settings["color_source"] == "preset"
+    assert settings["resolved_palette"] == settings["series"]["palette"]
     assert settings["series"]["palette"][0] == "#0072b2"
     assert settings["series"]["overrides"]["Trend"]["color"] == "#123456"
     assert settings["stat_lines"]["overrides"]["a::mean"]["opacity"] == 0.33
@@ -455,6 +546,17 @@ def test_dashboard_visual_settings_style_trend_roles_and_unprefixed_stat_lines()
     assert measurements["opacity"] == 0.73
     assert measurements["meta"]["dashboard_visual_role"] == "series"
     assert measurements["meta"]["dashboard_visual_chart_kind"] == "scatter"
+    assert measurements["meta"]["metroliza_trace_schema"] == "metroliza.plotly_trace.v1"
+    assert measurements["meta"]["metroliza_target_id"] == "series:measurements"
+    assert measurements["meta"]["metroliza_visual_target_id"] == "series:measurements"
+    assert measurements["meta"]["metroliza_style_capabilities"] == [
+        "color",
+        "opacity",
+        "outline_width",
+        "outline_color",
+        "marker_size",
+        "marker_symbol",
+    ]
 
     assert trend["line"]["color"] == "#334455"
     assert trend["line"]["width"] == 4.0
@@ -463,6 +565,12 @@ def test_dashboard_visual_settings_style_trend_roles_and_unprefixed_stat_lines()
     assert "marker" not in trend
     assert trend["meta"]["dashboard_visual_role"] == "trend"
     assert trend["meta"]["dashboard_visual_chart_kind"] == "trend"
+    assert trend["meta"]["metroliza_style_capabilities"] == [
+        "color",
+        "opacity",
+        "width",
+        "dash",
+    ]
 
     assert lsl["line"]["color"] == "#ff0000"
     assert lsl["line"]["dash"] == "dot"
@@ -470,12 +578,48 @@ def test_dashboard_visual_settings_style_trend_roles_and_unprefixed_stat_lines()
     assert lsl["opacity"] == 0.4
     assert lsl["meta"]["dashboard_visual_role"] == "reference"
     assert lsl["meta"]["metroliza_reference_id"] == "lsl"
+    assert lsl["meta"]["metroliza_style_capabilities"] == ["color", "opacity", "width", "dash"]
 
     assert mean["line"]["color"] == "#abcdef"
     assert mean["line"]["width"] == 3.0
     assert mean["meta"]["dashboard_visual_role"] == "stat"
     assert mean["meta"]["metroliza_stat_id"] == "mean"
+    assert mean["meta"]["metroliza_style_capabilities"] == ["color", "opacity", "width", "dash"]
     assert mean["opacity"] == 0.5
     assert median["line"]["width"] == 3.0
     assert median["meta"]["dashboard_visual_role"] == "stat"
     assert median["visible"] == "legendonly"
+
+
+def test_dashboard_visual_histogram_trace_metadata_exposes_pattern_capability() -> None:
+    spec = {
+        "data": [
+            {
+                "type": "histogram",
+                "name": "A (n=4)",
+                "x": [1.0, 1.1, 1.2, 1.3],
+                "marker": {"color": "#aaaaaa"},
+            }
+        ],
+        "layout": {},
+        "metadata": {"kind": "histogram"},
+    }
+
+    apply_dashboard_visual_settings(
+        spec,
+        payload={"groups": [{"group": "A"}], "type": "histogram"},
+        visual_settings=dashboard_visual_settings_to_plotly_settings(
+            {"preset": "custom", "palette": ["#123456"], "distinguish": "always"}
+        ),
+    )
+
+    meta = spec["data"][0]["meta"]
+    assert meta["metroliza_target_id"] == "series:a"
+    assert meta["metroliza_legend_label"] == "A"
+    assert meta["metroliza_style_capabilities"] == [
+        "color",
+        "opacity",
+        "outline_width",
+        "outline_color",
+        "pattern_shape",
+    ]

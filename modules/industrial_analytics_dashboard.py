@@ -200,6 +200,7 @@ def write_production_dashboard(
     assets_dir: str | Path | None = None,
     plotly_spec_count_budget: int = DEFAULT_PLOTLY_SPEC_COUNT_BUDGET,
     plotly_serialized_json_bytes_budget: int = DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET,
+    dashboard_visual_settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Write an offline production analytics dashboard and local Plotly asset."""
 
@@ -258,7 +259,11 @@ def write_production_dashboard(
     )
     _apply_plotly_runtime_summary(dashboard_manifest, status=plotly_runtime_status)
 
-    html_text = _render_dashboard_html(dashboard_manifest, asset_directory_name=asset_directory.name)
+    html_text = _render_dashboard_html(
+        dashboard_manifest,
+        asset_directory_name=asset_directory.name,
+        dashboard_visual_settings=dashboard_visual_settings,
+    )
     html_bytes = len(html_text.encode("utf-8"))
     destination.write_text(html_text, encoding="utf-8")
     return {
@@ -1996,7 +2001,12 @@ def _groupstats_payload(groupstats_result: ProductionGroupstatsResult | None) ->
     }
 
 
-def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: str) -> str:
+def _render_dashboard_html(
+    manifest: dict[str, Any],
+    *,
+    asset_directory_name: str,
+    dashboard_visual_settings: dict[str, Any] | None = None,
+) -> str:
     summary = manifest.get("summary") if isinstance(manifest.get("summary"), dict) else {}
     charts = manifest.get("charts") if isinstance(manifest.get("charts"), list) else []
     diagnostics = manifest.get("diagnostics") if isinstance(manifest.get("diagnostics"), list) else []
@@ -2012,7 +2022,14 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
         if plotly_charts
         else ""
     )
-    plotly_runtime = _render_plotly_runtime(charts_json) if plotly_charts else ""
+    plotly_runtime = (
+        _render_plotly_runtime(
+            charts_json,
+            dashboard_visual_settings=dashboard_visual_settings,
+        )
+        if plotly_charts
+        else ""
+    )
     lightbox_markup = _render_chart_lightbox() if plotly_charts else ""
     cards = _render_summary_cards(summary)
     diagnostics_markup = _render_diagnostics(diagnostics)
@@ -2587,13 +2604,19 @@ def _production_dashboard_plotly_theme_tokens() -> dict[str, Any]:
     }
 
 
-def _render_plotly_runtime(charts_json: str) -> str:
+def _render_plotly_runtime(
+    charts_json: str,
+    *,
+    dashboard_visual_settings: dict[str, Any] | None = None,
+) -> str:
     theme_tokens_json = json.dumps(
         _production_dashboard_plotly_theme_tokens(),
         ensure_ascii=False,
         separators=(",", ":"),
     )
-    visual_runtime_js = render_dashboard_visual_runtime_js()
+    visual_runtime_js = render_dashboard_visual_runtime_js(
+        initial_settings=dashboard_visual_settings
+    )
     return (
         f'\n  <script id="production-dashboard-charts" type="application/json">{charts_json}</script>\n'
         "  <script>\n"
