@@ -25,6 +25,43 @@ DASHBOARD_VISUAL_STORAGE_KEY = "metroliza-dashboard-visuals"
 DASHBOARD_VISUAL_THEME_STORAGE_KEY = "metroliza-dashboard-visual-themes"
 
 
+def _render_visual_range_field(
+    *,
+    label: str,
+    range_id: str | None = None,
+    value: str | float,
+    minimum: str | float,
+    maximum: str | float,
+    step: str | float,
+    extra_attrs: str = "",
+    selected_field: str | None = None,
+) -> str:
+    """Return a range input paired with a visible numeric input."""
+
+    escaped_label = html.escape(label)
+    value_text = html.escape(str(value))
+    min_text = html.escape(str(minimum))
+    max_text = html.escape(str(maximum))
+    step_text = html.escape(str(step))
+    field_attr = (
+        f' data-visual-selected-field="{html.escape(selected_field)}"'
+        if selected_field
+        else ""
+    )
+    id_attr = f' id="{html.escape(range_id)}"' if range_id else ""
+    number_for = f' data-visual-range-value-for="{html.escape(range_id)}"' if range_id else ""
+    return (
+        f'<label class="visual-field visual-range-field"{field_attr}><span>{escaped_label}</span>'
+        '<div class="visual-range-row">'
+        f'<input type="range" min="{min_text}" max="{max_text}" step="{step_text}" '
+        f'value="{value_text}"{id_attr}{extra_attrs}>'
+        f'<input type="number" min="{min_text}" max="{max_text}" step="{step_text}" '
+        f'value="{value_text}" class="visual-range-number" data-visual-range-value{number_for} '
+        f'aria-label="{escaped_label} value">'
+        '</div></label>'
+    )
+
+
 def render_dashboard_theme_bootstrap_script() -> str:
     """Return early theme bootstrap JS used before CSS paints."""
 
@@ -118,11 +155,14 @@ def render_dashboard_visual_dialog() -> str:
     )
     opacity_inputs = "".join(
         (
-            '<label class="visual-field">'
-            f"<span>{label}</span>"
-            f'<input type="range" min="0.10" max="1" step="0.01" '
-            f'data-visual-opacity="{key}" value="{DEFAULT_OPACITY[key]}">'
-            "</label>"
+            _render_visual_range_field(
+                label=label,
+                value=DEFAULT_OPACITY[key],
+                minimum="0.10",
+                maximum="1",
+                step="0.01",
+                extra_attrs=f' data-visual-opacity="{html.escape(key)}"',
+            )
         )
         for key, label in opacity_controls
     )
@@ -143,6 +183,101 @@ def render_dashboard_visual_dialog() -> str:
         )
         for index, label in enumerate(("Group 1", "Group 2", "Group 3", "Group 4", "Population points"))
     )
+    fine_tuning_controls = (
+        _render_visual_range_field(
+            label="Default marker size",
+            range_id="dashboard-visual-marker-size",
+            value="7",
+            minimum="2",
+            maximum="18",
+            step="0.5",
+        )
+        + _render_visual_range_field(
+            label="Stat width",
+            range_id="dashboard-visual-stat-width",
+            value="2",
+            minimum="0.5",
+            maximum="6",
+            step="0.25",
+        )
+        + _render_visual_range_field(
+            label="Model curve opacity",
+            value=DEFAULT_OPACITY["model_curve"],
+            minimum="0.10",
+            maximum="1",
+            step="0.01",
+            extra_attrs=' data-visual-opacity="model_curve"',
+        )
+        + '<label class="visual-field visual-check"><input type="checkbox" id="dashboard-visual-stat-accent">'
+        '<span>Stat accents</span></label>'
+    )
+    selection_controls = (
+        '<label class="visual-field"><span>Selection inspector</span>'
+        '<select id="dashboard-visual-element"><option value="">Click a plot element</option></select></label>'
+        '<label class="visual-field" data-visual-selected-field="color"><span>Element color</span>'
+        '<input type="color" id="dashboard-visual-element-color" value="#245a5a"></label>'
+        + _render_visual_range_field(
+            label="Element opacity",
+            range_id="dashboard-visual-element-opacity",
+            value="1",
+            minimum="0.05",
+            maximum="1",
+            step="0.01",
+            selected_field="opacity",
+        )
+        + _render_visual_range_field(
+            label="Line width",
+            range_id="dashboard-visual-element-width",
+            value="2",
+            minimum="0.5",
+            maximum="8",
+            step="0.25",
+            selected_field="width",
+        )
+        + '<label class="visual-field" data-visual-selected-field="dash"><span>Dash</span>'
+        '<select id="dashboard-visual-element-dash">'
+        '<option value="solid">Solid</option><option value="dash">Dash</option>'
+        '<option value="dot">Dot</option><option value="dashdot">Dash-dot</option>'
+        '</select></label>'
+        + _render_visual_range_field(
+            label="Marker size",
+            range_id="dashboard-visual-element-marker-size",
+            value="7",
+            minimum="2",
+            maximum="18",
+            step="0.5",
+            selected_field="marker_size",
+        )
+        + '<label class="visual-field" data-visual-selected-field="marker_symbol"><span>Shape</span>'
+        f'<select id="dashboard-visual-element-marker-symbol">{marker_symbol_options}</select></label>'
+        '<label class="visual-field visual-check" data-visual-selected-field="outline_enabled">'
+        '<input type="checkbox" id="dashboard-visual-element-outline-enabled">'
+        '<span>Marker border</span></label>'
+        + _render_visual_range_field(
+            label="Border width",
+            range_id="dashboard-visual-element-outline-width",
+            value="1.25",
+            minimum="0",
+            maximum="6",
+            step="0.25",
+            selected_field="outline_width",
+        )
+        + '<label class="visual-field" data-visual-selected-field="outline_color_mode"><span>Border color mode</span>'
+        '<select id="dashboard-visual-element-outline-color-mode">'
+        '<option value="auto">Auto contrast</option><option value="custom">Custom color</option>'
+        '</select></label>'
+        '<label class="visual-field" data-visual-selected-field="outline_color"><span>Border color</span>'
+        '<input type="color" id="dashboard-visual-element-outline-color" value="#111827"></label>'
+        '<label class="visual-field" data-visual-selected-field="pattern_shape"><span>Pattern</span>'
+        '<select id="dashboard-visual-element-pattern">'
+        '<option value="">None</option><option value="/">Slash</option>'
+        '<option value="\\\\">Backslash</option><option value="x">Cross</option>'
+        '<option value=".">Dot</option><option value="-">Dash</option>'
+        '</select></label>'
+        '<div class="visual-actions visual-actions-inline">'
+        '<button type="button" id="dashboard-visual-element-reset">Reset element</button>'
+        '</div>'
+    )
     return (
         '<dialog id="dashboard-visual-dialog" class="visual-dialog" aria-label="Plot visual settings">'
         '<form method="dialog" class="visual-panel">'
@@ -150,16 +285,6 @@ def render_dashboard_visual_dialog() -> str:
         '<div><h2>Plot Visuals</h2></div>'
         '<button type="button" class="visual-dialog-close" id="dashboard-visuals-close">Close</button>'
         '</div>'
-        '<section class="visual-section visual-grid">'
-        '<label class="visual-field"><span>Theme</span>'
-        '<select id="dashboard-visual-theme"><option value="">Current settings</option></select></label>'
-        '<label class="visual-field"><span>Name</span>'
-        '<input type="text" id="dashboard-visual-theme-name" placeholder="Theme name"></label>'
-        '<div class="visual-actions visual-actions-inline">'
-        '<button type="button" id="dashboard-visual-theme-save">Save theme</button>'
-        '<button type="button" id="dashboard-visual-theme-delete">Delete</button>'
-        '</div>'
-        '</section>'
         '<section class="visual-section">'
         '<div class="visual-section-title">Visual recipe</div>'
         '<div class="visual-segmented" role="group" aria-label="Visual recipe">'
@@ -196,55 +321,21 @@ def render_dashboard_visual_dialog() -> str:
         '</section>'
         f'<section class="visual-section visual-swatches">{palette_inputs}</section>'
         '<section class="visual-section visual-grid">'
-        '<label class="visual-field"><span>Default marker size</span>'
-        '<input type="range" min="2" max="18" step="0.5" id="dashboard-visual-marker-size" value="7"></label>'
-        '<label class="visual-field"><span>Stat width</span>'
-        '<input type="range" min="0.5" max="6" step="0.25" id="dashboard-visual-stat-width" value="2"></label>'
-        '<label class="visual-field"><span>Model curve opacity</span>'
-        f'<input type="range" min="0.10" max="1" step="0.01" data-visual-opacity="model_curve" value="{DEFAULT_OPACITY["model_curve"]}"></label>'
-        '<label class="visual-field visual-check"><input type="checkbox" id="dashboard-visual-stat-accent">'
-        '<span>Stat accents</span></label>'
-        '</section>'
-        f'<section class="visual-section visual-grid">{opacity_inputs}</section>'
-        '<section class="visual-section visual-grid">'
-        '<label class="visual-field"><span>Selection inspector</span>'
-        '<select id="dashboard-visual-element"><option value="">Click a plot element</option></select></label>'
-        '<label class="visual-field" data-visual-selected-field="color"><span>Element color</span>'
-        '<input type="color" id="dashboard-visual-element-color" value="#245a5a"></label>'
-        '<label class="visual-field" data-visual-selected-field="opacity"><span>Element opacity</span>'
-        '<input type="range" min="0.05" max="1" step="0.01" id="dashboard-visual-element-opacity" value="1"></label>'
-        '<label class="visual-field" data-visual-selected-field="width"><span>Line width</span>'
-        '<input type="range" min="0.5" max="8" step="0.25" id="dashboard-visual-element-width" value="2"></label>'
-        '<label class="visual-field" data-visual-selected-field="dash"><span>Dash</span>'
-        '<select id="dashboard-visual-element-dash">'
-        '<option value="solid">Solid</option><option value="dash">Dash</option>'
-        '<option value="dot">Dot</option><option value="dashdot">Dash-dot</option>'
-        '</select></label>'
-        '<label class="visual-field" data-visual-selected-field="marker_size"><span>Marker size</span>'
-        '<input type="range" min="2" max="18" step="0.5" id="dashboard-visual-element-marker-size" value="7"></label>'
-        '<label class="visual-field" data-visual-selected-field="marker_symbol"><span>Shape</span>'
-        f'<select id="dashboard-visual-element-marker-symbol">{marker_symbol_options}</select></label>'
-        '<label class="visual-field visual-check" data-visual-selected-field="outline_enabled">'
-        '<input type="checkbox" id="dashboard-visual-element-outline-enabled">'
-        '<span>Marker border</span></label>'
-        '<label class="visual-field" data-visual-selected-field="outline_width"><span>Border width</span>'
-        '<input type="range" min="0" max="6" step="0.25" id="dashboard-visual-element-outline-width" value="1.25"></label>'
-        '<label class="visual-field" data-visual-selected-field="outline_color_mode"><span>Border color mode</span>'
-        '<select id="dashboard-visual-element-outline-color-mode">'
-        '<option value="auto">Auto contrast</option><option value="custom">Custom color</option>'
-        '</select></label>'
-        '<label class="visual-field" data-visual-selected-field="outline_color"><span>Border color</span>'
-        '<input type="color" id="dashboard-visual-element-outline-color" value="#111827"></label>'
-        '<label class="visual-field" data-visual-selected-field="pattern_shape"><span>Pattern</span>'
-        '<select id="dashboard-visual-element-pattern">'
-        '<option value="">None</option><option value="/">Slash</option>'
-        '<option value="\\\\">Backslash</option><option value="x">Cross</option>'
-        '<option value=".">Dot</option><option value="-">Dash</option>'
-        '</select></label>'
+        '<label class="visual-field"><span>Theme</span>'
+        '<select id="dashboard-visual-theme"><option value="">Current settings</option></select></label>'
+        '<label class="visual-field"><span>Name</span>'
+        '<input type="text" id="dashboard-visual-theme-name" placeholder="Theme name"></label>'
         '<div class="visual-actions visual-actions-inline">'
-        '<button type="button" id="dashboard-visual-element-reset">Reset element</button>'
+        '<button type="button" id="dashboard-visual-theme-save">Save theme</button>'
+        '<button type="button" id="dashboard-visual-theme-delete">Delete</button>'
         '</div>'
         '</section>'
+        '<section class="visual-section">'
+        '<div class="visual-section-title">Fine tuning</div>'
+        f'<div class="visual-grid">{fine_tuning_controls}</div>'
+        '</section>'
+        f'<section class="visual-section visual-grid">{opacity_inputs}</section>'
+        f'<section class="visual-section visual-grid">{selection_controls}</section>'
         '<section class="visual-section visual-actions">'
         '<button type="button" id="dashboard-visual-reset">Reset</button>'
         '</section>'
@@ -415,12 +506,14 @@ def render_dashboard_controls_css() -> str:
     .visual-field select,
     .visual-field input[type="range"],
     .visual-field input[type="color"],
-    .visual-field input[type="text"] {
+    .visual-field input[type="text"],
+    .visual-field input[type="number"] {
       min-height: 34px;
       width: 100%;
     }
     .visual-field select,
-    .visual-field input[type="text"] {
+    .visual-field input[type="text"],
+    .visual-field input[type="number"] {
       border: 1px solid var(--line);
       border-radius: 8px;
       background: var(--panel, #ffffff);
@@ -429,6 +522,15 @@ def render_dashboard_controls_css() -> str:
       text-transform: none;
       letter-spacing: 0;
       font-weight: 600;
+    }
+    .visual-range-row {
+      align-items: center;
+      display: grid;
+      grid-template-columns: minmax(92px, 1fr) minmax(64px, 82px);
+      gap: 8px;
+    }
+    .visual-range-number {
+      text-align: right;
     }
     .visual-field[data-disabled="1"] {
       opacity: 0.46;
@@ -603,6 +705,10 @@ def render_dashboard_visual_runtime_js(
       );
 
       const clonePlotlySpec = (spec) => JSON.parse(JSON.stringify(spec || {{}}));
+
+      const embeddedInitialVisualState = () => (
+        sanitizeVisualState({config_var}.initialSettings || {config_var}.defaults)
+      );
 
       const normalizeColor = (value, fallback) => (
         typeof value === 'string' && /^#[0-9a-f]{{6}}$/i.test(value.trim())
@@ -1328,9 +1434,52 @@ def render_dashboard_visual_runtime_js(
           ? document.querySelector(selectorOrId)
           : document.getElementById(selectorOrId);
         if (!control) return;
-        control.disabled = !enabled;
         const field = control.closest('.visual-field');
-        if (field) field.dataset.disabled = enabled ? '0' : '1';
+        if (field) {{
+          field.dataset.disabled = enabled ? '0' : '1';
+          field.querySelectorAll('input, select').forEach((fieldControl) => {{
+            fieldControl.disabled = !enabled;
+          }});
+        }} else {{
+          control.disabled = !enabled;
+        }}
+      }};
+
+      const syncRangeNumberReadouts = () => {{
+        document.querySelectorAll('[data-visual-range-value]').forEach((numberInput) => {{
+          let range = null;
+          const pairedId = numberInput.getAttribute('data-visual-range-value-for') || '';
+          if (pairedId) range = document.getElementById(pairedId);
+          if (!range) {{
+            const row = numberInput.closest('.visual-range-row');
+            range = row ? row.querySelector('input[type="range"]') : null;
+          }}
+          if (range) numberInput.value = range.value;
+        }});
+      }};
+
+      const initializeVisualRangeReadouts = () => {{
+        document.querySelectorAll('[data-visual-range-value]').forEach((numberInput) => {{
+          let range = null;
+          const pairedId = numberInput.getAttribute('data-visual-range-value-for') || '';
+          if (pairedId) range = document.getElementById(pairedId);
+          if (!range) {{
+            const row = numberInput.closest('.visual-range-row');
+            range = row ? row.querySelector('input[type="range"]') : null;
+          }}
+          if (!range) return;
+          range.addEventListener('input', () => {{ numberInput.value = range.value; }});
+          range.addEventListener('change', () => {{ numberInput.value = range.value; }});
+          numberInput.addEventListener('input', () => {{
+            range.value = numberInput.value;
+            range.dispatchEvent(new Event('input', {{ bubbles: true }}));
+          }});
+          numberInput.addEventListener('change', () => {{
+            range.value = numberInput.value;
+            range.dispatchEvent(new Event('change', {{ bubbles: true }}));
+          }});
+        }});
+        syncRangeNumberReadouts();
       }};
 
       const syncVisualControlAvailability = (state) => {{
@@ -1392,6 +1541,7 @@ def render_dashboard_visual_runtime_js(
           const key = input.getAttribute('data-visual-opacity');
           if (key && Object.prototype.hasOwnProperty.call(state.opacity, key)) input.value = state.opacity[key];
         }});
+        syncRangeNumberReadouts();
         refreshResolvedPalettePreview(state);
         syncVisualControlAvailability(state);
       }};
@@ -1723,6 +1873,7 @@ def render_dashboard_visual_runtime_js(
         if (outlineColorMode) outlineColorMode.value = style.outline_color_mode || currentStyle.outline_color_mode || 'auto';
         if (outlineColor) outlineColor.value = normalizeColor(style.outline_color, normalizeColor(currentStyle.outline_color, '#111827'));
         if (pattern) pattern.value = typeof style.pattern_shape === 'string' ? style.pattern_shape : (currentStyle.pattern_shape || '');
+        syncRangeNumberReadouts();
         syncSelectedElementControls(target);
       }};
 
@@ -1772,9 +1923,10 @@ def render_dashboard_visual_runtime_js(
       const resetSelectedElementStyle = () => {{
         if (!dashboardVisualSelectedTarget) return;
         const state = sanitizeVisualState(dashboardVisualState);
+        const embedded = embeddedInitialVisualState();
         const target = dashboardVisualSelectedTarget;
         if (target.role === 'reference' && target.key && state.reference_lines[target.key]) {{
-          state.reference_lines[target.key] = clonePlotlySpec({config_var}.defaults.reference_lines[target.key]);
+          state.reference_lines[target.key] = clonePlotlySpec(embedded.reference_lines[target.key]);
         }} else if (target.role === 'stat') {{
           delete state.stat_line_overrides[statOverrideKey(target.group, target.stat)];
         }} else {{
@@ -1805,6 +1957,7 @@ def render_dashboard_visual_runtime_js(
         dashboardVisualThemeLibrary = readVisualThemeLibrary();
         dashboardVisualState = readStoredVisualState();
         refreshVisualThemeControls();
+        initializeVisualRangeReadouts();
         applyVisualStateToControls(dashboardVisualState);
         const dialog = document.getElementById('dashboard-visual-dialog');
         const openButton = document.getElementById('dashboard-visuals-open');
@@ -1826,7 +1979,7 @@ def render_dashboard_visual_runtime_js(
           closeButton.addEventListener('click', () => dialog.close ? dialog.close() : dialog.removeAttribute('open'));
         }}
         if (resetButton) {{
-          resetButton.addEventListener('click', () => setDashboardVisualState(sanitizeVisualState({config_var}.initialSettings || {config_var}.defaults)));
+          resetButton.addEventListener('click', () => setDashboardVisualState(embeddedInitialVisualState()));
         }}
         if (themeSelect) {{
           themeSelect.addEventListener('change', () => {{

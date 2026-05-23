@@ -74,6 +74,23 @@ def test_dashboard_visual_dialog_uses_live_recipe_and_group_color_chips() -> Non
     assert 'id="dashboard-visual-apply"' not in dialog_html
 
 
+def test_dashboard_visual_dialog_pairs_ranges_with_number_readouts() -> None:
+    dialog_html = render_dashboard_visual_dialog()
+
+    assert dialog_html.index("Visual recipe") < dialog_html.index("Color set")
+    assert dialog_html.index("Color set") < dialog_html.index("Fine tuning")
+    assert dialog_html.index("Fine tuning") < dialog_html.index("Selection inspector")
+    assert dialog_html.count('class="visual-range-number"') >= 12
+    assert 'data-visual-range-value-for="dashboard-visual-marker-size"' in dialog_html
+    assert 'data-visual-range-value-for="dashboard-visual-stat-width"' in dialog_html
+    assert 'data-visual-range-value-for="dashboard-visual-element-opacity"' in dialog_html
+    assert 'data-visual-range-value-for="dashboard-visual-element-width"' in dialog_html
+    assert 'data-visual-range-value-for="dashboard-visual-element-marker-size"' in dialog_html
+    assert 'data-visual-range-value-for="dashboard-visual-element-outline-width"' in dialog_html
+    assert 'aria-label="Element opacity value"' in dialog_html
+    assert 'type="number"' in dialog_html
+
+
 def test_dashboard_visual_runtime_scopes_storage_and_uses_initial_settings() -> None:
     initial_settings = {
         "preset": "custom",
@@ -99,6 +116,42 @@ def test_dashboard_visual_runtime_scopes_storage_and_uses_initial_settings() -> 
     assert '"initialSettings":{' in runtime_js
     assert '"preset":"custom"' in runtime_js
     assert "#123456" in runtime_js
+
+
+def test_dashboard_visual_runtime_range_readouts_use_existing_update_path() -> None:
+    runtime_js = render_dashboard_visual_runtime_js()
+
+    assert "const initializeVisualRangeReadouts" in runtime_js
+    assert "const syncRangeNumberReadouts" in runtime_js
+    assert "document.querySelectorAll('[data-visual-range-value]')" in runtime_js
+    assert "range.dispatchEvent(new Event('input', { bubbles: true }));" in runtime_js
+    assert "range.dispatchEvent(new Event('change', { bubbles: true }));" in runtime_js
+    assert "syncRangeNumberReadouts();" in runtime_js
+    assert "control.addEventListener('input', () => setDashboardVisualState(collectVisualStateFromControls()))" in runtime_js
+    assert "window.setTimeout(() => {" in runtime_js
+
+
+def test_dashboard_visual_runtime_reference_reset_uses_embedded_initial_settings() -> None:
+    initial_settings = {
+        "reference_lines": {
+            "lsl": {"color": "#123456", "width": 4.5, "dash": "dot", "opacity": 0.42},
+        }
+    }
+    config = json.loads(dashboard_visual_runtime_config_json(initial_settings))
+    runtime_js = render_dashboard_visual_runtime_js(initial_settings=initial_settings)
+
+    assert config["initialSettings"]["reference_lines"]["lsl"]["color"] == "#123456"
+    assert config["initialSettings"]["reference_lines"]["lsl"]["width"] == 4.5
+    assert config["initialSettings"]["reference_lines"]["lsl"]["opacity"] == 0.42
+    assert config["initialSettings"]["reference_lines"]["lsl"] != config["defaults"]["reference_lines"]["lsl"]
+    assert "const embeddedInitialVisualState" in runtime_js
+    assert "const embedded = embeddedInitialVisualState();" in runtime_js
+    assert "state.reference_lines[target.key] = clonePlotlySpec(embedded.reference_lines[target.key]);" in runtime_js
+    assert (
+        "state.reference_lines[target.key] = "
+        "clonePlotlySpec(dashboardVisualConfig.defaults.reference_lines[target.key]);"
+        not in runtime_js
+    )
 
 
 def test_dashboard_visual_runtime_recipes_update_controls_and_palette_preview() -> None:

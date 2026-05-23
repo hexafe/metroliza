@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSlider,
+    QSpinBox,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -137,6 +138,7 @@ class DashboardVisualOptionsDialog(QDialog):
         self._reference_width_control_value = float(
             self._settings["reference_lines"]["lsl"]["width"]
         )
+        self._preview_source_pixmap: QPixmap | None = None
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
         self._preview_timer.timeout.connect(self._refresh_preview)
@@ -330,29 +332,36 @@ class DashboardVisualOptionsDialog(QDialog):
         opacity_group = QGroupBox("Opacity")
         opacity_form = QFormLayout(opacity_group)
         self.histogram_opacity_slider = self._opacity_slider()
+        self.histogram_opacity_spin = self._opacity_spin()
         self.grouped_histogram_opacity_slider = self._opacity_slider()
+        self.grouped_histogram_opacity_spin = self._opacity_spin()
         self.distribution_opacity_slider = self._opacity_slider()
+        self.distribution_opacity_spin = self._opacity_spin()
         self.iqr_opacity_slider = self._opacity_slider()
+        self.iqr_opacity_spin = self._opacity_spin()
         self.scatter_opacity_slider = self._opacity_slider()
+        self.scatter_opacity_spin = self._opacity_spin()
         self.trend_opacity_slider = self._opacity_slider()
+        self.trend_opacity_spin = self._opacity_spin()
         self.model_curve_opacity_slider = self._opacity_slider()
-        for slider in (
-            self.histogram_opacity_slider,
-            self.grouped_histogram_opacity_slider,
-            self.distribution_opacity_slider,
-            self.iqr_opacity_slider,
-            self.scatter_opacity_slider,
-            self.trend_opacity_slider,
-            self.model_curve_opacity_slider,
+        self.model_curve_opacity_spin = self._opacity_spin()
+        for slider, spin in (
+            (self.histogram_opacity_slider, self.histogram_opacity_spin),
+            (self.grouped_histogram_opacity_slider, self.grouped_histogram_opacity_spin),
+            (self.distribution_opacity_slider, self.distribution_opacity_spin),
+            (self.iqr_opacity_slider, self.iqr_opacity_spin),
+            (self.scatter_opacity_slider, self.scatter_opacity_spin),
+            (self.trend_opacity_slider, self.trend_opacity_spin),
+            (self.model_curve_opacity_slider, self.model_curve_opacity_spin),
         ):
-            slider.valueChanged.connect(lambda _value: self._handle_control_changed())
-        opacity_form.addRow("Histogram", self.histogram_opacity_slider)
-        opacity_form.addRow("Grouped histogram", self.grouped_histogram_opacity_slider)
-        opacity_form.addRow("Violin", self.distribution_opacity_slider)
-        opacity_form.addRow("IQR", self.iqr_opacity_slider)
-        opacity_form.addRow("Scatter", self.scatter_opacity_slider)
-        opacity_form.addRow("Trend", self.trend_opacity_slider)
-        opacity_form.addRow("Model curve", self.model_curve_opacity_slider)
+            self._bind_opacity_controls(slider, spin, changed=self._handle_control_changed)
+        opacity_form.addRow("Histogram", self._slider_spin_row(self.histogram_opacity_slider, self.histogram_opacity_spin))
+        opacity_form.addRow("Grouped histogram", self._slider_spin_row(self.grouped_histogram_opacity_slider, self.grouped_histogram_opacity_spin))
+        opacity_form.addRow("Violin", self._slider_spin_row(self.distribution_opacity_slider, self.distribution_opacity_spin))
+        opacity_form.addRow("IQR", self._slider_spin_row(self.iqr_opacity_slider, self.iqr_opacity_spin))
+        opacity_form.addRow("Scatter", self._slider_spin_row(self.scatter_opacity_slider, self.scatter_opacity_spin))
+        opacity_form.addRow("Trend", self._slider_spin_row(self.trend_opacity_slider, self.trend_opacity_spin))
+        opacity_form.addRow("Model curve", self._slider_spin_row(self.model_curve_opacity_slider, self.model_curve_opacity_spin))
         controls_layout.addWidget(opacity_group)
 
         line_group = QGroupBox("Lines")
@@ -385,14 +394,21 @@ class DashboardVisualOptionsDialog(QDialog):
         line_form.addRow("Nominal", self._line_style_row(self.nominal_color_button, self.nominal_dash_combo))
         controls_layout.addWidget(line_group)
 
-        selection_group = QGroupBox("Selection inspector")
-        selection_form = QFormLayout(selection_group)
+        self.selection_group = QGroupBox("Selection inspector")
+        self.selection_group.setObjectName("selectionInspector")
+        selection_form = QFormLayout(self.selection_group)
         self.element_combo = QComboBox()
         self.element_combo.addItem("Click a plot element or choose one", "")
         self.element_combo.currentIndexChanged.connect(self._handle_element_combo_changed)
         self.element_color_button = self._color_button("#245a5a")
         self.element_color_button.clicked.connect(lambda: self._choose_color(self.element_color_button))
         self.element_opacity_slider = self._opacity_slider()
+        self.element_opacity_spin = self._opacity_spin()
+        self._bind_opacity_controls(
+            self.element_opacity_slider,
+            self.element_opacity_spin,
+            changed=self._mark_custom_from_element_controls,
+        )
         self.element_width_spin = self._line_width_spin()
         self.element_dash_combo = self._dash_combo()
         self.element_marker_size_spin = QDoubleSpinBox()
@@ -417,7 +433,6 @@ class DashboardVisualOptionsDialog(QDialog):
         self.apply_element_button.clicked.connect(self._apply_selected_element_style)
         self.reset_element_button.clicked.connect(self._reset_selected_element_style)
         for widget in (
-            self.element_opacity_slider,
             self.element_width_spin,
             self.element_dash_combo,
             self.element_marker_size_spin,
@@ -438,7 +453,7 @@ class DashboardVisualOptionsDialog(QDialog):
         selection_actions_layout.addWidget(self.reset_element_button)
         selection_form.addRow("Element", self.element_combo)
         selection_form.addRow("Color", self.element_color_button)
-        selection_form.addRow("Opacity", self.element_opacity_slider)
+        selection_form.addRow("Opacity", self._slider_spin_row(self.element_opacity_slider, self.element_opacity_spin))
         selection_form.addRow("Width", self.element_width_spin)
         selection_form.addRow("Dash", self.element_dash_combo)
         selection_form.addRow("Marker size", self.element_marker_size_spin)
@@ -449,7 +464,6 @@ class DashboardVisualOptionsDialog(QDialog):
         selection_form.addRow("Pattern", self.element_pattern_combo)
         selection_form.addRow("", self.element_stat_accent_checkbox)
         selection_form.addRow("", selection_actions)
-        controls_layout.addWidget(selection_group)
         controls_layout.addStretch(1)
 
         preview_panel = QVBoxLayout()
@@ -483,6 +497,7 @@ class DashboardVisualOptionsDialog(QDialog):
         self.preview_image_label.setMinimumSize(520, 360)
         self.preview_image_label.setScaledContents(False)
         self.preview_tabs.addTab(self.preview_image_label, "Static")
+        preview_panel.addWidget(self.selection_group, 0)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok
@@ -495,6 +510,15 @@ class DashboardVisualOptionsDialog(QDialog):
         root.addWidget(buttons)
         configure_accessibility(self.preset_combo, name="Dashboard visual preset")
         configure_accessibility(self.chart_type_combo, name="Dashboard visual preview chart")
+        configure_accessibility(self.element_combo, name="Dashboard visual selected element")
+        configure_accessibility(self.element_opacity_slider, name="Selected element opacity")
+        configure_accessibility(self.element_opacity_spin, name="Selected element opacity percent")
+
+        self.setTabOrder(self.chart_type_combo, self.preview_tabs)
+        self.setTabOrder(self.preview_tabs, self.element_combo)
+        self.setTabOrder(self.element_combo, self.element_color_button)
+        self.setTabOrder(self.element_color_button, self.element_opacity_slider)
+        self.setTabOrder(self.element_opacity_slider, self.element_opacity_spin)
 
     def _populate_from_settings(self, settings: Mapping[str, Any]) -> None:
         self._populating_controls = True
@@ -570,14 +594,10 @@ class DashboardVisualOptionsDialog(QDialog):
         if image_bytes:
             pixmap = QPixmap()
             if pixmap.loadFromData(image_bytes):
-                self.preview_image_label.setPixmap(
-                    pixmap.scaled(
-                        self.preview_image_label.size(),
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation,
-                    )
-                )
+                self._preview_source_pixmap = pixmap
+                self._update_static_preview_pixmap()
                 return
+        self._preview_source_pixmap = None
         palette = ", ".join(dashboard_visual_swatch_palette(settings, count=5))
         self.preview_image_label.setText(f"Preview spec ready. Palette: {palette}")
 
@@ -634,6 +654,7 @@ class DashboardVisualOptionsDialog(QDialog):
         for widget in (
             self.element_color_button,
             self.element_opacity_slider,
+            self.element_opacity_spin,
             self.element_stat_accent_checkbox,
             self.apply_element_button,
             self.reset_element_button,
@@ -1144,6 +1165,24 @@ class DashboardVisualOptionsDialog(QDialog):
     def _schedule_preview(self) -> None:
         self._preview_timer.start(180)
 
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt virtual method.
+        super().resizeEvent(event)
+        self._update_static_preview_pixmap()
+
+    def _update_static_preview_pixmap(self) -> None:
+        if self._preview_source_pixmap is None or self._preview_source_pixmap.isNull():
+            return
+        target_size = self.preview_image_label.size()
+        if not target_size.isValid() or target_size.width() <= 0 or target_size.height() <= 0:
+            return
+        self.preview_image_label.setPixmap(
+            self._preview_source_pixmap.scaled(
+                target_size,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+
     def _choose_color(self, button: QPushButton) -> None:
         initial = QColor(str(button.property("color") or "#ffffff"))
         color = QColorDialog.getColor(initial, self, "Choose color")
@@ -1201,6 +1240,38 @@ class DashboardVisualOptionsDialog(QDialog):
         slider.setRange(5, 100)
         slider.setTickInterval(5)
         return slider
+
+    @staticmethod
+    def _opacity_spin() -> QSpinBox:
+        spin = QSpinBox()
+        spin.setRange(5, 100)
+        spin.setSingleStep(5)
+        spin.setSuffix("%")
+        spin.setFixedWidth(72)
+        return spin
+
+    @staticmethod
+    def _slider_spin_row(slider: QSlider, spin: QSpinBox) -> QWidget:
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(slider, 1)
+        layout.addWidget(spin, 0)
+        return widget
+
+    @staticmethod
+    def _bind_opacity_controls(slider: QSlider, spin: QSpinBox, *, changed) -> None:
+        def slider_changed(value: int) -> None:
+            spin.blockSignals(True)
+            spin.setValue(value)
+            spin.blockSignals(False)
+            changed()
+
+        def spin_changed(value: int) -> None:
+            slider.setValue(value)
+
+        slider.valueChanged.connect(slider_changed)
+        spin.valueChanged.connect(spin_changed)
 
     @staticmethod
     def _line_width_spin() -> QDoubleSpinBox:

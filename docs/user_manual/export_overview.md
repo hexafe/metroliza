@@ -149,6 +149,19 @@ Interactive Plotly histograms use the same bin range as the workbook/native hist
 
 This option does not replace the workbook. It adds an extra review file alongside it.
 
+#### Dashboard visuals
+
+Use **Dashboard visuals...** to adjust how exported Plotly charts look in the HTML dashboard. The main choices are visual recipes, color palettes, group differentiation, opacity, marker size, stat/reference line styling, and selected chart elements.
+
+Use the recipes first for routine output:
+
+- **Default** keeps Metroliza's normal dashboard styling.
+- **Distinct** makes grouped series easier to separate.
+- **Print** favors monochrome-friendly output.
+- **Custom** keeps your manual choices.
+
+Fine-tuning controls are meant for visual review, not data changes. Sliders are used for relative visual adjustments with immediate preview, such as opacity and marker emphasis. Exact values, such as line width or marker size, are also shown numerically so you can type or step to a precise value when needed.
+
 ### Industrial context
 
 You can optionally check **Industrial context**.

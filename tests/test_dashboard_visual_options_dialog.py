@@ -187,6 +187,172 @@ def test_dashboard_visual_dialog_manual_edit_switches_recipe_to_custom(monkeypat
         dialog.deleteLater()
 
 
+def test_dashboard_visual_dialog_opacity_controls_show_synced_numeric_companions(
+    monkeypatch,
+) -> None:
+    _qapp()
+    try:
+        from PyQt6.QtCore import Qt  # noqa: F401
+    except Exception as exc:
+        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
+    import modules.dashboard_visual_options_dialog as dialog_module
+
+    _stub_preview_builders(monkeypatch, dialog_module)
+    dialog = dialog_module.DashboardVisualOptionsDialog(
+        settings={"preset": "custom", "opacity": {"histogram": 0.42}},
+        persist_on_accept=False,
+    )
+    try:
+        dialog._preview_timer.stop()
+
+        assert dialog.histogram_opacity_slider.value() == 42
+        assert dialog.histogram_opacity_spin.value() == 42
+
+        dialog.histogram_opacity_slider.setValue(67)
+        assert dialog.histogram_opacity_spin.value() == 67
+        assert dialog.visual_settings()["opacity"]["histogram"] == 0.67
+
+        dialog.histogram_opacity_spin.setValue(85)
+        assert dialog.histogram_opacity_slider.value() == 85
+        assert dialog.visual_settings()["opacity"]["histogram"] == 0.85
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+
+
+def test_dashboard_visual_dialog_selection_inspector_sits_below_preview_and_starts_disabled(
+    monkeypatch,
+) -> None:
+    _qapp()
+    try:
+        from PyQt6.QtCore import Qt  # noqa: F401
+    except Exception as exc:
+        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
+    import modules.dashboard_visual_options_dialog as dialog_module
+
+    _stub_preview_builders(monkeypatch, dialog_module)
+    dialog = dialog_module.DashboardVisualOptionsDialog(persist_on_accept=False)
+    try:
+        dialog._preview_timer.stop()
+        body_layout = dialog.layout().itemAt(0).layout()
+        preview_layout = body_layout.itemAt(1).layout()
+
+        assert preview_layout.itemAt(1).widget() is dialog.preview_tabs
+        assert preview_layout.itemAt(2).widget() is dialog.selection_group
+        assert dialog.selection_group.objectName() == "selectionInspector"
+        assert not dialog.element_opacity_slider.isEnabled()
+        assert not dialog.element_opacity_spin.isEnabled()
+        assert not dialog.apply_element_button.isEnabled()
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+
+
+def test_dashboard_visual_dialog_selection_opacity_numeric_syncs_and_writes_override(
+    monkeypatch,
+) -> None:
+    _qapp()
+    try:
+        from PyQt6.QtCore import Qt  # noqa: F401
+    except Exception as exc:
+        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
+    import modules.dashboard_visual_options_dialog as dialog_module
+
+    _stub_preview_builders(monkeypatch, dialog_module)
+    dialog = dialog_module.DashboardVisualOptionsDialog(
+        settings={"preset": "custom"},
+        persist_on_accept=False,
+    )
+    try:
+        dialog._preview_timer.stop()
+        dialog._selected_target = {
+            "target": "series:measurements",
+            "role": "series",
+            "label": "Measurements",
+            "capabilities": ["color", "opacity", "marker_size"],
+            "style": {"color": "#123456", "opacity": 0.55, "marker_size": 8},
+        }
+        dialog._load_selected_element_controls()
+
+        assert dialog.element_opacity_slider.value() == 55
+        assert dialog.element_opacity_spin.value() == 55
+
+        dialog.element_opacity_spin.setValue(73)
+        assert dialog.element_opacity_slider.value() == 73
+        assert dialog.visual_settings()["series_overrides"]["measurements"]["opacity"] == 0.73
+
+        dialog.element_opacity_slider.setValue(64)
+        assert dialog.element_opacity_spin.value() == 64
+        assert dialog.visual_settings()["series_overrides"]["measurements"]["opacity"] == 0.64
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+
+
+def test_dashboard_visual_dialog_selection_accessibility_and_tab_order(monkeypatch) -> None:
+    _qapp()
+    try:
+        from PyQt6.QtCore import Qt  # noqa: F401
+    except Exception as exc:
+        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
+    import modules.dashboard_visual_options_dialog as dialog_module
+
+    _stub_preview_builders(monkeypatch, dialog_module)
+    dialog = dialog_module.DashboardVisualOptionsDialog(persist_on_accept=False)
+    try:
+        dialog._preview_timer.stop()
+
+        assert dialog.element_combo.accessibleName() == "Dashboard visual selected element"
+        assert dialog.element_opacity_slider.accessibleName() == "Selected element opacity"
+        assert dialog.element_opacity_spin.accessibleName() == "Selected element opacity percent"
+        assert dialog.element_opacity_slider.nextInFocusChain() is dialog.element_opacity_spin
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+
+
+def test_dashboard_visual_dialog_static_preview_rescales_existing_pixmap(monkeypatch) -> None:
+    _qapp()
+    try:
+        from PyQt6.QtCore import QBuffer, QIODevice
+        from PyQt6.QtGui import QImage
+    except Exception as exc:
+        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
+    import modules.dashboard_visual_options_dialog as dialog_module
+
+    image = QImage(320, 160, QImage.Format.Format_RGB32)
+    image.fill(0x245A5A)
+    buffer = QBuffer()
+    buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+    image.save(buffer, "PNG")
+    png_bytes = bytes(buffer.data())
+
+    _stub_preview_builders(monkeypatch, dialog_module)
+    monkeypatch.setattr(
+        dialog_module,
+        "build_dashboard_visual_preview_png",
+        lambda _settings, *, chart_type: png_bytes,
+    )
+    dialog = dialog_module.DashboardVisualOptionsDialog(persist_on_accept=False)
+    try:
+        dialog._preview_timer.stop()
+        dialog.preview_image_label.resize(700, 400)
+        dialog._refresh_preview()
+
+        assert dialog._preview_source_pixmap is not None
+        assert dialog._preview_source_pixmap.size().width() == 320
+        assert dialog.preview_image_label.pixmap().size().width() <= 700
+
+        dialog.preview_image_label.resize(560, 360)
+        dialog._update_static_preview_pixmap()
+
+        assert dialog.preview_image_label.pixmap().size().width() <= 560
+        assert dialog.preview_image_label.pixmap().size().height() <= 360
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+
+
 def test_dashboard_visual_dialog_selected_controls_are_role_aware(monkeypatch) -> None:
     _qapp()
     try:

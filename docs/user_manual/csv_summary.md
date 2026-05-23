@@ -127,6 +127,10 @@ Choose chart/statistics outputs:
 Choose an HTML dashboard path. Optionally enable workbook output and **Separate sheet per
 selected parameter**.
 
+Use **Dashboard visuals...** when you want the CSV/Excel dashboard to use a saved visual recipe,
+palette, marker emphasis, opacity, or reference/stat-line style. These choices affect the
+interactive dashboard charts only; they do not change the source data or the selected metrics.
+
 Selected plots are included in the dashboard and in the workbook chart sheet. Grouped time
 series use separate marker-only scatter traces. Multi-group histograms are normalized to
 show each group's share, so smaller selected groups remain visible next to larger
