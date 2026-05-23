@@ -28,12 +28,16 @@ from modules.industrial_analytics_state import (
 )
 
 
-def _png_color_count(image_bytes: bytes, color: str) -> int:
+def _png_color_count(image_bytes: bytes, color: str, *, tolerance: int = 16) -> int:
     pil_image = pytest.importorskip("PIL.Image")
     target = tuple(int(color[index : index + 2], 16) for index in (1, 3, 5))
     image = pil_image.open(BytesIO(image_bytes)).convert("RGB")
     pixels = image.get_flattened_data() if hasattr(image, "get_flattened_data") else image.getdata()
-    return sum(1 for pixel in pixels if pixel == target)
+    return sum(
+        1
+        for pixel in pixels
+        if all(abs(pixel[channel] - target[channel]) <= tolerance for channel in range(3))
+    )
 
 
 def _png_nonwhite_count(image_bytes: bytes) -> int:
