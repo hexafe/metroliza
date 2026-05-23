@@ -118,7 +118,7 @@ python -m maturin build --manifest-path modules/native/chart_renderer/Cargo.toml
 Current validation branch: `rc2` / PR #895.
 Current RC metadata: `2026.05rc4(260520)`.
 Current plotstats hotfix pin:
-`2a15c1c799902831f64b95a53de30547885cdcc8`.
+`1e2c72107d342f44a37e5fb78d7d76992ea60315`.
 
 - Static scatter annotation audit evidence lives in
   [`rc4_static_scatter_annotation_backgrounds_2026-05-23.md`](./rc4_static_scatter_annotation_backgrounds_2026-05-23.md).
@@ -126,17 +126,17 @@ Current plotstats hotfix pin:
   [`rc2_release_audit_2026-05-17.md`](./rc2_release_audit_2026-05-17.md).
 - Local release gates passed for the current audit worktree:
   `ruff`, `compileall`, release metadata sync, release hygiene, `git diff --check`,
-  security audit, full pytest, and focused Codex-review regression tests.
+  security audit, full pytest, and focused dependency/adapter regression tests.
 - Full pytest passed:
-  `1645 passed, 174 skipped, 6 warnings, 60 subtests passed`.
+  `1653 passed, 176 skipped, 6 warnings, 60 subtests passed`.
 - Security audit passed after allowing `pip-audit` to create/upgrade its temporary
   dependency environment; `pip-audit` reported no known vulnerabilities.
-- GitHub Actions CI passed for Metroliza run `26326503387` on the latest code
-  commit before this documentation refresh:
+- Previous RC4 GitHub Actions CI passed for Metroliza run `26326503387` on
+  commit:
   `d0ce9f38061f9af747ee234f27cc46c534355aff`.
-- GitHub Actions CI passed for hexafe-plotstats run `26326553748` on the
-  scatter annotation code-fix commit
-  `736ed35048a7c76c3a9b236ed8151b5358286414`.
+- GitHub Actions CI passed for hexafe-plotstats run `26337409366` on the
+  package `main` commit
+  `1e2c72107d342f44a37e5fb78d7d76992ea60315`.
 - Manual packaging smoke, Windows executable clean-machine launch, Google conversion
   smoke, and third-party notice artifact evidence are not recorded for the RC4
   promotion artifact yet and remain release-promotion blockers.

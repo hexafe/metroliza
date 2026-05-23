@@ -3,10 +3,11 @@
 ## Scope
 
 - Updated the pinned `hexafe-plotstats[pandas]` dependency to commit
-  `2a15c1c799902831f64b95a53de30547885cdcc8`.
-- The pinned plotstats commit adds semi-opaque white backgrounds behind static
+  `1e2c72107d342f44a37e5fb78d7d76992ea60315`.
+- The pinned plotstats commit includes semi-opaque white backgrounds behind static
   Matplotlib scatter reference annotations so LSL, Nominal, and USL labels stay
-  readable over their reference lines.
+  readable over their reference lines, plus the benchmark-script Ruff ordering
+  fix validated on the package `main` branch.
 - Codex review comments on Metroliza PR #895 were audited. The sampling-budget
   thread is resolved. The reference-cohort groupstats and trend-vs-scatter chart
   classification comments are already covered by current code and regression
@@ -21,10 +22,8 @@
 - `env RUFF_CACHE_DIR=/tmp/metroliza-plotstats-ruff-cache python -m ruff check src/hexafe_plotstats/renderers/matplotlib/scatter.py tests/test_renderer_backends.py` - passed.
 - `env PYTHONPYCACHEPREFIX=/tmp/metroliza-plotstats-pycache python -m compileall -q src tests` - passed.
 - `env PYTHONPYCACHEPREFIX=/tmp/metroliza-plotstats-pycache python -m pytest -q -p no:cacheprovider` - passed, 77 tests, 10 skipped.
-- GitHub Actions CI run `26326553748` passed for the initial code-fix commit
-  `736ed35048a7c76c3a9b236ed8151b5358286414`.
-
-Note: full-repo plotstats Ruff still reports existing `E402` findings in benchmark scripts outside this fix.
+- GitHub Actions CI run `26337409366` passed for the package `main` commit
+  `1e2c72107d342f44a37e5fb78d7d76992ea60315`.
 
 ### Metroliza
 
@@ -34,7 +33,7 @@ Note: full-repo plotstats Ruff still reports existing `E402` findings in benchma
 - `python -m compileall -q -x '^\\./\\.git/' .` - passed.
 - `python scripts/sync_release_metadata.py --check` - passed.
 - `python scripts/check_release_hygiene.py` - passed.
-- `QT_QPA_PLATFORM=offscreen python -m pytest tests -q` - passed, 1645 tests, 174 skipped, 60 subtests.
+- `QT_QPA_PLATFORM=offscreen python -m pytest tests -q` - passed, 1653 tests, 176 skipped, 60 subtests.
 - `python scripts/security_audit.py --ci --sibling-root /home/hexaf/Projects` - passed after rerun with network access for `pip-audit`.
 
 Security audit retained the existing report-only Bandit warning baseline.
