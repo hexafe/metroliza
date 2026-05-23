@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
+import modules.industrial_analytics_dashboard as dashboard_module
 from modules.industrial_analytics_dashboard import (
     DASHBOARD_RAW_POINT_LIMIT,
     DASHBOARD_SCHEMA,
@@ -154,6 +155,27 @@ def test_distribution_plotly_payloads_are_sampled_for_large_frames() -> None:
                 if isinstance((value := trace.get(key)), list)
             )
         assert trace_points <= DASHBOARD_RAW_POINT_LIMIT
+
+
+def test_static_image_sampling_caps_total_when_group_count_exceeds_budget(monkeypatch) -> None:
+    monkeypatch.setattr(dashboard_module, "DASHBOARD_RAW_POINT_LIMIT", 3)
+    groups = [
+        (f"group-{index}", pd.DataFrame({"length_mm": [float(index)]}))
+        for index in range(5)
+    ]
+
+    sampled_groups, note = dashboard_module._sample_plot_groups_for_static_image(
+        groups,
+        "length_mm",
+        seed_parts=("cap-test",),
+    )
+
+    sampled_total = sum(len(group.index) for _label, group in sampled_groups)
+    nonempty_groups = [label for label, group in sampled_groups if len(group.index) > 0]
+    assert sampled_total == 3
+    assert len(nonempty_groups) == 3
+    assert note is not None
+    assert "Plot shows 3 randomly sampled points from 5 rows" in note
 
 
 def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None:

@@ -1691,6 +1691,17 @@ def _sample_allocations(counts: list[int], limit: int) -> list[int]:
     if total <= limit:
         return [max(0, int(count)) for count in counts]
     raw_allocations = [max(0.0, (max(0, int(count)) / total) * limit) for count in counts]
+    positive_indices = [index for index, count in enumerate(counts) if int(count) > 0]
+    if len(positive_indices) > limit:
+        allocations = [0 for _count in counts]
+        ranked_indices = sorted(
+            positive_indices,
+            key=lambda index: (int(counts[index]), -index),
+            reverse=True,
+        )
+        for index in ranked_indices[:limit]:
+            allocations[index] = 1
+        return allocations
     allocations = [
         min(max(0, int(count)), max(1, int(np.floor(raw))))
         if int(count) > 0
