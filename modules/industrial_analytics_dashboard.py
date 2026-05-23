@@ -22,6 +22,14 @@ from modules.dashboard_navigation import (
     render_section_nav,
     unique_html_id,
 )
+from modules.dashboard_html_controls import (
+    DASHBOARD_THEME_STORAGE_KEY,
+    render_dashboard_control_bar,
+    render_dashboard_controls_css,
+    render_dashboard_theme_bootstrap_script,
+    render_dashboard_visual_dialog,
+    render_dashboard_visual_runtime_js,
+)
 from modules.dashboard_plotly_visuals import apply_dashboard_visual_settings
 from modules.export_summary_utils import resolve_histogram_bin_count
 from modules.hexafe_plotstats_adapter import (
@@ -223,7 +231,24 @@ def write_production_dashboard(
             reasons.append(f"serialized_json_bytes>{json_bytes_budget}")
         plotly_budget_reason = ",".join(reasons)
 
-    requires_plotly = _manifest_requires_plotly(dashboard_manifest)
+    asset_directory.mkdir(parents=True, exist_ok=True)
+    plotly_runtime_status = "not_needed"
+    if _manifest_requires_plotly(dashboard_manifest):
+        plotly_js_path = _copy_plotly_runtime_asset(asset_directory)
+        if plotly_js_path:
+            plotly_runtime_status = "local"
+        else:
+            dashboard_manifest = _copy_manifest_without_plotly_specs(
+                dashboard_manifest,
+                note_message=(
+                    "Interactive chart omitted because the bundled Plotly runtime asset was "
+                    "unavailable; summary/statistics remain available."
+                ),
+            )
+            plotly_runtime_status = "snapshot_only"
+    elif plotly_spec_count > 0 and plotly_budget_status == "over_budget":
+        plotly_runtime_status = "budget_snapshot_only"
+
     embedded_plotly_spec_count = _count_plotly_specs(dashboard_manifest)
     embedded_plotly_serialized_json_bytes = _measure_plotly_specs_json_bytes(dashboard_manifest)
     _apply_plotly_budget_summary(
@@ -231,11 +256,7 @@ def write_production_dashboard(
         status=plotly_budget_status,
         reason=plotly_budget_reason,
     )
-    asset_directory.mkdir(parents=True, exist_ok=True)
-    if requires_plotly:
-        plotly_target = asset_directory / PLOTLY_ASSET_NAME
-        if not plotly_target.exists():
-            shutil.copy2(PLOTLY_ASSET_SOURCE, plotly_target)
+    _apply_plotly_runtime_summary(dashboard_manifest, status=plotly_runtime_status)
 
     html_text = _render_dashboard_html(dashboard_manifest, asset_directory_name=asset_directory.name)
     html_bytes = len(html_text.encode("utf-8"))
@@ -258,6 +279,7 @@ def write_production_dashboard(
             "spec_count_budget": int(count_budget),
             "serialized_json_bytes_budget": int(json_bytes_budget),
         },
+        "html_dashboard_plotly_runtime_status": plotly_runtime_status,
     }
 
 
@@ -301,7 +323,29 @@ def _measure_plotly_specs_json_bytes(manifest: dict[str, Any]) -> int:
     return int(total)
 
 
-def _copy_manifest_without_plotly_specs(manifest: dict[str, Any]) -> dict[str, Any]:
+def _resolve_bundled_plotly_js_path() -> Path:
+    return PLOTLY_ASSET_SOURCE
+
+
+def _copy_plotly_runtime_asset(asset_directory: Path) -> str | None:
+    source_path = _resolve_bundled_plotly_js_path()
+    if not source_path.exists():
+        return None
+    destination_path = asset_directory / PLOTLY_ASSET_NAME
+    if not destination_path.exists():
+        shutil.copy2(source_path, destination_path)
+    return f"{asset_directory.name}/{destination_path.name}"
+
+
+def _copy_manifest_without_plotly_specs(
+    manifest: dict[str, Any],
+    *,
+    note_message: str | None = None,
+) -> dict[str, Any]:
+    note = note_message or (
+        "Interactive chart omitted because the Plotly payload exceeded the dashboard "
+        "budget; summary/statistics remain available."
+    )
     pruned_manifest = dict(manifest)
     summary = manifest.get("summary")
     if isinstance(summary, dict):
@@ -321,10 +365,7 @@ def _copy_manifest_without_plotly_specs(manifest: dict[str, Any]) -> dict[str, A
         notes = list(raw_notes) if isinstance(raw_notes, list) else []
         chart_copy["notes"] = notes
         if isinstance(notes, list):
-            notes.append(
-                "Interactive chart omitted because the Plotly payload exceeded the dashboard "
-                "budget; summary/statistics remain available."
-            )
+            notes.append(note)
         pruned_charts.append(chart_copy)
     pruned_manifest["charts"] = pruned_charts
     return pruned_manifest
@@ -342,6 +383,18 @@ def _apply_plotly_budget_summary(
     summary["plotly_budget_status"] = status
     if reason:
         summary["plotly_budget_reason"] = reason
+    else:
+        summary.pop("plotly_budget_reason", None)
+
+
+def _apply_plotly_runtime_summary(
+    manifest: dict[str, Any],
+    *,
+    status: str,
+) -> None:
+    summary = manifest.get("summary")
+    if isinstance(summary, dict):
+        summary["plotly_runtime_status"] = status
 
 
 def _build_time_series_charts(
@@ -1939,6 +1992,10 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
     groupstats = manifest.get("groupstats") if isinstance(manifest.get("groupstats"), dict) else {}
     plotly_charts = _plotly_chart_payloads(charts)
     charts_json = json.dumps(plotly_charts, ensure_ascii=False).replace("</", "<\\/")
+    theme_bootstrap_script = render_dashboard_theme_bootstrap_script()
+    dashboard_controls_markup = render_dashboard_control_bar(include_visuals=bool(plotly_charts))
+    dashboard_controls_css = render_dashboard_controls_css()
+    visual_dialog_markup = render_dashboard_visual_dialog() if plotly_charts else ""
     plotly_script = (
         f'  <script src="{html.escape(asset_directory_name)}/{PLOTLY_ASSET_NAME}"></script>'
         if plotly_charts
@@ -1954,7 +2011,14 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
         summary.get("dashboard_subtitle") or "Cached production data dashboard generated by Metroliza."
     )
     plotly_budget_notice = ""
-    if str(summary.get("plotly_budget_status") or "") == "over_budget":
+    plotly_runtime_status = str(summary.get("plotly_runtime_status") or "")
+    if plotly_runtime_status == "snapshot_only":
+        plotly_budget_notice = (
+            '<p class="runtime-note">Interactive charts are unavailable in this dashboard because '
+            'the bundled Plotly runtime asset was not found. Snapshot and summary content is shown '
+            'instead.</p>'
+        )
+    elif str(summary.get("plotly_budget_status") or "") == "over_budget":
         plotly_budget_notice = (
             '<p class="runtime-note">Interactive charts are unavailable in this dashboard because '
             'the Plotly payload exceeded the saved-dashboard budget. Snapshot and summary content '
@@ -1995,26 +2059,58 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
   <title>{html.escape(dashboard_title)}</title>
+{theme_bootstrap_script}
 {plotly_script}
   <style>
     :root {{
-      color-scheme: light dark;
+      color-scheme: light;
       --bg: #f6f7f9;
       --panel: #ffffff;
+      --panel-strong: #ffffff;
       --text: #1f2933;
+      --ink: #1f2933;
       --muted: #687385;
       --line: #d8dde6;
       --accent: #1769aa;
+      --accent-soft: rgba(23, 105, 170, 0.12);
+      --accent-border: rgba(23, 105, 170, 0.24);
+      --detail-panel-bg: rgba(31, 41, 51, 0.04);
+      --focus-ring: rgba(23, 105, 170, 0.34);
+      --overlay-bg: rgba(15, 23, 42, 0.74);
+    }}
+    :root[data-theme="dark"] {{
+      color-scheme: dark;
+      --bg: #15181d;
+      --panel: #20252c;
+      --panel-strong: #252b34;
+      --text: #edf1f7;
+      --ink: #edf1f7;
+      --muted: #aab4c2;
+      --line: #384250;
+      --accent: #5aa9e6;
+      --accent-soft: rgba(90, 169, 230, 0.16);
+      --accent-border: rgba(90, 169, 230, 0.32);
+      --detail-panel-bg: rgba(237, 241, 247, 0.05);
+      --focus-ring: rgba(90, 169, 230, 0.38);
+      --overlay-bg: rgba(4, 8, 12, 0.88);
     }}
     @media (prefers-color-scheme: dark) {{
-      :root {{
+      :root:not([data-theme-choice]) {{
         --bg: #15181d;
         --panel: #20252c;
+        --panel-strong: #252b34;
         --text: #edf1f7;
+        --ink: #edf1f7;
         --muted: #aab4c2;
         --line: #384250;
         --accent: #5aa9e6;
+        --accent-soft: rgba(90, 169, 230, 0.16);
+        --accent-border: rgba(90, 169, 230, 0.32);
+        --detail-panel-bg: rgba(237, 241, 247, 0.05);
+        --focus-ring: rgba(90, 169, 230, 0.38);
+        --overlay-bg: rgba(4, 8, 12, 0.88);
       }}
     }}
     html {{
@@ -2049,6 +2145,7 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
       font-size: 13px;
       line-height: 1.4;
     }}
+{dashboard_controls_css}
     .cards {{
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -2334,6 +2431,10 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
       header, main {{
         width: min(100vw - 20px, 1280px);
       }}
+      .dashboard-control-bar {{
+        justify-content: flex-start;
+        margin-top: 12px;
+      }}
       .chart-grid {{
         grid-template-columns: 1fr;
       }}
@@ -2351,6 +2452,7 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
     <h1>{html.escape(dashboard_title)}</h1>
     <div class="subtitle">{html.escape(dashboard_subtitle)}</div>
     {plotly_budget_notice}
+    {dashboard_controls_markup}
     {cards}
     {nav_markup}
   </header>
@@ -2360,6 +2462,7 @@ def _render_dashboard_html(manifest: dict[str, Any], *, asset_directory_name: st
     {chart_markup}
   </main>
   {lightbox_markup}
+  {visual_dialog_markup}
 {plotly_runtime}
 </body>
 </html>
@@ -2430,77 +2533,319 @@ def _render_chart_lightbox() -> str:
     )
 
 
+def _production_dashboard_plotly_theme_tokens() -> dict[str, Any]:
+    return {
+        "light": {
+            "colorway": list(PLOT_COLORWAY),
+            "paper_bg": "rgba(255,255,255,0)",
+            "plot_bg": "#ffffff",
+            "font": "#1f2933",
+            "grid": SUMMARY_PLOT_PALETTE["grid"],
+            "zero": SUMMARY_PLOT_PALETTE["grid"],
+            "axis": SUMMARY_PLOT_PALETTE["axis_spine"],
+            "legend_bg": "rgba(255,255,255,0.86)",
+            "legend_border": SUMMARY_PLOT_PALETTE["annotation_box_edge"],
+            "hover_bg": "#ffffff",
+            "hover_font": "#1f2933",
+            "annotation_bg": "#ffffff",
+            "bar_outline": "#ffffff",
+            "color_remap": {},
+        },
+        "dark": {
+            "colorway": ["#57b3b3", "#ff9d5c", "#5fd6ba", "#ff8c73", "#b59cff", "#8bb8ff"],
+            "paper_bg": "rgba(0,0,0,0)",
+            "plot_bg": "#20252c",
+            "font": "#edf1f7",
+            "grid": "rgba(237,241,247,0.12)",
+            "zero": "rgba(237,241,247,0.16)",
+            "axis": "rgba(237,241,247,0.22)",
+            "legend_bg": "rgba(21,24,29,0.82)",
+            "legend_border": "rgba(237,241,247,0.14)",
+            "hover_bg": "#10151c",
+            "hover_font": "#f8fafc",
+            "annotation_bg": "#20252c",
+            "bar_outline": "#15181d",
+            "color_remap": {
+                "#245a5a": "#57b3b3",
+                "#d55e00": "#ff9d5c",
+                "#009e73": "#5fd6ba",
+                "#1f2933": "#edf1f7",
+                "#ffffff": "#15181d",
+            },
+        },
+    }
+
+
 def _render_plotly_runtime(charts_json: str) -> str:
-    return f"""
-  <script id="production-dashboard-charts" type="application/json">{charts_json}</script>
-  <script>
-    const chartData = JSON.parse(document.getElementById('production-dashboard-charts').textContent);
-    const chartById = new Map(chartData.map((chart) => [chart.id, chart]));
-    function attachRawLayerLegendHandler(target, chart) {{
-      if (typeof target.on !== 'function') return;
-      target.on('plotly_legendclick', function(eventData) {{
+    theme_tokens_json = json.dumps(
+        _production_dashboard_plotly_theme_tokens(),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    visual_runtime_js = render_dashboard_visual_runtime_js()
+    return (
+        f'\n  <script id="production-dashboard-charts" type="application/json">{charts_json}</script>\n'
+        "  <script>\n"
+        "    const chartData = JSON.parse(document.getElementById('production-dashboard-charts').textContent);\n"
+        "    const chartById = new Map(chartData.map((chart) => [chart.id, chart]));\n"
+        f"    const themeStorageKey = {json.dumps(DASHBOARD_THEME_STORAGE_KEY)};\n"
+        f"    const productionPlotlyThemeTokens = {theme_tokens_json};\n"
+        + visual_runtime_js
+        + """
+    const allowedThemeChoices = new Set(['auto', 'light', 'dark']);
+    const themeMedia = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+    const sanitizeThemeChoice = (value) => allowedThemeChoices.has(value) ? value : 'auto';
+    const currentThemeChoice = () => sanitizeThemeChoice(document.documentElement.dataset.themeChoice || 'auto');
+    const resolveTheme = (choice) => (
+      choice === 'auto'
+        ? ((themeMedia && themeMedia.matches) ? 'dark' : 'light')
+        : choice
+    );
+    const persistThemeChoice = (choice) => {
+      try {
+        window.localStorage.setItem(themeStorageKey, choice);
+      } catch (_error) {
+        // Ignore storage failures in locked-down browser contexts.
+      }
+    };
+    const readStoredThemeChoice = () => {
+      try {
+        return sanitizeThemeChoice(window.localStorage.getItem(themeStorageKey) || currentThemeChoice());
+      } catch (_error) {
+        return currentThemeChoice();
+      }
+    };
+    const currentPlotlyTheme = () => (
+      productionPlotlyThemeTokens[document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light']
+      || productionPlotlyThemeTokens.light
+    );
+    const remapPlotlyColor = (value, colorRemap) => {
+      if (typeof value !== 'string') return value;
+      return colorRemap[value.trim().toLowerCase()] || value;
+    };
+    const remapPlotlyTraceForTheme = (trace, colorRemap) => {
+      if (!trace || typeof trace !== 'object') return trace;
+      const nextTrace = Object.assign({}, trace);
+      const meta = (nextTrace.meta && typeof nextTrace.meta === 'object') ? nextTrace.meta : {};
+      const preserveColor = Boolean(meta.dashboard_visual_preserve_color);
+      if (nextTrace.line && typeof nextTrace.line === 'object') {
+        nextTrace.line = Object.assign({}, nextTrace.line, {
+          color: preserveColor ? nextTrace.line.color : remapPlotlyColor(nextTrace.line.color, colorRemap),
+        });
+      }
+      if (nextTrace.marker && typeof nextTrace.marker === 'object') {
+        nextTrace.marker = Object.assign({}, nextTrace.marker);
+        if (typeof nextTrace.marker.color === 'string' && !preserveColor) {
+          nextTrace.marker.color = remapPlotlyColor(nextTrace.marker.color, colorRemap);
+        }
+        if (nextTrace.marker.line && typeof nextTrace.marker.line === 'object') {
+          nextTrace.marker.line = Object.assign({}, nextTrace.marker.line, {
+            color: preserveColor
+              ? nextTrace.marker.line.color
+              : remapPlotlyColor(nextTrace.marker.line.color, colorRemap),
+          });
+        }
+      }
+      if (typeof nextTrace.fillcolor === 'string' && !preserveColor) {
+        nextTrace.fillcolor = remapPlotlyColor(nextTrace.fillcolor, colorRemap);
+      }
+      return nextTrace;
+    };
+    const applyThemeToPlotlySpec = (rawSpec) => {
+      const spec = clonePlotlySpec(rawSpec);
+      const layout = (spec.layout && typeof spec.layout === 'object') ? spec.layout : {};
+      const theme = currentPlotlyTheme();
+      const colorRemap = theme.color_remap || {};
+      layout.paper_bgcolor = theme.paper_bg;
+      layout.plot_bgcolor = theme.plot_bg;
+      const layoutMeta = (layout.meta && typeof layout.meta === 'object') ? layout.meta : {};
+      if (!layoutMeta.dashboard_visual_preserve_colorway) {
+        layout.colorway = Array.isArray(theme.colorway) ? theme.colorway.slice() : layout.colorway;
+      }
+      layout.font = Object.assign({}, layout.font || {}, { color: theme.font });
+      layout.title = Object.assign({}, layout.title || {}, {
+        font: Object.assign({}, ((layout.title || {}).font || {}), { color: theme.font }),
+      });
+      layout.hoverlabel = Object.assign({}, layout.hoverlabel || {}, {
+        bgcolor: theme.hover_bg,
+        font: Object.assign({}, ((layout.hoverlabel || {}).font || {}), { color: theme.hover_font }),
+      });
+      layout.legend = Object.assign({}, layout.legend || {}, {
+        bgcolor: theme.legend_bg,
+        bordercolor: theme.legend_border,
+        font: Object.assign({}, ((layout.legend || {}).font || {}), { color: theme.font }),
+      });
+      Object.keys(layout).forEach((axisKey) => {
+        if (!/^xaxis|^yaxis/.test(axisKey) || !layout[axisKey] || typeof layout[axisKey] !== 'object') return;
+        const axis = layout[axisKey];
+        layout[axisKey] = Object.assign({}, axis, {
+          gridcolor: theme.grid,
+          zerolinecolor: theme.zero,
+          linecolor: theme.axis,
+          color: theme.font,
+          title: Object.assign({}, axis.title || {}, {
+            font: Object.assign({}, ((axis.title || {}).font || {}), { color: theme.font }),
+          }),
+        });
+      });
+      if (Array.isArray(layout.annotations)) {
+        layout.annotations = layout.annotations.map((annotation) => {
+          if (!annotation || typeof annotation !== 'object') return annotation;
+          return Object.assign({}, annotation, {
+            bgcolor: Object.prototype.hasOwnProperty.call(annotation, 'bgcolor')
+              ? annotation.bgcolor
+              : theme.annotation_bg,
+            font: Object.assign({}, annotation.font || {}, {
+              color: remapPlotlyColor((annotation.font && annotation.font.color) || theme.font, colorRemap),
+            }),
+          });
+        });
+      }
+      if (Array.isArray(layout.shapes)) {
+        layout.shapes = layout.shapes.map((shape) => {
+          if (!shape || typeof shape !== 'object' || !shape.line || typeof shape.line !== 'object') return shape;
+          return Object.assign({}, shape, {
+            line: Object.assign({}, shape.line, {
+              color: remapPlotlyColor(shape.line.color, colorRemap),
+            }),
+          });
+        });
+      }
+      if (Array.isArray(spec.data)) {
+        spec.data = spec.data.map((trace) => remapPlotlyTraceForTheme(trace, colorRemap));
+      }
+      spec.layout = layout;
+      return spec;
+    };
+    const updateThemeControls = () => {
+      const choice = currentThemeChoice();
+      document.querySelectorAll('.theme-option').forEach((button) => {
+        const active = button.getAttribute('data-theme-choice') === choice;
+        button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        button.dataset.active = active ? '1' : '0';
+      });
+    };
+    const attachRawLayerLegendHandler = (target, chart) => {
+      if (!target || typeof target.on !== 'function' || target.dataset.rawLegendHandler === '1') return;
+      target.dataset.rawLegendHandler = '1';
+      target.on('plotly_legendclick', function(eventData) {
         const curveNumber = eventData && typeof eventData.curveNumber === 'number' ? eventData.curveNumber : -1;
         const trace = (chart.plotly_spec.data || [])[curveNumber];
         if (!trace || typeof trace.metroliza_raw_layer_index !== 'number') return true;
         const imageIndex = trace.metroliza_raw_layer_index;
         const images = (target.layout && target.layout.images) || [];
-        const image = images[imageIndex] || {{}};
+        const image = images[imageIndex] || {};
         const nextVisible = image.visible === false;
-        const update = {{}};
-        update[`images[${{imageIndex}}].visible`] = nextVisible;
+        const update = {};
+        update[`images[${imageIndex}].visible`] = nextVisible;
         Plotly.relayout(target, update);
-        Plotly.restyle(target, {{ visible: nextVisible ? true : 'legendonly' }}, [curveNumber]);
+        Plotly.restyle(target, { visible: nextVisible ? true : 'legendonly' }, [curveNumber]);
         return false;
-      }});
-    }}
-    function renderPlotlyChart(target, chart, configOverrides = {{}}) {{
-      if (!target || !chart || !chart.plotly_spec) return;
-      const spec = chart.plotly_spec;
-      Plotly.newPlot(
-        target,
-        spec.data || [],
-        spec.layout || {{}},
-        {{ ...(spec.config || {{}}), ...configOverrides }}
-      );
+      });
+    };
+    function renderPlotlyChart(target, chart, configOverrides = {}, force = false) {
+      if (!target || !chart || !chart.plotly_spec || !window.Plotly) return;
+      const baseSpec = clonePlotlySpec(chart.plotly_spec);
+      const visualSpec = applyDashboardVisualsToPlotlySpec(baseSpec);
+      const spec = applyThemeToPlotlySpec(visualSpec);
+      const config = Object.assign({}, spec.config || {}, configOverrides);
+      if (force && target.dataset.plotlyReady === '1') {
+        Plotly.react(target, spec.data || [], spec.layout || {}, config);
+      } else {
+        Plotly.newPlot(target, spec.data || [], spec.layout || {}, config);
+      }
+      target.dataset.plotlyReady = '1';
       attachRawLayerLegendHandler(target, chart);
-    }}
-    for (const chart of chartData) {{
-      const target = document.getElementById(chart.id);
-      renderPlotlyChart(target, chart);
-    }}
+    }
+    function refreshPlotlyCharts() {
+      for (const chart of chartData) {
+        const target = document.getElementById(chart.id);
+        if (target && target.dataset.plotlyReady === '1') {
+          renderPlotlyChart(target, chart, {}, true);
+        }
+      }
+    }
     const lightbox = document.getElementById('chart-lightbox');
     const lightboxPlotly = document.getElementById('chart-lightbox-plotly');
     const lightboxTitle = document.getElementById('chart-lightbox-title');
     const lightboxClose = document.getElementById('chart-lightbox-close');
-    function closeLightbox() {{
+    function refreshOpenLightboxPlotly() {
+      if (!lightbox || !lightbox.open || !lightboxPlotly || !lightboxPlotly.dataset.chartId) return;
+      const chart = chartById.get(lightboxPlotly.dataset.chartId);
+      if (!chart) return;
+      renderPlotlyChart(lightboxPlotly, chart, { responsive: true }, true);
+      window.setTimeout(() => Plotly.Plots.resize(lightboxPlotly), 0);
+    }
+    const applyThemeChoice = (choice, { persist = false, rerender = true } = {}) => {
+      const normalizedChoice = sanitizeThemeChoice(choice);
+      document.documentElement.dataset.themeChoice = normalizedChoice;
+      document.documentElement.dataset.theme = resolveTheme(normalizedChoice);
+      if (persist) persistThemeChoice(normalizedChoice);
+      updateThemeControls();
+      if (rerender) {
+        refreshPlotlyCharts();
+        refreshOpenLightboxPlotly();
+      }
+    };
+    function closeLightbox() {
       if (!lightbox || !lightbox.open) return;
       lightbox.close();
-    }}
-    function openLightbox(chartId) {{
+    }
+    function openLightbox(chartId) {
       const chart = chartById.get(chartId);
       if (!chart || !lightbox || !lightboxPlotly) return;
       if (lightboxTitle) lightboxTitle.textContent = chart.title || chartId;
       Plotly.purge(lightboxPlotly);
-      renderPlotlyChart(lightboxPlotly, chart, {{ responsive: true }});
+      lightboxPlotly.dataset.plotlyReady = '0';
+      lightboxPlotly.removeAttribute('data-raw-legend-handler');
+      lightboxPlotly.dataset.chartId = chartId;
+      renderPlotlyChart(lightboxPlotly, chart, { responsive: true });
       lightbox.showModal();
       window.setTimeout(() => Plotly.Plots.resize(lightboxPlotly), 0);
-    }}
-    document.querySelectorAll('.plotly-expand-trigger[data-chart-id]').forEach((trigger) => {{
+    }
+    initializeDashboardVisualControls();
+    applyThemeChoice(readStoredThemeChoice(), { rerender: false });
+    if (themeMedia) {
+      const onSystemThemeChange = () => {
+        if (currentThemeChoice() === 'auto') applyThemeChoice('auto');
+      };
+      if (typeof themeMedia.addEventListener === 'function') {
+        themeMedia.addEventListener('change', onSystemThemeChange);
+      } else if (typeof themeMedia.addListener === 'function') {
+        themeMedia.addListener(onSystemThemeChange);
+      }
+    }
+    for (const chart of chartData) {
+      const target = document.getElementById(chart.id);
+      renderPlotlyChart(target, chart);
+    }
+    document.querySelectorAll('.plotly-expand-trigger[data-chart-id]').forEach((trigger) => {
       trigger.addEventListener('click', () => openLightbox(trigger.dataset.chartId));
-    }});
-    if (lightbox) {{
-      lightbox.addEventListener('click', (event) => {{
+    });
+    document.querySelectorAll('.theme-option').forEach((button) => {
+      button.addEventListener('click', () => {
+        applyThemeChoice(button.getAttribute('data-theme-choice') || 'auto', { persist: true });
+      });
+    });
+    if (lightbox) {
+      lightbox.addEventListener('click', (event) => {
         if (event.target === lightbox) closeLightbox();
-      }});
-      lightbox.addEventListener('close', () => {{
-        if (lightboxPlotly) Plotly.purge(lightboxPlotly);
-      }});
-    }}
-    if (lightboxClose) {{
+      });
+      lightbox.addEventListener('close', () => {
+        if (lightboxPlotly) {
+          Plotly.purge(lightboxPlotly);
+          lightboxPlotly.dataset.plotlyReady = '0';
+          lightboxPlotly.removeAttribute('data-raw-legend-handler');
+          lightboxPlotly.removeAttribute('data-chart-id');
+        }
+      });
+    }
+    if (lightboxClose) {
       lightboxClose.addEventListener('click', closeLightbox);
-    }}
+    }
   </script>
 """
+    )
 
 
 def _render_summary_cards(summary: dict[str, Any]) -> str:

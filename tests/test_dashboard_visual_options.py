@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from io import BytesIO
+
 import pandas as pd
+import pytest
 
 from modules.contracts import (
     AppPaths,
@@ -11,6 +14,7 @@ from modules.contracts import (
     validate_industrial_analytics_request,
 )
 from modules.dashboard_visual_options import (
+    build_dashboard_visual_preview_png,
     build_dashboard_visual_preview_spec,
     dashboard_visual_settings_to_plotly_settings,
     dashboard_visual_swatch_palette,
@@ -22,6 +26,21 @@ from modules.industrial_analytics_state import (
     ProductionChartSelection,
     ProductionMetricSelection,
 )
+
+
+def _png_color_count(image_bytes: bytes, color: str) -> int:
+    pil_image = pytest.importorskip("PIL.Image")
+    target = tuple(int(color[index : index + 2], 16) for index in (1, 3, 5))
+    image = pil_image.open(BytesIO(image_bytes)).convert("RGB")
+    pixels = image.get_flattened_data() if hasattr(image, "get_flattened_data") else image.getdata()
+    return sum(1 for pixel in pixels if pixel == target)
+
+
+def _png_nonwhite_count(image_bytes: bytes) -> int:
+    pil_image = pytest.importorskip("PIL.Image")
+    image = pil_image.open(BytesIO(image_bytes)).convert("RGB")
+    pixels = image.get_flattened_data() if hasattr(image, "get_flattened_data") else image.getdata()
+    return sum(1 for pixel in pixels if pixel != (255, 255, 255))
 
 
 def test_dashboard_visual_gradient_settings_build_distinct_palette() -> None:
@@ -72,6 +91,115 @@ def test_dashboard_visual_preview_applies_custom_palette_to_plotly_spec() -> Non
     assert spec["metadata"]["dashboard_visual_settings_applied"] is True
     assert spec["data"][0]["marker"]["color"] == "#123456"
     assert spec["data"][1]["marker"]["color"] == "#abcdef"
+
+
+def test_dashboard_visual_preview_png_changes_with_custom_palette() -> None:
+    red_preview = build_dashboard_visual_preview_png(
+        {
+            "preset": "custom",
+            "palette": ["#ff0000", "#00aa00", "#0000ff"],
+            "distinguish": "always",
+        },
+        chart_type="histogram",
+    )
+    blue_preview = build_dashboard_visual_preview_png(
+        {
+            "preset": "custom",
+            "palette": ["#0000ff", "#00aa00", "#ff0000"],
+            "distinguish": "always",
+        },
+        chart_type="histogram",
+    )
+
+    assert red_preview
+    assert blue_preview
+    assert red_preview != blue_preview
+    assert _png_nonwhite_count(red_preview) > 20_000
+
+
+def test_dashboard_visual_preview_png_reflects_stat_line_width() -> None:
+    thin_preview = build_dashboard_visual_preview_png(
+        {
+            "preset": "custom",
+            "palette": ["#ff0000", "#00aa00", "#0000ff"],
+            "distinguish": "always",
+            "stat_lines": {"width": 0.5, "accent_by_stat": True},
+        },
+        chart_type="violin",
+    )
+    thick_preview = build_dashboard_visual_preview_png(
+        {
+            "preset": "custom",
+            "palette": ["#ff0000", "#00aa00", "#0000ff"],
+            "distinguish": "always",
+            "stat_lines": {"width": 6.0, "accent_by_stat": True},
+        },
+        chart_type="violin",
+    )
+
+    assert thin_preview
+    assert thick_preview
+    assert _png_color_count(thick_preview, "#FF2424") > _png_color_count(
+        thin_preview,
+        "#FF2424",
+    )
+
+
+def test_dashboard_visual_preview_png_reflects_reference_dash_styles() -> None:
+    base_settings = {
+        "preset": "custom",
+        "reference_lines": {
+            "lsl": {"color": "#112233", "dash": "solid", "width": 3.0},
+        },
+    }
+    solid_histogram = build_dashboard_visual_preview_png(base_settings, chart_type="histogram")
+    dotted_histogram = build_dashboard_visual_preview_png(
+        {
+            **base_settings,
+            "reference_lines": {
+                "lsl": {"color": "#112233", "dash": "dot", "width": 3.0},
+            },
+        },
+        chart_type="histogram",
+    )
+    solid_iqr = build_dashboard_visual_preview_png(base_settings, chart_type="iqr")
+    dotted_iqr = build_dashboard_visual_preview_png(
+        {
+            **base_settings,
+            "reference_lines": {
+                "lsl": {"color": "#112233", "dash": "dot", "width": 3.0},
+            },
+        },
+        chart_type="iqr",
+    )
+
+    assert solid_histogram
+    assert dotted_histogram
+    assert solid_iqr
+    assert dotted_iqr
+    assert _png_color_count(solid_histogram, "#112233") > _png_color_count(
+        dotted_histogram,
+        "#112233",
+    )
+    assert _png_color_count(solid_iqr, "#112233") > _png_color_count(
+        dotted_iqr,
+        "#112233",
+    )
+
+
+def test_dashboard_visual_preview_png_renders_each_chart_type() -> None:
+    for chart_type in ("histogram", "violin", "iqr", "scatter"):
+        image_bytes = build_dashboard_visual_preview_png(
+            {
+                "preset": "custom",
+                "palette": ["#ff0000", "#00aa00", "#0000ff"],
+                "distinguish": "always",
+            },
+            chart_type=chart_type,
+        )
+
+        assert image_bytes
+        assert _png_nonwhite_count(image_bytes) > 18_000
 
 
 def test_visual_settings_flow_through_export_and_analytics_contracts() -> None:

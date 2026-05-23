@@ -183,6 +183,22 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     assert "Production Analytics" in html_text
     assert "plotly-2.27.0.min.js" in html_text
     assert "cdn.plot.ly" not in html_text
+    assert "theme-switch" in html_text
+    assert "dashboard-control-bar" in html_text
+    assert '.theme-option[data-active="1"]' in html_text
+    assert 'data-theme-choice="auto"' in html_text
+    assert 'data-theme-choice="light"' in html_text
+    assert 'data-theme-choice="dark"' in html_text
+    assert "metroliza-dashboard-theme" in html_text
+    assert "prefers-color-scheme: dark" in html_text
+    assert "dataset.themeChoice" in html_text
+    assert "Plotly.react" in html_text
+    assert "visual-settings-trigger" in html_text
+    assert "dashboard-visual-dialog" in html_text
+    assert "metroliza-dashboard-visuals" in html_text
+    assert "applyDashboardVisualsToPlotlySpec(baseSpec)" in html_text
+    assert "initializeDashboardVisualControls();" in html_text
+    assert "refreshOpenLightboxPlotly();" in html_text
     assert "raw_record_json" not in html_text
     assert "Selected references" in html_text
     assert "Descriptive stats" in html_text
@@ -257,6 +273,11 @@ def test_write_production_dashboard_omits_plotly_when_payload_exceeds_budget(tmp
     assert "spec_count>0" in result["html_dashboard_plotly_budget"]["reason"]
     assert "production-dashboard-charts" not in html_text
     assert "plotly-2.27.0.min.js" not in html_text
+    assert "theme-switch" in html_text
+    assert 'data-theme-choice="auto"' in html_text
+    assert "metroliza-dashboard-theme" in html_text
+    assert 'id="dashboard-visual-dialog"' not in html_text
+    assert '<button type="button" class="visual-settings-trigger"' not in html_text
     assert 'class="chart-image"' in html_text
     histogram = next(chart for chart in manifest["charts"] if chart["chart_type"] == "histogram")
     assert histogram["image"]["mime_type"] == "image/png"
@@ -266,6 +287,37 @@ def test_write_production_dashboard_omits_plotly_when_payload_exceeds_budget(tmp
     assert "Interactive charts are unavailable in this dashboard" in html_text
     assert "Interactive chart omitted because the Plotly payload exceeded" in html_text
     assert not (Path(result["html_dashboard_assets_path"]) / "plotly-2.27.0.min.js").exists()
+    assert any("plotly_spec" in chart for chart in manifest["charts"])
+
+
+def test_write_production_dashboard_falls_back_to_snapshots_when_plotly_bundle_missing(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    manifest = _production_dashboard_fixture(tmp_path)
+    output_file = tmp_path / "production_dashboard.html"
+    missing_bundle = tmp_path / "missing-plotly.min.js"
+    monkeypatch.setattr(
+        "modules.industrial_analytics_dashboard._resolve_bundled_plotly_js_path",
+        lambda: missing_bundle,
+    )
+
+    result = write_production_dashboard(manifest, output_file)
+
+    html_text = output_file.read_text(encoding="utf-8")
+    assets_path = Path(result["html_dashboard_assets_path"])
+    assert result["html_dashboard_plotly_spec_count"] > 0
+    assert result["html_dashboard_interactive_chart_count"] == 0
+    assert result["html_dashboard_embedded_plotly_spec_count"] == 0
+    assert result["html_dashboard_plotly_runtime_status"] == "snapshot_only"
+    assert result["html_dashboard_plotly_budget"]["status"] == "within_budget"
+    assert "production-dashboard-charts" not in html_text
+    assert "plotly-2.27.0.min.js" not in html_text
+    assert 'id="dashboard-visual-dialog"' not in html_text
+    assert "the bundled Plotly runtime asset was not found" in html_text
+    assert "Interactive chart omitted because the bundled Plotly runtime asset was unavailable" in html_text
+    assert 'class="chart-image"' in html_text
+    assert not (assets_path / "plotly-2.27.0.min.js").exists()
     assert any("plotly_spec" in chart for chart in manifest["charts"])
 
 

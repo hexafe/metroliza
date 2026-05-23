@@ -85,6 +85,13 @@ class DashboardVisualOptionsDialog(QDialog):
         self._settings = normalize_dashboard_visual_settings(settings)
         self._persist_on_accept = bool(persist_on_accept)
         self._palette_buttons: list[QPushButton] = []
+        self._reference_width_source = {
+            key: float(value["width"])
+            for key, value in self._settings["reference_lines"].items()
+        }
+        self._reference_width_control_value = float(
+            self._settings["reference_lines"]["lsl"]["width"]
+        )
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
         self._preview_timer.timeout.connect(self._refresh_preview)
@@ -120,21 +127,37 @@ class DashboardVisualOptionsDialog(QDialog):
             "accent_by_stat": self.stat_accent_combo.currentData() == "accent",
             "width": self.stat_width_spin.value(),
         }
+        reference_width = self.reference_width_spin.value()
+        preserve_reference_widths = (
+            abs(reference_width - self._reference_width_control_value) <= 1e-9
+        )
         settings["reference_lines"] = {
             "lsl": {
                 "color": str(self.lsl_color_button.property("color") or "#b91c1c"),
                 "dash": str(self.lsl_dash_combo.currentData() or "dash"),
-                "width": self.reference_width_spin.value(),
+                "width": self._reference_line_width(
+                    "lsl",
+                    fallback=reference_width,
+                    preserve=preserve_reference_widths,
+                ),
             },
             "usl": {
                 "color": str(self.usl_color_button.property("color") or "#b91c1c"),
                 "dash": str(self.usl_dash_combo.currentData() or "dash"),
-                "width": self.reference_width_spin.value(),
+                "width": self._reference_line_width(
+                    "usl",
+                    fallback=reference_width,
+                    preserve=preserve_reference_widths,
+                ),
             },
             "nominal": {
                 "color": str(self.nominal_color_button.property("color") or "#0f766e"),
                 "dash": str(self.nominal_dash_combo.currentData() or "solid"),
-                "width": self.reference_width_spin.value(),
+                "width": self._reference_line_width(
+                    "nominal",
+                    fallback=reference_width,
+                    preserve=preserve_reference_widths,
+                ),
             },
         }
         return normalize_dashboard_visual_settings(settings)
@@ -320,7 +343,12 @@ class DashboardVisualOptionsDialog(QDialog):
         self.marker_size_spin.setValue(float(settings["marker_size"]))
         self.stat_width_spin.setValue(float(settings["stat_lines"]["width"]))
         reference = settings["reference_lines"]
-        self.reference_width_spin.setValue(float(reference["lsl"]["width"]))
+        self._reference_width_source = {
+            key: float(reference[key]["width"])
+            for key in ("lsl", "usl", "nominal")
+        }
+        self._reference_width_control_value = float(reference["lsl"]["width"])
+        self.reference_width_spin.setValue(self._reference_width_control_value)
         self._set_button_color(self.lsl_color_button, reference["lsl"]["color"])
         self._set_button_color(self.usl_color_button, reference["usl"]["color"])
         self._set_button_color(self.nominal_color_button, reference["nominal"]["color"])
@@ -387,6 +415,11 @@ class DashboardVisualOptionsDialog(QDialog):
     def _reset_defaults(self) -> None:
         self._populate_from_settings(default_dashboard_visual_settings())
         self._handle_control_changed()
+
+    def _reference_line_width(self, key: str, *, fallback: float, preserve: bool) -> float:
+        if preserve:
+            return float(self._reference_width_source.get(key, fallback))
+        return float(fallback)
 
     @staticmethod
     def _combo(items: tuple[tuple[str, str], ...]) -> QComboBox:

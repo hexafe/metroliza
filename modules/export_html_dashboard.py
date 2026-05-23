@@ -20,6 +20,14 @@ from modules.dashboard_navigation import (
     render_section_header,
     render_section_nav,
 )
+from modules.dashboard_html_controls import (
+    DASHBOARD_THEME_STORAGE_KEY,
+    render_dashboard_control_bar,
+    render_dashboard_controls_css,
+    render_dashboard_theme_bootstrap_script,
+    render_dashboard_visual_dialog,
+    render_dashboard_visual_runtime_js,
+)
 from modules.distribution_iqr_plotly_specs import build_distribution_iqr_plotly_spec
 from modules.dashboard_plotly_visuals import apply_dashboard_visual_settings
 from modules.export_summary_utils import resolve_histogram_bin_count
@@ -48,7 +56,7 @@ _PLOTLY_DARK_COLORWAY = [
 ]
 _PLOTLY_JS_ASSET_DIRNAME = "html_dashboard_assets"
 _PLOTLY_JS_FILENAME = "plotly-2.27.0.min.js"
-_DASHBOARD_THEME_STORAGE_KEY = "metroliza-dashboard-theme"
+_DASHBOARD_THEME_STORAGE_KEY = DASHBOARD_THEME_STORAGE_KEY
 _PLOTLY_MODEBAR_REMOVE = [
     "lasso2d",
     "select2d",
@@ -2739,27 +2747,6 @@ def _drop_plotly_specs(sections: list[dict[str, Any]], group_analysis: dict[str,
             chart.pop("plotly_spec", None)
 
 
-def _render_theme_switch() -> str:
-    options = (
-        ("auto", "Auto"),
-        ("light", "Light"),
-        ("dark", "Dark"),
-    )
-    buttons = "".join(
-        (
-            f'<button type="button" class="theme-option" data-theme-choice="{choice}" '
-            f'aria-pressed="false">{label}</button>'
-        )
-        for choice, label in options
-    )
-    return (
-        '<div class="theme-switch" role="group" aria-label="Dashboard theme">'
-        '<span class="theme-switch-label">Theme</span>'
-        f'<div class="theme-options">{buttons}</div>'
-        '</div>'
-    )
-
-
 def _render_dashboard_html(manifest: dict[str, Any]) -> str:
     sections = manifest.get("sections") or []
     group_analysis = manifest.get("group_analysis") or {}
@@ -2790,7 +2777,18 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
     overview_cards = _render_overview_cards(manifest)
     nav_markup = render_section_nav(nav_items)
     plotly_js_path = str(manifest.get("plotly_js_path") or "").strip()
-    theme_switch_markup = _render_theme_switch()
+    interactive_plotly_available = bool(plotly_js_path)
+    dashboard_controls_markup = render_dashboard_control_bar(
+        include_visuals=interactive_plotly_available
+    )
+    dashboard_controls_css = render_dashboard_controls_css()
+    visual_dialog_markup = render_dashboard_visual_dialog() if interactive_plotly_available else ""
+    visual_runtime_js = (
+        render_dashboard_visual_runtime_js()
+        if interactive_plotly_available
+        else ""
+    )
+    theme_bootstrap_script = render_dashboard_theme_bootstrap_script()
     plotly_theme_tokens_json = json.dumps(
         {
             "light": _build_plotly_theme_tokens("light"),
@@ -2818,27 +2816,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>Metroliza Dashboard</title>
-  <script>
-    (() => {{
-      const storageKey = {json.dumps(_DASHBOARD_THEME_STORAGE_KEY)};
-      const allowedChoices = new Set(['auto', 'light', 'dark']);
-      let choice = 'auto';
-      try {{
-        const storedChoice = window.localStorage.getItem(storageKey) || 'auto';
-        if (allowedChoices.has(storedChoice)) {{
-          choice = storedChoice;
-        }}
-      }} catch (_error) {{
-        choice = 'auto';
-      }}
-      const themeMedia = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
-      const resolvedTheme = choice === 'auto'
-        ? ((themeMedia && themeMedia.matches) ? 'dark' : 'light')
-        : choice;
-      document.documentElement.dataset.themeChoice = choice;
-      document.documentElement.dataset.theme = resolvedTheme;
-    }})();
-  </script>
+{theme_bootstrap_script}
 {plotly_script_tag}  <style>
     :root {{
       color-scheme: light;
@@ -3050,6 +3028,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       outline: 3px solid var(--focus-ring);
       outline-offset: 2px;
     }}
+{dashboard_controls_css}
     .runtime-note {{
       margin: 14px 0 0;
       max-width: 780px;
@@ -3496,7 +3475,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       .shell {{ width: min(100vw - 18px, 1480px); padding-top: 12px; }}
       .hero, .measurement-section, .empty-state {{ padding: 18px; border-radius: 18px; }}
       .chart-grid {{ grid-template-columns: 1fr; }}
-      .theme-switch {{ width: 100%; justify-content: space-between; }}
+      .theme-switch {{ justify-content: space-between; }}
       .theme-options {{ flex-wrap: wrap; justify-content: flex-end; }}
       .section-actions {{ align-items: flex-start; }}
     }}
@@ -3511,7 +3490,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
           <h1>{html.escape(source_label)}</h1>
           <p class="lede">{html.escape(lede_text)}</p>
         </div>
-        {theme_switch_markup}
+        {dashboard_controls_markup}
       </div>
       {plotly_status_notice}
       {overview_cards}
@@ -3535,6 +3514,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       <p id="chart-lightbox-caption" class="lightbox-caption"></p>
     </div>
   </dialog>
+  {visual_dialog_markup}
   <script>
     (() => {{
       const themeStorageKey = {json.dumps(_DASHBOARD_THEME_STORAGE_KEY)};
@@ -3732,6 +3712,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
         spec.layout = layout;
         return spec;
       }};
+{visual_runtime_js}
 
       const parsePlotlySpec = (container) => {{
         const currentTheme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
@@ -3760,7 +3741,10 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
         if (!baseSpec) {{
           return false;
         }}
-        const spec = applyThemeToPlotlySpec(baseSpec);
+        const visualSpec = typeof applyDashboardVisualsToPlotlySpec === 'function'
+          ? applyDashboardVisualsToPlotlySpec(baseSpec)
+          : baseSpec;
+        const spec = applyThemeToPlotlySpec(visualSpec);
         const config = Object.assign({{ responsive: true }}, spec.config || {{}});
         try {{
           if (force && container.dataset.plotlyReady === '1') {{
@@ -3800,6 +3784,12 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
           renderPlotlyContainer(container, {{ force: true }});
         }});
       }};
+      const refreshOpenLightboxPlotly = () => {{
+        if (lightbox && lightbox.open && lightbox.dataset.mode === 'plotly' && lightboxPlotly) {{
+          renderPlotlyContainer(lightboxPlotly, {{ force: true }});
+          scheduleLightboxPlotlyResize();
+        }}
+      }};
 
       const updateThemeControls = () => {{
         const choice = currentThemeChoice();
@@ -3820,10 +3810,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
         updateThemeControls();
         if (rerender) {{
           refreshPlotlyCharts();
-          if (lightbox && lightbox.open && lightbox.dataset.mode === 'plotly' && lightboxPlotly) {{
-            renderPlotlyContainer(lightboxPlotly, {{ force: true }});
-            scheduleLightboxPlotlyResize();
-          }}
+          refreshOpenLightboxPlotly();
         }}
       }};
 
@@ -3943,6 +3930,9 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
         }});
         return true;
       }};
+      if (typeof initializeDashboardVisualControls === 'function') {{
+        initializeDashboardVisualControls();
+      }}
       applyThemeChoice(readStoredThemeChoice(), {{ rerender: false }});
       document.querySelectorAll('.theme-option').forEach((button) => {{
         button.addEventListener('click', () => {{
