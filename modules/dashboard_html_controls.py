@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 
@@ -9,6 +10,8 @@ from modules.dashboard_visual_options import (
     DEFAULT_DASHBOARD_PALETTE,
     DEFAULT_HIGHLIGHT_ANCHOR,
     DEFAULT_OPACITY,
+    DASHBOARD_VISUAL_MARKER_SYMBOLS,
+    DASHBOARD_VISUAL_PATTERN_SHAPES,
     PRINT_DASHBOARD_PALETTE,
     dashboard_visual_palette_presets,
     dashboard_visual_recipe_settings,
@@ -123,13 +126,20 @@ def render_dashboard_visual_dialog() -> str:
         )
         for key, label in opacity_controls
     )
+    marker_symbol_options = "".join(
+        (
+            f'<option value="{html.escape(symbol)}">'
+            f'{html.escape(symbol.replace("-", " ").title())}</option>'
+        )
+        for symbol in DASHBOARD_VISUAL_MARKER_SYMBOLS
+    )
     group_color_chips = "".join(
         (
-            '<span class="visual-color-chip" data-visual-group-chip '
+            '<button type="button" class="visual-color-chip" data-visual-group-chip '
             f'data-visual-chip-index="{index}">'
             '<span class="visual-color-chip-swatch"></span>'
             f'<span class="visual-color-chip-label">{html.escape(label)}</span>'
-            "</span>"
+            "</button>"
         )
         for index, label in enumerate(("Group 1", "Group 2", "Group 3", "Group 4", "Population points"))
     )
@@ -177,7 +187,7 @@ def render_dashboard_visual_dialog() -> str:
         '<option value="normal">Normal</option>'
         '<option value="wide">Wide</option>'
         '</select></label>'
-        '<label class="visual-field"><span>Markers</span>'
+        '<label class="visual-field"><span>Differentiate</span>'
         '<select id="dashboard-visual-distinguish">'
         '<option value="color_only">Color only</option>'
         '<option value="when_similar">When similar</option>'
@@ -186,7 +196,7 @@ def render_dashboard_visual_dialog() -> str:
         '</section>'
         f'<section class="visual-section visual-swatches">{palette_inputs}</section>'
         '<section class="visual-section visual-grid">'
-        '<label class="visual-field"><span>Marker size</span>'
+        '<label class="visual-field"><span>Default marker size</span>'
         '<input type="range" min="2" max="18" step="0.5" id="dashboard-visual-marker-size" value="7"></label>'
         '<label class="visual-field"><span>Stat width</span>'
         '<input type="range" min="0.5" max="6" step="0.25" id="dashboard-visual-stat-width" value="2"></label>'
@@ -197,7 +207,7 @@ def render_dashboard_visual_dialog() -> str:
         '</section>'
         f'<section class="visual-section visual-grid">{opacity_inputs}</section>'
         '<section class="visual-section visual-grid">'
-        '<label class="visual-field"><span>Selected element</span>'
+        '<label class="visual-field"><span>Selection inspector</span>'
         '<select id="dashboard-visual-element"><option value="">Click a plot element</option></select></label>'
         '<label class="visual-field" data-visual-selected-field="color"><span>Element color</span>'
         '<input type="color" id="dashboard-visual-element-color" value="#245a5a"></label>'
@@ -212,6 +222,19 @@ def render_dashboard_visual_dialog() -> str:
         '</select></label>'
         '<label class="visual-field" data-visual-selected-field="marker_size"><span>Marker size</span>'
         '<input type="range" min="2" max="18" step="0.5" id="dashboard-visual-element-marker-size" value="7"></label>'
+        '<label class="visual-field" data-visual-selected-field="marker_symbol"><span>Shape</span>'
+        f'<select id="dashboard-visual-element-marker-symbol">{marker_symbol_options}</select></label>'
+        '<label class="visual-field visual-check" data-visual-selected-field="outline_enabled">'
+        '<input type="checkbox" id="dashboard-visual-element-outline-enabled">'
+        '<span>Marker border</span></label>'
+        '<label class="visual-field" data-visual-selected-field="outline_width"><span>Border width</span>'
+        '<input type="range" min="0" max="6" step="0.25" id="dashboard-visual-element-outline-width" value="1.25"></label>'
+        '<label class="visual-field" data-visual-selected-field="outline_color_mode"><span>Border color mode</span>'
+        '<select id="dashboard-visual-element-outline-color-mode">'
+        '<option value="auto">Auto contrast</option><option value="custom">Custom color</option>'
+        '</select></label>'
+        '<label class="visual-field" data-visual-selected-field="outline_color"><span>Border color</span>'
+        '<input type="color" id="dashboard-visual-element-outline-color" value="#111827"></label>'
         '<label class="visual-field" data-visual-selected-field="pattern_shape"><span>Pattern</span>'
         '<select id="dashboard-visual-element-pattern">'
         '<option value="">None</option><option value="/">Slash</option>'
@@ -450,9 +473,11 @@ def render_dashboard_controls_css() -> str:
       margin-top: 10px;
     }
     .visual-color-chip {
+      appearance: none;
       align-items: center;
       border: 1px solid var(--line);
       border-radius: 8px;
+      cursor: pointer;
       display: inline-flex;
       gap: 8px;
       min-width: 0;
@@ -461,6 +486,11 @@ def render_dashboard_controls_css() -> str:
       color: var(--ink, var(--text));
       font-size: 12px;
       font-weight: 700;
+      text-align: left;
+    }
+    .visual-color-chip:focus-visible {
+      outline: 2px solid var(--accent, #245a5a);
+      outline-offset: 2px;
     }
     .visual-color-chip-swatch {
       border: 1px solid rgba(15, 23, 42, 0.28);
@@ -493,17 +523,25 @@ def render_dashboard_controls_css() -> str:
     """
 
 
+def _dashboard_visual_state_signature(settings: dict) -> str:
+    payload = json.dumps(settings, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
 def dashboard_visual_runtime_config_json(initial_settings: dict | None = None) -> str:
     """Return shared defaults as compact JSON for browser runtime."""
 
     normalized_initial_settings = normalize_dashboard_visual_settings(initial_settings)
+    default_settings = default_dashboard_visual_settings()
     return json.dumps(
         {
             "storageKey": DASHBOARD_VISUAL_STORAGE_KEY,
             "themeStorageKey": DASHBOARD_VISUAL_THEME_STORAGE_KEY,
             "storageVersion": 1,
-            "defaults": default_dashboard_visual_settings(),
+            "defaults": default_settings,
             "initialSettings": normalized_initial_settings,
+            "defaultSettingsSignature": _dashboard_visual_state_signature(default_settings),
+            "initialSettingsSignature": _dashboard_visual_state_signature(normalized_initial_settings),
             "recipes": {
                 key: dashboard_visual_recipe_settings(key)
                 for key in ("auto", "distinct", "print", "custom")
@@ -518,8 +556,8 @@ def dashboard_visual_runtime_config_json(initial_settings: dict | None = None) -
                 }
                 for key, meta in dashboard_visual_palette_presets().items()
             },
-            "markerSymbols": ["circle", "diamond", "square", "cross", "x", "triangle-up"],
-            "patterns": ["", "/", "\\", "x", ".", "-"],
+            "markerSymbols": list(DASHBOARD_VISUAL_MARKER_SYMBOLS),
+            "patterns": list(DASHBOARD_VISUAL_PATTERN_SHAPES),
         },
         ensure_ascii=False,
         separators=(",", ":"),
@@ -660,6 +698,11 @@ def render_dashboard_visual_runtime_js(
           if (Object.prototype.hasOwnProperty.call(style, 'opacity')) clean.opacity = boundedNumber(style.opacity, 1, 0, 1);
           if (Object.prototype.hasOwnProperty.call(style, 'width')) clean.width = boundedNumber(style.width, 2, 0.5, 8);
           if (Object.prototype.hasOwnProperty.call(style, 'marker_size')) clean.marker_size = boundedNumber(style.marker_size, 7, 2, 18);
+          if (Object.prototype.hasOwnProperty.call(style, 'outline_width')) clean.outline_width = boundedNumber(style.outline_width, 0, 0, 6);
+          if (typeof style.outline_color_mode === 'string') clean.outline_color_mode = visualChoice(style.outline_color_mode, ['auto', 'custom'], 'auto');
+          if (String(style.outline_color || '').toLowerCase() === 'auto') clean.outline_color_mode = 'auto';
+          if (style.outline_color && String(style.outline_color).toLowerCase() !== 'auto') clean.outline_color = normalizeColor(style.outline_color, '');
+          if (clean.outline_color === '') delete clean.outline_color;
           if (typeof style.dash === 'string') clean.dash = visualChoice(style.dash, ['solid', 'dash', 'dot', 'dashdot', 'longdash'], 'solid');
           if (typeof style.marker_symbol === 'string') clean.marker_symbol = style.marker_symbol;
           if (typeof style.pattern_shape === 'string') clean.pattern_shape = style.pattern_shape;
@@ -669,17 +712,35 @@ def render_dashboard_visual_runtime_js(
       }};
 
       const readStoredVisualState = () => {{
+        const embedded = {config_var}.initialSettings || {config_var}.defaults;
         try {{
           const raw = window.localStorage.getItem(visualStorageKey);
-          return sanitizeVisualState(raw ? JSON.parse(raw) : ({config_var}.initialSettings || {config_var}.defaults));
+          if (!raw) return sanitizeVisualState(embedded);
+          const parsed = JSON.parse(raw);
+          const currentSignature = {config_var}.initialSettingsSignature || '';
+          const defaultSignature = {config_var}.defaultSettingsSignature || '';
+          if (parsed && typeof parsed === 'object' && parsed.state) {{
+            if (parsed.initialSettingsSignature === currentSignature) {{
+              return sanitizeVisualState(parsed.state);
+            }}
+            return sanitizeVisualState(embedded);
+          }}
+          if (currentSignature && defaultSignature && currentSignature !== defaultSignature) {{
+            return sanitizeVisualState(embedded);
+          }}
+          return sanitizeVisualState(parsed);
         }} catch (_error) {{
-          return sanitizeVisualState({config_var}.initialSettings || {config_var}.defaults);
+          return sanitizeVisualState(embedded);
         }}
       }};
 
       const persistVisualState = (state) => {{
         try {{
-          window.localStorage.setItem(visualStorageKey, JSON.stringify(state));
+          window.localStorage.setItem(visualStorageKey, JSON.stringify({{
+            version: {config_var}.storageVersion || 1,
+            initialSettingsSignature: {config_var}.initialSettingsSignature || '',
+            state,
+          }}));
         }} catch (_error) {{
           // Ignore storage failures in locked-down browser contexts.
         }}
@@ -953,6 +1014,17 @@ def render_dashboard_visual_runtime_js(
         return null;
       }};
 
+      const contrastOutlineColor = (color) => {{
+        const text = String(color || '').trim();
+        const match = /^#([0-9a-f]{{2}})([0-9a-f]{{2}})([0-9a-f]{{2}})$/i.exec(text);
+        if (!match) return '#111827';
+        const red = parseInt(match[1], 16);
+        const green = parseInt(match[2], 16);
+        const blue = parseInt(match[3], 16);
+        const luminance = (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255;
+        return luminance >= 0.58 ? '#111827' : '#ffffff';
+      }};
+
       const setTraceColor = (trace, color) => {{
         trace.marker = Object.assign({{}}, trace.marker || {{}}, {{ color }});
         trace.line = Object.assign({{}}, trace.line || {{}}, {{ color }});
@@ -1204,11 +1276,32 @@ def render_dashboard_visual_runtime_js(
                 shape: patterns[labelIndex % patterns.length],
               }});
             }}
+            const resolvedOutlineWidth = Number.isFinite(Number(override.outline_width))
+              ? Number(override.outline_width)
+              : (Number.isFinite(Number(series.outline_width)) ? Number(series.outline_width) : null);
+            const outlineMode = override.outline_color_mode || series.outline_color_mode || '';
+            let resolvedOutlineColor = override.outline_color || series.outline_color || '';
+            if (String(resolvedOutlineColor).toLowerCase() === 'auto' || outlineMode === 'auto') {{
+              resolvedOutlineColor = resolvedOutlineWidth && resolvedOutlineWidth > 0
+                ? contrastOutlineColor(trace.marker.color || color)
+                : '';
+            }}
+            if (resolvedOutlineWidth !== null || resolvedOutlineColor) {{
+              trace.marker.line = Object.assign({{}}, trace.marker.line || {{}});
+              if (resolvedOutlineWidth !== null) trace.marker.line.width = Math.max(0, resolvedOutlineWidth);
+              if (resolvedOutlineColor) trace.marker.line.color = resolvedOutlineColor;
+            }}
           }}
           const role = traceChartKind === 'model_curve' ? 'model_curve' : (isTrendLine ? 'trend' : 'series');
-          const visualCapabilities = ['trend', 'model_curve'].includes(role)
+          let visualCapabilities = ['trend', 'model_curve'].includes(role)
             ? ['color', 'opacity', 'width', 'dash']
-            : ['color', 'opacity', 'marker_size', 'marker_symbol', 'pattern_shape'];
+            : ['color', 'opacity', 'outline_width', 'outline_color', 'outline_color_mode'];
+          if (role === 'series' && traceHasMarkers(trace)) {{
+            visualCapabilities = visualCapabilities.concat(['marker_size', 'marker_symbol']);
+          }}
+          if (role === 'series' && ['bar', 'histogram'].includes(String(trace.type || '').toLowerCase())) {{
+            visualCapabilities = visualCapabilities.concat(['pattern_shape']);
+          }}
           trace.meta = Object.assign({{}}, trace.meta || {{}}, {{
             dashboard_visual_role: role,
             dashboard_visual_target: `${{role}}:${{normalizeLabelKey(label)}}`,
@@ -1379,6 +1472,7 @@ def render_dashboard_visual_runtime_js(
       const traceStyleForSelection = (trace) => {{
         const marker = trace && trace.marker && typeof trace.marker === 'object' ? trace.marker : {{}};
         const line = trace && trace.line && typeof trace.line === 'object' ? trace.line : {{}};
+        const markerLine = marker.line && typeof marker.line === 'object' ? marker.line : {{}};
         const pattern = marker.pattern && typeof marker.pattern === 'object' ? marker.pattern : {{}};
         return {{
           color: traceColor(trace) || '#245a5a',
@@ -1386,6 +1480,10 @@ def render_dashboard_visual_runtime_js(
           width: Number.isFinite(Number(line.width)) ? Number(line.width) : 2,
           dash: typeof line.dash === 'string' ? line.dash : 'solid',
           marker_size: Number.isFinite(Number(marker.size)) ? Number(marker.size) : 7,
+          marker_symbol: typeof marker.symbol === 'string' ? marker.symbol : 'circle',
+          outline_width: Number.isFinite(Number(markerLine.width)) ? Number(markerLine.width) : 0,
+          outline_color: normalizeColor(markerLine.color, '#111827'),
+          outline_color_mode: 'custom',
           pattern_shape: typeof pattern.shape === 'string' ? pattern.shape : '',
         }};
       }};
@@ -1401,7 +1499,18 @@ def render_dashboard_visual_runtime_js(
             caps[String(name)] = true;
           }});
           return Object.assign(
-            {{ color: false, opacity: false, width: false, dash: false, marker_size: false, pattern_shape: false }},
+            {{
+              color: false,
+              opacity: false,
+              width: false,
+              dash: false,
+              marker_size: false,
+              marker_symbol: false,
+              outline_width: false,
+              outline_color: false,
+              outline_color_mode: false,
+              pattern_shape: false,
+            }},
             caps
           );
         }}
@@ -1417,6 +1526,10 @@ def render_dashboard_visual_runtime_js(
           width: lineLike,
           dash: lineLike,
           marker_size: markerLike,
+          marker_symbol: markerLike,
+          outline_width: markerLike || patternLike,
+          outline_color: markerLike || patternLike,
+          outline_color_mode: markerLike || patternLike,
           pattern_shape: patternLike,
         }};
       }};
@@ -1478,12 +1591,7 @@ def render_dashboard_visual_runtime_js(
         return null;
       }};
 
-      const refreshVisualElementControls = () => {{
-        const select = document.getElementById('dashboard-visual-element');
-        if (!select) return;
-        const current = dashboardVisualSelectedTarget && dashboardVisualSelectedTarget.target
-          ? dashboardVisualSelectedTarget.target
-          : '';
+      const collectVisualTargets = () => {{
         const targets = new Map();
         document.querySelectorAll('.plotly-chart').forEach((node) => {{
           const data = Array.isArray(node.data) ? node.data : [];
@@ -1492,6 +1600,16 @@ def render_dashboard_visual_runtime_js(
             if (target && target.target && !targets.has(target.target)) targets.set(target.target, target);
           }});
         }});
+        return Array.from(targets.values());
+      }};
+
+      const refreshVisualElementControls = () => {{
+        const select = document.getElementById('dashboard-visual-element');
+        if (!select) return;
+        const current = dashboardVisualSelectedTarget && dashboardVisualSelectedTarget.target
+          ? dashboardVisualSelectedTarget.target
+          : '';
+        const targets = collectVisualTargets();
         select.innerHTML = '<option value="">Click a plot element</option>';
         targets.forEach((target) => {{
           const option = document.createElement('option');
@@ -1501,6 +1619,20 @@ def render_dashboard_visual_runtime_js(
           select.appendChild(option);
         }});
         select.value = current;
+        const seriesTargets = targets.filter((target) => target.role === 'series');
+        document.querySelectorAll('[data-visual-group-chip]').forEach((chip) => {{
+          const index = Number(chip.getAttribute('data-visual-chip-index'));
+          const label = chip.querySelector('.visual-color-chip-label');
+          const target = Number.isInteger(index) ? seriesTargets[index] : null;
+          if (label && target) label.textContent = target.label || target.target;
+        }});
+      }};
+
+      const selectVisualTargetByChipIndex = (index) => {{
+        const targets = collectVisualTargets();
+        const seriesTargets = targets.filter((target) => target.role === 'series');
+        const target = seriesTargets[index] || targets[index] || null;
+        if (target) applySelectedVisualTargetToControls(target);
       }};
 
       const selectedTargetOverrideKey = (target) => (
@@ -1518,9 +1650,37 @@ def render_dashboard_visual_runtime_js(
 
       const syncSelectedElementControls = (target) => {{
         const caps = target && target.capabilities ? target.capabilities : {{}};
-        ['color', 'opacity', 'width', 'dash', 'marker_size', 'pattern_shape'].forEach((name) => {{
+        [
+          'color',
+          'opacity',
+          'width',
+          'dash',
+          'marker_size',
+          'marker_symbol',
+          'pattern_shape',
+          'outline_enabled',
+          'outline_width',
+          'outline_color_mode',
+          'outline_color',
+        ].forEach((name) => {{
           setSelectedElementFieldAvailability(name, Boolean(target && caps[name]));
         }});
+        const outlineAvailable = Boolean(
+          target && (caps.outline_width || caps.outline_color || caps.outline_color_mode)
+        );
+        setSelectedElementFieldAvailability('outline_enabled', outlineAvailable);
+        const outlineEnabled = Boolean(
+          outlineAvailable
+          && document.getElementById('dashboard-visual-element-outline-enabled')
+          && document.getElementById('dashboard-visual-element-outline-enabled').checked
+        );
+        setSelectedElementFieldAvailability('outline_width', outlineEnabled);
+        setSelectedElementFieldAvailability('outline_color_mode', outlineEnabled);
+        const outlineMode = document.getElementById('dashboard-visual-element-outline-color-mode');
+        setSelectedElementFieldAvailability(
+          'outline_color',
+          outlineEnabled && outlineMode && outlineMode.value === 'custom'
+        );
       }};
 
       const applySelectedVisualTargetToControls = (target) => {{
@@ -1531,6 +1691,11 @@ def render_dashboard_visual_runtime_js(
         const width = document.getElementById('dashboard-visual-element-width');
         const dash = document.getElementById('dashboard-visual-element-dash');
         const markerSize = document.getElementById('dashboard-visual-element-marker-size');
+        const markerSymbol = document.getElementById('dashboard-visual-element-marker-symbol');
+        const outlineEnabled = document.getElementById('dashboard-visual-element-outline-enabled');
+        const outlineWidth = document.getElementById('dashboard-visual-element-outline-width');
+        const outlineColorMode = document.getElementById('dashboard-visual-element-outline-color-mode');
+        const outlineColor = document.getElementById('dashboard-visual-element-outline-color');
         const pattern = document.getElementById('dashboard-visual-element-pattern');
         syncSelectedElementControls(target);
         if (!target) return;
@@ -1549,7 +1714,16 @@ def render_dashboard_visual_runtime_js(
         if (width) width.value = Number.isFinite(Number(style.width)) ? style.width : (currentStyle.width ?? 2);
         if (dash) dash.value = style.dash || currentStyle.dash || 'solid';
         if (markerSize) markerSize.value = Number.isFinite(Number(style.marker_size)) ? style.marker_size : (currentStyle.marker_size ?? state.marker_size);
+        if (markerSymbol) markerSymbol.value = style.marker_symbol || currentStyle.marker_symbol || 'circle';
+        const styleOutlineWidth = Number.isFinite(Number(style.outline_width))
+          ? Number(style.outline_width)
+          : (Number.isFinite(Number(currentStyle.outline_width)) ? Number(currentStyle.outline_width) : 0);
+        if (outlineEnabled) outlineEnabled.checked = styleOutlineWidth > 0;
+        if (outlineWidth) outlineWidth.value = styleOutlineWidth > 0 ? styleOutlineWidth : 1.25;
+        if (outlineColorMode) outlineColorMode.value = style.outline_color_mode || currentStyle.outline_color_mode || 'auto';
+        if (outlineColor) outlineColor.value = normalizeColor(style.outline_color, normalizeColor(currentStyle.outline_color, '#111827'));
         if (pattern) pattern.value = typeof style.pattern_shape === 'string' ? style.pattern_shape : (currentStyle.pattern_shape || '');
+        syncSelectedElementControls(target);
       }};
 
       const applySelectedElementStyle = () => {{
@@ -1563,6 +1737,11 @@ def render_dashboard_visual_runtime_js(
         const width = document.getElementById('dashboard-visual-element-width');
         const dash = document.getElementById('dashboard-visual-element-dash');
         const markerSize = document.getElementById('dashboard-visual-element-marker-size');
+        const markerSymbol = document.getElementById('dashboard-visual-element-marker-symbol');
+        const outlineEnabled = document.getElementById('dashboard-visual-element-outline-enabled');
+        const outlineWidth = document.getElementById('dashboard-visual-element-outline-width');
+        const outlineColorMode = document.getElementById('dashboard-visual-element-outline-color-mode');
+        const outlineColor = document.getElementById('dashboard-visual-element-outline-color');
         const pattern = document.getElementById('dashboard-visual-element-pattern');
         const style = {{}};
         if (caps.color && color) style.color = color.value;
@@ -1570,6 +1749,14 @@ def render_dashboard_visual_runtime_js(
         if (caps.width && width) style.width = Number(width.value);
         if (caps.dash && dash) style.dash = dash.value;
         if (caps.marker_size && markerSize) style.marker_size = Number(markerSize.value);
+        if (caps.marker_symbol && markerSymbol) style.marker_symbol = markerSymbol.value;
+        if ((caps.outline_width || caps.outline_color || caps.outline_color_mode) && outlineEnabled) {{
+          style.outline_width = outlineEnabled.checked && outlineWidth ? Number(outlineWidth.value) : 0;
+          style.outline_color_mode = outlineColorMode ? outlineColorMode.value : 'auto';
+          if (style.outline_color_mode === 'custom' && outlineColor) {{
+            style.outline_color = outlineColor.value;
+          }}
+        }}
         if (caps.pattern_shape && pattern) style.pattern_shape = pattern.value;
         if (target.role === 'reference' && target.key && state.reference_lines[target.key]) {{
           state.reference_lines[target.key] = Object.assign({{}}, state.reference_lines[target.key], style);
@@ -1579,6 +1766,7 @@ def render_dashboard_visual_runtime_js(
           state.series_overrides[selectedTargetOverrideKey(target)] = style;
         }}
         setDashboardVisualState(state);
+        applySelectedVisualTargetToControls(target);
       }};
 
       const resetSelectedElementStyle = () => {{
@@ -1638,7 +1826,7 @@ def render_dashboard_visual_runtime_js(
           closeButton.addEventListener('click', () => dialog.close ? dialog.close() : dialog.removeAttribute('open'));
         }}
         if (resetButton) {{
-          resetButton.addEventListener('click', () => setDashboardVisualState(applyVisualRecipe('auto', sanitizeVisualState({config_var}.initialSettings || {config_var}.defaults))));
+          resetButton.addEventListener('click', () => setDashboardVisualState(sanitizeVisualState({config_var}.initialSettings || {config_var}.defaults)));
         }}
         if (themeSelect) {{
           themeSelect.addEventListener('change', () => {{
@@ -1693,6 +1881,11 @@ def render_dashboard_visual_runtime_js(
           'dashboard-visual-element-width',
           'dashboard-visual-element-dash',
           'dashboard-visual-element-marker-size',
+          'dashboard-visual-element-marker-symbol',
+          'dashboard-visual-element-outline-enabled',
+          'dashboard-visual-element-outline-width',
+          'dashboard-visual-element-outline-color-mode',
+          'dashboard-visual-element-outline-color',
           'dashboard-visual-element-pattern',
         ].forEach((id) => {{
           const control = document.getElementById(id);
@@ -1704,6 +1897,12 @@ def render_dashboard_visual_runtime_js(
         if (elementResetButton) {{
           elementResetButton.addEventListener('click', resetSelectedElementStyle);
         }}
+        document.querySelectorAll('[data-visual-group-chip]').forEach((chip) => {{
+          chip.addEventListener('click', () => {{
+            const index = Number(chip.getAttribute('data-visual-chip-index'));
+            if (Number.isInteger(index)) selectVisualTargetByChipIndex(index);
+          }});
+        }});
         document.querySelectorAll('[data-visual-preset]').forEach((button) => {{
           button.addEventListener('click', () => {{
             setDashboardVisualState(applyVisualRecipe(button.getAttribute('data-visual-preset') || 'auto'));

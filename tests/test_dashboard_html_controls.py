@@ -66,6 +66,11 @@ def test_dashboard_visual_dialog_uses_live_recipe_and_group_color_chips() -> Non
     assert "Population" in dialog_html
     assert "Color set" in dialog_html
     assert "Color generation" in dialog_html
+    assert "Default marker size" in dialog_html
+    assert "Selection inspector" in dialog_html
+    assert "dashboard-visual-element-marker-symbol" in dialog_html
+    assert "dashboard-visual-element-outline-enabled" in dialog_html
+    assert "dashboard-visual-element-outline-color-mode" in dialog_html
     assert 'id="dashboard-visual-apply"' not in dialog_html
 
 
@@ -84,9 +89,12 @@ def test_dashboard_visual_runtime_scopes_storage_and_uses_initial_settings() -> 
     assert config["initialSettings"]["palette_preset"] == "custom"
     assert config["initialSettings"]["palette"][:2] == ["#123456", "#abcdef"]
     assert config["initialSettings"] != config["defaults"]
+    assert config["initialSettingsSignature"] != config["defaultSettingsSignature"]
     assert "const visualStorageBaseKey" in runtime_js
     assert "const visualStorageKey = `${visualStorageBaseKey}:${dashboardVisualScope()}`;" in runtime_js
     assert "window.metrolizaDashboardVisualStorageKey = visualStorageKey;" in runtime_js
+    assert "parsed.initialSettingsSignature === currentSignature" in runtime_js
+    assert "initialSettingsSignature" in runtime_js
     assert "initialSettings || dashboardVisualConfig.defaults" in runtime_js
     assert '"initialSettings":{' in runtime_js
     assert '"preset":"custom"' in runtime_js
@@ -101,6 +109,7 @@ def test_dashboard_visual_runtime_recipes_update_controls_and_palette_preview() 
     assert "sanitizeVisualState(Object.assign({}, defaults, configured || {}, preservedTheme))" in runtime_js
     assert "const refreshResolvedPalettePreview" in runtime_js
     assert "document.querySelectorAll('[data-visual-group-chip]')" in runtime_js
+    assert "selectVisualTargetByChipIndex" in runtime_js
     assert "setDashboardVisualState(applyVisualRecipe(button.getAttribute('data-visual-preset')" in runtime_js
 
 
@@ -114,4 +123,7 @@ def test_dashboard_visual_runtime_selected_element_controls_are_role_aware() -> 
     assert "const syncSelectedElementControls" in runtime_js
     assert "data-visual-selected-field" in render_dashboard_visual_dialog()
     assert "dashboard-visual-element-marker-size" in runtime_js
+    assert "dashboard-visual-element-marker-symbol" in runtime_js
+    assert "dashboard-visual-element-outline-width" in runtime_js
+    assert "contrastOutlineColor" in runtime_js
     assert "dashboard-visual-element-pattern" in runtime_js

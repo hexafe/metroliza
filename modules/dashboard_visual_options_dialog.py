@@ -34,6 +34,7 @@ from PyQt6.QtWidgets import (
 
 from modules.dashboard_visual_options import (
     DEFAULT_DASHBOARD_PALETTE,
+    DASHBOARD_VISUAL_MARKER_SYMBOLS,
     build_dashboard_visual_preview_html,
     build_dashboard_visual_preview_png,
     build_dashboard_visual_preview_spec,
@@ -87,6 +88,11 @@ _CHART_ITEMS = (
 )
 _DASH_ITEMS = (("Solid", "solid"), ("Dash", "dash"), ("Dot", "dot"), ("Dash-dot", "dashdot"))
 _PREVIEW_SERIES_LABELS = ("Group 1", "Group 2", "Group 3", "Group 4", "Population points")
+_MARKER_SYMBOL_ITEMS = tuple(
+    (str(symbol).replace("-", " ").title(), symbol)
+    for symbol in DASHBOARD_VISUAL_MARKER_SYMBOLS
+)
+_OUTLINE_COLOR_MODE_ITEMS = (("Auto contrast", "auto"), ("Custom color", "custom"))
 
 
 class _PreviewSelectionBridge(QObject):
@@ -276,6 +282,7 @@ class DashboardVisualOptionsDialog(QDialog):
         for index, label in enumerate(_PREVIEW_SERIES_LABELS):
             chip = self._color_button(DEFAULT_DASHBOARD_PALETTE[index % len(DEFAULT_DASHBOARD_PALETTE)])
             chip.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            chip.clicked.connect(lambda _checked=False, index=index: self._select_preview_series(index))
             self._preview_color_buttons.append(chip)
             preview_colors.addWidget(QLabel(label), index, 0)
             preview_colors.addWidget(chip, index, 1)
@@ -316,8 +323,8 @@ class DashboardVisualOptionsDialog(QDialog):
         self.marker_size_spin.setSingleStep(0.5)
         self.marker_size_spin.valueChanged.connect(lambda _value: self._handle_control_changed())
         self.distinguish_combo.currentIndexChanged.connect(self._handle_control_changed)
-        series_form.addRow("Distinguish", self.distinguish_combo)
-        series_form.addRow("Marker size", self.marker_size_spin)
+        series_form.addRow("Differentiate", self.distinguish_combo)
+        series_form.addRow("Default marker size", self.marker_size_spin)
         controls_layout.addWidget(series_group)
 
         opacity_group = QGroupBox("Opacity")
@@ -378,7 +385,7 @@ class DashboardVisualOptionsDialog(QDialog):
         line_form.addRow("Nominal", self._line_style_row(self.nominal_color_button, self.nominal_dash_combo))
         controls_layout.addWidget(line_group)
 
-        selection_group = QGroupBox("Selected element")
+        selection_group = QGroupBox("Selection inspector")
         selection_form = QFormLayout(selection_group)
         self.element_combo = QComboBox()
         self.element_combo.addItem("Click a plot element or choose one", "")
@@ -391,6 +398,16 @@ class DashboardVisualOptionsDialog(QDialog):
         self.element_marker_size_spin = QDoubleSpinBox()
         self.element_marker_size_spin.setRange(2.0, 18.0)
         self.element_marker_size_spin.setSingleStep(0.5)
+        self.element_marker_symbol_combo = self._combo(_MARKER_SYMBOL_ITEMS)
+        self.element_outline_checkbox = QCheckBox("Marker border")
+        self.element_outline_width_spin = QDoubleSpinBox()
+        self.element_outline_width_spin.setRange(0.0, 6.0)
+        self.element_outline_width_spin.setSingleStep(0.25)
+        self.element_outline_color_mode_combo = self._combo(_OUTLINE_COLOR_MODE_ITEMS)
+        self.element_outline_color_button = self._color_button("#111827")
+        self.element_outline_color_button.clicked.connect(
+            lambda: self._choose_color(self.element_outline_color_button)
+        )
         self.element_pattern_combo = self._combo(
             (("None", ""), ("Diagonal", "/"), ("Back diagonal", "\\"), ("Cross", "x"), ("Dots", "."), ("Horizontal", "-"))
         )
@@ -404,6 +421,10 @@ class DashboardVisualOptionsDialog(QDialog):
             self.element_width_spin,
             self.element_dash_combo,
             self.element_marker_size_spin,
+            self.element_marker_symbol_combo,
+            self.element_outline_checkbox,
+            self.element_outline_width_spin,
+            self.element_outline_color_mode_combo,
             self.element_pattern_combo,
             self.element_stat_accent_checkbox,
         ):
@@ -421,6 +442,10 @@ class DashboardVisualOptionsDialog(QDialog):
         selection_form.addRow("Width", self.element_width_spin)
         selection_form.addRow("Dash", self.element_dash_combo)
         selection_form.addRow("Marker size", self.element_marker_size_spin)
+        selection_form.addRow("Shape", self.element_marker_symbol_combo)
+        selection_form.addRow("", self.element_outline_checkbox)
+        selection_form.addRow("Border width", self.element_outline_width_spin)
+        selection_form.addRow("Border color", self._line_style_row(self.element_outline_color_button, self.element_outline_color_mode_combo))
         selection_form.addRow("Pattern", self.element_pattern_combo)
         selection_form.addRow("", self.element_stat_accent_checkbox)
         selection_form.addRow("", selection_actions)
@@ -619,6 +644,18 @@ class DashboardVisualOptionsDialog(QDialog):
         self.element_width_spin.setEnabled(has_selection and capabilities["line"])
         self.element_dash_combo.setEnabled(has_selection and capabilities["line"])
         self.element_marker_size_spin.setEnabled(has_selection and capabilities["marker_size"])
+        self.element_marker_symbol_combo.setEnabled(has_selection and capabilities["marker_symbol"])
+        self.element_outline_checkbox.setEnabled(has_selection and capabilities["outline"])
+        outline_enabled = (
+            has_selection
+            and capabilities["outline"]
+            and self.element_outline_checkbox.isChecked()
+        )
+        self.element_outline_width_spin.setEnabled(outline_enabled)
+        self.element_outline_color_mode_combo.setEnabled(outline_enabled)
+        self.element_outline_color_button.setEnabled(
+            outline_enabled and self.element_outline_color_mode_combo.currentData() == "custom"
+        )
         self.element_pattern_combo.setEnabled(has_selection and capabilities["pattern"])
         self.element_stat_accent_checkbox.setEnabled(has_selection and role == "stat")
 
@@ -772,6 +809,17 @@ class DashboardVisualOptionsDialog(QDialog):
             "width": line.get("width"),
             "dash": line.get("dash"),
             "marker_size": marker.get("size"),
+            "marker_symbol": marker.get("symbol"),
+            "outline_width": (
+                marker.get("line", {}).get("width")
+                if isinstance(marker.get("line"), Mapping)
+                else None
+            ),
+            "outline_color": (
+                marker.get("line", {}).get("color")
+                if isinstance(marker.get("line"), Mapping)
+                else None
+            ),
             "pattern_shape": (
                 marker.get("pattern", {}).get("shape")
                 if isinstance(marker.get("pattern"), Mapping)
@@ -846,6 +894,8 @@ class DashboardVisualOptionsDialog(QDialog):
         return {
             "line": bool(capabilities & {"width", "dash"}),
             "marker_size": "marker_size" in capabilities,
+            "marker_symbol": "marker_symbol" in capabilities,
+            "outline": bool(capabilities & {"outline_width", "outline_color", "outline_color_mode"}),
             "pattern": "pattern_shape" in capabilities,
         }
 
@@ -860,7 +910,7 @@ class DashboardVisualOptionsDialog(QDialog):
         if "lines" in mode:
             capabilities.extend(["width", "dash"])
         if trace_type == "scatter" and "markers" in mode:
-            capabilities.append("marker_size")
+            capabilities.extend(["marker_size", "marker_symbol", "outline_width", "outline_color", "outline_color_mode"])
         if trace_type in {"bar", "histogram"}:
             capabilities.append("pattern_shape")
         return capabilities
@@ -890,6 +940,22 @@ class DashboardVisualOptionsDialog(QDialog):
                 self._sync_custom_controls()
                 return
 
+    def _select_preview_series(self, index: int) -> None:
+        series_targets = [
+            target
+            for target in self._preview_targets
+            if str(target.get("role") or "") == "series"
+        ]
+        target = series_targets[index] if 0 <= index < len(series_targets) else None
+        if target is None and 0 <= index < len(self._preview_targets):
+            target = self._preview_targets[index]
+        if target is None:
+            return
+        self._selected_target = dict(target)
+        self._populate_element_combo()
+        self._load_selected_element_controls()
+        self._sync_custom_controls()
+
     def _handle_preview_target_payload(self, payload: str) -> None:
         try:
             target = json.loads(payload)
@@ -917,10 +983,18 @@ class DashboardVisualOptionsDialog(QDialog):
             self.element_width_spin.setValue(float(style.get("width", 2.0)))
             self._set_combo_data(self.element_dash_combo, str(style.get("dash") or "solid"))
             self.element_marker_size_spin.setValue(float(style.get("marker_size", self.marker_size_spin.value())))
+            self._set_combo_data(self.element_marker_symbol_combo, str(style.get("marker_symbol") or "circle"))
+            outline_width = float(style.get("outline_width", 0.0) or 0.0)
+            outline_color_mode = str(style.get("outline_color_mode") or "auto")
+            self.element_outline_checkbox.setChecked(outline_width > 0)
+            self.element_outline_width_spin.setValue(outline_width if outline_width > 0 else 1.25)
+            self._set_combo_data(self.element_outline_color_mode_combo, outline_color_mode)
+            self._set_button_color(self.element_outline_color_button, str(style.get("outline_color") or "#111827"))
             self._set_combo_data(self.element_pattern_combo, str(style.get("pattern_shape") or ""))
             self.element_stat_accent_checkbox.setChecked(role == "stat" and self.stat_accent_combo.currentData() == "accent")
         finally:
             self._updating_selection_controls = False
+        self._sync_custom_controls()
 
     def _selected_element_style(self, target: Mapping[str, Any]) -> dict[str, Any]:
         role = str(target.get("role") or "")
@@ -962,6 +1036,10 @@ class DashboardVisualOptionsDialog(QDialog):
         style.setdefault("width", trace_style.get("width") or 2.0)
         style.setdefault("dash", trace_style.get("dash") or "solid")
         style.setdefault("marker_size", trace_style.get("marker_size") or settings["marker_size"])
+        style.setdefault("marker_symbol", trace_style.get("marker_symbol") or "circle")
+        style.setdefault("outline_width", trace_style.get("outline_width") or 0.0)
+        style.setdefault("outline_color_mode", style.get("outline_color_mode") or "auto")
+        style.setdefault("outline_color", trace_style.get("outline_color") or "#111827")
         style.setdefault("pattern_shape", trace_style.get("pattern_shape") or "")
         return style
 
@@ -1007,6 +1085,23 @@ class DashboardVisualOptionsDialog(QDialog):
             if label:
                 if capabilities["marker_size"]:
                     style["marker_size"] = self.element_marker_size_spin.value()
+                if capabilities["marker_symbol"]:
+                    style["marker_symbol"] = str(self.element_marker_symbol_combo.currentData() or "circle")
+                if capabilities["outline"]:
+                    style["outline_width"] = (
+                        self.element_outline_width_spin.value()
+                        if self.element_outline_checkbox.isChecked()
+                        else 0.0
+                    )
+                    style["outline_color_mode"] = str(
+                        self.element_outline_color_mode_combo.currentData() or "auto"
+                    )
+                    if style["outline_color_mode"] == "custom":
+                        style["outline_color"] = str(
+                            self.element_outline_color_button.property("color") or "#111827"
+                        )
+                    else:
+                        style.pop("outline_color", None)
                 if capabilities["pattern"]:
                     style["pattern_shape"] = str(self.element_pattern_combo.currentData() or "")
                 self._series_overrides[label.casefold()] = style
@@ -1054,7 +1149,10 @@ class DashboardVisualOptionsDialog(QDialog):
         color = QColorDialog.getColor(initial, self, "Choose color")
         if color.isValid():
             self._set_button_color(button, color.name())
-            if button is getattr(self, "element_color_button", None) and self._selected_target:
+            if button in {
+                getattr(self, "element_color_button", None),
+                getattr(self, "element_outline_color_button", None),
+            } and self._selected_target:
                 self._apply_selected_element_style()
                 return
             self._handle_control_changed()

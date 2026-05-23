@@ -76,6 +76,29 @@ def test_dashboard_visual_gradient_settings_build_distinct_palette() -> None:
     assert plotly_settings["series"]["marker_symbols"]
 
 
+def test_dashboard_visual_series_overrides_normalize_marker_outline_options() -> None:
+    settings = normalize_dashboard_visual_settings(
+        {
+            "preset": "custom",
+            "series_overrides": {
+                "Group 1": {
+                    "marker_size": 12,
+                    "marker_symbol": "diamond",
+                    "outline_width": 1.5,
+                    "outline_color": "auto",
+                }
+            },
+        }
+    )
+
+    override = settings["series_overrides"]["Group 1"]
+    assert override["marker_size"] == 12
+    assert override["marker_symbol"] == "diamond"
+    assert override["outline_width"] == 1.5
+    assert override["outline_color_mode"] == "auto"
+    assert "outline_color" not in override
+
+
 def test_dashboard_visual_palette_presets_include_researched_data_viz_palettes() -> None:
     presets = dashboard_visual_palette_presets()
 
@@ -554,6 +577,7 @@ def test_dashboard_visual_settings_style_trend_roles_and_unprefixed_stat_lines()
         "opacity",
         "outline_width",
         "outline_color",
+        "outline_color_mode",
         "marker_size",
         "marker_symbol",
     ]
@@ -621,5 +645,59 @@ def test_dashboard_visual_histogram_trace_metadata_exposes_pattern_capability() 
         "opacity",
         "outline_width",
         "outline_color",
+        "outline_color_mode",
         "pattern_shape",
     ]
+
+
+def test_dashboard_visual_scatter_series_overrides_apply_marker_shape_and_auto_outline() -> None:
+    spec = {
+        "data": [
+            {
+                "type": "scatter",
+                "mode": "markers",
+                "name": "Light",
+                "x": [1, 2],
+                "y": [3, 4],
+                "marker": {"color": "#aaaaaa"},
+            },
+            {
+                "type": "scatter",
+                "mode": "markers",
+                "name": "Dark",
+                "x": [1, 2],
+                "y": [4, 5],
+                "marker": {"color": "#bbbbbb"},
+            },
+        ],
+        "layout": {},
+        "metadata": {"kind": "scatter"},
+    }
+
+    apply_dashboard_visual_settings(
+        spec,
+        payload={"labels": ["Light", "Dark"], "type": "scatter"},
+        visual_settings={
+            "series": {
+                "palette": ["#facc15", "#123456"],
+                "overrides": {
+                    "Light": {
+                        "marker_size": 13,
+                        "marker_symbol": "diamond",
+                        "outline_width": 2,
+                        "outline_color_mode": "auto",
+                    },
+                    "Dark": {
+                        "outline_width": 2,
+                        "outline_color_mode": "auto",
+                    },
+                },
+            }
+        },
+    )
+
+    light, dark = spec["data"]
+    assert light["marker"]["size"] == 13
+    assert light["marker"]["symbol"] == "diamond"
+    assert light["marker"]["line"] == {"width": 2, "color": "#111827"}
+    assert dark["marker"]["line"] == {"width": 2, "color": "#ffffff"}

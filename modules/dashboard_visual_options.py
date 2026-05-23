@@ -32,6 +32,9 @@ DASHBOARD_VISUAL_GRADIENT_SPREADS = ("narrow", "normal", "wide")
 DASHBOARD_VISUAL_DISTINGUISH_MODES = ("color_only", "when_similar", "always")
 DASHBOARD_VISUAL_CHART_TYPES = ("histogram", "violin", "iqr", "scatter")
 DASHBOARD_VISUAL_THEME_LIBRARY_VERSION = 1
+DASHBOARD_VISUAL_MARKER_SYMBOLS = ("circle", "diamond", "square", "cross", "x", "triangle-up")
+DASHBOARD_VISUAL_PATTERN_SHAPES = ("", "/", "\\", "x", ".", "-")
+DASHBOARD_VISUAL_OUTLINE_COLOR_MODES = ("auto", "custom")
 
 DEFAULT_DASHBOARD_PALETTE = tuple(
     str(color).lower()
@@ -55,8 +58,8 @@ DEFAULT_OPACITY = {
     "trend": 0.35,
     "model_curve": 0.58,
 }
-_MARKER_SYMBOLS = ("circle", "diamond", "square", "cross", "x", "triangle-up")
-_PATTERN_SHAPES = ("", "/", "\\", "x", ".", "-")
+_MARKER_SYMBOLS = DASHBOARD_VISUAL_MARKER_SYMBOLS
+_PATTERN_SHAPES = DASHBOARD_VISUAL_PATTERN_SHAPES
 _REFERENCE_DEFAULTS = {
     "lsl": {
         "color": str(SUMMARY_PLOT_PALETTE["spec_limit"]).lower(),
@@ -1110,7 +1113,17 @@ def _normalize_series_overrides(value: Any) -> dict[str, dict[str, Any]]:
         outline_width = _optional_bounded_float(raw_style.get("outline_width"), minimum=0.0, maximum=6.0)
         if outline_width is not None:
             style["outline_width"] = outline_width
-        outline_color = _color(raw_style.get("outline_color"), "")
+        raw_outline_color = raw_style.get("outline_color")
+        outline_color_mode = _choice(
+            raw_style.get("outline_color_mode"),
+            DASHBOARD_VISUAL_OUTLINE_COLOR_MODES,
+            "",
+        )
+        if str(raw_outline_color or "").strip().casefold() == "auto":
+            outline_color_mode = "auto"
+        if outline_color_mode:
+            style["outline_color_mode"] = outline_color_mode
+        outline_color = _color(raw_outline_color, "")
         if outline_color:
             style["outline_color"] = outline_color
         line_width = _optional_bounded_float(raw_style.get("width"), minimum=0.5, maximum=8.0)
@@ -1788,8 +1801,11 @@ __all__ = [
     "DASHBOARD_VISUAL_COLOR_SOURCES",
     "DASHBOARD_VISUAL_DISTINGUISH_MODES",
     "DASHBOARD_VISUAL_GRADIENT_SPREADS",
+    "DASHBOARD_VISUAL_MARKER_SYMBOLS",
+    "DASHBOARD_VISUAL_OUTLINE_COLOR_MODES",
     "DASHBOARD_VISUAL_PALETTE_MODES",
     "DASHBOARD_VISUAL_PALETTE_PRESET_IDS",
+    "DASHBOARD_VISUAL_PATTERN_SHAPES",
     "DASHBOARD_VISUAL_PRESETS",
     "DASHBOARD_VISUAL_RECIPES",
     "DASHBOARD_VISUAL_THEME_LIBRARY_VERSION",

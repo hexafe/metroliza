@@ -143,6 +143,7 @@ def apply_dashboard_visual_settings(
     marker_size = _finite_float(series.get("marker_size"))
     outline_width = _finite_float(series.get("outline_width"))
     outline_color = _string_or_none(series.get("outline_color"))
+    outline_color_mode = _outline_color_mode(series.get("outline_color_mode"))
     auto_distinguish = bool(series.get("auto_distinguish"))
     similar_palette = _palette_has_similar_colors(palette, threshold=_similarity_threshold(series))
     use_distinguishers = bool(marker_symbols or pattern_shapes) and (
@@ -227,6 +228,7 @@ def apply_dashboard_visual_settings(
             pattern_shape=_distinguishing_value(pattern_shapes, labels, label, use_distinguishers),
             outline_width=outline_width,
             outline_color=outline_color,
+            outline_color_mode=outline_color_mode,
             preserve_color=preserve_colors,
         )
 
@@ -399,6 +401,7 @@ def _apply_series_trace_style(
     pattern_shape: str | None,
     outline_width: float | None,
     outline_color: str | None,
+    outline_color_mode: str,
     preserve_color: bool,
 ) -> None:
     is_trend_line = chart_kind in {"trend", "model_curve"} and (
@@ -429,7 +432,9 @@ def _apply_series_trace_style(
             if dash:
                 line["dash"] = dash
     if isinstance(marker, dict) and not is_trend_line:
-        resolved_marker_size = _finite_float(style.get("marker_size")) or marker_size
+        resolved_marker_size = _finite_float(style.get("marker_size"))
+        if resolved_marker_size is None:
+            resolved_marker_size = marker_size
         if resolved_marker_size is not None and _trace_has_markers(trace):
             marker["size"] = resolved_marker_size
         resolved_symbol = _string_or_none(style.get("marker_symbol")) or marker_symbol
@@ -443,7 +448,20 @@ def _apply_series_trace_style(
         resolved_outline_width = _finite_float(style.get("outline_width"))
         if resolved_outline_width is None:
             resolved_outline_width = outline_width
-        resolved_outline_color = _string_or_none(style.get("outline_color")) or outline_color
+        style_outline_color_mode = _outline_color_mode(style.get("outline_color_mode"))
+        resolved_outline_color_mode = style_outline_color_mode or outline_color_mode
+        raw_outline_color = _string_or_none(style.get("outline_color"))
+        if raw_outline_color and raw_outline_color.casefold() == "auto":
+            resolved_outline_color_mode = "auto"
+            raw_outline_color = None
+        resolved_outline_color = raw_outline_color or outline_color
+        if resolved_outline_color and resolved_outline_color.casefold() == "auto":
+            resolved_outline_color_mode = "auto"
+            resolved_outline_color = None
+        if resolved_outline_color_mode == "auto" and (resolved_outline_width or 0.0) > 0.0:
+            resolved_outline_color = _contrasting_marker_outline_color(
+                _string_or_none(marker.get("color")) or color or _trace_color(trace)
+            )
         if resolved_outline_width is not None or resolved_outline_color:
             line = marker.setdefault("line", {})
             if isinstance(line, dict):
@@ -562,7 +580,7 @@ def _series_label_for_trace(trace: Mapping[str, Any], labels: Sequence[str]) -> 
 def _style_capabilities_for_series_trace(trace: Mapping[str, Any], role: str) -> tuple[str, ...]:
     if role in {"trend", "model_curve"}:
         return _LINE_STYLE_CAPABILITIES
-    capabilities = ["color", "opacity", "outline_width", "outline_color"]
+    capabilities = ["color", "opacity", "outline_width", "outline_color", "outline_color_mode"]
     if _trace_has_markers(trace):
         capabilities.extend(("marker_size", "marker_symbol"))
     if str(trace.get("type") or "").casefold() in {"bar", "histogram"}:
@@ -666,6 +684,20 @@ def _parse_hex_color(value: str) -> tuple[int, int, int] | None:
     if not re.fullmatch(r"#[0-9a-fA-F]{6}", text):
         return None
     return int(text[1:3], 16), int(text[3:5], 16), int(text[5:7], 16)
+
+
+def _contrasting_marker_outline_color(color: str | None) -> str:
+    rgb = _parse_hex_color(str(color or ""))
+    if rgb is None:
+        return "#111827"
+    red, green, blue = rgb
+    luminance = (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255.0
+    return "#111827" if luminance >= 0.58 else "#ffffff"
+
+
+def _outline_color_mode(value: Any) -> str:
+    text = str(value or "").strip().casefold()
+    return text if text in {"auto", "custom"} else ""
 
 
 def _accent_color(color: str, stat_label: str) -> str:

@@ -293,3 +293,70 @@ def test_dashboard_visual_dialog_selected_series_override_only_writes_supported_
     finally:
         dialog.close()
         dialog.deleteLater()
+
+
+def test_dashboard_visual_dialog_selected_marker_controls_write_series_outline(
+    monkeypatch,
+) -> None:
+    _qapp()
+    try:
+        from PyQt6.QtCore import Qt  # noqa: F401
+    except Exception as exc:
+        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
+    import modules.dashboard_visual_options_dialog as dialog_module
+
+    _stub_preview_builders(monkeypatch, dialog_module)
+    dialog = dialog_module.DashboardVisualOptionsDialog(
+        settings={"preset": "custom"},
+        persist_on_accept=False,
+    )
+    try:
+        dialog._preview_timer.stop()
+        dialog._selected_target = {
+            "target": "series:measurements",
+            "role": "series",
+            "label": "Measurements",
+            "capabilities": [
+                "color",
+                "opacity",
+                "marker_size",
+                "marker_symbol",
+                "outline_width",
+                "outline_color",
+                "outline_color_mode",
+            ],
+            "style": {
+                "color": "#123456",
+                "marker_size": 9,
+                "marker_symbol": "square",
+                "outline_width": 1.25,
+                "outline_color": "#ffffff",
+            },
+        }
+        dialog._load_selected_element_controls()
+        dialog._sync_custom_controls()
+
+        assert dialog.element_marker_size_spin.isEnabled()
+        assert dialog.element_marker_symbol_combo.isEnabled()
+        assert dialog.element_outline_checkbox.isEnabled()
+        assert dialog.element_outline_width_spin.isEnabled()
+        assert dialog.element_outline_color_mode_combo.isEnabled()
+        assert dialog.element_marker_symbol_combo.currentData() == "square"
+
+        dialog.element_marker_size_spin.setValue(14.0)
+        dialog._set_combo_data(dialog.element_marker_symbol_combo, "diamond")
+        dialog.element_outline_checkbox.setChecked(True)
+        dialog.element_outline_width_spin.setValue(2.0)
+        dialog._set_combo_data(dialog.element_outline_color_mode_combo, "custom")
+        dialog._set_button_color(dialog.element_outline_color_button, "#abcdef")
+        dialog._apply_selected_element_style()
+
+        override = dialog.visual_settings()["series_overrides"]["measurements"]
+        assert override["marker_size"] == 14.0
+        assert override["marker_symbol"] == "diamond"
+        assert override["outline_width"] == 2.0
+        assert override["outline_color_mode"] == "custom"
+        assert override["outline_color"] == "#abcdef"
+    finally:
+        dialog.close()
+        dialog.deleteLater()
