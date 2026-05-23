@@ -266,6 +266,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn('metroliza-dashboard-visuals', html_text)
             self.assertIn('prefers-color-scheme: dark', html_text)
             self.assertIn('window.Plotly.react', html_text)
+            self.assertIn('preservePlotlyTraceVisibility(container, data);', html_text)
             self.assertIn('applyDashboardVisualsToPlotlySpec(baseSpec)', html_text)
             self.assertIn('initializeDashboardVisualControls();', html_text)
             self.assertIn('refreshOpenLightboxPlotly();', html_text)
@@ -563,7 +564,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
         settings = {
             'series': {
                 'palette': ['#345678'],
-                'opacity': {'trend': 0.61},
+                'opacity': {'scatter': 0.61, 'trend': 0.27},
                 'marker_symbols': ['diamond'],
                 'always_distinguish': True,
                 'marker_size': 11,
@@ -585,6 +586,11 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(measurements['marker']['symbol'], 'diamond')
         self.assertEqual(measurements['marker']['size'], 11)
         self.assertEqual(measurements['opacity'], 0.61)
+        self.assertEqual(measurements['meta']['dashboard_visual_chart_kind'], 'scatter')
+        trend = _trace_by_name(bundle['light'], 'Trend')
+        self.assertEqual(trend['opacity'], 0.27)
+        self.assertEqual(trend['meta']['dashboard_visual_role'], 'trend')
+        self.assertEqual(trend['meta']['dashboard_visual_chart_kind'], 'trend')
         self.assertEqual(_trace_by_name(bundle['dark'], 'Measurements')['marker']['color'], '#345678')
 
     def test_group_analysis_histogram_plotly_spec_uses_shared_bins_for_overlay(self):
@@ -650,7 +656,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertNotIn('shapes', spec['layout'])
         self.assertNotIn('annotations', spec['layout'])
 
-    def test_group_analysis_violin_plotly_spec_treats_numeric_labels_as_categories(self):
+    def test_group_analysis_violin_plotly_spec_uses_numeric_axis_with_label_ticks(self):
         with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
             spec = _build_group_analysis_plotly_spec(
                 'FEATURE_1',
@@ -665,9 +671,10 @@ class TestExportHtmlDashboard(unittest.TestCase):
             )
 
         xaxis = spec['layout']['xaxis']
-        self.assertEqual(xaxis['type'], 'category')
-        self.assertEqual(xaxis['categoryorder'], 'array')
-        self.assertEqual(xaxis['categoryarray'], ['73211', 'A', 'POPULATION'])
+        self.assertEqual(xaxis['type'], 'linear')
+        self.assertEqual(xaxis['range'], [0.5, 3.5])
+        self.assertEqual(xaxis['tickvals'], [1, 2, 3])
+        self.assertEqual(xaxis['ticktext'], ['73211', 'A', 'POPULATION'])
         trace_names = [trace['name'] for trace in spec['data']]
         self.assertIn('73211 (n=3)', trace_names)
         self.assertIn('A (n=3)', trace_names)
@@ -679,12 +686,57 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertTrue(stat_traces)
         self.assertTrue(
             all(
-                isinstance(x_value, str)
+                trace.get('x') == [0.5, 3.5]
+                for trace in stat_traces
+            )
+        )
+        self.assertTrue(
+            all(
+                isinstance(x_value, int)
                 for trace in spec['data']
                 if trace.get('type') == 'violin'
                 for x_value in trace['x']
             )
         )
+
+    def test_group_analysis_violin_single_group_fallback_uses_trace_controlled_lines(self):
+        with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
+            spec = _build_group_analysis_plotly_spec(
+                'FEATURE_1',
+                'violin',
+                {
+                    'groups': [
+                        {'group': 'A', 'values': [6.469, 6.495, 6.501, 6.687]},
+                    ],
+                    'spec_limits': {'lsl': 6.2, 'nominal': 6.5, 'usl': 6.8},
+                },
+            )
+
+        self.assertNotIn('shapes', spec['layout'])
+        self.assertNotIn('annotations', spec['layout'])
+        self.assertEqual(spec['layout']['xaxis']['range'], [0.5, 1.5])
+        self.assertEqual(spec['layout']['xaxis']['tickvals'], [1])
+        self.assertEqual(spec['layout']['xaxis']['ticktext'], ['A'])
+        violin_trace = next(trace for trace in spec['data'] if trace.get('type') == 'violin')
+        self.assertEqual(violin_trace['x'], [1, 1, 1, 1])
+
+        stat_trace = _trace_by_name(spec, 'Mean=6.5380')
+        self.assertEqual(stat_trace['x'], [0.5, 1.5])
+        self.assertEqual(stat_trace['y'], [6.538, 6.538])
+        self.assertEqual(stat_trace.get('visible'), 'legendonly')
+
+        for name, y_value in {
+            'LSL=6.200': 6.2,
+            'Nominal=6.500': 6.5,
+            'USL=6.800': 6.8,
+        }.items():
+            reference_trace = _trace_by_name(spec, name)
+            self.assertEqual(reference_trace['type'], 'scatter')
+            self.assertEqual(reference_trace['mode'], 'lines')
+            self.assertEqual(reference_trace['x'], [0.5, 1.5])
+            self.assertEqual(reference_trace['y'], [y_value, y_value])
+            self.assertNotEqual(reference_trace.get('visible'), 'legendonly')
+            self.assertTrue(reference_trace.get('showlegend'))
 
     def test_group_analysis_iqr_plotly_spec_includes_group_statistics_in_legend_names(self):
         with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
@@ -731,6 +783,19 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertIn('Max=6.687', trace_names)
         self.assertIn('Nominal=6.500', trace_names)
         self.assertNotIn('A Min=6.469', trace_names)
+        self.assertNotIn('shapes', spec['layout'])
+        self.assertNotIn('annotations', spec['layout'])
+        self.assertEqual(spec['layout']['xaxis']['range'], [0.5, 1.5])
+        self.assertEqual(spec['layout']['xaxis']['tickvals'], [1])
+        self.assertEqual(spec['layout']['xaxis']['ticktext'], ['A'])
+        self.assertEqual(spec['data'][0]['x'], [1, 1, 1, 1])
+
+        stat_trace = _trace_by_name(spec, 'Mean=6.5380')
+        self.assertEqual(stat_trace['x'], [0.5, 1.5])
+        self.assertEqual(stat_trace.get('visible'), 'legendonly')
+        nominal_trace = _trace_by_name(spec, 'Nominal=6.500')
+        self.assertEqual(nominal_trace['x'], [0.5, 1.5])
+        self.assertNotEqual(nominal_trace.get('visible'), 'legendonly')
 
     def test_summary_iqr_nested_limits_create_full_width_shapes_and_safe_legend_traces(self):
         with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):

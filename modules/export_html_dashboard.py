@@ -639,10 +639,8 @@ def _stat_legend_prefix(group_label: str, *, populated_count: int) -> str:
 
 
 def _legend_line_x_values(category_labels: list[str]) -> list[Any]:
-    if len(category_labels) >= 2:
-        return [category_labels[0], category_labels[-1]]
-    if len(category_labels) == 1:
-        return [category_labels[0], category_labels[0]]
+    if category_labels:
+        return [0.5, len(category_labels) + 0.5]
     return [None, None]
 
 
@@ -1666,155 +1664,26 @@ def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str, them
             "config": _build_plotly_config(),
         }
 
-    labels = [str(item) for item in (payload.get("labels") or [])]
-    series_list = _payload_distribution_series(payload)
-    traces = []
-    category_labels = []
-    for index, (label, series) in enumerate(zip(labels, series_list), start=1):
-        values = _coerce_finite_float_list(series)
-        if not values:
-            continue
-        group_label = label or f"Group {index}"
-        trace_name = _format_group_statistics_trace_name(group_label, values)
-        group_color = tokens["colorway"][(index - 1) % len(tokens["colorway"])]
-        category_labels.append(group_label)
-        traces.append(
-            {
-                "type": "violin",
-                "name": trace_name,
-                "y": values,
-                "x": [group_label] * len(values),
-                "box": {"visible": True},
-                "meanline": {"visible": True},
-                "line": {"color": group_color, "width": 1.2},
-                "marker": {"color": group_color},
-                "fillcolor": group_color,
-                "opacity": 0.84,
-                "points": False,
-                "scalemode": "count",
-                "spanmode": "hard",
-                "hovertemplate": f"{trace_name}<br>Measurement=%{{y}}<extra></extra>",
-            }
-        )
-    if not traces:
-        return {}
-
-    layout = _build_plotly_base_layout(
+    shared_payload = {**payload, "render_mode": "violin"}
+    spec = build_distribution_iqr_plotly_spec(
+        shared_payload,
         title=title,
-        x_label=str(payload.get("x_label") or "Group"),
-        y_label=str(payload.get("y_label") or "Measurement"),
+        chart_type="distribution",
+        static=False,
         theme=theme,
     )
-    layout["xaxis"].update(
-        {
-            "type": "category",
-            "categoryorder": "array",
-            "categoryarray": category_labels,
-        }
-    )
-    shapes, annotations = _build_horizontal_reference_shapes(nominal=nominal, lsl=lsl, usl=usl, theme=theme)
-    layout["shapes"] = shapes
-    layout["annotations"] = annotations
-    y_limits = payload.get("y_limits") if isinstance(payload.get("y_limits"), dict) else {}
-    y_min = _coerce_finite_float(y_limits.get("min"))
-    y_max = _coerce_finite_float(y_limits.get("max"))
-    if y_min is not None and y_max is not None and y_min < y_max:
-        layout["yaxis"]["range"] = [y_min, y_max]
-    traces.extend(
-        _build_distribution_stat_legend_traces(
-            labels=category_labels,
-            series_list=[trace["y"] for trace in traces if trace.get("type") == "violin"],
-            limits={"lsl": lsl, "nominal": nominal, "usl": usl},
-            tokens=tokens,
-            group_colors=_group_colors_from_traces(traces, category_labels, tokens),
-            mean_precision=_mean_precision_from_payload(payload),
-        )
-    )
-    return {
-        "data": traces,
-        "layout": layout,
-        "config": _build_plotly_config(),
-    }
+    return spec or {}
 
 
 def _build_plotly_iqr_spec(payload: dict[str, Any], *, title: str, theme: str = "light") -> dict[str, Any]:
-    tokens = _build_plotly_theme_tokens(theme)
-    limits = _resolve_limit_values(payload)
-    labels = [str(item) for item in (payload.get("labels") or [])]
-    series_list = _payload_distribution_series(payload)
-    traces = []
-    category_labels = []
-    for index, (label, series) in enumerate(zip(labels, series_list), start=1):
-        values = _coerce_finite_float_list(series)
-        if not values:
-            continue
-        group_label = label or f"Group {index}"
-        trace_name = _format_group_statistics_trace_name(group_label, values)
-        group_color = tokens["colorway"][(index - 1) % len(tokens["colorway"])]
-        category_labels.append(group_label)
-        traces.append(
-            {
-                "type": "box",
-                "name": trace_name,
-                "x": [group_label] * len(values),
-                "y": values,
-                "boxpoints": False,
-                "boxmean": True,
-                "marker": {"color": group_color},
-                "line": {"color": group_color},
-                "hovertemplate": f"{trace_name}<br>Measurement=%{{y}}<extra></extra>",
-            }
-        )
-    if not traces:
-        return {}
-
-    layout = _build_plotly_base_layout(
+    spec = build_distribution_iqr_plotly_spec(
+        payload,
         title=title,
-        x_label=str(payload.get("x_label") or "Group"),
-        y_label=str(payload.get("y_label") or "Measurement"),
+        chart_type="iqr",
+        static=False,
         theme=theme,
     )
-    shapes, annotations = _build_horizontal_reference_shapes(
-        nominal=limits.get("nominal"),
-        lsl=limits.get("lsl"),
-        usl=limits.get("usl"),
-        theme=theme,
-    )
-    layout["shapes"] = shapes
-    layout["annotations"] = annotations
-    _apply_plotly_categorical_axis(
-        layout,
-        "xaxis",
-        payload.get("layout") if isinstance(payload.get("layout"), dict) else None,
-    )
-    if category_labels:
-        layout["xaxis"].update(
-            {
-                "type": "category",
-                "categoryorder": "array",
-                "categoryarray": category_labels,
-            }
-        )
-    y_limits = payload.get("y_limits") if isinstance(payload.get("y_limits"), dict) else {}
-    y_min = _coerce_finite_float(y_limits.get("min"))
-    y_max = _coerce_finite_float(y_limits.get("max"))
-    if y_min is not None and y_max is not None and y_min < y_max:
-        layout["yaxis"]["range"] = [y_min, y_max]
-    traces.extend(
-        _build_distribution_stat_legend_traces(
-            labels=category_labels,
-            series_list=[trace["y"] for trace in traces if trace.get("type") == "box"],
-            limits=limits,
-            tokens=tokens,
-            group_colors=_group_colors_from_traces(traces, category_labels, tokens),
-            mean_precision=_mean_precision_from_payload(payload),
-        )
-    )
-    return {
-        "data": traces,
-        "layout": layout,
-        "config": _build_plotly_config(),
-    }
+    return spec or {}
 
 
 def _format_group_statistics_trace_name(label: str, values: list[float]) -> str:

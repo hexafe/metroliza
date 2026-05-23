@@ -21,6 +21,7 @@ from modules.dashboard_visual_options import (
     dashboard_visual_swatch_palette,
     normalize_dashboard_visual_settings,
 )
+from modules.dashboard_plotly_visuals import apply_dashboard_visual_settings
 from modules.industrial_analytics_dashboard import build_production_dashboard_manifest
 from modules.industrial_analytics_state import (
     ProductionAggregationState,
@@ -323,3 +324,93 @@ def test_csv_summary_dashboard_applies_visual_settings_to_plotly_specs() -> None
     ]
     assert series_traces
     assert series_traces[0]["marker"]["color"] == "#123456"
+
+
+def test_dashboard_visual_settings_style_trend_roles_and_unprefixed_stat_lines() -> None:
+    spec = {
+        "data": [
+            {
+                "type": "scatter",
+                "mode": "markers",
+                "name": "Measurements",
+                "x": [1, 2, 3],
+                "y": [10.1, 10.2, 10.3],
+                "marker": {"color": "#aaaaaa", "size": 8},
+            },
+            {
+                "type": "scatter",
+                "mode": "lines",
+                "name": "Trend",
+                "x": [1, 3],
+                "y": [10.1, 10.3],
+                "line": {"color": "#bbbbbb", "width": 1.1, "dash": "dash"},
+            },
+            {
+                "type": "scatter",
+                "mode": "lines",
+                "name": "LSL=9.900",
+                "x": [1, 3],
+                "y": [9.9, 9.9],
+                "line": {"color": "#cccccc", "dash": "dash"},
+            },
+            {
+                "type": "scatter",
+                "mode": "lines",
+                "name": "Mean=10.2000",
+                "x": [1, 3],
+                "y": [10.2, 10.2],
+                "line": {"color": "#dddddd", "dash": "dashdot"},
+            },
+            {
+                "type": "scatter",
+                "mode": "lines",
+                "name": "Median=10.2000",
+                "x": [1, 3],
+                "y": [10.2, 10.2],
+                "line": {"color": "#eeeeee", "dash": "dot"},
+                "visible": "legendonly",
+            },
+        ],
+        "layout": {},
+        "metadata": {"kind": "trend"},
+    }
+    settings = {
+        "preserve_colors_on_theme": True,
+        "series": {
+            "palette": ["#111111", "#222222"],
+            "opacity": {"scatter": 0.73, "trend": 0.21},
+            "marker_size": 12,
+            "marker_symbols": ["diamond"],
+            "always_distinguish": True,
+        },
+        "stat_lines": {"width": 3.0, "accent_by_stat": True},
+        "reference_lines": {"lsl": {"color": "#ff0000", "dash": "dot", "width": 1.25}},
+    }
+
+    apply_dashboard_visual_settings(spec, visual_settings=settings)
+
+    measurements, trend, lsl, mean, median = spec["data"]
+    assert measurements["marker"]["color"] == "#111111"
+    assert measurements["marker"]["size"] == 12
+    assert measurements["marker"]["symbol"] == "diamond"
+    assert measurements["opacity"] == 0.73
+    assert measurements["meta"]["dashboard_visual_role"] == "series"
+    assert measurements["meta"]["dashboard_visual_chart_kind"] == "scatter"
+
+    assert trend["line"]["color"] == "#222222"
+    assert trend["opacity"] == 0.21
+    assert "marker" not in trend
+    assert trend["meta"]["dashboard_visual_role"] == "trend"
+    assert trend["meta"]["dashboard_visual_chart_kind"] == "trend"
+
+    assert lsl["line"]["color"] == "#ff0000"
+    assert lsl["line"]["dash"] == "dot"
+    assert lsl["line"]["width"] == 1.25
+    assert lsl.get("meta", {}).get("dashboard_visual_role") is None
+
+    assert mean["line"]["width"] == 3.0
+    assert mean["meta"]["dashboard_visual_role"] == "stat"
+    assert "opacity" not in mean
+    assert median["line"]["width"] == 3.0
+    assert median["meta"]["dashboard_visual_role"] == "stat"
+    assert median["visible"] == "legendonly"

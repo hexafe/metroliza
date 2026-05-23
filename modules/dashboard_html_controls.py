@@ -609,12 +609,21 @@ def render_dashboard_visual_runtime_js(config_var: str = "dashboardVisualConfig"
 
       const stripGroupCount = (label) => String(label || '').replace(/\\s*\\(n\\s*=\\s*\\d+\\)\\s*$/i, '').trim();
       const isReferenceName = (name) => ['lsl', 'usl', 'nominal'].includes(String(name || '').split('=')[0].trim().toLowerCase());
-      const groupStatMatch = (name) => String(name || '').trim().match(/^\\((.+?)\\)\\s*(Min|Q1|Median|Mean|Q3|Max)=/i);
+      const groupStatMatch = (name) => {{
+        const match = String(name || '').trim().match(/^(?:\\((.+?)\\)\\s*)?(Min|Q1|Median|Mean|Q3|Max)=/i);
+        if (!match) return null;
+        return {{ group: match[1] ? stripGroupCount(match[1]) : '', stat: match[2] }};
+      }};
       const traceLooksLikeTrend = (trace) => {{
         if (!trace || typeof trace !== 'object') return false;
         const name = String(trace.name || '').trim().toLowerCase();
         const mode = String(trace.mode || '').toLowerCase();
         return name === 'trend' && mode.includes('lines') && !isReferenceName(name);
+      }};
+      const chartKindForTrace = (trace, chartKind) => {{
+        if (traceLooksLikeTrend(trace)) return 'trend';
+        if (chartKind === 'trend' && traceHasMarkers(trace)) return 'scatter';
+        return chartKind;
       }};
 
       const chartKindForSpec = (spec) => {{
@@ -670,6 +679,75 @@ def render_dashboard_visual_runtime_js(config_var: str = "dashboardVisualConfig"
 
       const traceHasMarkers = (trace) => String(trace.mode || '').toLowerCase().includes('markers');
 
+      const setTrendTraceColor = (trace, color) => {{
+        trace.line = Object.assign({{}}, trace.line || {{}}, {{ color }});
+      }};
+
+      const traceVisibilityState = (trace) => {{
+        if (!trace || typeof trace !== 'object') {{
+          return {{ hasVisible: false, value: undefined }};
+        }}
+        return Object.prototype.hasOwnProperty.call(trace, 'visible')
+          ? {{ hasVisible: true, value: trace.visible }}
+          : {{ hasVisible: false, value: undefined }};
+      }};
+
+      const traceIsHidden = (trace) => {{
+        const visibility = traceVisibilityState(trace);
+        return visibility.hasVisible && (visibility.value === 'legendonly' || visibility.value === false);
+      }};
+
+      const preservePlotlyTraceVisibility = (container, nextData) => {{
+        const node = typeof container === 'string' ? document.getElementById(container) : container;
+        const currentData = node && Array.isArray(node.data) ? node.data : [];
+        if (!Array.isArray(nextData) || !currentData.length) {{
+          return nextData;
+        }}
+        const allCurrentTracesHidden = currentData.every((trace) => traceIsHidden(trace));
+        nextData.forEach((trace, index) => {{
+          if (!trace || typeof trace !== 'object') return;
+          const visibility = traceVisibilityState(currentData[index]);
+          if (visibility.hasVisible) {{
+            trace.visible = visibility.value;
+          }} else if (allCurrentTracesHidden) {{
+            trace.visible = 'legendonly';
+          }} else if (!allCurrentTracesHidden && Object.prototype.hasOwnProperty.call(trace, 'visible')) {{
+            delete trace.visible;
+          }}
+        }});
+        return nextData;
+      }};
+
+      let plotlyVisibilityPatchAttempts = 0;
+      const installPlotlyVisibilityReactPatch = () => {{
+        if (!window.Plotly || typeof window.Plotly.react !== 'function') {{
+          return false;
+        }}
+        if (window.Plotly.react.__metrolizaPreservesTraceVisibility) {{
+          return true;
+        }}
+        const originalReact = window.Plotly.react.bind(window.Plotly);
+        const patchedReact = (container, data, layout, config) => {{
+          preservePlotlyTraceVisibility(container, data);
+          return originalReact(container, data, layout, config);
+        }};
+        patchedReact.__metrolizaPreservesTraceVisibility = true;
+        window.Plotly.react = patchedReact;
+        return true;
+      }};
+
+      const ensurePlotlyVisibilityReactPatch = () => {{
+        if (installPlotlyVisibilityReactPatch()) {{
+          return;
+        }}
+        if (plotlyVisibilityPatchAttempts >= 40) {{
+          return;
+        }}
+        plotlyVisibilityPatchAttempts += 1;
+        window.setTimeout(ensurePlotlyVisibilityReactPatch, 250);
+      }};
+      ensurePlotlyVisibilityReactPatch();
+
       const paletteHasSimilarColors = (palette) => {{
         if (!Array.isArray(palette) || palette.length < 2) return false;
         for (let index = 1; index < palette.length; index += 1) {{
@@ -698,9 +776,6 @@ def render_dashboard_visual_runtime_js(config_var: str = "dashboardVisualConfig"
         const palette = Array.isArray(series.palette) ? series.palette : [];
         const labels = seriesLabelsForSpec(spec);
         const chartKind = chartKindForSpec(spec);
-        const opacity = series.opacity && Object.prototype.hasOwnProperty.call(series.opacity, chartKind)
-          ? Number(series.opacity[chartKind])
-          : Number(series.opacity && series.opacity.default);
         const markerSymbols = Array.isArray(series.marker_symbols) ? series.marker_symbols : [];
         const patterns = Array.isArray(series.patterns) ? series.patterns : [];
         const useDistinguishers = Boolean(series.always_distinguish)
@@ -720,11 +795,15 @@ def render_dashboard_visual_runtime_js(config_var: str = "dashboardVisualConfig"
           const name = String(trace.name || '');
           const stat = groupStatMatch(name);
           if (stat) {{
-            const groupLabel = stripGroupCount(stat[1]);
-            const labelIndex = Math.max(0, labels.indexOf(groupLabel));
-            let color = palette[labelIndex % Math.max(1, palette.length)] || traceColor(trace);
+            const groupLabel = stat.group || (labels.length === 1 ? labels[0] : '');
+            let color = traceColor(trace);
+            if (groupLabel) {{
+              const groupIndex = labels.indexOf(groupLabel);
+              const labelIndex = groupIndex >= 0 ? groupIndex : traceIndex;
+              color = palette[labelIndex % Math.max(1, palette.length)] || color;
+            }}
             if (color && settings.stat_lines && settings.stat_lines.accent_by_stat) {{
-              color = accentColor(color, stat[2]);
+              color = accentColor(color, stat.stat);
             }}
             trace.line = Object.assign({{}}, trace.line || {{}});
             if (color) trace.line.color = color;
@@ -748,38 +827,52 @@ def render_dashboard_visual_runtime_js(config_var: str = "dashboardVisualConfig"
             return;
           }}
 
+          const traceChartKind = chartKindForTrace(trace, chartKind);
+          const opacity = series.opacity && Object.prototype.hasOwnProperty.call(series.opacity, traceChartKind)
+            ? Number(series.opacity[traceChartKind])
+            : Number(series.opacity && series.opacity.default);
+          const isTrendLine = traceChartKind === 'trend' && traceLooksLikeTrend(trace);
           const rawLabel = stripGroupCount(name);
           let label = labels.includes(rawLabel) ? rawLabel : null;
           if (!label && labels.length === 1 && ['Frequency', 'Histogram', 'Measurements', ''].includes(name)) {{
             label = labels[0];
+          }}
+          if (!label && isTrendLine) {{
+            label = 'Trend';
           }}
           if (!label && !labels.length && rawLabel) {{
             label = rawLabel;
           }}
           if (!label) return;
 
-          const labelIndex = Math.max(0, labels.indexOf(label));
+          const rawLabelIndex = labels.indexOf(label);
+          const labelIndex = rawLabelIndex >= 0 ? rawLabelIndex : traceIndex;
           const color = palette[labelIndex % Math.max(1, palette.length)] || traceColor(trace);
-          if (color) setTraceColor(trace, color);
+          if (color) {{
+            if (isTrendLine) setTrendTraceColor(trace, color);
+            else setTraceColor(trace, color);
+          }}
           if (Number.isFinite(opacity)) {{
             trace.opacity = Math.max(0, Math.min(1, opacity));
           }}
-          trace.marker = Object.assign({{}}, trace.marker || {{}});
-          if (traceHasMarkers(trace) && Number.isFinite(Number(series.marker_size))) {{
-            trace.marker.size = Number(series.marker_size);
-          }}
-          if (traceHasMarkers(trace) && useDistinguishers && markerSymbols.length) {{
-            trace.marker.symbol = markerSymbols[labelIndex % markerSymbols.length];
-          }}
-          if (['bar', 'histogram'].includes(String(trace.type || '').toLowerCase()) && useDistinguishers && patterns.length) {{
-            trace.marker.pattern = Object.assign({{}}, trace.marker.pattern || {{}}, {{
-              shape: patterns[labelIndex % patterns.length],
-            }});
+          if (!isTrendLine) {{
+            trace.marker = Object.assign({{}}, trace.marker || {{}});
+            if (traceHasMarkers(trace) && Number.isFinite(Number(series.marker_size))) {{
+              trace.marker.size = Number(series.marker_size);
+            }}
+            if (traceHasMarkers(trace) && useDistinguishers && markerSymbols.length) {{
+              trace.marker.symbol = markerSymbols[labelIndex % markerSymbols.length];
+            }}
+            if (['bar', 'histogram'].includes(String(trace.type || '').toLowerCase()) && useDistinguishers && patterns.length) {{
+              trace.marker.pattern = Object.assign({{}}, trace.marker.pattern || {{}}, {{
+                shape: patterns[labelIndex % patterns.length],
+              }});
+            }}
           }}
           trace.meta = Object.assign({{}}, trace.meta || {{}}, {{
-            dashboard_visual_role: 'series',
+            dashboard_visual_role: isTrendLine ? 'trend' : 'series',
             dashboard_visual_preserve_color: Boolean(color),
-            dashboard_visual_chart_kind: chartKind,
+            dashboard_visual_chart_kind: traceChartKind,
           }});
         }});
         spec.metadata = Object.assign({{}}, spec.metadata || {{}}, {{
@@ -856,6 +949,7 @@ def render_dashboard_visual_runtime_js(config_var: str = "dashboardVisualConfig"
       }};
 
       const scheduleVisualRefresh = () => {{
+        ensurePlotlyVisibilityReactPatch();
         window.clearTimeout(visualRefreshTimer);
         visualRefreshTimer = window.setTimeout(() => {{
           refreshPlotlyCharts();

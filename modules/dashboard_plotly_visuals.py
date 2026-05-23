@@ -10,7 +10,10 @@ from typing import Any
 
 
 _GROUP_COUNT_SUFFIX_PATTERN = re.compile(r"\s*\(n\s*=\s*\d+\)\s*$", re.IGNORECASE)
-_GROUP_STAT_PATTERN = re.compile(r"^\((?P<group>.+?)\)\s*(?P<stat>Min|Q1|Median|Mean|Q3|Max)=", re.IGNORECASE)
+_GROUP_STAT_PATTERN = re.compile(
+    r"^(?:\((?P<group>.+?)\)\s*)?(?P<stat>Min|Q1|Median|Mean|Q3|Max)=",
+    re.IGNORECASE,
+)
 _REFERENCE_PREFIXES = {
     "lsl": "lsl",
     "usl": "usl",
@@ -81,7 +84,6 @@ def apply_dashboard_visual_settings(
     overrides = _series_overrides(series.get("overrides") or resolved.get("series_overrides"))
     labels = _series_labels(payload_map, spec)
     chart_kind = _chart_kind(payload_map, spec)
-    opacity = _chart_setting(series.get("opacity"), chart_kind)
     marker_symbols = _string_list(series.get("marker_symbols") or series.get("symbols"))
     pattern_shapes = _string_list(series.get("patterns") or series.get("pattern_shapes"))
     marker_size = _finite_float(series.get("marker_size"))
@@ -115,13 +117,18 @@ def apply_dashboard_visual_settings(
         group_stat = _group_stat_match(name)
         if group_stat is not None:
             group_label, stat_label = group_stat
-            style = _resolve_series_style(
-                group_label,
-                labels,
-                trace_index=trace_index,
-                palette=palette,
-                overrides=overrides,
-                fallback_color=_trace_color(trace),
+            style_label = _stat_style_label(group_label, labels)
+            style = (
+                _resolve_series_style(
+                    style_label,
+                    labels,
+                    trace_index=trace_index,
+                    palette=palette,
+                    overrides=overrides,
+                    fallback_color=_trace_color(trace),
+                )
+                if style_label
+                else {"color": _trace_color(trace)}
             )
             _apply_stat_trace_style(
                 trace,
@@ -137,7 +144,10 @@ def apply_dashboard_visual_settings(
             _apply_reference_trace_style(trace, reference_key, reference_settings)
             continue
 
+        trace_chart_kind = _chart_kind_for_trace(trace, chart_kind)
         label = _series_label_for_trace(trace, labels)
+        if label is None and trace_chart_kind == "trend" and _trace_looks_like_trend(trace):
+            label = "Trend"
         if label is None:
             continue
         style = _resolve_series_style(
@@ -151,8 +161,8 @@ def apply_dashboard_visual_settings(
         _apply_series_trace_style(
             trace,
             style,
-            chart_kind=chart_kind,
-            opacity=opacity,
+            chart_kind=trace_chart_kind,
+            opacity=_chart_setting(series.get("opacity"), trace_chart_kind),
             marker_size=marker_size,
             marker_symbol=_distinguishing_value(marker_symbols, labels, label, use_distinguishers),
             pattern_shape=_distinguishing_value(pattern_shapes, labels, label, use_distinguishers),
@@ -276,6 +286,14 @@ def _chart_setting(value: Any, chart_kind: str) -> Any:
     return value
 
 
+def _chart_kind_for_trace(trace: Mapping[str, Any], chart_kind: str) -> str:
+    if _trace_looks_like_trend(trace):
+        return "trend"
+    if str(chart_kind or "").casefold() == "trend" and _trace_has_markers(trace):
+        return "scatter"
+    return chart_kind
+
+
 def _resolve_series_style(
     label: str,
     labels: Sequence[str],
@@ -311,17 +329,23 @@ def _apply_series_trace_style(
     outline_color: str | None,
     preserve_color: bool,
 ) -> None:
+    is_trend_line = chart_kind == "trend" and _trace_looks_like_trend(trace)
     color = _string_or_none(style.get("color"))
     if color:
-        _set_trace_color(trace, color)
+        if is_trend_line:
+            line = trace.setdefault("line", {})
+            if isinstance(line, dict):
+                line["color"] = color
+        else:
+            _set_trace_color(trace, color)
     resolved_opacity = _finite_float(style.get("opacity"))
     if resolved_opacity is None:
         resolved_opacity = _finite_float(opacity)
     if resolved_opacity is not None:
         trace["opacity"] = max(0.0, min(1.0, resolved_opacity))
 
-    marker = trace.setdefault("marker", {})
-    if isinstance(marker, dict):
+    marker = trace.setdefault("marker", {}) if not is_trend_line else {}
+    if isinstance(marker, dict) and not is_trend_line:
         resolved_marker_size = _finite_float(style.get("marker_size")) or marker_size
         if resolved_marker_size is not None and _trace_has_markers(trace):
             marker["size"] = resolved_marker_size
@@ -347,7 +371,7 @@ def _apply_series_trace_style(
 
     meta = trace.setdefault("meta", {})
     if isinstance(meta, dict):
-        meta["dashboard_visual_role"] = "series"
+        meta["dashboard_visual_role"] = "trend" if is_trend_line else "series"
         if color and preserve_color:
             meta["dashboard_visual_preserve_color"] = True
         meta["dashboard_visual_chart_kind"] = chart_kind
@@ -447,7 +471,22 @@ def _group_stat_match(name: str) -> tuple[str, str] | None:
     match = _GROUP_STAT_PATTERN.match(str(name or "").strip())
     if not match:
         return None
-    return _strip_group_count_suffix(match.group("group")), match.group("stat")
+    group = match.group("group")
+    return (_strip_group_count_suffix(group) if group is not None else ""), match.group("stat")
+
+
+def _stat_style_label(group_label: str, labels: Sequence[str]) -> str:
+    if group_label:
+        return group_label
+    if len(labels) == 1:
+        return labels[0]
+    return ""
+
+
+def _trace_looks_like_trend(trace: Mapping[str, Any]) -> bool:
+    name = str(trace.get("name") or "").strip().casefold()
+    mode = str(trace.get("mode") or "").casefold()
+    return name == "trend" and "lines" in mode and _reference_key(name) is None
 
 
 def _distinguishing_value(

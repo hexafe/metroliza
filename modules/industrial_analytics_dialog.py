@@ -80,6 +80,7 @@ except ImportError:  # pragma: no cover - compatibility with lightweight test st
 
 SOURCE_PRODUCTION_CACHE = "production_cache"
 SOURCE_TABULAR_FILE = "tabular_file"
+GROUPSTATS_REFERENCE_COHORT_MODES = frozenset({"compare_rest", "group_selected"})
 
 
 def build_analytics_completion_message(result) -> tuple[str, str, str, str]:
@@ -439,6 +440,10 @@ class IndustrialAnalyticsDialog(QDialog):
         self.groupstats_checkbox.setChecked(True)
         self.workbook_checkbox.setChecked(False)
         self.parameter_sheets_checkbox.setChecked(True)
+        self.reference_mode_combo.currentIndexChanged.connect(
+            lambda _index: self._sync_groupstats_output_for_reference_change()
+        )
+        self.references_edit.textChanged.connect(self._sync_groupstats_output_for_reference_change)
 
         self.browse_input_button = QPushButton("Browse")
         self.filters_button = QPushButton("Filters...")
@@ -1187,6 +1192,17 @@ class IndustrialAnalyticsDialog(QDialog):
             return
         self._set_groupstats_output_checked(self._tabular_groupstats_available())
 
+    def _sync_groupstats_output_for_reference_change(self) -> None:
+        if self.is_production_source:
+            return
+        was_available = self.groupstats_checkbox.isEnabled()
+        available = self._tabular_groupstats_available()
+        if available and not was_available:
+            self._set_groupstats_output_checked(True)
+        elif not available:
+            self._set_groupstats_output_checked(False)
+        self._sync_ui_state()
+
     def _sync_grouping_summary(self) -> None:
         if self.is_production_source:
             return
@@ -1382,18 +1398,43 @@ class IndustrialAnalyticsDialog(QDialog):
     def _tabular_groupstats_available(self) -> bool:
         return self._tabular_groupstats_unavailable_reason() is None
 
-    def _tabular_groupstats_unavailable_reason(self) -> str | None:
+    def _tabular_manual_groups_can_form_groupstats(self) -> bool:
+        return self._tabular_manual_group_count() >= 2
+
+    def _tabular_manual_group_count(self) -> int:
         if self.is_production_source:
-            return None
+            return 0
         if not self.grouping_applied or self.df_for_grouping is None or self.df_for_grouping.empty:
-            return "Groupstats requires manual CSV/Excel groups. Use Edit groups... first."
+            return 0
         groups = self.df_for_grouping.get("GROUP", [])
         values = {str(value).strip() for value in groups if str(value).strip()}
         if self._tabular_grouping_has_population(values):
             values.add(TABULAR_DEFAULT_GROUP)
-        if len(values) < 2:
-            return "Groupstats requires at least 2 non-empty manual groups."
-        return None
+        return len(values)
+
+    def _tabular_reference_cohort_can_form_groupstats(self) -> bool:
+        if self.is_production_source:
+            return False
+        cohort = self._cohort_state()
+        return bool(cohort.is_applied and cohort.mode in GROUPSTATS_REFERENCE_COHORT_MODES)
+
+    def _tabular_groupstats_unavailable_reason(self) -> str | None:
+        if self.is_production_source:
+            return None
+        if (
+            self._tabular_manual_groups_can_form_groupstats()
+            or self._tabular_reference_cohort_can_form_groupstats()
+        ):
+            return None
+        if self.grouping_applied:
+            return (
+                "Groupstats requires at least 2 non-empty manual groups, or pasted "
+                "references with Compare selected vs rest / Group pasted references."
+            )
+        return (
+            "Groupstats requires manual CSV/Excel groups or pasted references with "
+            "Compare selected vs rest / Group pasted references."
+        )
 
     def _selected_sheet_name(self) -> str | None:
         if self.is_production_source:

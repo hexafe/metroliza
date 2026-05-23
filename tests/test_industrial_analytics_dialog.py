@@ -718,8 +718,10 @@ def test_tabular_groupstats_is_disabled_until_manual_groups_are_available() -> N
         assert not dialog.groupstats_checkbox.isEnabled()
         assert not dialog.groupstats_checkbox.isChecked()
         assert "manual CSV/Excel groups" in dialog.groupstats_checkbox.toolTip()
+        assert "pasted references" in dialog.groupstats_checkbox.toolTip()
         assert not dialog.groupstats_reason_label.isHidden()
         assert "manual CSV/Excel groups" in dialog.groupstats_reason_label.text()
+        assert "pasted references" in dialog.groupstats_reason_label.text()
 
         grouping_df = pd.DataFrame(
             {
@@ -751,6 +753,48 @@ def test_tabular_groupstats_is_disabled_until_manual_groups_are_available() -> N
         assert "at least 2 non-empty manual groups" in dialog.groupstats_checkbox.toolTip()
     finally:
         dialog.close()
+
+
+def _select_tabular_reference_mode(dialog, mode: str) -> None:
+    index = dialog.reference_mode_combo.findData(mode)
+    assert index >= 0
+    dialog.reference_mode_combo.setCurrentIndex(index)
+
+
+def _assert_reference_groupstats_mode_enables_request(mode: str) -> None:
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.metric_candidates = (ProductionMetricSelection("length_mm", "Length Mm"),)
+        dialog._populate_metrics()
+        dialog._sync_ui_state()
+
+        assert not dialog.groupstats_checkbox.isEnabled()
+        assert not dialog.groupstats_checkbox.isChecked()
+
+        _select_tabular_reference_mode(dialog, mode)
+        dialog.references_edit.setPlainText("R1\nR2")
+
+        assert dialog.groupstats_checkbox.isEnabled()
+        assert dialog.groupstats_checkbox.isChecked()
+        assert dialog.groupstats_checkbox.toolTip() == ""
+        assert dialog.groupstats_reason_label.isHidden()
+
+        request = dialog._build_analytics_request()
+        assert request.grouping_df is None
+        assert request.cohort_state.mode == mode
+        assert request.cohort_state.references == ("R1", "R2")
+        assert request.chart_selection.groupstats is True
+    finally:
+        dialog.close()
+
+
+def test_tabular_groupstats_compare_rest_refs_enable_without_manual_groups() -> None:
+    _assert_reference_groupstats_mode_enables_request("compare_rest")
+
+
+def test_tabular_groupstats_group_selected_refs_enable_without_manual_groups() -> None:
+    _assert_reference_groupstats_mode_enables_request("group_selected")
 
 
 def test_tabular_groupstats_toggle_does_not_start_analysis_worker(monkeypatch) -> None:
