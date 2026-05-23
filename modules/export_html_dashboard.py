@@ -3624,6 +3624,9 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
             return true;
           }}
           container.dataset.plotlyReady = '1';
+          if (typeof window.metrolizaInstallVisualSelectionHandlers === 'function') {{
+            window.metrolizaInstallVisualSelectionHandlers(container);
+          }}
           return true;
         }} catch (_error) {{
           container.dataset.plotlyReady = 'error';
@@ -3751,6 +3754,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
         lightboxPlotly.removeAttribute('data-plotly-spec-light');
         lightboxPlotly.removeAttribute('data-plotly-spec-dark');
         lightboxPlotly.removeAttribute('data-plotly-spec');
+        delete lightboxPlotly.__metrolizaVisualSelectionHandlers;
         lightboxPlotly.textContent = '';
         clearPlotlyInteractionArtifacts();
       }};

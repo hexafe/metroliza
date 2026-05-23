@@ -7,11 +7,12 @@ def test_dashboard_visual_runtime_detects_trend_before_scatter() -> None:
     runtime_js = render_dashboard_visual_runtime_js()
 
     assert "const traceLooksLikeTrend" in runtime_js
+    assert "const traceLooksLikeModelCurve" in runtime_js
     assert "name === 'trend' && mode.includes('lines')" in runtime_js
     assert runtime_js.index("return 'trend'") < runtime_js.index("return 'scatter'")
     assert "const chartKindForTrace" in runtime_js
     assert "if (chartKind === 'trend' && traceHasMarkers(trace)) return 'scatter';" in runtime_js
-    assert "dashboard_visual_role: isTrendLine ? 'trend' : 'series'" in runtime_js
+    assert "dashboard_visual_role: role" in runtime_js
 
 
 def test_dashboard_visual_runtime_matches_prefixed_and_unprefixed_stat_lines() -> None:
@@ -33,3 +34,18 @@ def test_dashboard_visual_runtime_preserves_trace_visibility_before_plotly_react
     assert "delete trace.visible;" in runtime_js
     assert "preservePlotlyTraceVisibility(container, data);" in runtime_js
     assert "window.Plotly.react = patchedReact;" in runtime_js
+
+
+def test_dashboard_visual_runtime_supports_palettes_themes_and_element_selection() -> None:
+    runtime_js = render_dashboard_visual_runtime_js()
+
+    assert "palettePresets" in runtime_js
+    assert "okabe_ito" in runtime_js
+    assert "visualThemeStorageKey" in runtime_js
+    assert "readVisualThemeLibrary" in runtime_js
+    assert "series_overrides" in runtime_js
+    assert "stat_line_overrides" in runtime_js
+    assert "window.metrolizaInstallVisualSelectionHandlers" in runtime_js
+    assert "plotly_click" in runtime_js
+    assert "dashboard_visual_target" in runtime_js
+    assert "__metrolizaVisualSelectionHandlers" in runtime_js

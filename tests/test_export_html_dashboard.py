@@ -266,6 +266,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn('metroliza-dashboard-visuals', html_text)
             self.assertIn('prefers-color-scheme: dark', html_text)
             self.assertIn('window.Plotly.react', html_text)
+            self.assertIn('delete lightboxPlotly.__metrolizaVisualSelectionHandlers;', html_text)
             self.assertIn('preservePlotlyTraceVisibility(container, data);', html_text)
             self.assertIn('applyDashboardVisualsToPlotlySpec(baseSpec)', html_text)
             self.assertIn('initializeDashboardVisualControls();', html_text)

@@ -17,9 +17,12 @@ from modules.contracts import (
 from modules.dashboard_visual_options import (
     build_dashboard_visual_preview_png,
     build_dashboard_visual_preview_spec,
+    dashboard_visual_palette_presets,
     dashboard_visual_settings_to_plotly_settings,
     dashboard_visual_swatch_palette,
     normalize_dashboard_visual_settings,
+    normalize_dashboard_visual_theme_library,
+    upsert_dashboard_visual_theme,
 )
 from modules.dashboard_plotly_visuals import apply_dashboard_visual_settings
 from modules.industrial_analytics_dashboard import build_production_dashboard_manifest
@@ -68,6 +71,53 @@ def test_dashboard_visual_gradient_settings_build_distinct_palette() -> None:
     assert plotly_settings["series"]["palette"] == palette
     assert plotly_settings["series"]["always_distinguish"] is True
     assert plotly_settings["series"]["marker_symbols"]
+
+
+def test_dashboard_visual_palette_presets_include_researched_data_viz_palettes() -> None:
+    presets = dashboard_visual_palette_presets()
+
+    assert {"okabe_ito", "tableau_10", "colorbrewer_set2", "viridis", "cividis", "rdbu"}.issubset(
+        presets
+    )
+    assert presets["okabe_ito"]["kind"] == "categorical"
+    assert presets["viridis"]["kind"] == "sequential"
+    assert len(presets["tableau_10"]["colors"]) >= 10
+
+
+def test_dashboard_visual_named_theme_library_upserts_normalized_settings() -> None:
+    library, theme = upsert_dashboard_visual_theme(
+        None,
+        name="Operator review",
+        settings={
+            "preset": "custom",
+            "palette_preset": "okabe_ito",
+            "series_overrides": {"Group 1": {"color": "#123456", "opacity": 0.4}},
+        },
+        set_default=True,
+    )
+    normalized = normalize_dashboard_visual_theme_library(library)
+
+    assert theme["id"] == "operator-review"
+    assert normalized["default_theme_id"] == "operator-review"
+    assert normalized["themes"][0]["settings"]["palette_preset"] == "okabe_ito"
+    assert normalized["themes"][0]["settings"]["series_overrides"]["Group 1"]["color"] == "#123456"
+
+
+def test_dashboard_visual_settings_convert_overrides_to_plotly_contract() -> None:
+    settings = dashboard_visual_settings_to_plotly_settings(
+        {
+            "preset": "custom",
+            "palette_preset": "okabe_ito",
+            "series_overrides": {"Trend": {"color": "#123456", "width": 4.0, "dash": "dot"}},
+            "stat_line_overrides": {"a::mean": {"color": "#654321", "opacity": 0.33}},
+            "reference_lines": {"lsl": {"color": "#112233", "opacity": 0.44}},
+        }
+    )
+
+    assert settings["series"]["palette"][0] == "#0072b2"
+    assert settings["series"]["overrides"]["Trend"]["color"] == "#123456"
+    assert settings["stat_lines"]["overrides"]["a::mean"]["opacity"] == 0.33
+    assert settings["reference_lines"]["lsl"]["opacity"] == 0.44
 
 
 def test_dashboard_visual_preview_spec_uses_sample_groups_and_population() -> None:
@@ -382,9 +432,18 @@ def test_dashboard_visual_settings_style_trend_roles_and_unprefixed_stat_lines()
             "marker_size": 12,
             "marker_symbols": ["diamond"],
             "always_distinguish": True,
+            "overrides": {
+                "Trend": {"color": "#334455", "width": 4.0, "dash": "dot"},
+            },
         },
-        "stat_lines": {"width": 3.0, "accent_by_stat": True},
-        "reference_lines": {"lsl": {"color": "#ff0000", "dash": "dot", "width": 1.25}},
+        "stat_lines": {
+            "width": 3.0,
+            "accent_by_stat": True,
+            "overrides": {"mean": {"color": "#abcdef", "opacity": 0.5}},
+        },
+        "reference_lines": {
+            "lsl": {"color": "#ff0000", "dash": "dot", "width": 1.25, "opacity": 0.4},
+        },
     }
 
     apply_dashboard_visual_settings(spec, visual_settings=settings)
@@ -397,7 +456,9 @@ def test_dashboard_visual_settings_style_trend_roles_and_unprefixed_stat_lines()
     assert measurements["meta"]["dashboard_visual_role"] == "series"
     assert measurements["meta"]["dashboard_visual_chart_kind"] == "scatter"
 
-    assert trend["line"]["color"] == "#222222"
+    assert trend["line"]["color"] == "#334455"
+    assert trend["line"]["width"] == 4.0
+    assert trend["line"]["dash"] == "dot"
     assert trend["opacity"] == 0.21
     assert "marker" not in trend
     assert trend["meta"]["dashboard_visual_role"] == "trend"
@@ -406,11 +467,15 @@ def test_dashboard_visual_settings_style_trend_roles_and_unprefixed_stat_lines()
     assert lsl["line"]["color"] == "#ff0000"
     assert lsl["line"]["dash"] == "dot"
     assert lsl["line"]["width"] == 1.25
-    assert lsl.get("meta", {}).get("dashboard_visual_role") is None
+    assert lsl["opacity"] == 0.4
+    assert lsl["meta"]["dashboard_visual_role"] == "reference"
+    assert lsl["meta"]["metroliza_reference_id"] == "lsl"
 
+    assert mean["line"]["color"] == "#abcdef"
     assert mean["line"]["width"] == 3.0
     assert mean["meta"]["dashboard_visual_role"] == "stat"
-    assert "opacity" not in mean
+    assert mean["meta"]["metroliza_stat_id"] == "mean"
+    assert mean["opacity"] == 0.5
     assert median["line"]["width"] == 3.0
     assert median["meta"]["dashboard_visual_role"] == "stat"
     assert median["visible"] == "legendonly"

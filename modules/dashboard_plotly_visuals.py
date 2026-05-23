@@ -133,6 +133,7 @@ def apply_dashboard_visual_settings(
             _apply_stat_trace_style(
                 trace,
                 style,
+                group_label=group_label,
                 stat_label=stat_label,
                 stat_settings=stat_settings,
                 preserve_color=preserve_colors,
@@ -148,6 +149,9 @@ def apply_dashboard_visual_settings(
         label = _series_label_for_trace(trace, labels)
         if label is None and trace_chart_kind == "trend" and _trace_looks_like_trend(trace):
             label = "Trend"
+        if label is None and _trace_looks_like_model_curve(trace):
+            trace_chart_kind = "model_curve"
+            label = _strip_group_count_suffix(name)
         if label is None:
             continue
         style = _resolve_series_style(
@@ -161,6 +165,7 @@ def apply_dashboard_visual_settings(
         _apply_series_trace_style(
             trace,
             style,
+            label=label,
             chart_kind=trace_chart_kind,
             opacity=_chart_setting(series.get("opacity"), trace_chart_kind),
             marker_size=marker_size,
@@ -233,6 +238,16 @@ def _series_overrides(value: Any) -> dict[str, dict[str, Any]]:
     return overrides
 
 
+def _line_overrides(value: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, Mapping):
+        return {}
+    overrides: dict[str, dict[str, Any]] = {}
+    for key, raw_style in value.items():
+        if isinstance(raw_style, Mapping):
+            overrides[_normalize_label_key(str(key))] = copy.deepcopy(dict(raw_style))
+    return overrides
+
+
 def _series_labels(payload: Mapping[str, Any], spec: Mapping[str, Any]) -> list[str]:
     labels: list[str] = []
     groups = payload.get("groups")
@@ -289,6 +304,8 @@ def _chart_setting(value: Any, chart_kind: str) -> Any:
 def _chart_kind_for_trace(trace: Mapping[str, Any], chart_kind: str) -> str:
     if _trace_looks_like_trend(trace):
         return "trend"
+    if _trace_looks_like_model_curve(trace):
+        return "model_curve"
     if str(chart_kind or "").casefold() == "trend" and _trace_has_markers(trace):
         return "scatter"
     return chart_kind
@@ -320,6 +337,7 @@ def _apply_series_trace_style(
     trace: dict[str, Any],
     style: Mapping[str, Any],
     *,
+    label: str,
     chart_kind: str,
     opacity: Any,
     marker_size: float | None,
@@ -329,7 +347,9 @@ def _apply_series_trace_style(
     outline_color: str | None,
     preserve_color: bool,
 ) -> None:
-    is_trend_line = chart_kind == "trend" and _trace_looks_like_trend(trace)
+    is_trend_line = chart_kind in {"trend", "model_curve"} and (
+        _trace_looks_like_trend(trace) or _trace_looks_like_model_curve(trace)
+    )
     color = _string_or_none(style.get("color"))
     if color:
         if is_trend_line:
@@ -345,6 +365,15 @@ def _apply_series_trace_style(
         trace["opacity"] = max(0.0, min(1.0, resolved_opacity))
 
     marker = trace.setdefault("marker", {}) if not is_trend_line else {}
+    if is_trend_line:
+        line = trace.setdefault("line", {})
+        if isinstance(line, dict):
+            width = _finite_float(style.get("width"))
+            dash = _string_or_none(style.get("dash"))
+            if width is not None:
+                line["width"] = max(0.0, width)
+            if dash:
+                line["dash"] = dash
     if isinstance(marker, dict) and not is_trend_line:
         resolved_marker_size = _finite_float(style.get("marker_size")) or marker_size
         if resolved_marker_size is not None and _trace_has_markers(trace):
@@ -371,35 +400,68 @@ def _apply_series_trace_style(
 
     meta = trace.setdefault("meta", {})
     if isinstance(meta, dict):
-        meta["dashboard_visual_role"] = "trend" if is_trend_line else "series"
+        role = chart_kind if chart_kind == "model_curve" else ("trend" if is_trend_line else "series")
+        meta["dashboard_visual_role"] = role
+        meta["dashboard_visual_target"] = f"{role}:{_normalize_label_key(label)}"
+        meta["metroliza_trace_schema"] = "metroliza.plotly_trace.v1"
+        meta["metroliza_role"] = role
+        meta["metroliza_target_id"] = meta["dashboard_visual_target"]
+        meta["metroliza_series_id"] = _normalize_label_key(label)
+        meta["metroliza_legend_label"] = label
         if color and preserve_color:
             meta["dashboard_visual_preserve_color"] = True
         meta["dashboard_visual_chart_kind"] = chart_kind
+        meta["metroliza_chart_kind"] = chart_kind
 
 
 def _apply_stat_trace_style(
     trace: dict[str, Any],
     style: Mapping[str, Any],
     *,
+    group_label: str,
     stat_label: str,
     stat_settings: Mapping[str, Any],
     preserve_color: bool,
 ) -> None:
+    overrides = _line_overrides(stat_settings.get("overrides"))
+    override = overrides.get(_stat_override_key(group_label, stat_label)) or overrides.get(
+        _normalize_label_key(stat_label)
+    ) or {}
     color = _string_or_none(style.get("color"))
-    if color and bool(stat_settings.get("accent_by_stat")):
+    override_color = _string_or_none(override.get("color"))
+    if color and not override_color and bool(stat_settings.get("accent_by_stat")):
         color = _accent_color(color, stat_label)
+    if override_color:
+        color = override_color
     if color:
         line = trace.setdefault("line", {})
         if isinstance(line, dict):
             line["color"] = color
-    width = _finite_float(stat_settings.get("width"))
+    width = _finite_float(override.get("width"))
+    if width is None:
+        width = _finite_float(stat_settings.get("width"))
     if width is not None:
         line = trace.setdefault("line", {})
         if isinstance(line, dict):
             line["width"] = max(0.0, width)
+    dash = _string_or_none(override.get("dash"))
+    if dash:
+        line = trace.setdefault("line", {})
+        if isinstance(line, dict):
+            line["dash"] = dash
+    opacity = _finite_float(override.get("opacity"))
+    if opacity is not None:
+        trace["opacity"] = max(0.0, min(1.0, opacity))
     meta = trace.setdefault("meta", {})
     if isinstance(meta, dict):
         meta["dashboard_visual_role"] = "stat"
+        meta["dashboard_visual_target"] = f"stat:{_stat_override_key(group_label, stat_label)}"
+        meta["metroliza_trace_schema"] = "metroliza.plotly_trace.v1"
+        meta["metroliza_role"] = "stat"
+        meta["metroliza_target_id"] = meta["dashboard_visual_target"]
+        meta["metroliza_series_id"] = _normalize_label_key(group_label)
+        meta["metroliza_stat_id"] = _normalize_label_key(stat_label)
+        meta["metroliza_legend_label"] = str(trace.get("name") or stat_label)
         if color and preserve_color:
             meta["dashboard_visual_preserve_color"] = True
 
@@ -418,12 +480,24 @@ def _apply_reference_trace_style(
     color = _string_or_none(raw_style.get("color"))
     dash = _string_or_none(raw_style.get("dash"))
     width = _finite_float(raw_style.get("width"))
+    opacity = _finite_float(raw_style.get("opacity"))
     if color:
         line["color"] = color
     if dash:
         line["dash"] = dash
     if width is not None:
         line["width"] = max(0.0, width)
+    if opacity is not None:
+        trace["opacity"] = max(0.0, min(1.0, opacity))
+    meta = trace.setdefault("meta", {})
+    if isinstance(meta, dict):
+        meta["dashboard_visual_role"] = "reference"
+        meta["dashboard_visual_target"] = f"reference:{reference_key}"
+        meta["metroliza_trace_schema"] = "metroliza.plotly_trace.v1"
+        meta["metroliza_role"] = "reference"
+        meta["metroliza_target_id"] = meta["dashboard_visual_target"]
+        meta["metroliza_reference_id"] = reference_key
+        meta["metroliza_legend_label"] = str(trace.get("name") or reference_key.upper())
 
 
 def _series_label_for_trace(trace: Mapping[str, Any], labels: Sequence[str]) -> str | None:
@@ -489,6 +563,14 @@ def _trace_looks_like_trend(trace: Mapping[str, Any]) -> bool:
     return name == "trend" and "lines" in mode and _reference_key(name) is None
 
 
+def _trace_looks_like_model_curve(trace: Mapping[str, Any]) -> bool:
+    name = str(trace.get("name") or "").strip().casefold()
+    mode = str(trace.get("mode") or "").casefold()
+    if "lines" not in mode or _reference_key(name) is not None or _group_stat_match(name):
+        return False
+    return "curve" in name or "kde" in name or "model" in name
+
+
 def _distinguishing_value(
     values: Sequence[str],
     labels: Sequence[str],
@@ -548,6 +630,12 @@ def _strip_group_count_suffix(label: str) -> str:
 
 def _normalize_label_key(label: str) -> str:
     return _strip_group_count_suffix(label).casefold()
+
+
+def _stat_override_key(group_label: str, stat_label: str) -> str:
+    stat_key = _normalize_label_key(stat_label)
+    group_key = _normalize_label_key(group_label)
+    return f"{group_key}::{stat_key}" if group_key else stat_key
 
 
 def _unique(values: Sequence[str]) -> list[str]:

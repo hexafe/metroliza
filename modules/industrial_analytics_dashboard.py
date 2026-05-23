@@ -2767,6 +2767,9 @@ def _render_plotly_runtime(charts_json: str) -> str:
       }
       target.dataset.plotlyReady = '1';
       attachRawLayerLegendHandler(target, chart);
+      if (typeof window.metrolizaInstallVisualSelectionHandlers === 'function') {
+        window.metrolizaInstallVisualSelectionHandlers(target);
+      }
     }
     function refreshPlotlyCharts() {
       for (const chart of chartData) {
@@ -2809,6 +2812,7 @@ def _render_plotly_runtime(charts_json: str) -> str:
       Plotly.purge(lightboxPlotly);
       lightboxPlotly.dataset.plotlyReady = '0';
       lightboxPlotly.removeAttribute('data-raw-legend-handler');
+      delete lightboxPlotly.__metrolizaVisualSelectionHandlers;
       lightboxPlotly.dataset.chartId = chartId;
       renderPlotlyChart(lightboxPlotly, chart, { responsive: true });
       lightbox.showModal();
@@ -2847,6 +2851,7 @@ def _render_plotly_runtime(charts_json: str) -> str:
           Plotly.purge(lightboxPlotly);
           lightboxPlotly.dataset.plotlyReady = '0';
           lightboxPlotly.removeAttribute('data-raw-legend-handler');
+          delete lightboxPlotly.__metrolizaVisualSelectionHandlers;
           lightboxPlotly.removeAttribute('data-chart-id');
         }
       });

@@ -22,6 +22,7 @@ DASHBOARD_VISUAL_PALETTE_MODES = ("fixed", "auto_gradient", "highlight_gradient"
 DASHBOARD_VISUAL_GRADIENT_SPREADS = ("narrow", "normal", "wide")
 DASHBOARD_VISUAL_DISTINGUISH_MODES = ("color_only", "when_similar", "always")
 DASHBOARD_VISUAL_CHART_TYPES = ("histogram", "violin", "iqr", "scatter")
+DASHBOARD_VISUAL_THEME_LIBRARY_VERSION = 1
 
 DEFAULT_DASHBOARD_PALETTE = tuple(
     str(color).lower()
@@ -43,18 +44,162 @@ DEFAULT_OPACITY = {
     "iqr": 0.62,
     "scatter": 0.82,
     "trend": 0.35,
+    "model_curve": 0.58,
 }
 _MARKER_SYMBOLS = ("circle", "diamond", "square", "cross", "x", "triangle-up")
 _PATTERN_SHAPES = ("", "/", "\\", "x", ".", "-")
 _REFERENCE_DEFAULTS = {
-    "lsl": {"color": str(SUMMARY_PLOT_PALETTE["spec_limit"]).lower(), "dash": "dash", "width": 1.5},
-    "usl": {"color": str(SUMMARY_PLOT_PALETTE["spec_limit"]).lower(), "dash": "dash", "width": 1.5},
+    "lsl": {
+        "color": str(SUMMARY_PLOT_PALETTE["spec_limit"]).lower(),
+        "dash": "dash",
+        "width": 1.5,
+        "opacity": 1.0,
+    },
+    "usl": {
+        "color": str(SUMMARY_PLOT_PALETTE["spec_limit"]).lower(),
+        "dash": "dash",
+        "width": 1.5,
+        "opacity": 1.0,
+    },
     "nominal": {
         "color": str(SUMMARY_PLOT_PALETTE["central_tendency"]).lower(),
         "dash": "solid",
         "width": 1.5,
+        "opacity": 1.0,
     },
 }
+_PALETTE_PRESETS: dict[str, dict[str, Any]] = {
+    "metroliza": {
+        "label": "Metroliza default",
+        "kind": "categorical",
+        "colors": DEFAULT_DASHBOARD_PALETTE,
+        "note": "Existing dashboard colors.",
+    },
+    "okabe_ito": {
+        "label": "Okabe-Ito",
+        "kind": "categorical",
+        "colors": (
+            "#0072b2",
+            "#d55e00",
+            "#009e73",
+            "#cc79a7",
+            "#f0e442",
+            "#56b4e9",
+            "#e69f00",
+            "#000000",
+        ),
+        "note": "Color-vision-deficiency friendly categorical palette.",
+    },
+    "tableau_10": {
+        "label": "Tableau 10",
+        "kind": "categorical",
+        "colors": (
+            "#4e79a7",
+            "#f28e2b",
+            "#e15759",
+            "#76b7b2",
+            "#59a14f",
+            "#edc949",
+            "#af7aa1",
+            "#ff9da7",
+            "#9c755f",
+            "#bab0ab",
+        ),
+        "note": "General-purpose categorical dashboard palette.",
+    },
+    "colorbrewer_set2": {
+        "label": "ColorBrewer Set2",
+        "kind": "categorical",
+        "colors": (
+            "#66c2a5",
+            "#fc8d62",
+            "#8da0cb",
+            "#e78ac3",
+            "#a6d854",
+            "#ffd92f",
+            "#e5c494",
+            "#b3b3b3",
+        ),
+        "note": "Soft qualitative palette.",
+    },
+    "colorbrewer_dark2": {
+        "label": "ColorBrewer Dark2",
+        "kind": "categorical",
+        "colors": (
+            "#1b9e77",
+            "#d95f02",
+            "#7570b3",
+            "#e7298a",
+            "#66a61e",
+            "#e6ab02",
+            "#a6761d",
+            "#666666",
+        ),
+        "note": "Higher-contrast qualitative palette.",
+    },
+    "colorbrewer_paired": {
+        "label": "ColorBrewer Paired",
+        "kind": "categorical",
+        "colors": (
+            "#a6cee3",
+            "#1f78b4",
+            "#b2df8a",
+            "#33a02c",
+            "#fb9a99",
+            "#e31a1c",
+            "#fdbf6f",
+            "#ff7f00",
+            "#cab2d6",
+            "#6a3d9a",
+            "#ffff99",
+            "#b15928",
+        ),
+        "note": "Paired categorical colors for related groups.",
+    },
+    "viridis": {
+        "label": "Viridis",
+        "kind": "sequential",
+        "colors": ("#440154", "#414487", "#2a788e", "#22a884", "#7ad151", "#fde725"),
+        "note": "Perceptually uniform sequential palette.",
+    },
+    "cividis": {
+        "label": "Cividis",
+        "kind": "sequential",
+        "colors": ("#00204c", "#31446b", "#666970", "#958f78", "#c7b96e", "#ffea46"),
+        "note": "Color-vision-deficiency optimized sequential palette.",
+    },
+    "plasma": {
+        "label": "Plasma",
+        "kind": "sequential",
+        "colors": ("#0d0887", "#6a00a8", "#b12a90", "#e16462", "#fca636", "#f0f921"),
+        "note": "High-energy perceptual sequential palette.",
+    },
+    "magma": {
+        "label": "Magma",
+        "kind": "sequential",
+        "colors": ("#000004", "#3b0f70", "#8c2981", "#de4968", "#fe9f6d", "#fcfdbf"),
+        "note": "Dark-to-light perceptual sequential palette.",
+    },
+    "rdbu": {
+        "label": "RdBu",
+        "kind": "diverging",
+        "colors": ("#b2182b", "#ef8a62", "#fddbc7", "#d1e5f0", "#67a9cf", "#2166ac"),
+        "note": "Blue-red diverging palette.",
+    },
+    "puor": {
+        "label": "PuOr",
+        "kind": "diverging",
+        "colors": ("#b35806", "#f1a340", "#fee0b6", "#d8daeb", "#998ec3", "#542788"),
+        "note": "Orange-purple diverging palette.",
+    },
+    "brbg": {
+        "label": "BrBG",
+        "kind": "diverging",
+        "colors": ("#8c510a", "#d8b365", "#f6e8c3", "#c7eae5", "#5ab4ac", "#01665e"),
+        "note": "Brown-teal diverging palette.",
+    },
+}
+DASHBOARD_VISUAL_PALETTE_PRESET_IDS = tuple(_PALETTE_PRESETS.keys()) + ("custom",)
 _PRESET_LABELS = {
     "auto": "Auto",
     "distinct": "Distinct groups",
@@ -68,7 +213,10 @@ def default_dashboard_visual_settings() -> dict[str, Any]:
     """Return the serializable default dashboard visual settings."""
 
     return {
+        "theme_id": "",
+        "theme_name": "",
         "preset": "auto",
+        "palette_preset": "metroliza",
         "palette_mode": "fixed",
         "palette": list(DEFAULT_DASHBOARD_PALETTE),
         "anchor_color": DEFAULT_HIGHLIGHT_ANCHOR,
@@ -77,6 +225,8 @@ def default_dashboard_visual_settings() -> dict[str, Any]:
         "opacity": dict(DEFAULT_OPACITY),
         "marker_size": 7.0,
         "stat_lines": {"accent_by_stat": False, "width": 2.0},
+        "series_overrides": {},
+        "stat_line_overrides": {},
         "reference_lines": copy.deepcopy(_REFERENCE_DEFAULTS),
     }
 
@@ -85,6 +235,171 @@ def default_dashboard_visual_config_path() -> Path:
     """Return the shared user config path for dashboard visual settings."""
 
     return Path.home() / ".metroliza" / ".dashboard_visual_options.json"
+
+
+def default_dashboard_visual_theme_library_path() -> Path:
+    """Return the shared user config path for saved dashboard visual themes."""
+
+    return Path.home() / ".metroliza" / ".dashboard_visual_themes.json"
+
+
+def dashboard_visual_palette_presets() -> dict[str, dict[str, Any]]:
+    """Return built-in palette preset metadata."""
+
+    return copy.deepcopy(_PALETTE_PRESETS)
+
+
+def default_dashboard_visual_theme_library() -> dict[str, Any]:
+    """Return an empty normalized visual theme library."""
+
+    return {
+        "version": DASHBOARD_VISUAL_THEME_LIBRARY_VERSION,
+        "default_theme_id": "",
+        "themes": [],
+    }
+
+
+def load_dashboard_visual_theme_library(
+    config_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Load saved visual themes, returning an empty library when unavailable."""
+
+    path = (
+        Path(config_path)
+        if config_path is not None
+        else default_dashboard_visual_theme_library_path()
+    )
+    if not path.exists():
+        return default_dashboard_visual_theme_library()
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return default_dashboard_visual_theme_library()
+    return normalize_dashboard_visual_theme_library(payload)
+
+
+def save_dashboard_visual_theme_library(
+    library: Mapping[str, Any] | None,
+    config_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Persist and return a normalized visual theme library."""
+
+    normalized = normalize_dashboard_visual_theme_library(library)
+    path = (
+        Path(config_path)
+        if config_path is not None
+        else default_dashboard_visual_theme_library_path()
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(normalized, handle, indent=2, sort_keys=True)
+    return normalized
+
+
+def normalize_dashboard_visual_theme_library(value: Any) -> dict[str, Any]:
+    """Normalize a saved theme library into a stable serializable shape."""
+
+    defaults = default_dashboard_visual_theme_library()
+    if not isinstance(value, Mapping):
+        return defaults
+    normalized = copy.deepcopy(defaults)
+    normalized["version"] = DASHBOARD_VISUAL_THEME_LIBRARY_VERSION
+    normalized["default_theme_id"] = _text(value.get("default_theme_id"), "")
+    themes = value.get("themes")
+    if not isinstance(themes, Sequence) or isinstance(themes, (str, bytes)):
+        return normalized
+    seen: set[str] = set()
+    for index, theme in enumerate(themes, start=1):
+        if not isinstance(theme, Mapping):
+            continue
+        settings = normalize_dashboard_visual_settings(theme.get("settings"))
+        theme_id = _text(theme.get("id"), "") or _theme_id_from_name(
+            _text(theme.get("name"), f"Theme {index}")
+        )
+        if not theme_id:
+            theme_id = f"theme-{index}"
+        base_id = theme_id
+        suffix = 2
+        while theme_id in seen:
+            theme_id = f"{base_id}-{suffix}"
+            suffix += 1
+        seen.add(theme_id)
+        name = _text(theme.get("name"), "") or _PRESET_LABELS.get(
+            settings.get("preset"),
+            "Dashboard theme",
+        )
+        settings["theme_id"] = theme_id
+        settings["theme_name"] = name
+        normalized["themes"].append(
+            {
+                "id": theme_id,
+                "name": name,
+                "settings": settings,
+            }
+        )
+    if normalized["default_theme_id"] not in seen:
+        normalized["default_theme_id"] = ""
+    return normalized
+
+
+def upsert_dashboard_visual_theme(
+    library: Mapping[str, Any] | None,
+    *,
+    name: str,
+    settings: Mapping[str, Any] | None,
+    theme_id: str | None = None,
+    set_default: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Insert or update a named theme in a normalized library."""
+
+    normalized = normalize_dashboard_visual_theme_library(library)
+    clean_name = _text(name, "Dashboard theme") or "Dashboard theme"
+    clean_id = _text(theme_id, "") or _theme_id_from_name(clean_name)
+    existing_ids = {
+        str(theme["id"])
+        for theme in normalized["themes"]
+        if isinstance(theme, Mapping) and str(theme.get("id") or "") != clean_id
+    }
+    base_id = clean_id or "theme"
+    suffix = 2
+    while clean_id in existing_ids:
+        clean_id = f"{base_id}-{suffix}"
+        suffix += 1
+    theme_settings = normalize_dashboard_visual_settings(settings)
+    theme_settings["theme_id"] = clean_id
+    theme_settings["theme_name"] = clean_name
+    theme = {"id": clean_id, "name": clean_name, "settings": theme_settings}
+    replaced = False
+    for index, current in enumerate(normalized["themes"]):
+        if isinstance(current, Mapping) and current.get("id") == clean_id:
+            normalized["themes"][index] = theme
+            replaced = True
+            break
+    if not replaced:
+        normalized["themes"].append(theme)
+    if set_default:
+        normalized["default_theme_id"] = clean_id
+    return normalized, theme
+
+
+def remove_dashboard_visual_theme(
+    library: Mapping[str, Any] | None,
+    *,
+    theme_id: str,
+) -> dict[str, Any]:
+    """Remove a named theme from a library."""
+
+    normalized = normalize_dashboard_visual_theme_library(library)
+    clean_id = _text(theme_id, "")
+    normalized["themes"] = [
+        theme
+        for theme in normalized["themes"]
+        if not (isinstance(theme, Mapping) and theme.get("id") == clean_id)
+    ]
+    if normalized["default_theme_id"] == clean_id:
+        normalized["default_theme_id"] = ""
+    return normalized
 
 
 def load_dashboard_visual_settings(config_path: str | Path | None = None) -> dict[str, Any]:
@@ -122,7 +437,17 @@ def normalize_dashboard_visual_settings(settings: Any) -> dict[str, Any]:
     if not isinstance(settings, Mapping):
         return defaults
     normalized = copy.deepcopy(defaults)
+    normalized["theme_id"] = _text(settings.get("theme_id"), defaults["theme_id"])
+    normalized["theme_name"] = _text(settings.get("theme_name"), defaults["theme_name"])
     normalized["preset"] = _choice(settings.get("preset"), DASHBOARD_VISUAL_PRESETS, defaults["preset"])
+    palette_preset_fallback = defaults["palette_preset"]
+    if "palette_preset" not in settings and "palette" in settings:
+        palette_preset_fallback = "custom"
+    normalized["palette_preset"] = _choice(
+        settings.get("palette_preset"),
+        DASHBOARD_VISUAL_PALETTE_PRESET_IDS,
+        palette_preset_fallback,
+    )
     normalized["palette_mode"] = _choice(
         settings.get("palette_mode"),
         DASHBOARD_VISUAL_PALETTE_MODES,
@@ -163,6 +488,12 @@ def normalize_dashboard_visual_settings(settings: Any) -> dict[str, Any]:
                 maximum=6.0,
             ),
         }
+    normalized["series_overrides"] = _normalize_series_overrides(
+        settings.get("series_overrides")
+    )
+    normalized["stat_line_overrides"] = _normalize_line_overrides(
+        settings.get("stat_line_overrides")
+    )
     reference_lines = settings.get("reference_lines")
     if isinstance(reference_lines, Mapping):
         normalized["reference_lines"] = {
@@ -179,6 +510,11 @@ def dashboard_visual_settings_summary(settings: Any) -> str:
     preset = normalized["preset"]
     if preset != "custom":
         return _PRESET_LABELS[preset]
+    palette_preset = normalized.get("palette_preset")
+    if palette_preset and palette_preset != "custom":
+        preset_meta = _PALETTE_PRESETS.get(str(palette_preset))
+        if preset_meta:
+            return f"Custom: {preset_meta['label']}"
     mode = normalized["palette_mode"]
     if mode == "auto_gradient":
         return "Custom gradient"
@@ -215,8 +551,12 @@ def dashboard_visual_settings_to_plotly_settings(settings: Any) -> dict[str, Any
             "patterns": list(_PATTERN_SHAPES if use_distinguishers else ()),
             "auto_distinguish": distinguish == "when_similar",
             "always_distinguish": always_distinguish,
+            "overrides": copy.deepcopy(normalized["series_overrides"]),
         },
-        "stat_lines": dict(normalized["stat_lines"]),
+        "stat_lines": {
+            **dict(normalized["stat_lines"]),
+            "overrides": copy.deepcopy(normalized["stat_line_overrides"]),
+        },
         "reference_lines": copy.deepcopy(normalized["reference_lines"]),
     }
 
@@ -259,19 +599,77 @@ def build_dashboard_visual_preview_spec(
     return spec
 
 
-def build_dashboard_visual_preview_html(spec: Mapping[str, Any]) -> str:
+def build_dashboard_visual_preview_html(
+    spec: Mapping[str, Any],
+    *,
+    enable_selection_bridge: bool = False,
+) -> str:
     """Build a small standalone Plotly preview document for QWebEngine."""
 
     plotly_asset = Path(__file__).resolve().parent / "html_dashboard_assets" / "plotly-2.27.0.min.js"
     spec_json = json.dumps(spec, ensure_ascii=False)
     asset_uri = plotly_asset.resolve().as_uri()
+    qwebchannel_script = ""
+    if enable_selection_bridge:
+        qwebchannel_script = "<script src='qrc:///qtwebchannel/qwebchannel.js'></script>"
+    bridge_script = """
+let metrolizaVisualBridge = null;
+if (window.qt && window.QWebChannel && qt.webChannelTransport) {
+  new QWebChannel(qt.webChannelTransport, (channel) => {
+    metrolizaVisualBridge = channel.objects.metrolizaVisualBridge || null;
+  });
+}
+const visualTargetForTrace = (trace, traceIndex) => {
+  const meta = (trace && typeof trace.meta === 'object') ? trace.meta : {};
+  const target = meta.metroliza_target_id || meta.dashboard_visual_target || '';
+  if (target) {
+    return {
+      target,
+      role: meta.metroliza_role || meta.dashboard_visual_role || 'series',
+      label: meta.metroliza_legend_label || trace.name || target,
+      trace: traceIndex,
+    };
+  }
+  const name = String((trace && trace.name) || '').trim();
+  const reference = name.split('=')[0].trim().toLowerCase();
+  if (['lsl', 'usl', 'nominal'].includes(reference)) {
+    return {target: `reference:${reference}`, role: 'reference', key: reference, label: name, trace: traceIndex};
+  }
+  const stat = name.match(/^(?:\\((.+?)\\)\\s*)?(Min|Q1|Median|Mean|Q3|Max)=/i);
+  if (stat) {
+    const group = stat[1] || '';
+    const statName = stat[2].toLowerCase();
+    return {target: `stat:${group}:${statName}`, role: 'stat', group, stat: statName, label: name, trace: traceIndex};
+  }
+  if (name) {
+    return {target: `series:${name}`, role: 'series', label: name, trace: traceIndex};
+  }
+  return null;
+};
+const notifyVisualTarget = (payload) => {
+  if (!payload || !metrolizaVisualBridge || typeof metrolizaVisualBridge.selectTarget !== 'function') return;
+  metrolizaVisualBridge.selectTarget(JSON.stringify(payload));
+};
+"""
     return (
         "<!doctype html><html><head><meta charset='utf-8'>"
         "<style>html,body,#chart{height:100%;margin:0;background:#fff;}</style>"
-        f"<script src='{asset_uri}'></script></head><body><div id='chart'></div>"
+        f"<script src='{asset_uri}'></script>{qwebchannel_script}</head><body><div id='chart'></div>"
         "<script>"
         f"const spec = {spec_json};"
-        "Plotly.newPlot('chart', spec.data || [], spec.layout || {}, spec.config || {});"
+        f"{bridge_script}"
+        "const chart = document.getElementById('chart');"
+        "Plotly.newPlot(chart, spec.data || [], spec.layout || {}, spec.config || {}).then(() => {"
+        "chart.on('plotly_click', (eventData) => {"
+        "const point = eventData && eventData.points && eventData.points[0];"
+        "if (!point || typeof point.curveNumber !== 'number') return;"
+        "notifyVisualTarget(visualTargetForTrace((spec.data || [])[point.curveNumber], point.curveNumber));"
+        "});"
+        "chart.on('plotly_legendclick', (eventData) => {"
+        "const curveNumber = eventData && typeof eventData.curveNumber === 'number' ? eventData.curveNumber : -1;"
+        "notifyVisualTarget(visualTargetForTrace((spec.data || [])[curveNumber], curveNumber));"
+        "});"
+        "});"
         "</script></body></html>"
     )
 
@@ -431,17 +829,35 @@ def _resolved_palette(settings: Mapping[str, Any], *, count: int) -> list[str]:
     preset = settings["preset"]
     if preset == "print":
         return list(PRINT_DASHBOARD_PALETTE[:count])
-    if preset == "distinct":
-        return list(DEFAULT_DASHBOARD_PALETTE[:count])
     palette_mode = settings["palette_mode"]
     if palette_mode in {"auto_gradient", "highlight_gradient"}:
+        preset_meta = _PALETTE_PRESETS.get(str(settings.get("palette_preset") or ""))
+        if preset_meta and preset_meta.get("kind") in {"sequential", "diverging"}:
+            return _expand_palette(preset_meta.get("colors"), count=count)
         return _gradient_palette(
             settings["anchor_color"],
             count=count,
             spread=settings["gradient_spread"],
             highlight=palette_mode == "highlight_gradient",
         )
+    palette_preset = str(settings.get("palette_preset") or "metroliza")
+    if palette_preset != "custom":
+        preset_meta = _PALETTE_PRESETS.get(palette_preset)
+        if preset_meta:
+            return _expand_palette(preset_meta.get("colors"), count=count)
+    if preset == "distinct":
+        return list(DEFAULT_DASHBOARD_PALETTE[:count])
     return _palette(settings.get("palette"), fallback=DEFAULT_DASHBOARD_PALETTE)[:count]
+
+
+def _expand_palette(value: Any, *, count: int) -> list[str]:
+    colors = _palette(value, fallback=DEFAULT_DASHBOARD_PALETTE)
+    if not colors:
+        colors = list(DEFAULT_DASHBOARD_PALETTE)
+    output: list[str] = []
+    for index in range(max(1, int(count))):
+        output.append(colors[index % len(colors)])
+    return output
 
 
 def _gradient_palette(
@@ -472,7 +888,80 @@ def _normalize_reference_style(value: Any, fallback: Mapping[str, Any]) -> dict[
         "color": _color(source.get("color"), str(fallback["color"])),
         "dash": _dash(source.get("dash"), str(fallback["dash"])),
         "width": _bounded_float(source.get("width"), fallback=float(fallback["width"]), minimum=0.5, maximum=6.0),
+        "opacity": _bounded_float(
+            source.get("opacity"),
+            fallback=float(fallback.get("opacity", 1.0)),
+            minimum=0.05,
+            maximum=1.0,
+        ),
     }
+
+
+def _normalize_series_overrides(value: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, Mapping):
+        return {}
+    normalized: dict[str, dict[str, Any]] = {}
+    for raw_key, raw_style in value.items():
+        key = _text(raw_key, "")
+        if not key or not isinstance(raw_style, Mapping):
+            continue
+        style: dict[str, Any] = {}
+        color = _color(raw_style.get("color"), "")
+        if color:
+            style["color"] = color
+        opacity = _optional_bounded_float(raw_style.get("opacity"), minimum=0.0, maximum=1.0)
+        if opacity is not None:
+            style["opacity"] = opacity
+        marker_size = _optional_bounded_float(raw_style.get("marker_size"), minimum=2.0, maximum=18.0)
+        if marker_size is not None:
+            style["marker_size"] = marker_size
+        marker_symbol = _choice(raw_style.get("marker_symbol"), _MARKER_SYMBOLS, "")
+        if marker_symbol:
+            style["marker_symbol"] = marker_symbol
+        pattern_shape = _choice(raw_style.get("pattern_shape"), _PATTERN_SHAPES, "")
+        if pattern_shape or raw_style.get("pattern_shape") == "":
+            style["pattern_shape"] = pattern_shape
+        outline_width = _optional_bounded_float(raw_style.get("outline_width"), minimum=0.0, maximum=6.0)
+        if outline_width is not None:
+            style["outline_width"] = outline_width
+        outline_color = _color(raw_style.get("outline_color"), "")
+        if outline_color:
+            style["outline_color"] = outline_color
+        line_width = _optional_bounded_float(raw_style.get("width"), minimum=0.5, maximum=8.0)
+        if line_width is not None:
+            style["width"] = line_width
+        dash = _dash(raw_style.get("dash"), "")
+        if dash:
+            style["dash"] = dash
+        if style:
+            normalized[key] = style
+    return normalized
+
+
+def _normalize_line_overrides(value: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, Mapping):
+        return {}
+    normalized: dict[str, dict[str, Any]] = {}
+    for raw_key, raw_style in value.items():
+        key = _text(raw_key, "")
+        if not key or not isinstance(raw_style, Mapping):
+            continue
+        style: dict[str, Any] = {}
+        color = _color(raw_style.get("color"), "")
+        if color:
+            style["color"] = color
+        dash = _dash(raw_style.get("dash"), "")
+        if dash:
+            style["dash"] = dash
+        width = _optional_bounded_float(raw_style.get("width"), minimum=0.5, maximum=8.0)
+        if width is not None:
+            style["width"] = width
+        opacity = _optional_bounded_float(raw_style.get("opacity"), minimum=0.0, maximum=1.0)
+        if opacity is not None:
+            style["opacity"] = opacity
+        if style:
+            normalized[key] = style
+    return normalized
 
 
 def _palette(value: Any, *, fallback: Sequence[str]) -> list[str]:
@@ -526,6 +1015,26 @@ def _bounded_float(value: Any, *, fallback: float, minimum: float, maximum: floa
     if not math.isfinite(number):
         number = float(fallback)
     return max(float(minimum), min(float(maximum), number))
+
+
+def _optional_bounded_float(value: Any, *, minimum: float, maximum: float) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return max(float(minimum), min(float(maximum), number))
+
+
+def _text(value: Any, fallback: str) -> str:
+    text = str(value or "").strip()
+    return text if text else fallback
+
+
+def _theme_id_from_name(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", str(name or "").casefold()).strip("-")
+    return slug[:80]
 
 
 def _preview_svg_png_fallback(settings: Any) -> bytes | None:
@@ -1093,19 +1602,29 @@ __all__ = [
     "DASHBOARD_VISUAL_DISTINGUISH_MODES",
     "DASHBOARD_VISUAL_GRADIENT_SPREADS",
     "DASHBOARD_VISUAL_PALETTE_MODES",
+    "DASHBOARD_VISUAL_PALETTE_PRESET_IDS",
     "DASHBOARD_VISUAL_PRESETS",
+    "DASHBOARD_VISUAL_THEME_LIBRARY_VERSION",
     "DEFAULT_DASHBOARD_PALETTE",
     "DEFAULT_HIGHLIGHT_ANCHOR",
     "build_dashboard_visual_preview_html",
     "build_dashboard_visual_preview_png",
     "build_dashboard_visual_preview_spec",
+    "dashboard_visual_palette_presets",
     "dashboard_visual_settings_summary",
     "dashboard_visual_settings_to_plotly_settings",
     "dashboard_visual_swatch_palette",
     "default_dashboard_visual_config_path",
     "default_dashboard_visual_settings",
+    "default_dashboard_visual_theme_library",
+    "default_dashboard_visual_theme_library_path",
     "load_dashboard_visual_settings",
+    "load_dashboard_visual_theme_library",
     "normalize_dashboard_visual_settings",
+    "normalize_dashboard_visual_theme_library",
+    "remove_dashboard_visual_theme",
     "save_dashboard_visual_settings",
+    "save_dashboard_visual_theme_library",
     "temporary_dashboard_visual_preview_html",
+    "upsert_dashboard_visual_theme",
 ]
