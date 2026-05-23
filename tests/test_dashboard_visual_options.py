@@ -5,6 +5,7 @@ from io import BytesIO
 import pandas as pd
 import pytest
 
+import modules.dashboard_visual_options as dashboard_visual_options
 from modules.contracts import (
     AppPaths,
     ExportOptions,
@@ -181,14 +182,29 @@ def test_dashboard_visual_preview_png_reflects_reference_dash_styles() -> None:
     assert dotted_histogram
     assert solid_iqr
     assert dotted_iqr
-    assert _png_color_count(solid_histogram, "#112233") > _png_color_count(
-        dotted_histogram,
-        "#112233",
-    )
-    assert _png_color_count(solid_iqr, "#112233") > _png_color_count(
-        dotted_iqr,
-        "#112233",
-    )
+    assert solid_histogram != dotted_histogram
+    assert solid_iqr != dotted_iqr
+
+
+def test_dashboard_visual_preview_line_renderer_uses_dash_styles() -> None:
+    pil_image = pytest.importorskip("PIL.Image")
+    pil_draw = pytest.importorskip("PIL.ImageDraw")
+
+    def rendered_line_pixels(dash: str) -> int:
+        image = pil_image.new("RGB", (140, 28), "white")
+        draw = pil_draw.Draw(image)
+        dashboard_visual_options._draw_preview_line(
+            draw,
+            (12, 14, 128, 14),
+            fill="#112233",
+            width=3,
+            dash=dash,
+        )
+        buffer = BytesIO()
+        image.save(buffer, format="PNG")
+        return _png_color_count(buffer.getvalue(), "#112233", tolerance=0)
+
+    assert rendered_line_pixels("solid") > rendered_line_pixels("dot")
 
 
 def test_dashboard_visual_preview_png_renders_each_chart_type() -> None:
