@@ -113,27 +113,33 @@ python -m maturin build --manifest-path modules/native/chart_renderer/Cargo.toml
 - [ ] Coverage visibility output from `unit-tests` is reviewed (job log summary and `unit-test-coverage` artifact `coverage.xml`) as RC confidence evidence; this is informational and not a blocking PR check. *(Owner: Release owner/QA)*
 - [ ] Manual release smoke evidence is linked before open-testing promotion when applicable. Google conversion smoke is release-blocking for promoted RC artifacts; skipped default CI does not satisfy that gate. *(Owner: Release owner)*
 
-### 2026.05 RC2 release-audit evidence
+### 2026.05 RC4 PR/release-audit evidence
 
-Current validation branch: `codex/oznak-metroliza-integration`.
-Current RC metadata: `2026.05rc2(260517)`.
-Current local base commit before the final audit documentation update:
-`ae124fcb293a74977b9f091d989bd192804642f9`.
+Current validation branch: `rc2` / PR #895.
+Current RC metadata: `2026.05rc4(260520)`.
+Current plotstats hotfix pin:
+`2a15c1c799902831f64b95a53de30547885cdcc8`.
 
-- Release audit evidence lives in [`rc2_release_audit_2026-05-17.md`](./rc2_release_audit_2026-05-17.md).
-- Local release gates passed on the current audit worktree:
+- Static scatter annotation audit evidence lives in
+  [`rc4_static_scatter_annotation_backgrounds_2026-05-23.md`](./rc4_static_scatter_annotation_backgrounds_2026-05-23.md).
+- Previous RC2 audit evidence remains historical in
+  [`rc2_release_audit_2026-05-17.md`](./rc2_release_audit_2026-05-17.md).
+- Local release gates passed for the current audit worktree:
   `ruff`, `compileall`, release metadata sync, release hygiene, `git diff --check`,
-  security audit, full pytest, and coverage pytest.
+  security audit, full pytest, and focused Codex-review regression tests.
 - Full pytest passed:
-  `1454 passed, 126 skipped, 6 warnings, 60 subtests passed`.
-- Coverage pytest passed:
-  `1454 passed, 126 skipped, 86 warnings, 60 subtests passed`; total line coverage `80%`.
+  `1645 passed, 174 skipped, 6 warnings, 60 subtests passed`.
 - Security audit passed after allowing `pip-audit` to create/upgrade its temporary
   dependency environment; `pip-audit` reported no known vulnerabilities.
-- This worktree has uncommitted release-audit changes, so `ae124fc` is not final RC2 evidence.
-- Fresh GitHub CI for the final commit is not recorded yet.
-- Manual packaging smoke, Windows executable clean-machine launch, and Google conversion
-  smoke are not recorded for this RC2 build yet and remain release blockers.
+- GitHub Actions CI passed for Metroliza run `26326503387` on the latest code
+  commit before this documentation refresh:
+  `d0ce9f38061f9af747ee234f27cc46c534355aff`.
+- GitHub Actions CI passed for hexafe-plotstats run `26326553748` on the
+  scatter annotation code-fix commit
+  `736ed35048a7c76c3a9b236ed8151b5358286414`.
+- Manual packaging smoke, Windows executable clean-machine launch, Google conversion
+  smoke, and third-party notice artifact evidence are not recorded for the RC4
+  promotion artifact yet and remain release-promotion blockers.
 
 Optional CI/manual smoke commands (non-blocking for regular PRs/pushes):
 
