@@ -186,6 +186,43 @@ def test_dashboard_visual_preview_png_reflects_reference_dash_styles() -> None:
     assert solid_iqr != dotted_iqr
 
 
+def test_dashboard_visual_preview_png_synthesizes_reference_styles_without_traces() -> None:
+    spec = {
+        "data": [
+            {
+                "type": "histogram",
+                "name": "Group 1",
+                "marker": {"color": "#4d908e"},
+                "x": [6.2, 6.4, 6.6, 6.8],
+            },
+        ],
+        "layout": {},
+        "config": {},
+    }
+    solid_preview = dashboard_visual_options._preview_plotly_spec_png(
+        spec,
+        chart_type="histogram",
+        settings={
+            "reference_lines": {
+                "lsl": {"color": "#112233", "dash": "solid", "width": 3.0},
+            },
+        },
+    )
+    dotted_preview = dashboard_visual_options._preview_plotly_spec_png(
+        spec,
+        chart_type="histogram",
+        settings={
+            "reference_lines": {
+                "lsl": {"color": "#112233", "dash": "dot", "width": 3.0},
+            },
+        },
+    )
+
+    assert solid_preview
+    assert dotted_preview
+    assert solid_preview != dotted_preview
+
+
 def test_dashboard_visual_preview_line_renderer_uses_dash_styles() -> None:
     pil_image = pytest.importorskip("PIL.Image")
     pil_draw = pytest.importorskip("PIL.ImageDraw")

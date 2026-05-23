@@ -610,6 +610,12 @@ def render_dashboard_visual_runtime_js(config_var: str = "dashboardVisualConfig"
       const stripGroupCount = (label) => String(label || '').replace(/\\s*\\(n\\s*=\\s*\\d+\\)\\s*$/i, '').trim();
       const isReferenceName = (name) => ['lsl', 'usl', 'nominal'].includes(String(name || '').split('=')[0].trim().toLowerCase());
       const groupStatMatch = (name) => String(name || '').trim().match(/^\\((.+?)\\)\\s*(Min|Q1|Median|Mean|Q3|Max)=/i);
+      const traceLooksLikeTrend = (trace) => {{
+        if (!trace || typeof trace !== 'object') return false;
+        const name = String(trace.name || '').trim().toLowerCase();
+        const mode = String(trace.mode || '').toLowerCase();
+        return name === 'trend' && mode.includes('lines') && !isReferenceName(name);
+      }};
 
       const chartKindForSpec = (spec) => {{
         const metadata = (spec.metadata && typeof spec.metadata === 'object') ? spec.metadata : {{}};
@@ -621,6 +627,7 @@ def render_dashboard_visual_runtime_js(config_var: str = "dashboardVisualConfig"
         if (histogramCount === 1) return 'histogram';
         if (traces.some((trace) => String(trace.type || '').toLowerCase() === 'violin')) return 'distribution';
         if (traces.some((trace) => String(trace.type || '').toLowerCase() === 'box')) return 'iqr';
+        if (traces.some((trace) => traceLooksLikeTrend(trace))) return 'trend';
         if (traces.some((trace) => String(trace.mode || '').toLowerCase().includes('markers'))) return 'scatter';
         return 'default';
       }};

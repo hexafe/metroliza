@@ -375,9 +375,13 @@ def run_tabular_file_analytics(
         grouping_applied=grouped.applied,
     )
     charts = request.chart_selection
-    if charts.groupstats and grouped.group_count < 2:
-        charts = replace(charts, groupstats=False)
     cohort = request.cohort_state
+    if charts.groupstats and not _tabular_groupstats_can_form_groups(
+        grouped_group_count=grouped.group_count,
+        aggregation=aggregation,
+        cohort=cohort,
+    ):
+        charts = replace(charts, groupstats=False)
     cohorted = apply_reference_cohorts(grouped.dataframe, cohort)
     _emit_progress(
         progress_callback,
@@ -533,6 +537,21 @@ def _tabular_dashboard_frame_for_detail_mode(
         },
     )
     return sampled, (diagnostic,)
+
+
+def _tabular_groupstats_can_form_groups(
+    *,
+    grouped_group_count: int,
+    aggregation: ProductionAggregationState,
+    cohort: ReferenceCohortState,
+) -> bool:
+    """Return whether tabular groupstats has a configured grouping source."""
+
+    if int(grouped_group_count or 0) >= 2:
+        return True
+    if aggregation.time_bucket != "none" or bool(aggregation.group_fields):
+        return True
+    return bool(cohort.is_applied and cohort.mode in {"compare_rest", "group_selected"})
 
 
 def _emit_progress(

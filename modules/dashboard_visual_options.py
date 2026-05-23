@@ -285,7 +285,7 @@ def build_dashboard_visual_preview_png(
 
     chart_type = _choice(chart_type, DASHBOARD_VISUAL_CHART_TYPES, "histogram")
     spec = build_dashboard_visual_preview_spec(settings, chart_type=chart_type)
-    image_bytes = _preview_plotly_spec_png(spec, chart_type=chart_type)
+    image_bytes = _preview_plotly_spec_png(spec, chart_type=chart_type, settings=settings)
     if image_bytes:
         return image_bytes
 
@@ -548,7 +548,12 @@ def _preview_svg_png_fallback(settings: Any) -> bytes | None:
     return buffer.getvalue()
 
 
-def _preview_plotly_spec_png(spec: Mapping[str, Any] | None, *, chart_type: str) -> bytes | None:
+def _preview_plotly_spec_png(
+    spec: Mapping[str, Any] | None,
+    *,
+    chart_type: str,
+    settings: Any = None,
+) -> bytes | None:
     if not isinstance(spec, Mapping):
         return None
     try:
@@ -570,7 +575,10 @@ def _preview_plotly_spec_png(spec: Mapping[str, Any] | None, *, chart_type: str)
     series = _preview_series_traces(spec)
     if not series:
         return None
-    reference_traces = _preview_reference_traces(spec)
+    reference_traces = _preview_reference_traces_with_settings(
+        _preview_reference_traces(spec),
+        settings,
+    )
     stat_traces = _preview_stat_traces(spec)
     line_domain_traces = [*series, *reference_traces, *stat_traces]
     if chart_type == "histogram":
@@ -629,6 +637,40 @@ def _preview_reference_traces(spec: Mapping[str, Any]) -> list[Mapping[str, Any]
         for trace in traces
         if isinstance(trace, Mapping) and _preview_reference_key(str(trace.get("name") or ""))
     ]
+
+
+def _preview_reference_traces_with_settings(
+    traces: Sequence[Mapping[str, Any]],
+    settings: Any,
+) -> list[Mapping[str, Any]]:
+    """Return reference traces styled from the dashboard settings contract.
+
+    The preview should show LSL/Nominal/USL styling even when the installed plot
+    renderer does not emit reference-line traces for the sample payload.
+    """
+
+    normalized = normalize_dashboard_visual_settings(settings)
+    reference_styles = normalized["reference_lines"]
+    merged: dict[str, Mapping[str, Any]] = {}
+    for trace in traces:
+        key = _preview_reference_key(str(trace.get("name") or ""))
+        if not key:
+            continue
+        trace_copy = dict(trace)
+        line = dict(trace_copy.get("line") if isinstance(trace_copy.get("line"), Mapping) else {})
+        line.update(reference_styles[key])
+        trace_copy["line"] = line
+        merged[key] = trace_copy
+
+    for key in ("lsl", "nominal", "usl"):
+        if key in merged:
+            continue
+        merged[key] = {
+            "name": "Nominal" if key == "nominal" else key.upper(),
+            "mode": "lines",
+            "line": dict(reference_styles[key]),
+        }
+    return [merged[key] for key in ("lsl", "nominal", "usl")]
 
 
 def _preview_stat_traces(spec: Mapping[str, Any]) -> list[Mapping[str, Any]]:

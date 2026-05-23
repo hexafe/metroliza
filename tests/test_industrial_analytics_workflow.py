@@ -190,6 +190,7 @@ def test_run_tabular_file_analytics_reuses_shared_dashboard_and_parameter_workbo
     assert result.html_dashboard_html_bytes > 0
     assert result.html_dashboard_plotly_budget_status == "within_budget"
     assert result.metric_count == 1
+    assert result.groupstats_metric_count == 1
     assert result.parameter_sheet_count == 1
     assert "Length Mm" in result.workbook_sheet_names
     assert "Charts" in result.workbook_sheet_names
@@ -201,6 +202,34 @@ def test_run_tabular_file_analytics_reuses_shared_dashboard_and_parameter_workbo
     assert any(message.startswith("Writing dashboard...") for message in progress_messages)
     assert progress_messages[-1].startswith("Analytics complete")
     assert all("ETA" in message for message in progress_messages)
+
+
+def test_run_tabular_file_analytics_preserves_groupstats_for_reference_cohort(tmp_path) -> None:
+    input_file = tmp_path / "reference_cohort_table.csv"
+    dashboard_file = tmp_path / "reference_cohort_table_analytics.html"
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=8, freq="h"),
+            "Reference ID": ["R1", "R1", "R1", "R1", "R2", "R2", "R3", "R3"],
+            "Length mm": [10.0, 10.1, 10.2, 10.3, 10.8, 10.9, 11.0, 11.1],
+        }
+    ).to_csv(input_file, index=False)
+
+    result = run_tabular_file_analytics(
+        input_file=str(input_file),
+        output_dashboard_file=str(dashboard_file),
+        metric_selection=(ProductionMetricSelection("length_mm", display_label="Length mm"),),
+        aggregation_state=ProductionAggregationState(
+            time_bucket="none",
+            aggregation_methods=("mean",),
+        ),
+        cohort_state=ReferenceCohortState.from_text("R1", mode="compare_rest"),
+        chart_selection=ProductionChartSelection(groupstats=True),
+        separate_parameter_sheets=False,
+    )
+
+    assert result.groupstats_metric_count == 1
+    assert "Groupstats" in dashboard_file.read_text(encoding="utf-8")
 
 
 def test_run_tabular_file_analytics_uses_loaded_snapshot_without_reloading(
