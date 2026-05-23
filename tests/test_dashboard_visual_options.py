@@ -650,6 +650,36 @@ def test_dashboard_visual_histogram_trace_metadata_exposes_pattern_capability() 
     ]
 
 
+def test_dashboard_visual_histogram_empty_pattern_override_clears_auto_pattern() -> None:
+    spec = {
+        "data": [
+            {
+                "type": "histogram",
+                "name": "A",
+                "x": [1.0, 1.1, 1.2],
+                "marker": {"color": "#aaaaaa"},
+            }
+        ],
+        "layout": {},
+        "metadata": {"kind": "histogram"},
+    }
+
+    apply_dashboard_visual_settings(
+        spec,
+        payload={"groups": [{"group": "A"}], "type": "histogram"},
+        visual_settings={
+            "series": {
+                "palette": ["#123456"],
+                "patterns": ["/"],
+                "always_distinguish": True,
+                "overrides": {"A": {"pattern_shape": ""}},
+            }
+        },
+    )
+
+    assert spec["data"][0]["marker"]["pattern"]["shape"] == ""
+
+
 def test_dashboard_visual_scatter_series_overrides_apply_marker_shape_and_auto_outline() -> None:
     spec = {
         "data": [

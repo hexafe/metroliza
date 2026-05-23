@@ -440,8 +440,16 @@ def _apply_series_trace_style(
         resolved_symbol = _string_or_none(style.get("marker_symbol")) or marker_symbol
         if resolved_symbol and _trace_has_markers(trace):
             marker["symbol"] = resolved_symbol
-        resolved_pattern = _string_or_none(style.get("pattern_shape")) or pattern_shape
-        if resolved_pattern and str(trace.get("type") or "").casefold() in {"bar", "histogram"}:
+        pattern_overridden = "pattern_shape" in style
+        resolved_pattern = (
+            str(style.get("pattern_shape") or "")
+            if pattern_overridden
+            else pattern_shape
+        )
+        if (
+            (pattern_overridden or resolved_pattern)
+            and str(trace.get("type") or "").casefold() in {"bar", "histogram"}
+        ):
             pattern = marker.setdefault("pattern", {})
             if isinstance(pattern, dict):
                 pattern["shape"] = resolved_pattern
