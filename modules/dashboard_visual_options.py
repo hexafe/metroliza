@@ -887,6 +887,12 @@ if (window.qt && window.QWebChannel && qt.webChannelTransport) {
     metrolizaVisualBridge = channel.objects.metrolizaVisualBridge || null;
   });
 }
+const statTargetPart = (value) => String(value || '').trim().toLowerCase();
+const statTargetKey = (group, stat) => {
+  const groupKey = statTargetPart(group);
+  const statKey = statTargetPart(stat);
+  return groupKey ? `${groupKey}::${statKey}` : statKey;
+};
 const visualTargetForTrace = (trace, traceIndex) => {
   const meta = (trace && typeof trace.meta === 'object') ? trace.meta : {};
   const target = meta.metroliza_target_id || meta.dashboard_visual_target || '';
@@ -907,7 +913,7 @@ const visualTargetForTrace = (trace, traceIndex) => {
   if (stat) {
     const group = stat[1] || '';
     const statName = stat[2].toLowerCase();
-    return {target: `stat:${group}:${statName}`, role: 'stat', group, stat: statName, label: name, trace: traceIndex};
+    return {target: `stat:${statTargetKey(group, statName)}`, role: 'stat', group, stat: statName, label: name, trace: traceIndex};
   }
   if (name) {
     return {target: `series:${name}`, role: 'series', label: name, trace: traceIndex};

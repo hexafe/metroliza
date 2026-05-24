@@ -35,6 +35,10 @@ def test_dashboard_visual_runtime_preserves_trace_visibility_before_plotly_react
     runtime_js = render_dashboard_visual_runtime_js()
 
     assert "const preservePlotlyTraceVisibility" in runtime_js
+    assert "const traceVisibilityKey" in runtime_js
+    assert "visibilityByKey" in runtime_js
+    assert "meta.metroliza_target_id" in runtime_js
+    assert "trace.uid" in runtime_js
     assert "const allCurrentTracesHidden = currentData.every((trace) => traceIsHidden(trace));" in runtime_js
     assert "trace.visible = 'legendonly';" in runtime_js
     assert "delete trace.visible;" in runtime_js
@@ -206,6 +210,9 @@ def test_dashboard_visual_runtime_selected_element_controls_are_role_aware() -> 
     assert "const rehydrateSelectedVisualTarget" in runtime_js
     assert "if (dashboardVisualSelectedTarget) rehydrateSelectedVisualTarget();" in runtime_js
     assert "normalizeMarkerSymbol(marker.symbol, 'circle')" in runtime_js
+    assert "const shouldResetMarkerSymbol" in runtime_js
+    assert "kind.startsWith('time_series')" in runtime_js
+    assert "shouldResetMarkerSymbol(trace, traceChartKind)" in runtime_js
     assert "trace.marker.symbol = 'circle';" in runtime_js
     assert "trace.marker.pattern.shape = '';" in runtime_js
     assert "rightIndex = leftIndex + 1" in runtime_js

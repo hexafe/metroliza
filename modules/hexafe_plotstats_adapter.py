@@ -278,6 +278,7 @@ def _fallback_histogram_plotly_spec(
 
     style = payload.get("style") if isinstance(payload.get("style"), Mapping) else {}
     x_label = str(style.get("axis_label_x") or payload.get("x_label") or "Value")
+    histogram_kind = "grouped_histogram" if len(groups) > 1 else "histogram"
     spec = {
         "data": traces,
         "layout": {
@@ -289,7 +290,7 @@ def _fallback_histogram_plotly_spec(
         },
         "config": {"responsive": True, "displaylogo": False, "staticPlot": bool(static)},
         "metadata": {
-            "kind": "histogram",
+            "kind": histogram_kind,
             "histogram_y_mode": "percent",
             "mean_precision": mean_precision,
         },
@@ -480,6 +481,7 @@ def build_plotstats_dashboard_spec(
     _normalize_payload_group_stat_trace_names(spec, payload)
     _ensure_group_histogram_mean_annotations(spec, payload)
     normalized = _trim_plotly_spec(spec)
+    _apply_payload_kind_metadata(normalized, payload)
     _apply_payload_histogram_overlay_plotly_y(normalized, payload)
     _normalize_scatter_trend_dashboard_spec(normalized, payload)
     apply_dashboard_visual_settings(normalized, payload=payload, theme=dashboard_theme)
@@ -1238,16 +1240,35 @@ def _payload_with_resolved_histogram_bin_count(payload: Mapping[str, Any]) -> Ma
     return next_payload
 
 
+def _payload_dashboard_kind(payload: Mapping[str, Any]) -> str:
+    payload_type = str(payload.get("type") or payload.get("chart_type") or "").strip().casefold()
+    if payload_type == "histogram":
+        groups = _histogram_payload_groups(payload)
+        return "grouped_histogram" if len(groups) > 1 else "histogram"
+    return payload_type
+
+
+def _apply_payload_kind_metadata(spec: Mapping[str, Any], payload: Mapping[str, Any]) -> None:
+    if not isinstance(spec, dict):
+        return
+    kind = _payload_dashboard_kind(payload)
+    if not kind:
+        return
+    metadata = spec.setdefault("metadata", {})
+    if isinstance(metadata, dict):
+        metadata["kind"] = kind
+
+
 def _apply_payload_histogram_bins_to_spec(spec: Mapping[str, Any], payload: Mapping[str, Any]) -> None:
     if str(payload.get("type") or "").strip().casefold() != "histogram":
         return
+    groups = _histogram_payload_groups(payload)
     if isinstance(spec, dict):
         metadata = spec.setdefault("metadata", {})
         if isinstance(metadata, dict):
-            metadata["kind"] = "histogram"
+            metadata["kind"] = "grouped_histogram" if len(groups) > 1 else "histogram"
             metadata["histogram_y_mode"] = "percent"
             metadata["mean_precision"] = _mean_precision_from_payload(payload)
-    groups = _histogram_payload_groups(payload)
     all_values = np.concatenate([values for _label, values in groups]) if groups else np.asarray([])
     all_values = all_values[np.isfinite(all_values)]
     if all_values.size == 0:

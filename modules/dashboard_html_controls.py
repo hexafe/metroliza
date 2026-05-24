@@ -1359,6 +1359,13 @@ def render_dashboard_visual_runtime_js(
 
       const traceHasMarkers = (trace) => String(trace.mode || '').toLowerCase().includes('markers');
 
+      const shouldResetMarkerSymbol = (trace, chartKind) => {{
+        if (!traceHasMarkers(trace)) return false;
+        const kind = String(chartKind || '').toLowerCase();
+        if (kind.startsWith('time_series')) return false;
+        return ['scatter', 'distribution'].includes(kind);
+      }};
+
       const setTrendTraceColor = (trace, color) => {{
         trace.line = Object.assign({{}}, trace.line || {{}}, {{ color }});
       }};
@@ -1377,6 +1384,20 @@ def render_dashboard_visual_runtime_js(
         return visibility.hasVisible && (visibility.value === 'legendonly' || visibility.value === false);
       }};
 
+      const traceVisibilityKey = (trace) => {{
+        if (!trace || typeof trace !== 'object') return '';
+        const meta = (trace.meta && typeof trace.meta === 'object') ? trace.meta : {{}};
+        const candidates = [
+          meta.metroliza_target_id,
+          meta.dashboard_visual_target,
+          trace.uid,
+          trace.name ? `${{String(trace.type || 'trace')}}:${{String(trace.name)}}` : '',
+        ];
+        return candidates
+          .map((value) => String(value || '').trim())
+          .find((value) => value.length > 0) || '';
+      }};
+
       const preservePlotlyTraceVisibility = (container, nextData) => {{
         const node = typeof container === 'string' ? document.getElementById(container) : container;
         const currentData = node && Array.isArray(node.data) ? node.data : [];
@@ -1384,11 +1405,22 @@ def render_dashboard_visual_runtime_js(
           return nextData;
         }}
         const allCurrentTracesHidden = currentData.every((trace) => traceIsHidden(trace));
+        const visibilityByKey = new Map();
+        const visibilityByIndex = new Map();
+        currentData.forEach((trace, index) => {{
+          const visibility = traceVisibilityState(trace);
+          if (!visibility.hasVisible) return;
+          const key = traceVisibilityKey(trace);
+          if (key) visibilityByKey.set(key, visibility.value);
+          visibilityByIndex.set(index, visibility.value);
+        }});
         nextData.forEach((trace, index) => {{
           if (!trace || typeof trace !== 'object') return;
-          const visibility = traceVisibilityState(currentData[index]);
-          if (visibility.hasVisible) {{
-            trace.visible = visibility.value;
+          const key = traceVisibilityKey(trace);
+          if (key && visibilityByKey.has(key)) {{
+            trace.visible = visibilityByKey.get(key);
+          }} else if (!key && visibilityByIndex.has(index)) {{
+            trace.visible = visibilityByIndex.get(index);
           }} else if (allCurrentTracesHidden) {{
             trace.visible = 'legendonly';
           }} else if (!allCurrentTracesHidden && Object.prototype.hasOwnProperty.call(trace, 'visible')) {{
@@ -1625,7 +1657,7 @@ def render_dashboard_visual_runtime_js(
               trace.marker.symbol = style.marker_symbol;
             }} else if (traceHasMarkers(trace) && !populationLike && useDistinguishers && markerSymbols.length) {{
               trace.marker.symbol = markerSymbols[labelIndex % markerSymbols.length];
-            }} else if (traceHasMarkers(trace)) {{
+            }} else if (shouldResetMarkerSymbol(trace, traceChartKind)) {{
               trace.marker.symbol = 'circle';
             }}
             if (['bar', 'histogram'].includes(String(trace.type || '').toLowerCase()) && style.pattern_shape !== undefined) {{

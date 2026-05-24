@@ -562,7 +562,7 @@ def _apply_series_trace_style(
         resolved_symbol = _string_or_none(style.get("marker_symbol")) or marker_symbol
         if resolved_symbol and _trace_has_markers(trace):
             marker["symbol"] = resolved_symbol
-        elif _trace_has_markers(trace):
+        elif _should_reset_marker_symbol(trace, chart_kind):
             marker["symbol"] = "circle"
         pattern_overridden = "pattern_shape" in style
         resolved_pattern = (
@@ -777,6 +777,15 @@ def _set_trace_color(trace: dict[str, Any], color: str) -> None:
 def _trace_has_markers(trace: Mapping[str, Any]) -> bool:
     mode = str(trace.get("mode") or "").casefold()
     return "markers" in mode
+
+
+def _should_reset_marker_symbol(trace: Mapping[str, Any], chart_kind: str) -> bool:
+    if not _trace_has_markers(trace):
+        return False
+    kind = str(chart_kind or "").strip().casefold()
+    if kind.startswith("time_series"):
+        return False
+    return kind in {"scatter", "distribution"}
 
 
 def _trace_color(trace: Mapping[str, Any]) -> str | None:

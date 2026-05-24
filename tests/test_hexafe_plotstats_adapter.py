@@ -301,6 +301,39 @@ def test_plotstats_dashboard_spec_normalizes_histogram_plotly_semantics(monkeypa
     assert all(annotation["opacity"] == 1.0 for annotation in spec["layout"]["annotations"])
 
 
+def test_plotstats_dashboard_spec_marks_multi_group_histograms(monkeypatch) -> None:
+    def fake_artifact(_payload, **_kwargs):
+        return {
+            "plotly_spec": {
+                "data": [{"type": "bar", "name": "A", "x": [1.0], "y": [1.0]}],
+                "layout": {"yaxis": {"range": [0.0, 1.0]}},
+                "config": {"responsive": True},
+                "metadata": {"kind": "histogram"},
+            }
+        }
+
+    package = ModuleType("hexafe_plotstats")
+    adapters = ModuleType("hexafe_plotstats.adapters")
+    adapters.chart_artifact_from_metroliza_payload = fake_artifact
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats", package)
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats.adapters", adapters)
+
+    spec = build_plotstats_dashboard_spec(
+        {
+            "type": "histogram",
+            "groups": [
+                {"group": "A", "values": [1.0, 2.0]},
+                {"group": "B", "values": [2.0, 3.0]},
+            ],
+        },
+        title="Grouped histogram",
+        static=False,
+    )
+
+    assert spec is not None
+    assert spec["metadata"]["kind"] == "grouped_histogram"
+
+
 def test_plotstats_dashboard_spec_promotes_valued_histogram_reference_traces(monkeypatch) -> None:
     def fake_artifact(_payload, **_kwargs):
         return {
@@ -402,6 +435,23 @@ def test_dashboard_plotly_fallback_builds_percent_histogram_with_reference_value
     assert all(trace["y"] == [0.0, 0.5] for trace in spec["data"][1:])
     assert "annotations" not in spec["layout"]
     assert "shapes" not in spec["layout"]
+
+
+def test_dashboard_plotly_fallback_marks_multi_group_histograms() -> None:
+    spec = _fallback_dashboard_plotly_spec(
+        {
+            "type": "histogram",
+            "groups": [
+                {"group": "A", "values": [1.0, 2.0, 3.0]},
+                {"group": "B", "values": [2.0, 3.0, 4.0]},
+            ],
+        },
+        title="Grouped histogram",
+        static=False,
+    )
+
+    assert spec is not None
+    assert spec["metadata"]["kind"] == "grouped_histogram"
 
 
 def test_dashboard_plotly_fallback_builds_distribution_and_iqr_with_full_width_legend_lines() -> None:

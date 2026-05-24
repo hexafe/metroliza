@@ -457,6 +457,21 @@ def test_dashboard_visual_preview_png_synthesizes_reference_styles_without_trace
     assert solid_preview != dotted_preview
 
 
+def test_dashboard_visual_preview_bridge_uses_dialog_stat_target_key() -> None:
+    html = dashboard_visual_options.build_dashboard_visual_preview_html(
+        {
+            "data": [{"type": "scatter", "mode": "lines", "name": "(Group 1) Mean=6.5"}],
+            "layout": {},
+            "config": {},
+        },
+        enable_selection_bridge=True,
+    )
+
+    assert "const statTargetKey" in html
+    assert "target: `stat:${statTargetKey(group, statName)}`" in html
+    assert "target: `stat:${group}:${statName}`" not in html
+
+
 def test_dashboard_visual_preview_line_renderer_uses_dash_styles() -> None:
     pil_image = pytest.importorskip("PIL.Image")
     pil_draw = pytest.importorskip("PIL.ImageDraw")
@@ -989,6 +1004,31 @@ def test_dashboard_visual_clears_stale_marker_symbols_when_distinguishers_turn_o
     )
 
     assert spec["data"][0]["marker"]["symbol"] == "circle"
+
+
+def test_dashboard_visual_preserves_time_series_marker_symbols_without_distinguishers() -> None:
+    spec = {
+        "data": [
+            {
+                "type": "scatter",
+                "mode": "markers",
+                "name": "M1 aggregate",
+                "x": ["2026-01"],
+                "y": [11.0],
+                "marker": {"symbol": "x"},
+            }
+        ],
+        "layout": {},
+        "metadata": {"kind": "time_series_raw_aggregate"},
+    }
+
+    apply_dashboard_visual_settings(
+        spec,
+        payload={"labels": ["M1 aggregate"], "type": "time_series_raw_aggregate"},
+        visual_settings={"series": {"palette": ["#123456"], "marker_symbols": []}},
+    )
+
+    assert spec["data"][0]["marker"]["symbol"] == "x"
 
 
 def test_dashboard_visual_clears_stale_histogram_pattern_when_distinguishers_turn_off() -> None:
