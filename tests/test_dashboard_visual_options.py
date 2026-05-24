@@ -467,9 +467,13 @@ def test_dashboard_visual_preview_bridge_uses_dialog_stat_target_key() -> None:
         enable_selection_bridge=True,
     )
 
+    assert "const targetPart" in html
     assert "const statTargetKey" in html
+    assert "const fallbackRoleForName" in html
     assert "target: `stat:${statTargetKey(group, statName)}`" in html
     assert "target: `stat:${group}:${statName}`" not in html
+    assert "target: `${role}:${targetPart(name)}`" in html
+    assert "target: `series:${name}`" not in html
 
 
 def test_dashboard_visual_preview_line_renderer_uses_dash_styles() -> None:

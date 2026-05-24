@@ -887,11 +887,15 @@ if (window.qt && window.QWebChannel && qt.webChannelTransport) {
     metrolizaVisualBridge = channel.objects.metrolizaVisualBridge || null;
   });
 }
-const statTargetPart = (value) => String(value || '').trim().toLowerCase();
+const targetPart = (value) => String(value || '').trim().toLowerCase();
 const statTargetKey = (group, stat) => {
-  const groupKey = statTargetPart(group);
-  const statKey = statTargetPart(stat);
+  const groupKey = targetPart(group);
+  const statKey = targetPart(stat);
   return groupKey ? `${groupKey}::${statKey}` : statKey;
+};
+const fallbackRoleForName = (name) => {
+  const key = targetPart(name);
+  return key.includes('curve') || key.includes('kde') ? 'model_curve' : 'series';
 };
 const visualTargetForTrace = (trace, traceIndex) => {
   const meta = (trace && typeof trace.meta === 'object') ? trace.meta : {};
@@ -916,7 +920,8 @@ const visualTargetForTrace = (trace, traceIndex) => {
     return {target: `stat:${statTargetKey(group, statName)}`, role: 'stat', group, stat: statName, label: name, trace: traceIndex};
   }
   if (name) {
-    return {target: `series:${name}`, role: 'series', label: name, trace: traceIndex};
+    const role = fallbackRoleForName(name);
+    return {target: `${role}:${targetPart(name)}`, role, label: name, trace: traceIndex};
   }
   return null;
 };
