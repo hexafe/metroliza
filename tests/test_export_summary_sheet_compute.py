@@ -57,6 +57,112 @@ def test_resolve_sampling_context_normalizes_numeric_measurements_once_and_retur
     assert context['iqr_payload']['values'] == [[1.0, 2.0], [3.5, 4.5]]
 
 
+def test_resolve_sampling_context_ungrouped_uses_total_finite_rows_for_violin_threshold():
+    frame = normalize_summary_group_frame(
+        pd.DataFrame(
+            {
+                'REFERENCE': ['R1'] * 79,
+                'HEADER': ['Diameter'] * 79,
+                'AX': ['X'] * 79,
+                'SAMPLE_NUMBER': [str(index + 1) for index in range(79)],
+                'MEAS': [10.0 + (index * 0.01) for index in range(78)] + ['not numeric'],
+                'NOM': [10.0] * 79,
+                '+TOL': [0.2] * 79,
+                '-TOL': [-0.2] * 79,
+            }
+        )
+    )
+
+    context = resolve_sampling_context(
+        frame,
+        grouping_applied=False,
+        sampling_policy=resolve_chart_sampling_policy(density_mode='full'),
+        violin_plot_min_samplesize=78,
+    )
+
+    assert context['distribution_key'] == 'SAMPLE_NUMBER'
+    assert context['scatter_key'] == 'SAMPLE_NUMBER'
+    assert context['distribution_payload']['labels'] == ['All']
+    assert len(context['distribution_payload']['values']) == 1
+    assert len(context['distribution_payload']['values'][0]) == 78
+    assert context['distribution_payload']['can_render_violin'] is True
+    assert context['iqr_payload']['labels'] == ['All']
+
+
+def test_resolve_sampling_context_ungrouped_low_n_keeps_scatter_fallback_title():
+    frame = normalize_summary_group_frame(
+        pd.DataFrame(
+            {
+                'REFERENCE': ['R1'] * 5,
+                'HEADER': ['Diameter'] * 5,
+                'AX': ['X'] * 5,
+                'SAMPLE_NUMBER': [str(index + 1) for index in range(5)],
+                'MEAS': [9.95, 10.0, 10.05, 10.1, 10.15],
+                'NOM': [10.0] * 5,
+                '+TOL': [0.2] * 5,
+                '-TOL': [-0.2] * 5,
+            }
+        )
+    )
+    summary_stats = retrieve_summary_statistics(frame, sql_summary=None, nom=10.0, usl=10.2, lsl=9.8)
+
+    context = resolve_sampling_context(
+        frame,
+        grouping_applied=False,
+        sampling_policy=resolve_chart_sampling_policy(density_mode='full'),
+        violin_plot_min_samplesize=6,
+    )
+    payloads = prepare_summary_chart_payloads(
+        header='Diameter / X',
+        grouping_applied=False,
+        sampling_context=context,
+        summary_stats=summary_stats,
+    )
+
+    assert context['distribution_payload']['labels'] == ['All']
+    assert context['distribution_payload']['values'] == [[9.95, 10.0, 10.05, 10.1, 10.15]]
+    assert context['distribution_payload']['can_render_violin'] is False
+    assert payloads['distribution']['title'] == 'Diameter / X (means)'
+
+
+def test_resolve_sampling_context_grouped_still_requires_each_group_minimum():
+    frame = normalize_summary_group_frame(
+        pd.DataFrame(
+            {
+                'REFERENCE': ['R1'] * 8,
+                'HEADER': ['Diameter'] * 8,
+                'AX': ['X'] * 8,
+                'SAMPLE_NUMBER': [str(index + 1) for index in range(8)],
+                'GROUP': ['A'] * 6 + ['B'] * 2,
+                'MEAS': [10.0, 10.01, 10.02, 10.03, 10.04, 10.05, 10.5, 10.6],
+                'NOM': [10.0] * 8,
+                '+TOL': [0.2] * 8,
+                '-TOL': [-0.2] * 8,
+            }
+        ),
+        grouping_key='GROUP',
+    )
+    summary_stats = retrieve_summary_statistics(frame, sql_summary=None, nom=10.0, usl=10.2, lsl=9.8)
+
+    context = resolve_sampling_context(
+        frame,
+        grouping_applied=True,
+        sampling_policy=resolve_chart_sampling_policy(density_mode='full'),
+        violin_plot_min_samplesize=6,
+    )
+    payloads = prepare_summary_chart_payloads(
+        header='Diameter / X',
+        grouping_applied=True,
+        sampling_context=context,
+        summary_stats=summary_stats,
+    )
+
+    assert context['distribution_payload']['labels'] == ['A', 'B']
+    assert [len(values) for values in context['distribution_payload']['values']] == [6, 2]
+    assert context['distribution_payload']['can_render_violin'] is False
+    assert payloads['distribution']['labels'] == ['A (n=6)', 'B (n=2)']
+
+
 def test_resolve_sampling_context_preserves_middle_population_group_under_sampling():
     frame = normalize_summary_group_frame(
         pd.DataFrame(

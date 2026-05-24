@@ -380,6 +380,59 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertGreaterEqual(timings['total'], timings['plotly_spec_generation'])
             self.assertEqual(result['html_dashboard_plotly_spec_count'], 3)
 
+    def test_write_export_html_dashboard_section_sample_size_is_independent_from_plot_count(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            excel_file = Path(tmpdir) / 'report.xlsx'
+            html_path = resolve_html_dashboard_path(excel_file)
+            assets_dir = resolve_html_dashboard_assets_dir(html_path)
+
+            result = write_export_html_dashboard(
+                excel_file=excel_file,
+                output_path=html_path,
+                assets_dir=assets_dir,
+                sections=[
+                    {
+                        'header': 'Diameter / X',
+                        'subtitle': 'Reference R-100',
+                        'reference': 'R-100',
+                        'axis': 'X',
+                        'grouping_applied': False,
+                        'sample_size': 25,
+                        'limits': {'nominal': 10.0, 'lsl': 9.8, 'usl': 10.2},
+                        'summary_rows': [('Samples', '25')],
+                        'charts': [
+                            {
+                                'chart_type': 'distribution',
+                                'title': 'Diameter / X',
+                                'backend': 'native',
+                                'image_buffer': BytesIO(b'png-bytes'),
+                                'payload': {
+                                    'type': 'distribution',
+                                    'render_mode': 'violin',
+                                    'labels': ['All'],
+                                    'series': [[10.0 + index * 0.01 for index in range(8)]],
+                                    'x_label': 'Measurement set',
+                                    'y_label': 'Measurement',
+                                    'limits': {'nominal': 10.0, 'lsl': 9.8, 'usl': 10.2},
+                                },
+                                'note': 'Violin distribution view',
+                            }
+                        ],
+                    }
+                ],
+                chart_observability_summary={},
+            )
+
+            html_text = Path(result['html_dashboard_path']).read_text(encoding='utf-8')
+
+        self.assertIn('Sample size: 25', html_text)
+        embedded_specs = _embedded_plotly_specs(html_text)
+        self.assertTrue(embedded_specs)
+        violin_trace = next(trace for trace in embedded_specs[0]['data'] if trace.get('type') == 'violin')
+        self.assertEqual(embedded_specs[0]['layout']['xaxis']['title']['text'], 'Measurement set')
+        self.assertEqual(violin_trace['name'], 'All (n=8)')
+        self.assertEqual(len(violin_trace['y']), 8)
+
     def test_write_export_html_dashboard_falls_back_to_png_only_when_plotly_bundle_missing(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             excel_file = Path(tmpdir) / 'report.xlsx'

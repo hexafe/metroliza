@@ -2347,7 +2347,7 @@ class TestExportBackendSmoke(unittest.TestCase):
         )
         thread = ExportDataThread(request)
         thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution'}
-        thread.violin_plot_min_samplesize = 3
+        thread.violin_plot_min_samplesize = 10
 
         header_group = pd.DataFrame(
             {
@@ -2377,6 +2377,129 @@ class TestExportBackendSmoke(unittest.TestCase):
 
         self.assertEqual(captured['labels'], ['1', '', '2', '', '3', ''])
         self.assertEqual(captured['positions'], [1.0, 1.0, 2.0, 2.0, 3.0, 3.0])
+
+    def test_summary_sheet_distribution_ungrouped_high_n_renders_single_violin_series(self):
+        import pandas as pd
+
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, *_args, **_kwargs):
+                return None
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True, generate_html_dashboard=True),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution'}
+        thread.violin_plot_min_samplesize = 78
+
+        captured_payloads = []
+
+        def _capture_summary_chart(_fig, mode='workbook', *, chart_type=None, native_payload=None):
+            if chart_type == 'distribution':
+                captured_payloads.append(dict(native_payload or {}))
+            return type("Result", (), {"png_bytes": b"distribution-bytes", "backend": "native"})()
+
+        thread._save_summary_chart = _capture_summary_chart
+        header_group = pd.DataFrame(
+            {
+                'REFERENCE': ['R1'] * 78,
+                'HEADER': ['Diameter'] * 78,
+                'AX': ['X'] * 78,
+                'MEAS': [10.0 + (index * 0.01) for index in range(78)],
+                'NOM': [10.0] * 78,
+                '+TOL': [0.2] * 78,
+                '-TOL': [-0.2] * 78,
+                'SAMPLE_NUMBER': [str(index + 1) for index in range(78)],
+                'DATE': ['2024-01-01'] * 78,
+            }
+        )
+
+        with mock.patch('modules.export_data_thread.resolve_distribution_renderer_backend', return_value='native'):
+            thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'Diameter / X', header_group, col=5)
+
+        self.assertEqual(len(captured_payloads), 1)
+        payload = captured_payloads[0]
+        self.assertEqual(payload['render_mode'], 'violin')
+        self.assertEqual(payload['labels'], ['All'])
+        self.assertEqual([len(series) for series in payload['series']], [78])
+        self.assertEqual(payload['x_label'], 'Measurement set')
+        self.assertEqual(payload['y_label'], 'Measurement')
+        self.assertEqual(len(thread._html_dashboard_sections), 1)
+        section = thread._html_dashboard_sections[0]
+        self.assertEqual(section['sample_size'], 78)
+        self.assertEqual(section['charts'][0]['payload']['render_mode'], 'violin')
+        self.assertEqual(section['charts'][0]['note'], 'Violin distribution view')
+
+    def test_summary_sheet_html_sections_keep_characteristic_sample_sizes_separate(self):
+        import pandas as pd
+
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, *_args, **_kwargs):
+                return None
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True, generate_html_dashboard=True),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution'}
+        thread.violin_plot_min_samplesize = 6
+        thread._save_summary_chart = (
+            lambda _fig, mode='workbook', *, chart_type=None, native_payload=None: type(
+                "Result",
+                (),
+                {"png_bytes": b"distribution-bytes", "backend": "native"},
+            )()
+        )
+
+        def _section_frame(header, axis, row_count):
+            return pd.DataFrame(
+                {
+                    'REFERENCE': ['R1'] * row_count,
+                    'HEADER': [header] * row_count,
+                    'AX': [axis] * row_count,
+                    'MEAS': [10.0 + (index * 0.01) for index in range(row_count)],
+                    'NOM': [10.0] * row_count,
+                    '+TOL': [0.2] * row_count,
+                    '-TOL': [-0.2] * row_count,
+                    'SAMPLE_NUMBER': [str(index + 1) for index in range(row_count)],
+                    'DATE': ['2024-01-01'] * row_count,
+                }
+            )
+
+        with mock.patch('modules.export_data_thread.resolve_distribution_renderer_backend', return_value='native'):
+            thread.summary_sheet_fill(
+                _FakeSummaryWorksheet(),
+                'Diameter / X',
+                _section_frame('Diameter', 'X', 25),
+                col=5,
+            )
+            thread.summary_sheet_fill(
+                _FakeSummaryWorksheet(),
+                'Diameter / Y',
+                _section_frame('Diameter', 'Y', 53),
+                col=5,
+            )
+
+        self.assertEqual([section['sample_size'] for section in thread._html_dashboard_sections], [25, 53])
+        self.assertEqual(
+            [
+                len(section['charts'][0]['payload']['series'][0])
+                for section in thread._html_dashboard_sections
+            ],
+            [25, 53],
+        )
 
     def test_summary_sheet_trend_axis_title_uses_sample_number_when_grouped(self):
         import pandas as pd

@@ -133,7 +133,7 @@ def resolve_sampling_context(
     """
 
     distribution_key = 'GROUP' if grouping_applied else 'SAMPLE_NUMBER'
-    scatter_key = distribution_key
+    scatter_key = 'SAMPLE_NUMBER'
     sampled_frames = {}
     for chart_type in ('distribution', 'iqr', 'histogram', 'trend'):
         sampled_frames[chart_type] = sample_frame_for_chart(
@@ -143,14 +143,15 @@ def resolve_sampling_context(
             grouping_key=distribution_key if grouping_applied and chart_type in {'distribution', 'iqr'} else None,
         )
 
+    violin_grouping_key = distribution_key if grouping_applied else '__all_measurements__'
     distribution_labels, distribution_values, can_render_violin = build_violin_payload_vectorized(
         sampled_frames['distribution'],
-        distribution_key,
+        violin_grouping_key,
         violin_plot_min_samplesize,
     )
     iqr_labels, iqr_values, _ = build_violin_payload_vectorized(
         sampled_frames['iqr'],
-        distribution_key,
+        violin_grouping_key,
         violin_plot_min_samplesize,
     )
 

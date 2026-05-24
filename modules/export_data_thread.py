@@ -5750,7 +5750,7 @@ class ExportDataThread(QThread):
             label_positions = None
             x_values = None
             y_values = None
-            grouped_x_axis_label = 'Group' if grouping_applied else 'Sample number'
+            distribution_x_axis_label = 'Group' if grouping_applied else 'Measurement set'
             scatter_x_axis_label = 'Sample number'
             distribution_title = chart_payloads['distribution']['title']
             characteristic_axis_label = str(header or "Measurement")
@@ -5834,7 +5834,7 @@ class ExportDataThread(QThread):
                     distribution_native_payload.update(
                         {
                             'render_mode': 'violin' if can_render_violin else 'scatter',
-                            'x_label': grouped_x_axis_label if can_render_violin else scatter_x_axis_label,
+                            'x_label': distribution_x_axis_label if can_render_violin else scatter_x_axis_label,
                             'y_label': 'Measurement' if can_render_violin else characteristic_axis_label,
                             'limits': {
                                 'lsl': None if LSL is None else float(LSL),
@@ -5957,7 +5957,7 @@ class ExportDataThread(QThread):
                         current_y_limits = ax.get_ylim()
                         y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
                         ax.set_ylim(y_min, y_max)
-                        ax.set_xlabel(grouped_x_axis_label if can_render_violin else scatter_x_axis_label)
+                        ax.set_xlabel(distribution_x_axis_label if can_render_violin else scatter_x_axis_label)
                         ax.set_ylabel('Measurement' if can_render_violin else characteristic_axis_label)
                         ax.set_title(
                             build_wrapped_chart_title(header if not can_render_violin else distribution_title),
@@ -5998,7 +5998,7 @@ class ExportDataThread(QThread):
                         backend=distribution_render_result.backend,
                         image_buffer=image_data,
                         payload=distribution_native_payload if isinstance(distribution_native_payload, dict) else {},
-                        note='Violin distribution view' if can_render_violin else 'Grouped mean scatter view',
+                        note='Violin distribution view' if can_render_violin else 'Sample scatter fallback',
                     )
                     if self._check_canceled():
                         return
