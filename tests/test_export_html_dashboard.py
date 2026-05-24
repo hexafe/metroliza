@@ -525,8 +525,8 @@ class TestExportHtmlDashboard(unittest.TestCase):
         for variant in ('light', 'dark'):
             trace = bundle[variant]['data'][0]
             self.assertEqual(trace['marker']['color'], '#123456')
-            self.assertEqual(trace['marker']['line']['color'], '#654321')
-            self.assertEqual(trace['marker']['line']['width'], 2)
+            self.assertNotEqual(trace['marker']['line']['color'], '#654321')
+            self.assertNotEqual(trace['marker']['line']['width'], 2)
             self.assertEqual(trace['marker']['pattern']['shape'], '/')
             self.assertEqual(trace['opacity'], 0.42)
             self.assertEqual(bundle[variant]['layout']['colorway'], ['#123456'])

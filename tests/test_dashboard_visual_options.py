@@ -123,6 +123,7 @@ def test_dashboard_visual_recipe_settings_update_dependent_color_sources() -> No
     )
     print_friendly = dashboard_visual_recipe_settings("print")
     highlight = dashboard_visual_recipe_settings("highlight_gradient")
+    toned = dashboard_visual_recipe_settings("toned_report")
 
     assert distinct["preset"] == "distinct"
     assert distinct["recipe"] == "distinct"
@@ -150,6 +151,42 @@ def test_dashboard_visual_recipe_settings_update_dependent_color_sources() -> No
     assert highlight["palette_mode"] == "highlight_gradient"
     assert highlight["color_source"] == "highlight"
     assert len(set(dashboard_visual_swatch_palette(highlight, count=6))) == 6
+
+    assert toned["recipe"] == "toned_report"
+    assert toned["preset"] == "custom"
+    assert toned["population_baseline"]["aliases"] == ["population", "population points"]
+    assert toned["population_baseline"]["marker_size"] < toned["comparison_focus"]["marker_size"]
+    assert toned["comparison_focus"]["outline_width"] > 0
+
+
+def test_dashboard_visual_population_baseline_normalizes_aliases_and_focus() -> None:
+    settings = normalize_dashboard_visual_settings(
+        {
+            "preset": "custom",
+            "population_baseline": {
+                "aliases": "POPULATION",
+                "color": "#999999",
+                "opacity": {"scatter": 0.02, "grouped_histogram": 2},
+                "marker_size": 1,
+                "outline_width": 9,
+            },
+            "comparison_focus": {
+                "opacity": {"scatter": 1.5},
+                "marker_size": 30,
+                "outline_width": 2,
+                "outline_color_mode": "auto",
+            },
+        }
+    )
+
+    assert settings["population_baseline"]["aliases"] == ["population", "population points"]
+    assert settings["population_baseline"]["opacity"]["scatter"] == 0.02
+    assert settings["population_baseline"]["opacity"]["grouped_histogram"] == 1.0
+    assert settings["population_baseline"]["marker_size"] == 2.0
+    assert settings["population_baseline"]["outline_width"] == 6.0
+    assert settings["comparison_focus"]["opacity"]["scatter"] == 1.0
+    assert settings["comparison_focus"]["marker_size"] == 18.0
+    assert settings["comparison_focus"]["outline_width"] == 2.0
 
 
 def test_dashboard_visual_resolved_palette_info_covers_each_color_source() -> None:
@@ -575,11 +612,11 @@ def test_dashboard_visual_settings_style_trend_roles_and_unprefixed_stat_lines()
     assert measurements["meta"]["metroliza_style_capabilities"] == [
         "color",
         "opacity",
+        "marker_size",
+        "marker_symbol",
         "outline_width",
         "outline_color",
         "outline_color_mode",
-        "marker_size",
-        "marker_symbol",
     ]
 
     assert trend["line"]["color"] == "#334455"
@@ -643,11 +680,75 @@ def test_dashboard_visual_histogram_trace_metadata_exposes_pattern_capability() 
     assert meta["metroliza_style_capabilities"] == [
         "color",
         "opacity",
-        "outline_width",
-        "outline_color",
-        "outline_color_mode",
         "pattern_shape",
     ]
+
+
+def test_dashboard_visual_population_baseline_styles_real_and_preview_aliases() -> None:
+    spec = {
+        "data": [
+            {
+                "type": "scatter",
+                "mode": "markers",
+                "name": "Group A",
+                "x": [1, 2],
+                "y": [6.6, 6.7],
+                "marker": {"color": "#aaaaaa"},
+            },
+            {
+                "type": "scatter",
+                "mode": "markers",
+                "name": "POPULATION (n=3000)",
+                "x": [1, 2, 3],
+                "y": [6.1, 6.2, 6.3],
+                "marker": {"color": "#bbbbbb"},
+            },
+        ],
+        "layout": {},
+        "metadata": {"kind": "scatter"},
+    }
+
+    apply_dashboard_visual_settings(
+        spec,
+        payload={"labels": ["Group A", "POPULATION"], "type": "distribution", "render_mode": "scatter"},
+        visual_settings=dashboard_visual_settings_to_plotly_settings({"recipe": "toned_report"}),
+    )
+
+    population, group = spec["data"]
+    assert population["name"] == "POPULATION (n=3000)"
+    assert population["marker"]["color"] == "#8a949e"
+    assert population["marker"]["size"] == 4.5
+    assert population["opacity"] == 0.24
+    assert population["marker"]["line"]["width"] == 0.0
+    assert group["marker"]["size"] == 8.0
+    assert group["marker"]["line"]["width"] == 1.15
+    assert group["opacity"] == 0.92
+
+
+def test_dashboard_visual_population_alias_matches_preview_label() -> None:
+    spec = {
+        "data": [
+            {
+                "type": "scatter",
+                "mode": "markers",
+                "name": "Population points",
+                "x": [1, 2],
+                "y": [6.1, 6.2],
+                "marker": {"color": "#bbbbbb"},
+            },
+        ],
+        "layout": {},
+        "metadata": {"kind": "scatter"},
+    }
+
+    apply_dashboard_visual_settings(
+        spec,
+        payload={"labels": ["Population points"], "type": "distribution", "render_mode": "scatter"},
+        visual_settings=dashboard_visual_settings_to_plotly_settings({"recipe": "professional_contrast"}),
+    )
+
+    assert spec["data"][0]["marker"]["color"] == "#7b8794"
+    assert spec["data"][0]["marker"]["size"] == 4.5
 
 
 def test_dashboard_visual_histogram_empty_pattern_override_clears_auto_pattern() -> None:

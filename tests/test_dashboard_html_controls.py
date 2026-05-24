@@ -62,6 +62,8 @@ def test_dashboard_visual_dialog_uses_live_recipe_and_group_color_chips() -> Non
 
     assert "Visual recipe" in dialog_html
     assert "data-visual-group-chip" in dialog_html
+    assert "Toned report" in dialog_html
+    assert "High-color groups" in dialog_html
     assert "Group 1" in dialog_html
     assert "Population" in dialog_html
     assert 'id="dashboard-visual-customize-open"' in dialog_html
@@ -104,6 +106,9 @@ def test_dashboard_visual_runtime_scopes_storage_and_uses_initial_settings() -> 
     runtime_js = render_dashboard_visual_runtime_js(initial_settings=initial_settings)
 
     assert config["storageVersion"] == 1
+    assert "toned_report" in config["recipes"]
+    assert "population_baseline" in config["recipes"]["toned_report"]
+    assert config["recipes"]["toned_report"]["population_baseline"]["marker_size"] < config["recipes"]["toned_report"]["comparison_focus"]["marker_size"]
     assert config["initialSettings"]["preset"] == "custom"
     assert config["initialSettings"]["palette_preset"] == "custom"
     assert config["initialSettings"]["palette"][:2] == ["#123456", "#abcdef"]
@@ -167,6 +172,7 @@ def test_dashboard_visual_runtime_recipes_update_controls_and_palette_preview() 
     assert "const applyVisualRecipe" in runtime_js
     assert "const configuredRecipes = dashboardVisualConfig.recipes || {};" in runtime_js
     assert "sanitizeVisualState(Object.assign({}, defaults, configured || {}, preservedTheme))" in runtime_js
+    assert "state.recipe = visualChoice(state.recipe || state.visual_recipe || state.preset" in runtime_js
     assert "const refreshResolvedPalettePreview" in runtime_js
     assert "document.querySelectorAll('[data-visual-group-chip]')" in runtime_js
     assert "selectVisualTargetByChipIndex" in runtime_js
@@ -181,9 +187,25 @@ def test_dashboard_visual_runtime_selected_element_controls_are_role_aware() -> 
     assert "style: traceStyleForSelection(trace)" in runtime_js
     assert "capabilities: traceCapabilitiesForSelection(trace, roleFromMeta)" in runtime_js
     assert "const syncSelectedElementControls" in runtime_js
+    assert "field.hidden = !enabled;" in runtime_js
     assert "data-visual-selected-field" in render_dashboard_visual_dialog()
     assert "dashboard-visual-element-marker-size" in runtime_js
     assert "dashboard-visual-element-marker-symbol" in runtime_js
     assert "dashboard-visual-element-outline-width" in runtime_js
     assert "contrastOutlineColor" in runtime_js
     assert "dashboard-visual-element-pattern" in runtime_js
+    assert "outline_width: markerLike," in runtime_js
+    assert "pattern_shape: patternLike" in runtime_js
+
+
+def test_dashboard_visual_runtime_carries_population_focus_contract() -> None:
+    runtime_js = render_dashboard_visual_runtime_js()
+    config = json.loads(dashboard_visual_runtime_config_json())
+
+    assert "population_baseline" in config["defaults"]
+    assert "comparison_focus" in config["defaults"]
+    assert "sanitizePopulationBaseline" in runtime_js
+    assert "population_baseline: clonePlotlySpec(state.population_baseline || {})" in runtime_js
+    assert "comparison_focus: clonePlotlySpec(state.comparison_focus || {})" in runtime_js
+    assert "const isPopulationLabel" in runtime_js
+    assert "mergeRoleStyle(Object.assign(style, override), roleStyle, override)" in runtime_js

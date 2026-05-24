@@ -12,8 +12,10 @@ from modules.dashboard_visual_options import (
     DEFAULT_OPACITY,
     DASHBOARD_VISUAL_MARKER_SYMBOLS,
     DASHBOARD_VISUAL_PATTERN_SHAPES,
+    DASHBOARD_VISUAL_RECIPES,
     PRINT_DASHBOARD_PALETTE,
     dashboard_visual_palette_presets,
+    dashboard_visual_recipe_choices,
     dashboard_visual_recipe_settings,
     default_dashboard_visual_settings,
     normalize_dashboard_visual_settings,
@@ -183,6 +185,15 @@ def render_dashboard_visual_dialog() -> str:
         )
         for index, label in enumerate(("Group 1", "Group 2", "Group 3", "Group 4", "Population points"))
     )
+    recipe_buttons = "".join(
+        (
+            '<button type="button" '
+            f'data-visual-preset="{html.escape(recipe_id)}" '
+            f'aria-pressed="{"true" if recipe_id == "auto" else "false"}">'
+            f"{html.escape(label)}</button>"
+        )
+        for label, recipe_id in dashboard_visual_recipe_choices()
+    )
     fine_tuning_controls = (
         _render_visual_range_field(
             label="Default marker size",
@@ -288,10 +299,7 @@ def render_dashboard_visual_dialog() -> str:
         '<section class="visual-section">'
         '<div class="visual-section-title">Visual recipe</div>'
         '<div class="visual-segmented" role="group" aria-label="Visual recipe">'
-        '<button type="button" data-visual-preset="auto" aria-pressed="true">Default</button>'
-        '<button type="button" data-visual-preset="distinct" aria-pressed="false">Distinct</button>'
-        '<button type="button" data-visual-preset="print" aria-pressed="false">Print</button>'
-        '<button type="button" data-visual-preset="custom" aria-pressed="false">Custom</button>'
+        f"{recipe_buttons}"
         '</div>'
         f'<div class="visual-palette-preview" aria-label="Resolved group colors">{group_color_chips}</div>'
         '</section>'
@@ -655,8 +663,9 @@ def dashboard_visual_runtime_config_json(initial_settings: dict | None = None) -
             "initialSettingsSignature": _dashboard_visual_state_signature(normalized_initial_settings),
             "recipes": {
                 key: dashboard_visual_recipe_settings(key)
-                for key in ("auto", "distinct", "print", "custom")
+                for key in DASHBOARD_VISUAL_RECIPES
             },
+            "recipeIds": list(DASHBOARD_VISUAL_RECIPES),
             "defaultPalette": list(DEFAULT_DASHBOARD_PALETTE),
             "printPalette": list(PRINT_DASHBOARD_PALETTE),
             "palettePresets": {
@@ -737,6 +746,10 @@ def render_dashboard_visual_runtime_js(
         const defaults = clonePlotlySpec({config_var}.defaults);
         const source = (value && typeof value === 'object') ? value : {{}};
         const state = Object.assign(defaults, source);
+        const recipeIds = Array.isArray({config_var}.recipeIds)
+          ? {config_var}.recipeIds
+          : ['auto', 'distinct', 'print', 'custom'];
+        state.recipe = visualChoice(state.recipe || state.visual_recipe || state.preset, recipeIds, defaults.recipe || defaults.preset);
         state.preset = visualChoice(state.preset, ['auto', 'distinct', 'print', 'custom'], defaults.preset);
         state.theme_id = typeof state.theme_id === 'string' ? state.theme_id : '';
         state.theme_name = typeof state.theme_name === 'string' ? state.theme_name : '';
@@ -770,6 +783,8 @@ def render_dashboard_visual_runtime_js(
           state.opacity[key] = boundedNumber(state.opacity[key], defaults.opacity[key], 0.05, 1);
         }});
         state.marker_size = boundedNumber(state.marker_size, defaults.marker_size, 2, 18);
+        state.population_baseline = sanitizePopulationBaseline(state.population_baseline);
+        state.comparison_focus = sanitizeComparisonFocus(state.comparison_focus);
         state.stat_lines = Object.assign({{}}, defaults.stat_lines, state.stat_lines || {{}});
         state.stat_lines.width = boundedNumber(state.stat_lines.width, defaults.stat_lines.width, 0.5, 6);
         state.stat_lines.accent_by_stat = Boolean(state.stat_lines.accent_by_stat);
@@ -800,6 +815,52 @@ def render_dashboard_visual_runtime_js(
         state.series_overrides = sanitizeStyleOverrides(state.series_overrides);
         state.stat_line_overrides = sanitizeStyleOverrides(state.stat_line_overrides);
         return state;
+      }};
+
+      const sanitizeChartFloatMap = (value, minimum, maximum) => {{
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return {{}};
+        const output = {{}};
+        Object.entries(value).forEach(([key, number]) => {{
+          if (!key) return;
+          output[String(key)] = boundedNumber(number, 1, minimum, maximum);
+        }});
+        return output;
+      }};
+
+      const sanitizePopulationBaseline = (value) => {{
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return {{}};
+        const aliases = Array.isArray(value.aliases)
+          ? value.aliases.map((alias) => String(alias || '').trim()).filter(Boolean)
+          : ['population', 'population points'];
+        const clean = {{
+          aliases: aliases.length ? aliases : ['population', 'population points'],
+          draw_first: value.draw_first !== false,
+        }};
+        const color = normalizeColor(value.color, '');
+        if (color) clean.color = color;
+        const opacity = sanitizeChartFloatMap(value.opacity, 0, 1);
+        if (Object.keys(opacity).length) clean.opacity = opacity;
+        if (Object.prototype.hasOwnProperty.call(value, 'marker_size')) clean.marker_size = boundedNumber(value.marker_size, 4.5, 2, 18);
+        if (typeof value.marker_symbol === 'string') clean.marker_symbol = value.marker_symbol;
+        if (Object.prototype.hasOwnProperty.call(value, 'outline_width')) clean.outline_width = boundedNumber(value.outline_width, 0, 0, 6);
+        if (typeof value.outline_color_mode === 'string') clean.outline_color_mode = visualChoice(value.outline_color_mode, ['auto', 'custom'], 'auto');
+        const outlineColor = normalizeColor(value.outline_color, '');
+        if (outlineColor) clean.outline_color = outlineColor;
+        return clean;
+      }};
+
+      const sanitizeComparisonFocus = (value) => {{
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return {{}};
+        const clean = {{}};
+        const opacity = sanitizeChartFloatMap(value.opacity, 0, 1);
+        if (Object.keys(opacity).length) clean.opacity = opacity;
+        if (Object.prototype.hasOwnProperty.call(value, 'marker_size')) clean.marker_size = boundedNumber(value.marker_size, 8.5, 2, 18);
+        if (typeof value.marker_symbol === 'string') clean.marker_symbol = value.marker_symbol;
+        if (Object.prototype.hasOwnProperty.call(value, 'outline_width')) clean.outline_width = boundedNumber(value.outline_width, 1.25, 0, 6);
+        if (typeof value.outline_color_mode === 'string') clean.outline_color_mode = visualChoice(value.outline_color_mode, ['auto', 'custom'], 'auto');
+        const outlineColor = normalizeColor(value.outline_color, '');
+        if (outlineColor) clean.outline_color = outlineColor;
+        return clean;
       }};
 
       const sanitizeStyleOverrides = (value) => {{
@@ -1013,7 +1074,8 @@ def render_dashboard_visual_runtime_js(
         const next = recipe === 'custom'
           ? state
           : sanitizeVisualState(Object.assign({{}}, defaults, configured || {{}}, preservedTheme));
-        next.preset = visualChoice(recipe, ['auto', 'distinct', 'print', 'custom'], 'auto');
+        next.recipe = visualChoice(recipe, Object.keys(configuredRecipes).concat(['custom']), 'auto');
+        next.preset = visualChoice(next.preset, ['auto', 'distinct', 'print', 'custom'], 'custom');
         if (recipe === 'custom' && next.palette_preset !== 'custom') {{
           next.palette = resolvedVisualPalette(state, 6);
           next.palette_preset = 'custom';
@@ -1023,7 +1085,7 @@ def render_dashboard_visual_runtime_js(
         next.stat_line_overrides = recipe === 'custom' ? clonePlotlySpec(state.stat_line_overrides || {{}}) : {{}};
         next.reference_lines = recipe === 'custom'
           ? clonePlotlySpec(state.reference_lines || defaults.reference_lines)
-          : clonePlotlySpec(defaults.reference_lines);
+          : clonePlotlySpec(next.reference_lines || defaults.reference_lines);
         if (next.preset === 'custom') {{
           next.preset = 'custom';
         }}
@@ -1036,6 +1098,8 @@ def render_dashboard_visual_runtime_js(
         }}
         const useDistinguishers = state.distinguish !== 'color_only' || state.preset === 'print';
         return {{
+          recipe: state.recipe,
+          color_source: state.color_source,
           preserve_colors_on_theme: true,
           series: {{
             palette: resolvedVisualPalette(state, 6),
@@ -1045,6 +1109,8 @@ def render_dashboard_visual_runtime_js(
             patterns: useDistinguishers ? {config_var}.patterns.slice() : [],
             auto_distinguish: state.distinguish === 'when_similar',
             always_distinguish: state.distinguish === 'always' || state.preset === 'print',
+            population_baseline: clonePlotlySpec(state.population_baseline || {{}}),
+            comparison_focus: clonePlotlySpec(state.comparison_focus || {{}}),
             overrides: clonePlotlySpec(state.series_overrides || {{}}),
           }},
           stat_lines: Object.assign({{}}, state.stat_lines, {{
@@ -1056,6 +1122,38 @@ def render_dashboard_visual_runtime_js(
 
       const stripGroupCount = (label) => String(label || '').replace(/\\s*\\(n\\s*=\\s*\\d+\\)\\s*$/i, '').trim();
       const normalizeLabelKey = (label) => stripGroupCount(label).toLowerCase();
+      const chartSetting = (value, chartKind) => (
+        value && typeof value === 'object' && !Array.isArray(value)
+          ? (value[chartKind] ?? value.default)
+          : value
+      );
+      const isPopulationLabel = (label, population) => {{
+        const aliases = population && Array.isArray(population.aliases)
+          ? population.aliases
+          : ['population', 'population points'];
+        const labelKey = normalizeLabelKey(label);
+        return aliases.some((alias) => labelKey === normalizeLabelKey(alias));
+      }};
+      const roleStyleFromSettings = (settings, chartKind) => {{
+        if (!settings || typeof settings !== 'object') return {{}};
+        const style = {{}};
+        if (settings.color) style.color = settings.color;
+        const opacity = Number(chartSetting(settings.opacity, chartKind));
+        if (Number.isFinite(opacity)) style.opacity = opacity;
+        if (Number.isFinite(Number(settings.marker_size))) style.marker_size = Number(settings.marker_size);
+        if (settings.marker_symbol) style.marker_symbol = settings.marker_symbol;
+        if (Number.isFinite(Number(settings.outline_width))) style.outline_width = Number(settings.outline_width);
+        if (settings.outline_color_mode) style.outline_color_mode = settings.outline_color_mode;
+        if (settings.outline_color) style.outline_color = settings.outline_color;
+        return style;
+      }};
+      const mergeRoleStyle = (style, roleStyle, override) => {{
+        const merged = Object.assign({{}}, style);
+        Object.entries(roleStyle || {{}}).forEach(([key, value]) => {{
+          if (!Object.prototype.hasOwnProperty.call(override || {{}}, key)) merged[key] = value;
+        }});
+        return merged;
+      }};
       const statOverrideKey = (group, stat) => {{
         const groupKey = normalizeLabelKey(group);
         const statKey = normalizeLabelKey(stat);
@@ -1250,6 +1348,12 @@ def render_dashboard_visual_runtime_js(
         const chartKind = chartKindForSpec(spec);
         const markerSymbols = Array.isArray(series.marker_symbols) ? series.marker_symbols : [];
         const patterns = Array.isArray(series.patterns) ? series.patterns : [];
+        const populationBaseline = (series.population_baseline && typeof series.population_baseline === 'object')
+          ? series.population_baseline
+          : {{}};
+        const comparisonFocus = (series.comparison_focus && typeof series.comparison_focus === 'object')
+          ? series.comparison_focus
+          : {{}};
         const seriesOverrides = (series.overrides && typeof series.overrides === 'object') ? series.overrides : {{}};
         const statOverrides = (settings.stat_lines && settings.stat_lines.overrides && typeof settings.stat_lines.overrides === 'object')
           ? settings.stat_lines.overrides
@@ -1358,61 +1462,70 @@ def render_dashboard_visual_runtime_js(
           const rawLabelIndex = labels.indexOf(label);
           const labelIndex = rawLabelIndex >= 0 ? rawLabelIndex : traceIndex;
           const override = seriesOverrides[normalizeLabelKey(label)] || {{}};
-          const color = override.color || palette[labelIndex % Math.max(1, palette.length)] || traceColor(trace);
+          let style = {{
+            color: palette[labelIndex % Math.max(1, palette.length)] || traceColor(trace),
+          }};
+          const roleStyle = isPopulationLabel(label, populationBaseline)
+            ? roleStyleFromSettings(populationBaseline, traceChartKind)
+            : roleStyleFromSettings(comparisonFocus, traceChartKind);
+          style = mergeRoleStyle(Object.assign(style, override), roleStyle, override);
+          const color = style.color || traceColor(trace);
           if (color) {{
             if (isTrendLine) setTrendTraceColor(trace, color);
             else setTraceColor(trace, color);
           }}
-          const resolvedOpacity = Number.isFinite(Number(override.opacity)) ? Number(override.opacity) : opacity;
+          const resolvedOpacity = Number.isFinite(Number(style.opacity)) ? Number(style.opacity) : opacity;
           if (Number.isFinite(resolvedOpacity)) {{
             trace.opacity = Math.max(0, Math.min(1, resolvedOpacity));
           }}
           if (isTrendLine && trace.line && typeof trace.line === 'object') {{
-            if (Number.isFinite(Number(override.width))) trace.line.width = Math.max(0, Number(override.width));
-            if (override.dash) trace.line.dash = override.dash;
+            if (Number.isFinite(Number(style.width))) trace.line.width = Math.max(0, Number(style.width));
+            if (style.dash) trace.line.dash = style.dash;
           }}
           if (!isTrendLine) {{
             trace.marker = Object.assign({{}}, trace.marker || {{}});
-            const resolvedMarkerSize = Number.isFinite(Number(override.marker_size)) ? Number(override.marker_size) : Number(series.marker_size);
+            const resolvedMarkerSize = Number.isFinite(Number(style.marker_size)) ? Number(style.marker_size) : Number(series.marker_size);
             if (traceHasMarkers(trace) && Number.isFinite(resolvedMarkerSize)) {{
               trace.marker.size = resolvedMarkerSize;
             }}
-            if (traceHasMarkers(trace) && override.marker_symbol) {{
-              trace.marker.symbol = override.marker_symbol;
+            if (traceHasMarkers(trace) && style.marker_symbol) {{
+              trace.marker.symbol = style.marker_symbol;
             }} else if (traceHasMarkers(trace) && useDistinguishers && markerSymbols.length) {{
               trace.marker.symbol = markerSymbols[labelIndex % markerSymbols.length];
             }}
-            if (['bar', 'histogram'].includes(String(trace.type || '').toLowerCase()) && override.pattern_shape !== undefined) {{
+            if (['bar', 'histogram'].includes(String(trace.type || '').toLowerCase()) && style.pattern_shape !== undefined) {{
               trace.marker.pattern = Object.assign({{}}, trace.marker.pattern || {{}}, {{
-                shape: override.pattern_shape,
+                shape: style.pattern_shape,
               }});
             }} else if (['bar', 'histogram'].includes(String(trace.type || '').toLowerCase()) && useDistinguishers && patterns.length) {{
               trace.marker.pattern = Object.assign({{}}, trace.marker.pattern || {{}}, {{
                 shape: patterns[labelIndex % patterns.length],
               }});
             }}
-            const resolvedOutlineWidth = Number.isFinite(Number(override.outline_width))
-              ? Number(override.outline_width)
-              : (Number.isFinite(Number(series.outline_width)) ? Number(series.outline_width) : null);
-            const outlineMode = override.outline_color_mode || series.outline_color_mode || '';
-            let resolvedOutlineColor = override.outline_color || series.outline_color || '';
-            if (String(resolvedOutlineColor).toLowerCase() === 'auto' || outlineMode === 'auto') {{
-              resolvedOutlineColor = resolvedOutlineWidth && resolvedOutlineWidth > 0
-                ? contrastOutlineColor(trace.marker.color || color)
-                : '';
-            }}
-            if (resolvedOutlineWidth !== null || resolvedOutlineColor) {{
-              trace.marker.line = Object.assign({{}}, trace.marker.line || {{}});
-              if (resolvedOutlineWidth !== null) trace.marker.line.width = Math.max(0, resolvedOutlineWidth);
-              if (resolvedOutlineColor) trace.marker.line.color = resolvedOutlineColor;
+            if (traceHasMarkers(trace)) {{
+              const resolvedOutlineWidth = Number.isFinite(Number(style.outline_width))
+                ? Number(style.outline_width)
+                : (Number.isFinite(Number(series.outline_width)) ? Number(series.outline_width) : null);
+              const outlineMode = style.outline_color_mode || series.outline_color_mode || '';
+              let resolvedOutlineColor = style.outline_color || series.outline_color || '';
+              if (String(resolvedOutlineColor).toLowerCase() === 'auto' || outlineMode === 'auto') {{
+                resolvedOutlineColor = resolvedOutlineWidth && resolvedOutlineWidth > 0
+                  ? contrastOutlineColor(trace.marker.color || color)
+                  : '';
+              }}
+              if (resolvedOutlineWidth !== null || resolvedOutlineColor) {{
+                trace.marker.line = Object.assign({{}}, trace.marker.line || {{}});
+                if (resolvedOutlineWidth !== null) trace.marker.line.width = Math.max(0, resolvedOutlineWidth);
+                if (resolvedOutlineColor) trace.marker.line.color = resolvedOutlineColor;
+              }}
             }}
           }}
           const role = traceChartKind === 'model_curve' ? 'model_curve' : (isTrendLine ? 'trend' : 'series');
           let visualCapabilities = ['trend', 'model_curve'].includes(role)
             ? ['color', 'opacity', 'width', 'dash']
-            : ['color', 'opacity', 'outline_width', 'outline_color', 'outline_color_mode'];
+            : ['color', 'opacity'];
           if (role === 'series' && traceHasMarkers(trace)) {{
-            visualCapabilities = visualCapabilities.concat(['marker_size', 'marker_symbol']);
+            visualCapabilities = visualCapabilities.concat(['marker_size', 'marker_symbol', 'outline_width', 'outline_color', 'outline_color_mode']);
           }}
           if (role === 'series' && ['bar', 'histogram'].includes(String(trace.type || '').toLowerCase())) {{
             visualCapabilities = visualCapabilities.concat(['pattern_shape']);
@@ -1435,6 +1548,20 @@ def render_dashboard_visual_runtime_js(
         spec.metadata = Object.assign({{}}, spec.metadata || {{}}, {{
           dashboard_visual_settings_applied: true,
         }});
+        if (populationBaseline && Object.keys(populationBaseline).length && populationBaseline.draw_first !== false) {{
+          spec.data = spec.data
+            .map((trace, index) => ({{ trace, index }}))
+            .sort((left, right) => {{
+              const leftMeta = left.trace && left.trace.meta && typeof left.trace.meta === 'object' ? left.trace.meta : {{}};
+              const rightMeta = right.trace && right.trace.meta && typeof right.trace.meta === 'object' ? right.trace.meta : {{}};
+              const leftLabel = leftMeta.metroliza_legend_label || (left.trace ? left.trace.name : '');
+              const rightLabel = rightMeta.metroliza_legend_label || (right.trace ? right.trace.name : '');
+              const leftPopulation = isPopulationLabel(leftLabel, populationBaseline) ? 0 : 1;
+              const rightPopulation = isPopulationLabel(rightLabel, populationBaseline) ? 0 : 1;
+              return leftPopulation - rightPopulation || left.index - right.index;
+            }})
+            .map((item) => item.trace);
+        }}
         return spec;
       }};
 
@@ -1493,7 +1620,7 @@ def render_dashboard_visual_runtime_js(
 
       const syncVisualControlAvailability = (state) => {{
         const printLocked = state.preset === 'print';
-        const customSwatches = state.preset === 'custom'
+        const customSwatches = state.recipe === 'custom'
           && state.palette_preset === 'custom'
           && state.palette_mode === 'fixed';
         const gradientMode = state.palette_mode === 'auto_gradient' || state.palette_mode === 'highlight_gradient';
@@ -1526,8 +1653,9 @@ def render_dashboard_visual_runtime_js(
       }};
 
       const applyVisualStateToControls = (state) => {{
+        const activeRecipe = state.recipe === 'distinct' ? 'colorblind_distinct' : state.recipe;
         document.querySelectorAll('[data-visual-preset]').forEach((button) => {{
-          const active = button.getAttribute('data-visual-preset') === state.preset;
+          const active = button.getAttribute('data-visual-preset') === activeRecipe;
           button.setAttribute('aria-pressed', active ? 'true' : 'false');
           button.dataset.active = active ? '1' : '0';
         }});
@@ -1561,6 +1689,7 @@ def render_dashboard_visual_runtime_js(
           return applyVisualRecipe(presetOverride, state);
         }} else {{
           state.preset = 'custom';
+          state.recipe = 'custom';
         }}
         const valueOf = (id, fallback) => {{
           const control = document.getElementById(id);
@@ -1686,9 +1815,9 @@ def render_dashboard_visual_runtime_js(
           dash: lineLike,
           marker_size: markerLike,
           marker_symbol: markerLike,
-          outline_width: markerLike || patternLike,
-          outline_color: markerLike || patternLike,
-          outline_color_mode: markerLike || patternLike,
+          outline_width: markerLike,
+          outline_color: markerLike,
+          outline_color_mode: markerLike,
           pattern_shape: patternLike,
         }};
       }};
@@ -1705,6 +1834,7 @@ def render_dashboard_visual_runtime_js(
             group: meta.metroliza_series_id || '',
             stat: meta.metroliza_stat_id || '',
             key: meta.metroliza_reference_id || '',
+            chart_kind: meta.metroliza_chart_kind || meta.dashboard_visual_chart_kind || '',
             style: traceStyleForSelection(trace),
             capabilities: traceCapabilitiesForSelection(trace, roleFromMeta),
             curveNumber,
@@ -1717,6 +1847,7 @@ def render_dashboard_visual_runtime_js(
             target: `reference:${{reference}}`,
             role: 'reference',
             key: reference,
+            chart_kind: meta.metroliza_chart_kind || meta.dashboard_visual_chart_kind || '',
             label: name,
             style: traceStyleForSelection(trace),
             capabilities: traceCapabilitiesForSelection(trace, 'reference'),
@@ -1730,6 +1861,7 @@ def render_dashboard_visual_runtime_js(
             role: 'stat',
             group: stat.group,
             stat: stat.stat,
+            chart_kind: meta.metroliza_chart_kind || meta.dashboard_visual_chart_kind || '',
             label: name,
             style: traceStyleForSelection(trace),
             capabilities: traceCapabilitiesForSelection(trace, 'stat'),
@@ -1741,6 +1873,7 @@ def render_dashboard_visual_runtime_js(
           return {{
             target: `${{role}}:${{normalizeLabelKey(name)}}`,
             role,
+            chart_kind: meta.metroliza_chart_kind || meta.dashboard_visual_chart_kind || String(trace.type || ''),
             label: name,
             style: traceStyleForSelection(trace),
             capabilities: traceCapabilitiesForSelection(trace, role),
@@ -1756,7 +1889,11 @@ def render_dashboard_visual_runtime_js(
           const data = Array.isArray(node.data) ? node.data : [];
           data.forEach((trace, index) => {{
             const target = selectedTargetFromTrace(trace, index);
-            if (target && target.target && !targets.has(target.target)) targets.set(target.target, target);
+            if (target && target.target) {{
+              target.selection_key = target.selection_key
+                || `${{target.chart_kind || 'plot'}}:${{target.target}}:${{index}}`;
+              if (!targets.has(target.selection_key)) targets.set(target.selection_key, target);
+            }}
           }});
         }});
         return Array.from(targets.values());
@@ -1765,15 +1902,18 @@ def render_dashboard_visual_runtime_js(
       const refreshVisualElementControls = () => {{
         const select = document.getElementById('dashboard-visual-element');
         if (!select) return;
-        const current = dashboardVisualSelectedTarget && dashboardVisualSelectedTarget.target
-          ? dashboardVisualSelectedTarget.target
+        const current = dashboardVisualSelectedTarget && dashboardVisualSelectedTarget.selection_key
+          ? dashboardVisualSelectedTarget.selection_key
           : '';
         const targets = collectVisualTargets();
         select.innerHTML = '<option value="">Click a plot element</option>';
         targets.forEach((target) => {{
           const option = document.createElement('option');
-          option.value = target.target;
-          option.textContent = target.label || target.target;
+          option.value = target.selection_key || target.target;
+          const chartLabel = target.chart_kind
+            ? `${{String(target.chart_kind).replace(/_/g, ' ')}} - `
+            : '';
+          option.textContent = `${{chartLabel}}${{target.label || target.target}}`;
           option.dataset.visualTarget = JSON.stringify(target);
           select.appendChild(option);
         }});
@@ -1802,6 +1942,7 @@ def render_dashboard_visual_runtime_js(
         const field = document.querySelector(`[data-visual-selected-field="${{name}}"]`);
         if (!field) return;
         field.dataset.disabled = enabled ? '0' : '1';
+        field.hidden = !enabled;
         field.querySelectorAll('input, select').forEach((control) => {{
           control.disabled = !enabled;
         }});
@@ -1890,6 +2031,7 @@ def render_dashboard_visual_runtime_js(
         if (!dashboardVisualSelectedTarget) return;
         const state = sanitizeVisualState(dashboardVisualState);
         state.preset = 'custom';
+        state.recipe = 'custom';
         const target = dashboardVisualSelectedTarget;
         const caps = target.capabilities || {{}};
         const color = document.getElementById('dashboard-visual-element-color');

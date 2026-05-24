@@ -18,7 +18,20 @@ from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE
 
 
 DASHBOARD_VISUAL_PRESETS = ("auto", "distinct", "print", "custom")
-DASHBOARD_VISUAL_RECIPES = ("auto", "distinct", "print", "highlight_gradient", "custom")
+DASHBOARD_VISUAL_RECIPES = (
+    "auto",
+    "professional_contrast",
+    "colorblind_distinct",
+    "high_color_groups",
+    "toned_report",
+    "soft_pastel_review",
+    "scientific_gradient",
+    "diverging_nominal",
+    "print",
+    "distinct",
+    "highlight_gradient",
+    "custom",
+)
 DASHBOARD_VISUAL_COLOR_SOURCES = (
     "default",
     "preset",
@@ -48,7 +61,16 @@ DEFAULT_DASHBOARD_PALETTE = tuple(
     )
 )
 PRINT_DASHBOARD_PALETTE = ("#111827", "#4b5563", "#737373", "#9ca3af", "#d4d4d4", "#6b7280")
+TONED_REPORT_DASHBOARD_PALETTE = (
+    "#245a5a",
+    "#d66e2f",
+    "#476f95",
+    "#7a8f3d",
+    "#b2503c",
+    "#6a5f85",
+)
 DEFAULT_HIGHLIGHT_ANCHOR = "#facc15"
+DEFAULT_POPULATION_ALIASES = ("population", "population points")
 DEFAULT_OPACITY = {
     "histogram": 0.86,
     "grouped_histogram": 0.55,
@@ -220,8 +242,27 @@ _PRESET_LABELS = {
 }
 _RECIPE_LABELS = {
     **_PRESET_LABELS,
+    "professional_contrast": "Professional contrast",
+    "colorblind_distinct": "Colorblind distinct",
+    "high_color_groups": "High-color groups",
+    "toned_report": "Toned report",
+    "soft_pastel_review": "Soft pastel review",
+    "scientific_gradient": "Scientific gradient",
+    "diverging_nominal": "Diverging from nominal",
     "highlight_gradient": "Highlight gradient",
 }
+_VISIBLE_RECIPE_IDS = (
+    "auto",
+    "professional_contrast",
+    "colorblind_distinct",
+    "high_color_groups",
+    "toned_report",
+    "soft_pastel_review",
+    "scientific_gradient",
+    "diverging_nominal",
+    "print",
+    "custom",
+)
 _GROUP_COUNT_SUFFIX_PATTERN = re.compile(r"\s*\(n\s*=\s*\d+\)\s*$", re.IGNORECASE)
 
 
@@ -242,6 +283,8 @@ def default_dashboard_visual_settings() -> dict[str, Any]:
         "distinguish": "when_similar",
         "opacity": dict(DEFAULT_OPACITY),
         "marker_size": 7.0,
+        "population_baseline": {},
+        "comparison_focus": {},
         "stat_lines": {"accent_by_stat": False, "width": 2.0},
         "series_overrides": {},
         "stat_line_overrides": {},
@@ -265,6 +308,12 @@ def dashboard_visual_palette_presets() -> dict[str, dict[str, Any]]:
     """Return built-in palette preset metadata."""
 
     return copy.deepcopy(_PALETTE_PRESETS)
+
+
+def dashboard_visual_recipe_choices() -> tuple[tuple[str, str], ...]:
+    """Return user-facing recipe choices as ``(label, id)`` pairs."""
+
+    return tuple((_RECIPE_LABELS[recipe_id], recipe_id) for recipe_id in _VISIBLE_RECIPE_IDS)
 
 
 def dashboard_visual_recipe_settings(
@@ -568,6 +617,12 @@ def normalize_dashboard_visual_settings(settings: Any) -> dict[str, Any]:
         minimum=2.0,
         maximum=18.0,
     )
+    normalized["population_baseline"] = _normalize_population_baseline(
+        settings.get("population_baseline")
+    )
+    normalized["comparison_focus"] = _normalize_comparison_focus(
+        settings.get("comparison_focus")
+    )
     stat_lines = settings.get("stat_lines")
     if isinstance(stat_lines, Mapping):
         normalized["stat_lines"] = {
@@ -648,6 +703,8 @@ def dashboard_visual_settings_to_plotly_settings(settings: Any) -> dict[str, Any
             "patterns": list(_PATTERN_SHAPES if use_distinguishers else ()),
             "auto_distinguish": distinguish == "when_similar",
             "always_distinguish": always_distinguish,
+            "population_baseline": copy.deepcopy(normalized["population_baseline"]),
+            "comparison_focus": copy.deepcopy(normalized["comparison_focus"]),
             "overrides": copy.deepcopy(normalized["series_overrides"]),
         },
         "stat_lines": {
@@ -947,29 +1004,179 @@ def _resolved_palette(settings: Mapping[str, Any], *, count: int) -> list[str]:
     return _palette(settings.get("palette"), fallback=DEFAULT_DASHBOARD_PALETTE)[:count]
 
 
+def _focused_group_recipe_payload(
+    recipe: str,
+    *,
+    palette_preset: str,
+    palette: Sequence[str] | None = None,
+    distinguish: str = "when_similar",
+    opacity: Mapping[str, float] | None = None,
+    marker_size: float = 7.0,
+    population_color: str = "#6b7280",
+    population_opacity: Mapping[str, float] | None = None,
+    population_marker_size: float = 4.5,
+    comparison_marker_size: float = 8.5,
+    comparison_outline_width: float = 1.25,
+    stat_width: float = 2.0,
+) -> dict[str, Any]:
+    palette_values = list(
+        palette
+        if palette is not None
+        else _expand_palette(_PALETTE_PRESETS[palette_preset]["colors"], count=6)
+    )
+    return {
+        "preset": "custom",
+        "recipe": recipe,
+        "palette_preset": palette_preset,
+        "palette_mode": "fixed",
+        "palette": palette_values,
+        "distinguish": distinguish,
+        "opacity": {**dict(DEFAULT_OPACITY), **dict(opacity or {})},
+        "marker_size": marker_size,
+        "population_baseline": {
+            "aliases": list(DEFAULT_POPULATION_ALIASES),
+            "color": population_color,
+            "opacity": {
+                "grouped_histogram": 0.36,
+                "distribution": 0.50,
+                "iqr": 0.48,
+                "scatter": 0.28,
+                **dict(population_opacity or {}),
+            },
+            "marker_size": population_marker_size,
+            "marker_symbol": "circle",
+            "outline_width": 0.0,
+            "outline_color_mode": "auto",
+            "draw_first": True,
+        },
+        "comparison_focus": {
+            "opacity": {
+                "grouped_histogram": 0.64,
+                "distribution": 0.88,
+                "iqr": 0.76,
+                "scatter": 0.92,
+            },
+            "marker_size": comparison_marker_size,
+            "outline_width": comparison_outline_width,
+            "outline_color_mode": "auto",
+        },
+        "stat_lines": {"accent_by_stat": False, "width": stat_width},
+        "series_overrides": {},
+        "stat_line_overrides": {},
+    }
+
+
 def _visual_recipe_payload(recipe: str) -> dict[str, Any]:
     recipe_id = _choice(recipe, DASHBOARD_VISUAL_RECIPES, "auto")
-    if recipe_id == "distinct":
-        return {
-            "preset": "distinct",
-            "recipe": "distinct",
-            "palette_preset": "okabe_ito",
-            "palette_mode": "fixed",
-            "palette": _expand_palette(_PALETTE_PRESETS["okabe_ito"]["colors"], count=6),
-            "distinguish": "always",
-            "series_overrides": {},
-            "stat_line_overrides": {},
+    if recipe_id in {"distinct", "colorblind_distinct"}:
+        payload = _focused_group_recipe_payload(
+            recipe_id,
+            palette_preset="okabe_ito",
+            distinguish="always",
+            population_color="#6b7280",
+            population_marker_size=4.0,
+            comparison_marker_size=9.0,
+            comparison_outline_width=1.5,
+            stat_width=2.15,
+        )
+        if recipe_id == "distinct":
+            payload["preset"] = "distinct"
+        return payload
+    if recipe_id == "professional_contrast":
+        return _focused_group_recipe_payload(
+            recipe_id,
+            palette_preset="metroliza",
+            distinguish="when_similar",
+            population_color="#7b8794",
+            comparison_marker_size=8.5,
+            comparison_outline_width=1.25,
+        )
+    if recipe_id == "high_color_groups":
+        return _focused_group_recipe_payload(
+            recipe_id,
+            palette_preset="colorbrewer_dark2",
+            distinguish="when_similar",
+            opacity={"grouped_histogram": 0.52, "distribution": 0.82, "trend": 0.30},
+            population_color="#6b7280",
+            population_marker_size=4.0,
+            comparison_marker_size=8.8,
+            comparison_outline_width=1.35,
+        )
+    if recipe_id == "toned_report":
+        return _focused_group_recipe_payload(
+            recipe_id,
+            palette_preset="custom",
+            palette=TONED_REPORT_DASHBOARD_PALETTE,
+            distinguish="when_similar",
+            opacity={
+                "histogram": 0.78,
+                "grouped_histogram": 0.50,
+                "distribution": 0.76,
+                "iqr": 0.60,
+                "scatter": 0.78,
+                "trend": 0.30,
+                "model_curve": 0.58,
+            },
+            population_color="#8a949e",
+            population_opacity={"scatter": 0.24, "grouped_histogram": 0.32},
+            comparison_marker_size=8.0,
+            comparison_outline_width=1.15,
+            stat_width=1.85,
+        )
+    if recipe_id == "soft_pastel_review":
+        return _focused_group_recipe_payload(
+            recipe_id,
+            palette_preset="colorbrewer_set2",
+            distinguish="always",
+            opacity={
+                "histogram": 0.92,
+                "grouped_histogram": 0.68,
+                "distribution": 0.88,
+                "iqr": 0.74,
+                "scatter": 0.86,
+                "trend": 0.40,
+            },
+            population_color="#a3aab5",
+            population_opacity={"scatter": 0.22, "grouped_histogram": 0.40},
+            comparison_marker_size=9.0,
+            comparison_outline_width=1.6,
+        )
+    if recipe_id == "scientific_gradient":
+        return _focused_group_recipe_payload(
+            recipe_id,
+            palette_preset="cividis",
+            distinguish="when_similar",
+            population_color="#70747d",
+            comparison_marker_size=8.2,
+            comparison_outline_width=1.25,
+        )
+    if recipe_id == "diverging_nominal":
+        payload = _focused_group_recipe_payload(
+            recipe_id,
+            palette_preset="rdbu",
+            distinguish="when_similar",
+            opacity={"distribution": 0.78, "iqr": 0.72, "scatter": 0.86, "trend": 0.35},
+            population_color="#8b95a1",
+            comparison_marker_size=8.6,
+            comparison_outline_width=1.35,
+            stat_width=2.15,
+        )
+        payload["reference_lines"] = {
+            **copy.deepcopy(_REFERENCE_DEFAULTS),
+            "nominal": {
+                **copy.deepcopy(_REFERENCE_DEFAULTS["nominal"]),
+                "width": 2.25,
+                "dash": "solid",
+            },
         }
+        return payload
     if recipe_id == "print":
-        return {
-            "preset": "print",
-            "recipe": "print",
-            "palette_preset": "custom",
-            "palette_mode": "fixed",
-            "palette": list(PRINT_DASHBOARD_PALETTE),
-            "distinguish": "always",
-            "opacity": {
-                **dict(DEFAULT_OPACITY),
+        payload = _focused_group_recipe_payload(
+            "print",
+            palette_preset="custom",
+            palette=PRINT_DASHBOARD_PALETTE,
+            distinguish="always",
+            opacity={
                 "grouped_histogram": 0.72,
                 "distribution": 0.74,
                 "iqr": 0.70,
@@ -977,10 +1184,15 @@ def _visual_recipe_payload(recipe: str) -> dict[str, Any]:
                 "trend": 0.55,
                 "model_curve": 0.72,
             },
-            "stat_lines": {"accent_by_stat": False, "width": 2.25},
-            "series_overrides": {},
-            "stat_line_overrides": {},
-        }
+            population_color="#9ca3af",
+            population_opacity={"scatter": 0.30, "grouped_histogram": 0.46},
+            population_marker_size=4.5,
+            comparison_marker_size=8.5,
+            comparison_outline_width=1.5,
+            stat_width=2.25,
+        )
+        payload["preset"] = "print"
+        return payload
     if recipe_id == "highlight_gradient":
         return {
             "preset": "custom",
@@ -1134,6 +1346,93 @@ def _normalize_series_overrides(value: Any) -> dict[str, dict[str, Any]]:
             style["dash"] = dash
         if style:
             normalized[key] = style
+    return normalized
+
+
+def _normalize_chart_float_map(
+    value: Any,
+    *,
+    minimum: float,
+    maximum: float,
+) -> dict[str, float]:
+    if not isinstance(value, Mapping):
+        return {}
+    normalized: dict[str, float] = {}
+    for raw_key, raw_number in value.items():
+        key = _text(raw_key, "")
+        number = _optional_bounded_float(raw_number, minimum=minimum, maximum=maximum)
+        if key and number is not None:
+            normalized[key] = number
+    return normalized
+
+
+def _normalize_population_baseline(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or not value:
+        return {}
+    raw_aliases = value.get("aliases", DEFAULT_POPULATION_ALIASES)
+    aliases = (
+        [_text(alias, "") for alias in raw_aliases if _text(alias, "")]
+        if isinstance(raw_aliases, Sequence) and not isinstance(raw_aliases, (str, bytes))
+        else []
+    )
+    if not aliases:
+        aliases = list(DEFAULT_POPULATION_ALIASES)
+    normalized: dict[str, Any] = {"aliases": aliases}
+    color = _color(value.get("color"), "")
+    if color:
+        normalized["color"] = color
+    opacity = _normalize_chart_float_map(value.get("opacity"), minimum=0.0, maximum=1.0)
+    if opacity:
+        normalized["opacity"] = opacity
+    marker_size = _optional_bounded_float(value.get("marker_size"), minimum=2.0, maximum=18.0)
+    if marker_size is not None:
+        normalized["marker_size"] = marker_size
+    marker_symbol = _choice(value.get("marker_symbol"), _MARKER_SYMBOLS, "")
+    if marker_symbol:
+        normalized["marker_symbol"] = marker_symbol
+    outline_width = _optional_bounded_float(value.get("outline_width"), minimum=0.0, maximum=6.0)
+    if outline_width is not None:
+        normalized["outline_width"] = outline_width
+    outline_color_mode = _choice(
+        value.get("outline_color_mode"),
+        DASHBOARD_VISUAL_OUTLINE_COLOR_MODES,
+        "",
+    )
+    if outline_color_mode:
+        normalized["outline_color_mode"] = outline_color_mode
+    outline_color = _color(value.get("outline_color"), "")
+    if outline_color:
+        normalized["outline_color"] = outline_color
+    normalized["draw_first"] = bool(value.get("draw_first", True))
+    return normalized
+
+
+def _normalize_comparison_focus(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or not value:
+        return {}
+    normalized: dict[str, Any] = {}
+    opacity = _normalize_chart_float_map(value.get("opacity"), minimum=0.0, maximum=1.0)
+    if opacity:
+        normalized["opacity"] = opacity
+    marker_size = _optional_bounded_float(value.get("marker_size"), minimum=2.0, maximum=18.0)
+    if marker_size is not None:
+        normalized["marker_size"] = marker_size
+    marker_symbol = _choice(value.get("marker_symbol"), _MARKER_SYMBOLS, "")
+    if marker_symbol:
+        normalized["marker_symbol"] = marker_symbol
+    outline_width = _optional_bounded_float(value.get("outline_width"), minimum=0.0, maximum=6.0)
+    if outline_width is not None:
+        normalized["outline_width"] = outline_width
+    outline_color_mode = _choice(
+        value.get("outline_color_mode"),
+        DASHBOARD_VISUAL_OUTLINE_COLOR_MODES,
+        "",
+    )
+    if outline_color_mode:
+        normalized["outline_color_mode"] = outline_color_mode
+    outline_color = _color(value.get("outline_color"), "")
+    if outline_color:
+        normalized["outline_color"] = outline_color
     return normalized
 
 
@@ -1816,6 +2115,7 @@ __all__ = [
     "build_dashboard_visual_preview_spec",
     "dashboard_visual_color_source",
     "dashboard_visual_palette_presets",
+    "dashboard_visual_recipe_choices",
     "dashboard_visual_recipe_settings",
     "dashboard_visual_resolved_palette_info",
     "dashboard_visual_settings_summary",

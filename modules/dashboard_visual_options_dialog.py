@@ -40,6 +40,7 @@ from modules.dashboard_visual_options import (
     build_dashboard_visual_preview_png,
     build_dashboard_visual_preview_spec,
     dashboard_visual_palette_presets,
+    dashboard_visual_recipe_choices,
     dashboard_visual_recipe_settings,
     dashboard_visual_settings_summary,
     dashboard_visual_swatch_palette,
@@ -64,12 +65,7 @@ except Exception:  # pragma: no cover - depends on local Qt installation.
     QWebChannel = None
 
 
-_PRESET_ITEMS = (
-    ("Default", "auto"),
-    ("Distinct groups", "distinct"),
-    ("Print friendly", "print"),
-    ("Custom", "custom"),
-)
+_PRESET_ITEMS = dashboard_visual_recipe_choices()
 _PALETTE_MODE_ITEMS = (
     ("Fixed palette", "fixed"),
     ("Auto gradient", "auto_gradient"),
@@ -157,9 +153,12 @@ class DashboardVisualOptionsDialog(QDialog):
         """Return normalized settings represented by the current controls."""
 
         settings = default_dashboard_visual_settings()
+        settings.pop("color_source", None)
         settings["theme_id"] = str(self.theme_combo.currentData() or "")
         settings["theme_name"] = self.theme_name_edit.text().strip()
-        settings["preset"] = str(self.preset_combo.currentData() or "auto")
+        recipe = str(self.preset_combo.currentData() or "auto")
+        settings["recipe"] = recipe
+        settings["preset"] = recipe if recipe in {"auto", "distinct", "print", "custom"} else "custom"
         settings["palette_preset"] = str(self.palette_preset_combo.currentData() or "metroliza")
         settings["palette_mode"] = str(self.palette_mode_combo.currentData() or "fixed")
         settings["palette"] = [button.property("color") for button in self._palette_buttons]
@@ -415,6 +414,7 @@ class DashboardVisualOptionsDialog(QDialog):
         self.element_combo = QComboBox()
         self.element_combo.addItem("Click a plot element or choose one", "")
         self.element_combo.currentIndexChanged.connect(self._handle_element_combo_changed)
+        self._selection_rows: dict[str, list[QWidget]] = {}
         self.element_color_button = self._color_button("#245a5a")
         self.element_color_button.clicked.connect(lambda: self._choose_color(self.element_color_button))
         self.element_opacity_slider = self._opacity_slider()
@@ -466,19 +466,29 @@ class DashboardVisualOptionsDialog(QDialog):
         selection_actions_layout.setContentsMargins(0, 0, 0, 0)
         selection_actions_layout.addWidget(self.apply_element_button)
         selection_actions_layout.addWidget(self.reset_element_button)
-        selection_form.addRow("Element", self.element_combo)
-        selection_form.addRow("Color", self.element_color_button)
-        selection_form.addRow("Opacity", self._slider_spin_row(self.element_opacity_slider, self.element_opacity_spin))
-        selection_form.addRow("Width", self.element_width_spin)
-        selection_form.addRow("Dash", self.element_dash_combo)
-        selection_form.addRow("Marker size", self.element_marker_size_spin)
-        selection_form.addRow("Shape", self.element_marker_symbol_combo)
-        selection_form.addRow("", self.element_outline_checkbox)
-        selection_form.addRow("Border width", self.element_outline_width_spin)
-        selection_form.addRow("Border color", self._line_style_row(self.element_outline_color_button, self.element_outline_color_mode_combo))
-        selection_form.addRow("Pattern", self.element_pattern_combo)
-        selection_form.addRow("", self.element_stat_accent_checkbox)
-        selection_form.addRow("", selection_actions)
+        self._add_selection_row(selection_form, "element", "Element", self.element_combo)
+        self._add_selection_row(selection_form, "color", "Color", self.element_color_button)
+        self._add_selection_row(
+            selection_form,
+            "opacity",
+            "Opacity",
+            self._slider_spin_row(self.element_opacity_slider, self.element_opacity_spin),
+        )
+        self._add_selection_row(selection_form, "line", "Width", self.element_width_spin)
+        self._add_selection_row(selection_form, "dash", "Dash", self.element_dash_combo)
+        self._add_selection_row(selection_form, "marker_size", "Marker size", self.element_marker_size_spin)
+        self._add_selection_row(selection_form, "marker_symbol", "Shape", self.element_marker_symbol_combo)
+        self._add_selection_row(selection_form, "outline", "", self.element_outline_checkbox)
+        self._add_selection_row(selection_form, "outline_width", "Border width", self.element_outline_width_spin)
+        self._add_selection_row(
+            selection_form,
+            "outline_color",
+            "Border color",
+            self._line_style_row(self.element_outline_color_button, self.element_outline_color_mode_combo),
+        )
+        self._add_selection_row(selection_form, "pattern", "Pattern", self.element_pattern_combo)
+        self._add_selection_row(selection_form, "stat_accent", "", self.element_stat_accent_checkbox)
+        self._add_selection_row(selection_form, "actions", "", selection_actions)
 
         preview_panel = QVBoxLayout()
         preview_panel.setContentsMargins(0, 0, 0, 0)
@@ -537,6 +547,20 @@ class DashboardVisualOptionsDialog(QDialog):
         self.setTabOrder(self.element_color_button, self.element_opacity_slider)
         self.setTabOrder(self.element_opacity_slider, self.element_opacity_spin)
 
+    def _add_selection_row(
+        self,
+        layout: QFormLayout,
+        row_key: str,
+        label: str,
+        widget: QWidget,
+    ) -> None:
+        layout.addRow(label, widget)
+        row_widgets = [widget]
+        label_widget = layout.labelForField(widget)
+        if label_widget is not None:
+            row_widgets.append(label_widget)
+        self._selection_rows[row_key] = row_widgets
+
     def _set_customize_controls_visible(self, visible: bool) -> None:
         visible = bool(visible)
         self.customize_controls_container.setVisible(visible)
@@ -559,7 +583,10 @@ class DashboardVisualOptionsDialog(QDialog):
         self.theme_combo.blockSignals(True)
         self._set_combo_data(self.theme_combo, str(settings.get("theme_id") or ""))
         self.theme_combo.blockSignals(False)
-        self._set_combo_data(self.preset_combo, settings["preset"])
+        recipe_id = str(settings.get("recipe") or settings["preset"])
+        if recipe_id == "distinct":
+            recipe_id = "colorblind_distinct"
+        self._set_combo_data(self.preset_combo, recipe_id)
         self._set_combo_data(self.palette_preset_combo, settings["palette_preset"])
         self._set_combo_data(self.palette_mode_combo, settings["palette_mode"])
         self._set_combo_data(self.gradient_spread_combo, settings["gradient_spread"])
@@ -604,6 +631,11 @@ class DashboardVisualOptionsDialog(QDialog):
         self.summary_label.setText(dashboard_visual_settings_summary(settings))
         spec = build_dashboard_visual_preview_spec(settings, chart_type=chart_type)
         self._preview_targets = self._extract_visual_targets(spec)
+        if self._selected_target and not any(
+            target.get("target") == self._selected_target.get("target")
+            for target in self._preview_targets
+        ):
+            self._selected_target = None
         self._populate_element_combo()
         self._sync_custom_controls()
         if spec and self.web_view is not None:
@@ -642,9 +674,9 @@ class DashboardVisualOptionsDialog(QDialog):
 
     def _sync_custom_controls(self) -> None:
         settings = self.visual_settings()
-        preset = str(settings.get("preset") or "auto")
-        is_auto = preset == "auto"
-        is_custom = preset == "custom"
+        recipe = str(settings.get("recipe") or settings.get("preset") or "auto")
+        is_auto = recipe == "auto"
+        is_custom = recipe == "custom"
         palette = dashboard_visual_swatch_palette(settings, count=max(6, len(_PREVIEW_SERIES_LABELS)))
         custom_swatches_enabled = (
             is_custom
@@ -686,6 +718,13 @@ class DashboardVisualOptionsDialog(QDialog):
             widget.setEnabled(has_selection)
         role = str((self._selected_target or {}).get("role") or "")
         capabilities = self._selected_target_capabilities(self._selected_target)
+        self._set_selection_row_visible("color", has_selection)
+        self._set_selection_row_visible("opacity", has_selection)
+        self._set_selection_row_visible("line", has_selection and capabilities["line"])
+        self._set_selection_row_visible("dash", has_selection and capabilities["line"])
+        self._set_selection_row_visible("marker_size", has_selection and capabilities["marker_size"])
+        self._set_selection_row_visible("marker_symbol", has_selection and capabilities["marker_symbol"])
+        self._set_selection_row_visible("outline", has_selection and capabilities["outline"])
         self.element_width_spin.setEnabled(has_selection and capabilities["line"])
         self.element_dash_combo.setEnabled(has_selection and capabilities["line"])
         self.element_marker_size_spin.setEnabled(has_selection and capabilities["marker_size"])
@@ -696,13 +735,21 @@ class DashboardVisualOptionsDialog(QDialog):
             and capabilities["outline"]
             and self.element_outline_checkbox.isChecked()
         )
+        self._set_selection_row_visible("outline_width", outline_enabled)
+        self._set_selection_row_visible("outline_color", outline_enabled)
         self.element_outline_width_spin.setEnabled(outline_enabled)
         self.element_outline_color_mode_combo.setEnabled(outline_enabled)
         self.element_outline_color_button.setEnabled(
             outline_enabled and self.element_outline_color_mode_combo.currentData() == "custom"
         )
+        self._set_selection_row_visible("pattern", has_selection and capabilities["pattern"])
         self.element_pattern_combo.setEnabled(has_selection and capabilities["pattern"])
+        self._set_selection_row_visible("stat_accent", has_selection and role == "stat")
         self.element_stat_accent_checkbox.setEnabled(has_selection and role == "stat")
+
+    def _set_selection_row_visible(self, row_key: str, visible: bool) -> None:
+        for widget in self._selection_rows.get(row_key, []):
+            widget.setVisible(bool(visible))
 
     def _populate_theme_combo(self) -> None:
         current = self.theme_combo.currentData() if hasattr(self, "theme_combo") else ""

@@ -142,16 +142,23 @@ def test_dashboard_visual_dialog_recipe_updates_controls_and_preview_swatches(mo
         )
         assert print_swatches != initial_swatches
 
-        dialog._set_combo_data(dialog.preset_combo, "distinct")
+        dialog._set_combo_data(dialog.preset_combo, "colorblind_distinct")
         distinct_settings = dialog.visual_settings()
         distinct_swatches = [button.property("color") for button in dialog._preview_color_buttons]
-        assert distinct_settings["preset"] == "distinct"
+        assert distinct_settings["recipe"] == "colorblind_distinct"
+        assert distinct_settings["preset"] == "custom"
         assert dialog.palette_preset_combo.currentData() == "okabe_ito"
         assert distinct_swatches == dialog_module.dashboard_visual_swatch_palette(
             distinct_settings,
             count=len(dialog._preview_color_buttons),
         )
         assert distinct_swatches != print_swatches
+
+        dialog._set_combo_data(dialog.preset_combo, "toned_report")
+        toned_settings = dialog.visual_settings()
+        assert toned_settings["recipe"] == "toned_report"
+        assert toned_settings["preset"] == "custom"
+        assert toned_settings["population_baseline"]["marker_size"] < toned_settings["comparison_focus"]["marker_size"]
     finally:
         dialog.close()
         dialog.deleteLater()
@@ -251,6 +258,7 @@ def test_dashboard_visual_dialog_selection_inspector_sits_below_preview_and_star
         assert not dialog.selection_group.isHidden()
         assert not dialog.element_opacity_slider.isEnabled()
         assert not dialog.element_opacity_spin.isEnabled()
+        assert dialog.element_opacity_slider.parentWidget().isHidden()
         assert not dialog.apply_element_button.isEnabled()
     finally:
         dialog.close()
@@ -407,16 +415,24 @@ def test_dashboard_visual_dialog_selected_controls_are_role_aware(monkeypatch) -
         dialog._set_combo_data(dialog.element_combo, "series:histogram")
         assert dialog.element_color_button.property("color") == "#123456"
         assert not dialog.element_width_spin.isEnabled()
+        assert dialog.element_width_spin.isHidden()
         assert not dialog.element_dash_combo.isEnabled()
+        assert dialog.element_dash_combo.isHidden()
         assert not dialog.element_marker_size_spin.isEnabled()
+        assert dialog.element_marker_size_spin.isHidden()
+        assert dialog.element_outline_checkbox.isHidden()
         assert dialog.element_pattern_combo.isEnabled()
+        assert not dialog.element_pattern_combo.isHidden()
 
         dialog._set_combo_data(dialog.element_combo, "model_curve:kde")
         assert dialog.element_color_button.property("color") == "#654321"
         assert dialog.element_width_spin.isEnabled()
+        assert not dialog.element_width_spin.isHidden()
         assert dialog.element_dash_combo.isEnabled()
         assert not dialog.element_marker_size_spin.isEnabled()
+        assert dialog.element_marker_size_spin.isHidden()
         assert not dialog.element_pattern_combo.isEnabled()
+        assert dialog.element_pattern_combo.isHidden()
 
         dialog._set_combo_data(dialog.element_combo, "stat:group 1::mean")
         assert dialog.element_stat_accent_checkbox.isEnabled()
@@ -512,8 +528,10 @@ def test_dashboard_visual_dialog_selected_marker_controls_write_series_outline(
         dialog._sync_custom_controls()
 
         assert dialog.element_marker_size_spin.isEnabled()
+        assert not dialog.element_marker_size_spin.isHidden()
         assert dialog.element_marker_symbol_combo.isEnabled()
         assert dialog.element_outline_checkbox.isEnabled()
+        assert not dialog.element_outline_checkbox.isHidden()
         assert dialog.element_outline_width_spin.isEnabled()
         assert dialog.element_outline_color_mode_combo.isEnabled()
         assert dialog.element_marker_symbol_combo.currentData() == "square"

@@ -159,8 +159,16 @@ stat/reference line styling, and selected chart elements.
 Use the recipes first for routine output:
 
 - **Default** keeps Metroliza's normal dashboard styling.
-- **Distinct** makes grouped series easier to separate.
-- **Print** favors monochrome-friendly output.
+- **Professional contrast** is the routine report recipe. It tones population/baseline
+  points down and keeps comparison groups prominent.
+- **Colorblind distinct** uses stronger non-color differentiation for grouped comparisons.
+- **High-color groups** favors many visible comparison groups in dense dashboards.
+- **Toned report** uses muted professional colors while keeping small comparison groups
+  readable against a large population baseline.
+- **Soft pastel review** is a calmer exploratory palette with outlined comparison points.
+- **Scientific gradient** is intended for ordered process states or ranked groups.
+- **Diverging from nominal** is intended for deviation around a real target or nominal.
+- **Print gray** favors monochrome-friendly output.
 - **Custom** keeps your manual choices.
 
 Fine-tuning controls are meant for visual review, not data changes. Sliders are used for
@@ -170,7 +178,9 @@ type or step to a precise value when needed.
 
 The dialog opens with recipes, saved themes, and preview visible. Use **Customize...** to
 show detailed color, opacity, line, and selected-element controls when routine recipes are
-not enough.
+not enough. Selected-element controls are chart-aware: histogram/bar elements show color,
+opacity, and pattern controls; scatter markers show marker size/shape/border controls;
+line-like elements show width and dash controls.
 
 ### Industrial context
 

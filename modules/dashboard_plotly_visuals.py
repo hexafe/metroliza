@@ -217,6 +217,10 @@ def apply_dashboard_visual_settings(
             overrides=overrides,
             fallback_color=_trace_color(trace),
         )
+        override = overrides.get(_normalize_label_key(label)) or {}
+        role_style = _series_role_style(label, series, trace_chart_kind)
+        if role_style:
+            style = _merge_series_role_style(style, role_style, override)
         _apply_series_trace_style(
             trace,
             style,
@@ -231,6 +235,8 @@ def apply_dashboard_visual_settings(
             outline_color_mode=outline_color_mode,
             preserve_color=preserve_colors,
         )
+
+    _apply_population_draw_order(data, series)
 
     metadata = spec.setdefault("metadata", {})
     if isinstance(metadata, dict):
@@ -389,6 +395,58 @@ def _resolve_series_style(
     return style
 
 
+def _series_role_style(
+    label: str,
+    series: Mapping[str, Any],
+    chart_kind: str,
+) -> dict[str, Any]:
+    population = series.get("population_baseline")
+    comparison = series.get("comparison_focus")
+    if isinstance(population, Mapping) and _is_population_label(label, population):
+        return _style_from_role_settings(population, chart_kind)
+    if isinstance(comparison, Mapping):
+        return _style_from_role_settings(comparison, chart_kind)
+    return {}
+
+
+def _style_from_role_settings(settings: Mapping[str, Any], chart_kind: str) -> dict[str, Any]:
+    style: dict[str, Any] = {}
+    color = _string_or_none(settings.get("color"))
+    if color:
+        style["color"] = color
+    opacity = _finite_float(_chart_setting(settings.get("opacity"), chart_kind))
+    if opacity is not None:
+        style["opacity"] = opacity
+    marker_size = _finite_float(settings.get("marker_size"))
+    if marker_size is not None:
+        style["marker_size"] = marker_size
+    marker_symbol = _string_or_none(settings.get("marker_symbol"))
+    if marker_symbol:
+        style["marker_symbol"] = marker_symbol
+    outline_width = _finite_float(settings.get("outline_width"))
+    if outline_width is not None:
+        style["outline_width"] = outline_width
+    outline_color_mode = _outline_color_mode(settings.get("outline_color_mode"))
+    if outline_color_mode:
+        style["outline_color_mode"] = outline_color_mode
+    outline_color = _string_or_none(settings.get("outline_color"))
+    if outline_color:
+        style["outline_color"] = outline_color
+    return style
+
+
+def _merge_series_role_style(
+    style: Mapping[str, Any],
+    role_style: Mapping[str, Any],
+    override: Mapping[str, Any],
+) -> dict[str, Any]:
+    merged = dict(style)
+    for key, value in role_style.items():
+        if key not in override:
+            merged[key] = value
+    return merged
+
+
 def _apply_series_trace_style(
     trace: dict[str, Any],
     style: Mapping[str, Any],
@@ -453,30 +511,31 @@ def _apply_series_trace_style(
             pattern = marker.setdefault("pattern", {})
             if isinstance(pattern, dict):
                 pattern["shape"] = resolved_pattern
-        resolved_outline_width = _finite_float(style.get("outline_width"))
-        if resolved_outline_width is None:
-            resolved_outline_width = outline_width
-        style_outline_color_mode = _outline_color_mode(style.get("outline_color_mode"))
-        resolved_outline_color_mode = style_outline_color_mode or outline_color_mode
-        raw_outline_color = _string_or_none(style.get("outline_color"))
-        if raw_outline_color and raw_outline_color.casefold() == "auto":
-            resolved_outline_color_mode = "auto"
-            raw_outline_color = None
-        resolved_outline_color = raw_outline_color or outline_color
-        if resolved_outline_color and resolved_outline_color.casefold() == "auto":
-            resolved_outline_color_mode = "auto"
-            resolved_outline_color = None
-        if resolved_outline_color_mode == "auto" and (resolved_outline_width or 0.0) > 0.0:
-            resolved_outline_color = _contrasting_marker_outline_color(
-                _string_or_none(marker.get("color")) or color or _trace_color(trace)
-            )
-        if resolved_outline_width is not None or resolved_outline_color:
-            line = marker.setdefault("line", {})
-            if isinstance(line, dict):
-                if resolved_outline_width is not None:
-                    line["width"] = max(0.0, resolved_outline_width)
-                if resolved_outline_color:
-                    line["color"] = resolved_outline_color
+        if _trace_has_markers(trace):
+            resolved_outline_width = _finite_float(style.get("outline_width"))
+            if resolved_outline_width is None:
+                resolved_outline_width = outline_width
+            style_outline_color_mode = _outline_color_mode(style.get("outline_color_mode"))
+            resolved_outline_color_mode = style_outline_color_mode or outline_color_mode
+            raw_outline_color = _string_or_none(style.get("outline_color"))
+            if raw_outline_color and raw_outline_color.casefold() == "auto":
+                resolved_outline_color_mode = "auto"
+                raw_outline_color = None
+            resolved_outline_color = raw_outline_color or outline_color
+            if resolved_outline_color and resolved_outline_color.casefold() == "auto":
+                resolved_outline_color_mode = "auto"
+                resolved_outline_color = None
+            if resolved_outline_color_mode == "auto" and (resolved_outline_width or 0.0) > 0.0:
+                resolved_outline_color = _contrasting_marker_outline_color(
+                    _string_or_none(marker.get("color")) or color or _trace_color(trace)
+                )
+            if resolved_outline_width is not None or resolved_outline_color:
+                line = marker.setdefault("line", {})
+                if isinstance(line, dict):
+                    if resolved_outline_width is not None:
+                        line["width"] = max(0.0, resolved_outline_width)
+                    if resolved_outline_color:
+                        line["color"] = resolved_outline_color
 
     role = chart_kind if chart_kind == "model_curve" else ("trend" if is_trend_line else "series")
     tag_plotly_visual_trace(
@@ -489,6 +548,33 @@ def _apply_series_trace_style(
         series_id=_normalize_label_key(label),
         preserve_color=bool(color and preserve_color),
     )
+
+
+def _is_population_label(label: str, population: Mapping[str, Any]) -> bool:
+    aliases = population.get("aliases")
+    alias_values = (
+        aliases
+        if isinstance(aliases, Sequence) and not isinstance(aliases, (str, bytes))
+        else ("population", "population points")
+    )
+    label_key = _normalize_label_key(label)
+    return any(label_key == _normalize_label_key(str(alias)) for alias in alias_values)
+
+
+def _apply_population_draw_order(data: list[Any], series: Mapping[str, Any]) -> None:
+    population = series.get("population_baseline")
+    if not isinstance(population, Mapping) or not population or not population.get("draw_first", True):
+        return
+
+    def sort_key(item: tuple[int, Any]) -> tuple[int, int]:
+        index, trace = item
+        if not isinstance(trace, Mapping):
+            return (1, index)
+        meta = trace.get("meta") if isinstance(trace.get("meta"), Mapping) else {}
+        label = str(meta.get("metroliza_legend_label") or trace.get("name") or "")
+        return (0 if _is_population_label(label, population) else 1, index)
+
+    data[:] = [trace for _index, trace in sorted(enumerate(data), key=sort_key)]
 
 
 def _apply_stat_trace_style(
@@ -588,9 +674,15 @@ def _series_label_for_trace(trace: Mapping[str, Any], labels: Sequence[str]) -> 
 def _style_capabilities_for_series_trace(trace: Mapping[str, Any], role: str) -> tuple[str, ...]:
     if role in {"trend", "model_curve"}:
         return _LINE_STYLE_CAPABILITIES
-    capabilities = ["color", "opacity", "outline_width", "outline_color", "outline_color_mode"]
+    capabilities = ["color", "opacity"]
     if _trace_has_markers(trace):
-        capabilities.extend(("marker_size", "marker_symbol"))
+        capabilities.extend((
+            "marker_size",
+            "marker_symbol",
+            "outline_width",
+            "outline_color",
+            "outline_color_mode",
+        ))
     if str(trace.get("type") or "").casefold() in {"bar", "histogram"}:
         capabilities.append(_PATTERN_STYLE_CAPABILITY)
     return tuple(capabilities)
