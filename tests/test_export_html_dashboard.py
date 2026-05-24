@@ -12,6 +12,7 @@ from modules.export_html_dashboard import (
     _build_group_analysis_plotly_spec_bundle,
     _build_plotly_chart_spec,
     _build_plotly_chart_spec_bundle,
+    _dashboard_visual_preview_labels_from_manifest,
     extract_dashboard_chart_details,
     _render_overview_cards,
     resolve_html_dashboard_assets_dir,
@@ -34,6 +35,32 @@ def _trace_by_name(spec: dict, name: str) -> dict:
             return trace
     available = [trace.get('name') for trace in spec.get('data', [])]
     raise AssertionError(f'Missing trace {name!r}; available traces: {available!r}')
+
+
+def test_dashboard_visual_preview_labels_derive_from_export_plotly_specs() -> None:
+    labels = _dashboard_visual_preview_labels_from_manifest(
+        [
+            {
+                "charts": [
+                    {
+                        "plotly_spec": {
+                            "data": [
+                                {"type": "histogram", "name": "POPULATION"},
+                                {"type": "histogram", "name": "DUPA"},
+                                {"type": "histogram", "name": "TEST123"},
+                                {"type": "scatter", "mode": "lines", "name": "LSL=1.0"},
+                                {"type": "scatter", "mode": "lines", "name": "(DUPA) Mean=6.5"},
+                            ],
+                            "layout": {},
+                        }
+                    }
+                ]
+            }
+        ],
+        {},
+    )
+
+    assert labels == ("POPULATION", "DUPA", "TEST123", "Group 3", "Group 4")
 
 
 class TestExportHtmlDashboard(unittest.TestCase):

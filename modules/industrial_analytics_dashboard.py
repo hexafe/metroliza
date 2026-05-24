@@ -9,6 +9,7 @@ import html
 from io import BytesIO
 import json
 from pathlib import Path
+import re
 import shutil
 from typing import Any
 
@@ -31,6 +32,7 @@ from modules.dashboard_html_controls import (
     render_dashboard_visual_runtime_js,
 )
 from modules.dashboard_plotly_visuals import apply_dashboard_visual_settings
+from modules.dashboard_visual_options import dashboard_visual_preview_labels
 from modules.export_summary_utils import resolve_histogram_bin_count
 from modules.hexafe_plotstats_adapter import (
     build_dashboard_plotly_spec,
@@ -57,6 +59,7 @@ from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE
 DASHBOARD_SCHEMA = "metroliza.production_analytics_dashboard.v1"
 PLOTLY_ASSET_NAME = "plotly-2.27.0.min.js"
 PLOTLY_ASSET_SOURCE = Path(__file__).resolve().parent / "html_dashboard_assets" / PLOTLY_ASSET_NAME
+_GROUP_COUNT_SUFFIX_PATTERN = re.compile(r"\s*\(n\s*=\s*\d+\)\s*$", re.IGNORECASE)
 PLOTLY_MODEBAR_REMOVE = (
     "select2d",
     "lasso2d",
@@ -78,6 +81,11 @@ DASHBOARD_RAW_POINT_LIMIT = 50_000
 DASHBOARD_AGGREGATE_TRACE_TARGET_POINTS = 2_500
 DEFAULT_PLOTLY_SPEC_COUNT_BUDGET = 160
 DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET = 8_000_000
+
+
+def _strip_group_count_suffix(label: str) -> str:
+    stripped = _GROUP_COUNT_SUFFIX_PATTERN.sub("", str(label or "").strip()).strip()
+    return stripped or str(label or "").strip()
 
 
 def build_production_dashboard_manifest(
@@ -2016,7 +2024,12 @@ def _render_dashboard_html(
     theme_bootstrap_script = render_dashboard_theme_bootstrap_script()
     dashboard_controls_markup = render_dashboard_control_bar(include_visuals=bool(plotly_charts))
     dashboard_controls_css = render_dashboard_controls_css()
-    visual_dialog_markup = render_dashboard_visual_dialog() if plotly_charts else ""
+    visual_preview_labels = _dashboard_visual_preview_labels_from_charts(charts)
+    visual_dialog_markup = (
+        render_dashboard_visual_dialog(preview_labels=visual_preview_labels)
+        if plotly_charts
+        else ""
+    )
     plotly_script = (
         f'  <script src="{html.escape(asset_directory_name)}/{PLOTLY_ASSET_NAME}"></script>'
         if plotly_charts
@@ -2026,6 +2039,7 @@ def _render_dashboard_html(
         _render_plotly_runtime(
             charts_json,
             dashboard_visual_settings=dashboard_visual_settings,
+            preview_labels=visual_preview_labels,
         )
         if plotly_charts
         else ""
@@ -2512,6 +2526,62 @@ def _plotly_chart_payloads(charts: list[Any]) -> list[dict[str, Any]]:
     return payloads
 
 
+def _dashboard_visual_preview_labels_from_charts(charts: list[Any]) -> tuple[str, ...]:
+    labels: list[str] = []
+    seen: set[str] = set()
+
+    def add_label(raw_label: Any) -> None:
+        label = _strip_group_count_suffix(str(raw_label or "").strip())
+        key = label.casefold()
+        if not key or key in seen:
+            return
+        seen.add(key)
+        labels.append(label)
+
+    for chart in charts:
+        if not isinstance(chart, dict):
+            continue
+        for label in chart.get("group_labels") or []:
+            add_label(label)
+        for variant in _plotly_spec_variants(chart.get("plotly_spec")):
+            for label in _series_labels_from_plotly_spec(variant):
+                add_label(label)
+    return dashboard_visual_preview_labels(labels)
+
+
+def _plotly_spec_variants(spec: Any) -> list[dict[str, Any]]:
+    if not isinstance(spec, dict):
+        return []
+    if isinstance(spec.get("data"), list):
+        return [spec]
+    variants: list[dict[str, Any]] = []
+    for key in ("light", "dark"):
+        variant = spec.get(key)
+        if isinstance(variant, dict) and isinstance(variant.get("data"), list):
+            variants.append(variant)
+    return variants
+
+
+def _series_labels_from_plotly_spec(spec: dict[str, Any]) -> list[str]:
+    labels: list[str] = []
+    generic = {"frequency", "histogram", "measurements", "trend", "all production rows"}
+    for trace in spec.get("data") or []:
+        if not isinstance(trace, dict):
+            continue
+        name = _strip_group_count_suffix(str(trace.get("name") or "").strip())
+        if not name or name.casefold() in generic:
+            continue
+        if name.split("=", 1)[0].strip().casefold() in {"lsl", "usl", "nominal"}:
+            continue
+        if re.match(r"^(?:\((.+?)\)\s*)?(Min|Q1|Median|Mean|Q3|Max)=", name, re.IGNORECASE):
+            continue
+        trace_type = str(trace.get("type") or "").casefold()
+        mode = str(trace.get("mode") or "").casefold()
+        if trace_type in {"bar", "histogram", "box", "violin"} or "markers" in mode:
+            labels.append(name)
+    return labels
+
+
 def _render_dashboard_section(*, section_id: str, title: str, body: str, subtitle: str = "") -> str:
     if not str(body or "").strip():
         return ""
@@ -2608,6 +2678,7 @@ def _render_plotly_runtime(
     charts_json: str,
     *,
     dashboard_visual_settings: dict[str, Any] | None = None,
+    preview_labels: list[str] | tuple[str, ...] | None = None,
 ) -> str:
     theme_tokens_json = json.dumps(
         _production_dashboard_plotly_theme_tokens(),
@@ -2615,7 +2686,8 @@ def _render_plotly_runtime(
         separators=(",", ":"),
     )
     visual_runtime_js = render_dashboard_visual_runtime_js(
-        initial_settings=dashboard_visual_settings
+        initial_settings=dashboard_visual_settings,
+        preview_labels=preview_labels,
     )
     return (
         f'\n  <script id="production-dashboard-charts" type="application/json">{charts_json}</script>\n'

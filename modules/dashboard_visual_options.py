@@ -71,6 +71,8 @@ TONED_REPORT_DASHBOARD_PALETTE = (
 )
 DEFAULT_HIGHLIGHT_ANCHOR = "#facc15"
 DEFAULT_POPULATION_ALIASES = ("population", "population points")
+DEFAULT_PREVIEW_POPULATION_LABEL = "POPULATION"
+DEFAULT_PREVIEW_COMPARISON_SLOTS = 4
 DEFAULT_OPACITY = {
     "histogram": 0.86,
     "grouped_histogram": 0.55,
@@ -733,6 +735,78 @@ def dashboard_visual_swatch_palette(settings: Any, *, count: int = 6) -> list[st
     return _resolved_palette(normalized, count=max(1, int(count)))
 
 
+def dashboard_visual_preview_labels(
+    group_names: Sequence[str] | None = None,
+    *,
+    comparison_slots: int = DEFAULT_PREVIEW_COMPARISON_SLOTS,
+    population_label: str = DEFAULT_PREVIEW_POPULATION_LABEL,
+) -> tuple[str, ...]:
+    """Return population-first labels for visual settings previews.
+
+    Real comparison group names keep their source order. Remaining comparison
+    slots are filled by position, so one real group yields ``Group 2`` next.
+    """
+
+    slot_count = max(0, int(comparison_slots))
+    population = _strip_group_count_suffix(str(population_label or "")).strip()
+    if not population:
+        population = DEFAULT_PREVIEW_POPULATION_LABEL
+    population_settings = {"aliases": list(DEFAULT_POPULATION_ALIASES) + [population]}
+    comparison_labels: list[str] = []
+    seen: set[str] = set()
+    if isinstance(group_names, Sequence) and not isinstance(group_names, (str, bytes)):
+        for raw_label in group_names:
+            label = _strip_group_count_suffix(str(raw_label or "")).strip()
+            if not label or _is_population_label_for_options(label, population_settings):
+                continue
+            key = _normalize_label_key(label)
+            if key in seen:
+                continue
+            seen.add(key)
+            comparison_labels.append(label)
+            if len(comparison_labels) >= slot_count:
+                break
+    placeholder_index = len(comparison_labels) + 1
+    while len(comparison_labels) < slot_count:
+        label = f"Group {placeholder_index}"
+        placeholder_index += 1
+        key = _normalize_label_key(label)
+        if key in seen:
+            continue
+        seen.add(key)
+        comparison_labels.append(label)
+    return (population, *comparison_labels)
+
+
+def dashboard_visual_group_names_from_grouping_frame(
+    frame: Any,
+    *,
+    group_column: str = "GROUP",
+    default_group: str = DEFAULT_PREVIEW_POPULATION_LABEL,
+) -> tuple[str, ...]:
+    """Extract stable non-population group names from a grouping dataframe-like object."""
+
+    if frame is None or not hasattr(frame, "columns") or group_column not in frame.columns:
+        return ()
+    try:
+        raw_values = frame[group_column].tolist()
+    except (AttributeError, KeyError, TypeError):
+        return ()
+    population_settings = {"aliases": list(DEFAULT_POPULATION_ALIASES) + [default_group]}
+    labels: list[str] = []
+    seen: set[str] = set()
+    for raw_value in raw_values:
+        label = _strip_group_count_suffix(str(raw_value or "")).strip()
+        if not label or _is_population_label_for_options(label, population_settings):
+            continue
+        key = _normalize_label_key(label)
+        if key in seen:
+            continue
+        seen.add(key)
+        labels.append(label)
+    return tuple(labels)
+
+
 def _strip_group_count_suffix(label: str) -> str:
     stripped = _GROUP_COUNT_SUFFIX_PATTERN.sub("", str(label or "").strip()).strip()
     return stripped or str(label or "").strip()
@@ -833,21 +907,23 @@ def build_dashboard_visual_preview_spec(
     settings: Any,
     *,
     chart_type: str = "histogram",
+    preview_group_names: Sequence[str] | None = None,
 ) -> dict[str, Any] | None:
     """Build a Plotly preview spec from deterministic sample data."""
 
     normalized = normalize_dashboard_visual_settings(settings)
-    plotly_settings = dashboard_visual_settings_to_plotly_settings(normalized)
+    plotly_settings = _dashboard_visual_preview_plotly_settings(normalized)
     chart_type = _choice(chart_type, DASHBOARD_VISUAL_CHART_TYPES, "histogram")
+    labels = dashboard_visual_preview_labels(preview_group_names)
     if chart_type == "scatter":
-        return _scatter_preview_spec(plotly_settings)
+        return _scatter_preview_spec(plotly_settings, labels=labels)
 
     from modules.hexafe_plotstats_adapter import (
         build_dashboard_plotly_spec,
         metroliza_dashboard_plotstats_theme,
     )
 
-    payload = _preview_payload(chart_type)
+    payload = _preview_payload(chart_type, labels=labels)
     if plotly_settings:
         payload["plotly_visual_settings"] = plotly_settings
     theme = metroliza_dashboard_plotstats_theme()
@@ -957,17 +1033,23 @@ def build_dashboard_visual_preview_png(
     settings: Any,
     *,
     chart_type: str = "histogram",
+    preview_group_names: Sequence[str] | None = None,
 ) -> bytes | None:
     """Render a lightweight PNG preview that reflects the current visual settings."""
 
     chart_type = _choice(chart_type, DASHBOARD_VISUAL_CHART_TYPES, "histogram")
-    spec = build_dashboard_visual_preview_spec(settings, chart_type=chart_type)
+    spec = build_dashboard_visual_preview_spec(
+        settings,
+        chart_type=chart_type,
+        preview_group_names=preview_group_names,
+    )
     image_bytes = _preview_plotly_spec_png(spec, chart_type=chart_type, settings=settings)
     if image_bytes:
         return image_bytes
 
-    payload = _preview_payload(chart_type)
-    low_level = dashboard_visual_settings_to_plotly_settings(settings)
+    labels = dashboard_visual_preview_labels(preview_group_names)
+    payload = _preview_payload(chart_type, labels=labels)
+    low_level = _dashboard_visual_preview_plotly_settings(settings)
     from modules.hexafe_plotstats_adapter import metroliza_dashboard_plotstats_theme, render_chart_artifact_png
 
     if low_level:
@@ -998,21 +1080,19 @@ def temporary_dashboard_visual_preview_html(spec: Mapping[str, Any]) -> Path:
     return path
 
 
-def _preview_payload(chart_type: str) -> dict[str, Any]:
-    labels = ["Group 1", "Group 2", "Group 3", "Group 4", "Population points"]
-    series = [
-        [6.10, 6.20, 6.23, 6.28, 6.32, 6.37, 6.41, 6.47],
-        [6.31, 6.38, 6.42, 6.48, 6.53, 6.57, 6.61, 6.66],
-        [6.52, 6.59, 6.63, 6.67, 6.71, 6.78, 6.82, 6.87],
-        [6.72, 6.77, 6.83, 6.88, 6.94, 6.99, 7.05, 7.10],
-        [6.18, 6.44, 6.70, 6.96, 7.12],
-    ]
+def _preview_payload(
+    chart_type: str,
+    *,
+    labels: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    preview_labels = list(dashboard_visual_preview_labels(labels))
+    series = _preview_series_values(len(preview_labels))
     limits = {"lsl": 6.0, "nominal": 6.55, "usl": 7.15}
     if chart_type == "scatter":
         x_values: list[float] = []
         y_values: list[float] = []
         point_labels: list[str] = []
-        for group_index, (label, values) in enumerate(zip(labels, series, strict=False)):
+        for group_index, (label, values) in enumerate(zip(preview_labels, series, strict=False)):
             for point_index, value in enumerate(values[:5], start=1):
                 x_values.append(float(point_index))
                 y_values.append(float(value + group_index * 0.02))
@@ -1034,7 +1114,7 @@ def _preview_payload(chart_type: str) -> dict[str, Any]:
             "title": "Dashboard visual preview",
             "groups": [
                 {"group": label, "values": values}
-                for label, values in zip(labels, series, strict=False)
+                for label, values in zip(preview_labels, series, strict=False)
             ],
             "limits": limits,
             "style": {"axis_label_x": "Measurement", "axis_label_y": "Frequency (%)"},
@@ -1044,7 +1124,7 @@ def _preview_payload(chart_type: str) -> dict[str, Any]:
             "type": "iqr",
             "render_mode": "iqr",
             "title": "Dashboard visual preview",
-            "labels": labels,
+            "labels": preview_labels,
             "series": series,
             "limits": limits,
             "x_label": "Groups",
@@ -1054,7 +1134,7 @@ def _preview_payload(chart_type: str) -> dict[str, Any]:
         "type": "distribution",
         "render_mode": "violin",
         "title": "Dashboard visual preview",
-        "labels": labels,
+        "labels": preview_labels,
         "series": series,
         "limits": limits,
         "x_label": "Groups",
@@ -1062,14 +1142,18 @@ def _preview_payload(chart_type: str) -> dict[str, Any]:
     }
 
 
-def _scatter_preview_spec(plotly_settings: Mapping[str, Any]) -> dict[str, Any]:
+def _scatter_preview_spec(
+    plotly_settings: Mapping[str, Any],
+    *,
+    labels: Sequence[str] | None = None,
+) -> dict[str, Any]:
     from modules.hexafe_plotstats_adapter import metroliza_dashboard_plotstats_theme
 
-    labels = ["Group 1", "Group 2", "Group 3", "Group 4", "Population points"]
+    preview_labels = list(dashboard_visual_preview_labels(labels))
     theme = metroliza_dashboard_plotstats_theme()
-    palette = dashboard_visual_swatch_palette({"preset": "distinct"}, count=len(labels))
+    palette = dashboard_visual_swatch_palette({"preset": "distinct"}, count=len(preview_labels))
     traces = []
-    for index, label in enumerate(labels):
+    for index, label in enumerate(preview_labels):
         x_values = [1, 2, 3, 4, 5]
         offset = index * 0.18
         y_values = [6.1 + offset, 6.18 + offset, 6.14 + offset, 6.28 + offset, 6.35 + offset]
@@ -1102,6 +1186,33 @@ def _scatter_preview_spec(plotly_settings: Mapping[str, Any]) -> dict[str, Any]:
     if plotly_settings:
         apply_dashboard_visual_settings(spec, visual_settings=plotly_settings)
     return spec
+
+
+def _dashboard_visual_preview_plotly_settings(settings: Any) -> dict[str, Any]:
+    normalized = normalize_dashboard_visual_settings(settings)
+    plotly_settings = dashboard_visual_settings_to_plotly_settings(normalized)
+    if plotly_settings:
+        return plotly_settings
+    preview_settings = copy.deepcopy(normalized)
+    preview_settings["preset"] = "custom"
+    preview_settings["recipe"] = normalized.get("recipe") or "auto"
+    return dashboard_visual_settings_to_plotly_settings(preview_settings)
+
+
+def _preview_series_values(count: int) -> list[list[float]]:
+    samples = [
+        [6.05, 6.13, 6.18, 6.22, 6.30, 6.37, 6.44, 6.52, 6.59, 6.66, 6.74, 6.81, 6.89, 6.96, 7.04, 7.12],
+        [6.10, 6.20, 6.23, 6.28, 6.32, 6.37, 6.41, 6.47],
+        [6.31, 6.38, 6.42, 6.48, 6.53, 6.57, 6.61, 6.66],
+        [6.52, 6.59, 6.63, 6.67, 6.71, 6.78, 6.82, 6.87],
+        [6.72, 6.77, 6.83, 6.88, 6.94, 6.99, 7.05, 7.10],
+    ]
+    values: list[list[float]] = []
+    for index in range(max(0, int(count))):
+        source = samples[index] if index < len(samples) else samples[-1]
+        offset = max(0, index - len(samples) + 1) * 0.12
+        values.append([float(value + offset) for value in source])
+    return values
 
 
 def _resolved_palette(settings: Mapping[str, Any], *, count: int) -> list[str]:
@@ -2378,6 +2489,8 @@ __all__ = [
     "dashboard_visual_effective_series_styles",
     "dashboard_visual_color_source",
     "dashboard_visual_palette_presets",
+    "dashboard_visual_group_names_from_grouping_frame",
+    "dashboard_visual_preview_labels",
     "dashboard_visual_recipe_choices",
     "dashboard_visual_recipe_settings",
     "dashboard_visual_resolved_palette_info",

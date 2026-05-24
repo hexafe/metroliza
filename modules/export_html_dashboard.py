@@ -30,6 +30,7 @@ from modules.dashboard_html_controls import (
 )
 from modules.distribution_iqr_plotly_specs import build_distribution_iqr_plotly_spec
 from modules.dashboard_plotly_visuals import apply_dashboard_visual_settings
+from modules.dashboard_visual_options import dashboard_visual_preview_labels
 from modules.export_summary_utils import resolve_histogram_bin_count
 from modules.hexafe_plotstats_adapter import (
     build_plotstats_dashboard_spec,
@@ -2620,6 +2621,69 @@ def _drop_plotly_specs(sections: list[dict[str, Any]], group_analysis: dict[str,
             chart.pop("plotly_spec", None)
 
 
+def _dashboard_visual_preview_labels_from_manifest(
+    sections: list[dict[str, Any]],
+    group_analysis: dict[str, Any],
+) -> tuple[str, ...]:
+    labels: list[str] = []
+    seen: set[str] = set()
+    for section in sections:
+        for chart in section.get("charts") or []:
+            if not isinstance(chart, dict):
+                continue
+            payload_summary = chart.get("payload_summary")
+            if not isinstance(payload_summary, dict):
+                continue
+            for label in payload_summary.get("label_preview") or []:
+                key = _strip_group_count_suffix(str(label or "")).casefold()
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                labels.append(str(label))
+    for spec in _iter_plotly_specs(sections, group_analysis):
+        for variant in _plotly_spec_variants(spec):
+            for label in _series_labels_from_plotly_spec(variant):
+                key = _strip_group_count_suffix(label).casefold()
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                labels.append(label)
+    return dashboard_visual_preview_labels(labels)
+
+
+def _plotly_spec_variants(spec: Any) -> list[dict[str, Any]]:
+    if not isinstance(spec, dict):
+        return []
+    if isinstance(spec.get("data"), list):
+        return [spec]
+    variants: list[dict[str, Any]] = []
+    for key in ("light", "dark"):
+        variant = spec.get(key)
+        if isinstance(variant, dict) and isinstance(variant.get("data"), list):
+            variants.append(variant)
+    return variants
+
+
+def _series_labels_from_plotly_spec(spec: dict[str, Any]) -> list[str]:
+    labels: list[str] = []
+    generic = {"frequency", "histogram", "measurements", "trend"}
+    for trace in spec.get("data") or []:
+        if not isinstance(trace, dict):
+            continue
+        name = _strip_group_count_suffix(str(trace.get("name") or "").strip())
+        if not name or name.casefold() in generic:
+            continue
+        if name.split("=", 1)[0].strip().casefold() in {"lsl", "usl", "nominal"}:
+            continue
+        if re.match(r"^(?:\((.+?)\)\s*)?(Min|Q1|Median|Mean|Q3|Max)=", name, re.IGNORECASE):
+            continue
+        trace_type = str(trace.get("type") or "").casefold()
+        mode = str(trace.get("mode") or "").casefold()
+        if trace_type in {"bar", "histogram", "box", "violin"} or "markers" in mode:
+            labels.append(name)
+    return labels
+
+
 def _render_dashboard_html(
     manifest: dict[str, Any],
     *,
@@ -2659,9 +2723,20 @@ def _render_dashboard_html(
         include_visuals=interactive_plotly_available
     )
     dashboard_controls_css = render_dashboard_controls_css()
-    visual_dialog_markup = render_dashboard_visual_dialog() if interactive_plotly_available else ""
+    visual_preview_labels = _dashboard_visual_preview_labels_from_manifest(
+        sections,
+        group_analysis,
+    )
+    visual_dialog_markup = (
+        render_dashboard_visual_dialog(preview_labels=visual_preview_labels)
+        if interactive_plotly_available
+        else ""
+    )
     visual_runtime_js = (
-        render_dashboard_visual_runtime_js(initial_settings=dashboard_visual_settings)
+        render_dashboard_visual_runtime_js(
+            initial_settings=dashboard_visual_settings,
+            preview_labels=visual_preview_labels,
+        )
         if interactive_plotly_available
         else ""
     )

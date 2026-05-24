@@ -70,7 +70,7 @@ def test_dashboard_visual_dialog_uses_live_recipe_and_group_color_chips() -> Non
     assert "Executive report" in dialog_html
     assert "Dense group scan" in dialog_html
     assert "Group 1" in dialog_html
-    assert "Population" in dialog_html
+    assert "POPULATION" in dialog_html
     assert 'id="dashboard-visual-customize-open"' in dialog_html
     assert 'id="dashboard-visual-customize" class="visual-customize" hidden' in dialog_html
     assert "Palette" in dialog_html
@@ -83,6 +83,20 @@ def test_dashboard_visual_dialog_uses_live_recipe_and_group_color_chips() -> Non
     assert "dashboard-visual-element-outline-color-mode" in dialog_html
     assert '<option value="when_similar" selected>When similar</option>' in dialog_html
     assert 'id="dashboard-visual-apply"' not in dialog_html
+
+
+def test_dashboard_visual_dialog_and_runtime_embed_real_preview_labels() -> None:
+    labels = ("DUPA", "TEST123")
+    dialog_html = render_dashboard_visual_dialog(preview_labels=labels)
+    config = json.loads(dashboard_visual_runtime_config_json(preview_labels=labels))
+    runtime_js = render_dashboard_visual_runtime_js(preview_labels=labels)
+
+    assert config["previewLabels"] == ["POPULATION", "DUPA", "TEST123", "Group 3", "Group 4"]
+    assert "DUPA" in dialog_html
+    assert "TEST123" in dialog_html
+    assert '"previewLabels":["POPULATION","DUPA","TEST123","Group 3","Group 4"]' in runtime_js
+    assert "const orderSeriesTargetsPopulationFirst" in runtime_js
+    assert "paletteIndexForPreviewLabel(" in runtime_js
 
 
 def test_dashboard_visual_dialog_pairs_ranges_with_number_readouts() -> None:

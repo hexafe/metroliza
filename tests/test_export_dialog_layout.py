@@ -244,9 +244,10 @@ class TestExportDialogLayout(unittest.TestCase):
             calls = {}
 
             class FakeDashboardVisualOptionsDialog:
-                def __init__(self, parent=None, *, settings=None):
+                def __init__(self, parent=None, *, settings=None, preview_group_names=None):
                     calls["parent_is_dialog"] = isinstance(parent, ExportDialog)
                     calls["settings"] = settings
+                    calls["preview_group_names"] = preview_group_names
 
                 def exec(self):
                     calls["exec_called"] = True
@@ -273,6 +274,7 @@ class TestExportDialogLayout(unittest.TestCase):
                 "html_checked": dialog.generate_html_dashboard_checkbox.isChecked(),
                 "exec_called": calls.get("exec_called", False),
                 "parent_is_dialog": calls.get("parent_is_dialog", False),
+                "preview_group_names": calls.get("preview_group_names"),
                 "settings_preset": dialog.dashboard_visual_settings["preset"],
             }, sort_keys=True))
             dialog.close()
@@ -285,6 +287,7 @@ class TestExportDialogLayout(unittest.TestCase):
         self.assertTrue(payload["html_checked"])
         self.assertTrue(payload["exec_called"])
         self.assertTrue(payload["parent_is_dialog"])
+        self.assertEqual(payload["preview_group_names"], [])
         self.assertEqual(payload["settings_preset"], "distinct")
 
 

@@ -479,20 +479,39 @@ class _FakeButton:
 
 
 class TestDataGroupingGroupLabels(unittest.TestCase):
-    def test_group_display_label_contains_count(self):
-        self.assertEqual(DataGrouping._group_display_label('Group A', 3), 'Group A (n=3)')
+    def test_group_display_label_indexes_non_default_groups(self):
+        self.assertEqual(
+            DataGrouping._group_display_label(
+                'Group A',
+                3,
+                display_index=2,
+                default_group='POPULATION',
+            ),
+            'Group A [2] (n=3)',
+        )
+
+    def test_group_display_label_keeps_default_group_unnumbered(self):
+        self.assertEqual(
+            DataGrouping._group_display_label(
+                'POPULATION',
+                3,
+                display_index=1,
+                default_group='POPULATION',
+            ),
+            'POPULATION (n=3)',
+        )
 
     def test_selected_group_name_prefers_user_role(self):
         dialog = DataGrouping.__new__(DataGrouping)
-        dialog._group_display_to_name = {'Sales (n=2)': 'Sales'}
-        dialog.groups_list = _FakeListWidget([_FakeListItem(text='Sales (n=2)', user_role='Sales')])
+        dialog._group_display_to_name = {'Sales [1] (n=2)': 'Sales'}
+        dialog.groups_list = _FakeListWidget([_FakeListItem(text='Sales [1] (n=2)', user_role='Sales')])
 
         self.assertEqual(dialog._selected_group_name(), 'Sales')
 
     def test_selected_group_name_falls_back_to_display_mapping(self):
         dialog = DataGrouping.__new__(DataGrouping)
-        dialog._group_display_to_name = {'Ops Team (n=1)': 'Ops Team'}
-        dialog.groups_list = _FakeListWidget([_FakeListItem(text='Ops Team (n=1)', user_role=None)])
+        dialog._group_display_to_name = {'Ops Team [1] (n=1)': 'Ops Team'}
+        dialog.groups_list = _FakeListWidget([_FakeListItem(text='Ops Team [1] (n=1)', user_role=None)])
 
         self.assertEqual(dialog._selected_group_name(), 'Ops Team')
 
@@ -508,8 +527,8 @@ class TestDataGroupingGroupLabels(unittest.TestCase):
                 'GROUP_COLOR': ['#ABCDEF', '#FFFFFF'],
             }
         )
-        dialog._group_display_to_name = {'Ops Team (n=1)': 'Ops Team'}
-        dialog.groups_list = _FakeListWidget([_FakeListItem(text='Ops Team (n=1)', user_role='Ops Team')])
+        dialog._group_display_to_name = {'Ops Team [1] (n=1)': 'Ops Team'}
+        dialog.groups_list = _FakeListWidget([_FakeListItem(text='Ops Team [1] (n=1)', user_role='Ops Team')])
         dialog._selected_group_name = lambda: 'Ops Team'
         dialog.populate_list_widgets = lambda: None
         dialog.remove_from_group_button = _FakeButton()
@@ -646,7 +665,7 @@ class TestDataGroupingGroupLabels(unittest.TestCase):
     def test_on_group_selection_changed_enables_rename_and_delete_for_non_default_group(self):
         dialog = DataGrouping.__new__(DataGrouping)
         dialog.default_group = 'POPULATION'
-        dialog.groups_list = _FakeListWidget([_FakeListItem(text='Ops Team (n=1)', user_role='Ops Team')])
+        dialog.groups_list = _FakeListWidget([_FakeListItem(text='Ops Team [1] (n=1)', user_role='Ops Team')])
         dialog.part_group_list = _FakeListWidget([_FakeListItem(text='P1')])
         dialog.rename_group_button = _FakeButton()
         dialog.delete_group_button = _FakeButton()
@@ -665,7 +684,7 @@ class TestDataGroupingGroupLabels(unittest.TestCase):
 
         dialog = DataGrouping.__new__(DataGrouping)
         dialog._list_selection_utils = ListSelectionUtils()
-        dialog.groups_list = _FakeListWidget([_FakeListItem(text='Fancy Label (n=4)', user_role='CanonicalGroup')])
+        dialog.groups_list = _FakeListWidget([_FakeListItem(text='Fancy Label [1] (n=4)', user_role='CanonicalGroup')])
 
         dialog.search_list_widgets(dialog.groups_list, 'canonical')
 
@@ -1083,8 +1102,8 @@ class TestDataGroupingSelectionRetention(unittest.TestCase):
 
         self.assertEqual([item.text() for item in dialog.reference_list._items], ['REF-1 (n=1)'])
         self.assertEqual(
-            [item.text() for item in dialog.groups_list._items],
-            ['POPULATION (n=2)', 'Reviewed (n=1)'],
+            [(item.data(0), item.text()) for item in dialog.groups_list._items],
+            [('POPULATION', 'POPULATION (n=2)'), ('Reviewed', 'Reviewed [1] (n=1)')],
         )
         self.assertEqual(dialog.scope_filter_summary_label.value, 'Scope: 1 of 3 rows')
 

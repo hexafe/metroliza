@@ -15,6 +15,7 @@ from modules.dashboard_visual_options import (
     DASHBOARD_VISUAL_RECIPES,
     PRINT_DASHBOARD_PALETTE,
     dashboard_visual_palette_presets,
+    dashboard_visual_preview_labels,
     dashboard_visual_recipe_choices,
     dashboard_visual_recipe_settings,
     default_dashboard_visual_settings,
@@ -129,9 +130,13 @@ def render_dashboard_control_bar(*, include_visuals: bool) -> str:
     )
 
 
-def render_dashboard_visual_dialog() -> str:
+def render_dashboard_visual_dialog(
+    *,
+    preview_labels: list[str] | tuple[str, ...] | None = None,
+) -> str:
     """Return a compact visual settings dialog for saved Plotly dashboards."""
 
+    resolved_preview_labels = dashboard_visual_preview_labels(preview_labels)
     palette_preset_options = "".join(
         (
             f'<option value="{html.escape(key)}">{html.escape(str(meta.get("label") or key))}</option>'
@@ -183,7 +188,7 @@ def render_dashboard_visual_dialog() -> str:
             f'<span class="visual-color-chip-label">{html.escape(label)}</span>'
             "</button>"
         )
-        for index, label in enumerate(("Population points", "Group 1", "Group 2", "Group 3", "Group 4"))
+        for index, label in enumerate(resolved_preview_labels)
     )
     recipe_options = "".join(
         (
@@ -643,11 +648,16 @@ def _dashboard_visual_state_signature(settings: dict) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def dashboard_visual_runtime_config_json(initial_settings: dict | None = None) -> str:
+def dashboard_visual_runtime_config_json(
+    initial_settings: dict | None = None,
+    *,
+    preview_labels: list[str] | tuple[str, ...] | None = None,
+) -> str:
     """Return shared defaults as compact JSON for browser runtime."""
 
     normalized_initial_settings = normalize_dashboard_visual_settings(initial_settings)
     default_settings = default_dashboard_visual_settings()
+    resolved_preview_labels = dashboard_visual_preview_labels(preview_labels)
     return json.dumps(
         {
             "storageKey": DASHBOARD_VISUAL_STORAGE_KEY,
@@ -664,6 +674,7 @@ def dashboard_visual_runtime_config_json(initial_settings: dict | None = None) -
             "recipeIds": list(DASHBOARD_VISUAL_RECIPES),
             "defaultPalette": list(DEFAULT_DASHBOARD_PALETTE),
             "printPalette": list(PRINT_DASHBOARD_PALETTE),
+            "previewLabels": list(resolved_preview_labels),
             "palettePresets": {
                 key: {
                     "label": str(meta.get("label") or key),
@@ -684,11 +695,12 @@ def render_dashboard_visual_runtime_js(
     config_var: str = "dashboardVisualConfig",
     *,
     initial_settings: dict | None = None,
+    preview_labels: list[str] | tuple[str, ...] | None = None,
 ) -> str:
     """Return browser functions for applying dashboard visual settings to Plotly specs."""
 
     return f"""
-      const {config_var} = {dashboard_visual_runtime_config_json(initial_settings)};
+      const {config_var} = {dashboard_visual_runtime_config_json(initial_settings, preview_labels=preview_labels)};
       const visualStorageBaseKey = {config_var}.storageKey;
       const visualThemeStorageKey = {config_var}.themeStorageKey;
       let dashboardVisualState = null;
@@ -1189,7 +1201,9 @@ def render_dashboard_visual_runtime_js(
         }});
         return merged;
       }};
-      const visualPreviewLabels = ['Population points', 'Group 1', 'Group 2', 'Group 3', 'Group 4'];
+      const visualPreviewLabels = Array.isArray({config_var}.previewLabels) && {config_var}.previewLabels.length
+        ? {config_var}.previewLabels.slice()
+        : ['POPULATION', 'Group 1', 'Group 2', 'Group 3', 'Group 4'];
       const comparisonLabelsForPalette = (labels, population) => (
         (labels || []).filter((item) => !isPopulationLabel(item, population))
       );
@@ -1200,9 +1214,10 @@ def render_dashboard_visual_runtime_js(
         const comparisonIndex = comparisonLabels.findIndex((item) => normalizeLabelKey(item) === key);
         return comparisonIndex >= 0 ? comparisonIndex : fallbackIndex;
       }};
-      const paletteIndexForPreviewLabel = (label) => {{
+      const paletteIndexForPreviewLabel = (label, population = {{}}) => {{
         const key = normalizeLabelKey(label);
-        const index = ['Group 1', 'Group 2', 'Group 3', 'Group 4'].findIndex((item) => normalizeLabelKey(item) === key);
+        const comparisonLabels = comparisonLabelsForPalette(visualPreviewLabels, population);
+        const index = comparisonLabels.findIndex((item) => normalizeLabelKey(item) === key);
         return index >= 0 ? index : null;
       }};
       const previewLabelsPopulationFirst = (labels, population) => {{
@@ -2096,7 +2111,9 @@ def render_dashboard_visual_runtime_js(
           select.appendChild(option);
         }});
         select.value = current;
-        const seriesTargets = targets.filter((target) => target.role === 'series');
+        const seriesTargets = orderSeriesTargetsPopulationFirst(
+          targets.filter((target) => target.role === 'series')
+        );
         document.querySelectorAll('[data-visual-group-chip]').forEach((chip) => {{
           const index = Number(chip.getAttribute('data-visual-chip-index'));
           const label = chip.querySelector('.visual-color-chip-label');
@@ -2125,9 +2142,27 @@ def render_dashboard_visual_runtime_js(
         syncSelectedElementControls(null);
       }};
 
+      const orderSeriesTargetsPopulationFirst = (targets, state = dashboardVisualState) => {{
+        const population = state && state.population_baseline && typeof state.population_baseline === 'object'
+          ? state.population_baseline
+          : {{}};
+        return (targets || [])
+          .map((target, index) => ({{ target, index }}))
+          .sort((left, right) => {{
+            const leftLabel = left.target && (left.target.label || left.target.group || left.target.target);
+            const rightLabel = right.target && (right.target.label || right.target.group || right.target.target);
+            const leftPopulation = isPopulationLabel(leftLabel, population) ? 0 : 1;
+            const rightPopulation = isPopulationLabel(rightLabel, population) ? 0 : 1;
+            return leftPopulation - rightPopulation || left.index - right.index;
+          }})
+          .map((item) => item.target);
+      }};
+
       const selectVisualTargetByChipIndex = (index) => {{
         const targets = collectVisualTargets();
-        const seriesTargets = targets.filter((target) => target.role === 'series');
+        const seriesTargets = orderSeriesTargetsPopulationFirst(
+          targets.filter((target) => target.role === 'series')
+        );
         const target = seriesTargets[index] || targets[index] || null;
         if (target) applySelectedVisualTargetToControls(target);
       }};
@@ -2329,7 +2364,10 @@ def render_dashboard_visual_runtime_js(
             state.population_baseline = Object.assign({{}}, state.population_baseline || {{}}, populationStyle);
             delete state.series_overrides[overrideKey];
           }} else {{
-            const paletteIndex = paletteIndexForPreviewLabel(target.label || target.group);
+            const paletteIndex = paletteIndexForPreviewLabel(
+              target.label || target.group,
+              state.population_baseline || {{}}
+            );
             if (paletteIndex !== null && style.color) {{
               state.palette = resolvedVisualPalette(state, 6).slice();
               while (state.palette.length < 6) state.palette.push('#245a5a');

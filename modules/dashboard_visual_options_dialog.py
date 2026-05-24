@@ -41,6 +41,7 @@ from modules.dashboard_visual_options import (
     build_dashboard_visual_preview_spec,
     dashboard_visual_effective_series_styles,
     dashboard_visual_palette_presets,
+    dashboard_visual_preview_labels,
     dashboard_visual_recipe_choices,
     dashboard_visual_recipe_settings,
     dashboard_visual_settings_summary,
@@ -85,8 +86,8 @@ _CHART_ITEMS = (
     ("Scatter", "scatter"),
 )
 _DASH_ITEMS = (("Solid", "solid"), ("Dash", "dash"), ("Dot", "dot"), ("Dash-dot", "dashdot"))
-_PREVIEW_SERIES_LABELS = ("Population points", "Group 1", "Group 2", "Group 3", "Group 4")
-_PREVIEW_PALETTE_LABELS = ("Group 1", "Group 2", "Group 3", "Group 4")
+_PREVIEW_SERIES_LABELS = dashboard_visual_preview_labels()
+_PREVIEW_PALETTE_LABELS = _PREVIEW_SERIES_LABELS[1:]
 _GROUP_COUNT_SUFFIX_PATTERN = re.compile(r"\s*\(n\s*=\s*\d+\)\s*$", re.IGNORECASE)
 _MARKER_SYMBOL_ITEMS = tuple(
     (str(symbol).replace("-", " ").title(), symbol)
@@ -106,9 +107,12 @@ def _is_population_preview_label(label: str, population: Mapping[str, Any]) -> b
     return any(label_key == _preview_label_key(str(alias)) for alias in alias_values)
 
 
-def _preview_palette_index_for_label(label: str) -> int | None:
+def _preview_palette_index_for_label(
+    label: str,
+    palette_labels: tuple[str, ...] = _PREVIEW_PALETTE_LABELS,
+) -> int | None:
     label_key = _preview_label_key(label)
-    for index, preview_label in enumerate(_PREVIEW_PALETTE_LABELS):
+    for index, preview_label in enumerate(palette_labels):
         if label_key == _preview_label_key(preview_label):
             return index
     return None
@@ -137,6 +141,7 @@ class DashboardVisualOptionsDialog(QDialog):
         parent=None,
         *,
         settings: Mapping[str, Any] | None = None,
+        preview_group_names: Any = None,
         persist_on_accept: bool = True,
     ):
         super().__init__(parent)
@@ -148,6 +153,17 @@ class DashboardVisualOptionsDialog(QDialog):
         self._stat_line_overrides = dict(self._settings.get("stat_line_overrides") or {})
         self._population_baseline = dict(self._settings.get("population_baseline") or {})
         self._comparison_focus = dict(self._settings.get("comparison_focus") or {})
+        self._preview_group_names = (
+            (str(preview_group_names),)
+            if isinstance(preview_group_names, (str, bytes))
+            else tuple(preview_group_names or ())
+        )
+        self._preview_series_labels = dashboard_visual_preview_labels(self._preview_group_names)
+        self._preview_palette_labels = tuple(
+            label
+            for label in self._preview_series_labels
+            if not _is_population_preview_label(label, self._population_baseline)
+        )
         self._theme_library = load_dashboard_visual_theme_library()
         self._palette_presets = dashboard_visual_palette_presets()
         self._preview_targets: list[dict[str, Any]] = []
@@ -314,7 +330,7 @@ class DashboardVisualOptionsDialog(QDialog):
         preset_layout.addLayout(preset_form)
         preview_colors = QGridLayout()
         preview_colors.setContentsMargins(0, 0, 0, 0)
-        for index, label in enumerate(_PREVIEW_SERIES_LABELS):
+        for index, label in enumerate(self._preview_series_labels):
             chip = self._color_button(DEFAULT_DASHBOARD_PALETTE[index % len(DEFAULT_DASHBOARD_PALETTE)])
             chip.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             chip.clicked.connect(lambda _checked=False, index=index: self._select_preview_series(index))
@@ -665,7 +681,11 @@ class DashboardVisualOptionsDialog(QDialog):
         settings = self.visual_settings()
         chart_type = str(self.chart_type_combo.currentData() or "histogram")
         self.summary_label.setText(dashboard_visual_settings_summary(settings))
-        spec = build_dashboard_visual_preview_spec(settings, chart_type=chart_type)
+        spec = build_dashboard_visual_preview_spec(
+            settings,
+            chart_type=chart_type,
+            preview_group_names=self._preview_group_names,
+        )
         self._preview_targets = self._extract_visual_targets(spec)
         if self._selected_target:
             selected_id = self._selected_target.get("target")
@@ -686,7 +706,11 @@ class DashboardVisualOptionsDialog(QDialog):
                 ),
                 QUrl("about:blank"),
             )
-        image_bytes = build_dashboard_visual_preview_png(settings, chart_type=chart_type)
+        image_bytes = build_dashboard_visual_preview_png(
+            settings,
+            chart_type=chart_type,
+            preview_group_names=self._preview_group_names,
+        )
         if image_bytes:
             pixmap = QPixmap()
             if pixmap.loadFromData(image_bytes):
@@ -721,10 +745,13 @@ class DashboardVisualOptionsDialog(QDialog):
         recipe = str(settings.get("recipe") or settings.get("preset") or "auto")
         is_auto = recipe == "auto"
         is_custom = recipe == "custom"
-        palette = dashboard_visual_swatch_palette(settings, count=max(6, len(_PREVIEW_PALETTE_LABELS)))
+        palette = dashboard_visual_swatch_palette(
+            settings,
+            count=max(6, len(self._preview_palette_labels)),
+        )
         preview_styles = dashboard_visual_effective_series_styles(
             settings,
-            labels=_PREVIEW_SERIES_LABELS,
+            labels=self._preview_series_labels,
             chart_type=str(self.chart_type_combo.currentData() or "grouped_histogram")
             if hasattr(self, "chart_type_combo")
             else "grouped_histogram",
@@ -737,7 +764,7 @@ class DashboardVisualOptionsDialog(QDialog):
         for index, button in enumerate(self._preview_color_buttons):
             style = preview_styles[index % len(preview_styles)]
             color = str(style.get("color") or palette[index % len(palette)])
-            label = str(style.get("label") or _PREVIEW_SERIES_LABELS[index])
+            label = str(style.get("label") or self._preview_series_labels[index])
             self._set_button_color(button, color)
             button.setToolTip(f"{label}: {color}")
         if not custom_swatches_enabled:
@@ -910,7 +937,7 @@ class DashboardVisualOptionsDialog(QDialog):
         base_settings = self.visual_settings()
         effective_palette = dashboard_visual_swatch_palette(
             base_settings,
-            count=max(6, len(_PREVIEW_SERIES_LABELS)),
+            count=max(6, len(self._preview_series_labels)),
         )
         settings = dashboard_visual_recipe_settings("custom", base=base_settings)
         settings["palette_preset"] = "custom"
@@ -1102,7 +1129,7 @@ class DashboardVisualOptionsDialog(QDialog):
         label: str,
         target: Mapping[str, Any],
     ) -> dict[str, Any]:
-        labels = list(_PREVIEW_SERIES_LABELS)
+        labels = list(self._preview_series_labels)
         if _preview_label_key(label) not in {_preview_label_key(item) for item in labels}:
             labels.append(label)
         styles = dashboard_visual_effective_series_styles(
@@ -1413,7 +1440,10 @@ class DashboardVisualOptionsDialog(QDialog):
                     self._population_baseline.update(population_style)
                     self._series_overrides.pop(key, None)
                 else:
-                    palette_index = _preview_palette_index_for_label(label)
+                    palette_index = _preview_palette_index_for_label(
+                        label,
+                        self._preview_palette_labels,
+                    )
                     if palette_index is not None and "color" in style:
                         self._set_button_color(self._palette_buttons[palette_index], str(style["color"]))
                         style = dict(style)

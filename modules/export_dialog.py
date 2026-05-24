@@ -21,6 +21,7 @@ from modules.export_preset_utils import (
     save_export_dialog_config,
 )
 from modules.dashboard_visual_options import (
+    dashboard_visual_group_names_from_grouping_frame,
     dashboard_visual_settings_summary,
     dashboard_visual_swatch_palette,
     load_dashboard_visual_settings,
@@ -1290,6 +1291,9 @@ class ExportDialog(QDialog):
             dialog = DashboardVisualOptionsDialog(
                 self,
                 settings=getattr(self, "dashboard_visual_settings", None),
+                preview_group_names=dashboard_visual_group_names_from_grouping_frame(
+                    getattr(self, "df_for_grouping", None)
+                ),
             )
             if dialog.exec():
                 self.dashboard_visual_settings = dialog.visual_settings()

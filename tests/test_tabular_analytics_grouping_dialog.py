@@ -482,7 +482,7 @@ def test_sqlite_grouping_dialog_uses_preview_rows_and_sparse_assignments(tmp_pat
             dialog.groups_list.item(index).text()
             for index in range(dialog.groups_list.count())
         }
-        assert group_labels == {"POPULATION (n=2)", "Line A (n=2)"}
+        assert group_labels == {"POPULATION (n=2)", "Line A [1] (n=2)"}
 
         b_item = _item_for_data(dialog.selector_list, ("B",))
         dialog.selector_list.setCurrentItem(b_item)
@@ -499,7 +499,7 @@ def test_sqlite_grouping_dialog_uses_preview_rows_and_sparse_assignments(tmp_pat
             dialog.groups_list.item(index).text()
             for index in range(dialog.groups_list.count())
         }
-        assert group_labels == {"Line A (n=2)", "Line B (n=2)"}
+        assert group_labels == {"Line A [1] (n=2)", "Line B [2] (n=2)"}
 
         materialized = dialog._materialize_grouping_dataframe()
         assert materialized["REPORT_ID"].tolist() == [1, 2, 3, 4]
@@ -684,7 +684,7 @@ def test_sqlite_source_filters_do_not_narrow_group_counts(tmp_path) -> None:
             for index in range(dialog.groups_list.count())
         }
 
-        assert group_labels == {"POPULATION (n=2)", "Line B (n=2)"}
+        assert group_labels == {"POPULATION (n=2)", "Line B [1] (n=2)"}
     finally:
         dialog.close()
         cleanup_tabular_load_result(loaded)
@@ -860,7 +860,7 @@ def test_sqlite_assign_filtered_rows_defers_row_id_expansion_until_materializati
             dialog.groups_list.item(index).text()
             for index in range(dialog.groups_list.count())
         }
-        assert group_labels == {"POPULATION (n=1)", "Matches (n=3)"}
+        assert group_labels == {"POPULATION (n=1)", "Matches [1] (n=3)"}
 
         materialized = dialog._materialize_grouping_dataframe()
         assert materialized["REPORT_ID"].tolist() == [1, 2, 4]
@@ -1651,17 +1651,21 @@ def test_population_group_is_hidden_when_all_rows_are_assigned() -> None:
         _select_selector_rows(dialog, 0, 2)
         dialog.create_group(initial_group_name="Fixture A")
         assert {
-            dialog.groups_list.item(index).text()
+            dialog.groups_list.item(index).data(Qt.ItemDataRole.UserRole): dialog.groups_list.item(
+                index
+            ).text()
             for index in range(dialog.groups_list.count())
-        } == {"POPULATION (n=1)", "Fixture A (n=2)"}
+        } == {"POPULATION": "POPULATION (n=1)", "Fixture A": "Fixture A [1] (n=2)"}
 
         _select_selector_rows(dialog, 2, 3)
         dialog.create_group(initial_group_name="Fixture B")
 
         assert {
-            dialog.groups_list.item(index).text()
+            dialog.groups_list.item(index).data(Qt.ItemDataRole.UserRole): dialog.groups_list.item(
+                index
+            ).text()
             for index in range(dialog.groups_list.count())
-        } == {"Fixture A (n=2)", "Fixture B (n=1)"}
+        } == {"Fixture A": "Fixture A [1] (n=2)", "Fixture B": "Fixture B [2] (n=1)"}
     finally:
         dialog.close()
 

@@ -30,6 +30,27 @@ from modules.industrial_analytics_state import (
 from tests.industrial_analytics_fixtures import seed_production_analytics_cache
 
 
+def test_dashboard_visual_preview_labels_derive_from_industrial_chart_groups() -> None:
+    labels = dashboard_module._dashboard_visual_preview_labels_from_charts(
+        [
+            {
+                "group_labels": ["POPULATION", "DUPA", "TEST123"],
+                "plotly_spec": {
+                    "data": [
+                        {"type": "histogram", "name": "POPULATION"},
+                        {"type": "histogram", "name": "DUPA"},
+                        {"type": "histogram", "name": "TEST123"},
+                        {"type": "scatter", "mode": "lines", "name": "(DUPA) Mean=6.5"},
+                    ],
+                    "layout": {},
+                },
+            }
+        ]
+    )
+
+    assert labels == ("POPULATION", "DUPA", "TEST123", "Group 3", "Group 4")
+
+
 def _production_dashboard_fixture(tmp_path):
     db_path = str(tmp_path / "production_only.db")
     seed_production_analytics_cache(db_path)

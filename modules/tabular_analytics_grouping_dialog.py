@@ -2153,13 +2153,19 @@ class TabularAnalyticsGroupingDialog(QDialog):
         if not group_counts:
             group_counts[self.default_group] = 0
         self._last_group_counts = {str(group): int(count) for group, count in group_counts.items()}
+        non_default_group_index = 0
         for group_name, count in sorted(group_counts.items(), key=lambda item: (item[0] != self.default_group, str(item[0]))):
-            label = f"{group_name} (n={int(count)})"
+            group_name = str(group_name)
+            if group_name == self.default_group:
+                label = f"{group_name} (n={int(count)})"
+            else:
+                non_default_group_index += 1
+                label = f"{group_name} [{non_default_group_index}] (n={int(count)})"
             item = QListWidgetItem(label)
-            item.setData(Qt.ItemDataRole.UserRole, str(group_name))
-            self._apply_item_color(item, self._group_color_for_group(str(group_name)))
+            item.setData(Qt.ItemDataRole.UserRole, group_name)
+            self._apply_item_color(item, self._group_color_for_group(group_name))
             self.groups_list.addItem(item)
-            if preferred_group == str(group_name):
+            if preferred_group == group_name:
                 item.setSelected(True)
                 self.groups_list.setCurrentItem(item)
         if self.groups_list.currentItem() is None and self.groups_list.count():

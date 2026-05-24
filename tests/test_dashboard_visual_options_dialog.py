@@ -10,6 +10,13 @@ except Exception as exc:  # pragma: no cover - depends on optional Qt runtime.
 else:
     PYQT_IMPORT_ERROR = None
 
+try:
+    import modules.dashboard_visual_options_dialog as _DIALOG_MODULE  # noqa: F401
+except Exception as exc:  # pragma: no cover - depends on optional Qt runtime.
+    DIALOG_IMPORT_ERROR = exc
+else:
+    DIALOG_IMPORT_ERROR = None
+
 
 _APP = None
 
@@ -18,6 +25,8 @@ def _qapp():
     global _APP
     if QApplication is None:
         pytest.skip(f"PyQt6 is unavailable in this environment: {PYQT_IMPORT_ERROR}")
+    if DIALOG_IMPORT_ERROR is not None:
+        pytest.skip(f"Dashboard visual dialog is unavailable: {DIALOG_IMPORT_ERROR}")
     _APP = QApplication.instance() or _APP or QApplication([])
     return _APP
 
@@ -26,7 +35,7 @@ def _stub_preview_builders(monkeypatch, dialog_module, captured_settings: list[d
     monkeypatch.setattr(
         dialog_module,
         "build_dashboard_visual_preview_spec",
-        lambda settings, *, chart_type: {"data": [], "layout": {}, "config": {}},
+        lambda settings, *, chart_type, **_kwargs: {"data": [], "layout": {}, "config": {}},
     )
     monkeypatch.setattr(
         dialog_module,
@@ -34,7 +43,7 @@ def _stub_preview_builders(monkeypatch, dialog_module, captured_settings: list[d
         lambda _spec, **_kwargs: "",
     )
 
-    def fake_preview_png(settings, *, chart_type):
+    def fake_preview_png(settings, *, chart_type, **_kwargs):
         if captured_settings is not None:
             captured_settings.append(settings)
         return None
@@ -56,7 +65,8 @@ def test_dashboard_visual_dialog_preview_uses_current_palette_color(monkeypatch)
     monkeypatch.setattr(
         dialog_module,
         "build_dashboard_visual_preview_png",
-        lambda settings, *, chart_type: captured_palette.append(settings["palette"][0]) or None,
+        lambda settings, *, chart_type, **_kwargs: captured_palette.append(settings["palette"][0])
+        or None,
     )
     dialog = dialog_module.DashboardVisualOptionsDialog(
         settings={
@@ -111,6 +121,35 @@ def test_dashboard_visual_dialog_preserves_per_reference_widths_when_unchanged(m
         assert settings["reference_lines"]["lsl"]["width"] == 2.0
         assert settings["reference_lines"]["usl"]["width"] == 2.0
         assert settings["reference_lines"]["nominal"]["width"] == 2.0
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+
+
+def test_dashboard_visual_dialog_uses_real_preview_group_names(monkeypatch) -> None:
+    _qapp()
+    try:
+        from PyQt6.QtCore import Qt  # noqa: F401
+    except Exception as exc:
+        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
+    import modules.dashboard_visual_options_dialog as dialog_module
+
+    _stub_preview_builders(monkeypatch, dialog_module)
+    dialog = dialog_module.DashboardVisualOptionsDialog(
+        preview_group_names=("DUPA", "TEST123"),
+        persist_on_accept=False,
+    )
+    try:
+        dialog._preview_timer.stop()
+        assert dialog._preview_series_labels == (
+            "POPULATION",
+            "DUPA",
+            "TEST123",
+            "Group 3",
+            "Group 4",
+        )
+        assert "DUPA" in dialog._preview_color_buttons[1].toolTip()
+        assert "TEST123" in dialog._preview_color_buttons[2].toolTip()
     finally:
         dialog.close()
         dialog.deleteLater()
@@ -210,7 +249,7 @@ def test_dashboard_visual_dialog_recipe_refreshes_selected_element_controls(monk
             style
             for style in dialog_module.dashboard_visual_effective_series_styles(
                 dialog.visual_settings(),
-                labels=dialog_module._PREVIEW_SERIES_LABELS,
+                labels=dialog._preview_series_labels,
                 chart_type="grouped_histogram",
             )
             if style["label"] == "Group 1"
@@ -311,9 +350,9 @@ def test_dashboard_visual_dialog_population_color_edit_updates_baseline_not_pale
         dialog._preview_timer.stop()
         original_palette = [button.property("color") for button in dialog._palette_buttons]
         dialog._selected_target = {
-            "target": "series:population points",
+            "target": "series:population",
             "role": "series",
-            "label": "Population points",
+            "label": "POPULATION",
             "chart_kind": "scatter",
             "capabilities": ["color", "opacity", "marker_size", "marker_symbol"],
             "style": {"color": "#8a949e", "opacity": 0.32, "marker_size": 4.5},
@@ -331,7 +370,7 @@ def test_dashboard_visual_dialog_population_color_edit_updates_baseline_not_pale
         assert settings["population_baseline"]["draw_first"] is True
         assert [button.property("color") for button in dialog._palette_buttons] == original_palette
         assert dialog._preview_color_buttons[0].property("color") == "#aabbcc"
-        assert "population points" not in settings["series_overrides"]
+        assert "population" not in settings["series_overrides"]
     finally:
         dialog.close()
         dialog.deleteLater()
@@ -376,7 +415,7 @@ def test_dashboard_visual_dialog_group_edit_keeps_population_first_in_histogram(
             for trace in spec["data"]
             if trace.get("meta", {}).get("dashboard_visual_role") == "series"
         ]
-        assert series_traces[0]["name"] == "Population points"
+        assert series_traces[0]["name"] == "POPULATION"
         assert series_traces[0]["marker"]["color"] == "#8a949e"
         assert next(trace for trace in series_traces if trace["name"] == "Group 1")[
             "marker"
@@ -541,7 +580,7 @@ def test_dashboard_visual_dialog_static_preview_rescales_existing_pixmap(monkeyp
     monkeypatch.setattr(
         dialog_module,
         "build_dashboard_visual_preview_png",
-        lambda _settings, *, chart_type: png_bytes,
+        lambda _settings, *, chart_type, **_kwargs: png_bytes,
     )
     dialog = dialog_module.DashboardVisualOptionsDialog(persist_on_accept=False)
     try:

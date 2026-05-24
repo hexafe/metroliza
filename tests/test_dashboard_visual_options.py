@@ -20,6 +20,8 @@ from modules.dashboard_visual_options import (
     dashboard_visual_color_source,
     dashboard_visual_effective_series_styles,
     dashboard_visual_palette_presets,
+    dashboard_visual_preview_labels,
+    dashboard_visual_recipe_choices,
     dashboard_visual_recipe_settings,
     dashboard_visual_resolved_palette_info,
     dashboard_visual_settings_to_plotly_settings,
@@ -307,7 +309,41 @@ def test_dashboard_visual_preview_spec_uses_sample_groups_and_population() -> No
     trace_names = {str(trace.get("name") or "") for trace in spec["data"]}
     assert any("Group 1" in name for name in trace_names)
     assert any("Group 4" in name for name in trace_names)
-    assert any("Population points" in name for name in trace_names)
+    assert any("POPULATION" in name for name in trace_names)
+
+
+def test_dashboard_visual_preview_labels_use_real_groups_and_fill_slots() -> None:
+    assert dashboard_visual_preview_labels(["GRP1"]) == (
+        "POPULATION",
+        "GRP1",
+        "Group 2",
+        "Group 3",
+        "Group 4",
+    )
+    assert dashboard_visual_preview_labels(["DUPA", "TEST123"]) == (
+        "POPULATION",
+        "DUPA",
+        "TEST123",
+        "Group 3",
+        "Group 4",
+    )
+
+
+def test_dashboard_visual_preview_specs_are_population_first_for_all_recipes() -> None:
+    for _label, recipe_id in dashboard_visual_recipe_choices():
+        for chart_type in ("histogram", "violin", "iqr", "scatter"):
+            spec = build_dashboard_visual_preview_spec(
+                {"recipe": recipe_id},
+                chart_type=chart_type,
+            )
+            assert spec is not None
+            series = [
+                trace
+                for trace in spec["data"]
+                if trace.get("meta", {}).get("dashboard_visual_role") == "series"
+            ]
+            assert series, f"{recipe_id} {chart_type}"
+            assert str(series[0]["name"]).startswith("POPULATION"), f"{recipe_id} {chart_type}"
 
 
 def test_dashboard_visual_preview_applies_custom_palette_to_plotly_spec() -> None:
@@ -327,7 +363,7 @@ def test_dashboard_visual_preview_applies_custom_palette_to_plotly_spec() -> Non
         for trace in spec["data"]
         if trace.get("meta", {}).get("dashboard_visual_role") == "series"
     ]
-    assert series_traces[0]["name"] == "Population points"
+    assert series_traces[0]["name"] == "POPULATION"
     assert series_traces[0]["marker"]["color"] == "#8a949e"
     group_1 = next(trace for trace in series_traces if trace["name"] == "Group 1")
     group_2 = next(trace for trace in series_traces if trace["name"] == "Group 2")
@@ -932,7 +968,7 @@ def test_dashboard_visual_population_stays_first_with_custom_series_override() -
         for trace in spec["data"]
         if trace.get("meta", {}).get("dashboard_visual_role") == "series"
     ]
-    assert series_traces[0]["name"] == "Population points"
+    assert series_traces[0]["name"] == "POPULATION"
     assert series_traces[0]["marker"]["color"] == "#8a949e"
     assert series_traces[0]["opacity"] == 0.32
     group_1 = next(trace for trace in series_traces if trace["name"] == "Group 1")
@@ -947,12 +983,12 @@ def test_dashboard_visual_effective_series_styles_order_population_before_palett
             "palette": ["#111111", "#222222", "#333333"],
             "series_overrides": {"Group 2": {"color": "#abcdef"}},
         },
-        labels=("Group 1", "Group 2", "Population points"),
+        labels=("Group 1", "Group 2", "POPULATION"),
         chart_type="grouped_histogram",
     )
 
     assert [(style["label"], style["color"], style["palette_index"]) for style in styles] == [
-        ("Population points", "#8a949e", None),
+        ("POPULATION", "#8a949e", None),
         ("Group 1", "#111111", 0),
         ("Group 2", "#abcdef", 1),
     ]

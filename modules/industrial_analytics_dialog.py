@@ -30,6 +30,7 @@ from PyQt6.QtWidgets import (
 
 from modules.contracts import IndustrialAnalyticsRequest, validate_industrial_analytics_request
 from modules.dashboard_visual_options import (
+    dashboard_visual_group_names_from_grouping_frame,
     dashboard_visual_settings_summary,
     dashboard_visual_swatch_palette,
     load_dashboard_visual_settings,
@@ -783,7 +784,13 @@ class IndustrialAnalyticsDialog(QDialog):
         try:
             from modules.dashboard_visual_options_dialog import DashboardVisualOptionsDialog
 
-            dialog = DashboardVisualOptionsDialog(self, settings=self.dashboard_visual_settings)
+            dialog = DashboardVisualOptionsDialog(
+                self,
+                settings=self.dashboard_visual_settings,
+                preview_group_names=dashboard_visual_group_names_from_grouping_frame(
+                    self.df_for_grouping if self.grouping_applied else None
+                ),
+            )
             if dialog.exec():
                 self.dashboard_visual_settings = dialog.visual_settings()
                 self._sync_dashboard_visual_controls()

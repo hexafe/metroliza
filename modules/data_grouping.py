@@ -971,7 +971,12 @@ class DataGrouping(QDialog):
         self._add_list_limit_marker(self.part_group_list, total_rows)
 
     @staticmethod
-    def _group_display_label(group_name, sample_size):
+    def _group_display_label(group_name, sample_size, *, display_index=None, default_group=None):
+        group_name = str(group_name)
+        if default_group is not None and group_name == str(default_group):
+            return f"{group_name} (n={sample_size})"
+        if display_index is not None:
+            return f"{group_name} [{int(display_index)}] (n={sample_size})"
         return f"{group_name} (n={sample_size})"
 
     @staticmethod
@@ -1103,9 +1108,19 @@ class DataGrouping(QDialog):
 
             group_names = list(map(str, unique_groups))
             self.groups_list.clear()
+            non_default_group_index = 0
             for group_name in group_names:
                 sample_size = int(group_row_index[group_row_index['GROUP'] == group_name]['GROUP_KEY'].nunique())
-                display_label = self._group_display_label(group_name, sample_size)
+                display_index = None
+                if group_name != self.default_group:
+                    non_default_group_index += 1
+                    display_index = non_default_group_index
+                display_label = self._group_display_label(
+                    group_name,
+                    sample_size,
+                    display_index=display_index,
+                    default_group=self.default_group,
+                )
                 item = QListWidgetItem(display_label)
                 item.setData(Qt.ItemDataRole.UserRole, group_name)
                 self._group_display_to_name[display_label] = group_name
