@@ -216,6 +216,27 @@ _PALETTE_PRESETS: dict[str, dict[str, Any]] = {
         ),
         "note": "Paired categorical colors for related groups.",
     },
+    "ibm_carbon": {
+        "label": "IBM Carbon categorical",
+        "kind": "categorical",
+        "colors": (
+            "#6929c4",
+            "#1192e8",
+            "#005d5d",
+            "#9f1853",
+            "#fa4d56",
+            "#570408",
+            "#198038",
+            "#002d9c",
+            "#ee538b",
+            "#b28600",
+            "#009d9a",
+            "#012749",
+            "#8a3800",
+            "#a56eff",
+        ),
+        "note": "Enterprise categorical sequence from IBM Carbon data visualization.",
+    },
     "viridis": {
         "label": "Viridis",
         "kind": "sequential",
@@ -261,21 +282,21 @@ _PALETTE_PRESETS: dict[str, dict[str, Any]] = {
 }
 DASHBOARD_VISUAL_PALETTE_PRESET_IDS = tuple(_PALETTE_PRESETS.keys()) + ("custom",)
 _PRESET_LABELS = {
-    "auto": "Default",
+    "auto": "Metroliza default",
     "distinct": "Distinct groups",
-    "print": "Print friendly",
+    "print": "Print mono",
     "custom": "Custom",
 }
 _RECIPE_LABELS = {
     **_PRESET_LABELS,
-    "professional_contrast": "Professional contrast",
-    "colorblind_distinct": "Colorblind distinct",
-    "high_color_groups": "High-color groups",
-    "toned_report": "Toned report",
-    "soft_pastel_review": "Soft pastel review",
-    "scientific_gradient": "Scientific gradient",
-    "diverging_nominal": "Diverging from nominal",
-    "highlight_gradient": "Highlight gradient",
+    "professional_contrast": "Corporate contrast",
+    "colorblind_distinct": "Accessible groups",
+    "high_color_groups": "Dense group scan",
+    "toned_report": "Executive report",
+    "soft_pastel_review": "Soft review",
+    "scientific_gradient": "Scientific sequential",
+    "diverging_nominal": "Nominal divergence",
+    "highlight_gradient": "Highlight story",
 }
 _VISIBLE_RECIPE_IDS = (
     "auto",
@@ -287,6 +308,7 @@ _VISIBLE_RECIPE_IDS = (
     "scientific_gradient",
     "diverging_nominal",
     "print",
+    "highlight_gradient",
     "custom",
 )
 _GROUP_COUNT_SUFFIX_PATTERN = re.compile(r"\s*\(n\s*=\s*\d+\)\s*$", re.IGNORECASE)
@@ -643,6 +665,13 @@ def normalize_dashboard_visual_settings(settings: Any) -> dict[str, Any]:
         minimum=2.0,
         maximum=18.0,
     )
+    if normalized["preset"] == "distinct":
+        normalized["palette_preset"] = "okabe_ito"
+        normalized["palette_mode"] = "fixed"
+    elif normalized["preset"] == "print":
+        normalized["palette_preset"] = "custom"
+        normalized["palette_mode"] = "fixed"
+        normalized["palette"] = list(PRINT_DASHBOARD_PALETTE)
     normalized["population_baseline"] = _normalize_population_baseline(
         settings.get("population_baseline") or defaults["population_baseline"]
     )
@@ -1127,7 +1156,7 @@ def _series_role_style_for_options(settings: Mapping[str, Any], chart_type: str)
     marker_size = _optional_bounded_float(settings.get("marker_size"), minimum=2.0, maximum=18.0)
     if marker_size is not None:
         style["marker_size"] = marker_size
-    marker_symbol = _choice(settings.get("marker_symbol"), _MARKER_SYMBOLS, "")
+    marker_symbol = _marker_symbol(settings.get("marker_symbol"), "")
     if marker_symbol:
         style["marker_symbol"] = marker_symbol
     outline_width = _optional_bounded_float(settings.get("outline_width"), minimum=0.0, maximum=6.0)
@@ -1458,7 +1487,7 @@ def _normalize_series_overrides(value: Any) -> dict[str, dict[str, Any]]:
         marker_size = _optional_bounded_float(raw_style.get("marker_size"), minimum=2.0, maximum=18.0)
         if marker_size is not None:
             style["marker_size"] = marker_size
-        marker_symbol = _choice(raw_style.get("marker_symbol"), _MARKER_SYMBOLS, "")
+        marker_symbol = _marker_symbol(raw_style.get("marker_symbol"), "")
         if marker_symbol:
             style["marker_symbol"] = marker_symbol
         pattern_shape = _choice(raw_style.get("pattern_shape"), _PATTERN_SHAPES, "")
@@ -1529,7 +1558,7 @@ def _normalize_population_baseline(value: Any) -> dict[str, Any]:
     marker_size = _optional_bounded_float(value.get("marker_size"), minimum=2.0, maximum=18.0)
     if marker_size is not None:
         normalized["marker_size"] = marker_size
-    marker_symbol = _choice(value.get("marker_symbol"), _MARKER_SYMBOLS, "")
+    marker_symbol = _marker_symbol(value.get("marker_symbol"), "")
     if marker_symbol:
         normalized["marker_symbol"] = marker_symbol
     outline_width = _optional_bounded_float(value.get("outline_width"), minimum=0.0, maximum=6.0)
@@ -1559,7 +1588,7 @@ def _normalize_comparison_focus(value: Any) -> dict[str, Any]:
     marker_size = _optional_bounded_float(value.get("marker_size"), minimum=2.0, maximum=18.0)
     if marker_size is not None:
         normalized["marker_size"] = marker_size
-    marker_symbol = _choice(value.get("marker_symbol"), _MARKER_SYMBOLS, "")
+    marker_symbol = _marker_symbol(value.get("marker_symbol"), "")
     if marker_symbol:
         normalized["marker_symbol"] = marker_symbol
     outline_width = _optional_bounded_float(value.get("outline_width"), minimum=0.0, maximum=6.0)
@@ -1641,6 +1670,13 @@ def _rgb_to_hex(red: int, green: int, blue: int) -> str:
 def _choice(value: Any, allowed: Sequence[str], fallback: str) -> str:
     normalized = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
     return normalized if normalized in allowed else fallback
+
+
+def _marker_symbol(value: Any, fallback: str) -> str:
+    """Return a Plotly marker symbol without losing hyphenated values."""
+
+    text = str(value or "").strip().lower().replace("_", "-").replace(" ", "-")
+    return text if text in _MARKER_SYMBOLS else fallback
 
 
 def _dash(value: Any, fallback: str) -> str:

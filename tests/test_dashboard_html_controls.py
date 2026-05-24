@@ -60,18 +60,20 @@ def test_dashboard_visual_runtime_supports_palettes_themes_and_element_selection
 def test_dashboard_visual_dialog_uses_live_recipe_and_group_color_chips() -> None:
     dialog_html = render_dashboard_visual_dialog()
 
-    assert "Visual recipe" in dialog_html
+    assert "Visual preset" in dialog_html
+    assert 'id="dashboard-visual-preset"' in dialog_html
     assert "data-visual-group-chip" in dialog_html
-    assert "Toned report" in dialog_html
-    assert "High-color groups" in dialog_html
+    assert "Executive report" in dialog_html
+    assert "Dense group scan" in dialog_html
     assert "Group 1" in dialog_html
     assert "Population" in dialog_html
     assert 'id="dashboard-visual-customize-open"' in dialog_html
     assert 'id="dashboard-visual-customize" class="visual-customize" hidden' in dialog_html
-    assert "Color set" in dialog_html
-    assert "Color generation" in dialog_html
+    assert "Palette" in dialog_html
+    assert "Palette mode" in dialog_html
     assert "Default marker size" in dialog_html
     assert "Selection inspector" in dialog_html
+    assert "Clear selected style" in dialog_html
     assert "dashboard-visual-element-marker-symbol" in dialog_html
     assert "dashboard-visual-element-outline-enabled" in dialog_html
     assert "dashboard-visual-element-outline-color-mode" in dialog_html
@@ -82,8 +84,8 @@ def test_dashboard_visual_dialog_uses_live_recipe_and_group_color_chips() -> Non
 def test_dashboard_visual_dialog_pairs_ranges_with_number_readouts() -> None:
     dialog_html = render_dashboard_visual_dialog()
 
-    assert dialog_html.index("Visual recipe") < dialog_html.index("Color set")
-    assert dialog_html.index("Color set") < dialog_html.index("Fine tuning")
+    assert dialog_html.index("Visual preset") < dialog_html.index("Palette")
+    assert dialog_html.index("Palette") < dialog_html.index("Fine tuning")
     assert dialog_html.index("Fine tuning") < dialog_html.index("Selection inspector")
     assert dialog_html.count('class="visual-range-number"') >= 12
     assert 'data-visual-range-value-for="dashboard-visual-marker-size"' in dialog_html
@@ -179,7 +181,8 @@ def test_dashboard_visual_runtime_recipes_update_controls_and_palette_preview() 
     assert "visualPreviewLabels" in runtime_js
     assert "document.querySelectorAll('[data-visual-group-chip]')" in runtime_js
     assert "selectVisualTargetByChipIndex" in runtime_js
-    assert "setDashboardVisualState(applyVisualRecipe(button.getAttribute('data-visual-preset')" in runtime_js
+    assert "const presetSelect = document.getElementById('dashboard-visual-preset');" in runtime_js
+    assert "setDashboardVisualState(applyVisualRecipe(presetSelect.value || 'auto'))" in runtime_js
 
 
 def test_dashboard_visual_runtime_selected_element_controls_are_role_aware() -> None:
@@ -199,6 +202,10 @@ def test_dashboard_visual_runtime_selected_element_controls_are_role_aware() -> 
     assert "dashboard-visual-element-pattern" in runtime_js
     assert "outline_width: markerLike," in runtime_js
     assert "pattern_shape: patternLike" in runtime_js
+    assert "const resolvedSelectedSeriesStyle" in runtime_js
+    assert "const rehydrateSelectedVisualTarget" in runtime_js
+    assert "if (dashboardVisualSelectedTarget) rehydrateSelectedVisualTarget();" in runtime_js
+    assert "normalizeMarkerSymbol(marker.symbol, 'circle')" in runtime_js
 
 
 def test_dashboard_visual_runtime_carries_population_focus_contract() -> None:
@@ -211,6 +218,14 @@ def test_dashboard_visual_runtime_carries_population_focus_contract() -> None:
     assert "population_baseline: clonePlotlySpec(state.population_baseline || {})" in runtime_js
     assert "comparison_focus: clonePlotlySpec(state.comparison_focus || {})" in runtime_js
     assert "const isPopulationLabel" in runtime_js
+    assert "const comparisonLabelsForPalette" in runtime_js
+    assert "const paletteIndexForLabel" in runtime_js
     assert "mergeRoleStyle(Object.assign(style, override), roleStyle, override)" in runtime_js
-    assert "state.population_baseline = Object.assign({}, state.population_baseline || {}, style);" in runtime_js
+    assert "&& !populationLike && useDistinguishers && markerSymbols.length" in runtime_js
+    assert "const opacity = Object.assign(" in runtime_js
+    assert "opacity[selectedTargetChartKind(target)] = populationStyle.opacity;" in runtime_js
+    assert (
+        "state.population_baseline = Object.assign("
+        "{}, state.population_baseline || {}, populationStyle);"
+    ) in runtime_js
     assert "state.palette[paletteIndex] = style.color;" in runtime_js

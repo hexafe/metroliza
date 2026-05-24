@@ -173,6 +173,55 @@ def test_dashboard_visual_dialog_recipe_updates_controls_and_preview_swatches(mo
         dialog.deleteLater()
 
 
+def test_dashboard_visual_dialog_recipe_refreshes_selected_element_controls(monkeypatch) -> None:
+    _qapp()
+    try:
+        from PyQt6.QtCore import Qt  # noqa: F401
+    except Exception as exc:
+        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
+    import modules.dashboard_visual_options_dialog as dialog_module
+
+    _stub_preview_builders(monkeypatch, dialog_module)
+    dialog = dialog_module.DashboardVisualOptionsDialog(
+        settings={
+            "preset": "custom",
+            "palette": ["#123456", "#222222", "#333333", "#444444", "#555555", "#666666"],
+            "series_overrides": {"Group 1": {"color": "#123456"}},
+        },
+        persist_on_accept=False,
+    )
+    try:
+        dialog._preview_timer.stop()
+        dialog._selected_target = {
+            "target": "series:group 1",
+            "role": "series",
+            "label": "Group 1",
+            "chart_kind": "grouped_histogram",
+            "capabilities": ["color", "opacity", "pattern_shape"],
+            "style": {"color": "#123456", "opacity": 0.50},
+        }
+        dialog._load_selected_element_controls()
+        assert dialog.element_color_button.property("color") == "#123456"
+
+        dialog._set_combo_data(dialog.preset_combo, "toned_report")
+        dialog._handle_preset_changed()
+
+        expected = next(
+            style
+            for style in dialog_module.dashboard_visual_effective_series_styles(
+                dialog.visual_settings(),
+                labels=dialog_module._PREVIEW_SERIES_LABELS,
+                chart_type="grouped_histogram",
+            )
+            if style["label"] == "Group 1"
+        )
+        assert dialog.element_color_button.property("color") == expected["color"]
+        assert dialog.element_color_button.property("color") != "#123456"
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+
+
 def test_dashboard_visual_dialog_manual_edit_switches_recipe_to_custom(monkeypatch) -> None:
     _qapp()
     try:
@@ -265,16 +314,20 @@ def test_dashboard_visual_dialog_population_color_edit_updates_baseline_not_pale
             "target": "series:population points",
             "role": "series",
             "label": "Population points",
+            "chart_kind": "scatter",
             "capabilities": ["color", "opacity", "marker_size", "marker_symbol"],
             "style": {"color": "#8a949e", "opacity": 0.32, "marker_size": 4.5},
         }
         dialog._load_selected_element_controls()
         dialog._set_button_color(dialog.element_color_button, "#aabbcc")
+        dialog.element_opacity_slider.setValue(41)
 
         dialog._apply_selected_element_style()
 
         settings = dialog.visual_settings()
         assert settings["population_baseline"]["color"] == "#aabbcc"
+        assert settings["population_baseline"]["opacity"]["scatter"] == 0.41
+        assert settings["population_baseline"]["opacity"]["grouped_histogram"] == 0.32
         assert settings["population_baseline"]["draw_first"] is True
         assert [button.property("color") for button in dialog._palette_buttons] == original_palette
         assert dialog._preview_color_buttons[0].property("color") == "#aabbcc"
@@ -398,7 +451,8 @@ def test_dashboard_visual_dialog_selection_inspector_sits_below_preview_and_star
         assert not dialog.element_opacity_slider.isEnabled()
         assert not dialog.element_opacity_spin.isEnabled()
         assert dialog.element_opacity_slider.parentWidget().isHidden()
-        assert not dialog.apply_element_button.isEnabled()
+        assert dialog.reset_element_button.text() == "Clear selected style"
+        assert not dialog.reset_element_button.isEnabled()
     finally:
         dialog.close()
         dialog.deleteLater()

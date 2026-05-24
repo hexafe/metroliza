@@ -100,14 +100,39 @@ def test_dashboard_visual_series_overrides_normalize_marker_outline_options() ->
     assert "outline_color" not in override
 
 
+def test_dashboard_visual_marker_symbol_normalization_preserves_triangle_up() -> None:
+    settings = normalize_dashboard_visual_settings(
+        {
+            "preset": "custom",
+            "series_overrides": {"Group 1": {"marker_symbol": "Triangle Up"}},
+            "population_baseline": {
+                "aliases": ["population"],
+                "marker_symbol": "triangle_up",
+            },
+            "comparison_focus": {"marker_symbol": "triangle-up"},
+        }
+    )
+
+    assert settings["series_overrides"]["Group 1"]["marker_symbol"] == "triangle-up"
+    assert settings["population_baseline"]["marker_symbol"] == "triangle-up"
+    assert settings["comparison_focus"]["marker_symbol"] == "triangle-up"
+
+
 def test_dashboard_visual_palette_presets_include_researched_data_viz_palettes() -> None:
     presets = dashboard_visual_palette_presets()
 
-    assert {"okabe_ito", "tableau_10", "colorbrewer_set2", "viridis", "cividis", "rdbu"}.issubset(
-        presets
-    )
+    assert {
+        "okabe_ito",
+        "tableau_10",
+        "colorbrewer_set2",
+        "ibm_carbon",
+        "viridis",
+        "cividis",
+        "rdbu",
+    }.issubset(presets)
     assert presets["okabe_ito"]["kind"] == "categorical"
     assert presets["viridis"]["kind"] == "sequential"
+    assert presets["ibm_carbon"]["kind"] == "categorical"
     assert len(presets["tableau_10"]["colors"]) >= 10
 
 
@@ -215,10 +240,10 @@ def test_dashboard_visual_resolved_palette_info_covers_each_color_source() -> No
         "recipe": "distinct",
         "color_source": "preset",
         "palette": ["#0072b2", "#d55e00"],
-        "palette_preset": "viridis",
-        "palette_label": "Viridis",
-        "palette_kind": "sequential",
-        "palette_mode": "highlight_gradient",
+        "palette_preset": "okabe_ito",
+        "palette_label": "Okabe-Ito",
+        "palette_kind": "categorical",
+        "palette_mode": "fixed",
         "anchor_color": "#ff00ff",
         "gradient_spread": "normal",
     }
@@ -805,6 +830,71 @@ def test_dashboard_visual_population_alias_matches_preview_label() -> None:
 
     assert spec["data"][0]["marker"]["color"] == "#7b8794"
     assert spec["data"][0]["marker"]["size"] == 4.5
+
+
+def test_dashboard_visual_population_first_does_not_shift_comparison_palette() -> None:
+    spec = {
+        "data": [
+            {"type": "bar", "name": "POPULATION", "x": ["A"], "y": [120], "marker": {}},
+            {"type": "bar", "name": "GROUP1", "x": ["A"], "y": [4], "marker": {}},
+            {"type": "bar", "name": "GROUP2", "x": ["A"], "y": [6], "marker": {}},
+        ],
+        "layout": {},
+        "metadata": {"kind": "histogram"},
+    }
+    settings = dashboard_visual_settings_to_plotly_settings(
+        {
+            "preset": "custom",
+            "palette": ["#111111", "#222222", "#333333"],
+            "population_baseline": {
+                "aliases": ["POPULATION"],
+                "color": "#999999",
+                "opacity": {"grouped_histogram": 0.3},
+                "draw_first": True,
+            },
+        }
+    )
+
+    apply_dashboard_visual_settings(
+        spec,
+        payload={"groups": [{"group": "POPULATION"}, {"group": "GROUP1"}, {"group": "GROUP2"}], "type": "histogram"},
+        visual_settings=settings,
+    )
+
+    population, group_1, group_2 = spec["data"]
+    assert population["name"] == "POPULATION"
+    assert population["marker"]["color"] == "#999999"
+    assert group_1["name"] == "GROUP1"
+    assert group_1["marker"]["color"] == "#111111"
+    assert group_2["name"] == "GROUP2"
+    assert group_2["marker"]["color"] == "#222222"
+
+
+def test_dashboard_visual_triangle_up_marker_is_applied_to_scatter_preview() -> None:
+    spec = {
+        "data": [
+            {
+                "type": "scatter",
+                "mode": "markers",
+                "name": "Group 1",
+                "x": [1, 2],
+                "y": [3, 4],
+                "marker": {},
+            }
+        ],
+        "layout": {},
+        "metadata": {"kind": "scatter"},
+    }
+
+    apply_dashboard_visual_settings(
+        spec,
+        payload={"labels": ["Group 1"], "type": "distribution", "render_mode": "scatter"},
+        visual_settings=dashboard_visual_settings_to_plotly_settings(
+            {"preset": "custom", "series_overrides": {"Group 1": {"marker_symbol": "Triangle Up"}}}
+        ),
+    )
+
+    assert spec["data"][0]["marker"]["symbol"] == "triangle-up"
 
 
 def test_dashboard_visual_population_stays_first_with_custom_series_override() -> None:

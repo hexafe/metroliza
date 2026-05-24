@@ -144,6 +144,8 @@ def apply_dashboard_visual_settings(
     outline_width = _finite_float(series.get("outline_width"))
     outline_color = _string_or_none(series.get("outline_color"))
     outline_color_mode = _outline_color_mode(series.get("outline_color_mode"))
+    population = series.get("population_baseline")
+    population_settings = population if isinstance(population, Mapping) else {}
     auto_distinguish = bool(series.get("auto_distinguish"))
     similar_palette = _palette_has_similar_colors(
         _effective_series_colors(
@@ -152,6 +154,7 @@ def apply_dashboard_visual_settings(
             chart_kind=chart_kind,
             palette=palette,
             overrides=overrides,
+            population=population_settings,
         ),
         threshold=_similarity_threshold(series),
     )
@@ -187,6 +190,7 @@ def apply_dashboard_visual_settings(
                     trace_index=trace_index,
                     palette=palette,
                     overrides=overrides,
+                    population=population_settings,
                     fallback_color=_trace_color(trace),
                 )
                 if style_label
@@ -222,12 +226,14 @@ def apply_dashboard_visual_settings(
             trace_index=trace_index,
             palette=palette,
             overrides=overrides,
+            population=population_settings,
             fallback_color=_trace_color(trace),
         )
         override = overrides.get(_normalize_label_key(label)) or {}
         role_style = _series_role_style(label, series, trace_chart_kind)
         if role_style:
             style = _merge_series_role_style(style, role_style, override)
+        is_population = _is_population_label(label, population_settings)
         _apply_series_trace_style(
             trace,
             style,
@@ -235,8 +241,22 @@ def apply_dashboard_visual_settings(
             chart_kind=trace_chart_kind,
             opacity=_chart_setting(series.get("opacity"), trace_chart_kind),
             marker_size=marker_size,
-            marker_symbol=_distinguishing_value(marker_symbols, labels, label, use_distinguishers),
-            pattern_shape=_distinguishing_value(pattern_shapes, labels, label, use_distinguishers),
+            marker_symbol=None
+            if is_population
+            else _distinguishing_value(
+                marker_symbols,
+                _comparison_labels(labels, population_settings),
+                label,
+                use_distinguishers,
+            ),
+            pattern_shape=None
+            if is_population
+            else _distinguishing_value(
+                pattern_shapes,
+                _comparison_labels(labels, population_settings),
+                label,
+                use_distinguishers,
+            ),
             outline_width=outline_width,
             outline_color=outline_color,
             outline_color_mode=outline_color_mode,
@@ -387,14 +407,20 @@ def _resolve_series_style(
     trace_index: int,
     palette: Sequence[str],
     overrides: Mapping[str, Mapping[str, Any]],
+    population: Mapping[str, Any] | None = None,
     fallback_color: str | None,
 ) -> dict[str, Any]:
     label_key = _normalize_label_key(label)
     style = dict(overrides.get(label_key) or {})
-    try:
-        label_index = list(labels).index(label)
-    except ValueError:
-        label_index = trace_index
+    population_settings = population if isinstance(population, Mapping) else {}
+    comparison_labels = _comparison_labels(labels, population_settings)
+    if _is_population_label(label, population_settings):
+        label_index = 0
+    else:
+        try:
+            label_index = comparison_labels.index(label)
+        except ValueError:
+            label_index = trace_index
     color = _string_or_none(style.get("color")) or (
         palette[label_index % len(palette)] if palette else fallback_color
     )
@@ -409,8 +435,10 @@ def _effective_series_colors(
     chart_kind: str,
     palette: Sequence[str],
     overrides: Mapping[str, Mapping[str, Any]],
+    population: Mapping[str, Any] | None = None,
 ) -> list[str]:
     colors: list[str] = []
+    population_settings = population if isinstance(population, Mapping) else {}
     for label_index, label in enumerate(labels):
         style = _resolve_series_style(
             label,
@@ -418,6 +446,7 @@ def _effective_series_colors(
             trace_index=label_index,
             palette=palette,
             overrides=overrides,
+            population=population_settings,
             fallback_color=None,
         )
         override = overrides.get(_normalize_label_key(label)) or {}
@@ -586,6 +615,8 @@ def _apply_series_trace_style(
 
 
 def _is_population_label(label: str, population: Mapping[str, Any]) -> bool:
+    if not isinstance(population, Mapping) or not population:
+        return False
     aliases = population.get("aliases")
     alias_values = (
         aliases
@@ -594,6 +625,10 @@ def _is_population_label(label: str, population: Mapping[str, Any]) -> bool:
     )
     label_key = _normalize_label_key(label)
     return any(label_key == _normalize_label_key(str(alias)) for alias in alias_values)
+
+
+def _comparison_labels(labels: Sequence[str], population: Mapping[str, Any]) -> list[str]:
+    return [label for label in labels if not _is_population_label(label, population)]
 
 
 def _apply_population_draw_order(data: list[Any], series: Mapping[str, Any]) -> None:

@@ -114,6 +114,13 @@ def _preview_palette_index_for_label(label: str) -> int | None:
     return None
 
 
+def _first_style_value(*values: Any) -> Any:
+    for value in values:
+        if value is not None and value != "":
+            return value
+    return None
+
+
 class _PreviewSelectionBridge(QObject):
     target_selected = pyqtSignal(str)
 
@@ -147,6 +154,7 @@ class DashboardVisualOptionsDialog(QDialog):
         self._selected_target: dict[str, Any] | None = None
         self._populating_controls = False
         self._updating_selection_controls = False
+        self._prefer_resolved_selection_style = False
         self._reference_width_source = {
             key: float(value["width"])
             for key, value in self._settings["reference_lines"].items()
@@ -302,7 +310,7 @@ class DashboardVisualOptionsDialog(QDialog):
         preset_group = QGroupBox("Mode")
         preset_layout = QVBoxLayout(preset_group)
         preset_form = QFormLayout()
-        preset_form.addRow("Visual recipe", self.preset_combo)
+        preset_form.addRow("Visual preset", self.preset_combo)
         preset_layout.addLayout(preset_form)
         preview_colors = QGridLayout()
         preview_colors.setContentsMargins(0, 0, 0, 0)
@@ -329,7 +337,7 @@ class DashboardVisualOptionsDialog(QDialog):
         customize_layout.setSpacing(10)
         controls_layout.addWidget(self.customize_controls_container)
 
-        palette_group = QGroupBox("Color source")
+        palette_group = QGroupBox("Advanced palette")
         palette_layout = QGridLayout(palette_group)
         self.palette_preset_combo = QComboBox()
         self._populate_palette_preset_combo()
@@ -469,9 +477,7 @@ class DashboardVisualOptionsDialog(QDialog):
             (("None", ""), ("Diagonal", "/"), ("Back diagonal", "\\"), ("Cross", "x"), ("Dots", "."), ("Horizontal", "-"))
         )
         self.element_stat_accent_checkbox = QCheckBox("Use stat accent")
-        self.apply_element_button = QPushButton("Apply to selection")
-        self.reset_element_button = QPushButton("Reset selection")
-        self.apply_element_button.clicked.connect(self._apply_selected_element_style)
+        self.reset_element_button = QPushButton("Clear selected style")
         self.reset_element_button.clicked.connect(self._reset_selected_element_style)
         for widget in (
             self.element_width_spin,
@@ -490,7 +496,6 @@ class DashboardVisualOptionsDialog(QDialog):
         selection_actions = QWidget()
         selection_actions_layout = QHBoxLayout(selection_actions)
         selection_actions_layout.setContentsMargins(0, 0, 0, 0)
-        selection_actions_layout.addWidget(self.apply_element_button)
         selection_actions_layout.addWidget(self.reset_element_button)
         self._add_selection_row(selection_form, "element", "Element", self.element_combo)
         self._add_selection_row(selection_form, "color", "Color", self.element_color_button)
@@ -600,7 +605,10 @@ class DashboardVisualOptionsDialog(QDialog):
             self._populate_from_settings_unchecked(settings)
         finally:
             self._populating_controls = False
-        self._sync_custom_controls()
+        if self._selected_target:
+            self._load_selected_element_controls()
+        else:
+            self._sync_custom_controls()
 
     def _populate_from_settings_unchecked(self, settings: Mapping[str, Any]) -> None:
         self._series_overrides = dict(settings.get("series_overrides") or {})
@@ -659,12 +667,16 @@ class DashboardVisualOptionsDialog(QDialog):
         self.summary_label.setText(dashboard_visual_settings_summary(settings))
         spec = build_dashboard_visual_preview_spec(settings, chart_type=chart_type)
         self._preview_targets = self._extract_visual_targets(spec)
-        if self._selected_target and not any(
-            target.get("target") == self._selected_target.get("target")
-            for target in self._preview_targets
-        ):
-            self._selected_target = None
+        if self._selected_target:
+            selected_id = self._selected_target.get("target")
+            refreshed = next(
+                (target for target in self._preview_targets if target.get("target") == selected_id),
+                None,
+            )
+            self._selected_target = dict(refreshed) if refreshed is not None else None
         self._populate_element_combo()
+        if self._selected_target:
+            self._load_selected_element_controls()
         self._sync_custom_controls()
         if spec and self.web_view is not None:
             self.web_view.setHtml(
@@ -697,7 +709,11 @@ class DashboardVisualOptionsDialog(QDialog):
             return
         preset = str(self.preset_combo.currentData() or "auto")
         settings = dashboard_visual_recipe_settings(preset, base=self.visual_settings())
-        self._populate_from_settings(settings)
+        self._prefer_resolved_selection_style = True
+        try:
+            self._populate_from_settings(settings)
+        finally:
+            self._prefer_resolved_selection_style = False
         self._schedule_preview()
 
     def _sync_custom_controls(self) -> None:
@@ -750,7 +766,6 @@ class DashboardVisualOptionsDialog(QDialog):
             self.element_opacity_slider,
             self.element_opacity_spin,
             self.element_stat_accent_checkbox,
-            self.apply_element_button,
             self.reset_element_button,
         ):
             widget.setEnabled(has_selection)
@@ -815,8 +830,12 @@ class DashboardVisualOptionsDialog(QDialog):
         for theme in self._theme_library.get("themes", []):
             if isinstance(theme, Mapping) and theme.get("id") == theme_id:
                 settings = normalize_dashboard_visual_settings(theme.get("settings"))
-                self._populate_from_settings(settings)
-                self._handle_control_changed()
+                self._prefer_resolved_selection_style = True
+                try:
+                    self._populate_from_settings(settings)
+                finally:
+                    self._prefer_resolved_selection_style = False
+                self._schedule_preview()
                 return
 
     def _save_theme_as(self) -> None:
@@ -875,11 +894,16 @@ class DashboardVisualOptionsDialog(QDialog):
     def _mark_custom_from_element_controls(self) -> None:
         if self._updating_selection_controls:
             return
-        self._switch_to_custom_preserving_effective_style()
         if self._selected_target is not None:
             self._apply_selected_element_style()
+        else:
+            self._switch_to_custom_preserving_effective_style()
 
-    def _switch_to_custom_preserving_effective_style(self) -> None:
+    def _switch_to_custom_preserving_effective_style(
+        self,
+        *,
+        reload_selection_controls: bool = True,
+    ) -> None:
         if self.preset_combo.currentData() == "custom":
             return
         selected_target = dict(self._selected_target) if self._selected_target else None
@@ -892,7 +916,15 @@ class DashboardVisualOptionsDialog(QDialog):
         settings["palette_preset"] = "custom"
         settings["palette_mode"] = "fixed"
         settings["palette"] = effective_palette
-        self._populate_from_settings(settings)
+        if reload_selection_controls:
+            self._populate_from_settings(settings)
+        else:
+            self._populating_controls = True
+            try:
+                self._populate_from_settings_unchecked(settings)
+            finally:
+                self._populating_controls = False
+            self._sync_custom_controls()
         self._selected_target = selected_target
         self._populate_element_combo()
 
@@ -918,6 +950,7 @@ class DashboardVisualOptionsDialog(QDialog):
         meta = trace.get("meta") if isinstance(trace.get("meta"), Mapping) else {}
         target_id = str(meta.get("metroliza_target_id") or meta.get("dashboard_visual_target") or "")
         role = str(meta.get("metroliza_role") or meta.get("dashboard_visual_role") or "")
+        chart_kind = str(meta.get("metroliza_chart_kind") or meta.get("dashboard_visual_chart_kind") or "")
         name = str(trace.get("name") or "").strip()
         line = trace.get("line") if isinstance(trace.get("line"), Mapping) else {}
         marker = trace.get("marker") if isinstance(trace.get("marker"), Mapping) else {}
@@ -963,6 +996,7 @@ class DashboardVisualOptionsDialog(QDialog):
                 "role": target_role,
                 "label": str(meta.get("metroliza_legend_label") or name or target_id),
                 "trace": index,
+                "chart_kind": chart_kind,
                 "trace_type": str(trace.get("type") or ""),
                 "mode": str(trace.get("mode") or ""),
                 "group": str(meta.get("metroliza_series_id") or ""),
@@ -982,6 +1016,7 @@ class DashboardVisualOptionsDialog(QDialog):
                 "key": reference,
                 "label": name,
                 "trace": index,
+                "chart_kind": chart_kind,
                 "trace_type": str(trace.get("type") or ""),
                 "mode": str(trace.get("mode") or ""),
                 "capabilities": self._trace_capabilities(trace, "reference"),
@@ -999,6 +1034,7 @@ class DashboardVisualOptionsDialog(QDialog):
                 "stat": stat,
                 "label": name,
                 "trace": index,
+                "chart_kind": chart_kind,
                 "trace_type": str(trace.get("type") or ""),
                 "mode": str(trace.get("mode") or ""),
                 "capabilities": self._trace_capabilities(trace, "stat"),
@@ -1011,6 +1047,7 @@ class DashboardVisualOptionsDialog(QDialog):
                 "role": role,
                 "label": name,
                 "trace": index,
+                "chart_kind": chart_kind,
                 "trace_type": str(trace.get("type") or ""),
                 "mode": str(trace.get("mode") or ""),
                 "capabilities": self._trace_capabilities(trace, role),
@@ -1028,6 +1065,56 @@ class DashboardVisualOptionsDialog(QDialog):
             "outline": bool(capabilities & {"outline_width", "outline_color", "outline_color_mode"}),
             "pattern": "pattern_shape" in capabilities,
         }
+
+    def _selected_target_chart_kind(self, target: Mapping[str, Any]) -> str:
+        chart = str(
+            self.chart_type_combo.currentData() if hasattr(self, "chart_type_combo") else ""
+        ).casefold()
+        raw = str(target.get("chart_kind") or "").strip().casefold()
+        if raw == "violin":
+            raw = "distribution"
+        if raw == "histogram" and chart == "histogram":
+            raw = "grouped_histogram"
+        if raw in {
+            "histogram",
+            "grouped_histogram",
+            "distribution",
+            "iqr",
+            "scatter",
+            "trend",
+            "model_curve",
+        }:
+            return raw
+        role = str(target.get("role") or "").casefold()
+        if role in {"trend", "model_curve"}:
+            return role
+        trace_type = str(target.get("trace_type") or "").casefold()
+        if trace_type in {"bar", "histogram"}:
+            return "grouped_histogram" if chart == "histogram" else "histogram"
+        if chart == "violin":
+            return "distribution"
+        if chart in {"histogram", "iqr", "scatter"}:
+            return "grouped_histogram" if chart == "histogram" else chart
+        return "grouped_histogram"
+
+    def _resolved_preview_series_style(
+        self,
+        label: str,
+        target: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        labels = list(_PREVIEW_SERIES_LABELS)
+        if _preview_label_key(label) not in {_preview_label_key(item) for item in labels}:
+            labels.append(label)
+        styles = dashboard_visual_effective_series_styles(
+            self.visual_settings(),
+            labels=labels,
+            chart_type=self._selected_target_chart_kind(target),
+        )
+        key = _preview_label_key(label)
+        for style in styles:
+            if _preview_label_key(str(style.get("label") or "")) == key:
+                return dict(style)
+        return {}
 
     @staticmethod
     def _trace_capabilities(trace: Mapping[str, Any], role: str) -> list[str]:
@@ -1153,18 +1240,23 @@ class DashboardVisualOptionsDialog(QDialog):
         label = str(target.get("label") or "")
         if role == "series" and _is_population_preview_label(label, self._population_baseline):
             style = dict(self._population_baseline)
+            resolved_style = self._resolved_preview_series_style(label, target)
             raw_opacity = style.get("opacity")
+            trace_opacity = trace_style.get("opacity")
             if isinstance(raw_opacity, Mapping):
-                chart_kind = str(target.get("chart_kind") or target.get("trace_type") or "grouped_histogram")
-                style["opacity"] = (
-                    trace_style.get("opacity")
-                    or raw_opacity.get(chart_kind)
-                    or raw_opacity.get("grouped_histogram")
-                    or raw_opacity.get("scatter")
-                    or 0.35
-                )
-            style.setdefault("color", trace_style.get("color") or "#8a949e")
-            style.setdefault("opacity", trace_style.get("opacity") or 0.35)
+                chart_kind = self._selected_target_chart_kind(target)
+                mapped_opacity = raw_opacity.get(chart_kind)
+                if mapped_opacity is None:
+                    mapped_opacity = raw_opacity.get("grouped_histogram")
+                if mapped_opacity is None:
+                    mapped_opacity = raw_opacity.get("scatter")
+                style["opacity"] = trace_opacity if trace_opacity is not None else mapped_opacity
+            style.setdefault(
+                "color",
+                _first_style_value(resolved_style.get("color"), trace_style.get("color"), "#8a949e"),
+            )
+            if style.get("opacity") is None:
+                style["opacity"] = trace_opacity if trace_opacity is not None else 0.35
             style.setdefault("marker_size", trace_style.get("marker_size") or 4.5)
             style.setdefault("marker_symbol", trace_style.get("marker_symbol") or "circle")
             style.setdefault("outline_width", trace_style.get("outline_width") or 0.0)
@@ -1175,30 +1267,82 @@ class DashboardVisualOptionsDialog(QDialog):
         key = _preview_label_key(label)
         style = dict(self._series_overrides.get(key) or {})
         settings = self.visual_settings()
+        resolved_style = self._resolved_preview_series_style(label, target)
+        first_style = resolved_style if self._prefer_resolved_selection_style else trace_style
+        second_style = trace_style if self._prefer_resolved_selection_style else resolved_style
         style.setdefault(
             "color",
-            trace_style.get("color") or dashboard_visual_swatch_palette(settings, count=1)[0],
+            _first_style_value(
+                first_style.get("color"),
+                second_style.get("color"),
+                dashboard_visual_swatch_palette(settings, count=1)[0],
+            ),
         )
         style.setdefault(
             "opacity",
-            trace_style.get("opacity")
-            or settings["opacity"].get("model_curve" if role == "model_curve" else role, 0.85),
+            _first_style_value(
+                first_style.get("opacity"),
+                second_style.get("opacity"),
+                settings["opacity"].get("model_curve" if role == "model_curve" else role, 0.85),
+            ),
         )
-        style.setdefault("width", trace_style.get("width") or 2.0)
-        style.setdefault("dash", trace_style.get("dash") or "solid")
-        style.setdefault("marker_size", trace_style.get("marker_size") or settings["marker_size"])
-        style.setdefault("marker_symbol", trace_style.get("marker_symbol") or "circle")
-        style.setdefault("outline_width", trace_style.get("outline_width") or 0.0)
-        style.setdefault("outline_color_mode", style.get("outline_color_mode") or "auto")
-        style.setdefault("outline_color", trace_style.get("outline_color") or "#111827")
-        style.setdefault("pattern_shape", trace_style.get("pattern_shape") or "")
+        style.setdefault("width", _first_style_value(first_style.get("width"), second_style.get("width"), 2.0))
+        style.setdefault("dash", _first_style_value(first_style.get("dash"), second_style.get("dash"), "solid"))
+        style.setdefault(
+            "marker_size",
+            _first_style_value(
+                first_style.get("marker_size"),
+                second_style.get("marker_size"),
+                settings["marker_size"],
+            ),
+        )
+        style.setdefault(
+            "marker_symbol",
+            _first_style_value(
+                first_style.get("marker_symbol"),
+                second_style.get("marker_symbol"),
+                "circle",
+            ),
+        )
+        style.setdefault(
+            "outline_width",
+            _first_style_value(
+                first_style.get("outline_width"),
+                second_style.get("outline_width"),
+                0.0,
+            ),
+        )
+        style.setdefault(
+            "outline_color_mode",
+            _first_style_value(
+                style.get("outline_color_mode"),
+                first_style.get("outline_color_mode"),
+                second_style.get("outline_color_mode"),
+                "auto",
+            ),
+        )
+        style.setdefault(
+            "outline_color",
+            _first_style_value(
+                first_style.get("outline_color"),
+                second_style.get("outline_color"),
+                "#111827",
+            ),
+        )
+        style.setdefault(
+            "pattern_shape",
+            _first_style_value(
+                first_style.get("pattern_shape"),
+                second_style.get("pattern_shape"),
+                "",
+            ),
+        )
         return style
 
     def _apply_selected_element_style(self) -> None:
         target = self._selected_target
         if not target:
             return
-        self._switch_to_custom_preserving_effective_style()
         role = str(target.get("role") or "")
         capabilities = self._selected_target_capabilities(target)
         color = str(self.element_color_button.property("color") or "#245a5a")
@@ -1209,6 +1353,7 @@ class DashboardVisualOptionsDialog(QDialog):
         if capabilities["line"]:
             style["width"] = self.element_width_spin.value()
             style["dash"] = str(self.element_dash_combo.currentData() or "solid")
+        self._switch_to_custom_preserving_effective_style(reload_selection_controls=False)
         if role == "reference":
             key = str(target.get("key") or "").casefold()
             width = float(style.get("width", self.reference_width_spin.value()))
@@ -1255,10 +1400,17 @@ class DashboardVisualOptionsDialog(QDialog):
                     else:
                         style.pop("outline_color", None)
                 if capabilities["pattern"]:
-                        style["pattern_shape"] = str(self.element_pattern_combo.currentData() or "")
+                    style["pattern_shape"] = str(self.element_pattern_combo.currentData() or "")
                 key = _preview_label_key(label)
                 if is_population:
-                    self._population_baseline.update(style)
+                    population_style = dict(style)
+                    opacity_value = population_style.pop("opacity", None)
+                    if opacity_value is not None:
+                        raw_opacity = self._population_baseline.get("opacity")
+                        opacity_map = dict(raw_opacity) if isinstance(raw_opacity, Mapping) else {}
+                        opacity_map[self._selected_target_chart_kind(target)] = float(opacity_value)
+                        population_style["opacity"] = opacity_map
+                    self._population_baseline.update(population_style)
                     self._series_overrides.pop(key, None)
                 else:
                     palette_index = _preview_palette_index_for_label(label)

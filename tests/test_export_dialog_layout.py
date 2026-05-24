@@ -118,7 +118,7 @@ class TestExportDialogLayout(unittest.TestCase):
         self.assertEqual(payload["dashboard_visuals_text"], "Change...")
         self.assertFalse(payload["dashboard_visuals_visible"])
         self.assertFalse(payload["dashboard_visuals_enabled"])
-        self.assertEqual(payload["dashboard_visuals_summary"], "Default")
+        self.assertEqual(payload["dashboard_visuals_summary"], "Metroliza default")
         self.assertIn("Enable HTML dashboard output", payload["dashboard_visuals_tooltip"])
         self.assertFalse(payload["has_html_only_checkbox"])
         self.assertIn("HTML dashboard only", payload["preset_labels"])
