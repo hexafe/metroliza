@@ -360,10 +360,11 @@ class IndustrialAnalyticsDialog(QDialog):
             "Fast keeps CSV Summary dashboard generation lightweight. "
             "Full adds richer detail at a higher processing cost."
         )
+        self.dashboard_visuals_row_label = section_label("Dashboard style")
         self.dashboard_visuals_summary_label = status_chip("", "neutral")
-        self.dashboard_visuals_button = QPushButton("Dashboard visuals...")
+        self.dashboard_visuals_button = QPushButton("Change...")
         self.dashboard_visuals_button.setToolTip(
-            "Adjust dashboard colors, opacity, markers, and reference/stat lines."
+            "Adjust dashboard style, colors, opacity, markers, and reference/stat lines."
         )
         self.dashboard_visuals_button.clicked.connect(self.open_dashboard_visual_options)
         self.readiness_label = status_chip("Load metrics and choose an output path.", "warning")
@@ -613,15 +614,20 @@ class IndustrialAnalyticsDialog(QDialog):
             self.histogram_checkbox,
             self.violin_checkbox,
             self.box_checkbox,
-            self.groupstats_checkbox,
         ):
             chart_actions.addWidget(checkbox)
-        chart_actions.addSpacing(6)
-        chart_actions.addWidget(self.dashboard_visuals_summary_label)
-        chart_actions.addWidget(self.dashboard_visuals_button)
         chart_actions.addStretch(1)
-        grid.addWidget(section_label("Outputs"), row, 0)
+        grid.addWidget(section_label("Charts"), row, 0)
         grid.addLayout(chart_actions, row, 1, 1, 2)
+
+        row += 1
+        statistics_actions = QHBoxLayout()
+        statistics_actions.setContentsMargins(0, 0, 0, 0)
+        statistics_actions.setSpacing(10)
+        statistics_actions.addWidget(self.groupstats_checkbox)
+        statistics_actions.addStretch(1)
+        grid.addWidget(section_label("Statistics"), row, 0)
+        grid.addLayout(statistics_actions, row, 1, 1, 2)
 
         row += 1
         grid.addWidget(self.groupstats_reason_label, row, 1, 1, 2)
@@ -634,6 +640,16 @@ class IndustrialAnalyticsDialog(QDialog):
         row += 1
         grid.addWidget(self.dashboard_detail_row_label, row, 0)
         grid.addWidget(self.dashboard_detail_mode_combo, row, 1, 1, 2)
+
+        row += 1
+        dashboard_visuals_actions = QHBoxLayout()
+        dashboard_visuals_actions.setContentsMargins(0, 0, 0, 0)
+        dashboard_visuals_actions.setSpacing(8)
+        dashboard_visuals_actions.addWidget(self.dashboard_visuals_summary_label)
+        dashboard_visuals_actions.addWidget(self.dashboard_visuals_button)
+        dashboard_visuals_actions.addStretch(1)
+        grid.addWidget(self.dashboard_visuals_row_label, row, 0)
+        grid.addLayout(dashboard_visuals_actions, row, 1, 1, 2)
 
         row += 1
         grid.addWidget(section_label("Workbook"), row, 0)

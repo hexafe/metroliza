@@ -82,10 +82,6 @@ class TestExportDialogLayout(unittest.TestCase):
                 "dashboard_visuals_enabled": dialog.dashboard_visuals_button.isEnabled(),
                 "dashboard_visuals_summary": dialog.dashboard_visuals_summary_label.text(),
                 "dashboard_visuals_tooltip": dialog.dashboard_visuals_button.toolTip(),
-                "dashboard_visuals_next_in_tab_order": (
-                    dialog.generate_html_dashboard_checkbox.nextInFocusChain()
-                    is dialog.dashboard_visuals_button
-                ),
                 "has_html_only_checkbox": hasattr(dialog, "html_dashboard_only_checkbox"),
                 "preset_labels": [
                     dialog.preset_combobox.itemText(index)
@@ -119,12 +115,11 @@ class TestExportDialogLayout(unittest.TestCase):
         self.assertEqual(payload["toggle_text"], "Show advanced options")
         self.assertEqual(payload["google_label"], "Google Sheets")
         self.assertEqual(payload["html_label"], "HTML dashboard")
-        self.assertEqual(payload["dashboard_visuals_text"], "Dashboard visuals...")
-        self.assertTrue(payload["dashboard_visuals_visible"])
-        self.assertTrue(payload["dashboard_visuals_enabled"])
+        self.assertEqual(payload["dashboard_visuals_text"], "Change...")
+        self.assertFalse(payload["dashboard_visuals_visible"])
+        self.assertFalse(payload["dashboard_visuals_enabled"])
         self.assertEqual(payload["dashboard_visuals_summary"], "Default")
-        self.assertIn("apply when HTML dashboard output is enabled", payload["dashboard_visuals_tooltip"])
-        self.assertTrue(payload["dashboard_visuals_next_in_tab_order"])
+        self.assertIn("Enable HTML dashboard output", payload["dashboard_visuals_tooltip"])
         self.assertFalse(payload["has_html_only_checkbox"])
         self.assertIn("HTML dashboard only", payload["preset_labels"])
         self.assertEqual(payload["close_label"], "Close")
@@ -232,7 +227,7 @@ class TestExportDialogLayout(unittest.TestCase):
         self.assertFalse(payload["google_enabled"])
         self.assertEqual(payload["export_target"], "html_dashboard")
 
-    def test_dashboard_visuals_button_launches_dialog_before_html_dashboard_is_checked(self):
+    def test_dashboard_visuals_button_launches_dialog_after_html_dashboard_is_checked(self):
         payload = self._run_probe(
             """
             import json
@@ -267,6 +262,7 @@ class TestExportDialogLayout(unittest.TestCase):
 
             app = QApplication.instance() or QApplication([])
             dialog = ExportDialog(parent=None, db_file="")
+            dialog.generate_html_dashboard_checkbox.setChecked(True)
             dialog.show()
             app.processEvents()
             dialog.open_dashboard_visual_options()
@@ -286,7 +282,7 @@ class TestExportDialogLayout(unittest.TestCase):
 
         self.assertTrue(payload["button_visible"])
         self.assertTrue(payload["button_enabled"])
-        self.assertFalse(payload["html_checked"])
+        self.assertTrue(payload["html_checked"])
         self.assertTrue(payload["exec_called"])
         self.assertTrue(payload["parent_is_dialog"])
         self.assertEqual(payload["settings_preset"], "distinct")

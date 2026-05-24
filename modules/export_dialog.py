@@ -375,8 +375,9 @@ class ExportDialog(QDialog):
             self.generate_html_dashboard_checkbox.stateChanged.connect(
                 lambda _state: self._sync_dashboard_visual_controls()
             )
+            self.dashboard_visuals_label = QLabel("Dashboard style:")
             self.dashboard_visuals_summary_label = status_chip("", "neutral")
-            self.dashboard_visuals_button = QPushButton("Dashboard visuals...")
+            self.dashboard_visuals_button = QPushButton("Change...")
             self.dashboard_visuals_button.setToolTip(
                 "Adjust HTML dashboard colors, opacity, markers, and reference/stat lines."
             )
@@ -600,8 +601,9 @@ class ExportDialog(QDialog):
             optional_outputs_layout.addWidget(self.google_sheets_info_button, 0, 1)
             optional_outputs_layout.addWidget(self.generate_html_dashboard_checkbox, 0, 2)
             optional_outputs_layout.addWidget(self.html_dashboard_info_button, 0, 3)
-            optional_outputs_layout.addWidget(self.dashboard_visuals_summary_label, 0, 4)
-            optional_outputs_layout.addWidget(self.dashboard_visuals_button, 0, 5)
+            optional_outputs_layout.addWidget(self.dashboard_visuals_label, 1, 2)
+            optional_outputs_layout.addWidget(self.dashboard_visuals_summary_label, 1, 3)
+            optional_outputs_layout.addWidget(self.dashboard_visuals_button, 1, 4)
             optional_outputs_layout.addWidget(self.include_industrial_context_checkbox, 1, 0)
             optional_outputs_layout.addWidget(self.industrial_context_info_button, 1, 1)
             optional_outputs_layout.setColumnStretch(6, 1)
@@ -1255,14 +1257,19 @@ class ExportDialog(QDialog):
         if not hasattr(self, "dashboard_visuals_button"):
             return
         enabled = self._dashboard_visuals_enabled()
-        self.dashboard_visuals_summary_label.setVisible(True)
-        self.dashboard_visuals_summary_label.setEnabled(True)
-        self.dashboard_visuals_button.setVisible(True)
-        self.dashboard_visuals_button.setEnabled(True)
+        for widget in (
+            getattr(self, "dashboard_visuals_label", None),
+            self.dashboard_visuals_summary_label,
+            self.dashboard_visuals_button,
+        ):
+            if widget is None:
+                continue
+            widget.setVisible(enabled)
+            widget.setEnabled(enabled)
         self.dashboard_visuals_button.setToolTip(
             "Adjust HTML dashboard colors, opacity, markers, and reference/stat lines."
             if enabled
-            else "Adjust visuals now; these settings apply when HTML dashboard output is enabled."
+            else "Enable HTML dashboard output to adjust dashboard visuals."
         )
         settings = getattr(self, "dashboard_visual_settings", None)
         summary = dashboard_visual_settings_summary(settings)

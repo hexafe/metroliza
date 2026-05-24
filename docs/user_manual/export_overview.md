@@ -151,7 +151,10 @@ This option does not replace the workbook. It adds an extra review file alongsid
 
 #### Dashboard visuals
 
-Use **Dashboard visuals...** to adjust how exported Plotly charts look in the HTML dashboard. The main choices are visual recipes, color palettes, group differentiation, opacity, marker size, stat/reference line styling, and selected chart elements.
+When **HTML dashboard** is enabled, use **Dashboard style > Change...** to adjust how
+exported Plotly charts look in the HTML dashboard. The main choices are visual recipes,
+saved themes, color palettes, group differentiation, opacity, marker size,
+stat/reference line styling, and selected chart elements.
 
 Use the recipes first for routine output:
 
@@ -160,7 +163,14 @@ Use the recipes first for routine output:
 - **Print** favors monochrome-friendly output.
 - **Custom** keeps your manual choices.
 
-Fine-tuning controls are meant for visual review, not data changes. Sliders are used for relative visual adjustments with immediate preview, such as opacity and marker emphasis. Exact values, such as line width or marker size, are also shown numerically so you can type or step to a precise value when needed.
+Fine-tuning controls are meant for visual review, not data changes. Sliders are used for
+relative visual adjustments with immediate preview, such as opacity and marker emphasis.
+Exact values, such as line width or marker size, are also shown numerically so you can
+type or step to a precise value when needed.
+
+The dialog opens with recipes, saved themes, and preview visible. Use **Customize...** to
+show detailed color, opacity, line, and selected-element controls when routine recipes are
+not enough.
 
 ### Industrial context
 

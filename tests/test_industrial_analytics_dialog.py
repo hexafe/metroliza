@@ -289,9 +289,9 @@ def test_analytics_dashboard_visuals_button_is_visible_for_production_and_tabula
         for dialog in dialogs:
             assert dialog.dashboard_visuals_button.isVisible()
             assert dialog.dashboard_visuals_button.isEnabled()
-            assert dialog.dashboard_visuals_button.text() == "Dashboard visuals..."
+            assert dialog.dashboard_visuals_button.text() == "Change..."
             assert dialog.dashboard_visuals_summary_label.text() == "Default"
-            assert "Adjust dashboard colors" in dialog.dashboard_visuals_button.toolTip()
+            assert "Adjust dashboard style" in dialog.dashboard_visuals_button.toolTip()
     finally:
         for dialog in dialogs:
             dialog.close()

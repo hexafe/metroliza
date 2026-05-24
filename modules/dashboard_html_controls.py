@@ -296,6 +296,21 @@ def render_dashboard_visual_dialog() -> str:
         f'<div class="visual-palette-preview" aria-label="Resolved group colors">{group_color_chips}</div>'
         '</section>'
         '<section class="visual-section visual-grid">'
+        '<label class="visual-field"><span>Theme</span>'
+        '<select id="dashboard-visual-theme"><option value="">Current settings</option></select></label>'
+        '<label class="visual-field"><span>Name</span>'
+        '<input type="text" id="dashboard-visual-theme-name" placeholder="Theme name"></label>'
+        '<div class="visual-actions visual-actions-inline">'
+        '<button type="button" id="dashboard-visual-theme-save">Save theme</button>'
+        '<button type="button" id="dashboard-visual-theme-delete">Delete</button>'
+        '</div>'
+        '</section>'
+        '<section class="visual-section visual-actions visual-actions-inline">'
+        '<button type="button" id="dashboard-visual-customize-open" '
+        'aria-expanded="false" aria-controls="dashboard-visual-customize">Customize...</button>'
+        '</section>'
+        '<div id="dashboard-visual-customize" class="visual-customize" hidden>'
+        '<section class="visual-section visual-grid">'
         '<label class="visual-field"><span>Color set</span>'
         f'<select id="dashboard-visual-palette-preset">{palette_preset_options}</select></label>'
         '<label class="visual-field"><span>Color generation</span>'
@@ -320,22 +335,13 @@ def render_dashboard_visual_dialog() -> str:
         '</select></label>'
         '</section>'
         f'<section class="visual-section visual-swatches">{palette_inputs}</section>'
-        '<section class="visual-section visual-grid">'
-        '<label class="visual-field"><span>Theme</span>'
-        '<select id="dashboard-visual-theme"><option value="">Current settings</option></select></label>'
-        '<label class="visual-field"><span>Name</span>'
-        '<input type="text" id="dashboard-visual-theme-name" placeholder="Theme name"></label>'
-        '<div class="visual-actions visual-actions-inline">'
-        '<button type="button" id="dashboard-visual-theme-save">Save theme</button>'
-        '<button type="button" id="dashboard-visual-theme-delete">Delete</button>'
-        '</div>'
-        '</section>'
         '<section class="visual-section">'
         '<div class="visual-section-title">Fine tuning</div>'
         f'<div class="visual-grid">{fine_tuning_controls}</div>'
         '</section>'
         f'<section class="visual-section visual-grid">{opacity_inputs}</section>'
         f'<section class="visual-section visual-grid">{selection_controls}</section>'
+        '</div>'
         '<section class="visual-section visual-actions">'
         '<button type="button" id="dashboard-visual-reset">Reset</button>'
         '</section>'
@@ -455,6 +461,9 @@ def render_dashboard_controls_css() -> str:
       border-top: 1px solid var(--line);
       padding-top: 12px;
       margin-top: 12px;
+    }
+    .visual-customize[hidden] {
+      display: none;
     }
     .visual-section-title {
       color: var(--muted);
@@ -1968,6 +1977,8 @@ def render_dashboard_visual_runtime_js(
         const deleteThemeButton = document.getElementById('dashboard-visual-theme-delete');
         const elementSelect = document.getElementById('dashboard-visual-element');
         const elementResetButton = document.getElementById('dashboard-visual-element-reset');
+        const customizeButton = document.getElementById('dashboard-visual-customize-open');
+        const customizePanel = document.getElementById('dashboard-visual-customize');
         if (openButton && dialog) {{
           openButton.addEventListener('click', () => {{
             refreshVisualElementControls();
@@ -1980,6 +1991,15 @@ def render_dashboard_visual_runtime_js(
         }}
         if (resetButton) {{
           resetButton.addEventListener('click', () => setDashboardVisualState(embeddedInitialVisualState()));
+        }}
+        if (customizeButton && customizePanel) {{
+          customizeButton.addEventListener('click', () => {{
+            const expanded = customizePanel.hasAttribute('hidden');
+            customizePanel.toggleAttribute('hidden', !expanded);
+            customizeButton.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            customizeButton.textContent = expanded ? 'Hide customization' : 'Customize...';
+            if (expanded) refreshVisualElementControls();
+          }});
         }}
         if (themeSelect) {{
           themeSelect.addEventListener('change', () => {{

@@ -240,6 +240,15 @@ def test_dashboard_visual_dialog_selection_inspector_sits_below_preview_and_star
         assert preview_layout.itemAt(1).widget() is dialog.preview_tabs
         assert preview_layout.itemAt(2).widget() is dialog.selection_group
         assert dialog.selection_group.objectName() == "selectionInspector"
+        assert dialog.customize_button.text() == "Customize..."
+        assert dialog.customize_controls_container.isHidden()
+        assert dialog.selection_group.isHidden()
+
+        dialog.customize_button.setChecked(True)
+
+        assert dialog.customize_button.text() == "Hide customization"
+        assert not dialog.customize_controls_container.isHidden()
+        assert not dialog.selection_group.isHidden()
         assert not dialog.element_opacity_slider.isEnabled()
         assert not dialog.element_opacity_spin.isEnabled()
         assert not dialog.apply_element_button.isEnabled()

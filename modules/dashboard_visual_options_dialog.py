@@ -291,6 +291,19 @@ class DashboardVisualOptionsDialog(QDialog):
         preset_layout.addLayout(preview_colors)
         controls_layout.addWidget(preset_group)
 
+        self.customize_button = QPushButton("Customize...")
+        self.customize_button.setCheckable(True)
+        self.customize_button.setToolTip(
+            "Show detailed color, opacity, line, and selected-element controls."
+        )
+        controls_layout.addWidget(self.customize_button)
+
+        self.customize_controls_container = QWidget()
+        customize_layout = QVBoxLayout(self.customize_controls_container)
+        customize_layout.setContentsMargins(0, 0, 0, 0)
+        customize_layout.setSpacing(10)
+        controls_layout.addWidget(self.customize_controls_container)
+
         palette_group = QGroupBox("Color source")
         palette_layout = QGridLayout(palette_group)
         self.palette_preset_combo = QComboBox()
@@ -315,7 +328,7 @@ class DashboardVisualOptionsDialog(QDialog):
             button.clicked.connect(lambda _checked=False, button=button: self._choose_color(button))
             self._palette_buttons.append(button)
             palette_layout.addWidget(button, 3 + index // 3, index % 3)
-        controls_layout.addWidget(palette_group)
+        customize_layout.addWidget(palette_group)
 
         series_group = QGroupBox("Series")
         series_form = QFormLayout(series_group)
@@ -327,7 +340,7 @@ class DashboardVisualOptionsDialog(QDialog):
         self.distinguish_combo.currentIndexChanged.connect(self._handle_control_changed)
         series_form.addRow("Differentiate", self.distinguish_combo)
         series_form.addRow("Default marker size", self.marker_size_spin)
-        controls_layout.addWidget(series_group)
+        customize_layout.addWidget(series_group)
 
         opacity_group = QGroupBox("Opacity")
         opacity_form = QFormLayout(opacity_group)
@@ -362,7 +375,7 @@ class DashboardVisualOptionsDialog(QDialog):
         opacity_form.addRow("Scatter", self._slider_spin_row(self.scatter_opacity_slider, self.scatter_opacity_spin))
         opacity_form.addRow("Trend", self._slider_spin_row(self.trend_opacity_slider, self.trend_opacity_spin))
         opacity_form.addRow("Model curve", self._slider_spin_row(self.model_curve_opacity_slider, self.model_curve_opacity_spin))
-        controls_layout.addWidget(opacity_group)
+        customize_layout.addWidget(opacity_group)
 
         line_group = QGroupBox("Lines")
         line_form = QFormLayout(line_group)
@@ -392,7 +405,9 @@ class DashboardVisualOptionsDialog(QDialog):
         line_form.addRow("LSL", self._line_style_row(self.lsl_color_button, self.lsl_dash_combo))
         line_form.addRow("USL", self._line_style_row(self.usl_color_button, self.usl_dash_combo))
         line_form.addRow("Nominal", self._line_style_row(self.nominal_color_button, self.nominal_dash_combo))
-        controls_layout.addWidget(line_group)
+        customize_layout.addWidget(line_group)
+        customize_layout.addStretch(1)
+        controls_layout.addStretch(1)
 
         self.selection_group = QGroupBox("Selection inspector")
         self.selection_group.setObjectName("selectionInspector")
@@ -464,7 +479,6 @@ class DashboardVisualOptionsDialog(QDialog):
         selection_form.addRow("Pattern", self.element_pattern_combo)
         selection_form.addRow("", self.element_stat_accent_checkbox)
         selection_form.addRow("", selection_actions)
-        controls_layout.addStretch(1)
 
         preview_panel = QVBoxLayout()
         preview_panel.setContentsMargins(0, 0, 0, 0)
@@ -498,6 +512,8 @@ class DashboardVisualOptionsDialog(QDialog):
         self.preview_image_label.setScaledContents(False)
         self.preview_tabs.addTab(self.preview_image_label, "Static")
         preview_panel.addWidget(self.selection_group, 0)
+        self.customize_button.toggled.connect(self._set_customize_controls_visible)
+        self._set_customize_controls_visible(False)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok
@@ -509,6 +525,7 @@ class DashboardVisualOptionsDialog(QDialog):
         buttons.button(QDialogButtonBox.StandardButton.Reset).clicked.connect(self._reset_defaults)
         root.addWidget(buttons)
         configure_accessibility(self.preset_combo, name="Dashboard visual preset")
+        configure_accessibility(self.customize_button, name="Show dashboard visual customization")
         configure_accessibility(self.chart_type_combo, name="Dashboard visual preview chart")
         configure_accessibility(self.element_combo, name="Dashboard visual selected element")
         configure_accessibility(self.element_opacity_slider, name="Selected element opacity")
@@ -519,6 +536,13 @@ class DashboardVisualOptionsDialog(QDialog):
         self.setTabOrder(self.element_combo, self.element_color_button)
         self.setTabOrder(self.element_color_button, self.element_opacity_slider)
         self.setTabOrder(self.element_opacity_slider, self.element_opacity_spin)
+
+    def _set_customize_controls_visible(self, visible: bool) -> None:
+        visible = bool(visible)
+        self.customize_controls_container.setVisible(visible)
+        self.selection_group.setVisible(visible)
+        self.customize_button.setChecked(visible)
+        self.customize_button.setText("Hide customization" if visible else "Customize...")
 
     def _populate_from_settings(self, settings: Mapping[str, Any]) -> None:
         self._populating_controls = True

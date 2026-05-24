@@ -64,6 +64,8 @@ def test_dashboard_visual_dialog_uses_live_recipe_and_group_color_chips() -> Non
     assert "data-visual-group-chip" in dialog_html
     assert "Group 1" in dialog_html
     assert "Population" in dialog_html
+    assert 'id="dashboard-visual-customize-open"' in dialog_html
+    assert 'id="dashboard-visual-customize" class="visual-customize" hidden' in dialog_html
     assert "Color set" in dialog_html
     assert "Color generation" in dialog_html
     assert "Default marker size" in dialog_html
@@ -123,6 +125,11 @@ def test_dashboard_visual_runtime_range_readouts_use_existing_update_path() -> N
 
     assert "const initializeVisualRangeReadouts" in runtime_js
     assert "const syncRangeNumberReadouts" in runtime_js
+    assert (
+        "const customizeButton = document.getElementById('dashboard-visual-customize-open')"
+        in runtime_js
+    )
+    assert "customizePanel.toggleAttribute('hidden', !expanded)" in runtime_js
     assert "document.querySelectorAll('[data-visual-range-value]')" in runtime_js
     assert "range.dispatchEvent(new Event('input', { bubbles: true }));" in runtime_js
     assert "range.dispatchEvent(new Event('change', { bubbles: true }));" in runtime_js
