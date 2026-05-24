@@ -966,6 +966,54 @@ def test_dashboard_visual_when_similar_only_distinguishes_similar_effective_colo
     assert histogram_patterns(["#111111", "#121212", "#333333"]) == ["/", "\\", "x"]
 
 
+def test_dashboard_visual_clears_stale_marker_symbols_when_distinguishers_turn_off() -> None:
+    spec = {
+        "data": [
+            {
+                "type": "scatter",
+                "mode": "markers",
+                "name": "A",
+                "x": [1, 2],
+                "y": [3, 4],
+                "marker": {"symbol": "diamond"},
+            }
+        ],
+        "layout": {},
+        "metadata": {"kind": "scatter"},
+    }
+
+    apply_dashboard_visual_settings(
+        spec,
+        payload={"labels": ["A"], "type": "scatter"},
+        visual_settings={"series": {"palette": ["#123456"], "marker_symbols": []}},
+    )
+
+    assert spec["data"][0]["marker"]["symbol"] == "circle"
+
+
+def test_dashboard_visual_clears_stale_histogram_pattern_when_distinguishers_turn_off() -> None:
+    spec = {
+        "data": [
+            {
+                "type": "histogram",
+                "name": "A",
+                "x": [1.0, 1.1, 1.2],
+                "marker": {"pattern": {"shape": "/"}},
+            }
+        ],
+        "layout": {},
+        "metadata": {"kind": "histogram"},
+    }
+
+    apply_dashboard_visual_settings(
+        spec,
+        payload={"groups": [{"group": "A"}], "type": "histogram"},
+        visual_settings={"series": {"palette": ["#123456"], "patterns": []}},
+    )
+
+    assert spec["data"][0]["marker"]["pattern"]["shape"] == ""
+
+
 def test_dashboard_visual_histogram_empty_pattern_override_clears_auto_pattern() -> None:
     spec = {
         "data": [

@@ -206,6 +206,9 @@ def test_dashboard_visual_runtime_selected_element_controls_are_role_aware() -> 
     assert "const rehydrateSelectedVisualTarget" in runtime_js
     assert "if (dashboardVisualSelectedTarget) rehydrateSelectedVisualTarget();" in runtime_js
     assert "normalizeMarkerSymbol(marker.symbol, 'circle')" in runtime_js
+    assert "trace.marker.symbol = 'circle';" in runtime_js
+    assert "trace.marker.pattern.shape = '';" in runtime_js
+    assert "rightIndex = leftIndex + 1" in runtime_js
 
 
 def test_dashboard_visual_runtime_carries_population_focus_contract() -> None:

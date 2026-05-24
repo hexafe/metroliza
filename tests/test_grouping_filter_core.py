@@ -1,3 +1,5 @@
+import warnings
+
 import pandas as pd
 import pytest
 
@@ -297,6 +299,25 @@ def test_parse_filter_expression_supports_in_membership_and_wildcards() -> None:
         True,
         True,
     ]
+
+
+def test_parse_filter_expression_does_not_warn_for_mixed_format_date_membership() -> None:
+    frame = pd.DataFrame(
+        {
+            "Created": ["13.05.2026", "14.05.2026", "15.05.2026"],
+            "Sample": ["A", "B", "C"],
+        }
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        parsed = parse_filter_expression(
+            "Created IN (13.05.2026, 15.05.2026)",
+            frame.columns,
+        )
+
+    assert not any("Could not infer format" in str(warning.message) for warning in caught)
+    assert parsed.mask(frame).tolist() == [True, False, True]
 
 
 def test_parse_filter_expression_preserves_membership_boolean_precedence() -> None:

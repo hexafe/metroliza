@@ -1625,6 +1625,8 @@ def render_dashboard_visual_runtime_js(
               trace.marker.symbol = style.marker_symbol;
             }} else if (traceHasMarkers(trace) && !populationLike && useDistinguishers && markerSymbols.length) {{
               trace.marker.symbol = markerSymbols[labelIndex % markerSymbols.length];
+            }} else if (traceHasMarkers(trace)) {{
+              trace.marker.symbol = 'circle';
             }}
             if (['bar', 'histogram'].includes(String(trace.type || '').toLowerCase()) && style.pattern_shape !== undefined) {{
               trace.marker.pattern = Object.assign({{}}, trace.marker.pattern || {{}}, {{
@@ -1634,6 +1636,8 @@ def render_dashboard_visual_runtime_js(
               trace.marker.pattern = Object.assign({{}}, trace.marker.pattern || {{}}, {{
                 shape: patterns[labelIndex % patterns.length],
               }});
+            }} else if (['bar', 'histogram'].includes(String(trace.type || '').toLowerCase()) && trace.marker.pattern && typeof trace.marker.pattern === 'object') {{
+              trace.marker.pattern.shape = '';
             }}
             if (traceHasMarkers(trace)) {{
               const resolvedOutlineWidth = Number.isFinite(Number(style.outline_width))

@@ -562,19 +562,24 @@ def _apply_series_trace_style(
         resolved_symbol = _string_or_none(style.get("marker_symbol")) or marker_symbol
         if resolved_symbol and _trace_has_markers(trace):
             marker["symbol"] = resolved_symbol
+        elif _trace_has_markers(trace):
+            marker["symbol"] = "circle"
         pattern_overridden = "pattern_shape" in style
         resolved_pattern = (
             str(style.get("pattern_shape") or "")
             if pattern_overridden
             else pattern_shape
         )
-        if (
-            (pattern_overridden or resolved_pattern)
-            and str(trace.get("type") or "").casefold() in {"bar", "histogram"}
-        ):
-            pattern = marker.setdefault("pattern", {})
-            if isinstance(pattern, dict):
-                pattern["shape"] = resolved_pattern
+        pattern_trace = str(trace.get("type") or "").casefold() in {"bar", "histogram"}
+        if pattern_trace:
+            if pattern_overridden or resolved_pattern:
+                pattern = marker.setdefault("pattern", {})
+                if isinstance(pattern, dict):
+                    pattern["shape"] = resolved_pattern
+            else:
+                pattern = marker.get("pattern")
+                if isinstance(pattern, dict) and "shape" in pattern:
+                    pattern["shape"] = ""
         if _trace_has_markers(trace):
             resolved_outline_width = _finite_float(style.get("outline_width"))
             if resolved_outline_width is None:

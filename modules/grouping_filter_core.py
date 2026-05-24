@@ -824,7 +824,12 @@ def _parse_filter_condition(
     column = resolve_filter_column(column_text, columns, aliases=aliases)
 
     looks_date_like = bool(re.search(r"\d{4}", value) or any(marker in value for marker in ("-", "/", ":")))
-    date_value = pd.to_datetime(pd.Series([value]), errors="coerce", dayfirst=dayfirst).iloc[0]
+    date_value = pd.to_datetime(
+        pd.Series([value]),
+        errors="coerce",
+        dayfirst=dayfirst,
+        format="mixed",
+    ).iloc[0]
     number_value = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
     if looks_date_like and not pd.isna(date_value):
         return DateFilterSpec(
@@ -1103,7 +1108,12 @@ def _wildcard_text_mask(text: pd.Series, pattern: str) -> pd.Series:
 
 def _membership_value_kind(values: tuple[Any, ...], *, dayfirst: bool) -> str:
     if values and all(_looks_date_like(value) for value in values):
-        parsed_dates = pd.to_datetime(pd.Series(list(values)), errors="coerce", dayfirst=dayfirst)
+        parsed_dates = pd.to_datetime(
+            pd.Series(list(values)),
+            errors="coerce",
+            dayfirst=dayfirst,
+            format="mixed",
+        )
         if parsed_dates.notna().all():
             return "date"
     parsed_numbers = pd.to_numeric(pd.Series(list(values)), errors="coerce")
