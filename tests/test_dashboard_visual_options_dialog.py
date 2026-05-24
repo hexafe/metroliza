@@ -136,10 +136,14 @@ def test_dashboard_visual_dialog_recipe_updates_controls_and_preview_swatches(mo
         assert print_settings["preset"] == "print"
         assert dialog.palette_preset_combo.currentData() == "custom"
         assert dialog.distinguish_combo.currentData() == "always"
-        assert print_swatches == dialog_module.dashboard_visual_swatch_palette(
-            print_settings,
-            count=len(dialog._preview_color_buttons),
-        )
+        assert print_swatches == [
+            style["color"]
+            for style in dialog_module.dashboard_visual_effective_series_styles(
+                print_settings,
+                labels=dialog_module._PREVIEW_SERIES_LABELS,
+                chart_type="grouped_histogram",
+            )
+        ]
         assert print_swatches != initial_swatches
 
         dialog._set_combo_data(dialog.preset_combo, "colorblind_distinct")
@@ -148,10 +152,15 @@ def test_dashboard_visual_dialog_recipe_updates_controls_and_preview_swatches(mo
         assert distinct_settings["recipe"] == "colorblind_distinct"
         assert distinct_settings["preset"] == "custom"
         assert dialog.palette_preset_combo.currentData() == "okabe_ito"
-        assert distinct_swatches == dialog_module.dashboard_visual_swatch_palette(
-            distinct_settings,
-            count=len(dialog._preview_color_buttons),
-        )
+        assert distinct_settings["distinguish"] == "when_similar"
+        assert distinct_swatches == [
+            style["color"]
+            for style in dialog_module.dashboard_visual_effective_series_styles(
+                distinct_settings,
+                labels=dialog_module._PREVIEW_SERIES_LABELS,
+                chart_type="grouped_histogram",
+            )
+        ]
         assert distinct_swatches != print_swatches
 
         dialog._set_combo_data(dialog.preset_combo, "toned_report")
@@ -189,6 +198,136 @@ def test_dashboard_visual_dialog_manual_edit_switches_recipe_to_custom(monkeypat
         assert dialog.palette_preset_combo.currentData() == "custom"
         assert [button.property("color") for button in dialog._preview_color_buttons] == print_swatches
         assert dialog._preview_timer.isActive()
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+
+
+def test_dashboard_visual_dialog_group_color_edit_updates_palette_and_chips(monkeypatch) -> None:
+    _qapp()
+    try:
+        from PyQt6.QtCore import Qt  # noqa: F401
+    except Exception as exc:
+        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
+    import modules.dashboard_visual_options_dialog as dialog_module
+
+    _stub_preview_builders(monkeypatch, dialog_module)
+    dialog = dialog_module.DashboardVisualOptionsDialog(
+        settings={"recipe": "toned_report"},
+        persist_on_accept=False,
+    )
+    try:
+        dialog._preview_timer.stop()
+        dialog._selected_target = {
+            "target": "series:group 2",
+            "role": "series",
+            "label": "Group 2",
+            "capabilities": ["color", "opacity", "pattern_shape"],
+            "style": {"color": "#d66e2f", "opacity": 0.50},
+        }
+        dialog._load_selected_element_controls()
+        dialog._set_button_color(dialog.element_color_button, "#abcdef")
+
+        dialog._apply_selected_element_style()
+
+        settings = dialog.visual_settings()
+        assert dialog.preset_combo.currentData() == "custom"
+        assert settings["palette"][1] == "#abcdef"
+        assert dialog._palette_buttons[1].property("color") == "#abcdef"
+        assert dialog._preview_color_buttons[2].property("color") == "#abcdef"
+        assert settings["population_baseline"]["draw_first"] is True
+        assert settings["population_baseline"]["color"] == "#8a949e"
+        assert settings["comparison_focus"]["outline_width"] > 0
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+
+
+def test_dashboard_visual_dialog_population_color_edit_updates_baseline_not_palette(
+    monkeypatch,
+) -> None:
+    _qapp()
+    try:
+        from PyQt6.QtCore import Qt  # noqa: F401
+    except Exception as exc:
+        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
+    import modules.dashboard_visual_options_dialog as dialog_module
+
+    _stub_preview_builders(monkeypatch, dialog_module)
+    dialog = dialog_module.DashboardVisualOptionsDialog(
+        settings={"recipe": "toned_report"},
+        persist_on_accept=False,
+    )
+    try:
+        dialog._preview_timer.stop()
+        original_palette = [button.property("color") for button in dialog._palette_buttons]
+        dialog._selected_target = {
+            "target": "series:population points",
+            "role": "series",
+            "label": "Population points",
+            "capabilities": ["color", "opacity", "marker_size", "marker_symbol"],
+            "style": {"color": "#8a949e", "opacity": 0.32, "marker_size": 4.5},
+        }
+        dialog._load_selected_element_controls()
+        dialog._set_button_color(dialog.element_color_button, "#aabbcc")
+
+        dialog._apply_selected_element_style()
+
+        settings = dialog.visual_settings()
+        assert settings["population_baseline"]["color"] == "#aabbcc"
+        assert settings["population_baseline"]["draw_first"] is True
+        assert [button.property("color") for button in dialog._palette_buttons] == original_palette
+        assert dialog._preview_color_buttons[0].property("color") == "#aabbcc"
+        assert "population points" not in settings["series_overrides"]
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+
+
+def test_dashboard_visual_dialog_group_edit_keeps_population_first_in_histogram(
+    monkeypatch,
+) -> None:
+    _qapp()
+    try:
+        from PyQt6.QtCore import Qt  # noqa: F401
+    except Exception as exc:
+        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
+    import modules.dashboard_visual_options as visual_options
+    import modules.dashboard_visual_options_dialog as dialog_module
+
+    _stub_preview_builders(monkeypatch, dialog_module)
+    dialog = dialog_module.DashboardVisualOptionsDialog(
+        settings={"recipe": "toned_report"},
+        persist_on_accept=False,
+    )
+    try:
+        dialog._preview_timer.stop()
+        dialog._selected_target = {
+            "target": "series:group 1",
+            "role": "series",
+            "label": "Group 1",
+            "capabilities": ["color", "opacity"],
+            "style": {"color": "#245a5a", "opacity": 0.50},
+        }
+        dialog._load_selected_element_controls()
+        dialog._set_button_color(dialog.element_color_button, "#ff0000")
+        dialog._apply_selected_element_style()
+
+        spec = visual_options.build_dashboard_visual_preview_spec(
+            dialog.visual_settings(),
+            chart_type="histogram",
+        )
+
+        series_traces = [
+            trace
+            for trace in spec["data"]
+            if trace.get("meta", {}).get("dashboard_visual_role") == "series"
+        ]
+        assert series_traces[0]["name"] == "Population points"
+        assert series_traces[0]["marker"]["color"] == "#8a949e"
+        assert next(trace for trace in series_traces if trace["name"] == "Group 1")[
+            "marker"
+        ]["color"] == "#ff0000"
     finally:
         dialog.close()
         dialog.deleteLater()

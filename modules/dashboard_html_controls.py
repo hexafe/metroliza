@@ -183,7 +183,7 @@ def render_dashboard_visual_dialog() -> str:
             f'<span class="visual-color-chip-label">{html.escape(label)}</span>'
             "</button>"
         )
-        for index, label in enumerate(("Group 1", "Group 2", "Group 3", "Group 4", "Population points"))
+        for index, label in enumerate(("Population points", "Group 1", "Group 2", "Group 3", "Group 4"))
     )
     recipe_buttons = "".join(
         (
@@ -338,7 +338,7 @@ def render_dashboard_visual_dialog() -> str:
         '<label class="visual-field"><span>Differentiate</span>'
         '<select id="dashboard-visual-distinguish">'
         '<option value="color_only">Color only</option>'
-        '<option value="when_similar">When similar</option>'
+        '<option value="when_similar" selected>When similar</option>'
         '<option value="always">Always</option>'
         '</select></label>'
         '</section>'
@@ -783,8 +783,14 @@ def render_dashboard_visual_runtime_js(
           state.opacity[key] = boundedNumber(state.opacity[key], defaults.opacity[key], 0.05, 1);
         }});
         state.marker_size = boundedNumber(state.marker_size, defaults.marker_size, 2, 18);
-        state.population_baseline = sanitizePopulationBaseline(state.population_baseline);
-        state.comparison_focus = sanitizeComparisonFocus(state.comparison_focus);
+        state.population_baseline = sanitizePopulationBaseline(
+          state.population_baseline,
+          defaults.population_baseline
+        );
+        state.comparison_focus = sanitizeComparisonFocus(
+          state.comparison_focus,
+          defaults.comparison_focus
+        );
         state.stat_lines = Object.assign({{}}, defaults.stat_lines, state.stat_lines || {{}});
         state.stat_lines.width = boundedNumber(state.stat_lines.width, defaults.stat_lines.width, 0.5, 6);
         state.stat_lines.accent_by_stat = Boolean(state.stat_lines.accent_by_stat);
@@ -827,38 +833,44 @@ def render_dashboard_visual_runtime_js(
         return output;
       }};
 
-      const sanitizePopulationBaseline = (value) => {{
-        if (!value || typeof value !== 'object' || Array.isArray(value)) return {{}};
-        const aliases = Array.isArray(value.aliases)
-          ? value.aliases.map((alias) => String(alias || '').trim()).filter(Boolean)
+      const sanitizePopulationBaseline = (value, fallback = {{}}) => {{
+        const source = value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length
+          ? value
+          : fallback;
+        if (!source || typeof source !== 'object' || Array.isArray(source)) return {{}};
+        const aliases = Array.isArray(source.aliases)
+          ? source.aliases.map((alias) => String(alias || '').trim()).filter(Boolean)
           : ['population', 'population points'];
         const clean = {{
           aliases: aliases.length ? aliases : ['population', 'population points'],
-          draw_first: value.draw_first !== false,
+          draw_first: source.draw_first !== false,
         }};
-        const color = normalizeColor(value.color, '');
+        const color = normalizeColor(source.color, '');
         if (color) clean.color = color;
-        const opacity = sanitizeChartFloatMap(value.opacity, 0, 1);
+        const opacity = sanitizeChartFloatMap(source.opacity, 0, 1);
         if (Object.keys(opacity).length) clean.opacity = opacity;
-        if (Object.prototype.hasOwnProperty.call(value, 'marker_size')) clean.marker_size = boundedNumber(value.marker_size, 4.5, 2, 18);
-        if (typeof value.marker_symbol === 'string') clean.marker_symbol = value.marker_symbol;
-        if (Object.prototype.hasOwnProperty.call(value, 'outline_width')) clean.outline_width = boundedNumber(value.outline_width, 0, 0, 6);
-        if (typeof value.outline_color_mode === 'string') clean.outline_color_mode = visualChoice(value.outline_color_mode, ['auto', 'custom'], 'auto');
-        const outlineColor = normalizeColor(value.outline_color, '');
+        if (Object.prototype.hasOwnProperty.call(source, 'marker_size')) clean.marker_size = boundedNumber(source.marker_size, 4.5, 2, 18);
+        if (typeof source.marker_symbol === 'string') clean.marker_symbol = source.marker_symbol;
+        if (Object.prototype.hasOwnProperty.call(source, 'outline_width')) clean.outline_width = boundedNumber(source.outline_width, 0, 0, 6);
+        if (typeof source.outline_color_mode === 'string') clean.outline_color_mode = visualChoice(source.outline_color_mode, ['auto', 'custom'], 'auto');
+        const outlineColor = normalizeColor(source.outline_color, '');
         if (outlineColor) clean.outline_color = outlineColor;
         return clean;
       }};
 
-      const sanitizeComparisonFocus = (value) => {{
-        if (!value || typeof value !== 'object' || Array.isArray(value)) return {{}};
+      const sanitizeComparisonFocus = (value, fallback = {{}}) => {{
+        const source = value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length
+          ? value
+          : fallback;
+        if (!source || typeof source !== 'object' || Array.isArray(source)) return {{}};
         const clean = {{}};
-        const opacity = sanitizeChartFloatMap(value.opacity, 0, 1);
+        const opacity = sanitizeChartFloatMap(source.opacity, 0, 1);
         if (Object.keys(opacity).length) clean.opacity = opacity;
-        if (Object.prototype.hasOwnProperty.call(value, 'marker_size')) clean.marker_size = boundedNumber(value.marker_size, 8.5, 2, 18);
-        if (typeof value.marker_symbol === 'string') clean.marker_symbol = value.marker_symbol;
-        if (Object.prototype.hasOwnProperty.call(value, 'outline_width')) clean.outline_width = boundedNumber(value.outline_width, 1.25, 0, 6);
-        if (typeof value.outline_color_mode === 'string') clean.outline_color_mode = visualChoice(value.outline_color_mode, ['auto', 'custom'], 'auto');
-        const outlineColor = normalizeColor(value.outline_color, '');
+        if (Object.prototype.hasOwnProperty.call(source, 'marker_size')) clean.marker_size = boundedNumber(source.marker_size, 8.5, 2, 18);
+        if (typeof source.marker_symbol === 'string') clean.marker_symbol = source.marker_symbol;
+        if (Object.prototype.hasOwnProperty.call(source, 'outline_width')) clean.outline_width = boundedNumber(source.outline_width, 1.25, 0, 6);
+        if (typeof source.outline_color_mode === 'string') clean.outline_color_mode = visualChoice(source.outline_color_mode, ['auto', 'custom'], 'auto');
+        const outlineColor = normalizeColor(source.outline_color, '');
         if (outlineColor) clean.outline_color = outlineColor;
         return clean;
       }};
@@ -1154,6 +1166,73 @@ def render_dashboard_visual_runtime_js(
         }});
         return merged;
       }};
+      const visualPreviewLabels = ['Population points', 'Group 1', 'Group 2', 'Group 3', 'Group 4'];
+      const paletteIndexForPreviewLabel = (label) => {{
+        const key = normalizeLabelKey(label);
+        const index = ['Group 1', 'Group 2', 'Group 3', 'Group 4'].findIndex((item) => normalizeLabelKey(item) === key);
+        return index >= 0 ? index : null;
+      }};
+      const previewLabelsPopulationFirst = (labels, population) => {{
+        const populationLabels = [];
+        const comparisonLabels = [];
+        const seen = new Set();
+        (labels || []).forEach((label) => {{
+          const clean = stripGroupCount(label);
+          const key = normalizeLabelKey(clean);
+          if (!key || seen.has(key)) return;
+          seen.add(key);
+          if (isPopulationLabel(clean, population)) populationLabels.push(clean);
+          else comparisonLabels.push(clean);
+        }});
+        return populationLabels.concat(comparisonLabels);
+      }};
+      const effectiveSeriesColor = (
+        label,
+        labelIndex,
+        chartKind,
+        series,
+        palette,
+        population,
+        comparison,
+        overrides
+      ) => {{
+        const key = normalizeLabelKey(label);
+        const populationLike = isPopulationLabel(label, population);
+        const comparisonLabels = (series.__labels || []).filter((item) => !isPopulationLabel(item, population));
+        const comparisonIndex = comparisonLabels.findIndex((item) => normalizeLabelKey(item) === key);
+        const paletteIndex = comparisonIndex >= 0 ? comparisonIndex : labelIndex;
+        const override = overrides[key] || {{}};
+        let style = {{ color: palette[paletteIndex % Math.max(1, palette.length)] || '#245a5a' }};
+        const roleStyle = populationLike
+          ? roleStyleFromSettings(population, chartKind)
+          : roleStyleFromSettings(comparison, chartKind);
+        style = mergeRoleStyle(Object.assign(style, override), roleStyle, override);
+        return normalizeColor(style.color, '');
+      }};
+      const effectiveSeriesColors = (
+        labels,
+        chartKind,
+        series,
+        palette,
+        population,
+        comparison,
+        overrides
+      ) => {{
+        const labelSource = previewLabelsPopulationFirst(labels || [], population);
+        const seriesWithLabels = Object.assign({{}}, series || {{}}, {{ __labels: labels || [] }});
+        return labelSource
+          .map((label, index) => effectiveSeriesColor(
+            label,
+            index,
+            chartKind,
+            seriesWithLabels,
+            palette,
+            population,
+            comparison,
+            overrides || {{}}
+          ))
+          .filter(Boolean);
+      }};
       const statOverrideKey = (group, stat) => {{
         const groupKey = normalizeLabelKey(group);
         const statKey = normalizeLabelKey(stat);
@@ -1320,11 +1399,13 @@ def render_dashboard_visual_runtime_js(
 
       const paletteHasSimilarColors = (palette) => {{
         if (!Array.isArray(palette) || palette.length < 2) return false;
-        for (let index = 1; index < palette.length; index += 1) {{
-          const a = hexToRgb(palette[index - 1]);
-          const b = hexToRgb(palette[index]);
-          const distance = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
-          if (distance < 42) return true;
+        for (let leftIndex = 0; leftIndex < palette.length; leftIndex += 1) {{
+          for (let rightIndex = leftIndex + 1; rightIndex < palette.length; rightIndex += 1) {{
+            const a = hexToRgb(palette[leftIndex]);
+            const b = hexToRgb(palette[rightIndex]);
+            const distance = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+            if (distance < 42) return true;
+          }}
         }}
         return false;
       }};
@@ -1359,7 +1440,17 @@ def render_dashboard_visual_runtime_js(
           ? settings.stat_lines.overrides
           : {{}};
         const useDistinguishers = Boolean(series.always_distinguish)
-          || (Boolean(series.auto_distinguish) && paletteHasSimilarColors(palette));
+          || (Boolean(series.auto_distinguish) && paletteHasSimilarColors(
+            effectiveSeriesColors(
+              labels,
+              chartKind,
+              series,
+              palette,
+              populationBaseline,
+              comparisonFocus,
+              seriesOverrides
+            )
+          ));
 
         spec.layout = (spec.layout && typeof spec.layout === 'object') ? spec.layout : {{}};
         if (palette.length) {{
@@ -1637,9 +1728,20 @@ def render_dashboard_visual_runtime_js(
 
       const refreshResolvedPalettePreview = (state) => {{
         const palette = resolvedVisualPalette(state, 6);
+        const previewStyles = effectiveSeriesColors(
+          visualPreviewLabels,
+          'grouped_histogram',
+          {{ __labels: visualPreviewLabels }},
+          palette,
+          state.population_baseline || {{}},
+          state.comparison_focus || {{}},
+          state.series_overrides || {{}}
+        );
         document.querySelectorAll('[data-visual-group-chip]').forEach((chip) => {{
           const index = Number(chip.getAttribute('data-visual-chip-index'));
-          const color = palette[index % Math.max(1, palette.length)] || '#245a5a';
+          const color = previewStyles[index % Math.max(1, previewStyles.length)]
+            || palette[index % Math.max(1, palette.length)]
+            || '#245a5a';
           const swatch = chip.querySelector('.visual-color-chip-swatch');
           if (swatch) swatch.style.backgroundColor = color;
           chip.setAttribute('data-visual-chip-color', color);
@@ -2065,7 +2167,23 @@ def render_dashboard_visual_runtime_js(
         }} else if (target.role === 'stat') {{
           state.stat_line_overrides[statOverrideKey(target.group, target.stat)] = style;
         }} else {{
-          state.series_overrides[selectedTargetOverrideKey(target)] = style;
+          const overrideKey = selectedTargetOverrideKey(target);
+          if (target.role === 'series' && isPopulationLabel(target.label || target.group, state.population_baseline)) {{
+            state.population_baseline = Object.assign({{}}, state.population_baseline || {{}}, style);
+            delete state.series_overrides[overrideKey];
+          }} else {{
+            const paletteIndex = paletteIndexForPreviewLabel(target.label || target.group);
+            if (paletteIndex !== null && style.color) {{
+              state.palette = resolvedVisualPalette(state, 6).slice();
+              while (state.palette.length < 6) state.palette.push('#245a5a');
+              state.palette[paletteIndex] = style.color;
+              state.palette_preset = 'custom';
+              state.palette_mode = 'fixed';
+              delete style.color;
+            }}
+            if (Object.keys(style).length) state.series_overrides[overrideKey] = style;
+            else delete state.series_overrides[overrideKey];
+          }}
         }}
         setDashboardVisualState(state);
         applySelectedVisualTargetToControls(target);
@@ -2080,6 +2198,8 @@ def render_dashboard_visual_runtime_js(
           state.reference_lines[target.key] = clonePlotlySpec(embedded.reference_lines[target.key]);
         }} else if (target.role === 'stat') {{
           delete state.stat_line_overrides[statOverrideKey(target.group, target.stat)];
+        }} else if (target.role === 'series' && isPopulationLabel(target.label || target.group, state.population_baseline)) {{
+          state.population_baseline = clonePlotlySpec(embedded.population_baseline || dashboardVisualConfig.defaults.population_baseline || {{}});
         }} else {{
           delete state.series_overrides[selectedTargetOverrideKey(target)];
         }}

@@ -145,12 +145,19 @@ def apply_dashboard_visual_settings(
     outline_color = _string_or_none(series.get("outline_color"))
     outline_color_mode = _outline_color_mode(series.get("outline_color_mode"))
     auto_distinguish = bool(series.get("auto_distinguish"))
-    similar_palette = _palette_has_similar_colors(palette, threshold=_similarity_threshold(series))
-    use_distinguishers = bool(marker_symbols or pattern_shapes) and (
-        auto_distinguish or bool(series.get("always_distinguish"))
+    similar_palette = _palette_has_similar_colors(
+        _effective_series_colors(
+            labels,
+            series,
+            chart_kind=chart_kind,
+            palette=palette,
+            overrides=overrides,
+        ),
+        threshold=_similarity_threshold(series),
     )
-    if auto_distinguish and similar_palette:
-        use_distinguishers = True
+    use_distinguishers = bool(marker_symbols or pattern_shapes) and (
+        bool(series.get("always_distinguish")) or (auto_distinguish and similar_palette)
+    )
 
     if palette:
         layout = spec.setdefault("layout", {})
@@ -393,6 +400,34 @@ def _resolve_series_style(
     )
     style["color"] = color
     return style
+
+
+def _effective_series_colors(
+    labels: Sequence[str],
+    series: Mapping[str, Any],
+    *,
+    chart_kind: str,
+    palette: Sequence[str],
+    overrides: Mapping[str, Mapping[str, Any]],
+) -> list[str]:
+    colors: list[str] = []
+    for label_index, label in enumerate(labels):
+        style = _resolve_series_style(
+            label,
+            labels,
+            trace_index=label_index,
+            palette=palette,
+            overrides=overrides,
+            fallback_color=None,
+        )
+        override = overrides.get(_normalize_label_key(label)) or {}
+        role_style = _series_role_style(label, series, chart_kind)
+        if role_style:
+            style = _merge_series_role_style(style, role_style, override)
+        color = _string_or_none(style.get("color"))
+        if color:
+            colors.append(color)
+    return colors
 
 
 def _series_role_style(

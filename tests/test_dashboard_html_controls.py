@@ -75,6 +75,7 @@ def test_dashboard_visual_dialog_uses_live_recipe_and_group_color_chips() -> Non
     assert "dashboard-visual-element-marker-symbol" in dialog_html
     assert "dashboard-visual-element-outline-enabled" in dialog_html
     assert "dashboard-visual-element-outline-color-mode" in dialog_html
+    assert '<option value="when_similar" selected>When similar</option>' in dialog_html
     assert 'id="dashboard-visual-apply"' not in dialog_html
 
 
@@ -174,6 +175,8 @@ def test_dashboard_visual_runtime_recipes_update_controls_and_palette_preview() 
     assert "sanitizeVisualState(Object.assign({}, defaults, configured || {}, preservedTheme))" in runtime_js
     assert "state.recipe = visualChoice(state.recipe || state.visual_recipe || state.preset" in runtime_js
     assert "const refreshResolvedPalettePreview" in runtime_js
+    assert "const effectiveSeriesColors" in runtime_js
+    assert "visualPreviewLabels" in runtime_js
     assert "document.querySelectorAll('[data-visual-group-chip]')" in runtime_js
     assert "selectVisualTargetByChipIndex" in runtime_js
     assert "setDashboardVisualState(applyVisualRecipe(button.getAttribute('data-visual-preset')" in runtime_js
@@ -209,3 +212,5 @@ def test_dashboard_visual_runtime_carries_population_focus_contract() -> None:
     assert "comparison_focus: clonePlotlySpec(state.comparison_focus || {})" in runtime_js
     assert "const isPopulationLabel" in runtime_js
     assert "mergeRoleStyle(Object.assign(style, override), roleStyle, override)" in runtime_js
+    assert "state.population_baseline = Object.assign({}, state.population_baseline || {}, style);" in runtime_js
+    assert "state.palette[paletteIndex] = style.color;" in runtime_js

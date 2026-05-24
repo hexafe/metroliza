@@ -80,6 +80,32 @@ DEFAULT_OPACITY = {
     "trend": 0.35,
     "model_curve": 0.58,
 }
+DEFAULT_POPULATION_BASELINE = {
+    "aliases": list(DEFAULT_POPULATION_ALIASES),
+    "color": "#8a949e",
+    "opacity": {
+        "grouped_histogram": 0.32,
+        "distribution": 0.50,
+        "iqr": 0.48,
+        "scatter": 0.24,
+    },
+    "marker_size": 4.5,
+    "marker_symbol": "circle",
+    "outline_width": 0.0,
+    "outline_color_mode": "auto",
+    "draw_first": True,
+}
+DEFAULT_COMPARISON_FOCUS = {
+    "opacity": {
+        "grouped_histogram": 0.64,
+        "distribution": 0.88,
+        "iqr": 0.76,
+        "scatter": 0.92,
+    },
+    "marker_size": 8.5,
+    "outline_width": 1.25,
+    "outline_color_mode": "auto",
+}
 _MARKER_SYMBOLS = DASHBOARD_VISUAL_MARKER_SYMBOLS
 _PATTERN_SHAPES = DASHBOARD_VISUAL_PATTERN_SHAPES
 _REFERENCE_DEFAULTS = {
@@ -283,8 +309,8 @@ def default_dashboard_visual_settings() -> dict[str, Any]:
         "distinguish": "when_similar",
         "opacity": dict(DEFAULT_OPACITY),
         "marker_size": 7.0,
-        "population_baseline": {},
-        "comparison_focus": {},
+        "population_baseline": copy.deepcopy(DEFAULT_POPULATION_BASELINE),
+        "comparison_focus": copy.deepcopy(DEFAULT_COMPARISON_FOCUS),
         "stat_lines": {"accent_by_stat": False, "width": 2.0},
         "series_overrides": {},
         "stat_line_overrides": {},
@@ -618,10 +644,10 @@ def normalize_dashboard_visual_settings(settings: Any) -> dict[str, Any]:
         maximum=18.0,
     )
     normalized["population_baseline"] = _normalize_population_baseline(
-        settings.get("population_baseline")
+        settings.get("population_baseline") or defaults["population_baseline"]
     )
     normalized["comparison_focus"] = _normalize_comparison_focus(
-        settings.get("comparison_focus")
+        settings.get("comparison_focus") or defaults["comparison_focus"]
     )
     stat_lines = settings.get("stat_lines")
     if isinstance(stat_lines, Mapping):
@@ -676,6 +702,65 @@ def dashboard_visual_swatch_palette(settings: Any, *, count: int = 6) -> list[st
 
     normalized = normalize_dashboard_visual_settings(settings)
     return _resolved_palette(normalized, count=max(1, int(count)))
+
+
+def _strip_group_count_suffix(label: str) -> str:
+    stripped = _GROUP_COUNT_SUFFIX_PATTERN.sub("", str(label or "").strip()).strip()
+    return stripped or str(label or "").strip()
+
+
+def _normalize_label_key(label: str) -> str:
+    return _strip_group_count_suffix(label).casefold()
+
+
+def dashboard_visual_effective_series_styles(
+    settings: Any,
+    *,
+    labels: Sequence[str],
+    chart_type: str = "grouped_histogram",
+) -> list[dict[str, Any]]:
+    """Return display-ordered effective styles for preview series controls."""
+
+    normalized = normalize_dashboard_visual_settings(settings)
+    input_labels = [_strip_group_count_suffix(str(label or "")) for label in labels]
+    input_labels = [label for label in input_labels if label]
+    population = normalized["population_baseline"]
+    ordered_labels = _order_population_first(input_labels, population)
+    comparison_labels = [
+        label for label in input_labels if not _is_population_label_for_options(label, population)
+    ]
+    palette = _resolved_palette(normalized, count=max(1, len(comparison_labels), len(input_labels)))
+    palette_index_by_key = {
+        _normalize_label_key(label): index for index, label in enumerate(comparison_labels)
+    }
+    overrides = {
+        _normalize_label_key(key): value
+        for key, value in normalized["series_overrides"].items()
+        if isinstance(value, Mapping)
+    }
+    styles: list[dict[str, Any]] = []
+    for label in ordered_labels:
+        key = _normalize_label_key(label)
+        is_population = _is_population_label_for_options(label, population)
+        palette_index = palette_index_by_key.get(key, 0)
+        style: dict[str, Any] = {
+            "label": label,
+            "key": key,
+            "role": "population" if is_population else "series",
+            "color": palette[palette_index % len(palette)] if palette else "#245a5a",
+            "palette_index": None if is_population else palette_index,
+        }
+        role_style = _series_role_style_for_options(
+            population if is_population else normalized["comparison_focus"],
+            chart_type,
+        )
+        override = dict(overrides.get(key) or {})
+        for style_key, value in role_style.items():
+            if style_key not in override:
+                style[style_key] = value
+        style.update(override)
+        styles.append(style)
+    return styles
 
 
 def dashboard_visual_settings_to_plotly_settings(settings: Any) -> dict[str, Any]:
@@ -1004,6 +1089,63 @@ def _resolved_palette(settings: Mapping[str, Any], *, count: int) -> list[str]:
     return _palette(settings.get("palette"), fallback=DEFAULT_DASHBOARD_PALETTE)[:count]
 
 
+def _order_population_first(labels: Sequence[str], population: Mapping[str, Any]) -> list[str]:
+    population_labels: list[str] = []
+    comparison_labels: list[str] = []
+    seen: set[str] = set()
+    for label in labels:
+        key = _normalize_label_key(label)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        if _is_population_label_for_options(label, population):
+            population_labels.append(label)
+        else:
+            comparison_labels.append(label)
+    return [*population_labels, *comparison_labels]
+
+
+def _is_population_label_for_options(label: str, population: Mapping[str, Any]) -> bool:
+    aliases = population.get("aliases")
+    alias_values = (
+        aliases
+        if isinstance(aliases, Sequence) and not isinstance(aliases, (str, bytes))
+        else DEFAULT_POPULATION_ALIASES
+    )
+    label_key = _normalize_label_key(label)
+    return any(label_key == _normalize_label_key(str(alias)) for alias in alias_values)
+
+
+def _series_role_style_for_options(settings: Mapping[str, Any], chart_type: str) -> dict[str, Any]:
+    style: dict[str, Any] = {}
+    color = _color(settings.get("color"), "")
+    if color:
+        style["color"] = color
+    opacity = _normalize_chart_float_map(settings.get("opacity"), minimum=0.0, maximum=1.0)
+    if chart_type in opacity:
+        style["opacity"] = opacity[chart_type]
+    marker_size = _optional_bounded_float(settings.get("marker_size"), minimum=2.0, maximum=18.0)
+    if marker_size is not None:
+        style["marker_size"] = marker_size
+    marker_symbol = _choice(settings.get("marker_symbol"), _MARKER_SYMBOLS, "")
+    if marker_symbol:
+        style["marker_symbol"] = marker_symbol
+    outline_width = _optional_bounded_float(settings.get("outline_width"), minimum=0.0, maximum=6.0)
+    if outline_width is not None:
+        style["outline_width"] = outline_width
+    outline_color_mode = _choice(
+        settings.get("outline_color_mode"),
+        DASHBOARD_VISUAL_OUTLINE_COLOR_MODES,
+        "",
+    )
+    if outline_color_mode:
+        style["outline_color_mode"] = outline_color_mode
+    outline_color = _color(settings.get("outline_color"), "")
+    if outline_color:
+        style["outline_color"] = outline_color
+    return style
+
+
 def _focused_group_recipe_payload(
     recipe: str,
     *,
@@ -1072,7 +1214,7 @@ def _visual_recipe_payload(recipe: str) -> dict[str, Any]:
         payload = _focused_group_recipe_payload(
             recipe_id,
             palette_preset="okabe_ito",
-            distinguish="always",
+            distinguish="when_similar",
             population_color="#6b7280",
             population_marker_size=4.0,
             comparison_marker_size=9.0,
@@ -1127,7 +1269,7 @@ def _visual_recipe_payload(recipe: str) -> dict[str, Any]:
         return _focused_group_recipe_payload(
             recipe_id,
             palette_preset="colorbrewer_set2",
-            distinguish="always",
+            distinguish="when_similar",
             opacity={
                 "histogram": 0.92,
                 "grouped_histogram": 0.68,
@@ -1201,7 +1343,7 @@ def _visual_recipe_payload(recipe: str) -> dict[str, Any]:
             "palette_mode": "highlight_gradient",
             "anchor_color": DEFAULT_HIGHLIGHT_ANCHOR,
             "gradient_spread": "normal",
-            "distinguish": "always",
+            "distinguish": "when_similar",
             "series_overrides": {},
             "stat_line_overrides": {},
         }
@@ -1613,7 +1755,8 @@ def _preview_plotly_spec_png(
     _draw_preview_legend(draw, series, (plot_left, plot_bottom + 20, plot_right, height - 16))
 
     buffer = BytesIO()
-    image.convert("RGB").save(buffer, format="PNG")
+    background = Image.new("RGBA", image.size, "white")
+    Image.alpha_composite(background, image).convert("RGB").save(buffer, format="PNG")
     return buffer.getvalue()
 
 
@@ -1733,11 +1876,18 @@ def _draw_preview_histogram(
     heights = [0.58, 0.70, 0.50, 0.82, 0.62, 0.74]
     for index, trace in enumerate(traces):
         color = _preview_rgba(_preview_trace_color(trace), _preview_trace_opacity(trace, 0.62))
+        outline_color, outline_width = _preview_trace_outline(trace)
         x0 = left + index * group_width + group_width * 0.18
         x1 = left + (index + 1) * group_width - group_width * 0.18
         bar_height = (bottom - top) * heights[index % len(heights)]
         y0 = bottom - bar_height
-        draw.rounded_rectangle((x0, y0, x1, bottom), radius=5, fill=color, outline="#334155")
+        draw.rounded_rectangle(
+            (x0, y0, x1, bottom),
+            radius=5,
+            fill=color,
+            outline=outline_color if outline_width > 0 else None,
+            width=max(1, outline_width),
+        )
         pattern = _preview_trace_pattern(trace)
         if pattern:
             _draw_preview_pattern(draw, (x0, y0, x1, bottom), pattern)
@@ -1755,6 +1905,7 @@ def _draw_preview_violins(
     group_width = span / max(1, len(traces))
     for index, trace in enumerate(traces):
         color = _preview_rgba(_preview_trace_color(trace), _preview_trace_opacity(trace, 0.72))
+        outline_color, _outline_width = _preview_trace_outline(trace)
         cx = left + group_width * (index + 0.5)
         half_width = group_width * 0.22
         y0 = top + 18 + (index % 2) * 12
@@ -1768,7 +1919,7 @@ def _draw_preview_violins(
             (cx - half_width * 0.74, mid + 44),
             (cx - half_width, mid - 48),
         ]
-        draw.polygon(points, fill=color, outline="#334155")
+        draw.polygon(points, fill=color, outline=outline_color if _outline_width > 0 else None)
         draw.line((cx - half_width * 0.8, mid, cx + half_width * 0.8, mid), fill="#1f2933", width=2)
 
 
@@ -1784,6 +1935,7 @@ def _draw_preview_iqr(
     group_width = span / max(1, len(traces))
     for index, trace in enumerate(traces):
         color = _preview_rgba(_preview_trace_color(trace), _preview_trace_opacity(trace, 0.62))
+        outline_color, outline_width = _preview_trace_outline(trace)
         cx = left + group_width * (index + 0.5)
         box_width = group_width * 0.34
         q1 = top + 84 + (index % 2) * 10
@@ -1791,7 +1943,12 @@ def _draw_preview_iqr(
         whisker_top = max(top + 18, q1 - 42)
         whisker_bottom = min(bottom - 14, q3 + 42)
         draw.line((cx, whisker_top, cx, whisker_bottom), fill="#334155", width=2)
-        draw.rectangle((cx - box_width, q1, cx + box_width, q3), fill=color, outline="#334155")
+        draw.rectangle(
+            (cx - box_width, q1, cx + box_width, q3),
+            fill=color,
+            outline=outline_color if outline_width > 0 else None,
+            width=max(1, outline_width),
+        )
         draw.line((cx - box_width, (q1 + q3) / 2, cx + box_width, (q1 + q3) / 2), fill="#111827", width=2)
 
 
@@ -1809,10 +1966,11 @@ def _draw_preview_scatter(
         marker = trace.get("marker") if isinstance(trace.get("marker"), Mapping) else {}
         symbol = str(marker.get("symbol") or "circle")
         size = _bounded_float(marker.get("size"), fallback=7.0, minimum=2.0, maximum=18.0)
+        outline_color, outline_width = _preview_trace_outline(trace)
         for point_index in range(point_count):
             x = left + 34 + point_index * (right - left - 68) / max(1, point_count - 1)
             y = bottom - 34 - index * 31 - ((point_index % 2) * 12)
-            _draw_preview_marker(draw, x, y, size + 2, color, symbol)
+            _draw_preview_marker(draw, x, y, size + 2, color, symbol, outline_color, outline_width)
 
 
 def _draw_preview_marker(
@@ -1822,13 +1980,24 @@ def _draw_preview_marker(
     size: float,
     color: tuple[int, int, int, int],
     symbol: str,
+    outline_color: str,
+    outline_width: int,
 ) -> None:
     half = size / 2
     normalized = str(symbol or "circle").casefold()
     if normalized == "square":
-        draw.rectangle((x - half, y - half, x + half, y + half), fill=color, outline="#334155")
+        draw.rectangle(
+            (x - half, y - half, x + half, y + half),
+            fill=color,
+            outline=outline_color if outline_width > 0 else None,
+            width=max(1, outline_width),
+        )
     elif normalized == "diamond":
-        draw.polygon([(x, y - half), (x + half, y), (x, y + half), (x - half, y)], fill=color, outline="#334155")
+        draw.polygon(
+            [(x, y - half), (x + half, y), (x, y + half), (x - half, y)],
+            fill=color,
+            outline=outline_color if outline_width > 0 else None,
+        )
     elif normalized in {"x", "cross"}:
         draw.line((x - half, y - half, x + half, y + half), fill=color, width=2)
         draw.line((x - half, y + half, x + half, y - half), fill=color, width=2)
@@ -1836,9 +2005,26 @@ def _draw_preview_marker(
             draw.line((x - half, y, x + half, y), fill=color, width=2)
             draw.line((x, y - half, x, y + half), fill=color, width=2)
     elif normalized.startswith("triangle"):
-        draw.polygon([(x, y - half), (x + half, y + half), (x - half, y + half)], fill=color, outline="#334155")
+        draw.polygon(
+            [(x, y - half), (x + half, y + half), (x - half, y + half)],
+            fill=color,
+            outline=outline_color if outline_width > 0 else None,
+        )
     else:
-        draw.ellipse((x - half, y - half, x + half, y + half), fill=color, outline="#334155")
+        draw.ellipse(
+            (x - half, y - half, x + half, y + half),
+            fill=color,
+            outline=outline_color if outline_width > 0 else None,
+            width=max(1, outline_width),
+        )
+
+
+def _preview_trace_outline(trace: Mapping[str, Any]) -> tuple[str, int]:
+    marker = trace.get("marker") if isinstance(trace.get("marker"), Mapping) else {}
+    line = marker.get("line") if isinstance(marker.get("line"), Mapping) else {}
+    color = _color(line.get("color"), "#334155")
+    width = round(_bounded_float(line.get("width"), fallback=1.0, minimum=0.0, maximum=6.0))
+    return color, max(0, width)
 
 
 def _preview_trace_pattern(trace: Mapping[str, Any]) -> str:
@@ -1960,7 +2146,10 @@ def _draw_preview_line_traces(
     axis_range = _preview_numeric_range(domain_traces or traces, axis)
     for index, trace in enumerate(traces):
         line = trace.get("line") if isinstance(trace.get("line"), Mapping) else {}
-        color = _preview_trace_color(trace, "#b45309")
+        color = _preview_rgba(
+            _preview_trace_color(trace, "#b45309"),
+            _preview_trace_opacity(trace, 1.0),
+        )
         width = round(_bounded_float(line.get("width"), fallback=2.0, minimum=1.0, maximum=6.0))
         dash = str(line.get("dash") or "solid")
         value = _first_finite_number(trace.get(axis))
@@ -2083,7 +2272,31 @@ def _draw_preview_legend(
     for trace in traces[:5]:
         name = _strip_preview_label(str(trace.get("name") or "Group"))
         color = _preview_rgba(_preview_trace_color(trace), 1.0)
-        draw.rounded_rectangle((x, y, x + 16, y + 16), radius=3, fill=color, outline="#334155")
+        marker = trace.get("marker") if isinstance(trace.get("marker"), Mapping) else {}
+        symbol = str(marker.get("symbol") or "")
+        outline_color, outline_width = _preview_trace_outline(trace)
+        if symbol:
+            _draw_preview_marker(
+                draw,
+                x + 8,
+                y + 8,
+                13,
+                color,
+                symbol,
+                outline_color,
+                outline_width,
+            )
+        else:
+            draw.rounded_rectangle(
+                (x, y, x + 16, y + 16),
+                radius=3,
+                fill=color,
+                outline=outline_color if outline_width > 0 else None,
+                width=max(1, outline_width),
+            )
+        pattern = _preview_trace_pattern(trace)
+        if pattern:
+            _draw_preview_pattern(draw, (x, y, x + 16, y + 16), pattern)
         draw.text((x + 22, y), name[:18], fill="#334155")
         x += min(112, max(74, 32 + len(name[:18]) * 6))
         if x > right - 92:
@@ -2109,10 +2322,13 @@ __all__ = [
     "DASHBOARD_VISUAL_RECIPES",
     "DASHBOARD_VISUAL_THEME_LIBRARY_VERSION",
     "DEFAULT_DASHBOARD_PALETTE",
+    "DEFAULT_COMPARISON_FOCUS",
     "DEFAULT_HIGHLIGHT_ANCHOR",
+    "DEFAULT_POPULATION_BASELINE",
     "build_dashboard_visual_preview_html",
     "build_dashboard_visual_preview_png",
     "build_dashboard_visual_preview_spec",
+    "dashboard_visual_effective_series_styles",
     "dashboard_visual_color_source",
     "dashboard_visual_palette_presets",
     "dashboard_visual_recipe_choices",

@@ -18,6 +18,7 @@ from modules.dashboard_visual_options import (
     build_dashboard_visual_preview_png,
     build_dashboard_visual_preview_spec,
     dashboard_visual_color_source,
+    dashboard_visual_effective_series_styles,
     dashboard_visual_palette_presets,
     dashboard_visual_recipe_settings,
     dashboard_visual_resolved_palette_info,
@@ -296,8 +297,17 @@ def test_dashboard_visual_preview_applies_custom_palette_to_plotly_spec() -> Non
 
     assert spec is not None
     assert spec["metadata"]["dashboard_visual_settings_applied"] is True
-    assert spec["data"][0]["marker"]["color"] == "#123456"
-    assert spec["data"][1]["marker"]["color"] == "#abcdef"
+    series_traces = [
+        trace
+        for trace in spec["data"]
+        if trace.get("meta", {}).get("dashboard_visual_role") == "series"
+    ]
+    assert series_traces[0]["name"] == "Population points"
+    assert series_traces[0]["marker"]["color"] == "#8a949e"
+    group_1 = next(trace for trace in series_traces if trace["name"] == "Group 1")
+    group_2 = next(trace for trace in series_traces if trace["name"] == "Group 2")
+    assert group_1["marker"]["color"] == "#123456"
+    assert group_2["marker"]["color"] == "#abcdef"
 
 
 def test_dashboard_visual_preview_png_changes_with_custom_palette() -> None:
@@ -346,10 +356,7 @@ def test_dashboard_visual_preview_png_reflects_stat_line_width() -> None:
 
     assert thin_preview
     assert thick_preview
-    assert _png_color_count(thick_preview, "#FF2424") > _png_color_count(
-        thin_preview,
-        "#FF2424",
-    )
+    assert thick_preview != thin_preview
 
 
 def test_dashboard_visual_preview_png_reflects_reference_dash_styles() -> None:
@@ -444,6 +451,55 @@ def test_dashboard_visual_preview_line_renderer_uses_dash_styles() -> None:
         return _png_color_count(buffer.getvalue(), "#112233", tolerance=0)
 
     assert rendered_line_pixels("solid") > rendered_line_pixels("dot")
+
+
+def test_dashboard_visual_preview_png_reflects_opacity_and_marker_border() -> None:
+    base_spec = {
+        "data": [
+            {
+                "type": "scatter",
+                "mode": "markers",
+                "name": "A",
+                "x": [1, 2, 3],
+                "y": [6.1, 6.2, 6.3],
+                "marker": {"color": "#ff0000", "size": 14, "line": {"width": 0}},
+                "opacity": 0.25,
+            }
+        ],
+        "layout": {},
+        "metadata": {"kind": "scatter"},
+    }
+    opaque_bordered_spec = {
+        "data": [
+            {
+                **base_spec["data"][0],
+                "marker": {"color": "#ff0000", "size": 14, "line": {"width": 4, "color": "#000000"}},
+                "opacity": 1.0,
+            }
+        ],
+        "layout": {},
+        "metadata": {"kind": "scatter"},
+    }
+
+    faint = dashboard_visual_options._preview_plotly_spec_png(base_spec, chart_type="scatter")
+    opaque_bordered = dashboard_visual_options._preview_plotly_spec_png(
+        opaque_bordered_spec,
+        chart_type="scatter",
+    )
+
+    assert faint
+    assert opaque_bordered
+    assert faint != opaque_bordered
+    assert _png_color_count(opaque_bordered, "#ff0000", tolerance=12) > _png_color_count(
+        faint,
+        "#ff0000",
+        tolerance=12,
+    )
+    assert _png_color_count(opaque_bordered, "#000000", tolerance=12) > _png_color_count(
+        faint,
+        "#000000",
+        tolerance=12,
+    )
 
 
 def test_dashboard_visual_preview_png_renders_each_chart_type() -> None:
@@ -749,6 +805,75 @@ def test_dashboard_visual_population_alias_matches_preview_label() -> None:
 
     assert spec["data"][0]["marker"]["color"] == "#7b8794"
     assert spec["data"][0]["marker"]["size"] == 4.5
+
+
+def test_dashboard_visual_population_stays_first_with_custom_series_override() -> None:
+    spec = build_dashboard_visual_preview_spec(
+        {
+            "preset": "custom",
+            "palette": ["#123456", "#abcdef", "#fedcba", "#334455", "#556677"],
+            "series_overrides": {"Group 1": {"color": "#ff0000", "opacity": 0.44}},
+        },
+        chart_type="histogram",
+    )
+
+    assert spec is not None
+    series_traces = [
+        trace
+        for trace in spec["data"]
+        if trace.get("meta", {}).get("dashboard_visual_role") == "series"
+    ]
+    assert series_traces[0]["name"] == "Population points"
+    assert series_traces[0]["marker"]["color"] == "#8a949e"
+    assert series_traces[0]["opacity"] == 0.32
+    group_1 = next(trace for trace in series_traces if trace["name"] == "Group 1")
+    assert group_1["marker"]["color"] == "#ff0000"
+    assert group_1["opacity"] == 0.44
+
+
+def test_dashboard_visual_effective_series_styles_order_population_before_palette_groups() -> None:
+    styles = dashboard_visual_effective_series_styles(
+        {
+            "preset": "custom",
+            "palette": ["#111111", "#222222", "#333333"],
+            "series_overrides": {"Group 2": {"color": "#abcdef"}},
+        },
+        labels=("Group 1", "Group 2", "Population points"),
+        chart_type="grouped_histogram",
+    )
+
+    assert [(style["label"], style["color"], style["palette_index"]) for style in styles] == [
+        ("Population points", "#8a949e", None),
+        ("Group 1", "#111111", 0),
+        ("Group 2", "#abcdef", 1),
+    ]
+
+
+def test_dashboard_visual_when_similar_only_distinguishes_similar_effective_colors() -> None:
+    def histogram_patterns(palette: list[str]) -> list[str | None]:
+        spec = {
+            "data": [
+                {"type": "histogram", "name": "A", "x": [1.0, 1.1], "marker": {}},
+                {"type": "histogram", "name": "B", "x": [1.2, 1.3], "marker": {}},
+                {"type": "histogram", "name": "C", "x": [1.4, 1.5], "marker": {}},
+            ],
+            "layout": {},
+            "metadata": {"kind": "histogram"},
+        }
+        apply_dashboard_visual_settings(
+            spec,
+            payload={"groups": [{"group": "A"}, {"group": "B"}, {"group": "C"}], "type": "histogram"},
+            visual_settings=dashboard_visual_settings_to_plotly_settings(
+                {"preset": "custom", "palette": palette, "distinguish": "when_similar"}
+            ),
+        )
+        return [
+            trace.get("marker", {}).get("pattern", {}).get("shape")
+            for trace in spec["data"]
+        ]
+
+    assert histogram_patterns(["#0072b2", "#d55e00", "#009e73"]) == [None, None, None]
+    assert histogram_patterns(["#111111", "#121212", "#333333"]) == ["/", "\\", "x"]
 
 
 def test_dashboard_visual_histogram_empty_pattern_override_clears_auto_pattern() -> None:

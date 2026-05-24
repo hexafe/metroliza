@@ -39,6 +39,7 @@ from modules.dashboard_visual_options import (
     build_dashboard_visual_preview_html,
     build_dashboard_visual_preview_png,
     build_dashboard_visual_preview_spec,
+    dashboard_visual_effective_series_styles,
     dashboard_visual_palette_presets,
     dashboard_visual_recipe_choices,
     dashboard_visual_recipe_settings,
@@ -84,12 +85,33 @@ _CHART_ITEMS = (
     ("Scatter", "scatter"),
 )
 _DASH_ITEMS = (("Solid", "solid"), ("Dash", "dash"), ("Dot", "dot"), ("Dash-dot", "dashdot"))
-_PREVIEW_SERIES_LABELS = ("Group 1", "Group 2", "Group 3", "Group 4", "Population points")
+_PREVIEW_SERIES_LABELS = ("Population points", "Group 1", "Group 2", "Group 3", "Group 4")
+_PREVIEW_PALETTE_LABELS = ("Group 1", "Group 2", "Group 3", "Group 4")
+_GROUP_COUNT_SUFFIX_PATTERN = re.compile(r"\s*\(n\s*=\s*\d+\)\s*$", re.IGNORECASE)
 _MARKER_SYMBOL_ITEMS = tuple(
     (str(symbol).replace("-", " ").title(), symbol)
     for symbol in DASHBOARD_VISUAL_MARKER_SYMBOLS
 )
 _OUTLINE_COLOR_MODE_ITEMS = (("Auto contrast", "auto"), ("Custom color", "custom"))
+
+
+def _preview_label_key(label: str) -> str:
+    return _GROUP_COUNT_SUFFIX_PATTERN.sub("", str(label or "").strip()).strip().casefold()
+
+
+def _is_population_preview_label(label: str, population: Mapping[str, Any]) -> bool:
+    aliases = population.get("aliases") if isinstance(population, Mapping) else None
+    alias_values = aliases if isinstance(aliases, list) else ["population", "population points"]
+    label_key = _preview_label_key(label)
+    return any(label_key == _preview_label_key(str(alias)) for alias in alias_values)
+
+
+def _preview_palette_index_for_label(label: str) -> int | None:
+    label_key = _preview_label_key(label)
+    for index, preview_label in enumerate(_PREVIEW_PALETTE_LABELS):
+        if label_key == _preview_label_key(preview_label):
+            return index
+    return None
 
 
 class _PreviewSelectionBridge(QObject):
@@ -117,6 +139,8 @@ class DashboardVisualOptionsDialog(QDialog):
         self._preview_color_buttons: list[QPushButton] = []
         self._series_overrides = dict(self._settings.get("series_overrides") or {})
         self._stat_line_overrides = dict(self._settings.get("stat_line_overrides") or {})
+        self._population_baseline = dict(self._settings.get("population_baseline") or {})
+        self._comparison_focus = dict(self._settings.get("comparison_focus") or {})
         self._theme_library = load_dashboard_visual_theme_library()
         self._palette_presets = dashboard_visual_palette_presets()
         self._preview_targets: list[dict[str, Any]] = []
@@ -179,6 +203,8 @@ class DashboardVisualOptionsDialog(QDialog):
             "accent_by_stat": self.stat_accent_combo.currentData() == "accent",
             "width": self.stat_width_spin.value(),
         }
+        settings["population_baseline"] = dict(self._population_baseline)
+        settings["comparison_focus"] = dict(self._comparison_focus)
         settings["series_overrides"] = dict(self._series_overrides)
         settings["stat_line_overrides"] = dict(self._stat_line_overrides)
         reference_width = self.reference_width_spin.value()
@@ -579,6 +605,8 @@ class DashboardVisualOptionsDialog(QDialog):
     def _populate_from_settings_unchecked(self, settings: Mapping[str, Any]) -> None:
         self._series_overrides = dict(settings.get("series_overrides") or {})
         self._stat_line_overrides = dict(settings.get("stat_line_overrides") or {})
+        self._population_baseline = dict(settings.get("population_baseline") or {})
+        self._comparison_focus = dict(settings.get("comparison_focus") or {})
         self.theme_name_edit.setText(str(settings.get("theme_name") or ""))
         self.theme_combo.blockSignals(True)
         self._set_combo_data(self.theme_combo, str(settings.get("theme_id") or ""))
@@ -677,15 +705,25 @@ class DashboardVisualOptionsDialog(QDialog):
         recipe = str(settings.get("recipe") or settings.get("preset") or "auto")
         is_auto = recipe == "auto"
         is_custom = recipe == "custom"
-        palette = dashboard_visual_swatch_palette(settings, count=max(6, len(_PREVIEW_SERIES_LABELS)))
+        palette = dashboard_visual_swatch_palette(settings, count=max(6, len(_PREVIEW_PALETTE_LABELS)))
+        preview_styles = dashboard_visual_effective_series_styles(
+            settings,
+            labels=_PREVIEW_SERIES_LABELS,
+            chart_type=str(self.chart_type_combo.currentData() or "grouped_histogram")
+            if hasattr(self, "chart_type_combo")
+            else "grouped_histogram",
+        )
         custom_swatches_enabled = (
             is_custom
             and self.palette_mode_combo.currentData() == "fixed"
             and self.palette_preset_combo.currentData() == "custom"
         )
         for index, button in enumerate(self._preview_color_buttons):
-            self._set_button_color(button, palette[index % len(palette)])
-            button.setToolTip(f"{_PREVIEW_SERIES_LABELS[index]}: {palette[index % len(palette)]}")
+            style = preview_styles[index % len(preview_styles)]
+            color = str(style.get("color") or palette[index % len(palette)])
+            label = str(style.get("label") or _PREVIEW_SERIES_LABELS[index])
+            self._set_button_color(button, color)
+            button.setToolTip(f"{label}: {color}")
         if not custom_swatches_enabled:
             for index, button in enumerate(self._palette_buttons):
                 self._set_button_color(button, palette[index % len(palette)])
@@ -1113,7 +1151,28 @@ class DashboardVisualOptionsDialog(QDialog):
             )
             return style
         label = str(target.get("label") or "")
-        key = label.casefold()
+        if role == "series" and _is_population_preview_label(label, self._population_baseline):
+            style = dict(self._population_baseline)
+            raw_opacity = style.get("opacity")
+            if isinstance(raw_opacity, Mapping):
+                chart_kind = str(target.get("chart_kind") or target.get("trace_type") or "grouped_histogram")
+                style["opacity"] = (
+                    trace_style.get("opacity")
+                    or raw_opacity.get(chart_kind)
+                    or raw_opacity.get("grouped_histogram")
+                    or raw_opacity.get("scatter")
+                    or 0.35
+                )
+            style.setdefault("color", trace_style.get("color") or "#8a949e")
+            style.setdefault("opacity", trace_style.get("opacity") or 0.35)
+            style.setdefault("marker_size", trace_style.get("marker_size") or 4.5)
+            style.setdefault("marker_symbol", trace_style.get("marker_symbol") or "circle")
+            style.setdefault("outline_width", trace_style.get("outline_width") or 0.0)
+            style.setdefault("outline_color_mode", style.get("outline_color_mode") or "auto")
+            style.setdefault("outline_color", trace_style.get("outline_color") or "#111827")
+            style.setdefault("pattern_shape", trace_style.get("pattern_shape") or "")
+            return style
+        key = _preview_label_key(label)
         style = dict(self._series_overrides.get(key) or {})
         settings = self.visual_settings()
         style.setdefault(
@@ -1175,6 +1234,7 @@ class DashboardVisualOptionsDialog(QDialog):
         else:
             label = str(target.get("label") or "")
             if label:
+                is_population = _is_population_preview_label(label, self._population_baseline)
                 if capabilities["marker_size"]:
                     style["marker_size"] = self.element_marker_size_spin.value()
                 if capabilities["marker_symbol"]:
@@ -1195,8 +1255,21 @@ class DashboardVisualOptionsDialog(QDialog):
                     else:
                         style.pop("outline_color", None)
                 if capabilities["pattern"]:
-                    style["pattern_shape"] = str(self.element_pattern_combo.currentData() or "")
-                self._series_overrides[label.casefold()] = style
+                        style["pattern_shape"] = str(self.element_pattern_combo.currentData() or "")
+                key = _preview_label_key(label)
+                if is_population:
+                    self._population_baseline.update(style)
+                    self._series_overrides.pop(key, None)
+                else:
+                    palette_index = _preview_palette_index_for_label(label)
+                    if palette_index is not None and "color" in style:
+                        self._set_button_color(self._palette_buttons[palette_index], str(style["color"]))
+                        style = dict(style)
+                        style.pop("color", None)
+                    if style:
+                        self._series_overrides[key] = style
+                    else:
+                        self._series_overrides.pop(key, None)
         self._handle_control_changed()
 
     def _reset_selected_element_style(self) -> None:
@@ -1208,7 +1281,10 @@ class DashboardVisualOptionsDialog(QDialog):
             self._stat_line_overrides.pop(self._stat_override_key(target), None)
         elif role in {"series", "trend", "model_curve"}:
             label = str(target.get("label") or "")
-            self._series_overrides.pop(label.casefold(), None)
+            key = _preview_label_key(label)
+            if role == "series" and _is_population_preview_label(label, self._population_baseline):
+                self._population_baseline = dict(default_dashboard_visual_settings()["population_baseline"])
+            self._series_overrides.pop(key, None)
         elif role == "reference":
             defaults = default_dashboard_visual_settings()["reference_lines"]
             key = str(target.get("key") or "").casefold()
