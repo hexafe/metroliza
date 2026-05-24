@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from pathlib import Path
 import sqlite3
+import warnings
 import zipfile
 
 import pandas as pd
@@ -645,6 +646,23 @@ def test_sqlite_grouping_filter_expression_supports_membership_lists(tmp_path) -
         ) == [2, 5]
     finally:
         cleanup_tabular_load_result(result)
+
+
+def test_sqlite_grouping_filter_expression_does_not_warn_for_mixed_date_values() -> None:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        scalar_filter = compile_tabular_sqlite_grouping_filter(
+            ("timestamp",),
+            grouping_filter_expression="timestamp >= 13.05.2026",
+        )
+        membership_filter = compile_tabular_sqlite_grouping_filter(
+            ("timestamp",),
+            grouping_filter_expression="timestamp IN (13.05.2026, 15.05.2026)",
+        )
+
+    assert not any("Could not infer format" in str(warning.message) for warning in caught)
+    assert scalar_filter.params == ("2026-05-13",)
+    assert membership_filter.params == ("2026-05-13", "2026-05-15")
 
 
 def test_sqlite_membership_filter_escapes_wildcard_like_metacharacters(tmp_path) -> None:

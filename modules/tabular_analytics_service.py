@@ -3124,7 +3124,12 @@ def _sqlite_filter_number_value(value: Any, *, field_name: str) -> float:
 
 
 def _sqlite_filter_date_value(value: Any, *, dayfirst: bool, field_name: str) -> date:
-    parsed = pd.to_datetime(pd.Series([value]), errors="coerce", dayfirst=dayfirst).iloc[0]
+    parsed = pd.to_datetime(
+        pd.Series([value]),
+        errors="coerce",
+        dayfirst=dayfirst,
+        format="mixed",
+    ).iloc[0]
     if pd.isna(parsed):
         raise ValueError(f"{field_name} must be date-like")
     return parsed.date()
@@ -3141,7 +3146,12 @@ def _sqlite_membership_values(values: Iterable[Any]) -> tuple[Any, ...]:
 
 def _sqlite_membership_value_kind(values: tuple[Any, ...], *, dayfirst: bool) -> str:
     if values and all(_sqlite_membership_value_looks_date_like(value) for value in values):
-        parsed_dates = pd.to_datetime(pd.Series(list(values)), errors="coerce", dayfirst=dayfirst)
+        parsed_dates = pd.to_datetime(
+            pd.Series(list(values)),
+            errors="coerce",
+            dayfirst=dayfirst,
+            format="mixed",
+        )
         if parsed_dates.notna().all():
             return "date"
     parsed_numbers = pd.to_numeric(pd.Series(list(values)), errors="coerce")
