@@ -1,12 +1,13 @@
 RELEASE_VERSION = "2026.05rc4"
-VERSION_DATE = "260520"
+VERSION_DATE = "260524"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
-CURRENT_RELEASE_HIGHLIGHT = "Optimizations."
-PUBLIC_VERSION_LABEL = "2026.05 RC4 (build 260520)"
+CURRENT_RELEASE_HIGHLIGHT = "Optimizations and dashboard plot visual customization."
+PUBLIC_VERSION_LABEL = "2026.05 RC4 (build 260524)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
     - Optimizations<br>
+    - Dashboard plot visuals can now be customized<br>
 
     <br><b>Archive:</b><br>
 

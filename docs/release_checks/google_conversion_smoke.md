@@ -41,7 +41,7 @@ Superseded 2026-03 smoke attempts are archived at [`../archive/2026/google_conve
 
 ## Current RC status
 
-- `2026.05 RC4 (build 260520)`: no Google conversion smoke evidence is recorded yet
+- `2026.05 RC4 (build 260524)`: no Google conversion smoke evidence is recorded yet
   for the current promotion artifact. Default push/PR CI skips this manual job,
   so a green CI run does not satisfy this gate. Record a live smoke run for the
   exact promoted commit/artifact before open-testing promotion.

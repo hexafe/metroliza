@@ -116,7 +116,7 @@ python -m maturin build --manifest-path modules/native/chart_renderer/Cargo.toml
 ### 2026.05 RC4 PR/release-audit evidence
 
 Current validation branch: `rc2` / PR #895.
-Current RC metadata: `2026.05rc4(260520)`.
+Current RC metadata: `2026.05rc4(260524)`.
 Current plotstats hotfix pin:
 `1e2c72107d342f44a37e5fb78d7d76992ea60315`.
 
@@ -127,8 +127,8 @@ Current plotstats hotfix pin:
 - Local release gates passed for the current audit worktree:
   `ruff`, `compileall`, release metadata sync, release hygiene, `git diff --check`,
   security audit, full pytest, and focused dependency/adapter regression tests.
-- Full pytest passed:
-  `1653 passed, 176 skipped, 6 warnings, 60 subtests passed`.
+- Full pytest with coverage passed:
+  `1697 passed, 191 skipped, 91 warnings, 60 subtests passed`; total coverage `79%`.
 - Security audit passed after allowing `pip-audit` to create/upgrade its temporary
   dependency environment; `pip-audit` reported no known vulnerabilities.
 - Previous RC4 GitHub Actions CI passed for Metroliza run `26326503387` on

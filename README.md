@@ -286,11 +286,11 @@ Examples of metric availability by spec type:
 
 ## Release metadata
 
-Current release highlight (`2026.05 RC4 (build 260520)`): Optimizations.
+Current release highlight (`2026.05 RC4 (build 260524)`): Optimizations and dashboard plot visual customization.
 
 Canonical release metadata is in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, `CURRENT_RELEASE_HIGHLIGHT`).
 
-### Changelog highlights (release `2026.05 RC4 (build 260520)`)
+### Changelog highlights (release `2026.05 RC4 (build 260524)`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 

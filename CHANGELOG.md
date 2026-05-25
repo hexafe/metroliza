@@ -1,7 +1,8 @@
 # Changelog (for end users)
 
-## 2026.05 RC4 (build 260520) — current version
+## 2026.05 RC4 (build 260524) — current version
 - Optimizations.
+- Dashboard plot visuals can now be customized.
 
 ## 2026.05 RC3 (build 260519)
 - CSV Summary and Export grouping filters now apply after pressing Enter, keeping large row sets responsive while typing.
