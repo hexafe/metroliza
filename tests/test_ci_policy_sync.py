@@ -24,6 +24,9 @@ def test_ci_workflow_keeps_coverage_visibility_contract() -> None:
     assert '--cov-report=term' in workflow
     assert '--cov-report=xml:coverage.xml' in workflow
     assert '--cov-fail-under="${COVERAGE_MINIMUM_THRESHOLD:-65}"' in workflow
+    assert 'QT_QPA_PLATFORM: offscreen' in workflow
+    assert 'Install Qt runtime system libraries' in workflow
+    assert 'libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0' in workflow
     assert 'name: unit-test-coverage' in workflow
     assert 'coverage.xml' in workflow
 
@@ -62,6 +65,7 @@ def test_ci_policy_keeps_coverage_threshold_governance_self_contained() -> None:
     assert 'Coverage threshold changes require an explicit threshold update' in ci_policy
     assert 'coverage threshold is blocking' in ci_policy
     assert 'canonical `src/metroliza` line coverage' in ci_policy
+    assert 'Qt runtime system libraries' in ci_policy
 
 
 def test_active_docs_use_canonical_test_pythonpath() -> None:

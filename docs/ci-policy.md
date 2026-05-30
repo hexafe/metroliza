@@ -17,7 +17,7 @@ The following checks must pass on every PR and branch push.
 |---|---|---|
 | Lint and static validation | `static-checks` | Python compile check, Ruff lint, release metadata consistency check, and repository/diff JSON secret scan. |
 | Metadata checks | `static-checks` | `scripts/sync_release_metadata.py --check` is enforced in this job. |
-| Full pytest suite + coverage gate | `unit-tests` | Runs `python -m pytest tests -q --cov=src/metroliza --cov=modules --cov=scripts --cov-report=term --cov-report=xml:coverage.xml --cov-fail-under=65` for the full Python test suite and publishes coverage outputs. |
+| Full pytest suite + coverage gate | `unit-tests` | Runs `python -m pytest tests -q --cov=src/metroliza --cov=modules --cov=scripts --cov-report=term --cov-report=xml:coverage.xml --cov-fail-under=65` for the full Python test suite with Qt runtime libraries installed and `QT_QPA_PLATFORM=offscreen`, then publishes coverage outputs. |
 | Native artifact build + smoke/parity checks | `native-artifacts` | Builds all native wheels, installs them, runs import/smoke checks for each native module plus explicit fallback checks, executes native chart planner/parity smoke checks, runs an export-runtime fast-path contract smoke for extended summary charts, and runs native parser parity tests. |
 | CMM parser perf guardrail + trend gate | `cmm-parser-perf-gate` | Runs `scripts/benchmark_paths.py` for `cmm_parser_backend_compare` with fixed synthetic workload, enforces native speed/usage guardrails, and compares measured medians to checked-in baseline via `scripts/benchmark_trend_compare.py`. |
 
@@ -29,6 +29,7 @@ The following checks must pass on every PR and branch push.
   - machine-readable artifact via `coverage.xml` (`--cov-report=xml:coverage.xml`)
 - The same job enforces the blocking `--cov-fail-under` threshold and publishes a coverage threshold status in the CI job summary.
 - The status summary also reports canonical `src/metroliza` line coverage separately so legacy shim coverage cannot hide source-package regressions.
+- The job installs minimal Qt runtime system libraries before Python setup so PyQt import tests exercise the real UI modules instead of skipping on missing runner libraries.
 - Coverage threshold changes require an explicit threshold update in `.github/workflows/ci.yml` plus this policy file.
 - Reviewers can inspect coverage evidence in:
   - the `unit-tests` job log (terminal summary),

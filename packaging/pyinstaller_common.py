@@ -5,12 +5,27 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
-from PyInstaller.utils.hooks import (
-    collect_data_files,
-    collect_dynamic_libs,
-    collect_submodules,
-    copy_metadata,
-)
+try:
+    from PyInstaller.utils.hooks import (
+        collect_data_files,
+        collect_dynamic_libs,
+        collect_submodules,
+        copy_metadata,
+    )
+except ModuleNotFoundError as exc:
+    _PYINSTALLER_IMPORT_ERROR = exc
+
+    def _missing_pyinstaller_hook(*_args: object, **_kwargs: object) -> list:
+        raise ModuleNotFoundError(
+            "PyInstaller is required to build package collection metadata"
+        ) from _PYINSTALLER_IMPORT_ERROR
+
+    collect_data_files = _missing_pyinstaller_hook
+    collect_dynamic_libs = _missing_pyinstaller_hook
+    collect_submodules = _missing_pyinstaller_hook
+    copy_metadata = _missing_pyinstaller_hook
+else:
+    _PYINSTALLER_IMPORT_ERROR = None
 
 
 def read_version_label(root_dir: Path) -> str:
