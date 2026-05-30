@@ -37,6 +37,8 @@ nuitka-build-report.xml
 _metroliza_*_native.so
 modules/native/**/target/
 modules/native/**/Cargo.lock
+src/metroliza/native/**/target/
+src/metroliza/native/**/Cargo.lock
 
 # Google API local secrets
 credentials.json

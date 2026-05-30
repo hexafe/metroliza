@@ -13,6 +13,7 @@ from modules.db import (
     execute_many_with_retry,
     execute_select_with_columns,
     execute_with_retry,
+    quote_identifier,
     read_sql_dataframe,
     run_transaction_with_retry,
 )
@@ -81,6 +82,18 @@ class TestDbUtils(unittest.TestCase):
         df = read_sql_dataframe(self.db_path, 'SELECT id, name FROM sample ORDER BY id')
         self.assertIsInstance(df, pd.DataFrame)
         self.assertListEqual(df['name'].tolist(), ['alpha', 'beta'])
+
+    def test_read_sql_dataframe_accepts_query_params(self):
+        df = read_sql_dataframe(
+            self.db_path,
+            'SELECT id, name FROM sample WHERE name = ?',
+            params=('beta',),
+        )
+
+        self.assertListEqual(df['name'].tolist(), ['beta'])
+
+    def test_quote_identifier_escapes_embedded_quotes(self):
+        self.assertEqual(quote_identifier('source"name'), '"source""name"')
 
     def test_read_sql_dataframe_retries_on_transient_lock(self):
         from modules import db as db_module

@@ -248,6 +248,10 @@ def test_dashboard_visual_runtime_carries_population_focus_contract() -> None:
     assert "&& !populationLike && useDistinguishers && markerSymbols.length" in runtime_js
     assert "const opacity = Object.assign(" in runtime_js
     assert "opacity[selectedTargetChartKind(target)] = populationStyle.opacity;" in runtime_js
+    assert "if (['histogram', 'grouped_histogram', 'distribution', 'iqr', 'scatter', 'trend', 'model_curve'].includes(raw))" in runtime_js
+    assert "const resetSelectedSeriesPaletteEntry" in runtime_js
+    assert "resetSelectedSeriesPaletteEntry(state, embedded, target);" in runtime_js
+    assert "nextPalette[paletteIndex] = resetPalette[paletteIndex] || '#245a5a';" in runtime_js
     assert (
         "state.population_baseline = Object.assign("
         "{}, state.population_baseline || {}, populationStyle);"

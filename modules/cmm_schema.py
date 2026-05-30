@@ -1,16 +1,6 @@
-"""Compatibility imports for the neutral report ingestion schema."""
+"""Compatibility shim for ``metroliza.reports.cmm_schema``."""
 
-from modules.report_schema import ensure_report_schema, ensure_schema_indexes
+from modules.compat import alias_module as _alias_module
 
-__all__ = ["ensure_cmm_report_schema", "ensure_report_schema", "ensure_schema_indexes"]
-
-
-def ensure_cmm_report_schema(database, *, connection=None, retries=4, retry_delay_s=1):
-    """Ensure the report ingestion schema exists."""
-
-    return ensure_report_schema(
-        database,
-        connection=connection,
-        retries=retries,
-        retry_delay_s=retry_delay_s,
-    )
+_module = _alias_module(__name__, "metroliza.reports.cmm_schema")
+globals().update(_module.__dict__)

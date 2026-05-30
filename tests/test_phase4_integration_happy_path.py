@@ -12,6 +12,19 @@ import pandas as pd
 from pathlib import Path
 
 # Stubs for optional GUI/parser dependencies pulled in by thread modules.
+_STUBBED_MODULE_NAMES = (
+    'PyQt6.QtCore',
+    'modules.custom_logger',
+    'metroliza.shared.custom_logger',
+    'modules.cmm_report_parser',
+    'metroliza.parsing.cmm_report_parser',
+)
+_MISSING_MODULE = object()
+_ORIGINAL_MODULES = {
+    module_name: sys.modules.get(module_name, _MISSING_MODULE)
+    for module_name in _STUBBED_MODULE_NAMES
+}
+
 qtcore_stub = types.ModuleType('PyQt6.QtCore')
 
 
@@ -49,10 +62,20 @@ class _DummyLogger:
 
 custom_logger_stub.CustomLogger = _DummyLogger
 sys.modules['modules.custom_logger'] = custom_logger_stub
+sys.modules['metroliza.shared.custom_logger'] = custom_logger_stub
 
 cmm_parser_stub = types.ModuleType('modules.cmm_report_parser')
 cmm_parser_stub.CMMReportParser = object
 sys.modules['modules.cmm_report_parser'] = cmm_parser_stub
+sys.modules['metroliza.parsing.cmm_report_parser'] = cmm_parser_stub
+
+
+def teardown_module(_module):
+    for module_name, original_module in _ORIGINAL_MODULES.items():
+        if original_module is _MISSING_MODULE:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = original_module
 
 from modules.export_data_thread import ExportDataThread, build_export_dataframe, execute_export_query  # noqa: E402
 from modules.contracts import AppPaths, ExportOptions, ExportRequest  # noqa: E402

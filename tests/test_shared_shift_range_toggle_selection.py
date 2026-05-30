@@ -208,6 +208,7 @@ class TestSharedShiftRangeToggleSelection(unittest.TestCase):
             clear=False,
         ):
             sys.modules.pop("modules.list_selection_utils", None)
+            sys.modules.pop("metroliza.shared.list_selection_utils", None)
             utils_module = importlib.import_module("modules.list_selection_utils")
             self._run_shared_behavior_test(utils_module.ListSelectionUtils)
 
@@ -224,6 +225,7 @@ class TestSharedShiftRangeToggleSelection(unittest.TestCase):
             clear=False,
         ):
             sys.modules.pop("modules.list_selection_utils", None)
+            sys.modules.pop("metroliza.shared.list_selection_utils", None)
             utils_module = importlib.import_module("modules.list_selection_utils")
             self._run_filter_preserve_selection_test(utils_module.ListSelectionUtils, canonical=False)
             self._run_filter_preserve_selection_test(utils_module.ListSelectionUtils, canonical=True)
@@ -241,6 +243,7 @@ class TestSharedShiftRangeToggleSelection(unittest.TestCase):
             clear=False,
         ):
             sys.modules.pop("modules.list_selection_utils", None)
+            sys.modules.pop("metroliza.shared.list_selection_utils", None)
             utils_module = importlib.import_module("modules.list_selection_utils")
             helper = utils_module.ListSelectionUtils()
             list_widget = _FakeClickedListWidget()
@@ -252,6 +255,7 @@ class TestSharedShiftRangeToggleSelection(unittest.TestCase):
 
     def test_filter_dialog_delegates_shift_and_filter_to_shared_helper(self):
         pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
+        fake_pandas = types.ModuleType("pandas")
         fake_db = types.ModuleType("modules.db")
         fake_db.execute_with_retry = lambda *_args, **_kwargs: []
 
@@ -263,10 +267,13 @@ class TestSharedShiftRangeToggleSelection(unittest.TestCase):
                 "PyQt6.QtWidgets": qtwidgets,
                 "PyQt6.QtGui": qtgui,
                 "modules.db": fake_db,
+                "metroliza.reports.db": fake_db,
+                "pandas": fake_pandas,
             },
             clear=False,
         ):
             sys.modules.pop("modules.filter_dialog", None)
+            sys.modules.pop("metroliza.ui.filter_dialog", None)
             filter_dialog_module = importlib.import_module("modules.filter_dialog")
             dialog = filter_dialog_module.FilterDialog.__new__(filter_dialog_module.FilterDialog)
             dialog._list_selection_utils = Mock()
@@ -283,6 +290,7 @@ class TestSharedShiftRangeToggleSelection(unittest.TestCase):
 
     def test_data_grouping_delegates_shift_and_filter_to_shared_helper(self):
         pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
+        fake_pandas = types.ModuleType("pandas")
         fake_db = types.ModuleType("modules.db")
         fake_db.read_sql_dataframe = lambda *_args, **_kwargs: None
         fake_db.execute_with_retry = lambda *_args, **_kwargs: None
@@ -296,10 +304,14 @@ class TestSharedShiftRangeToggleSelection(unittest.TestCase):
                 "PyQt6.QtWidgets": qtwidgets,
                 "PyQt6.QtGui": qtgui,
                 "modules.db": fake_db,
+                "pandas": fake_pandas,
             },
             clear=False,
         ):
             sys.modules.pop("modules.data_grouping", None)
+            sys.modules.pop("metroliza.ui.data_grouping", None)
+            sys.modules.pop("modules.data_grouping_service", None)
+            sys.modules.pop("metroliza.tabular.data_grouping_service", None)
             data_grouping_module = importlib.import_module("modules.data_grouping")
             dialog = data_grouping_module.DataGrouping.__new__(data_grouping_module.DataGrouping)
             dialog._list_selection_utils = Mock()

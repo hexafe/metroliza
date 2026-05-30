@@ -23,8 +23,8 @@ REQUIREMENT_FILES = (
     "requirements-build.txt",
     "requirements-dev.txt",
 )
-IMPORT_SCAN_DIRS = ("modules", "scripts", "tests")
-BANDIT_SCAN_DIRS = ("modules", "scripts")
+IMPORT_SCAN_DIRS = ("src/metroliza", "modules", "scripts", "tests")
+BANDIT_SCAN_DIRS = ("src/metroliza", "modules", "scripts")
 PIP_AUDIT_CACHE_DIR = str(Path(tempfile.gettempdir()) / "pip-audit-cache")
 
 FIRST_PARTY_IMPORTS = {

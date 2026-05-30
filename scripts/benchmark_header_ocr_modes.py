@@ -134,7 +134,7 @@ def _env_snapshot() -> dict[str, str | None]:
 
 
 def _runtime_config_summary() -> dict[str, Any]:
-    from modules.header_ocr_backend import rapidocr_latin_runtime_config_from_env
+    from metroliza.parsing.header_ocr_backend import rapidocr_latin_runtime_config_from_env
 
     try:
         runtime_config = rapidocr_latin_runtime_config_from_env()
@@ -172,7 +172,7 @@ def _metadata_summary(result: Any) -> dict[str, Any]:
 
 
 def _run_one(pdf_path: Path, mode: str) -> dict[str, Any]:
-    from modules.cmm_report_parser import CMMReportParser
+    from metroliza.parsing.cmm_report_parser import CMMReportParser
 
     parser = CMMReportParser(str(pdf_path), ":memory:", metadata_parsing_mode=mode)
     start = perf_counter()

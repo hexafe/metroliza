@@ -6,18 +6,25 @@ import subprocess
 import sys
 
 
+def _drop_leaked_qt_stubs() -> None:
+    for module_name in ("PyQt6", "PyQt6.QtCore", "PyQt6.QtGui", "PyQt6.QtWidgets"):
+        module = sys.modules.get(module_name)
+        if module is not None and getattr(module, "__file__", None) is None:
+            sys.modules.pop(module_name, None)
+
+
 def test_main_window_does_not_top_level_import_heavy_feature_stacks():
-    module_ast = ast.parse(Path("modules/main_window.py").read_text(encoding="utf-8"))
+    module_ast = ast.parse(Path("src/metroliza/ui/main_window.py").read_text(encoding="utf-8"))
     blocked = {
-        "modules.export_dialog",
-        "modules.parsing_dialog",
-        "modules.metadata_enrichment_thread",
-        "modules.modify_db",
-        "modules.about_window",
-        "modules.release_notes_dialog",
-        "modules.characteristic_mapping_dialog",
-        "modules.industrial_data_dialog",
-        "modules.industrial_analytics_dialog",
+        "metroliza.ui.export_dialog",
+        "metroliza.ui.parsing_dialog",
+        "metroliza.parsing.metadata_enrichment_thread",
+        "metroliza.ui.modify_db",
+        "metroliza.ui.about_window",
+        "metroliza.ui.release_notes_dialog",
+        "metroliza.ui.characteristic_mapping_dialog",
+        "metroliza.ui.industrial_data_dialog",
+        "metroliza.ui.industrial_analytics_dialog",
     }
 
     imported_modules = set()
@@ -28,6 +35,17 @@ def test_main_window_does_not_top_level_import_heavy_feature_stacks():
             imported_modules.add(node.module)
 
     assert imported_modules.isdisjoint(blocked)
+
+
+def test_main_window_feature_warmup_uses_canonical_import_paths():
+    _drop_leaked_qt_stubs()
+    from metroliza.ui.main_window import FEATURE_IMPORT_WARMUP_MODULES
+
+    warmed_modules = [module_name for _label, module_name in FEATURE_IMPORT_WARMUP_MODULES]
+
+    assert warmed_modules
+    assert all(module_name.startswith("metroliza.") for module_name in warmed_modules)
+    assert all(not module_name.startswith("modules.") for module_name in warmed_modules)
 
 
 def test_startup_profile_writes_jsonl_events(tmp_path):

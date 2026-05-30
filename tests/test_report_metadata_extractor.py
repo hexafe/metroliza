@@ -333,7 +333,7 @@ def test_filename_split_date_fallback_does_not_pollute_part_name():
 def test_parser_header_extraction_uses_ocr_when_structured_words_are_missing(monkeypatch):
     spec = importlib.util.spec_from_file_location(
         "_cmm_report_parser_real_header_test",
-        Path("modules/cmm_report_parser.py"),
+        Path("src/metroliza/parsing/cmm_report_parser.py"),
     )
     parser_module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
@@ -388,7 +388,7 @@ def test_parser_header_extraction_uses_ocr_when_structured_words_are_missing(mon
 def test_parser_header_extraction_light_mode_skips_ocr_when_structured_words_are_missing(monkeypatch):
     spec = importlib.util.spec_from_file_location(
         "_cmm_report_parser_real_light_header_test",
-        Path("modules/cmm_report_parser.py"),
+        Path("src/metroliza/parsing/cmm_report_parser.py"),
     )
     parser_module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None

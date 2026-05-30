@@ -35,7 +35,7 @@ def test_parser_interface_matches_fixture_snapshot(fixture):
 
 
 def test_cmm_report_parser_wired_to_interface_layer():
-    parser_source = Path("modules/cmm_report_parser.py").read_text()
+    parser_source = Path("src/metroliza/parsing/cmm_report_parser.py").read_text()
     assert "parse_blocks_with_backend_and_telemetry(self.pdf_raw_text)" in parser_source
     assert "parse_blocks_with_backend_and_telemetry(self.pdf_raw_text, use_native=False)" not in parser_source
 
@@ -468,7 +468,7 @@ def test_dim_ax_subrows_d1_d2_d3_rows_reach_sqlite_via_to_sqlite(tmp_path):
     sys.modules["pymupdf"] = pymupdf_stub
 
     parser_spec = importlib.util.spec_from_file_location(
-        "_cmm_report_parser_real_for_test", Path("modules/cmm_report_parser.py")
+        "_cmm_report_parser_real_for_test", Path("src/metroliza/parsing/cmm_report_parser.py")
     )
     assert parser_spec is not None and parser_spec.loader is not None
     parser_module = importlib.util.module_from_spec(parser_spec)
@@ -532,7 +532,7 @@ def _load_cmm_report_parser_with_test_stubs():
     sys.modules["pymupdf"] = pymupdf_stub
 
     parser_spec = importlib.util.spec_from_file_location(
-        "_cmm_report_parser_real_for_pipeline_test", Path("modules/cmm_report_parser.py")
+        "_cmm_report_parser_real_for_pipeline_test", Path("src/metroliza/parsing/cmm_report_parser.py")
     )
     assert parser_spec is not None and parser_spec.loader is not None
     parser_module = importlib.util.module_from_spec(parser_spec)

@@ -5,13 +5,19 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCAN_DIRS = ("modules", "scripts", "tests")
+SCAN_DIRS = ("src/metroliza", "modules", "scripts", "tests")
 
 
 def _camelcase_module_ref(module_path: str | None) -> bool:
-    if not module_path or not module_path.startswith("modules."):
+    if not module_path:
         return False
-    module_name = module_path.split(".", 1)[1].split(".", 1)[0]
+    if module_path.startswith("modules."):
+        module_name = module_path.split(".", 1)[1].split(".", 1)[0]
+    elif module_path.startswith("metroliza."):
+        parts = module_path.split(".")
+        module_name = parts[-1] if parts else ""
+    else:
+        return False
     return module_name[:1].isupper()
 
 

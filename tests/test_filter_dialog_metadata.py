@@ -135,6 +135,7 @@ def _install_qt_stubs():
 class TestFilterDialogMetadata(unittest.TestCase):
     def _load_module(self):
         sys.modules.pop("modules.filter_dialog", None)
+        sys.modules.pop("metroliza.ui.filter_dialog", None)
         return importlib.import_module("modules.filter_dialog")
 
     def test_populate_list_widgets_includes_metadata_columns(self):
@@ -150,6 +151,7 @@ class TestFilterDialogMetadata(unittest.TestCase):
                 "PyQt6.QtWidgets": qtwidgets,
                 "PyQt6.QtGui": qtgui,
                 "modules.db": fake_db,
+                "metroliza.reports.db": fake_db,
             },
             clear=False,
         ):
@@ -200,6 +202,7 @@ class TestFilterDialogMetadata(unittest.TestCase):
                 "PyQt6.QtWidgets": qtwidgets,
                 "PyQt6.QtGui": qtgui,
                 "modules.db": fake_db,
+                "metroliza.reports.db": fake_db,
             },
             clear=False,
         ):
@@ -282,6 +285,7 @@ class TestFilterDialogMetadata(unittest.TestCase):
                 "PyQt6.QtWidgets": qtwidgets,
                 "PyQt6.QtGui": qtgui,
                 "modules.db": fake_db,
+                "metroliza.reports.db": fake_db,
             },
             clear=False,
         ):
@@ -309,6 +313,7 @@ class TestFilterDialogMetadata(unittest.TestCase):
                 "PyQt6.QtWidgets": qtwidgets,
                 "PyQt6.QtGui": qtgui,
                 "modules.db": fake_db,
+                "metroliza.reports.db": fake_db,
             },
             clear=False,
         ):
@@ -340,6 +345,7 @@ class TestFilterDialogMetadata(unittest.TestCase):
                 "PyQt6.QtWidgets": qtwidgets,
                 "PyQt6.QtGui": qtgui,
                 "modules.db": fake_db,
+                "metroliza.reports.db": fake_db,
             },
             clear=False,
         ):

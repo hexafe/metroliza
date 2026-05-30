@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 import textwrap
 import types
 from pathlib import Path
 
 import pytest
 
-from modules import pdf_backend
+from metroliza.parsing import pdf_backend
 import scripts.validate_packaged_pdf_parser as validator
 from scripts.validate_packaged_pdf_parser import (
     PackagingValidationError,
@@ -44,7 +45,9 @@ def test_validate_nuitka_report_has_pdf_backend_accepts_report(tmp_path):
         textwrap.dedent(
             '''
             <nuitka-report>
-              <module name="modules.cmm_report_parser" />
+              <module name="metroliza.parsing.cmm_report_parser" />
+              <module name="metroliza.reports.report_parser_factory" />
+              <module name="metroliza.parsing.pdf_backend" />
               <module name="pymupdf" />
               <module name="pymupdf._mupdf" />
               <module name="pymupdf._extra" />
@@ -61,7 +64,7 @@ def test_validate_nuitka_report_has_pdf_backend_accepts_report(tmp_path):
 
 def test_validate_nuitka_report_has_pdf_backend_rejects_missing_backend(tmp_path):
     report = tmp_path / 'nuitka-build-report.xml'
-    report.write_text('<nuitka-report><module name="modules.cmm_report_parser" /></nuitka-report>', encoding='utf-8')
+    report.write_text('<nuitka-report><module name="metroliza.parsing.cmm_report_parser" /></nuitka-report>', encoding='utf-8')
 
     with pytest.raises(PackagingValidationError):
         validate_nuitka_report_has_pdf_backend(report)
@@ -70,11 +73,34 @@ def test_validate_nuitka_report_has_pdf_backend_rejects_missing_backend(tmp_path
 def test_validate_nuitka_report_has_pdf_backend_rejects_missing_runtime_modules(tmp_path):
     report = tmp_path / 'nuitka-build-report.xml'
     report.write_text(
-        '<nuitka-report><module name="modules.cmm_report_parser" /><module name="pymupdf" /></nuitka-report>',
+        '<nuitka-report><module name="metroliza.parsing.cmm_report_parser" /><module name="pymupdf" /></nuitka-report>',
         encoding='utf-8',
     )
 
     with pytest.raises(PackagingValidationError, match='missing required PyMuPDF runtime modules'):
+        validate_nuitka_report_has_pdf_backend(report)
+
+
+def test_validate_nuitka_report_has_pdf_backend_rejects_missing_canonical_parser_modules(
+    tmp_path,
+):
+    report = tmp_path / 'nuitka-build-report.xml'
+    report.write_text(
+        textwrap.dedent(
+            '''
+            <nuitka-report>
+              <module name="pymupdf" />
+              <module name="pymupdf._mupdf" />
+              <module name="pymupdf._extra" />
+              <module name="pymupdf.extra" />
+              <module name="pymupdf.mupdf" />
+            </nuitka-report>
+            '''
+        ).strip(),
+        encoding='utf-8',
+    )
+
+    with pytest.raises(PackagingValidationError, match='missing required canonical PDF parser modules'):
         validate_nuitka_report_has_pdf_backend(report)
 
 
@@ -126,17 +152,17 @@ def test_validate_nuitka_report_has_header_ocr_accepts_report(tmp_path):
         textwrap.dedent(
             '''
             <nuitka-report>
-              <module name="modules.header_ocr_backend" />
-              <module name="modules.header_ocr_geometry" />
-              <module name="modules.header_ocr_corrections" />
+              <module name="metroliza.parsing.header_ocr_backend" />
+              <module name="metroliza.parsing.header_ocr_geometry" />
+              <module name="metroliza.parsing.header_ocr_corrections" />
               <module name="rapidocr" />
               <module name="onnxruntime" />
               <module name="openvino" />
               <module name="cv2" />
               <module name="numpy" />
-              <data-file name="modules/ocr_models/rapidocr/ch_PP-OCRv4_det_mobile.onnx" />
-              <data-file name="modules/ocr_models/rapidocr/ch_ppocr_mobile_v2.0_cls_mobile.onnx" />
-              <data-file name="modules/ocr_models/rapidocr/latin_PP-OCRv3_rec_mobile.onnx" />
+              <data-file name="metroliza/resources/ocr_models/rapidocr/ch_PP-OCRv4_det_mobile.onnx" />
+              <data-file name="metroliza/resources/ocr_models/rapidocr/ch_ppocr_mobile_v2.0_cls_mobile.onnx" />
+              <data-file name="metroliza/resources/ocr_models/rapidocr/latin_PP-OCRv3_rec_mobile.onnx" />
               <data-file name="THIRD_PARTY_NOTICES.md" />
             </nuitka-report>
             '''
@@ -153,9 +179,9 @@ def test_validate_nuitka_report_has_header_ocr_rejects_missing_model_data(tmp_pa
         textwrap.dedent(
             '''
             <nuitka-report>
-              <module name="modules.header_ocr_backend" />
-              <module name="modules.header_ocr_geometry" />
-              <module name="modules.header_ocr_corrections" />
+              <module name="metroliza.parsing.header_ocr_backend" />
+              <module name="metroliza.parsing.header_ocr_geometry" />
+              <module name="metroliza.parsing.header_ocr_corrections" />
               <module name="rapidocr" />
               <module name="onnxruntime" />
               <module name="openvino" />
@@ -177,17 +203,17 @@ def test_validate_nuitka_report_has_header_ocr_rejects_missing_third_party_notic
         textwrap.dedent(
             '''
             <nuitka-report>
-              <module name="modules.header_ocr_backend" />
-              <module name="modules.header_ocr_geometry" />
-              <module name="modules.header_ocr_corrections" />
+              <module name="metroliza.parsing.header_ocr_backend" />
+              <module name="metroliza.parsing.header_ocr_geometry" />
+              <module name="metroliza.parsing.header_ocr_corrections" />
               <module name="rapidocr" />
               <module name="onnxruntime" />
               <module name="openvino" />
               <module name="cv2" />
               <module name="numpy" />
-              <data-file name="modules/ocr_models/rapidocr/ch_PP-OCRv4_det_mobile.onnx" />
-              <data-file name="modules/ocr_models/rapidocr/ch_ppocr_mobile_v2.0_cls_mobile.onnx" />
-              <data-file name="modules/ocr_models/rapidocr/latin_PP-OCRv3_rec_mobile.onnx" />
+              <data-file name="metroliza/resources/ocr_models/rapidocr/ch_PP-OCRv4_det_mobile.onnx" />
+              <data-file name="metroliza/resources/ocr_models/rapidocr/ch_ppocr_mobile_v2.0_cls_mobile.onnx" />
+              <data-file name="metroliza/resources/ocr_models/rapidocr/latin_PP-OCRv3_rec_mobile.onnx" />
             </nuitka-report>
             '''
         ).strip(),
@@ -220,6 +246,7 @@ def test_build_nuitka_script_fails_closed_by_default_and_names_unsafe_override()
     assert '[switch]$AllowMissingOznakBuild' in script
     assert '[switch]$BundleCredentials' in script
     assert '[string]$CredentialsPath = ""' in script
+    assert '[string]$EntryPoint = "packaging/metroliza_package_entry.py"' in script
     assert "[ValidateSet('onefile', 'standalone')]" in script
     assert "[string]$Mode = 'onefile'" in script
     assert '-FastDev is a compatibility alias for -Mode standalone.' in script
@@ -253,6 +280,13 @@ def test_build_nuitka_script_defaults_to_release_onefile_and_includes_runtime_pa
     assert "$modeLabel = if ($Mode -eq 'standalone')" in script
     assert "Nuitka packaging mode: $Mode" in script
     assert "'--include-package=modules'" in script
+    assert "'--include-package=metroliza'" in script
+    assert "'--include-module=metroliza.parsing.cmm_report_parser'" in script
+    assert "'--include-module=metroliza.parsing.header_ocr_backend'" in script
+    assert "'--include-module=metroliza.parsing.header_ocr_geometry'" in script
+    assert "'--include-module=metroliza.parsing.header_ocr_corrections'" in script
+    assert "'--include-module=metroliza.reports.report_parser_factory'" in script
+    assert "'--include-module=metroliza.parsing.pdf_backend'" in script
     assert "'--include-package=hexafe_groupstats'" in script
     assert "'--include-package=hexafe_plotstats'" in script
     assert "'--include-distribution-metadata=hexafe-plotstats'" in script
@@ -266,6 +300,9 @@ def test_build_nuitka_script_defaults_to_release_onefile_and_includes_runtime_pa
     assert "'--include-module=modules.header_ocr_corrections'" in script
     assert "'--include-module=_metroliza_cmm_native'" in script
     assert "'--include-module=_metroliza_chart_native'" in script
+    assert "'--include-module=_metroliza_group_stats_native'" in script
+    assert "'--include-module=_metroliza_comparison_stats_native'" in script
+    assert "'--include-module=_metroliza_distribution_fit_native'" in script
     assert "'--include-module=modules.report_parser_factory'" in script
     assert "'--include-module=modules.pdf_backend'" in script
     assert "'--include-package-data=pymupdf'" in script
@@ -291,8 +328,8 @@ def test_build_nuitka_script_defaults_to_release_onefile_and_includes_runtime_pa
     assert 'THIRD_PARTY_NOTICES.md' in script
     assert '--include-data-files=$($resolvedThirdPartyNotices.Path)=THIRD_PARTY_NOTICES.md' in script
     assert '--require-header-ocr' in script
-    assert "modules/html_dashboard_assets/plotly-2.27.0.min.js" in script
-    assert '--include-data-files=$($resolvedPlotlyDashboardAsset.Path)=modules/html_dashboard_assets/plotly-2.27.0.min.js' in script
+    assert "src/metroliza/resources/html_dashboard_assets/plotly-2.27.0.min.js" in script
+    assert '--include-data-files=$($resolvedPlotlyDashboardAsset.Path)=metroliza/resources/html_dashboard_assets/plotly-2.27.0.min.js' in script
     assert 'if ($BundleCredentials)' in script
     assert "Credential bundling disabled; OAuth credentials must remain outside the packaged artifact." in script
     assert "Credential bundling was requested, but '$CredentialsPath' was not found." in script
@@ -310,9 +347,12 @@ def test_build_nuitka_script_defaults_to_release_onefile_and_includes_runtime_pa
 
 def test_pyinstaller_spec_collects_windows_runtime_and_pdf_parser_dependencies():
     spec = Path('packaging/metroliza_onefile.spec').read_text(encoding='utf-8')
+    entry = Path('packaging/metroliza_package_entry.py').read_text(encoding='utf-8')
     common = Path('packaging/pyinstaller_common.py').read_text(encoding='utf-8')
 
     assert 'from pyinstaller_common import build_pyinstaller_collection' in spec
+    assert 'from metroliza.app.bootstrap import run_application' in entry
+    assert 'This file intentionally is not named ``metroliza.py``.' in entry
     assert 'from PyInstaller.utils.hooks import (' in common
     assert 'def collect_windows_python_runtime_binaries()' in common
     assert 'collect_optional_runtime_assets(\n        "pymupdf"\n    )' in common
@@ -337,6 +377,8 @@ def test_pyinstaller_spec_collects_windows_runtime_and_pdf_parser_dependencies()
     assert 'binaries=COLLECTION["binaries"]' in spec
     assert 'datas=COLLECTION["datas"]' in spec
     assert 'hiddenimports=COLLECTION["hiddenimports"]' in spec
+    assert '"metroliza.parsing.cmm_report_parser"' in common
+    assert '"metroliza.charts.native_chart_compositor"' in common
     assert '"modules.cmm_report_parser"' in common
     assert '"modules.native_chart_compositor"' in common
     assert '"rapidocr"' in common
@@ -344,6 +386,9 @@ def test_pyinstaller_spec_collects_windows_runtime_and_pdf_parser_dependencies()
     assert '"openvino"' in common
     assert '"cv2"' in common
     assert '"numpy"' in common
+    assert '"_metroliza_group_stats_native"' in common
+    assert '"_metroliza_comparison_stats_native"' in common
+    assert '"_metroliza_distribution_fit_native"' in common
     assert '"hexafe_plotstats"' in common
     assert '"oznak"' in common
     assert '*hexafe_plotstats_hiddenimports' in common
@@ -358,8 +403,52 @@ def test_pyinstaller_spec_collects_windows_runtime_and_pdf_parser_dependencies()
     assert 'COLLECT(' not in spec
 
 
+def test_pyinstaller_vendored_ocr_models_use_runtime_resource_destination(tmp_path):
+    module_name = "_metroliza_pyinstaller_common_under_test"
+    spec = importlib.util.spec_from_file_location(
+        module_name,
+        Path("packaging/pyinstaller_common.py"),
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+
+    current_model = (
+        tmp_path
+        / "src"
+        / "metroliza"
+        / "resources"
+        / "ocr_models"
+        / "rapidocr"
+        / "latin_PP-OCRv3_rec_mobile.onnx"
+    )
+    legacy_root_model = tmp_path / "ocr_models" / "rapidocr" / "legacy-root.onnx"
+    legacy_modules_model = tmp_path / "modules" / "ocr_models" / "rapidocr" / "legacy-modules.onnx"
+    for model_file in (current_model, legacy_root_model, legacy_modules_model):
+        model_file.parent.mkdir(parents=True, exist_ok=True)
+        model_file.write_bytes(b"model")
+
+    datas = module.collect_optional_vendored_model_data(tmp_path)
+
+    assert (
+        str(current_model),
+        "metroliza/resources/ocr_models/rapidocr",
+    ) in datas
+    assert (
+        str(legacy_root_model),
+        "metroliza/resources/ocr_models/rapidocr",
+    ) in datas
+    assert (
+        str(legacy_modules_model),
+        "metroliza/resources/ocr_models/rapidocr",
+    ) in datas
+    assert not any(destination.startswith("src/") for _source, destination in datas)
+
+
 def test_vendored_plotly_dashboard_asset_is_checked_in():
-    asset = Path('modules/html_dashboard_assets/plotly-2.27.0.min.js')
+    asset = Path('src/metroliza/resources/html_dashboard_assets/plotly-2.27.0.min.js')
 
     assert asset.exists()
     assert asset.stat().st_size > 1_000_000

@@ -7,11 +7,11 @@ Status timestamp is tracked in git history for this file.
 
 ## Current release window (metadata-driven)
 
-Release/window metadata is defined in `VersionDate.py` and synchronized into user-facing docs with `python scripts/sync_release_metadata.py` (or validated with `--check`).
+Release/window metadata is defined in `src/metroliza/app/version.py` and synchronized into user-facing docs with `python scripts/sync_release_metadata.py` (or validated with `--check`).
 
 ## Active release line
 
-- Release line metadata is canonical in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, and `CURRENT_RELEASE_HIGHLIGHT`).
+- Release line metadata is canonical in `src/metroliza/app/version.py` (`RELEASE_VERSION`, `VERSION_DATE`, and `CURRENT_RELEASE_HIGHLIGHT`); `VersionDate.py` remains a compatibility import.
 - Build/evidence branch, commit SHA, and artifact/build ID must be refreshed in the linked evidence docs whenever smoke evidence changes; do not rely on stale branch-local snapshot values in this file.
 
 | Track | Status | Notes | Primary doc |
@@ -19,7 +19,7 @@ Release/window metadata is defined in `VersionDate.py` and synchronized into use
 | Freeze | In progress | Use the RC checklist and implementation triage to record current blockers, owner assignments, and sign-offs for the active build identity. | [`release_candidate_checklist.md`](./release_candidate_checklist.md), [`implementation_item_triage.md`](./implementation_item_triage.md) |
 | Open testing | Status tracked in linked evidence docs | Read the latest go/no-go state from the current smoke log and runbook evidence package, not from older branch snapshots. | [`google_conversion_smoke.md`](./google_conversion_smoke.md), [`open_testing_runbook.md`](./open_testing_runbook.md) |
 | Release candidate readiness | Status tracked in linked checklist and smoke evidence | The current RC decision must be based on the latest checklist state plus the current smoke evidence bundle. | [`release_candidate_checklist.md`](./release_candidate_checklist.md), [`google_conversion_smoke.md`](./google_conversion_smoke.md) |
-| Current RC2 audit | Local pass / release blocked | Local gates passed on the audit worktree; final Go still requires fresh CI and manual release evidence for the final committed SHA. | [`rc2_release_audit_2026-05-17.md`](./rc2_release_audit_2026-05-17.md), [`implementation_item_triage.md`](./implementation_item_triage.md) |
+| Current directory-reorganization audit | Local pass / release blocked | Local gates passed on `codex/directory-reorg-plan`; final Go still requires fresh CI and manual release evidence for the final committed SHA. | [`release_candidate_checklist.md`](./release_candidate_checklist.md), [`implementation_item_triage.md`](./implementation_item_triage.md) |
 | Google conversion smoke gate | Status tracked in smoke log | The latest PASS/FAIL result, command, and build identity belong in the smoke log for the current release line. | [`google_conversion_smoke.md`](./google_conversion_smoke.md) |
 
 ## Operating notes

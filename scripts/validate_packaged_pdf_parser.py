@@ -18,6 +18,11 @@ REQUIRED_PYMUPDF_MODULES = (
     'pymupdf.extra',
     'pymupdf.mupdf',
 )
+REQUIRED_PDF_PARSER_REPORT_MODULES = (
+    'metroliza.parsing.cmm_report_parser',
+    'metroliza.reports.report_parser_factory',
+    'metroliza.parsing.pdf_backend',
+)
 REQUIRED_HEADER_OCR_MODULES = (
     'rapidocr',
     'onnxruntime',
@@ -26,19 +31,22 @@ REQUIRED_HEADER_OCR_MODULES = (
     'numpy',
 )
 REQUIRED_HEADER_OCR_REPORT_MODULES = (
-    'modules.header_ocr_backend',
-    'modules.header_ocr_geometry',
-    'modules.header_ocr_corrections',
+    'metroliza.parsing.header_ocr_backend',
+    'metroliza.parsing.header_ocr_geometry',
+    'metroliza.parsing.header_ocr_corrections',
     *REQUIRED_HEADER_OCR_MODULES,
 )
 REQUIRED_THIRD_PARTY_NOTICE = ROOT / 'THIRD_PARTY_NOTICES.md'
 
 
 def _load_pdf_backend_helpers():
-    if str(ROOT) not in sys.path:
-        sys.path.insert(0, str(ROOT))
+    src_root = ROOT / "src"
+    for import_root in (ROOT, src_root):
+        import_root_text = str(import_root)
+        if import_root_text not in sys.path:
+            sys.path.insert(0, import_root_text)
 
-    from modules.pdf_backend import PDF_BACKEND_CANDIDATES, resolve_pdf_backend_module_name
+    from metroliza.parsing.pdf_backend import PDF_BACKEND_CANDIDATES, resolve_pdf_backend_module_name
 
     return PDF_BACKEND_CANDIDATES, resolve_pdf_backend_module_name
 
@@ -98,6 +106,13 @@ def validate_nuitka_report_has_pdf_backend(report_path: str | Path) -> tuple[str
         raise PackagingValidationError(
             f"Nuitka build report {report} is missing required PyMuPDF runtime modules: {', '.join(missing_required_modules)}."
         )
+    missing_parser_modules = tuple(
+        module_name for module_name in REQUIRED_PDF_PARSER_REPORT_MODULES if module_name not in haystack
+    )
+    if missing_parser_modules:
+        raise PackagingValidationError(
+            f"Nuitka build report {report} is missing required canonical PDF parser modules: {', '.join(missing_parser_modules)}."
+        )
     return included
 
 
@@ -139,10 +154,16 @@ def _sha256(path: Path) -> str:
 
 
 def validate_vendored_header_ocr_models(model_dir: str | Path | None = None) -> tuple[Path, ...]:
-    if str(ROOT) not in sys.path:
-        sys.path.insert(0, str(ROOT))
+    src_root = ROOT / "src"
+    for import_root in (ROOT, src_root):
+        import_root_text = str(import_root)
+        if import_root_text not in sys.path:
+            sys.path.insert(0, import_root_text)
 
-    from modules.header_ocr_backend import RAPIDOCR_MODEL_ASSET_MANIFEST, default_rapidocr_model_dir
+    from metroliza.parsing.header_ocr_backend import (
+        RAPIDOCR_MODEL_ASSET_MANIFEST,
+        default_rapidocr_model_dir,
+    )
 
     root = Path(model_dir).expanduser() if model_dir is not None else default_rapidocr_model_dir()
     root = root.resolve()
@@ -213,7 +234,7 @@ def validate_nuitka_report_has_header_ocr(report_path: str | Path) -> tuple[str,
             f"Nuitka build report {report} is missing required header OCR modules: {', '.join(missing_modules)}."
         )
 
-    from modules.header_ocr_backend import RAPIDOCR_MODEL_ASSET_MANIFEST
+    from metroliza.parsing.header_ocr_backend import RAPIDOCR_MODEL_ASSET_MANIFEST
 
     missing_models = tuple(filename for filename in RAPIDOCR_MODEL_ASSET_MANIFEST if filename not in haystack)
     if missing_models:

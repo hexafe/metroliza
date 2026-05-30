@@ -72,6 +72,38 @@ class TestLoggingUtils(unittest.TestCase):
             finally:
                 self._reset_logger(logger)
 
+    def test_ensure_application_logging_falls_back_when_standard_log_paths_are_unwritable(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            fake_home = root / "home_file"
+            fake_home.write_text("not a directory", encoding="utf-8")
+            fake_cwd = root / "cwd_file"
+            fake_cwd.write_text("not a directory", encoding="utf-8")
+            fallback_root = root / "runtime"
+
+            logger = logging.getLogger("metroliza_test_logging_fallback")
+            self._reset_logger(logger)
+            logger.setLevel(logging.NOTSET)
+            logger.propagate = False
+
+            try:
+                with patch("modules.logging_utils.logging.getLogger", return_value=logger), patch(
+                    "modules.logging_utils.Path.home", return_value=fake_home
+                ), patch("modules.logging_utils.Path.cwd", return_value=fake_cwd), patch(
+                    "modules.logging_utils.tempfile.gettempdir", return_value=str(fallback_root)
+                ):
+                    ensure_application_logging(level=logging.ERROR)
+                    logger.error("startup log path fallback worked")
+
+                fallback_log = fallback_root / "metroliza" / "metroliza.log"
+                file_handlers = [h for h in logger.handlers if isinstance(h, logging.FileHandler)]
+
+                self.assertEqual(len(file_handlers), 1)
+                self.assertTrue(fallback_log.exists())
+                self.assertIn("startup log path fallback worked", fallback_log.read_text(encoding="utf-8"))
+            finally:
+                self._reset_logger(logger)
+
     def test_ensure_application_logging_replaces_non_rotating_file_handlers(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

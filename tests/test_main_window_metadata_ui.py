@@ -142,6 +142,53 @@ class TestMainWindowMetadataUi(unittest.TestCase):
         finally:
             window.close()
 
+    def test_close_event_cancels_active_metadata_enrichment_and_stays_open(self):
+        window = MainWindow(version_label="test", days_until_expiration=None)
+
+        class FakeThread:
+            def __init__(self):
+                self.stop_calls = 0
+
+            def isRunning(self):
+                return True
+
+            def stop_enrichment(self):
+                self.stop_calls += 1
+
+        class FakeCloseEvent:
+            def __init__(self):
+                self.ignored = False
+
+            def ignore(self):
+                self.ignored = True
+
+        try:
+            fake_thread = FakeThread()
+            window.metadata_enrichment_thread = fake_thread
+            event = FakeCloseEvent()
+
+            window.closeEvent(event)
+
+            self.assertTrue(event.ignored)
+            self.assertEqual(fake_thread.stop_calls, 1)
+            self.assertIs(window.metadata_enrichment_thread, fake_thread)
+            self.assertIn("Canceling metadata enrichment", window.metadata_enrichment_status_label.text())
+        finally:
+            window.metadata_enrichment_thread = None
+            window.close()
+
+    def test_metadata_enrichment_thread_is_cleared_after_thread_lifecycle_finishes(self):
+        window = MainWindow(version_label="test", days_until_expiration=None)
+        try:
+            marker = object()
+            window.metadata_enrichment_thread = marker
+
+            window._clear_metadata_enrichment_thread()
+
+            self.assertIsNone(window.metadata_enrichment_thread)
+        finally:
+            window.close()
+
     def test_feature_import_warmup_imports_deferred_modules(self):
         imported_modules = []
 

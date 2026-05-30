@@ -11,11 +11,13 @@ Assess whether export-path refactoring is still needed after the recent RC2 stab
 ## Constraints
 - Preserve release confidence and behavior parity.
 - Prefer small, reversible seams over broad architecture rewrites.
-- Keep `modules/export_data_thread.py` as the compatibility entry point while extracting pure/helper logic.
+- Keep `src/metroliza/exporting/export_data_thread.py` as the canonical exporter
+  orchestration entry point; the legacy `modules.export_data_thread` shim remains
+  compatibility-only.
 
 ## Key findings
 1. **Refactoring is still needed in the exporter path.**
-   - `modules/export_data_thread.py` remains very large (~6.2k LOC) and still concentrates orchestration, plotting, worksheet population, and result handling responsibilities.
+   - `src/metroliza/exporting/export_data_thread.py` remains very large and still concentrates orchestration, plotting, worksheet population, and result handling responsibilities.
 2. **Recent seams reduced risk and completed summary-chart fast-path rollout, but did not finish decomposition.**
    - Existing helper seams (`export_query_service`, `export_sheet_writer`, `export_chart_writer`, `export_google_result_utils`, `export_logging_service`) are useful and already in use, and histogram/distribution/IQR/trend now all use planner-driven native fast-path payloads in the export runtime when allowed.
 3. **High-complexity method hotspots remain inside `ExportDataThread`.**
@@ -24,7 +26,7 @@ Assess whether export-path refactoring is still needed after the recent RC2 stab
    - Phase A completed small extractions (EX-001/EX-002/EX-003/EX-008), while deeper structural work (EX-004+) remains deferred to post-rc2.
 
 ## Current hotspot snapshot
-Approximate size hotspots in `modules/export_data_thread.py`:
+Approximate size hotspots in `src/metroliza/exporting/export_data_thread.py`:
 - `summary_sheet_fill` (~537 LOC)
 - `annotate_violin_group_stats` (~228 LOC)
 - `add_measurements_horizontal_sheet` (~197 LOC)
@@ -45,7 +47,7 @@ These are the best next extraction targets because they combine control flow + f
 
 ## What else should be prioritized (besides exporter)
 - **Parity evidence capture:** keep executing and recording release-check parity evidence after each extraction slice.
-- **Dialog/UI decomposition follow-up:** `modules/export_dialog.py` still has large widget/layout methods and can continue gradual service extraction (non-UI decisions first).
+- **Dialog/UI decomposition follow-up:** `src/metroliza/ui/export_dialog.py` still has large widget/layout methods and can continue gradual service extraction (non-UI decisions first).
 - **Deferred roadmap items remain correctly deferred:** plugin/LLM/warranty interfaces should wait until post-Phase-B boundaries stabilize.
 
 ## Risks and mitigations

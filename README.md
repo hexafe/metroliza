@@ -105,7 +105,6 @@ For a packaged parser smoke check, set a real OCR-needed PDF fixture and an
 expected text fragment before launching the EXE:
 
 ```powershell
-$env:METROLIZA_STARTUP_SMOKE = "1"
 $env:METROLIZA_PDF_PARSER_SMOKE_FIXTURE = "C:\path\to\report.pdf"
 $env:METROLIZA_PDF_PARSER_SMOKE_EXPECTED_TEXT = "expected text"
 .\dist\metroliza.exe
@@ -168,9 +167,9 @@ Parity between native and Python backends is enforced through fixture-based test
 ### Local native chart extension build (optional)
 
 ```bash
-python -m maturin develop --manifest-path modules/native/chart_renderer/Cargo.toml
+python -m maturin develop --manifest-path src/metroliza/native/chart_renderer/Cargo.toml
 # or build wheel artifacts
-python -m maturin build --manifest-path modules/native/chart_renderer/Cargo.toml --release
+python -m maturin build --manifest-path src/metroliza/native/chart_renderer/Cargo.toml --release
 ```
 
 ## Parser plugin resolver controls
@@ -286,9 +285,10 @@ Examples of metric availability by spec type:
 
 ## Release metadata
 
-Current release highlight (`2026.05 RC4 (build 260524)`): Optimizations and dashboard plot visual customization.
+Current release highlight (`2026.05 RC4 (build 260524)`): Export reliability, safer long-task cancellation, and dashboard plot visual customization.
 
-Canonical release metadata is in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, `CURRENT_RELEASE_HIGHLIGHT`).
+Canonical release metadata is in `src/metroliza/app/version.py`. The root `VersionDate.py`
+module remains as a compatibility import for existing scripts.
 
 ### Changelog highlights (release `2026.05 RC4 (build 260524)`)
 

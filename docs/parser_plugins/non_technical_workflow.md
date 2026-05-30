@@ -1,6 +1,6 @@
 # Non-Technical Workflow: Create a New Parser Plugin
 
-This guide is for a user who is not a programmer but wants Metroliza to support a new supplier report template with LLM help.
+This guide is for a user who is not a programmer but wants Metroliza to support a new supplier report template.
 
 ## What you need before you start
 
@@ -28,29 +28,29 @@ Inside that workspace:
 - fill `supplier_intake.md`
 - fill `expected_results_template.csv`
 
-## Step 3: Ask the LLM for analysis
+## Step 3: Prepare the template analysis
 
-Upload these items to your LLM:
+Prepare the template analysis from these items:
 
 - all sample reports from `samples/`
 - `supplier_intake.md`
 - `expected_results_template.csv`
 - `prompts/01_analysis_prompt.md`
 
-Save the LLM answer into:
+Save the analysis notes into:
 
 `responses/analysis_response.md`
 
-## Step 4: Ask the LLM to write the parser
+## Step 4: Prepare the parser files
 
-Upload these items to your LLM:
+Use these files as the parser implementation packet:
 
 - `responses/analysis_response.md`
 - `prompts/02_implementation_prompt.md`
 - `generated_plugin.py`
 - `tests/test_generated_plugin.py`
 
-Paste the returned file contents back into:
+Save the completed parser files back into:
 
 - `generated_plugin.py`
 - `tests/test_generated_plugin.py`
@@ -80,7 +80,7 @@ Run:
 python scripts/build_parser_plugin_repair_prompt.py --paths generated_plugin.py --plugin-id supplier_alpha --sample-input samples/sample_report_01.pdf --expected-results expected_results_template.csv --output artifacts/repair_prompt.md
 ```
 
-Then upload `artifacts/repair_prompt.md` to the LLM, ask for a corrected version, paste the corrected files back into the workspace, and validate again.
+Then use `artifacts/repair_prompt.md` to correct the parser files, save the corrected files back into the workspace, and validate again.
 
 ## Step 7: Install the validated plugin
 
@@ -116,7 +116,7 @@ You do not need to edit Metroliza source code to register the new parser.
 - Sample reports: inside the workspace `samples/`
 - Supplier notes: `supplier_intake.md`
 - Expected values: `expected_results_template.csv`
-- LLM analysis answer: `responses/analysis_response.md`
+- Template analysis notes: `responses/analysis_response.md`
 - Generated parser before validation: workspace `generated_plugin.py`
 - Final installed parser for Metroliza: `~/.metroliza/parser_plugins/<plugin-id>.py`
 

@@ -18,9 +18,12 @@ GOOGLE_SMOKE_RUNBOOK_PATH = Path('docs/google_conversion_smoke_runbook.md')
 def test_ci_workflow_keeps_coverage_visibility_contract() -> None:
     workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
 
-    assert '--cov=.' in workflow
+    assert '--cov=src/metroliza' in workflow
+    assert '--cov=modules' in workflow
+    assert '--cov=scripts' in workflow
     assert '--cov-report=term' in workflow
     assert '--cov-report=xml:coverage.xml' in workflow
+    assert '--cov-fail-under="${COVERAGE_MINIMUM_THRESHOLD:-65}"' in workflow
     assert 'name: unit-test-coverage' in workflow
     assert 'coverage.xml' in workflow
 
@@ -29,32 +32,48 @@ def test_docs_remain_aligned_with_coverage_visibility_contract() -> None:
     ci_policy = CI_POLICY_PATH.read_text(encoding='utf-8')
     checklist = RC_CHECKLIST_PATH.read_text(encoding='utf-8')
 
-    assert 'Coverage threshold staged policy' in ci_policy
-    assert 'Soft threshold warning stage (current enforcement mode)' in ci_policy
-    assert 'Blocking threshold stage (future)' in ci_policy
+    assert 'Coverage Threshold Policy' in ci_policy
+    assert 'Blocking threshold stage' in ci_policy
     assert 'unit-test-coverage' in ci_policy
     assert 'coverage.xml' in ci_policy
 
-    assert 'Coverage visibility output from `unit-tests` is reviewed' in checklist
+    assert 'Coverage threshold from `unit-tests` passes' in checklist
     assert '`unit-test-coverage` artifact `coverage.xml`' in checklist
 
 
-def test_ci_workflow_emits_non_blocking_coverage_threshold_status() -> None:
+def test_ci_workflow_enforces_coverage_threshold_status() -> None:
     workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
 
-    assert 'COVERAGE_WARNING_THRESHOLD' in workflow
-    assert 'Report coverage threshold status (non-blocking)' in workflow
-    assert 'Coverage threshold status (non-blocking)' in workflow
-    assert '::warning title=Coverage below warning threshold::' in workflow
-    assert 'This does not fail CI in the current staged policy.' in workflow
+    assert 'COVERAGE_MINIMUM_THRESHOLD' in workflow
+    assert 'Report coverage threshold status' in workflow
+    assert 'Coverage threshold status' in workflow
+    assert 'Canonical source line coverage' in workflow
+    assert 'src/metroliza/' in workflow
+    assert "pathlib.Path('src/metroliza') / filename" in workflow
+    assert '::error title=Canonical coverage below threshold::' in workflow
+    assert '::error title=Coverage below threshold::' in workflow
+    assert 'sys.exit(1)' in workflow
 
 
 def test_ci_policy_keeps_coverage_threshold_governance_self_contained() -> None:
     ci_policy = CI_POLICY_PATH.read_text(encoding='utf-8')
 
-    assert 'Coverage threshold staged policy' in ci_policy
-    assert 'Coverage threshold governance remains staged' in ci_policy
-    assert 'release owner records a dated go/no-go decision' in ci_policy
+    assert 'Coverage Threshold Policy' in ci_policy
+    assert 'Coverage threshold changes require an explicit threshold update' in ci_policy
+    assert 'coverage threshold is blocking' in ci_policy
+    assert 'canonical `src/metroliza` line coverage' in ci_policy
+
+
+def test_active_docs_use_canonical_test_pythonpath() -> None:
+    active_docs = [
+        Path('CONTRIBUTING.md'),
+        RC_CHECKLIST_PATH,
+    ]
+
+    for doc_path in active_docs:
+        text = doc_path.read_text(encoding='utf-8')
+        assert 'PYTHONPATH=. python -m pytest tests -q' not in text
+        assert 'PYTHONPATH=src:. python -m pytest tests -q' in text
 
 
 def test_ci_workflow_keeps_manual_smoke_gates_non_blocking() -> None:
@@ -69,7 +88,8 @@ def test_ci_workflow_keeps_manual_smoke_gates_non_blocking() -> None:
     )
     assert 'METROLIZA_PDF_PARSER_SMOKE_FIXTURE: tests/fixtures/pdf/cmm_smoke_fixture.pdf' in workflow
     assert 'METROLIZA_PDF_PARSER_SMOKE_EXPECTED_TEXT: METROLIZA PDF PARSER SMOKE' in workflow
-    assert 'timeout 60s ./dist/metroliza' in workflow
+    assert "find dist -maxdepth 1 -type f -name 'metroliza_P_*'" in workflow
+    assert 'timeout 60s "${{ steps.packaged-artifact.outputs.path }}"' in workflow
     assert 'name: packaging-smoke-artifacts' in workflow
 
 
@@ -85,6 +105,8 @@ def test_ci_and_precommit_run_release_hygiene_scan() -> None:
     assert 'artifacts/parser_plugin_workspace_ci/' in gitignore
     assert 'smoke-artifacts/' in gitignore
     assert 'nuitka-build-report.xml' in gitignore
+    assert 'src/metroliza/native/**/target/' in gitignore
+    assert 'src/metroliza/native/**/Cargo.lock' in gitignore
     assert '.coverage' in gitignore
     assert 'coverage.xml' in gitignore
     assert 'htmlcov/' in gitignore
@@ -198,7 +220,7 @@ def test_active_release_docs_use_master_as_current_production_branch() -> None:
 def test_release_status_keeps_current_release_line_metadata() -> None:
     release_status = RELEASE_STATUS_PATH.read_text(encoding='utf-8')
 
-    assert 'Release line metadata is canonical in `VersionDate.py`' in release_status
+    assert 'Release line metadata is canonical in `src/metroliza/app/version.py`' in release_status
     assert '`RELEASE_VERSION`' in release_status
     assert '`VERSION_DATE`' in release_status
     assert '`CURRENT_RELEASE_HIGHLIGHT`' in release_status

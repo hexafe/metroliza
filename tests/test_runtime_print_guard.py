@@ -4,18 +4,18 @@ import unittest
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
-MODULES_DIR = REPO_ROOT / 'modules'
+SOURCE_DIR = REPO_ROOT / 'src' / 'metroliza'
 PRINT_CALL_PATTERN = re.compile(r'\bprint\s*\(')
 EXCLUDED_FILES = {
-    # Add intentionally interactive scripts here if they are ever added under modules/.
+    # Add intentionally interactive runtime files here if they are ever added under src/metroliza.
 }
 
 
 class TestRuntimePrintGuard(unittest.TestCase):
-    def test_modules_runtime_paths_do_not_use_print_calls(self):
+    def test_runtime_source_paths_do_not_use_print_calls(self):
         offenders: list[str] = []
 
-        for path in sorted(MODULES_DIR.glob('*.py')):
+        for path in sorted(SOURCE_DIR.rglob('*.py')):
             relative_path = path.relative_to(REPO_ROOT).as_posix()
             if relative_path in EXCLUDED_FILES:
                 continue

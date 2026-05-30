@@ -14,15 +14,15 @@ exclude = [
 [tool.ruff.lint]
 
 [tool.ruff.lint.per-file-ignores]
-"modules/chart_renderer.py" = ["E402"]
-"modules/export_data_thread.py" = ["E402"]
+"src/metroliza/charts/chart_renderer.py" = ["E402"]
+"src/metroliza/exporting/export_data_thread.py" = ["E402"]
 "scripts/benchmark_paths.py" = ["E402"]
 "scripts/fetch_rapidocr_models.py" = ["E402"]
 
 [tool.pytest.ini_options]
 # Optional test runner normalization for contributors/tools that use pytest.
 testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = ["src", "."]
 markers = [
   "integration: optional tests that require external runtimes, sample files, or packaged artifacts",
 ]

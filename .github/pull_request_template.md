@@ -8,7 +8,7 @@
 
 ## Google conversion smoke-check evidence (required when applicable)
 
-- [ ] If this PR touches `modules/google_drive_export.py`, `modules/export_backends.py`, `modules/ExportDataThread.py`, or Google export UI/contract paths, I included smoke-check evidence (or explicit omission justification) with:
+- [ ] If this PR touches `src/metroliza/exporting/google_drive_export.py`, `src/metroliza/exporting/export_backends.py`, `src/metroliza/exporting/export_data_thread.py`, or Google export UI/contract paths, I included smoke-check evidence (or explicit omission justification) with:
   - command run
   - date/time
   - environment/sandbox account

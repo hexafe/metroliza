@@ -4,7 +4,7 @@ This directory is the active documentation set for creating, validating, install
 
 ## Use these docs
 
-- [`llm_plugin_specification.md`](./llm_plugin_specification.md) — the exact contract and output requirements for an LLM-generated parser plugin.
+- [`parser_plugin_specification.md`](./parser_plugin_specification.md) — the exact contract and output requirements for a generated parser plugin.
 - [`non_technical_workflow.md`](./non_technical_workflow.md) — step-by-step guide for a non-technical user from sample collection to installation.
 - [`../release_checks/parser_plugin_rollout_runbook.md`](../release_checks/parser_plugin_rollout_runbook.md) — rollout, rollback, and review controls for production activation.
 

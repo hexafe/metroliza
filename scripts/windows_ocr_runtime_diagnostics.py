@@ -105,7 +105,7 @@ def _build_smoke_tests() -> list[tuple[str, str]]:
         ),
         (
             "rapidocr_engine_load",
-            "from modules.header_ocr_backend import default_rapidocr_latin_model_paths, "
+            "from metroliza.parsing.header_ocr_backend import default_rapidocr_latin_model_paths, "
             "RapidOcrLatinBackendConfig, RapidOcrLatinBackend; "
             "backend = RapidOcrLatinBackend(RapidOcrLatinBackendConfig(model_paths=default_rapidocr_latin_model_paths())); "
             "backend.load_engine(); print('rapidocr_engine_ok')",
@@ -121,9 +121,9 @@ def _build_smoke_tests() -> list[tuple[str, str]]:
 
 
 def build_payload(pdf_path: Path | None = None, db_file: str | None = None) -> dict[str, Any]:
-    from modules.header_ocr_backend import default_rapidocr_model_dir, missing_rapidocr_latin_model_paths
-    from modules.header_ocr_backend import default_rapidocr_latin_model_paths
-    from modules.header_ocr_backend import rapidocr_latin_runtime_config_from_env
+    from metroliza.parsing.header_ocr_backend import default_rapidocr_model_dir, missing_rapidocr_latin_model_paths
+    from metroliza.parsing.header_ocr_backend import default_rapidocr_latin_model_paths
+    from metroliza.parsing.header_ocr_backend import rapidocr_latin_runtime_config_from_env
 
     model_paths = default_rapidocr_latin_model_paths(os.getenv("METROLIZA_HEADER_OCR_MODEL_DIR") or None)
     try:

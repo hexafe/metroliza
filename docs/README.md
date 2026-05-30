@@ -22,11 +22,12 @@ This directory contains active operational, maintenance, and end-user documentat
 - `native_build_distribution.md` — native build/distribution workflow and packaging references.
 - `../THIRD_PARTY_NOTICES.md` — third-party license and notice inventory for packaged distributions.
 - `parser_plugins/README.md` — active hub for parser plugin generation, validation, installation, and rollout docs.
-- `parser_plugins/llm_plugin_specification.md` — exact contract for LLM-generated Metroliza parser plugins.
+- `parser_plugins/parser_plugin_specification.md` — exact contract for generated Metroliza parser plugins.
 - `parser_plugins/non_technical_workflow.md` — non-technical step-by-step workflow for adding a new supplier report parser.
 - `roadmaps/2026_03_rc2_stabilization_execution.md` — RC2 stabilization closeout/reference tracker for the completed parity-first slice.
 - `roadmaps/OCR_BENCHMARKING_MASTER.md` — canonical OCR benchmarking, acceleration, privacy, and next-session handoff.
 - `roadmaps/PLOTSTATS_CENTRALIZATION_IMPLEMENTATION_PLAN.md` — future implementation plan for moving reusable Metroliza plot definitions into `hexafe-plotstats`.
+- `roadmaps/directory_reorganization_long_term.md` — completed directory reorganization record for the canonical `src/metroliza/` layout, legacy shims, packaging guardrails, and validation evidence.
 - `roadmaps/exporter_audit_2026_03.md` — focused exporter-path follow-up audit with the remaining structural refactor backlog.
 - `roadmaps/rust_acceleration_scope.md` — native-acceleration scope and promotion-gate decision record.
 
@@ -52,14 +53,14 @@ The legacy `docs/group_analysis/user_manual.md` path is retained only as a redir
 
 ## Module boundary notes (export/grouping dialogs)
 
-- `modules/export_data_thread.py` is the orchestration entry point. Pure computations are kept in helper modules:
-  - `modules/export_chart_payload_helpers.py` for chart payload/table shaping.
-  - `modules/export_workbook_planning_helpers.py` for workbook/table layout sizing heuristics.
-  - `modules/export_row_aggregation_utils.py` for row/group aggregation computations.
-- CSV/Excel Summary is routed through `modules/industrial_analytics_dialog.py` and the shared tabular analytics workflow.
-- `modules/data_grouping.py` keeps widget/event orchestration and delegates data/query mutations to `modules/data_grouping_service.py`.
-- Grouping dialog colors use shared semantic tokens from `modules/ui_theme_tokens.py` so dialogs stay visually consistent across light/dark themes.
-- Group Analysis statistical computation is bridged through `modules/hexafe_groupstats_adapter.py`; workbook, dashboard, export orchestration, and UI remain Metroliza-owned.
+- `src/metroliza/exporting/export_data_thread.py` is the orchestration entry point. Pure computations are kept in helper modules:
+  - `src/metroliza/charts/export_chart_payload_helpers.py` for chart payload/table shaping.
+  - `src/metroliza/exporting/export_workbook_planning_helpers.py` for workbook/table layout sizing heuristics.
+  - `src/metroliza/exporting/export_row_aggregation_utils.py` for row/group aggregation computations.
+- CSV/Excel Summary is routed through `src/metroliza/ui/industrial_analytics_dialog.py` and the shared tabular analytics workflow.
+- `src/metroliza/ui/data_grouping.py` keeps widget/event orchestration and delegates data/query mutations to `src/metroliza/tabular/data_grouping_service.py`.
+- Grouping dialog colors use shared semantic tokens from `src/metroliza/ui/ui_theme_tokens.py` so dialogs stay visually consistent across light/dark themes.
+- Group Analysis statistical computation is bridged through `src/metroliza/analytics/hexafe_groupstats_adapter.py`; workbook, dashboard, export orchestration, and UI remain Metroliza-owned.
 
 ### Active release-check docs (`docs/release_checks/`)
 

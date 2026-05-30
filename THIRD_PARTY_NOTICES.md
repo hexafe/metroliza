@@ -14,7 +14,7 @@ can preserve them.
 
 Metroliza's packaged header OCR path uses RapidOCR with ONNX Runtime by default,
 OpenVINO as a selectable CPU acceleration backend, and a small set of vendored
-ONNX model files listed in `modules/ocr_models/rapidocr/README.md`. The packaged
+ONNX model files listed in `src/metroliza/resources/ocr_models/rapidocr/README.md`. The packaged
 application uses local model files and does not download OCR models at runtime.
 
 | Component | License / notice | Project |
@@ -29,9 +29,9 @@ application uses local model files and does not download OCR models at runtime.
 
 Vendored RapidOCR model files:
 
-- `modules/ocr_models/rapidocr/ch_PP-OCRv4_det_mobile.onnx`
-- `modules/ocr_models/rapidocr/ch_ppocr_mobile_v2.0_cls_mobile.onnx`
-- `modules/ocr_models/rapidocr/latin_PP-OCRv3_rec_mobile.onnx`
+- `src/metroliza/resources/ocr_models/rapidocr/ch_PP-OCRv4_det_mobile.onnx`
+- `src/metroliza/resources/ocr_models/rapidocr/ch_ppocr_mobile_v2.0_cls_mobile.onnx`
+- `src/metroliza/resources/ocr_models/rapidocr/latin_PP-OCRv3_rec_mobile.onnx`
 
 ## Hexafe runtime packages
 

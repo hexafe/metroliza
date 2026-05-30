@@ -161,6 +161,7 @@ class TestFilterDialogDeleteKey(unittest.TestCase):
             clear=False,
         ):
             sys.modules.pop("modules.filter_dialog", None)
+            sys.modules.pop("metroliza.ui.filter_dialog", None)
             filter_dialog_module = importlib.import_module("modules.filter_dialog")
             dialog = filter_dialog_module.FilterDialog.__new__(filter_dialog_module.FilterDialog)
 

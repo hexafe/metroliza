@@ -1021,6 +1021,62 @@ def test_dashboard_visual_when_similar_only_distinguishes_similar_effective_colo
     assert histogram_patterns(["#111111", "#121212", "#333333"]) == ["/", "\\", "x"]
 
 
+def test_dashboard_visual_single_group_histogram_uses_histogram_style_bucket() -> None:
+    spec = {
+        "data": [
+            {
+                "type": "histogram",
+                "name": "A",
+                "x": [1.0, 1.1, 1.2],
+                "marker": {},
+            }
+        ],
+        "layout": {},
+        "metadata": {},
+    }
+
+    apply_dashboard_visual_settings(
+        spec,
+        payload={"groups": [{"group": "A"}], "type": "histogram"},
+        visual_settings={
+            "series": {
+                "palette": ["#123456"],
+                "opacity": {"histogram": 0.44, "grouped_histogram": 0.91},
+            }
+        },
+    )
+
+    assert spec["data"][0]["opacity"] == 0.44
+    assert spec["data"][0]["meta"]["dashboard_visual_chart_kind"] == "histogram"
+
+
+def test_dashboard_visual_multi_group_histogram_uses_grouped_style_bucket() -> None:
+    spec = {
+        "data": [
+            {"type": "histogram", "name": "A", "x": [1.0, 1.1], "marker": {}},
+            {"type": "histogram", "name": "B", "x": [1.2, 1.3], "marker": {}},
+        ],
+        "layout": {},
+        "metadata": {},
+    }
+
+    apply_dashboard_visual_settings(
+        spec,
+        payload={"groups": [{"group": "A"}, {"group": "B"}], "type": "histogram"},
+        visual_settings={
+            "series": {
+                "palette": ["#123456", "#654321"],
+                "opacity": {"histogram": 0.44, "grouped_histogram": 0.91},
+            }
+        },
+    )
+
+    assert [trace["opacity"] for trace in spec["data"]] == [0.91, 0.91]
+    assert {trace["meta"]["dashboard_visual_chart_kind"] for trace in spec["data"]} == {
+        "grouped_histogram"
+    }
+
+
 def test_dashboard_visual_clears_stale_marker_symbols_when_distinguishers_turn_off() -> None:
     spec = {
         "data": [

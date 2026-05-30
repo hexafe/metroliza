@@ -9,8 +9,8 @@ from pathlib import Path
 
 import numpy as np
 
-from modules.comparison_stats import ComparisonStatsConfig, compute_metric_pairwise_stats
-from modules.comparison_stats_native import _normalize_native_groups, native_backend_available
+from metroliza.analytics.comparison_stats import ComparisonStatsConfig, compute_metric_pairwise_stats
+from metroliza.native_bridges.comparison_stats_native import _normalize_native_groups, native_backend_available
 
 
 def _build_fixture(*, group_count: int, samples_per_group: int, seed: int) -> dict[str, list[float]]:

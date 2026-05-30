@@ -75,6 +75,7 @@ def collect_optional_vendored_model_data(root_dir: Path) -> list[tuple[str, str]
     model_roots = (
         root_dir / "ocr_models",
         root_dir / "modules" / "ocr_models",
+        root_dir / "src" / "metroliza" / "resources" / "ocr_models",
     )
     datas: list[tuple[str, str]] = []
     for model_root in model_roots:
@@ -82,12 +83,15 @@ def collect_optional_vendored_model_data(root_dir: Path) -> list[tuple[str, str]
             continue
         for file_path in model_root.rglob("*"):
             if file_path.is_file():
-                datas.append((str(file_path), str(file_path.parent.relative_to(root_dir))))
+                relative_parent = file_path.parent.relative_to(model_root)
+                destination = Path("metroliza") / "resources" / "ocr_models" / relative_parent
+                datas.append((str(file_path), str(destination)))
     return datas
 
 
 def build_pyinstaller_collection(root_dir: Path) -> dict[str, list]:
     """Return shared PyInstaller binaries, datas, and hidden imports."""
+    metroliza_hiddenimports = collect_submodules("metroliza")
     pymupdf_datas, pymupdf_binaries, pymupdf_hiddenimports = collect_optional_runtime_assets(
         "pymupdf"
     )
@@ -119,8 +123,15 @@ def build_pyinstaller_collection(root_dir: Path) -> dict[str, list]:
 
     html_dashboard_datas = [
         (
-            str(root_dir / "modules" / "html_dashboard_assets" / "plotly-2.27.0.min.js"),
-            "modules/html_dashboard_assets",
+            str(
+                root_dir
+                / "src"
+                / "metroliza"
+                / "resources"
+                / "html_dashboard_assets"
+                / "plotly-2.27.0.min.js"
+            ),
+            "metroliza/resources/html_dashboard_assets",
         )
     ]
     third_party_notice_datas = [(str(root_dir / "THIRD_PARTY_NOTICES.md"), ".")]
@@ -164,6 +175,9 @@ def build_pyinstaller_collection(root_dir: Path) -> dict[str, list]:
         "hiddenimports": [
             "_metroliza_cmm_native",
             "_metroliza_chart_native",
+            "_metroliza_group_stats_native",
+            "_metroliza_comparison_stats_native",
+            "_metroliza_distribution_fit_native",
             "hexafe_groupstats",
             "hexafe_plotstats",
             "oznak",
@@ -174,11 +188,18 @@ def build_pyinstaller_collection(root_dir: Path) -> dict[str, list]:
             "openvino",
             "cv2",
             "numpy",
+            "metroliza",
+            "metroliza.parsing.cmm_report_parser",
+            "metroliza.parsing.header_ocr_backend",
+            "metroliza.parsing.header_ocr_geometry",
+            "metroliza.parsing.header_ocr_corrections",
+            "metroliza.charts.native_chart_compositor",
             "modules.cmm_report_parser",
             "modules.header_ocr_backend",
             "modules.header_ocr_geometry",
             "modules.header_ocr_corrections",
             "modules.native_chart_compositor",
+            *metroliza_hiddenimports,
             *hexafe_groupstats_hiddenimports,
             *hexafe_plotstats_hiddenimports,
             *oznak_hiddenimports,

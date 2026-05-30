@@ -53,7 +53,7 @@ from modules.db import execute_with_retry, run_transaction_with_retry  # noqa: E
 
 class TestPhase2DbMigratedBehaviors(unittest.TestCase):
     def test_modules_use_shared_db_helpers_without_direct_sqlite_connect(self):
-        for module_path in Path('modules').glob('*.py'):
+        for module_path in Path('src/metroliza').rglob('*.py'):
             if module_path.name == 'db.py':
                 continue
             content = module_path.read_text(encoding='utf-8')

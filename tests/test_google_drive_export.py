@@ -26,6 +26,7 @@ from modules.google_drive_export import (
     map_google_http_error,
     map_google_network_error,
     parse_drive_conversion_response,
+    parse_spreadsheet_tab_titles,
     upload_and_convert_workbook,
 )
 
@@ -98,6 +99,16 @@ class TestGoogleDriveExport(unittest.TestCase):
 
         self.assertEqual("alt987", result.file_id)
         self.assertEqual("https://docs.google.com/spreadsheets/d/alt987/edit", result.web_url)
+
+    def test_parse_spreadsheet_tab_titles_extracts_sheet_titles(self):
+        payload = {
+            "sheets": [
+                {"properties": {"title": "MEASUREMENTS"}},
+                {"properties": {"title": "REF_A"}},
+            ]
+        }
+
+        self.assertEqual(("MEASUREMENTS", "REF_A"), parse_spreadsheet_tab_titles(payload))
 
     def test_map_google_http_error_auth(self):
         payload = json.dumps(
@@ -184,9 +195,19 @@ class TestGoogleDriveExport(unittest.TestCase):
             excel_path = Path(tmpdir) / "report.xlsx"
             excel_path.write_bytes(b"excel-content")
 
-            captured = {"upload_data": None, "folder_lookup": 0}
+            captured = {"upload_data": None, "folder_lookup": 0, "validation": 0}
 
             def fake_urlopen(request, timeout=0):
+                if request.method == "GET" and "sheets.googleapis.com/v4/spreadsheets/sheet123" in request.full_url:
+                    captured["validation"] += 1
+                    return _FakeResponse(
+                        {
+                            "sheets": [
+                                {"properties": {"title": "MEASUREMENTS"}},
+                                {"properties": {"title": "REF_A"}},
+                            ]
+                        }
+                    )
                 if request.method == "GET" and "www.googleapis.com/drive/v3/files" in request.full_url:
                     captured["folder_lookup"] += 1
                     return _FakeResponse({"files": [{"id": "folder-123", "name": GOOGLE_DRIVE_REPORTS_FOLDER_NAME}]})
@@ -211,11 +232,56 @@ class TestGoogleDriveExport(unittest.TestCase):
 
             self.assertEqual("sheet123", result.file_id)
             self.assertEqual(str(excel_path), result.local_xlsx_path)
-            self.assertEqual((), result.converted_tab_titles)
+            self.assertEqual(("MEASUREMENTS", "REF_A"), result.converted_tab_titles)
             self.assertEqual("", result.fallback_message)
             self.assertIn(b"application/vnd.google-apps.spreadsheet", captured["upload_data"])
             self.assertIn(b"\"parents\": [\"folder-123\"]", captured["upload_data"])
             self.assertEqual(1, captured["folder_lookup"])
+            self.assertEqual(1, captured["validation"])
+
+    def test_upload_and_convert_workbook_warns_when_converted_tabs_do_not_match(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            excel_path = Path(tmpdir) / "report.xlsx"
+            excel_path.write_bytes(b"excel-content")
+
+            def fake_urlopen(request, timeout=0):
+                if request.method == "GET" and "sheets.googleapis.com/v4/spreadsheets/sheet123" in request.full_url:
+                    return _FakeResponse(
+                        {
+                            "sheets": [
+                                {"properties": {"title": "MEASUREMENTS"}},
+                                {"properties": {"title": "Renamed"}},
+                            ]
+                        }
+                    )
+                if request.method == "GET" and "www.googleapis.com/drive/v3/files" in request.full_url:
+                    return _FakeResponse({"files": [{"id": "folder-123", "name": GOOGLE_DRIVE_REPORTS_FOLDER_NAME}]})
+                if request.method == "POST" and "upload/drive/v3/files" in request.full_url:
+                    return _FakeResponse(
+                        {
+                            "id": "sheet123",
+                            "webViewLink": "https://docs.google.com/spreadsheets/d/sheet123/edit",
+                        }
+                    )
+                raise AssertionError(f"Unexpected request: {request.method} {request.full_url}")
+
+            statuses = []
+            with patch("modules.google_drive_export._ensure_access_token", return_value="token"), patch(
+                "modules.google_drive_export.urllib.request.urlopen", side_effect=fake_urlopen
+            ):
+                result = upload_and_convert_workbook(
+                    str(excel_path),
+                    expected_sheet_names=["MEASUREMENTS", "REF_A"],
+                    max_retries=1,
+                    status_callback=statuses.append,
+                )
+
+            self.assertEqual(("MEASUREMENTS", "Renamed"), result.converted_tab_titles)
+            self.assertIn("Google Sheets conversion is missing expected workbook tabs.", result.warnings)
+            self.assertEqual("MEASUREMENTS, REF_A", result.warning_details[0]["expected"])
+            self.assertEqual("MEASUREMENTS, Renamed", result.warning_details[0]["actual"])
+            self.assertIn("Use local .xlsx fallback", result.fallback_message)
+            self.assertEqual(["uploading", "converting", "validating"], statuses)
 
     def test_upload_and_convert_workbook_retries_retryable_failures(self):
         with tempfile.TemporaryDirectory() as tmpdir:

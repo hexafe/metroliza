@@ -95,8 +95,8 @@ JSON output rather than failing the job.
 ## 3) Comparison-stats CI and pairwise flows
 
 Sources:
-- `modules/comparison_stats.py`
-- `modules/comparison_stats_native.py`
+- `src/metroliza/analytics/comparison_stats.py`
+- `src/metroliza/native_bridges/comparison_stats_native.py`
 - benchmark driver: `scripts/benchmark_comparison_stats.py`
 
 Canonical scenario keys:

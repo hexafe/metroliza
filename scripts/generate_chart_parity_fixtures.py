@@ -31,16 +31,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from modules.chart_render_spec import (
+from metroliza.charts.chart_render_spec import (
     build_resolved_distribution_spec,
     build_resolved_histogram_spec,
     build_resolved_iqr_spec,
     build_resolved_trend_spec,
     histogram_spec_to_mapping,
 )
-from modules.chart_renderer import build_distribution_native_payload, build_histogram_native_payload
-from modules.matplotlib_distribution_geometry import extract_distribution_geometry
-from modules.matplotlib_iqr_trend_geometry import extract_iqr_geometry, extract_trend_geometry
+from metroliza.charts.chart_renderer import build_distribution_native_payload, build_histogram_native_payload
+from metroliza.charts.matplotlib_distribution_geometry import extract_distribution_geometry
+from metroliza.charts.matplotlib_iqr_trend_geometry import extract_iqr_geometry, extract_trend_geometry
 
 
 FIXTURE_SET_VERSION = 1

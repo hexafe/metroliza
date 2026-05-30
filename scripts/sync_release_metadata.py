@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sync release metadata from VersionDate.py into user-facing docs."""
+"""Sync package release metadata into user-facing docs."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import sys
 from dataclasses import dataclass
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
-VERSION_MODULE = REPO_ROOT / "VersionDate.py"
+VERSION_MODULE = REPO_ROOT / "src" / "metroliza" / "app" / "version.py"
 README_PATH = REPO_ROOT / "README.md"
 CHANGELOG_PATH = REPO_ROOT / "CHANGELOG.md"
 
@@ -34,7 +34,7 @@ class UpdateResult:
 def load_metadata() -> ReleaseMetadata:
     spec = importlib.util.spec_from_file_location("VersionDate", VERSION_MODULE)
     if spec is None or spec.loader is None:
-        raise RuntimeError("Unable to load VersionDate.py")
+        raise RuntimeError("Unable to load package release metadata")
 
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -46,7 +46,7 @@ def load_metadata() -> ReleaseMetadata:
     ]
     if missing:
         names = ", ".join(missing)
-        raise RuntimeError(f"VersionDate.py missing required release fields: {names}")
+        raise RuntimeError(f"Package release metadata missing required fields: {names}")
 
     release_version = str(module.RELEASE_VERSION)
     release_match = re.fullmatch(r"(\d{4}\.\d{2})(?:rc(\d+))?", release_version)

@@ -124,6 +124,11 @@ class TestExportPresetFlowIntegration(unittest.TestCase):
                 'modules.data_grouping',
                 'modules.custom_logger',
                 'modules.export_dialog',
+                'metroliza.exporting.export_data_thread',
+                'metroliza.ui.filter_dialog',
+                'metroliza.ui.data_grouping',
+                'metroliza.shared.custom_logger',
+                'metroliza.ui.export_dialog',
             ]
         }
         cls._saved_module_attrs = {
@@ -131,12 +136,17 @@ class TestExportPresetFlowIntegration(unittest.TestCase):
             ('modules.filter_dialog', 'FilterDialog'): getattr(sys.modules.get('modules.filter_dialog'), 'FilterDialog', cls._missing),
             ('modules.data_grouping', 'DataGrouping'): getattr(sys.modules.get('modules.data_grouping'), 'DataGrouping', cls._missing),
             ('modules.custom_logger', 'CustomLogger'): getattr(sys.modules.get('modules.custom_logger'), 'CustomLogger', cls._missing),
+            ('metroliza.exporting.export_data_thread', 'ExportDataThread'): getattr(sys.modules.get('metroliza.exporting.export_data_thread'), 'ExportDataThread', cls._missing),
+            ('metroliza.ui.filter_dialog', 'FilterDialog'): getattr(sys.modules.get('metroliza.ui.filter_dialog'), 'FilterDialog', cls._missing),
+            ('metroliza.ui.data_grouping', 'DataGrouping'): getattr(sys.modules.get('metroliza.ui.data_grouping'), 'DataGrouping', cls._missing),
+            ('metroliza.shared.custom_logger', 'CustomLogger'): getattr(sys.modules.get('metroliza.shared.custom_logger'), 'CustomLogger', cls._missing),
         }
 
         # Minimal stubs for Qt and dependencies so we can import payload builder.
         qtcore_stub = types.ModuleType('PyQt6.QtCore')
         qtcore_stub.QByteArray = bytes
         qtcore_stub.QBuffer = object
+        qtcore_stub.QDate = object
         qtcore_stub.QIODevice = types.SimpleNamespace(OpenModeFlag=types.SimpleNamespace(ReadOnly=0))
         qtcore_stub.QSize = object
         qtcore_stub.QTemporaryFile = object
@@ -185,7 +195,17 @@ class TestExportPresetFlowIntegration(unittest.TestCase):
             setattr(qtwidgets_stub, name, object)
         sys.modules['PyQt6.QtWidgets'] = qtwidgets_stub
 
-        for module_name in ['modules.base64_encoded_files', 'modules.export_data_thread', 'modules.filter_dialog', 'modules.data_grouping', 'modules.custom_logger']:
+        for module_name in [
+            'modules.base64_encoded_files',
+            'modules.export_data_thread',
+            'modules.filter_dialog',
+            'modules.data_grouping',
+            'modules.custom_logger',
+            'metroliza.exporting.export_data_thread',
+            'metroliza.ui.filter_dialog',
+            'metroliza.ui.data_grouping',
+            'metroliza.shared.custom_logger',
+        ]:
             if module_name not in sys.modules:
                 sys.modules[module_name] = types.ModuleType(module_name)
 
@@ -193,11 +213,17 @@ class TestExportPresetFlowIntegration(unittest.TestCase):
         sys.modules['modules.filter_dialog'].FilterDialog = object
         sys.modules['modules.data_grouping'].DataGrouping = object
         sys.modules['modules.custom_logger'].CustomLogger = object
+        sys.modules['metroliza.exporting.export_data_thread'].ExportDataThread = object
+        sys.modules['metroliza.ui.filter_dialog'].FilterDialog = object
+        sys.modules['metroliza.ui.data_grouping'].DataGrouping = object
+        sys.modules['metroliza.shared.custom_logger'].CustomLogger = object
         sys.modules.pop('modules.export_dialog', None)
+        sys.modules.pop('metroliza.ui.export_dialog', None)
 
     @classmethod
     def tearDownClass(cls):
         sys.modules.pop('modules.export_dialog', None)
+        sys.modules.pop('metroliza.ui.export_dialog', None)
         for (module_name, attr_name), original_value in cls._saved_module_attrs.items():
             module = sys.modules.get(module_name)
             if module is None:

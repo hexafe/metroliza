@@ -55,6 +55,7 @@ class _FakeMessageBox:
 
 def _import_help_menu_with_stubs():
     sys.modules.pop('modules.help_menu', None)
+    sys.modules.pop('metroliza.ui.help_menu', None)
     qtcore = types.ModuleType('PyQt6.QtCore')
     qtcore.QUrl = _FakeQUrl
     qtgui = types.ModuleType('PyQt6.QtGui')
@@ -95,6 +96,7 @@ class TestHelpMenu(unittest.TestCase):
 
     def test_docs_ref_can_be_overridden_by_environment(self):
         sys.modules.pop('modules.help_menu', None)
+        sys.modules.pop('metroliza.ui.help_menu', None)
         qtcore = types.ModuleType('PyQt6.QtCore')
         qtcore.QUrl = _FakeQUrl
         qtgui = types.ModuleType('PyQt6.QtGui')
@@ -113,6 +115,7 @@ class TestHelpMenu(unittest.TestCase):
 
     def test_github_url_helper_imports_without_pyqt_runtime(self):
         sys.modules.pop('modules.help_menu', None)
+        sys.modules.pop('metroliza.ui.help_menu', None)
         real_import = __import__
 
         def _raise_for_pyqt(name, *args, **kwargs):

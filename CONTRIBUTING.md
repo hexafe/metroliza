@@ -39,42 +39,43 @@ Before opening a PR, run:
 ```bash
 python -m compileall .
 ruff check .
-PYTHONPATH=. python -m pytest tests -q
+PYTHONPATH=src:. python -m pytest tests -q
 ```
 
 ## Architecture notes
 
 Metroliza's core flow is:
 
-1. **Parse** (`modules/parse_reports_thread.py`) ingests reports/archives and normalizes rows.
-2. **Persist** (`modules/db.py` + DB call sites) stores and queries SQLite data.
-3. **Group/Filter** (`modules/data_grouping.py`, `modules/filter_dialog.py`) prepares user-selected subsets.
-4. **Export** (`modules/export_data_thread.py`) creates Excel outputs with summary stats/charts.
+1. **Parse** (`src/metroliza/parsing/parse_reports_thread.py`) ingests reports/archives and normalizes rows.
+2. **Persist** (`src/metroliza/reports/db.py` + DB call sites) stores and queries SQLite data.
+3. **Group/Filter** (`src/metroliza/ui/data_grouping.py`, `src/metroliza/ui/filter_dialog.py`) prepares user-selected subsets.
+4. **Export** (`src/metroliza/exporting/export_data_thread.py`) creates Excel outputs with summary stats/charts.
 
 ## Contracts usage
 
-Request/option contracts live in `modules/contracts.py`.
+Request/option contracts live in `src/metroliza/shared/contracts.py`.
 
 - Parse flows should build and validate `ParseRequest`.
 - Export flows should build and validate `ExportRequest` and nested dataclasses (`AppPaths`, `ExportOptions`, `GroupingAssignment`).
 - Prefer adding validation to contract constructors/helpers instead of duplicating checks in UI/dialog code.
 
 
-## Module naming policy (`modules/`)
+## Module naming policy (`src/metroliza/`)
 
-- Use **`snake_case.py`** for all new Python modules under `modules/`.
-- Prefer importing from snake_case module names in new and touched code.
+- Use **`snake_case.py`** for all new Python modules under `src/metroliza/`.
+- Prefer canonical `metroliza.*` imports in new and touched implementation code.
 - CamelCase module filenames are no longer supported; use snake_case paths exclusively.
+- The root `modules/` tree is compatibility shim space only; do not add new implementation code there.
 - The completed migration closeout is archived at [`docs/archive/2026/module_naming_migration.md`](docs/archive/2026/module_naming_migration.md).
 
 ## Coding guidance
 
 - Keep changes incremental and aligned with active operational docs under `docs/` (especially release-check workflows in `docs/release_checks/`).
-- Prefer shared helpers in `modules/db.py` over direct `sqlite3.connect` in feature modules.
+- Prefer shared helpers in `src/metroliza/reports/db.py` over direct `sqlite3.connect` in feature modules.
 - **Transaction granularity:** each logical write unit (e.g., inserting one parsed report and all related measurements, or applying all edits from one Modify DB submission) must execute inside a single `run_transaction_with_retry` call so retries are atomic and rollback-safe.
-- Use `run_transaction_with_retry` for multi-statement write workflows; keep retries centralized in `modules/db.py` rather than implementing ad-hoc retry loops in feature modules.
+- Use `run_transaction_with_retry` for multi-statement write workflows; keep retries centralized in `src/metroliza/reports/db.py` rather than implementing ad-hoc retry loops in feature modules.
 - Add or update tests in `tests/` for each behavior change.
-- Naming guardrail: `tests/test_module_naming_policy.py` enforces that any newly introduced `modules/*.py` files follow `snake_case.py` (with a temporary legacy allowlist during migration).
+- Naming guardrail: `tests/test_directory_reorganization_architecture.py` enforces canonical source packages and legacy-shim boundaries.
 
 
 ## Documentation source-of-truth hierarchy
@@ -110,4 +111,4 @@ When touching Google conversion/auth flows, validate and document:
 3. **Fallback behavior:** conversion degradation/failure messaging still reports the preserved `.xlsx` output path.
 4. **Testing strategy:** baseline automated tests remain passing; optional live smoke check stays release-gated/non-default.
 5. **Troubleshooting notes:** conversion warning guidance stays current in `README.md`.
-6. **PR evidence for Google export surface changes:** any PR touching `modules/google_drive_export.py`, `modules/export_backends.py`, `modules/export_data_thread.py`, or Google export UI/contract paths (for example `modules/export_dialog.py`, `modules/contracts.py`) must include Google conversion smoke-check evidence in the PR description using the standard evidence format; if evidence is omitted, include explicit justification.
+6. **PR evidence for Google export surface changes:** any PR touching `src/metroliza/exporting/google_drive_export.py`, `src/metroliza/exporting/export_backends.py`, `src/metroliza/exporting/export_data_thread.py`, or Google export UI/contract paths (for example `src/metroliza/ui/export_dialog.py`, `src/metroliza/shared/contracts.py`) must include Google conversion smoke-check evidence in the PR description using the standard evidence format; if evidence is omitted, include explicit justification.

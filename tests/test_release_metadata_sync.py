@@ -18,7 +18,9 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
 
     def test_in_app_current_release_notes_show_current_version_only(self):
         import VersionDate
+        from metroliza.app import version
 
+        self.assertIs(VersionDate.release_notes, version.release_notes)
         current_section = VersionDate.release_notes.split("<br><b>Archive:</b><br>", 1)[0]
 
         self.assertIn(f"Current version {VersionDate.PUBLIC_VERSION_LABEL}", current_section)
@@ -48,7 +50,8 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertEqual(
             current_bullets,
             [
-                "- Optimizations<br>",
+                "- Google Sheets export now checks converted workbook tabs and warns when a local Excel fallback should be used<br>",
+                "- Canceling long parsing, export, and metadata tasks is more reliable from progress windows<br>",
                 "- Dashboard plot visuals can now be customized<br>",
             ],
         )

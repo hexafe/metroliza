@@ -38,8 +38,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    from modules.llm_plugin_factory import write_plugin_workspace
-    from modules.parser_plugin_paths import default_external_plugin_dir_display
+    from metroliza.parsing.llm_plugin_factory import write_plugin_workspace
+    from metroliza.parsing.parser_plugin_paths import default_external_plugin_dir_display
 
     parser = build_parser()
     args = parser.parse_args(argv)

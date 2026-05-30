@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from modules.header_ocr_backend import RAPIDOCR_MODEL_ASSET_MANIFEST, default_rapidocr_model_dir
+from metroliza.parsing.header_ocr_backend import RAPIDOCR_MODEL_ASSET_MANIFEST, default_rapidocr_model_dir
 
 
 def _sha256(path: Path) -> str:

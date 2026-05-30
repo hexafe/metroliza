@@ -55,7 +55,13 @@ def _load_export_thread_type():
     custom_logger_stub.CustomLogger = _DummyLogger
 
     module_name = '_test_export_data_thread_workbook_output'
-    module_path = Path(__file__).resolve().parents[1] / 'modules' / 'export_data_thread.py'
+    module_path = (
+        Path(__file__).resolve().parents[1]
+        / 'src'
+        / 'metroliza'
+        / 'exporting'
+        / 'export_data_thread.py'
+    )
 
     with patch.dict(
         sys.modules,

@@ -6,10 +6,17 @@ def test_onefile_spec_includes_builtin_cmm_parser_hiddenimport():
     common_text = Path("packaging/pyinstaller_common.py").read_text(encoding="utf-8")
 
     assert "build_pyinstaller_collection" in spec_text
+    assert 'metroliza_package_entry.py' in spec_text
+    assert 'pathex=[str(ROOT_DIR / "src"), str(ROOT_DIR)]' in spec_text
+    assert "metroliza.parsing.cmm_report_parser" in common_text
+    assert "metroliza.charts.native_chart_compositor" in common_text
     assert "modules.cmm_report_parser" in common_text
     assert "modules.native_chart_compositor" in common_text
     assert "_metroliza_cmm_native" in common_text
     assert "_metroliza_chart_native" in common_text
+    assert "_metroliza_group_stats_native" in common_text
+    assert "_metroliza_comparison_stats_native" in common_text
+    assert "_metroliza_distribution_fit_native" in common_text
     assert "modules.header_ocr_backend" in common_text
     assert "modules.header_ocr_geometry" in common_text
     assert "modules.header_ocr_corrections" in common_text
@@ -58,6 +65,7 @@ def test_onefile_spec_collects_ocr_runtime_assets_and_model_data():
     assert "collect_optional_vendored_model_data(root_dir)" in spec_text
     assert 'root_dir / "ocr_models"' in spec_text
     assert 'root_dir / "modules" / "ocr_models"' in spec_text
+    assert 'root_dir / "src" / "metroliza" / "resources" / "ocr_models"' in spec_text
     assert "THIRD_PARTY_NOTICES.md" in spec_text
     assert "third_party_notice_datas" in spec_text
     assert "*rapidocr_hiddenimports" in spec_text
@@ -80,6 +88,20 @@ def test_windows_pyinstaller_build_validates_ocr_packaging_inputs():
     assert "--require-header-ocr" in script_text
     assert "Validating Oznak packaging inputs" in script_text
     assert "importlib.util.find_spec('oznak')" in script_text
+
+
+def test_nuitka_includes_all_native_acceleration_modules_when_available():
+    script = Path("packaging/build_nuitka.ps1").read_text(encoding="utf-8")
+
+    for module_name in (
+        "_metroliza_cmm_native",
+        "_metroliza_chart_native",
+        "_metroliza_group_stats_native",
+        "_metroliza_comparison_stats_native",
+        "_metroliza_distribution_fit_native",
+    ):
+        assert f"find_spec('{module_name}')" in script
+        assert f"'--include-module={module_name}'" in script
 
 
 def test_windows_runtime_setup_and_diagnostic_scripts_cover_ocr_prerequisites():
@@ -115,3 +137,4 @@ def test_onefile_spec_uses_release_metadata_pyinstaller_output_name():
     assert "name=OUTPUT_NAME" in spec_text
     assert 'OUTPUT_DIR_NAME = f"metroliza_P_{VERSION_LABEL}_onedir"' in onedir_text
     assert 'EXE_NAME = "metroliza"' in onedir_text
+    assert 'metroliza_package_entry.py' in onedir_text

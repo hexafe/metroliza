@@ -94,7 +94,7 @@ def build_payload(
     max_seconds: float | None,
     progress_every: int,
 ) -> dict[str, Any]:
-    from modules.header_ocr_backend import (
+    from metroliza.parsing.header_ocr_backend import (
         RapidOcrLatinBackendConfig,
         default_rapidocr_latin_model_paths,
         get_cached_rapidocr_latin_backend,

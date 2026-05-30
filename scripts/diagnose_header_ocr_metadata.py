@@ -132,7 +132,7 @@ def _classify_runtime_issue(header_diagnostics: dict[str, Any], field_sources: d
 
 
 def _run_parser_diagnostic(pdf_path: Path, db_file: str) -> dict[str, Any]:
-    from modules.cmm_report_parser import CMMReportParser
+    from metroliza.parsing.cmm_report_parser import CMMReportParser
 
     parser = CMMReportParser(str(pdf_path), db_file)
     parser.open_report()
@@ -168,13 +168,13 @@ def _run_parser_diagnostic(pdf_path: Path, db_file: str) -> dict[str, Any]:
 
 
 def build_diagnostic_payload(pdf_path: Path, db_file: str | None = None) -> dict[str, Any]:
-    from modules.header_ocr_backend import (
+    from metroliza.parsing.header_ocr_backend import (
         default_rapidocr_latin_model_paths,
         default_rapidocr_model_dir,
         missing_rapidocr_latin_model_paths,
         rapidocr_latin_runtime_config_from_env,
     )
-    from modules.report_repository import compute_sha256
+    from metroliza.reports.report_repository import compute_sha256
 
     resolved_pdf = pdf_path.expanduser().resolve()
     if not resolved_pdf.is_file():
@@ -207,7 +207,7 @@ def build_diagnostic_payload(pdf_path: Path, db_file: str | None = None) -> dict
         resolved_db = str(db_path)
         db_rows = _source_rows_for_sha(db_path, sha256_value)
 
-    parser_module = importlib.import_module("modules.cmm_report_parser")
+    parser_module = importlib.import_module("metroliza.parsing.cmm_report_parser")
 
     return {
         "environment": {

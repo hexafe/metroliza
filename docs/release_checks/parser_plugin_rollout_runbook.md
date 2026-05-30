@@ -1,13 +1,13 @@
 # Parser Plugin Rollout / Rollback Runbook
 
 ## Purpose
-Operational checklist for enabling parser-plugin updates (including LLM-assisted candidates) with clear ownership and rollback controls.
+Operational checklist for enabling parser-plugin updates with clear ownership and rollback controls.
 
 Active operator docs:
 
 - [`../parser_plugins/README.md`](../parser_plugins/README.md)
 - [`../parser_plugins/non_technical_workflow.md`](../parser_plugins/non_technical_workflow.md)
-- [`../parser_plugins/llm_plugin_specification.md`](../parser_plugins/llm_plugin_specification.md)
+- [`../parser_plugins/parser_plugin_specification.md`](../parser_plugins/parser_plugin_specification.md)
 
 ## PR governance checklist
 Use this checklist on parser plugin PRs before merge:

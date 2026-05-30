@@ -7,6 +7,7 @@ block_cipher = None
 SPEC_DIR = Path(SPECPATH).resolve()
 ROOT_DIR = SPEC_DIR.parent
 sys.path.insert(0, str(SPEC_DIR))
+sys.path.insert(0, str(ROOT_DIR / "src"))
 
 from pyinstaller_common import build_pyinstaller_collection, read_version_label
 
@@ -17,8 +18,8 @@ COLLECTION = build_pyinstaller_collection(ROOT_DIR)
 
 
 a = Analysis(
-    [str(ROOT_DIR / "metroliza.py")],
-    pathex=[],
+    [str(SPEC_DIR / "metroliza_package_entry.py")],
+    pathex=[str(ROOT_DIR / "src"), str(ROOT_DIR)],
     binaries=COLLECTION["binaries"],
     datas=COLLECTION["datas"],
     hiddenimports=COLLECTION["hiddenimports"],

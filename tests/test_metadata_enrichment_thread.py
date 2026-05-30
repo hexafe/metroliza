@@ -5,6 +5,7 @@ from modules.metadata_enrichment_thread import (
     MetadataEnrichmentWorkItem,
     discover_metadata_enrichment_work,
     enrich_existing_report_metadata,
+    run_metadata_enrichment_batch,
 )
 from modules.report_metadata_models import CanonicalReportMetadata, MetadataCandidate, MetadataSelectionResult
 from modules.report_repository import ReportRepository
@@ -239,3 +240,48 @@ def test_enrich_existing_report_metadata_preserves_measurement_rows(tmp_path):
     assert metadata_json["metadata_enrichment"]["mode"] == "complete"
     assert "reference" in metadata_json["metadata_enrichment"]["preserved_fields"]
     assert json.loads(raw_report_json)["metadata_enrichment"]["measurement_rows_preserved"] is True
+
+
+def test_metadata_enrichment_batch_continues_after_per_report_failure(tmp_path):
+    db_path = str(tmp_path / "reports.db")
+    work_items = [
+        MetadataEnrichmentWorkItem(report_id=1, source_path="bad.pdf", sha256="bad"),
+        MetadataEnrichmentWorkItem(report_id=2, source_path="good.pdf", sha256="good"),
+    ]
+    warnings = []
+    progress = []
+    enriched = []
+
+    def parser_factory(path, _db_file, connection=None):
+        assert connection is None
+        if path.endswith("bad.pdf"):
+            raise RuntimeError("broken report")
+        return object()
+
+    def fake_enrich(_db_file, work_item, *, connection=None, parser_factory=None):
+        parser_factory(work_item.source_path, _db_file, connection=connection)
+        return True
+
+    import modules.metadata_enrichment_thread as metadata_module
+
+    original_enrich = metadata_module.enrich_existing_report_metadata
+    try:
+        metadata_module.enrich_existing_report_metadata = fake_enrich
+        result = run_metadata_enrichment_batch(
+            db_path,
+            work_items,
+            parser_factory=parser_factory,
+            on_warning=lambda item, exc: warnings.append((item.report_id, str(exc))),
+            on_progress=lambda processed, total: progress.append((processed, total)),
+            on_item_enriched=lambda item, *_args: enriched.append(item.report_id),
+        )
+    finally:
+        metadata_module.enrich_existing_report_metadata = original_enrich
+
+    assert result.enriched_files == 1
+    assert result.failed_files == 1
+    assert result.skipped_files == 0
+    assert result.total_files == 2
+    assert warnings == [(1, "broken report")]
+    assert progress == [(1, 2), (2, 2)]
+    assert enriched == [2]

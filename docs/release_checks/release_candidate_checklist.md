@@ -10,10 +10,10 @@ Complete before announcing code freeze or cutting an RC branch.
 
 - [ ] Scope is locked for the target release; all non-release-critical work is moved out of milestone.
 - [ ] Release owner and backup owner are assigned.
-- [x] `VersionDate.py` version/build/date values are updated for this RC.
+- [x] `src/metroliza/app/version.py` version/build/date values are updated for this RC.
 - [x] `CHANGELOG.md` includes user-facing notes for this RC/release.
 - [x] `README.md` **Release highlights** reflects the current RC/release line.
-- [x] `python scripts/sync_release_metadata.py --check` passes (VersionDate/README/CHANGELOG are aligned).
+- [x] `python scripts/sync_release_metadata.py --check` passes (release metadata, README, and CHANGELOG are aligned).
 - [x] Open blockers are triaged against the defect criteria in section 6.
 - [x] Open implementation-item gate triage is completed in [`implementation_item_triage.md`](./implementation_item_triage.md) (Gate/Owner/Target RC/Rationale filled) before freeze proceeds.
 
@@ -37,7 +37,7 @@ Complete before beginning open testing on an RC build.
 Complete before beginning open testing on an RC build.
 
 - [ ] Feature freeze timestamp is recorded in release tracker and announcement thread. *(Owner: Release manager)*
-- [ ] Active RC branch name is confirmed and documented (for example `release/2026.05-rc1`; PR validation branches such as `codex/*` are not final RC branches). *(Owner: Release engineer)*
+- [ ] Active RC branch name is confirmed and documented (for example `release/2026.05-rc1`; validation branches are not final RC branches). *(Owner: Release engineer)*
 - [ ] Build identifier for open testing is published (artifact/version/hash) and linked in tracker. *(Owner: Release engineer)*
 - [ ] Mandatory CI baseline is completed and linked (build/lint/tests) before open testing starts. *(Owner: Release owner)*
 - [ ] Known-issues document link is prepared and shared with open testers. *(Owner: QA/Product)*
@@ -73,7 +73,7 @@ Run and record all required checks from the RC branch:
 ```bash
 python -m compileall .
 ruff check .
-PYTHONPATH=. python -m pytest tests -q
+PYTHONPATH=src:. python -m pytest tests -q
 ```
 
 - [x] Compile check passed locally for the current audit worktree. *(Owner: Dev)*
@@ -87,8 +87,11 @@ Build commands:
 ```bash
 pyinstaller packaging/metroliza_onefile.spec
 pyinstaller packaging/metroliza_onedir.spec
-python -m maturin build --manifest-path modules/native/cmm_parser/Cargo.toml --release
-python -m maturin build --manifest-path modules/native/chart_renderer/Cargo.toml --release
+python -m maturin build --manifest-path src/metroliza/native/cmm_parser/Cargo.toml --release
+python -m maturin build --manifest-path src/metroliza/native/chart_renderer/Cargo.toml --release
+python -m maturin build --manifest-path src/metroliza/native/group_stats_coercion/Cargo.toml --release
+python -m maturin build --manifest-path src/metroliza/native/comparison_stats_bootstrap/Cargo.toml --release
+python -m maturin build --manifest-path src/metroliza/native/distribution_fit_ad/Cargo.toml --release
 ```
 
 ```powershell
@@ -103,6 +106,7 @@ python -m maturin build --manifest-path modules/native/chart_renderer/Cargo.toml
 - [ ] Startup profile JSONL evidence is attached for onefile and onedir launch tests. *(Owner: QA)*
 - [ ] Native wheel build succeeds for release target(s), and `_metroliza_cmm_native` import smoke check passes. *(Owner: Release engineer/QA)*
 - [ ] Native chart wheel build succeeds for release target(s), and `_metroliza_chart_native` histogram render smoke check passes. *(Owner: Release engineer/QA)*
+- [ ] Native group statistics, comparison statistics, and distribution-fit wheels build and their import smoke checks pass. *(Owner: Release engineer/QA)*
 - [ ] Pure-Python parser fallback works when native module is intentionally unavailable (`METROLIZA_CMM_PARSER_BACKEND=python`). *(Owner: QA)*
 - [ ] Basic startup flow works (open app, load a representative input, generate an export). *(Owner: QA)*
 - [ ] Produced artifacts are named/versioned as expected for RC distribution. *(Owner: Release manager)*
@@ -110,12 +114,13 @@ python -m maturin build --manifest-path modules/native/chart_renderer/Cargo.toml
 
 - [ ] GitHub CI checks for the RC branch/PR are green before merge/tag. *(Owner: Release owner)*
 - [ ] CMM parser perf gate evidence (`cmm-parser-perf-gate` + `cmm-parser-perf-artifacts`) is reviewed when parser/backend changes are present; triage follows [`cmm_parser_perf_guardrail.md`](./cmm_parser_perf_guardrail.md). *(Owner: Release owner/QA)*
-- [ ] Coverage visibility output from `unit-tests` is reviewed (job log summary and `unit-test-coverage` artifact `coverage.xml`) as RC confidence evidence; this is informational and not a blocking PR check. *(Owner: Release owner/QA)*
+- [ ] Coverage threshold from `unit-tests` passes, and `unit-test-coverage` artifact `coverage.xml` is reviewed as RC confidence evidence. *(Owner: Release owner/QA)*
 - [ ] Manual release smoke evidence is linked before open-testing promotion when applicable. Google conversion smoke is release-blocking for promoted RC artifacts; skipped default CI does not satisfy that gate. *(Owner: Release owner)*
 
-### 2026.05 RC4 PR/release-audit evidence
+### 2026.05 RC4 directory-reorganization audit evidence
 
-Current validation branch: `rc2` / PR #895.
+Current validation branch: `codex/directory-reorg-plan`; GitHub PR and CI run
+identity must be recorded after publish.
 Current RC metadata: `2026.05rc4(260524)`.
 Current plotstats hotfix pin:
 `1e2c72107d342f44a37e5fb78d7d76992ea60315`.
@@ -124,16 +129,17 @@ Current plotstats hotfix pin:
   [`rc4_static_scatter_annotation_backgrounds_2026-05-23.md`](./rc4_static_scatter_annotation_backgrounds_2026-05-23.md).
 - Previous RC2 audit evidence remains historical in
   [`rc2_release_audit_2026-05-17.md`](./rc2_release_audit_2026-05-17.md).
-- Local release gates passed for the current audit worktree:
-  `ruff`, `compileall`, release metadata sync, release hygiene, `git diff --check`,
-  security audit, full pytest, and focused dependency/adapter regression tests.
+- Local release gates passed for the current directory-reorganization audit
+  worktree: `ruff`, `compileall`, release metadata sync, release hygiene,
+  `git diff --check`, security audit, full pytest with coverage, parser plugin
+  workspace validation, and packaged PDF parser input validation.
 - Full pytest with coverage passed:
-  `1697 passed, 191 skipped, 91 warnings, 60 subtests passed`; total coverage `79%`.
+  `1731 passed, 197 skipped, 95 warnings, 60 subtests passed`; CI-scope
+  coverage `67.06%`, canonical source coverage `69.47%`.
 - Security audit passed after allowing `pip-audit` to create/upgrade its temporary
   dependency environment; `pip-audit` reported no known vulnerabilities.
-- Previous RC4 GitHub Actions CI passed for Metroliza run `26326503387` on
-  commit:
-  `d0ce9f38061f9af747ee234f27cc46c534355aff`.
+- Fresh GitHub Actions CI for the final committed directory-reorganization SHA is
+  pending publish and must be green before merge/tag.
 - GitHub Actions CI passed for hexafe-plotstats run `26337409366` on the
   package `main` commit
   `1e2c72107d342f44a37e5fb78d7d76992ea60315`.

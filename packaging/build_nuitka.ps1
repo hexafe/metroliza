@@ -1,5 +1,5 @@
 param(
-    [string]$EntryPoint = "metroliza.py",
+    [string]$EntryPoint = "packaging/metroliza_package_entry.py",
     [string]$OutputName,
     [string]$IconPath = "$PSScriptRoot/metroliza_icon2.ico",
     [switch]$BundleCredentials,
@@ -21,6 +21,13 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$srcRoot = Join-Path $repoRoot 'src'
+$pathSeparator = [System.IO.Path]::PathSeparator
+if ([string]::IsNullOrWhiteSpace($env:PYTHONPATH)) {
+    $env:PYTHONPATH = "$srcRoot$pathSeparator$repoRoot"
+} elseif (-not ($env:PYTHONPATH -split [regex]::Escape($pathSeparator) | Where-Object { $_ -eq $srcRoot })) {
+    $env:PYTHONPATH = "$srcRoot$pathSeparator$repoRoot$pathSeparator$env:PYTHONPATH"
+}
 $credentialsPathWasBound = $PSBoundParameters.ContainsKey('CredentialsPath')
 $modeWasBound = $PSBoundParameters.ContainsKey('Mode')
 
@@ -492,6 +499,24 @@ if ($LASTEXITCODE -eq 0) {
     $chartNativeModuleAvailable = $true
 }
 
+$groupStatsNativeModuleAvailable = $false
+python -c "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('_metroliza_group_stats_native') else 1)" 2>$null
+if ($LASTEXITCODE -eq 0) {
+    $groupStatsNativeModuleAvailable = $true
+}
+
+$comparisonStatsNativeModuleAvailable = $false
+python -c "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('_metroliza_comparison_stats_native') else 1)" 2>$null
+if ($LASTEXITCODE -eq 0) {
+    $comparisonStatsNativeModuleAvailable = $true
+}
+
+$distributionFitNativeModuleAvailable = $false
+python -c "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('_metroliza_distribution_fit_native') else 1)" 2>$null
+if ($LASTEXITCODE -eq 0) {
+    $distributionFitNativeModuleAvailable = $true
+}
+
 $oznakPackageAvailable = $false
 python -c "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('oznak') else 1)" 2>$null
 if ($LASTEXITCODE -eq 0) {
@@ -499,19 +524,19 @@ if ($LASTEXITCODE -eq 0) {
 }
 
 $pdfBackendPackageAvailable = $false
-python -c "import sys,pathlib;root=pathlib.Path.cwd();sys.path.insert(0, str(root));from scripts.validate_packaged_pdf_parser import require_pdf_backend_available;print(require_pdf_backend_available(allow_broken=False))" 2>$null
+python -c "import sys,pathlib;root=pathlib.Path.cwd();sys.path.insert(0, str(root / 'src'));sys.path.insert(1, str(root));from scripts.validate_packaged_pdf_parser import require_pdf_backend_available;print(require_pdf_backend_available(allow_broken=False))" 2>$null
 if ($LASTEXITCODE -eq 0) {
     $pdfBackendPackageAvailable = $true
 }
 
 $headerOcrPackageAvailable = $false
-python -c "import sys,pathlib;root=pathlib.Path.cwd();sys.path.insert(0, str(root));from scripts.validate_packaged_pdf_parser import require_header_ocr_available,validate_vendored_header_ocr_models;require_header_ocr_available(allow_missing=False);validate_vendored_header_ocr_models()" 2>$null
+python -c "import sys,pathlib;root=pathlib.Path.cwd();sys.path.insert(0, str(root / 'src'));sys.path.insert(1, str(root));from scripts.validate_packaged_pdf_parser import require_header_ocr_available,validate_vendored_header_ocr_models;require_header_ocr_available(allow_missing=False);validate_vendored_header_ocr_models()" 2>$null
 if ($LASTEXITCODE -eq 0) {
     $headerOcrPackageAvailable = $true
 }
 
 if ($RequireNative -and -not $nativeModuleAvailable) {
-    throw "Native module '_metroliza_cmm_native' is required but unavailable. Build/install it first: python -m maturin develop --manifest-path modules/native/cmm_parser/Cargo.toml"
+    throw "Native module '_metroliza_cmm_native' is required but unavailable. Build/install it first: python -m maturin develop --manifest-path src/metroliza/native/cmm_parser/Cargo.toml"
 }
 
 if (-not $pdfBackendPackageAvailable -and -not $AllowBrokenPdfParserBuild) {
@@ -603,9 +628,16 @@ $commonArgs = @(
     "--windows-console-mode=$consoleMode",
     '--enable-plugin=pyqt6',
     '--include-package=modules',
+    '--include-package=metroliza',
     '--include-package=hexafe_groupstats',
     '--include-package=hexafe_plotstats',
     '--include-distribution-metadata=hexafe-plotstats',
+    '--include-module=metroliza.parsing.cmm_report_parser',
+    '--include-module=metroliza.parsing.header_ocr_backend',
+    '--include-module=metroliza.parsing.header_ocr_geometry',
+    '--include-module=metroliza.parsing.header_ocr_corrections',
+    '--include-module=metroliza.reports.report_parser_factory',
+    '--include-module=metroliza.parsing.pdf_backend',
     '--include-module=modules.cmm_report_parser',
     '--include-module=modules.header_ocr_backend',
     '--include-module=modules.header_ocr_geometry',
@@ -642,6 +674,18 @@ if ($nativeModuleAvailable) {
 
 if ($chartNativeModuleAvailable) {
     $commonArgs += '--include-module=_metroliza_chart_native'
+}
+
+if ($groupStatsNativeModuleAvailable) {
+    $commonArgs += '--include-module=_metroliza_group_stats_native'
+}
+
+if ($comparisonStatsNativeModuleAvailable) {
+    $commonArgs += '--include-module=_metroliza_comparison_stats_native'
+}
+
+if ($distributionFitNativeModuleAvailable) {
+    $commonArgs += '--include-module=_metroliza_distribution_fit_native'
 }
 
 if ($oznakPackageAvailable) {
@@ -699,8 +743,8 @@ foreach ($pattern in $tokenExcludePatterns) {
     $commonArgs += "--noinclude-data-files=$pattern"
 }
 
-$resolvedPlotlyDashboardAsset = Resolve-Path -LiteralPath (Join-Path $repoRoot 'modules/html_dashboard_assets/plotly-2.27.0.min.js')
-$commonArgs += "--include-data-files=$($resolvedPlotlyDashboardAsset.Path)=modules/html_dashboard_assets/plotly-2.27.0.min.js"
+$resolvedPlotlyDashboardAsset = Resolve-Path -LiteralPath (Join-Path $repoRoot 'src/metroliza/resources/html_dashboard_assets/plotly-2.27.0.min.js')
+$commonArgs += "--include-data-files=$($resolvedPlotlyDashboardAsset.Path)=metroliza/resources/html_dashboard_assets/plotly-2.27.0.min.js"
 
 $resolvedThirdPartyNotices = Resolve-Path -LiteralPath (Join-Path $repoRoot 'THIRD_PARTY_NOTICES.md') -ErrorAction SilentlyContinue
 if ($resolvedThirdPartyNotices) {
@@ -709,7 +753,7 @@ if ($resolvedThirdPartyNotices) {
     throw 'THIRD_PARTY_NOTICES.md is required for release packaging.'
 }
 
-$rapidOcrModelDir = Join-Path $repoRoot 'modules/ocr_models/rapidocr'
+$rapidOcrModelDir = Join-Path $repoRoot 'src/metroliza/resources/ocr_models/rapidocr'
 $rapidOcrModelFiles = @(
     'ch_PP-OCRv4_det_mobile.onnx',
     'ch_ppocr_mobile_v2.0_cls_mobile.onnx',
@@ -718,7 +762,7 @@ $rapidOcrModelFiles = @(
 foreach ($modelFile in $rapidOcrModelFiles) {
     $resolvedModelPath = Resolve-Path -LiteralPath (Join-Path $rapidOcrModelDir $modelFile) -ErrorAction SilentlyContinue
     if ($resolvedModelPath) {
-        $commonArgs += "--include-data-files=$($resolvedModelPath.Path)=modules/ocr_models/rapidocr/$modelFile"
+        $commonArgs += "--include-data-files=$($resolvedModelPath.Path)=metroliza/resources/ocr_models/rapidocr/$modelFile"
     }
 }
 

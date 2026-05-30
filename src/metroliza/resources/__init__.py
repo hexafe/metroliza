@@ -1,0 +1,1 @@
+"""Metroliza resources package."""

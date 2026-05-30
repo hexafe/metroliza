@@ -6,11 +6,11 @@ import ast
 from pathlib import Path
 
 DOCSTRING_GUARD_FILES = [
-    "modules/export_data_thread.py",
-    "modules/export_backends.py",
-    "modules/cmm_report_parser.py",
-    "modules/data_grouping.py",
-    "modules/bom_manager.py",
+    "src/metroliza/exporting/export_data_thread.py",
+    "src/metroliza/exporting/export_backends.py",
+    "src/metroliza/parsing/cmm_report_parser.py",
+    "src/metroliza/ui/data_grouping.py",
+    "src/metroliza/shared/bom_manager.py",
 ]
 
 

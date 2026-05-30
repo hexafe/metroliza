@@ -1,5 +1,6 @@
 import importlib
 import importlib.machinery
+import logging
 import os
 import sys
 import types
@@ -27,7 +28,9 @@ sys.modules.setdefault("fitz", fitz_stub)
 # `sys.modules` before importing thread modules. This test module needs the real
 # parser implementation, so force a clean import of both the parser and factory.
 sys.modules.pop("modules.report_parser_factory", None)
+sys.modules.pop("metroliza.reports.report_parser_factory", None)
 sys.modules.pop("modules.cmm_report_parser", None)
+sys.modules.pop("metroliza.parsing.cmm_report_parser", None)
 
 factory_module = importlib.import_module("modules.report_parser_factory")
 base_module = importlib.import_module("modules.base_report_parser")
@@ -741,6 +744,94 @@ class DemoExternalParser(BaseReportParser, BaseReportParserPlugin):
         PARSER_DETECTORS.update(original_detectors)
         PROBE_RESULT_CACHE.clear()
         PROBE_RESULT_CACHE.update(original_cache)
+
+
+def test_load_external_plugins_supports_dataclass_future_annotations(tmp_path):
+    plugin_file = tmp_path / "dataclass_external_plugin.py"
+    plugin_file.write_text(
+        """
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from modules.base_report_parser import BaseReportParser
+from modules.parser_plugin_contracts import BaseReportParserPlugin, PluginManifest, ProbeResult
+
+@dataclass(frozen=True)
+class ExternalConfig:
+    label: str
+
+class DataclassExternalParser(BaseReportParser, BaseReportParserPlugin):
+    manifest = PluginManifest(
+        plugin_id="dataclass_external",
+        display_name="Dataclass External",
+        version="1.0.0",
+        supported_formats=("pdf",),
+    )
+    config = ExternalConfig(label="ok")
+
+    @classmethod
+    def probe(cls, _input_ref, _context):
+        return ProbeResult(plugin_id="dataclass_external", can_parse=True, confidence=88)
+
+    def open_report(self):
+        self.raw_text = ["ok"]
+
+    def split_text_to_blocks(self):
+        self.blocks_text = []
+
+    def parse_to_v2(self):
+        raise NotImplementedError
+
+    @staticmethod
+    def to_legacy_blocks(_parse_result_v2):
+        return []
+""",
+        encoding="utf-8",
+    )
+
+    original_map = dict(PARSER_MAP)
+    original_manifests = dict(PARSER_MANIFESTS)
+    original_detectors = dict(PARSER_DETECTORS)
+    original_cache = dict(PROBE_RESULT_CACHE)
+    try:
+        result = factory_module.load_external_plugins(str(plugin_file))
+
+        assert result.errors == ()
+        assert "dataclass_external" in result.loaded_plugin_ids
+        assert result.loaded_modules[0] in sys.modules
+    finally:
+        for module_name in result.loaded_modules if "result" in locals() else ():
+            sys.modules.pop(module_name, None)
+        PARSER_MAP.clear()
+        PARSER_MAP.update(original_map)
+        PARSER_MANIFESTS.clear()
+        PARSER_MANIFESTS.update(original_manifests)
+        PARSER_DETECTORS.clear()
+        PARSER_DETECTORS.update(original_detectors)
+        PROBE_RESULT_CACHE.clear()
+        PROBE_RESULT_CACHE.update(original_cache)
+
+
+def test_external_plugin_load_errors_are_logged_by_auto_loader(monkeypatch, tmp_path, caplog):
+    plugin_file = tmp_path / "broken_external_plugin.py"
+    plugin_file.write_text('raise RuntimeError("plugin failed during import")\n', encoding="utf-8")
+
+    monkeypatch.setattr(
+        parser_plugin_paths_module,
+        "configured_external_plugin_path_entries",
+        lambda raw_paths=None, include_default_dir=True, home=None: (str(plugin_file),),
+    )
+    monkeypatch.setattr(factory_module, "_discover_external_plugin_entry_points", lambda force_refresh=False: ())
+    reset_external_plugin_loader_state()
+    try:
+        with caplog.at_level(logging.WARNING, logger=factory_module.logger.name):
+            factory_module._ensure_external_plugins_loaded_once()
+
+        assert "External parser plugin load issue" in caplog.text
+        assert "plugin failed during import" in caplog.text
+    finally:
+        reset_external_plugin_loader_state()
 
 
 def test_resolver_handles_probe_exceptions_without_crashing(tmp_path):

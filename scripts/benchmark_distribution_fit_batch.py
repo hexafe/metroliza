@@ -15,17 +15,17 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from modules.distribution_fit_service import (  # noqa: E402
+from metroliza.analytics.distribution_fit_service import (  # noqa: E402
     _coerce_measurements_array,
     fit_measurement_distribution,
     fit_measurement_distribution_batch,
     measurement_fingerprint,
 )
-from modules.distribution_fit_candidate_native import (  # noqa: E402
+from metroliza.native_bridges.distribution_fit_candidate_native import (  # noqa: E402
     native_fit_backend_available as native_candidate_fit_backend_available,
     native_metrics_backend_available as native_candidate_metrics_backend_available,
 )
-from modules.distribution_fit_native import (  # noqa: E402
+from metroliza.native_bridges.distribution_fit_native import (  # noqa: E402
     native_monte_carlo_backend_available,
     estimate_ad_pvalue_monte_carlo_native,
 )

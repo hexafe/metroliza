@@ -260,6 +260,7 @@ class TestExportDialogLayout(unittest.TestCase):
                 DashboardVisualOptionsDialog=FakeDashboardVisualOptionsDialog
             )
             sys.modules["modules.dashboard_visual_options_dialog"] = fake_module
+            sys.modules["metroliza.ui.dashboard_visual_options_dialog"] = fake_module
 
             app = QApplication.instance() or QApplication([])
             dialog = ExportDialog(parent=None, db_file="")

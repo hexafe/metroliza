@@ -10,7 +10,20 @@ from pathlib import Path
 from unittest import mock
 
 
-# Stubs for Qt and logger
+_STUBBED_MODULE_NAMES = (
+    'PyQt6',
+    'PyQt6.QtCore',
+    'PyQt6.QtGui',
+    'PyQt6.QtWidgets',
+    'modules.custom_logger',
+    'modules.cmm_report_parser',
+)
+_MISSING_MODULE = object()
+_ORIGINAL_MODULES = {
+    module_name: sys.modules.get(module_name, _MISSING_MODULE)
+    for module_name in _STUBBED_MODULE_NAMES
+}
+
 qtcore_stub = types.ModuleType('PyQt6.QtCore')
 
 
@@ -33,9 +46,12 @@ def _dummy_signal(*args, **kwargs):
     return _Signal()
 
 
+pyqt_stub = types.ModuleType('PyQt6')
 qtcore_stub.QCoreApplication = _DummyCoreApp
 qtcore_stub.QThread = _DummyThread
 qtcore_stub.pyqtSignal = _dummy_signal
+pyqt_stub.QtCore = qtcore_stub
+sys.modules['PyQt6'] = pyqt_stub
 sys.modules['PyQt6.QtCore'] = qtcore_stub
 
 custom_logger_stub = types.ModuleType('modules.custom_logger')
@@ -62,6 +78,14 @@ class _DummyCmmReportParser:
 
 cmm_parser_stub.CMMReportParser = _DummyCmmReportParser
 sys.modules['modules.cmm_report_parser'] = cmm_parser_stub
+
+
+def teardown_module(_module):
+    for module_name, original_module in _ORIGINAL_MODULES.items():
+        if original_module is _MISSING_MODULE:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = original_module
 from modules.export_data_thread import (  # noqa: E402
     ExportDataThread,
     classify_normality_status,
@@ -437,6 +461,67 @@ class TestParseHelpers(unittest.TestCase):
             self.assertEqual(persisted, ['a.pdf', 'b.pdf'])
             self.assertEqual(progress_updates, [(1, 3), (2, 3)])
 
+    def test_parse_new_reports_does_not_count_failed_persistence_as_success(self):
+        class DummyParser:
+            def __init__(self, report):
+                self.FILE_PATH = str(report)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report = os.path.join(tmpdir, 'broken.pdf')
+            with open(report, 'wb') as report_file:
+                report_file.write(b'broken')
+
+            progress_updates = []
+
+            with self.assertRaises(RuntimeError):
+                parse_new_reports(
+                    [report],
+                    set(),
+                    parser_factory=DummyParser,
+                    persist_report=lambda _parser: (_ for _ in ()).throw(RuntimeError('persist failed')),
+                    on_progress=lambda parsed, total: progress_updates.append((parsed, total)),
+                )
+
+            self.assertEqual(progress_updates, [])
+
+    def test_parse_new_reports_skips_parser_failures_and_continues(self):
+        class DummyParser:
+            def __init__(self, report):
+                report_name = os.path.basename(report)
+                if report_name == 'broken.pdf':
+                    raise ValueError('parser failed')
+                self.FILE_PATH = str(report)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            reports = []
+            for name in ('ok-1.pdf', 'broken.pdf', 'ok-2.pdf'):
+                path = os.path.join(tmpdir, name)
+                with open(path, 'wb') as report_file:
+                    report_file.write(name.encode('utf-8'))
+                reports.append(path)
+
+            persisted = []
+            failed = []
+            progress_updates = []
+
+            result = parse_new_reports(
+                reports,
+                set(),
+                parser_factory=DummyParser,
+                persist_report=lambda parser: persisted.append(os.path.basename(parser.FILE_PATH)),
+                on_file_failed=lambda report, exc, processed, total: failed.append(
+                    (os.path.basename(report), type(exc).__name__, processed, total)
+                ),
+                on_progress=lambda processed, total: progress_updates.append((processed, total)),
+            )
+
+            self.assertEqual(result.total_files, 3)
+            self.assertEqual(result.parsed_files, 2)
+            self.assertEqual(result.failed_files, 1)
+            self.assertEqual(persisted, ['ok-1.pdf', 'ok-2.pdf'])
+            self.assertEqual(failed, [('broken.pdf', 'ValueError', 2, 3)])
+            self.assertEqual(progress_updates, [(1, 3), (2, 3), (3, 3)])
+
     def test_parse_new_reports_two_stage_duplicate_detection(self):
         class DummyParser:
             def __init__(self, report):
@@ -513,6 +598,51 @@ class TestParseHelpers(unittest.TestCase):
 
             self.assertLessEqual(result.parsed_files, 2)
             self.assertEqual(len(persisted), result.parsed_files)
+
+    def test_parse_new_reports_two_stage_skips_parser_failures_and_continues(self):
+        class DummyParser:
+            def __init__(self, report):
+                report_name = os.path.basename(report)
+                if report_name == 'broken.pdf':
+                    raise ValueError('parser failed')
+                self.FILE_PATH = str(report)
+                self.pdf_reference = 'R'
+                self.pdf_file_path = '/tmp'
+                self.pdf_file_name = str(report)
+                self.pdf_date = '2024-01-01'
+                self.pdf_sample_number = report.replace('.pdf', '')
+                self.stage_timings_s = {}
+
+            def prepare_for_two_stage_pipeline(self):
+                return None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            reports = []
+            for name in ('ok-1.pdf', 'broken.pdf', 'ok-2.pdf'):
+                path = os.path.join(tmpdir, name)
+                with open(path, 'wb') as report_file:
+                    report_file.write(name.encode('utf-8'))
+                reports.append(path)
+
+            persisted = []
+            failed = []
+            result = parse_new_reports(
+                reports,
+                set(),
+                parser_factory=DummyParser,
+                persist_report=lambda parser: persisted.append(os.path.basename(parser.FILE_PATH)),
+                on_file_failed=lambda report, exc, _processed, total: failed.append(
+                    (os.path.basename(report), type(exc).__name__, total)
+                ),
+                enable_two_stage_pipeline=True,
+                worker_count=2,
+            )
+
+            self.assertEqual(result.total_files, 3)
+            self.assertEqual(result.parsed_files, 2)
+            self.assertEqual(result.failed_files, 1)
+            self.assertCountEqual(persisted, ['ok-1.pdf', 'ok-2.pdf'])
+            self.assertEqual(failed, [('broken.pdf', 'ValueError', 3)])
 
     def test_parse_new_reports_two_stage_deterministic_end_state_matches_sequential(self):
         class DummyParser:
@@ -604,6 +734,42 @@ class TestParseHelpers(unittest.TestCase):
         self.assertEqual(result.enriched_files, 2)
         self.assertEqual(result.total_files, 3)
         self.assertEqual(progress_updates, [(1, 3), (2, 3), (3, 3)])
+
+    def test_enrich_report_metadata_isolates_parser_and_persistence_failures(self):
+        reports = ["good.pdf", "skip.pdf", "bad-parser.pdf", "bad-persist.pdf"]
+        progress_updates = []
+        warnings = []
+
+        def parser_factory(report):
+            if report == "bad-parser.pdf":
+                raise RuntimeError("parser failed")
+            return report
+
+        def persist_enrichment(report, _parser):
+            if report == "bad-persist.pdf":
+                raise ValueError("persistence failed")
+            return report == "good.pdf"
+
+        result = enrich_report_metadata(
+            reports,
+            parser_factory=parser_factory,
+            persist_enrichment=persist_enrichment,
+            on_progress=lambda processed, total: progress_updates.append((processed, total)),
+            on_warning=lambda report, exc: warnings.append((report, type(exc).__name__)),
+        )
+
+        self.assertEqual(result.enriched_files, 1)
+        self.assertEqual(result.failed_files, 2)
+        self.assertEqual(result.skipped_files, 1)
+        self.assertEqual(result.total_files, 4)
+        self.assertEqual(progress_updates, [(1, 4), (2, 4), (3, 4), (4, 4)])
+        self.assertEqual(
+            warnings,
+            [
+                ("bad-parser.pdf", "RuntimeError"),
+                ("bad-persist.pdf", "ValueError"),
+            ],
+        )
 
     def test_merge_enriched_metadata_preserves_stable_light_fields_and_manual_overrides(self):
         from modules.report_metadata_models import CanonicalReportMetadata
@@ -854,6 +1020,169 @@ class TestParseHelpers(unittest.TestCase):
             self.assertEqual(raw_payload["parse_backend"], "synthetic")
             self.assertTrue(raw_payload["metadata_enrichment"]["measurement_rows_preserved"])
 
+    def test_background_metadata_enrichment_continues_after_report_failure(self):
+        import modules.parse_reports_thread as parse_module
+        from modules.contracts import ParseRequest
+        from modules.parse_reports_thread import ParseReportsThread
+        from modules.report_metadata_models import CanonicalReportMetadata, MetadataCandidate, MetadataSelectionResult
+        from modules.report_repository import ReportRepository
+
+        class _Signal:
+            def __init__(self):
+                self.values = []
+
+            def emit(self, value):
+                self.values.append(value)
+
+        class _FakeParser:
+            manifest = types.SimpleNamespace(version="1.1.0")
+
+            def __init__(self, selection_result):
+                self.metadata_parsing_mode = "light"
+                self._metadata_selection_result = selection_result
+                self.open_modes = []
+
+            def open_report(self):
+                self.open_modes.append(self.metadata_parsing_mode)
+
+            def extract_metadata(self):
+                return self._metadata_selection_result
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bad_report_path = os.path.join(tmpdir, "bad.pdf")
+            good_report_path = os.path.join(tmpdir, "good.pdf")
+            for report_path in (bad_report_path, good_report_path):
+                with open(report_path, "wb") as report_file:
+                    report_file.write(b"synthetic pdf bytes")
+
+            db_path = os.path.join(tmpdir, "reports.sqlite")
+            repository = ReportRepository(db_path)
+
+            def _persist_source(report_path):
+                return repository.persist_parsed_report(
+                    source_path=report_path,
+                    parser_id="cmm_pdf_header_box",
+                    parser_version="1.1.0",
+                    template_family="cmm_pdf_header_box",
+                    template_variant="synthetic_variant",
+                    parse_status="parsed",
+                    metadata={
+                        "reference": "LIGHT-REF",
+                        "reference_raw": "LIGHT-REF",
+                        "report_date": "2024-01-01",
+                        "revision": None,
+                        "sample_number": "7",
+                        "sample_number_kind": "filename_tail",
+                        "stats_count_raw": "7",
+                        "stats_count_int": 7,
+                        "metadata_json": {
+                            "field_sources": {
+                                "reference": "filename_candidate",
+                                "report_date": "filename_candidate",
+                                "sample_number": "filename_candidate",
+                                "stats_count_raw": "filename_candidate",
+                            }
+                        },
+                    },
+                    candidates=[],
+                    warnings=[],
+                    measurements=[
+                        {
+                            "row_order": 1,
+                            "header": "Feature 1",
+                            "ax": "X",
+                            "meas": 10.0,
+                            "status_code": "ok",
+                        }
+                    ],
+                    metadata_version="report_metadata_v1",
+                    raw_report_json={"parse_backend": "synthetic", "measurement_blocks": 1},
+                )
+
+            _persist_source(bad_report_path)
+            good_report_id = _persist_source(good_report_path)
+
+            enriched_metadata = CanonicalReportMetadata(
+                parser_id="cmm_pdf_header_box",
+                template_family="cmm_pdf_header_box",
+                template_variant="synthetic_variant",
+                metadata_confidence=0.99,
+                reference="OCR-REF",
+                reference_raw="OCR-REF",
+                report_date="2024-01-02",
+                report_time="12:34",
+                part_name="OCR Part",
+                revision="B",
+                sample_number="8",
+                sample_number_kind="explicit_sample_number",
+                stats_count_raw="8",
+                stats_count_int=8,
+                operator_name="Synthetic Operator",
+                comment="Synthetic comment",
+                page_count=1,
+                metadata_json={
+                    "field_sources": {
+                        "reference": "position_cell",
+                        "report_date": "position_cell",
+                        "report_time": "position_cell",
+                        "sample_number": "explicit_sample_number",
+                        "stats_count_raw": "position_cell",
+                        "operator_name": "position_cell",
+                    }
+                },
+                warnings=(),
+            )
+            candidate = MetadataCandidate(
+                field_name="revision",
+                raw_value="B",
+                normalized_value="B",
+                source_type="position_cell",
+                source_detail="synthetic_cell",
+                page_number=1,
+                region_name="header",
+                label_text="REV",
+                rule_id="synthetic_revision",
+                confidence=0.99,
+                evidence_text=None,
+                selected=True,
+            )
+            fake_parser = _FakeParser(MetadataSelectionResult(enriched_metadata, (candidate,)))
+            thread = ParseReportsThread(
+                ParseRequest(
+                    source_directory=tmpdir,
+                    db_file=db_path,
+                    metadata_parsing_mode="light",
+                    run_background_metadata_enrichment=True,
+                )
+            )
+            progress_signal = _Signal()
+            thread.update_progress = progress_signal
+
+            def _get_parser(report_path, *_args, **_kwargs):
+                if report_path == bad_report_path:
+                    raise RuntimeError("metadata parser failed")
+                return fake_parser
+
+            with mock.patch.object(parse_module, "get_parser", side_effect=_get_parser):
+                with sqlite3.connect(db_path) as connection:
+                    result = thread._run_background_metadata_enrichment(
+                        [bad_report_path, good_report_path],
+                        connection,
+                    )
+
+            self.assertEqual(result.enriched_files, 1)
+            self.assertEqual(result.failed_files, 1)
+            self.assertEqual(result.total_files, 2)
+            self.assertEqual(fake_parser.open_modes, ["complete"])
+            self.assertEqual(progress_signal.values[-1], 100)
+            self.assertGreaterEqual(len(progress_signal.values), 2)
+            with sqlite3.connect(db_path) as connection:
+                good_revision = connection.execute(
+                    "SELECT revision FROM report_metadata WHERE report_id = ?",
+                    (good_report_id,),
+                ).fetchone()[0]
+            self.assertEqual(good_revision, "B")
+
 
 class TestExportHelpers(unittest.TestCase):
     def test_build_export_dataframe_maps_columns(self):
@@ -1057,6 +1386,31 @@ class TestExportHelpers(unittest.TestCase):
         self.assertTrue(thread._check_canceled())
         self.assertEqual(calls['count'], 2)
 
+    def test_write_data_to_excel_reraises_backend_write_failures(self):
+        import pandas as pd
+
+        thread = ExportDataThread.__new__(ExportDataThread)
+        logged = []
+        thread._check_canceled = lambda: False
+        thread._record_exported_sheet_name = lambda _name: None
+        thread.calculate_column_width = lambda _column: 12
+        thread.log_and_exit = lambda exc: logged.append(str(exc))
+
+        class _Backend:
+            def list_sheet_names(self, _writer):
+                return set()
+
+            def write_dataframe(self, *_args, **_kwargs):
+                raise RuntimeError('write failed')
+
+        thread._active_backend = _Backend()
+        thread.get_export_backend = lambda: thread._active_backend
+
+        with self.assertRaises(RuntimeError):
+            thread.write_data_to_excel(pd.DataFrame({'A': [1]}), 'MEASUREMENTS', object())
+
+        self.assertEqual(logged, ['write failed'])
+
 
 class TestExportBackendSmoke(unittest.TestCase):
     @staticmethod
@@ -1144,7 +1498,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.export_filtered_data = lambda *_: None
             thread.update_progress.emit = lambda value: progress_values.append(value)
             thread.update_label.emit = lambda *_: None
-            thread.finished.emit = lambda: None
+            thread.completed.emit = lambda: None
             thread._active_backend = fake_backend
 
             measurement_df = self._build_multi_header_measurement_dataframe()
@@ -1941,7 +2295,7 @@ class TestExportBackendSmoke(unittest.TestCase):
         thread.get_export_backend = lambda: _Backend()
         thread.update_label.emit = lambda *_: None
         thread.update_progress.emit = lambda *_: None
-        thread.finished.emit = lambda: None
+        thread.completed.emit = lambda: None
 
         module = __import__('modules.export_data_thread', fromlist=['ProcessPoolExecutor'])
         previous_executor = module.ProcessPoolExecutor
@@ -2864,7 +3218,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             errors = []
             thread.update_label.emit = lambda text: emitted.append(text)
             thread.update_progress.emit = lambda *_: None
-            thread.finished.emit = lambda: calls.append('finished')
+            thread.completed.emit = lambda: calls.append('finished')
             thread.error_occurred.emit = lambda message: errors.append(message)
 
             module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
@@ -2910,7 +3264,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             emitted = []
             thread.update_label.emit = lambda text: emitted.append(text)
             thread.update_progress.emit = lambda *_: None
-            thread.finished.emit = lambda: None
+            thread.completed.emit = lambda: None
 
             module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
@@ -2970,7 +3324,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             captured = {}
             thread.update_label.emit = lambda *_: None
             thread.update_progress.emit = lambda *_: None
-            thread.finished.emit = lambda: None
+            thread.completed.emit = lambda: None
 
             module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
@@ -3016,7 +3370,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             emitted = []
             thread.update_label.emit = lambda text: emitted.append(text)
             thread.update_progress.emit = lambda *_: None
-            thread.finished.emit = lambda: None
+            thread.completed.emit = lambda: None
 
             module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
@@ -3069,7 +3423,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.update_label.emit = lambda *_: None
             thread.update_progress.emit = lambda *_: None
             thread.canceled.emit = lambda: canceled_calls.append('canceled')
-            thread.finished.emit = lambda: finished_calls.append('finished')
+            thread.completed.emit = lambda: finished_calls.append('finished')
 
             module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
@@ -3109,7 +3463,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             logger_calls = []
             thread.update_label.emit = lambda text: emitted.append(text)
             thread.update_progress.emit = lambda *_: None
-            thread.finished.emit = lambda: finished_calls.append('finished')
+            thread.completed.emit = lambda: finished_calls.append('finished')
             thread.log_and_exit = lambda exc: logger_calls.append(str(exc))
 
             module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
@@ -3154,7 +3508,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             logger_calls = []
             thread.update_label.emit = lambda text: emitted.append(text)
             thread.update_progress.emit = lambda *_: None
-            thread.finished.emit = lambda: finished_calls.append('finished')
+            thread.completed.emit = lambda: finished_calls.append('finished')
             thread.log_and_exit = lambda exc: logger_calls.append(str(exc))
 
             module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
@@ -3198,7 +3552,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             emitted = []
             thread.update_label.emit = lambda text: emitted.append(text)
             thread.update_progress.emit = lambda *_: None
-            thread.finished.emit = lambda: None
+            thread.completed.emit = lambda: None
 
             module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
@@ -3243,7 +3597,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.get_export_backend = lambda: _Backend()
             thread.update_label.emit = lambda *_: None
             thread.update_progress.emit = lambda *_: None
-            thread.finished.emit = lambda: None
+            thread.completed.emit = lambda: None
 
             module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
@@ -3312,7 +3666,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.get_export_backend = lambda: _Backend()
             thread.update_label.emit = lambda *_: None
             thread.update_progress.emit = lambda *_: None
-            thread.finished.emit = lambda: None
+            thread.completed.emit = lambda: None
 
             module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
@@ -3391,7 +3745,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.get_export_backend = lambda: _Backend()
             thread.update_label.emit = lambda *_: None
             thread.update_progress.emit = lambda *_: None
-            thread.finished.emit = lambda: None
+            thread.completed.emit = lambda: None
 
             module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
@@ -3445,7 +3799,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.get_export_backend = lambda: _Backend()
             thread.update_label.emit = lambda *_: None
             thread.update_progress.emit = lambda *_: None
-            thread.finished.emit = lambda: None
+            thread.completed.emit = lambda: None
 
             module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
@@ -3484,7 +3838,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.get_export_backend = lambda: _Backend()
             thread.update_label.emit = lambda *_: None
             thread.update_progress.emit = lambda *_: None
-            thread.finished.emit = lambda: None
+            thread.completed.emit = lambda: None
             thread.log_and_exit = lambda *_: None
 
             module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
@@ -3890,7 +4244,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.get_export_backend = lambda: _Backend()
             thread.update_label.emit = lambda *_: None
             thread.update_progress.emit = lambda *_: None
-            thread.finished.emit = lambda: None
+            thread.completed.emit = lambda: None
 
             stage_logs = []
             original_log_export_stage = thread._log_export_stage

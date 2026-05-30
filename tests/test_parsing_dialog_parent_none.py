@@ -194,6 +194,9 @@ class TestParsingDialogParentNoneSafety(unittest.TestCase):
         parse_reports_thread.ParseReportsThread = type("ParseReportsThread", (), {})
         worker_progress_dialog = types.ModuleType("modules.worker_progress_dialog")
         worker_progress_dialog.create_worker_progress_dialog = lambda *_args, **_kwargs: (None, None, None, None)
+        contracts = types.ModuleType("metroliza.shared.contracts")
+        contracts.ParseRequest = object
+        contracts.validate_parse_request = lambda request: request
         with patch.dict(
             sys.modules,
             {
@@ -202,12 +205,17 @@ class TestParsingDialogParentNoneSafety(unittest.TestCase):
                 "PyQt6.QtGui": qtgui,
                 "PyQt6.QtWidgets": qtwidgets,
                 "modules.parse_reports_thread": parse_reports_thread,
+                "metroliza.parsing.parse_reports_thread": parse_reports_thread,
                 "modules.worker_progress_dialog": worker_progress_dialog,
+                "metroliza.ui.worker_progress_dialog": worker_progress_dialog,
+                "metroliza.shared.contracts": contracts,
             },
             clear=False,
         ):
             sys.modules.pop("modules.ui_foundation", None)
             sys.modules.pop("modules.parsing_dialog", None)
+            sys.modules.pop("metroliza.ui.ui_foundation", None)
+            sys.modules.pop("metroliza.ui.parsing_dialog", None)
             return importlib.import_module("modules.parsing_dialog")
 
     def test_select_directory_updates_state_without_parent(self):

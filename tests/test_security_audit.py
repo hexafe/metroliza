@@ -9,6 +9,11 @@ def test_requirements_declare_all_runtime_import_packages():
     assert not result.errors
 
 
+def test_security_audit_scans_canonical_source_tree():
+    assert "src/metroliza" in security_audit.IMPORT_SCAN_DIRS
+    assert "src/metroliza" in security_audit.BANDIT_SCAN_DIRS
+
+
 def test_internal_hexafe_dependencies_are_full_sha_pins():
     result = security_audit.audit_internal_dependency_pins(security_audit.REPO_ROOT, sibling_root=None)
 

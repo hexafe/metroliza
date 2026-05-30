@@ -46,8 +46,8 @@ def _load_entries(manifest_path: Path, limit: int) -> list[dict[str, Any]]:
 
 
 def _render_crop(entry: dict[str, Any], index: int, output_dir: Path, zoom: float) -> dict[str, Any]:
-    from modules.cmm_report_parser import CMMReportParser
-    from modules.pdf_backend import require_pdf_backend
+    from metroliza.parsing.cmm_report_parser import CMMReportParser
+    from metroliza.parsing.pdf_backend import require_pdf_backend
 
     pdf_backend = require_pdf_backend()
     pdf_path = Path(entry["path"])

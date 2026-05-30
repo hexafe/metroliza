@@ -202,6 +202,7 @@ def test_export_dialog_saves_remembered_credentials_only_after_success(tmp_path,
         show_export_result_message=lambda *args, **kwargs: None,
     )
     monkeypatch.setitem(sys.modules, "modules.export_dialog", fake_export_dialog)
+    monkeypatch.setitem(sys.modules, "metroliza.ui.export_dialog", fake_export_dialog)
     monkeypatch.setattr(industrial_export_dialog.QMessageBox, "warning", lambda *args, **kwargs: None)
     dialog = IndustrialExportDialog(db_file=None, config_path=config_path)
     dialog.username_edit.setText("operator")
@@ -244,6 +245,7 @@ def test_export_dialog_completion_uses_export_style_workbook_link(tmp_path, monk
         )
     )
     monkeypatch.setitem(sys.modules, "modules.export_dialog", fake_export_dialog)
+    monkeypatch.setitem(sys.modules, "metroliza.ui.export_dialog", fake_export_dialog)
     dialog = IndustrialExportDialog(db_file=str(tmp_path / "industrial.db"))
 
     dialog.on_export_finished(

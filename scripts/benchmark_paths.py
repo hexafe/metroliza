@@ -23,13 +23,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from modules.matplotlib_runtime import configure_headless_matplotlib
+from metroliza.charts.matplotlib_runtime import configure_headless_matplotlib
 
 configure_headless_matplotlib()
 
 
 def _install_headless_stubs() -> None:
-    custom_logger_stub = types.ModuleType('modules.custom_logger')
+    custom_logger_stub = types.ModuleType('metroliza.shared.custom_logger')
 
     class _NoopLogger:
         def __init__(self, *args, **kwargs):
@@ -41,7 +41,7 @@ def _install_headless_stubs() -> None:
     custom_logger_stub.CustomLogger = _NoopLogger
     custom_logger_stub.handle_exception = _noop_handle_exception
     custom_logger_stub.LOG_ONLY = object()
-    sys.modules.setdefault('modules.custom_logger', custom_logger_stub)
+    sys.modules.setdefault('metroliza.shared.custom_logger', custom_logger_stub)
 
     fitz_stub = types.ModuleType('fitz')
     fitz_stub.__spec__ = importlib.machinery.ModuleSpec('fitz', loader=None)
@@ -139,8 +139,8 @@ def _create_pdf_fixture_dir(base_dir: Path, count: int) -> Path:
 
 
 def _create_export_db_fixture(db_path: Path, *, report_count: int, headers_per_report: int) -> dict[str, int]:
-    from modules.report_repository import ReportRepository
-    from modules.report_schema import ensure_report_schema
+    from metroliza.reports.report_repository import ReportRepository
+    from metroliza.reports.report_schema import ensure_report_schema
 
     ensure_report_schema(str(db_path))
     repository = ReportRepository(str(db_path))
@@ -231,7 +231,7 @@ def _create_csv_fixture(csv_path: Path, *, row_count: int, data_columns: int) ->
 
 
 def _run_excel_export_with_close_timing(thread: Any) -> tuple[bool, dict[str, float]]:
-    from modules.export_backends import ExcelExportBackend
+    from metroliza.exporting.export_backends import ExcelExportBackend
 
     class TimingExcelExportBackend(ExcelExportBackend):
         def __init__(self):
@@ -305,10 +305,10 @@ def _run_with_pandas_excel_writer_close_timing(
 
 
 def benchmark_parse_path(temp_dir: Path, pdf_count: int) -> ScenarioResult:
-    from modules.cmm_report_parser import CMMReportParser
-    from modules.cmm_native_parser import get_backend_telemetry_snapshot, reset_backend_telemetry
-    from modules.parse_reports_thread import ParseReportsThread, parse_new_reports
-    from modules.contracts import ParseRequest
+    from metroliza.parsing.cmm_report_parser import CMMReportParser
+    from metroliza.native_bridges.cmm_native_parser import get_backend_telemetry_snapshot, reset_backend_telemetry
+    from metroliza.parsing.parse_reports_thread import ParseReportsThread, parse_new_reports
+    from metroliza.shared.contracts import ParseRequest
 
     db_path = temp_dir / 'parse_benchmark.sqlite'
     pdf_dir = _create_pdf_fixture_dir(temp_dir, pdf_count)
@@ -362,7 +362,7 @@ def benchmark_cmm_parser_backend_compare(
     measurements_per_report: int,
     benchmark_mode: str = "parse",
 ) -> ScenarioResult:
-    from modules.cmm_native_parser import (
+    from metroliza.native_bridges.cmm_native_parser import (
         get_backend_telemetry_snapshot,
         native_backend_available,
         normalize_measurement_rows,
@@ -517,11 +517,11 @@ def benchmark_cmm_parser_backend_compare(
 
 
 def benchmark_excel_export_path(temp_dir: Path, report_count: int, headers_per_report: int) -> ScenarioResult:
-    from modules.export_data_thread import ExportDataThread
-    from modules.contracts import AppPaths, ExportOptions, ExportRequest
-    from modules.db import read_sql_dataframe
-    from modules.export_query_service import build_measurement_export_dataframe
-    from modules.export_summary_utils import compute_measurement_summary, resolve_nominal_and_limits
+    from metroliza.exporting.export_data_thread import ExportDataThread
+    from metroliza.shared.contracts import AppPaths, ExportOptions, ExportRequest
+    from metroliza.reports.db import read_sql_dataframe
+    from metroliza.exporting.export_query_service import build_measurement_export_dataframe
+    from metroliza.exporting.export_summary_utils import compute_measurement_summary, resolve_nominal_and_limits
 
     db_path = temp_dir / 'export_benchmark.sqlite'
     fixture_metrics = _create_export_db_fixture(db_path, report_count=report_count, headers_per_report=headers_per_report)
@@ -595,10 +595,10 @@ def benchmark_excel_export_path(temp_dir: Path, report_count: int, headers_per_r
 def benchmark_export_write_vs_shape_path(temp_dir: Path, report_count: int, headers_per_report: int) -> ScenarioResult:
     """Benchmark data-shaping preprocessing separately from worksheet write-only ops."""
     import xlsxwriter
-    from modules.db import read_sql_dataframe
-    from modules.export_query_service import build_measurement_export_dataframe
-    from modules.report_query_service import build_measurement_export_query
-    from modules.export_sheet_writer import (
+    from metroliza.reports.db import read_sql_dataframe
+    from metroliza.exporting.export_query_service import build_measurement_export_dataframe
+    from metroliza.reports.report_query_service import build_measurement_export_query
+    from metroliza.exporting.export_sheet_writer import (
         build_measurement_write_bundle_cached,
         create_measurement_formats,
         write_measurement_block,
@@ -694,12 +694,12 @@ def benchmark_export_write_vs_shape_path(temp_dir: Path, report_count: int, head
 
 
 def benchmark_export_high_header_cardinality_path(temp_dir: Path, report_count: int, headers_per_report: int) -> ScenarioResult:
-    from modules.export_data_thread import ExportDataThread
-    from modules.chart_render_service import build_violin_payload_vectorized, resolve_chart_sampling_policy, sample_frame_for_chart
-    from modules.contracts import AppPaths, ExportOptions, ExportRequest
-    from modules.db import read_sql_dataframe
-    from modules.export_query_service import build_measurement_export_dataframe
-    from modules.export_summary_utils import build_histogram_density_curve_payload, build_trend_plot_payload
+    from metroliza.exporting.export_data_thread import ExportDataThread
+    from metroliza.charts.chart_render_service import build_violin_payload_vectorized, resolve_chart_sampling_policy, sample_frame_for_chart
+    from metroliza.shared.contracts import AppPaths, ExportOptions, ExportRequest
+    from metroliza.reports.db import read_sql_dataframe
+    from metroliza.exporting.export_query_service import build_measurement_export_dataframe
+    from metroliza.exporting.export_summary_utils import build_histogram_density_curve_payload, build_trend_plot_payload
 
     db_path = temp_dir / 'export_benchmark_high_cardinality.sqlite'
     fixture_metrics = _create_export_db_fixture(db_path, report_count=report_count, headers_per_report=headers_per_report)
@@ -802,15 +802,15 @@ def benchmark_export_high_header_cardinality_path(temp_dir: Path, report_count: 
 
 
 def benchmark_distribution_fit_monte_carlo_path(temp_dir: Path, *, group_count: int, sample_size: int, monte_carlo_samples: int) -> ScenarioResult:
-    from modules.distribution_fit_service import (
+    from metroliza.analytics.distribution_fit_service import (
         _MONTE_CARLO_PVALUE_CACHE_NAMESPACE,
         fit_measurement_distribution,
     )
-    from modules.distribution_fit_candidate_native import (
+    from metroliza.native_bridges.distribution_fit_candidate_native import (
         native_fit_backend_available,
         native_metrics_backend_available,
     )
-    from modules.distribution_fit_native import (
+    from metroliza.native_bridges.distribution_fit_native import (
         native_ad_ks_backend_available,
         native_monte_carlo_backend_available,
     )
@@ -923,12 +923,12 @@ def benchmark_distribution_fit_gof_policy_compare(
     monte_carlo_samples: int,
     gof_max_sample_size: int,
 ) -> ScenarioResult:
-    from modules.distribution_fit_service import fit_measurement_distribution
-    from modules.distribution_fit_candidate_native import (
+    from metroliza.analytics.distribution_fit_service import fit_measurement_distribution
+    from metroliza.native_bridges.distribution_fit_candidate_native import (
         native_fit_backend_available,
         native_metrics_backend_available,
     )
-    from modules.distribution_fit_native import (
+    from metroliza.native_bridges.distribution_fit_native import (
         native_ad_ks_backend_available,
         native_monte_carlo_backend_available,
     )
@@ -1041,7 +1041,7 @@ def _coerce_legacy(values: list[Any]) -> np.ndarray:
 
 
 def benchmark_group_preprocess_mixed_types_path(temp_dir: Path, *, group_count: int, values_per_group: int) -> ScenarioResult:
-    from modules.group_stats_native import coerce_sequence_to_float64
+    from metroliza.native_bridges.group_stats_native import coerce_sequence_to_float64
 
     del temp_dir
     rng = np.random.default_rng(2026)
@@ -1091,8 +1091,8 @@ def benchmark_group_preprocess_mixed_types_path(temp_dir: Path, *, group_count: 
 
 
 def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int) -> ScenarioResult:
-    from modules.industrial_analytics_state import ProductionChartSelection
-    import modules.industrial_analytics_workflow as workflow_module
+    from metroliza.industrial.industrial_analytics_state import ProductionChartSelection
+    import metroliza.industrial.industrial_analytics_workflow as workflow_module
 
     csv_path = temp_dir / 'summary_fixture.csv'
     output_html = temp_dir / 'summary_dashboard.html'
@@ -1277,17 +1277,17 @@ def benchmark_production_dashboard_workbook_path(
     row_count: int,
     metric_count: int,
 ) -> ScenarioResult:
-    from modules.industrial_analytics_dashboard import (
+    from metroliza.industrial.industrial_analytics_dashboard import (
         build_production_dashboard_manifest,
         write_production_dashboard,
     )
-    from modules.industrial_analytics_service import aggregate_production_frame
-    from modules.industrial_analytics_state import (
+    from metroliza.industrial.industrial_analytics_service import aggregate_production_frame
+    from metroliza.industrial.industrial_analytics_state import (
         ProductionAggregationState,
         ProductionChartSelection,
         ProductionMetricSelection,
     )
-    from modules.industrial_analytics_workbook import export_production_analytics_workbook
+    from metroliza.industrial.industrial_analytics_workbook import export_production_analytics_workbook
 
     rng = np.random.default_rng(20260520)
     safe_row_count = max(1, int(row_count))
@@ -1435,13 +1435,13 @@ def benchmark_csv_summary_large_data_probe(
     release checks can use --large-csv-rows 1000000 --large-csv-columns 20.
     """
 
-    from modules.grouping_filter_core import DataFrameGroupingIndex
-    from modules.tabular_analytics_service import (
+    from metroliza.shared.grouping_filter_core import DataFrameGroupingIndex
+    from metroliza.tabular.tabular_analytics_service import (
         build_tabular_grouping_dataframe,
         load_tabular_analytics_files,
         materialize_tabular_dataframe,
     )
-    from modules.db import sqlite_connection_scope
+    from metroliza.reports.db import sqlite_connection_scope
 
     csv_path = temp_dir / 'summary_large_probe.csv'
     fixture_metrics = _create_csv_fixture(csv_path, row_count=row_count, data_columns=data_columns)
@@ -1641,7 +1641,7 @@ def benchmark_csv_summary_large_data_probe(
 
 def benchmark_chart_render_budget_path(temp_dir: Path, *, iterations: int, histogram_points: int) -> ScenarioResult:
     import matplotlib.pyplot as plt
-    from modules.chart_renderer import (
+    from metroliza.charts.chart_renderer import (
         MatplotlibChartRenderer,
         NativeChartRenderer,
         benchmark_histogram_render_runtime,
@@ -1695,8 +1695,8 @@ def benchmark_chart_render_budget_path(temp_dir: Path, *, iterations: int, histo
 
 def benchmark_chart_type_native_compare_path(temp_dir: Path, *, chart_type: str, iterations: int) -> ScenarioResult:
     """Benchmark one summary chart type using ExportDataThread timing hooks."""
-    from modules.contracts import AppPaths, ExportOptions, ExportRequest
-    from modules.export_data_thread import ExportDataThread
+    from metroliza.shared.contracts import AppPaths, ExportOptions, ExportRequest
+    from metroliza.exporting.export_data_thread import ExportDataThread
 
     class _BenchWorksheet:
         def write(self, *_args, **_kwargs):

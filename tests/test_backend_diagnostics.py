@@ -111,3 +111,19 @@ def test_backend_diagnostics_reports_distribution_fit_candidate_capabilities(mon
     assert fit_status["metrics_available"] is True
     assert fit_status["fit_available"] is True
     assert fit_status["status"] == "native_available"
+
+
+def test_backend_diagnostics_reports_distribution_fit_effective_python_in_frozen_auto(monkeypatch):
+    monkeypatch.setattr(backend_diagnostics.distribution_fit_native, "native_backend_available", lambda: True)
+    monkeypatch.setattr(
+        backend_diagnostics.distribution_fit_native,
+        "resolve_distribution_fit_backend",
+        lambda: "python",
+    )
+
+    summary = backend_diagnostics.build_backend_diagnostic_summary()
+    fit_status = summary["distribution_fit"]
+
+    assert fit_status["available"] is True
+    assert fit_status["selected_mode"] == "auto"
+    assert fit_status["effective_backend"] == "python"

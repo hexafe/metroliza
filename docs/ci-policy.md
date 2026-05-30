@@ -17,33 +17,34 @@ The following checks must pass on every PR and branch push.
 |---|---|---|
 | Lint and static validation | `static-checks` | Python compile check, Ruff lint, release metadata consistency check, and repository/diff JSON secret scan. |
 | Metadata checks | `static-checks` | `scripts/sync_release_metadata.py --check` is enforced in this job. |
-| Full pytest suite + coverage visibility | `unit-tests` | Runs `python -m pytest tests -q --cov=. --cov-report=term --cov-report=xml:coverage.xml` for the full Python test suite and publishes coverage outputs. |
+| Full pytest suite + coverage gate | `unit-tests` | Runs `python -m pytest tests -q --cov=src/metroliza --cov=modules --cov=scripts --cov-report=term --cov-report=xml:coverage.xml --cov-fail-under=65` for the full Python test suite and publishes coverage outputs. |
 | Native artifact build + smoke/parity checks | `native-artifacts` | Builds all native wheels, installs them, runs import/smoke checks for each native module plus explicit fallback checks, executes native chart planner/parity smoke checks, runs an export-runtime fast-path contract smoke for extended summary charts, and runs native parser parity tests. |
 | CMM parser perf guardrail + trend gate | `cmm-parser-perf-gate` | Runs `scripts/benchmark_paths.py` for `cmm_parser_backend_compare` with fixed synthetic workload, enforces native speed/usage guardrails, and compares measured medians to checked-in baseline via `scripts/benchmark_trend_compare.py`. |
 
 
-### Coverage reporting semantics
+### Coverage Reporting Semantics
 
 - The `unit-tests` job emits coverage output in two places:
   - terminal/log summary via `--cov-report=term`
   - machine-readable artifact via `coverage.xml` (`--cov-report=xml:coverage.xml`)
-- The same job also publishes a **non-blocking coverage threshold status** in the CI job summary by comparing observed line coverage from `coverage.xml` to `COVERAGE_WARNING_THRESHOLD`.
-- Current staged rollout keeps threshold checks **non-blocking**; a warning is emitted when coverage is below the warning threshold.
-- Coverage threshold governance remains staged: coverage stays advisory until a release owner records a dated go/no-go decision with evidence from routine CI runs.
+- The same job enforces the blocking `--cov-fail-under` threshold and publishes a coverage threshold status in the CI job summary.
+- The status summary also reports canonical `src/metroliza` line coverage separately so legacy shim coverage cannot hide source-package regressions.
+- Coverage threshold changes require an explicit threshold update in `.github/workflows/ci.yml` plus this policy file.
 - Reviewers can inspect coverage evidence in:
   - the `unit-tests` job log (terminal summary),
-  - the CI step summary section **"Coverage threshold status (non-blocking)"**, and
+  - the CI step summary section **"Coverage threshold status"**, and
   - the uploaded workflow artifact named `unit-test-coverage` (contains `coverage.xml`).
 
-### Coverage threshold staged policy
+### Coverage Threshold Policy
 
-Coverage threshold adoption follows a staged policy to reduce noise risk while still surfacing regressions early:
+Coverage threshold enforcement is blocking for the full test lane:
 
-1. **Informational stage (current baseline):** coverage outputs are visible in logs/artifacts; no threshold signal.
-2. **Soft threshold warning stage (current enforcement mode):** CI emits a non-blocking warning in the job summary if coverage falls below `COVERAGE_WARNING_THRESHOLD`.
-3. **Blocking threshold stage (future):** after tracker acceptance criteria are satisfied and a dated owner decision is recorded, `unit-tests` may enable a blocking fail-under gate.
+1. **Blocking threshold stage:** `unit-tests` fails when coverage drops below the configured threshold.
+2. **Ratcheting:** threshold increases should be made only after routine CI evidence shows stable headroom.
+3. **Review signal:** `coverage.xml` remains published so reviewers can inspect package-level changes, especially after large refactors.
+4. **Canonical source signal:** the CI summary includes `src/metroliza` line coverage alongside aggregate coverage.
 
-Until the stage-3 decision is recorded, coverage threshold status is advisory and does not block PR merges.
+The coverage threshold is blocking; do not lower it without recording the reason in the PR description or release evidence.
 
 ## Optional/manual checks (non-blocking)
 
@@ -58,7 +59,7 @@ These checks are explicitly non-blocking for normal PR CI:
 
 ### Packaging smoke parser semantics
 
-- After PyInstaller builds `dist/metroliza`, the workflow runs a non-interactive packaged PDF parser smoke command against the built artifact with:
+- After PyInstaller builds the versioned `dist/metroliza_P_*` artifact, the workflow discovers that artifact and runs a non-interactive packaged PDF parser smoke command against it with:
   - `METROLIZA_PDF_PARSER_SMOKE_FIXTURE=tests/fixtures/pdf/cmm_smoke_fixture.pdf`,
   - `METROLIZA_PDF_PARSER_SMOKE_EXPECTED_TEXT=METROLIZA PDF PARSER SMOKE`, and
   - `QT_QPA_PLATFORM=offscreen` (headless runner compatibility if Qt is touched during startup/imports).
@@ -92,13 +93,14 @@ These checks are explicitly non-blocking for normal PR CI:
 - CI no longer uses a standalone `python-setup` dependency warm-up job. That job did not share an environment with downstream jobs (each job runs on a fresh runner), so it added serial waiting time without reducing downstream install work.
 - Each job now performs only the setup it actually needs:
   - `static-checks`, `unit-tests`, `google-conversion-smoke` use `requirements-dev.txt`.
-  - `native-artifacts`, `packaging-smoke` use `requirements-build.txt`.
+  - `native-artifacts` uses `requirements-build.txt`.
+  - `packaging-smoke` uses both `requirements-build.txt` and `requirements-ocr.txt`.
 - `actions/setup-python@v5` pip caching is enabled per job with deterministic dependency keys via `cache-dependency-path` pinned to the exact requirements file used by that job.
 
 ### Cache determinism and safety
 
 - The cache key includes the dependency file hash (via `cache-dependency-path`) and the selected Python version, so cache reuse is deterministic for unchanged dependency manifests.
-- Any edit to `requirements-dev.txt` or `requirements-build.txt` automatically invalidates the relevant pip cache and forces a refresh.
+- Any edit to `requirements-dev.txt`, `requirements-build.txt`, or `requirements-ocr.txt` automatically invalidates the relevant pip cache and forces a refresh.
 - This keeps cache behavior safe for dependency updates while preserving faster warm-cache installs for unchanged dependency sets.
 
 ## CI duration measurement (before/after)

@@ -1,12 +1,65 @@
+import os
+from pathlib import Path
+import subprocess
+import sys
 import unittest
 import types
 from unittest.mock import patch
 
 import metroliza
+from metroliza.app import bootstrap
 from modules.license_bootstrap import validate_license_bootstrap
 
 
 class TestBootstrapStartup(unittest.TestCase):
+    def test_package_imports_from_outside_repo_root(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        src_dir = repo_root / "src"
+        with self.subTest("installed-package-style import"):
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import metroliza; "
+                        "from metroliza.app import bootstrap; "
+                        "print(metroliza.STARTUP_SMOKE_ENV); "
+                        "print(bootstrap.STARTUP_SMOKE_ENV)"
+                    ),
+                ],
+                cwd=repo_root.parent,
+                env={**os.environ, "PYTHONPATH": str(src_dir)},
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+
+        self.assertEqual(result.stdout.splitlines(), ["METROLIZA_STARTUP_SMOKE"] * 2)
+
+    def test_root_launcher_import_keeps_package_submodules_available(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import metroliza; "
+                    "from metroliza.app import bootstrap; "
+                    "print(metroliza.STARTUP_SMOKE_ENV); "
+                    "print(bootstrap.__file__)"
+                ),
+            ],
+            cwd=repo_root,
+            env={**os.environ, "PYTHONPATH": f"{repo_root / 'src'}{os.pathsep}{repo_root}"},
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+
+        lines = result.stdout.splitlines()
+        self.assertEqual(lines[0], "METROLIZA_STARTUP_SMOKE")
+        self.assertIn("src/metroliza/app/bootstrap.py", lines[1].replace("\\", "/"))
+
     def test_launch_ui_creates_qapplication_before_importing_main_window(self):
         call_order = []
         app_state = {"created": False}
@@ -41,16 +94,16 @@ class TestBootstrapStartup(unittest.TestCase):
             if name == "PyQt6.QtWidgets":
                 call_order.append("import_qtwidgets")
                 return fake_qtwidgets
-            if name == "modules.license_key_manager":
+            if name == "metroliza.app.license_key_manager":
                 call_order.append("import_license_manager")
                 return fake_license_module
-            if name == "modules.main_window":
+            if name == "metroliza.ui.main_window":
                 call_order.append("import_main_window")
                 self.assertTrue(app_state["created"])
                 return fake_main_window_module
             return real_import(name, globals, locals, fromlist, level)
 
-        config = metroliza.StartupConfig(
+        config = bootstrap.StartupConfig(
             startup_smoke_mode=False,
             startup_ui_smoke_mode=False,
             pdf_parser_smoke_fixture=None,
@@ -59,10 +112,10 @@ class TestBootstrapStartup(unittest.TestCase):
         )
 
         with patch("builtins.__import__", side_effect=tracked_import), patch(
-            "metroliza.validate_license_bootstrap",
+            "metroliza.app.bootstrap.validate_license_bootstrap",
             return_value=types.SimpleNamespace(is_valid=True, days_until_expiration=7),
         ):
-            result = metroliza.launch_ui(config)
+            result = bootstrap.launch_ui(config)
 
         self.assertEqual(result, 0)
         self.assertEqual(
@@ -80,7 +133,7 @@ class TestBootstrapStartup(unittest.TestCase):
 
     def test_load_startup_config_defaults_to_license_verification_disabled(self):
         with patch.dict("os.environ", {}, clear=True):
-            config = metroliza.load_startup_config()
+            config = bootstrap.load_startup_config()
 
         self.assertFalse(config.startup_smoke_mode)
         self.assertFalse(config.startup_ui_smoke_mode)
@@ -98,13 +151,13 @@ class TestBootstrapStartup(unittest.TestCase):
             },
             clear=True,
         ):
-            config = metroliza.load_startup_config()
+            config = bootstrap.load_startup_config()
 
         self.assertFalse(config.license_verification_enabled)
         self.assertTrue(config.startup_ui_smoke_mode)
 
     def test_validate_license_bootstrap_skips_validation_when_disabled(self):
-        with patch("modules.license_bootstrap.verify_license") as verify_mock:
+        with patch("metroliza.app.license_bootstrap.verify_license") as verify_mock:
             result = validate_license_bootstrap(False)
 
         self.assertTrue(result.is_valid)
@@ -112,38 +165,48 @@ class TestBootstrapStartup(unittest.TestCase):
         verify_mock.assert_not_called()
 
     def test_validate_license_bootstrap_invalid_key_when_enabled(self):
-        with patch("modules.license_bootstrap.verify_license", return_value=False):
+        with patch("metroliza.app.license_bootstrap.verify_license", return_value=False):
             result = validate_license_bootstrap(True)
 
         self.assertFalse(result.is_valid)
         self.assertIsNone(result.days_until_expiration)
 
     def test_validate_license_bootstrap_valid_enabled_returns_expiration_days(self):
-        fake_manager = types.SimpleNamespace(read_license_key_file=lambda: "license-token")
+        manager_calls = []
+        fake_manager = types.SimpleNamespace(
+            read_license_key_file=lambda: manager_calls.append("read") or "license-token"
+        )
         fake_module = types.SimpleNamespace(LicenseKeyManager=fake_manager)
 
-        with patch("modules.license_bootstrap.verify_license", return_value=True), patch(
-            "modules.license_bootstrap.get_days_until_expiration", return_value=12
-        ), patch.dict("sys.modules", {"modules.license_key_manager": fake_module}):
+        with patch("metroliza.app.license_bootstrap.verify_license", return_value=True), patch(
+            "metroliza.app.license_bootstrap.get_days_until_expiration", return_value=12
+        ), patch.dict(
+            "sys.modules",
+            {
+                "modules.license_key_manager": fake_module,
+                "metroliza.app.license_key_manager": fake_module,
+            },
+        ):
             result = validate_license_bootstrap(True)
 
         self.assertTrue(result.is_valid)
         self.assertEqual(result.days_until_expiration, 12)
+        self.assertEqual(manager_calls, ["read"])
 
     def test_bootstrap_application_uses_smoke_mode_when_enabled(self):
-        smoke_config = metroliza.StartupConfig(
+        smoke_config = bootstrap.StartupConfig(
             startup_smoke_mode=True,
             startup_ui_smoke_mode=False,
             pdf_parser_smoke_fixture=None,
             pdf_parser_smoke_expected_text=None,
             license_verification_enabled=True,
         )
-        with patch("metroliza.initialize_logging") as init_logging, patch(
-            "metroliza.load_startup_config", return_value=smoke_config
-        ), patch("metroliza.run_startup_smoke_mode", return_value=0) as smoke_mode, patch(
-            "metroliza.launch_ui"
+        with patch("metroliza.app.bootstrap.initialize_logging") as init_logging, patch(
+            "metroliza.app.bootstrap.load_startup_config", return_value=smoke_config
+        ), patch("metroliza.app.bootstrap.run_startup_smoke_mode", return_value=0) as smoke_mode, patch(
+            "metroliza.app.bootstrap.launch_ui"
         ) as launch_ui:
-            result = metroliza.bootstrap_application()
+            result = bootstrap.bootstrap_application()
 
         self.assertEqual(result, 0)
         smoke_mode.assert_called_once_with(init_logging.return_value)
@@ -152,19 +215,21 @@ class TestBootstrapStartup(unittest.TestCase):
 
 
     def test_bootstrap_application_uses_pdf_parser_smoke_when_fixture_is_set(self):
-        smoke_config = metroliza.StartupConfig(
+        smoke_config = bootstrap.StartupConfig(
             startup_smoke_mode=False,
             startup_ui_smoke_mode=False,
             pdf_parser_smoke_fixture='tests/fixtures/pdf/cmm_smoke_fixture.pdf',
             pdf_parser_smoke_expected_text='METROLIZA PDF PARSER SMOKE',
             license_verification_enabled=True,
         )
-        with patch("metroliza.initialize_logging") as init_logging, patch(
-            "metroliza.load_startup_config", return_value=smoke_config
-        ), patch("metroliza.run_pdf_parser_smoke_mode", return_value=0) as parser_smoke_mode, patch(
-            "metroliza.launch_ui"
+        with patch("metroliza.app.bootstrap.initialize_logging") as init_logging, patch(
+            "metroliza.app.bootstrap.load_startup_config", return_value=smoke_config
+        ), patch(
+            "metroliza.app.bootstrap.run_pdf_parser_smoke_mode", return_value=0
+        ) as parser_smoke_mode, patch(
+            "metroliza.app.bootstrap.launch_ui"
         ) as launch_ui:
-            result = metroliza.bootstrap_application()
+            result = bootstrap.bootstrap_application()
 
         self.assertEqual(result, 0)
         parser_smoke_mode.assert_called_once_with(
@@ -176,8 +241,10 @@ class TestBootstrapStartup(unittest.TestCase):
 
     def test_run_application_logs_and_returns_error_on_startup_exception(self):
         error = RuntimeError("startup failure")
-        with patch("metroliza.bootstrap_application", side_effect=error), patch("metroliza.log_and_exit") as log_and_exit:
-            result = metroliza.run_application()
+        with patch("metroliza.app.bootstrap.bootstrap_application", side_effect=error), patch(
+            "metroliza.app.bootstrap.log_and_exit"
+        ) as log_and_exit:
+            result = bootstrap.run_application()
 
         self.assertEqual(result, 1)
         log_and_exit.assert_called_once_with(error)

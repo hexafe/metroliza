@@ -135,7 +135,7 @@ Interpretation:
 - Native fit ranking parity is exact at the model/rank level; numeric metric drift remains small but tolerance-based for `skewnorm` and `johnsonsu`, and it does not change model selection on the audited fixtures.
 
 Fix landed:
-- Added native batch fit-parameter estimation for `norm`, `skewnorm`, `halfnorm`, `foldnorm`, `gamma`, `weibull_min`, `lognorm`, and `johnsonsu` in [`modules/native/distribution_fit_ad/src/lib.rs`](../../../modules/native/distribution_fit_ad/src/lib.rs).
+- Added native batch fit-parameter estimation for `norm`, `skewnorm`, `halfnorm`, `foldnorm`, `gamma`, `weibull_min`, `lognorm`, and `johnsonsu` in [`src/metroliza/native/distribution_fit_ad/src/lib.rs`](../../../src/metroliza/native/distribution_fit_ad/src/lib.rs).
 - Wired the Python bridge to expose `compute_candidate_fit_params_batch(...)` and merge unresolved candidates back through Python fallback in [`modules/distribution_fit_candidate_native.py`](../../../modules/distribution_fit_candidate_native.py).
 - Added parity coverage for mixed native/Python fit fallback in [`tests/test_distribution_fit_native_parity.py`](../../../tests/test_distribution_fit_native_parity.py).
 
@@ -200,12 +200,12 @@ Interpretation:
 - That means the remaining export bottleneck is no longer the compositor alone; the next export budget is concentrated in worksheet writes, image insertion density, and the remaining trend oracle path.
 
 Fix landed:
-- Added a payload-driven native chart compositor in [`modules/native_chart_compositor.py`](../../../modules/native_chart_compositor.py).
-- Extended the native chart module bridge in [`lib.rs`](../../../modules/native/chart_renderer/src/lib.rs) and [`Cargo.toml`](../../../modules/native/chart_renderer/Cargo.toml).
+- Added a payload-driven native chart compositor in [`src/metroliza/charts/native_chart_compositor.py`](../../../src/metroliza/charts/native_chart_compositor.py).
+- Extended the native chart module bridge in [`lib.rs`](../../../src/metroliza/native/chart_renderer/src/lib.rs) and [`Cargo.toml`](../../../src/metroliza/native/chart_renderer/Cargo.toml).
 - Enabled a native-capable export path for histogram, distribution, IQR, and trend summary charts in [`modules/export_data_thread.py`](../../../modules/export_data_thread.py), with runtime rollout now gated per chart kind in [`modules/chart_renderer.py`](../../../modules/chart_renderer.py).
 - Updated renderer contracts and validation in [`modules/chart_renderer.py`](../../../modules/chart_renderer.py).
 - Added an optional HTML dashboard sidecar that reuses the same rendered summary charts and chart payload metadata in [`modules/export_html_dashboard.py`](../../../modules/export_html_dashboard.py).
-- Added a compact histogram fast-encode path so stripped render-budget payloads no longer pay workbook-grade PNG compression in [`modules/native_chart_compositor.py`](../../../modules/native_chart_compositor.py).
+- Added a compact histogram fast-encode path so stripped render-budget payloads no longer pay workbook-grade PNG compression in [`src/metroliza/charts/native_chart_compositor.py`](../../../src/metroliza/charts/native_chart_compositor.py).
 
 ## Remaining bottlenecks
 
@@ -273,12 +273,12 @@ Build caveat:
 - [`modules/export_data_thread.py`](../../../modules/export_data_thread.py)
 - [`modules/export_html_dashboard.py`](../../../modules/export_html_dashboard.py)
 - [`modules/group_stats_native.py`](../../../modules/group_stats_native.py)
-- [`modules/native/distribution_fit_ad/src/lib.rs`](../../../modules/native/distribution_fit_ad/src/lib.rs)
+- [`src/metroliza/native/distribution_fit_ad/src/lib.rs`](../../../src/metroliza/native/distribution_fit_ad/src/lib.rs)
 - [`tests/test_distribution_fit_native_parity.py`](../../../tests/test_distribution_fit_native_parity.py)
 - [`modules/contracts.py`](../../../modules/contracts.py)
-- [`modules/native/chart_renderer/Cargo.toml`](../../../modules/native/chart_renderer/Cargo.toml)
-- [`modules/native/chart_renderer/src/lib.rs`](../../../modules/native/chart_renderer/src/lib.rs)
-- [`modules/native_chart_compositor.py`](../../../modules/native_chart_compositor.py)
+- [`src/metroliza/native/chart_renderer/Cargo.toml`](../../../src/metroliza/native/chart_renderer/Cargo.toml)
+- [`src/metroliza/native/chart_renderer/src/lib.rs`](../../../src/metroliza/native/chart_renderer/src/lib.rs)
+- [`src/metroliza/charts/native_chart_compositor.py`](../../../src/metroliza/charts/native_chart_compositor.py)
 - [`tests/test_chart_renderer.py`](../../../tests/test_chart_renderer.py)
 - [`tests/test_contracts.py`](../../../tests/test_contracts.py)
 - [`tests/test_thread_flow_helpers.py`](../../../tests/test_thread_flow_helpers.py)

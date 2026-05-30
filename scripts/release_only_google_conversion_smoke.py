@@ -30,7 +30,7 @@ from pathlib import Path
 
 import xlsxwriter
 
-from modules.google_drive_export import GoogleDriveExportError, upload_and_convert_workbook
+from metroliza.exporting.google_drive_export import GoogleDriveExportError, upload_and_convert_workbook
 from tests.test_google_drive_credentials_hygiene import validate_example_credentials_template_hygiene
 
 SMOKE_OPT_IN_ENV = "METROLIZA_RUN_GOOGLE_CONVERSION_SMOKE"

@@ -41,7 +41,7 @@ Packaging smoke semantics for open-testing evidence review:
 
 For every downloaded artifact:
 
-1. Launch the app and verify displayed version/build/date matches RC metadata in `VersionDate.py`.
+1. Launch the app and verify displayed version/build/date matches RC metadata in `src/metroliza/app/version.py`.
 2. Confirm release notes/highlight context is synchronized in:
    - [`README.md`](../../README.md)
    - [`CHANGELOG.md`](../../CHANGELOG.md)

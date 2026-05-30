@@ -8,12 +8,13 @@ def test_build_native_and_package_helper_covers_native_build_and_packaging_paths
     assert "[ValidateSet('all', 'cmm', 'chart', 'group-stats', 'comparison-stats', 'distribution-fit')]" in script
     assert "[ValidateSet('onefile', 'onedir', 'both')]" in script
     assert "[string]$PyInstallerMode = 'onefile'" in script
+    assert "[string]$EntryPoint = 'packaging/metroliza_package_entry.py'" in script
     assert "metroliza_onedir.spec" in script
-    assert "'modules/native/cmm_parser/Cargo.toml'" in script
-    assert "'modules/native/chart_renderer/Cargo.toml'" in script
-    assert "'modules/native/group_stats_coercion/Cargo.toml'" in script
-    assert "'modules/native/comparison_stats_bootstrap/Cargo.toml'" in script
-    assert "'modules/native/distribution_fit_ad/Cargo.toml'" in script
+    assert "'src/metroliza/native/cmm_parser/Cargo.toml'" in script
+    assert "'src/metroliza/native/chart_renderer/Cargo.toml'" in script
+    assert "'src/metroliza/native/group_stats_coercion/Cargo.toml'" in script
+    assert "'src/metroliza/native/comparison_stats_bootstrap/Cargo.toml'" in script
+    assert "'src/metroliza/native/distribution_fit_ad/Cargo.toml'" in script
     assert '$invocationBoundParameters = @{}' in script
     assert 'Add-ValueArgumentIfBound -Arguments $nuitkaArgs -BoundParameters $invocationBoundParameters' in script
     assert '[switch]$BundleCredentials' in script

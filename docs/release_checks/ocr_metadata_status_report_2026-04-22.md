@@ -105,7 +105,7 @@ Concrete runtime conditions that would produce the observed symptom:
 - the `.exe` was built with `-AllowMissingHeaderOcrBuild`,
 - `rapidocr`, `onnxruntime`, `cv2`, or `numpy` were not bundled/importable,
 - the three ONNX model files were not bundled under
-  `modules/ocr_models/rapidocr`,
+  `src/metroliza/resources/ocr_models/rapidocr`,
 - `METROLIZA_HEADER_OCR_BACKEND` is set to `none`, `off`, or another unsupported
   value,
 - `METROLIZA_HEADER_OCR_MODEL_DIR` points to a missing/stale directory,

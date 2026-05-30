@@ -57,12 +57,14 @@ def _build_qt_stubs():
 @contextmanager
 def _qt_stubbed_imports():
     qtcore, qtgui, qtwidgets = _build_qt_stubs()
+    fake_pandas = types.ModuleType('pandas')
     with patch.dict(
         sys.modules,
         {
             'PyQt6.QtCore': qtcore,
             'PyQt6.QtGui': qtgui,
             'PyQt6.QtWidgets': qtwidgets,
+            'pandas': fake_pandas,
         },
         clear=False,
     ):
@@ -71,6 +73,16 @@ def _qt_stubbed_imports():
 
 def _import_fresh(module_name):
     sys.modules.pop(module_name, None)
+    canonical_by_legacy = {
+        'modules.data_grouping': 'metroliza.ui.data_grouping',
+        'modules.export_dialog': 'metroliza.ui.export_dialog',
+        'modules.filter_dialog': 'metroliza.ui.filter_dialog',
+        'modules.modify_db': 'metroliza.ui.modify_db',
+        'modules.release_notes_dialog': 'metroliza.ui.release_notes_dialog',
+    }
+    canonical_name = canonical_by_legacy.get(module_name)
+    if canonical_name is not None:
+        sys.modules.pop(canonical_name, None)
     return importlib.import_module(module_name)
 
 
@@ -82,6 +94,8 @@ class TestDialogParentNoneSafety(unittest.TestCase):
                 DataGrouping, 'read_data_to_df', return_value=None
             ), patch.object(DataGrouping, 'add_default_group', return_value=None), patch.object(
                 DataGrouping, 'populate_list_widgets', return_value=None
+            ), patch.object(
+                DataGrouping, '_restore_saved_grouping_state', return_value=None
             ):
                 DataGrouping(parent=None, db_file='')
 

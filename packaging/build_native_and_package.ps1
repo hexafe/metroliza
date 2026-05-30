@@ -15,7 +15,7 @@ param(
     [string]$PyInstallerMode = 'onefile',
     [string]$PyInstallerSpecPath = "$PSScriptRoot/metroliza_onefile.spec",
     [string]$PyInstallerOnedirSpecPath = "$PSScriptRoot/metroliza_onedir.spec",
-    [string]$EntryPoint = 'metroliza.py',
+    [string]$EntryPoint = 'packaging/metroliza_package_entry.py',
     [string]$OutputName,
     [string]$IconPath = "$PSScriptRoot/metroliza_icon2.ico",
     [switch]$BundleCredentials,
@@ -44,37 +44,44 @@ foreach ($entry in $PSBoundParameters.GetEnumerator()) {
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $nuitkaScriptPath = Join-Path $PSScriptRoot 'build_nuitka.ps1'
+$srcRoot = Join-Path $repoRoot 'src'
+$pathSeparator = [System.IO.Path]::PathSeparator
+if ([string]::IsNullOrWhiteSpace($env:PYTHONPATH)) {
+    $env:PYTHONPATH = "$srcRoot$pathSeparator$repoRoot"
+} elseif (-not ($env:PYTHONPATH -split [regex]::Escape($pathSeparator) | Where-Object { $_ -eq $srcRoot })) {
+    $env:PYTHONPATH = "$srcRoot$pathSeparator$repoRoot$pathSeparator$env:PYTHONPATH"
+}
 
 $nativeTargetCatalog = @(
     [pscustomobject]@{
         Name = 'cmm'
         ModuleName = '_metroliza_cmm_native'
-        ManifestPath = 'modules/native/cmm_parser/Cargo.toml'
-        VerifyCommand = 'from modules.cmm_native_parser import native_backend_available, native_persistence_backend_available; import sys; sys.exit(0 if native_backend_available() and native_persistence_backend_available() else 1)'
+        ManifestPath = 'src/metroliza/native/cmm_parser/Cargo.toml'
+        VerifyCommand = 'from metroliza.native_bridges.cmm_native_parser import native_backend_available, native_persistence_backend_available; import modules.cmm_native_parser as legacy; import metroliza.native_bridges.cmm_native_parser as canonical; import sys; sys.exit(0 if legacy is canonical and native_backend_available() and native_persistence_backend_available() else 1)'
     }
     [pscustomobject]@{
         Name = 'chart'
         ModuleName = '_metroliza_chart_native'
-        ManifestPath = 'modules/native/chart_renderer/Cargo.toml'
-        VerifyCommand = 'from modules.chart_renderer import native_chart_backend_available; import sys; sys.exit(0 if native_chart_backend_available() else 1)'
+        ManifestPath = 'src/metroliza/native/chart_renderer/Cargo.toml'
+        VerifyCommand = 'from metroliza.charts.chart_renderer import native_chart_backend_available; import modules.chart_renderer as legacy; import metroliza.charts.chart_renderer as canonical; import sys; sys.exit(0 if legacy is canonical and native_chart_backend_available() else 1)'
     }
     [pscustomobject]@{
         Name = 'group-stats'
         ModuleName = '_metroliza_group_stats_native'
-        ManifestPath = 'modules/native/group_stats_coercion/Cargo.toml'
-        VerifyCommand = 'from modules.group_stats_native import native_backend_available; import sys; sys.exit(0 if native_backend_available() else 1)'
+        ManifestPath = 'src/metroliza/native/group_stats_coercion/Cargo.toml'
+        VerifyCommand = 'from metroliza.native_bridges.group_stats_native import native_backend_available; import modules.group_stats_native as legacy; import metroliza.native_bridges.group_stats_native as canonical; import sys; sys.exit(0 if legacy is canonical and native_backend_available() else 1)'
     }
     [pscustomobject]@{
         Name = 'comparison-stats'
         ModuleName = '_metroliza_comparison_stats_native'
-        ManifestPath = 'modules/native/comparison_stats_bootstrap/Cargo.toml'
-        VerifyCommand = 'from modules.comparison_stats_native import native_backend_available; import sys; sys.exit(0 if native_backend_available() else 1)'
+        ManifestPath = 'src/metroliza/native/comparison_stats_bootstrap/Cargo.toml'
+        VerifyCommand = 'from metroliza.native_bridges.comparison_stats_native import native_backend_available; import modules.comparison_stats_native as legacy; import metroliza.native_bridges.comparison_stats_native as canonical; import sys; sys.exit(0 if legacy is canonical and native_backend_available() else 1)'
     }
     [pscustomobject]@{
         Name = 'distribution-fit'
         ModuleName = '_metroliza_distribution_fit_native'
-        ManifestPath = 'modules/native/distribution_fit_ad/Cargo.toml'
-        VerifyCommand = 'from modules.distribution_fit_native import native_backend_available; import sys; sys.exit(0 if native_backend_available() else 1)'
+        ManifestPath = 'src/metroliza/native/distribution_fit_ad/Cargo.toml'
+        VerifyCommand = 'from metroliza.native_bridges.distribution_fit_native import native_backend_available; import modules.distribution_fit_native as legacy; import metroliza.native_bridges.distribution_fit_native as canonical; import sys; sys.exit(0 if legacy is canonical and native_backend_available() else 1)'
     }
 )
 
@@ -372,7 +379,7 @@ try {
 
         Invoke-CheckedPythonCommand -Arguments @(
             '-c',
-            'import json; from modules.backend_diagnostics import build_backend_diagnostic_summary; print(json.dumps(build_backend_diagnostic_summary(), indent=2, sort_keys=True))'
+            'import json; from metroliza.app.backend_diagnostics import build_backend_diagnostic_summary; print(json.dumps(build_backend_diagnostic_summary(), indent=2, sort_keys=True))'
         ) -FailureMessage 'Backend diagnostics summary failed.'
     }
 

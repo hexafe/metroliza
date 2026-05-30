@@ -34,6 +34,8 @@ pymupdf_stub = types.ModuleType('pymupdf')
 pymupdf_stub.__spec__ = importlib.machinery.ModuleSpec('pymupdf', loader=None)
 sys.modules.setdefault('pymupdf', pymupdf_stub)
 
+sys.modules.pop('modules.cmm_report_parser', None)
+sys.modules.pop('metroliza.parsing.cmm_report_parser', None)
 import modules.cmm_report_parser as cmm_report_parser_module  # noqa: E402
 from modules.cmm_schema import ensure_cmm_report_schema  # noqa: E402
 from modules.report_schema import ensure_report_schema  # noqa: E402
