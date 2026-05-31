@@ -21,8 +21,8 @@ This directory contains active operational, maintenance, and end-user documentat
 - `google_conversion_smoke_runbook.md` — local Google Sheets conversion smoke guidance.
 - `native_build_distribution.md` — native build/distribution workflow and packaging references.
 - `../THIRD_PARTY_NOTICES.md` — third-party license and notice inventory for packaged distributions.
-- `parser_plugins/README.md` — active hub for parser plugin generation, validation, installation, and rollout docs.
-- `parser_plugins/parser_plugin_specification.md` — exact contract for generated Metroliza parser plugins.
+- `parser_plugins/README.md` — active hub for declarative parser profiles, advanced parser plugin generation, validation, installation, and rollout docs.
+- `parser_plugins/parser_plugin_specification.md` — exact contract for declarative Metroliza parser profiles and advanced generated parser plugins.
 - `parser_plugins/non_technical_workflow.md` — non-technical step-by-step workflow for adding a new supplier report parser.
 - `roadmaps/2026_03_rc2_stabilization_execution.md` — RC2 stabilization closeout/reference tracker for the completed parity-first slice.
 - `roadmaps/OCR_BENCHMARKING_MASTER.md` — canonical OCR benchmarking, acceleration, privacy, and next-session handoff.

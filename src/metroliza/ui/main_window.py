@@ -33,6 +33,7 @@ FEATURE_IMPORT_WARMUP_MODULES = (
     ("Metadata Enrichment", "metroliza.parsing.metadata_enrichment_thread"),
     ("Modify Database", "metroliza.ui.modify_db"),
     ("Match Characteristic Names", "metroliza.ui.characteristic_mapping_dialog"),
+    ("Parser Profiles", "metroliza.ui.parser_plugin_wizard"),
 )
 
 
@@ -91,6 +92,7 @@ class MainWindow(QMainWindow):
         self.metadata_enrichment_thread = None
         self.metadata_enrichment_error_message = None
         self.industrial_data_dialog = None
+        self.parser_plugin_wizard_dialog = None
         self.directory = None
         self.db_file = None
         self._feature_import_warmup_completed = False
@@ -185,10 +187,14 @@ class MainWindow(QMainWindow):
         self.industrial_data_action = QAction("Industrial data...", self)
         self.industrial_data_action.setToolTip("Configure, sync, link, and export cached Oznak industrial data")
         self.industrial_data_action.triggered.connect(self.launch_industrial_data_dialog)
+        self.parser_profiles_action = QAction("Parser profiles...", self)
+        self.parser_profiles_action.setToolTip("Create a local handoff folder for a new supplier parser profile")
+        self.parser_profiles_action.triggered.connect(self.launch_parser_plugin_wizard)
         self.tools_menu = self.menuBar().addMenu("Tools")
         self.tools_menu.addAction(self.csv_summary_action)
         self.tools_menu.addAction(self.enrich_metadata_action)
         self.tools_menu.addAction(self.industrial_data_action)
+        self.tools_menu.addAction(self.parser_profiles_action)
         _, self.help_menu = build_help_menu(self, [("Main window manual", 'main_window')], menu_bar=self.menuBar())
         if hasattr(self.help_menu, "addSeparator"):
             self.help_menu.addSeparator()
@@ -442,6 +448,19 @@ class MainWindow(QMainWindow):
 
             self.industrial_data_dialog.raise_()
             self.industrial_data_dialog.activateWindow()
+        except Exception as e:
+            self.log_and_exit(e)
+
+    def launch_parser_plugin_wizard(self):
+        try:
+            from metroliza.ui.parser_plugin_wizard import ParserPluginWizardDialog
+
+            if not self.parser_plugin_wizard_dialog or not self.parser_plugin_wizard_dialog.isVisible():
+                self.parser_plugin_wizard_dialog = ParserPluginWizardDialog(self)
+                self.parser_plugin_wizard_dialog.show()
+
+            self.parser_plugin_wizard_dialog.raise_()
+            self.parser_plugin_wizard_dialog.activateWindow()
         except Exception as e:
             self.log_and_exit(e)
 

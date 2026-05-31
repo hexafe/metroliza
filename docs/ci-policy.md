@@ -15,7 +15,7 @@ The following checks must pass on every PR and branch push.
 
 | Requirement | Workflow job name (`ci.yml`) | What it validates |
 |---|---|---|
-| Lint and static validation | `static-checks` | Python compile check, Ruff lint, release metadata consistency check, and repository/diff JSON secret scan. |
+| Lint and static validation | `static-checks` | Python compile check, declarative parser profile self-service smoke, Ruff lint, release metadata consistency check, and repository/diff JSON secret scan. |
 | Metadata checks | `static-checks` | `scripts/sync_release_metadata.py --check` is enforced in this job. |
 | Full pytest suite + coverage gate | `unit-tests` | Runs `python -m pytest tests -q --cov=src/metroliza --cov=modules --cov=scripts --cov-report=term --cov-report=xml:coverage.xml --cov-fail-under=65` for the full Python test suite with Qt runtime libraries installed and `QT_QPA_PLATFORM=offscreen`, then publishes coverage outputs. |
 | Native artifact build + smoke/parity checks | `native-artifacts` | Builds all native wheels, installs them, runs import/smoke checks for each native module plus explicit fallback checks, executes native chart planner/parity smoke checks, runs an export-runtime fast-path contract smoke for extended summary charts, and runs native parser parity tests. |
@@ -67,6 +67,16 @@ These checks are explicitly non-blocking for normal PR CI:
 - The smoke command is bounded with a timeout to prevent hanging CI runners.
 - Startup logs (`stdout`, `stderr`, and discovered `metroliza.log` paths) are gathered into `smoke-artifacts/`.
 - On failure, those artifacts are uploaded as `packaging-smoke-artifacts` for troubleshooting.
+
+### Parser profile self-service smoke
+
+- The `static-checks` job creates a synthetic declarative parser profile through
+  `scripts/parser_plugin_self_service.py init`.
+- The same job validates the profile against a synthetic CSV sample and expected-results
+  CSV, diagnoses the sample, installs it into an isolated profile store with an
+  approval sidecar, and prints the generated evidence JSON.
+- This smoke proves the standard self-service lane stays data-only and does not
+  depend on generated Python parser code.
 
 ### Windows startup benchmark semantics
 

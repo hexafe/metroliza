@@ -153,6 +153,13 @@ def _load_expected_results_rows(expected_results_ref: str | Path) -> tuple[list[
             "" if not missing_columns else f"missing columns: {', '.join(missing_columns)}",
         )
     )
+    checks.append(
+        _check(
+            "expected_results_rows_present",
+            bool(rows),
+            "" if rows else "expected-results CSV must contain at least one checked result row",
+        )
+    )
     normalized_rows: list[dict[str, str]] = []
     for row_index, row in enumerate(rows, start=2):
         normalized_row = {key: (value if value is not None else "") for key, value in row.items()}
@@ -169,20 +176,25 @@ def _row_matches_sample_file(row: dict[str, str], sample_file_name: str) -> bool
     return Path(sample_file_value).name.casefold() == sample_file_name.casefold()
 
 
-def _extract_actual_rows(parse_result: ParseResultV2) -> dict[tuple[int, str, str], dict[str, object]]:
-    actual_rows: dict[tuple[int, str, str], dict[str, object]] = {}
+def _extract_actual_rows(parse_result: ParseResultV2) -> dict[tuple[int, str, str, int], dict[str, object]]:
+    actual_rows: dict[tuple[int, str, str, int], dict[str, object]] = {}
+    occurrences: dict[tuple[int, str, str], int] = {}
     for block in parse_result.blocks:
         header_normalized = _normalize_header_text(block.header_normalized) or ""
         for row in block.dimensions:
-            key = (
+            base_key = (
                 int(block.block_index),
                 header_normalized.casefold(),
                 _normalize_casefold_text(row.axis_code) or "",
             )
+            occurrence = occurrences.get(base_key, 0)
+            occurrences[base_key] = occurrence + 1
+            key = (*base_key, occurrence)
             actual_rows[key] = {
                 "row": row,
                 "block_index": int(block.block_index),
                 "header_normalized": header_normalized,
+                "occurrence": occurrence,
             }
     return actual_rows
 
@@ -270,13 +282,27 @@ def _build_expected_results_checks(
     )
 
     actual_rows = _extract_actual_rows(parse_result)
+    checks.append(
+        _check(
+            "expected_results_actual_row_count_matches",
+            len(actual_rows) == len(sample_rows),
+            f"expected {len(sample_rows)} checked rows, parsed {len(actual_rows)} rows",
+        )
+    )
+    expected_occurrences: dict[tuple[int, str, str], int] = {}
     for row in sample_rows:
         row_number = row.get("__row_number__", "?")
         block_index = _parse_int(row.get("block_index"))
         header_normalized = _normalize_header_text(row.get("header_normalized")) or ""
         axis_code = _normalize_casefold_text(row.get("axis_code")) or ""
-        row_key = (block_index if block_index is not None else -1, header_normalized.casefold(), axis_code)
-        row_label = f"row_{row_number}_b{row_key[0]}_{_slugify_for_check(header_normalized)}_{_slugify_for_check(axis_code)}"
+        base_row_key = (block_index if block_index is not None else -1, header_normalized.casefold(), axis_code)
+        occurrence = expected_occurrences.get(base_row_key, 0)
+        expected_occurrences[base_row_key] = occurrence + 1
+        row_key = (*base_row_key, occurrence)
+        row_label = (
+            f"row_{row_number}_b{row_key[0]}_{_slugify_for_check(header_normalized)}_"
+            f"{_slugify_for_check(axis_code)}_{occurrence + 1}"
+        )
         actual_entry = actual_rows.get(row_key)
         if actual_entry is None:
             checks.append(

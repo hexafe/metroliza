@@ -1,6 +1,8 @@
-# Non-Technical Workflow: Create a New Parser Plugin
+# Non-Technical Workflow: Create a New Parser Profile
 
 This guide is for a user who is not a programmer but wants Metroliza to support a new supplier report template.
+
+The preferred path is a **declarative parser profile**. That means you prepare examples and a YAML profile that trusted Metroliza code can read. You do not need to create Python code.
 
 ## What you need before you start
 
@@ -10,91 +12,105 @@ This guide is for a user who is not a programmer but wants Metroliza to support 
 
 ## Step 1: Create a workspace
 
-Run:
+In Metroliza, open:
 
-```bash
-python scripts/create_parser_plugin_workspace.py --plugin-id supplier_alpha --source-format pdf
+```text
+Tools > Parser profiles...
 ```
 
-This creates a working folder by default at:
+Enter:
 
-`artifacts/parser_plugin_workspaces/supplier_alpha/`
+- a short profile id, for example `supplier_alpha`,
+- a clear display name, for example `Supplier Alpha`,
+- the source type, such as `pdf`, `excel`, or `csv`.
+
+Click **Create Handoff Folder**.
+
+This creates a working folder under:
+
+`~/.metroliza/parser_plugins/profiles/incoming/<profile-id>/`
+
+Use **Open Folder** to open that hidden folder, or **Copy Path** if you need to paste the folder location into a message or file browser.
 
 ## Step 2: Place the input files
 
 Inside that workspace:
 
 - put the real sample reports into `samples/`
-- fill `supplier_intake.md`
-- fill `expected_results_template.csv`
+- fill `expected_results.csv` with the values you checked by hand
+- keep any supplier notes next to the handoff files
 
 ## Step 3: Prepare the template analysis
 
-Prepare the template analysis from these items:
+Open `llm_handoff.md`.
 
-- all sample reports from `samples/`
-- `supplier_intake.md`
-- `expected_results_template.csv`
-- `prompts/01_analysis_prompt.md`
+Use it with an approved external LLM workflow or with a human reviewer. Metroliza does not send reports to an LLM. The app only creates the local handoff folder.
 
-Save the analysis notes into:
+Give the reviewer:
 
-`responses/analysis_response.md`
+- `profile.yaml`
+- the sample reports from `samples/`
+- `expected_results.csv`
+- the visible supplier/template notes you collected
 
-## Step 4: Prepare the parser files
+Ask for a completed **declarative Metroliza parser profile**, not Python code.
 
-Use these files as the parser implementation packet:
+## Step 4: Complete the profile
 
-- `responses/analysis_response.md`
-- `prompts/02_implementation_prompt.md`
-- `generated_plugin.py`
-- `tests/test_generated_plugin.py`
+The completed `profile.yaml` should describe:
 
-Save the completed parser files back into:
+- profile identity and source type,
+- reliable text markers that identify the template,
+- report fields such as reference, date, and sample number,
+- measurement row patterns,
+- decimal and date normalization.
 
-- `generated_plugin.py`
-- `tests/test_generated_plugin.py`
+Do not add scripts, installers, network access, or package changes to the handoff folder.
 
-## Step 5: Validate the parser
+## Step 5: Validate and approve the profile
 
-Run:
+Validation and approval are operator steps. The profile is not active until it is validated, approved, and moved into the approved profile store.
 
-```bash
-python scripts/validate_parser_plugins.py --paths generated_plugin.py --plugin-id supplier_alpha --sample-input samples/sample_report_01.pdf --expected-results expected_results_template.csv
-```
-
-Replace `sample_report_01.pdf` with one real sample from your workspace.
-
-Validation should confirm that the plugin:
+Validation should confirm that the profile:
 
 - follows the required Metroliza contract
 - returns a valid `ParseResultV2`
 - keeps the requested plugin identity
-- matches the manually verified values in `expected_results_template.csv`
+- matches the manually verified values in `expected_results.csv`
+
+The operator command is:
+
+```bash
+PYTHONPATH=src:. python scripts/parser_plugin_self_service.py validate <handoff-folder>/profile.yaml --expected-results <handoff-folder>/expected_results.csv --workspace <handoff-folder>
+```
 
 ## Step 6: Repair if validation fails
 
-Run:
+If validation fails, use the failure notes to update only `profile.yaml` and the expected-values file when the manually checked value was wrong.
+
+Repeat validation until the reviewer approves the result.
+
+## Step 7: Install the approved profile
+
+Approved profiles are installed under:
+
+`~/.metroliza/parser_plugins/profiles/approved/<profile-id>/profile.yaml`
+
+with an approval sidecar:
+
+`~/.metroliza/parser_plugins/profiles/approved/<profile-id>/approval.json`
+
+The operator install command is:
 
 ```bash
-python scripts/build_parser_plugin_repair_prompt.py --paths generated_plugin.py --plugin-id supplier_alpha --sample-input samples/sample_report_01.pdf --expected-results expected_results_template.csv --output artifacts/repair_prompt.md
+PYTHONPATH=src:. python scripts/parser_plugin_self_service.py install <handoff-folder>/profile.yaml --expected-results <handoff-folder>/expected_results.csv --workspace <handoff-folder> --approved-by <approver>
 ```
 
-Then use `artifacts/repair_prompt.md` to correct the parser files, save the corrected files back into the workspace, and validate again.
-
-## Step 7: Install the validated plugin
-
-Copy the final `generated_plugin.py` file to:
-
-`~/.metroliza/parser_plugins/supplier_alpha.py`
-
-`~` means your home folder. On Windows this is typically:
-
-`C:\Users\<your-user>\.metroliza\parser_plugins\`
+Install will fail if `expected_results.csv` is missing or no sample report is referenced.
 
 ## Step 8: Restart Metroliza and parse the new report
 
-After restart, Metroliza automatically scans `~/.metroliza/parser_plugins/`.
+After restart, Metroliza automatically scans approved parser profiles.
 
 When you load a report:
 
@@ -103,26 +119,19 @@ When you load a report:
 - the best matching plugin is selected automatically by confidence, then priority, then plugin id
 - the selected parser should be the one that wins for the specific sample you are using, not just any parser for the same file type
 
-If you need to confirm why a specific file selected a parser, run:
-
-```bash
-python scripts/explain_parser_resolution.py samples/sample_report_01.pdf --paths generated_plugin.py
-```
-
 You do not need to edit Metroliza source code to register the new parser.
 
 ## What goes where
 
 - Sample reports: inside the workspace `samples/`
-- Supplier notes: `supplier_intake.md`
-- Expected values: `expected_results_template.csv`
-- Template analysis notes: `responses/analysis_response.md`
-- Generated parser before validation: workspace `generated_plugin.py`
-- Final installed parser for Metroliza: `~/.metroliza/parser_plugins/<plugin-id>.py`
+- Expected values: `expected_results.csv`
+- Profile draft: workspace `profile.yaml`
+- Handoff instructions: `llm_handoff.md`
+- Final approved profile for Metroliza: `~/.metroliza/parser_plugins/profiles/approved/<profile-id>/profile.yaml`
 
 ## Troubleshooting
 
-- If the wrong parser is selected, improve the generated `probe(...)` logic so it uses stronger template markers.
-- If dates or decimals are wrong, update `supplier_intake.md` with explicit locale examples and regenerate.
+- If the wrong parser is selected, improve the required markers in `profile.yaml`.
+- If dates or decimals are wrong, update the normalization section with explicit examples and repair the profile.
 - If the report family has multiple visible layouts, prepare one workspace per template family.
-- If validation passes but the business values are wrong, add those mismatches to `expected_results_template.csv`, then add them to the repair prompt and regenerate.
+- If validation passes but the business values are wrong, add those mismatches to `expected_results.csv`, then repair and validate again.

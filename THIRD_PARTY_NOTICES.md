@@ -44,16 +44,29 @@ statistical plots, and industrial database access.
 | hexafe-plotstats | MIT | https://github.com/hexafe/hexafe-plotstats |
 | Oznak | MIT | https://github.com/hexafe/oznak |
 
+## Excel parser profile readers
+
+Declarative parser profiles can read Excel workbooks through pandas and the
+runtime reader packages listed below.
+
+| Component | License / notice | Project |
+| --- | --- | --- |
+| openpyxl | MIT | https://openpyxl.readthedocs.io/ |
+| et-xmlfile | MIT | https://foss.heptapod.net/openpyxl/et_xmlfile |
+| xlrd | BSD-3-Clause | https://xlrd.readthedocs.io/ |
+
 ## Release packaging obligations
 
 - Ship or attach this notice with every distributed executable, installer, ZIP,
   or other release artifact.
 - Preserve RapidOCR's Apache-2.0 license notice and the model copyright
   attribution above.
-- Preserve ONNX Runtime, OpenVINO, OpenCV, NumPy, hexafe-plotstats, and Oznak
-  license/metadata files when the packaging tool can include distribution metadata.
-- If RapidOCR, OCR model files, ONNX Runtime, OpenVINO, OpenCV, NumPy, or their pinned
-  versions change, update this file and rerun the packaging validation tests.
+- Preserve ONNX Runtime, OpenVINO, OpenCV, NumPy, hexafe-plotstats, Oznak,
+  openpyxl, et-xmlfile, and xlrd license/metadata files when the packaging tool
+  can include distribution metadata.
+- If RapidOCR, OCR model files, ONNX Runtime, OpenVINO, OpenCV, NumPy, Excel
+  reader packages, or their pinned versions change, update this file and rerun
+  the packaging validation tests.
 - Do not publish a release artifact produced with an unsafe OCR packaging
   override such as `-AllowMissingHeaderOcrBuild`.
 

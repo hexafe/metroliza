@@ -106,7 +106,12 @@ def test_ci_and_precommit_run_release_hygiene_scan() -> None:
     assert 'python scripts/check_release_hygiene.py' in workflow
     assert 'id: release-hygiene' in precommit_config
     assert 'logs/release_checks/' in gitignore
+    release_hygiene = Path('scripts/check_release_hygiene.py').read_text(encoding='utf-8')
     assert 'artifacts/parser_plugin_workspace_ci/' in gitignore
+    assert 'artifacts/parser_profile_self_service_ci/' in gitignore
+    assert 'artifacts/parser_profile_self_service_home/' in gitignore
+    assert '"artifacts/parser_profile_self_service_ci/"' in release_hygiene
+    assert '"artifacts/parser_profile_self_service_home/"' in release_hygiene
     assert 'smoke-artifacts/' in gitignore
     assert 'nuitka-build-report.xml' in gitignore
     assert 'src/metroliza/native/**/target/' in gitignore
@@ -114,6 +119,25 @@ def test_ci_and_precommit_run_release_hygiene_scan() -> None:
     assert '.coverage' in gitignore
     assert 'coverage.xml' in gitignore
     assert 'htmlcov/' in gitignore
+
+
+def test_ci_workflow_runs_declarative_parser_profile_self_service_smoke() -> None:
+    workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+    ci_policy = CI_POLICY_PATH.read_text(encoding='utf-8')
+
+    assert 'name: Parser profile self-service smoke' in workflow
+    assert 'scripts/parser_plugin_self_service.py init' in workflow
+    assert 'scripts/parser_plugin_self_service.py validate' in workflow
+    assert 'scripts/parser_plugin_self_service.py diagnose' in workflow
+    assert 'scripts/parser_plugin_self_service.py --home "${home_dir}" install' in workflow
+    assert 'scripts/parser_plugin_self_service.py --home "${home_dir}" evidence ci_smoke' in workflow
+    assert '--source-format csv' in workflow
+    assert 'sample_report_01.csv' in workflow
+    assert 'artifacts/parser_profile_self_service_ci' in workflow
+    assert 'artifacts/parser_profile_self_service_home' in workflow
+    assert 'Parser profile self-service smoke' in ci_policy
+    assert 'synthetic CSV sample' in ci_policy
+    assert 'data-only' in ci_policy
 
 
 def test_ci_workflow_keeps_native_chart_planner_parity_smoke_step() -> None:

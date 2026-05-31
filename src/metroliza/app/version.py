@@ -1,11 +1,12 @@
 RELEASE_VERSION = "2026.05rc4"
 VERSION_DATE = "260524"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
-CURRENT_RELEASE_HIGHLIGHT = "Export reliability, safer long-task cancellation, and dashboard plot visual customization."
+CURRENT_RELEASE_HIGHLIGHT = "Parser profile self-service, export reliability, safer long-task cancellation, and dashboard plot visual customization."
 PUBLIC_VERSION_LABEL = "2026.05 RC4 (build 260524)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
+    - Parser profiles can now be prepared from Tools > Parser profiles... for new supplier report templates without writing Python code<br>
     - Google Sheets export now checks converted workbook tabs and warns when a local Excel fallback should be used<br>
     - Canceling long parsing, export, and metadata tasks is more reliable from progress windows<br>
     - Dashboard plot visuals can now be customized<br>

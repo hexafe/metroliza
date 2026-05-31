@@ -2,8 +2,87 @@
 
 ## Purpose
 
-Use this specification when creating a new Metroliza parser plugin for a
-supplier-specific report template.
+Use this specification when creating new Metroliza parser support for a supplier-specific report template.
+
+The preferred output is a **declarative parser profile**: a reviewed YAML file that Metroliza loads with trusted runtime code. A generated Python plugin is still supported for advanced operator-only cases where the declarative profile cannot model the template.
+
+## Declarative profile workspace
+
+The main window can create a local handoff folder:
+
+```text
+Tools > Parser profiles... > Create Handoff Folder
+```
+
+The handoff folder contains:
+
+- `profile.yaml`
+- `samples/`
+- `expected_results.csv`
+- `llm_handoff.md`
+
+The dialog does not call an LLM. It only prepares the local files that a user can give to an approved external workflow or a human reviewer, and it provides open-folder/copy-path actions for the hidden profile-store location.
+
+## Declarative profile contract
+
+`profile.yaml` must be data-only YAML. It must not require Python code, subprocesses, network access, or package installation.
+
+Declarative profiles are intentionally constrained. Validation rejects profiles that:
+
+- install without at least one sample report and `expected_results.csv`,
+- use an `expected_results.csv` file with no checked data rows,
+- parse extra rows that are not represented in the checked expected-results rows,
+- use path-like sample names outside the workspace `samples/` directory,
+- use regex backreferences, nested repeating groups, unbounded dot wildcards, or row patterns that are not line-anchored,
+- exceed runtime text and row-match limits intended to prevent a malformed profile from hanging parsing.
+
+Required top-level sections:
+
+- `schema_version`
+- `plugin`
+- `probe`
+- `extraction`
+- `normalization`
+
+Required `plugin` fields:
+
+- `plugin_id`
+- `display_name`
+- `version`
+- `source_format`
+- `template_ids`
+
+Required `probe` fields:
+
+- `required_markers`
+- `confidence`
+
+Required `extraction.report_fields` fields:
+
+- `reference`
+- `report_date`
+- `sample_number`
+
+Required measurement extraction:
+
+- at least one `extraction.blocks` entry,
+- each block must include a regex `pattern`,
+- row captures should use the standard measurement names: `axis_code`, `nominal`, `tol_plus`, `tol_minus`, `bonus`, `measured`, `deviation`, and `out_of_tolerance`.
+
+Runtime approval stores validated profiles under:
+
+`~/.metroliza/parser_plugins/profiles/approved/<profile-id>/`
+
+Each approved profile must have:
+
+- `profile.yaml`
+- `approval.json`
+
+The approval sidecar records the validation result and checksum. If the checksum no longer matches, Metroliza does not load the profile.
+
+## Advanced Python plugin output
+
+Use this section only when a declarative profile cannot represent the supplier template.
 
 The output must be a Python plugin file that Metroliza can load through the parser factory without manual architecture changes.
 
@@ -132,7 +211,24 @@ The generated plugin must:
 
 ## Installation target
 
-After validation passes, the generated plugin file is installed by copying it to:
+After declarative validation and approval pass, the profile is installed into:
+
+`~/.metroliza/parser_plugins/profiles/approved/<profile-id>/profile.yaml`
+
+with:
+
+`~/.metroliza/parser_plugins/profiles/approved/<profile-id>/approval.json`
+
+Use the declarative self-service CLI for this path:
+
+```bash
+PYTHONPATH=src:. python scripts/parser_plugin_self_service.py validate <handoff-folder>/profile.yaml --expected-results <handoff-folder>/expected_results.csv --workspace <handoff-folder>
+PYTHONPATH=src:. python scripts/parser_plugin_self_service.py diagnose <handoff-folder>/profile.yaml <handoff-folder>/samples/sample_report_01.pdf
+PYTHONPATH=src:. python scripts/parser_plugin_self_service.py install <handoff-folder>/profile.yaml --expected-results <handoff-folder>/expected_results.csv --workspace <handoff-folder> --approved-by operator
+PYTHONPATH=src:. python scripts/parser_plugin_self_service.py evidence <profile-id>
+```
+
+After advanced generated-plugin validation passes, the generated plugin file is installed by copying it to:
 
 `~/.metroliza/parser_plugins/<plugin-id>.py`
 
@@ -140,10 +236,20 @@ Metroliza will auto-discover that file and include it in parser factory resoluti
 
 ## Definition of done
 
-A generated parser plugin is ready only when all are true:
+### Declarative parser profile
 
-- validation passes via `scripts/validate_parser_plugins.py`
+- declarative profile validation passes via `scripts/parser_plugin_self_service.py validate`
+- declarative profile approval uses `scripts/parser_plugin_self_service.py install` with at least one sample and `expected_results.csv`
+- the parsed result matches every manually verified value in `expected_results.csv`
+- no extra parsed measurement rows are left unchecked by `expected_results.csv`
+- the profile is installed in its approved runtime location with a matching `approval.json` checksum
+- Metroliza selects the profile for the intended supplier report format
+- rollout approval follows the parser plugin runbook
+
+### Advanced Python plugin
+
+- advanced Python plugin validation passes via `scripts/validate_parser_plugins.py`
 - the parsed result matches the manually verified values in `expected_results_template.csv`
-- the plugin file is installed in `~/.metroliza/parser_plugins/`
+- the plugin file is installed in its approved runtime location
 - Metroliza selects the plugin for the intended supplier report format
 - rollout approval follows the parser plugin runbook

@@ -11,6 +11,7 @@ From here you can open:
 - Export,
 - Characteristic Name Matching,
 - Industrial data source setup, sync, and cached Oznak link refresh.
+- Parser profile handoff for new supplier report templates.
 
 It also gives you quick access to the **Tools** and **Help** menus from the menu bar.
 
@@ -90,6 +91,19 @@ If the Metroliza report reference and production reference are different, use **
 
 Use **Edit...** next to grouping in the industrial export dialog to choose production-line grouping fields such as station, line, work order, batch/lot, operator, or process status. The export dialog uses those fields for the summary sheet and optional plots.
 
+### Tools > Parser profiles...
+
+Opens the parser profile handoff dialog.
+
+Use this when a new supplier report template needs parser support. The dialog shows the local profile store status and can create a local handoff folder with:
+
+- a `profile.yaml` template,
+- a `samples/` folder,
+- an `expected_results.csv` file for values checked by hand,
+- an `llm_handoff.md` note for an approved external LLM or human review workflow.
+
+Metroliza does not call an LLM from this dialog. It only prepares local files. After creating a folder, use **Open Folder** or **Copy Path** to get to the hidden profile workspace. A parser profile is not active until an operator validates and approves it.
+
 ### Match Characteristic Names
 
 Opens the [Characteristic Name Matching](characteristic_name_matching.md) dialog.
@@ -136,6 +150,7 @@ A practical version is:
 - **Optionally sync industrial data**.
 - **Export**.
 - Use **Tools** for utility workflows such as **CSV Summary**, **Industrial data...**, or **Enrich existing database metadata...**.
+- Use **Tools > Parser profiles...** when a supplier sends a report layout that Metroliza does not recognize yet.
 - Use **Help** for manuals, **Release notes**, and **About**.
 
 ## Typical user journeys
@@ -168,6 +183,15 @@ Use:
 Use:
 
 1. [CSV Summary](csv_summary.md)
+
+### A supplier sent a report layout Metroliza does not recognize
+
+Use:
+
+1. **Tools > Parser profiles...**
+2. Create a handoff folder.
+3. Add sample reports and checked expected values.
+4. Send the handoff folder through the approved review process.
 
 ## Common confusion points
 

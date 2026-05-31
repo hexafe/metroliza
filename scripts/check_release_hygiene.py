@@ -10,6 +10,8 @@ from pathlib import Path
 BLOCKED_PREFIXES = (
     "benchmark_results/",
     "artifacts/parser_plugin_workspace_ci/",
+    "artifacts/parser_profile_self_service_ci/",
+    "artifacts/parser_profile_self_service_home/",
     "artifacts/security_siblings/",
     "artifacts/industrial/",
     "logs/release_checks/",

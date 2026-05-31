@@ -7,6 +7,7 @@ from pathlib import Path
 
 
 PARSER_EXTERNAL_PLUGIN_PATHS_ENV = "PARSER_EXTERNAL_PLUGIN_PATHS"
+PARSER_DISABLED_PLUGIN_IDS_ENV = "PARSER_DISABLED_PLUGIN_IDS"
 DEFAULT_PARSER_PLUGIN_HOME_SUBDIR = Path(".metroliza") / "parser_plugins"
 
 
@@ -61,3 +62,15 @@ def configured_external_plugin_path_entries(
         seen.add(entry)
         deduped.append(entry)
     return tuple(deduped)
+
+
+def disabled_plugin_ids(raw_ids: str | None = None) -> frozenset[str]:
+    """Return parser plugin ids disabled by runtime configuration."""
+
+    value = raw_ids if raw_ids is not None else os.getenv(PARSER_DISABLED_PLUGIN_IDS_ENV, "")
+    ids = {
+        item.strip()
+        for item in str(value).replace(";", ",").split(",")
+        if item.strip()
+    }
+    return frozenset(ids)

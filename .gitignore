@@ -29,6 +29,8 @@ benchmark_results/
 # Local/generated release and CI evidence
 logs/release_checks/
 artifacts/parser_plugin_workspace_ci/
+artifacts/parser_profile_self_service_ci/
+artifacts/parser_profile_self_service_home/
 parser_plugin_workspace*/
 smoke-artifacts/
 nuitka-build-report.xml

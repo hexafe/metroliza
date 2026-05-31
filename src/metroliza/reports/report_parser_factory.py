@@ -30,6 +30,12 @@ from metroliza.parsing.parser_plugin_contracts import (
 
 ParserType = Type[BaseReportParserPlugin]
 DetectorType = Callable[[str], ProbeResult]
+ExternalPluginConfigSignature = tuple[
+    tuple[str, ...],
+    tuple[str, ...],
+    tuple[tuple[str, str, str], ...],
+    tuple[str, ...],
+]
 
 
 @dataclass(frozen=True)
@@ -47,11 +53,12 @@ class ResolverDiagnostics:
 class ExternalPluginLoadResult:
     """Result summary for external plugin discovery/loading."""
 
-    loaded_plugin_ids: tuple[str, ...]
-    loaded_modules: tuple[str, ...]
-    loaded_entry_points: tuple[str, ...]
-    skipped_paths: tuple[str, ...]
-    errors: tuple[str, ...]
+    loaded_plugin_ids: tuple[str, ...] = ()
+    loaded_profile_ids: tuple[str, ...] = ()
+    loaded_modules: tuple[str, ...] = ()
+    loaded_entry_points: tuple[str, ...] = ()
+    skipped_paths: tuple[str, ...] = ()
+    errors: tuple[str, ...] = ()
 
 
 PARSER_MAP: dict[str, ParserType] = {}
@@ -60,7 +67,7 @@ PARSER_DETECTORS: dict[str, DetectorType] = {}
 PROBE_RESULT_CACHE: dict[tuple[str, str], ProbeResult] = {}
 
 _EXTERNAL_PLUGINS_LOADED = False
-_EXTERNAL_PLUGIN_CONFIG_SIGNATURE: tuple[tuple[str, ...], tuple[str, ...]] | None = None
+_EXTERNAL_PLUGIN_CONFIG_SIGNATURE: ExternalPluginConfigSignature | None = None
 _EXTERNAL_PLUGIN_ENTRY_POINTS: tuple[object, ...] | None = None
 _EXTERNAL_PLUGIN_MODULE_COUNTER = 0
 
@@ -162,6 +169,19 @@ def reset_external_plugin_loader_state() -> None:
     _EXTERNAL_PLUGINS_LOADED = False
     _EXTERNAL_PLUGIN_CONFIG_SIGNATURE = None
     _EXTERNAL_PLUGIN_ENTRY_POINTS = None
+
+
+def _unregister_parser(plugin_id: str) -> None:
+    PARSER_MAP.pop(plugin_id, None)
+    PARSER_MANIFESTS.pop(plugin_id, None)
+    PARSER_DETECTORS.pop(plugin_id, None)
+    PROBE_RESULT_CACHE.clear()
+
+
+def _unregister_declarative_profile_parsers() -> None:
+    for plugin_id, manifest in tuple(PARSER_MANIFESTS.items()):
+        if manifest.capabilities.get("declarative_profile") is True:
+            _unregister_parser(plugin_id)
 
 
 def plugins_for_format(source_format: str) -> tuple[ParserType, ...]:
@@ -312,6 +332,7 @@ def load_external_plugins(
     loaded_entry_points: list[str] = []
     skipped_paths: list[str] = []
     errors: list[str] = []
+    disabled_ids = parser_plugin_paths.disabled_plugin_ids()
 
     if paths is None:
         path_entries = list(parser_plugin_paths.configured_external_plugin_path_entries())
@@ -347,9 +368,11 @@ def load_external_plugins(
                     continue
 
                 for parser_cls in discovered:
-                    register_parser(parser_cls)
                     plugin_manifest = getattr(parser_cls, "manifest", None)
                     plugin_id = plugin_manifest.plugin_id if plugin_manifest is not None else parser_cls.__name__
+                    if plugin_id in disabled_ids:
+                        continue
+                    register_parser(parser_cls)
                     loaded_plugin_ids.append(plugin_id)
             except Exception as exc:  # pragma: no cover - defensive hardening
                 errors.append(f"{candidate}: {exc}")
@@ -368,9 +391,11 @@ def load_external_plugins(
                 if inspect.isabstract(parser_cls):
                     errors.append(f"entry-point {entry_point.name}: abstract parser classes are not loadable")
                     continue
-                register_parser(parser_cls)
                 manifest = getattr(parser_cls, "manifest", None)
                 plugin_id = manifest.plugin_id if manifest is not None else parser_cls.__name__
+                if plugin_id in disabled_ids:
+                    continue
+                register_parser(parser_cls)
                 loaded_plugin_ids.append(plugin_id)
             loaded_entry_points.append(entry_point.name)
         except Exception as exc:  # pragma: no cover - defensive hardening
@@ -378,6 +403,7 @@ def load_external_plugins(
 
     return ExternalPluginLoadResult(
         loaded_plugin_ids=tuple(loaded_plugin_ids),
+        loaded_profile_ids=(),
         loaded_modules=tuple(loaded_modules),
         loaded_entry_points=tuple(loaded_entry_points),
         skipped_paths=tuple(skipped_paths),
@@ -385,24 +411,78 @@ def load_external_plugins(
     )
 
 
+def _load_approved_declarative_profiles() -> ExternalPluginLoadResult:
+    """Load approved data-only parser profiles from the self-service store."""
+
+    try:
+        from metroliza.parsing.declarative_parser_profiles import load_approved_profile_parsers
+    except Exception as exc:  # pragma: no cover - import hardening
+        return ExternalPluginLoadResult(
+            loaded_plugin_ids=(),
+            loaded_profile_ids=(),
+            loaded_modules=(),
+            loaded_entry_points=(),
+            skipped_paths=(),
+            errors=(f"declarative profile loader unavailable: {exc}",),
+        )
+
+    loaded_profile_ids: list[str] = []
+    errors: list[str] = []
+    profiles, profile_errors = load_approved_profile_parsers()
+    errors.extend(profile_errors)
+    for plugin_id, parser_cls in profiles:
+        try:
+            register_parser(parser_cls)
+            loaded_profile_ids.append(plugin_id)
+        except Exception as exc:
+            errors.append(f"declarative profile {plugin_id}: {exc}")
+
+    return ExternalPluginLoadResult(
+        loaded_plugin_ids=tuple(loaded_profile_ids),
+        loaded_profile_ids=tuple(loaded_profile_ids),
+        loaded_modules=(),
+        loaded_entry_points=(),
+        skipped_paths=(),
+        errors=tuple(errors),
+    )
+
+
+def _current_declarative_profile_signature() -> tuple[tuple[str, str, str], ...]:
+    try:
+        from metroliza.parsing.declarative_parser_profiles import profile_store_signature
+    except Exception as exc:  # pragma: no cover - import hardening
+        return (("profile_loader_unavailable", type(exc).__name__, str(exc)),)
+    try:
+        return profile_store_signature()
+    except Exception as exc:  # pragma: no cover - filesystem hardening
+        return (("profile_signature_unavailable", type(exc).__name__, str(exc)),)
+
+
 def _ensure_external_plugins_loaded_once() -> None:
     global _EXTERNAL_PLUGINS_LOADED, _EXTERNAL_PLUGIN_CONFIG_SIGNATURE
 
     path_entries = parser_plugin_paths.configured_external_plugin_path_entries()
-    if _EXTERNAL_PLUGINS_LOADED and _EXTERNAL_PLUGIN_CONFIG_SIGNATURE is not None:
-        loaded_path_entries, _loaded_entry_point_names = _EXTERNAL_PLUGIN_CONFIG_SIGNATURE
-        if loaded_path_entries == path_entries:
-            return
-
     entry_points = _discover_external_plugin_entry_points(force_refresh=not _EXTERNAL_PLUGINS_LOADED)
     entry_point_names = tuple(entry_point.name for entry_point in entry_points)
-    config_signature = (path_entries, entry_point_names)
+    profile_signature = _current_declarative_profile_signature()
+    disabled_ids = tuple(sorted(parser_plugin_paths.disabled_plugin_ids()))
+    config_signature: ExternalPluginConfigSignature = (
+        path_entries,
+        entry_point_names,
+        profile_signature,
+        disabled_ids,
+    )
 
     if _EXTERNAL_PLUGINS_LOADED and _EXTERNAL_PLUGIN_CONFIG_SIGNATURE == config_signature:
         return
 
+    _unregister_declarative_profile_parsers()
+
     has_path_config = bool(path_entries)
     has_entry_points = bool(entry_point_names)
+    profile_load_result = _load_approved_declarative_profiles()
+    for error in profile_load_result.errors:
+        logger.warning("Declarative parser profile load issue: %s", error)
 
     # No-op only when neither file-based paths nor package entry points are available.
     if not has_path_config and not has_entry_points:

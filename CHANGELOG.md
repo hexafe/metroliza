@@ -1,6 +1,7 @@
 # Changelog (for end users)
 
 ## 2026.05 RC4 (build 260524) — current version
+- Parser profiles can now be prepared from **Tools > Parser profiles...** for new supplier report templates without writing Python code.
 - Google Sheets export now checks converted workbook tabs and warns when a local Excel fallback should be used.
 - Canceling long parsing, export, and metadata tasks is more reliable from progress windows.
 - Dashboard plot visuals can now be customized.

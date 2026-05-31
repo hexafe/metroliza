@@ -50,6 +50,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertEqual(
             current_bullets,
             [
+                "- Parser profiles can now be prepared from Tools > Parser profiles... for new supplier report templates without writing Python code<br>",
                 "- Google Sheets export now checks converted workbook tabs and warns when a local Excel fallback should be used<br>",
                 "- Canceling long parsing, export, and metadata tasks is more reliable from progress windows<br>",
                 "- Dashboard plot visuals can now be customized<br>",

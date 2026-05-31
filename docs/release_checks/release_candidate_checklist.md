@@ -110,7 +110,7 @@ python -m maturin build --manifest-path src/metroliza/native/distribution_fit_ad
 - [ ] Pure-Python parser fallback works when native module is intentionally unavailable (`METROLIZA_CMM_PARSER_BACKEND=python`). *(Owner: QA)*
 - [ ] Basic startup flow works (open app, load a representative input, generate an export). *(Owner: QA)*
 - [ ] Produced artifacts are named/versioned as expected for RC distribution. *(Owner: Release manager)*
-- [ ] Third-party notices/license attribution are bundled or attached to release artifacts, including RapidOCR, ONNX Runtime, OpenCV, NumPy, hexafe-plotstats, and Oznak. *(Owner: Release manager/QA)*
+- [ ] Third-party notices/license attribution are bundled or attached to release artifacts, including RapidOCR, ONNX Runtime, OpenCV, NumPy, Excel reader packages, hexafe-plotstats, and Oznak. *(Owner: Release manager/QA)*
 
 - [ ] GitHub CI checks for the RC branch/PR are green before merge/tag. *(Owner: Release owner)*
 - [ ] CMM parser perf gate evidence (`cmm-parser-perf-gate` + `cmm-parser-perf-artifacts`) is reviewed when parser/backend changes are present; triage follows [`cmm_parser_perf_guardrail.md`](./cmm_parser_perf_guardrail.md). *(Owner: Release owner/QA)*
@@ -133,13 +133,18 @@ Current plotstats hotfix pin:
   `git diff --check`, security audit, full pytest with coverage, parser plugin
   workspace validation, and packaged PDF parser input validation.
 - Full pytest with coverage passed:
-  `1735 passed, 197 skipped, 95 warnings, 60 subtests passed`; CI-scope
-  coverage `67.06%`, canonical source coverage `69%`.
+  `1762 passed, 203 skipped, 95 warnings, 60 subtests passed`; combined
+  CI-scope coverage `67.19%` against the `65%` threshold.
 - Security audit passed after allowing `pip-audit` to create/upgrade its temporary
   dependency environment; `pip-audit` reported no known vulnerabilities.
 - Post-reorganization follow-up local audit passed after docs/reference cleanup,
   parser-plugin productionization coverage, architecture guardrail hardening, and
   release-status refresh.
+- Parser profile self-service QA audit passed after fixing Excel workbook
+  extraction, expected-results cardinality checks, duplicate-row matching,
+  date/missing-token normalization, handoff folder open/copy actions, third-party
+  notice coverage for Excel reader packages, and docs split between declarative
+  profiles and advanced generated plugins.
 - Latest published branch CI before the post-reorganization follow-up slice passed:
   GitHub Actions run `26687615343` for commit
   `9d18b61f72292041fe8df3dcff58df8b604f38b9`. Required jobs passed; optional

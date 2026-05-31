@@ -46,16 +46,41 @@ jobs:
       - name: Compile check
         run: python -m compileall -x '^\./\.git/' .
 
-      - name: Parser plugin workspace smoke
+      - name: Parser profile self-service smoke
         run: |
-          workspace="artifacts/parser_plugin_workspace_ci"
-          PYTHONPATH=. python scripts/create_parser_plugin_workspace.py \
+          workspace="artifacts/parser_profile_self_service_ci"
+          home_dir="artifacts/parser_profile_self_service_home"
+          mkdir -p "${workspace}/samples"
+          PYTHONPATH=src:. python scripts/parser_plugin_self_service.py init \
             --plugin-id ci_smoke \
-            --source-format pdf \
-            --output-dir "${workspace}"
-          PYTHONPATH=. python scripts/validate_parser_plugins.py \
-            --paths "${workspace}/generated_plugin.py" \
-            --plugin-id ci_smoke
+            --display-name "CI Smoke" \
+            --source-format csv \
+            --output "${workspace}/profile.yaml" \
+            --force
+          printf '%s\n' \
+            'SUPPLIER TEMPLATE MARKER' \
+            'Reference: REF123' \
+            'Date: 2026-01-05' \
+            'Sample: 0001' \
+            'DIM X 10.0 0.1 -0.1 - 10.02 0.02 0' \
+            > "${workspace}/samples/sample_report_01.csv"
+          printf '%s\n' \
+            'sample_file,reference,report_date,sample_number,block_index,header_normalized,axis_code,nominal,tol_plus,tol_minus,bonus,measured,deviation,out_of_tolerance' \
+            'sample_report_01.csv,REF123,2026-01-05,0001,0,MAIN FEATURE,X,10.0,0.1,-0.1,,10.02,0.02,0' \
+            > "${workspace}/expected_results.csv"
+          PYTHONPATH=src:. python scripts/parser_plugin_self_service.py validate \
+            "${workspace}/profile.yaml" \
+            --expected-results "${workspace}/expected_results.csv" \
+            --workspace "${workspace}"
+          PYTHONPATH=src:. python scripts/parser_plugin_self_service.py diagnose \
+            "${workspace}/profile.yaml" \
+            "${workspace}/samples/sample_report_01.csv"
+          PYTHONPATH=src:. python scripts/parser_plugin_self_service.py --home "${home_dir}" install \
+            "${workspace}/profile.yaml" \
+            --expected-results "${workspace}/expected_results.csv" \
+            --workspace "${workspace}" \
+            --approved-by ci
+          PYTHONPATH=src:. python scripts/parser_plugin_self_service.py --home "${home_dir}" evidence ci_smoke
 
       - name: Ruff lint (full repository)
         run: python -m ruff check .
