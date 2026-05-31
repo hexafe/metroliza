@@ -145,13 +145,13 @@ Current plotstats hotfix pin:
   date/missing-token normalization, handoff folder open/copy actions, third-party
   notice coverage for Excel reader packages, and docs split between declarative
   profiles and advanced generated plugins.
-- Latest published branch CI before the post-reorganization follow-up slice passed:
-  GitHub Actions run `26687615343` for commit
-  `9d18b61f72292041fe8df3dcff58df8b604f38b9`. Required jobs passed; optional
-  manual packaging/Google/Windows lanes remained skipped as expected for default
-  push CI.
-- Fresh GitHub Actions CI for the final committed post-reorganization follow-up
-  SHA must be green after publish before merge/tag.
+- Latest published branch CI for the parser profile self-service follow-up slice
+  passed: GitHub Actions run `26719879455` for commit
+  `8d7717e4755d8bdba5593a6e05342f6f4a90143b`. Static checks, parser profile
+  self-service smoke, security audit, unit tests with coverage, native smoke/parity
+  checks, CMM parser perf guardrail, and the non-blocking benchmark trend check
+  passed. Optional manual packaging/Google/Windows lanes remained skipped as
+  expected for default push CI.
 - GitHub Actions CI passed for hexafe-plotstats run `26337409366` on the
   package `main` commit
   `1e2c72107d342f44a37e5fb78d7d76992ea60315`.
