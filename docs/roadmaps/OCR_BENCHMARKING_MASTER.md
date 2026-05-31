@@ -5,6 +5,13 @@ Last updated: 2026-04-28 22:09 Europe/Warsaw
 This is the canonical next-session entry point for Metroliza OCR benchmarking,
 OCR acceleration, and parser metadata performance work.
 
+## Post-Reorganization Path Policy
+
+Use canonical `src/metroliza/*` paths for new implementation work. Historical
+benchmark notes may describe pre-reorganization branch state, but new edits must
+not target `modules/*` compatibility shims unless the slice is explicitly about
+legacy import compatibility.
+
 ## Mandatory Update Rule
 
 After every OCR benchmark, implementation step, validation step, or hardware
@@ -222,10 +229,10 @@ Validation result:
 
 Files changed in this step:
 
-- `modules/parse_reports_thread.py`,
-- `modules/metadata_enrichment_thread.py`,
-- `modules/parsing_dialog.py`,
-- `modules/export_dialog.py`,
+- `src/metroliza/parsing/parse_reports_thread.py`,
+- `src/metroliza/parsing/metadata_enrichment_thread.py`,
+- `src/metroliza/ui/parsing_dialog.py`,
+- `src/metroliza/ui/export_dialog.py`,
 - `tests/test_metadata_enrichment_thread.py`,
 - `tests/test_parsing_dialog_selection_flow.py`,
 - `tests/test_export_presets.py`,
@@ -411,7 +418,7 @@ Non-confidential command shapes:
 
 ```bash
 rg -n "<main-window-and-enrichment-symbols>" modules tests docs/roadmaps/OCR_BENCHMARKING_MASTER.md
-sed -n "<relevant-ranges>" modules/main_window.py modules/metadata_enrichment_thread.py modules/export_dialog.py
+sed -n "<relevant-ranges>" src/metroliza/ui/main_window.py src/metroliza/parsing/metadata_enrichment_thread.py src/metroliza/ui/export_dialog.py
 ```
 
 Benchmark numbers:
@@ -431,9 +438,9 @@ Validation result:
 
 Files changed:
 
-- `modules/metadata_enrichment_thread.py`,
-- `modules/main_window.py`,
-- `modules/export_dialog.py`,
+- `src/metroliza/parsing/metadata_enrichment_thread.py`,
+- `src/metroliza/ui/main_window.py`,
+- `src/metroliza/ui/export_dialog.py`,
 - `tests/test_metadata_enrichment_thread.py`,
 - `docs/roadmaps/OCR_BENCHMARKING_MASTER.md`.
 
@@ -528,7 +535,7 @@ Non-confidential command shapes:
 
 ```bash
 rg -n "<metadata-enrichment-symbols>" modules tests docs/roadmaps/OCR_BENCHMARKING_MASTER.md
-sed -n "<relevant-ranges>" modules/parse_reports_thread.py modules/report_repository.py
+sed -n "<relevant-ranges>" src/metroliza/parsing/parse_reports_thread.py src/metroliza/reports/report_repository.py
 ```
 
 Benchmark numbers:
@@ -541,7 +548,7 @@ Validation result:
 
 Files changed:
 
-- `modules/parse_reports_thread.py`,
+- `src/metroliza/parsing/parse_reports_thread.py`,
 - `docs/roadmaps/OCR_BENCHMARKING_MASTER.md`.
 
 Caveats:
@@ -1523,11 +1530,11 @@ Focused validation used after the OpenVINO full-parser update:
 
 ```bash
 python -m ruff check \
-  modules/header_ocr_backend.py \
-  modules/cmm_report_parser.py \
-  modules/contracts.py \
-  modules/parse_reports_thread.py \
-  modules/parsing_dialog.py \
+  src/metroliza/parsing/header_ocr_backend.py \
+  src/metroliza/parsing/cmm_report_parser.py \
+  src/metroliza/shared/contracts.py \
+  src/metroliza/parsing/parse_reports_thread.py \
+  src/metroliza/ui/parsing_dialog.py \
   scripts/benchmark_header_ocr_modes.py \
   scripts/inspect_ocr_benchmark_results.py \
   scripts/compare_ocr_metadata_benchmarks.py \
@@ -1541,11 +1548,11 @@ python -m ruff check \
 
 ```bash
 python -m py_compile \
-  modules/header_ocr_backend.py \
-  modules/cmm_report_parser.py \
-  modules/contracts.py \
-  modules/parse_reports_thread.py \
-  modules/parsing_dialog.py \
+  src/metroliza/parsing/header_ocr_backend.py \
+  src/metroliza/parsing/cmm_report_parser.py \
+  src/metroliza/shared/contracts.py \
+  src/metroliza/parsing/parse_reports_thread.py \
+  src/metroliza/ui/parsing_dialog.py \
   scripts/benchmark_header_ocr_modes.py \
   scripts/inspect_ocr_benchmark_results.py \
   scripts/compare_ocr_metadata_benchmarks.py \

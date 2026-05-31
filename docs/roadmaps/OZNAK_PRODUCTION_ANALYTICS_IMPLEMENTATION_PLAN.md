@@ -1,6 +1,9 @@
 # Oznak Production Analytics Implementation Plan
 
 Created: 2026-05-11
+Status: Active production-analytics roadmap. New Metroliza implementation work
+must target canonical `src/metroliza/*` paths; `modules.*` remains a
+compatibility namespace only.
 
 ## Scope
 
@@ -32,20 +35,20 @@ Current branch status:
 - `Tools > Industrial data...` already provides source setup, reference-scoped sync,
   cached rows, report-to-production links, and a cached industrial workbook export.
 - Current sync uses Oznak typed filters and selected columns through
-  `modules/oznak_adapter.py`.
-- Current cache tables live in `modules/industrial_data_schema.py`:
+  `src/metroliza/industrial/oznak_adapter.py`.
+- Current cache tables live in `src/metroliza/industrial/industrial_data_schema.py`:
   `industrial_records` for common fields and `industrial_record_values` for dynamic
   source-specific values.
-- Current industrial export in `modules/industrial_export_service.py` writes raw cached
+- Current industrial export in `src/metroliza/industrial/industrial_export_service.py` writes raw cached
   rows, grouped record counts, diagnostics, and one Excel count chart.
-- Current grouping in `modules/industrial_workflow_state.py` is categorical only and
+- Current grouping in `src/metroliza/industrial/industrial_workflow_state.py` is categorical only and
   limited to fixed production metadata fields.
-- Current HTML dashboard support in `modules/export_html_dashboard.py` is mature, but
+- Current HTML dashboard support in `src/metroliza/charts/export_html_dashboard.py` is mature, but
   it is coupled to measurement-export and group-analysis payload shapes.
 - `hexafe-groupstats` is already a Metroliza runtime dependency and is bridged through
-  `modules/hexafe_groupstats_adapter.py`.
+  `src/metroliza/analytics/hexafe_groupstats_adapter.py`.
 - 2026-05-12 update: Metroliza now pins `hexafe-plotstats[pandas]` from a public Git
-  commit and uses it through `modules/hexafe_plotstats_adapter.py` for histogram
+  commit and uses it through `src/metroliza/charts/hexafe_plotstats_adapter.py` for histogram
   rendering/statistics-table reuse. Keep the adapter boundary narrow until a formal package
   release/tag replaces the temporary commit pin.
 - `hexafe/ProductionDataAnalyzer` currently provides useful concepts and simple
@@ -77,12 +80,12 @@ Main gaps:
 
 Relevant files:
 
-- `modules/industrial_data_schema.py`
-- `modules/industrial_data_repository.py`
-- `modules/industrial_workflow_state.py`
-- `modules/industrial_export_service.py`
-- `modules/industrial_data_dialog.py`
-- `modules/industrial_workers.py`
+- `src/metroliza/industrial/industrial_data_schema.py`
+- `src/metroliza/industrial/industrial_data_repository.py`
+- `src/metroliza/industrial/industrial_workflow_state.py`
+- `src/metroliza/industrial/industrial_export_service.py`
+- `src/metroliza/ui/industrial_data_dialog.py`
+- `src/metroliza/industrial/industrial_workers.py`
 
 Findings:
 
@@ -100,7 +103,7 @@ Findings:
   `IndustrialGroupingState` supports fixed categorical fields only.
 - `IndustrialDataDialog` is already a launcher for source setup, sync, links, and export.
   It should gain `Analyze...` without crowding the launcher.
-- Current industrial long-running work uses `QThread` wrappers in `modules/industrial_workers.py`.
+- Current industrial long-running work uses `QThread` wrappers in `src/metroliza/industrial/industrial_workers.py`.
   Dashboard/workbook generation should follow that pattern once the service is stable.
 - Existing tests cover schema creation, repository upserts, sync workers, launcher layout,
   filter parsing, grouping dialogs, and workbook export. The new analytics work should add
@@ -116,9 +119,9 @@ Design consequence:
 
 Relevant files:
 
-- `modules/export_html_dashboard.py`
-- `modules/group_analysis_service.py`
-- `modules/hexafe_groupstats_adapter.py`
+- `src/metroliza/charts/export_html_dashboard.py`
+- `src/metroliza/analytics/group_analysis_service.py`
+- `src/metroliza/analytics/hexafe_groupstats_adapter.py`
 - `tests/test_export_html_dashboard.py`
 - `tests/test_group_analysis_service.py`
 - `tests/test_group_analysis_writer.py`
@@ -323,7 +326,7 @@ The user-facing flow should be:
 
 ## Data Contracts
 
-Add pure state/contracts in a new module, for example `modules/industrial_analytics_state.py`.
+Add pure state/contracts in a new module, for example `src/metroliza/industrial/industrial_analytics_state.py`.
 
 Core state objects:
 
@@ -364,7 +367,7 @@ testable, and avoids changing live database query behavior.
 
 ## Service Layer
 
-Add `modules/industrial_analytics_service.py`.
+Add `src/metroliza/industrial/industrial_analytics_service.py`.
 
 Responsibilities:
 
@@ -441,7 +444,7 @@ Plot implementation order:
 
 ## UI Plan
 
-Add `modules/industrial_analytics_dialog.py`.
+Add `src/metroliza/ui/industrial_analytics_dialog.py`.
 
 Follow the current Metroliza industrial UI split:
 
@@ -532,19 +535,19 @@ Last updated: 2026-05-11
     fields, dynamic text fields, multiple references, multiple sources of grouping
     variation, and optional minimal report/link tables for later linked-context tests.
 - Step 1 status: completed.
-  - Added `modules/industrial_analytics_state.py` with Qt-free contracts for production
+  - Added `src/metroliza/industrial/industrial_analytics_state.py` with Qt-free contracts for production
     filters, dynamic field filters, metric selections, aggregation state, reference
     cohorts, chart selections, full analytics requests, and readiness validation.
   - Added `tests/test_industrial_analytics_state.py`.
   - Validation passed:
-    `python -m ruff check modules/industrial_analytics_state.py tests/test_industrial_analytics_state.py tests/industrial_analytics_fixtures.py`
+    `python -m ruff check src/metroliza/industrial/industrial_analytics_state.py tests/test_industrial_analytics_state.py tests/industrial_analytics_fixtures.py`
     and
     `QT_QPA_PLATFORM=offscreen python -m pytest tests/test_industrial_analytics_state.py -q`.
 - Audit after Step 1: the plan remains valid. The only execution adjustment is that the
   reusable fixture helper was added before service tests; Step 2 will now use that fixture
   to prove production-only loading and metric discovery.
 - Step 2 status: completed.
-  - Added `modules/industrial_analytics_service.py` with metric discovery and cached
+  - Added `src/metroliza/industrial/industrial_analytics_service.py` with metric discovery and cached
     production frame loading.
   - Dynamic numeric fields in `industrial_record_values` are now discoverable as metrics,
     mostly numeric fields are allowed with warnings, and all-text fields are skipped.
@@ -553,7 +556,7 @@ Last updated: 2026-05-11
     diagnostics instead of crashes.
   - Added `tests/test_industrial_analytics_service.py`.
   - Validation passed:
-    `python -m ruff check modules/industrial_analytics_state.py modules/industrial_analytics_service.py tests/test_industrial_analytics_state.py tests/test_industrial_analytics_service.py tests/industrial_analytics_fixtures.py`
+    `python -m ruff check src/metroliza/industrial/industrial_analytics_state.py src/metroliza/industrial/industrial_analytics_service.py tests/test_industrial_analytics_state.py tests/test_industrial_analytics_service.py tests/industrial_analytics_fixtures.py`
     and
     `QT_QPA_PLATFORM=offscreen python -m pytest tests/test_industrial_analytics_state.py tests/test_industrial_analytics_service.py -q`.
 - Audit after Step 2: the plan remains valid. Step 3 should extend the same service module
@@ -574,7 +577,7 @@ Last updated: 2026-05-11
     group-selected-ready columns.
   - Missing pasted references are reported in diagnostics.
   - Validation passed:
-    `python -m ruff check modules/industrial_analytics_state.py modules/industrial_analytics_service.py tests/test_industrial_analytics_state.py tests/test_industrial_analytics_service.py tests/industrial_analytics_fixtures.py`
+    `python -m ruff check src/metroliza/industrial/industrial_analytics_state.py src/metroliza/industrial/industrial_analytics_service.py tests/test_industrial_analytics_state.py tests/test_industrial_analytics_service.py tests/industrial_analytics_fixtures.py`
     and
     `QT_QPA_PLATFORM=offscreen python -m pytest tests/test_industrial_analytics_state.py tests/test_industrial_analytics_service.py -q`.
 - Audit after Step 5: the plan remains valid. Step 6 can build dashboard manifests directly
@@ -589,21 +592,21 @@ Last updated: 2026-05-11
     the production dashboard writer, then wire both Oznak and file sources into one UI.
 - Step 6 status: completed.
   - Added `build_production_dashboard_manifest(...)` in
-    `modules/industrial_analytics_dashboard.py`.
+    `src/metroliza/industrial/industrial_analytics_dashboard.py`.
   - The manifest contains summary cards, chart specs, metric metadata, diagnostics, and
     selected-reference styling metadata without exposing raw cached JSON.
 - Step 7 status: completed.
   - Added `write_production_dashboard(...)` with offline local Plotly asset copying.
   - Added `tests/test_industrial_analytics_dashboard.py`.
   - Validation passed:
-    `python -m ruff check modules/industrial_analytics_state.py modules/industrial_analytics_service.py modules/industrial_analytics_dashboard.py tests/test_industrial_analytics_state.py tests/test_industrial_analytics_service.py tests/test_industrial_analytics_dashboard.py tests/industrial_analytics_fixtures.py`
+    `python -m ruff check src/metroliza/industrial/industrial_analytics_state.py src/metroliza/industrial/industrial_analytics_service.py src/metroliza/industrial/industrial_analytics_dashboard.py tests/test_industrial_analytics_state.py tests/test_industrial_analytics_service.py tests/test_industrial_analytics_dashboard.py tests/industrial_analytics_fixtures.py`
     and
     `QT_QPA_PLATFORM=offscreen python -m pytest tests/test_industrial_analytics_state.py tests/test_industrial_analytics_service.py tests/test_industrial_analytics_dashboard.py -q`.
 - Audit after Step 7: the plan remains valid, with the user-requested CSV/Excel source now
   promoted to Step 11. The dashboard writer is dataframe-based enough to be reused for
   file analytics after a small normalization loader.
 - Step 11 status: service/export slice completed ahead of UI wiring.
-  - Added `modules/tabular_analytics_service.py` for CSV/Excel analytics input.
+  - Added `src/metroliza/tabular/tabular_analytics_service.py` for CSV/Excel analytics input.
   - CSV loading reuses the existing encoding/delimiter fallback helper; Excel loading
     supports a selected sheet.
   - Table columns are normalized into safe analytics identifiers while preserving an
@@ -617,7 +620,7 @@ Last updated: 2026-05-11
     Excel does not support timezone-aware datetimes.
   - Added `tests/test_tabular_analytics_service.py`.
   - Validation passed:
-    `python -m ruff check modules/tabular_analytics_service.py tests/test_tabular_analytics_service.py`
+    `python -m ruff check src/metroliza/tabular/tabular_analytics_service.py tests/test_tabular_analytics_service.py`
     and
     `QT_QPA_PLATFORM=offscreen python -m pytest tests/test_tabular_analytics_service.py -q`.
 - Audit after Step 11 service/export slice: the plan remains valid. Remaining Step 11 work
@@ -626,7 +629,7 @@ Last updated: 2026-05-11
   cache data.
 - Step 8 status: completed.
   - Added `build_production_groupstats_inputs(...)` and
-    `analyze_production_groupstats(...)` in `modules/industrial_analytics_service.py`.
+    `analyze_production_groupstats(...)` in `src/metroliza/industrial/industrial_analytics_service.py`.
   - Groupstats input can group by one field, multiple fields, time bucket, selected
     reference cohort, or selected-reference-vs-rest cohorts.
   - Non-numeric and non-finite metric values are dropped per group.
@@ -639,17 +642,17 @@ Last updated: 2026-05-11
   - Dashboard manifests now carry groupstats metric payloads, descriptive rows, pairwise
     rows, insights, and diagnostics, and the HTML writer renders compact stats tables.
   - Validation passed:
-    `python -m ruff check modules/industrial_analytics_service.py modules/industrial_analytics_dashboard.py tests/test_industrial_analytics_service.py tests/test_industrial_analytics_dashboard.py`
+    `python -m ruff check src/metroliza/industrial/industrial_analytics_service.py src/metroliza/industrial/industrial_analytics_dashboard.py tests/test_industrial_analytics_service.py tests/test_industrial_analytics_dashboard.py`
     and
     `QT_QPA_PLATFORM=offscreen python -m pytest tests/test_industrial_analytics_service.py tests/test_industrial_analytics_dashboard.py -q`.
 - Audit after Step 8: the plan remains valid. Step 9 should consume the now-stable
   dataframe/groupstats/dashboard service from a Qt worker and dialog instead of adding more
   statistics behavior first.
 - Step 9 status: completed for first usable production/file analytics UI.
-  - Added `modules/industrial_analytics_workflow.py` as the shared end-to-end entry point
+  - Added `src/metroliza/industrial/industrial_analytics_workflow.py` as the shared end-to-end entry point
     for cached production data and CSV/Excel files.
-  - Added `IndustrialAnalyticsThread` in `modules/industrial_workers.py`.
-  - Added `modules/industrial_analytics_dialog.py` with source-aware production and
+  - Added `IndustrialAnalyticsThread` in `src/metroliza/industrial/industrial_workers.py`.
+  - Added `src/metroliza/ui/industrial_analytics_dialog.py` with source-aware production and
     CSV/Excel modes, metric loading, metric selection, grouping, time bucket selection,
     aggregation method selection, reference cohort modes, chart toggles, groupstats toggle,
     dashboard path, workbook path, and separate-parameter-sheet option.
@@ -658,7 +661,7 @@ Last updated: 2026-05-11
     dialog while keeping the menu label stable for users and existing UI expectations.
   - Added `tests/test_industrial_analytics_dialog.py`.
 - Step 10 status: completed.
-  - Added `modules/industrial_analytics_workbook.py` for production analytics workbook
+  - Added `src/metroliza/industrial/industrial_analytics_workbook.py` for production analytics workbook
     output.
   - Production workbooks now include `Production Data`, optional `Aggregates`, `Metrics`,
     optional `Groupstats`, `Diagnostics`, and optional one-sheet-per-selected-metric output.
@@ -673,14 +676,14 @@ Last updated: 2026-05-11
   - The old CSV Summary action now opens the shared analytics path, preserving the
     requested per-parameter workbook-sheet behavior.
   - Validation passed:
-    `python -m ruff check modules/industrial_analytics_state.py modules/industrial_analytics_service.py modules/industrial_analytics_dashboard.py modules/industrial_analytics_workbook.py modules/industrial_analytics_workflow.py modules/tabular_analytics_service.py modules/industrial_analytics_dialog.py modules/industrial_workers.py modules/industrial_data_dialog.py modules/main_window.py tests/test_industrial_analytics_state.py tests/test_industrial_analytics_service.py tests/test_industrial_analytics_dashboard.py tests/test_industrial_analytics_workflow.py tests/test_industrial_analytics_dialog.py tests/test_tabular_analytics_service.py tests/industrial_analytics_fixtures.py`
+    `python -m ruff check src/metroliza/industrial/industrial_analytics_state.py src/metroliza/industrial/industrial_analytics_service.py src/metroliza/industrial/industrial_analytics_dashboard.py src/metroliza/industrial/industrial_analytics_workbook.py src/metroliza/industrial/industrial_analytics_workflow.py src/metroliza/tabular/tabular_analytics_service.py src/metroliza/ui/industrial_analytics_dialog.py src/metroliza/industrial/industrial_workers.py src/metroliza/ui/industrial_data_dialog.py src/metroliza/ui/main_window.py tests/test_industrial_analytics_state.py tests/test_industrial_analytics_service.py tests/test_industrial_analytics_dashboard.py tests/test_industrial_analytics_workflow.py tests/test_industrial_analytics_dialog.py tests/test_tabular_analytics_service.py tests/industrial_analytics_fixtures.py`
     and
     `QT_QPA_PLATFORM=offscreen python -m pytest tests/test_industrial_analytics_state.py tests/test_industrial_analytics_service.py tests/test_industrial_analytics_dashboard.py tests/test_industrial_analytics_workflow.py tests/test_industrial_analytics_dialog.py tests/test_tabular_analytics_service.py tests/test_main_window_metadata_ui.py tests/test_industrial_data_dialog.py -q`.
 - Step 12 status: partially completed on 2026-05-12.
   - The shipped dashboard path keeps offline Plotly for interactive histogram, time-series,
     violin, and box views.
   - `hexafe-plotstats` is now pinned as a runtime dependency and used through
-    `modules/hexafe_plotstats_adapter.py` for histogram rendering/statistics-table reuse.
+    `src/metroliza/charts/hexafe_plotstats_adapter.py` for histogram rendering/statistics-table reuse.
   - Remaining follow-up: replace the temporary Git commit pin with a formal package
     release/tag when available.
 - Step 13 status: completed for implementation notes and validation record; release-note
@@ -747,9 +750,9 @@ Goal:
 
 Primary files:
 
-- `modules/industrial_analytics_state.py`
+- `src/metroliza/industrial/industrial_analytics_state.py`
 - `tests/test_industrial_analytics_state.py`
-- `modules/industrial_workflow_state.py` for shared reference parsing only if needed
+- `src/metroliza/industrial/industrial_workflow_state.py` for shared reference parsing only if needed
 
 Tasks:
 
@@ -794,7 +797,7 @@ Goal:
 
 Primary files:
 
-- `modules/industrial_analytics_service.py`
+- `src/metroliza/industrial/industrial_analytics_service.py`
 - `tests/test_industrial_analytics_service.py`
 
 Tasks:
@@ -842,7 +845,7 @@ Goal:
 
 Primary files:
 
-- `modules/industrial_analytics_service.py`
+- `src/metroliza/industrial/industrial_analytics_service.py`
 - `tests/test_industrial_analytics_service.py`
 
 Tasks:
@@ -882,7 +885,7 @@ Goal:
 
 Primary files:
 
-- `modules/industrial_analytics_service.py`
+- `src/metroliza/industrial/industrial_analytics_service.py`
 - `tests/test_industrial_analytics_service.py`
 
 Tasks:
@@ -940,8 +943,8 @@ Goal:
 
 Primary files:
 
-- `modules/industrial_analytics_state.py`
-- `modules/industrial_analytics_service.py`
+- `src/metroliza/industrial/industrial_analytics_state.py`
+- `src/metroliza/industrial/industrial_analytics_service.py`
 - `tests/test_industrial_analytics_state.py`
 - `tests/test_industrial_analytics_service.py`
 
@@ -984,8 +987,8 @@ Goal:
 
 Primary files:
 
-- `modules/industrial_analytics_service.py`
-- `modules/industrial_analytics_dashboard.py`
+- `src/metroliza/industrial/industrial_analytics_service.py`
+- `src/metroliza/industrial/industrial_analytics_dashboard.py`
 - `tests/test_industrial_analytics_dashboard.py`
 
 Tasks:
@@ -1027,8 +1030,8 @@ Goal:
 
 Primary files:
 
-- `modules/industrial_analytics_dashboard.py`
-- `modules/export_html_dashboard.py` only if reusable helpers are extracted safely
+- `src/metroliza/industrial/industrial_analytics_dashboard.py`
+- `src/metroliza/charts/export_html_dashboard.py` only if reusable helpers are extracted safely
 - `tests/test_industrial_analytics_dashboard.py`
 - `tests/test_export_html_dashboard.py`
 
@@ -1072,8 +1075,8 @@ Goal:
 
 Primary files:
 
-- `modules/industrial_analytics_service.py`
-- `modules/hexafe_groupstats_adapter.py` only if a small shared helper is needed
+- `src/metroliza/industrial/industrial_analytics_service.py`
+- `src/metroliza/analytics/hexafe_groupstats_adapter.py` only if a small shared helper is needed
 - `tests/test_industrial_analytics_service.py`
 
 Tasks:
@@ -1115,14 +1118,14 @@ Goal:
 
 Primary files:
 
-- `modules/industrial_data_dialog.py`
-- `modules/industrial_analytics_dialog.py`
-- `modules/industrial_analytics_workers.py`
+- `src/metroliza/ui/industrial_data_dialog.py`
+- `src/metroliza/ui/industrial_analytics_dialog.py`
+- `src/metroliza/industrial/industrial_analytics_workers.py`
 - Optional focused subdialogs:
-  - `modules/industrial_metric_selection_dialog.py`
-  - `modules/industrial_production_filter_dialog.py`
-  - `modules/industrial_reference_cohort_dialog.py`
-  - `modules/industrial_analytics_grouping_dialog.py`
+  - `src/metroliza/ui/industrial_metric_selection_dialog.py`
+  - `src/metroliza/ui/industrial_production_filter_dialog.py`
+  - `src/metroliza/ui/industrial_reference_cohort_dialog.py`
+  - `src/metroliza/ui/industrial_analytics_grouping_dialog.py`
 - Tests:
   - `tests/test_industrial_data_dialog.py`
   - `tests/test_industrial_analytics_dialog.py`
@@ -1175,8 +1178,8 @@ Goal:
 
 Primary files:
 
-- `modules/industrial_export_service.py`
-- `modules/industrial_analytics_service.py`
+- `src/metroliza/industrial/industrial_export_service.py`
+- `src/metroliza/industrial/industrial_analytics_service.py`
 - `tests/test_industrial_export_service.py`
 - `tests/test_industrial_analytics_service.py`
 
@@ -1217,10 +1220,10 @@ Goal:
 
 Primary files:
 
-- `modules/tabular_analytics_service.py`
-- `modules/industrial_analytics_service.py`
-- `modules/industrial_analytics_dashboard.py`
-- `modules/industrial_analytics_dialog.py` as the shared CSV/Excel and production-cache launcher
+- `src/metroliza/tabular/tabular_analytics_service.py`
+- `src/metroliza/industrial/industrial_analytics_service.py`
+- `src/metroliza/industrial/industrial_analytics_dashboard.py`
+- `src/metroliza/ui/industrial_analytics_dialog.py` as the shared CSV/Excel and production-cache launcher
 - `tests/test_tabular_analytics_service.py`
 - `tests/test_industrial_analytics_dashboard.py`
 
@@ -1228,7 +1231,7 @@ Tasks:
 
 1. Add a file loader for `.csv`, `.xlsx`, and `.xls`.
 2. For CSV, reuse existing delimiter/decimal detection where practical from
-   `modules/csv_summary_utils.py`.
+   `src/metroliza/tabular/csv_summary_utils.py`.
 3. For Excel, support sheet selection, defaulting to the first sheet.
 4. Infer numeric metric candidates from table columns using the same numeric threshold logic
    as dynamic production fields.
@@ -1271,7 +1274,7 @@ Primary files:
 
 - `requirements.txt`
 - `packaging/`
-- `modules/hexafe_plotstats_adapter.py`
+- `src/metroliza/charts/hexafe_plotstats_adapter.py`
 - `tests/test_hexafe_plotstats_adapter.py`
 - `tests/test_industrial_analytics_dashboard.py`
 

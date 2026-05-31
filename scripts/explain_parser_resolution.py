@@ -73,7 +73,9 @@ def _format_candidate(report_parser_factory, candidate) -> str:
 
 
 def _selection_threshold() -> int:
-    return 80 if os.getenv("PARSER_STRICT_MATCHING", "false").strip().lower() in {"1", "true", "yes", "on"} else 1
+    from metroliza.shared.env_utils import env_bool
+
+    return 80 if env_bool("PARSER_STRICT_MATCHING", default=True) else 1
 
 
 def main(argv: list[str] | None = None) -> int:

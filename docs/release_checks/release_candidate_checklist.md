@@ -119,8 +119,7 @@ python -m maturin build --manifest-path src/metroliza/native/distribution_fit_ad
 
 ### 2026.05 RC4 directory-reorganization audit evidence
 
-Current validation branch: `codex/directory-reorg-plan`; GitHub PR and CI run
-identity must be recorded after publish.
+Current validation branch: `codex/directory-reorg-plan`.
 Current RC metadata: `2026.05rc4(260524)`.
 Current plotstats hotfix pin:
 `1e2c72107d342f44a37e5fb78d7d76992ea60315`.
@@ -134,12 +133,20 @@ Current plotstats hotfix pin:
   `git diff --check`, security audit, full pytest with coverage, parser plugin
   workspace validation, and packaged PDF parser input validation.
 - Full pytest with coverage passed:
-  `1731 passed, 197 skipped, 95 warnings, 60 subtests passed`; CI-scope
-  coverage `67.06%`, canonical source coverage `69.47%`.
+  `1735 passed, 197 skipped, 95 warnings, 60 subtests passed`; CI-scope
+  coverage `67.06%`, canonical source coverage `69%`.
 - Security audit passed after allowing `pip-audit` to create/upgrade its temporary
   dependency environment; `pip-audit` reported no known vulnerabilities.
-- Fresh GitHub Actions CI for the final committed directory-reorganization SHA is
-  pending publish and must be green before merge/tag.
+- Post-reorganization follow-up local audit passed after docs/reference cleanup,
+  parser-plugin productionization coverage, architecture guardrail hardening, and
+  release-status refresh.
+- Latest published branch CI before the post-reorganization follow-up slice passed:
+  GitHub Actions run `26687615343` for commit
+  `9d18b61f72292041fe8df3dcff58df8b604f38b9`. Required jobs passed; optional
+  manual packaging/Google/Windows lanes remained skipped as expected for default
+  push CI.
+- Fresh GitHub Actions CI for the final committed post-reorganization follow-up
+  SHA must be green after publish before merge/tag.
 - GitHub Actions CI passed for hexafe-plotstats run `26337409366` on the
   package `main` commit
   `1e2c72107d342f44a37e5fb78d7d76992ea60315`.

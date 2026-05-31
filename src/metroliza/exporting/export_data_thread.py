@@ -1,10 +1,10 @@
 """Orchestrate threaded export workflows, rendering helpers, and Excel writing operations.
 
-This module coordinates data retrieval (`modules.export_query_service`), grouping
-(`modules.export_grouping_utils`), chart and summary planning
-(`modules.export_chart_writer`, `modules.export_summary_utils`,
-`modules.export_summary_sheet_planner`), and workbook output through
-`modules.export_backends`.
+This module coordinates data retrieval (`metroliza.exporting.export_query_service`),
+grouping (`metroliza.exporting.export_grouping_utils`), chart and summary planning
+(`metroliza.charts.export_chart_writer`, `metroliza.exporting.export_summary_utils`,
+`metroliza.exporting.export_summary_sheet_planner`), and workbook output through
+`metroliza.exporting.export_backends`.
 """
 
 import logging
@@ -201,7 +201,7 @@ from metroliza.charts.export_html_dashboard import (
 )
 from metroliza.charts.dashboard_visual_options import dashboard_visual_settings_to_plotly_settings
 from metroliza.shared.stats_utils import is_one_sided_geometric_tolerance
-# Canonical violin payload builder lives in `modules/chart_render_service.py`.
+# Canonical violin payload builder lives in `metroliza.charts.chart_render_service`.
 from metroliza.charts.chart_render_service import (
     BoundedWorkerPool,
     build_violin_payload_vectorized,
@@ -349,7 +349,7 @@ def build_export_dataframe(data, column_names):
         pandas.DataFrame: Normalized frame ready for export writing.
 
     Side Effects:
-        Delegates implementation to `modules.export_query_service`.
+        Delegates implementation to `metroliza.exporting.export_query_service`.
     """
 
     return _build_export_dataframe(data, column_names)

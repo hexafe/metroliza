@@ -16,10 +16,33 @@ IMPLEMENTATION_IMPORT_ROOTS = (
     REPO_ROOT / "scripts",
     REPO_ROOT / "packaging",
 )
+TEST_LEGACY_REFERENCE_BUDGET = 1144
+TEST_LEGACY_REFERENCE_EXCLUDED_FILES = {
+    "tests/test_directory_reorganization_architecture.py",
+    "tests/test_packaging_spec_hiddenimports.py",
+}
+POWERSHELL_LEGACY_REFERENCE_ALLOWLIST = {
+    "packaging/build_native_and_package.ps1": {
+        "modules.chart_renderer",
+        "modules.cmm_native_parser",
+        "modules.comparison_stats_native",
+        "modules.distribution_fit_native",
+        "modules.group_stats_native",
+    },
+    "packaging/build_nuitka.ps1": {
+        "modules.cmm_report_parser",
+        "modules.header_ocr_backend",
+        "modules.header_ocr_corrections",
+        "modules.header_ocr_geometry",
+        "modules.pdf_backend",
+        "modules.report_parser_factory",
+    },
+}
 LEGACY_IMPORT_RE = re.compile(
     r"^\s*(?:from\s+modules(?:\.|\s+import)|import\s+modules\.|importlib\.import_module\([\"']modules\.)",
     flags=re.MULTILINE,
 )
+LEGACY_DOTTED_REFERENCE_RE = re.compile(r"\bmodules\.[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*")
 SHIM_TARGET_RE = re.compile(r"_alias_module\([^,]+,\s*[\"'](?P<target>metroliza(?:\.[^\"']+)*)[\"']\)")
 RUST_LEGACY_IMPORT_RE = re.compile(r"PyModule::import(?:_bound)?\([^,\n]+,\s*[\"']modules\.")
 METROLIZA_IMPORT_RE = re.compile(
@@ -175,6 +198,42 @@ def test_implementation_code_uses_canonical_metroliza_imports() -> None:
                 violations.append(str(path.relative_to(REPO_ROOT)))
 
     assert not violations, "Implementation code must not import legacy modules.* paths: " + ", ".join(violations)
+
+
+def test_behavior_test_legacy_module_references_stay_within_burn_down_budget() -> None:
+    references: list[str] = []
+
+    for path in sorted((REPO_ROOT / "tests").rglob("*.py")):
+        relative = path.relative_to(REPO_ROOT).as_posix()
+        if relative in TEST_LEGACY_REFERENCE_EXCLUDED_FILES:
+            continue
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            for match in LEGACY_DOTTED_REFERENCE_RE.finditer(line):
+                references.append(f"{relative}:{line_number}: {match.group(0)}")
+
+    excess = len(references) - TEST_LEGACY_REFERENCE_BUDGET
+    assert excess <= 0, (
+        f"Legacy modules.* references in behavior tests increased by {excess}; "
+        f"migrate tests to canonical imports or update the reviewed budget. "
+        f"Sample references: {references[:20]}"
+    )
+
+
+def test_powershell_packaging_legacy_modules_are_explicitly_allowlisted() -> None:
+    violations: list[str] = []
+
+    for path in sorted(REPO_ROOT.rglob("*.ps1")):
+        relative = path.relative_to(REPO_ROOT).as_posix()
+        text = path.read_text(encoding="utf-8")
+        discovered = set(LEGACY_DOTTED_REFERENCE_RE.findall(text))
+        allowed = POWERSHELL_LEGACY_REFERENCE_ALLOWLIST.get(relative, set())
+        unexpected = sorted(discovered - allowed)
+        if unexpected:
+            violations.append(f"{relative}: {unexpected}")
+
+    assert not violations, "PowerShell legacy modules.* references require an explicit allowlist: " + "; ".join(
+        violations
+    )
 
 
 def test_non_ui_packages_do_not_import_ui_package() -> None:

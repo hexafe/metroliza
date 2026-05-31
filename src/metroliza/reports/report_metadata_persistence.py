@@ -1,6 +1,6 @@
 """Compatibility wrapper for report metadata persistence.
 
-Persistence ownership stays in :mod:`modules.report_repository`; this module
+Persistence ownership stays in :mod:`metroliza.reports.report_repository`; this module
 only preserves a stable import location for callers that still expect a
 dedicated metadata persistence layer.
 """
@@ -20,7 +20,7 @@ __all__ = [
 
 
 class ReportMetadataPersistence:
-    """Thin delegate around :class:`modules.report_repository.ReportRepository`."""
+    """Thin delegate around :class:`metroliza.reports.report_repository.ReportRepository`."""
 
     def __init__(self, database: str, *, connection=None):
         self.database = database

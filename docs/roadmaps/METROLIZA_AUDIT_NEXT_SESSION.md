@@ -2,6 +2,10 @@
 
 Last updated: 2026-04-30
 
+Post-reorganization note: this is a completed pre-reorganization handoff.
+References to `modules/*` paths below are historical; refresh any follow-up
+against canonical `src/metroliza/*` paths before assigning implementation work.
+
 ## Start Here
 
 Branch: `codex/report-metadata-redesign`

@@ -26,7 +26,7 @@ Record the branch, commit SHA, artifact/build ID, and evidence links in the curr
 
 | Implementation item | Gate decision (`must-fix`/`defer`/`informational`) | Owner | Target RC | Evidence / rationale |
 | --- | --- | --- | --- | --- |
-| Final RC4 commit and fresh CI baseline | `informational` | Release owner | 2026.05 RC4 | `codex/directory-reorg-plan` has local audit evidence; record the final commit SHA and fresh GitHub Actions run after publish before merge/tag. |
+| Final RC4 commit and fresh CI baseline | `informational` | Release owner | 2026.05 RC4 | `codex/directory-reorg-plan` has local audit evidence. Published SHA `9d18b61f72292041fe8df3dcff58df8b604f38b9` passed required CI in GitHub Actions run `26687615343`; record the final post-reorganization follow-up commit SHA and fresh run after publish before merge/tag. |
 | Packaging smoke evidence for current RC4 promotion artifact | `must-fix` | Release engineer / QA | 2026.05 RC4 | Run the opt-in packaging smoke workflow or equivalent local build/launch smoke and link the artifact/logs before promotion. |
 | Windows EXE clean-machine launch evidence | `must-fix` | Release engineer / QA | 2026.05 RC4 | Linux local validation cannot prove the Windows user artifact; build the Windows EXE and smoke-launch it in a clean/sandbox Windows environment. |
 | Google conversion smoke evidence for current RC4 promotion artifact | `must-fix` | QA owner / Release manager | 2026.05 RC4 | [`google_conversion_smoke.md`](./google_conversion_smoke.md) has no RC4 live smoke result yet; green default CI does not satisfy this release gate. |

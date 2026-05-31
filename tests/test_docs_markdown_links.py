@@ -6,6 +6,8 @@ from pathlib import Path
 
 MARKDOWN_LINK_PATTERN = re.compile(r"!?\[[^\]]+\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 IGNORED_PREFIXES = ("http://", "https://", "mailto:", "#")
+DOCS_INDEX_PATH = Path("docs/README.md")
+ROADMAPS_ROOT = Path("docs/roadmaps")
 
 
 def iter_markdown_files(root: Path) -> list[Path]:
@@ -36,3 +38,14 @@ def test_docs_markdown_local_links_resolve() -> None:
                 failures.append(f"{markdown_file}: {target}")
 
     assert not failures, "Broken markdown local links:\n" + "\n".join(failures)
+
+
+def test_docs_index_inventories_every_roadmap() -> None:
+    docs_index = DOCS_INDEX_PATH.read_text(encoding="utf-8")
+    missing = [
+        str(path.relative_to("docs"))
+        for path in sorted(ROADMAPS_ROOT.glob("*.md"))
+        if str(path.relative_to("docs")) not in docs_index
+    ]
+
+    assert not missing, "Roadmaps missing from docs/README.md inventory:\n" + "\n".join(missing)

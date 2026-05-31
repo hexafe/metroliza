@@ -26,10 +26,36 @@ This directory contains active operational, maintenance, and end-user documentat
 - `parser_plugins/non_technical_workflow.md` — non-technical step-by-step workflow for adding a new supplier report parser.
 - `roadmaps/2026_03_rc2_stabilization_execution.md` — RC2 stabilization closeout/reference tracker for the completed parity-first slice.
 - `roadmaps/OCR_BENCHMARKING_MASTER.md` — canonical OCR benchmarking, acceleration, privacy, and next-session handoff.
+- `roadmaps/OZNAK_PRODUCTION_ANALYTICS_IMPLEMENTATION_PLAN.md` — active production-analytics roadmap using canonical `src/metroliza/*` implementation paths.
 - `roadmaps/PLOTSTATS_CENTRALIZATION_IMPLEMENTATION_PLAN.md` — future implementation plan for moving reusable Metroliza plot definitions into `hexafe-plotstats`.
 - `roadmaps/directory_reorganization_long_term.md` — completed directory reorganization record for the canonical `src/metroliza/` layout, legacy shims, packaging guardrails, and validation evidence.
+- `roadmaps/post_reorganization_next_implementation_plan.md` — active next implementation plan after the completed directory reorganization.
 - `roadmaps/exporter_audit_2026_03.md` — focused exporter-path follow-up audit with the remaining structural refactor backlog.
 - `roadmaps/rust_acceleration_scope.md` — native-acceleration scope and promotion-gate decision record.
+
+## Roadmap inventory
+
+Use this inventory before assigning work from `docs/roadmaps/`. Active entries
+can drive new implementation. Completed records and historical handoffs preserve
+pre-reorganization context and must be refreshed against canonical
+`src/metroliza/*` paths before being used as write scopes.
+
+| Roadmap | Status | Notes |
+|---|---|---|
+| `roadmaps/post_reorganization_next_implementation_plan.md` | Active | Current post-reorganization implementation plan and workstream hub. |
+| `roadmaps/OZNAK_PRODUCTION_ANALYTICS_IMPLEMENTATION_PLAN.md` | Active | Production and tabular analytics roadmap; paths are canonicalized to `src/metroliza/*`. |
+| `roadmaps/OCR_BENCHMARKING_MASTER.md` | Active | OCR benchmarking and acceleration handoff; new work follows the post-reorganization path policy. |
+| `roadmaps/PLOTSTATS_CENTRALIZATION_IMPLEMENTATION_PLAN.md` | Future active | Plotstats boundary migration plan. |
+| `roadmaps/exporter_audit_2026_03.md` | Active follow-up | Exporter Phase-B structural backlog after RC2 seam closeout. |
+| `roadmaps/rust_acceleration_scope.md` | Active decision record | Native-acceleration promotion gate and candidate-scope decision record. |
+| `roadmaps/directory_reorganization_long_term.md` | Completed record | Directory reorganization closeout and compatibility-shim policy. |
+| `roadmaps/2026_03_rc2_stabilization_execution.md` | Completed record | RC2 export-path stabilization closeout; `modules/*` references are historical. |
+| `roadmaps/UI_UX_RELEASE_FIX_PLAN.md` | Completed record | May 2026 UI/UX release-fix closeout; pre-reorganization path references are historical. |
+| `roadmaps/UI_UX_REVAMP_SUMMARY_PLAN.md` | Reference record | UI/UX revamp design principles and remaining polish guidance. |
+| `roadmaps/TESTS_CLEANUP_PLAN.md` | Completed record | Test-cleanup closeout and future cleanup cautions. |
+| `roadmaps/METROLIZA_AUDIT_NEXT_SESSION.md` | Historical handoff | April 2026 audit handoff; refresh before assigning new work. |
+| `roadmaps/OCR_TEST_CLEANUP_NEXT_SESSION_README.md` | Historical handoff | OCR/test-cleanup handoff after the 2026-04-28 pass. |
+| `roadmaps/OZNAK_METROLIZA_INTEGRATION_AUDIT_PLAN.md` | Historical implementation record | Oznak integration branch record; new industrial work should use the active production analytics plan. |
 
 ## Active end-user manual area
 
@@ -68,7 +94,7 @@ Canonical release operations docs (release gate/source-of-truth set):
 
 - `release_checks/release_status.md` — current release operational status and entry-point links.
 - `release_checks/release_candidate_checklist.md` — primary RC gate checklist and required sign-offs.
-- `release_checks/rc2_release_audit_2026-05-17.md` — current RC2 release audit evidence and blocker summary.
+- `release_checks/rc2_release_audit_2026-05-17.md` — historical RC2 release audit evidence and blocker summary.
 - `release_checks/rc2_performance_optimization_check_2026-05-20.md` — CSV Summary/grouping/dashboard performance optimization evidence and remaining bottlenecks.
 - `release_checks/open_testing_runbook.md` — open-testing execution runbook and evidence expectations.
 - `release_checks/branching_strategy.md` — authoritative branch naming/rules used during release work.

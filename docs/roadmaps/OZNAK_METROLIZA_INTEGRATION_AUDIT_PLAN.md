@@ -2,6 +2,9 @@
 
 Created: 2026-05-10
 Last updated: 2026-05-17 after QA/performance/UX hardening follow-up
+Status: Completed pre-reorganization implementation record. `modules/*` path
+references below are historical; new Oznak/industrial work must use canonical
+`src/metroliza/*` targets unless validating compatibility shims.
 
 ## Execution Tracker
 

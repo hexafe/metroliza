@@ -2,6 +2,10 @@
 
 Last updated: 2026-04-28 22:18 Europe/Warsaw
 
+Post-reorganization note: this is a completed pre-reorganization handoff.
+References to `modules/*` paths below are historical; use canonical
+`src/metroliza/*` paths for any new OCR or cleanup implementation work.
+
 This is the handoff for the next GPT/Codex session after the 2026-04-28
 tests-cleanup freeze and OCR stabilization pass.
 

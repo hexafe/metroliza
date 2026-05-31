@@ -37,7 +37,7 @@ def _load_script_module(script_name: str):
 
 
 def _snapshot_factory_state():
-    factory_module = importlib.import_module("modules.report_parser_factory")
+    factory_module = importlib.import_module("metroliza.reports.report_parser_factory")
     return factory_module, {
         "map": dict(factory_module.PARSER_MAP),
         "manifests": dict(factory_module.PARSER_MANIFESTS),
@@ -68,6 +68,148 @@ def _restore_factory_state(factory_module, snapshot):
     factory_module._EXTERNAL_PLUGIN_ENTRY_POINTS = snapshot["entry_points"]
 
 
+def _completed_supplier_alpha_plugin() -> str:
+    return '''
+from __future__ import annotations
+
+from pathlib import Path
+
+from metroliza.parsing.base_report_parser import BaseReportParser
+from metroliza.parsing.parser_plugin_contracts import (
+    BaseReportParserPlugin,
+    MeasurementBlockV2,
+    MeasurementV2,
+    ParseMetaV2,
+    ParseResultV2,
+    PluginManifest,
+    ProbeContext,
+    ProbeResult,
+    ReportInfoV2,
+)
+
+
+class SupplierAlphaReportParser(BaseReportParser, BaseReportParserPlugin):
+    manifest = PluginManifest(
+        plugin_id="supplier_alpha",
+        display_name="Supplier Alpha Parser",
+        version="0.1.0",
+        supported_formats=("pdf",),
+        supported_locales=("*",),
+        template_ids=("synthetic_fixture",),
+        priority=1000,
+        capabilities={"ocr_required": False},
+    )
+
+    @classmethod
+    def probe(cls, input_ref: str | Path, context: ProbeContext) -> ProbeResult:
+        if (context.source_format or "").lower() not in cls.manifest.supported_formats:
+            return ProbeResult(
+                plugin_id=cls.manifest.plugin_id,
+                can_parse=False,
+                confidence=0,
+                reasons=("unsupported_source_format",),
+            )
+
+        try:
+            sample_text = Path(input_ref).read_text(encoding="utf-8").casefold()
+        except OSError:
+            sample_text = ""
+
+        if "synthetic supplier alpha" not in sample_text:
+            return ProbeResult(
+                plugin_id=cls.manifest.plugin_id,
+                can_parse=False,
+                confidence=0,
+                reasons=("missing_synthetic_fixture_marker",),
+            )
+
+        return ProbeResult(
+            plugin_id=cls.manifest.plugin_id,
+            can_parse=True,
+            confidence=92,
+            matched_template_id="synthetic_fixture",
+            reasons=("source_format_match", "synthetic_fixture_marker"),
+        )
+
+    def open_report(self):
+        report_path = Path(self.file_path) / self.file_name
+        self.raw_text = report_path.read_text(encoding="utf-8").splitlines()
+
+    def split_text_to_blocks(self):
+        self.reference = "REF123"
+        self.date = "2026-01-05"
+        self.sample_number = "0001"
+        self.blocks_text = [
+            [["MAIN FEATURE"], [["X", 10.0, 0.1, -0.1, None, 10.02, 0.02, 0.0]]],
+        ]
+
+    def parse_to_v2(self) -> ParseResultV2:
+        if not self.raw_text:
+            self.open_report()
+        if not self.blocks_text:
+            self.split_text_to_blocks()
+
+        return ParseResultV2(
+            meta=ParseMetaV2(
+                source_file=str(Path(self.file_path) / self.file_name),
+                source_format="pdf",
+                plugin_id=self.manifest.plugin_id,
+                plugin_version=self.manifest.version,
+                template_id="synthetic_fixture",
+                parse_timestamp="2026-01-01T00:00:00Z",
+                locale_detected=None,
+                confidence=92,
+            ),
+            report=ReportInfoV2(
+                reference="REF123",
+                report_date="2026-01-05",
+                sample_number="0001",
+                file_name=self.file_name,
+                file_path=self.file_path,
+            ),
+            blocks=(
+                MeasurementBlockV2(
+                    header_raw=("MAIN FEATURE",),
+                    header_normalized="MAIN FEATURE",
+                    dimensions=(
+                        MeasurementV2(
+                            axis_code="X",
+                            nominal=10.0,
+                            tol_plus=0.1,
+                            tol_minus=-0.1,
+                            bonus=None,
+                            measured=10.02,
+                            deviation=0.02,
+                            out_of_tolerance=0.0,
+                        ),
+                    ),
+                    block_index=0,
+                ),
+            ),
+        )
+
+    @staticmethod
+    def to_legacy_blocks(parse_result_v2: ParseResultV2):
+        legacy_blocks = []
+        for block in parse_result_v2.blocks:
+            rows = [
+                [
+                    row.axis_code,
+                    row.nominal,
+                    row.tol_plus,
+                    row.tol_minus,
+                    row.bonus,
+                    row.measured,
+                    row.deviation,
+                    row.out_of_tolerance,
+                ]
+                for row in block.dimensions
+            ]
+            legacy_blocks.append([[list(block.header_raw)], rows])
+        return legacy_blocks
+'''
+
+
 def test_create_parser_plugin_workspace_script_creates_workspace(tmp_path):
     module = _load_script_module("create_parser_plugin_workspace.py")
     output_dir = tmp_path / "workspace"
@@ -78,6 +220,85 @@ def test_create_parser_plugin_workspace_script_creates_workspace(tmp_path):
     assert (output_dir / "README.md").exists()
     assert (output_dir / "generated_plugin.py").exists()
     assert (output_dir / "artifacts" / "README.md").exists()
+
+
+def test_generated_workspace_plugin_validates_and_resolves_from_explicit_path(
+    tmp_path,
+    capsys,
+    monkeypatch,
+):
+    create_module = _load_script_module("create_parser_plugin_workspace.py")
+    validate_module = _load_script_module("validate_parser_plugins.py")
+    diagnostics_module = _load_script_module("explain_parser_resolution.py")
+    parser_plugin_paths = importlib.import_module("metroliza.parsing.parser_plugin_paths")
+    workspace_dir = tmp_path / "supplier_alpha_workspace"
+
+    create_result = create_module.main(
+        [
+            "--plugin-id",
+            "supplier_alpha",
+            "--source-format",
+            "pdf",
+            "--output-dir",
+            str(workspace_dir),
+        ]
+    )
+    sample_file = workspace_dir / "samples" / "sample_report_01.pdf"
+    sample_file.write_text("SYNTHETIC SUPPLIER ALPHA\nfixture-only report\n", encoding="utf-8")
+    plugin_file = workspace_dir / "generated_plugin.py"
+    plugin_file.write_text(_completed_supplier_alpha_plugin(), encoding="utf-8")
+
+    factory_module, snapshot = _snapshot_factory_state()
+    try:
+        validate_result = validate_module.main(
+            [
+                "--paths",
+                str(plugin_file),
+                "--plugin-id",
+                "supplier_alpha",
+                "--sample-input",
+                str(sample_file),
+                "--expected-results",
+                str(workspace_dir / "expected_results_template.csv"),
+            ]
+        )
+    finally:
+        _restore_factory_state(factory_module, snapshot)
+
+    validate_output = capsys.readouterr().out
+    assert create_result == 0
+    assert validate_result == 0
+    assert "[PASS] supplier_alpha" in validate_output
+    assert "Validation passed for all selected parser plugins." in validate_output
+
+    factory_module, snapshot = _snapshot_factory_state()
+    try:
+        def _env_only_plugin_paths(raw_paths=None, include_default_dir=True, home=None):
+            return parser_plugin_paths.split_external_plugin_paths(
+                os.environ.get(parser_plugin_paths.PARSER_EXTERNAL_PLUGIN_PATHS_ENV, "")
+            )
+
+        monkeypatch.delenv("PARSER_EXTERNAL_PLUGIN_PATHS", raising=False)
+        monkeypatch.delenv("PARSER_STRICT_MATCHING", raising=False)
+        monkeypatch.setattr(factory_module, "_iter_external_plugin_entry_points", lambda: ())
+        monkeypatch.setattr(
+            parser_plugin_paths,
+            "configured_external_plugin_path_entries",
+            _env_only_plugin_paths,
+        )
+        factory_module.reset_external_plugin_loader_state()
+        factory_module.reset_probe_cache()
+
+        diagnostics_result = diagnostics_module.main([str(sample_file), "--paths", str(plugin_file)])
+    finally:
+        _restore_factory_state(factory_module, snapshot)
+
+    diagnostics_output = capsys.readouterr().out
+    assert diagnostics_result == 0
+    assert "Selection threshold: 80" in diagnostics_output
+    assert "supplier_alpha" in diagnostics_output
+    assert "synthetic_fixture_marker" in diagnostics_output
+    assert "Selected: supplier_alpha" in diagnostics_output
 
 
 def test_validate_parser_plugins_script_accepts_explicit_plugin_file(tmp_path):

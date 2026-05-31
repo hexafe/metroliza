@@ -1,7 +1,7 @@
 """Pairwise comparison statistics for grouped metric samples.
 
 Statistical rationale:
-    - Reuses assumption checks from :mod:`modules.group_stats_tests` to align
+    - Reuses assumption checks from :mod:`metroliza.analytics.group_stats_tests` to align
       pairwise test choice with omnibus selection (parametric vs non-parametric).
     - Applies multiplicity correction (Holm default) before significance flags.
     - Reports practical effect magnitudes to complement p-values.

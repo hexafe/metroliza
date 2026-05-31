@@ -1,5 +1,10 @@
 # 2026.03-rc2 Stabilization Execution Plan
 
+Post-reorganization note: this is a completed pre-reorganization closeout record.
+References to `modules/*` paths below describe the namespace used at the time;
+new implementation work must use canonical `src/metroliza/*` paths unless it is
+explicit compatibility-shim validation.
+
 ## 1. Purpose and scope
 This document is the operational source of truth for the 2026.03-rc2 export-path stabilization and safe refactor workstream, and now serves as its closeout/reference tracker. It defines what changed, what was deferred, the order of execution that was followed, and how maintainers should interpret the remaining backlog.
 

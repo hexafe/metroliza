@@ -2,7 +2,7 @@
 
 The parser will use these helpers to choose a single top-of-page header crop and
 translate OCR pixel boxes back into the page coordinate system expected by
-``modules.report_metadata_selector.HeaderTextItem``.
+``metroliza.reports.report_metadata_selector.HeaderTextItem``.
 """
 
 from __future__ import annotations

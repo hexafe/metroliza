@@ -4,14 +4,14 @@ Last updated: 2026-05-09
 
 ## Scope
 
-This is the repo-local plan for a focused UI/UX revamp of the Metroliza desktop app and exported HTML dashboard. It combines the earlier branch-local UI plan with the May 2026 audit of `modules/main_window.py`, `modules/export_dialog.py`, `modules/parsing_dialog.py`, `modules/modify_db.py`, `modules/characteristic_mapping_dialog.py`, and the shared CSV/Excel analytics surface in `modules/industrial_analytics_dialog.py`.
+This is the repo-local plan for a focused UI/UX revamp of the Metroliza desktop app and exported HTML dashboard. It combines the earlier branch-local UI plan with the May 2026 audit of `src/metroliza/ui/main_window.py`, `src/metroliza/ui/export_dialog.py`, `src/metroliza/ui/parsing_dialog.py`, `src/metroliza/ui/modify_db.py`, `src/metroliza/ui/characteristic_mapping_dialog.py`, and the shared CSV/Excel analytics surface in `src/metroliza/ui/industrial_analytics_dialog.py`.
 
 Metroliza should remain a professional metrology workflow tool: quiet, dense, predictable, and fast to scan. The goal is not a decorative redesign, not a marketing shell, and not a broad rewrite. Changes should be incremental, tested, and compatible with the current `codex/report-metadata-redesign` branch.
 
 ## Current Branch Status
 
 - 2026-05-09 branch `codex/metroliza-ui-ux-visual-revamp` started for the PyQt6 UI/UX and visual theme revamp.
-- Shared UI helpers now live in `modules/ui_foundation.py`, with semantic visual tokens in `modules/ui_theme_tokens.py`.
+- Shared UI helpers now live in `src/metroliza/ui/ui_foundation.py`, with semantic visual tokens in `src/metroliza/ui/ui_theme_tokens.py`.
 - The first implementation slice covers the main window command center, parsing layout/readiness, worker progress/release notes, CSV Summary, Modify Database, filtering/grouping, export, Characteristic Matching, and HTML dashboard review polish.
 - The 2026-05-09 release-fix pass completed the final pre-release UI blockers:
   CSV Summary moved under Tools and gained clearer footer actions; fast-then-enrich

@@ -2,6 +2,10 @@
 
 Last updated: 2026-05-09
 
+Post-reorganization note: this is a completed pre-reorganization release-fix
+record. `modules/*` write targets below are historical; new UI/UX work must use
+canonical `src/metroliza/*` paths unless explicitly testing compatibility shims.
+
 ## Purpose
 
 This plan captures the final UI/UX and release-readiness fixes requested before
