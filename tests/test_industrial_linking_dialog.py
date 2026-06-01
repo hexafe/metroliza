@@ -7,9 +7,11 @@ from modules.db import sqlite_connection_scope
 try:
     from PyQt6.QtWidgets import QApplication
 
+    from modules import industrial_linking_dialog
     from modules.industrial_linking_dialog import IndustrialLinkingDialog
 except Exception as exc:  # pragma: no cover - depends on local Qt runtime availability.
     QApplication = None
+    industrial_linking_dialog = None
     IndustrialLinkingDialog = None
     PYQT_IMPORT_ERROR = exc
 else:
@@ -151,4 +153,47 @@ def test_manual_linking_dialog_links_and_clears_different_references(tmp_path):
         remaining = conn.execute("SELECT COUNT(*) FROM industrial_link_candidates").fetchone()[0]
 
     assert remaining == 0
+    dialog.close()
+
+
+def test_manual_linking_dialog_handles_empty_database_state_and_missing_selection(monkeypatch):
+    _app()
+    warnings = []
+    monkeypatch.setattr(industrial_linking_dialog.QMessageBox, "warning", lambda *args: warnings.append(args))
+    dialog = IndustrialLinkingDialog(db_file=None)
+
+    assert dialog.report_table.rowCount() == 0
+    assert dialog.production_table.rowCount() == 0
+    assert not dialog.link_button.isEnabled()
+    assert not dialog.clear_button.isEnabled()
+    assert not dialog.auto_link_button.isEnabled()
+    assert "Select a Metroliza report database" in dialog.status_label.text()
+
+    dialog.link_selected_records()
+    dialog.clear_selected_manual_link()
+    dialog.refresh_auto_links()
+
+    assert "Select one Metroliza report and one cached production row" in warnings[0][2]
+    assert warnings[1][2] == "Select one Metroliza report."
+    dialog.close()
+
+
+def test_manual_linking_dialog_search_and_auto_refresh(monkeypatch, tmp_path):
+    _app()
+    db_path = _prepare_linking_db(tmp_path)
+    summary = type("Summary", (), {"accepted_links": 1, "ambiguous_reports": 2, "unmatched_reports": 3})()
+    monkeypatch.setattr(
+        industrial_linking_dialog,
+        "materialize_industrial_report_links",
+        lambda db_file: summary,
+    )
+    dialog = IndustrialLinkingDialog(db_file=db_path)
+
+    dialog.report_search_edit.setText("MET-123")
+    dialog.production_search_edit.setText("PROD")
+    assert dialog.report_table.rowCount() == 1
+    assert dialog.production_table.rowCount() == 1
+
+    dialog.refresh_auto_links()
+    assert "1 accepted, 2 ambiguous, 3 unmatched" in dialog.status_label.text()
     dialog.close()

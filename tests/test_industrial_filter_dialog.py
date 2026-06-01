@@ -7,9 +7,13 @@ import pytest
 try:
     from PyQt6.QtWidgets import QApplication, QDialog
 
-    from modules.industrial_filter_dialog import IndustrialFilterDialog
-    from modules.industrial_workflow_state import IndustrialFilterState, parse_reference_values
-    from modules.report_schema import ensure_report_schema
+    import metroliza.ui.industrial_filter_dialog as industrial_filter_dialog
+    from metroliza.industrial.industrial_workflow_state import (
+        IndustrialFilterState,
+        parse_reference_values,
+    )
+    from metroliza.reports.report_schema import ensure_report_schema
+    from metroliza.ui.industrial_filter_dialog import IndustrialFilterDialog
 except Exception as exc:  # pragma: no cover - depends on local Qt runtime availability.
     QApplication = None
     QDialog = None
@@ -99,4 +103,27 @@ def test_filter_dialog_loads_references_from_local_metroliza_metadata_only(tmp_p
     dialog.load_database_references()
 
     assert dialog.references_edit.toPlainText().splitlines() == ["REF-1", "REF-2"]
+    dialog.close()
+
+
+def test_filter_dialog_warning_and_clear_paths(monkeypatch):
+    _app()
+    warnings = []
+    monkeypatch.setattr(
+        industrial_filter_dialog.QMessageBox,
+        "warning",
+        lambda *args: warnings.append(args),
+    )
+    dialog = IndustrialFilterDialog(state=IndustrialFilterState(references=("REF-1",)))
+
+    dialog.load_database_references()
+    dialog.clear_filter()
+    dialog.reference_column_edit.setText("reference;drop")
+    dialog.references_edit.setPlainText("REF-2")
+    dialog.apply_filter()
+
+    assert len(warnings) == 2
+    assert "Select a Metroliza report database" in warnings[0][2]
+    assert "cleared" in dialog.summary_label.text()
+    assert "reference column" in warnings[1][2]
     dialog.close()

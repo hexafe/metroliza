@@ -7,25 +7,35 @@ import pytest
 
 try:
     from PyQt6.QtCore import Qt
-    from PyQt6.QtWidgets import QApplication, QLabel, QMessageBox, QPushButton, QWidget
-    from modules import ui_theme_tokens
-    from modules.grouping_filter_core import DataFrameGroupingIndex
-    from modules.list_selection_utils import ListSelectionUtils
-    from modules.tabular_analytics_service import (
+    from PyQt6.QtWidgets import (
+        QApplication,
+        QLabel,
+        QListWidgetItem,
+        QMessageBox,
+        QPushButton,
+        QWidget,
+    )
+    from metroliza.ui import ui_theme_tokens
+    from metroliza.shared.grouping_filter_core import DataFrameGroupingIndex
+    from metroliza.shared.list_selection_utils import ListSelectionUtils
+    from metroliza.tabular.tabular_analytics_service import (
         TabularColumnFilter,
         cleanup_tabular_load_result,
         load_tabular_analytics_file,
     )
-    from modules.tabular_analytics_grouping_dialog import TabularAnalyticsGroupingDialog
+    import metroliza.ui.tabular_analytics_grouping_dialog as grouping_dialog_module
+    from metroliza.ui.tabular_analytics_grouping_dialog import TabularAnalyticsGroupingDialog
 except ImportError as exc:  # pragma: no cover - depends on PyQt collection order
     Qt = None
     QApplication = None
     QWidget = None
+    QListWidgetItem = None
     TabularColumnFilter = None
     DataFrameGroupingIndex = None
     cleanup_tabular_load_result = None
     load_tabular_analytics_file = None
     ListSelectionUtils = None
+    grouping_dialog_module = None
     TabularAnalyticsGroupingDialog = None
     PYQT_IMPORT_ERROR = exc
 else:
@@ -1444,7 +1454,7 @@ def test_create_or_add_prompts_each_time_so_second_group_can_be_created(monkeypa
     dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
     responses = iter([("Fixture A", True), ("Fixture B", True)])
     monkeypatch.setattr(
-        "modules.tabular_analytics_grouping_dialog.QInputDialog.getText",
+        "metroliza.ui.tabular_analytics_grouping_dialog.QInputDialog.getText",
         lambda *_args, **_kwargs: next(responses),
     )
     try:
@@ -1486,7 +1496,7 @@ def test_create_group_prefills_prompt_with_selected_custom_group(monkeypatch) ->
         return "", False
 
     monkeypatch.setattr(
-        "modules.tabular_analytics_grouping_dialog.QInputDialog.getText",
+        "metroliza.ui.tabular_analytics_grouping_dialog.QInputDialog.getText",
         capture_prompt,
     )
     try:
@@ -1532,7 +1542,7 @@ def test_create_group_does_not_prefill_prompt_for_default_or_blank_selection(
         return "", False
 
     monkeypatch.setattr(
-        "modules.tabular_analytics_grouping_dialog.QInputDialog.getText",
+        "metroliza.ui.tabular_analytics_grouping_dialog.QInputDialog.getText",
         capture_prompt,
     )
     try:
@@ -1569,7 +1579,7 @@ def test_assign_filtered_rows_prefills_prompt_with_selected_custom_group(monkeyp
         return "", False
 
     monkeypatch.setattr(
-        "modules.tabular_analytics_grouping_dialog.QInputDialog.getText",
+        "metroliza.ui.tabular_analytics_grouping_dialog.QInputDialog.getText",
         capture_prompt,
     )
     try:
@@ -1614,7 +1624,7 @@ def test_assign_filtered_rows_does_not_prefill_prompt_for_default_or_blank_selec
         return "", False
 
     monkeypatch.setattr(
-        "modules.tabular_analytics_grouping_dialog.QInputDialog.getText",
+        "metroliza.ui.tabular_analytics_grouping_dialog.QInputDialog.getText",
         capture_prompt,
     )
     try:
@@ -1681,7 +1691,7 @@ def test_enter_in_matching_rows_opens_group_prompt_and_assigns_rows(monkeypatch)
     )
     dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
     monkeypatch.setattr(
-        "modules.tabular_analytics_grouping_dialog.QInputDialog.getText",
+        "metroliza.ui.tabular_analytics_grouping_dialog.QInputDialog.getText",
         lambda *_args, **_kwargs: ("Fixture A", True),
     )
     try:
@@ -1715,7 +1725,7 @@ def test_double_click_matching_rows_opens_group_prompt_and_assigns_selection(mon
     )
     dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
     monkeypatch.setattr(
-        "modules.tabular_analytics_grouping_dialog.QInputDialog.getText",
+        "metroliza.ui.tabular_analytics_grouping_dialog.QInputDialog.getText",
         lambda *_args, **_kwargs: ("Fixture A", True),
     )
     try:
@@ -1750,7 +1760,7 @@ def test_double_click_group_item_opens_rename_prompt(monkeypatch) -> None:
         dialog.selected_selector_keys = {("TC-001",)}
         dialog.create_group(initial_group_name="Fixture A")
         monkeypatch.setattr(
-            "modules.tabular_analytics_grouping_dialog.QInputDialog.getText",
+            "metroliza.ui.tabular_analytics_grouping_dialog.QInputDialog.getText",
             lambda *_args, **_kwargs: ("Fixture B", True),
         )
 
@@ -1783,7 +1793,7 @@ def test_delete_key_on_group_list_confirms_and_deletes_custom_group(monkeypatch)
     )
     dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
     monkeypatch.setattr(
-        "modules.tabular_analytics_grouping_dialog.QMessageBox.question",
+        "metroliza.ui.tabular_analytics_grouping_dialog.QMessageBox.question",
         lambda *_args, **_kwargs: QMessageBox.StandardButton.Yes,
     )
     try:
@@ -1980,3 +1990,363 @@ def test_existing_grouping_assignments_are_preserved_when_dialog_reopens() -> No
     materialized = dialog._materialize_grouping_dataframe()
     assert materialized["GROUP"].tolist() == ["Fixture A", "POPULATION", "Fixture B"]
     assert materialized["GROUP_COLOR"].tolist() == ["#ABCDEF", "#FFFFFF", "#FEDCBA"]
+
+
+def test_grouping_dialog_color_helpers_normalize_defaults_and_mixed_selector_keys() -> None:
+    dialog = _dialog_for_frame(
+        pd.DataFrame(
+            {
+                "source_row_number": [1, 2, 3],
+                "tracecode": ["TC-001", "TC-001", "TC-002"],
+            }
+        )
+    )
+    dialog.selector_columns = ["tracecode"]
+    dialog.group_palette = ["#123456"]
+    dialog._temp_group_assignments = {
+        1: ("Fixture A", "#123456"),
+        2: ("Fixture B", ""),
+        3: ("POPULATION", "#654321"),
+    }
+
+    dialog._ensure_group_color_integrity()
+
+    assert 3 not in dialog._temp_group_assignments
+    assert dialog._temp_group_assignments[2][1] != dialog.default_group_color
+    assert dialog._next_group_color() != "#123456"
+
+    assert dialog._group_color_for_row({"GROUP_COLOR": ""}) == dialog.default_group_color
+    assert dialog._group_color_for_row({"GROUP_COLOR": None}) == dialog.default_group_color
+
+    item = QListWidgetItem("invalid color")
+    dialog._apply_item_color(item, "not-a-color")
+    assert _background_hex(item) == dialog.default_group_color.upper()
+
+    color_map, mixed_keys = dialog._selector_color_map(
+        [{"key": ("TC-001",), "label": "TC-001", "row_count": 2}]
+    )
+    assert color_map == {}
+    assert mixed_keys == {("TC-001",)}
+
+
+def test_grouping_dialog_expression_specs_convert_to_tabular_filters() -> None:
+    dialog = _dialog_for_frame(
+        pd.DataFrame(
+            {
+                "source_row_number": [1, 2],
+                "Supplier Name": ["SUPPLIER", "OTHER"],
+                "Value": [1.0, 2.0],
+                "TimeStamp": ["2026-05-01", "2026-05-02"],
+            }
+        )
+    )
+    dialog.column_labels = {"Supplier Name": "Supplier Name", "Value": "Value", "TimeStamp": "Time Stamp"}
+    dialog._applied_selector_filter_text = "Supplier Name=SUPPLIER AND Value>=1 AND Time Stamp<2026-05-03"
+
+    state = dialog._selector_filter_state()
+    converted = dialog._tabular_filters_for_expression_specs(state.specs)
+
+    assert state.mode == "expression"
+    assert converted == (
+        TabularColumnFilter("Supplier Name", selected_values=("SUPPLIER",)),
+        TabularColumnFilter("Value", numeric_operator=">=", numeric_value="1"),
+        TabularColumnFilter("TimeStamp", date_operator="<", date_value="2026-05-03"),
+    )
+
+    dialog._applied_selector_filter_text = "Supplier Name=SUPPLIER AND Supplier Name=OTHER"
+    duplicate_state = dialog._selector_filter_state()
+    assert dialog._tabular_filters_for_expression_specs(duplicate_state.specs) is None
+    assert dialog._tabular_filter_for_expression_spec(object()) is None
+    assert dialog._selector_filter_input_text() == ""
+
+
+def test_grouping_dialog_search_scope_helpers_cover_empty_invalid_and_exception_paths(monkeypatch) -> None:
+    dialog = _dialog_for_frame(
+        pd.DataFrame(
+            {
+                "source_row_number": [1, 2, 3],
+                "tracecode": ["MATCH-1", "OTHER-1", "MATCH-2"],
+                "value": [1, 2, 3],
+            }
+        )
+    )
+
+    dialog._applied_selector_filter_text = "MATCH"
+    assert dialog._scope_row_count() == 0
+    assert dialog._scope_has_rows() is False
+    assert dialog._row_ids_for_scope() == []
+
+    dialog.selector_columns = ["tracecode"]
+    dialog._invalidate_selector_cache()
+    assert dialog._scope_row_count() == 2
+    assert dialog._scope_has_rows() is True
+    assert dialog._row_ids_for_scope() == [1, 3]
+
+    dialog._applied_selector_filter_text = "missing_column=1"
+    assert dialog._scoped_source_dataframe().empty
+    assert dialog._row_ids_for_selected_keys() == []
+
+    dialog._applied_selector_filter_text = "value>1"
+    dialog._invalidate_selector_cache()
+
+    def fail_apply_filter_specs(*_args, **_kwargs):
+        raise ValueError("bad filter")
+
+    monkeypatch.setitem(
+        TabularAnalyticsGroupingDialog._scoped_source_dataframe.__globals__,
+        "apply_filter_specs",
+        fail_apply_filter_specs,
+    )
+    assert dialog._scoped_source_dataframe().empty
+
+
+def test_grouping_dialog_selection_and_navigation_noops_keep_state() -> None:
+    _app()
+    frame = pd.DataFrame(
+        {
+            "source_row_number": list(range(1, 4)),
+            "tracecode": ["TC-001", "TC-002", "TC-003"],
+            "cavity": ["C1", "C2", "C3"],
+        }
+    )
+    dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
+    try:
+        dialog.available_columns_list.setCurrentItem(None)
+        dialog.add_selector_column()
+        assert dialog.selector_columns == []
+
+        dialog.column_search.setText("trace")
+        dialog._apply_column_search()
+        assert dialog._applied_column_search_text == "trace"
+        assert dialog.available_columns_list.count() == 1
+
+        dialog.selected_column_search.setText("none")
+        dialog._apply_selected_column_search()
+        assert dialog._applied_selected_column_search_text == "none"
+
+        dialog.remove_last_selector_column()
+        dialog.remove_selected_selector_column()
+        dialog.first_selector_page()
+        dialog.previous_selector_page()
+        dialog.next_selector_page()
+        dialog.last_selector_page()
+        for page_text in ("", "bad", "1"):
+            dialog.page_jump_input.setText(page_text)
+            dialog.jump_selector_page()
+
+        assert dialog._selector_page_offset == 0
+
+        trace_item = _item_for_data(dialog.available_columns_list, "tracecode")
+        dialog.available_columns_list.setCurrentItem(trace_item)
+        dialog.add_selector_column()
+        dialog.selected_selector_keys = {("TC-001",)}
+        dialog._refresh_selectors()
+        dialog.clear_selection()
+        assert dialog.selected_selector_keys == set()
+
+        dialog.clear_selector_columns()
+        assert dialog.selector_columns == []
+        assert dialog.selector_status_label.text() == "No grouping columns selected"
+    finally:
+        dialog.close()
+
+
+def test_grouping_dialog_validation_branches_do_not_mutate_assignments(monkeypatch) -> None:
+    _app()
+    frame = pd.DataFrame(
+        {
+            "source_row_number": [1, 2],
+            "tracecode": ["TC-001", "TC-002"],
+        }
+    )
+    dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
+    messages: list[str] = []
+    monkeypatch.setattr(
+        "metroliza.ui.tabular_analytics_grouping_dialog.QMessageBox.information",
+        lambda _parent, _title, message: messages.append(message),
+    )
+    monkeypatch.setattr(
+        "metroliza.ui.tabular_analytics_grouping_dialog.QInputDialog.getText",
+        lambda *_args, **_kwargs: ("", True),
+    )
+    try:
+        dialog.create_group()
+        assert messages == ["Select matching rows before creating a group."]
+
+        dialog.selector_columns = ["tracecode"]
+        dialog._refresh_all()
+        dialog.selected_selector_keys = {("TC-001",)}
+        dialog.create_group(initial_group_name="")
+        dialog.create_group()
+        assert dialog._temp_group_assignments == {}
+
+        dialog._applied_selector_filter_text = "NO_MATCH"
+        dialog._invalidate_selector_cache()
+        dialog.assign_filtered_rows()
+        assert messages[-1] == "No rows match the current search or filter."
+
+        dialog._applied_selector_filter_text = ""
+        dialog.assign_filtered_rows(initial_group_name="")
+        assert dialog._temp_group_assignments == {}
+    finally:
+        dialog.close()
+
+
+def test_grouping_dialog_rename_delete_and_member_removal_noops(monkeypatch) -> None:
+    _app()
+    frame = pd.DataFrame(
+        {
+            "source_row_number": [1, 2, 3],
+            "tracecode": ["TC-001", "TC-002", "TC-003"],
+        }
+    )
+    dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
+    try:
+        dialog.selector_columns = ["tracecode"]
+        dialog._refresh_all()
+        dialog.selected_selector_keys = {("TC-001",), ("TC-002",)}
+        dialog.create_group(initial_group_name="Fixture A")
+        fixture_item = _item_for_data(dialog.groups_list, "Fixture A")
+        dialog.groups_list.setCurrentItem(fixture_item)
+
+        monkeypatch.setattr(
+            "metroliza.ui.tabular_analytics_grouping_dialog.QInputDialog.getText",
+            lambda *_args, **_kwargs: ("", True),
+        )
+        dialog.rename_group()
+        assert set(_temporary_groups(dialog).values()) == {"Fixture A"}
+
+        monkeypatch.setattr(
+            "metroliza.ui.tabular_analytics_grouping_dialog.QMessageBox.question",
+            lambda *_args, **_kwargs: QMessageBox.StandardButton.No,
+        )
+        dialog.delete_group()
+        assert set(_temporary_groups(dialog).values()) == {"Fixture A"}
+
+        dialog.group_members_list.addItem("bad row id")
+        bad_item = dialog.group_members_list.item(dialog.group_members_list.count() - 1)
+        bad_item.setData(Qt.ItemDataRole.UserRole, "not-an-int")
+        bad_item.setSelected(True)
+        dialog.remove_selected_group_members()
+        assert set(_temporary_groups(dialog).values()) == {"Fixture A"}
+
+        dialog.groups_list.setCurrentItem(_item_for_data(dialog.groups_list, "POPULATION"))
+        dialog.delete_group()
+        dialog.remove_selected_group_members()
+        assert set(_temporary_groups(dialog).values()) == {"Fixture A"}
+    finally:
+        dialog.close()
+
+
+def test_sqlite_grouping_preview_and_assignment_lifecycle_branches(tmp_path) -> None:
+    _app()
+    input_file = tmp_path / "sqlite_grouping_lifecycle.csv"
+    pd.DataFrame(
+        {
+            "Line": ["A", "B", "A"],
+            "TraceCode": ["TC-001", "TC-002", "TC-003"],
+        }
+    ).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file, force_sqlite=True)
+
+    dialog = TabularAnalyticsGroupingDialog(
+        dataframe=loaded.dataframe,
+        column_mapping=loaded.column_mapping,
+        sqlite_store=loaded.sqlite_store,
+    )
+    try:
+        assert dialog._sqlite_preview_rows(offset=0, limit=10) == ([], 0)
+        assert dialog._sqlite_selector_row_count() == 3
+        assert dialog._sqlite_total_grouping_rows() == 3
+
+        dialog.selector_columns = ["line"]
+        preview_rows, total_rows = dialog._sqlite_preview_rows(offset=0, limit=10)
+        assert total_rows == 2
+        assert [tuple(row["key"]) for row in preview_rows] == [("A",), ("B",)]
+        dialog.selected_selector_keys = {("A",)}
+        assert dialog._sqlite_row_ids_for_selected_keys() == [1, 3]
+        assert dialog._sqlite_selector_row_count() == 2
+
+        dialog._append_sqlite_row_assignment_operation([1, 1, 2], "Rows", "#123456")
+        assert dialog._sqlite_assignment_operations[-1].row_ids == (1, 2)
+        dialog._assign_rows_to_group([1], dialog.default_group)
+        assert dialog._sqlite_assignment_operations[-1].group_name == dialog.default_group
+        assert dialog._sqlite_assignment_operation_colors("Rows") == ["#123456"]
+
+        dialog._sqlite_assignment_operations.clear()
+        dialog._temp_group_assignments = {2: ("Rows", "#123456")}
+        materialized = dialog._materialize_grouping_dataframe()
+        assert materialized["REPORT_ID"].tolist() == [2]
+        assert materialized["GROUP"].tolist() == ["Rows"]
+
+        dialog._on_sqlite_selector_preview_error(dialog._selector_preview_request_id + 1, "stale")
+        assert not dialog.selector_preview_label.text().startswith("Could not load groups:")
+        dialog._on_sqlite_selector_preview_error(dialog._selector_preview_request_id, "boom")
+        assert dialog.selector_preview_label.text() == "Could not load groups: boom"
+
+        class _Label:
+            def __init__(self):
+                self.text = ""
+
+            def setText(self, text):
+                self.text = text
+
+        class _Dialog:
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        loading_dialog = _Dialog()
+        loading_label = _Label()
+        dialog._selector_preview_loading_dialog = loading_dialog
+        dialog._selector_preview_loading_label = loading_label
+        dialog._cancel_sqlite_selector_preview()
+        assert loading_label.text.startswith("Canceling group preview")
+        assert loading_dialog.closed is True
+        assert dialog.selector_preview_label.text() == "Group preview canceled."
+    finally:
+        dialog.close()
+        cleanup_tabular_load_result(loaded)
+
+
+def test_sqlite_grouping_selected_key_query_handles_missing_builders(tmp_path) -> None:
+    _app()
+    input_file = tmp_path / "sqlite_grouping_query.csv"
+    pd.DataFrame({"Line": ["A"], "TraceCode": ["TC-001"]}).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file, force_sqlite=True)
+    dialog = TabularAnalyticsGroupingDialog(
+        dataframe=loaded.dataframe,
+        column_mapping=loaded.column_mapping,
+        sqlite_store=loaded.sqlite_store,
+    )
+    try:
+        empty_scope = grouping_dialog_module._PendingSqliteScope(
+            selector_columns=(),
+            search_text="",
+            filter_columns=(),
+            selected_filter_keys=(),
+            base_column_filters=(),
+            grouping_filter=None,
+            selected_group_keys=(("A",),),
+        )
+        assert dialog._sqlite_selected_group_keys_query(empty_scope) == ("", [])
+
+        class _StoreWithoutBuilder:
+            table_name = "tabular_rows"
+
+        dialog.sqlite_store = _StoreWithoutBuilder()
+        scoped = grouping_dialog_module._PendingSqliteScope(
+            selector_columns=("line",),
+            search_text="",
+            filter_columns=(),
+            selected_filter_keys=(),
+            base_column_filters=(),
+            grouping_filter=None,
+            selected_group_keys=(("A",),),
+        )
+        assert dialog._sqlite_selected_group_keys_query(scoped) == ("", [])
+    finally:
+        dialog.close()
+        cleanup_tabular_load_result(loaded)

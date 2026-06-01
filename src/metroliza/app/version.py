@@ -1,7 +1,7 @@
 RELEASE_VERSION = "2026.05rc4"
 VERSION_DATE = "260601"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
-CURRENT_RELEASE_HIGHLIGHT = "Parser profile self-service, export reliability, safer long-task cancellation, dashboard plot visual customization, and clearer dashboard reading flow."
+CURRENT_RELEASE_HIGHLIGHT = "Parser profile self-service, export reliability, safer long-task cancellation, dashboard plot visual customization, static POPULATION layers for CSV Summary, and clearer dashboard reading flow."
 PUBLIC_VERSION_LABEL = "2026.05 RC4 (build 260601)"
 
 release_notes = f"""
@@ -10,6 +10,7 @@ release_notes = f"""
     - Google Sheets export now checks converted workbook tabs and warns when a local Excel fallback should be used<br>
     - Canceling long parsing, export, and metadata tasks is more reliable from progress windows<br>
     - Dashboard plot visuals can now be customized<br>
+    - CSV Summary dashboards can render dense POPULATION background layers as static images while keeping smaller groups interactive<br>
     - CSV Summary and Export dashboards now use clearer run notes, image snapshot wording, and group comparison takeaways<br>
 
     <br><b>Archive:</b><br>

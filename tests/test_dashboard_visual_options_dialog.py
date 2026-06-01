@@ -11,7 +11,7 @@ else:
     PYQT_IMPORT_ERROR = None
 
 try:
-    import modules.dashboard_visual_options_dialog as _DIALOG_MODULE  # noqa: F401
+    import metroliza.ui.dashboard_visual_options_dialog as _DIALOG_MODULE  # noqa: F401
 except Exception as exc:  # pragma: no cover - depends on optional Qt runtime.
     DIALOG_IMPORT_ERROR = exc
 else:
@@ -57,7 +57,7 @@ def test_dashboard_visual_dialog_preview_uses_current_palette_color(monkeypatch)
         from PyQt6.QtCore import Qt  # noqa: F401
     except Exception as exc:
         pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
-    import modules.dashboard_visual_options_dialog as dialog_module
+    import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     captured_palette: list[str] = []
 
@@ -95,7 +95,7 @@ def test_dashboard_visual_dialog_preserves_per_reference_widths_when_unchanged(m
         from PyQt6.QtCore import Qt  # noqa: F401
     except Exception as exc:
         pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
-    import modules.dashboard_visual_options_dialog as dialog_module
+    import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
     dialog = dialog_module.DashboardVisualOptionsDialog(
@@ -132,7 +132,7 @@ def test_dashboard_visual_dialog_uses_real_preview_group_names(monkeypatch) -> N
         from PyQt6.QtCore import Qt  # noqa: F401
     except Exception as exc:
         pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
-    import modules.dashboard_visual_options_dialog as dialog_module
+    import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
     dialog = dialog_module.DashboardVisualOptionsDialog(
@@ -161,7 +161,7 @@ def test_dashboard_visual_dialog_recipe_updates_controls_and_preview_swatches(mo
         from PyQt6.QtCore import Qt  # noqa: F401
     except Exception as exc:
         pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
-    import modules.dashboard_visual_options_dialog as dialog_module
+    import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
     dialog = dialog_module.DashboardVisualOptionsDialog(persist_on_accept=False)
@@ -218,7 +218,7 @@ def test_dashboard_visual_dialog_recipe_refreshes_selected_element_controls(monk
         from PyQt6.QtCore import Qt  # noqa: F401
     except Exception as exc:
         pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
-    import modules.dashboard_visual_options_dialog as dialog_module
+    import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
     dialog = dialog_module.DashboardVisualOptionsDialog(
@@ -267,7 +267,7 @@ def test_dashboard_visual_dialog_manual_edit_switches_recipe_to_custom(monkeypat
         from PyQt6.QtCore import Qt  # noqa: F401
     except Exception as exc:
         pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
-    import modules.dashboard_visual_options_dialog as dialog_module
+    import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
     dialog = dialog_module.DashboardVisualOptionsDialog(
@@ -297,7 +297,7 @@ def test_dashboard_visual_dialog_group_color_edit_updates_palette_and_chips(monk
         from PyQt6.QtCore import Qt  # noqa: F401
     except Exception as exc:
         pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
-    import modules.dashboard_visual_options_dialog as dialog_module
+    import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
     dialog = dialog_module.DashboardVisualOptionsDialog(
@@ -339,7 +339,7 @@ def test_dashboard_visual_dialog_population_color_edit_updates_baseline_not_pale
         from PyQt6.QtCore import Qt  # noqa: F401
     except Exception as exc:
         pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
-    import modules.dashboard_visual_options_dialog as dialog_module
+    import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
     dialog = dialog_module.DashboardVisualOptionsDialog(
@@ -384,8 +384,8 @@ def test_dashboard_visual_dialog_group_edit_keeps_population_first_in_histogram(
         from PyQt6.QtCore import Qt  # noqa: F401
     except Exception as exc:
         pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
-    import modules.dashboard_visual_options as visual_options
-    import modules.dashboard_visual_options_dialog as dialog_module
+    from metroliza.charts import dashboard_visual_options as visual_options
+    import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
     dialog = dialog_module.DashboardVisualOptionsDialog(
@@ -433,7 +433,7 @@ def test_dashboard_visual_dialog_opacity_controls_show_synced_numeric_companions
         from PyQt6.QtCore import Qt  # noqa: F401
     except Exception as exc:
         pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
-    import modules.dashboard_visual_options_dialog as dialog_module
+    import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
     dialog = dialog_module.DashboardVisualOptionsDialog(
@@ -466,7 +466,7 @@ def test_dashboard_visual_dialog_selection_inspector_sits_below_preview_and_star
         from PyQt6.QtCore import Qt  # noqa: F401
     except Exception as exc:
         pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
-    import modules.dashboard_visual_options_dialog as dialog_module
+    import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
     dialog = dialog_module.DashboardVisualOptionsDialog(persist_on_accept=False)
@@ -505,7 +505,7 @@ def test_dashboard_visual_dialog_selection_opacity_numeric_syncs_and_writes_over
         from PyQt6.QtCore import Qt  # noqa: F401
     except Exception as exc:
         pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
-    import modules.dashboard_visual_options_dialog as dialog_module
+    import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
     dialog = dialog_module.DashboardVisualOptionsDialog(
@@ -544,7 +544,7 @@ def test_dashboard_visual_dialog_selection_accessibility_and_tab_order(monkeypat
         from PyQt6.QtCore import Qt  # noqa: F401
     except Exception as exc:
         pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
-    import modules.dashboard_visual_options_dialog as dialog_module
+    import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
     dialog = dialog_module.DashboardVisualOptionsDialog(persist_on_accept=False)
@@ -567,7 +567,7 @@ def test_dashboard_visual_dialog_static_preview_rescales_existing_pixmap(monkeyp
         from PyQt6.QtGui import QImage
     except Exception as exc:
         pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
-    import modules.dashboard_visual_options_dialog as dialog_module
+    import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     image = QImage(320, 160, QImage.Format.Format_RGB32)
     image.fill(0x245A5A)
@@ -608,7 +608,7 @@ def test_dashboard_visual_dialog_selected_controls_are_role_aware(monkeypatch) -
         from PyQt6.QtCore import Qt  # noqa: F401
     except Exception as exc:
         pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
-    import modules.dashboard_visual_options_dialog as dialog_module
+    import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
     dialog = dialog_module.DashboardVisualOptionsDialog(
@@ -681,7 +681,7 @@ def test_dashboard_visual_dialog_selected_series_override_only_writes_supported_
         from PyQt6.QtCore import Qt  # noqa: F401
     except Exception as exc:
         pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
-    import modules.dashboard_visual_options_dialog as dialog_module
+    import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
     dialog = dialog_module.DashboardVisualOptionsDialog(
@@ -726,7 +726,7 @@ def test_dashboard_visual_dialog_selected_marker_controls_write_series_outline(
         from PyQt6.QtCore import Qt  # noqa: F401
     except Exception as exc:
         pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
-    import modules.dashboard_visual_options_dialog as dialog_module
+    import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
     dialog = dialog_module.DashboardVisualOptionsDialog(
@@ -782,6 +782,389 @@ def test_dashboard_visual_dialog_selected_marker_controls_write_series_outline(
         assert override["outline_width"] == 2.0
         assert override["outline_color_mode"] == "custom"
         assert override["outline_color"] == "#abcdef"
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+
+
+def test_dashboard_visual_dialog_bridge_emits_normalized_payload() -> None:
+    _qapp()
+    import metroliza.ui.dashboard_visual_options_dialog as dialog_module
+
+    bridge = dialog_module._PreviewSelectionBridge()
+    captured: list[str] = []
+    bridge.target_selected.connect(captured.append)
+
+    bridge.selectTarget(None)
+    bridge.selectTarget('{"target":"series:group 1"}')
+
+    assert captured == ["", '{"target":"series:group 1"}']
+
+
+def test_dashboard_visual_dialog_accept_persists_when_enabled(monkeypatch) -> None:
+    _qapp()
+    try:
+        from PyQt6.QtCore import Qt  # noqa: F401
+    except Exception as exc:
+        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
+    import metroliza.ui.dashboard_visual_options_dialog as dialog_module
+
+    saved_settings: list[dict] = []
+    _stub_preview_builders(monkeypatch, dialog_module)
+    monkeypatch.setattr(dialog_module, "save_dashboard_visual_settings", saved_settings.append)
+    dialog = dialog_module.DashboardVisualOptionsDialog(
+        settings={"preset": "custom", "palette": ["#101010", "#202020", "#303030"]},
+        persist_on_accept=True,
+    )
+    try:
+        dialog._preview_timer.stop()
+        dialog._set_button_color(dialog._palette_buttons[0], "#abcdef")
+
+        dialog.accept()
+
+        assert saved_settings
+        assert saved_settings[-1]["palette"][0] == "#abcdef"
+        assert dialog.result() == dialog.DialogCode.Accepted
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+
+
+def test_dashboard_visual_dialog_theme_select_save_update_and_delete(monkeypatch) -> None:
+    _qapp()
+    try:
+        from PyQt6.QtCore import Qt  # noqa: F401
+    except Exception as exc:
+        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
+    import metroliza.ui.dashboard_visual_options_dialog as dialog_module
+
+    library = {
+        "themes": [
+            "ignored",
+            {
+                "id": "theme-1",
+                "name": "Muted report",
+                "settings": {
+                    "preset": "custom",
+                    "palette": ["#010101", "#020202", "#030303"],
+                    "theme_name": "Muted report",
+                },
+            },
+        ]
+    }
+    saved_libraries: list[dict] = []
+
+    _stub_preview_builders(monkeypatch, dialog_module)
+    monkeypatch.setattr(dialog_module, "load_dashboard_visual_theme_library", lambda: library)
+
+    def fake_save(next_library):
+        saved_libraries.append(next_library)
+        return next_library
+
+    monkeypatch.setattr(dialog_module, "save_dashboard_visual_theme_library", fake_save)
+    dialog = dialog_module.DashboardVisualOptionsDialog(persist_on_accept=False)
+    try:
+        dialog._preview_timer.stop()
+        assert dialog.theme_combo.findData("theme-1") >= 0
+
+        dialog._set_combo_data(dialog.theme_combo, "theme-1")
+        dialog._handle_theme_selected()
+        assert dialog.theme_name_edit.text() == "Muted report"
+        assert dialog._palette_buttons[0].property("color") == "#010101"
+        assert dialog._preview_timer.isActive()
+        dialog._preview_timer.stop()
+
+        dialog._set_combo_data(dialog.theme_combo, "")
+        dialog._handle_theme_selected()
+        assert not dialog._preview_timer.isActive()
+
+        dialog.theme_name_edit.setText("Saved copy")
+        dialog._save_theme_as()
+        created_id = str(dialog.theme_combo.currentData())
+        assert created_id
+        assert dialog.theme_name_edit.text() == "Saved copy"
+        assert saved_libraries[-1]["themes"][-1]["name"] == "Saved copy"
+
+        dialog.theme_name_edit.setText("Updated copy")
+        dialog._update_theme()
+        assert any(theme.get("name") == "Updated copy" for theme in saved_libraries[-1]["themes"])
+
+        dialog._delete_theme()
+        assert dialog.theme_combo.findData(created_id) < 0
+        assert dialog.theme_name_edit.text() == ""
+        assert dialog._preview_timer.isActive()
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+
+
+def test_dashboard_visual_dialog_target_extraction_handles_meta_fallbacks_and_duplicates(
+    monkeypatch,
+) -> None:
+    _qapp()
+    try:
+        from PyQt6.QtCore import Qt  # noqa: F401
+    except Exception as exc:
+        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
+    import metroliza.ui.dashboard_visual_options_dialog as dialog_module
+
+    _stub_preview_builders(monkeypatch, dialog_module)
+    dialog = dialog_module.DashboardVisualOptionsDialog(persist_on_accept=False)
+    try:
+        dialog._preview_timer.stop()
+        spec = {
+            "data": [
+                "ignored",
+                {
+                    "name": "Raw target",
+                    "type": "scatter",
+                    "mode": "lines+markers",
+                    "opacity": 0.44,
+                    "line": {"color": "#111111", "width": 2, "dash": "dash"},
+                    "marker": {"size": 7, "symbol": "diamond"},
+                    "meta": {
+                        "dashboard_visual_target": "series:raw",
+                        "dashboard_visual_role": "series",
+                        "dashboard_visual_chart_kind": "scatter",
+                        "dashboard_visual_capabilities": ["color", "opacity"],
+                    },
+                },
+                {
+                    "name": "Duplicate",
+                    "meta": {"dashboard_visual_target": "series:raw"},
+                },
+                {"name": "LSL=1.0", "line": {"color": "#aa0000"}},
+                {"name": "(Group 1) Mean=3.0", "line": {"color": "#00aa00"}},
+                {"name": "KDE curve", "line": {"color": "#0000aa"}},
+                {"name": "Measurements", "type": "bar", "marker": {"pattern": {"shape": "/"}}},
+                {"name": ""},
+            ]
+        }
+
+        assert dialog._extract_visual_targets(None) == []
+        assert dialog._extract_visual_targets({"data": "bad"}) == []
+        targets = dialog._extract_visual_targets(spec)
+
+        assert [target["target"] for target in targets] == [
+            "series:raw",
+            "reference:lsl",
+            "stat:group 1::mean",
+            "model_curve:kde curve",
+            "series:measurements",
+        ]
+        assert targets[0]["capabilities"] == ["color", "opacity"]
+        assert targets[1]["role"] == "reference"
+        assert targets[2]["group"] == "Group 1"
+        assert targets[3]["role"] == "model_curve"
+        assert "pattern_shape" in targets[4]["capabilities"]
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+
+
+def test_dashboard_visual_dialog_preview_payload_and_chip_selection_paths(monkeypatch) -> None:
+    _qapp()
+    try:
+        from PyQt6.QtCore import Qt  # noqa: F401
+    except Exception as exc:
+        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
+    import metroliza.ui.dashboard_visual_options_dialog as dialog_module
+
+    _stub_preview_builders(monkeypatch, dialog_module)
+    dialog = dialog_module.DashboardVisualOptionsDialog(persist_on_accept=False)
+    try:
+        dialog._preview_timer.stop()
+        dialog._preview_targets = [
+            {
+                "target": "reference:lsl",
+                "role": "reference",
+                "key": "lsl",
+                "label": "LSL=1.0",
+                "capabilities": ["color", "opacity", "width", "dash"],
+                "style": {"color": "#aa0000", "opacity": 0.5, "width": 2.0, "dash": "dash"},
+            },
+            {
+                "target": "series:group 1",
+                "role": "series",
+                "label": "Group 1",
+                "chart_kind": "histogram",
+                "capabilities": ["color", "opacity", "pattern_shape"],
+                "style": {"color": "#123456", "opacity": 0.6},
+            },
+        ]
+        dialog._populate_element_combo()
+
+        dialog._handle_preview_target_payload("{not json")
+        assert dialog._selected_target is None
+        dialog._handle_preview_target_payload("[]")
+        assert dialog._selected_target is None
+        dialog._handle_preview_target_payload('{"role":"series"}')
+        assert dialog._selected_target is None
+
+        dialog._handle_preview_target_payload('{"target":"series:group 1","label":"Wrong"}')
+        assert dialog._selected_target["label"] == "Group 1"
+        assert dialog.element_color_button.property("color") == "#123456"
+
+        dialog._handle_element_combo_changed()
+        assert dialog._selected_target["target"] == "series:group 1"
+        dialog._set_combo_data(dialog.element_combo, "")
+        dialog._handle_element_combo_changed()
+        assert dialog._selected_target is None
+
+        dialog._handle_preview_target_payload(
+            '{"target":"series:ad hoc","role":"series","label":"Ad hoc",'
+            '"capabilities":["color","opacity"],"style":{"color":"#654321"}}'
+        )
+        assert dialog._selected_target["target"] == "series:ad hoc"
+        assert dialog.element_color_button.property("color") == "#654321"
+
+        dialog._selected_target = None
+        dialog._select_preview_series(0)
+        assert dialog._selected_target["target"] == "series:group 1"
+        dialog._selected_target = None
+        dialog._select_preview_series(5)
+        assert dialog._selected_target is None
+
+        dialog._preview_targets = [dialog._preview_targets[0]]
+        dialog._selected_target = None
+        dialog._select_preview_series(0)
+        assert dialog._selected_target["target"] == "reference:lsl"
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+
+
+def test_dashboard_visual_dialog_reference_and_stat_apply_reset_flows(monkeypatch) -> None:
+    _qapp()
+    try:
+        from PyQt6.QtCore import Qt  # noqa: F401
+    except Exception as exc:
+        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
+    import metroliza.ui.dashboard_visual_options_dialog as dialog_module
+
+    _stub_preview_builders(monkeypatch, dialog_module)
+    dialog = dialog_module.DashboardVisualOptionsDialog(
+        settings={"preset": "custom", "stat_lines": {"accent_by_stat": False, "width": 1.5}},
+        persist_on_accept=False,
+    )
+    try:
+        dialog._preview_timer.stop()
+        dialog._selected_target = {
+            "target": "reference:usl",
+            "role": "reference",
+            "key": "usl",
+            "label": "USL=9.0",
+            "capabilities": ["color", "opacity", "width", "dash"],
+            "style": {"color": "#b91c1c", "opacity": 1.0, "width": 1.5, "dash": "dash"},
+        }
+        dialog._load_selected_element_controls()
+        dialog._set_button_color(dialog.element_color_button, "#fedcba")
+        dialog.element_opacity_slider.setValue(62)
+        dialog.element_width_spin.setValue(3.25)
+        dialog._set_combo_data(dialog.element_dash_combo, "dot")
+        dialog._apply_selected_element_style()
+
+        settings = dialog.visual_settings()
+        assert settings["reference_lines"]["usl"] == {
+            "color": "#fedcba",
+            "dash": "dot",
+            "width": 3.25,
+            "opacity": 0.62,
+        }
+
+        dialog._reset_selected_element_style()
+        reset_settings = dialog.visual_settings()
+        assert (
+            reset_settings["reference_lines"]["usl"]
+            == dialog_module.default_dashboard_visual_settings()["reference_lines"]["usl"]
+        )
+
+        dialog._selected_target = {
+            "target": "stat:mean",
+            "role": "stat",
+            "group": "",
+            "stat": "mean",
+            "label": "Mean=5.0",
+            "capabilities": ["color", "opacity", "width", "dash"],
+            "style": {"color": "#111111", "opacity": 0.5, "width": 1.5, "dash": "solid"},
+        }
+        dialog._load_selected_element_controls()
+        dialog._set_button_color(dialog.element_color_button, "#102030")
+        dialog.element_opacity_slider.setValue(74)
+        dialog.element_width_spin.setValue(2.75)
+        dialog._set_combo_data(dialog.element_dash_combo, "dashdot")
+        dialog.element_stat_accent_checkbox.setChecked(True)
+        dialog._apply_selected_element_style()
+
+        assert dialog.stat_accent_combo.currentData() == "accent"
+        assert dialog.visual_settings()["stat_line_overrides"]["mean"] == {
+            "color": "#102030",
+            "opacity": 0.74,
+            "width": 2.75,
+            "dash": "dashdot",
+        }
+
+        dialog._reset_selected_element_style()
+        assert "mean" not in dialog.visual_settings()["stat_line_overrides"]
+
+        dialog._selected_target = None
+        dialog._apply_selected_element_style()
+        dialog._reset_selected_element_style()
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+
+
+def test_dashboard_visual_dialog_choose_color_and_reset_defaults(monkeypatch) -> None:
+    _qapp()
+    try:
+        from PyQt6.QtGui import QColor
+    except Exception as exc:
+        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
+    import metroliza.ui.dashboard_visual_options_dialog as dialog_module
+
+    _stub_preview_builders(monkeypatch, dialog_module)
+    dialog = dialog_module.DashboardVisualOptionsDialog(
+        settings={"preset": "custom", "palette": ["#101010", "#202020", "#303030"]},
+        persist_on_accept=False,
+    )
+    try:
+        dialog._preview_timer.stop()
+        monkeypatch.setattr(
+            dialog_module.QColorDialog,
+            "getColor",
+            lambda *_args, **_kwargs: QColor("#abcdef"),
+        )
+        dialog._choose_color(dialog._palette_buttons[0])
+        assert dialog._palette_buttons[0].property("color") == "#abcdef"
+        assert dialog._preview_timer.isActive()
+        dialog._preview_timer.stop()
+
+        dialog._selected_target = {
+            "target": "series:measurements",
+            "role": "series",
+            "label": "Measurements",
+            "capabilities": ["color", "opacity"],
+            "style": {"color": "#101010", "opacity": 0.5},
+        }
+        dialog._load_selected_element_controls()
+        dialog._choose_color(dialog.element_color_button)
+        assert dialog.visual_settings()["series_overrides"]["measurements"]["color"] == "#abcdef"
+
+        monkeypatch.setattr(
+            dialog_module.QColorDialog,
+            "getColor",
+            lambda *_args, **_kwargs: QColor(),
+        )
+        dialog._preview_timer.stop()
+        dialog._choose_color(dialog.anchor_color_button)
+        assert not dialog._preview_timer.isActive()
+
+        dialog._set_button_color(dialog._palette_buttons[0], "#010203")
+        dialog._reset_defaults()
+        assert dialog._palette_buttons[0].property("color") != "#010203"
+        assert dialog.visual_settings()["palette"][0] == dialog._palette_buttons[0].property("color")
+        assert dialog._preview_timer.isActive()
     finally:
         dialog.close()
         dialog.deleteLater()

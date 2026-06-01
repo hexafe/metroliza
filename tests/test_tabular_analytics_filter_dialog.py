@@ -7,16 +7,17 @@ import pytest
 
 try:
     from PyQt6.QtCore import QDate, Qt
-    from PyQt6.QtWidgets import QApplication
-    import modules.tabular_analytics_filter_dialog as filter_dialog_module
-    from modules.tabular_analytics_filter_dialog import TabularAnalyticsFilterDialog
-    from modules.tabular_analytics_service import (
+    from PyQt6.QtWidgets import QApplication, QListWidgetItem
+    import metroliza.ui.tabular_analytics_filter_dialog as filter_dialog_module
+    from metroliza.ui.tabular_analytics_filter_dialog import TabularAnalyticsFilterDialog
+    from metroliza.tabular.tabular_analytics_service import (
         TabularColumnFilter,
         cleanup_tabular_load_result,
         load_tabular_analytics_file,
     )
 except ImportError as exc:  # pragma: no cover - depends on optional PyQt availability
     QApplication = None
+    QListWidgetItem = None
     QDate = None
     Qt = None
     filter_dialog_module = None
@@ -384,3 +385,225 @@ def test_filter_dialog_apply_commits_pending_date_editor_text(tmp_path) -> None:
         )
     finally:
         dialog.close()
+
+
+def test_filter_dialog_loads_modern_and_legacy_initial_filters(tmp_path) -> None:
+    _app()
+    loaded = _sample_loaded_table(tmp_path)
+
+    modern = TabularAnalyticsFilterDialog(
+        dataframe=loaded.dataframe,
+        column_mapping=loaded.column_mapping,
+        column_filters=(
+            TabularColumnFilter("line", selected_values=("L1",)),
+            TabularColumnFilter("time_stamp", date_mode="from", date_from="2026-05-11"),
+            TabularColumnFilter("time_stamp", date_mode="to", date_to="2026-05-13"),
+            TabularColumnFilter("missing", selected_values=("ignored",)),
+            object(),
+        ),
+    )
+    try:
+        assert modern.filter_columns == ["line", "time_stamp"]
+        assert modern._selected_column_label("line") == "Line: 1 value(s)"
+        assert modern._selected_column_label("time_stamp") == "Time Stamp: <= 2026-05-13"
+    finally:
+        modern.close()
+
+    legacy = TabularAnalyticsFilterDialog(
+        dataframe=loaded.dataframe,
+        column_mapping=loaded.column_mapping,
+        filter_columns=("line", "tracecode", "missing"),
+        selected_filter_keys=(("L1", "TC-001"), ("L2", "TC-002"), ("bad-length",)),
+    )
+    try:
+        assert legacy.filter_columns == ["line", "tracecode"]
+        assert legacy.value_filters == {"line": {"L1", "L2"}, "tracecode": {"TC-001", "TC-002"}}
+        assert legacy.date_filters["line"] == {"mode": "any", "from": None, "to": None}
+    finally:
+        legacy.close()
+
+
+def test_filter_dialog_column_actions_reset_state_and_handle_noops(tmp_path) -> None:
+    _app()
+    loaded = _sample_loaded_table(tmp_path)
+    dialog = TabularAnalyticsFilterDialog(
+        dataframe=loaded.dataframe,
+        column_mapping=loaded.column_mapping,
+    )
+    try:
+        dialog.column_list.setCurrentItem(None)
+        dialog.add_filter_column()
+        assert dialog.filter_columns == []
+
+        _select_available_column(dialog, "line")
+        dialog.add_filter_column()
+        assert dialog.filter_columns == ["line"]
+        duplicate_item = QListWidgetItem("Line")
+        duplicate_item.setData(Qt.ItemDataRole.UserRole, "line")
+        dialog.column_list.addItem(duplicate_item)
+        dialog.column_list.setCurrentItem(duplicate_item)
+        dialog.add_filter_column()
+        assert dialog.filter_columns == ["line"]
+
+        _select_values(dialog, {"L1"})
+        assert dialog.clear_selection_button.isEnabled() is True
+        dialog.clear_selection()
+        assert dialog.value_filters["line"] == set()
+        assert dialog.date_filters["line"] == {"mode": "any", "from": None, "to": None}
+        assert dialog.clear_selection_button.isEnabled() is False
+
+        dialog.selected_columns_list.setCurrentItem(None)
+        dialog.remove_selected_filter_column()
+        assert dialog.filter_columns == []
+
+        _select_available_column(dialog, "tracecode")
+        dialog.add_filter_column()
+        dialog._value_index_by_column["tracecode"] = object()
+        dialog.clear_filter_columns()
+        assert dialog.filter_columns == []
+        assert dialog.value_filters == {}
+        assert dialog._value_index_by_column == {}
+
+        _select_available_column(dialog, "time_stamp")
+        dialog.add_filter_column()
+        dialog.value_filters["time_stamp"] = {"2026-05-10 08:00:00"}
+        dialog.clear_filter()
+        assert dialog.get_filter() == ((), ())
+        assert dialog.status_label.text() == "No row filter selected"
+    finally:
+        dialog.close()
+
+
+def test_filter_dialog_search_and_preview_helpers_cover_empty_and_limited_states(tmp_path) -> None:
+    _app()
+    loaded = _sample_loaded_table(tmp_path)
+    dialog = TabularAnalyticsFilterDialog(
+        dataframe=loaded.dataframe,
+        column_mapping=loaded.column_mapping,
+    )
+    try:
+        refreshed = []
+        original_refresh_values = dialog._refresh_values
+        dialog._refresh_values = lambda: refreshed.append("refresh")
+        dialog.matching_search.setText("TC")
+        assert refreshed == ["refresh"]
+        dialog._refresh_values = original_refresh_values
+
+        dialog._syncing_current_filter = True
+        dialog._store_current_selection()
+        dialog._commit_current_filter_controls()
+        assert dialog.value_filters == {}
+        dialog._syncing_current_filter = False
+
+        dialog._apply_value_preview(
+            "tracecode",
+            [{"label": "TC-001", "row_count": 1, "key": ("TC-001",)}],
+            2,
+        )
+        assert dialog.matching_status_label.text() == (
+            "Showing 1 of 2 value(s). Search to narrow."
+        )
+
+        dialog.matching_list.clear()
+        dialog._refresh_values()
+        assert dialog.matching_status_label.text() == "Add a filter column to preview values."
+    finally:
+        dialog.close()
+
+
+def test_filter_dialog_date_helpers_cover_non_date_and_bounds_fallbacks(tmp_path) -> None:
+    _app()
+    frame = pd.DataFrame(
+        {
+            "source_row_number": [1, 2],
+            "length_mm": [10.1, 10.2],
+            "status": ["open", "closed"],
+            "created_date": [None, None],
+            "updated_time": ["bad", "2026-05-12"],
+            "empty_date": [None, None],
+        }
+    )
+    dialog = TabularAnalyticsFilterDialog(dataframe=frame)
+    try:
+        assert dialog._is_date_filterable(None) is False
+        assert dialog._is_date_filterable("length_mm") is False
+        assert dialog._is_date_filterable("status") is False
+        assert dialog._is_date_filterable("created_date") is False
+        assert dialog._is_date_filterable("updated_time") is False
+
+        lower, upper = dialog._column_date_bounds("empty_date")
+        assert lower.isValid()
+        assert upper == lower
+
+        _select_available_column(dialog, "updated_time")
+        dialog.add_filter_column()
+        dialog._store_current_date_filter()
+        assert dialog.date_filters["updated_time"] == {"mode": "any", "from": None, "to": None}
+
+        dialog._set_combo_data(dialog.date_mode_combo, "missing-mode")
+        assert dialog.date_mode_combo.currentData() == "any"
+    finally:
+        dialog.close()
+
+
+def test_filter_dialog_sqlite_lifecycle_handlers_ignore_stale_results_and_report_errors(
+    tmp_path,
+) -> None:
+    _app()
+    input_file = tmp_path / "sqlite_filter_lifecycle.csv"
+    pd.DataFrame(
+        {
+            "Line": ["L1", "L2"],
+            "Time Stamp": ["2026-05-10", "2026-05-11"],
+        }
+    ).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file, force_sqlite=True)
+
+    dialog = TabularAnalyticsFilterDialog(
+        dataframe=loaded.dataframe,
+        column_mapping=loaded.column_mapping,
+        sqlite_store=loaded.sqlite_store,
+    )
+    try:
+        _select_available_column(dialog, "line")
+        dialog.add_filter_column()
+        _wait_for_value_preview(dialog)
+        dialog._preview_request_id = 7
+
+        dialog._on_sqlite_value_preview_ready(
+            6,
+            "line",
+            [{"label": "stale", "row_count": 1, "key": ("stale",)}],
+            1,
+        )
+        assert all(dialog.matching_list.item(index).text() != "stale (n=1)" for index in range(dialog.matching_list.count()))
+
+        dialog._on_sqlite_value_preview_error(7, "line", "boom")
+        assert dialog.matching_status_label.text() == "Could not load values: boom"
+
+        class _Label:
+            def __init__(self):
+                self.text = ""
+
+            def setText(self, text):
+                self.text = text
+
+        class _Dialog:
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        loading_dialog = _Dialog()
+        loading_label = _Label()
+        dialog._preview_loading_dialog = loading_dialog
+        dialog._preview_loading_label = loading_label
+        dialog._cancel_sqlite_value_preview()
+
+        assert loading_label.text.startswith("Canceling value preview")
+        assert loading_dialog.closed is True
+        assert dialog.matching_status_label.text() == "Value preview canceled."
+    finally:
+        dialog.close()
+        cleanup_tabular_load_result(loaded)

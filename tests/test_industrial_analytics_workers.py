@@ -145,7 +145,11 @@ def test_industrial_analytics_thread_passes_tabular_grouping_to_workflow(
         tabular_filter_keys=(("TC-001",),),
         tabular_column_filters=(TabularColumnFilter("line", selected_values=("L1",)),),
         dashboard_detail_mode="full",
-        dashboard_interactivity_options={"mode": "static", "sample_size": 5000},
+        dashboard_interactivity_options={
+            "mode": "static",
+            "sample_size": 5000,
+            "populationLayerMode": "interactive",
+        },
         sheet_name="Measurements",
         timestamp_column="time_stamp",
         reference_column="reference_id",
@@ -169,6 +173,7 @@ def test_industrial_analytics_thread_passes_tabular_grouping_to_workflow(
     assert captured["dashboard_interactivity_options"] == DashboardInteractivityOptions(
         mode="static",
         sample_size=5000,
+        population_layer_mode="interactive",
     )
     assert captured["sheet_name"] == "Measurements"
     assert captured["timestamp_column"] == "time_stamp"

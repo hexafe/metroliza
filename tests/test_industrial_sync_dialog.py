@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 try:
+    from PyQt6.QtGui import QCloseEvent
     from PyQt6.QtWidgets import QApplication
 
     import modules.industrial_sync_dialog as industrial_sync_dialog
@@ -12,6 +13,7 @@ try:
     from modules.industrial_sync_dialog import IndustrialSyncDialog
     from modules.industrial_workflow_state import IndustrialFilterState
 except Exception as exc:  # pragma: no cover - depends on local Qt runtime availability.
+    QCloseEvent = None
     QApplication = None
     industrial_sync_dialog = None
     IndustrialDataRepository = None
@@ -266,4 +268,180 @@ def test_sync_dialog_access_only_loads_profiles_from_config(tmp_path):
     assert not dialog.edit_filter_button.isEnabled()
     assert "Access-only mode" in dialog.status_label.text()
     assert "never saves data" in dialog.status_label.text()
+    dialog.close()
+
+
+def test_sync_dialog_no_database_non_access_mode_stays_disabled(tmp_path):
+    _app()
+    dialog = IndustrialSyncDialog(db_file=None, access_only=False, config_path=tmp_path / "sources.yaml")
+
+    assert dialog.current_profile() is None
+    assert not dialog.test_connection_button.isEnabled()
+    assert not dialog.sync_now_button.isEnabled()
+    assert "Create a production source before syncing" in dialog.status_label.text()
+    with pytest.raises(ValueError, match="Create or select"):
+        dialog._profile_for_current_filter()
+    dialog.close()
+
+
+def test_sync_dialog_starts_sync_thread_without_external_connection(monkeypatch, tmp_path):
+    _app()
+    db_path = str(tmp_path / "industrial.db")
+    IndustrialDataRepository(db_path).upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="events",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+        allowed_columns=("event_id", "reference"),
+        default_pagination_column="event_id",
+    )
+    saved_credentials = []
+    monkeypatch.setattr(
+        industrial_sync_dialog,
+        "save_industrial_credentials",
+        lambda profile_key, *, username, password: saved_credentials.append(
+            (profile_key, username, password)
+        ),
+    )
+    started_threads = []
+
+    class Signal:
+        def __init__(self):
+            self.callbacks = []
+
+        def connect(self, callback):
+            self.callbacks.append(callback)
+
+    class FakeSyncThread:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.progress_message = Signal()
+            self.result_ready = Signal()
+            self.error_occurred = Signal()
+            self.finished = Signal()
+            self.started = False
+            started_threads.append(self)
+
+        def start(self):
+            self.started = True
+
+        def isRunning(self):
+            return self.started
+
+        def cancel(self):
+            self.started = False
+
+    monkeypatch.setattr(industrial_sync_dialog, "IndustrialOznakSyncThread", FakeSyncThread)
+    dialog = IndustrialSyncDialog(
+        db_file=db_path,
+        filter_state=IndustrialFilterState(reference_column="reference", references=("REF-1",)),
+    )
+    dialog.username_edit.setText("operator")
+    dialog.password_edit.setText("secret-password")
+    dialog.remember_credentials_checkbox.setChecked(True)
+
+    dialog.sync_now()
+
+    assert saved_credentials == [("assembly_mes", "operator", "secret-password")]
+    assert started_threads[0].started is True
+    assert started_threads[0].kwargs["reference_filter_column"] == "reference"
+    assert started_threads[0].kwargs["reference_values"] == ("REF-1",)
+    assert dialog.cancel_sync_button.isEnabled()
+
+    dialog.cancel_sync()
+    assert "Cancelling industrial sync" in dialog.status_label.text()
+    dialog.on_oznak_thread_stopped()
+    assert dialog.oznak_sync_thread is None
+    assert not dialog.cancel_sync_button.isEnabled()
+    dialog.close()
+
+
+def test_sync_dialog_access_check_thread_and_result_statuses(monkeypatch, tmp_path):
+    _app()
+    config_path = tmp_path / "industrial_sources.yaml"
+    upsert_source_profile_in_config(
+        config_path,
+        build_source_profile(
+            profile_key="assembly_mes",
+            profile_name="Assembly MES",
+            source_db_alias="assembly_mes",
+            database_type="mssql",
+            host="mes.example.invalid",
+            port=1433,
+            database_name="plantdb",
+            source_object_name="events",
+            allowed_columns=("event_id", "reference"),
+            default_pagination_column="event_id",
+        ),
+    )
+    started = []
+
+    class Signal:
+        def connect(self, callback):
+            self.callback = callback
+
+    class FakeAccessThread:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.progress_message = Signal()
+            self.result_ready = Signal()
+            self.error_occurred = Signal()
+            self.finished = Signal()
+            started.append(self)
+
+        def start(self):
+            self.started = True
+
+        def isRunning(self):
+            return False
+
+    monkeypatch.setattr(industrial_sync_dialog, "IndustrialOznakAccessCheckThread", FakeAccessThread)
+    dialog = IndustrialSyncDialog(db_file=None, config_path=config_path, access_only=True)
+    dialog.username_edit.setText("operator")
+    dialog.password_edit.setText("secret-password")
+
+    dialog.test_connection()
+    dialog.on_oznak_progress("Reading one row")
+    dialog.on_oznak_result({"status": "succeeded", "test_only": True, "row_count": 0})
+    assert started[0].kwargs["profile"].profile_key == "assembly_mes"
+    assert "0 rows visible" in dialog.status_label.text()
+
+    dialog.on_oznak_result({"status": "succeeded", "test_only": True, "row_count": 2})
+    assert "Access check passed: 2 row(s)" in dialog.status_label.text()
+    assert dialog._format_failed_result_status(
+        {"status": "failed", "test_only": True, "diagnostics": {"warnings": ["password=secret"]}}
+    ) == "Access check failed: password=<redacted>"
+    dialog.close()
+
+
+def test_sync_dialog_error_and_close_running_paths(monkeypatch, tmp_path):
+    _app()
+    warnings = []
+    infos = []
+    monkeypatch.setattr(industrial_sync_dialog.QMessageBox, "warning", lambda *args: warnings.append(args))
+    monkeypatch.setattr(
+        industrial_sync_dialog.QMessageBox,
+        "information",
+        lambda *args: infos.append(args),
+    )
+
+    class RunningThread:
+        def isRunning(self):
+            return True
+
+    dialog = IndustrialSyncDialog(parent=None, db_file=str(tmp_path / "industrial.db"))
+    dialog.on_oznak_error("password=super-secret")
+    dialog.oznak_sync_thread = RunningThread()
+    event = QCloseEvent()
+    dialog.closeEvent(event)
+
+    assert "password=<redacted>" in warnings[0][2]
+    assert "super-secret" not in warnings[0][2]
+    assert infos[0][2] == "Cancel or wait for the sync to finish."
+    assert not event.isAccepted()
+    dialog.oznak_sync_thread = None
     dialog.close()

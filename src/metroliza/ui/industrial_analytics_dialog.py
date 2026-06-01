@@ -95,13 +95,24 @@ _DASHBOARD_INTERACTIVITY_LABELS = {
     "static": "Snapshots only",
     "full": "All rows",
 }
+_POPULATION_LAYER_MODE_LABELS = {
+    "auto": "POPULATION layer auto",
+    "interactive": "POPULATION layer interactive",
+    "static": "POPULATION layer static image",
+}
 
 
 def dashboard_interactivity_options_summary(options: DashboardInteractivityOptions) -> str:
     mode = _DASHBOARD_INTERACTIVITY_LABELS.get(options.mode, options.mode.title())
     if options.mode in {"auto", "sampled"}:
-        return f"{mode}, {options.sample_size:,} random rows"
-    return mode
+        summary = f"{mode}, {options.sample_size:,} random rows"
+    else:
+        summary = mode
+    population_mode = _POPULATION_LAYER_MODE_LABELS.get(
+        options.population_layer_mode,
+        f"POPULATION layer {options.population_layer_mode}",
+    )
+    return f"{summary}; {population_mode}"
 
 
 class DashboardInteractivityOptionsDialog(QDialog):
@@ -117,7 +128,7 @@ class DashboardInteractivityOptionsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Dashboard interactivity")
         self._options = options or DashboardInteractivityOptions()
-        configure_window_size(self, minimum=(360, 180), initial=(420, 220))
+        configure_window_size(self, minimum=(380, 220), initial=(460, 280))
 
         layout = QVBoxLayout(self)
         if row_count is not None and row_count > self._options.sample_size:
@@ -139,6 +150,17 @@ class DashboardInteractivityOptionsDialog(QDialog):
         self.mode_combo.currentIndexChanged.connect(self._sync_sample_size_enabled)
         form.addRow("Mode", self.mode_combo)
 
+        self.population_layer_combo = QComboBox()
+        self.population_layer_combo.addItem("Auto", "auto")
+        self.population_layer_combo.addItem("Interactive", "interactive")
+        self.population_layer_combo.addItem("Static image", "static")
+        population_index = self.population_layer_combo.findData(self._options.population_layer_mode)
+        self.population_layer_combo.setCurrentIndex(population_index if population_index >= 0 else 0)
+        self.population_layer_combo.setToolTip(
+            "Choose how the CSV Summary POPULATION layer is rendered."
+        )
+        form.addRow("POPULATION layer", self.population_layer_combo)
+
         self.sample_size_spin = QSpinBox()
         self.sample_size_spin.setRange(5_000, 200_000)
         self.sample_size_spin.setSingleStep(5_000)
@@ -147,7 +169,7 @@ class DashboardInteractivityOptionsDialog(QDialog):
         layout.addLayout(form)
         layout.addWidget(
             status_chip(
-                "Random sampling affects interactive charts only; summaries and group comparison use all selected rows.",
+                "Random sampling affects interactive charts only; POPULATION layer mode controls its dashboard rendering.",
                 "neutral",
             )
         )
@@ -160,6 +182,10 @@ class DashboardInteractivityOptionsDialog(QDialog):
         layout.addWidget(buttons)
 
         configure_accessibility(self.mode_combo, name="Dashboard interactivity mode")
+        configure_accessibility(
+            self.population_layer_combo,
+            name="Dashboard POPULATION layer mode",
+        )
         configure_accessibility(self.sample_size_spin, name="Dashboard interactivity sample size")
         self._sync_sample_size_enabled()
 
@@ -170,6 +196,7 @@ class DashboardInteractivityOptionsDialog(QDialog):
         return DashboardInteractivityOptions(
             mode=str(self.mode_combo.currentData() or "auto"),
             sample_size=self.sample_size_spin.value(),
+            population_layer_mode=str(self.population_layer_combo.currentData() or "auto"),
         )
 
 
@@ -455,7 +482,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.dashboard_interactivity_summary_label = status_chip("", "neutral")
         self.dashboard_interactivity_button = QPushButton("Change...")
         self.dashboard_interactivity_button.setToolTip(
-            "Adjust CSV Summary chart interactivity for large datasets."
+            "Adjust CSV Summary chart interactivity and POPULATION layer rendering for large datasets."
         )
         self.dashboard_interactivity_button.clicked.connect(self.open_dashboard_interactivity_options)
         self.dashboard_visuals_row_label = section_label("Dashboard style")
@@ -901,7 +928,10 @@ class IndustrialAnalyticsDialog(QDialog):
             return
         summary = dashboard_interactivity_options_summary(self.dashboard_interactivity_options)
         self.dashboard_interactivity_summary_label.setText(summary)
-        self.dashboard_interactivity_summary_label.setToolTip(summary)
+        self.dashboard_interactivity_summary_label.setToolTip(
+            f"{summary}. POPULATION layer mode controls whether that layer is auto, "
+            "interactive, or rendered as a static image."
+        )
 
     def open_dashboard_interactivity_options(self) -> None:
         dialog = DashboardInteractivityOptionsDialog(

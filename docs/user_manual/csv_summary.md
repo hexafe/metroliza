@@ -148,12 +148,16 @@ very large selections. **All rows** attempts all selected rows, but Metroliza ca
 replace individual interactive charts with image snapshots if the saved dashboard would
 otherwise be too large. Statistics, group comparison, aggregate tables, and workbook output
 continue to use all selected rows. When a visual sample is used, the dashboard run notes
-state how many rows were rendered into dashboard charts.
+state how many rows were rendered into dashboard charts and how many selected source rows
+were included in the statistics.
 
-For very large grouped time-series charts, the dashboard can also flag a **static
-POPULATION layer** optimization. That means the heavy POPULATION marker layer can be
-reviewed as an image-backed layer while selected/custom groups remain available for
-interactive Plotly review.
+The same dialog also includes **POPULATION layer**. **Auto** renders an oversized
+POPULATION background as a static image when that keeps a supported time-series chart
+responsive. **Interactive** keeps the POPULATION background as normal Plotly points.
+**Static image** uses the image-backed POPULATION background whenever the chart supports
+it. Static POPULATION layers keep the process background visible, but hover and point
+selection are unavailable for that background layer; selected/custom groups remain
+interactive where Plotly is enabled.
 
 Selected plots are included in the dashboard and in the workbook chart sheet. Grouped time
 series use separate marker-only scatter traces. Multi-group histograms are normalized to

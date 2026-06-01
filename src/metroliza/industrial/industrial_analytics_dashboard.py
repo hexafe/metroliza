@@ -116,12 +116,21 @@ def build_production_dashboard_manifest(
     dashboard_context: dict[str, Any] | None = None,
     plotly_visual_settings: dict[str, Any] | None = None,
     include_plotly_specs: bool = True,
+    dashboard_interactivity_options: Any = None,
+    source_row_count: int | None = None,
+    dashboard_row_count: int | None = None,
 ) -> dict[str, Any]:
     """Build a renderer-neutral manifest for the production analytics dashboard."""
 
     aggregation = aggregation_state or ProductionAggregationState()
     charts = chart_selection or ProductionChartSelection()
     cohort = cohort_state or ReferenceCohortState()
+    interactivity = _normalize_dashboard_interactivity_options(dashboard_interactivity_options)
+    population_layer_mode = str(interactivity.get("population_layer_mode") or "auto")
+    rendered_row_count = int(dashboard_row_count if dashboard_row_count is not None else len(frame.index))
+    selected_source_row_count = int(
+        source_row_count if source_row_count is not None else len(frame.index)
+    )
     aggregate_frame = (
         aggregation_result.dataframe
         if aggregation_result is not None and not aggregation_result.dataframe.empty
@@ -145,6 +154,7 @@ def build_production_dashboard_manifest(
                 group_columns=chart_group_columns,
                 plotly_visual_settings=plotly_visual_settings,
                 include_plotly_specs=include_plotly_specs,
+                population_layer_mode=population_layer_mode,
             )
             chart_specs.extend(spec for spec in specs if spec)
         if charts.histogram:
@@ -182,7 +192,8 @@ def build_production_dashboard_manifest(
 
     summary = {
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-        "source_rows": int(len(frame.index)),
+        "source_rows": selected_source_row_count,
+        "rows": rendered_row_count,
         "aggregate_rows": (
             int(aggregation_result.output_row_count)
             if aggregation_result is not None
@@ -252,10 +263,15 @@ def write_production_dashboard(
     interactivity = _normalize_dashboard_interactivity_options(dashboard_interactivity_options)
     plotly_budget_status = "within_budget"
     plotly_budget_reason = ""
-    dashboard_manifest = _copy_manifest_for_render(manifest)
+    base_dashboard_manifest = _copy_manifest_for_render(manifest)
+    population_layer_summary = _apply_static_population_layer_options(
+        base_dashboard_manifest,
+        interactivity=interactivity,
+    )
+    dashboard_manifest = base_dashboard_manifest
     if interactivity["mode"] == "static" and plotly_spec_count > 0:
         dashboard_manifest = _copy_manifest_without_plotly_specs(
-            manifest,
+            base_dashboard_manifest,
             note_message=(
                 "Interactive chart replaced with an image snapshot because Snapshots only "
                 "mode was selected; summary content remains available."
@@ -264,7 +280,7 @@ def write_production_dashboard(
     else:
         dashboard_manifest, plotly_budget_status, plotly_budget_reason = (
             _copy_manifest_with_plotly_budget(
-                manifest,
+                base_dashboard_manifest,
                 count_budget=count_budget,
                 json_bytes_budget=json_bytes_budget,
             )
@@ -308,7 +324,11 @@ def write_production_dashboard(
 
     embedded_plotly_spec_count = _count_plotly_specs(dashboard_manifest)
     embedded_plotly_serialized_json_bytes = _measure_plotly_specs_json_bytes(dashboard_manifest)
-    _apply_dashboard_interactivity_summary(dashboard_manifest, interactivity)
+    _apply_dashboard_interactivity_summary(
+        dashboard_manifest,
+        interactivity,
+        population_layer_summary=population_layer_summary,
+    )
     _apply_plotly_budget_summary(
         dashboard_manifest,
         status=plotly_budget_status,
@@ -342,6 +362,7 @@ def write_production_dashboard(
             "serialized_json_bytes_budget": int(json_bytes_budget),
         },
         "html_dashboard_plotly_runtime_status": plotly_runtime_status,
+        "html_dashboard_static_population_layer": population_layer_summary,
     }
 
 
@@ -357,8 +378,25 @@ def _copy_manifest_for_render(manifest: dict[str, Any]) -> dict[str, Any]:
         manifest_copy["summary"] = dict(summary)
     charts = manifest.get("charts")
     if isinstance(charts, list):
-        manifest_copy["charts"] = [dict(chart) if isinstance(chart, dict) else chart for chart in charts]
+        copied_charts: list[Any] = []
+        for chart in charts:
+            if not isinstance(chart, dict):
+                copied_charts.append(chart)
+                continue
+            chart_copy = dict(chart)
+            plotly_spec = chart.get("plotly_spec")
+            if isinstance(plotly_spec, dict):
+                chart_copy["plotly_spec"] = _clone_jsonable(plotly_spec)
+            optimization_options = chart.get("optimization_options")
+            if isinstance(optimization_options, list):
+                chart_copy["optimization_options"] = _clone_jsonable(optimization_options)
+            copied_charts.append(chart_copy)
+        manifest_copy["charts"] = copied_charts
     return manifest_copy
+
+
+def _clone_jsonable(value: Any) -> Any:
+    return json.loads(json.dumps(value, ensure_ascii=False, default=str))
 
 
 def _iter_plotly_specs(manifest: dict[str, Any]):
@@ -403,21 +441,533 @@ def _measure_plotly_spec_json_bytes(plotly_spec: dict[str, Any]) -> int:
 def _normalize_dashboard_interactivity_options(options: Any) -> dict[str, int | str]:
     mode = "auto"
     sample_size = int(DASHBOARD_RAW_POINT_LIMIT)
+    population_layer_mode = "auto"
     if isinstance(options, dict):
         raw_mode = options.get("mode")
         raw_sample_size = options.get("sample_size", options.get("sampleSize"))
+        raw_population_layer_mode = options.get(
+            "population_layer_mode",
+            options.get("populationLayerMode"),
+        )
     else:
         raw_mode = getattr(options, "mode", None)
         raw_sample_size = getattr(options, "sample_size", getattr(options, "sampleSize", None))
+        raw_population_layer_mode = getattr(
+            options,
+            "population_layer_mode",
+            getattr(options, "populationLayerMode", None),
+        )
     if isinstance(raw_mode, str):
         candidate_mode = raw_mode.strip().casefold()
         if candidate_mode in {"auto", "sampled", "static", "full"}:
             mode = candidate_mode
+    if isinstance(raw_population_layer_mode, str):
+        candidate_population_layer_mode = raw_population_layer_mode.strip().casefold()
+        if candidate_population_layer_mode in {"auto", "interactive", "static"}:
+            population_layer_mode = candidate_population_layer_mode
     try:
         sample_size = int(raw_sample_size)
     except (TypeError, ValueError):
         pass
-    return {"mode": mode, "sample_size": max(1, int(sample_size))}
+    return {
+        "mode": mode,
+        "sample_size": max(1, int(sample_size)),
+        "population_layer_mode": population_layer_mode,
+    }
+
+
+def _apply_static_population_layer_options(
+    manifest: dict[str, Any],
+    *,
+    interactivity: dict[str, int | str],
+) -> dict[str, Any]:
+    selected_mode = str(interactivity.get("population_layer_mode") or "auto")
+    summary: dict[str, Any] = {
+        "mode": selected_mode,
+        "applied_chart_count": 0,
+        "source_point_count": 0,
+        "rendered_point_count": 0,
+        "skipped_chart_count": 0,
+    }
+    manifest_summary = manifest.get("summary")
+    if isinstance(manifest_summary, dict):
+        sample_size = int(interactivity.get("sample_size") or DASHBOARD_RAW_POINT_LIMIT)
+        summary["sample_size"] = sample_size
+        source_row_count = int(manifest_summary.get("source_rows") or 0)
+        rendered_row_count = int(manifest_summary.get("rows") or 0)
+        if rendered_row_count and source_row_count > rendered_row_count:
+            summary.update(
+                {
+                    "dashboard_sampled": True,
+                    "source_row_count": source_row_count,
+                    "dashboard_row_count": rendered_row_count,
+                }
+            )
+    if selected_mode == "interactive":
+        summary["status"] = "interactive"
+        return summary
+    if str(interactivity.get("mode") or "") == "static":
+        summary["status"] = "dashboard_static"
+        return summary
+
+    charts = manifest.get("charts") if isinstance(manifest.get("charts"), list) else []
+    for chart in charts:
+        if not isinstance(chart, dict):
+            continue
+        option = _static_population_layer_option_for_chart(chart)
+        if option is None:
+            already_static = _static_population_layer_existing_result(
+                chart,
+                selected_mode=selected_mode,
+            )
+            if already_static is not None and selected_mode != "interactive":
+                summary["applied_chart_count"] += 1
+                summary["source_point_count"] += int(already_static.get("source_point_count") or 0)
+                summary["rendered_point_count"] += int(already_static.get("rendered_point_count") or 0)
+                continue
+            if selected_mode == "static" and _chart_has_population_like_plotly_trace(chart):
+                _mark_static_population_layer_skipped(
+                    chart,
+                    reason="unsupported_chart_type",
+                    message="Static POPULATION image layers are not available for this chart type yet.",
+                )
+                summary["skipped_chart_count"] += 1
+            continue
+        source_point_count = int(option.get("source_point_count") or 0)
+        should_apply = selected_mode == "static" or (
+            selected_mode == "auto" and source_point_count >= int(DASHBOARD_RAW_POINT_LIMIT)
+        )
+        option["selected_mode"] = selected_mode
+        option["applied"] = False
+        if not should_apply:
+            option["skipped_reason"] = "below_auto_threshold"
+            continue
+        result = _convert_static_population_layer(chart, option=option)
+        if result.get("applied"):
+            summary["applied_chart_count"] += 1
+            summary["source_point_count"] += int(result.get("source_point_count") or 0)
+            summary["rendered_point_count"] += int(result.get("rendered_point_count") or 0)
+        else:
+            summary["skipped_chart_count"] += 1
+    if summary["applied_chart_count"]:
+        summary["status"] = "applied"
+    elif summary["skipped_chart_count"]:
+        summary["status"] = "skipped"
+    else:
+        summary["status"] = "not_applicable"
+    return summary
+
+
+def _static_population_layer_existing_result(
+    chart: dict[str, Any],
+    *,
+    selected_mode: str,
+) -> dict[str, Any] | None:
+    plotly_spec = chart.get("plotly_spec")
+    if not isinstance(plotly_spec, dict):
+        return None
+    layout = plotly_spec.get("layout")
+    images = layout.get("images") if isinstance(layout, dict) else None
+    if not isinstance(images, list):
+        return None
+    static_image_indexes = [
+        index
+        for index, image in enumerate(images)
+        if isinstance(image, dict)
+        and image.get("visible") is not False
+        and (
+            image.get("metroliza_static_population_layer")
+            or _is_population_layer_label(image.get("metroliza_static_population_layer_label"))
+            or _is_population_layer_label(image.get("metroliza_raw_layer_label"))
+        )
+    ]
+    if not static_image_indexes:
+        return None
+    source_point_count = 0
+    rendered_point_count = 0
+    raw_options = chart.get("optimization_options")
+    if isinstance(raw_options, list):
+        for option in raw_options:
+            if not isinstance(option, dict):
+                continue
+            if option.get("id") != STATIC_POPULATION_LAYER_OPTIMIZATION:
+                continue
+            source_point_count += int(option.get("source_point_count") or 0)
+            rendered_point_count += int(option.get("sample_point_limit") or 0)
+            option["applied"] = True
+            option["selected_mode"] = selected_mode
+            option["rendered_point_count"] = int(option.get("sample_point_limit") or 0)
+    return {
+        "applied": True,
+        "source_point_count": source_point_count,
+        "rendered_point_count": rendered_point_count,
+    }
+
+
+def _static_population_layer_option_for_chart(chart: dict[str, Any]) -> dict[str, Any] | None:
+    chart_type = str(chart.get("chart_type") or "").casefold()
+    if not _supports_static_population_layer(chart_type):
+        return None
+    plotly_spec = chart.get("plotly_spec")
+    if not isinstance(plotly_spec, dict):
+        return None
+    traces = plotly_spec.get("data")
+    if not isinstance(traces, list):
+        return None
+    population_indexes = [
+        index
+        for index, trace in enumerate(traces)
+        if _is_population_marker_trace(trace)
+    ]
+    if len(population_indexes) != 1:
+        return None
+    population_trace = traces[population_indexes[0]]
+    source_point_count = _trace_point_count(population_trace)
+    if source_point_count <= 0:
+        return None
+    option = _ensure_static_population_layer_option(chart)
+    option.update(
+        {
+            "id": STATIC_POPULATION_LAYER_OPTIMIZATION,
+            "available": True,
+            "reason": "population_marker_layer_available",
+            "group_label": _population_trace_label(population_trace),
+            "source_point_count": int(source_point_count),
+            "sample_point_limit": int(DASHBOARD_RAW_POINT_LIMIT),
+            "supported": True,
+            "applied": False,
+        }
+    )
+    return option
+
+
+def _ensure_static_population_layer_option(chart: dict[str, Any]) -> dict[str, Any]:
+    raw_options = chart.get("optimization_options")
+    options = raw_options if isinstance(raw_options, list) else []
+    for option in options:
+        if isinstance(option, dict) and option.get("id") == STATIC_POPULATION_LAYER_OPTIMIZATION:
+            return option
+    option: dict[str, Any] = {"id": STATIC_POPULATION_LAYER_OPTIMIZATION}
+    options.append(option)
+    chart["optimization_options"] = options
+    return option
+
+
+def _supports_static_population_layer(chart_type: str) -> bool:
+    return chart_type.startswith("time_series") or chart_type in {"scatter", "point_series"}
+
+
+def _chart_has_population_like_plotly_trace(chart: dict[str, Any]) -> bool:
+    plotly_spec = chart.get("plotly_spec")
+    if not isinstance(plotly_spec, dict) or not isinstance(plotly_spec.get("data"), list):
+        return False
+    return any(_is_population_marker_trace(trace) for trace in plotly_spec["data"])
+
+
+def _mark_static_population_layer_skipped(
+    chart: dict[str, Any],
+    *,
+    reason: str,
+    message: str,
+) -> None:
+    option = _ensure_static_population_layer_option(chart)
+    option.update(
+        {
+            "available": False,
+            "selected_mode": "static",
+            "applied": False,
+            "skipped_reason": reason,
+        }
+    )
+    notes = list(chart.get("notes") or []) if isinstance(chart.get("notes"), list) else []
+    if message not in notes:
+        notes.append(message)
+    chart["notes"] = notes
+
+
+def _convert_static_population_layer(
+    chart: dict[str, Any],
+    *,
+    option: dict[str, Any],
+) -> dict[str, Any]:
+    plotly_spec = chart.get("plotly_spec")
+    if not isinstance(plotly_spec, dict) or not isinstance(plotly_spec.get("data"), list):
+        option["skipped_reason"] = "missing_plotly_spec"
+        return {"applied": False}
+    traces = plotly_spec["data"]
+    population_indexes = [
+        index
+        for index, trace in enumerate(traces)
+        if _is_population_marker_trace(trace)
+    ]
+    if len(population_indexes) != 1:
+        option["skipped_reason"] = "ambiguous_population_layer"
+        return {"applied": False}
+    population_index = population_indexes[0]
+    population_trace = traces[population_index]
+    xy = _coerce_trace_xy(population_trace)
+    if xy.empty:
+        option["skipped_reason"] = "empty_population_layer"
+        return {"applied": False}
+    all_bounds = _plotly_trace_axis_bounds(traces)
+    if not all_bounds:
+        option["skipped_reason"] = "axis_bounds_unavailable"
+        return {"applied": False}
+    sample_limit = int(option.get("sample_point_limit") or DASHBOARD_RAW_POINT_LIMIT)
+    rendered = _sample_xy_frame(
+        xy,
+        min(len(xy.index), max(1, sample_limit)),
+        seed=_stable_seed(str(chart.get("id") or ""), str(option.get("group_label") or "POPULATION")),
+    )
+    color = _trace_color(population_trace) or _plot_color(population_index, "POPULATION")
+    png_bytes = _render_time_series_raw_layer_png(
+        rendered["__x_numeric"].to_numpy(dtype=float),
+        rendered["__y"].to_numpy(dtype=float),
+        x_range=(all_bounds["x_min"], all_bounds["x_max"]),
+        y_range=(all_bounds["y_min"], all_bounds["y_max"]),
+        color=color,
+    )
+    layout = plotly_spec.setdefault("layout", {})
+    if not isinstance(layout, dict):
+        layout = {}
+        plotly_spec["layout"] = layout
+    image_index = _append_static_population_layout_image(
+        layout,
+        png_bytes=png_bytes,
+        label=str(option.get("group_label") or "POPULATION"),
+        bounds=all_bounds,
+    )
+    traces.pop(population_index)
+    traces.insert(
+        population_index,
+        _static_population_layer_proxy_trace(
+            label=str(option.get("group_label") or "POPULATION"),
+            color=color,
+            image_index=image_index,
+        ),
+    )
+    _apply_static_population_axis_ranges(layout, all_bounds)
+    note = (
+        "POPULATION layer rendered as a static image; hover and point selection are unavailable "
+        "for that background layer."
+    )
+    notes = list(chart.get("notes") or []) if isinstance(chart.get("notes"), list) else []
+    if note not in notes:
+        notes.append(note)
+    chart["notes"] = notes
+    rendered_count = int(len(rendered.index))
+    source_count = int(len(xy.index))
+    option.update(
+        {
+            "applied": True,
+            "rendered_point_count": rendered_count,
+            "source_point_count": source_count,
+            "image_index": int(image_index),
+            "raster_width": 900,
+            "raster_height": 520,
+        }
+    )
+    return {
+        "applied": True,
+        "source_point_count": source_count,
+        "rendered_point_count": rendered_count,
+    }
+
+
+def _is_population_marker_trace(trace: Any) -> bool:
+    if not isinstance(trace, dict):
+        return False
+    trace_type = str(trace.get("type") or "").casefold()
+    mode = str(trace.get("mode") or "").casefold()
+    if trace_type != "scatter" or "markers" not in mode:
+        return False
+    return _is_population_layer_label(_population_trace_label(trace))
+
+
+def _population_trace_label(trace: dict[str, Any]) -> str:
+    meta = trace.get("meta") if isinstance(trace.get("meta"), dict) else {}
+    for candidate in (
+        meta.get("metroliza_legend_label"),
+        meta.get("metroliza_series_id"),
+        trace.get("name"),
+    ):
+        label = _strip_group_count_suffix(str(candidate or "").strip())
+        if label:
+            return label
+    return "POPULATION"
+
+
+def _trace_point_count(trace: Any) -> int:
+    if not isinstance(trace, dict):
+        return 0
+    x_values = trace.get("x")
+    y_values = trace.get("y")
+    if not isinstance(x_values, list) or not isinstance(y_values, list):
+        return 0
+    return min(len(x_values), len(y_values))
+
+
+def _trace_color(trace: dict[str, Any]) -> str | None:
+    marker = trace.get("marker") if isinstance(trace.get("marker"), dict) else {}
+    color = marker.get("color")
+    if isinstance(color, str) and color.strip():
+        return color.strip()
+    line = trace.get("line") if isinstance(trace.get("line"), dict) else {}
+    color = line.get("color")
+    if isinstance(color, str) and color.strip():
+        return color.strip()
+    return None
+
+
+def _coerce_trace_xy(trace: dict[str, Any]) -> pd.DataFrame:
+    x_values = trace.get("x")
+    y_values = trace.get("y")
+    if not isinstance(x_values, list) or not isinstance(y_values, list):
+        return pd.DataFrame(columns=["__x_numeric", "__y", "__x_mode"])
+    pair_count = min(len(x_values), len(y_values))
+    raw = pd.DataFrame({"__x_raw": x_values[:pair_count], "__y_raw": y_values[:pair_count]})
+    y_series = pd.to_numeric(raw["__y_raw"], errors="coerce")
+    x_datetime = pd.to_datetime(raw["__x_raw"], errors="coerce", utc=True)
+    non_null_x = int(raw["__x_raw"].notna().sum())
+    datetime_count = int(x_datetime.notna().sum())
+    if datetime_count and datetime_count >= max(1, int(non_null_x * 0.8)):
+        x_numeric = x_datetime.astype("int64").astype(float) / 1_000_000.0
+        mode = "date"
+        valid_mask = x_datetime.notna() & y_series.notna()
+    else:
+        x_numeric = pd.to_numeric(raw["__x_raw"], errors="coerce")
+        mode = "linear"
+        valid_mask = x_numeric.notna() & y_series.notna()
+    result = pd.DataFrame(
+        {
+            "__x_numeric": x_numeric.loc[valid_mask].astype(float),
+            "__y": y_series.loc[valid_mask].astype(float),
+        }
+    )
+    result = result.replace([np.inf, -np.inf], np.nan).dropna()
+    result["__x_mode"] = mode
+    return result
+
+
+def _plotly_trace_axis_bounds(traces: list[Any]) -> dict[str, Any] | None:
+    prepared = [
+        xy
+        for trace in traces
+        if isinstance(trace, dict) and str(trace.get("type") or "").casefold() == "scatter"
+        if not (xy := _coerce_trace_xy(trace)).empty
+    ]
+    if not prepared:
+        return None
+    x_modes = {str(xy["__x_mode"].iloc[0]) for xy in prepared}
+    if len(x_modes) != 1:
+        return None
+    x_min = min(float(xy["__x_numeric"].min()) for xy in prepared)
+    x_max = max(float(xy["__x_numeric"].max()) for xy in prepared)
+    y_min = min(float(xy["__y"].min()) for xy in prepared)
+    y_max = max(float(xy["__y"].max()) for xy in prepared)
+    if np.isclose(x_min, x_max):
+        x_max = x_min + 1.0
+    if np.isclose(y_min, y_max):
+        y_min -= 0.5
+        y_max += 0.5
+    else:
+        padding = max((y_max - y_min) * 0.04, 1e-9)
+        y_min -= padding
+        y_max += padding
+    return {
+        "x_mode": next(iter(x_modes)),
+        "x_min": x_min,
+        "x_max": x_max,
+        "y_min": y_min,
+        "y_max": y_max,
+    }
+
+
+def _append_static_population_layout_image(
+    layout: dict[str, Any],
+    *,
+    png_bytes: bytes,
+    label: str,
+    bounds: dict[str, Any],
+) -> int:
+    images = layout.setdefault("images", [])
+    if not isinstance(images, list):
+        images = []
+        layout["images"] = images
+    image_index = len(images)
+    x_mode = str(bounds.get("x_mode") or "linear")
+    images.append(
+        {
+            "source": "data:image/png;base64," + base64.b64encode(png_bytes).decode("ascii"),
+            "xref": "x",
+            "yref": "y",
+            "x": _display_x_value(float(bounds["x_min"]), mode=x_mode),
+            "y": float(bounds["y_max"]),
+            "sizex": float(bounds["x_max"]) - float(bounds["x_min"]),
+            "sizey": float(bounds["y_max"]) - float(bounds["y_min"]),
+            "sizing": "stretch",
+            "layer": "below",
+            "opacity": 1.0,
+            "visible": True,
+            "metroliza_static_population_layer": True,
+            "metroliza_static_population_layer_label": label,
+        }
+    )
+    return image_index
+
+
+def _static_population_layer_proxy_trace(
+    *,
+    label: str,
+    color: str,
+    image_index: int,
+) -> dict[str, Any]:
+    target_id = f"series:{normalize_population_label_key(label)}"
+    return {
+        "type": "scatter",
+        "mode": "markers",
+        "name": f"{label} static layer",
+        "x": [None],
+        "y": [None],
+        "showlegend": True,
+        "hoverinfo": "skip",
+        "marker": {
+            "color": color,
+            "size": 8,
+            "symbol": "circle",
+            "opacity": 0.75,
+        },
+        "meta": {
+            "metroliza_trace_schema": "metroliza.plotly_trace.v1",
+            "metroliza_role": "static_population_layer",
+            "metroliza_target_id": target_id,
+            "metroliza_series_id": normalize_population_label_key(label),
+            "metroliza_legend_label": label,
+            "metroliza_chart_kind": "scatter",
+            "metroliza_style_capabilities": [],
+        },
+        "metroliza_static_population_layer_index": int(image_index),
+        "metroliza_static_population_layer_label": label,
+    }
+
+
+def normalize_population_label_key(label: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", _strip_group_count_suffix(label).casefold()).strip("-")
+
+
+def _apply_static_population_axis_ranges(layout: dict[str, Any], bounds: dict[str, Any]) -> None:
+    x_mode = str(bounds.get("x_mode") or "linear")
+    xaxis = layout.setdefault("xaxis", {})
+    if isinstance(xaxis, dict):
+        xaxis["range"] = [
+            _display_x_value(float(bounds["x_min"]), mode=x_mode),
+            _display_x_value(float(bounds["x_max"]), mode=x_mode),
+        ]
+        xaxis["autorange"] = False
+    yaxis = layout.setdefault("yaxis", {})
+    if isinstance(yaxis, dict):
+        yaxis["range"] = [float(bounds["y_min"]), float(bounds["y_max"])]
+        yaxis["autorange"] = False
 
 
 def _copy_manifest_with_plotly_budget(
@@ -524,6 +1074,8 @@ def _omit_chart_plotly_spec(chart: dict[str, Any], *, note_message: str) -> None
 def _apply_dashboard_interactivity_summary(
     manifest: dict[str, Any],
     interactivity: dict[str, int | str],
+    *,
+    population_layer_summary: dict[str, Any] | None = None,
 ) -> None:
     summary = manifest.get("summary")
     if not isinstance(summary, dict):
@@ -531,7 +1083,10 @@ def _apply_dashboard_interactivity_summary(
     summary["dashboard_interactivity"] = {
         "mode": str(interactivity.get("mode") or "auto"),
         "sample_size": int(interactivity.get("sample_size") or DASHBOARD_RAW_POINT_LIMIT),
+        "population_layer_mode": str(interactivity.get("population_layer_mode") or "auto"),
     }
+    if population_layer_summary:
+        summary["static_population_layer"] = dict(population_layer_summary)
 
 
 def _apply_plotly_budget_summary(
@@ -569,6 +1124,7 @@ def _build_time_series_charts(
     group_columns: list[str] | None = None,
     plotly_visual_settings: dict[str, Any] | None = None,
     include_plotly_specs: bool = True,
+    population_layer_mode: str = "auto",
 ) -> list[dict[str, Any]]:
     method = aggregation.aggregation_methods[0] if aggregation.aggregation_methods else "mean"
     aggregate_metric = f"{metric.field_name}__{method}"
@@ -579,7 +1135,10 @@ def _build_time_series_charts(
         x_column="process_datetime",
         y_column=metric.field_name,
     )
-    use_hybrid_raw = raw_point_count > DASHBOARD_RAW_POINT_LIMIT
+    use_hybrid_raw = (
+        str(population_layer_mode or "auto").strip().casefold() != "interactive"
+        and raw_point_count > DASHBOARD_RAW_POINT_LIMIT
+    )
     raw_with_markers_x_axis_title = _raw_with_markers_x_axis_title(aggregation)
     if (
         aggregation.is_aggregated
@@ -1277,6 +1836,14 @@ def _time_series_raw_image_layers(
                     "visible": True,
                     "metroliza_raw_layer": True,
                     "metroliza_raw_layer_label": label,
+                    **(
+                        {
+                            "metroliza_static_population_layer": True,
+                            "metroliza_static_population_layer_label": label,
+                        }
+                        if _is_population_layer_label(label)
+                        else {}
+                    ),
                 },
             }
         )
@@ -1424,6 +1991,14 @@ def _raw_layer_legend_traces(raw_layers: list[dict[str, Any]]) -> list[dict[str,
                     "opacity": 0.75,
                 },
                 "metroliza_raw_layer_index": index,
+                **(
+                    {
+                        "metroliza_static_population_layer_index": index,
+                        "metroliza_static_population_layer_label": label,
+                    }
+                    if _is_population_layer_label(label)
+                    else {}
+                ),
             }
         )
     return traces
@@ -2975,6 +3550,11 @@ def _plotly_chart_payloads(charts: list[Any]) -> list[dict[str, Any]]:
                 "id": chart.get("id"),
                 "title": chart.get("title") or chart.get("id") or "Chart",
                 "plotly_spec": chart.get("plotly_spec"),
+                **(
+                    {"optimization_options": chart.get("optimization_options")}
+                    if isinstance(chart.get("optimization_options"), list)
+                    else {}
+                ),
             }
         )
     return payloads
@@ -3285,14 +3865,22 @@ def _render_plotly_runtime(
         button.dataset.active = active ? '1' : '0';
       });
     };
+    const staticImageLayerIndexForTrace = (trace) => {
+      if (!trace || typeof trace !== 'object') return null;
+      if (typeof trace.metroliza_raw_layer_index === 'number') return trace.metroliza_raw_layer_index;
+      if (typeof trace.metroliza_static_population_layer_index === 'number') {
+        return trace.metroliza_static_population_layer_index;
+      }
+      return null;
+    };
     const attachRawLayerLegendHandler = (target, chart) => {
       if (!target || typeof target.on !== 'function' || target.dataset.rawLegendHandler === '1') return;
       target.dataset.rawLegendHandler = '1';
       target.on('plotly_legendclick', function(eventData) {
         const curveNumber = eventData && typeof eventData.curveNumber === 'number' ? eventData.curveNumber : -1;
-        const trace = (chart.plotly_spec.data || [])[curveNumber];
-        if (!trace || typeof trace.metroliza_raw_layer_index !== 'number') return true;
-        const imageIndex = trace.metroliza_raw_layer_index;
+        const trace = (target.data || [])[curveNumber] || (chart.plotly_spec.data || [])[curveNumber];
+        const imageIndex = staticImageLayerIndexForTrace(trace);
+        if (imageIndex === null) return true;
         const images = (target.layout && target.layout.images) || [];
         const image = images[imageIndex] || {};
         const nextVisible = image.visible === false;
@@ -3497,7 +4085,11 @@ def _summary_card_rows(summary: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
     sheet_label = str(context.get("sheet_label") or "").strip()
     if sheet_label:
         rows.append(("Sheet", sheet_label))
-    rows.append(("Rows rendered", summary.get("source_rows")))
+    rows.append(("Rows rendered", summary.get("rows", summary.get("source_rows"))))
+    source_rows = _summary_int(summary.get("source_rows"))
+    rendered_rows = _summary_int(summary.get("rows", summary.get("source_rows")))
+    if source_rows is not None and rendered_rows is not None and source_rows > rendered_rows:
+        rows.append(("Source rows", source_rows))
     aggregate_rows = _summary_int(summary.get("aggregate_rows"))
     if aggregate_rows and aggregate_rows > 0:
         rows.append(("Summary points", aggregate_rows))
@@ -3540,6 +4132,14 @@ def _summary_card_rows(summary: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
     chart_detail = str(context.get("chart_detail") or "").strip()
     if chart_detail:
         rows.append(("Chart detail", chart_detail))
+    static_population = summary.get("static_population_layer")
+    if isinstance(static_population, dict) and _summary_int(static_population.get("applied_chart_count")):
+        rows.append(
+            (
+                "POPULATION layer",
+                f"Static image in {_summary_int(static_population.get('applied_chart_count'))} chart(s)",
+            )
+        )
 
     return tuple(rows)
 
@@ -3564,14 +4164,18 @@ def _dashboard_takeaway_rows(
             rows.append({"label": label, "value": text})
 
     source_rows = _summary_int(summary.get("source_rows"))
-    if source_rows is not None:
-        add("Rows rendered", f"{source_rows:,} rows are rendered into dashboard chart data.")
+    rendered_rows = _summary_int(summary.get("rows", summary.get("source_rows")))
+    if rendered_rows is not None:
+        add("Rows rendered", f"{rendered_rows:,} rows are rendered into dashboard chart data.")
+    if source_rows is not None and rendered_rows is not None and source_rows > rendered_rows:
+        add("Source rows", f"{source_rows:,} selected rows are included in statistics and summaries.")
 
     chart_detail = str(context.get("chart_detail") or "").strip()
     interactivity = summary.get("dashboard_interactivity")
     if isinstance(interactivity, dict):
         mode = str(interactivity.get("mode") or "").strip().casefold()
         sample_size = _summary_int(interactivity.get("sample_size"))
+        population_layer_mode = str(interactivity.get("population_layer_mode") or "auto").strip()
         if mode in {"auto", "sampled"} and sample_size:
             add(
                 "Chart detail",
@@ -3582,6 +4186,8 @@ def _dashboard_takeaway_rows(
             add("Chart detail", "Charts are saved as static snapshots for faster browser loading.")
         elif mode == "full":
             add("Chart detail", "Interactive charts use all selected rows unless dashboard size limits apply.")
+        if population_layer_mode:
+            add("POPULATION layer", f"POPULATION layer mode: {population_layer_mode}.")
     elif chart_detail:
         add("Chart detail", chart_detail)
 
@@ -3601,6 +4207,12 @@ def _dashboard_takeaway_rows(
         add(
             "Optimization option",
             "Large POPULATION marker layers can be reviewed as static image layers to keep the saved dashboard responsive.",
+        )
+    static_population = summary.get("static_population_layer")
+    if isinstance(static_population, dict) and _summary_int(static_population.get("applied_chart_count")):
+        add(
+            "POPULATION layer",
+            "Static POPULATION layers keep the process background visible; hover and point selection are unavailable for that background layer.",
         )
 
     groupstats_metric_count = _summary_int(summary.get("groupstats_metric_count"))

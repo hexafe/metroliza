@@ -116,6 +116,14 @@ class TestDataGroupingFilterQuery(unittest.TestCase):
 
 
 class TestDataGroupingPartDisplayLabel(unittest.TestCase):
+    def test_display_text_and_truthy_text_normalize_empty_values(self):
+        self.assertEqual(DataGrouping._display_text(None), '')
+        self.assertEqual(DataGrouping._display_text(pd.NA), '')
+        self.assertEqual(DataGrouping._display_text('  value  '), 'value')
+        self.assertFalse(DataGrouping._truthy_text('0'))
+        self.assertFalse(DataGrouping._truthy_text('false'))
+        self.assertTrue(DataGrouping._truthy_text('yes'))
+
     def test_part_display_label_accepts_namedtuple_row(self):
         dialog = DataGrouping.__new__(DataGrouping)
         Row = namedtuple(
@@ -212,6 +220,17 @@ class TestDataGroupingScopeFilterAliases(unittest.TestCase):
         filtered = apply_filter_specs(frame, parsed.specs, match_mode=parsed.match_mode)
 
         self.assertEqual(filtered.index.tolist(), [0])
+
+    def test_scope_filter_alias_normalization_preserves_connectors_and_unknown_fields(self):
+        normalized = DataGrouping._normalize_scope_filter_aliases(
+            ' Supplier IN (ACME, Partner*) OR Unknown=1 AND Date>=2026-05-01',
+            {'Supplier': 'SUPPLIER_NAME', 'Date': 'REPORT_DATE'},
+        )
+
+        self.assertEqual(
+            normalized,
+            ' SUPPLIER_NAME IN (ACME, Partner*) OR Unknown=1 AND REPORT_DATE>=2026-05-01',
+        )
 
     def test_scope_filter_aliases_support_membership_and_wildcards(self):
         from modules.grouping_filter_core import apply_filter_specs
@@ -973,6 +992,46 @@ class TestDataGroupingPartDoubleClick(unittest.TestCase):
 
 
 class TestDataGroupingSelectionRetention(unittest.TestCase):
+    def test_apply_scope_filter_updates_applied_text_and_invalidates_filtered_cache(self):
+        class _TextInput:
+            def text(self):
+                return ' Part=Body '
+
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.scope_filter_input = _TextInput()
+        dialog._cached_filtered_grouping_dataframe = pd.DataFrame({'A': [1]})
+        dialog._cached_grouping_row_index = pd.DataFrame({'B': [1]})
+        dialog._cached_full_grouping_row_index = pd.DataFrame({'C': [1]})
+        calls = []
+        dialog.populate_list_widgets = lambda: calls.append('populate')
+
+        dialog._apply_scope_filter()
+
+        self.assertEqual(dialog._applied_scope_filter_text, 'Part=Body')
+        self.assertIsNone(dialog._cached_filtered_grouping_dataframe)
+        self.assertIsNone(dialog._cached_grouping_row_index)
+        self.assertIsInstance(dialog._cached_full_grouping_row_index, pd.DataFrame)
+        self.assertEqual(calls, ['populate'])
+
+    def test_filtered_grouping_dataframe_without_expression_uses_full_frame_and_summary(self):
+        class _Label:
+            def __init__(self):
+                self.value = ''
+
+            def setText(self, value):
+                self.value = value
+
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.df = pd.DataFrame({'REFERENCE': ['R1', 'R2']})
+        dialog._applied_scope_filter_text = ''
+        dialog._cached_filtered_grouping_dataframe = None
+        dialog.scope_filter_summary_label = _Label()
+
+        filtered = dialog._filtered_grouping_dataframe()
+
+        self.assertIs(filtered, dialog.df)
+        self.assertEqual(dialog.scope_filter_summary_label.value, 'Scope: all rows (2 rows)')
+
     def test_populate_list_widgets_prefers_existing_group_name(self):
         from unittest.mock import patch
 

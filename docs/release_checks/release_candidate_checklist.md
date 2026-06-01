@@ -149,6 +149,11 @@ Current plotstats hotfix pin:
   security-audit attempt failed only because `pip-audit` could not refresh its
   temporary dependency environment; the escalated rerun reported no known
   vulnerabilities.
+- Static POPULATION layer QA passed locally on 2026-06-01. The full headless
+  suite passed (`1825 passed, 259 skipped, 95 warnings, 60 subtests passed`),
+  focused dashboard/contract tests passed, and the combined coverage gate passed
+  with isolated real-Qt UI shards at `81%` against the raised `80%` threshold.
+  Fresh pushed-SHA CI evidence is still required before merge/tag.
 - Post-reorganization follow-up local audit passed after docs/reference cleanup,
   parser-plugin productionization coverage, architecture guardrail hardening, and
   release-status refresh.

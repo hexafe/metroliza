@@ -916,6 +916,100 @@ def test_very_large_time_series_uses_sampled_raw_image_layers(tmp_path) -> None:
     assert len(html_text.encode("utf-8")) < 6 * 1024 * 1024
 
 
+def test_large_time_series_interactive_population_mode_keeps_plotly_markers(monkeypatch) -> None:
+    monkeypatch.setattr(dashboard_module, "DASHBOARD_RAW_POINT_LIMIT", 5)
+    frame = pd.DataFrame(
+        {
+            "process_datetime": pd.date_range(
+                "2026-05-10 08:00",
+                periods=8,
+                freq="s",
+                tz="UTC",
+            ),
+            "GROUP": ["POPULATION"] * 6 + ["A"] * 2,
+            "length_mm": [float(index) for index in range(8)],
+        }
+    )
+
+    manifest = build_production_dashboard_manifest(
+        frame=frame,
+        metric_selection=(ProductionMetricSelection("length_mm", "Length Mm"),),
+        aggregation_state=ProductionAggregationState(
+            time_bucket="none",
+            aggregation_methods=("mean",),
+            group_fields=("GROUP",),
+        ),
+        chart_selection=ProductionChartSelection(
+            time_series=True,
+            histogram=False,
+            violin=False,
+            box=False,
+            groupstats=False,
+        ),
+        dashboard_interactivity_options={"population_layer_mode": "interactive"},
+    )
+
+    spec = manifest["charts"][0]["plotly_spec"]
+    assert {trace["name"] for trace in spec["data"]} == {"POPULATION", "A"}
+    assert "images" not in spec["layout"]
+
+
+def test_large_time_series_static_population_mode_marks_existing_raw_layer(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(dashboard_module, "DASHBOARD_RAW_POINT_LIMIT", 5)
+    monkeypatch.setattr(
+        dashboard_module,
+        "_render_time_series_raw_layer_png",
+        lambda *_args, **_kwargs: b"png",
+    )
+    frame = pd.DataFrame(
+        {
+            "process_datetime": pd.date_range(
+                "2026-05-10 08:00",
+                periods=8,
+                freq="s",
+                tz="UTC",
+            ),
+            "GROUP": ["POPULATION"] * 6 + ["A"] * 2,
+            "length_mm": [float(index) for index in range(8)],
+        }
+    )
+    manifest = build_production_dashboard_manifest(
+        frame=frame,
+        metric_selection=(ProductionMetricSelection("length_mm", "Length Mm"),),
+        aggregation_state=ProductionAggregationState(
+            time_bucket="none",
+            aggregation_methods=("mean",),
+            group_fields=("GROUP",),
+        ),
+        chart_selection=ProductionChartSelection(
+            time_series=True,
+            histogram=False,
+            violin=False,
+            box=False,
+            groupstats=False,
+        ),
+        dashboard_interactivity_options={"population_layer_mode": "static"},
+    )
+
+    chart = manifest["charts"][0]
+    spec = chart["plotly_spec"]
+    population_trace = next(trace for trace in spec["data"] if trace["name"] == "POPULATION raw layer")
+    image_index = population_trace["metroliza_static_population_layer_index"]
+    assert spec["layout"]["images"][image_index]["metroliza_static_population_layer_label"] == "POPULATION"
+
+    result = write_production_dashboard(
+        manifest,
+        tmp_path / "population_raw_layer.html",
+        dashboard_interactivity_options={"population_layer_mode": "static"},
+    )
+
+    assert result["html_dashboard_static_population_layer"]["status"] == "applied"
+    assert result["html_dashboard_static_population_layer"]["source_point_count"] == 6
+
+
 def test_static_population_layer_optimization_marked_available(monkeypatch) -> None:
     monkeypatch.setattr(dashboard_module, "DASHBOARD_RAW_POINT_LIMIT", 5)
     monkeypatch.setattr(
@@ -963,6 +1057,213 @@ def test_static_population_layer_optimization_marked_available(monkeypatch) -> N
     assert option["group_label"] == "POPULATION"
     assert option["source_point_count"] == 8
     assert option["sample_point_limit"] == 5
+
+
+def _static_population_layer_manifest(point_count: int = 8) -> dict[str, object]:
+    x_values = [
+        value.isoformat()
+        for value in pd.date_range("2026-05-10 08:00", periods=point_count, freq="s", tz="UTC")
+    ]
+    return {
+        "schema": DASHBOARD_SCHEMA,
+        "summary": {
+            "source_rows": point_count + 2,
+            "metric_count": 1,
+            "chart_count": 1,
+        },
+        "charts": [
+            {
+                "id": "time-series-length_mm",
+                "title": "Length Mm over time",
+                "chart_type": "time_series",
+                "plotly_spec": {
+                    "data": [
+                        {
+                            "type": "scatter",
+                            "mode": "markers",
+                            "name": "POPULATION",
+                            "x": x_values,
+                            "y": [float(index) for index in range(point_count)],
+                            "marker": {"color": "#245a5a"},
+                        },
+                        {
+                            "type": "scatter",
+                            "mode": "markers",
+                            "name": "A",
+                            "x": x_values[:2],
+                            "y": [1.0, 2.0],
+                            "marker": {"color": "#d55e00"},
+                        },
+                    ],
+                    "layout": {"xaxis": {"title": "Process time"}, "yaxis": {"title": "Length Mm"}},
+                    "config": {"responsive": True},
+                },
+            }
+        ],
+        "groupstats": {},
+        "diagnostics": [],
+    }
+
+
+def _embedded_dashboard_charts(html_text: str) -> list[dict[str, object]]:
+    match = re.search(
+        r'<script id="production-dashboard-charts" type="application/json">(.*?)</script>',
+        html_text,
+        re.DOTALL,
+    )
+    assert match is not None
+    return json.loads(match.group(1))
+
+
+def test_write_dashboard_static_population_layer_mode_converts_supported_time_series(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        dashboard_module,
+        "_render_time_series_raw_layer_png",
+        lambda *_args, **_kwargs: b"png",
+    )
+    manifest = _static_population_layer_manifest()
+
+    result = write_production_dashboard(
+        manifest,
+        tmp_path / "population_static.html",
+        dashboard_interactivity_options={"population_layer_mode": "static"},
+    )
+
+    html_text = Path(result["html_dashboard_path"]).read_text(encoding="utf-8")
+    chart = _embedded_dashboard_charts(html_text)[0]
+    spec = chart["plotly_spec"]
+    traces = spec["data"]
+    assert [trace["name"] for trace in traces] == ["POPULATION static layer", "A"]
+    assert traces[0]["metroliza_static_population_layer_index"] == 0
+    assert traces[0]["meta"]["metroliza_role"] == "static_population_layer"
+    assert spec["layout"]["images"][0]["source"].startswith("data:image/png;base64,")
+    assert spec["layout"]["images"][0]["metroliza_static_population_layer_label"] == "POPULATION"
+    assert spec["layout"]["xaxis"]["autorange"] is False
+    assert spec["layout"]["yaxis"]["autorange"] is False
+    assert result["html_dashboard_static_population_layer"]["status"] == "applied"
+    assert result["html_dashboard_static_population_layer"]["applied_chart_count"] == 1
+    assert "Static POPULATION layers keep the process background visible" in html_text
+    assert "hover and point selection are unavailable" in html_text
+    assert "plotly_spec" in manifest["charts"][0]
+
+
+def test_write_dashboard_static_population_layer_interactive_mode_keeps_trace(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        dashboard_module,
+        "_render_time_series_raw_layer_png",
+        lambda *_args, **_kwargs: b"png",
+    )
+    manifest = _static_population_layer_manifest()
+
+    result = write_production_dashboard(
+        manifest,
+        tmp_path / "population_interactive.html",
+        dashboard_interactivity_options={"populationLayerMode": "interactive"},
+    )
+
+    html_text = Path(result["html_dashboard_path"]).read_text(encoding="utf-8")
+    chart = _embedded_dashboard_charts(html_text)[0]
+    spec = chart["plotly_spec"]
+    assert [trace["name"] for trace in spec["data"]] == ["POPULATION", "A"]
+    assert "images" not in spec["layout"]
+    assert result["html_dashboard_static_population_layer"]["status"] == "interactive"
+
+
+def test_write_dashboard_static_population_layer_auto_applies_only_above_threshold(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(dashboard_module, "DASHBOARD_RAW_POINT_LIMIT", 5)
+    monkeypatch.setattr(
+        dashboard_module,
+        "_render_time_series_raw_layer_png",
+        lambda *_args, **_kwargs: b"png",
+    )
+
+    large_result = write_production_dashboard(
+        _static_population_layer_manifest(point_count=8),
+        tmp_path / "population_auto_large.html",
+        dashboard_interactivity_options={"population_layer_mode": "auto"},
+    )
+    small_result = write_production_dashboard(
+        _static_population_layer_manifest(point_count=4),
+        tmp_path / "population_auto_small.html",
+        dashboard_interactivity_options={"population_layer_mode": "auto"},
+    )
+
+    large_html = Path(large_result["html_dashboard_path"]).read_text(encoding="utf-8")
+    small_html = Path(small_result["html_dashboard_path"]).read_text(encoding="utf-8")
+    assert _embedded_dashboard_charts(large_html)[0]["plotly_spec"]["layout"]["images"]
+    assert "images" not in _embedded_dashboard_charts(small_html)[0]["plotly_spec"]["layout"]
+    assert large_result["html_dashboard_static_population_layer"]["status"] == "applied"
+    assert small_result["html_dashboard_static_population_layer"]["status"] == "not_applicable"
+
+
+def test_write_dashboard_static_population_layer_converts_sampled_dashboard_frame(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        dashboard_module,
+        "_render_time_series_raw_layer_png",
+        lambda *_args, **_kwargs: b"png",
+    )
+    manifest = _static_population_layer_manifest(point_count=5)
+    manifest["summary"]["source_rows"] = 350_000
+    manifest["summary"]["rows"] = 50_000
+
+    result = write_production_dashboard(
+        manifest,
+        tmp_path / "population_static_sampled.html",
+        dashboard_interactivity_options={
+            "mode": "sampled",
+            "sample_size": 50_000,
+            "population_layer_mode": "static",
+        },
+    )
+
+    html_text = Path(result["html_dashboard_path"]).read_text(encoding="utf-8")
+    chart = _embedded_dashboard_charts(html_text)[0]
+    static_population = result["html_dashboard_static_population_layer"]
+    assert chart["plotly_spec"]["data"][0]["name"] == "POPULATION static layer"
+    assert chart["plotly_spec"]["layout"]["images"][0]["metroliza_static_population_layer_label"] == "POPULATION"
+    assert static_population["status"] == "applied"
+    assert static_population["dashboard_sampled"] is True
+    assert static_population["source_row_count"] == 350_000
+    assert static_population["dashboard_row_count"] == 50_000
+
+
+def test_write_dashboard_static_population_layer_keeps_unsupported_chart_honest(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        dashboard_module,
+        "_render_time_series_raw_layer_png",
+        lambda *_args, **_kwargs: b"png",
+    )
+    manifest = _static_population_layer_manifest()
+    manifest["charts"][0]["chart_type"] = "histogram"
+    manifest["charts"][0]["id"] = "histogram-length_mm"
+
+    result = write_production_dashboard(
+        manifest,
+        tmp_path / "population_unsupported.html",
+        dashboard_interactivity_options={"population_layer_mode": "static"},
+    )
+
+    html_text = Path(result["html_dashboard_path"]).read_text(encoding="utf-8")
+    chart = _embedded_dashboard_charts(html_text)[0]
+    assert [trace["name"] for trace in chart["plotly_spec"]["data"]] == ["POPULATION", "A"]
+    assert "images" not in chart["plotly_spec"]["layout"]
+    assert "Static POPULATION image layers are not available for this chart type yet." in html_text
+    assert chart["optimization_options"][0]["skipped_reason"] == "unsupported_chart_type"
 
 
 def test_distribution_charts_use_selected_group_field_before_default_columns() -> None:

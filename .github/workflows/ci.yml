@@ -198,7 +198,7 @@ jobs:
     name: Unit tests
     runs-on: ubuntu-latest
     env:
-      COVERAGE_MINIMUM_THRESHOLD: '65'
+      COVERAGE_MINIMUM_THRESHOLD: '80'
       QT_QPA_PLATFORM: offscreen
     steps:
       - name: Checkout
@@ -223,15 +223,67 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
 
-      - name: Run test suite with coverage (pytest)
+      - name: Run test suite with combined coverage (pytest)
         run: |
+          set -euo pipefail
+          python -m coverage erase
           PYTHONPATH=src:. python -m pytest tests -q \
             --cov=src/metroliza \
             --cov=modules \
             --cov=scripts \
-            --cov-report=term \
-            --cov-report=xml:coverage.xml \
-            --cov-fail-under="${COVERAGE_MINIMUM_THRESHOLD:-65}"
+            --cov-report= \
+            --cov-fail-under=0
+          PYTHONPATH=src:. python -m pytest tests/test_dashboard_visual_options_dialog.py -q \
+            --cov=src/metroliza \
+            --cov=modules \
+            --cov=scripts \
+            --cov-append \
+            --cov-report= \
+            --cov-fail-under=0
+          PYTHONPATH=src:. python -m pytest tests/test_industrial_analytics_dialog.py -q \
+            --cov=src/metroliza \
+            --cov=modules \
+            --cov=scripts \
+            --cov-append \
+            --cov-report= \
+            --cov-fail-under=0
+          PYTHONPATH=src:. python -m pytest tests/test_tabular_analytics_grouping_dialog.py tests/test_tabular_analytics_filter_dialog.py -q \
+            --cov=src/metroliza \
+            --cov=modules \
+            --cov=scripts \
+            --cov-append \
+            --cov-report= \
+            --cov-fail-under=0
+          PYTHONPATH=src:. python -m pytest tests/test_export_dialog_behavior.py tests/test_export_dialog_layout.py -q \
+            --cov=src/metroliza \
+            --cov=modules \
+            --cov=scripts \
+            --cov-append \
+            --cov-report= \
+            --cov-fail-under=0
+          PYTHONPATH=src:. python -m pytest tests/test_industrial_data_dialog.py tests/test_industrial_export_dialog.py tests/test_industrial_filter_dialog.py tests/test_industrial_linking_dialog.py tests/test_industrial_sync_dialog.py -q \
+            --cov=src/metroliza \
+            --cov=modules \
+            --cov=scripts \
+            --cov-append \
+            --cov-report= \
+            --cov-fail-under=0
+          PYTHONPATH=src:. python -m pytest tests/test_data_grouping_filter_query.py tests/test_modifydb_record_updates.py tests/test_modifydb_update_statements.py -q \
+            --cov=src/metroliza \
+            --cov=modules \
+            --cov=scripts \
+            --cov-append \
+            --cov-report= \
+            --cov-fail-under=0
+          PYTHONPATH=src:. python -m pytest tests/test_worker_progress_dialog.py tests/test_parser_plugin_wizard.py tests/test_main_window_metadata_ui.py -q \
+            --cov=src/metroliza \
+            --cov=modules \
+            --cov=scripts \
+            --cov-append \
+            --cov-report= \
+            --cov-fail-under=0
+          python -m coverage report --fail-under="${COVERAGE_MINIMUM_THRESHOLD:-80}"
+          python -m coverage xml -o coverage.xml
 
       - name: Report coverage threshold status
         run: |
@@ -241,7 +293,7 @@ jobs:
           import sys
           import xml.etree.ElementTree as ET
 
-          threshold = float(os.environ.get('COVERAGE_MINIMUM_THRESHOLD', '65'))
+          threshold = float(os.environ.get('COVERAGE_MINIMUM_THRESHOLD', '80'))
           coverage_path = pathlib.Path('coverage.xml')
           if not coverage_path.exists():
               print('::warning title=Coverage threshold status unavailable::coverage.xml was not generated; skipping threshold summary.')

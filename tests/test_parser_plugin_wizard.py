@@ -111,6 +111,34 @@ class TestParserPluginWizard(unittest.TestCase):
             finally:
                 dialog.close()
 
+    def test_dialog_open_and_copy_are_noops_without_workspace(self):
+        with tempfile.TemporaryDirectory() as home_dir:
+            dialog = ParserPluginWizardDialog(home=Path(home_dir))
+            try:
+                with patch("metroliza.ui.parser_plugin_wizard.QDesktopServices.openUrl") as open_url:
+                    dialog.open_handoff_folder()
+                dialog.copy_handoff_path()
+
+                open_url.assert_not_called()
+                self.assertIn("No handoff folder created yet", dialog.result_label.text())
+            finally:
+                dialog.close()
+
+    def test_dialog_open_handoff_folder_reports_failed_desktop_open(self):
+        with tempfile.TemporaryDirectory() as home_dir:
+            dialog = ParserPluginWizardDialog(home=Path(home_dir))
+            try:
+                dialog.plugin_id_edit.setText("Supplier Delta")
+                dialog.create_handoff_workspace()
+
+                with patch("metroliza.ui.parser_plugin_wizard.QDesktopServices.openUrl", return_value=False):
+                    dialog.open_handoff_folder()
+
+                self.assertIn("Could not open folder", dialog.result_label.text())
+                self.assertIn(str(dialog.last_handoff_workspace.root), dialog.result_label.text())
+            finally:
+                dialog.close()
+
     def test_main_window_tools_menu_opens_parser_profile_dialog(self):
         window = MainWindow(version_label="test", days_until_expiration=None)
 

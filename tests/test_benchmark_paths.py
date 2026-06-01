@@ -1,4 +1,16 @@
+import csv
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+from scripts import benchmark_paths
 from scripts.benchmark_paths import (
+    ScenarioResult,
+    _collect_distribution_gof_metrics,
+    _coerce_legacy,
+    _write_outputs,
     benchmark_csv_summary_large_data_probe,
     benchmark_csv_summary_path,
     benchmark_distribution_fit_gof_policy_compare,
@@ -160,3 +172,297 @@ def test_distribution_fit_gof_policy_compare_smoke(tmp_path):
     assert result.input_metrics['auto_selected_policy_subsampled'] == 2
     assert result.input_metrics['auto_effective_gof_sample_size_min'] == 12
     assert result.input_metrics['auto_effective_gof_sample_size_max'] == 12
+
+
+def test_distribution_gof_metrics_counts_methods_policies_and_effective_sizes():
+    metrics = _collect_distribution_gof_metrics(
+        [
+            {
+                'gof_metrics': {
+                    'ad_pvalue_method': 'monte_carlo',
+                    'ad_sample_policy': 'full',
+                    'ad_effective_sample_size': 40,
+                },
+                'ranking_metrics': [
+                    {'ad_pvalue_method': 'ks_proxy'},
+                    {'ad_pvalue_method': 'monte_carlo'},
+                ],
+            },
+            {
+                'gof_metrics': {
+                    'ad_pvalue_method': 'ks_proxy',
+                    'ad_sample_policy': 'subsampled',
+                    'ad_effective_sample_size': 12,
+                },
+                'ranking_metrics': [{'ad_pvalue_method': None}],
+            },
+            {},
+        ],
+        prefix='auto',
+    )
+
+    assert metrics == {
+        'auto_selected_count': 3,
+        'auto_effective_gof_sample_size_min': 12,
+        'auto_effective_gof_sample_size_max': 40,
+        'auto_selected_method_monte_carlo': 1,
+        'auto_selected_method_ks_proxy': 1,
+        'auto_selected_method_unknown': 1,
+        'auto_selected_policy_full': 1,
+        'auto_selected_policy_subsampled': 1,
+        'auto_selected_policy_unknown': 1,
+        'auto_ranking_method_ks_proxy': 1,
+        'auto_ranking_method_monte_carlo': 1,
+        'auto_ranking_method_unknown': 1,
+    }
+
+
+def test_coerce_legacy_converts_mixed_values_to_float_array():
+    values = _coerce_legacy(['1.5', None, 'bad', 2])
+
+    assert values.tolist()[0] == 1.5
+    assert values.tolist()[3] == 2.0
+    assert values.shape == (4,)
+    assert values.dtype.kind == 'f'
+    assert values[1] != values[1]
+    assert values[2] != values[2]
+
+
+def test_write_outputs_writes_parseable_json_and_flat_csv(tmp_path: Path):
+    payload = {
+        'results': [
+            {
+                'scenario': 'synthetic_path',
+                'wall_time_s': 1.25,
+                'stage_timings_s': {'load': 0.5, 'write': 0.75},
+                'input_metrics': {'rows': 10, 'headers': 2},
+            }
+        ]
+    }
+
+    json_path, csv_path = _write_outputs(tmp_path / 'benchmarks', payload)
+
+    assert json.loads(json_path.read_text(encoding='utf-8')) == payload
+    rows = list(csv.DictReader(csv_path.open(encoding='utf-8')))
+    assert rows == [
+        {
+            'scenario': 'synthetic_path',
+            'metric_type': 'wall_time_s',
+            'metric_name': 'total',
+            'value': '1.25',
+        },
+        {
+            'scenario': 'synthetic_path',
+            'metric_type': 'stage_timing_s',
+            'metric_name': 'load',
+            'value': '0.5',
+        },
+        {
+            'scenario': 'synthetic_path',
+            'metric_type': 'stage_timing_s',
+            'metric_name': 'write',
+            'value': '0.75',
+        },
+        {
+            'scenario': 'synthetic_path',
+            'metric_type': 'input_metric',
+            'metric_name': 'rows',
+            'value': '10',
+        },
+        {
+            'scenario': 'synthetic_path',
+            'metric_type': 'input_metric',
+            'metric_name': 'headers',
+            'value': '2',
+        },
+    ]
+
+
+def test_benchmark_main_runs_selected_mocked_scenarios_and_writes_summary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    calls: list[str] = []
+
+    def fake_result(scenario: str) -> ScenarioResult:
+        return ScenarioResult(
+            scenario=scenario,
+            wall_time_s=0.1,
+            stage_timings_s={'selected': float(len(calls))},
+            input_metrics={
+                'rows': 1,
+                'headers': 1,
+                'chart_count': 1,
+                'chart_backend_native_count': 1 if scenario == 'excel_export_path' else 0,
+                'chart_backend_matplotlib_count': 2 if scenario == 'excel_export_path' else 0,
+                'chart_type_median_distribution_s': 0.3,
+            },
+        )
+
+    def fake_excel(temp_path: Path, *, report_count: int, headers_per_report: int) -> ScenarioResult:
+        assert temp_path.exists()
+        assert report_count == 3
+        assert headers_per_report == 4
+        calls.append('excel_export_path')
+        return fake_result('excel_export_path')
+
+    def fake_chart(temp_path: Path, *, chart_type: str, iterations: int) -> ScenarioResult:
+        assert temp_path.exists()
+        assert chart_type == 'histogram'
+        assert iterations == 2
+        calls.append('chart_type_native_compare')
+        return fake_result('chart_type_native_compare')
+
+    monkeypatch.setattr(benchmark_paths, 'benchmark_excel_export_path', fake_excel)
+    monkeypatch.setattr(benchmark_paths, 'benchmark_chart_type_native_compare_path', fake_chart)
+    monkeypatch.setattr(
+        sys,
+        'argv',
+        [
+            'benchmark_paths.py',
+            '--output-dir',
+            str(tmp_path),
+            '--report-count',
+            '3',
+            '--headers-per-report',
+            '4',
+            '--chart-type-benchmark-chart',
+            'histogram',
+            '--chart-type-benchmark-iterations',
+            '2',
+            '--scenarios',
+            'excel_export_path',
+            'chart_type_native_compare',
+        ],
+    )
+
+    result = benchmark_paths.main()
+
+    assert result == 0
+    assert calls == ['excel_export_path', 'chart_type_native_compare']
+    output = capsys.readouterr().out
+    assert 'Benchmark JSON:' in output
+    json_path = next(tmp_path.glob('benchmark-*.json'))
+    payload = json.loads(json_path.read_text(encoding='utf-8'))
+    assert [item['scenario'] for item in payload['results']] == [
+        'excel_export_path',
+        'chart_type_native_compare',
+    ]
+    assert payload['config']['scenarios'] == ['excel_export_path', 'chart_type_native_compare']
+    assert payload['summary']['chart_backend_distribution']['counts'] == {
+        'native': 1,
+        'matplotlib': 2,
+    }
+
+
+def test_benchmark_main_default_selection_skips_manual_large_csv_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    called: list[str] = []
+
+    def runner(name: str):
+        def _run(_temp_path: Path, **_kwargs) -> ScenarioResult:
+            called.append(name)
+            return ScenarioResult(
+                scenario=name,
+                wall_time_s=0.01,
+                stage_timings_s={},
+                input_metrics={},
+            )
+
+        return _run
+
+    monkeypatch.setattr(benchmark_paths, 'benchmark_parse_path', runner('pdf_parse_path'))
+    monkeypatch.setattr(benchmark_paths, 'benchmark_excel_export_path', runner('excel_export_path'))
+    monkeypatch.setattr(
+        benchmark_paths,
+        'benchmark_export_write_vs_shape_path',
+        runner('excel_export_write_vs_shape_path'),
+    )
+    monkeypatch.setattr(
+        benchmark_paths,
+        'benchmark_export_high_header_cardinality_path',
+        runner('excel_export_high_header_cardinality_compare'),
+    )
+    monkeypatch.setattr(
+        benchmark_paths,
+        'benchmark_csv_summary_path',
+        runner('csv_summary_export_path'),
+    )
+    monkeypatch.setattr(
+        benchmark_paths,
+        'benchmark_production_dashboard_workbook_path',
+        runner('production_dashboard_workbook_path'),
+    )
+    monkeypatch.setattr(
+        benchmark_paths,
+        'benchmark_csv_summary_large_data_probe',
+        runner('csv_summary_large_data_probe'),
+    )
+    monkeypatch.setattr(
+        benchmark_paths,
+        'benchmark_distribution_fit_monte_carlo_path',
+        runner('distribution_fit_monte_carlo_path'),
+    )
+    monkeypatch.setattr(
+        benchmark_paths,
+        'benchmark_distribution_fit_gof_policy_compare',
+        runner('distribution_fit_gof_policy_compare'),
+    )
+    monkeypatch.setattr(
+        benchmark_paths,
+        'benchmark_group_preprocess_mixed_types_path',
+        runner('group_preprocess_mixed_types_compare'),
+    )
+    monkeypatch.setattr(
+        benchmark_paths,
+        'benchmark_cmm_parser_backend_compare',
+        runner('cmm_parser_backend_compare'),
+    )
+    monkeypatch.setattr(
+        benchmark_paths,
+        'benchmark_chart_render_budget_path',
+        runner('chart_render_budget_path'),
+    )
+    monkeypatch.setattr(
+        benchmark_paths,
+        'benchmark_chart_type_native_compare_path',
+        runner('chart_type_native_compare'),
+    )
+    monkeypatch.setattr(
+        sys,
+        'argv',
+        ['benchmark_paths.py', '--output-dir', str(tmp_path)],
+    )
+
+    assert benchmark_paths.main() == 0
+    assert 'csv_summary_large_data_probe' not in called
+    assert called == [
+        'pdf_parse_path',
+        'excel_export_path',
+        'excel_export_write_vs_shape_path',
+        'excel_export_high_header_cardinality_compare',
+        'csv_summary_export_path',
+        'production_dashboard_workbook_path',
+        'distribution_fit_monte_carlo_path',
+        'distribution_fit_gof_policy_compare',
+        'group_preprocess_mixed_types_compare',
+        'cmm_parser_backend_compare',
+        'chart_render_budget_path',
+        'chart_type_native_compare',
+    ]
+
+
+def test_benchmark_main_validates_cli_choices(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        sys,
+        'argv',
+        ['benchmark_paths.py', '--chart-type-benchmark-chart', 'scatter'],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        benchmark_paths.main()
+
+    assert exc_info.value.code == 2

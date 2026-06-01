@@ -13,6 +13,7 @@ try:
     from PyQt6.QtWidgets import QApplication, QDialog
     from modules.industrial_analytics_dialog import (
         build_analytics_completion_message,
+        DashboardInteractivityOptionsDialog,
         IndustrialAnalyticsDialog,
         MetricSelectionDialog,
         SOURCE_PRODUCTION_CACHE,
@@ -30,6 +31,7 @@ except ImportError as exc:  # pragma: no cover - environment/order dependent
     build_analytics_completion_message = None
     QApplication = None
     cleanup_tabular_load_result = None
+    DashboardInteractivityOptionsDialog = None
     QDialog = None
     IndustrialAnalyticsDialog = None
     IndustrialAnalyticsFilterDialog = None
@@ -277,29 +279,68 @@ def test_tabular_analytics_dialog_interactivity_controls_are_visible_and_in_requ
     dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
     try:
         assert not dialog.dashboard_interactivity_button.isHidden()
-        assert dialog.dashboard_interactivity_summary_label.text() == "Auto, 50,000 random rows"
+        assert (
+            dialog.dashboard_interactivity_summary_label.text()
+            == "Auto, 50,000 random rows; POPULATION layer auto"
+        )
         assert dialog.dashboard_interactivity_row_label.text() == "Dashboard interactivity"
         assert "chart interactivity" in dialog.dashboard_interactivity_button.toolTip()
+        assert "POPULATION layer" in dialog.dashboard_interactivity_button.toolTip()
 
         dialog.dashboard_interactivity_options = DashboardInteractivityOptions(
             mode="sampled",
             sample_size=75000,
+            population_layer_mode="static",
         )
         dialog._sync_dashboard_interactivity_controls()
         assert (
             dialog.dashboard_interactivity_summary_label.text()
-            == "Interactive random sample, 75,000 random rows"
+            == "Interactive random sample, 75,000 random rows; POPULATION layer static image"
+        )
+        assert "interactive, or rendered as a static image" in (
+            dialog.dashboard_interactivity_summary_label.toolTip()
         )
         request = dialog._build_analytics_request()
 
         assert request.dashboard_interactivity_options == DashboardInteractivityOptions(
             mode="sampled",
             sample_size=75000,
+            population_layer_mode="static",
         )
         thread = dialog.create_analytics_thread()
         assert thread.dashboard_interactivity_options == DashboardInteractivityOptions(
             mode="sampled",
             sample_size=75000,
+            population_layer_mode="static",
+        )
+    finally:
+        dialog.close()
+
+
+def test_dashboard_interactivity_dialog_exposes_population_layer_mode() -> None:
+    _app()
+    dialog = DashboardInteractivityOptionsDialog(
+        options=DashboardInteractivityOptions(
+            mode="sampled",
+            sample_size=75000,
+            population_layer_mode="interactive",
+        )
+    )
+    try:
+        assert dialog.population_layer_combo.currentData() == "interactive"
+        assert dialog.population_layer_combo.itemText(
+            dialog.population_layer_combo.findData("static")
+        ) == "Static image"
+        assert "CSV Summary POPULATION layer" in dialog.population_layer_combo.toolTip()
+
+        dialog.population_layer_combo.setCurrentIndex(
+            dialog.population_layer_combo.findData("static")
+        )
+
+        assert dialog.interactivity_options() == DashboardInteractivityOptions(
+            mode="sampled",
+            sample_size=75000,
+            population_layer_mode="static",
         )
     finally:
         dialog.close()
@@ -332,8 +373,9 @@ def test_tabular_analytics_interactivity_button_launches_dialog(monkeypatch) -> 
         def interactivity_options(self):
             return DashboardInteractivityOptions(mode="static", sample_size=50000)
 
-    monkeypatch.setattr(
-        "modules.industrial_analytics_dialog.DashboardInteractivityOptionsDialog",
+    monkeypatch.setitem(
+        IndustrialAnalyticsDialog.open_dashboard_interactivity_options.__globals__,
+        "DashboardInteractivityOptionsDialog",
         FakeDashboardInteractivityOptionsDialog,
     )
 
@@ -348,7 +390,10 @@ def test_tabular_analytics_interactivity_button_launches_dialog(monkeypatch) -> 
             mode="static",
             sample_size=50000,
         )
-        assert dialog.dashboard_interactivity_summary_label.text() == "Snapshots only"
+        assert (
+            dialog.dashboard_interactivity_summary_label.text()
+            == "Snapshots only; POPULATION layer auto"
+        )
     finally:
         dialog.close()
 
@@ -370,8 +415,9 @@ def test_large_tabular_dashboard_auto_mode_prompts_for_interactivity(monkeypatch
         def interactivity_options(self):
             return DashboardInteractivityOptions(mode="sampled", sample_size=50000)
 
-    monkeypatch.setattr(
-        "modules.industrial_analytics_dialog.DashboardInteractivityOptionsDialog",
+    monkeypatch.setitem(
+        IndustrialAnalyticsDialog._confirm_large_dashboard_interactivity.__globals__,
+        "DashboardInteractivityOptionsDialog",
         FakeDashboardInteractivityOptionsDialog,
     )
 
@@ -613,12 +659,14 @@ def test_tabular_grouping_dialog_uses_sqlite_store_without_materializing_rows(
     def fail_materialize(*_args, **_kwargs):
         raise AssertionError("SQLite-backed grouping should not materialize all tabular rows")
 
-    monkeypatch.setattr(
-        "modules.industrial_analytics_dialog.TabularAnalyticsGroupingDialog",
+    monkeypatch.setitem(
+        IndustrialAnalyticsDialog.open_grouping_dialog.__globals__,
+        "TabularAnalyticsGroupingDialog",
         FakeGroupingDialog,
     )
-    monkeypatch.setattr(
-        "modules.industrial_analytics_dialog.materialize_tabular_dataframe",
+    monkeypatch.setitem(
+        IndustrialAnalyticsDialog.open_grouping_dialog.__globals__,
+        "materialize_tabular_dataframe",
         fail_materialize,
     )
 
@@ -717,8 +765,9 @@ def test_tabular_row_filter_is_summarized_passed_to_worker_and_used_for_grouping
             calls["executed"] = True
             return 0
 
-    monkeypatch.setattr(
-        "modules.industrial_analytics_dialog.TabularAnalyticsGroupingDialog",
+    monkeypatch.setitem(
+        IndustrialAnalyticsDialog.open_grouping_dialog.__globals__,
+        "TabularAnalyticsGroupingDialog",
         FakeGroupingDialog,
     )
 
@@ -780,8 +829,9 @@ def test_tabular_filter_dialog_accept_uses_column_filters_without_legacy_keys(
         def get_filter(self):
             raise AssertionError("legacy filter keys should not be built on accept")
 
-    monkeypatch.setattr(
-        "modules.industrial_analytics_dialog.TabularAnalyticsFilterDialog",
+    monkeypatch.setitem(
+        IndustrialAnalyticsDialog.open_tabular_filter_dialog.__globals__,
+        "TabularAnalyticsFilterDialog",
         FakeFilterDialog,
     )
     dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
@@ -948,7 +998,11 @@ def test_tabular_groupstats_toggle_does_not_start_analysis_worker(monkeypatch) -
         def _unexpected_worker(*_args, **_kwargs):
             raise AssertionError("Toggling groupstats should not create an analytics worker")
 
-        monkeypatch.setattr("modules.industrial_analytics_dialog.IndustrialAnalyticsThread", _unexpected_worker)
+        monkeypatch.setitem(
+            IndustrialAnalyticsDialog.create_analytics_thread.__globals__,
+            "IndustrialAnalyticsThread",
+            _unexpected_worker,
+        )
 
         dialog.groupstats_checkbox.setChecked(False)
         dialog._sync_ui_state()
@@ -1074,8 +1128,9 @@ def test_tabular_grouping_dialog_reopens_with_existing_groups_and_column_labels(
             calls["executed"] = True
             return 0
 
-    monkeypatch.setattr(
-        "modules.industrial_analytics_dialog.TabularAnalyticsGroupingDialog",
+    monkeypatch.setitem(
+        IndustrialAnalyticsDialog.open_grouping_dialog.__globals__,
+        "TabularAnalyticsGroupingDialog",
         FakeGroupingDialog,
     )
 

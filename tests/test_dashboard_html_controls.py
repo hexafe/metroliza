@@ -38,17 +38,21 @@ def test_dashboard_visual_runtime_preserves_trace_visibility_before_plotly_react
     assert "const preservePlotlyLayoutImageVisibility" in runtime_js
     assert "const traceVisibilityKey" in runtime_js
     assert "const isRawLayerProxyTrace" in runtime_js
+    assert "const isStaticPopulationLayerProxyTrace" in runtime_js
+    assert "const isStaticImageLayerProxyTrace" in runtime_js
     assert "visibilityByKey" in runtime_js
     assert "meta.metroliza_target_id" in runtime_js
     assert "trace.uid" in runtime_js
     assert "image.metroliza_raw_layer_label" in runtime_js
+    assert "trace.metroliza_static_population_layer_label" in runtime_js
+    assert "image.metroliza_static_population_layer_label" in runtime_js
     assert "const allCurrentTracesHidden = currentData.every((trace) => traceIsHidden(trace));" in runtime_js
     assert "trace.visible = 'legendonly';" in runtime_js
     assert "delete trace.visible;" in runtime_js
     assert "preservePlotlyTraceVisibility(container, data);" in runtime_js
     assert "preservePlotlyLayoutImageVisibility(container, layout);" in runtime_js
-    assert "if (isRawLayerProxyTrace(trace)) return;" in runtime_js
-    assert "if (isRawLayerProxyTrace(trace)) return null;" in runtime_js
+    assert "if (isStaticImageLayerProxyTrace(trace)) return;" in runtime_js
+    assert "if (isStaticImageLayerProxyTrace(trace)) return null;" in runtime_js
     assert "window.Plotly.react = patchedReact;" in runtime_js
 
 

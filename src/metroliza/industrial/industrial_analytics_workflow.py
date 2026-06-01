@@ -453,6 +453,7 @@ def run_tabular_file_analytics(
     )
     dashboard = _write_dashboard(
         frame=dashboard_frame,
+        source_row_count=len(cohorted.dataframe.index),
         metrics=metrics,
         aggregation=aggregation,
         aggregated=aggregated,
@@ -528,22 +529,40 @@ def _normalize_dashboard_interactivity_options(
 ) -> dict[str, int | str]:
     mode = "full" if str(detail_mode or "").strip().casefold() == "full" else "auto"
     sample_size = int(TABULAR_FAST_DASHBOARD_ROW_LIMIT)
+    population_layer_mode = "auto"
     if isinstance(options, dict):
         raw_mode = options.get("mode")
         raw_sample_size = options.get("sample_size", options.get("sampleSize"))
+        raw_population_layer_mode = options.get(
+            "population_layer_mode",
+            options.get("populationLayerMode"),
+        )
     else:
         raw_mode = getattr(options, "mode", None)
         raw_sample_size = getattr(options, "sample_size", getattr(options, "sampleSize", None))
+        raw_population_layer_mode = getattr(
+            options,
+            "population_layer_mode",
+            getattr(options, "populationLayerMode", None),
+        )
     if isinstance(raw_mode, str) and raw_mode.strip():
         candidate_mode = raw_mode.strip().casefold()
         if candidate_mode in _DASHBOARD_INTERACTIVITY_MODES:
             mode = candidate_mode
+    if isinstance(raw_population_layer_mode, str) and raw_population_layer_mode.strip():
+        candidate_population_layer_mode = raw_population_layer_mode.strip().casefold()
+        if candidate_population_layer_mode in {"auto", "interactive", "static"}:
+            population_layer_mode = candidate_population_layer_mode
     try:
         candidate_sample_size = int(raw_sample_size)
     except (TypeError, ValueError):
         candidate_sample_size = sample_size
     sample_size = max(1, candidate_sample_size)
-    return {"mode": mode, "sample_size": sample_size}
+    return {
+        "mode": mode,
+        "sample_size": sample_size,
+        "population_layer_mode": population_layer_mode,
+    }
 
 
 def _dashboard_interactivity_label(options: dict[str, int | str]) -> str:
@@ -560,8 +579,15 @@ def _dashboard_interactivity_label(options: dict[str, int | str]) -> str:
             sample_size = int(options.get("sample_size") or TABULAR_FAST_DASHBOARD_ROW_LIMIT)
         except (TypeError, ValueError):
             sample_size = int(TABULAR_FAST_DASHBOARD_ROW_LIMIT)
-        return f"{label}, {sample_size:,} random row sample"
-    return label
+        detail = f"{label}, {sample_size:,} random row sample"
+    else:
+        detail = label
+    population_label = {
+        "auto": "POPULATION layer auto",
+        "interactive": "POPULATION layer interactive",
+        "static": "POPULATION layer static image",
+    }.get(str(options.get("population_layer_mode") or "auto").strip().casefold(), "POPULATION layer auto")
+    return f"{detail}; {population_label}"
 
 
 def _tabular_dashboard_context(
@@ -874,6 +900,7 @@ def _analyze_groupstats_if_enabled(
 def _write_dashboard(
     *,
     frame,
+    source_row_count: int | None = None,
     metrics: tuple[ProductionMetricSelection, ...],
     aggregation: ProductionAggregationState,
     aggregated,
@@ -905,6 +932,9 @@ def _write_dashboard(
         dashboard_context=dashboard_context,
         plotly_visual_settings=plotly_visual_settings,
         include_plotly_specs=interactivity_mode.strip().casefold() != "static",
+        dashboard_interactivity_options=dashboard_interactivity_options,
+        source_row_count=source_row_count,
+        dashboard_row_count=len(getattr(frame, "index", ())),
     )
     _raise_if_cancelled(cancel_check)
     target_path = _html_output_path(output_dashboard_file)

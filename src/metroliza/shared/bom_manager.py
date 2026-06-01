@@ -24,6 +24,15 @@ from metroliza.reports.db import (
 )
 
 
+class _WriteResult:
+    def __init__(self, lastrowid=None):
+        self.lastrowid = lastrowid
+
+
+def _qt_user_role():
+    return getattr(getattr(Qt, "ItemDataRole", Qt), "UserRole")
+
+
 class BOMManager(QMainWindow):
     """BOMManager public interface used by export and UI workflows."""
 
@@ -61,7 +70,11 @@ class BOMManager(QMainWindow):
         self.selected_entry_id = None
 
     def _execute_write(self, query, params=()):
-        execute_many_with_retry(self.database_path, [(query, params)])
+        result = execute_many_with_retry(self.database_path, [(query, params)])
+        if str(query or "").lstrip().casefold().startswith("insert "):
+            rows = self._execute_read("SELECT MAX(id) FROM bom")
+            return _WriteResult(rows[0][0] if rows and rows[0] else None)
+        return result
 
     def _execute_read(self, query, params=()):
         rows, _ = execute_select_with_columns(self.database_path, query, params)
@@ -241,15 +254,15 @@ class BOMManager(QMainWindow):
 
             # Set the item data for each column in the row
             item_product_reference = QTableWidgetItem(product_reference)
-            item_product_reference.setData(Qt.UserRole, row_data)
+            item_product_reference.setData(_qt_user_role(), row_data)
             item_description = QTableWidgetItem(description)
-            item_description.setData(Qt.UserRole, row_data)
+            item_description.setData(_qt_user_role(), row_data)
             item_part_reference = QTableWidgetItem(part_reference)
-            item_part_reference.setData(Qt.UserRole, row_data)
+            item_part_reference.setData(_qt_user_role(), row_data)
             item_part_description = QTableWidgetItem(part_description)
-            item_part_description.setData(Qt.UserRole, row_data)
+            item_part_description.setData(_qt_user_role(), row_data)
             item_parent_reference = QTableWidgetItem(self.get_parent_reference(parent_id))
-            item_parent_reference.setData(Qt.UserRole, row_data)
+            item_parent_reference.setData(_qt_user_role(), row_data)
 
             self.bom_table.setItem(row_num, 0, item_product_reference)
             self.bom_table.setItem(row_num, 1, item_description)
@@ -424,13 +437,14 @@ class BOMManager(QMainWindow):
             return
 
         # Confirm the deletion with the user
-        confirm_dialog = QMessageBox.question(self, "Confirm Deletion", "Are you sure you want to delete the selected row(s)?",
+        dialog_parent = self if isinstance(self, QWidget) else None
+        confirm_dialog = QMessageBox.question(dialog_parent, "Confirm Deletion", "Are you sure you want to delete the selected row(s)?",
                                             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if confirm_dialog == QMessageBox.StandardButton.Yes:
             # Delete the selected BOM entries from the database
             delete_statements = []
             for row in selected_rows:
-                entry_id = self.bom_table.item(row, 0).data(Qt.UserRole)[0]
+                entry_id = self.bom_table.item(row, 0).data(_qt_user_role())[0]
                 delete_statements.append(("DELETE FROM bom WHERE id = ?", (entry_id,)))
 
             if hasattr(self, "database_path"):
@@ -477,7 +491,7 @@ class BOMManager(QMainWindow):
             May update UI state, database rows, or in-memory export context.
         """
 
-        selected_data = self.bom_table.item(row, 0).data(Qt.UserRole)
+        selected_data = self.bom_table.item(row, 0).data(_qt_user_role())
         if selected_data:
             self.modifying_row = True
             self.selected_entry_id = selected_data[0]

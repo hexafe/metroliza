@@ -21,9 +21,10 @@ def test_ci_workflow_keeps_coverage_visibility_contract() -> None:
     assert '--cov=src/metroliza' in workflow
     assert '--cov=modules' in workflow
     assert '--cov=scripts' in workflow
-    assert '--cov-report=term' in workflow
-    assert '--cov-report=xml:coverage.xml' in workflow
-    assert '--cov-fail-under="${COVERAGE_MINIMUM_THRESHOLD:-65}"' in workflow
+    assert 'COVERAGE_MINIMUM_THRESHOLD: \'80\'' in workflow
+    assert '--cov-append' in workflow
+    assert 'python -m coverage report --fail-under="${COVERAGE_MINIMUM_THRESHOLD:-80}"' in workflow
+    assert 'python -m coverage xml -o coverage.xml' in workflow
     assert 'QT_QPA_PLATFORM: offscreen' in workflow
     assert 'Install Qt runtime system libraries' in workflow
     assert 'libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0' in workflow

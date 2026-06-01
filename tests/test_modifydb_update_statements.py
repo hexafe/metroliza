@@ -87,6 +87,15 @@ class _FakeMatrixTable:
         return self._rows[row][col]
 
 
+class _FakeFilterTable(_FakeMatrixTable):
+    def __init__(self, rows):
+        super().__init__(rows)
+        self.hidden_rows = {}
+
+    def setRowHidden(self, row, hidden):
+        self.hidden_rows[row] = bool(hidden)
+
+
 class _FakeHeader:
     def __init__(self):
         self.stretch_last_section = None
@@ -203,6 +212,62 @@ class TestModifyDbUpdateStatements(unittest.TestCase):
             table.header.resize_modes[2],
             expected_name="ResizeToContents",
             expected_stub=resize_mode.ResizeToContents,
+        )
+
+    def test_available_specs_and_select_exprs_quote_aliases(self):
+        dialog = object.__new__(ModifyDB)
+        specs = [
+            {"label": "ID", "field": "report_id", "source": "ID"},
+            {"label": "+TOL", "field": "tol_plus", "source": "+TOL"},
+            {"label": "MISSING", "field": "missing", "source": "missing"},
+        ]
+
+        available = dialog._available_specs(specs, {"id", "+tol"})
+        expressions = dialog._select_exprs_for_specs(available)
+
+        self.assertEqual(available, specs[:2])
+        self.assertEqual(expressions, ['"ID" AS "report_id"', '"+TOL" AS "tol_plus"'])
+
+    def test_filter_table_rows_matches_across_columns_and_hides_misses(self):
+        dialog = object.__new__(ModifyDB)
+        table = _FakeFilterTable(
+            [
+                [_FakeItem("REF-A", "REF-A"), _FakeItem("Part", "Part")],
+                [_FakeItem("REF-B", "REF-B"), _FakeItem("Width", "Width")],
+            ]
+        )
+
+        dialog._filter_table_rows(table, "width")
+
+        self.assertEqual(table.hidden_rows, {0: True, 1: False})
+
+    def test_collect_table_modifications_includes_occurrence_count(self):
+        dialog = object.__new__(ModifyDB)
+        table = _FakeMatrixTable(
+            [
+                [_FakeItem("A", "A"), _FakeItem("A", "A2"), _FakeItem(3, "3")],
+                [_FakeItem("B", "B"), _FakeItem("B", "B"), _FakeItem(1, "1")],
+            ]
+        )
+
+        summary = dialog.collect_table_modifications(table, "References")
+
+        self.assertEqual(summary, 'References: "A" -> "A2" (occurrences: 3)')
+
+    def test_legacy_record_update_statements_skip_unknown_fields(self):
+        dialog = object.__new__(ModifyDB)
+
+        statements = dialog._build_legacy_record_update_statements(
+            [(4, {"reference": "REF-4", "unknown": "ignored"})],
+            [(7, {"nominal": 10.5, "header": "WIDTH"})],
+        )
+
+        self.assertEqual(
+            statements,
+            [
+                ('UPDATE "REPORTS" SET "REFERENCE" = ? WHERE "ID" = ?', ("REF-4", 4)),
+                ('UPDATE "MEASUREMENTS" SET "NOM" = ?, "HEADER" = ? WHERE "ID" = ?', (10.5, "WIDTH", 7)),
+            ],
         )
 
 

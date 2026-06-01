@@ -192,7 +192,10 @@ def test_run_tabular_file_analytics_reuses_shared_dashboard_and_parameter_workbo
     assert '<span class="metric-value-line">table.csv</span>' in html_text
     assert '<div class="metric-label">Rows rendered</div>' in html_text
     assert '<div class="metric-label">Chart detail</div>' in html_text
-    assert '<span class="metric-value-line">Auto, 50,000 random row sample</span>' in html_text
+    assert (
+        '<span class="metric-value-line">Auto, 50,000 random row sample; '
+        "POPULATION layer auto</span>"
+    ) in html_text
     assert "Metroliza CSV Summary Dashboard" in html_text
     assert "Cached production data dashboard" not in html_text
     assert result.source_kind == "tabular_file"
@@ -358,8 +361,14 @@ def test_run_tabular_file_analytics_sampled_dashboard_renders_sampling_copy(
         in html_text
     )
     assert (
+        '<div class="metric-label">Source rows</div><div class="metric-value">'
+        '<span class="metric-value-line">6</span></div>'
+        in html_text
+    )
+    assert (
         '<div class="metric-label">Chart detail</div><div class="metric-value">'
-        '<span class="metric-value-line">Auto, 3 random row sample</span></div>'
+        '<span class="metric-value-line">Auto, 3 random row sample; '
+        "POPULATION layer auto</span></div>"
         in html_text
     )
     assert (
@@ -498,7 +507,11 @@ def test_run_tabular_file_analytics_sampled_interactivity_uses_sample_size(
 
     assert result.row_count == row_count
     assert len(captured["frame"].index) == 5000
-    assert captured["dashboard_interactivity_options"] == {"mode": "sampled", "sample_size": 5000}
+    assert captured["dashboard_interactivity_options"] == {
+        "mode": "sampled",
+        "sample_size": 5000,
+        "population_layer_mode": "auto",
+    }
     assert any(
         diagnostic.code == "tabular_dashboard_fast_sample"
         and diagnostic.context["dashboard_interactivity_mode"] == "sampled"
@@ -544,7 +557,11 @@ def test_run_tabular_file_analytics_static_interactivity_uses_sample_size(
 
     assert result.row_count == row_count
     assert len(captured["frame"].index) == 5000
-    assert captured["dashboard_interactivity_options"] == {"mode": "static", "sample_size": 5000}
+    assert captured["dashboard_interactivity_options"] == {
+        "mode": "static",
+        "sample_size": 5000,
+        "population_layer_mode": "auto",
+    }
     assert any(
         diagnostic.code == "tabular_dashboard_fast_sample"
         and diagnostic.context["dashboard_interactivity_mode"] == "static"

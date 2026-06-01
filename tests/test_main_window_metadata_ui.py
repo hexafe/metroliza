@@ -1,3 +1,5 @@
+import sys
+import types
 import unittest
 from unittest.mock import patch
 
@@ -101,6 +103,103 @@ class TestMainWindowMetadataUi(unittest.TestCase):
             )
             self.assertEqual(window.db_file, "/tmp/metroliza-b.db")
         finally:
+            window.close()
+
+    def test_set_directory_updates_context_label_state(self):
+        window = MainWindow(version_label="test", days_until_expiration=None)
+        try:
+            window.set_directory("/tmp/metroliza-reports")
+
+            self.assertEqual(window.directory, "/tmp/metroliza-reports")
+            self.assertEqual(window.source_status_label.text(), "Source: /tmp/metroliza-reports")
+            self.assertEqual(window.database_status_label.text(), "Database: not selected")
+        finally:
+            window.close()
+
+    def test_launch_modifydb_closes_other_transient_dialogs_and_reuses_visible_dialog(self):
+        window = MainWindow(version_label="test", days_until_expiration=None)
+
+        class VisibleDialog:
+            def __init__(self):
+                self.close_calls = 0
+                self.visible = True
+
+            def isVisible(self):
+                return self.visible
+
+            def close(self):
+                self.close_calls += 1
+                self.visible = False
+
+        class FakeModifyDialog:
+            created = []
+
+            def __init__(self, parent, db_file):
+                self.parent = parent
+                self.db_file = db_file
+                self.show_calls = 0
+                self.raise_calls = 0
+                self.activate_calls = 0
+                FakeModifyDialog.created.append(self)
+
+            def isVisible(self):
+                return self.show_calls > 0
+
+            def show(self):
+                self.show_calls += 1
+
+            def raise_(self):
+                self.raise_calls += 1
+
+            def activateWindow(self):
+                self.activate_calls += 1
+
+        try:
+            window.db_file = "/tmp/metroliza.db"
+            window.export_dialog = VisibleDialog()
+            window.parsing_dialog = VisibleDialog()
+            fake_module = types.SimpleNamespace(ModifyDB=FakeModifyDialog)
+
+            with patch.dict(sys.modules, {"metroliza.ui.modify_db": fake_module}):
+                window.launch_modifydb_dialog()
+                window.launch_modifydb_dialog()
+
+            self.assertEqual(window.export_dialog.close_calls, 1)
+            self.assertEqual(window.parsing_dialog.close_calls, 1)
+            self.assertEqual(len(FakeModifyDialog.created), 1)
+            self.assertEqual(FakeModifyDialog.created[0].db_file, "/tmp/metroliza.db")
+            self.assertEqual(FakeModifyDialog.created[0].show_calls, 1)
+            self.assertEqual(FakeModifyDialog.created[0].raise_calls, 2)
+            self.assertEqual(FakeModifyDialog.created[0].activate_calls, 2)
+        finally:
+            window.close()
+
+    def test_metadata_enrichment_finished_reports_result_and_hides_cancel(self):
+        window = MainWindow(version_label="test", days_until_expiration=None)
+
+        class FakeResult:
+            enriched_files = 2
+            total_files = 3
+
+        class FakeThread:
+            result = FakeResult()
+
+        try:
+            window.metadata_enrichment_thread = FakeThread()
+            window.metadata_enrichment_error_message = None
+            window.cancel_metadata_enrichment_button.setVisible(True)
+            window.cancel_metadata_enrichment_button.setEnabled(True)
+            window.enrich_metadata_action.setEnabled(False)
+
+            window.on_metadata_enrichment_finished()
+
+            self.assertTrue(window.enrich_metadata_action.isEnabled())
+            self.assertFalse(window.cancel_metadata_enrichment_button.isEnabled())
+            self.assertTrue(window.cancel_metadata_enrichment_button.isHidden())
+            self.assertEqual(window.metadata_enrichment_progress_bar.value(), 100)
+            self.assertIn("2/3 reports updated", window.metadata_enrichment_status_label.text())
+        finally:
+            window.metadata_enrichment_thread = None
             window.close()
 
     def test_release_and_about_are_under_help_menu(self):

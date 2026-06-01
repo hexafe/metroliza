@@ -274,7 +274,11 @@ class TestValidateIndustrialAnalyticsRequest(unittest.TestCase):
 
         self.assertEqual(
             validated.dashboard_interactivity_options,
-            DashboardInteractivityOptions(mode='auto', sample_size=50000),
+            DashboardInteractivityOptions(
+                mode='auto',
+                sample_size=50000,
+                population_layer_mode='auto',
+            ),
         )
 
     def test_normalizes_dashboard_interactivity_options_mapping(self):
@@ -282,13 +286,43 @@ class TestValidateIndustrialAnalyticsRequest(unittest.TestCase):
             IndustrialAnalyticsRequest(
                 source_kind='production_cache',
                 output_dashboard_file='dashboard.html',
-                dashboard_interactivity_options={'mode': ' Sampled ', 'sample_size': '75000'},
+                dashboard_interactivity_options={
+                    'mode': ' Sampled ',
+                    'sample_size': '75000',
+                    'population_layer_mode': ' Static ',
+                },
             )
         )
 
         self.assertEqual(
             validated.dashboard_interactivity_options,
-            DashboardInteractivityOptions(mode='sampled', sample_size=75000),
+            DashboardInteractivityOptions(
+                mode='sampled',
+                sample_size=75000,
+                population_layer_mode='static',
+            ),
+        )
+
+    def test_normalizes_dashboard_interactivity_population_layer_camel_case_alias(self):
+        validated = validate_industrial_analytics_request(
+            IndustrialAnalyticsRequest(
+                source_kind='production_cache',
+                output_dashboard_file='dashboard.html',
+                dashboard_interactivity_options={
+                    'mode': 'auto',
+                    'sample_size': 50000,
+                    'populationLayerMode': 'Interactive',
+                },
+            )
+        )
+
+        self.assertEqual(
+            validated.dashboard_interactivity_options,
+            DashboardInteractivityOptions(
+                mode='auto',
+                sample_size=50000,
+                population_layer_mode='interactive',
+            ),
         )
 
     def test_rejects_unknown_dashboard_interactivity_mode(self):
@@ -298,6 +332,16 @@ class TestValidateIndustrialAnalyticsRequest(unittest.TestCase):
                     source_kind='production_cache',
                     output_dashboard_file='dashboard.html',
                     dashboard_interactivity_options={'mode': 'animated'},
+                )
+            )
+
+    def test_rejects_unknown_dashboard_population_layer_mode(self):
+        with self.assertRaisesRegex(ValueError, 'Unsupported dashboard POPULATION layer mode'):
+            validate_industrial_analytics_request(
+                IndustrialAnalyticsRequest(
+                    source_kind='production_cache',
+                    output_dashboard_file='dashboard.html',
+                    dashboard_interactivity_options={'population_layer_mode': 'animated'},
                 )
             )
 

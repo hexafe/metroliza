@@ -158,6 +158,38 @@ class TestModifyDbRecordUpdates(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "update_report_metadata_fields"):
             dialog.apply_record_updates(object(), [(42, {"reference": "REF_B"})], [])
 
+    def test_collect_record_table_modifications_reports_original_values(self):
+        dialog = object.__new__(ModifyDB)
+        specs = [
+            {"label": "REPORT_ID", "field": "report_id", "editable": False},
+            {"label": "REFERENCE", "field": "reference", "editable": True},
+            {"label": "COMMENT", "field": "comment", "editable": True},
+        ]
+        table = _FakeTable(
+            [
+                [
+                    _FakeItem(42, "42"),
+                    _FakeItem("REF_A", "REF_B"),
+                    _FakeItem("old comment", ""),
+                ]
+            ]
+        )
+        dialog._record_specs_by_table = {table: specs}
+
+        summary = dialog.collect_record_table_modifications(table, "Report records", "report_id")
+
+        self.assertEqual(
+            summary,
+            'Report records.REFERENCE: "REF_A" -> "REF_B" (REPORT_ID=42)\n'
+            'Report records.COMMENT: "old comment" -> NULL (REPORT_ID=42)',
+        )
+
+    def test_record_value_coercion_preserves_invalid_float_text(self):
+        self.assertIsNone(ModifyDB._coerce_record_value("", "float"))
+        self.assertEqual(ModifyDB._coerce_record_value("10.5", "float"), 10.5)
+        self.assertEqual(ModifyDB._coerce_record_value("not-a-number", "float"), "not-a-number")
+        self.assertEqual(ModifyDB._coerce_record_id("bad-id"), None)
+
 
 if __name__ == "__main__":
     unittest.main()

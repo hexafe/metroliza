@@ -6,7 +6,7 @@ import types
 import pytest
 
 try:
-    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtWidgets import QApplication, QLabel
 
     import modules.industrial_export_dialog as industrial_export_dialog
     from modules.industrial_credentials import IndustrialStoredCredentials
@@ -16,6 +16,7 @@ try:
     from modules.industrial_workers import IndustrialLiveExportThread
 except Exception as exc:  # pragma: no cover - depends on local Qt runtime availability.
     QApplication = None
+    QLabel = None
     IndustrialExportDialog = None
     IndustrialFilterState = None
     IndustrialGroupingState = None
@@ -271,4 +272,105 @@ def test_export_dialog_completion_uses_export_style_workbook_link(tmp_path, monk
             str(output_path),
         )
     ]
+    dialog.close()
+
+
+def test_export_dialog_child_windows_and_output_selection(monkeypatch, tmp_path):
+    _app()
+    calls = []
+
+    class FakeFilterDialog:
+        def __init__(self, parent, *, db_file, state):
+            calls.append(("filter", parent, db_file, state))
+
+        def exec(self):
+            calls.append(("filter_exec",))
+
+    class FakeGroupingDialog:
+        def __init__(self, parent, *, state):
+            calls.append(("grouping", parent, state))
+
+        def exec(self):
+            calls.append(("grouping_exec",))
+
+    selected_output = tmp_path / "industrial_export"
+    monkeypatch.setattr(industrial_export_dialog, "IndustrialFilterDialog", FakeFilterDialog)
+    monkeypatch.setattr(industrial_export_dialog, "IndustrialGroupingDialog", FakeGroupingDialog)
+    monkeypatch.setattr(
+        industrial_export_dialog.QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: (str(selected_output), "Excel workbook (*.xlsx)"),
+    )
+    dialog = IndustrialExportDialog(db_file=str(tmp_path / "industrial.db"))
+
+    dialog.open_filter_dialog()
+    dialog.open_grouping_dialog()
+    dialog.select_output_file()
+
+    assert calls[0] == ("filter", dialog, dialog.db_file, dialog.filter_state)
+    assert calls[1] == ("filter_exec",)
+    assert calls[2] == ("grouping", dialog, dialog.grouping_state)
+    assert calls[3] == ("grouping_exec",)
+    assert dialog.output_file == str(selected_output.with_suffix(".xlsx"))
+    dialog.close()
+
+
+def test_export_dialog_reports_start_and_cancel_states(monkeypatch, tmp_path):
+    _app()
+    warnings = []
+    infos = []
+    monkeypatch.setattr(industrial_export_dialog.QMessageBox, "warning", lambda *args: warnings.append(args))
+    monkeypatch.setattr(
+        industrial_export_dialog.QMessageBox,
+        "information",
+        lambda *args: infos.append(args),
+    )
+    dialog = IndustrialExportDialog(db_file=str(tmp_path / "industrial.db"))
+    dialog.output_file = str(tmp_path / "industrial.xlsx")
+    dialog._sync_ui_state()
+    monkeypatch.setattr(dialog, "show_loading_screen", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    dialog.handle_start_button()
+
+    assert "Could not start export: boom" in warnings[0][2]
+
+    class RunningThread:
+        def __init__(self):
+            self.cancelled = False
+
+        def isRunning(self):
+            return True
+
+        def cancel(self):
+            self.cancelled = True
+
+    thread = RunningThread()
+    dialog.export_thread = thread
+    dialog.loading_label = QLabel()
+    dialog.cancel_export()
+    dialog.on_export_cancelled("")
+    dialog.loading_dialog = types.SimpleNamespace(close=lambda: infos.append(("closed",)))
+    dialog.on_export_thread_stopped()
+
+    assert thread.cancelled is True
+    assert "Cancel requested" in dialog.loading_label.text()
+    assert infos[0][2] == "Industrial export was cancelled."
+    assert dialog.export_thread is None
+    dialog.close()
+
+
+def test_export_dialog_live_mode_validates_credentials_and_profiles(tmp_path):
+    _app()
+    dialog = IndustrialExportDialog(db_file=None, config_path=tmp_path / "missing_sources.yaml")
+    dialog.output_file = str(tmp_path / "industrial.xlsx")
+    dialog._sync_ui_state()
+
+    assert dialog.current_profile() is None
+    assert not dialog.start_button.isEnabled()
+    assert "Create a production source" in dialog.readiness_label.text()
+    with pytest.raises(ValueError, match="username"):
+        dialog._read_live_credentials()
+    dialog.username_edit.setText("operator")
+    with pytest.raises(ValueError, match="password"):
+        dialog._read_live_credentials()
     dialog.close()

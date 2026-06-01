@@ -29,7 +29,8 @@ class TestBOMManagerParentSelection(unittest.TestCase):
         self.manager = BOMManager(str(self.db_path))
 
     def tearDown(self):
-        self.manager.conn.close()
+        if hasattr(self.manager, "conn"):
+            self.manager.conn.close()
         self.manager.close()
         self.temp_dir.cleanup()
 

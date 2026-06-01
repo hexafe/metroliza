@@ -5,15 +5,19 @@ import time
 import pytest
 
 try:
+    from PyQt6.QtCore import QSize
     from PyQt6.QtGui import QCloseEvent
     from PyQt6.QtWidgets import QApplication
     from modules.worker_progress_dialog import (
+        _scaled_loading_gif_size,
         create_delayed_worker_progress_dialog,
         create_worker_progress_dialog,
     )
 except ImportError as exc:  # pragma: no cover - depends on optional PyQt availability
     QApplication = None
     QCloseEvent = None
+    QSize = None
+    _scaled_loading_gif_size = None
     create_delayed_worker_progress_dialog = None
     create_worker_progress_dialog = None
     PYQT_IMPORT_ERROR = exc
@@ -55,6 +59,33 @@ def test_delayed_worker_progress_dialog_waits_before_showing() -> None:
         assert not dialog.isVisible()
 
         _process_events_for(1000)
+
+        assert dialog.isVisible()
+    finally:
+        dialog.close()
+
+
+def test_scaled_loading_gif_size_preserves_aspect_ratio() -> None:
+    _app()
+
+    assert _scaled_loading_gif_size(QSize()).width() == 216
+    assert _scaled_loading_gif_size(QSize()).height() == 216
+    assert _scaled_loading_gif_size(QSize(432, 216)) == QSize(216, 108)
+    assert _scaled_loading_gif_size(QSize(100, 400)) == QSize(54, 216)
+
+
+def test_delayed_worker_progress_dialog_zero_delay_shows_immediately() -> None:
+    _app()
+    dialog, _label, _bar, _movie = create_delayed_worker_progress_dialog(
+        None,
+        window_title="Working",
+        initial_status_text="Stage\nDetail\nETA --",
+        on_cancel=lambda: None,
+        delay_ms=0,
+    )
+    try:
+        dialog.show()
+        _process_events_for(50)
 
         assert dialog.isVisible()
     finally:

@@ -8,6 +8,7 @@ try:
     from PyQt6.QtWidgets import QApplication, QComboBox, QWidget  # noqa: F401
 
     from modules import industrial_data_dialog
+    from modules import industrial_source_profiles_dialog
     from modules import industrial_workers
     from modules.industrial_data_dialog import (
         IndustrialDataDialog,
@@ -24,6 +25,7 @@ try:
 except Exception as exc:  # pragma: no cover - depends on local Qt runtime availability.
     QApplication = None
     industrial_data_dialog = None
+    industrial_source_profiles_dialog = None
     industrial_workers = None
     IndustrialDataDialog = None
     IndustrialExportDialog = None
@@ -112,6 +114,41 @@ def test_source_dialog_can_configure_file_before_metroliza_database_is_selected(
     assert "password" not in config_text.lower()
     assert "Use Export" in dialog.status_label.text()
     assert "sync rows into the local cache" in dialog.status_label.text()
+    dialog.close()
+
+
+def test_source_dialog_form_helpers_and_config_browse(monkeypatch, tmp_path):
+    _app()
+    selected_path = tmp_path / "plant_sources"
+    monkeypatch.setattr(
+        industrial_source_profiles_dialog.QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: (str(selected_path), "YAML config (*.yaml *.yml)"),
+    )
+    dialog = IndustrialSourceProfilesDialog(db_file=None, config_path=tmp_path / "initial.yaml")
+
+    dialog.browse_config_file()
+    dialog.source_name_edit.setText("123 Assembly MES")
+    dialog.alias_edit.clear()
+    dialog.db_type_combo.setCurrentIndex(dialog.db_type_combo.findData("mysql"))
+    dialog.host_edit.setText("mes.example.invalid")
+    dialog.database_edit.setText("plantdb")
+    dialog.table_edit.setText("events")
+    dialog.columns_edit.setText("reference, station")
+    dialog.record_key_edit.setText("event_id")
+    dialog.timestamp_column_edit.setText("event_at")
+    profile = dialog.profile_from_form()
+
+    assert dialog.config_path == selected_path.with_suffix(".yaml")
+    assert dialog.port_spin.value() == 3306
+    assert profile.profile_key == "source_123_assembly_mes"
+    assert profile.allowed_columns == ("reference", "station", "event_id", "event_at")
+
+    dialog.clear_form()
+
+    assert dialog.source_name_edit.text() == ""
+    assert dialog.order_by_checkbox.isChecked()
+    assert "New production source" in dialog.status_label.text()
     dialog.close()
 
 
@@ -662,6 +699,92 @@ def test_launcher_can_select_metroliza_database_and_enable_oznak_actions(monkeyp
     assert "needs synced rows" in dialog.analytics_status_label.text()
     dialog.close()
     parent.close()
+
+
+def test_launcher_initializes_cache_and_opens_owned_child_dialogs(monkeypatch, tmp_path):
+    _app()
+    opened = []
+
+    class FakeSourcesDialog:
+        def __init__(self, parent, *, db_file, config_path):
+            opened.append(("sources", parent, db_file, config_path))
+            self.config_path = tmp_path / "new_sources.yaml"
+
+        def exec(self):
+            opened.append(("sources_exec",))
+
+    class FakeLinkingDialog:
+        def __init__(self, parent, *, db_file):
+            opened.append(("links", parent, db_file))
+
+        def exec(self):
+            opened.append(("links_exec",))
+
+    monkeypatch.setattr(industrial_data_dialog, "IndustrialSourceProfilesDialog", FakeSourcesDialog)
+    monkeypatch.setattr(industrial_data_dialog, "IndustrialLinkingDialog", FakeLinkingDialog)
+    db_path = str(tmp_path / "metroliza.db")
+    dialog = IndustrialDataDialog(db_file=None)
+    initial_config_path = dialog.config_path
+
+    dialog.initialize_cache()
+    dialog.update_db_file(db_path)
+    dialog.initialize_cache()
+    dialog.open_sources_dialog()
+    dialog.open_links_dialog()
+
+    assert "Local industrial cache empty" in dialog.status_label.text()
+    assert opened[0] == ("sources", dialog, db_path, initial_config_path)
+    assert opened[1] == ("sources_exec",)
+    assert dialog.config_path == tmp_path / "new_sources.yaml"
+    assert opened[2] == ("links", dialog, db_path)
+    assert opened[3] == ("links_exec",)
+    dialog.close()
+
+
+def test_launcher_refresh_links_thread_states(monkeypatch, tmp_path):
+    _app()
+    db_path = str(tmp_path / "metroliza.db")
+    started = []
+
+    class Signal:
+        def connect(self, callback):
+            self.callback = callback
+
+    class FakeLinkRefreshThread:
+        def __init__(self, db_file):
+            self.db_file = db_file
+            self.summary_ready = Signal()
+            self.error_occurred = Signal()
+            self.finished = Signal()
+            started.append(self)
+
+        def start(self):
+            self.started = True
+
+        def isRunning(self):
+            return False
+
+    monkeypatch.setattr(industrial_data_dialog, "IndustrialLinkRefreshThread", FakeLinkRefreshThread)
+    warnings = []
+    monkeypatch.setattr(industrial_data_dialog.QMessageBox, "warning", lambda *args: warnings.append(args))
+    dialog = IndustrialDataDialog(db_file=db_path)
+
+    dialog.refresh_links()
+    assert started[0].db_file == db_path
+    assert started[0].started is True
+    assert not dialog.initialize_button.isEnabled()
+
+    summary = SimpleNamespace(accepted_links=2, ambiguous_reports=1, unmatched_reports=3)
+    dialog.on_link_refresh_finished(summary)
+    assert "2 accepted, 1 ambiguous, 3 unmatched" in dialog.status_label.text()
+
+    dialog.on_link_refresh_error("boom")
+    assert "Could not refresh links: boom" in warnings[0][2]
+
+    dialog.on_link_refresh_thread_stopped()
+    assert dialog.link_refresh_thread is None
+    assert dialog.initialize_button.isEnabled()
+    dialog.close()
 
 
 def test_launcher_reports_ready_state_when_cache_has_synced_rows(tmp_path):

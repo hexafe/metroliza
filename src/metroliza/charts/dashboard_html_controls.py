@@ -1331,7 +1331,7 @@ def render_dashboard_visual_runtime_js(
         const traces = Array.isArray(spec.data) ? spec.data : [];
         traces.forEach((trace) => {{
           if (!trace || typeof trace !== 'object') return;
-          if (isRawLayerProxyTrace(trace)) return;
+          if (isStaticImageLayerProxyTrace(trace)) return;
           const name = String(trace.name || '').trim();
           if (!name || isReferenceName(name) || groupStatMatch(name)) return;
           const type = String(trace.type || '').toLowerCase();
@@ -1406,6 +1406,7 @@ def render_dashboard_visual_runtime_js(
         const candidates = [
           meta.metroliza_target_id,
           meta.dashboard_visual_target,
+          trace.metroliza_static_population_layer_label,
           trace.uid,
           trace.name ? `${{String(trace.type || 'trace')}}:${{String(trace.name)}}` : '',
         ];
@@ -1416,6 +1417,15 @@ def render_dashboard_visual_runtime_js(
 
       const isRawLayerProxyTrace = (trace) => (
         trace && typeof trace === 'object' && typeof trace.metroliza_raw_layer_index === 'number'
+      );
+
+      const isStaticPopulationLayerProxyTrace = (trace) => (
+        trace && typeof trace === 'object'
+        && typeof trace.metroliza_static_population_layer_index === 'number'
+      );
+
+      const isStaticImageLayerProxyTrace = (trace) => (
+        isRawLayerProxyTrace(trace) || isStaticPopulationLayerProxyTrace(trace)
       );
 
       const preservePlotlyTraceVisibility = (container, nextData) => {{
@@ -1454,6 +1464,7 @@ def render_dashboard_visual_runtime_js(
         if (!image || typeof image !== 'object') return '';
         const candidates = [
           image.metroliza_raw_layer_label,
+          image.metroliza_static_population_layer_label,
           image.name,
           image.source ? `source:${{String(image.source).slice(0, 120)}}` : '',
         ];
@@ -1588,7 +1599,7 @@ def render_dashboard_visual_runtime_js(
         const traces = Array.isArray(spec.data) ? spec.data : [];
         traces.forEach((trace, traceIndex) => {{
           if (!trace || typeof trace !== 'object') return;
-          if (isRawLayerProxyTrace(trace)) return;
+          if (isStaticImageLayerProxyTrace(trace)) return;
           const name = String(trace.name || '');
           const stat = groupStatMatch(name);
           if (stat) {{
@@ -2065,7 +2076,7 @@ def render_dashboard_visual_runtime_js(
 
       const selectedTargetFromTrace = (trace, curveNumber = -1) => {{
         if (!trace || typeof trace !== 'object') return null;
-        if (isRawLayerProxyTrace(trace)) return null;
+        if (isStaticImageLayerProxyTrace(trace)) return null;
         const meta = trace.meta && typeof trace.meta === 'object' ? trace.meta : {{}};
         const roleFromMeta = meta.metroliza_role || meta.dashboard_visual_role || 'series';
         if (meta.metroliza_target_id || meta.dashboard_visual_target) {{
