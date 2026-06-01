@@ -7,6 +7,7 @@ import types
 import pandas as pd
 
 from tests.industrial_analytics_fixtures import seed_production_analytics_cache
+from modules.contracts import DashboardInteractivityOptions
 
 try:
     from PyQt6.QtWidgets import QApplication, QDialog
@@ -271,6 +272,126 @@ def test_tabular_analytics_dialog_dashboard_detail_mode_is_selectable_and_in_req
         dialog.close()
 
 
+def test_tabular_analytics_dialog_interactivity_controls_are_visible_and_in_request() -> None:
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        assert not dialog.dashboard_interactivity_button.isHidden()
+        assert dialog.dashboard_interactivity_summary_label.text() == "Auto, 50,000 rows"
+
+        dialog.dashboard_interactivity_options = DashboardInteractivityOptions(
+            mode="sampled",
+            sample_size=75000,
+        )
+        request = dialog._build_analytics_request()
+
+        assert request.dashboard_interactivity_options == DashboardInteractivityOptions(
+            mode="sampled",
+            sample_size=75000,
+        )
+        thread = dialog.create_analytics_thread()
+        assert thread.dashboard_interactivity_options == DashboardInteractivityOptions(
+            mode="sampled",
+            sample_size=75000,
+        )
+    finally:
+        dialog.close()
+
+
+def test_production_analytics_dialog_hides_interactivity_controls() -> None:
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_PRODUCTION_CACHE)
+    try:
+        assert dialog.dashboard_interactivity_row_label.isHidden()
+        assert dialog.dashboard_interactivity_summary_label.isHidden()
+        assert dialog.dashboard_interactivity_button.isHidden()
+    finally:
+        dialog.close()
+
+
+def test_tabular_analytics_interactivity_button_launches_dialog(monkeypatch) -> None:
+    _app()
+    calls = {}
+
+    class FakeDashboardInteractivityOptionsDialog:
+        def __init__(self, parent=None, *, options=None):
+            calls["parent"] = parent
+            calls["options"] = options
+
+        def exec(self):
+            calls["exec_called"] = True
+            return QDialog.DialogCode.Accepted
+
+        def interactivity_options(self):
+            return DashboardInteractivityOptions(mode="static", sample_size=50000)
+
+    monkeypatch.setattr(
+        "modules.industrial_analytics_dialog.DashboardInteractivityOptionsDialog",
+        FakeDashboardInteractivityOptionsDialog,
+    )
+
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.open_dashboard_interactivity_options()
+
+        assert calls["parent"] is dialog
+        assert calls["options"] == DashboardInteractivityOptions(mode="auto", sample_size=50000)
+        assert calls["exec_called"] is True
+        assert dialog.dashboard_interactivity_options == DashboardInteractivityOptions(
+            mode="static",
+            sample_size=50000,
+        )
+        assert dialog.dashboard_interactivity_summary_label.text() == "Static"
+    finally:
+        dialog.close()
+
+
+def test_large_tabular_dashboard_auto_mode_prompts_for_interactivity(monkeypatch) -> None:
+    _app()
+    calls = {}
+
+    class FakeDashboardInteractivityOptionsDialog:
+        def __init__(self, parent=None, *, options=None, row_count=None):
+            calls["parent"] = parent
+            calls["options"] = options
+            calls["row_count"] = row_count
+
+        def exec(self):
+            calls["exec_called"] = True
+            return QDialog.DialogCode.Accepted
+
+        def interactivity_options(self):
+            return DashboardInteractivityOptions(mode="sampled", sample_size=50000)
+
+    monkeypatch.setattr(
+        "modules.industrial_analytics_dialog.DashboardInteractivityOptionsDialog",
+        FakeDashboardInteractivityOptionsDialog,
+    )
+
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.tabular_load_result = object()
+        monkeypatch.setattr(
+            IndustrialAnalyticsDialog,
+            "_tabular_filtered_row_count",
+            lambda _self: 350000,
+        )
+
+        assert dialog._confirm_large_dashboard_interactivity() is True
+
+        assert calls["parent"] is dialog
+        assert calls["options"] == DashboardInteractivityOptions(mode="auto", sample_size=50000)
+        assert calls["row_count"] == 350000
+        assert calls["exec_called"] is True
+        assert dialog.dashboard_interactivity_options == DashboardInteractivityOptions(
+            mode="sampled",
+            sample_size=50000,
+        )
+    finally:
+        dialog.tabular_load_result = None
+        dialog.close()
+
+
 def test_analytics_dashboard_visuals_button_is_visible_for_production_and_tabular(monkeypatch) -> None:
     app = _app()
     monkeypatch.setattr(
@@ -290,7 +411,7 @@ def test_analytics_dashboard_visuals_button_is_visible_for_production_and_tabula
             assert dialog.dashboard_visuals_button.isVisible()
             assert dialog.dashboard_visuals_button.isEnabled()
             assert dialog.dashboard_visuals_button.text() == "Change..."
-            assert dialog.dashboard_visuals_summary_label.text() == "Default"
+            assert dialog.dashboard_visuals_summary_label.text() == "Metroliza default"
             assert "Adjust dashboard style" in dialog.dashboard_visuals_button.toolTip()
     finally:
         for dialog in dialogs:
@@ -306,7 +427,7 @@ def test_analytics_dashboard_visuals_button_launches_dialog(monkeypatch) -> None
     calls = {}
 
     class FakeDashboardVisualOptionsDialog:
-        def __init__(self, parent=None, *, settings=None):
+        def __init__(self, parent=None, *, settings=None, **_kwargs):
             calls["parent"] = parent
             calls["settings"] = settings
 
@@ -320,6 +441,11 @@ def test_analytics_dashboard_visuals_button_launches_dialog(monkeypatch) -> None
     monkeypatch.setitem(
         sys.modules,
         "modules.dashboard_visual_options_dialog",
+        types.SimpleNamespace(DashboardVisualOptionsDialog=FakeDashboardVisualOptionsDialog),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "metroliza.ui.dashboard_visual_options_dialog",
         types.SimpleNamespace(DashboardVisualOptionsDialog=FakeDashboardVisualOptionsDialog),
     )
 
@@ -1049,6 +1175,7 @@ def test_analytics_completion_message_uses_export_style_file_links(tmp_path, mon
         )
     )
     monkeypatch.setitem(sys.modules, "modules.export_dialog", fake_export_dialog)
+    monkeypatch.setitem(sys.modules, "metroliza.ui.export_dialog", fake_export_dialog)
 
     dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
     try:
@@ -1092,6 +1219,7 @@ def test_analytics_completion_message_opens_dashboard_normally_when_workbook_dis
         )
     )
     monkeypatch.setitem(sys.modules, "modules.export_dialog", fake_export_dialog)
+    monkeypatch.setitem(sys.modules, "metroliza.ui.export_dialog", fake_export_dialog)
 
     dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
     try:

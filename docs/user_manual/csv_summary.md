@@ -133,6 +133,16 @@ the visible recipe and saved-theme controls; use **Customize...** for detailed c
 opacity, line, or selected-element styling. These choices affect the interactive dashboard
 charts only; they do not change the source data or the selected metrics.
 
+Use **Plotly strategy > Change...** when the selected file is large enough that fully
+interactive Plotly charts may make the saved dashboard too heavy for a browser. **Auto** is
+the default: small selections stay fully interactive, while large selections ask for a
+strategy before processing. **Sampled** keeps interactive charts by using a reproducible
+visual sample, defaulting to 50,000 rows. **Static** writes snapshot charts only and uses
+the same bounded visual sample for very large selections. **Full** attempts all selected
+rows, but Metroliza can still omit individual interactive charts if the saved Plotly
+payload exceeds the dashboard safety budget. Statistics, groupstats, aggregate tables,
+and workbook output continue to use all selected rows.
+
 Selected plots are included in the dashboard and in the workbook chart sheet. Grouped time
 series use separate marker-only scatter traces. Multi-group histograms are normalized to
 show each group's share, so smaller selected groups remain visible next to larger

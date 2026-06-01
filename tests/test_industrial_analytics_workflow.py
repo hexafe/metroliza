@@ -395,6 +395,98 @@ def test_run_tabular_file_analytics_full_detail_uses_full_dashboard_frame(
     assert not any(diagnostic.code == "tabular_dashboard_fast_sample" for diagnostic in result.diagnostics)
 
 
+def test_run_tabular_file_analytics_sampled_interactivity_uses_sample_size(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    input_file = tmp_path / "sampled_detail_table.csv"
+    dashboard_file = tmp_path / "sampled_detail_table_analytics.html"
+    row_count = 5001
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=row_count, freq="s"),
+            "Reference ID": [f"R{index}" for index in range(row_count)],
+            "Length mm": [10.0 + (index % 100) * 0.01 for index in range(row_count)],
+        }
+    ).to_csv(input_file, index=False)
+    captured: dict[str, object] = {}
+
+    def capture_dashboard(**kwargs):
+        captured.update(kwargs)
+        return {
+            "html_dashboard_path": str(dashboard_file),
+            "html_dashboard_assets_path": str(tmp_path / "sampled_detail_table_analytics_assets"),
+            "html_dashboard_chart_count": 1,
+        }
+
+    monkeypatch.setattr(workflow_module, "_write_dashboard", capture_dashboard)
+
+    result = run_tabular_file_analytics(
+        input_file=str(input_file),
+        output_dashboard_file=str(dashboard_file),
+        metric_selection=(ProductionMetricSelection("length_mm", display_label="Length mm"),),
+        chart_selection=ProductionChartSelection(time_series=True),
+        dashboard_detail_mode="full",
+        dashboard_interactivity_options={"mode": "sampled", "sample_size": 5000},
+    )
+
+    assert result.row_count == row_count
+    assert len(captured["frame"].index) == 5000
+    assert captured["dashboard_interactivity_options"] == {"mode": "sampled", "sample_size": 5000}
+    assert any(
+        diagnostic.code == "tabular_dashboard_fast_sample"
+        and diagnostic.context["dashboard_interactivity_mode"] == "sampled"
+        and diagnostic.context["sample_size"] == 5000
+        for diagnostic in result.diagnostics
+    )
+
+
+def test_run_tabular_file_analytics_static_interactivity_uses_sample_size(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    input_file = tmp_path / "static_detail_table.csv"
+    dashboard_file = tmp_path / "static_detail_table_analytics.html"
+    row_count = 5001
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=row_count, freq="s"),
+            "Reference ID": [f"R{index}" for index in range(row_count)],
+            "Length mm": [10.0 + (index % 100) * 0.01 for index in range(row_count)],
+        }
+    ).to_csv(input_file, index=False)
+    captured: dict[str, object] = {}
+
+    def capture_dashboard(**kwargs):
+        captured.update(kwargs)
+        return {
+            "html_dashboard_path": str(dashboard_file),
+            "html_dashboard_assets_path": str(tmp_path / "static_detail_table_analytics_assets"),
+            "html_dashboard_chart_count": 1,
+        }
+
+    monkeypatch.setattr(workflow_module, "_write_dashboard", capture_dashboard)
+
+    result = run_tabular_file_analytics(
+        input_file=str(input_file),
+        output_dashboard_file=str(dashboard_file),
+        metric_selection=(ProductionMetricSelection("length_mm", display_label="Length mm"),),
+        chart_selection=ProductionChartSelection(time_series=True),
+        dashboard_detail_mode="full",
+        dashboard_interactivity_options={"mode": "static", "sample_size": 5000},
+    )
+
+    assert result.row_count == row_count
+    assert len(captured["frame"].index) == 5000
+    assert captured["dashboard_interactivity_options"] == {"mode": "static", "sample_size": 5000}
+    assert any(
+        diagnostic.code == "tabular_dashboard_fast_sample"
+        and diagnostic.context["dashboard_interactivity_mode"] == "static"
+        and diagnostic.context["sample_size"] == 5000
+        for diagnostic in result.diagnostics
+    )
+
+
 def test_run_tabular_file_analytics_uses_sqlite_backed_loaded_snapshot(
     tmp_path,
     monkeypatch,

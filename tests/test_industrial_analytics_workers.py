@@ -4,6 +4,7 @@ import pandas as pd
 
 try:
     from modules import industrial_workers
+    from modules.contracts import DashboardInteractivityOptions
     from modules.industrial_analytics_workflow import AnalyticsCancelled
     from modules.industrial_workers import IndustrialAnalyticsThread, TabularAnalyticsLoadThread
     from modules.tabular_analytics_service import (
@@ -13,6 +14,7 @@ try:
     )
 except ImportError as exc:  # pragma: no cover - environment/order dependent
     industrial_workers = None
+    DashboardInteractivityOptions = None
     AnalyticsCancelled = None
     IndustrialAnalyticsThread = None
     TabularAnalyticsLoadThread = None
@@ -143,6 +145,7 @@ def test_industrial_analytics_thread_passes_tabular_grouping_to_workflow(
         tabular_filter_keys=(("TC-001",),),
         tabular_column_filters=(TabularColumnFilter("line", selected_values=("L1",)),),
         dashboard_detail_mode="full",
+        dashboard_interactivity_options={"mode": "static", "sample_size": 5000},
         sheet_name="Measurements",
         timestamp_column="time_stamp",
         reference_column="reference_id",
@@ -163,6 +166,10 @@ def test_industrial_analytics_thread_passes_tabular_grouping_to_workflow(
     assert captured["tabular_filter_keys"] == (("TC-001",),)
     assert captured["tabular_column_filters"] == (TabularColumnFilter("line", selected_values=("L1",)),)
     assert captured["dashboard_detail_mode"] == "full"
+    assert captured["dashboard_interactivity_options"] == DashboardInteractivityOptions(
+        mode="static",
+        sample_size=5000,
+    )
     assert captured["sheet_name"] == "Measurements"
     assert captured["timestamp_column"] == "time_stamp"
     assert captured["reference_column"] == "reference_id"

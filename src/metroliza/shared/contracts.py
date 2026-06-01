@@ -177,6 +177,14 @@ class ExportRequest:
 
 
 @dataclass(frozen=True)
+class DashboardInteractivityOptions:
+    """Normalized dashboard interactivity strategy for large Plotly datasets."""
+
+    mode: str = "auto"
+    sample_size: int = 50_000
+
+
+@dataclass(frozen=True)
 class IndustrialAnalyticsRequest:
     """Top-level immutable request contract for shared analytics workflows."""
 
@@ -201,6 +209,7 @@ class IndustrialAnalyticsRequest:
     tabular_column_filters: tuple[TabularColumnFilter, ...] = ()
     grouping_df: pd.DataFrame | None = None
     dashboard_visual_settings: dict | None = None
+    dashboard_interactivity_options: DashboardInteractivityOptions | dict | None = None
 
 
 def validate_export_request(request: ExportRequest) -> ExportRequest:
@@ -304,6 +313,9 @@ def validate_industrial_analytics_request(
         dashboard_visual_settings=normalize_dashboard_visual_settings(
             request.dashboard_visual_settings
         ),
+        dashboard_interactivity_options=_normalize_dashboard_interactivity_options(
+            request.dashboard_interactivity_options
+        ),
     )
 
 
@@ -337,6 +349,10 @@ _PARSE_METADATA_MODE_ALIASES = {
 }
 _ANALYTICS_SOURCE_KINDS = {"production_cache", "tabular_file"}
 _DASHBOARD_DETAIL_MODES = {"fast", "full"}
+_DASHBOARD_INTERACTIVITY_MODES = {"auto", "sampled", "static", "full"}
+_DASHBOARD_INTERACTIVITY_DEFAULT_SAMPLE_SIZE = 50_000
+_DASHBOARD_INTERACTIVITY_MIN_SAMPLE_SIZE = 5_000
+_DASHBOARD_INTERACTIVITY_MAX_SAMPLE_SIZE = 200_000
 
 
 def validate_paths(paths: AppPaths) -> AppPaths:
@@ -608,6 +624,48 @@ def _normalize_dashboard_detail_mode(value: object) -> str:
     if detail_mode not in _DASHBOARD_DETAIL_MODES:
         raise ValueError(f"Unsupported dashboard detail mode: {value}")
     return detail_mode
+
+
+def _normalize_dashboard_interactivity_options(value: object) -> DashboardInteractivityOptions:
+    if value is None:
+        return DashboardInteractivityOptions()
+    if isinstance(value, DashboardInteractivityOptions):
+        mode = value.mode
+        sample_size = value.sample_size
+    elif isinstance(value, dict):
+        mode = value.get("mode", DashboardInteractivityOptions.mode)
+        sample_size = value.get("sample_size", DashboardInteractivityOptions.sample_size)
+    else:
+        raise ValueError(
+            "Dashboard interactivity options must be provided as a "
+            "DashboardInteractivityOptions instance or mapping."
+        )
+
+    if not isinstance(mode, str):
+        raise ValueError("Dashboard interactivity mode must be provided as a string.")
+    normalized_mode = mode.strip().lower()
+    if normalized_mode not in _DASHBOARD_INTERACTIVITY_MODES:
+        raise ValueError(f"Unsupported dashboard interactivity mode: {mode}")
+
+    try:
+        normalized_sample_size = int(sample_size)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Dashboard interactivity sample size must be an integer.") from exc
+    if not (
+        _DASHBOARD_INTERACTIVITY_MIN_SAMPLE_SIZE
+        <= normalized_sample_size
+        <= _DASHBOARD_INTERACTIVITY_MAX_SAMPLE_SIZE
+    ):
+        raise ValueError(
+            "Dashboard interactivity sample size must be between "
+            f"{_DASHBOARD_INTERACTIVITY_MIN_SAMPLE_SIZE} and "
+            f"{_DASHBOARD_INTERACTIVITY_MAX_SAMPLE_SIZE}."
+        )
+
+    return DashboardInteractivityOptions(
+        mode=normalized_mode,
+        sample_size=normalized_sample_size,
+    )
 
 
 def _normalize_optional_output_path(

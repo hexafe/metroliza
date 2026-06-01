@@ -83,7 +83,7 @@ The legacy `docs/group_analysis/user_manual.md` path is retained only as a redir
   - `src/metroliza/charts/export_chart_payload_helpers.py` for chart payload/table shaping.
   - `src/metroliza/exporting/export_workbook_planning_helpers.py` for workbook/table layout sizing heuristics.
   - `src/metroliza/exporting/export_row_aggregation_utils.py` for row/group aggregation computations.
-- CSV/Excel Summary is routed through `src/metroliza/ui/industrial_analytics_dialog.py` and the shared tabular analytics workflow.
+- CSV/Excel Summary is routed through `src/metroliza/ui/industrial_analytics_dialog.py` and the shared tabular analytics workflow; large Plotly dashboard behavior is controlled by the CSV Summary interactivity strategy contract in `src/metroliza/shared/contracts.py`.
 - `src/metroliza/ui/data_grouping.py` keeps widget/event orchestration and delegates data/query mutations to `src/metroliza/tabular/data_grouping_service.py`.
 - Grouping dialog colors use shared semantic tokens from `src/metroliza/ui/ui_theme_tokens.py` so dialogs stay visually consistent across light/dark themes.
 - Group Analysis statistical computation is bridged through `src/metroliza/analytics/hexafe_groupstats_adapter.py`; workbook, dashboard, export orchestration, and UI remain Metroliza-owned.

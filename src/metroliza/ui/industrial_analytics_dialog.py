@@ -12,7 +12,9 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QDialogButtonBox,
     QFileDialog,
+    QFormLayout,
     QGridLayout,
     QHBoxLayout,
     QLineEdit,
@@ -22,13 +24,18 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from metroliza.shared.contracts import IndustrialAnalyticsRequest, validate_industrial_analytics_request
+from metroliza.shared.contracts import (
+    DashboardInteractivityOptions,
+    IndustrialAnalyticsRequest,
+    validate_industrial_analytics_request,
+)
 from metroliza.charts.dashboard_visual_options import (
     dashboard_visual_group_names_from_grouping_frame,
     dashboard_visual_settings_summary,
@@ -82,6 +89,82 @@ except ImportError:  # pragma: no cover - compatibility with lightweight test st
 SOURCE_PRODUCTION_CACHE = "production_cache"
 SOURCE_TABULAR_FILE = "tabular_file"
 GROUPSTATS_REFERENCE_COHORT_MODES = frozenset({"compare_rest", "group_selected"})
+_DASHBOARD_INTERACTIVITY_LABELS = {
+    "auto": "Auto",
+    "sampled": "Sampled",
+    "static": "Static",
+    "full": "Full",
+}
+
+
+def dashboard_interactivity_options_summary(options: DashboardInteractivityOptions) -> str:
+    mode = _DASHBOARD_INTERACTIVITY_LABELS.get(options.mode, options.mode.title())
+    if options.mode in {"auto", "sampled"}:
+        return f"{mode}, {options.sample_size:,} rows"
+    return mode
+
+
+class DashboardInteractivityOptionsDialog(QDialog):
+    """Edit CSV Summary Plotly interactivity options."""
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        options: DashboardInteractivityOptions | None = None,
+        row_count: int | None = None,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle("Dashboard interactivity")
+        self._options = options or DashboardInteractivityOptions()
+        configure_window_size(self, minimum=(360, 180), initial=(420, 220))
+
+        layout = QVBoxLayout(self)
+        if row_count is not None and row_count > self._options.sample_size:
+            notice = status_chip(
+                f"{row_count:,} rows selected for dashboard detail",
+                "warning",
+            )
+            layout.addWidget(notice)
+        form = QFormLayout()
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("Auto", "auto")
+        self.mode_combo.addItem("Sampled", "sampled")
+        self.mode_combo.addItem("Static", "static")
+        self.mode_combo.addItem("Full", "full")
+        index = self.mode_combo.findData(self._options.mode)
+        self.mode_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.mode_combo.currentIndexChanged.connect(self._sync_sample_size_enabled)
+        form.addRow("Mode", self.mode_combo)
+
+        self.sample_size_spin = QSpinBox()
+        self.sample_size_spin.setRange(5_000, 200_000)
+        self.sample_size_spin.setSingleStep(5_000)
+        self.sample_size_spin.setValue(self._options.sample_size)
+        form.addRow("Sample size", self.sample_size_spin)
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        configure_accessibility(self.mode_combo, name="Dashboard interactivity mode")
+        configure_accessibility(self.sample_size_spin, name="Dashboard interactivity sample size")
+        self._sync_sample_size_enabled()
+
+    def _sync_sample_size_enabled(self) -> None:
+        self.sample_size_spin.setEnabled(self.mode_combo.currentData() in {"auto", "sampled"})
+
+    def interactivity_options(self) -> DashboardInteractivityOptions:
+        return DashboardInteractivityOptions(
+            mode=str(self.mode_combo.currentData() or "auto"),
+            sample_size=self.sample_size_spin.value(),
+        )
 
 
 def build_analytics_completion_message(result) -> tuple[str, str, str, str]:
@@ -333,6 +416,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.df_for_grouping = None
         self.grouping_applied = False
         self._tabular_reload_notice = ""
+        self.dashboard_interactivity_options = DashboardInteractivityOptions()
 
         self.setWindowTitle("Production analytics" if self.is_production_source else "CSV Summary")
         configure_window_size(self, minimum=(720, 560), initial=(880, 680))
@@ -361,6 +445,13 @@ class IndustrialAnalyticsDialog(QDialog):
             "Fast keeps CSV Summary dashboard generation lightweight. "
             "Full adds richer detail at a higher processing cost."
         )
+        self.dashboard_interactivity_row_label = section_label("Plotly strategy")
+        self.dashboard_interactivity_summary_label = status_chip("", "neutral")
+        self.dashboard_interactivity_button = QPushButton("Change...")
+        self.dashboard_interactivity_button.setToolTip(
+            "Adjust CSV Summary Plotly interactivity for large datasets."
+        )
+        self.dashboard_interactivity_button.clicked.connect(self.open_dashboard_interactivity_options)
         self.dashboard_visuals_row_label = section_label("Dashboard style")
         self.dashboard_visuals_summary_label = status_chip("", "neutral")
         self.dashboard_visuals_button = QPushButton("Change...")
@@ -643,6 +734,16 @@ class IndustrialAnalyticsDialog(QDialog):
         grid.addWidget(self.dashboard_detail_mode_combo, row, 1, 1, 2)
 
         row += 1
+        dashboard_interactivity_actions = QHBoxLayout()
+        dashboard_interactivity_actions.setContentsMargins(0, 0, 0, 0)
+        dashboard_interactivity_actions.setSpacing(8)
+        dashboard_interactivity_actions.addWidget(self.dashboard_interactivity_summary_label)
+        dashboard_interactivity_actions.addWidget(self.dashboard_interactivity_button)
+        dashboard_interactivity_actions.addStretch(1)
+        grid.addWidget(self.dashboard_interactivity_row_label, row, 0)
+        grid.addLayout(dashboard_interactivity_actions, row, 1, 1, 2)
+
+        row += 1
         dashboard_visuals_actions = QHBoxLayout()
         dashboard_visuals_actions.setContentsMargins(0, 0, 0, 0)
         dashboard_visuals_actions.setSpacing(8)
@@ -714,6 +815,11 @@ class IndustrialAnalyticsDialog(QDialog):
             name="Dashboard detail mode",
             description=self.dashboard_detail_mode_combo.toolTip(),
         )
+        configure_accessibility(
+            self.dashboard_interactivity_button,
+            name="Edit dashboard interactivity",
+            description=self.dashboard_interactivity_button.toolTip(),
+        )
         configure_accessibility(self.groupstats_checkbox, name="Include groupstats output")
         configure_accessibility(self.dashboard_visuals_button, name="Edit dashboard visuals")
         configure_accessibility(self.dashboard_button, name="Select analytics dashboard path")
@@ -746,6 +852,9 @@ class IndustrialAnalyticsDialog(QDialog):
         self.clear_filter_button.setVisible(show_file)
         self.dashboard_detail_row_label.setVisible(show_file)
         self.dashboard_detail_mode_combo.setVisible(show_file)
+        self.dashboard_interactivity_row_label.setVisible(show_file)
+        self.dashboard_interactivity_summary_label.setVisible(show_file)
+        self.dashboard_interactivity_button.setVisible(show_file)
         self.database_row_label.setVisible(self.is_production_source)
         self.database_field.setVisible(self.is_production_source)
         self.grouping_row_label.setText("Group by" if self.is_production_source else "Groups")
@@ -754,6 +863,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.edit_groups_button.setVisible(show_file)
         self.clear_groups_button.setVisible(show_file)
         self._sync_filter_summary()
+        self._sync_dashboard_interactivity_controls()
         self._sync_dashboard_visual_controls()
 
     def _sync_filter_summary(self) -> None:
@@ -779,6 +889,29 @@ class IndustrialAnalyticsDialog(QDialog):
         palette = dashboard_visual_swatch_palette(self.dashboard_visual_settings, count=6)
         self.dashboard_visuals_summary_label.setText(summary)
         self.dashboard_visuals_summary_label.setToolTip(" ".join(palette))
+
+    def _sync_dashboard_interactivity_controls(self) -> None:
+        if not hasattr(self, "dashboard_interactivity_summary_label"):
+            return
+        summary = dashboard_interactivity_options_summary(self.dashboard_interactivity_options)
+        self.dashboard_interactivity_summary_label.setText(summary)
+        self.dashboard_interactivity_summary_label.setToolTip(summary)
+
+    def open_dashboard_interactivity_options(self) -> None:
+        dialog = DashboardInteractivityOptionsDialog(
+            self,
+            options=self.dashboard_interactivity_options,
+        )
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            request = validate_industrial_analytics_request(
+                IndustrialAnalyticsRequest(
+                    source_kind=self.source_kind,
+                    output_dashboard_file=self.output_dashboard_file,
+                    dashboard_interactivity_options=dialog.interactivity_options(),
+                )
+            )
+            self.dashboard_interactivity_options = request.dashboard_interactivity_options
+            self._sync_dashboard_interactivity_controls()
 
     def open_dashboard_visual_options(self) -> None:
         try:
@@ -1605,7 +1738,36 @@ class IndustrialAnalyticsDialog(QDialog):
         self._sync_ui_state()
         if not self.start_button.isEnabled():
             return
+        if not self._confirm_large_dashboard_interactivity():
+            return
         self.show_loading_screen()
+
+    def _confirm_large_dashboard_interactivity(self) -> bool:
+        if self.is_production_source or self.tabular_load_result is None:
+            return True
+        options = self.dashboard_interactivity_options
+        if options.mode != "auto":
+            return True
+        row_count = self._tabular_filtered_row_count()
+        if row_count <= options.sample_size:
+            return True
+        dialog = DashboardInteractivityOptionsDialog(
+            self,
+            options=options,
+            row_count=row_count,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        request = validate_industrial_analytics_request(
+            IndustrialAnalyticsRequest(
+                source_kind=self.source_kind,
+                output_dashboard_file=self.output_dashboard_file,
+                dashboard_interactivity_options=dialog.interactivity_options(),
+            )
+        )
+        self.dashboard_interactivity_options = request.dashboard_interactivity_options
+        self._sync_dashboard_interactivity_controls()
+        return True
 
     def show_tabular_load_screen(self) -> None:
         if self.is_production_source:
@@ -1706,6 +1868,7 @@ class IndustrialAnalyticsDialog(QDialog):
                 tabular_column_filters=self.tabular_column_filters,
                 grouping_df=self.df_for_grouping if self.grouping_applied else None,
                 dashboard_visual_settings=self.dashboard_visual_settings,
+                dashboard_interactivity_options=self.dashboard_interactivity_options,
             ),
             require_runnable=require_runnable,
         )
@@ -1734,6 +1897,7 @@ class IndustrialAnalyticsDialog(QDialog):
             dashboard_detail_mode=request.dashboard_detail_mode,
             grouping_df=request.grouping_df,
             dashboard_visual_settings=request.dashboard_visual_settings,
+            dashboard_interactivity_options=request.dashboard_interactivity_options,
         )
 
     def show_loading_screen(self) -> None:

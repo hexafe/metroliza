@@ -53,6 +53,7 @@ AnalyticsSourceKind = Literal["production_cache", "tabular_file"]
 CancelCheck = Callable[[], bool]
 ProgressCallback = Callable[[str], None]
 TABULAR_FAST_DASHBOARD_ROW_LIMIT = DASHBOARD_RAW_POINT_LIMIT
+_DASHBOARD_INTERACTIVITY_MODES = {"auto", "sampled", "static", "full"}
 
 
 class AnalyticsCancelled(RuntimeError):
@@ -279,6 +280,7 @@ def run_tabular_file_analytics(
     cancel_check: CancelCheck | None = None,
     progress_callback: ProgressCallback | None = None,
     dashboard_visual_settings: dict | None = None,
+    dashboard_interactivity_options: object | None = None,
 ) -> IndustrialAnalyticsRunResult:
     """Run analytics from a CSV or Excel file."""
 
@@ -301,6 +303,7 @@ def run_tabular_file_analytics(
             tabular_filter_keys=tabular_filter_keys or (),
             tabular_column_filters=tabular_column_filters or (),
             dashboard_detail_mode=dashboard_detail_mode,
+            dashboard_interactivity_options=dashboard_interactivity_options,
             grouping_df=grouping_df,
             dashboard_visual_settings=dashboard_visual_settings,
         ),
@@ -425,9 +428,13 @@ def run_tabular_file_analytics(
         + aggregated.diagnostics
         + groupstats.diagnostics
     )
-    dashboard_frame, dashboard_diagnostics = _tabular_dashboard_frame_for_detail_mode(
-        cohorted.dataframe,
+    dashboard_interactivity = _normalize_dashboard_interactivity_options(
+        dashboard_interactivity_options,
         detail_mode=request.dashboard_detail_mode,
+    )
+    dashboard_frame, dashboard_diagnostics = _tabular_dashboard_frame_for_interactivity(
+        cohorted.dataframe,
+        options=dashboard_interactivity,
     )
     diagnostics = diagnostics + dashboard_diagnostics
     _emit_progress(
@@ -435,8 +442,10 @@ def run_tabular_file_analytics(
         "Writing dashboard...",
         (
             "Rendering full-detail HTML dashboard and chart payloads"
-            if request.dashboard_detail_mode == "full"
-            else "Rendering fast HTML dashboard and bounded chart payloads"
+            if dashboard_interactivity["mode"] == "full"
+            else "Rendering static HTML dashboard snapshots"
+            if dashboard_interactivity["mode"] == "static"
+            else "Rendering sampled HTML dashboard and bounded chart payloads"
         ),
         step=5,
         total_steps=total_steps,
@@ -459,6 +468,7 @@ def run_tabular_file_analytics(
             request.dashboard_visual_settings
         ),
         dashboard_visual_settings=request.dashboard_visual_settings,
+        dashboard_interactivity_options=dashboard_interactivity,
     )
     workbook = None
     if request.output_workbook_file:
@@ -504,15 +514,41 @@ def run_tabular_file_analytics(
     )
 
 
-def _tabular_dashboard_frame_for_detail_mode(
-    dataframe,
+def _normalize_dashboard_interactivity_options(
+    options: object | None,
     *,
     detail_mode: str,
+) -> dict[str, int | str]:
+    mode = "full" if str(detail_mode or "").strip().casefold() == "full" else "auto"
+    sample_size = int(TABULAR_FAST_DASHBOARD_ROW_LIMIT)
+    if isinstance(options, dict):
+        raw_mode = options.get("mode")
+        raw_sample_size = options.get("sample_size", options.get("sampleSize"))
+    else:
+        raw_mode = getattr(options, "mode", None)
+        raw_sample_size = getattr(options, "sample_size", getattr(options, "sampleSize", None))
+    if isinstance(raw_mode, str) and raw_mode.strip():
+        candidate_mode = raw_mode.strip().casefold()
+        if candidate_mode in _DASHBOARD_INTERACTIVITY_MODES:
+            mode = candidate_mode
+    try:
+        candidate_sample_size = int(raw_sample_size)
+    except (TypeError, ValueError):
+        candidate_sample_size = sample_size
+    sample_size = max(1, candidate_sample_size)
+    return {"mode": mode, "sample_size": sample_size}
+
+
+def _tabular_dashboard_frame_for_interactivity(
+    dataframe,
+    *,
+    options: dict[str, int | str],
 ) -> tuple[object, tuple[ProductionAnalyticsDiagnostic, ...]]:
-    if str(detail_mode or "").strip().casefold() != "fast":
+    mode = str(options.get("mode") or "auto")
+    if mode not in {"auto", "sampled", "static"}:
         return dataframe, ()
     row_count = int(len(getattr(dataframe, "index", ())))
-    limit = int(TABULAR_FAST_DASHBOARD_ROW_LIMIT)
+    limit = max(1, int(options.get("sample_size") or TABULAR_FAST_DASHBOARD_ROW_LIMIT))
     if row_count <= limit:
         return dataframe, ()
     if TABULAR_GROUP_COLUMN in dataframe.columns:
@@ -529,11 +565,13 @@ def _tabular_dashboard_frame_for_detail_mode(
         severity="info",
         code="tabular_dashboard_fast_sample",
         message=(
-            f"Fast CSV/Excel dashboard detail rendered {len(sampled.index):,} sampled rows "
+            f"{mode.title()} CSV/Excel dashboard detail rendered {len(sampled.index):,} sampled rows "
             f"from {row_count:,}; aggregate tables, groupstats, and workbook output use all rows."
         ),
         context={
             "detail_mode": "fast",
+            "dashboard_interactivity_mode": mode,
+            "sample_size": limit,
             "input_row_count": row_count,
             "dashboard_row_count": int(len(sampled.index)),
         },
@@ -795,7 +833,9 @@ def _write_dashboard(
     cancel_check: CancelCheck | None,
     plotly_visual_settings: dict[str, object] | None = None,
     dashboard_visual_settings: dict[str, object] | None = None,
+    dashboard_interactivity_options: dict[str, object] | None = None,
 ) -> dict[str, object]:
+    interactivity_mode = str((dashboard_interactivity_options or {}).get("mode") or "auto")
     manifest = build_production_dashboard_manifest(
         frame=frame,
         metric_selection=metrics,
@@ -808,6 +848,7 @@ def _write_dashboard(
         dashboard_title=dashboard_title,
         dashboard_subtitle=dashboard_subtitle,
         plotly_visual_settings=plotly_visual_settings,
+        include_plotly_specs=interactivity_mode.strip().casefold() != "static",
     )
     _raise_if_cancelled(cancel_check)
     target_path = _html_output_path(output_dashboard_file)
@@ -818,6 +859,7 @@ def _write_dashboard(
             temp_path,
             assets_dir=_dashboard_assets_dir(target_path),
             dashboard_visual_settings=dashboard_visual_settings,
+            dashboard_interactivity_options=dashboard_interactivity_options,
         )
         _raise_if_cancelled(cancel_check)
         Path(dashboard["html_dashboard_path"]).replace(target_path)

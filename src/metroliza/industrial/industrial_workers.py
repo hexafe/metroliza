@@ -232,6 +232,7 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
         dashboard_detail_mode: str = "fast",
         grouping_df=None,
         dashboard_visual_settings: dict | None = None,
+        dashboard_interactivity_options: object | None = None,
     ):
         super().__init__()
         validated_request = validate_industrial_analytics_request(
@@ -257,6 +258,7 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
                 dashboard_detail_mode=dashboard_detail_mode,
                 grouping_df=grouping_df,
                 dashboard_visual_settings=dashboard_visual_settings,
+                dashboard_interactivity_options=dashboard_interactivity_options,
             )
         )
         self.request = validated_request
@@ -281,6 +283,7 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
         self.dashboard_detail_mode = validated_request.dashboard_detail_mode
         self.grouping_df = validated_request.grouping_df
         self.dashboard_visual_settings = validated_request.dashboard_visual_settings
+        self.dashboard_interactivity_options = validated_request.dashboard_interactivity_options
         self._init_cancellation_state()
 
     def _emit_progress_message(self, message: str) -> None:
@@ -308,6 +311,7 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
                     chart_selection=self.chart_selection,
                     separate_parameter_sheets=self.separate_parameter_sheets,
                     dashboard_visual_settings=self.dashboard_visual_settings,
+                    dashboard_interactivity_options=self.dashboard_interactivity_options,
                     cancel_check=self._is_cancelled,
                     progress_callback=self._emit_progress_message,
                 )

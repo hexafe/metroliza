@@ -51,7 +51,7 @@ def test_dashboard_visual_preview_labels_derive_from_industrial_chart_groups() -
     assert labels == ("POPULATION", "DUPA", "TEST123", "Group 3", "Group 4")
 
 
-def _production_dashboard_fixture(tmp_path):
+def _production_dashboard_fixture(tmp_path, *, include_plotly_specs: bool = True):
     db_path = str(tmp_path / "production_only.db")
     seed_production_analytics_cache(db_path)
     metrics = (ProductionMetricSelection("cycle_time_s"),)
@@ -90,6 +90,7 @@ def _production_dashboard_fixture(tmp_path):
             + aggregated.diagnostics
             + groupstats.diagnostics
         ),
+        include_plotly_specs=include_plotly_specs,
     )
     return manifest
 
@@ -124,6 +125,26 @@ def test_build_production_dashboard_manifest_contains_requested_chart_families(t
         for table in histogram["stats_tables"]
         for row in table["rows"]
     )
+
+
+def test_build_production_dashboard_manifest_can_skip_plotly_specs(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    def fail_plotly_spec(*_args, **_kwargs):
+        raise AssertionError("static dashboard mode should not build Plotly specs")
+
+    monkeypatch.setattr(dashboard_module, "build_dashboard_plotly_spec", fail_plotly_spec)
+    monkeypatch.setattr(dashboard_module, "build_plotstats_dashboard_spec", fail_plotly_spec)
+
+    manifest = _production_dashboard_fixture(tmp_path, include_plotly_specs=False)
+
+    assert manifest["charts"]
+    assert all("plotly_spec" not in chart for chart in manifest["charts"])
+    time_series = next(chart for chart in manifest["charts"] if chart["chart_type"] == "time_series")
+    assert any("static dashboard mode" in note for note in time_series.get("notes", []))
+    histogram = next(chart for chart in manifest["charts"] if chart["chart_type"] == "histogram")
+    assert histogram["image"]["mime_type"] == "image/png"
 
 
 def test_dashboard_chart_layout_reserves_title_and_legend_spacing(tmp_path) -> None:
@@ -340,9 +361,66 @@ def test_write_production_dashboard_omits_plotly_when_payload_exceeds_budget(tmp
     assert "Cycle Time S distribution" in html_text
     assert "Cycle Time S violin" in html_text
     assert "Cycle Time S box" in html_text
-    assert "Interactive charts are unavailable in this dashboard" in html_text
-    assert "Interactive chart omitted because the Plotly payload exceeded" in html_text
+    assert "Some interactive charts were omitted in this dashboard" in html_text
+    assert "Interactive chart omitted because this chart&#x27;s Plotly payload exceeded" in html_text
     assert not (Path(result["html_dashboard_assets_path"]) / "plotly-2.27.0.min.js").exists()
+    assert any("plotly_spec" in chart for chart in manifest["charts"])
+
+
+def test_write_production_dashboard_omits_plotly_chart_by_chart_when_payload_exceeds_budget(
+    tmp_path,
+) -> None:
+    manifest = _production_dashboard_fixture(tmp_path)
+    output_file = tmp_path / "production_dashboard.html"
+    spec_count = dashboard_module._count_plotly_specs(manifest)
+
+    result = write_production_dashboard(
+        manifest,
+        output_file,
+        plotly_spec_count_budget=spec_count - 1,
+        plotly_serialized_json_bytes_budget=10_000_000,
+    )
+
+    html_text = output_file.read_text(encoding="utf-8")
+    assert result["html_dashboard_plotly_spec_count"] == spec_count
+    assert result["html_dashboard_embedded_plotly_spec_count"] == spec_count - 1
+    assert result["html_dashboard_interactive_chart_count"] == spec_count - 1
+    assert result["html_dashboard_plotly_budget"]["status"] == "over_budget"
+    assert "production-dashboard-charts" in html_text
+    assert "plotly-2.27.0.min.js" in html_text
+    assert "Some interactive charts were omitted in this dashboard" in html_text
+    assert "Interactive chart omitted because this chart&#x27;s Plotly payload exceeded" in html_text
+    chart_payload = json.loads(
+        re.search(
+            r'<script id="production-dashboard-charts" type="application/json">(.*?)</script>',
+            html_text,
+            re.DOTALL,
+        ).group(1)
+    )
+    assert len(chart_payload) == spec_count - 1
+
+
+def test_write_production_dashboard_static_interactivity_suppresses_plotly_specs(
+    tmp_path,
+) -> None:
+    manifest = _production_dashboard_fixture(tmp_path)
+    output_file = tmp_path / "production_dashboard.html"
+
+    result = write_production_dashboard(
+        manifest,
+        output_file,
+        dashboard_interactivity_options={"mode": "static", "sample_size": 123},
+    )
+
+    html_text = output_file.read_text(encoding="utf-8")
+    assert result["html_dashboard_plotly_spec_count"] > 0
+    assert result["html_dashboard_embedded_plotly_spec_count"] == 0
+    assert result["html_dashboard_interactive_chart_count"] == 0
+    assert result["html_dashboard_plotly_runtime_status"] == "static_snapshot_only"
+    assert result["html_dashboard_plotly_budget"]["status"] == "within_budget"
+    assert "production-dashboard-charts" not in html_text
+    assert "plotly-2.27.0.min.js" not in html_text
+    assert "Interactive chart omitted because static dashboard mode was selected" in html_text
     assert any("plotly_spec" in chart for chart in manifest["charts"])
 
 

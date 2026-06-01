@@ -4,6 +4,7 @@ import pandas as pd
 
 from modules.contracts import (
     AppPaths,
+    DashboardInteractivityOptions,
     ExportOptions,
     IndustrialAnalyticsRequest,
     ParseRequest,
@@ -263,6 +264,53 @@ class TestValidateExportRequest(unittest.TestCase):
 
 
 class TestValidateIndustrialAnalyticsRequest(unittest.TestCase):
+    def test_defaults_dashboard_interactivity_options(self):
+        validated = validate_industrial_analytics_request(
+            IndustrialAnalyticsRequest(
+                source_kind='production_cache',
+                output_dashboard_file='dashboard.html',
+            )
+        )
+
+        self.assertEqual(
+            validated.dashboard_interactivity_options,
+            DashboardInteractivityOptions(mode='auto', sample_size=50000),
+        )
+
+    def test_normalizes_dashboard_interactivity_options_mapping(self):
+        validated = validate_industrial_analytics_request(
+            IndustrialAnalyticsRequest(
+                source_kind='production_cache',
+                output_dashboard_file='dashboard.html',
+                dashboard_interactivity_options={'mode': ' Sampled ', 'sample_size': '75000'},
+            )
+        )
+
+        self.assertEqual(
+            validated.dashboard_interactivity_options,
+            DashboardInteractivityOptions(mode='sampled', sample_size=75000),
+        )
+
+    def test_rejects_unknown_dashboard_interactivity_mode(self):
+        with self.assertRaisesRegex(ValueError, 'Unsupported dashboard interactivity mode'):
+            validate_industrial_analytics_request(
+                IndustrialAnalyticsRequest(
+                    source_kind='production_cache',
+                    output_dashboard_file='dashboard.html',
+                    dashboard_interactivity_options={'mode': 'animated'},
+                )
+            )
+
+    def test_rejects_dashboard_interactivity_sample_size_outside_bounds(self):
+        with self.assertRaisesRegex(ValueError, 'between 5000 and 200000'):
+            validate_industrial_analytics_request(
+                IndustrialAnalyticsRequest(
+                    source_kind='production_cache',
+                    output_dashboard_file='dashboard.html',
+                    dashboard_interactivity_options={'mode': 'sampled', 'sample_size': 4999},
+                )
+            )
+
     def test_defaults_dashboard_detail_mode_to_fast(self):
         validated = validate_industrial_analytics_request(
             IndustrialAnalyticsRequest(
