@@ -23,6 +23,7 @@ from metroliza.exporting.export_summary_sheet_planner import (
 )
 from metroliza.exporting.export_workbook_planning_helpers import compute_histogram_font_sizes
 from metroliza.charts.summary_plot_palette import SUMMARY_PLOT_PALETTE
+from metroliza.charts.value_formatting import format_metrology_label_text
 
 try:
     from scipy.stats import gaussian_kde
@@ -456,7 +457,12 @@ def _fallback_histogram_annotation_rows(payload: Mapping[str, Any], *, x_min: fl
     ):
         if value is None:
             continue
-        text = f"{label}={value:.3f}" if kind != "mean" else f"Mean = {value:.3f}"
+        text = format_metrology_label_text(
+            label,
+            value,
+            mean_default_precision=3,
+            mean_separator=" = ",
+        )
         fallback_annotations.append(
             {
                 "label": label,

@@ -21,6 +21,7 @@ from metroliza.exporting.export_summary_sheet_planner import (
     compute_histogram_annotation_rows as _compute_histogram_annotation_rows,
 )
 from metroliza.charts.summary_plot_palette import SUMMARY_PLOT_PALETTE
+from metroliza.charts.value_formatting import format_metrology_label_text
 
 
 DEFAULT_DPI = 150
@@ -627,7 +628,7 @@ def _draw_horizontal_reference_labels(
         _draw_annotation_box(
             image,
             draw,
-            text=f"{label}={float(value):.3f}",
+            text=format_metrology_label_text(label, value, mean_default_precision=3),
             anchor_x=right - 8.0,
             base_y=base_y,
             color=_hex_rgba(line.get("color") or SUMMARY_PLOT_PALETTE["annotation_text"], float(line.get("alpha") or 1.0)),
@@ -868,7 +869,12 @@ def _fallback_histogram_annotation_rows(
     ):
         if value is None:
             continue
-        text = f"{label}={value:.3f}" if kind != "mean" else f"Mean = {value:.3f}"
+        text = format_metrology_label_text(
+            label,
+            value,
+            mean_default_precision=3,
+            mean_separator=" = ",
+        )
         fallback_annotations.append(
             {
                 "label": label,

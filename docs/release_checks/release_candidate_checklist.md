@@ -120,7 +120,7 @@ python -m maturin build --manifest-path src/metroliza/native/distribution_fit_ad
 ### 2026.05 RC4 directory-reorganization audit evidence
 
 Current validation branch: `codex/directory-reorg-plan`.
-Current RC metadata: `2026.05rc4(260524)`.
+Current RC metadata: `2026.05rc4(260601)`.
 Current plotstats hotfix pin:
 `1e2c72107d342f44a37e5fb78d7d76992ea60315`.
 
@@ -129,12 +129,13 @@ Current plotstats hotfix pin:
 - Previous RC2 audit evidence remains historical in
   [`rc2_release_audit_2026-05-17.md`](./rc2_release_audit_2026-05-17.md).
 - Local release gates passed for the current directory-reorganization audit
-  worktree: `ruff`, `compileall`, release metadata sync, release hygiene,
-  `git diff --check`, security audit, full pytest with coverage, parser plugin
-  workspace validation, and packaged PDF parser input validation.
+  worktree after the chart reference-label dedupe and `260601` build-date
+  refresh: `ruff`, `compileall`, release metadata sync, release hygiene,
+  security audit, full pytest with coverage, and packaged PDF parser input
+  validation.
 - Full pytest with coverage passed:
-  `1762 passed, 203 skipped, 95 warnings, 60 subtests passed`; combined
-  CI-scope coverage `67.19%` against the `65%` threshold.
+  `1773 passed, 207 skipped, 95 warnings, 60 subtests passed`; combined
+  CI-scope coverage `67.20%` against the `65%` threshold.
 - Security audit passed after allowing `pip-audit` to create/upgrade its temporary
   dependency environment; `pip-audit` reported no known vulnerabilities.
 - Post-reorganization follow-up local audit passed after docs/reference cleanup,

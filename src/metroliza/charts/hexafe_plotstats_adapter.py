@@ -20,6 +20,7 @@ from metroliza.charts.export_chart_payload_helpers import build_histogram_table_
 from metroliza.exporting.export_summary_utils import resolve_histogram_bin_count
 from metroliza.charts.matplotlib_runtime import configure_headless_matplotlib
 from metroliza.charts.summary_plot_palette import SUMMARY_PLOT_PALETTE
+from metroliza.charts.value_formatting import format_metrology_legend_value as _shared_format_metrology_legend_value
 
 configure_headless_matplotlib()
 
@@ -481,6 +482,13 @@ def build_plotstats_dashboard_spec(
     _normalize_payload_group_stat_trace_names(spec, payload)
     _ensure_group_histogram_mean_annotations(spec, payload)
     normalized = _trim_plotly_spec(spec)
+    if not _is_histogram_plotly_spec(normalized):
+        _normalize_reference_trace_names_and_annotations(
+            normalized,
+            add_missing_annotations=False,
+            include_mean=False,
+        )
+    _dedupe_visible_stat_legend_items(normalized)
     _apply_payload_kind_metadata(normalized, payload)
     _apply_payload_histogram_overlay_plotly_y(normalized, payload)
     _normalize_scatter_trend_dashboard_spec(normalized, payload)
@@ -495,6 +503,11 @@ def normalize_distribution_stat_legend(
     """Ensure distribution/IQR Plotly legends expose values for semantic stat items."""
 
     normalized = dict(spec)
+    _normalize_reference_trace_names_and_annotations(
+        normalized,
+        add_missing_annotations=False,
+        include_mean=False,
+    )
     _normalize_payload_group_stat_trace_names(normalized, payload)
     _dedupe_visible_stat_legend_items(normalized)
     return normalized
@@ -2081,16 +2094,12 @@ def _format_metrology_legend_value(
     *,
     mean_precision: int | None = None,
 ) -> str:
-    if value is None or not math.isfinite(float(value)):
-        return ""
-    if label.strip().casefold() == "mean":
-        precision = int(mean_precision) if mean_precision is not None else 4
-    else:
-        precision = 3
-    precision = max(0, min(precision, 8))
-    quantizer = Decimal("1").scaleb(-precision)
-    rounded = Decimal(str(round(float(value), 12))).quantize(quantizer, rounding=ROUND_HALF_UP)
-    return f"{rounded:.{precision}f}"
+    return _shared_format_metrology_legend_value(
+        label,
+        value,
+        mean_precision=mean_precision,
+        mean_default_precision=4,
+    )
 
 
 def _dedupe_visible_stat_legend_items(spec: Mapping[str, Any]) -> None:
@@ -2392,7 +2401,12 @@ def _parse_bin_range_label(value: Any) -> tuple[float, float, str] | None:
     return start, end, text
 
 
-def _normalize_reference_trace_names_and_annotations(spec: Mapping[str, Any]) -> None:
+def _normalize_reference_trace_names_and_annotations(
+    spec: Mapping[str, Any],
+    *,
+    add_missing_annotations: bool = True,
+    include_mean: bool = True,
+) -> None:
     layout = spec.get("layout")
     if not isinstance(layout, dict):
         return
@@ -2422,6 +2436,8 @@ def _normalize_reference_trace_names_and_annotations(spec: Mapping[str, Any]) ->
             display_label = _REFERENCE_LEGEND_DISPLAY_LABELS.get(label_key)
         if display_label is None:
             continue
+        if not include_mean and display_label.casefold() == "mean":
+            continue
         axis, value = _constant_line_axis_and_value(trace)
         if value is None:
             value = parsed_value
@@ -2435,7 +2451,7 @@ def _normalize_reference_trace_names_and_annotations(spec: Mapping[str, Any]) ->
         if is_histogram and axis == "x":
             _normalize_histogram_reference_trace(trace, value=value, label=display_label, display=display)
             continue
-        if display in existing_text:
+        if display in existing_text or not add_missing_annotations:
             continue
         annotation = _reference_annotation(axis=axis, value=value, text=display, color=_trace_line_color(trace))
         if annotation is not None:

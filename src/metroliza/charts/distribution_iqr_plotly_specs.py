@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from decimal import Decimal, ROUND_HALF_UP
 import math
 import re
 from typing import Any
 
 from metroliza.charts.summary_plot_palette import SUMMARY_PLOT_PALETTE
+from metroliza.charts.value_formatting import format_metrology_legend_value as _shared_format_metrology_legend_value
 
 _GROUP_COUNT_SUFFIX_PATTERN = re.compile(r"\s*\(n\s*=\s*\d+\)\s*$", re.IGNORECASE)
 _STAT_DASH_BY_LABEL = {
@@ -447,13 +447,12 @@ def _format_metrology_legend_value(
     *,
     mean_precision: int | None = None,
 ) -> str:
-    if value is None or not math.isfinite(float(value)):
-        return ""
-    precision = int(mean_precision) if label.strip().casefold() == "mean" else 3
-    precision = max(0, min(precision, 8))
-    quantizer = Decimal("1").scaleb(-precision)
-    rounded = Decimal(str(round(float(value), 12))).quantize(quantizer, rounding=ROUND_HALF_UP)
-    return f"{rounded:.{precision}f}"
+    return _shared_format_metrology_legend_value(
+        label,
+        value,
+        mean_precision=mean_precision,
+        mean_default_precision=4,
+    )
 
 
 __all__ = [

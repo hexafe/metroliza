@@ -1,8 +1,8 @@
 RELEASE_VERSION = "2026.05rc4"
-VERSION_DATE = "260524"
+VERSION_DATE = "260601"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = "Parser profile self-service, export reliability, safer long-task cancellation, and dashboard plot visual customization."
-PUBLIC_VERSION_LABEL = "2026.05 RC4 (build 260524)"
+PUBLIC_VERSION_LABEL = "2026.05 RC4 (build 260601)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>

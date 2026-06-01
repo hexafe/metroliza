@@ -12,6 +12,7 @@ from modules.hexafe_plotstats_adapter import (
     build_histogram_stats_table,
     build_plotstats_dashboard_spec,
     metroliza_dashboard_plotstats_theme,
+    normalize_distribution_stat_legend,
     plotstats_export_charts_enabled,
     render_chart_artifact_png,
     render_histogram_png,
@@ -286,7 +287,7 @@ def test_plotstats_dashboard_spec_normalizes_histogram_plotly_semantics(monkeypa
     assert bar_trace["x"] == [3046.5, 8885.0]
     assert bar_trace["width"] == [5847.0, 5830.0]
     assert bar_trace["customdata"][0] == [123.0, 5970.0, 4, "123 - 5.97e+03"]
-    assert spec["data"][1]["name"] == "LSL=123.000"
+    assert spec["data"][1]["name"] == "LSL=123"
     assert spec["data"][1].get("visible") != "legendonly"
     assert spec["data"][1]["y"] == [0.0, 0.6]
     assert spec["data"][2]["name"] == "Mean=124.0"
@@ -380,8 +381,8 @@ def test_plotstats_dashboard_spec_promotes_valued_histogram_reference_traces(mon
     )
 
     names = [trace.get("name") for trace in spec["data"]]
-    assert names.count("LSL=1.500") == 1
-    assert names.count("USL=3.500") == 1
+    assert names.count("LSL=1.5") == 1
+    assert names.count("USL=3.5") == 1
     assert names.count("Mean=2.0") == 1
     assert all(trace.get("visible") != "legendonly" for trace in spec["data"][1:])
     assert all(trace["y"] == [0.0, 0.75] for trace in spec["data"][1:])
@@ -418,8 +419,8 @@ def test_dashboard_plotly_fallback_builds_percent_histogram_with_reference_value
         "Mean=2.5",
         "Q3=3.250",
         "Max=4.000",
-        "LSL=1.500",
-        "USL=3.500",
+        "LSL=1.5",
+        "USL=3.5",
     }.issubset(trace_names)
     visible_default_prefixes = ("Mean=", "LSL=", "Nominal=", "USL=")
     assert all(
@@ -481,7 +482,7 @@ def test_dashboard_plotly_fallback_builds_distribution_and_iqr_with_full_width_l
         stat_trace = next(trace for trace in spec["data"] if trace["name"] == "(A) Mean=6.5380")
         assert stat_trace["visible"] == "legendonly"
         assert stat_trace["x"] == [0.5, 2.5]
-        lsl_trace = next(trace for trace in spec["data"] if trace["name"] == "LSL=6.200")
+        lsl_trace = next(trace for trace in spec["data"] if trace["name"] == "LSL=6.2")
         assert lsl_trace.get("visible") != "legendonly"
         assert lsl_trace["x"] == [0.5, 2.5]
 
@@ -539,7 +540,7 @@ def test_plotstats_dashboard_spec_normalizes_generic_histogram_overlays(monkeypa
     assert "overlay 2" not in trace_names
     assert "Selected model curve" in trace_names
     assert "KDE reference" in trace_names
-    assert "LSL=1.250" in trace_names
+    assert "LSL=1.25" in trace_names
     assert spec["layout"]["yaxis"]["range"] == [0.0, 0.648]
     assert spec["data"][0]["y"] == [0.4, 0.6]
     selected = next(trace for trace in spec["data"] if trace.get("name") == "Selected model curve")
@@ -971,8 +972,8 @@ def test_plotstats_dashboard_spec_values_existing_single_group_semantic_legend_i
     assert "Min=6.469" in trace_names
     assert "Mean=6.5380" in trace_names
     assert "Max=6.687" in trace_names
-    assert "Nominal=6.500" in trace_names
-    assert visible_trace_names.count("Nominal=6.500") == 1
+    assert "Nominal=6.5" in trace_names
+    assert visible_trace_names.count("Nominal=6.5") == 1
     assert "Minimum" not in trace_names
     assert "Maximum" not in trace_names
 
@@ -1019,6 +1020,43 @@ def test_plotstats_dashboard_spec_normalizes_valued_stat_labels_and_hides_duplic
     assert "Minimum=1.234" not in visible_trace_names
 
 
+def test_normalize_distribution_stat_legend_dedupes_limit_values_with_mixed_rounding() -> None:
+    spec = {
+        "data": [
+            {"type": "violin", "name": "A", "y": [0.1, 0.2, 0.3]},
+            {
+                "type": "scatter",
+                "mode": "lines",
+                "name": "USL=0.2",
+                "y": [0.2, 0.2],
+                "showlegend": True,
+            },
+            {
+                "type": "scatter",
+                "mode": "lines",
+                "name": "USL=0.200",
+                "y": [0.2, 0.2],
+                "showlegend": True,
+            },
+        ],
+        "layout": {},
+    }
+
+    normalized = normalize_distribution_stat_legend(
+        spec,
+        {"type": "distribution", "values": [[0.1, 0.2, 0.3]], "limits": {"usl": 0.2}},
+    )
+
+    visible_trace_names = [
+        trace["name"]
+        for trace in normalized["data"]
+        if trace.get("showlegend", True) is not False
+    ]
+    assert visible_trace_names.count("USL=0.2") == 1
+    assert "USL=0.200" not in visible_trace_names
+    assert "annotations" not in normalized["layout"]
+
+
 def test_dashboard_plotly_spec_renames_generic_limit_traces(monkeypatch) -> None:
     def fake_spec(_payload, *, title, theme, static):
         return {
@@ -1057,7 +1095,7 @@ def test_dashboard_plotly_spec_renames_generic_limit_traces(monkeypatch) -> None
     )
 
     assert spec is not None
-    assert {trace["name"] for trace in spec["data"][1:]} == {"LSL=1.500", "USL=3.500"}
+    assert {trace["name"] for trace in spec["data"][1:]} == {"LSL=1.5", "USL=3.5"}
     assert all(trace.get("visible") != "legendonly" for trace in spec["data"][1:])
     assert all(trace["y"] == [0.0, 1.0] for trace in spec["data"][1:])
     assert "annotations" not in spec["layout"]
@@ -1165,8 +1203,8 @@ def test_plotstats_dashboard_spec_preserves_trend_axis_limits_and_legend_referen
     assert spec is not None
     assert spec["layout"]["xaxis"]["range"] == [-0.25, 3.25]
     assert spec["layout"]["yaxis"]["range"] == [9.0, 11.0]
-    lsl_trace = next(trace for trace in spec["data"] if trace.get("name") == "LSL=9.500")
-    nominal_trace = next(trace for trace in spec["data"] if trace.get("name") == "Nominal=10.000")
+    lsl_trace = next(trace for trace in spec["data"] if trace.get("name") == "LSL=9.5")
+    nominal_trace = next(trace for trace in spec["data"] if trace.get("name") == "Nominal=10")
     assert lsl_trace["x"] == [-0.25, 3.25]
     assert nominal_trace["x"] == [-0.25, 3.25]
     assert lsl_trace["showlegend"] is True
@@ -1298,7 +1336,7 @@ def test_plotstats_dashboard_spec_normalizes_distribution_scatter_references(
     )
 
     assert spec is not None
-    lsl_trace = next(trace for trace in spec["data"] if trace.get("name") == "LSL=9.500")
+    lsl_trace = next(trace for trace in spec["data"] if trace.get("name") == "LSL=9.5")
     assert spec["layout"]["xaxis"]["range"] == [0.5, 3.5]
     assert lsl_trace["x"] == [0.5, 3.5]
     assert lsl_trace["showlegend"] is True

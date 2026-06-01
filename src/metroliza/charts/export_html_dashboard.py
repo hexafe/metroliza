@@ -37,6 +37,7 @@ from metroliza.charts.hexafe_plotstats_adapter import (
     normalize_distribution_stat_legend,
     plotstats_export_charts_enabled,
 )
+from metroliza.charts.value_formatting import format_metrology_legend_value as _shared_format_metrology_legend_value
 
 
 _PLOTLY_COLORWAY = [
@@ -1799,16 +1800,12 @@ def _format_metrology_legend_value(
     *,
     mean_precision: int | None = None,
 ) -> str:
-    if value is None or not math.isfinite(float(value)):
-        return ""
-    if label.strip().casefold() == "mean":
-        precision = int(mean_precision) if mean_precision is not None else 4
-    else:
-        precision = 3
-    precision = max(0, min(precision, 8))
-    quantizer = Decimal("1").scaleb(-precision)
-    rounded = Decimal(str(round(float(value), 12))).quantize(quantizer, rounding=ROUND_HALF_UP)
-    return f"{rounded:.{precision}f}"
+    return _shared_format_metrology_legend_value(
+        label,
+        value,
+        mean_precision=mean_precision,
+        mean_default_precision=4,
+    )
 
 
 def _group_colors_from_traces(
@@ -2031,7 +2028,7 @@ def _build_group_analysis_plotly_spec(
                 static=False,
             )
             if spec:
-                return spec
+                return normalize_distribution_stat_legend(spec, payload)
         return _build_plotly_distribution_spec(payload, title=f"{metric_name} - Violin", theme=theme)
 
     if plot_key_normalized == "histogram":
@@ -2158,6 +2155,7 @@ def _build_plotly_chart_spec(
             theme=theme,
         )
         if spec:
+            spec = normalize_distribution_stat_legend(spec, payload)
             return apply_dashboard_visual_settings(
                 spec,
                 payload=payload,

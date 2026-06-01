@@ -1,5 +1,6 @@
 """Pure planning helpers for summary-sheet worksheet/chart rendering."""
 
+from metroliza.charts.value_formatting import format_metrology_label_text
 from metroliza.charts.summary_plot_palette import SUMMARY_PLOT_PALETTE
 
 
@@ -59,7 +60,12 @@ def build_histogram_annotation_specs(average, usl, lsl, y_max):
         {
             'kind': 'mean',
             'x': average,
-            'text': f'Mean = {average:.3f}',
+            'text': format_metrology_label_text(
+                'Mean',
+                average,
+                mean_default_precision=3,
+                mean_separator=' = ',
+            ),
             'color': SUMMARY_PLOT_PALETTE['annotation_text'],
             'ha': 'center',
             'priority': 300,
@@ -68,7 +74,7 @@ def build_histogram_annotation_specs(average, usl, lsl, y_max):
         {
             'kind': 'usl',
             'x': usl,
-            'text': f'USL={usl:.3f}',
+            'text': format_metrology_label_text('USL', usl, mean_default_precision=3),
             'color': SUMMARY_PLOT_PALETTE['spec_limit'],
             'ha': 'center',
             'priority': 260,
@@ -77,7 +83,7 @@ def build_histogram_annotation_specs(average, usl, lsl, y_max):
         {
             'kind': 'lsl',
             'x': lsl,
-            'text': f'LSL={lsl:.3f}',
+            'text': format_metrology_label_text('LSL', lsl, mean_default_precision=3),
             'color': SUMMARY_PLOT_PALETTE['spec_limit'],
             'ha': 'center',
             'priority': 250,

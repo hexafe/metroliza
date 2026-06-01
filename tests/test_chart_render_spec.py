@@ -422,7 +422,7 @@ def test_render_distribution_png_draws_small_reference_label_boxes_for_scatter(m
     render_distribution_png(payload)
 
     rendered_labels = {str(call["text"]) for call in calls}
-    assert {"LSL=9.500", "USL=10.500", "Mean=10.000"}.issubset(rendered_labels)
+    assert {"LSL=9.5", "USL=10.5", "Mean=10.000"}.issubset(rendered_labels)
     assert all(int(call["font_size"]) <= 8 for call in calls)
 
 

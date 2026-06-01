@@ -857,9 +857,9 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
         }
         self.assertTrue({0.95, 1.0, 1.05}.issubset(horizontal_levels))
         annotation_texts = [text.get_text() for text in ax.texts]
-        self.assertIn('USL=1.050', annotation_texts)
-        self.assertIn('Nominal=1.000', annotation_texts)
-        self.assertIn('LSL=0.950', annotation_texts)
+        self.assertIn('USL=1.05', annotation_texts)
+        self.assertIn('Nominal=1', annotation_texts)
+        self.assertIn('LSL=0.95', annotation_texts)
         self.assertTrue(any(str(text).startswith('μ=') for text in annotation_texts))
         self.assertTrue(any('Capability: Marginal' in str(text) for text in annotation_texts))
         self.assertTrue(any('95% CI 0.750 to 1.200' in str(text) for text in annotation_texts))

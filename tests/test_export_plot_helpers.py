@@ -1191,9 +1191,9 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(len(annotations), 3)
         self.assertEqual(annotations[0]['text'], 'Mean = 10.123')
         self.assertEqual(annotations[0]['x'], 10.1234)
-        self.assertEqual(annotations[1]['text'], 'USL=10.600')
+        self.assertEqual(annotations[1]['text'], 'USL=10.6')
         self.assertEqual(annotations[1]['ha'], 'center')
-        self.assertEqual(annotations[2]['text'], 'LSL=9.800')
+        self.assertEqual(annotations[2]['text'], 'LSL=9.8')
         self.assertEqual(annotations[2]['ha'], 'center')
         self.assertEqual(by_kind['mean']['preferred_slot'], 'mean_primary')
         self.assertEqual(by_kind['usl']['preferred_slot'], 'spec_primary')
@@ -1874,7 +1874,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         self.assertEqual(len(rendered), 3)
-        self.assertEqual([text.get_text() for text in rendered], ['Mean = 4.000', 'USL=8.000', 'LSL=2.000'])
+        self.assertEqual([text.get_text() for text in rendered], ['Mean = 4.000', 'USL=8', 'LSL=2'])
         self.assertEqual(rendered[0].get_position()[0], 4.0)
         self.assertEqual(rendered[1].get_position()[0], 8.0)
         self.assertEqual(rendered[2].get_position()[0], 2.0)
@@ -1894,8 +1894,8 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         texts = {text.get_text() for text in rendered}
-        self.assertIn('USL=10.500', texts)
-        self.assertIn('LSL=9.500', texts)
+        self.assertIn('USL=10.5', texts)
+        self.assertIn('LSL=9.5', texts)
         plt.close(fig)
 
     def test_histogram_annotation_fontsize_contract_is_shared_for_mean_usl_lsl(self):
@@ -1919,7 +1919,7 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         annotation_specs = [
             {'kind': 'mean', 'x': 0.5, 'text_y_axes': 0.95, 'text': 'Mean = 0.500', 'color': '#111111', 'ha': 'center', 'priority': 300},
-            {'kind': 'usl', 'x': 0.5, 'text_y_axes': 0.95, 'text': 'USL=0.500', 'color': '#222222', 'ha': 'center', 'priority': 100},
+            {'kind': 'usl', 'x': 0.5, 'text_y_axes': 0.95, 'text': 'USL=0.5', 'color': '#222222', 'ha': 'center', 'priority': 100},
         ]
 
         rendered = render_histogram_annotations(
@@ -1973,8 +1973,8 @@ class TestExportPlotHelpers(unittest.TestCase):
             )
             texts = {text.get_text() for text in rendered}
             self.assertIn('Mean = 5.000', texts)
-            self.assertIn('USL=9.000', texts)
-            self.assertIn('LSL=1.000', texts)
+            self.assertIn('USL=9', texts)
+            self.assertIn('LSL=1', texts)
         finally:
             plt.close(fig)
 
@@ -1989,7 +1989,7 @@ class TestExportPlotHelpers(unittest.TestCase):
                         'kind': 'lsl',
                         'x': 0.01,
                         'text_y_axes': 1.02,
-                        'text': 'LSL=0.010',
+                        'text': 'LSL=0.01',
                         'color': '#222222',
                         'ha': 'center',
                     }
@@ -2018,7 +2018,7 @@ class TestExportPlotHelpers(unittest.TestCase):
                         'kind': 'usl',
                         'x': 0.99,
                         'text_y_axes': 1.02,
-                        'text': 'USL=0.990',
+                        'text': 'USL=0.99',
                         'color': '#222222',
                         'ha': 'center',
                     }
@@ -2086,8 +2086,8 @@ class TestExportPlotHelpers(unittest.TestCase):
             texts = {text.get_text() for text in rendered}
             self.assertEqual(len(rendered), 3)
             self.assertIn('Mean = 5.000', texts)
-            self.assertIn('USL=9.000', texts)
-            self.assertIn('LSL=1.000', texts)
+            self.assertIn('USL=9', texts)
+            self.assertIn('LSL=1', texts)
             self.assertLess(title_bbox.y0, fig_bbox.y1)
             self.assertLessEqual(title_artist.get_position()[1], 1.0)
             self.assertGreater(title_artist.get_position()[1], 0.9)
@@ -2149,8 +2149,8 @@ class TestExportPlotHelpers(unittest.TestCase):
             title_artist = render_histogram_title(ax, 'Distribution Fit')
             annotation_specs = [
                 {'kind': 'mean', 'x': 0.5, 'text_y_axes': 1.14, 'text': 'Mean = 0.500', 'color': '#111111', 'ha': 'center', 'priority': 300},
-                {'kind': 'usl', 'x': 0.52, 'text_y_axes': 1.14, 'text': 'USL=0.520', 'color': '#222222', 'ha': 'center', 'priority': 260},
-                {'kind': 'lsl', 'x': 0.48, 'text_y_axes': 1.14, 'text': 'LSL=0.480', 'color': '#222222', 'ha': 'center', 'priority': 250},
+                {'kind': 'usl', 'x': 0.52, 'text_y_axes': 1.14, 'text': 'USL=0.52', 'color': '#222222', 'ha': 'center', 'priority': 260},
+                {'kind': 'lsl', 'x': 0.48, 'text_y_axes': 1.14, 'text': 'LSL=0.48', 'color': '#222222', 'ha': 'center', 'priority': 250},
             ]
             rendered = render_histogram_annotations(
                 ax,
@@ -2222,8 +2222,8 @@ class TestExportPlotHelpers(unittest.TestCase):
             texts = {text.get_text() for text in rendered}
             self.assertEqual(len(rendered), 3)
             self.assertIn('Mean = 5.000', texts)
-            self.assertIn('USL=9.000', texts)
-            self.assertIn('LSL=1.000', texts)
+            self.assertIn('USL=9', texts)
+            self.assertIn('LSL=1', texts)
             self.assertFalse(any('P(X < LSL)' in text for text in texts))
             self.assertFalse(any('P(X > USL)' in text for text in texts))
             self.assertLess(title_artist.get_window_extent(renderer=fig.canvas.get_renderer()).y0, fig.bbox.y1)

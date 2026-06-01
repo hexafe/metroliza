@@ -131,6 +131,7 @@ from metroliza.charts.summary_plot_palette import (
     STATUS_BORDER_STYLE_BY_PALETTE,
     STATUS_ICON_PREFIX_BY_PALETTE,
 )
+from metroliza.charts.value_formatting import format_metrology_label_text
 from metroliza.shared.stats_number_formatting import (
     format_probability_percent,
 )
@@ -4913,7 +4914,7 @@ class ExportDataThread(QThread):
         for key, label in (('lsl', 'LSL'), ('nominal', 'Nominal'), ('usl', 'USL')):
             value = (spec_limits or {}).get(key)
             if value is not None:
-                spec_parts.append(f"{label}={float(value):.3f}")
+                spec_parts.append(format_metrology_label_text(label, value, mean_default_precision=3))
 
         description_parts = [f"Group Analysis {plot_label} for {metric_name}."]
         if group_parts:
@@ -5136,7 +5137,7 @@ class ExportDataThread(QThread):
                     if limit_value is None:
                         continue
                     ax.annotate(
-                        f"{label}={float(limit_value):.3f}",
+                        format_metrology_label_text(label, limit_value, mean_default_precision=3),
                         xy=(1.0, float(limit_value)),
                         xycoords=annotation_transform,
                         textcoords='offset points',

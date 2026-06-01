@@ -818,9 +818,9 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(stat_trace.get('visible'), 'legendonly')
 
         for name, y_value in {
-            'LSL=6.200': 6.2,
-            'Nominal=6.500': 6.5,
-            'USL=6.800': 6.8,
+            'LSL=6.2': 6.2,
+            'Nominal=6.5': 6.5,
+            'USL=6.8': 6.8,
         }.items():
             reference_trace = _trace_by_name(spec, name)
             self.assertEqual(reference_trace['type'], 'scatter')
@@ -829,6 +829,36 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertEqual(reference_trace['y'], [y_value, y_value])
             self.assertNotEqual(reference_trace.get('visible'), 'legendonly')
             self.assertTrue(reference_trace.get('showlegend'))
+
+    def test_group_analysis_violin_plotstats_dedupes_limit_values_with_mixed_rounding(self):
+        raw_plotly_spec = {
+            'data': [
+                {'type': 'violin', 'name': 'A', 'y': [0.1, 0.2, 0.3]},
+                {'type': 'scatter', 'mode': 'lines', 'name': 'USL=0.2', 'y': [0.2, 0.2]},
+                {'type': 'scatter', 'mode': 'lines', 'name': 'USL=0.200', 'y': [0.2, 0.2]},
+            ],
+            'layout': {},
+        }
+        with (
+            patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=True),
+            patch('modules.export_html_dashboard.build_plotstats_dashboard_spec', return_value=raw_plotly_spec),
+        ):
+            spec = _build_group_analysis_plotly_spec(
+                'FEATURE_1',
+                'violin',
+                {
+                    'groups': [{'group': 'A', 'values': [0.1, 0.2, 0.3]}],
+                    'spec_limits': {'usl': 0.2},
+                },
+            )
+
+        visible_trace_names = [
+            trace.get('name')
+            for trace in spec['data']
+            if trace.get('showlegend', True) is not False
+        ]
+        self.assertEqual(visible_trace_names.count('USL=0.2'), 1)
+        self.assertNotIn('USL=0.200', visible_trace_names)
 
     def test_group_analysis_iqr_plotly_spec_includes_group_statistics_in_legend_names(self):
         with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
@@ -873,7 +903,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertIn('Min=6.469', trace_names)
         self.assertIn('Mean=6.5380', trace_names)
         self.assertIn('Max=6.687', trace_names)
-        self.assertIn('Nominal=6.500', trace_names)
+        self.assertIn('Nominal=6.5', trace_names)
         self.assertNotIn('A Min=6.469', trace_names)
         self.assertNotIn('shapes', spec['layout'])
         self.assertNotIn('annotations', spec['layout'])
@@ -885,7 +915,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
         stat_trace = _trace_by_name(spec, 'Mean=6.5380')
         self.assertEqual(stat_trace['x'], [0.5, 1.5])
         self.assertEqual(stat_trace.get('visible'), 'legendonly')
-        nominal_trace = _trace_by_name(spec, 'Nominal=6.500')
+        nominal_trace = _trace_by_name(spec, 'Nominal=6.5')
         self.assertEqual(nominal_trace['x'], [0.5, 1.5])
         self.assertNotEqual(nominal_trace.get('visible'), 'legendonly')
 
@@ -904,9 +934,9 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(spec['data'][0]['name'], 'A (n=16)')
         trace_names = {trace['name'] for trace in spec['data']}
         self.assertIn('(A) Min=6.469', trace_names)
-        self.assertIn('LSL=6.200', trace_names)
+        self.assertIn('LSL=6.2', trace_names)
         self.assertNotIn('shapes', spec['layout'])
-        lsl_trace = next(trace for trace in spec['data'] if trace['name'] == 'LSL=6.200')
+        lsl_trace = next(trace for trace in spec['data'] if trace['name'] == 'LSL=6.2')
         self.assertEqual(lsl_trace['x'], [0.5, 2.5])
         self.assertEqual(lsl_trace['y'], [6.2, 6.2])
         self.assertTrue(lsl_trace.get('showlegend'))
@@ -1040,7 +1070,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertIn('Median=6.498', trace_names)
         self.assertIn('Mean=6.5380', trace_names)
         self.assertIn('Q3=6.548', trace_names)
-        self.assertIn('Nominal=6.500', trace_names)
+        self.assertIn('Nominal=6.5', trace_names)
 
     def test_distribution_violin_plotly_spec_rounds_stat_legend_values_half_up(self):
         with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
@@ -1132,9 +1162,9 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertIn('%{y:.4f}', measurement_trace['hovertemplate'])
 
         expected_references = {
-            'LSL=10.100': 10.1,
-            'Nominal=10.350': 10.35,
-            'USL=10.600': 10.6,
+            'LSL=10.1': 10.1,
+            'Nominal=10.35': 10.35,
+            'USL=10.6': 10.6,
             'Mean=10.37047': 10.370466666666666,
         }
         for name, y_value in expected_references.items():
