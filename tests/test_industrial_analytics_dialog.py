@@ -277,7 +277,7 @@ def test_tabular_analytics_dialog_interactivity_controls_are_visible_and_in_requ
     dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
     try:
         assert not dialog.dashboard_interactivity_button.isHidden()
-        assert dialog.dashboard_interactivity_summary_label.text() == "Auto, 50,000 rows"
+        assert dialog.dashboard_interactivity_summary_label.text() == "Auto, 50,000 random rows"
         assert dialog.dashboard_interactivity_row_label.text() == "Dashboard interactivity"
         assert "chart interactivity" in dialog.dashboard_interactivity_button.toolTip()
 
@@ -286,7 +286,10 @@ def test_tabular_analytics_dialog_interactivity_controls_are_visible_and_in_requ
             sample_size=75000,
         )
         dialog._sync_dashboard_interactivity_controls()
-        assert dialog.dashboard_interactivity_summary_label.text() == "Interactive sample, 75,000 rows"
+        assert (
+            dialog.dashboard_interactivity_summary_label.text()
+            == "Interactive random sample, 75,000 random rows"
+        )
         request = dialog._build_analytics_request()
 
         assert request.dashboard_interactivity_options == DashboardInteractivityOptions(

@@ -1331,6 +1331,7 @@ def render_dashboard_visual_runtime_js(
         const traces = Array.isArray(spec.data) ? spec.data : [];
         traces.forEach((trace) => {{
           if (!trace || typeof trace !== 'object') return;
+          if (isRawLayerProxyTrace(trace)) return;
           const name = String(trace.name || '').trim();
           if (!name || isReferenceName(name) || groupStatMatch(name)) return;
           const type = String(trace.type || '').toLowerCase();
@@ -1413,6 +1414,10 @@ def render_dashboard_visual_runtime_js(
           .find((value) => value.length > 0) || '';
       }};
 
+      const isRawLayerProxyTrace = (trace) => (
+        trace && typeof trace === 'object' && typeof trace.metroliza_raw_layer_index === 'number'
+      );
+
       const preservePlotlyTraceVisibility = (container, nextData) => {{
         const node = typeof container === 'string' ? document.getElementById(container) : container;
         const currentData = node && Array.isArray(node.data) ? node.data : [];
@@ -1445,6 +1450,47 @@ def render_dashboard_visual_runtime_js(
         return nextData;
       }};
 
+      const layoutImageVisibilityKey = (image) => {{
+        if (!image || typeof image !== 'object') return '';
+        const candidates = [
+          image.metroliza_raw_layer_label,
+          image.name,
+          image.source ? `source:${{String(image.source).slice(0, 120)}}` : '',
+        ];
+        return candidates
+          .map((value) => String(value || '').trim())
+          .find((value) => value.length > 0) || '';
+      }};
+
+      const preservePlotlyLayoutImageVisibility = (container, nextLayout) => {{
+        const node = typeof container === 'string' ? document.getElementById(container) : container;
+        const currentImages = node && node.layout && Array.isArray(node.layout.images)
+          ? node.layout.images
+          : [];
+        const nextImages = nextLayout && Array.isArray(nextLayout.images) ? nextLayout.images : [];
+        if (!currentImages.length || !nextImages.length) {{
+          return nextLayout;
+        }}
+        const visibilityByKey = new Map();
+        const visibilityByIndex = new Map();
+        currentImages.forEach((image, index) => {{
+          if (!image || typeof image !== 'object' || !Object.prototype.hasOwnProperty.call(image, 'visible')) return;
+          const key = layoutImageVisibilityKey(image);
+          if (key) visibilityByKey.set(key, image.visible);
+          visibilityByIndex.set(index, image.visible);
+        }});
+        nextImages.forEach((image, index) => {{
+          if (!image || typeof image !== 'object') return;
+          const key = layoutImageVisibilityKey(image);
+          if (key && visibilityByKey.has(key)) {{
+            image.visible = visibilityByKey.get(key);
+          }} else if (!key && visibilityByIndex.has(index)) {{
+            image.visible = visibilityByIndex.get(index);
+          }}
+        }});
+        return nextLayout;
+      }};
+
       let plotlyVisibilityPatchAttempts = 0;
       const installPlotlyVisibilityReactPatch = () => {{
         if (!window.Plotly || typeof window.Plotly.react !== 'function') {{
@@ -1456,6 +1502,7 @@ def render_dashboard_visual_runtime_js(
         const originalReact = window.Plotly.react.bind(window.Plotly);
         const patchedReact = (container, data, layout, config) => {{
           preservePlotlyTraceVisibility(container, data);
+          preservePlotlyLayoutImageVisibility(container, layout);
           return originalReact(container, data, layout, config);
         }};
         patchedReact.__metrolizaPreservesTraceVisibility = true;
@@ -1541,6 +1588,7 @@ def render_dashboard_visual_runtime_js(
         const traces = Array.isArray(spec.data) ? spec.data : [];
         traces.forEach((trace, traceIndex) => {{
           if (!trace || typeof trace !== 'object') return;
+          if (isRawLayerProxyTrace(trace)) return;
           const name = String(trace.name || '');
           const stat = groupStatMatch(name);
           if (stat) {{
@@ -2017,6 +2065,7 @@ def render_dashboard_visual_runtime_js(
 
       const selectedTargetFromTrace = (trace, curveNumber = -1) => {{
         if (!trace || typeof trace !== 'object') return null;
+        if (isRawLayerProxyTrace(trace)) return null;
         const meta = trace.meta && typeof trace.meta === 'object' ? trace.meta : {{}};
         const roleFromMeta = meta.metroliza_role || meta.dashboard_visual_role || 'series';
         if (meta.metroliza_target_id || meta.dashboard_visual_target) {{

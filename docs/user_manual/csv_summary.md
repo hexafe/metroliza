@@ -127,6 +127,11 @@ Choose chart/statistics outputs:
 Choose an HTML dashboard path. Optionally enable workbook output and **Separate sheet per
 selected parameter**.
 
+The saved page is titled **Metroliza CSV Summary Dashboard**. Its front-page cards show
+the source, sheet when available, filters, groups, rows rendered into dashboard chart data,
+and chart detail mode so reviewers can see when they are looking at all rows or a bounded
+visual sample.
+
 Use **Dashboard style > Change...** when you want the CSV/Excel dashboard to use a saved
 visual recipe, palette, marker emphasis, opacity, or reference/stat-line style. Start with
 the visible recipe and saved-theme controls; use **Customize...** for detailed color,
@@ -136,13 +141,19 @@ charts only; they do not change the source data or the selected metrics.
 Use **Dashboard interactivity > Change...** when the selected file is large enough that
 fully interactive charts may make the saved dashboard too heavy for a browser. **Auto** is
 the default: small selections stay fully interactive, while large selections ask for a
-strategy before processing. **Interactive sample** keeps interactive charts by using a
-reproducible visual sample, defaulting to 50,000 rows. **Snapshots only** writes image
-snapshots instead of interactive charts and uses the same bounded visual sample for very
-large selections. **All rows** attempts all selected rows, but Metroliza can still replace
-individual interactive charts with image snapshots if the saved dashboard would otherwise
-be too large. Statistics, group comparison, aggregate tables, and workbook output continue
-to use all selected rows.
+strategy before processing. **Interactive random sample** keeps interactive charts by using
+a reproducible random visual sample, defaulting to 50,000 rows. **Snapshots only** writes
+image snapshots instead of interactive charts and uses the same bounded visual sample for
+very large selections. **All rows** attempts all selected rows, but Metroliza can still
+replace individual interactive charts with image snapshots if the saved dashboard would
+otherwise be too large. Statistics, group comparison, aggregate tables, and workbook output
+continue to use all selected rows. When a visual sample is used, the dashboard run notes
+state how many rows were rendered into dashboard charts.
+
+For very large grouped time-series charts, the dashboard can also flag a **static
+POPULATION layer** optimization. That means the heavy POPULATION marker layer can be
+reviewed as an image-backed layer while selected/custom groups remain available for
+interactive Plotly review.
 
 Selected plots are included in the dashboard and in the workbook chart sheet. Grouped time
 series use separate marker-only scatter traces. Multi-group histograms are normalized to

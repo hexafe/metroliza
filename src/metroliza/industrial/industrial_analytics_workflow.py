@@ -461,8 +461,8 @@ def run_tabular_file_analytics(
         cohort=cohort,
         diagnostics=diagnostics,
         output_dashboard_file=request.output_dashboard_file,
-        dashboard_title="CSV Summary Dashboard",
-        dashboard_subtitle="Review selected CSV/Excel rows, charts, and group comparisons.",
+        dashboard_title="Metroliza CSV Summary Dashboard",
+        dashboard_subtitle="",
         dashboard_context=_tabular_dashboard_context(
             loaded=loaded,
             request=request,
@@ -549,7 +549,7 @@ def _normalize_dashboard_interactivity_options(
 def _dashboard_interactivity_label(options: dict[str, int | str]) -> str:
     labels = {
         "auto": "Auto",
-        "sampled": "Interactive sample",
+        "sampled": "Interactive random sample",
         "static": "Snapshots only",
         "full": "All rows",
     }
@@ -560,7 +560,7 @@ def _dashboard_interactivity_label(options: dict[str, int | str]) -> str:
             sample_size = int(options.get("sample_size") or TABULAR_FAST_DASHBOARD_ROW_LIMIT)
         except (TypeError, ValueError):
             sample_size = int(TABULAR_FAST_DASHBOARD_ROW_LIMIT)
-        return f"{label}, {sample_size:,} row sample"
+        return f"{label}, {sample_size:,} random row sample"
     return label
 
 
@@ -618,8 +618,9 @@ def _tabular_dashboard_frame_for_interactivity(
         severity="info",
         code="tabular_dashboard_fast_sample",
         message=(
-            f"Dashboard charts use {len(sampled.index):,} reproducibly sampled rows from "
-            f"{row_count:,}; aggregate tables, group comparison, and workbook output use all rows."
+            f"Interactive dashboard charts use a reproducible random sample of "
+            f"{len(sampled.index):,} rows from {row_count:,}; aggregate tables, "
+            "group comparison, and workbook output use all selected rows."
         ),
         context={
             "detail_mode": "fast",

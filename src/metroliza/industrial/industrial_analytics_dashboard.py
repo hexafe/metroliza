@@ -36,7 +36,10 @@ from metroliza.charts.dashboard_shell import (
     clean_dashboard_copy,
     dashboard_key_takeaway_rows,
     humanize_dashboard_reason_code,
+    render_dashboard_hero,
     render_dashboard_message_section,
+    render_dashboard_overview_cards,
+    render_dashboard_takeaways_section,
 )
 from metroliza.charts.dashboard_plotly_visuals import apply_dashboard_visual_settings
 from metroliza.charts.dashboard_visual_options import dashboard_visual_preview_labels
@@ -90,6 +93,7 @@ DASHBOARD_RAW_POINT_LIMIT = 50_000
 DASHBOARD_AGGREGATE_TRACE_TARGET_POINTS = 2_500
 DEFAULT_PLOTLY_SPEC_COUNT_BUDGET = 160
 DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET = 8_000_000
+STATIC_POPULATION_LAYER_OPTIMIZATION = "static_population_layer"
 
 
 def _strip_group_count_suffix(label: str) -> str:
@@ -200,6 +204,9 @@ def build_production_dashboard_manifest(
             else 0
         ),
     }
+    available_optimization_options = _available_chart_optimization_options(chart_specs)
+    if available_optimization_options:
+        summary["available_optimization_options"] = available_optimization_options
     return {
         "schema": DASHBOARD_SCHEMA,
         "summary": summary,
@@ -964,6 +971,13 @@ def _build_hybrid_time_series_chart(
     plotly_visual_settings: dict[str, Any] | None = None,
     include_plotly_specs: bool = True,
 ) -> dict[str, Any]:
+    optimization_options = _time_series_optimization_options(
+        raw_frame,
+        x_column="process_datetime",
+        y_column=metric.field_name,
+        group_columns=group_columns,
+        default_name=metric.display_label,
+    )
     raw_layers, sampling_note, raw_bounds = _time_series_raw_image_layers(
         raw_frame,
         x_column="process_datetime",
@@ -1005,7 +1019,107 @@ def _build_hybrid_time_series_chart(
     )
     if sampling_note:
         chart["notes"] = [sampling_note]
+    if optimization_options:
+        chart["optimization_options"] = optimization_options
     return chart
+
+
+def _time_series_optimization_options(
+    frame: pd.DataFrame,
+    *,
+    x_column: str,
+    y_column: str,
+    group_columns: list[str],
+    default_name: str,
+) -> list[dict[str, Any]]:
+    option = _static_population_layer_optimization_option(
+        frame,
+        x_column=x_column,
+        y_column=y_column,
+        group_columns=group_columns,
+        default_name=default_name,
+    )
+    return [option] if option else []
+
+
+def _static_population_layer_optimization_option(
+    frame: pd.DataFrame,
+    *,
+    x_column: str,
+    y_column: str,
+    group_columns: list[str],
+    default_name: str,
+) -> dict[str, Any] | None:
+    population_group = _population_layer_group(frame, group_columns, default_name=default_name)
+    if population_group is None:
+        return None
+    group_label, population_frame = population_group
+    point_count = _time_series_point_count(
+        population_frame,
+        x_column=x_column,
+        y_column=y_column,
+    )
+    if point_count <= DASHBOARD_RAW_POINT_LIMIT:
+        return None
+    return {
+        "id": STATIC_POPULATION_LAYER_OPTIMIZATION,
+        "available": True,
+        "reason": "population_raw_points_exceed_interactive_limit",
+        "group_label": group_label,
+        "source_point_count": int(point_count),
+        "sample_point_limit": int(DASHBOARD_RAW_POINT_LIMIT),
+    }
+
+
+def _population_layer_group(
+    frame: pd.DataFrame,
+    group_columns: list[str],
+    *,
+    default_name: str,
+) -> tuple[str, pd.DataFrame] | None:
+    population_groups = [
+        (label, group)
+        for label, group in _grouped_frames(frame, group_columns, default_name=default_name)
+        if _is_population_layer_label(label)
+    ]
+    if len(population_groups) == 1:
+        return population_groups[0]
+    if not population_groups and _frame_has_static_population_group(frame):
+        return "POPULATION", frame
+    return None
+
+
+def _frame_has_static_population_group(frame: pd.DataFrame) -> bool:
+    if "GROUP" not in frame.columns:
+        return False
+    labels = [
+        str(label)
+        for label in frame["GROUP"].dropna().unique().tolist()
+        if str(label).strip()
+    ]
+    return bool(labels) and all(_is_population_layer_label(label) for label in labels)
+
+
+def _is_population_layer_label(label: Any) -> bool:
+    return _strip_group_count_suffix(str(label or "")).casefold() == "population"
+
+
+def _available_chart_optimization_options(charts: list[dict[str, Any]]) -> list[str]:
+    options: list[str] = []
+    seen: set[str] = set()
+    for chart in charts:
+        chart_options = chart.get("optimization_options")
+        if not isinstance(chart_options, list):
+            continue
+        for option in chart_options:
+            if not isinstance(option, dict) or not option.get("available"):
+                continue
+            option_id = str(option.get("id") or "").strip()
+            if not option_id or option_id in seen:
+                continue
+            seen.add(option_id)
+            options.append(option_id)
+    return options
 
 
 def _time_series_point_count(
@@ -2215,6 +2329,14 @@ def _render_dashboard_html(
     lightbox_markup = _render_chart_lightbox() if plotly_charts else ""
     cards = _render_summary_cards(summary)
     diagnostics_groups = classify_dashboard_diagnostics(diagnostics)
+    takeaways_markup = render_dashboard_takeaways_section(
+        _dashboard_takeaway_rows(
+            summary=summary,
+            diagnostics=diagnostics_groups,
+            groupstats=groupstats,
+            charts=charts,
+        )
+    )
     attention_markup = render_dashboard_message_section(
         section_id="attention-needed",
         title=f"Attention needed ({len(diagnostics_groups.attention)})",
@@ -2231,8 +2353,14 @@ def _render_dashboard_html(
     )
     groupstats_markup = _render_groupstats(groupstats)
     dashboard_title = str(summary.get("dashboard_title") or "Production Analytics")
-    dashboard_subtitle = str(
-        summary.get("dashboard_subtitle") or "Cached production data dashboard generated by Metroliza."
+    dashboard_subtitle = str(summary.get("dashboard_subtitle") or "").strip()
+    dashboard_context = (
+        summary.get("dashboard_context") if isinstance(summary.get("dashboard_context"), dict) else {}
+    )
+    source_label = str(dashboard_context.get("source_label") or "").strip()
+    dashboard_headline = source_label if source_label else dashboard_title
+    lede_markup = (
+        f'<p class="lede">{html.escape(dashboard_subtitle)}</p>' if dashboard_subtitle else ""
     )
     plotly_budget_notice = ""
     plotly_runtime_status = str(summary.get("plotly_runtime_status") or "")
@@ -2248,8 +2376,16 @@ def _render_dashboard_html(
             'because the saved dashboard would otherwise be too large. Summary content remains '
             'available.</p>'
         )
-    used_section_ids = {"dashboard-start", "attention-needed", "run-notes", "groupstats"}
+    used_section_ids = {
+        "dashboard-start",
+        "key-takeaways",
+        "attention-needed",
+        "run-notes",
+        "groupstats",
+    }
     nav_items: list[dict[str, str]] = []
+    if takeaways_markup:
+        nav_items.append({"id": "key-takeaways", "label": "Key takeaways"})
     if diagnostics_groups.attention:
         nav_items.append({"id": "attention-needed", "label": "Attention needed"})
     if diagnostics_groups.run_notes:
@@ -2275,6 +2411,15 @@ def _render_dashboard_html(
         chart_sections.append(_render_chart_section(chart, section_id=section_id))
     chart_markup = "".join(chart_sections)
     nav_markup = render_section_nav(nav_items)
+    hero_markup = render_dashboard_hero(
+        eyebrow=dashboard_title,
+        headline=dashboard_headline,
+        lede_markup=lede_markup,
+        controls_markup=dashboard_controls_markup,
+        notice_markup=plotly_budget_notice,
+        overview_markup=cards,
+        nav_markup=nav_markup,
+    )
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -2288,8 +2433,13 @@ def _render_dashboard_html(
     :root {{
       color-scheme: light;
       --bg: #f6f7f9;
+      --bg-base: #f6f7f9;
+      --paper: #f6f7f9;
+      --paper-strong: #ffffff;
       --panel: #ffffff;
       --panel-strong: #ffffff;
+      --card-bg: rgba(255,255,255,0.88);
+      --card-soft: rgba(255,255,255,0.70);
       --text: #1f2933;
       --ink: #1f2933;
       --muted: #687385;
@@ -2297,15 +2447,27 @@ def _render_dashboard_html(
       --accent: #1769aa;
       --accent-soft: rgba(23, 105, 170, 0.12);
       --accent-border: rgba(23, 105, 170, 0.24);
+      --teal: #245a5a;
+      --teal-soft: rgba(36, 90, 90, 0.10);
+      --teal-border: rgba(36, 90, 90, 0.18);
       --detail-panel-bg: rgba(31, 41, 51, 0.04);
+      --detail-card-bg: rgba(255, 255, 255, 0.68);
+      --table-head-bg: rgba(31, 41, 51, 0.04);
+      --plot-shell-bg: rgba(255,255,255,0.92);
       --focus-ring: rgba(23, 105, 170, 0.34);
       --overlay-bg: rgba(15, 23, 42, 0.74);
+      --runtime-note-bg: rgba(23, 105, 170, 0.10);
     }}
     :root[data-theme="dark"] {{
       color-scheme: dark;
       --bg: #15181d;
+      --bg-base: #15181d;
+      --paper: #15181d;
+      --paper-strong: #252b34;
       --panel: #20252c;
       --panel-strong: #252b34;
+      --card-bg: rgba(37, 43, 52, 0.94);
+      --card-soft: rgba(32, 37, 44, 0.92);
       --text: #edf1f7;
       --ink: #edf1f7;
       --muted: #aab4c2;
@@ -2313,15 +2475,27 @@ def _render_dashboard_html(
       --accent: #5aa9e6;
       --accent-soft: rgba(90, 169, 230, 0.16);
       --accent-border: rgba(90, 169, 230, 0.32);
+      --teal: #79c6be;
+      --teal-soft: rgba(121, 198, 190, 0.16);
+      --teal-border: rgba(121, 198, 190, 0.26);
       --detail-panel-bg: rgba(237, 241, 247, 0.05);
+      --detail-card-bg: rgba(255, 255, 255, 0.03);
+      --table-head-bg: rgba(255, 255, 255, 0.06);
+      --plot-shell-bg: rgba(18, 25, 33, 0.96);
       --focus-ring: rgba(90, 169, 230, 0.38);
       --overlay-bg: rgba(4, 8, 12, 0.88);
+      --runtime-note-bg: rgba(90, 169, 230, 0.12);
     }}
     @media (prefers-color-scheme: dark) {{
       :root:not([data-theme-choice]) {{
         --bg: #15181d;
+        --bg-base: #15181d;
+        --paper: #15181d;
+        --paper-strong: #252b34;
         --panel: #20252c;
         --panel-strong: #252b34;
+        --card-bg: rgba(37, 43, 52, 0.94);
+        --card-soft: rgba(32, 37, 44, 0.92);
         --text: #edf1f7;
         --ink: #edf1f7;
         --muted: #aab4c2;
@@ -2329,9 +2503,16 @@ def _render_dashboard_html(
         --accent: #5aa9e6;
         --accent-soft: rgba(90, 169, 230, 0.16);
         --accent-border: rgba(90, 169, 230, 0.32);
+        --teal: #79c6be;
+        --teal-soft: rgba(121, 198, 190, 0.16);
+        --teal-border: rgba(121, 198, 190, 0.26);
         --detail-panel-bg: rgba(237, 241, 247, 0.05);
+        --detail-card-bg: rgba(255, 255, 255, 0.03);
+        --table-head-bg: rgba(255, 255, 255, 0.06);
+        --plot-shell-bg: rgba(18, 25, 33, 0.96);
         --focus-ring: rgba(90, 169, 230, 0.38);
         --overlay-bg: rgba(4, 8, 12, 0.88);
+        --runtime-note-bg: rgba(90, 169, 230, 0.12);
       }}
     }}
     html {{
@@ -2339,65 +2520,129 @@ def _render_dashboard_html(
     }}
     body {{
       margin: 0;
-      background: var(--bg);
+      background: var(--bg-base);
       color: var(--text);
       font-family: Inter, Segoe UI, Roboto, Arial, sans-serif;
     }}
-    header, main {{
-      width: min(1280px, calc(100vw - 32px));
+    .shell {{
+      width: min(1480px, calc(100vw - 32px));
       margin: 0 auto;
+      padding: 28px 0 52px;
     }}
-    header {{
-      padding: 28px 0 14px;
+    .hero {{
+      background: var(--panel-strong);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 28px 28px 22px;
+    }}
+    .hero-top {{
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }}
+    .hero-copy {{
+      min-width: min(100%, 620px);
+      flex: 1 1 620px;
+    }}
+    .eyebrow {{
+      margin: 0 0 10px;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      color: var(--teal);
+      font-weight: 700;
     }}
     h1 {{
-      margin: 0 0 6px;
-      font-size: 28px;
-      line-height: 1.2;
+      margin: 0;
+      font-size: clamp(30px, 3.6vw, 46px);
+      line-height: 1.05;
       letter-spacing: 0;
     }}
-    .subtitle {{
+    .lede {{
+      margin: 12px 0 0;
+      max-width: 780px;
       color: var(--muted);
-      font-size: 14px;
+      line-height: 1.5;
     }}
     .runtime-note {{
-      margin: 10px 0 0;
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.4;
+      margin: 14px 0 0;
+      max-width: 780px;
+      border-left: 4px solid var(--accent);
+      padding: 10px 14px;
+      border-radius: 12px;
+      background: var(--runtime-note-bg);
+      color: var(--ink);
+      line-height: 1.5;
     }}
 {dashboard_controls_css}
-    .cards {{
+    .overview-grid {{
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-      gap: 10px;
-      margin: 18px 0;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      margin-top: 24px;
     }}
-{render_section_navigation_css("compact")}
+    .metric-card {{
+      background: var(--panel-strong);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px 18px;
+    }}
+    .metric-label {{
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      margin-bottom: 8px;
+    }}
+    .metric-value {{
+      color: var(--ink);
+      font-size: 24px;
+      font-weight: 700;
+    }}
+    .metric-value-line {{
+      display: block;
+      line-height: 1.15;
+    }}
+{render_section_navigation_css()}
+    main {{
+      display: block;
+    }}
+    .measurement-section {{
+      margin-top: 18px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 22px;
+    }}
     .dashboard-section {{
-      margin-bottom: 14px;
       scroll-margin-top: 18px;
     }}
     .section-top {{
       display: flex;
       justify-content: space-between;
-      gap: 12px;
+      gap: 16px;
       align-items: flex-start;
+      flex-wrap: wrap;
       margin: 0 0 10px;
     }}
     .section-top h2 {{
       margin: 0;
-      font-size: 18px;
+      font-size: 24px;
       line-height: 1.25;
     }}
     .section-meta {{
       color: var(--muted);
-      font-size: 13px;
-      margin-top: 3px;
+      margin-top: 8px;
+      line-height: 1.5;
     }}
     .section-actions {{
       display: flex;
+      flex-direction: column;
+      align-items: flex-end;
       justify-content: flex-end;
+      gap: 10px;
     }}
     .card, .chart-card, .dashboard-messages {{
       background: var(--panel);
@@ -2568,7 +2813,7 @@ def _render_dashboard_html(
     }}
     .dashboard-messages {{
       padding: 12px 14px;
-      margin: 0 0 14px;
+      margin: 18px 0 0;
     }}
     .dashboard-messages summary {{
       cursor: pointer;
@@ -2678,8 +2923,12 @@ def _render_dashboard_html(
       white-space: nowrap;
     }}
     @media (max-width: 640px) {{
-      header, main {{
-        width: min(100vw - 20px, 1280px);
+      .shell {{
+        width: min(100vw - 20px, 1480px);
+        padding: 12px 0 32px;
+      }}
+      .hero, .measurement-section {{
+        padding: 18px;
       }}
       .dashboard-control-bar {{
         justify-content: flex-start;
@@ -2698,20 +2947,16 @@ def _render_dashboard_html(
   </style>
 </head>
 <body>
-  <header id="dashboard-start">
-    <h1>{html.escape(dashboard_title)}</h1>
-    <div class="subtitle">{html.escape(dashboard_subtitle)}</div>
-    {plotly_budget_notice}
-    {dashboard_controls_markup}
-    {cards}
-    {nav_markup}
-  </header>
-  <main>
+  <div class="shell">
+    {hero_markup}
+    <main>
+    {takeaways_markup}
     {attention_markup}
     {run_notes_markup}
     {groupstats_markup}
     {chart_markup}
-  </main>
+    </main>
+  </div>
   {lightbox_markup}
   {visual_dialog_markup}
 {plotly_runtime}
@@ -2800,7 +3045,7 @@ def _render_dashboard_section(*, section_id: str, title: str, body: str, subtitl
         actions=render_back_to_dashboard_start(),
     )
     return (
-        f'<section id="{html.escape(section_id)}" class="dashboard-section">'
+        f'<section id="{html.escape(section_id)}" class="measurement-section dashboard-section">'
         f"{header}{body}"
         "</section>"
     )
@@ -2819,7 +3064,7 @@ def _render_chart_section(chart: dict[str, Any], *, section_id: str) -> str:
         actions=render_back_to_dashboard_start(),
     )
     return (
-        f'<section id="{html.escape(section_id)}" class="dashboard-section">'
+        f'<section id="{html.escape(section_id)}" class="measurement-section dashboard-section">'
         f"{header}"
         f'<div class="chart-grid">{_render_chart_shell(chart)}</div>'
         "</section>"
@@ -3169,15 +3414,7 @@ def _render_plotly_runtime(
 
 
 def _render_summary_cards(summary: dict[str, Any]) -> str:
-    markup = []
-    for label, value in _summary_card_rows(summary):
-        markup.append(
-            '<div class="card">'
-            f'<div class="card-label">{html.escape(str(label))}</div>'
-            f'<div class="card-value">{html.escape(str(value if value not in (None, "") else "n/a"))}</div>'
-            '</div>'
-        )
-    return f'<section class="cards">{"".join(markup)}</section>'
+    return render_dashboard_overview_cards(_summary_card_rows(summary))
 
 
 def _summary_int(value: Any) -> int | None:
@@ -3260,7 +3497,7 @@ def _summary_card_rows(summary: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
     sheet_label = str(context.get("sheet_label") or "").strip()
     if sheet_label:
         rows.append(("Sheet", sheet_label))
-    rows.append(("Rows used", summary.get("source_rows")))
+    rows.append(("Rows rendered", summary.get("source_rows")))
     aggregate_rows = _summary_int(summary.get("aggregate_rows"))
     if aggregate_rows and aggregate_rows > 0:
         rows.append(("Summary points", aggregate_rows))
@@ -3305,6 +3542,93 @@ def _summary_card_rows(summary: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
         rows.append(("Chart detail", chart_detail))
 
     return tuple(rows)
+
+
+def _dashboard_takeaway_rows(
+    *,
+    summary: dict[str, Any],
+    diagnostics: Any,
+    groupstats: dict[str, Any],
+    charts: list[Any],
+) -> list[dict[str, str]]:
+    context = summary.get("dashboard_context") if isinstance(summary.get("dashboard_context"), dict) else {}
+    rows: list[dict[str, str]] = []
+
+    def add(label: str, value: Any) -> None:
+        text = clean_dashboard_copy(value)
+        if not text:
+            return
+        key = (label.casefold(), text.casefold())
+        existing = {(row["label"].casefold(), row["value"].casefold()) for row in rows}
+        if key not in existing:
+            rows.append({"label": label, "value": text})
+
+    source_rows = _summary_int(summary.get("source_rows"))
+    if source_rows is not None:
+        add("Rows rendered", f"{source_rows:,} rows are rendered into dashboard chart data.")
+
+    chart_detail = str(context.get("chart_detail") or "").strip()
+    interactivity = summary.get("dashboard_interactivity")
+    if isinstance(interactivity, dict):
+        mode = str(interactivity.get("mode") or "").strip().casefold()
+        sample_size = _summary_int(interactivity.get("sample_size"))
+        if mode in {"auto", "sampled"} and sample_size:
+            add(
+                "Chart detail",
+                f"Interactive charts use a reproducible random sample of up to "
+                f"{sample_size:,} rows; aggregate tables and group comparison use all selected rows.",
+            )
+        elif mode == "static":
+            add("Chart detail", "Charts are saved as static snapshots for faster browser loading.")
+        elif mode == "full":
+            add("Chart detail", "Interactive charts use all selected rows unless dashboard size limits apply.")
+    elif chart_detail:
+        add("Chart detail", chart_detail)
+
+    metric_count = _summary_int(summary.get("metric_count"))
+    chart_count = _summary_int(summary.get("chart_count"))
+    if metric_count is not None and chart_count is not None:
+        add(
+            "Coverage",
+            f"{chart_count:,} charts summarize {_plural_summary_count(metric_count, 'metric')}.",
+        )
+
+    available_options = summary.get("available_optimization_options")
+    if (
+        isinstance(available_options, list)
+        and STATIC_POPULATION_LAYER_OPTIMIZATION in available_options
+    ):
+        add(
+            "Optimization option",
+            "Large POPULATION marker layers can be reviewed as static image layers to keep the saved dashboard responsive.",
+        )
+
+    groupstats_metric_count = _summary_int(summary.get("groupstats_metric_count"))
+    if groupstats_metric_count and groupstats_metric_count > 0:
+        add(
+            "Group comparison",
+            f"Group comparison is available for "
+            f"{_plural_summary_count(groupstats_metric_count, 'metric')}.",
+        )
+    elif groupstats:
+        add("Group comparison", "Group comparison was evaluated and any skipped metrics are listed below.")
+
+    filter_label = str(context.get("filter_label") or "").strip()
+    if filter_label and filter_label.casefold() != "none":
+        add("Filters", "CSV filters were applied before dashboard generation.")
+    group_label = str(context.get("group_label") or "").strip()
+    group_fields = _friendly_group_fields(summary.get("group_fields"))
+    if group_label and group_label.casefold() != "none":
+        add("Groups", f"Rows are organized by {group_label.lower()}.")
+    elif group_fields:
+        add("Groups", f"Rows are organized by {group_fields.lower()}.")
+
+    if getattr(diagnostics, "attention", ()):
+        add("Needs review", diagnostics.attention[0])
+    elif not charts:
+        add("Charts", "No chart sections were generated for the selected metrics.")
+
+    return rows
 
 
 def _render_groupstats(groupstats: dict[str, Any]) -> str:

@@ -293,7 +293,7 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     assert "const chartById = new Map" in html_text
     assert ".chart-stats th" in html_text
     assert "background: #0f172a" in html_text
-    assert '<header id="dashboard-start">' in html_text
+    assert '<header class="hero" id="dashboard-start">' in html_text
     assert '<nav class="section-nav">' in html_text
     assert '<a class="section-chip" href="#groupstats">Group comparison</a>' in html_text
     assert 'Back to dashboard start</a>' in html_text
@@ -303,13 +303,13 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     assert "color: #0f172a" in html_text
     assert "<th>Statistic</th><th>Value</th>" in html_text
     assert "grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));" in html_text
-    assert '<div class="card-label">Summary points</div>' in html_text
-    assert '<div class="card-label">Groups</div>' in html_text
+    assert '<div class="metric-label">Summary points</div>' in html_text
+    assert '<div class="metric-label">Groups</div>' in html_text
     assert "Pasted reference cohorts" in html_text
-    assert '<div class="card-label">Reference rows</div>' in html_text
-    assert '<div class="card-label">Group comparison</div>' in html_text
-    assert '<div class="card-label">Reference cohort</div>' not in html_text
-    assert '<div class="card-label">Stats metrics</div>' not in html_text
+    assert '<div class="metric-label">Reference rows</div>' in html_text
+    assert '<div class="metric-label">Group comparison</div>' in html_text
+    assert '<div class="metric-label">Reference cohort</div>' not in html_text
+    assert '<div class="metric-label">Stats metrics</div>' not in html_text
 
     match = re.search(
         r'<script id="production-dashboard-charts" type="application/json">(.*?)</script>',
@@ -914,6 +914,55 @@ def test_very_large_time_series_uses_sampled_raw_image_layers(tmp_path) -> None:
 
     assert "metroliza_raw_layer_index" in html_text
     assert len(html_text.encode("utf-8")) < 6 * 1024 * 1024
+
+
+def test_static_population_layer_optimization_marked_available(monkeypatch) -> None:
+    monkeypatch.setattr(dashboard_module, "DASHBOARD_RAW_POINT_LIMIT", 5)
+    monkeypatch.setattr(
+        dashboard_module,
+        "_render_time_series_raw_layer_png",
+        lambda *_args, **_kwargs: b"png",
+    )
+    frame = pd.DataFrame(
+        {
+            "process_datetime": pd.date_range(
+                "2026-05-10 08:00",
+                periods=8,
+                freq="s",
+                tz="UTC",
+            ),
+            "GROUP": ["POPULATION"] * 8,
+            "length_mm": [float(index) for index in range(8)],
+        }
+    )
+
+    manifest = build_production_dashboard_manifest(
+        frame=frame,
+        metric_selection=(ProductionMetricSelection("length_mm", "Length Mm"),),
+        aggregation_state=ProductionAggregationState(
+            time_bucket="none",
+            aggregation_methods=("mean",),
+            group_fields=("GROUP",),
+        ),
+        chart_selection=ProductionChartSelection(
+            time_series=True,
+            histogram=False,
+            violin=False,
+            box=False,
+            groupstats=False,
+        ),
+        include_plotly_specs=False,
+    )
+
+    chart = manifest["charts"][0]
+    option = chart["optimization_options"][0]
+    assert "plotly_spec" not in chart
+    assert manifest["summary"]["available_optimization_options"] == ["static_population_layer"]
+    assert option["id"] == "static_population_layer"
+    assert option["available"] is True
+    assert option["group_label"] == "POPULATION"
+    assert option["source_point_count"] == 8
+    assert option["sample_point_limit"] == 5
 
 
 def test_distribution_charts_use_selected_group_field_before_default_columns() -> None:

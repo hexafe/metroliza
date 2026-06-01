@@ -206,3 +206,99 @@ def render_dashboard_message_section(
         f"<ul>{rows}</ul>"
         "</details>"
     )
+
+
+def render_dashboard_overview_cards(rows: Iterable[tuple[Any, Any]]) -> str:
+    """Render the shared KPI card grid used by saved dashboards."""
+
+    cards = []
+    for label, value in rows:
+        label_text = str(label or "").strip()
+        if not label_text:
+            continue
+        value_text = str(value if value not in (None, "") else "n/a")
+        value_markup = "".join(
+            f'<span class="metric-value-line">{html.escape(line)}</span>'
+            for line in value_text.splitlines()
+            if line
+        )
+        if not value_markup:
+            value_markup = '<span class="metric-value-line">n/a</span>'
+        cards.append(
+            '<div class="metric-card">'
+            f'<div class="metric-label">{html.escape(label_text)}</div>'
+            f'<div class="metric-value">{value_markup}</div>'
+            '</div>'
+        )
+    return f'<section class="overview-grid">{"".join(cards)}</section>' if cards else ""
+
+
+def render_dashboard_hero(
+    *,
+    eyebrow: str,
+    headline: str,
+    lede_markup: str = "",
+    controls_markup: str = "",
+    notice_markup: str = "",
+    overview_markup: str = "",
+    nav_markup: str = "",
+) -> str:
+    """Render the shared dashboard hero/header layout."""
+
+    return (
+        '<header class="hero" id="dashboard-start">'
+        '<div class="hero-top">'
+        '<div class="hero-copy">'
+        f'<p class="eyebrow">{html.escape(str(eyebrow or "Metroliza Dashboard"))}</p>'
+        f'<h1>{html.escape(str(headline or "Metroliza dashboard"))}</h1>'
+        f"{lede_markup}"
+        '</div>'
+        f"{controls_markup}"
+        '</div>'
+        f"{notice_markup}"
+        f"{overview_markup}"
+        f"{nav_markup}"
+        "</header>"
+    )
+
+
+def render_dashboard_takeaways_section(
+    rows: Iterable[dict[str, str] | tuple[Any, Any]],
+    *,
+    section_id: str = "key-takeaways",
+    title: str = "Key takeaways",
+) -> str:
+    """Render shared, plain-English dashboard insight cards."""
+
+    cards = []
+    seen: set[tuple[str, str]] = set()
+    for row in rows:
+        if isinstance(row, dict):
+            label = str(row.get("label") or "Insight").strip()
+            value = clean_dashboard_copy(row.get("value"))
+        else:
+            label = str(row[0] if len(row) > 0 else "Insight").strip()
+            value = clean_dashboard_copy(row[1] if len(row) > 1 else "")
+        if not label or not value or should_hide_dashboard_debug_text(value):
+            continue
+        key = (label.casefold(), value.casefold())
+        if key in seen:
+            continue
+        seen.add(key)
+        cards.append(
+            '<div class="insight-card">'
+            f'<div class="insight-label">{html.escape(label)}</div>'
+            f'<div class="insight-value">{html.escape(value)}</div>'
+            '</div>'
+        )
+    if not cards:
+        return ""
+    return (
+        f'<section id="{html.escape(section_id)}" class="measurement-section dashboard-takeaways">'
+        '<div class="section-top">'
+        f'<div><h2>{html.escape(title)}</h2></div>'
+        '<div class="section-actions"></div>'
+        '</div>'
+        f'<div class="insight-grid">{"".join(cards)}</div>'
+        '</section>'
+    )

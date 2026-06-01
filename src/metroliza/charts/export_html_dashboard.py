@@ -24,6 +24,7 @@ from metroliza.charts.dashboard_shell import (
     clean_dashboard_copy,
     dashboard_key_takeaway_rows,
     humanize_dashboard_reason_code,
+    render_dashboard_hero,
     should_hide_dashboard_debug_text,
 )
 from metroliza.charts.dashboard_html_controls import (
@@ -2715,10 +2716,8 @@ def _render_dashboard_html(
     if dashboard_mode == "html_only":
         lede_text = "Review measurement charts and group comparisons in the saved dashboard."
     else:
-        lede_text = (
-            "Review exported measurement charts, image snapshots, and group comparisons "
-            "in one browser view."
-        )
+        lede_text = ""
+    lede_markup = f'<p class="lede">{html.escape(lede_text)}</p>' if lede_text else ""
     nav_items = [
         {"id": str(section["id"]), "label": str(section["header"] or section["id"])}
         for section in sections
@@ -2777,6 +2776,15 @@ def _render_dashboard_html(
             '<p class="runtime-note">Interactive charts are unavailable in this export. '
             'Image snapshots are shown instead.</p>'
         )
+    hero_markup = render_dashboard_hero(
+        eyebrow="Metroliza Export Dashboard",
+        headline=source_label,
+        lede_markup=lede_markup,
+        controls_markup=dashboard_controls_markup,
+        notice_markup=plotly_status_notice,
+        overview_markup=overview_cards,
+        nav_markup=nav_markup,
+    )
 
     return f"""<!doctype html>
 <html lang="en">
@@ -3443,19 +3451,7 @@ def _render_dashboard_html(
 </head>
 <body>
   <div class="shell">
-    <header class="hero" id="dashboard-start">
-      <div class="hero-top">
-        <div class="hero-copy">
-          <p class="eyebrow">Metroliza Export Dashboard</p>
-          <h1>{html.escape(source_label)}</h1>
-          <p class="lede">{html.escape(lede_text)}</p>
-        </div>
-        {dashboard_controls_markup}
-      </div>
-      {plotly_status_notice}
-      {overview_cards}
-      {nav_markup}
-    </header>
+    {hero_markup}
     {section_blocks}
     {group_analysis_block}
   </div>

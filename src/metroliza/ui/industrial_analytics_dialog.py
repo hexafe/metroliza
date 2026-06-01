@@ -91,7 +91,7 @@ SOURCE_TABULAR_FILE = "tabular_file"
 GROUPSTATS_REFERENCE_COHORT_MODES = frozenset({"compare_rest", "group_selected"})
 _DASHBOARD_INTERACTIVITY_LABELS = {
     "auto": "Auto",
-    "sampled": "Interactive sample",
+    "sampled": "Interactive random sample",
     "static": "Snapshots only",
     "full": "All rows",
 }
@@ -100,7 +100,7 @@ _DASHBOARD_INTERACTIVITY_LABELS = {
 def dashboard_interactivity_options_summary(options: DashboardInteractivityOptions) -> str:
     mode = _DASHBOARD_INTERACTIVITY_LABELS.get(options.mode, options.mode.title())
     if options.mode in {"auto", "sampled"}:
-        return f"{mode}, {options.sample_size:,} rows"
+        return f"{mode}, {options.sample_size:,} random rows"
     return mode
 
 
@@ -131,7 +131,7 @@ class DashboardInteractivityOptionsDialog(QDialog):
 
         self.mode_combo = QComboBox()
         self.mode_combo.addItem("Auto", "auto")
-        self.mode_combo.addItem("Interactive sample", "sampled")
+        self.mode_combo.addItem("Interactive random sample", "sampled")
         self.mode_combo.addItem("Snapshots only", "static")
         self.mode_combo.addItem("All rows", "full")
         index = self.mode_combo.findData(self._options.mode)
@@ -145,6 +145,12 @@ class DashboardInteractivityOptionsDialog(QDialog):
         self.sample_size_spin.setValue(self._options.sample_size)
         form.addRow("Sample size", self.sample_size_spin)
         layout.addLayout(form)
+        layout.addWidget(
+            status_chip(
+                "Random sampling affects interactive charts only; summaries and group comparison use all selected rows.",
+                "neutral",
+            )
+        )
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
