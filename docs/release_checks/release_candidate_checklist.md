@@ -138,6 +138,17 @@ Current plotstats hotfix pin:
   CI-scope coverage `67.20%` against the `65%` threshold.
 - Security audit passed after allowing `pip-audit` to create/upgrade its temporary
   dependency environment; `pip-audit` reported no known vulnerabilities.
+- Dashboard UX/copy unification QA passed on 2026-06-01 after the CSV Summary and
+  Export dashboard updates: focused dashboard tests passed
+  (`114 passed`), full headless pytest passed
+  (`1773 passed, 207 skipped, 6 warnings, 60 subtests passed`), and the CI-style
+  coverage gate passed (`1773 passed, 207 skipped, 95 warnings, 60 subtests
+  passed`; coverage `67.26%` against the `65%` threshold). Local gates also
+  passed for `ruff`, `compileall`, packaged PDF parser validation, release
+  metadata sync, release hygiene, and the security audit. The first sandboxed
+  security-audit attempt failed only because `pip-audit` could not refresh its
+  temporary dependency environment; the escalated rerun reported no known
+  vulnerabilities.
 - Post-reorganization follow-up local audit passed after docs/reference cleanup,
   parser-plugin productionization coverage, architecture guardrail hardening, and
   release-status refresh.

@@ -5,6 +5,7 @@
 - Google Sheets export now checks converted workbook tabs and warns when a local Excel fallback should be used.
 - Canceling long parsing, export, and metadata tasks is more reliable from progress windows.
 - Dashboard plot visuals can now be customized.
+- CSV Summary and Export dashboards now use clearer run notes, image snapshot wording, and group comparison takeaways.
 
 ## 2026.05 RC3 (build 260519)
 - CSV Summary and Export grouping filters now apply after pressing Enter, keeping large row sets responsive while typing.

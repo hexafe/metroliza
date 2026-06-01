@@ -20,6 +20,12 @@ from metroliza.charts.dashboard_navigation import (
     render_section_header,
     render_section_nav,
 )
+from metroliza.charts.dashboard_shell import (
+    clean_dashboard_copy,
+    dashboard_key_takeaway_rows,
+    humanize_dashboard_reason_code,
+    should_hide_dashboard_debug_text,
+)
 from metroliza.charts.dashboard_html_controls import (
     DASHBOARD_THEME_STORAGE_KEY,
     render_dashboard_control_bar,
@@ -2399,7 +2405,12 @@ def _normalize_group_analysis_manifest(
                 "reference": str(raw_metric.get("reference") or ""),
                 "group_count": int(raw_metric.get("group_count") or 0),
                 "summary_rows": summary_rows,
-                "insights": [str(item) for item in (raw_metric.get("insights") or []) if str(item).strip()],
+                "takeaways": dashboard_key_takeaway_rows(
+                    primary_insight=raw_metric.get("primary_insight"),
+                    structured_insights=raw_metric.get("structured_insights"),
+                    legacy_insights=raw_metric.get("insights"),
+                    summary_rows=summary_rows,
+                ),
                 "descriptive_stats": _normalize_rows_table(
                     raw_metric.get("descriptive_stats"),
                     preferred_columns=[
@@ -2450,7 +2461,7 @@ def _normalize_group_analysis_manifest(
         "status": str(payload.get("status") or ""),
         "analysis_level": _humanize_field_label(str(payload.get("analysis_level") or "")).lower(),
         "effective_scope": str(payload.get("effective_scope") or "").replace("_", " "),
-        "skip_reason_message": str(skip_reason.get("message") or ""),
+        "skip_reason_message": clean_dashboard_copy(skip_reason.get("message") or ""),
         "summary_rows": _normalize_summary_rows(
             [
                 ("Status", payload.get("status")),
@@ -2462,12 +2473,19 @@ def _normalize_group_analysis_manifest(
                 ("Warnings", warning_summary.get("count")),
             ]
         ),
-        "warning_messages": [str(item) for item in (warning_summary.get("messages") or []) if str(item).strip()],
+        "warning_messages": [
+            clean_dashboard_copy(item)
+            for item in (warning_summary.get("messages") or [])
+            if clean_dashboard_copy(item) and not should_hide_dashboard_debug_text(item)
+        ],
         "histogram_skip_summary": {
             "applies": bool(histogram_skip_summary.get("applies")),
             "count": int(histogram_skip_summary.get("count") or 0),
             "reason_rows": _normalize_summary_rows(
-                [(str(key), value) for key, value in sorted(reason_counts.items())]
+                [
+                    (humanize_dashboard_reason_code(key), value)
+                    for key, value in sorted(reason_counts.items())
+                ]
             ),
         },
         "metrics": metrics,
@@ -2547,7 +2565,7 @@ def _normalize_group_analysis_plot_eligibility(value: Any) -> list[dict[str, str
         if not plot_meta:
             continue
         status = "Eligible" if bool(plot_meta.get("eligible")) else "Skipped"
-        reason = str(plot_meta.get("skip_reason") or "").replace("_", " ").strip()
+        reason = humanize_dashboard_reason_code(plot_meta.get("skip_reason"))
         rows.append(
             {
                 "label": _humanize_field_label(plot_key),
@@ -2695,18 +2713,18 @@ def _render_dashboard_html(
         manifest.get("source_label") or manifest.get("excel_file") or "Metroliza dashboard"
     )
     if dashboard_mode == "html_only":
-        lede_text = "Review measurement charts and group analysis in the saved dashboard."
+        lede_text = "Review measurement charts and group comparisons in the saved dashboard."
     else:
         lede_text = (
-            "Extended summary charts exported in this dashboard. Use the interactive view "
-            "to inspect results; snapshot PNG charts are shown with each card."
+            "Review exported measurement charts, image snapshots, and group comparisons "
+            "in one browser view."
         )
     nav_items = [
         {"id": str(section["id"]), "label": str(section["header"] or section["id"])}
         for section in sections
     ]
     if group_analysis:
-        nav_items.append({"id": "group-analysis", "label": "Group Analysis"})
+        nav_items.append({"id": "group-analysis", "label": "Group comparison"})
     section_blocks = "".join(_render_section(section) for section in sections)
     if not section_blocks and not group_analysis:
         section_blocks = (
@@ -2757,7 +2775,7 @@ def _render_dashboard_html(
     if str(manifest.get("plotly_runtime_status") or "") in {"snapshot_only", "budget_snapshot_only"}:
         plotly_status_notice = (
             '<p class="runtime-note">Interactive charts are unavailable in this export. '
-            'Snapshot PNG charts are shown instead.</p>'
+            'Image snapshots are shown instead.</p>'
         )
 
     return f"""<!doctype html>
@@ -2771,8 +2789,8 @@ def _render_dashboard_html(
 {plotly_script_tag}  <style>
     :root {{
       color-scheme: light;
-      --paper: #f5f1e8;
-      --paper-strong: #fbf8f2;
+      --paper: #f6f7f8;
+      --paper-strong: #ffffff;
       --ink: #162330;
       --muted: #556270;
       --accent: #d66e2f;
@@ -2791,12 +2809,9 @@ def _render_dashboard_html(
       --table-head-bg: rgba(22, 35, 48, 0.04);
       --plot-shell-bg: rgba(255,255,255,0.92);
       --line: rgba(22, 35, 48, 0.12);
-      --shadow: 0 18px 44px rgba(14, 23, 32, 0.12);
-      --hero-bg: linear-gradient(135deg, rgba(255,255,255,0.92), rgba(255,249,241,0.9));
-      --bg-left: rgba(214, 110, 47, 0.18);
-      --bg-right: rgba(36, 90, 90, 0.18);
-      --bg-base-top: #fbf8f2;
-      --bg-base-bottom: #f5f1e8;
+      --shadow: none;
+      --hero-bg: var(--panel-strong);
+      --bg-base: #f6f7f8;
       --runtime-note-bg: rgba(214, 110, 47, 0.10);
       --pre-bg: #121a22;
       --pre-ink: #eef4f8;
@@ -2837,12 +2852,9 @@ def _render_dashboard_html(
       --table-head-bg: rgba(255, 255, 255, 0.06);
       --plot-shell-bg: rgba(18, 25, 33, 0.96);
       --line: rgba(230, 237, 243, 0.12);
-      --shadow: 0 20px 52px rgba(0, 0, 0, 0.34);
-      --hero-bg: linear-gradient(135deg, rgba(24, 33, 43, 0.95), rgba(18, 25, 33, 0.95));
-      --bg-left: rgba(241, 154, 91, 0.12);
-      --bg-right: rgba(121, 198, 190, 0.12);
-      --bg-base-top: #111821;
-      --bg-base-bottom: #0b1117;
+      --shadow: none;
+      --hero-bg: var(--panel-strong);
+      --bg-base: #0f151b;
       --runtime-note-bg: rgba(241, 154, 91, 0.12);
       --pre-bg: #081018;
       --pre-ink: #eef4f8;
@@ -2866,10 +2878,7 @@ def _render_dashboard_html(
       margin: 0;
       font-family: Aptos, "Segoe UI", "Helvetica Neue", sans-serif;
       color: var(--ink);
-      background:
-        radial-gradient(circle at top left, var(--bg-left), transparent 34%),
-        radial-gradient(circle at top right, var(--bg-right), transparent 32%),
-        linear-gradient(180deg, var(--bg-base-top) 0%, var(--bg-base-bottom) 100%);
+      background: var(--bg-base);
     }}
     body,
     .hero,
@@ -2895,7 +2904,7 @@ def _render_dashboard_html(
     .hero {{
       background: var(--hero-bg);
       border: 1px solid var(--line);
-      border-radius: 28px;
+      border-radius: 8px;
       box-shadow: var(--shadow);
       padding: 28px 28px 22px;
     }}
@@ -2999,7 +3008,7 @@ def _render_dashboard_html(
     .metric-card {{
       background: var(--panel-strong);
       border: 1px solid var(--line);
-      border-radius: 20px;
+      border-radius: 8px;
       padding: 16px 18px;
     }}
     .metric-label {{
@@ -3022,7 +3031,7 @@ def _render_dashboard_html(
       margin-top: 18px;
       background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 24px;
+      border-radius: 8px;
       box-shadow: var(--shadow);
       padding: 22px;
     }}
@@ -3087,7 +3096,7 @@ def _render_dashboard_html(
     .chart-card {{
       background: var(--card-bg);
       border: 1px solid var(--line);
-      border-radius: 20px;
+      border-radius: 8px;
       overflow: hidden;
     }}
     .chart-card header {{
@@ -3171,7 +3180,7 @@ def _render_dashboard_html(
       width: 100%;
       min-height: 360px;
       border: 1px solid var(--line);
-      border-radius: 18px;
+      border-radius: 8px;
       background: var(--plot-shell-bg);
       overflow: hidden;
     }}
@@ -3296,7 +3305,7 @@ def _render_dashboard_html(
     .detail-panel {{
       background: var(--detail-panel-bg);
       border: 1px solid var(--line);
-      border-radius: 16px;
+      border-radius: 8px;
       padding: 12px 14px;
     }}
     .detail-panel h4 {{
@@ -3314,7 +3323,7 @@ def _render_dashboard_html(
     .detail-card {{
       background: var(--detail-card-bg);
       border: 1px solid var(--line);
-      border-radius: 14px;
+      border-radius: 8px;
       padding: 10px 12px;
       min-width: 0;
     }}
@@ -3367,7 +3376,7 @@ def _render_dashboard_html(
       margin-top: 16px;
       overflow-x: auto;
       border: 1px solid var(--line);
-      border-radius: 16px;
+      border-radius: 8px;
       background: var(--table-shell-bg);
     }}
     .subsection-title {{
@@ -3383,7 +3392,7 @@ def _render_dashboard_html(
     .metric-block {{
       background: var(--card-soft);
       border: 1px solid var(--line);
-      border-radius: 20px;
+      border-radius: 8px;
       padding: 18px;
     }}
     .metric-block h3 {{
@@ -3424,7 +3433,7 @@ def _render_dashboard_html(
     }}
     @media (max-width: 780px) {{
       .shell {{ width: min(100vw - 18px, 1480px); padding-top: 12px; }}
-      .hero, .measurement-section, .empty-state {{ padding: 18px; border-radius: 18px; }}
+      .hero, .measurement-section, .empty-state {{ padding: 18px; border-radius: 8px; }}
       .chart-grid {{ grid-template-columns: 1fr; }}
       .theme-switch {{ justify-content: space-between; }}
       .theme-options {{ flex-wrap: wrap; justify-content: flex-end; }}
@@ -4010,10 +4019,7 @@ def _format_generated_card_value(generated_at: Any) -> str:
 
 
 def _render_diagnostics(lines: list[str]) -> str:
-    if not lines:
-        return ""
-    items = "".join(f"<li>{html.escape(line)}</li>" for line in lines)
-    return f'<section class="diagnostics"><h2>Backend diagnostics</h2><ul>{items}</ul></section>'
+    return ""
 
 
 def _render_section(section: dict[str, Any]) -> str:
@@ -4044,7 +4050,8 @@ def _render_section(section: dict[str, Any]) -> str:
     summary_table = ""
     if summary_rows:
         rows_markup = "".join(
-            f"<tr><td>{html.escape(row['label'])}</td><td>{html.escape(row['value'])}</td></tr>"
+            f"<tr><td>{html.escape(clean_dashboard_copy(row['label']))}</td>"
+            f"<td>{html.escape(clean_dashboard_copy(row['value']))}</td></tr>"
             for row in summary_rows
         )
         summary_table = f'<table class="summary-table">{rows_markup}</table>'
@@ -4086,11 +4093,11 @@ def _render_plotly_shell(chart: dict[str, Any]) -> str:
         '<div class="plotly-shell">'
         '<div class="plotly-shell-header">'
         '<div class="plotly-shell-copy">'
-        '<span class="plotly-kicker">Interactive Plotly view</span>'
-        '<span class="plotly-shell-note">Inspect the chart directly in the saved dashboard.</span>'
+        '<span class="plotly-kicker">Interactive chart</span>'
+        '<span class="plotly-shell-note">Zoom, pan, and inspect values in this saved dashboard.</span>'
         '</div>'
         '<div class="plotly-actions">'
-        f'<button type="button" class="plotly-expand-trigger" data-lightbox-route="plotly" aria-label="Enlarge interactive chart: {html.escape(title)}" data-image-caption="{html.escape(title)}">Increase size</button>'
+        f'<button type="button" class="plotly-expand-trigger" data-lightbox-route="plotly" aria-label="Open larger view: {html.escape(title)}" data-image-caption="{html.escape(title)}">Open large view</button>'
         '</div>'
         '</div>'
         f'<div class="plotly-chart" aria-label="Interactive chart: {html.escape(title)}" '
@@ -4106,7 +4113,7 @@ def _render_chart_snapshot(chart: dict[str, Any], *, interactive_available: bool
 
     title = str(chart.get("title") or chart.get("chart_type") or "chart")
     fallback_note = (
-        '<p class="chart-fallback-note">Snapshot PNG chart.</p>'
+        '<p class="chart-fallback-note">Image snapshot.</p>'
         if interactive_available
         else ""
     )
@@ -4114,7 +4121,7 @@ def _render_chart_snapshot(chart: dict[str, Any], *, interactive_available: bool
     return (
         f'<div class="{wrapper_class}">' if wrapper_class else ""
     ) + (
-        f'<button type="button" class="chart-image-trigger" aria-label="Enlarge chart: {html.escape(title)}" '
+        f'<button type="button" class="chart-image-trigger" aria-label="Open larger view: {html.escape(title)}" '
         'data-lightbox-route="image" '
         f'data-image-src="{html.escape(image_path)}" '
         f'data-image-caption="{html.escape(title)}">'
@@ -4127,9 +4134,10 @@ def _render_chart_snapshot(chart: dict[str, Any], *, interactive_available: bool
 
 
 def _render_chart_card(chart: dict[str, Any]) -> str:
+    chart_note = clean_dashboard_copy(chart.get("note"))
     note_markup = (
-        f'<p class="chart-note">{html.escape(chart["note"])}</p>'
-        if str(chart.get("note") or "").strip()
+        f'<p class="chart-note">{html.escape(chart_note)}</p>'
+        if chart_note
         else ""
     )
     chart_type = str(chart.get("chart_type") or "").strip().lower()
@@ -4198,15 +4206,15 @@ def _render_chart_payload_details(details: dict[str, Any]) -> str:
 
 
 def _render_detail_panel(title: str, content: str) -> str:
-    return f'<section class="detail-panel"><h4>{html.escape(str(title or ""))}</h4>{content}</section>'
+    return f'<section class="detail-panel"><h4>{html.escape(clean_dashboard_copy(title))}</h4>{content}</section>'
 
 
 def _render_detail_cards(rows: list[dict[str, str]]) -> str:
     if not rows:
         return ""
     cards = "".join(
-        f'<div class="detail-card"><div class="detail-card-label">{html.escape(row["label"])}</div>'
-        f'<div class="detail-card-value">{html.escape(row["value"])}</div></div>'
+        f'<div class="detail-card"><div class="detail-card-label">{html.escape(clean_dashboard_copy(row["label"]))}</div>'
+        f'<div class="detail-card-value">{html.escape(clean_dashboard_copy(row["value"]))}</div></div>'
         for row in rows
     )
     return f'<div class="detail-cards">{cards}</div>'
@@ -4216,7 +4224,8 @@ def _render_summary_table(rows: list[dict[str, str]]) -> str:
     if not rows:
         return ""
     rows_markup = "".join(
-        f"<tr><td>{html.escape(row['label'])}</td><td>{html.escape(row['value'])}</td></tr>"
+        f"<tr><td>{html.escape(clean_dashboard_copy(row['label']))}</td>"
+        f"<td>{html.escape(clean_dashboard_copy(row['value']))}</td></tr>"
         for row in rows
     )
     return f'<table class="detail-table">{rows_markup}</table>'
@@ -4225,7 +4234,12 @@ def _render_summary_table(rows: list[dict[str, str]]) -> str:
 def _render_text_list(items: list[str]) -> str:
     if not items:
         return ""
-    return '<ul class="detail-list">' + "".join(f"<li>{html.escape(item)}</li>" for item in items) + "</ul>"
+    rows = "".join(
+        f"<li>{html.escape(cleaned)}</li>"
+        for item in items
+        if (cleaned := clean_dashboard_copy(item)) and not should_hide_dashboard_debug_text(item)
+    )
+    return f'<ul class="detail-list">{rows}</ul>' if rows else ""
 
 
 def _render_group_analysis(group_analysis: dict[str, Any]) -> str:
@@ -4280,8 +4294,9 @@ def _render_group_analysis(group_analysis: dict[str, Any]) -> str:
 
     return (
         '<section id="group-analysis" class="measurement-section">'
-        '<div class="section-top"><div><h2>Group Analysis</h2>'
-        '<div class="section-meta">Grouped metric analysis data mirrored from the export payload.</div></div>'
+        '<div class="section-top"><div><h2>Group comparison</h2>'
+        '<div class="section-meta">Compare grouped measurements by metric. Start with the '
+        'summary and recommended action, then open detailed tables when needed.</div></div>'
         f'<div class="pill-row">{pill_markup}</div></div>'
         f'{skip_message}'
         f'{summary_table}'
@@ -4294,7 +4309,7 @@ def _render_group_analysis(group_analysis: dict[str, Any]) -> str:
 
 def _render_group_analysis_metric(metric: dict[str, Any]) -> str:
     summary_rows = metric.get("summary_rows") or []
-    insights = metric.get("insights") or []
+    takeaways = metric.get("takeaways") or []
     descriptive_stats = metric.get("descriptive_stats") or {}
     pairwise_rows = metric.get("pairwise_rows") or {}
     distribution_difference = metric.get("distribution_difference") or []
@@ -4305,13 +4320,13 @@ def _render_group_analysis_metric(metric: dict[str, Any]) -> str:
     if metric.get("reference"):
         pills.append(f"Reference: {metric['reference']}")
     pill_markup = "".join(f'<span class="pill">{html.escape(item)}</span>' for item in pills)
-    back_button = render_back_to_section("group-analysis", "Back to Group Analysis")
+    back_button = render_back_to_section("group-analysis", "Back to group comparison")
 
     summary_panels = []
+    if takeaways:
+        summary_panels.append(_render_detail_panel("Key takeaways", _render_detail_cards(takeaways)))
     if summary_rows:
         summary_panels.append(_render_detail_panel("Metric summary", _render_summary_table(summary_rows)))
-    if insights:
-        summary_panels.append(_render_detail_panel("Key insights", _render_text_list(insights)))
     summary_grid_markup = (
         f'<div class="metric-summary-grid detail-grid">{"".join(summary_panels)}</div>'
         if summary_panels
@@ -4326,7 +4341,10 @@ def _render_group_analysis_metric(metric: dict[str, Any]) -> str:
     if distribution_difference:
         raw_table_sections.append('<div class="subsection-title">Distribution difference</div>' + _render_summary_table(distribution_difference))
     if distribution_pairwise_rows.get("rows"):
-        raw_table_sections.append('<div class="subsection-title">Distribution pairwise rows</div>' + _render_data_table(distribution_pairwise_rows))
+        raw_table_sections.append(
+            '<div class="subsection-title">Distribution pairwise comparison</div>'
+            + _render_data_table(distribution_pairwise_rows)
+        )
 
     plot_markup = ""
     if plots:
@@ -4359,10 +4377,13 @@ def _render_data_table(table_meta: dict[str, Any]) -> str:
     rows = table_meta.get("rows") or []
     if not columns or not rows:
         return ""
-    header_markup = "".join(f"<th>{html.escape(str(column.get('label') or ''))}</th>" for column in columns)
+    header_markup = "".join(
+        f"<th>{html.escape(clean_dashboard_copy(column.get('label') or ''))}</th>"
+        for column in columns
+    )
     row_markup = "".join(
         "<tr>" + "".join(
-            f"<td>{html.escape(str(row.get(column.get('key')) or ''))}</td>"
+            f"<td>{html.escape(clean_dashboard_copy(row.get(column.get('key')) or ''))}</td>"
             for column in columns
         ) + "</tr>"
         for row in rows

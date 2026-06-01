@@ -187,7 +187,10 @@ class TestExportHtmlDashboard(unittest.TestCase):
                             'recommended_action': 'Investigate group B shift.',
                             'diagnostics_comment': 'Analyzed: exact match; pairwise and capability checks enabled.',
                             'metric_flags': 'LOW N',
-                            'insights': ['Group B runs higher than group A.'],
+                            'insights': [
+                                'Group B runs higher than group A.',
+                                'Status: Exact match; mode=Full analysis.',
+                            ],
                             'plot_eligibility': {
                                 'violin': {'eligible': True, 'skip_reason': ''},
                                 'histogram': {'eligible': True, 'skip_reason': ''},
@@ -220,7 +223,11 @@ class TestExportHtmlDashboard(unittest.TestCase):
                         'group_count': 2,
                         'reference_count': 1,
                         'warning_summary': {'count': 1, 'messages': ['FEATURE_1: LOW N']},
-                        'histogram_skip_summary': {'applies': True, 'count': 0, 'reason_counts': {}},
+                        'histogram_skip_summary': {
+                            'applies': True,
+                            'count': 1,
+                            'reason_counts': {'low_total_samples': 1},
+                        },
                     },
                 },
                 group_analysis_plot_assets={
@@ -259,11 +266,11 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertNotIn('backend-badge', html_text)
             self.assertNotIn('Native renders', html_text)
             self.assertNotIn('Matplotlib renders', html_text)
-            self.assertIn('Group Analysis', html_text)
+            self.assertIn('Group comparison', html_text)
             self.assertIn('FEATURE_1', html_text)
-            self.assertIn('Interactive Plotly view', html_text)
+            self.assertIn('Interactive chart', html_text)
             self.assertIn('plotly-chart', html_text)
-            self.assertIn('Snapshot PNG chart.', html_text)
+            self.assertIn('Image snapshot.', html_text)
             self.assertNotIn('Workbook-matching PNG snapshot.', html_text)
             self.assertIn('report_dashboard_assets/section_001_diameter-x_histogram_01.png', html_text)
             self.assertIn('data-plotly-spec-light=', html_text)
@@ -314,8 +321,8 @@ class TestExportHtmlDashboard(unittest.TestCase):
                 html_text,
             )
             self.assertIn('plotly-expand-trigger', html_text)
-            self.assertIn('Increase size', html_text)
-            self.assertIn('Enlarge interactive chart: Diameter / X', html_text)
+            self.assertIn('Open large view', html_text)
+            self.assertIn('Open larger view: Diameter / X', html_text)
             self.assertIn('<header class="hero" id="dashboard-start">', html_text)
             self.assertIn(
                 '<a class="section-chip section-chip--back" href="#dashboard-start" role="button">'
@@ -324,7 +331,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
             )
             self.assertIn(
                 '<a class="section-chip section-chip--back" href="#group-analysis" role="button">'
-                'Back to Group Analysis</a>',
+                'Back to group comparison</a>',
                 html_text,
             )
             self.assertIn('<a class="section-chip" href="#group-metric-001">FEATURE_1</a>', html_text)
@@ -333,10 +340,13 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn('Detailed tables', html_text)
             self.assertIn('Pairwise comparisons', html_text)
             self.assertIn('Descriptive stats', html_text)
+            self.assertIn('At least 6 total numeric samples are required.', html_text)
             self.assertIn('metric-summary-grid detail-grid', html_text)
             self.assertLess(html_text.index('Metric summary'), html_text.index('Detailed tables'))
-            self.assertLess(html_text.index('Key insights'), html_text.index('Detailed tables'))
+            self.assertLess(html_text.index('Key takeaways'), html_text.index('Detailed tables'))
             self.assertLess(html_text.index('Recommended action'), html_text.index('Detailed tables'))
+            self.assertNotIn('low_total_samples', html_text)
+            self.assertNotIn('mode=Full analysis', html_text)
             self.assertNotIn('Plot eligibility', html_text)
             self.assertNotIn('Analyzed: exact match; pairwise and capability checks enabled.', html_text)
             self.assertNotIn('Capability CI', html_text)
@@ -353,7 +363,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn("document.querySelectorAll('.dragcover').forEach((overlay) => {", html_text)
             self.assertIn("lightbox.addEventListener('close', resetLightboxState);", html_text)
             self.assertIn('chart-image-trigger', html_text)
-            self.assertIn('Enlarge chart: Diameter / X', html_text)
+            self.assertIn('Open larger view: Diameter / X', html_text)
             self.assertIn(
                 "document.querySelectorAll('.chart-image-trigger[data-lightbox-route=\"image\"]').forEach((trigger) => {",
                 html_text,
@@ -477,7 +487,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertNotIn('dashboard-visual-dialog', html_text)
             self.assertNotIn('<button type="button" class="visual-settings-trigger"', html_text)
             self.assertIn('Interactive charts are unavailable in this export', html_text)
-            self.assertIn('Snapshot PNG charts are shown instead.', html_text)
+            self.assertIn('Image snapshots are shown instead.', html_text)
             self.assertNotIn('Workbook-matching PNG snapshots are shown instead.', html_text)
             self.assertFalse((assets_dir / 'plotly-2.27.0.min.js').exists())
 

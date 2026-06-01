@@ -278,11 +278,15 @@ def test_tabular_analytics_dialog_interactivity_controls_are_visible_and_in_requ
     try:
         assert not dialog.dashboard_interactivity_button.isHidden()
         assert dialog.dashboard_interactivity_summary_label.text() == "Auto, 50,000 rows"
+        assert dialog.dashboard_interactivity_row_label.text() == "Dashboard interactivity"
+        assert "chart interactivity" in dialog.dashboard_interactivity_button.toolTip()
 
         dialog.dashboard_interactivity_options = DashboardInteractivityOptions(
             mode="sampled",
             sample_size=75000,
         )
+        dialog._sync_dashboard_interactivity_controls()
+        assert dialog.dashboard_interactivity_summary_label.text() == "Interactive sample, 75,000 rows"
         request = dialog._build_analytics_request()
 
         assert request.dashboard_interactivity_options == DashboardInteractivityOptions(
@@ -341,7 +345,7 @@ def test_tabular_analytics_interactivity_button_launches_dialog(monkeypatch) -> 
             mode="static",
             sample_size=50000,
         )
-        assert dialog.dashboard_interactivity_summary_label.text() == "Static"
+        assert dialog.dashboard_interactivity_summary_label.text() == "Snapshots only"
     finally:
         dialog.close()
 

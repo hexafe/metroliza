@@ -91,9 +91,9 @@ SOURCE_TABULAR_FILE = "tabular_file"
 GROUPSTATS_REFERENCE_COHORT_MODES = frozenset({"compare_rest", "group_selected"})
 _DASHBOARD_INTERACTIVITY_LABELS = {
     "auto": "Auto",
-    "sampled": "Sampled",
-    "static": "Static",
-    "full": "Full",
+    "sampled": "Interactive sample",
+    "static": "Snapshots only",
+    "full": "All rows",
 }
 
 
@@ -105,7 +105,7 @@ def dashboard_interactivity_options_summary(options: DashboardInteractivityOptio
 
 
 class DashboardInteractivityOptionsDialog(QDialog):
-    """Edit CSV Summary Plotly interactivity options."""
+    """Edit CSV Summary dashboard interactivity options."""
 
     def __init__(
         self,
@@ -131,9 +131,9 @@ class DashboardInteractivityOptionsDialog(QDialog):
 
         self.mode_combo = QComboBox()
         self.mode_combo.addItem("Auto", "auto")
-        self.mode_combo.addItem("Sampled", "sampled")
-        self.mode_combo.addItem("Static", "static")
-        self.mode_combo.addItem("Full", "full")
+        self.mode_combo.addItem("Interactive sample", "sampled")
+        self.mode_combo.addItem("Snapshots only", "static")
+        self.mode_combo.addItem("All rows", "full")
         index = self.mode_combo.findData(self._options.mode)
         self.mode_combo.setCurrentIndex(index if index >= 0 else 0)
         self.mode_combo.currentIndexChanged.connect(self._sync_sample_size_enabled)
@@ -445,11 +445,11 @@ class IndustrialAnalyticsDialog(QDialog):
             "Fast keeps CSV Summary dashboard generation lightweight. "
             "Full adds richer detail at a higher processing cost."
         )
-        self.dashboard_interactivity_row_label = section_label("Plotly strategy")
+        self.dashboard_interactivity_row_label = section_label("Dashboard interactivity")
         self.dashboard_interactivity_summary_label = status_chip("", "neutral")
         self.dashboard_interactivity_button = QPushButton("Change...")
         self.dashboard_interactivity_button.setToolTip(
-            "Adjust CSV Summary Plotly interactivity for large datasets."
+            "Adjust CSV Summary chart interactivity for large datasets."
         )
         self.dashboard_interactivity_button.clicked.connect(self.open_dashboard_interactivity_options)
         self.dashboard_visuals_row_label = section_label("Dashboard style")

@@ -142,7 +142,7 @@ def test_build_production_dashboard_manifest_can_skip_plotly_specs(
     assert manifest["charts"]
     assert all("plotly_spec" not in chart for chart in manifest["charts"])
     time_series = next(chart for chart in manifest["charts"] if chart["chart_type"] == "time_series")
-    assert any("static dashboard mode" in note for note in time_series.get("notes", []))
+    assert any("Snapshots only mode" in note for note in time_series.get("notes", []))
     histogram = next(chart for chart in manifest["charts"] if chart["chart_type"] == "histogram")
     assert histogram["image"]["mime_type"] == "image/png"
 
@@ -284,7 +284,7 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
         'class="plotly-chart" id="histogram-cycle_time_s"' in html_text
         or 'class="chart-image"' in html_text
     )
-    assert "Static snapshot" in html_text
+    assert "Image snapshot" in html_text
     assert '<details class="chart-stats">' in html_text
     assert "<summary>Chart statistics (" in html_text
     assert 'class="plotly-expand-trigger"' in html_text
@@ -295,7 +295,7 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     assert "background: #0f172a" in html_text
     assert '<header id="dashboard-start">' in html_text
     assert '<nav class="section-nav">' in html_text
-    assert '<a class="section-chip" href="#groupstats">Groupstats</a>' in html_text
+    assert '<a class="section-chip" href="#groupstats">Group comparison</a>' in html_text
     assert 'Back to dashboard start</a>' in html_text
     assert 'id="chart-time-series-cycle-time-s-aggregated"' in html_text
     assert "color: #f8fafc" in html_text
@@ -303,11 +303,11 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     assert "color: #0f172a" in html_text
     assert "<th>Statistic</th><th>Value</th>" in html_text
     assert "grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));" in html_text
-    assert '<div class="card-label">Aggregated output points</div>' in html_text
+    assert '<div class="card-label">Summary points</div>' in html_text
     assert '<div class="card-label">Groups</div>' in html_text
     assert "Pasted reference cohorts" in html_text
-    assert '<div class="card-label">Pasted references</div>' in html_text
-    assert '<div class="card-label">Groupstats</div>' in html_text
+    assert '<div class="card-label">Reference rows</div>' in html_text
+    assert '<div class="card-label">Group comparison</div>' in html_text
     assert '<div class="card-label">Reference cohort</div>' not in html_text
     assert '<div class="card-label">Stats metrics</div>' not in html_text
 
@@ -361,8 +361,8 @@ def test_write_production_dashboard_omits_plotly_when_payload_exceeds_budget(tmp
     assert "Cycle Time S distribution" in html_text
     assert "Cycle Time S violin" in html_text
     assert "Cycle Time S box" in html_text
-    assert "Some interactive charts were omitted in this dashboard" in html_text
-    assert "Interactive chart omitted because this chart&#x27;s Plotly payload exceeded" in html_text
+    assert "Some interactive charts were replaced with image snapshots" in html_text
+    assert "Interactive chart replaced with an image snapshot because this chart would make" in html_text
     assert not (Path(result["html_dashboard_assets_path"]) / "plotly-2.27.0.min.js").exists()
     assert any("plotly_spec" in chart for chart in manifest["charts"])
 
@@ -388,8 +388,8 @@ def test_write_production_dashboard_omits_plotly_chart_by_chart_when_payload_exc
     assert result["html_dashboard_plotly_budget"]["status"] == "over_budget"
     assert "production-dashboard-charts" in html_text
     assert "plotly-2.27.0.min.js" in html_text
-    assert "Some interactive charts were omitted in this dashboard" in html_text
-    assert "Interactive chart omitted because this chart&#x27;s Plotly payload exceeded" in html_text
+    assert "Some interactive charts were replaced with image snapshots" in html_text
+    assert "Interactive chart replaced with an image snapshot because this chart would make" in html_text
     chart_payload = json.loads(
         re.search(
             r'<script id="production-dashboard-charts" type="application/json">(.*?)</script>',
@@ -420,7 +420,7 @@ def test_write_production_dashboard_static_interactivity_suppresses_plotly_specs
     assert result["html_dashboard_plotly_budget"]["status"] == "within_budget"
     assert "production-dashboard-charts" not in html_text
     assert "plotly-2.27.0.min.js" not in html_text
-    assert "Interactive chart omitted because static dashboard mode was selected" in html_text
+    assert "Interactive chart replaced with an image snapshot because Snapshots only mode was selected" in html_text
     assert any("plotly_spec" in chart for chart in manifest["charts"])
 
 
@@ -449,7 +449,7 @@ def test_write_production_dashboard_falls_back_to_snapshots_when_plotly_bundle_m
     assert "plotly-2.27.0.min.js" not in html_text
     assert 'id="dashboard-visual-dialog"' not in html_text
     assert "the bundled Plotly runtime asset was not found" in html_text
-    assert "Interactive chart omitted because the bundled Plotly runtime asset was unavailable" in html_text
+    assert "Interactive chart replaced with an image snapshot because the interactive chart library was unavailable" in html_text
     assert 'class="chart-image"' in html_text
     assert not (assets_path / "plotly-2.27.0.min.js").exists()
     assert any("plotly_spec" in chart for chart in manifest["charts"])
@@ -458,17 +458,27 @@ def test_write_production_dashboard_falls_back_to_snapshots_when_plotly_bundle_m
 def test_write_production_dashboard_collapses_diagnostics_by_default(tmp_path) -> None:
     manifest = _production_dashboard_fixture(tmp_path)
     manifest["diagnostics"] = [
-        {"severity": "warning", "code": "sample", "message": "Diagnostic details"}
+        {"severity": "warning", "code": "sample", "message": "Diagnostic details"},
+        {
+            "severity": "info",
+            "code": "tabular_sqlite_column_pruning",
+            "message": "CSV/Excel analytics projected a reduced SQLite column set before materialization.",
+        },
+        {"severity": "info", "code": "debug", "message": "Backend diagnostics: raw_record_json"},
     ]
     output_file = tmp_path / "production_dashboard.html"
 
     write_production_dashboard(manifest, output_file)
 
     html_text = output_file.read_text(encoding="utf-8")
-    assert '<details class="diagnostics">' in html_text
-    assert "<summary>Diagnostics (1)</summary>" in html_text
-    assert "<h2>Diagnostics</h2>" in html_text
-    assert '<a class="section-chip" href="#diagnostics">Diagnostics</a>' in html_text
+    assert '<details id="attention-needed" class="dashboard-messages attention-needed" open>' in html_text
+    assert "<summary>Attention needed (1)</summary>" in html_text
+    assert "<summary>Run notes (1)</summary>" in html_text
+    assert "Only the columns needed for this dashboard were prepared" in html_text
+    assert "Backend diagnostics" not in html_text
+    assert "raw_record_json" not in html_text
+    assert "<h2>Diagnostics</h2>" not in html_text
+    assert '<a class="section-chip" href="#attention-needed">Attention needed</a>' in html_text
 
 
 def test_time_series_trace_drops_sparse_aggregation_nan_pairs() -> None:
@@ -1200,7 +1210,7 @@ def test_groupstats_html_renders_overall_and_ordered_pairwise_rows(tmp_path) -> 
 
     html_text = output_file.read_text(encoding="utf-8")
     assert '<details class="stats-section">' in html_text
-    assert "<summary>Groupstats (1 metric)</summary>" in html_text
+    assert "<summary>Group comparison (1 metric)</summary>" in html_text
     assert '<details class="stats-card">' in html_text
     assert "Overall group test" in html_text
     assert "<summary>Pairwise tests (3 rows)</summary>" in html_text

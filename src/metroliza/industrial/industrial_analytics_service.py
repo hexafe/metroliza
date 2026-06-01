@@ -795,7 +795,7 @@ def _prepare_production_groupstats_grouping(
             ).indices.items()
         }
     else:
-        grouped_indices = {"All production rows": active_positions}
+        grouped_indices = {"All rows": active_positions}
 
     return _PreparedProductionGroupstatsGrouping(
         dataframe=dataframe,
