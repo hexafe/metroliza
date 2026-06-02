@@ -25,10 +25,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -171,21 +171,21 @@ jobs:
         run: python scripts/check_release_hygiene.py
 
       - name: Checkout pinned hexafe-groupstats for security audit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: hexafe/hexafe-groupstats
           ref: 14cc60e7412fa2647a8906f3f8833d0d789fc552
           path: artifacts/security_siblings/hexafe-groupstats
 
       - name: Checkout pinned hexafe-plotstats for security audit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: hexafe/hexafe-plotstats
           ref: 1e2c72107d342f44a37e5fb78d7d76992ea60315
           path: artifacts/security_siblings/hexafe-plotstats
 
       - name: Checkout pinned oznak for security audit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: hexafe/oznak
           ref: 46eba3f63eab1d65e3117c238324eade9118d242
@@ -202,7 +202,7 @@ jobs:
       QT_QPA_PLATFORM: offscreen
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Qt runtime system libraries
         run: |
@@ -210,7 +210,7 @@ jobs:
           sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -366,10 +366,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -536,10 +536,10 @@ jobs:
     needs: [static-checks, unit-tests]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -617,10 +617,10 @@ jobs:
     needs: [static-checks, unit-tests]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -724,10 +724,10 @@ jobs:
       METROLIZA_RUN_PACKAGING_SMOKE: ${{ inputs.run_packaging_smoke }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -786,10 +786,10 @@ jobs:
       METROLIZA_RUN_GOOGLE_CONVERSION_SMOKE: ${{ inputs.run_google_conversion_smoke }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -815,10 +815,10 @@ jobs:
       METROLIZA_RUN_WINDOWS_STARTUP_BENCHMARK: ${{ inputs.run_windows_startup_benchmark }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: 'pip'
