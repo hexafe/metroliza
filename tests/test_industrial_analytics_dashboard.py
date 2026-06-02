@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+from io import BytesIO
 import json
 import re
 from pathlib import Path
@@ -418,6 +420,7 @@ def test_write_production_dashboard_static_interactivity_suppresses_plotly_specs
     assert result["html_dashboard_interactive_chart_count"] == 0
     assert result["html_dashboard_plotly_runtime_status"] == "static_snapshot_only"
     assert result["html_dashboard_plotly_budget"]["status"] == "within_budget"
+    assert result["html_dashboard_static_population_layer"]["status"] == "dashboard_static"
     assert "production-dashboard-charts" not in html_text
     assert "plotly-2.27.0.min.js" not in html_text
     assert "Interactive chart replaced with an image snapshot because Snapshots only mode was selected" in html_text
@@ -1057,6 +1060,79 @@ def test_static_population_layer_optimization_marked_available(monkeypatch) -> N
     assert option["group_label"] == "POPULATION"
     assert option["source_point_count"] == 8
     assert option["sample_point_limit"] == 5
+
+
+def test_static_population_layer_converts_single_population_group_under_sample_cap(
+    tmp_path,
+) -> None:
+    from PIL import Image
+
+    point_count = 5_000
+    frame = pd.DataFrame(
+        {
+            "process_datetime": pd.date_range(
+                "2026-05-10 08:00",
+                periods=point_count,
+                freq="s",
+                tz="UTC",
+            ),
+            "GROUP": ["POPULATION"] * point_count,
+            "length_mm": [10.0 + (index % 100) * 0.01 for index in range(point_count)],
+        }
+    )
+    manifest = build_production_dashboard_manifest(
+        frame=frame,
+        metric_selection=(ProductionMetricSelection("length_mm", "Length Mm"),),
+        aggregation_state=ProductionAggregationState(
+            time_bucket="none",
+            aggregation_methods=("mean",),
+            group_fields=("GROUP",),
+        ),
+        chart_selection=ProductionChartSelection(
+            time_series=True,
+            histogram=False,
+            violin=False,
+            box=False,
+            groupstats=False,
+        ),
+        dashboard_interactivity_options={
+            "mode": "sampled",
+            "sample_size": 50_000,
+            "population_layer_mode": "static",
+        },
+    )
+
+    result = write_production_dashboard(
+        manifest,
+        tmp_path / "single_population_static.html",
+        dashboard_interactivity_options={
+            "mode": "sampled",
+            "sample_size": 50_000,
+            "population_layer_mode": "static",
+        },
+    )
+
+    html_text = Path(result["html_dashboard_path"]).read_text(encoding="utf-8")
+    chart = _embedded_dashboard_charts(html_text)[0]
+    spec = chart["plotly_spec"]
+    image_source = spec["layout"]["images"][0]["source"]
+    png_bytes = base64.b64decode(image_source.removeprefix("data:image/png;base64,"))
+    image = Image.open(BytesIO(png_bytes))
+
+    assert [trace["name"] for trace in spec["data"]] == ["POPULATION static layer"]
+    assert spec["layout"]["xaxis"]["type"] == "date"
+    assert spec["layout"]["images"][0]["metroliza_static_population_layer_label"] == "POPULATION"
+    assert image.getchannel("A").getextrema()[1] >= 32
+    assert result["html_dashboard_static_population_layer"] == {
+        "mode": "static",
+        "applied_chart_count": 1,
+        "source_point_count": point_count,
+        "rendered_point_count": point_count,
+        "skipped_chart_count": 0,
+        "sample_size": 50_000,
+        "status": "applied",
+    }
+    assert "Interactive charts use all selected rows; random sampling was not needed." in html_text
 
 
 def _static_population_layer_manifest(point_count: int = 8) -> dict[str, object]:

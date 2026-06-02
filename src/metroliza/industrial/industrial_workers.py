@@ -578,12 +578,16 @@ class IndustrialOznakAccessCheckThread(WorkerCancellationMixin, QThread):
         username: str,
         password: str,
         timeout_seconds: int,
+        reference_filter_column: str | None = None,
+        reference_values: tuple[str, ...] = (),
     ):
         super().__init__()
         self.profile = profile
         self.username = username
         self.password = password
         self.timeout_seconds = timeout_seconds
+        self.reference_filter_column = reference_filter_column
+        self.reference_values = reference_values
         self.cancellation_token = None
         self._init_cancellation_state()
 
@@ -601,8 +605,8 @@ class IndustrialOznakAccessCheckThread(WorkerCancellationMixin, QThread):
                 password=self.password,
                 limit=1,
                 timeout_seconds=self.timeout_seconds,
-                reference_filter_column=None,
-                reference_values=(),
+                reference_filter_column=self.reference_filter_column,
+                reference_values=self.reference_values,
                 cancellation_token=self.cancellation_token,
                 progress_callback=self._emit_progress_from_diagnostic,
             )

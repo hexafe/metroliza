@@ -6,6 +6,8 @@
 - Canceling long parsing, export, and metadata tasks is more reliable from progress windows.
 - Dashboard plot visuals can now be customized.
 - CSV Summary dashboards can render dense POPULATION background layers as static images while keeping smaller groups interactive.
+- CSV Summary static POPULATION layers now remain visible when all selected rows belong to POPULATION and no random sampling is needed.
+- Oznak Check access no longer requests a reference column unless reference filtering is configured.
 - CSV Summary and Export dashboards now use clearer run notes, image snapshot wording, and group comparison takeaways.
 
 ## 2026.05 RC3 (build 260519)

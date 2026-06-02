@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 import zipfile
 from pathlib import Path
 
@@ -193,7 +195,7 @@ def test_run_tabular_file_analytics_reuses_shared_dashboard_and_parameter_workbo
     assert '<div class="metric-label">Rows rendered</div>' in html_text
     assert '<div class="metric-label">Chart detail</div>' in html_text
     assert (
-        '<span class="metric-value-line">Auto, 50,000 random row sample; '
+        '<span class="metric-value-line">Auto, all 6 rows rendered; '
         "POPULATION layer auto</span>"
     ) in html_text
     assert "Metroliza CSV Summary Dashboard" in html_text
@@ -380,6 +382,75 @@ def test_run_tabular_file_analytics_sampled_dashboard_renders_sampling_copy(
     assert '<p class="eyebrow">Metroliza CSV Summary Dashboard</p>' in html_text
     assert "<h1>sampled_dashboard_table.csv</h1>" in html_text
     assert "Cached production data dashboard" not in html_text
+
+
+def _embedded_dashboard_charts(html_text: str) -> list[dict[str, object]]:
+    match = re.search(
+        r'<script id="production-dashboard-charts" type="application/json">(.*?)</script>',
+        html_text,
+        re.DOTALL,
+    )
+    assert match is not None
+    return json.loads(match.group(1))
+
+
+def test_run_tabular_file_analytics_static_population_for_small_dataset_uses_all_rows(
+    tmp_path,
+) -> None:
+    input_file = tmp_path / "population_table.csv"
+    dashboard_file = tmp_path / "population_table_analytics.html"
+    row_count = 5_000
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=row_count, freq="s"),
+            "Reference ID": [f"R{index}" for index in range(row_count)],
+            "Length mm": [10.0 + (index % 100) * 0.01 for index in range(row_count)],
+        }
+    ).to_csv(input_file, index=False)
+    grouping_df = pd.DataFrame(
+        {
+            "REPORT_ID": list(range(1, row_count + 1)),
+            "GROUP": ["POPULATION"] * row_count,
+        }
+    )
+
+    result = run_tabular_file_analytics(
+        input_file=str(input_file),
+        output_dashboard_file=str(dashboard_file),
+        metric_selection=(ProductionMetricSelection("length_mm", display_label="Length mm"),),
+        grouping_df=grouping_df,
+        aggregation_state=ProductionAggregationState(
+            time_bucket="none",
+            aggregation_methods=("mean",),
+            group_fields=("GROUP",),
+        ),
+        chart_selection=ProductionChartSelection(
+            time_series=True,
+            histogram=False,
+            violin=False,
+            box=False,
+            groupstats=False,
+        ),
+        dashboard_interactivity_options={
+            "mode": "sampled",
+            "sample_size": 50_000,
+            "population_layer_mode": "static",
+        },
+    )
+
+    html_text = dashboard_file.read_text(encoding="utf-8")
+    chart = _embedded_dashboard_charts(html_text)[0]
+    spec = chart["plotly_spec"]
+
+    assert result.row_count == row_count
+    assert [trace["name"] for trace in spec["data"]] == ["POPULATION static layer"]
+    assert spec["layout"]["images"][0]["metroliza_static_population_layer_label"] == "POPULATION"
+    assert (
+        '<span class="metric-value-line">Interactive random sample, all 5,000 rows rendered; '
+        "POPULATION layer static image</span>"
+        in html_text
+    )
+    assert "Interactive charts use all selected rows; random sampling was not needed." in html_text
 
 
 def test_run_tabular_file_analytics_fast_detail_preserves_middle_population_group(

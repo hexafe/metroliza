@@ -154,6 +154,16 @@ Current plotstats hotfix pin:
   focused dashboard/contract tests passed, and the combined coverage gate passed
   with isolated real-Qt UI shards at `81%` against the raised `80%` threshold.
   Fresh pushed-SHA CI evidence is still required before merge/tag.
+- Oznak access-check and CSV Summary static POPULATION regression QA passed
+  locally on 2026-06-02. `Check access` no longer requests a reference column
+  unless reference filtering is configured, and 5,000-row all-POPULATION CSV
+  Summary time-series dashboards render a visible static POPULATION layer with
+  all rows when the sample cap is 50,000. Local gates passed: release metadata
+  sync, release hygiene, packaged PDF parser validation, security audit, focused
+  Oznak/dashboard tests (`17 passed` and `57 passed`), full headless suite
+  (`1828 passed, 261 skipped, 95 warnings, 60 subtests passed`), and the
+  CI-shaped combined coverage gate at `81%` against the `80%` threshold.
+  Fresh pushed-SHA CI evidence is still required before merge/tag.
 - Post-reorganization follow-up local audit passed after docs/reference cleanup,
   parser-plugin productionization coverage, architecture guardrail hardening, and
   release-status refresh.

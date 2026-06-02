@@ -112,6 +112,30 @@ def test_sync_dialog_adds_filter_column_to_runtime_profile_without_persisting(tm
     dialog.close()
 
 
+def test_sync_dialog_does_not_add_default_reference_column_without_filter_values(tmp_path):
+    _app()
+    db_path = str(tmp_path / "industrial.db")
+    repository = IndustrialDataRepository(db_path)
+    repository.upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="events",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+        allowed_columns=("event_id", "station"),
+        default_pagination_column="event_id",
+    )
+
+    dialog = IndustrialSyncDialog(db_file=db_path)
+    runtime_profile = dialog._profile_for_current_filter()
+
+    assert runtime_profile.allowed_columns == ("event_id", "station")
+    dialog.close()
+
+
 def test_sync_dialog_keeps_connection_test_enabled_until_references_are_selected(tmp_path):
     _app()
     db_path = str(tmp_path / "industrial.db")
@@ -408,6 +432,8 @@ def test_sync_dialog_access_check_thread_and_result_statuses(monkeypatch, tmp_pa
     dialog.on_oznak_progress("Reading one row")
     dialog.on_oznak_result({"status": "succeeded", "test_only": True, "row_count": 0})
     assert started[0].kwargs["profile"].profile_key == "assembly_mes"
+    assert started[0].kwargs["reference_filter_column"] is None
+    assert started[0].kwargs["reference_values"] == ()
     assert "0 rows visible" in dialog.status_label.text()
 
     dialog.on_oznak_result({"status": "succeeded", "test_only": True, "row_count": 2})
@@ -415,6 +441,63 @@ def test_sync_dialog_access_check_thread_and_result_statuses(monkeypatch, tmp_pa
     assert dialog._format_failed_result_status(
         {"status": "failed", "test_only": True, "diagnostics": {"warnings": ["password=secret"]}}
     ) == "Access check failed: password=<redacted>"
+    dialog.close()
+
+
+def test_sync_dialog_access_check_forwards_configured_reference_filter(monkeypatch, tmp_path):
+    _app()
+    config_path = tmp_path / "industrial_sources.yaml"
+    upsert_source_profile_in_config(
+        config_path,
+        build_source_profile(
+            profile_key="assembly_mes",
+            profile_name="Assembly MES",
+            source_db_alias="assembly_mes",
+            database_type="mssql",
+            host="mes.example.invalid",
+            port=1433,
+            database_name="plantdb",
+            source_object_name="events",
+            allowed_columns=("event_id", "station"),
+            default_pagination_column="event_id",
+        ),
+    )
+    started = []
+
+    class Signal:
+        def connect(self, callback):
+            self.callback = callback
+
+    class FakeAccessThread:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.progress_message = Signal()
+            self.result_ready = Signal()
+            self.error_occurred = Signal()
+            self.finished = Signal()
+            started.append(self)
+
+        def start(self):
+            self.started = True
+
+        def isRunning(self):
+            return False
+
+    monkeypatch.setattr(industrial_sync_dialog, "IndustrialOznakAccessCheckThread", FakeAccessThread)
+    dialog = IndustrialSyncDialog(
+        db_file=None,
+        config_path=config_path,
+        access_only=True,
+        filter_state=IndustrialFilterState(reference_column="serial_number", references=("SN-1",)),
+    )
+    dialog.username_edit.setText("operator")
+    dialog.password_edit.setText("secret-password")
+
+    dialog.test_connection()
+
+    assert started[0].kwargs["reference_filter_column"] == "serial_number"
+    assert started[0].kwargs["reference_values"] == ("SN-1",)
+    assert "serial_number" in started[0].kwargs["profile"].allowed_columns
     dialog.close()
 
 

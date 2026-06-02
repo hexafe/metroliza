@@ -232,6 +232,8 @@ class IndustrialSyncDialog(QDialog):
         profile = self.current_profile()
         if profile is None:
             raise ValueError("Create or select a production source before syncing.")
+        if not self.filter_state.references:
+            return profile
         filter_column = self.filter_state.reference_column
         if not filter_column or filter_column in profile.allowed_columns:
             return profile
@@ -288,7 +290,13 @@ class IndustrialSyncDialog(QDialog):
             set_status_variant(self.status_label, "neutral")
             return
         try:
-            profile = self._profile_for_current_filter()
+            profile = (
+                self._profile_for_current_filter()
+                if (not test_only or self.filter_state.references)
+                else self.current_profile()
+            )
+            if profile is None:
+                raise ValueError("Create or select a production source before checking access.")
             username, password = self._read_credentials()
             if self.access_only and not test_only:
                 raise ValueError(
@@ -317,6 +325,10 @@ class IndustrialSyncDialog(QDialog):
                 username=username,
                 password=password,
                 timeout_seconds=self.timeout_spin.value(),
+                reference_filter_column=self.filter_state.reference_column
+                if self.filter_state.references
+                else None,
+                reference_values=self.filter_state.references,
             )
         else:
             self.oznak_sync_thread = IndustrialOznakSyncThread(

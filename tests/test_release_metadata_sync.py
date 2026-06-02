@@ -55,6 +55,8 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
                 "- Canceling long parsing, export, and metadata tasks is more reliable from progress windows<br>",
                 "- Dashboard plot visuals can now be customized<br>",
                 "- CSV Summary dashboards can render dense POPULATION background layers as static images while keeping smaller groups interactive<br>",
+                "- CSV Summary static POPULATION layers now remain visible when all selected rows belong to POPULATION and no random sampling is needed<br>",
+                "- Oznak Check access no longer requests a reference column unless reference filtering is configured<br>",
                 "- CSV Summary and Export dashboards now use clearer run notes, image snapshot wording, and group comparison takeaways<br>",
             ],
         )

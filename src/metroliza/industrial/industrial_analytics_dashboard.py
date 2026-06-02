@@ -619,6 +619,19 @@ def _static_population_layer_option_for_chart(chart: dict[str, Any]) -> dict[str
         for index, trace in enumerate(traces)
         if _is_population_marker_trace(trace)
     ]
+    existing_option = _existing_static_population_layer_option(chart)
+    if (
+        not population_indexes
+        and existing_option is not None
+        and _is_population_layer_label(existing_option.get("group_label"))
+    ):
+        marker_indexes = [
+            index
+            for index, trace in enumerate(traces)
+            if _is_static_population_candidate_marker_trace(trace)
+        ]
+        if len(marker_indexes) == 1:
+            population_indexes = marker_indexes
     if len(population_indexes) != 1:
         return None
     population_trace = traces[population_indexes[0]]
@@ -639,6 +652,16 @@ def _static_population_layer_option_for_chart(chart: dict[str, Any]) -> dict[str
         }
     )
     return option
+
+
+def _existing_static_population_layer_option(chart: dict[str, Any]) -> dict[str, Any] | None:
+    raw_options = chart.get("optimization_options")
+    if not isinstance(raw_options, list):
+        return None
+    for option in raw_options:
+        if isinstance(option, dict) and option.get("id") == STATIC_POPULATION_LAYER_OPTIMIZATION:
+            return option
+    return None
 
 
 def _ensure_static_population_layer_option(chart: dict[str, Any]) -> dict[str, Any]:
@@ -700,6 +723,14 @@ def _convert_static_population_layer(
         for index, trace in enumerate(traces)
         if _is_population_marker_trace(trace)
     ]
+    if not population_indexes and _is_population_layer_label(option.get("group_label")):
+        marker_indexes = [
+            index
+            for index, trace in enumerate(traces)
+            if _is_static_population_candidate_marker_trace(trace)
+        ]
+        if len(marker_indexes) == 1:
+            population_indexes = marker_indexes
     if len(population_indexes) != 1:
         option["skipped_reason"] = "ambiguous_population_layer"
         return {"applied": False}
@@ -777,11 +808,17 @@ def _convert_static_population_layer(
 def _is_population_marker_trace(trace: Any) -> bool:
     if not isinstance(trace, dict):
         return False
-    trace_type = str(trace.get("type") or "").casefold()
-    mode = str(trace.get("mode") or "").casefold()
-    if trace_type != "scatter" or "markers" not in mode:
+    if not _is_static_population_candidate_marker_trace(trace):
         return False
     return _is_population_layer_label(_population_trace_label(trace))
+
+
+def _is_static_population_candidate_marker_trace(trace: Any) -> bool:
+    if not isinstance(trace, dict):
+        return False
+    trace_type = str(trace.get("type") or "").casefold()
+    mode = str(trace.get("mode") or "").casefold()
+    return trace_type == "scatter" and "markers" in mode
 
 
 def _population_trace_label(trace: dict[str, Any]) -> str:
@@ -959,6 +996,8 @@ def _apply_static_population_axis_ranges(layout: dict[str, Any], bounds: dict[st
     x_mode = str(bounds.get("x_mode") or "linear")
     xaxis = layout.setdefault("xaxis", {})
     if isinstance(xaxis, dict):
+        if x_mode == "date":
+            xaxis["type"] = "date"
         xaxis["range"] = [
             _display_x_value(float(bounds["x_min"]), mode=x_mode),
             _display_x_value(float(bounds["x_max"]), mode=x_mode),
@@ -2403,7 +2442,11 @@ def _chart_group_columns(
     selected_columns = [
         column
         for column in aggregation.group_fields
-        if column in frame.columns and frame[column].nunique(dropna=True) > 1
+        if column in frame.columns
+        and (
+            frame[column].nunique(dropna=True) > 1
+            or _column_has_single_population_label(frame, column)
+        )
     ]
     if (
         "reference_cohort" in frame.columns
@@ -2415,7 +2458,10 @@ def _chart_group_columns(
 
 
 def _preferred_group_columns(frame: pd.DataFrame) -> list[str]:
-    if "GROUP" in frame.columns and frame["GROUP"].nunique(dropna=True) > 1:
+    if "GROUP" in frame.columns and (
+        frame["GROUP"].nunique(dropna=True) > 1
+        or _column_has_single_population_label(frame, "GROUP")
+    ):
         return ["GROUP"]
     if "reference_cohort" in frame.columns and frame["reference_cohort"].nunique(dropna=True) > 1:
         return ["reference_cohort"]
@@ -2423,6 +2469,17 @@ def _preferred_group_columns(frame: pd.DataFrame) -> list[str]:
         if column in frame.columns and frame[column].nunique(dropna=True) > 1:
             return [column]
     return []
+
+
+def _column_has_single_population_label(frame: pd.DataFrame, column: str) -> bool:
+    if column not in frame.columns:
+        return False
+    labels = [
+        str(label).strip()
+        for label in frame[column].dropna().unique().tolist()
+        if str(label).strip()
+    ]
+    return len(labels) == 1 and _is_population_layer_label(labels[0])
 
 
 def _grouped_frames(
@@ -2633,11 +2690,21 @@ def _render_time_series_raw_layer_png(
     try:
         fig.patch.set_alpha(0.0)
         ax.set_facecolor((1.0, 1.0, 1.0, 0.0))
+        point_count = int(len(x_values))
+        if point_count < 10_000:
+            marker_size = 3.2
+            marker_alpha = 0.48
+        elif point_count < 30_000:
+            marker_size = 1.1
+            marker_alpha = 0.32
+        else:
+            marker_size = 0.24
+            marker_alpha = 0.22
         ax.scatter(
             x_values,
             y_values,
-            s=0.16,
-            alpha=0.18,
+            s=marker_size,
+            alpha=marker_alpha,
             c=color,
             marker=".",
             linewidths=0,
@@ -4177,17 +4244,28 @@ def _dashboard_takeaway_rows(
         sample_size = _summary_int(interactivity.get("sample_size"))
         population_layer_mode = str(interactivity.get("population_layer_mode") or "auto").strip()
         if mode in {"auto", "sampled"} and sample_size:
-            add(
-                "Chart detail",
-                f"Interactive charts use a reproducible random sample of up to "
-                f"{sample_size:,} rows; aggregate tables and group comparison use all selected rows.",
-            )
+            if (
+                source_rows is not None
+                and rendered_rows is not None
+                and source_rows <= sample_size
+                and rendered_rows >= source_rows
+            ):
+                add(
+                    "Chart detail",
+                    "Interactive charts use all selected rows; random sampling was not needed.",
+                )
+            else:
+                add(
+                    "Chart detail",
+                    f"Interactive charts use a reproducible random sample of up to "
+                    f"{sample_size:,} rows; aggregate tables and group comparison use all selected rows.",
+                )
         elif mode == "static":
             add("Chart detail", "Charts are saved as static snapshots for faster browser loading.")
         elif mode == "full":
             add("Chart detail", "Interactive charts use all selected rows unless dashboard size limits apply.")
         if population_layer_mode:
-            add("POPULATION layer", f"POPULATION layer mode: {population_layer_mode}.")
+            add("POPULATION mode", f"POPULATION layer mode: {population_layer_mode}.")
     elif chart_detail:
         add("Chart detail", chart_detail)
 
@@ -4211,7 +4289,7 @@ def _dashboard_takeaway_rows(
     static_population = summary.get("static_population_layer")
     if isinstance(static_population, dict) and _summary_int(static_population.get("applied_chart_count")):
         add(
-            "POPULATION layer",
+            "Static layer",
             "Static POPULATION layers keep the process background visible; hover and point selection are unavailable for that background layer.",
         )
 

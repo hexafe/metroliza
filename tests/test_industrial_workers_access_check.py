@@ -79,6 +79,56 @@ def test_access_check_thread_uses_bounded_fetch_without_local_repository(monkeyp
     assert fetch_kwargs["reference_values"] == ()
 
 
+def test_access_check_thread_forwards_explicit_reference_filter(monkeypatch):
+    profile = build_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+        source_object_name="events",
+        allowed_columns=("event_id", "serial_number"),
+        default_pagination_column="event_id",
+    )
+    status = OznakAdapterStatus(available=True, version="0.1.0", fetch_available=True)
+    result = OznakAdapterFetchResult(
+        status=status,
+        records=({"source_primary_key": "ROW-1", "raw_record": {"event_id": "ROW-1"}},),
+        row_count=1,
+        implemented=True,
+        diagnostics={"stage": "mapped"},
+    )
+    fetch_kwargs = {}
+
+    monkeypatch.setattr(industrial_workers, "get_oznak_adapter_status", lambda: status)
+    monkeypatch.setattr(industrial_workers, "create_oznak_cancellation_token", lambda: None)
+
+    def fake_fetch(*args, **kwargs):
+        fetch_kwargs.update(kwargs)
+        return result
+
+    monkeypatch.setattr(industrial_workers, "fetch_oznak_records_for_source_profile", fake_fetch)
+
+    thread = IndustrialOznakAccessCheckThread(
+        profile=profile,
+        username="operator",
+        password="secret-password",
+        timeout_seconds=30,
+        reference_filter_column="serial_number",
+        reference_values=("SN-1",),
+    )
+    emitted = []
+    _capture_signal(thread.result_ready, emitted)
+
+    thread.run()
+
+    assert emitted[0]["status"] == "succeeded"
+    assert fetch_kwargs["reference_filter_column"] == "serial_number"
+    assert fetch_kwargs["reference_values"] == ("SN-1",)
+
+
 def test_access_check_thread_redacts_failed_error(monkeypatch):
     profile = build_source_profile(
         profile_key="assembly_mes",

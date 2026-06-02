@@ -470,6 +470,8 @@ def run_tabular_file_analytics(
             filtered_applied=filtered.applied,
             grouped_applied=grouped.applied,
             interactivity_options=dashboard_interactivity,
+            source_row_count=len(cohorted.dataframe.index),
+            dashboard_row_count=len(dashboard_frame.index),
         ),
         cancel_check=cancel_check,
         plotly_visual_settings=dashboard_visual_settings_to_plotly_settings(
@@ -565,7 +567,12 @@ def _normalize_dashboard_interactivity_options(
     }
 
 
-def _dashboard_interactivity_label(options: dict[str, int | str]) -> str:
+def _dashboard_interactivity_label(
+    options: dict[str, int | str],
+    *,
+    source_row_count: int | None = None,
+    dashboard_row_count: int | None = None,
+) -> str:
     labels = {
         "auto": "Auto",
         "sampled": "Interactive random sample",
@@ -579,7 +586,15 @@ def _dashboard_interactivity_label(options: dict[str, int | str]) -> str:
             sample_size = int(options.get("sample_size") or TABULAR_FAST_DASHBOARD_ROW_LIMIT)
         except (TypeError, ValueError):
             sample_size = int(TABULAR_FAST_DASHBOARD_ROW_LIMIT)
-        detail = f"{label}, {sample_size:,} random row sample"
+        if (
+            source_row_count is not None
+            and dashboard_row_count is not None
+            and int(source_row_count) <= sample_size
+            and int(dashboard_row_count) >= int(source_row_count)
+        ):
+            detail = f"{label}, all {int(source_row_count):,} rows rendered"
+        else:
+            detail = f"{label}, {sample_size:,} random row sample"
     else:
         detail = label
     population_label = {
@@ -597,6 +612,8 @@ def _tabular_dashboard_context(
     filtered_applied: bool,
     grouped_applied: bool,
     interactivity_options: dict[str, int | str],
+    source_row_count: int | None = None,
+    dashboard_row_count: int | None = None,
 ) -> dict[str, object]:
     source_files = tuple(loaded.source_files or ())
     if not source_files and request.input_file:
@@ -614,7 +631,11 @@ def _tabular_dashboard_context(
         "sheet_label": sheet_label,
         "filter_label": "Applied" if filtered_applied else "None",
         "group_label": "Manual groups" if grouped_applied else "None",
-        "chart_detail": _dashboard_interactivity_label(interactivity_options),
+        "chart_detail": _dashboard_interactivity_label(
+            interactivity_options,
+            source_row_count=source_row_count,
+            dashboard_row_count=dashboard_row_count,
+        ),
     }
 
 
