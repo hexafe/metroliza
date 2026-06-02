@@ -1,6 +1,6 @@
-# Group Analysis Worksheet Manual
+# Group Analysis Guide
 
-This folder contains the end-user manual for the exported **Group Analysis worksheet**.
+This folder contains the end-user guide for exported **Group Analysis** output.
 
 Files in this folder:
 

@@ -94,11 +94,36 @@ DASHBOARD_AGGREGATE_TRACE_TARGET_POINTS = 2_500
 DEFAULT_PLOTLY_SPEC_COUNT_BUDGET = 160
 DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET = 8_000_000
 STATIC_POPULATION_LAYER_OPTIMIZATION = "static_population_layer"
+_STATIC_POPULATION_SOURCE_XY_KEY = "_metroliza_static_population_source_xy"
+_STATIC_POPULATION_DENSITY_POINT_THRESHOLD = DASHBOARD_RAW_POINT_LIMIT
 
 
 def _strip_group_count_suffix(label: str) -> str:
     stripped = _GROUP_COUNT_SUFFIX_PATTERN.sub("", str(label or "").strip()).strip()
     return stripped or str(label or "").strip()
+
+
+def _metric_population_source_frame(
+    source_frame: pd.DataFrame | None,
+    metric_field_name: str,
+    group_columns: list[str],
+    *,
+    default_name: str,
+) -> pd.DataFrame | None:
+    if source_frame is None or source_frame.empty:
+        return None
+    required_columns = ["process_datetime", metric_field_name, *group_columns]
+    if any(column not in source_frame.columns for column in required_columns):
+        return None
+    population_group = _population_layer_group(
+        source_frame,
+        group_columns,
+        default_name=default_name,
+    )
+    if population_group is None:
+        return None
+    _label, group = population_group
+    return group.loc[group[metric_field_name].notna(), required_columns].copy()
 
 
 def build_production_dashboard_manifest(
@@ -119,6 +144,7 @@ def build_production_dashboard_manifest(
     dashboard_interactivity_options: Any = None,
     source_row_count: int | None = None,
     dashboard_row_count: int | None = None,
+    static_population_source_frame: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """Build a renderer-neutral manifest for the production analytics dashboard."""
 
@@ -146,9 +172,16 @@ def build_production_dashboard_manifest(
             continue
         chart_group_columns = _chart_group_columns(metric_frame, aggregation)
         if charts.time_series:
+            metric_population_source_frame = _metric_population_source_frame(
+                static_population_source_frame,
+                metric.field_name,
+                chart_group_columns,
+                default_name=metric.display_label,
+            )
             specs = _build_time_series_charts(
                 metric,
                 raw_frame=metric_frame,
+                static_population_source_frame=metric_population_source_frame,
                 aggregate_frame=aggregate_frame,
                 aggregation=aggregation,
                 group_columns=chart_group_columns,
@@ -335,6 +368,7 @@ def write_production_dashboard(
         reason=plotly_budget_reason,
     )
     _apply_plotly_runtime_summary(dashboard_manifest, status=plotly_runtime_status)
+    _strip_static_population_private_payloads(dashboard_manifest)
 
     html_text = _render_dashboard_html(
         dashboard_manifest,
@@ -389,7 +423,9 @@ def _copy_manifest_for_render(manifest: dict[str, Any]) -> dict[str, Any]:
                 chart_copy["plotly_spec"] = _clone_jsonable(plotly_spec)
             optimization_options = chart.get("optimization_options")
             if isinstance(optimization_options, list):
-                chart_copy["optimization_options"] = _clone_jsonable(optimization_options)
+                chart_copy["optimization_options"] = _clone_optimization_options(
+                    optimization_options
+                )
             copied_charts.append(chart_copy)
         manifest_copy["charts"] = copied_charts
     return manifest_copy
@@ -397,6 +433,38 @@ def _copy_manifest_for_render(manifest: dict[str, Any]) -> dict[str, Any]:
 
 def _clone_jsonable(value: Any) -> Any:
     return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+
+
+def _clone_optimization_options(options: list[Any]) -> list[Any]:
+    cloned: list[Any] = []
+    for option in options:
+        if not isinstance(option, dict):
+            cloned.append(_clone_jsonable(option))
+            continue
+        private_source = option.get(_STATIC_POPULATION_SOURCE_XY_KEY)
+        public_option = {
+            key: value
+            for key, value in option.items()
+            if key != _STATIC_POPULATION_SOURCE_XY_KEY
+        }
+        cloned_option = _clone_jsonable(public_option)
+        if private_source is not None:
+            cloned_option[_STATIC_POPULATION_SOURCE_XY_KEY] = private_source
+        cloned.append(cloned_option)
+    return cloned
+
+
+def _strip_static_population_private_payloads(manifest: dict[str, Any]) -> None:
+    charts = manifest.get("charts") if isinstance(manifest.get("charts"), list) else []
+    for chart in charts:
+        if not isinstance(chart, dict):
+            continue
+        options = chart.get("optimization_options")
+        if not isinstance(options, list):
+            continue
+        for option in options:
+            if isinstance(option, dict):
+                option.pop(_STATIC_POPULATION_SOURCE_XY_KEY, None)
 
 
 def _iter_plotly_specs(manifest: dict[str, Any]):
@@ -487,6 +555,8 @@ def _apply_static_population_layer_options(
         "applied_chart_count": 0,
         "source_point_count": 0,
         "rendered_point_count": 0,
+        "contributed_point_count": 0,
+        "render_strategy_counts": {},
         "skipped_chart_count": 0,
     }
     manifest_summary = manifest.get("summary")
@@ -524,6 +594,11 @@ def _apply_static_population_layer_options(
                 summary["applied_chart_count"] += 1
                 summary["source_point_count"] += int(already_static.get("source_point_count") or 0)
                 summary["rendered_point_count"] += int(already_static.get("rendered_point_count") or 0)
+                summary["contributed_point_count"] += int(
+                    already_static.get("contributed_point_count")
+                    or already_static.get("rendered_point_count")
+                    or 0
+                )
                 continue
             if selected_mode == "static" and _chart_has_population_like_plotly_trace(chart):
                 _mark_static_population_layer_skipped(
@@ -547,6 +622,12 @@ def _apply_static_population_layer_options(
             summary["applied_chart_count"] += 1
             summary["source_point_count"] += int(result.get("source_point_count") or 0)
             summary["rendered_point_count"] += int(result.get("rendered_point_count") or 0)
+            summary["contributed_point_count"] += int(result.get("contributed_point_count") or 0)
+            render_strategy = str(result.get("render_strategy") or "").strip()
+            if render_strategy:
+                strategy_counts = summary["render_strategy_counts"]
+                if isinstance(strategy_counts, dict):
+                    strategy_counts[render_strategy] = int(strategy_counts.get(render_strategy) or 0) + 1
         else:
             summary["skipped_chart_count"] += 1
     if summary["applied_chart_count"]:
@@ -585,6 +666,7 @@ def _static_population_layer_existing_result(
         return None
     source_point_count = 0
     rendered_point_count = 0
+    contributed_point_count = 0
     raw_options = chart.get("optimization_options")
     if isinstance(raw_options, list):
         for option in raw_options:
@@ -594,13 +676,22 @@ def _static_population_layer_existing_result(
                 continue
             source_point_count += int(option.get("source_point_count") or 0)
             rendered_point_count += int(option.get("sample_point_limit") or 0)
+            contributed_point_count += int(
+                option.get("contributed_point_count")
+                or option.get("sample_point_limit")
+                or 0
+            )
             option["applied"] = True
             option["selected_mode"] = selected_mode
             option["rendered_point_count"] = int(option.get("sample_point_limit") or 0)
+            option.setdefault("contributed_point_count", int(option.get("sample_point_limit") or 0))
+            option.setdefault("render_strategy", "sampled_marker_image")
     return {
         "applied": True,
         "source_point_count": source_point_count,
         "rendered_point_count": rendered_point_count,
+        "contributed_point_count": contributed_point_count,
+        "render_strategy": "sampled_marker_image",
     }
 
 
@@ -635,8 +726,14 @@ def _static_population_layer_option_for_chart(chart: dict[str, Any]) -> dict[str
     if len(population_indexes) != 1:
         return None
     population_trace = traces[population_indexes[0]]
-    source_point_count = _trace_point_count(population_trace)
-    if source_point_count <= 0:
+    trace_point_count = _trace_point_count(population_trace)
+    existing_source_count = (
+        int(existing_option.get("source_point_count") or 0)
+        if isinstance(existing_option, dict)
+        else 0
+    )
+    source_point_count = max(int(trace_point_count), int(existing_source_count))
+    if source_point_count <= 0 or trace_point_count <= 0:
         return None
     option = _ensure_static_population_layer_option(chart)
     option.update(
@@ -646,6 +743,7 @@ def _static_population_layer_option_for_chart(chart: dict[str, Any]) -> dict[str
             "reason": "population_marker_layer_available",
             "group_label": _population_trace_label(population_trace),
             "source_point_count": int(source_point_count),
+            "plotly_trace_point_count": int(trace_point_count),
             "sample_point_limit": int(DASHBOARD_RAW_POINT_LIMIT),
             "supported": True,
             "applied": False,
@@ -744,20 +842,54 @@ def _convert_static_population_layer(
     if not all_bounds:
         option["skipped_reason"] = "axis_bounds_unavailable"
         return {"applied": False}
+    source_xy = _static_population_source_xy(option)
+    if not source_xy.empty and str(source_xy["__x_mode"].iloc[0]) == str(all_bounds.get("x_mode")):
+        render_xy = source_xy
+        all_bounds = _axis_bounds_with_xy_frame(all_bounds, source_xy)
+    else:
+        render_xy = xy
     sample_limit = int(option.get("sample_point_limit") or DASHBOARD_RAW_POINT_LIMIT)
-    rendered = _sample_xy_frame(
-        xy,
-        min(len(xy.index), max(1, sample_limit)),
-        seed=_stable_seed(str(chart.get("id") or ""), str(option.get("group_label") or "POPULATION")),
-    )
     color = _trace_color(population_trace) or _plot_color(population_index, "POPULATION")
-    png_bytes = _render_time_series_raw_layer_png(
-        rendered["__x_numeric"].to_numpy(dtype=float),
-        rendered["__y"].to_numpy(dtype=float),
-        x_range=(all_bounds["x_min"], all_bounds["x_max"]),
-        y_range=(all_bounds["y_min"], all_bounds["y_max"]),
-        color=color,
-    )
+    render_strategy = "marker_static"
+    non_empty_pixel_count = None
+    try:
+        if len(render_xy.index) > _STATIC_POPULATION_DENSITY_POINT_THRESHOLD:
+            png_bytes, non_empty_pixel_count = _render_time_series_density_layer_png(
+                render_xy["__x_numeric"].to_numpy(dtype=float),
+                render_xy["__y"].to_numpy(dtype=float),
+                x_range=(all_bounds["x_min"], all_bounds["x_max"]),
+                y_range=(all_bounds["y_min"], all_bounds["y_max"]),
+                color=color,
+            )
+            render_strategy = "full_density"
+        else:
+            png_bytes = _render_time_series_raw_layer_png(
+                render_xy["__x_numeric"].to_numpy(dtype=float),
+                render_xy["__y"].to_numpy(dtype=float),
+                x_range=(all_bounds["x_min"], all_bounds["x_max"]),
+                y_range=(all_bounds["y_min"], all_bounds["y_max"]),
+                color=color,
+            )
+    except Exception as exc:
+        rendered_fallback = _sample_xy_frame(
+            render_xy,
+            min(len(render_xy.index), max(1, sample_limit)),
+            seed=_stable_seed(
+                str(chart.get("id") or ""),
+                str(option.get("group_label") or "POPULATION"),
+                "static-fallback",
+            ),
+        )
+        png_bytes = _render_time_series_raw_layer_png(
+            rendered_fallback["__x_numeric"].to_numpy(dtype=float),
+            rendered_fallback["__y"].to_numpy(dtype=float),
+            x_range=(all_bounds["x_min"], all_bounds["x_max"]),
+            y_range=(all_bounds["y_min"], all_bounds["y_max"]),
+            color=color,
+        )
+        render_xy = rendered_fallback
+        render_strategy = "sampled_marker_fallback"
+        option["render_warning"] = f"full_density_render_failed: {type(exc).__name__}"
     layout = plotly_spec.setdefault("layout", {})
     if not isinstance(layout, dict):
         layout = {}
@@ -775,6 +907,7 @@ def _convert_static_population_layer(
             label=str(option.get("group_label") or "POPULATION"),
             color=color,
             image_index=image_index,
+            render_strategy=render_strategy,
         ),
     )
     _apply_static_population_axis_ranges(layout, all_bounds)
@@ -782,26 +915,43 @@ def _convert_static_population_layer(
         "POPULATION layer rendered as a static image; hover and point selection are unavailable "
         "for that background layer."
     )
+    if render_strategy == "full_density":
+        note = (
+            "POPULATION layer rendered as a static density image from all source points; "
+            "hover and point selection are unavailable for that background layer."
+        )
+    elif render_strategy == "sampled_marker_fallback":
+        note = (
+            f"POPULATION layer rendered as a sampled static fallback with {len(render_xy.index):,} "
+            "points; hover and point selection are unavailable for that background layer."
+        )
     notes = list(chart.get("notes") or []) if isinstance(chart.get("notes"), list) else []
     if note not in notes:
         notes.append(note)
     chart["notes"] = notes
-    rendered_count = int(len(rendered.index))
-    source_count = int(len(xy.index))
+    rendered_count = int(len(render_xy.index))
+    source_count = int(max(len(xy.index), int(option.get("source_point_count") or 0)))
+    contributed_count = rendered_count if render_strategy == "sampled_marker_fallback" else source_count
     option.update(
         {
             "applied": True,
             "rendered_point_count": rendered_count,
             "source_point_count": source_count,
+            "contributed_point_count": contributed_count,
+            "render_strategy": render_strategy,
             "image_index": int(image_index),
             "raster_width": 900,
             "raster_height": 520,
         }
     )
+    if non_empty_pixel_count is not None:
+        option["non_empty_pixel_count"] = int(non_empty_pixel_count)
     return {
         "applied": True,
         "source_point_count": source_count,
         "rendered_point_count": rendered_count,
+        "contributed_point_count": contributed_count,
+        "render_strategy": render_strategy,
     }
 
 
@@ -920,6 +1070,36 @@ def _plotly_trace_axis_bounds(traces: list[Any]) -> dict[str, Any] | None:
     }
 
 
+def _axis_bounds_with_xy_frame(
+    bounds: dict[str, Any],
+    xy: pd.DataFrame,
+) -> dict[str, Any]:
+    if xy.empty:
+        return dict(bounds)
+    merged = dict(bounds)
+    merged["x_min"] = min(float(bounds["x_min"]), float(xy["__x_numeric"].min()))
+    merged["x_max"] = max(float(bounds["x_max"]), float(xy["__x_numeric"].max()))
+    merged["y_min"] = min(float(bounds["y_min"]), float(xy["__y"].min()))
+    merged["y_max"] = max(float(bounds["y_max"]), float(xy["__y"].max()))
+    if np.isclose(float(merged["x_min"]), float(merged["x_max"])):
+        merged["x_max"] = float(merged["x_min"]) + 1.0
+    if np.isclose(float(merged["y_min"]), float(merged["y_max"])):
+        merged["y_min"] = float(merged["y_min"]) - 0.5
+        merged["y_max"] = float(merged["y_max"]) + 0.5
+    return merged
+
+
+def _static_population_source_xy(option: dict[str, Any]) -> pd.DataFrame:
+    source = option.get(_STATIC_POPULATION_SOURCE_XY_KEY)
+    if isinstance(source, pd.DataFrame):
+        required = {"__x_numeric", "__y", "__x_mode"}
+        if required.issubset(source.columns):
+            return source.replace([np.inf, -np.inf], np.nan).dropna(
+                subset=["__x_numeric", "__y"]
+            )
+    return pd.DataFrame(columns=["__x_numeric", "__y", "__x_mode"])
+
+
 def _append_static_population_layout_image(
     layout: dict[str, Any],
     *,
@@ -958,6 +1138,7 @@ def _static_population_layer_proxy_trace(
     label: str,
     color: str,
     image_index: int,
+    render_strategy: str = "marker_static",
 ) -> dict[str, Any]:
     target_id = f"series:{normalize_population_label_key(label)}"
     return {
@@ -980,11 +1161,13 @@ def _static_population_layer_proxy_trace(
             "metroliza_target_id": target_id,
             "metroliza_series_id": normalize_population_label_key(label),
             "metroliza_legend_label": label,
+            "metroliza_render_strategy": render_strategy,
             "metroliza_chart_kind": "scatter",
             "metroliza_style_capabilities": [],
         },
         "metroliza_static_population_layer_index": int(image_index),
         "metroliza_static_population_layer_label": label,
+        "metroliza_static_population_render_strategy": render_strategy,
     }
 
 
@@ -1158,6 +1341,7 @@ def _build_time_series_charts(
     metric: ProductionMetricSelection,
     *,
     raw_frame: pd.DataFrame,
+    static_population_source_frame: pd.DataFrame | None = None,
     aggregate_frame: pd.DataFrame,
     aggregation: ProductionAggregationState,
     group_columns: list[str] | None = None,
@@ -1173,6 +1357,14 @@ def _build_time_series_charts(
         raw_frame,
         x_column="process_datetime",
         y_column=metric.field_name,
+    )
+    static_population_options = _time_series_optimization_options(
+        raw_frame,
+        static_population_source_frame=static_population_source_frame,
+        x_column="process_datetime",
+        y_column=metric.field_name,
+        group_columns=group_columns,
+        default_name=metric.display_label,
     )
     use_hybrid_raw = (
         str(population_layer_mode or "auto").strip().casefold() != "interactive"
@@ -1223,6 +1415,7 @@ def _build_time_series_charts(
                 hybrid = _build_hybrid_time_series_chart(
                     metric,
                     raw_frame=raw_frame,
+                    static_population_source_frame=static_population_source_frame,
                     aggregate_traces=overlay_traces,
                     group_columns=group_columns,
                     chart_id=f"time-series-{metric.field_name}-raw-aggregate",
@@ -1258,6 +1451,7 @@ def _build_time_series_charts(
                         },
                         plotly_visual_settings=plotly_visual_settings,
                         include_plotly_specs=include_plotly_specs,
+                        optimization_options=static_population_options,
                     )
                 )
         return charts
@@ -1266,6 +1460,7 @@ def _build_time_series_charts(
         hybrid = _build_hybrid_time_series_chart(
             metric,
             raw_frame=raw_frame,
+            static_population_source_frame=static_population_source_frame,
             aggregate_traces=_display_aggregate_time_series_traces(
                 raw_frame,
                 x_column="process_datetime",
@@ -1306,6 +1501,7 @@ def _build_time_series_charts(
             },
             plotly_visual_settings=plotly_visual_settings,
             include_plotly_specs=include_plotly_specs,
+            optimization_options=static_population_options,
         )
     ]
 
@@ -1559,6 +1755,7 @@ def _build_hybrid_time_series_chart(
     metric: ProductionMetricSelection,
     *,
     raw_frame: pd.DataFrame,
+    static_population_source_frame: pd.DataFrame | None = None,
     aggregate_traces: list[dict[str, Any]],
     group_columns: list[str],
     chart_id: str,
@@ -1571,6 +1768,7 @@ def _build_hybrid_time_series_chart(
 ) -> dict[str, Any]:
     optimization_options = _time_series_optimization_options(
         raw_frame,
+        static_population_source_frame=static_population_source_frame,
         x_column="process_datetime",
         y_column=metric.field_name,
         group_columns=group_columns,
@@ -1625,6 +1823,7 @@ def _build_hybrid_time_series_chart(
 def _time_series_optimization_options(
     frame: pd.DataFrame,
     *,
+    static_population_source_frame: pd.DataFrame | None = None,
     x_column: str,
     y_column: str,
     group_columns: list[str],
@@ -1632,6 +1831,7 @@ def _time_series_optimization_options(
 ) -> list[dict[str, Any]]:
     option = _static_population_layer_optimization_option(
         frame,
+        static_population_source_frame=static_population_source_frame,
         x_column=x_column,
         y_column=y_column,
         group_columns=group_columns,
@@ -1643,6 +1843,7 @@ def _time_series_optimization_options(
 def _static_population_layer_optimization_option(
     frame: pd.DataFrame,
     *,
+    static_population_source_frame: pd.DataFrame | None = None,
     x_column: str,
     y_column: str,
     group_columns: list[str],
@@ -1652,21 +1853,40 @@ def _static_population_layer_optimization_option(
     if population_group is None:
         return None
     group_label, population_frame = population_group
+    source_xy = pd.DataFrame()
+    if static_population_source_frame is not None and not static_population_source_frame.empty:
+        source_group = _population_layer_group(
+            static_population_source_frame,
+            group_columns,
+            default_name=default_name,
+        )
+        if source_group is not None:
+            _source_group_label, source_frame = source_group
+            source_xy = _coerce_time_series_xy(
+                source_frame,
+                x_column=x_column,
+                y_column=y_column,
+            )
     point_count = _time_series_point_count(
         population_frame,
         x_column=x_column,
         y_column=y_column,
     )
-    if point_count <= DASHBOARD_RAW_POINT_LIMIT:
+    source_point_count = max(int(point_count), int(len(source_xy.index)))
+    if source_point_count <= DASHBOARD_RAW_POINT_LIMIT and source_xy.empty:
         return None
-    return {
+    option: dict[str, Any] = {
         "id": STATIC_POPULATION_LAYER_OPTIMIZATION,
         "available": True,
         "reason": "population_raw_points_exceed_interactive_limit",
         "group_label": group_label,
-        "source_point_count": int(point_count),
+        "source_point_count": int(source_point_count),
         "sample_point_limit": int(DASHBOARD_RAW_POINT_LIMIT),
     }
+    if not source_xy.empty and len(source_xy.index) > int(point_count):
+        option[_STATIC_POPULATION_SOURCE_XY_KEY] = source_xy
+        option["full_source_point_count"] = int(len(source_xy.index))
+    return option
 
 
 def _population_layer_group(
@@ -2307,9 +2527,10 @@ def _chart_payload(
     layout: dict[str, Any],
     plotly_visual_settings: dict[str, Any] | None = None,
     include_plotly_specs: bool = True,
+    optimization_options: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if not include_plotly_specs:
-        return {
+        chart = {
             "id": chart_id,
             "title": title,
             "chart_type": chart_type,
@@ -2318,6 +2539,9 @@ def _chart_payload(
                 "was selected; summary content remains available."
             ],
         }
+        if optimization_options:
+            chart["optimization_options"] = optimization_options
+        return chart
     resolved_layout = {
         "title": {"text": title, "font": {"size": 18}, "y": 0.99, "yanchor": "top"},
         "font": {"family": 'Aptos, "Segoe UI", "Helvetica Neue", sans-serif', "color": "#1f2933"},
@@ -2370,12 +2594,15 @@ def _chart_payload(
                     visual_settings=plotly_visual_settings,
                     theme=metroliza_dashboard_plotstats_theme(),
                 )
-            return {
+            chart = {
                 "id": chart_id,
                 "title": title,
                 "chart_type": chart_type,
                 "plotly_spec": spec,
             }
+            if optimization_options:
+                chart["optimization_options"] = optimization_options
+            return chart
     spec = {
         "data": data,
         "layout": resolved_layout,
@@ -2393,12 +2620,15 @@ def _chart_payload(
             theme=metroliza_dashboard_plotstats_theme(),
         )
     _apply_time_series_tick_readability(spec, chart_type=chart_type)
-    return {
+    chart = {
         "id": chart_id,
         "title": title,
         "chart_type": chart_type,
         "plotly_spec": spec,
     }
+    if optimization_options:
+        chart["optimization_options"] = optimization_options
+    return chart
 
 
 def _static_chart_payload(
@@ -2720,6 +2950,90 @@ def _render_time_series_raw_layer_png(
         return image_data.getvalue()
     finally:
         plt.close(fig)
+
+
+def _render_time_series_density_layer_png(
+    x_values: np.ndarray,
+    y_values: np.ndarray,
+    *,
+    x_range: tuple[float, float],
+    y_range: tuple[float, float],
+    color: str,
+    width: int = 1152,
+    height: int = 456,
+) -> tuple[bytes, int]:
+    from PIL import Image
+    from matplotlib.colors import to_rgb
+
+    width = max(32, int(width))
+    height = max(32, int(height))
+    x = np.asarray(x_values, dtype=float)
+    y = np.asarray(y_values, dtype=float)
+    finite = np.isfinite(x) & np.isfinite(y)
+    if not bool(np.any(finite)):
+        return _transparent_png(width, height), 0
+    x = x[finite]
+    y = y[finite]
+    x_min, x_max = float(x_range[0]), float(x_range[1])
+    y_min, y_max = float(y_range[0]), float(y_range[1])
+    if not np.isfinite(x_min) or not np.isfinite(x_max) or np.isclose(x_min, x_max):
+        x_min = float(np.nanmin(x))
+        x_max = float(np.nanmax(x))
+        if np.isclose(x_min, x_max):
+            x_max = x_min + 1.0
+    if not np.isfinite(y_min) or not np.isfinite(y_max) or np.isclose(y_min, y_max):
+        y_min = float(np.nanmin(y))
+        y_max = float(np.nanmax(y))
+        if np.isclose(y_min, y_max):
+            y_min -= 0.5
+            y_max += 0.5
+
+    x_pixels = np.floor(((x - x_min) / (x_max - x_min)) * (width - 1)).astype(np.int64)
+    y_pixels = np.floor(((y_max - y) / (y_max - y_min)) * (height - 1)).astype(np.int64)
+    in_bounds = (
+        (x_pixels >= 0)
+        & (x_pixels < width)
+        & (y_pixels >= 0)
+        & (y_pixels < height)
+    )
+    if not bool(np.any(in_bounds)):
+        return _transparent_png(width, height), 0
+    flat_indexes = y_pixels[in_bounds] * width + x_pixels[in_bounds]
+    counts = np.bincount(flat_indexes, minlength=width * height).reshape((height, width))
+    non_empty = counts > 0
+    non_empty_count = int(np.count_nonzero(non_empty))
+    if non_empty_count <= 0:
+        return _transparent_png(width, height), 0
+
+    alpha_scale = np.log1p(counts.astype(np.float64))
+    max_alpha = float(alpha_scale.max())
+    alpha = np.zeros((height, width), dtype=np.uint8)
+    if max_alpha > 0:
+        alpha_values = 36.0 + (alpha_scale[non_empty] / max_alpha) * 204.0
+        alpha[non_empty] = np.clip(alpha_values, 36, 240).astype(np.uint8)
+    rgb = tuple(int(round(channel * 255)) for channel in to_rgb(color))
+    image = np.zeros((height, width, 4), dtype=np.uint8)
+    image[:, :, 0] = rgb[0]
+    image[:, :, 1] = rgb[1]
+    image[:, :, 2] = rgb[2]
+    image[:, :, 3] = alpha
+    buffer = BytesIO()
+    Image.fromarray(image, mode="RGBA").save(buffer, format="PNG", optimize=True)
+    buffer.seek(0)
+    return buffer.getvalue(), non_empty_count
+
+
+def _transparent_png(width: int, height: int) -> bytes:
+    from PIL import Image
+
+    buffer = BytesIO()
+    Image.new("RGBA", (max(1, int(width)), max(1, int(height))), (0, 0, 0, 0)).save(
+        buffer,
+        format="PNG",
+        optimize=True,
+    )
+    buffer.seek(0)
+    return buffer.getvalue()
 
 
 def _histogram_bins(values: list[float]) -> dict[str, float]:
@@ -4198,13 +4512,24 @@ def _summary_card_rows(summary: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
         )
     chart_detail = str(context.get("chart_detail") or "").strip()
     if chart_detail:
-        rows.append(("Chart detail", chart_detail))
+        rows.append(("Dashboard interactivity", chart_detail))
     static_population = summary.get("static_population_layer")
     if isinstance(static_population, dict) and _summary_int(static_population.get("applied_chart_count")):
+        strategy_counts = static_population.get("render_strategy_counts")
+        if isinstance(strategy_counts, dict) and _summary_int(strategy_counts.get("full_density")):
+            layer_value = (
+                f"Full-source density image in "
+                f"{_summary_int(static_population.get('applied_chart_count'))} chart(s)"
+            )
+        else:
+            layer_value = (
+                f"Static image in "
+                f"{_summary_int(static_population.get('applied_chart_count'))} chart(s)"
+            )
         rows.append(
             (
                 "POPULATION layer",
-                f"Static image in {_summary_int(static_population.get('applied_chart_count'))} chart(s)",
+                layer_value,
             )
         )
 
@@ -4251,23 +4576,28 @@ def _dashboard_takeaway_rows(
                 and rendered_rows >= source_rows
             ):
                 add(
-                    "Chart detail",
+                    "Dashboard interactivity",
                     "Interactive charts use all selected rows; random sampling was not needed.",
                 )
             else:
                 add(
-                    "Chart detail",
+                    "Dashboard interactivity",
                     f"Interactive charts use a reproducible random sample of up to "
                     f"{sample_size:,} rows; aggregate tables and group comparison use all selected rows.",
                 )
         elif mode == "static":
-            add("Chart detail", "Charts are saved as static snapshots for faster browser loading.")
+            add("Dashboard interactivity", "Charts are saved as static snapshots for faster browser loading.")
         elif mode == "full":
-            add("Chart detail", "Interactive charts use all selected rows unless dashboard size limits apply.")
+            add("Dashboard interactivity", "Interactive charts use all selected rows unless dashboard size limits apply.")
         if population_layer_mode:
-            add("POPULATION mode", f"POPULATION layer mode: {population_layer_mode}.")
+            population_label = {
+                "auto": "automatic",
+                "interactive": "interactive points",
+                "static": "static image",
+            }.get(population_layer_mode, population_layer_mode)
+            add("POPULATION mode", f"POPULATION layer mode: {population_label}.")
     elif chart_detail:
-        add("Chart detail", chart_detail)
+        add("Dashboard interactivity", chart_detail)
 
     metric_count = _summary_int(summary.get("metric_count"))
     chart_count = _summary_int(summary.get("chart_count"))
@@ -4288,10 +4618,31 @@ def _dashboard_takeaway_rows(
         )
     static_population = summary.get("static_population_layer")
     if isinstance(static_population, dict) and _summary_int(static_population.get("applied_chart_count")):
-        add(
-            "Static layer",
-            "Static POPULATION layers keep the process background visible; hover and point selection are unavailable for that background layer.",
-        )
+        strategy_counts = static_population.get("render_strategy_counts")
+        source_points = _summary_int(static_population.get("source_point_count"))
+        contributed_points = _summary_int(static_population.get("contributed_point_count"))
+        if isinstance(strategy_counts, dict) and _summary_int(strategy_counts.get("full_density")):
+            point_text = (
+                f" from {contributed_points:,} source points"
+                if contributed_points is not None
+                else ""
+            )
+            add(
+                "Static layer",
+                "Static POPULATION density layers keep the full process background visible"
+                f"{point_text}; hover and point selection are unavailable for that background layer.",
+            )
+        elif source_points is not None and contributed_points is not None and contributed_points < source_points:
+            add(
+                "Static layer",
+                f"Static POPULATION layers show {contributed_points:,} sampled points from "
+                f"{source_points:,}; hover and point selection are unavailable for that background layer.",
+            )
+        else:
+            add(
+                "Static layer",
+                "Static POPULATION layers keep the process background visible; hover and point selection are unavailable for that background layer.",
+            )
 
     groupstats_metric_count = _summary_int(summary.get("groupstats_metric_count"))
     if groupstats_metric_count and groupstats_metric_count > 0:

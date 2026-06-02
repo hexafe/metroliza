@@ -19,6 +19,11 @@ import numpy as np
 import pandas as pd
 import statistics
 
+try:
+    import resource
+except ImportError:  # pragma: no cover - Windows benchmark fallback.
+    resource = None
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -1639,6 +1644,91 @@ def benchmark_csv_summary_large_data_probe(
     )
 
 
+def _max_rss_kb() -> int:
+    if resource is None:
+        return 0
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    return int(getattr(usage, 'ru_maxrss', 0) or 0)
+
+
+def benchmark_population_static_render_probe(
+    temp_dir: Path,
+    *,
+    row_count: int,
+) -> ScenarioResult:
+    """Probe static POPULATION rendering with release-scale point counts.
+
+    This scenario is intentionally opt-in. Release checks can run it at
+    --population-static-render-rows 10000000 to capture the 10M-point tier.
+    """
+
+    from metroliza.industrial.industrial_analytics_dashboard import (
+        DASHBOARD_RAW_POINT_LIMIT,
+        _render_time_series_density_layer_png,
+        _render_time_series_raw_layer_png,
+    )
+
+    row_count = max(1, int(row_count))
+    generation_start = time.perf_counter()
+    x_values = np.linspace(0.0, float(row_count - 1), num=row_count, dtype=np.float64)
+    phase = np.linspace(0.0, 80.0, num=row_count, dtype=np.float64)
+    y_values = 10.0 + np.sin(phase) * 0.24 + ((np.arange(row_count) % 97) * 0.0008)
+    generation_s = time.perf_counter() - generation_start
+
+    x_range = (float(x_values[0]), float(x_values[-1] if row_count > 1 else x_values[0] + 1.0))
+    y_min = float(np.min(y_values))
+    y_max = float(np.max(y_values))
+    y_padding = max((y_max - y_min) * 0.04, 1e-9)
+    y_range = (y_min - y_padding, y_max + y_padding)
+
+    rss_before_density = _max_rss_kb()
+    density_start = time.perf_counter()
+    density_png, non_empty_pixels = _render_time_series_density_layer_png(
+        x_values,
+        y_values,
+        x_range=x_range,
+        y_range=y_range,
+        color='#1f77b4',
+    )
+    density_s = time.perf_counter() - density_start
+    rss_after_density = _max_rss_kb()
+
+    sample_size = min(row_count, int(DASHBOARD_RAW_POINT_LIMIT))
+    marker_start = time.perf_counter()
+    marker_png = _render_time_series_raw_layer_png(
+        x_values[:sample_size],
+        y_values[:sample_size],
+        x_range=x_range,
+        y_range=y_range,
+        color='#1f77b4',
+    )
+    marker_s = time.perf_counter() - marker_start
+
+    out_path = temp_dir / f'population-static-render-{row_count}.png'
+    out_path.write_bytes(density_png)
+    wall_time_s = generation_s + density_s + marker_s
+    return ScenarioResult(
+        scenario='population_static_render_probe',
+        wall_time_s=wall_time_s,
+        stage_timings_s={
+            'array_generation': generation_s,
+            'full_density_render': density_s,
+            'sampled_marker_render': marker_s,
+        },
+        input_metrics={
+            'rows': row_count,
+            'density_contributed_points': row_count,
+            'density_png_bytes': len(density_png),
+            'density_non_empty_pixels': int(non_empty_pixels),
+            'sampled_marker_points': sample_size,
+            'sampled_marker_png_bytes': len(marker_png),
+            'max_rss_before_density_kb': rss_before_density,
+            'max_rss_after_density_kb': rss_after_density,
+            'max_rss_delta_density_kb': max(0, rss_after_density - rss_before_density),
+        },
+    )
+
+
 def benchmark_chart_render_budget_path(temp_dir: Path, *, iterations: int, histogram_points: int) -> ScenarioResult:
     import matplotlib.pyplot as plt
     from metroliza.charts.chart_renderer import (
@@ -1860,6 +1950,7 @@ def main() -> int:
     parser.add_argument('--large-csv-columns', type=int, default=20)
     parser.add_argument('--large-csv-search', default='P-00')
     parser.add_argument('--large-csv-materialize-columns', type=int, default=5)
+    parser.add_argument('--population-static-render-rows', type=int, default=1_000_000)
     parser.add_argument('--fit-group-count', type=int, default=40)
     parser.add_argument('--fit-sample-size', type=int, default=120)
     parser.add_argument('--fit-monte-carlo-samples', type=int, default=250)
@@ -1899,6 +1990,7 @@ def main() -> int:
             'csv_summary_export_path',
             'production_dashboard_workbook_path',
             'csv_summary_large_data_probe',
+            'population_static_render_probe',
             'distribution_fit_monte_carlo_path',
             'distribution_fit_gof_policy_compare',
             'group_preprocess_mixed_types_compare',
@@ -1938,6 +2030,10 @@ def main() -> int:
             search_text=args.large_csv_search,
             materialize_columns=max(1, args.large_csv_materialize_columns),
         ),
+        'population_static_render_probe': lambda temp_path: benchmark_population_static_render_probe(
+            temp_path,
+            row_count=max(1, args.population_static_render_rows),
+        ),
         'distribution_fit_monte_carlo_path': lambda temp_path: benchmark_distribution_fit_monte_carlo_path(
             temp_path,
             group_count=args.fit_group_count,
@@ -1973,7 +2069,7 @@ def main() -> int:
             iterations=max(1, args.chart_type_benchmark_iterations),
         ),
     }
-    manual_scenarios = {'csv_summary_large_data_probe'}
+    manual_scenarios = {'csv_summary_large_data_probe', 'population_static_render_probe'}
     selected_scenarios = args.scenarios or [
         scenario for scenario in scenario_runners if scenario not in manual_scenarios
     ]

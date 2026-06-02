@@ -29,7 +29,6 @@ Main controls:
 - **Choose metrics**
 - **Reload metrics** when source or column choices change
 - **Edit row groups, then choose time bucket and aggregation**
-- **Paste references or IDs to mark/filter/compare**
 - **Choose charts and statistics**
 - **Select dashboard and workbook output paths**
 - **Create analytics**
@@ -89,6 +88,11 @@ The selected groups are written as the `GROUP` column and are used by aggregatio
 groupstats, and workbook output. Choose a time bucket and aggregation method in the main
 dialog.
 
+To make specific references, IDs, batches, or other row values stand out, use **Edit
+groups** instead of a separate references field. Select the source column that identifies
+those rows, assign the matching values to a named group, and leave the remaining rows in
+**POPULATION** when you want a selected-vs-rest view.
+
 Available time buckets:
 
 - raw rows,
@@ -101,20 +105,7 @@ Available time buckets:
 Available aggregation choices include mean, median, count, sum, min, max, standard
 deviation, and percentiles.
 
-### 5. Paste References Or IDs
-
-Paste references or IDs if you want those rows to stand out in charts and statistics.
-
-Pasted reference actions:
-
-- highlight selected values,
-- compare selected values against the rest,
-- analyze selected values only,
-- group pasted references as an analysis-only cohort.
-
-This pasted reference cohort does not edit manual CSV groups.
-
-### 6. Choose Outputs
+### 5. Choose Outputs
 
 Choose chart/statistics outputs:
 
@@ -129,11 +120,11 @@ selected parameter**.
 
 The saved page is titled **Metroliza CSV Summary Dashboard**. Its front-page cards show
 the source, sheet when available, filters, groups, rows rendered into dashboard chart data,
-and chart detail mode so reviewers can see when they are looking at all rows or a bounded
-visual sample.
+and dashboard interactivity mode so reviewers can see when they are looking at all rows or
+a bounded visual sample.
 
 Use **Dashboard style > Change...** when you want the CSV/Excel dashboard to use a saved
-visual recipe, palette, marker emphasis, opacity, or reference/stat-line style. Start with
+visual recipe, palette, marker emphasis, opacity, or group/stat-line style. Start with
 the visible recipe and saved-theme controls; use **Customize...** for detailed color,
 opacity, line, or selected-element styling. These choices affect the interactive dashboard
 charts only; they do not change the source data or the selected metrics.
@@ -167,7 +158,7 @@ multi-group histograms use Excel charts where that keeps the data editable; sing
 histograms, violin plots, and box plots use plotstats-first rendered images with
 Metroliza/native fallback.
 
-### 7. Create Analytics
+### 6. Create Analytics
 
 Metroliza creates the dashboard and optional workbook in the background.
 

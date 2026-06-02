@@ -103,7 +103,9 @@ def test_path_filter_group_controls_and_button_state(monkeypatch, tmp_path):
         assert dialog.select_filter_label.text() == NOT_APPLIED_LABEL
         assert dialog.df_for_grouping is None
         assert dialog.select_group_label.text() == "Not applied"
-        assert dialog.group_analysis_level_combobox.currentText() == "Off"
+        assert dialog._selected_group_analysis_level() == "off"
+        assert not hasattr(dialog, "group_analysis_level_combobox")
+        assert not hasattr(dialog, "group_analysis_scope_combobox")
         assert dialog.filter_window is None
         assert dialog.grouping_window is None
         assert filter_window.closed and filter_window.deleted
@@ -128,15 +130,15 @@ def test_output_mode_and_option_synchronization(monkeypatch, tmp_path):
         assert dialog._selected_export_target() == "google_sheets_drive_convert"
         assert dialog._selected_group_analysis_level() == "off"
         assert dialog._selected_group_analysis_scope() == "auto"
-        assert not dialog.group_analysis_scope_combobox.isEnabled()
+        assert not hasattr(dialog, "group_analysis_level_combobox")
+        assert not hasattr(dialog, "group_analysis_scope_combobox")
 
-        dialog.group_analysis_level_combobox.setCurrentText("Light")
-        dialog.group_analysis_scope_combobox.setCurrentText("Multi-reference")
-
-        assert dialog._selected_group_analysis_level() == "light"
-        assert dialog._selected_group_analysis_scope() == "multi-reference"
-        assert not dialog.group_analysis_scope_combobox.isHidden()
-        assert dialog.group_analysis_scope_combobox.isEnabled()
+        dialog.set_grouping_applied(True)
+        assert dialog._selected_group_analysis_level() == "standard"
+        assert dialog._selected_group_analysis_scope() == "auto"
+        assert dialog.generate_html_dashboard_checkbox.isChecked()
+        assert not dialog.generate_html_dashboard_checkbox.isEnabled()
+        assert dialog.dashboard_visuals_button.isEnabled()
 
         selected_label = _set_combo_to_existing_label(dialog.preset_combobox, "HTML dashboard only")
         dialog.preset_combobox.setCurrentText(selected_label)

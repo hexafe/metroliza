@@ -317,8 +317,7 @@ class TestExportDialogPresetApplication(unittest.TestCase):
         dialog.summary_plot_scale = _FakeLineEdit("42")
         dialog.hide_ok_results_checkbox = _FakeCheckbox(True)
         dialog.include_google_sheets_checkbox = _FakeCheckbox(False)
-        dialog.group_analysis_level_combobox = _FakeCombo("Off")
-        dialog.group_analysis_scope_combobox = _FakeCombo("Auto")
+        dialog._grouping_applied = False
         dialog._save_dialog_config = lambda: None
 
         dialog.apply_selected_preset()
@@ -1322,7 +1321,7 @@ class TestExportDialogGroupingAnalysisDefaults(unittest.TestCase):
     def setUpClass(cls):
         TestExportPresetFlowIntegration.setUpClass()
 
-    def test_grouping_applied_promotes_off_level_to_standard(self):
+    def test_grouping_applied_infers_standard_group_analysis(self):
         from modules.export_dialog import ExportDialog
 
         class _FakeLabel:
@@ -1332,52 +1331,13 @@ class TestExportDialogGroupingAnalysisDefaults(unittest.TestCase):
             def setText(self, value):
                 self.value = value
 
-        class _FakeCombo:
-            def __init__(self, value):
-                self._value = value
-
-            def currentText(self):
-                return self._value
-
-            def setCurrentText(self, value):
-                self._value = value
-
         dialog = ExportDialog.__new__(ExportDialog)
         dialog.select_group_label = _FakeLabel()
-        dialog.group_analysis_level_combobox = _FakeCombo('Off')
 
         dialog.set_grouping_applied(True)
 
         self.assertEqual(dialog.select_group_label.value, 'Applied')
-        self.assertEqual(dialog.group_analysis_level_combobox.currentText(), 'Standard')
-
-    def test_grouping_applied_keeps_non_off_level(self):
-        from modules.export_dialog import ExportDialog
-
-        class _FakeLabel:
-            def __init__(self):
-                self.value = None
-
-            def setText(self, value):
-                self.value = value
-
-        class _FakeCombo:
-            def __init__(self, value):
-                self._value = value
-
-            def currentText(self):
-                return self._value
-
-            def setCurrentText(self, value):
-                self._value = value
-
-        dialog = ExportDialog.__new__(ExportDialog)
-        dialog.select_group_label = _FakeLabel()
-        dialog.group_analysis_level_combobox = _FakeCombo('Light')
-
-        dialog.set_grouping_applied(True)
-
-        self.assertEqual(dialog.group_analysis_level_combobox.currentText(), 'Light')
+        self.assertEqual(dialog._selected_group_analysis_level(), 'standard')
 
 
 class TestExportDialogFilterStateSummary(unittest.TestCase):
@@ -1445,7 +1405,7 @@ class TestExportDialogFilterStateSummary(unittest.TestCase):
         self.assertEqual(dialog.select_filter_label.value, "AX: 2 selected; Reference: REF1; NOK only")
         self.assertIn("AX: AX1, AX2", dialog.select_filter_label.tooltip)
 
-    def test_grouping_disabled_sets_level_off(self):
+    def test_grouping_disabled_infers_level_off(self):
         from modules.export_dialog import ExportDialog
 
         class _FakeLabel:
@@ -1455,24 +1415,13 @@ class TestExportDialogFilterStateSummary(unittest.TestCase):
             def setText(self, value):
                 self.value = value
 
-        class _FakeCombo:
-            def __init__(self, value):
-                self._value = value
-
-            def currentText(self):
-                return self._value
-
-            def setCurrentText(self, value):
-                self._value = value
-
         dialog = ExportDialog.__new__(ExportDialog)
         dialog.select_group_label = _FakeLabel()
-        dialog.group_analysis_level_combobox = _FakeCombo('Standard')
 
         dialog.set_grouping_applied(False)
 
         self.assertEqual(dialog.select_group_label.value, 'Not applied')
-        self.assertEqual(dialog.group_analysis_level_combobox.currentText(), 'Off')
+        self.assertEqual(dialog._selected_group_analysis_level(), 'off')
 
 
 

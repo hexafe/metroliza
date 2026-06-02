@@ -9,7 +9,7 @@ Open it from the Export dialog by clicking **Edit...** next to **Grouping**.
 Use grouping when you want to:
 
 - compare named groups in the export,
-- prepare data for the **Group Analysis worksheet**, or
+- prepare data for dashboard group analysis, or
 - organize a mixed population into smaller logical sets.
 
 Grouping affects the export workflow. It does not replace filtering.
@@ -172,13 +172,13 @@ If you choose this, Export clears the saved grouping context and marks grouping 
 
 Grouping matters because it changes how the export can compare data.
 
-In practical terms, grouping lets the workbook compare named groups rather than treating everything as one undivided population.
+In practical terms, grouping lets the dashboard compare named groups rather than treating
+everything as one undivided population.
 
-This is especially important for the **Group Analysis worksheet**.
+This is especially important for the Export HTML dashboard, where standard group analysis is
+added automatically when grouping is applied.
 
 The grouping dialog still keys rows by `report_id`; the richer labels are only for display.
-
-For help reading that worksheet after export, see [Group Analysis worksheet manual](group_analysis/user_manual.md).
 
 ## Keyboard and double-click shortcuts
 

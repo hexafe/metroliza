@@ -14,6 +14,7 @@ from scripts.benchmark_paths import (
     benchmark_csv_summary_large_data_probe,
     benchmark_csv_summary_path,
     benchmark_distribution_fit_gof_policy_compare,
+    benchmark_population_static_render_probe,
     benchmark_production_dashboard_workbook_path,
     build_benchmark_run_summary,
 )
@@ -149,6 +150,21 @@ def test_csv_summary_large_data_probe_smoke(tmp_path):
     assert result.input_metrics['materialized_columns'] >= 3
     assert result.input_metrics['preview_multi_column_group_total'] >= 1
     assert result.input_metrics['assign_filtered_scope_rows'] >= 1
+
+
+def test_population_static_render_probe_smoke(tmp_path):
+    result = benchmark_population_static_render_probe(tmp_path, row_count=256)
+
+    assert result.scenario == 'population_static_render_probe'
+    assert result.stage_timings_s['array_generation'] >= 0.0
+    assert result.stage_timings_s['full_density_render'] > 0.0
+    assert result.stage_timings_s['sampled_marker_render'] > 0.0
+    assert result.input_metrics['rows'] == 256
+    assert result.input_metrics['density_contributed_points'] == 256
+    assert result.input_metrics['density_png_bytes'] > 0
+    assert result.input_metrics['density_non_empty_pixels'] > 0
+    assert result.input_metrics['sampled_marker_points'] == 256
+    assert result.input_metrics['sampled_marker_png_bytes'] > 0
 
 
 def test_distribution_fit_gof_policy_compare_smoke(tmp_path):
@@ -403,6 +419,11 @@ def test_benchmark_main_default_selection_skips_manual_large_csv_probe(
     )
     monkeypatch.setattr(
         benchmark_paths,
+        'benchmark_population_static_render_probe',
+        runner('population_static_render_probe'),
+    )
+    monkeypatch.setattr(
+        benchmark_paths,
         'benchmark_distribution_fit_monte_carlo_path',
         runner('distribution_fit_monte_carlo_path'),
     )
@@ -439,6 +460,7 @@ def test_benchmark_main_default_selection_skips_manual_large_csv_probe(
 
     assert benchmark_paths.main() == 0
     assert 'csv_summary_large_data_probe' not in called
+    assert 'population_static_render_probe' not in called
     assert called == [
         'pdf_parse_path',
         'excel_export_path',

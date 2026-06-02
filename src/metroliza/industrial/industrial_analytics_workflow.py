@@ -270,7 +270,7 @@ def run_tabular_file_analytics(
     tabular_filter_columns: tuple[str, ...] | list[str] | None = None,
     tabular_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
     tabular_column_filters: tuple[TabularColumnFilter, ...] | list[TabularColumnFilter] | None = None,
-    dashboard_detail_mode: str = "fast",
+    dashboard_detail_mode: str = "full",
     grouping_df=None,
     aggregation_state: ProductionAggregationState | None = None,
     cohort_state: ReferenceCohortState | None = None,
@@ -454,6 +454,7 @@ def run_tabular_file_analytics(
     dashboard = _write_dashboard(
         frame=dashboard_frame,
         source_row_count=len(cohorted.dataframe.index),
+        static_population_source_frame=cohorted.dataframe,
         metrics=metrics,
         aggregation=aggregation,
         aggregated=aggregated,
@@ -594,12 +595,12 @@ def _dashboard_interactivity_label(
         ):
             detail = f"{label}, all {int(source_row_count):,} rows rendered"
         else:
-            detail = f"{label}, {sample_size:,} random row sample"
+            detail = f"{label}, {sample_size:,} interactive random sample limit"
     else:
         detail = label
     population_label = {
         "auto": "POPULATION layer auto",
-        "interactive": "POPULATION layer interactive",
+        "interactive": "POPULATION layer interactive points",
         "static": "POPULATION layer static image",
     }.get(str(options.get("population_layer_mode") or "auto").strip().casefold(), "POPULATION layer auto")
     return f"{detail}; {population_label}"
@@ -670,7 +671,6 @@ def _tabular_dashboard_frame_for_interactivity(
             "group comparison, and workbook output use all selected rows."
         ),
         context={
-            "detail_mode": "fast",
             "dashboard_interactivity_mode": mode,
             "sample_size": limit,
             "input_row_count": row_count,
@@ -922,6 +922,7 @@ def _write_dashboard(
     *,
     frame,
     source_row_count: int | None = None,
+    static_population_source_frame=None,
     metrics: tuple[ProductionMetricSelection, ...],
     aggregation: ProductionAggregationState,
     aggregated,
@@ -956,6 +957,7 @@ def _write_dashboard(
         dashboard_interactivity_options=dashboard_interactivity_options,
         source_row_count=source_row_count,
         dashboard_row_count=len(getattr(frame, "index", ())),
+        static_population_source_frame=static_population_source_frame,
     )
     _raise_if_cancelled(cancel_check)
     target_path = _html_output_path(output_dashboard_file)

@@ -1046,6 +1046,10 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             thread = ExportDataThread(request)
             thread.run()
 
+            sheet_names = _xlsx_sheet_names(out_path)
+            self.assertNotIn('Group Analysis', sheet_names)
+            self.assertNotIn('Group Analysis Plots', sheet_names)
+
             html_path = resolve_html_dashboard_path(out_path)
             assets_path = resolve_html_dashboard_assets_dir(html_path)
             self.assertTrue(Path(html_path).exists())

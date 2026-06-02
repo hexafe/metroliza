@@ -4383,7 +4383,7 @@ class ExportDataThread(QThread):
                     self._emit_stage_progress('filtered_sheet_write', 1.0),
                 ),
                 lambda: (
-                    self.update_label.emit(build_three_line_status("Building group analysis...", "Writing Group Analysis worksheet", "ETA --")),
+                    self.update_label.emit(build_three_line_status("Building group analysis...", "Preparing grouped comparisons", "ETA --")),
                     self._write_group_analysis_outputs(excel_writer),
                 ),
             ],
@@ -5321,9 +5321,10 @@ class ExportDataThread(QThread):
             logger.warning('Unknown group analysis level %r; skipping Group Analysis output.', mode)
             return
 
+        dashboard_only_group_analysis = self.generate_html_dashboard and self.export_target != 'html_dashboard'
         backend = self._active_backend or self.get_export_backend()
-        workbook = backend.get_workbook(excel_writer)
-        used_sheet_names = backend.list_sheet_names(excel_writer)
+        workbook = None if dashboard_only_group_analysis else backend.get_workbook(excel_writer)
+        used_sheet_names = set() if dashboard_only_group_analysis else backend.list_sheet_names(excel_writer)
 
         grouped_export_df = self._build_export_filtered_dataframe()
         grouped_export_df = self._ensure_sample_number_column(grouped_export_df)
@@ -5341,10 +5342,6 @@ class ExportDataThread(QThread):
                 'Group Analysis skipped: grouping assignments could not be matched '
                 'to the exported measurement rows.'
             )
-            group_sheet_name = unique_sheet_name('Group Analysis', used_sheet_names)
-            group_worksheet = workbook.add_worksheet(group_sheet_name)
-            self._record_exported_sheet_name(group_sheet_name)
-            self._write_group_analysis_message_sheet(group_worksheet, message)
             if self.generate_html_dashboard:
                 self._html_group_analysis_payload = {
                     'status': 'skipped',
@@ -5373,6 +5370,12 @@ class ExportDataThread(QThread):
                     'metric_rows': [],
                 }
                 self._html_group_analysis_plot_assets = {'metrics': {}}
+            if dashboard_only_group_analysis:
+                return
+            group_sheet_name = unique_sheet_name('Group Analysis', used_sheet_names)
+            group_worksheet = workbook.add_worksheet(group_sheet_name)
+            self._record_exported_sheet_name(group_sheet_name)
+            self._write_group_analysis_message_sheet(group_worksheet, message)
             return
 
         def emit_group_analysis_progress(message):
@@ -5405,6 +5408,14 @@ class ExportDataThread(QThread):
         if self.generate_html_dashboard:
             self._html_group_analysis_payload = payload
             self._html_group_analysis_plot_assets = {'metrics': {}}
+        if dashboard_only_group_analysis:
+            if self.generate_html_dashboard:
+                self._html_group_analysis_plot_assets = self._build_group_analysis_plot_assets(
+                    payload,
+                    mode=mode,
+                    audience='dashboard',
+                )
+            return
 
         group_sheet_name = unique_sheet_name('Group Analysis', used_sheet_names)
         group_worksheet = workbook.add_worksheet(group_sheet_name)

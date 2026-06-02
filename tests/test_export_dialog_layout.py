@@ -72,8 +72,8 @@ class TestExportDialogLayout(unittest.TestCase):
                 "dialog_size": [dialog.width(), dialog.height()],
                 "available": [available.width(), available.height()],
                 "advanced_visible": dialog.advanced_options_container.isVisible(),
-                "scope_visible": dialog.group_analysis_scope_combobox.isVisible(),
-                "scope_enabled": dialog.group_analysis_scope_combobox.isEnabled(),
+                "has_group_analysis_level": hasattr(dialog, "group_analysis_level_combobox"),
+                "has_group_analysis_scope": hasattr(dialog, "group_analysis_scope_combobox"),
                 "toggle_text": dialog.advanced_toggle_button.text(),
                 "google_label": dialog.include_google_sheets_checkbox.text(),
                 "html_label": dialog.generate_html_dashboard_checkbox.text(),
@@ -110,8 +110,8 @@ class TestExportDialogLayout(unittest.TestCase):
         self.assertLessEqual(payload["dialog_size"][0], payload["available"][0])
         self.assertLessEqual(payload["dialog_size"][1], payload["available"][1])
         self.assertFalse(payload["advanced_visible"])
-        self.assertFalse(payload["scope_visible"])
-        self.assertFalse(payload["scope_enabled"])
+        self.assertFalse(payload["has_group_analysis_level"])
+        self.assertFalse(payload["has_group_analysis_scope"])
         self.assertEqual(payload["toggle_text"], "Show advanced options")
         self.assertEqual(payload["google_label"], "Google Sheets")
         self.assertEqual(payload["html_label"], "HTML dashboard")

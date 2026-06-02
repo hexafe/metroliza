@@ -1,8 +1,8 @@
 RELEASE_VERSION = "2026.05rc4"
-VERSION_DATE = "260601"
+VERSION_DATE = "260602"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
-CURRENT_RELEASE_HIGHLIGHT = "Parser profile self-service, export reliability, safer long-task cancellation, dashboard plot visual customization, static POPULATION layers for CSV Summary, and clearer dashboard reading flow."
-PUBLIC_VERSION_LABEL = "2026.05 RC4 (build 260601)"
+CURRENT_RELEASE_HIGHLIGHT = "Parser profile self-service, export reliability, safer long-task cancellation, dashboard plot visual customization, static POPULATION layers, CSV Summary cleanup, and dashboard-first Export group analysis."
+PUBLIC_VERSION_LABEL = "2026.05 RC4 (build 260602)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
@@ -14,6 +14,8 @@ release_notes = f"""
     - CSV Summary static POPULATION layers now remain visible when all selected rows belong to POPULATION and no random sampling is needed<br>
     - Oznak Check access no longer requests a reference column unless reference filtering is configured<br>
     - CSV Summary and Export dashboards now use clearer run notes, image snapshot wording, and group comparison takeaways<br>
+    - CSV Summary now uses Edit groups for selected-reference comparisons and keeps dashboard rendering controls in Dashboard interactivity<br>
+    - Grouped Export runs now add standard group analysis to the HTML dashboard instead of adding extra workbook sheets<br>
 
     <br><b>Archive:</b><br>
 

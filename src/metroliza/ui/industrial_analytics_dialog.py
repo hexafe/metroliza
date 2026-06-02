@@ -88,7 +88,6 @@ except ImportError:  # pragma: no cover - compatibility with lightweight test st
 
 SOURCE_PRODUCTION_CACHE = "production_cache"
 SOURCE_TABULAR_FILE = "tabular_file"
-GROUPSTATS_REFERENCE_COHORT_MODES = frozenset({"compare_rest", "group_selected"})
 _DASHBOARD_INTERACTIVITY_LABELS = {
     "auto": "Auto",
     "sampled": "Interactive random sample",
@@ -97,7 +96,7 @@ _DASHBOARD_INTERACTIVITY_LABELS = {
 }
 _POPULATION_LAYER_MODE_LABELS = {
     "auto": "POPULATION layer auto",
-    "interactive": "POPULATION layer interactive",
+    "interactive": "POPULATION layer interactive points",
     "static": "POPULATION layer static image",
 }
 
@@ -105,7 +104,7 @@ _POPULATION_LAYER_MODE_LABELS = {
 def dashboard_interactivity_options_summary(options: DashboardInteractivityOptions) -> str:
     mode = _DASHBOARD_INTERACTIVITY_LABELS.get(options.mode, options.mode.title())
     if options.mode in {"auto", "sampled"}:
-        summary = f"{mode}, {options.sample_size:,} random rows"
+        summary = f"{mode}, {options.sample_size:,} interactive random sample limit"
     else:
         summary = mode
     population_mode = _POPULATION_LAYER_MODE_LABELS.get(
@@ -152,7 +151,7 @@ class DashboardInteractivityOptionsDialog(QDialog):
 
         self.population_layer_combo = QComboBox()
         self.population_layer_combo.addItem("Auto", "auto")
-        self.population_layer_combo.addItem("Interactive", "interactive")
+        self.population_layer_combo.addItem("Interactive points", "interactive")
         self.population_layer_combo.addItem("Static image", "static")
         population_index = self.population_layer_combo.findData(self._options.population_layer_mode)
         self.population_layer_combo.setCurrentIndex(population_index if population_index >= 0 else 0)
@@ -165,11 +164,11 @@ class DashboardInteractivityOptionsDialog(QDialog):
         self.sample_size_spin.setRange(5_000, 200_000)
         self.sample_size_spin.setSingleStep(5_000)
         self.sample_size_spin.setValue(self._options.sample_size)
-        form.addRow("Sample size", self.sample_size_spin)
+        form.addRow("Random sample limit", self.sample_size_spin)
         layout.addLayout(form)
         layout.addWidget(
             status_chip(
-                "Random sampling affects interactive charts only; POPULATION layer mode controls its dashboard rendering.",
+                "The random sample limit bounds interactive chart rows; static POPULATION images may use all source rows.",
                 "neutral",
             )
         )
@@ -470,14 +469,6 @@ class IndustrialAnalyticsDialog(QDialog):
             self.output_workbook_file,
             empty_text="No workbook path selected",
         )
-        self.dashboard_detail_row_label = section_label("Dashboard detail")
-        self.dashboard_detail_mode_combo = QComboBox()
-        self.dashboard_detail_mode_combo.addItem("Fast", "fast")
-        self.dashboard_detail_mode_combo.addItem("Full", "full")
-        self.dashboard_detail_mode_combo.setToolTip(
-            "Fast keeps CSV Summary dashboard generation lightweight. "
-            "Full adds richer detail at a higher processing cost."
-        )
         self.dashboard_interactivity_row_label = section_label("Dashboard interactivity")
         self.dashboard_interactivity_summary_label = status_chip("", "neutral")
         self.dashboard_interactivity_button = QPushButton("Change...")
@@ -536,17 +527,14 @@ class IndustrialAnalyticsDialog(QDialog):
             ("group_selected", "Group pasted references"),
         ):
             self.reference_mode_combo.addItem(label, value)
-        reference_action_tooltip = (
-            "Pasted references create an analysis-only cohort for this run. "
-            "Group pasted references does not edit manual CSV groups."
-        )
+        reference_action_tooltip = "Pasted references create an analysis-only cohort for this run."
         self.reference_mode_combo.setToolTip(reference_action_tooltip)
         self.references_edit = QPlainTextEdit()
         self.references_edit.setPlaceholderText("Paste Part / IDs to highlight/filter; separate with comma, semicolon, space, or new line")
         self.references_edit.setMaximumHeight(90)
         self.references_edit.setToolTip(reference_action_tooltip)
         self.reference_mode_hint_label = status_chip(
-            "Pasted references affect only this analytics run; manual CSV groups are unchanged.",
+            "Pasted references affect only this analytics run.",
             "info",
         )
 
@@ -718,13 +706,13 @@ class IndustrialAnalyticsDialog(QDialog):
         grid.addWidget(self.aggregation_combo, row, 1, 1, 2)
 
         row += 1
-        reference_mode_label = section_label("Pasted reference action")
-        grid.addWidget(reference_mode_label, row, 0)
+        self.reference_mode_row_label = section_label("Pasted reference action")
+        grid.addWidget(self.reference_mode_row_label, row, 0)
         grid.addWidget(self.reference_mode_combo, row, 1, 1, 2)
 
         row += 1
-        references_label = section_label("References")
-        grid.addWidget(references_label, row, 0)
+        self.references_row_label = section_label("References")
+        grid.addWidget(self.references_row_label, row, 0)
         grid.addWidget(self.references_edit, row, 1, 1, 2)
 
         row += 1
@@ -761,10 +749,6 @@ class IndustrialAnalyticsDialog(QDialog):
         grid.addWidget(section_label("Dashboard"), row, 0)
         grid.addWidget(self.dashboard_path_field, row, 1)
         grid.addWidget(self.dashboard_button, row, 2)
-
-        row += 1
-        grid.addWidget(self.dashboard_detail_row_label, row, 0)
-        grid.addWidget(self.dashboard_detail_mode_combo, row, 1, 1, 2)
 
         row += 1
         dashboard_interactivity_actions = QHBoxLayout()
@@ -844,11 +828,6 @@ class IndustrialAnalyticsDialog(QDialog):
             description=self.references_edit.toolTip(),
         )
         configure_accessibility(
-            self.dashboard_detail_mode_combo,
-            name="Dashboard detail mode",
-            description=self.dashboard_detail_mode_combo.toolTip(),
-        )
-        configure_accessibility(
             self.dashboard_interactivity_button,
             name="Edit dashboard interactivity",
             description=self.dashboard_interactivity_button.toolTip(),
@@ -883,11 +862,18 @@ class IndustrialAnalyticsDialog(QDialog):
         self._sync_filter_visibility()
         self.filters_button.setText("Filters..." if self.is_production_source else "Filter rows...")
         self.clear_filter_button.setVisible(show_file)
-        self.dashboard_detail_row_label.setVisible(show_file)
-        self.dashboard_detail_mode_combo.setVisible(show_file)
         self.dashboard_interactivity_row_label.setVisible(show_file)
         self.dashboard_interactivity_summary_label.setVisible(show_file)
         self.dashboard_interactivity_button.setVisible(show_file)
+        show_reference_cohort = self.is_production_source
+        for widget in (
+            self.reference_mode_row_label,
+            self.reference_mode_combo,
+            self.references_row_label,
+            self.references_edit,
+            self.reference_mode_hint_label,
+        ):
+            widget.setVisible(show_reference_cohort)
         self.database_row_label.setVisible(self.is_production_source)
         self.database_field.setVisible(self.is_production_source)
         self.grouping_row_label.setText("Group by" if self.is_production_source else "Groups")
@@ -1604,29 +1590,14 @@ class IndustrialAnalyticsDialog(QDialog):
             values.add(TABULAR_DEFAULT_GROUP)
         return len(values)
 
-    def _tabular_reference_cohort_can_form_groupstats(self) -> bool:
-        if self.is_production_source:
-            return False
-        cohort = self._cohort_state()
-        return bool(cohort.is_applied and cohort.mode in GROUPSTATS_REFERENCE_COHORT_MODES)
-
     def _tabular_groupstats_unavailable_reason(self) -> str | None:
         if self.is_production_source:
             return None
-        if (
-            self._tabular_manual_groups_can_form_groupstats()
-            or self._tabular_reference_cohort_can_form_groupstats()
-        ):
+        if self._tabular_manual_groups_can_form_groupstats():
             return None
         if self.grouping_applied:
-            return (
-                "Groupstats requires at least 2 non-empty manual groups, or pasted "
-                "references with Compare selected vs rest / Group pasted references."
-            )
-        return (
-            "Groupstats requires manual CSV/Excel groups or pasted references with "
-            "Compare selected vs rest / Group pasted references."
-        )
+            return "Groupstats requires at least 2 non-empty manual groups."
+        return "Groupstats requires manual CSV/Excel groups."
 
     def _selected_sheet_name(self) -> str | None:
         if self.is_production_source:
@@ -1651,6 +1622,8 @@ class IndustrialAnalyticsDialog(QDialog):
         )
 
     def _cohort_state(self) -> ReferenceCohortState:
+        if not self.is_production_source:
+            return ReferenceCohortState()
         return ReferenceCohortState.from_text(
             self.references_edit.toPlainText(),
             mode=str(self.reference_mode_combo.currentData() or "highlight"),
@@ -1882,7 +1855,7 @@ class IndustrialAnalyticsDialog(QDialog):
                 db_file=self.db_file,
                 input_file=self.input_file,
                 output_dashboard_file=self.output_dashboard_file,
-                dashboard_detail_mode=str(self.dashboard_detail_mode_combo.currentData() or "fast"),
+                dashboard_detail_mode="full",
                 output_workbook_file=(
                     self.output_workbook_file if self.workbook_checkbox.isChecked() else ""
                 ),

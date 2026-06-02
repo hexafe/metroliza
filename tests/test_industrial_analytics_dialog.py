@@ -244,29 +244,26 @@ def test_tabular_analytics_dialog_uses_workbook_path_only_when_opted_in(tmp_path
         dialog.close()
 
 
-def test_tabular_analytics_dialog_uses_part_id_wording_and_delimiters() -> None:
+def test_tabular_analytics_dialog_uses_part_id_wording_and_hides_reference_cohort() -> None:
     _app()
     dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
     try:
         dialog.references_edit.setPlainText("R1,R2; R3\nR4")
 
         assert dialog.reference_column_row_label.text() == "Part / ID column"
-        assert "comma, semicolon, space, or new line" in dialog.references_edit.placeholderText()
-        assert dialog._cohort_state().references == ("R1", "R2", "R3", "R4")
+        assert dialog.reference_mode_combo.isHidden()
+        assert dialog.references_edit.isHidden()
+        assert dialog.reference_mode_hint_label.isHidden()
+        assert dialog._cohort_state().references == ()
     finally:
         dialog.close()
 
 
-def test_tabular_analytics_dialog_dashboard_detail_mode_is_selectable_and_in_request() -> None:
+def test_tabular_analytics_dialog_uses_full_dashboard_detail_without_selector() -> None:
     _app()
     dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
     try:
-        assert not dialog.dashboard_detail_mode_combo.isHidden()
-        assert dialog.dashboard_detail_mode_combo.currentData() == "fast"
-
-        dialog.dashboard_detail_mode_combo.setCurrentIndex(
-            dialog.dashboard_detail_mode_combo.findData("full")
-        )
+        assert not hasattr(dialog, "dashboard_detail_mode_combo")
         request = dialog._build_analytics_request()
 
         assert request.dashboard_detail_mode == "full"
@@ -281,7 +278,7 @@ def test_tabular_analytics_dialog_interactivity_controls_are_visible_and_in_requ
         assert not dialog.dashboard_interactivity_button.isHidden()
         assert (
             dialog.dashboard_interactivity_summary_label.text()
-            == "Auto, 50,000 random rows; POPULATION layer auto"
+            == "Auto, 50,000 interactive random sample limit; POPULATION layer auto"
         )
         assert dialog.dashboard_interactivity_row_label.text() == "Dashboard interactivity"
         assert "chart interactivity" in dialog.dashboard_interactivity_button.toolTip()
@@ -295,7 +292,7 @@ def test_tabular_analytics_dialog_interactivity_controls_are_visible_and_in_requ
         dialog._sync_dashboard_interactivity_controls()
         assert (
             dialog.dashboard_interactivity_summary_label.text()
-            == "Interactive random sample, 75,000 random rows; POPULATION layer static image"
+            == "Interactive random sample, 75,000 interactive random sample limit; POPULATION layer static image"
         )
         assert "interactive, or rendered as a static image" in (
             dialog.dashboard_interactivity_summary_label.toolTip()
@@ -331,6 +328,9 @@ def test_dashboard_interactivity_dialog_exposes_population_layer_mode() -> None:
         assert dialog.population_layer_combo.itemText(
             dialog.population_layer_combo.findData("static")
         ) == "Static image"
+        assert dialog.population_layer_combo.itemText(
+            dialog.population_layer_combo.findData("interactive")
+        ) == "Interactive points"
         assert "CSV Summary POPULATION layer" in dialog.population_layer_combo.toolTip()
 
         dialog.population_layer_combo.setCurrentIndex(
@@ -901,10 +901,8 @@ def test_tabular_groupstats_is_disabled_until_manual_groups_are_available() -> N
         assert not dialog.groupstats_checkbox.isEnabled()
         assert not dialog.groupstats_checkbox.isChecked()
         assert "manual CSV/Excel groups" in dialog.groupstats_checkbox.toolTip()
-        assert "pasted references" in dialog.groupstats_checkbox.toolTip()
         assert not dialog.groupstats_reason_label.isHidden()
         assert "manual CSV/Excel groups" in dialog.groupstats_reason_label.text()
-        assert "pasted references" in dialog.groupstats_reason_label.text()
 
         grouping_df = pd.DataFrame(
             {
@@ -936,48 +934,6 @@ def test_tabular_groupstats_is_disabled_until_manual_groups_are_available() -> N
         assert "at least 2 non-empty manual groups" in dialog.groupstats_checkbox.toolTip()
     finally:
         dialog.close()
-
-
-def _select_tabular_reference_mode(dialog, mode: str) -> None:
-    index = dialog.reference_mode_combo.findData(mode)
-    assert index >= 0
-    dialog.reference_mode_combo.setCurrentIndex(index)
-
-
-def _assert_reference_groupstats_mode_enables_request(mode: str) -> None:
-    _app()
-    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
-    try:
-        dialog.metric_candidates = (ProductionMetricSelection("length_mm", "Length Mm"),)
-        dialog._populate_metrics()
-        dialog._sync_ui_state()
-
-        assert not dialog.groupstats_checkbox.isEnabled()
-        assert not dialog.groupstats_checkbox.isChecked()
-
-        _select_tabular_reference_mode(dialog, mode)
-        dialog.references_edit.setPlainText("R1\nR2")
-
-        assert dialog.groupstats_checkbox.isEnabled()
-        assert dialog.groupstats_checkbox.isChecked()
-        assert dialog.groupstats_checkbox.toolTip() == ""
-        assert dialog.groupstats_reason_label.isHidden()
-
-        request = dialog._build_analytics_request()
-        assert request.grouping_df is None
-        assert request.cohort_state.mode == mode
-        assert request.cohort_state.references == ("R1", "R2")
-        assert request.chart_selection.groupstats is True
-    finally:
-        dialog.close()
-
-
-def test_tabular_groupstats_compare_rest_refs_enable_without_manual_groups() -> None:
-    _assert_reference_groupstats_mode_enables_request("compare_rest")
-
-
-def test_tabular_groupstats_group_selected_refs_enable_without_manual_groups() -> None:
-    _assert_reference_groupstats_mode_enables_request("group_selected")
 
 
 def test_tabular_groupstats_toggle_does_not_start_analysis_worker(monkeypatch) -> None:

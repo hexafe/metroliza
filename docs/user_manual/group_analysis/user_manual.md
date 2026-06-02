@@ -1,23 +1,23 @@
 # Group Analysis User Manual
 
-This guide explains how to read the exported **Group Analysis** worksheet in plain English. It is the main end-user reading guide for the current Group Analysis-focused release.
+This guide explains how to read exported **Group Analysis** output in plain English. It is the main end-user reading guide for grouped dashboard analysis and related grouped export output.
 
 Printable companion: [`user_manual.pdf`](user_manual.pdf).
 
-If you are not sure where to start, read the worksheet top summary first, then move to the metric block you care about, then use the pairwise table and caution notes before acting on the result.
+If you are not sure where to start, read the top summary first, then move to the metric block you care about, then use the pairwise table and caution notes before acting on the result.
 
 ## A quick real-world example
 
 Imagine you measure the same feature from three production lines: **Line A**, **Line B**, and **Line C**.
 
-You open the Group Analysis worksheet because you want to answer practical questions such as:
+You open Group Analysis because you want to answer practical questions such as:
 
 - Are the lines behaving similarly or differently?
 - If they differ, is the difference probably real or just noise?
 - Is the gap large enough to matter in practice?
 - Are any groups drifting toward a specification limit?
 
-The worksheet helps you answer those questions from one main results sheet, with a separate plots sheet in Standard mode when you want the extra visual detail.
+Group Analysis helps you answer those questions from the grouped dashboard section, with visual detail available beside the metric summaries.
 
 ## What the sheet is for
 
@@ -320,7 +320,7 @@ Before you make a process decision, run through this checklist:
 
 ## Final takeaway
 
-The Group Analysis worksheet is meant to help you move from **"Are these groups different?"** to **"Does that difference matter, and what should I do next?"**
+Group Analysis is meant to help you move from **"Are these groups different?"** to **"Does that difference matter, and what should I do next?"**
 
 The safest reading pattern is:
 

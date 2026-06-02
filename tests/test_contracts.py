@@ -355,7 +355,7 @@ class TestValidateIndustrialAnalyticsRequest(unittest.TestCase):
                 )
             )
 
-    def test_defaults_dashboard_detail_mode_to_fast(self):
+    def test_defaults_dashboard_detail_mode_to_full(self):
         validated = validate_industrial_analytics_request(
             IndustrialAnalyticsRequest(
                 source_kind='production_cache',
@@ -363,7 +363,7 @@ class TestValidateIndustrialAnalyticsRequest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(validated.dashboard_detail_mode, 'fast')
+        self.assertEqual(validated.dashboard_detail_mode, 'full')
 
     def test_normalizes_dashboard_detail_mode(self):
         validated = validate_industrial_analytics_request(
@@ -377,7 +377,7 @@ class TestValidateIndustrialAnalyticsRequest(unittest.TestCase):
         self.assertEqual(validated.dashboard_detail_mode, 'full')
 
     def test_rejects_unknown_dashboard_detail_mode(self):
-        with self.assertRaisesRegex(ValueError, 'Unsupported dashboard detail mode'):
+        with self.assertRaisesRegex(ValueError, 'Unsupported dashboard rendering mode'):
             validate_industrial_analytics_request(
                 IndustrialAnalyticsRequest(
                     source_kind='production_cache',

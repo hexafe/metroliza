@@ -235,6 +235,7 @@ class ExportDialog(QDialog):
         self.export_thread = None
         self.export_error_message = None
         self._cancel_requested = False
+        self._grouping_applied = False
         self.config_path = Path.home() / '.metroliza' / '.export_dialog_config.json'
         self.config = self._load_dialog_config()
         self.dashboard_visual_settings = load_dashboard_visual_settings()
@@ -427,32 +428,6 @@ class ExportDialog(QDialog):
             self.sort_measurements_label.setToolTip("Use this menu to select how data should be sorted - by date or measurement or sample number")
             self.sort_measurements_combobox.setToolTip("Use this menu to select how data should be sorted - by date or measurement or sample number")
 
-            self.group_analysis_level_label = QLabel("Group analysis:")
-            self.group_analysis_level_combobox = QComboBox()
-            self.group_analysis_level_combobox.addItem("Off")
-            self.group_analysis_level_combobox.addItem("Light")
-            self.group_analysis_level_combobox.addItem("Standard")
-            self.group_analysis_level_label.setToolTip(
-                "Controls whether the canonical Group Analysis worksheet is added.\n"
-                "Off: do not add grouped statistical output.\n"
-                "Light: add the compact Group Analysis worksheet.\n"
-                "Standard: add the same worksheet with additional supported on-sheet plots."
-            )
-            self.group_analysis_level_combobox.setToolTip(self.group_analysis_level_label.toolTip())
-            self.group_analysis_level_combobox.currentTextChanged.connect(lambda _: self._update_group_analysis_scope_enabled_state())
-
-            self.group_analysis_scope_label = QLabel("Scope:")
-            self.group_analysis_scope_combobox = QComboBox()
-            self.group_analysis_scope_combobox.addItem("Auto")
-            self.group_analysis_scope_combobox.addItem("Single-reference")
-            self.group_analysis_scope_combobox.addItem("Multi-reference")
-            self.group_analysis_scope_label.setToolTip(
-                "Choose how the Group Analysis worksheet resolves references.\n"
-                "Auto uses the filtered grouped rows.\n"
-                "Single-reference and Multi-reference enforce the corresponding scope check for that worksheet."
-            )
-            self.group_analysis_scope_combobox.setToolTip(self.group_analysis_scope_label.toolTip())
-
             # Add textbox to set min samplesize for violin plot
             self.violin_plot_min_samplesize_label = QLabel("Violin min n:")
             self.violin_plot_min_samplesize = QLineEdit()
@@ -507,12 +482,11 @@ class ExportDialog(QDialog):
 
             self.preset_output_section_label = section_label("Preset and output")
             self.filters_grouping_section_label = section_label("Filters and grouping")
-            self.chart_analysis_section_label = section_label("Chart and group analysis")
+            self.chart_analysis_section_label = section_label("Chart settings")
             self.optional_outputs_section_label = section_label("Optional outputs")
             self.advanced_section_label = section_label("Advanced")
 
             self._set_compact_row_label_widths()
-            self._update_group_analysis_scope_enabled_state()
             self._sync_html_dashboard_only_state()
             self._sync_dashboard_visual_controls()
             self._update_export_button_enabled_state()
@@ -592,12 +566,6 @@ class ExportDialog(QDialog):
             content_layout.addWidget(self.sort_measurements_combobox, row, 3)
 
             row += 1
-            content_layout.addWidget(self.group_analysis_level_label, row, 0)
-            content_layout.addWidget(self.group_analysis_level_combobox, row, 1)
-            content_layout.addWidget(self.group_analysis_scope_label, row, 2)
-            content_layout.addWidget(self.group_analysis_scope_combobox, row, 3)
-
-            row += 1
             content_layout.addWidget(separator(), row, 0, 1, 4)
 
             row += 1
@@ -659,9 +627,7 @@ class ExportDialog(QDialog):
             self.setTabOrder(self.group_button, self.clear_group_button)
             self.setTabOrder(self.clear_group_button, self.export_type_combobox)
             self.setTabOrder(self.export_type_combobox, self.sort_measurements_combobox)
-            self.setTabOrder(self.sort_measurements_combobox, self.group_analysis_level_combobox)
-            self.setTabOrder(self.group_analysis_level_combobox, self.group_analysis_scope_combobox)
-            self.setTabOrder(self.group_analysis_scope_combobox, self.include_google_sheets_checkbox)
+            self.setTabOrder(self.sort_measurements_combobox, self.include_google_sheets_checkbox)
             self.setTabOrder(self.include_google_sheets_checkbox, self.generate_html_dashboard_checkbox)
             self.setTabOrder(self.generate_html_dashboard_checkbox, self.dashboard_visuals_button)
             self.setTabOrder(self.dashboard_visuals_button, self.include_industrial_context_checkbox)
@@ -685,8 +651,6 @@ class ExportDialog(QDialog):
         configure_accessibility(self.clear_group_button, name="Clear export grouping")
         configure_accessibility(self.export_type_combobox, name="Export chart type")
         configure_accessibility(self.sort_measurements_combobox, name="Export sort order")
-        configure_accessibility(self.group_analysis_level_combobox, name="Group analysis level")
-        configure_accessibility(self.group_analysis_scope_combobox, name="Group analysis scope")
         configure_accessibility(self.include_google_sheets_checkbox, name="Create Google Sheets output")
         configure_accessibility(self.generate_html_dashboard_checkbox, name="Create HTML dashboard")
         configure_accessibility(self.dashboard_visuals_button, name="Edit dashboard visuals")
@@ -731,8 +695,6 @@ class ExportDialog(QDialog):
             self.select_excel_label,
             self.export_type_label,
             self.sort_measurements_label,
-            self.group_analysis_level_label,
-            self.group_analysis_scope_label,
             self.export_target_label,
             self.violin_plot_min_samplesize_label,
             self.summary_plot_scale_label,
@@ -791,6 +753,17 @@ class ExportDialog(QDialog):
     def _is_html_dashboard_only(self):
         return self._selected_preset_options().get("export_target") == "html_dashboard"
 
+    def _grouping_is_applied(self):
+        if bool(getattr(self, "_grouping_applied", False)):
+            return True
+        label = getattr(self, "select_group_label", None)
+        label_text = ""
+        if label is not None and hasattr(label, "text"):
+            label_text = str(label.text() or "")
+        elif label is not None and hasattr(label, "value"):
+            label_text = str(label.value or "")
+        return label_text.strip().lower() == "applied"
+
     def _coerce_output_path_for_mode(self):
         if not str(getattr(self, "excel_file", "") or "").strip():
             return
@@ -811,8 +784,9 @@ class ExportDialog(QDialog):
 
     def _sync_html_dashboard_only_state(self, _checked=None):
         html_only = self._is_html_dashboard_only()
+        grouped = self._grouping_is_applied()
         if hasattr(self, "generate_html_dashboard_checkbox"):
-            if html_only:
+            if html_only or grouped:
                 self.generate_html_dashboard_checkbox.setChecked(True)
             elif (
                 hasattr(self.generate_html_dashboard_checkbox, "isEnabled")
@@ -820,7 +794,13 @@ class ExportDialog(QDialog):
             ):
                 self.generate_html_dashboard_checkbox.setChecked(False)
             if hasattr(self.generate_html_dashboard_checkbox, "setEnabled"):
-                self.generate_html_dashboard_checkbox.setEnabled(not html_only)
+                self.generate_html_dashboard_checkbox.setEnabled(not (html_only or grouped))
+            tooltip = (
+                "Grouped exports include Group Analysis in the HTML dashboard."
+                if grouped and not html_only
+                else "Create a local HTML sidecar for browser-based chart review next to the workbook."
+            )
+            self.generate_html_dashboard_checkbox.setToolTip(tooltip)
         if hasattr(self, "include_google_sheets_checkbox"):
             if html_only:
                 self.include_google_sheets_checkbox.setChecked(False)
@@ -1038,17 +1018,12 @@ class ExportDialog(QDialog):
 
     def set_grouping_applied(self, applied):
         try:
-            # Update filter label in export window
+            self._grouping_applied = bool(applied)
             if applied:
                 self.select_group_label.setText("Applied")
-                if hasattr(self, "group_analysis_level_combobox"):
-                    current = self.group_analysis_level_combobox.currentText().strip().lower()
-                    if current == "off":
-                        self.group_analysis_level_combobox.setCurrentText("Standard")
             else:
                 self.select_group_label.setText("Not applied")
-                if hasattr(self, "group_analysis_level_combobox"):
-                    self.group_analysis_level_combobox.setCurrentText("Off")
+            self._sync_html_dashboard_only_state()
         except Exception as e:
             self.log_and_exit(e)
 
@@ -1110,6 +1085,7 @@ class ExportDialog(QDialog):
                     generate_html_dashboard=(
                         self.generate_html_dashboard_checkbox.isChecked()
                         or self._is_html_dashboard_only()
+                        or self._grouping_is_applied()
                     ),
                     include_industrial_context=(
                         self.include_industrial_context_checkbox.isChecked()
@@ -1287,6 +1263,8 @@ class ExportDialog(QDialog):
     def _dashboard_visuals_enabled(self):
         if self._is_html_dashboard_only():
             return True
+        if self._grouping_is_applied():
+            return True
         checkbox = getattr(self, "generate_html_dashboard_checkbox", None)
         return bool(checkbox is not None and checkbox.isChecked())
 
@@ -1338,24 +1316,7 @@ class ExportDialog(QDialog):
             QMessageBox.warning(self, "Dashboard visuals", f"Could not open dashboard visuals: {exc}")
 
     def _selected_group_analysis_level(self):
-        combobox = getattr(self, "group_analysis_level_combobox", None)
-        if combobox is None:
-            return "off"
-        return combobox.currentText().strip().lower()
+        return "standard" if self._grouping_is_applied() else "off"
 
     def _selected_group_analysis_scope(self):
-        combobox = getattr(self, "group_analysis_scope_combobox", None)
-        if combobox is None:
-            return "auto"
-        return combobox.currentText().strip().lower()
-
-    def _update_group_analysis_scope_enabled_state(self):
-        level = self._selected_group_analysis_level()
-        enabled = level != "off"
-        if hasattr(self, "group_analysis_scope_combobox"):
-            self.group_analysis_scope_combobox.setVisible(enabled)
-            self.group_analysis_scope_combobox.setEnabled(enabled)
-        if hasattr(self, "group_analysis_scope_label"):
-            self.group_analysis_scope_label.setVisible(enabled)
-            self.group_analysis_scope_label.setEnabled(enabled)
-        self._apply_window_size_constraints()
+        return "auto"

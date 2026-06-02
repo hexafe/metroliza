@@ -1123,15 +1123,16 @@ def test_static_population_layer_converts_single_population_group_under_sample_c
     assert spec["layout"]["xaxis"]["type"] == "date"
     assert spec["layout"]["images"][0]["metroliza_static_population_layer_label"] == "POPULATION"
     assert image.getchannel("A").getextrema()[1] >= 32
-    assert result["html_dashboard_static_population_layer"] == {
-        "mode": "static",
-        "applied_chart_count": 1,
-        "source_point_count": point_count,
-        "rendered_point_count": point_count,
-        "skipped_chart_count": 0,
-        "sample_size": 50_000,
-        "status": "applied",
-    }
+    static_population = result["html_dashboard_static_population_layer"]
+    assert static_population["mode"] == "static"
+    assert static_population["applied_chart_count"] == 1
+    assert static_population["source_point_count"] == point_count
+    assert static_population["rendered_point_count"] == point_count
+    assert static_population["contributed_point_count"] == point_count
+    assert static_population["render_strategy_counts"] == {"marker_static": 1}
+    assert static_population["skipped_chart_count"] == 0
+    assert static_population["sample_size"] == 50_000
+    assert static_population["status"] == "applied"
     assert "Interactive charts use all selected rows; random sampling was not needed." in html_text
 
 
@@ -1287,19 +1288,58 @@ def test_write_dashboard_static_population_layer_converts_sampled_dashboard_fram
 ) -> None:
     monkeypatch.setattr(
         dashboard_module,
-        "_render_time_series_raw_layer_png",
-        lambda *_args, **_kwargs: b"png",
+        "_STATIC_POPULATION_DENSITY_POINT_THRESHOLD",
+        5,
     )
-    manifest = _static_population_layer_manifest(point_count=5)
-    manifest["summary"]["source_rows"] = 350_000
-    manifest["summary"]["rows"] = 50_000
+    monkeypatch.setattr(
+        dashboard_module,
+        "_render_time_series_density_layer_png",
+        lambda *_args, **_kwargs: (b"png", 4),
+    )
+    full_frame = pd.DataFrame(
+        {
+            "process_datetime": pd.date_range(
+                "2026-05-10 08:00",
+                periods=12,
+                freq="s",
+                tz="UTC",
+            ),
+            "GROUP": ["POPULATION"] * 12,
+            "length_mm": [10.0 + (index * 0.01) for index in range(12)],
+        }
+    )
+    dashboard_frame = full_frame.iloc[:5].copy()
+    manifest = build_production_dashboard_manifest(
+        frame=dashboard_frame,
+        static_population_source_frame=full_frame,
+        source_row_count=len(full_frame.index),
+        dashboard_row_count=len(dashboard_frame.index),
+        metric_selection=(ProductionMetricSelection("length_mm", "Length Mm"),),
+        aggregation_state=ProductionAggregationState(
+            time_bucket="none",
+            aggregation_methods=("mean",),
+            group_fields=("GROUP",),
+        ),
+        chart_selection=ProductionChartSelection(
+            time_series=True,
+            histogram=False,
+            violin=False,
+            box=False,
+            groupstats=False,
+        ),
+        dashboard_interactivity_options={
+            "mode": "sampled",
+            "sample_size": 5,
+            "population_layer_mode": "static",
+        },
+    )
 
     result = write_production_dashboard(
         manifest,
         tmp_path / "population_static_sampled.html",
         dashboard_interactivity_options={
             "mode": "sampled",
-            "sample_size": 50_000,
+            "sample_size": 5,
             "population_layer_mode": "static",
         },
     )
@@ -1307,12 +1347,19 @@ def test_write_dashboard_static_population_layer_converts_sampled_dashboard_fram
     html_text = Path(result["html_dashboard_path"]).read_text(encoding="utf-8")
     chart = _embedded_dashboard_charts(html_text)[0]
     static_population = result["html_dashboard_static_population_layer"]
-    assert chart["plotly_spec"]["data"][0]["name"] == "POPULATION static layer"
+    proxy_trace = chart["plotly_spec"]["data"][0]
+    assert proxy_trace["name"] == "POPULATION static layer"
+    assert proxy_trace["meta"]["metroliza_render_strategy"] == "full_density"
     assert chart["plotly_spec"]["layout"]["images"][0]["metroliza_static_population_layer_label"] == "POPULATION"
     assert static_population["status"] == "applied"
     assert static_population["dashboard_sampled"] is True
-    assert static_population["source_row_count"] == 350_000
-    assert static_population["dashboard_row_count"] == 50_000
+    assert static_population["source_row_count"] == 12
+    assert static_population["dashboard_row_count"] == 5
+    assert static_population["source_point_count"] == 12
+    assert static_population["rendered_point_count"] == 12
+    assert static_population["contributed_point_count"] == 12
+    assert static_population["render_strategy_counts"] == {"full_density": 1}
+    assert "Static POPULATION density layers keep the full process background visible" in html_text
 
 
 def test_write_dashboard_static_population_layer_keeps_unsupported_chart_honest(

@@ -75,11 +75,31 @@ Expected stage-level timings include:
 - CSV summary path: `groupstats_analysis`, `transform_grouping`,
   `detail_sheet_to_excel`, `worksheet_writes`, `chart_generation`,
   `overview_sheet_write`, `workbook_write`, and `workbook_close`.
+- Static POPULATION render probe: `array_generation`, `full_density_render`,
+  and `sampled_marker_render`.
 
 CI trend reporting uses `scripts/benchmark_trend_compare.py
 --export-stage-metrics` to include these export stage keys in the uploaded
 non-blocking trend report. Missing stage keys are reported as `missing` in the
 JSON output rather than failing the job.
+
+Manual release-scale dashboard probes:
+
+```bash
+PYTHONPATH=src:. python scripts/benchmark_paths.py \
+  --scenarios population_static_render_probe \
+  --population-static-render-rows 10000000
+
+PYTHONPATH=src:. python scripts/benchmark_paths.py \
+  --scenarios csv_summary_large_data_probe \
+  --large-csv-rows 10000000 \
+  --large-csv-columns 20 \
+  --large-csv-materialize-columns 5
+```
+
+The 10M-point static POPULATION probe is opt-in and is not part of default CI.
+It records full-density render time, sampled-marker comparison time, PNG size,
+non-empty pixel count, and peak RSS when the platform exposes it.
 
 ## 2) Distribution fit batch path (`scripts/benchmark_distribution_fit_batch.py`)
 

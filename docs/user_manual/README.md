@@ -16,7 +16,7 @@ This manual set helps you:
 - open the right tool for the job,
 - understand what each button and field does,
 - avoid common mistakes,
-- understand how to read the Group Analysis worksheet safely, and
+- understand grouped dashboard analysis safely, and
 - find the right reference page when you need details later.
 
 ## Recommended reading order
@@ -29,17 +29,17 @@ If you are new to the app, start here:
 4. [Characteristic Name Matching](characteristic_name_matching.md) — optional normalization when the same characteristic appears under different names.
 5. [Export overview](export_overview.md) — create the main Excel report.
 6. [Export filtering](export_filtering.md) — narrow the export to the data you want.
-7. [Export grouping](export_grouping.md) — create groups for grouped reporting and Group Analysis.
-8. [Group Analysis worksheet manual](group_analysis/README.md) — learn how to read the exported worksheet after export.
+7. [Export grouping](export_grouping.md) — create groups for grouped reporting and dashboard analysis.
+8. [Group Analysis guide](group_analysis/README.md) — learn how to read grouped statistical output.
 
 If you are using CSV Summary instead of the database workflow, jump to [CSV Summary](csv_summary.md).
 
 ## Current documentation focus
 
-The current release focuses especially on **Group Analysis** and the user manuals around it. If you work with grouped exports, read these pages first after the export setup guides:
+The current release focuses especially on grouped dashboard analysis and the user manuals around it. If you work with grouped exports, read these pages first after the export setup guides:
 
-- [Export grouping](export_grouping.md) — how to prepare the groups that feed the worksheet.
-- [Group Analysis worksheet manual](group_analysis/README.md) — how to read the exported worksheet in plain English.
+- [Export grouping](export_grouping.md) — how to prepare the groups that feed the dashboard.
+- [Group Analysis guide](group_analysis/README.md) — how to read grouped statistical output in plain English.
 - [Group Analysis Markdown manual](group_analysis/user_manual.md) — the detailed reading guide.
 
 ## Workflow manuals
@@ -65,8 +65,8 @@ These pages support the main workflows.
 
 These pages explain exported output rather than the Export dialog itself.
 
-- [Group Analysis worksheet manual](group_analysis/README.md)
+- [Group Analysis guide](group_analysis/README.md)
   - [HTML/Markdown version](group_analysis/user_manual.md)
   - [Printable PDF](group_analysis/user_manual.pdf)
 
-The Group Analysis manual explains how to read the exported **Group Analysis worksheet**. It does **not** explain how to use the Export dialog itself. For export setup, start with [Export overview](export_overview.md).
+The Group Analysis manual explains how to read grouped statistical output. It does **not** explain how to use the Export dialog itself. For export setup, start with [Export overview](export_overview.md).

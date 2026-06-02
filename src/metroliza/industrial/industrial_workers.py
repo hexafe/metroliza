@@ -229,7 +229,7 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
         tabular_filter_columns: tuple[str, ...] | list[str] | None = None,
         tabular_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
         tabular_column_filters: tuple[TabularColumnFilter, ...] | list[TabularColumnFilter] | None = None,
-        dashboard_detail_mode: str = "fast",
+        dashboard_detail_mode: str = "full",
         grouping_df=None,
         dashboard_visual_settings: dict | None = None,
         dashboard_interactivity_options: object | None = None,

@@ -120,7 +120,7 @@ python -m maturin build --manifest-path src/metroliza/native/distribution_fit_ad
 ### 2026.05 RC4 directory-reorganization audit evidence
 
 Current validation branch: `codex/directory-reorg-plan`.
-Current RC metadata: `2026.05rc4(260601)`.
+Current RC metadata: `2026.05rc4(260602)`.
 Current plotstats hotfix pin:
 `1e2c72107d342f44a37e5fb78d7d76992ea60315`.
 
@@ -129,7 +129,7 @@ Current plotstats hotfix pin:
 - Previous RC2 audit evidence remains historical in
   [`rc2_release_audit_2026-05-17.md`](./rc2_release_audit_2026-05-17.md).
 - Local release gates passed for the current directory-reorganization audit
-  worktree after the chart reference-label dedupe and `260601` build-date
+  worktree after the chart reference-label dedupe and `260602` build-date
   refresh: `ruff`, `compileall`, release metadata sync, release hygiene,
   security audit, full pytest with coverage, and packaged PDF parser input
   validation.
@@ -163,6 +163,18 @@ Current plotstats hotfix pin:
   Oznak/dashboard tests (`17 passed` and `57 passed`), full headless suite
   (`1828 passed, 261 skipped, 95 warnings, 60 subtests passed`), and the
   CI-shaped combined coverage gate at `81%` against the `80%` threshold.
+  Fresh pushed-SHA CI evidence is still required before merge/tag.
+- Export/CSV Summary cleanup QA passed locally on 2026-06-02. Export grouping
+  now infers standard group analysis from applied grouping, creates the HTML
+  dashboard automatically for grouped exports, and keeps Group Analysis out of
+  the workbook when the dashboard is generated. CSV Summary now removes the
+  former detail selector, uses full dashboard rendering by default, and keeps
+  pasted-reference controls out of the CSV/Excel workflow. Focused Export and
+  release metadata tests passed (`78 passed`), local release gates passed
+  (`ruff`, `compileall`, release metadata sync, release hygiene, and security
+  audit with no known vulnerabilities), the full headless suite passed
+  (`1828 passed, 259 skipped, 95 warnings, 60 subtests passed`), and the
+  CI-shaped combined coverage gate passed at `81%` against the `80%` threshold.
   Fresh pushed-SHA CI evidence is still required before merge/tag.
 - Post-reorganization follow-up local audit passed after docs/reference cleanup,
   parser-plugin productionization coverage, architecture guardrail hardening, and

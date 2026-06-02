@@ -191,7 +191,7 @@ class IndustrialAnalyticsRequest:
 
     source_kind: str
     output_dashboard_file: str
-    dashboard_detail_mode: str = "fast"
+    dashboard_detail_mode: str = "full"
     db_file: str = ""
     input_file: str = ""
     output_workbook_file: str = ""
@@ -621,10 +621,10 @@ def _normalize_analytics_source_kind(value: object) -> str:
 
 def _normalize_dashboard_detail_mode(value: object) -> str:
     if not isinstance(value, str):
-        raise ValueError("Dashboard detail mode must be provided as a string.")
+        raise ValueError("Dashboard rendering mode must be provided as a string.")
     detail_mode = value.strip().lower()
     if detail_mode not in _DASHBOARD_DETAIL_MODES:
-        raise ValueError(f"Unsupported dashboard detail mode: {value}")
+        raise ValueError(f"Unsupported dashboard rendering mode: {value}")
     return detail_mode
 
 

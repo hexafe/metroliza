@@ -13,7 +13,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}(?:rc\d+)?$")
         self.assertRegex(metadata.build, r"^\d{6}$")
         self.assertEqual(metadata.version_label, f"{metadata.release_version}({metadata.build})")
-        self.assertEqual(metadata.public_version_label, "2026.05 RC4 (build 260601)")
+        self.assertEqual(metadata.public_version_label, "2026.05 RC4 (build 260602)")
         self.assertTrue(metadata.highlight)
 
     def test_in_app_current_release_notes_show_current_version_only(self):
@@ -58,6 +58,8 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
                 "- CSV Summary static POPULATION layers now remain visible when all selected rows belong to POPULATION and no random sampling is needed<br>",
                 "- Oznak Check access no longer requests a reference column unless reference filtering is configured<br>",
                 "- CSV Summary and Export dashboards now use clearer run notes, image snapshot wording, and group comparison takeaways<br>",
+                "- CSV Summary now uses Edit groups for selected-reference comparisons and keeps dashboard rendering controls in Dashboard interactivity<br>",
+                "- Grouped Export runs now add standard group analysis to the HTML dashboard instead of adding extra workbook sheets<br>",
             ],
         )
         changelog_bullets = [

@@ -1,6 +1,6 @@
 # Changelog (for end users)
 
-## 2026.05 RC4 (build 260601) — current version
+## 2026.05 RC4 (build 260602) — current version
 - Parser profiles can now be prepared from **Tools > Parser profiles...** for new supplier report templates without writing Python code.
 - Google Sheets export now checks converted workbook tabs and warns when a local Excel fallback should be used.
 - Canceling long parsing, export, and metadata tasks is more reliable from progress windows.
@@ -9,6 +9,8 @@
 - CSV Summary static POPULATION layers now remain visible when all selected rows belong to POPULATION and no random sampling is needed.
 - Oznak Check access no longer requests a reference column unless reference filtering is configured.
 - CSV Summary and Export dashboards now use clearer run notes, image snapshot wording, and group comparison takeaways.
+- CSV Summary now uses Edit groups for selected-reference comparisons and keeps dashboard rendering controls in Dashboard interactivity.
+- Grouped Export runs now add standard group analysis to the HTML dashboard instead of adding extra workbook sheets.
 
 ## 2026.05 RC3 (build 260519)
 - CSV Summary and Export grouping filters now apply after pressing Enter, keeping large row sets responsive while typing.

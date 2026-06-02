@@ -183,21 +183,11 @@ python -m maturin build --manifest-path src/metroliza/native/chart_renderer/Carg
 
 ## Group Analysis
 
-Excel exports now present grouped statistical results in a canonical **Group Analysis** worksheet. In **Standard** mode, the workbook also adds a separate **Group Analysis Plots** sheet.
+Grouped Export runs now add standard group analysis to the HTML dashboard automatically. The workbook stays focused on the main exported measurement sheets and selected workbook charts.
 
-For a plain-English guide to the exported Group Analysis worksheet, see [`docs/user_manual/group_analysis/user_manual.md`](docs/user_manual/group_analysis/user_manual.md). Printable companion: [`docs/user_manual/group_analysis/user_manual.pdf`](docs/user_manual/group_analysis/user_manual.pdf).
+Use Export grouping when you want named groups compared in the browser dashboard. Without grouping, group analysis is off.
 
-### What is on the sheet
-
-The worksheet is designed to be read top-to-bottom on one main sheet so users can review conclusions first and only open extra visual detail when needed:
-
-- **Title and context at the top** so users can confirm they are reading the grouped analysis output.
-- A **compact summary** near the top that shows status, effective scope, metric count, and any short export warning.
-- A **metric index with jump links** near the top so users can move directly to a metric block without leaving the single worksheet.
-- Repeated **per-metric blocks** so each metric keeps its descriptive statistics, significance results, effect-size context, and nearby notes together.
-- **Pairwise comparison tables** inside each metric block so users can compare one group against another without leaving the sheet.
-- Short **interpretation and action notes** in plain language to explain what changed, what is statistically meaningful, and what to review next.
-- A separate **Group Analysis Plots** sheet in **Standard** mode so the main results sheet stays cleaner while the visual detail remains one click away.
+For background on the statistical output, see the Group Analysis user manual: [`docs/user_manual/group_analysis/user_manual.md`](docs/user_manual/group_analysis/user_manual.md). Printable companion: [`docs/user_manual/group_analysis/user_manual.pdf`](docs/user_manual/group_analysis/user_manual.pdf).
 - A **light visual style**: no user-facing freeze panes, hidden gridlines, selective borders, and explicit widths/heights tuned for readability.
 
 ### Light vs Standard
@@ -269,8 +259,8 @@ Examples of metric availability by spec type:
 - Modify Database guide: [`docs/user_manual/modify_database.md`](docs/user_manual/modify_database.md)
 - Export overview: [`docs/user_manual/export_overview.md`](docs/user_manual/export_overview.md)
 - CSV Summary guide: [`docs/user_manual/csv_summary.md`](docs/user_manual/csv_summary.md)
-- Group Analysis worksheet manual: [`docs/user_manual/group_analysis/user_manual.md`](docs/user_manual/group_analysis/user_manual.md)
-- Group Analysis printable companion: [`docs/user_manual/group_analysis/user_manual.pdf`](docs/user_manual/group_analysis/user_manual.pdf)
+- Group analysis interpretation guide: [`docs/user_manual/group_analysis/user_manual.md`](docs/user_manual/group_analysis/user_manual.md)
+- Group analysis printable companion: [`docs/user_manual/group_analysis/user_manual.pdf`](docs/user_manual/group_analysis/user_manual.pdf)
 
 ### Other repository docs
 
@@ -285,12 +275,12 @@ Examples of metric availability by spec type:
 
 ## Release metadata
 
-Current release highlight (`2026.05 RC4 (build 260601)`): Parser profile self-service, export reliability, safer long-task cancellation, dashboard plot visual customization, static POPULATION layers for CSV Summary, and clearer dashboard reading flow.
+Current release highlight (`2026.05 RC4 (build 260602)`): Parser profile self-service, export reliability, safer long-task cancellation, dashboard plot visual customization, static POPULATION layers, CSV Summary cleanup, and dashboard-first Export group analysis.
 
 Canonical release metadata is in `src/metroliza/app/version.py`. The root `VersionDate.py`
 module remains as a compatibility import for existing scripts.
 
-### Changelog highlights (release `2026.05 RC4 (build 260601)`)
+### Changelog highlights (release `2026.05 RC4 (build 260602)`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 

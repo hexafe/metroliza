@@ -193,9 +193,9 @@ def test_run_tabular_file_analytics_reuses_shared_dashboard_and_parameter_workbo
     assert '<div class="metric-label">Source</div>' in html_text
     assert '<span class="metric-value-line">table.csv</span>' in html_text
     assert '<div class="metric-label">Rows rendered</div>' in html_text
-    assert '<div class="metric-label">Chart detail</div>' in html_text
+    assert '<div class="metric-label">Dashboard interactivity</div>' in html_text
     assert (
-        '<span class="metric-value-line">Auto, all 6 rows rendered; '
+        '<span class="metric-value-line">All rows; '
         "POPULATION layer auto</span>"
     ) in html_text
     assert "Metroliza CSV Summary Dashboard" in html_text
@@ -278,21 +278,21 @@ def test_run_tabular_file_analytics_uses_loaded_snapshot_without_reloading(
     assert Path(result.html_dashboard_path).exists()
 
 
-def test_run_tabular_file_analytics_fast_detail_samples_dashboard_frame(
+def test_run_tabular_file_analytics_interactivity_auto_samples_dashboard_frame(
     tmp_path,
     monkeypatch,
 ) -> None:
     input_file = tmp_path / "detail_table.csv"
     dashboard_file = tmp_path / "detail_table_analytics.html"
+    row_count = 5001
     pd.DataFrame(
         {
-            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=6, freq="h"),
-            "Reference ID": [f"R{index}" for index in range(6)],
-            "Length mm": [10.0, 10.2, 10.4, 10.6, 10.8, 11.0],
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=row_count, freq="s"),
+            "Reference ID": [f"R{index}" for index in range(row_count)],
+            "Length mm": [10.0 + (index % 100) * 0.01 for index in range(row_count)],
         }
     ).to_csv(input_file, index=False)
     captured_lengths: list[int] = []
-    monkeypatch.setattr(workflow_module, "TABULAR_FAST_DASHBOARD_ROW_LIMIT", 3)
 
     def capture_dashboard(**kwargs):
         captured_lengths.append(len(kwargs["frame"].index))
@@ -309,14 +309,15 @@ def test_run_tabular_file_analytics_fast_detail_samples_dashboard_frame(
         output_dashboard_file=str(dashboard_file),
         metric_selection=(ProductionMetricSelection("length_mm", display_label="Length mm"),),
         chart_selection=ProductionChartSelection(time_series=True),
+        dashboard_interactivity_options={"mode": "auto", "sample_size": 5000},
     )
 
-    assert result.row_count == 6
-    assert captured_lengths == [3]
+    assert result.row_count == row_count
+    assert captured_lengths == [5000]
     assert any(
         diagnostic.code == "tabular_dashboard_fast_sample"
-        and diagnostic.context["input_row_count"] == 6
-        and diagnostic.context["dashboard_row_count"] == 3
+        and diagnostic.context["input_row_count"] == row_count
+        and diagnostic.context["dashboard_row_count"] == 5000
         for diagnostic in result.diagnostics
     )
 
@@ -327,29 +328,30 @@ def test_run_tabular_file_analytics_sampled_dashboard_renders_sampling_copy(
 ) -> None:
     input_file = tmp_path / "sampled_dashboard_table.csv"
     dashboard_file = tmp_path / "sampled_dashboard_table_analytics.html"
+    row_count = 5001
     pd.DataFrame(
         {
-            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=6, freq="h"),
-            "Reference ID": [f"R{index}" for index in range(6)],
-            "Length mm": [10.0, 10.2, 10.4, 10.6, 10.8, 11.0],
+            "Time Stamp": pd.date_range("2026-05-10 08:00", periods=row_count, freq="s"),
+            "Reference ID": [f"R{index}" for index in range(row_count)],
+            "Length mm": [10.0 + (index % 100) * 0.01 for index in range(row_count)],
         }
     ).to_csv(input_file, index=False)
-    monkeypatch.setattr(workflow_module, "TABULAR_FAST_DASHBOARD_ROW_LIMIT", 3)
 
     result = run_tabular_file_analytics(
         input_file=str(input_file),
         output_dashboard_file=str(dashboard_file),
         metric_selection=(ProductionMetricSelection("length_mm", display_label="Length mm"),),
         chart_selection=ProductionChartSelection(time_series=True),
+        dashboard_interactivity_options={"mode": "auto", "sample_size": 5000},
     )
 
     sampling_note = (
-        "Interactive dashboard charts use a reproducible random sample of 3 rows from 6; "
+        "Interactive dashboard charts use a reproducible random sample of 5,000 rows from 5,001; "
         "aggregate tables, group comparison, and workbook output use all selected rows."
     )
     html_text = dashboard_file.read_text(encoding="utf-8")
 
-    assert result.row_count == 6
+    assert result.row_count == row_count
     assert sampling_note in html_text
     assert any(
         diagnostic.code == "tabular_dashboard_fast_sample"
@@ -359,22 +361,22 @@ def test_run_tabular_file_analytics_sampled_dashboard_renders_sampling_copy(
     )
     assert (
         '<div class="metric-label">Rows rendered</div><div class="metric-value">'
-        '<span class="metric-value-line">3</span></div>'
+        '<span class="metric-value-line">5000</span></div>'
         in html_text
     )
     assert (
         '<div class="metric-label">Source rows</div><div class="metric-value">'
-        '<span class="metric-value-line">6</span></div>'
+        '<span class="metric-value-line">5001</span></div>'
         in html_text
     )
     assert (
-        '<div class="metric-label">Chart detail</div><div class="metric-value">'
-        '<span class="metric-value-line">Auto, 3 random row sample; '
+        '<div class="metric-label">Dashboard interactivity</div><div class="metric-value">'
+        '<span class="metric-value-line">Auto, 5,000 interactive random sample limit; '
         "POPULATION layer auto</span></div>"
         in html_text
     )
     assert (
-        "Interactive charts use a reproducible random sample of up to 3 rows; "
+        "Interactive charts use a reproducible random sample of up to 5,000 rows; "
         "aggregate tables and group comparison use all selected rows."
         in html_text
     )
@@ -493,6 +495,7 @@ def test_run_tabular_file_analytics_fast_detail_preserves_middle_population_grou
         grouping_df=grouping_df,
         aggregation_state=ProductionAggregationState(time_bucket="none", aggregation_methods=("mean",)),
         chart_selection=ProductionChartSelection(violin=True, box=True, groupstats=False),
+        dashboard_detail_mode="fast",
     )
 
     assert result.row_count == row_count

@@ -85,11 +85,13 @@ See [Export filtering](export_filtering.md) for details.
 
 Click **Edit...** next to **Grouping** to open the grouping dialog.
 
-Use this when you want to assign parts into named groups for grouped reporting and the **Group Analysis worksheet**.
+Use this when you want to assign parts into named groups for grouped reporting and dashboard
+group comparison.
 
 See [Export grouping](export_grouping.md) for details.
 
-Important behavior: if grouping is applied, the Export dialog automatically switches **Group analysis** to **Standard** if it was previously **Off**.
+Important behavior: if grouping is applied, Export automatically includes standard group
+analysis in the HTML dashboard. The Excel workbook stays focused on the main export sheets.
 
 ## Output
 
@@ -226,50 +228,14 @@ Choose the option that best matches how you want to read the workbook.
 
 ## Group analysis
 
-This section controls whether the exported workbook includes the **Group Analysis worksheet**.
+Group analysis is automatic:
 
-### Group analysis level
+- if grouping is **Not applied**, group analysis is off;
+- if grouping is **Applied**, standard group analysis is added to the HTML dashboard.
 
-Available levels are:
-
-- **Off**
-- **Light**
-- **Standard**
-
-#### Off
-
-Do not add the Group Analysis worksheet.
-
-#### Light
-
-Adds the Group Analysis worksheet in a more compact form.
-
-#### Standard
-
-Adds the same worksheet with more supported on-sheet detail, including plot support when available.
-
-### Group analysis scope
-
-Available scopes are:
-
-- **Auto**
-- **Single-reference**
-- **Multi-reference**
-
-This setting appears only when **Group analysis** is not **Off**.
-
-A simple way to think about scope:
-
-- **Auto** lets the export decide based on the filtered/grouped data.
-- **Single-reference** is for exports that should be treated as one-reference analysis.
-- **Multi-reference** is for exports that should be treated as multi-reference analysis.
-
-There is a dependency between the level and scope:
-
-- if level is **Off**, scope is effectively inactive,
-- if level is **Light** or **Standard**, scope becomes available.
-
-For help reading the finished worksheet, see [Group Analysis worksheet manual](group_analysis/user_manual.md).
+The dashboard is enabled automatically for grouped exports, because group comparison is easier
+to review in the browser layout than as extra workbook sheets. The workbook still contains the
+main exported measurement sheets and selected workbook charts.
 
 ## Advanced options
 
@@ -344,4 +310,4 @@ Use these follow-up pages based on what you need:
 
 - [Export filtering](export_filtering.md) — how filtering choices work.
 - [Export grouping](export_grouping.md) — how to create and save groups.
-- [Group Analysis worksheet manual](group_analysis/user_manual.md) — how to read the exported worksheet.
+- [Group Analysis guide](group_analysis/user_manual.md) — how to read grouped statistical output.
