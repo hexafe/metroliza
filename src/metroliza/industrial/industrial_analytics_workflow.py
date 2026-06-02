@@ -38,6 +38,10 @@ from metroliza.industrial.industrial_analytics_workbook import (
     export_production_analytics_workbook,
 )
 from metroliza.shared.progress_status import build_three_line_status, format_progress_duration
+from metroliza.shared.dashboard_interactivity import (
+    normalize_dashboard_interactivity_mapping,
+    summarize_dashboard_interactivity_options,
+)
 from metroliza.tabular.tabular_analytics_service import (
     TABULAR_GROUP_COLUMN,
     TabularAnalyticsLoadResult,
@@ -53,7 +57,6 @@ AnalyticsSourceKind = Literal["production_cache", "tabular_file"]
 CancelCheck = Callable[[], bool]
 ProgressCallback = Callable[[str], None]
 TABULAR_FAST_DASHBOARD_ROW_LIMIT = DASHBOARD_RAW_POINT_LIMIT
-_DASHBOARD_INTERACTIVITY_MODES = {"auto", "sampled", "static", "full"}
 
 
 class AnalyticsCancelled(RuntimeError):
@@ -530,42 +533,15 @@ def _normalize_dashboard_interactivity_options(
     *,
     detail_mode: str,
 ) -> dict[str, int | str]:
-    mode = "full" if str(detail_mode or "").strip().casefold() == "full" else "auto"
-    sample_size = int(TABULAR_FAST_DASHBOARD_ROW_LIMIT)
-    population_layer_mode = "auto"
-    if isinstance(options, dict):
-        raw_mode = options.get("mode")
-        raw_sample_size = options.get("sample_size", options.get("sampleSize"))
-        raw_population_layer_mode = options.get(
-            "population_layer_mode",
-            options.get("populationLayerMode"),
-        )
-    else:
-        raw_mode = getattr(options, "mode", None)
-        raw_sample_size = getattr(options, "sample_size", getattr(options, "sampleSize", None))
-        raw_population_layer_mode = getattr(
-            options,
-            "population_layer_mode",
-            getattr(options, "populationLayerMode", None),
-        )
-    if isinstance(raw_mode, str) and raw_mode.strip():
-        candidate_mode = raw_mode.strip().casefold()
-        if candidate_mode in _DASHBOARD_INTERACTIVITY_MODES:
-            mode = candidate_mode
-    if isinstance(raw_population_layer_mode, str) and raw_population_layer_mode.strip():
-        candidate_population_layer_mode = raw_population_layer_mode.strip().casefold()
-        if candidate_population_layer_mode in {"auto", "interactive", "static"}:
-            population_layer_mode = candidate_population_layer_mode
-    try:
-        candidate_sample_size = int(raw_sample_size)
-    except (TypeError, ValueError):
-        candidate_sample_size = sample_size
-    sample_size = max(1, candidate_sample_size)
-    return {
-        "mode": mode,
-        "sample_size": sample_size,
-        "population_layer_mode": population_layer_mode,
-    }
+    default_mode = "full" if str(detail_mode or "").strip().casefold() == "full" else "auto"
+    return normalize_dashboard_interactivity_mapping(
+        options,
+        default_mode=default_mode,
+        default_sample_size=int(TABULAR_FAST_DASHBOARD_ROW_LIMIT),
+        strict=False,
+        min_sample_size=1,
+        max_sample_size=None,
+    )
 
 
 def _dashboard_interactivity_label(
@@ -574,36 +550,12 @@ def _dashboard_interactivity_label(
     source_row_count: int | None = None,
     dashboard_row_count: int | None = None,
 ) -> str:
-    labels = {
-        "auto": "Auto",
-        "sampled": "Interactive random sample",
-        "static": "Snapshots only",
-        "full": "All rows",
-    }
-    mode = str(options.get("mode") or "auto").strip().casefold()
-    label = labels.get(mode, mode.replace("_", " ").strip().title() or "Auto")
-    if mode in {"auto", "sampled"}:
-        try:
-            sample_size = int(options.get("sample_size") or TABULAR_FAST_DASHBOARD_ROW_LIMIT)
-        except (TypeError, ValueError):
-            sample_size = int(TABULAR_FAST_DASHBOARD_ROW_LIMIT)
-        if (
-            source_row_count is not None
-            and dashboard_row_count is not None
-            and int(source_row_count) <= sample_size
-            and int(dashboard_row_count) >= int(source_row_count)
-        ):
-            detail = f"{label}, all {int(source_row_count):,} rows rendered"
-        else:
-            detail = f"{label}, {sample_size:,} interactive random sample limit"
-    else:
-        detail = label
-    population_label = {
-        "auto": "POPULATION layer auto",
-        "interactive": "POPULATION layer interactive points",
-        "static": "POPULATION layer static image",
-    }.get(str(options.get("population_layer_mode") or "auto").strip().casefold(), "POPULATION layer auto")
-    return f"{detail}; {population_label}"
+    return summarize_dashboard_interactivity_options(
+        options,
+        default_sample_size=int(TABULAR_FAST_DASHBOARD_ROW_LIMIT),
+        source_row_count=source_row_count,
+        dashboard_row_count=dashboard_row_count,
+    )
 
 
 def _tabular_dashboard_context(

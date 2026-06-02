@@ -4,13 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import math
-import re
 from typing import Any
 
+from metroliza.charts.plotly_stat_helpers import (
+    format_group_statistics_trace_name as _format_group_statistics_trace_name,
+    payload_distribution_series as _payload_distribution_series,
+    strip_group_count_suffix as _strip_group_count_suffix,
+)
 from metroliza.charts.summary_plot_palette import SUMMARY_PLOT_PALETTE
 from metroliza.charts.value_formatting import format_metrology_legend_value as _shared_format_metrology_legend_value
 
-_GROUP_COUNT_SUFFIX_PATTERN = re.compile(r"\s*\(n\s*=\s*\d+\)\s*$", re.IGNORECASE)
 _STAT_DASH_BY_LABEL = {
     "Min": "dot",
     "Q1": "dash",
@@ -164,16 +167,6 @@ def build_distribution_iqr_plotly_spec(
     }
 
 
-def _payload_distribution_series(payload: Mapping[str, Any]) -> list[Any]:
-    series = payload.get("series")
-    if isinstance(series, list):
-        return series
-    values = payload.get("values")
-    if isinstance(values, list):
-        return values
-    return []
-
-
 def _coerce_finite_float(value: Any) -> float | None:
     try:
         number = float(value)
@@ -184,18 +177,6 @@ def _coerce_finite_float(value: Any) -> float | None:
 
 def _coerce_finite_float_list(values: Any) -> list[float]:
     return [number for value in values or [] if (number := _coerce_finite_float(value)) is not None]
-
-
-def _format_group_statistics_trace_name(label: str, values: Sequence[float]) -> str:
-    text = str(label)
-    if _GROUP_COUNT_SUFFIX_PATTERN.search(text.strip()):
-        return text
-    return f"{text} (n={len(values)})"
-
-
-def _strip_group_count_suffix(label: str) -> str:
-    stripped = _GROUP_COUNT_SUFFIX_PATTERN.sub("", str(label or "").strip()).strip()
-    return stripped or str(label or "").strip()
 
 
 def _stat_line_traces(

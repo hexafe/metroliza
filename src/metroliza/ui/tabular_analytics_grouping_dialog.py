@@ -510,10 +510,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         return ui_theme_tokens.ideal_text_color(background_hex)
 
     def _resolve_default_group_color(self) -> str:
-        palette = self.palette() if hasattr(self, "palette") else None
-        base = palette.base().color() if palette is not None and hasattr(palette, "base") else None
-        base_hex = base.name() if base is not None and hasattr(base, "isValid") and base.isValid() else None
-        return ui_theme_tokens.resolve_base_row_background(base_hex)
+        return ui_theme_tokens.resolve_widget_base_row_background(self)
 
     @staticmethod
     def _is_dark_mode_base(base_hex: str) -> bool:

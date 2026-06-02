@@ -28,6 +28,7 @@ from metroliza.charts.dashboard_html_controls import (
     render_dashboard_control_bar,
     render_dashboard_controls_css,
     render_dashboard_theme_bootstrap_script,
+    render_dashboard_theme_runtime_helpers,
     render_dashboard_visual_dialog,
     render_dashboard_visual_runtime_js,
 )
@@ -52,6 +53,11 @@ from metroliza.charts.hexafe_plotstats_adapter import (
     plotstats_export_charts_enabled,
     render_histogram_png,
 )
+from metroliza.charts.plotly_stat_helpers import (
+    plotly_spec_variants as _plotly_spec_variants,
+    series_labels_from_plotly_spec as _shared_series_labels_from_plotly_spec,
+    strip_group_count_suffix as _strip_group_count_suffix,
+)
 from metroliza.industrial.industrial_analytics_service import (
     ProductionAggregationResult,
     ProductionAnalyticsDiagnostic,
@@ -64,6 +70,7 @@ from metroliza.industrial.industrial_analytics_state import (
     ReferenceCohortState,
 )
 from metroliza.charts.summary_plot_palette import SUMMARY_PLOT_PALETTE
+from metroliza.shared.dashboard_interactivity import normalize_dashboard_interactivity_mapping
 
 
 DASHBOARD_SCHEMA = "metroliza.production_analytics_dashboard.v1"
@@ -71,7 +78,6 @@ PLOTLY_ASSET_NAME = "plotly-2.27.0.min.js"
 PLOTLY_ASSET_SOURCE = (
     Path(__file__).resolve().parents[1] / "resources" / "html_dashboard_assets" / PLOTLY_ASSET_NAME
 )
-_GROUP_COUNT_SUFFIX_PATTERN = re.compile(r"\s*\(n\s*=\s*\d+\)\s*$", re.IGNORECASE)
 PLOTLY_MODEBAR_REMOVE = (
     "select2d",
     "lasso2d",
@@ -96,11 +102,6 @@ DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET = 8_000_000
 STATIC_POPULATION_LAYER_OPTIMIZATION = "static_population_layer"
 _STATIC_POPULATION_SOURCE_XY_KEY = "_metroliza_static_population_source_xy"
 _STATIC_POPULATION_DENSITY_POINT_THRESHOLD = DASHBOARD_RAW_POINT_LIMIT
-
-
-def _strip_group_count_suffix(label: str) -> str:
-    stripped = _GROUP_COUNT_SUFFIX_PATTERN.sub("", str(label or "").strip()).strip()
-    return stripped or str(label or "").strip()
 
 
 def _metric_population_source_frame(
@@ -507,41 +508,13 @@ def _measure_plotly_spec_json_bytes(plotly_spec: dict[str, Any]) -> int:
 
 
 def _normalize_dashboard_interactivity_options(options: Any) -> dict[str, int | str]:
-    mode = "auto"
-    sample_size = int(DASHBOARD_RAW_POINT_LIMIT)
-    population_layer_mode = "auto"
-    if isinstance(options, dict):
-        raw_mode = options.get("mode")
-        raw_sample_size = options.get("sample_size", options.get("sampleSize"))
-        raw_population_layer_mode = options.get(
-            "population_layer_mode",
-            options.get("populationLayerMode"),
-        )
-    else:
-        raw_mode = getattr(options, "mode", None)
-        raw_sample_size = getattr(options, "sample_size", getattr(options, "sampleSize", None))
-        raw_population_layer_mode = getattr(
-            options,
-            "population_layer_mode",
-            getattr(options, "populationLayerMode", None),
-        )
-    if isinstance(raw_mode, str):
-        candidate_mode = raw_mode.strip().casefold()
-        if candidate_mode in {"auto", "sampled", "static", "full"}:
-            mode = candidate_mode
-    if isinstance(raw_population_layer_mode, str):
-        candidate_population_layer_mode = raw_population_layer_mode.strip().casefold()
-        if candidate_population_layer_mode in {"auto", "interactive", "static"}:
-            population_layer_mode = candidate_population_layer_mode
-    try:
-        sample_size = int(raw_sample_size)
-    except (TypeError, ValueError):
-        pass
-    return {
-        "mode": mode,
-        "sample_size": max(1, int(sample_size)),
-        "population_layer_mode": population_layer_mode,
-    }
+    return normalize_dashboard_interactivity_mapping(
+        options,
+        default_sample_size=int(DASHBOARD_RAW_POINT_LIMIT),
+        strict=False,
+        min_sample_size=1,
+        max_sample_size=None,
+    )
 
 
 def _apply_static_population_layer_options(
@@ -3964,37 +3937,11 @@ def _dashboard_visual_preview_labels_from_charts(charts: list[Any]) -> tuple[str
     return dashboard_visual_preview_labels(labels)
 
 
-def _plotly_spec_variants(spec: Any) -> list[dict[str, Any]]:
-    if not isinstance(spec, dict):
-        return []
-    if isinstance(spec.get("data"), list):
-        return [spec]
-    variants: list[dict[str, Any]] = []
-    for key in ("light", "dark"):
-        variant = spec.get(key)
-        if isinstance(variant, dict) and isinstance(variant.get("data"), list):
-            variants.append(variant)
-    return variants
-
-
 def _series_labels_from_plotly_spec(spec: dict[str, Any]) -> list[str]:
-    labels: list[str] = []
-    generic = {"frequency", "histogram", "measurements", "trend", "all production rows"}
-    for trace in spec.get("data") or []:
-        if not isinstance(trace, dict):
-            continue
-        name = _strip_group_count_suffix(str(trace.get("name") or "").strip())
-        if not name or name.casefold() in generic:
-            continue
-        if name.split("=", 1)[0].strip().casefold() in {"lsl", "usl", "nominal"}:
-            continue
-        if re.match(r"^(?:\((.+?)\)\s*)?(Min|Q1|Median|Mean|Q3|Max)=", name, re.IGNORECASE):
-            continue
-        trace_type = str(trace.get("type") or "").casefold()
-        mode = str(trace.get("mode") or "").casefold()
-        if trace_type in {"bar", "histogram", "box", "violin"} or "markers" in mode:
-            labels.append(name)
-    return labels
+    return _shared_series_labels_from_plotly_spec(
+        spec,
+        extra_generic_labels={"all production rows"},
+    )
 
 
 def _render_dashboard_section(*, section_id: str, title: str, body: str, subtitle: str = "") -> str:
@@ -4104,6 +4051,10 @@ def _render_plotly_runtime(
         initial_settings=dashboard_visual_settings,
         preview_labels=preview_labels,
     )
+    theme_runtime_helpers = render_dashboard_theme_runtime_helpers(
+        storage_key_var="themeStorageKey",
+        indent="    ",
+    )
     return (
         f'\n  <script id="production-dashboard-charts" type="application/json">{charts_json}</script>\n'
         "  <script>\n"
@@ -4112,30 +4063,9 @@ def _render_plotly_runtime(
         f"    const themeStorageKey = {json.dumps(DASHBOARD_THEME_STORAGE_KEY)};\n"
         f"    const productionPlotlyThemeTokens = {theme_tokens_json};\n"
         + visual_runtime_js
+        + "\n"
+        + theme_runtime_helpers
         + """
-    const allowedThemeChoices = new Set(['auto', 'light', 'dark']);
-    const themeMedia = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
-    const sanitizeThemeChoice = (value) => allowedThemeChoices.has(value) ? value : 'auto';
-    const currentThemeChoice = () => sanitizeThemeChoice(document.documentElement.dataset.themeChoice || 'auto');
-    const resolveTheme = (choice) => (
-      choice === 'auto'
-        ? ((themeMedia && themeMedia.matches) ? 'dark' : 'light')
-        : choice
-    );
-    const persistThemeChoice = (choice) => {
-      try {
-        window.localStorage.setItem(themeStorageKey, choice);
-      } catch (_error) {
-        // Ignore storage failures in locked-down browser contexts.
-      }
-    };
-    const readStoredThemeChoice = () => {
-      try {
-        return sanitizeThemeChoice(window.localStorage.getItem(themeStorageKey) || currentThemeChoice());
-      } catch (_error) {
-        return currentThemeChoice();
-      }
-    };
     const currentPlotlyTheme = () => (
       productionPlotlyThemeTokens[document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light']
       || productionPlotlyThemeTokens.light

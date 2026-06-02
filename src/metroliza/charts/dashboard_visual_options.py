@@ -14,6 +14,10 @@ from typing import Any
 from io import BytesIO
 
 from metroliza.charts.dashboard_plotly_visuals import apply_dashboard_visual_settings
+from metroliza.charts.plotly_stat_helpers import (
+    normalize_group_label_key as _normalize_label_key,
+    strip_group_count_suffix as _strip_group_count_suffix,
+)
 from metroliza.charts.summary_plot_palette import SUMMARY_PLOT_PALETTE
 
 
@@ -313,9 +317,6 @@ _VISIBLE_RECIPE_IDS = (
     "highlight_gradient",
     "custom",
 )
-_GROUP_COUNT_SUFFIX_PATTERN = re.compile(r"\s*\(n\s*=\s*\d+\)\s*$", re.IGNORECASE)
-
-
 def default_dashboard_visual_settings() -> dict[str, Any]:
     """Return the serializable default dashboard visual settings."""
 
@@ -805,15 +806,6 @@ def dashboard_visual_group_names_from_grouping_frame(
         seen.add(key)
         labels.append(label)
     return tuple(labels)
-
-
-def _strip_group_count_suffix(label: str) -> str:
-    stripped = _GROUP_COUNT_SUFFIX_PATTERN.sub("", str(label or "").strip()).strip()
-    return stripped or str(label or "").strip()
-
-
-def _normalize_label_key(label: str) -> str:
-    return _strip_group_count_suffix(label).casefold()
 
 
 def dashboard_visual_effective_series_styles(
@@ -2468,7 +2460,7 @@ def _draw_preview_legend(
 
 
 def _strip_preview_label(label: str) -> str:
-    return _GROUP_COUNT_SUFFIX_PATTERN.sub("", str(label or "")).strip() or "Group"
+    return _strip_group_count_suffix(str(label or "")).strip() or "Group"
 
 
 __all__ = [

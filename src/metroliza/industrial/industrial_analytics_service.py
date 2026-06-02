@@ -16,6 +16,7 @@ from metroliza.reports.db import (
     sqlite_connection_scope,
 )
 from metroliza.analytics.hexafe_groupstats_adapter import analyze_group_metric
+from metroliza.industrial.industrial_analytics_helpers import format_time_bucket_label
 from metroliza.industrial.industrial_analytics_state import (
     FIXED_PRODUCTION_FIELDS,
     DynamicFieldFilter,
@@ -26,6 +27,7 @@ from metroliza.industrial.industrial_analytics_state import (
     production_field_label,
     require_identifier,
 )
+from metroliza.shared.numeric_coercion import coerce_finite_float as _coerce_float
 
 
 PRODUCTION_RECORD_COLUMNS: tuple[str, ...] = (
@@ -1243,29 +1245,12 @@ def _groupstats_label(key: Any, *, time_bucket: str | None = None) -> str:
         if pd.isna(value):
             parts.append("(blank)")
         elif time_bucket and time_bucket != "none" and hasattr(value, "isoformat"):
-            parts.append(_format_time_bucket_label(value, time_bucket))
+            parts.append(format_time_bucket_label(value, time_bucket))
         elif hasattr(value, "isoformat"):
             parts.append(value.isoformat())
         else:
             parts.append(str(value))
     return " | ".join(part.strip() or "(blank)" for part in parts)
-
-
-def _format_time_bucket_label(value: Any, time_bucket: str) -> str:
-    timestamp = pd.Timestamp(value)
-    if timestamp.tzinfo is not None:
-        timestamp = timestamp.tz_convert(None)
-    if time_bucket == "year":
-        return timestamp.strftime("%Y")
-    if time_bucket == "month":
-        return timestamp.strftime("%Y-%m")
-    if time_bucket == "day":
-        return timestamp.strftime("%Y-%m-%d")
-    if time_bucket == "week":
-        return f"Week of {timestamp.strftime('%Y-%m-%d')}"
-    if time_bucket == "hour":
-        return timestamp.strftime("%Y-%m-%d %H:00")
-    return timestamp.isoformat()
 
 
 def _finite_numeric_array(series: pd.Series) -> np.ndarray:
@@ -1280,14 +1265,6 @@ def _coerce_groupstats_metric_values(series: pd.Series) -> np.ndarray:
         except TypeError:
             return series.to_numpy(dtype=float, copy=False)
     return pd.to_numeric(series, errors="coerce").to_numpy(dtype=float, copy=False)
-
-
-def _coerce_float(value: Any) -> float | None:
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return None
-    return numeric if np.isfinite(numeric) else None
 
 
 def _metric_spec_records(metric: ProductionMetricSelection) -> list[dict[str, float | None]]:

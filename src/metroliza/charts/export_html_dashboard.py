@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import Decimal, ROUND_HALF_UP
 import copy
 import html
 import json
@@ -32,6 +31,7 @@ from metroliza.charts.dashboard_html_controls import (
     render_dashboard_control_bar,
     render_dashboard_controls_css,
     render_dashboard_theme_bootstrap_script,
+    render_dashboard_theme_runtime_helpers,
     render_dashboard_visual_dialog,
     render_dashboard_visual_runtime_js,
 )
@@ -43,6 +43,14 @@ from metroliza.charts.hexafe_plotstats_adapter import (
     build_plotstats_dashboard_spec,
     normalize_distribution_stat_legend,
     plotstats_export_charts_enabled,
+)
+from metroliza.charts.plotly_stat_helpers import (
+    legend_only_reference_trace as _legend_only_reference_trace,
+    payload_distribution_series as _payload_distribution_series,
+    plotly_spec_variants as _plotly_spec_variants,
+    series_labels_from_plotly_spec as _series_labels_from_plotly_spec,
+    stat_legend_prefix as _stat_legend_prefix,
+    strip_group_count_suffix as _strip_group_count_suffix,
 )
 from metroliza.charts.value_formatting import format_metrology_legend_value as _shared_format_metrology_legend_value
 
@@ -74,7 +82,6 @@ _PLOTLY_MODEBAR_REMOVE = [
 ]
 _DEFAULT_PLOTLY_SPEC_COUNT_BUDGET = 160
 _DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET = 8_000_000
-_GROUP_COUNT_SUFFIX_PATTERN = re.compile(r"\s*\(n\s*=\s*\d+\)\s*$", re.IGNORECASE)
 _STAT_DASH_BY_LABEL = {
     "Min": "dot",
     "Q1": "dash",
@@ -635,21 +642,6 @@ def _infer_decimal_places(values: list[float], *, max_decimals: int = 6) -> int:
 def _plotly_fixed_format(decimals: int) -> str:
     precision = max(0, min(int(decimals), 8))
     return ".0f" if precision == 0 else f".{precision}f"
-
-
-def _group_label_has_count_suffix(label: str) -> bool:
-    return bool(_GROUP_COUNT_SUFFIX_PATTERN.search(str(label or "").strip()))
-
-
-def _strip_group_count_suffix(label: str) -> str:
-    stripped = _GROUP_COUNT_SUFFIX_PATTERN.sub("", str(label or "").strip()).strip()
-    return stripped or str(label or "").strip()
-
-
-def _stat_legend_prefix(group_label: str, *, populated_count: int) -> str:
-    if populated_count <= 1:
-        return ""
-    return f"({_strip_group_count_suffix(group_label)}) "
 
 
 def _legend_line_x_values(category_labels: list[str]) -> list[Any]:
@@ -1700,24 +1692,6 @@ def _build_plotly_iqr_spec(payload: dict[str, Any], *, title: str, theme: str = 
     return spec or {}
 
 
-def _format_group_statistics_trace_name(label: str, values: list[float]) -> str:
-    if not values:
-        return str(label)
-    if _group_label_has_count_suffix(label):
-        return str(label)
-    return f"{label} (n={len(values)})"
-
-
-def _payload_distribution_series(payload: dict[str, Any]) -> list[Any]:
-    series = payload.get("series")
-    if isinstance(series, list):
-        return series
-    values = payload.get("values")
-    if isinstance(values, list):
-        return values
-    return []
-
-
 def _build_distribution_stat_legend_traces(
     *,
     labels: list[str],
@@ -1778,29 +1752,6 @@ def _build_distribution_stat_legend_traces(
     return traces
 
 
-def _legend_only_reference_trace(
-    *,
-    name: str,
-    value: float | None,
-    color: str,
-    dash: str,
-    x_values: list[Any] | None = None,
-) -> dict[str, Any]:
-    numeric = 0.0 if value is None else float(value)
-    resolved_x = list(x_values) if x_values else [None, None]
-    return {
-        "type": "scatter",
-        "mode": "lines",
-        "name": name,
-        "x": resolved_x,
-        "y": [numeric, numeric],
-        "line": {"color": color, "width": 2, "dash": dash},
-        "hoverinfo": "skip",
-        "visible": "legendonly",
-        "showlegend": True,
-    }
-
-
 def _format_metrology_legend_value(
     label: str,
     value: float | None,
@@ -1837,18 +1788,6 @@ def _group_colors_from_traces(
         if isinstance(color, str) and color:
             colors[group_label] = color
     return colors
-
-
-def _format_plotly_stat_value(value: float | None) -> str:
-    if value is None or not math.isfinite(float(value)):
-        return ""
-    number = float(value)
-    magnitude = abs(number)
-    if magnitude >= 10_000 or (0.0 < magnitude < 0.001):
-        return f"{number:.4g}"
-    rounded = Decimal(str(round(number, 12))).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
-    text = f"{rounded:f}".rstrip("0").rstrip(".")
-    return "0" if text in {"", "-0"} else text
 
 
 def _build_plotly_trend_spec(payload: dict[str, Any], *, title: str, theme: str = "light") -> dict[str, Any]:
@@ -2669,39 +2608,6 @@ def _dashboard_visual_preview_labels_from_manifest(
     return dashboard_visual_preview_labels(labels)
 
 
-def _plotly_spec_variants(spec: Any) -> list[dict[str, Any]]:
-    if not isinstance(spec, dict):
-        return []
-    if isinstance(spec.get("data"), list):
-        return [spec]
-    variants: list[dict[str, Any]] = []
-    for key in ("light", "dark"):
-        variant = spec.get(key)
-        if isinstance(variant, dict) and isinstance(variant.get("data"), list):
-            variants.append(variant)
-    return variants
-
-
-def _series_labels_from_plotly_spec(spec: dict[str, Any]) -> list[str]:
-    labels: list[str] = []
-    generic = {"frequency", "histogram", "measurements", "trend"}
-    for trace in spec.get("data") or []:
-        if not isinstance(trace, dict):
-            continue
-        name = _strip_group_count_suffix(str(trace.get("name") or "").strip())
-        if not name or name.casefold() in generic:
-            continue
-        if name.split("=", 1)[0].strip().casefold() in {"lsl", "usl", "nominal"}:
-            continue
-        if re.match(r"^(?:\((.+?)\)\s*)?(Min|Q1|Median|Mean|Q3|Max)=", name, re.IGNORECASE):
-            continue
-        trace_type = str(trace.get("type") or "").casefold()
-        mode = str(trace.get("mode") or "").casefold()
-        if trace_type in {"bar", "histogram", "box", "violin"} or "markers" in mode:
-            labels.append(name)
-    return labels
-
-
 def _render_dashboard_html(
     manifest: dict[str, Any],
     *,
@@ -2757,6 +2663,10 @@ def _render_dashboard_html(
         else ""
     )
     theme_bootstrap_script = render_dashboard_theme_bootstrap_script()
+    theme_runtime_helpers = render_dashboard_theme_runtime_helpers(
+        storage_key_var="themeStorageKey",
+        indent="      ",
+    )
     plotly_theme_tokens_json = json.dumps(
         {
             "light": _build_plotly_theme_tokens("light"),
@@ -3475,38 +3385,7 @@ def _render_dashboard_html(
     (() => {{
       const themeStorageKey = {json.dumps(_DASHBOARD_THEME_STORAGE_KEY)};
       const plotlyThemeTokens = {plotly_theme_tokens_json};
-      const allowedThemeChoices = new Set(['auto', 'light', 'dark']);
-      const themeMedia = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
-
-      const sanitizeThemeChoice = (value) => (
-        allowedThemeChoices.has(value) ? value : 'auto'
-      );
-
-      const currentThemeChoice = () => sanitizeThemeChoice(
-        document.documentElement.dataset.themeChoice || 'auto'
-      );
-
-      const resolveTheme = (choice) => (
-        choice === 'auto'
-          ? ((themeMedia && themeMedia.matches) ? 'dark' : 'light')
-          : choice
-      );
-
-      const persistThemeChoice = (choice) => {{
-        try {{
-          window.localStorage.setItem(themeStorageKey, choice);
-        }} catch (_error) {{
-          // Ignore storage failures in locked-down browser contexts.
-        }}
-      }};
-
-      const readStoredThemeChoice = () => {{
-        try {{
-          return sanitizeThemeChoice(window.localStorage.getItem(themeStorageKey) || currentThemeChoice());
-        }} catch (_error) {{
-          return currentThemeChoice();
-        }}
-      }};
+{theme_runtime_helpers}
 
       const readCssVar = (name, fallback) => {{
         const value = window.getComputedStyle(document.documentElement).getPropertyValue(name).trim();

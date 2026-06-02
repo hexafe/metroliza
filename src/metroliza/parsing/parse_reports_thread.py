@@ -19,7 +19,11 @@ from metroliza.reports.cmm_schema import ensure_cmm_report_schema
 from metroliza.reports.db import execute_with_retry, sqlite_connection_scope
 from metroliza.shared.env_utils import env_bool, env_int
 from metroliza.shared.log_context import build_parse_log_extra, get_operation_logger
-from metroliza.shared.progress_status import build_three_line_status, format_progress_duration
+from metroliza.shared.progress_status import (
+    MonotonicProgressEmitterMixin,
+    build_three_line_status,
+    format_progress_duration,
+)
 from metroliza.reports.report_identity import build_report_identity_hash
 from metroliza.reports.report_metadata_models import CanonicalReportMetadata
 from metroliza.reports.report_repository import ReportRepository, compute_sha256
@@ -486,7 +490,7 @@ def persist_complete_metadata_enrichment(db_file, report_id, selection_result, *
     return merged_metadata, merge_summary
 
 
-class ParseReportsThread(QThread):
+class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
     LOOKUP_BATCH_SIZE = 250
     PROGRESS_STAGE_RANGES = {
         'discover_reports': (0, 15),
@@ -517,19 +521,6 @@ class ParseReportsThread(QThread):
         if self.run_background_metadata_enrichment and self.metadata_parsing_mode == "light":
             self._progress_stage_ranges["parse_reports"] = (30, 75)
             self._progress_stage_ranges["enrich_metadata"] = (75, 100)
-
-    @staticmethod
-    def _clamp_progress(value):
-        return max(0, min(100, int(round(value))))
-
-    def _emit_progress(self, value):
-        clamped_value = self._clamp_progress(value)
-        progress_value = max(clamped_value, self._last_emitted_progress)
-        if progress_value == self._last_emitted_progress:
-            return
-
-        self._last_emitted_progress = progress_value
-        self.update_progress.emit(progress_value)
 
     def _emit_stage_progress(self, stage_name, fraction=1.0):
         start, end = self._progress_stage_ranges[stage_name]

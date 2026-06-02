@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
-from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
 import math
 import re
@@ -17,6 +16,13 @@ from metroliza.shared.env_utils import FALSE_VALUES, TRUE_VALUES, env_bool
 from metroliza.charts.dashboard_plotly_visuals import apply_dashboard_visual_settings
 from metroliza.charts.distribution_iqr_plotly_specs import build_distribution_iqr_plotly_spec
 from metroliza.charts.export_chart_payload_helpers import build_histogram_table_data
+from metroliza.charts.plotly_stat_helpers import (
+    format_group_statistics_trace_name as _format_group_statistics_trace_name,
+    legend_only_reference_trace as _legend_only_reference_trace,
+    payload_distribution_series as _payload_distribution_series,
+    stat_legend_prefix as _stat_legend_prefix,
+    strip_group_count_suffix as _strip_group_count_suffix,
+)
 from metroliza.exporting.export_summary_utils import resolve_histogram_bin_count
 from metroliza.charts.matplotlib_runtime import configure_headless_matplotlib
 from metroliza.charts.summary_plot_palette import SUMMARY_PLOT_PALETTE
@@ -960,7 +966,6 @@ _BIN_RANGE_PATTERN = re.compile(
     r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s*$",
     re.IGNORECASE,
 )
-_GROUP_COUNT_SUFFIX_PATTERN = re.compile(r"\s*\(n\s*=\s*\d+\)\s*$", re.IGNORECASE)
 _VALUED_LEGEND_LABEL_PATTERN = re.compile(
     r"^\s*(?P<label>[^=]+?)\s*=\s*(?P<value>[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s*$",
     re.IGNORECASE,
@@ -1429,16 +1434,6 @@ def _ensure_payload_distribution_stat_legend_traces(
     data.extend(traces)
 
 
-def _payload_distribution_series(payload: Mapping[str, Any]) -> list[Any]:
-    series = payload.get("series")
-    if isinstance(series, list):
-        return series
-    values = payload.get("values")
-    if isinstance(values, list):
-        return values
-    return []
-
-
 def _normalize_existing_semantic_stat_traces(
     data: list[Any],
     *,
@@ -1550,29 +1545,6 @@ def _is_semantic_stat_trace_label(label: str, label_to_stat: Mapping[str, str]) 
 
 def _semantic_trace_label_base(label: str) -> str:
     return str(label or "").split("=", 1)[0].strip()
-
-
-def _legend_only_reference_trace(
-    *,
-    name: str,
-    value: float | None,
-    color: str,
-    dash: str,
-    x_values: list[Any] | None = None,
-) -> dict[str, Any]:
-    numeric = 0.0 if value is None else float(value)
-    resolved_x = list(x_values) if x_values else [None, None]
-    return {
-        "type": "scatter",
-        "mode": "lines",
-        "name": name,
-        "x": resolved_x,
-        "y": [numeric, numeric],
-        "line": {"color": color, "width": 2, "dash": dash},
-        "hoverinfo": "skip",
-        "visible": "legendonly",
-        "showlegend": True,
-    }
 
 
 def _ensure_group_histogram_mean_annotations(spec: Mapping[str, Any], payload: Mapping[str, Any]) -> None:
@@ -2068,26 +2040,6 @@ def _normalized_histogram_overlay_label(label: str) -> str:
     return text
 
 
-def _format_group_statistics_trace_name(label: str, values: list[float]) -> str:
-    if not values:
-        return str(label)
-    if _group_label_has_count_suffix(label):
-        return str(label)
-    return f"{label} (n={len(values)})"
-
-
-def _format_plotly_stat_value(value: float | None) -> str:
-    if value is None or not math.isfinite(float(value)):
-        return ""
-    number = float(value)
-    magnitude = abs(number)
-    if magnitude >= 10_000 or (0.0 < magnitude < 0.001):
-        return f"{number:.4g}"
-    rounded = Decimal(str(round(number, 12))).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
-    text = f"{rounded:f}".rstrip("0").rstrip(".")
-    return "0" if text in {"", "-0"} else text
-
-
 def _format_metrology_legend_value(
     label: str,
     value: float | None,
@@ -2127,21 +2079,6 @@ def _is_canonical_stat_legend_item_name(name: str) -> bool:
         return False
     label = left.strip().split(" ")[-1].casefold()
     return label in _REFERENCE_LEGEND_LABELS
-
-
-def _group_label_has_count_suffix(label: str) -> bool:
-    return bool(_GROUP_COUNT_SUFFIX_PATTERN.search(str(label or "").strip()))
-
-
-def _strip_group_count_suffix(label: str) -> str:
-    stripped = _GROUP_COUNT_SUFFIX_PATTERN.sub("", str(label or "").strip()).strip()
-    return stripped or str(label or "").strip()
-
-
-def _stat_legend_prefix(group_label: str, *, populated_count: int) -> str:
-    if populated_count <= 1:
-        return ""
-    return f"({_strip_group_count_suffix(group_label)}) "
 
 
 def _legend_line_x_values(category_labels: list[str]) -> list[Any]:

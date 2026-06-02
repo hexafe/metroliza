@@ -13,6 +13,7 @@ from hexafe_groupstats import (
     describe_correction_policy,
     format_correction_method,
 )
+from metroliza.shared.numeric_coercion import coerce_finite_float as _coerce_float
 try:
     from hexafe_groupstats.adapters import (
         capability_rows as _package_capability_rows,
@@ -58,16 +59,6 @@ _BACKEND_ALIASES = {
     'rust': 'rust',
     'native': 'rust',
 }
-
-
-def _coerce_float(value: Any) -> float | None:
-    if value is None:
-        return None
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return None
-    return numeric if np.isfinite(numeric) else None
 
 
 def _round_float(value: Any, *, precision: int = 3) -> float | None:

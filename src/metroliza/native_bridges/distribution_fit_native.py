@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Sequence
 
-import numpy as np
+from metroliza.native_bridges.native_array_utils import (
+    as_float64_1d_contiguous as _as_float64_1d_contiguous,
+)
 from metroliza.shared.runtime_backend_policy import should_prefer_python_backend_in_auto_mode
 
 try:
@@ -34,18 +36,6 @@ def resolve_distribution_fit_backend() -> str:
     if should_prefer_python_backend_in_auto_mode():
         return "python"
     return "native" if native_backend_available() else "python"
-
-
-def _as_float64_1d_contiguous(values: Sequence[float] | np.ndarray) -> np.ndarray:
-    if isinstance(values, np.ndarray) and values.dtype == np.float64 and values.flags['C_CONTIGUOUS']:
-        array = values
-    else:
-        array = np.asarray(values, dtype=np.float64)
-    if array.ndim != 1:
-        raise ValueError('Expected 1D numeric input')
-    if array.flags['C_CONTIGUOUS']:
-        return array
-    return np.ascontiguousarray(array)
 
 
 def estimate_ad_pvalue_monte_carlo_native(

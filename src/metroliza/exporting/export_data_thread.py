@@ -51,7 +51,11 @@ from metroliza.exporting.export_google_result_utils import (
     build_google_fallback_metadata,
     build_google_stage_message,
 )
-from metroliza.shared.progress_status import build_three_line_status, format_progress_duration
+from metroliza.shared.progress_status import (
+    MonotonicProgressEmitterMixin,
+    build_three_line_status,
+    format_progress_duration,
+)
 from metroliza.shared.log_context import (
     build_google_conversion_log_extra,
     get_operation_logger,
@@ -3381,7 +3385,7 @@ def add_quality_title_badge(ax, label, palette_key, *, x=0.01, y=1.02):
     )
 
 
-class ExportDataThread(QThread):
+class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
     """Background worker thread that executes the full export pipeline.
 
     The thread queries report data, applies grouping/filters, writes Excel sheets,
@@ -4108,18 +4112,6 @@ class ExportDataThread(QThread):
     @staticmethod
     def _downsample_frame(df, sample_limit):
         return deterministic_downsample_frame(df, sample_limit)
-
-    @staticmethod
-    def _clamp_progress(value):
-        return max(0, min(100, int(round(value))))
-
-    def _emit_progress(self, value):
-        clamped_value = self._clamp_progress(value)
-        progress_value = max(clamped_value, self._last_emitted_progress)
-        if progress_value == self._last_emitted_progress:
-            return
-        self._last_emitted_progress = progress_value
-        self.update_progress.emit(progress_value)
 
     def _emit_stage_progress(self, stage_name, fraction=1.0):
         start, end = self.PROGRESS_STAGE_RANGES[stage_name]

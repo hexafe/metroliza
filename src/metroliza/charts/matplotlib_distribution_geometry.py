@@ -7,15 +7,7 @@ from typing import Any
 import numpy as np
 from matplotlib import colors as mcolors
 
-
-def _as_float(value: Any) -> float | None:
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return None
-    if not np.isfinite(numeric):
-        return None
-    return numeric
+from metroliza.shared.numeric_coercion import coerce_finite_float as _as_float
 
 
 def _normalize_rgba(color: Any) -> tuple[str, float]:

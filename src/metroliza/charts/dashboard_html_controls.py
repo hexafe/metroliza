@@ -91,6 +91,49 @@ def render_dashboard_theme_bootstrap_script() -> str:
   </script>"""
 
 
+def render_dashboard_theme_runtime_helpers(
+    *,
+    storage_key_var: str = "themeStorageKey",
+    indent: str = "      ",
+) -> str:
+    """Return shared browser-side helpers for dashboard theme switching."""
+
+    storage_key = str(storage_key_var or "themeStorageKey")
+    return f"""
+{indent}const allowedThemeChoices = new Set(['auto', 'light', 'dark']);
+{indent}const themeMedia = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+
+{indent}const sanitizeThemeChoice = (value) => (
+{indent}  allowedThemeChoices.has(value) ? value : 'auto'
+{indent});
+
+{indent}const currentThemeChoice = () => sanitizeThemeChoice(
+{indent}  document.documentElement.dataset.themeChoice || 'auto'
+{indent});
+
+{indent}const resolveTheme = (choice) => (
+{indent}  choice === 'auto'
+{indent}    ? ((themeMedia && themeMedia.matches) ? 'dark' : 'light')
+{indent}    : choice
+{indent});
+
+{indent}const persistThemeChoice = (choice) => {{
+{indent}  try {{
+{indent}    window.localStorage.setItem({storage_key}, choice);
+{indent}  }} catch (_error) {{
+{indent}    // Ignore storage failures in locked-down browser contexts.
+{indent}  }}
+{indent}}};
+
+{indent}const readStoredThemeChoice = () => {{
+{indent}  try {{
+{indent}    return sanitizeThemeChoice(window.localStorage.getItem({storage_key}) || currentThemeChoice());
+{indent}  }} catch (_error) {{
+{indent}    return currentThemeChoice();
+{indent}  }}
+{indent}}};""".strip("\n")
+
+
 def render_dashboard_theme_switch() -> str:
     """Return compact Auto/Light/Dark dashboard theme controls."""
 

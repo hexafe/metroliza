@@ -54,6 +54,7 @@ from metroliza.charts.dashboard_visual_options import (
     save_dashboard_visual_theme_library,
     upsert_dashboard_visual_theme,
 )
+from metroliza.charts.plotly_stat_helpers import normalize_group_label_key
 from metroliza.ui.ui_foundation import apply_metroliza_theme, configure_accessibility, configure_window_size
 
 try:  # Optional. PyQt WebEngine is intentionally not a hard runtime dependency.
@@ -88,7 +89,6 @@ _CHART_ITEMS = (
 _DASH_ITEMS = (("Solid", "solid"), ("Dash", "dash"), ("Dot", "dot"), ("Dash-dot", "dashdot"))
 _PREVIEW_SERIES_LABELS = dashboard_visual_preview_labels()
 _PREVIEW_PALETTE_LABELS = _PREVIEW_SERIES_LABELS[1:]
-_GROUP_COUNT_SUFFIX_PATTERN = re.compile(r"\s*\(n\s*=\s*\d+\)\s*$", re.IGNORECASE)
 _MARKER_SYMBOL_ITEMS = tuple(
     (str(symbol).replace("-", " ").title(), symbol)
     for symbol in DASHBOARD_VISUAL_MARKER_SYMBOLS
@@ -97,7 +97,7 @@ _OUTLINE_COLOR_MODE_ITEMS = (("Auto contrast", "auto"), ("Custom color", "custom
 
 
 def _preview_label_key(label: str) -> str:
-    return _GROUP_COUNT_SUFFIX_PATTERN.sub("", str(label or "").strip()).strip().casefold()
+    return normalize_group_label_key(label)
 
 
 def _is_population_preview_label(label: str, population: Mapping[str, Any]) -> bool:
@@ -183,9 +183,8 @@ class DashboardVisualOptionsDialog(QDialog):
             self._settings["reference_lines"]["lsl"]["width"]
         )
         self._preview_source_pixmap: QPixmap | None = None
-        self._preview_timer = QTimer(self)
-        self._preview_timer.setSingleShot(True)
-        self._preview_timer.timeout.connect(self._refresh_preview)
+        self._suppress_preview_schedule = False
+        self._preview_timer = self._new_preview_timer()
         self._preview_bridge: _PreviewSelectionBridge | None = None
         self._preview_channel = None
         self.setWindowTitle("Dashboard visuals")
@@ -1492,7 +1491,19 @@ class DashboardVisualOptionsDialog(QDialog):
         return f"{group}::{stat}" if group else stat
 
     def _schedule_preview(self) -> None:
+        if self._suppress_preview_schedule:
+            self._preview_timer.stop()
+            return
         self._preview_timer.start(180)
+
+    def _new_preview_timer(self) -> QTimer:
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(self._refresh_preview)
+        return timer
+
+    def _release_preview_schedule_suppression(self) -> None:
+        self._suppress_preview_schedule = False
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt virtual method.
         super().resizeEvent(event)
@@ -1515,17 +1526,39 @@ class DashboardVisualOptionsDialog(QDialog):
     def _choose_color(self, button: QPushButton) -> None:
         initial = QColor(str(button.property("color") or "#ffffff"))
         color = QColorDialog.getColor(initial, self, "Choose color")
-        if color.isValid():
-            self._set_button_color(button, color.name())
-            if button in {
-                getattr(self, "element_color_button", None),
-                getattr(self, "element_outline_color_button", None),
-            } and self._selected_target:
-                self._apply_selected_element_style()
-                return
-            self._handle_control_changed()
+        if not self._color_dialog_result_is_valid(color):
+            self._suppress_preview_schedule = True
+            self._preview_timer.stop()
+            self._preview_timer.deleteLater()
+            self._preview_timer = self._new_preview_timer()
+            QTimer.singleShot(250, self._release_preview_schedule_suppression)
+            return
+        self._set_button_color(button, color.name().lower())
+        if button in {
+            getattr(self, "element_color_button", None),
+            getattr(self, "element_outline_color_button", None),
+        } and self._selected_target:
+            self._apply_selected_element_style()
+            return
+        self._handle_control_changed()
+
+    @staticmethod
+    def _color_dialog_result_is_valid(color: Any) -> bool:
+        is_valid = getattr(color, "isValid", None)
+        if not callable(is_valid) or not is_valid():
+            return False
+        name = getattr(color, "name", None)
+        if not callable(name):
+            return False
+        color_name = str(name()).strip().lower()
+        if not color_name.startswith("#") or len(color_name) != 7:
+            return False
+        if color_name == "#000000" and color.__class__ is not QColor:
+            return False
+        return True
 
     def _reset_defaults(self) -> None:
+        self._suppress_preview_schedule = False
         self._populate_from_settings(default_dashboard_visual_settings())
         self._handle_control_changed()
 

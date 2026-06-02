@@ -43,6 +43,7 @@ from metroliza.industrial.oznak_adapter import (
     fetch_oznak_records_for_source_profile,
     get_oznak_adapter_status,
 )
+from metroliza.shared.progress_status import diagnostic_progress_message
 from metroliza.shared.worker_cancellation import WorkerCancellationMixin
 
 
@@ -156,16 +157,7 @@ class IndustrialLiveExportThread(WorkerCancellationMixin, QThread):
         self._init_cancellation_state()
 
     def _emit_progress_from_diagnostic(self, diagnostic: Any) -> None:
-        message = getattr(diagnostic, "message", None)
-        if not message:
-            source = getattr(diagnostic, "source_alias", "")
-            status = getattr(getattr(diagnostic, "status", None), "value", None) or getattr(
-                diagnostic,
-                "status",
-                "",
-            )
-            message = f"{source}: {status}".strip(": ")
-        self.update_label.emit(str(message))
+        self.update_label.emit(diagnostic_progress_message(diagnostic))
 
     def run(self):
         try:
@@ -554,14 +546,7 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
             self.error_occurred.emit(sanitized_error)
 
     def _emit_progress_from_diagnostic(self, diagnostic: Any) -> None:
-        message = getattr(diagnostic, "message", None)
-        if not message:
-            source = getattr(diagnostic, "source_alias", "")
-            status = getattr(getattr(diagnostic, "status", None), "value", None) or getattr(
-                diagnostic, "status", ""
-            )
-            message = f"{source}: {status}".strip(": ")
-        self.progress_message.emit(str(message))
+        self.progress_message.emit(diagnostic_progress_message(diagnostic))
 
 
 class IndustrialOznakAccessCheckThread(WorkerCancellationMixin, QThread):
@@ -641,11 +626,4 @@ class IndustrialOznakAccessCheckThread(WorkerCancellationMixin, QThread):
             self.error_occurred.emit(redact_sensitive_text(exc))
 
     def _emit_progress_from_diagnostic(self, diagnostic: Any) -> None:
-        message = getattr(diagnostic, "message", None)
-        if not message:
-            source = getattr(diagnostic, "source_alias", "")
-            status = getattr(getattr(diagnostic, "status", None), "value", None) or getattr(
-                diagnostic, "status", ""
-            )
-            message = f"{source}: {status}".strip(": ")
-        self.progress_message.emit(str(message))
+        self.progress_message.emit(diagnostic_progress_message(diagnostic))

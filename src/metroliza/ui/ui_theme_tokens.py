@@ -164,6 +164,17 @@ def resolve_base_row_background(base_hex=None):
     return normalize_hex_color(base_hex, fallback=BASE_ROW_BACKGROUND_FALLBACK)
 
 
+def resolve_default_group_color_from_base(base_hex=None, fallback_hex=BASE_ROW_BACKGROUND_FALLBACK):
+    return resolve_base_row_background(base_hex or fallback_hex)
+
+
+def resolve_widget_base_row_background(widget, fallback_hex=BASE_ROW_BACKGROUND_FALLBACK):
+    palette = widget.palette() if hasattr(widget, "palette") else None
+    base = palette.base().color() if palette is not None and hasattr(palette, "base") else None
+    base_hex = base.name() if base is not None and hasattr(base, "isValid") and base.isValid() else None
+    return resolve_default_group_color_from_base(base_hex, fallback_hex=fallback_hex)
+
+
 def selected_row_background_override(highlight_hex=None):
     normalized = normalize_hex_color(highlight_hex, fallback=SELECTED_ROW_BACKGROUND_FALLBACK)
     red, green, blue = _parse_hex_color(normalized)

@@ -36,6 +36,7 @@ from metroliza.shared.contracts import (
     IndustrialAnalyticsRequest,
     validate_industrial_analytics_request,
 )
+from metroliza.shared.dashboard_interactivity import summarize_dashboard_interactivity_options
 from metroliza.charts.dashboard_visual_options import (
     dashboard_visual_group_names_from_grouping_frame,
     dashboard_visual_settings_summary,
@@ -88,30 +89,10 @@ except ImportError:  # pragma: no cover - compatibility with lightweight test st
 
 SOURCE_PRODUCTION_CACHE = "production_cache"
 SOURCE_TABULAR_FILE = "tabular_file"
-_DASHBOARD_INTERACTIVITY_LABELS = {
-    "auto": "Auto",
-    "sampled": "Interactive random sample",
-    "static": "Snapshots only",
-    "full": "All rows",
-}
-_POPULATION_LAYER_MODE_LABELS = {
-    "auto": "POPULATION layer auto",
-    "interactive": "POPULATION layer interactive points",
-    "static": "POPULATION layer static image",
-}
 
 
 def dashboard_interactivity_options_summary(options: DashboardInteractivityOptions) -> str:
-    mode = _DASHBOARD_INTERACTIVITY_LABELS.get(options.mode, options.mode.title())
-    if options.mode in {"auto", "sampled"}:
-        summary = f"{mode}, {options.sample_size:,} interactive random sample limit"
-    else:
-        summary = mode
-    population_mode = _POPULATION_LAYER_MODE_LABELS.get(
-        options.population_layer_mode,
-        f"POPULATION layer {options.population_layer_mode}",
-    )
-    return f"{summary}; {population_mode}"
+    return summarize_dashboard_interactivity_options(options)
 
 
 class DashboardInteractivityOptionsDialog(QDialog):

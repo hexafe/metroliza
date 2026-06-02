@@ -8,12 +8,12 @@ import math
 import re
 from typing import Any
 
-
-_GROUP_COUNT_SUFFIX_PATTERN = re.compile(r"\s*\(n\s*=\s*\d+\)\s*$", re.IGNORECASE)
-_GROUP_STAT_PATTERN = re.compile(
-    r"^(?:\((?P<group>.+?)\)\s*)?(?P<stat>Min|Q1|Median|Mean|Q3|Max)=",
-    re.IGNORECASE,
+from metroliza.charts.plotly_stat_helpers import (
+    STAT_LEGEND_VALUE_PATTERN as _GROUP_STAT_PATTERN,
+    normalize_group_label_key as _normalize_label_key,
+    strip_group_count_suffix as _strip_group_count_suffix,
 )
+
 _REFERENCE_PREFIXES = {
     "lsl": "lsl",
     "usl": "usl",
@@ -897,15 +897,6 @@ def _accent_color(color: str, stat_label: str) -> str:
         else:
             adjusted.append(round(channel * max(factor, 0.25)))
     return "#{:02X}{:02X}{:02X}".format(*[max(0, min(255, int(value))) for value in adjusted])
-
-
-def _strip_group_count_suffix(label: str) -> str:
-    stripped = _GROUP_COUNT_SUFFIX_PATTERN.sub("", str(label or "").strip()).strip()
-    return stripped or str(label or "").strip()
-
-
-def _normalize_label_key(label: str) -> str:
-    return _strip_group_count_suffix(label).casefold()
 
 
 def _stat_override_key(group_label: str, stat_label: str) -> str:

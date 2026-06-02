@@ -14,6 +14,7 @@ from metroliza.industrial.industrial_analytics_service import (
     ProductionAnalyticsDiagnostic,
     ProductionGroupstatsResult,
 )
+from metroliza.industrial.industrial_analytics_helpers import diagnostics_dataframe
 from metroliza.industrial.industrial_analytics_state import ProductionMetricSelection
 from metroliza.industrial.industrial_analytics_state import ProductionChartSelection
 from metroliza.industrial.industrial_analytics_workbook_charts import add_analytics_workbook_charts
@@ -95,7 +96,7 @@ def export_production_analytics_workbook(
             sheet_names.append(stats_sheet)
 
         diagnostics_sheet = unique_sheet_name("Diagnostics", used_names)
-        _diagnostics_dataframe(diagnostics).to_excel(writer, sheet_name=diagnostics_sheet, index=False)
+        diagnostics_dataframe(diagnostics).to_excel(writer, sheet_name=diagnostics_sheet, index=False)
         sheet_names.append(diagnostics_sheet)
 
         parameter_sheet_count = 0
@@ -317,22 +318,6 @@ def groupstats_result_dataframe(groupstats_result: ProductionGroupstatsResult) -
     if not rows:
         rows.append({"row_type": "info", "message": "No groupstats rows available."})
     return pd.DataFrame(rows)
-
-
-def _diagnostics_dataframe(diagnostics: tuple[ProductionAnalyticsDiagnostic, ...]) -> pd.DataFrame:
-    if not diagnostics:
-        return pd.DataFrame([{"severity": "info", "code": "ok", "message": "No diagnostics."}])
-    return pd.DataFrame(
-        [
-            {
-                "severity": diagnostic.severity,
-                "code": diagnostic.code,
-                "message": diagnostic.message,
-                "context": diagnostic.context,
-            }
-            for diagnostic in diagnostics
-        ]
-    )
 
 
 def _parameter_dataframe(dataframe: pd.DataFrame, metric_field: str) -> pd.DataFrame:

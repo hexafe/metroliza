@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from typing import Callable, Sequence
 
 import numpy as np
+from metroliza.native_bridges.native_array_utils import (
+    as_float64_1d_contiguous as _as_float64_1d_contiguous,
+)
 from metroliza.shared.env_utils import env_value, parse_choice
 from metroliza.shared.runtime_backend_policy import should_prefer_python_backend_in_auto_mode
 
@@ -113,13 +116,6 @@ def resolve_kernel_mode(explicit_mode: str | None = None) -> str:
     if mode == KERNEL_MODE_AUTO and should_prefer_python_backend_in_auto_mode():
         return KERNEL_MODE_PYTHON
     return mode
-
-
-def _as_float64_1d_contiguous(values: Sequence[float] | np.ndarray) -> np.ndarray:
-    array = np.asarray(values, dtype=np.float64)
-    if array.ndim != 1:
-        raise ValueError('Expected 1D numeric input')
-    return np.ascontiguousarray(array)
 
 
 def build_kernel_input(*, sample_values: Sequence[float] | np.ndarray, distribution: str, fitted_params: Sequence[float] | np.ndarray) -> CandidateKernelInput:

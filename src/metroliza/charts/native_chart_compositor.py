@@ -6,7 +6,7 @@ from functools import lru_cache
 from io import BytesIO
 import math
 import os
-from typing import Any, Iterable
+from typing import Any
 
 import numpy as np
 from PIL import Image, ImageColor, ImageDraw, ImageFont
@@ -19,6 +19,13 @@ except Exception:  # pragma: no cover - optional SciPy path
 from metroliza.exporting.export_summary_sheet_planner import (
     build_histogram_annotation_specs as _build_histogram_annotation_specs,
     compute_histogram_annotation_rows as _compute_histogram_annotation_rows,
+)
+from metroliza.charts.chart_numeric_helpers import (
+    as_finite_float as _as_float,
+    finite_array as _finite_array,
+    format_histogram_stat_value as _format_histogram_stat_value,
+    format_tick as _format_tick,
+    line_ticks as _line_ticks,
 )
 from metroliza.charts.summary_plot_palette import SUMMARY_PLOT_PALETTE
 from metroliza.charts.value_formatting import format_metrology_label_text
@@ -41,21 +48,6 @@ _FONT_PATHS = {
         "/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf",
     ),
 }
-
-
-def _as_float(value: Any) -> float | None:
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(numeric):
-        return None
-    return numeric
-
-
-def _finite_array(values: Iterable[Any]) -> np.ndarray:
-    arr = np.asarray(list(values), dtype=float)
-    return arr[np.isfinite(arr)]
 
 
 def _hex_rgba(color: str | tuple[int, int, int] | tuple[int, int, int, int], alpha: float = 1.0) -> tuple[int, int, int, int]:
@@ -148,23 +140,6 @@ def _encode_png(
         save_kwargs["compress_level"] = max(0, min(9, int(compress_level)))
     image.save(buffer, **save_kwargs)
     return buffer.getvalue()
-
-
-def _line_ticks(min_value: float, max_value: float, *, count: int = 5) -> list[float]:
-    if not math.isfinite(min_value) or not math.isfinite(max_value):
-        return [0.0, 1.0]
-    if math.isclose(min_value, max_value):
-        return [min_value]
-    return [min_value + ((max_value - min_value) * idx / max(1, count - 1)) for idx in range(count)]
-
-
-def _format_tick(value: float) -> str:
-    numeric = float(value)
-    if abs(numeric) >= 100 or math.isclose(numeric, round(numeric), abs_tol=1e-9):
-        return f"{numeric:.0f}"
-    if abs(numeric) >= 10:
-        return f"{numeric:.1f}"
-    return f"{numeric:.3f}".rstrip("0").rstrip(".")
 
 
 def _map_linear(value: float, src_min: float, src_max: float, dst_min: float, dst_max: float) -> float:
@@ -767,15 +742,6 @@ def _draw_resolved_distribution_annotations(
                 fill=_hex_rgba(text.get("color") or SUMMARY_PLOT_PALETTE["annotation_text"], float(text.get("alpha") or 1.0)),
                 width=1,
             )
-
-
-def _format_histogram_stat_value(value: Any, *, decimals: int = 3) -> str:
-    numeric = _as_float(value)
-    if numeric is None:
-        return "N/A"
-    if math.isclose(numeric, round(numeric), abs_tol=1e-9):
-        return f"{numeric:.0f}"
-    return f"{numeric:.{decimals}f}"
 
 
 def _fallback_histogram_specification_lines(payload: dict[str, Any]) -> list[dict[str, Any]]:

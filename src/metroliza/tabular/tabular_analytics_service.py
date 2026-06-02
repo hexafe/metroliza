@@ -25,6 +25,7 @@ from metroliza.reports.db import (
     sqlite_connection_scope,
 )
 from metroliza.shared.excel_sheet_utils import unique_sheet_name
+from metroliza.industrial.industrial_analytics_helpers import diagnostics_dataframe
 from metroliza.industrial.industrial_analytics_service import (
     ProductionAggregationResult,
     ProductionAnalyticsDiagnostic,
@@ -3474,7 +3475,7 @@ def export_tabular_analytics_workbook(
             sheet_names.append(stats_sheet)
 
         diagnostics_sheet = unique_sheet_name("Diagnostics", used_names)
-        _diagnostics_dataframe(diagnostics).to_excel(writer, sheet_name=diagnostics_sheet, index=False)
+        diagnostics_dataframe(diagnostics).to_excel(writer, sheet_name=diagnostics_sheet, index=False)
         sheet_names.append(diagnostics_sheet)
 
         parameter_sheet_count = 0
@@ -3685,22 +3686,6 @@ def _metric_summary_dataframe(
             }
         )
     return pd.DataFrame(rows)
-
-
-def _diagnostics_dataframe(diagnostics: tuple[ProductionAnalyticsDiagnostic, ...]) -> pd.DataFrame:
-    if not diagnostics:
-        return pd.DataFrame([{"severity": "info", "code": "ok", "message": "No diagnostics."}])
-    return pd.DataFrame(
-        [
-            {
-                "severity": diagnostic.severity,
-                "code": diagnostic.code,
-                "message": diagnostic.message,
-                "context": diagnostic.context,
-            }
-            for diagnostic in diagnostics
-        ]
-    )
 
 
 def _parameter_dataframe(dataframe: pd.DataFrame, metric_field: str) -> pd.DataFrame:

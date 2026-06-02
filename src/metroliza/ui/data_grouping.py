@@ -571,7 +571,10 @@ class DataGrouping(QDialog):
 
     @staticmethod
     def _resolve_default_group_color_from_base(base_hex, fallback_hex='#FFFFFF'):
-        return ui_theme_tokens.resolve_base_row_background(base_hex or fallback_hex)
+        return ui_theme_tokens.resolve_default_group_color_from_base(
+            base_hex,
+            fallback_hex=fallback_hex,
+        )
 
     @staticmethod
     def _is_dark_mode_base(base_hex):
@@ -586,10 +589,7 @@ class DataGrouping(QDialog):
         return ui_theme_tokens.themed_group_palette(base_palette=base_palette, dark_mode=dark_mode)
 
     def _resolve_default_group_color(self):
-        palette = self.palette() if hasattr(self, 'palette') else None
-        base = palette.base().color() if palette is not None and hasattr(palette, 'base') else None
-        base_hex = base.name() if base is not None and hasattr(base, 'isValid') and base.isValid() else None
-        return ui_theme_tokens.resolve_base_row_background(base_hex)
+        return ui_theme_tokens.resolve_widget_base_row_background(self)
 
     def _next_group_color(self):
         used = set(
