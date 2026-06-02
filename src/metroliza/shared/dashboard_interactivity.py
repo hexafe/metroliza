@@ -18,9 +18,9 @@ DASHBOARD_INTERACTIVITY_LABELS = {
     "full": "All rows",
 }
 DASHBOARD_POPULATION_LAYER_LABELS = {
-    "auto": "POPULATION layer auto",
-    "interactive": "POPULATION layer interactive points",
-    "static": "POPULATION layer static image",
+    "auto": "Auto",
+    "interactive": "Interactive points",
+    "static": "Static image",
 }
 
 
@@ -110,6 +110,25 @@ def summarize_dashboard_interactivity_options(
 ) -> str:
     """Return the concise user-facing summary for dashboard interactivity settings."""
 
+    detail = summarize_dashboard_sampling_options(
+        value,
+        default_sample_size=default_sample_size,
+        source_row_count=source_row_count,
+        dashboard_row_count=dashboard_row_count,
+    )
+    population_label = summarize_dashboard_population_layer_options(value)
+    return f"{detail}; POPULATION layer {population_label.casefold()}"
+
+
+def summarize_dashboard_sampling_options(
+    value: object,
+    *,
+    default_sample_size: int = DASHBOARD_INTERACTIVITY_DEFAULT_SAMPLE_SIZE,
+    source_row_count: int | None = None,
+    dashboard_row_count: int | None = None,
+) -> str:
+    """Return the concise user-facing summary for Plotly interactivity/sample settings."""
+
     options = normalize_dashboard_interactivity_options(
         value,
         strict=False,
@@ -133,11 +152,22 @@ def summarize_dashboard_interactivity_options(
             detail = f"{label}, {options.sample_size:,} interactive random sample limit"
     else:
         detail = label
-    population_label = DASHBOARD_POPULATION_LAYER_LABELS.get(
-        options.population_layer_mode,
-        f"POPULATION layer {options.population_layer_mode}",
+    return detail
+
+
+def summarize_dashboard_population_layer_options(value: object) -> str:
+    """Return the concise user-facing summary for the POPULATION layer render setting."""
+
+    options = normalize_dashboard_interactivity_options(
+        value,
+        strict=False,
+        min_sample_size=1,
+        max_sample_size=None,
     )
-    return f"{detail}; {population_label}"
+    return DASHBOARD_POPULATION_LAYER_LABELS.get(
+        options.population_layer_mode,
+        options.population_layer_mode.replace("_", " ").strip().title() or "Auto",
+    )
 
 
 def _raw_option(value: object, snake_name: str, camel_name: str) -> Any:

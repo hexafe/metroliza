@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 import modules.industrial_analytics_dashboard as dashboard_module
 from modules.industrial_analytics_dashboard import (
@@ -1227,6 +1228,33 @@ def test_write_dashboard_static_population_layer_mode_converts_supported_time_se
     assert "plotly_spec" in manifest["charts"][0]
 
 
+def test_static_population_layer_uses_population_marker_style(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_raw_layer(*_args, **kwargs):
+        captured.update(kwargs)
+        return b"png"
+
+    monkeypatch.setattr(dashboard_module, "_render_time_series_raw_layer_png", fake_raw_layer)
+    manifest = _static_population_layer_manifest()
+    population_trace = manifest["charts"][0]["plotly_spec"]["data"][0]
+    population_trace["marker"]["size"] = 8.0
+    population_trace["marker"]["opacity"] = 0.5
+
+    write_production_dashboard(
+        manifest,
+        tmp_path / "population_static_style.html",
+        dashboard_interactivity_options={"population_layer_mode": "static"},
+    )
+
+    assert captured["color"] == "#245a5a"
+    assert captured["marker_size"] == pytest.approx(10.0)
+    assert captured["opacity"] == pytest.approx(0.68)
+
+
 def test_write_dashboard_static_population_layer_interactive_mode_keeps_trace(
     tmp_path,
     monkeypatch,
@@ -1333,6 +1361,18 @@ def test_write_dashboard_static_population_layer_converts_sampled_dashboard_fram
             "population_layer_mode": "static",
         },
     )
+    spec = manifest["charts"][0]["plotly_spec"]
+    for trace in spec["data"]:
+        trace["x"] = [f"{index}.0" for index in range(len(trace.get("x") or []))]
+    manifest["charts"][0]["optimization_options"][0][
+        dashboard_module._STATIC_POPULATION_SOURCE_XY_KEY
+    ] = pd.DataFrame(
+        {
+            "__x_numeric": [float(index) for index in range(12)],
+            "__y": [10.0 + (index * 0.01) for index in range(12)],
+            "__x_mode": ["linear"] * 12,
+        }
+    )
 
     result = write_production_dashboard(
         manifest,
@@ -1346,11 +1386,20 @@ def test_write_dashboard_static_population_layer_converts_sampled_dashboard_fram
 
     html_text = Path(result["html_dashboard_path"]).read_text(encoding="utf-8")
     chart = _embedded_dashboard_charts(html_text)[0]
+    spec = chart["plotly_spec"]
     static_population = result["html_dashboard_static_population_layer"]
-    proxy_trace = chart["plotly_spec"]["data"][0]
+    proxy_trace = spec["data"][0]
     assert proxy_trace["name"] == "POPULATION static layer"
     assert proxy_trace["meta"]["metroliza_render_strategy"] == "full_density"
-    assert chart["plotly_spec"]["layout"]["images"][0]["metroliza_static_population_layer_label"] == "POPULATION"
+    assert spec["layout"]["images"][0]["metroliza_static_population_layer_label"] == "POPULATION"
+    image_bounds = proxy_trace["metroliza_static_population_image_bounds"]
+    view_bounds = proxy_trace["metroliza_static_population_view_bounds"]
+    assert image_bounds["x_max"] > view_bounds["x_max"]
+    assert image_bounds["y_max"] > view_bounds["y_max"]
+    assert spec["layout"]["yaxis"]["range"][1] == pytest.approx(view_bounds["y_max"])
+    assert proxy_trace["x"] != [None]
+    assert proxy_trace["y"][0] == pytest.approx(view_bounds["y_min"])
+    assert proxy_trace["y"][1] == pytest.approx(view_bounds["y_max"])
     assert static_population["status"] == "applied"
     assert static_population["dashboard_sampled"] is True
     assert static_population["source_row_count"] == 12

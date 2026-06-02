@@ -811,18 +811,21 @@ def _convert_static_population_layer(
     if xy.empty:
         option["skipped_reason"] = "empty_population_layer"
         return {"applied": False}
-    all_bounds = _plotly_trace_axis_bounds(traces)
-    if not all_bounds:
+    view_bounds = _plotly_trace_axis_bounds(traces)
+    if not view_bounds:
         option["skipped_reason"] = "axis_bounds_unavailable"
         return {"applied": False}
     source_xy = _static_population_source_xy(option)
-    if not source_xy.empty and str(source_xy["__x_mode"].iloc[0]) == str(all_bounds.get("x_mode")):
+    image_bounds = dict(view_bounds)
+    if not source_xy.empty and str(source_xy["__x_mode"].iloc[0]) == str(view_bounds.get("x_mode")):
         render_xy = source_xy
-        all_bounds = _axis_bounds_with_xy_frame(all_bounds, source_xy)
+        image_bounds = _axis_bounds_with_xy_frame(view_bounds, source_xy)
     else:
         render_xy = xy
     sample_limit = int(option.get("sample_point_limit") or DASHBOARD_RAW_POINT_LIMIT)
     color = _trace_color(population_trace) or _plot_color(population_index, "POPULATION")
+    marker_size = _static_population_marker_size(population_trace)
+    opacity = _static_population_opacity(population_trace)
     render_strategy = "marker_static"
     non_empty_pixel_count = None
     try:
@@ -830,18 +833,21 @@ def _convert_static_population_layer(
             png_bytes, non_empty_pixel_count = _render_time_series_density_layer_png(
                 render_xy["__x_numeric"].to_numpy(dtype=float),
                 render_xy["__y"].to_numpy(dtype=float),
-                x_range=(all_bounds["x_min"], all_bounds["x_max"]),
-                y_range=(all_bounds["y_min"], all_bounds["y_max"]),
+                x_range=(image_bounds["x_min"], image_bounds["x_max"]),
+                y_range=(image_bounds["y_min"], image_bounds["y_max"]),
                 color=color,
+                opacity=opacity,
             )
             render_strategy = "full_density"
         else:
             png_bytes = _render_time_series_raw_layer_png(
                 render_xy["__x_numeric"].to_numpy(dtype=float),
                 render_xy["__y"].to_numpy(dtype=float),
-                x_range=(all_bounds["x_min"], all_bounds["x_max"]),
-                y_range=(all_bounds["y_min"], all_bounds["y_max"]),
+                x_range=(image_bounds["x_min"], image_bounds["x_max"]),
+                y_range=(image_bounds["y_min"], image_bounds["y_max"]),
                 color=color,
+                marker_size=marker_size,
+                opacity=opacity,
             )
     except Exception as exc:
         rendered_fallback = _sample_xy_frame(
@@ -856,9 +862,11 @@ def _convert_static_population_layer(
         png_bytes = _render_time_series_raw_layer_png(
             rendered_fallback["__x_numeric"].to_numpy(dtype=float),
             rendered_fallback["__y"].to_numpy(dtype=float),
-            x_range=(all_bounds["x_min"], all_bounds["x_max"]),
-            y_range=(all_bounds["y_min"], all_bounds["y_max"]),
+            x_range=(image_bounds["x_min"], image_bounds["x_max"]),
+            y_range=(image_bounds["y_min"], image_bounds["y_max"]),
             color=color,
+            marker_size=marker_size,
+            opacity=opacity,
         )
         render_xy = rendered_fallback
         render_strategy = "sampled_marker_fallback"
@@ -871,7 +879,7 @@ def _convert_static_population_layer(
         layout,
         png_bytes=png_bytes,
         label=str(option.get("group_label") or "POPULATION"),
-        bounds=all_bounds,
+        bounds=image_bounds,
     )
     traces.pop(population_index)
     traces.insert(
@@ -881,9 +889,11 @@ def _convert_static_population_layer(
             color=color,
             image_index=image_index,
             render_strategy=render_strategy,
+            view_bounds=view_bounds,
+            image_bounds=image_bounds,
         ),
     )
-    _apply_static_population_axis_ranges(layout, all_bounds)
+    _apply_static_population_axis_ranges(layout, view_bounds)
     note = (
         "POPULATION layer rendered as a static image; hover and point selection are unavailable "
         "for that background layer."
@@ -979,6 +989,35 @@ def _trace_color(trace: dict[str, Any]) -> str | None:
     return None
 
 
+def _static_population_marker_size(trace: dict[str, Any]) -> float:
+    marker = trace.get("marker") if isinstance(trace.get("marker"), dict) else {}
+    raw_value = marker.get("size")
+    if isinstance(raw_value, list) and raw_value:
+        raw_value = raw_value[0]
+    try:
+        parsed = float(raw_value)
+    except (TypeError, ValueError):
+        parsed = 4.5
+    if not np.isfinite(parsed):
+        parsed = 4.5
+    return min(18.0, max(5.0, parsed * 1.25))
+
+
+def _static_population_opacity(trace: dict[str, Any]) -> float:
+    marker = trace.get("marker") if isinstance(trace.get("marker"), dict) else {}
+    raw_value = marker.get("opacity", trace.get("opacity"))
+    if isinstance(raw_value, list) and raw_value:
+        raw_value = raw_value[0]
+    try:
+        parsed = float(raw_value)
+    except (TypeError, ValueError):
+        parsed = 0.62
+    if not np.isfinite(parsed):
+        parsed = 0.62
+    parsed = min(1.0, max(0.0, parsed))
+    return min(1.0, max(0.62, 0.36 + parsed * 0.64))
+
+
 def _coerce_trace_xy(trace: dict[str, Any]) -> pd.DataFrame:
     x_values = trace.get("x")
     y_values = trace.get("y")
@@ -987,17 +1026,28 @@ def _coerce_trace_xy(trace: dict[str, Any]) -> pd.DataFrame:
     pair_count = min(len(x_values), len(y_values))
     raw = pd.DataFrame({"__x_raw": x_values[:pair_count], "__y_raw": y_values[:pair_count]})
     y_series = pd.to_numeric(raw["__y_raw"], errors="coerce")
-    x_datetime = pd.to_datetime(raw["__x_raw"], errors="coerce", utc=True)
     non_null_x = int(raw["__x_raw"].notna().sum())
-    datetime_count = int(x_datetime.notna().sum())
-    if datetime_count and datetime_count >= max(1, int(non_null_x * 0.8)):
-        x_numeric = x_datetime.astype("int64").astype(float) / 1_000_000.0
-        mode = "date"
-        valid_mask = x_datetime.notna() & y_series.notna()
-    else:
-        x_numeric = pd.to_numeric(raw["__x_raw"], errors="coerce")
+    x_numeric_candidate = pd.to_numeric(raw["__x_raw"], errors="coerce")
+    numeric_count = int(x_numeric_candidate.notna().sum())
+    if (
+        not pd.api.types.is_datetime64_any_dtype(raw["__x_raw"])
+        and numeric_count
+        and numeric_count >= max(1, int(non_null_x * 0.8))
+    ):
+        x_numeric = x_numeric_candidate
         mode = "linear"
         valid_mask = x_numeric.notna() & y_series.notna()
+    else:
+        x_datetime = pd.to_datetime(raw["__x_raw"], errors="coerce", utc=True)
+        datetime_count = int(x_datetime.notna().sum())
+        if datetime_count and datetime_count >= max(1, int(non_null_x * 0.8)):
+            x_numeric = x_datetime.astype("int64").astype(float) / 1_000_000.0
+            mode = "date"
+            valid_mask = x_datetime.notna() & y_series.notna()
+        else:
+            x_numeric = x_numeric_candidate
+            mode = "linear"
+            valid_mask = x_numeric.notna() & y_series.notna()
     result = pd.DataFrame(
         {
             "__x_numeric": x_numeric.loc[valid_mask].astype(float),
@@ -1007,7 +1057,6 @@ def _coerce_trace_xy(trace: dict[str, Any]) -> pd.DataFrame:
     result = result.replace([np.inf, -np.inf], np.nan).dropna()
     result["__x_mode"] = mode
     return result
-
 
 def _plotly_trace_axis_bounds(traces: list[Any]) -> dict[str, Any] | None:
     prepared = [
@@ -1112,21 +1161,33 @@ def _static_population_layer_proxy_trace(
     color: str,
     image_index: int,
     render_strategy: str = "marker_static",
+    view_bounds: dict[str, Any] | None = None,
+    image_bounds: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     target_id = f"series:{normalize_population_label_key(label)}"
+    x_values: list[Any] = [None]
+    y_values: list[Any] = [None]
+    if view_bounds:
+        x_mode = str(view_bounds.get("x_mode") or "linear")
+        x_values = [
+            _display_x_value(float(view_bounds["x_min"]), mode=x_mode),
+            _display_x_value(float(view_bounds["x_max"]), mode=x_mode),
+        ]
+        y_values = [float(view_bounds["y_min"]), float(view_bounds["y_max"])]
     return {
         "type": "scatter",
         "mode": "markers",
         "name": f"{label} static layer",
-        "x": [None],
-        "y": [None],
+        "x": x_values,
+        "y": y_values,
         "showlegend": True,
         "hoverinfo": "skip",
+        "opacity": 0.001,
         "marker": {
             "color": color,
-            "size": 8,
+            "size": 0.1,
             "symbol": "circle",
-            "opacity": 0.75,
+            "opacity": 0.001,
         },
         "meta": {
             "metroliza_trace_schema": "metroliza.plotly_trace.v1",
@@ -1141,6 +1202,8 @@ def _static_population_layer_proxy_trace(
         "metroliza_static_population_layer_index": int(image_index),
         "metroliza_static_population_layer_label": label,
         "metroliza_static_population_render_strategy": render_strategy,
+        "metroliza_static_population_view_bounds": dict(view_bounds or {}),
+        "metroliza_static_population_image_bounds": dict(image_bounds or view_bounds or {}),
     }
 
 
@@ -2175,17 +2238,28 @@ def _coerce_time_series_xy(
         return pd.DataFrame(columns=["__x_numeric", "__y", "__x_mode"])
     y_series = pd.to_numeric(frame[y_column], errors="coerce")
     x_raw = frame[x_column]
-    x_datetime = pd.to_datetime(x_raw, errors="coerce", utc=True)
     non_null_x = int(x_raw.notna().sum())
-    datetime_count = int(x_datetime.notna().sum())
-    if datetime_count and datetime_count >= max(1, int(non_null_x * 0.8)):
-        x_numeric = x_datetime.astype("int64").astype(float) / 1_000_000.0
-        mode = "date"
-        valid_mask = x_datetime.notna() & y_series.notna()
-    else:
-        x_numeric = pd.to_numeric(x_raw, errors="coerce")
+    x_numeric_candidate = pd.to_numeric(x_raw, errors="coerce")
+    numeric_count = int(x_numeric_candidate.notna().sum())
+    if (
+        not pd.api.types.is_datetime64_any_dtype(x_raw)
+        and numeric_count
+        and numeric_count >= max(1, int(non_null_x * 0.8))
+    ):
+        x_numeric = x_numeric_candidate
         mode = "linear"
         valid_mask = x_numeric.notna() & y_series.notna()
+    else:
+        x_datetime = pd.to_datetime(x_raw, errors="coerce", utc=True)
+        datetime_count = int(x_datetime.notna().sum())
+        if datetime_count and datetime_count >= max(1, int(non_null_x * 0.8)):
+            x_numeric = x_datetime.astype("int64").astype(float) / 1_000_000.0
+            mode = "date"
+            valid_mask = x_datetime.notna() & y_series.notna()
+        else:
+            x_numeric = x_numeric_candidate
+            mode = "linear"
+            valid_mask = x_numeric.notna() & y_series.notna()
     result = pd.DataFrame(
         {
             "__x_numeric": x_numeric.loc[valid_mask].astype(float),
@@ -2883,6 +2957,8 @@ def _render_time_series_raw_layer_png(
     x_range: tuple[float, float],
     y_range: tuple[float, float],
     color: str,
+    marker_size: float = 5.0,
+    opacity: float = 0.62,
 ) -> bytes:
     from metroliza.charts.matplotlib_runtime import configure_headless_matplotlib
 
@@ -2894,19 +2970,20 @@ def _render_time_series_raw_layer_png(
         fig.patch.set_alpha(0.0)
         ax.set_facecolor((1.0, 1.0, 1.0, 0.0))
         point_count = int(len(x_values))
+        base_marker_size = max(2.0, min(18.0, float(marker_size)))
+        marker_alpha = max(0.05, min(1.0, float(opacity)))
         if point_count < 10_000:
-            marker_size = 3.2
-            marker_alpha = 0.48
+            rendered_marker_size = max(3.8, base_marker_size * 0.92)
         elif point_count < 30_000:
-            marker_size = 1.1
-            marker_alpha = 0.32
+            rendered_marker_size = max(1.4, base_marker_size * 0.38)
+            marker_alpha = max(0.34, marker_alpha * 0.82)
         else:
-            marker_size = 0.24
-            marker_alpha = 0.22
+            rendered_marker_size = max(0.38, base_marker_size * 0.12)
+            marker_alpha = max(0.24, marker_alpha * 0.68)
         ax.scatter(
             x_values,
             y_values,
-            s=marker_size,
+            s=rendered_marker_size,
             alpha=marker_alpha,
             c=color,
             marker=".",
@@ -2932,6 +3009,7 @@ def _render_time_series_density_layer_png(
     x_range: tuple[float, float],
     y_range: tuple[float, float],
     color: str,
+    opacity: float = 0.62,
     width: int = 1152,
     height: int = 456,
 ) -> tuple[bytes, int]:
@@ -2982,8 +3060,13 @@ def _render_time_series_density_layer_png(
     max_alpha = float(alpha_scale.max())
     alpha = np.zeros((height, width), dtype=np.uint8)
     if max_alpha > 0:
-        alpha_values = 36.0 + (alpha_scale[non_empty] / max_alpha) * 204.0
-        alpha[non_empty] = np.clip(alpha_values, 36, 240).astype(np.uint8)
+        opacity = max(0.05, min(1.0, float(opacity)))
+        min_alpha = max(42.0, 64.0 * opacity)
+        max_layer_alpha = max(min_alpha + 1.0, 255.0 * opacity)
+        alpha_values = min_alpha + (alpha_scale[non_empty] / max_alpha) * (
+            max_layer_alpha - min_alpha
+        )
+        alpha[non_empty] = np.clip(alpha_values, min_alpha, max_layer_alpha).astype(np.uint8)
     rgb = tuple(int(round(channel * 255)) for channel in to_rgb(color))
     image = np.zeros((height, width, 4), dtype=np.uint8)
     image[:, :, 0] = rgb[0]
@@ -4444,7 +4527,14 @@ def _summary_card_rows(summary: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
     if chart_detail:
         rows.append(("Dashboard interactivity", chart_detail))
     static_population = summary.get("static_population_layer")
-    if isinstance(static_population, dict) and _summary_int(static_population.get("applied_chart_count")):
+    static_population_applied = (
+        isinstance(static_population, dict)
+        and bool(_summary_int(static_population.get("applied_chart_count")))
+    )
+    population_layer_detail = str(context.get("population_layer_detail") or "").strip()
+    if population_layer_detail and not static_population_applied:
+        rows.append(("POPULATION layer", population_layer_detail))
+    if isinstance(static_population, dict) and static_population_applied:
         strategy_counts = static_population.get("render_strategy_counts")
         if isinstance(strategy_counts, dict) and _summary_int(strategy_counts.get("full_density")):
             layer_value = (

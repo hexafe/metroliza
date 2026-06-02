@@ -14,6 +14,7 @@ try:
     from modules.industrial_analytics_dialog import (
         build_analytics_completion_message,
         DashboardInteractivityOptionsDialog,
+        DashboardPopulationLayerOptionsDialog,
         IndustrialAnalyticsDialog,
         MetricSelectionDialog,
         SOURCE_PRODUCTION_CACHE,
@@ -32,6 +33,7 @@ except ImportError as exc:  # pragma: no cover - environment/order dependent
     QApplication = None
     cleanup_tabular_load_result = None
     DashboardInteractivityOptionsDialog = None
+    DashboardPopulationLayerOptionsDialog = None
     QDialog = None
     IndustrialAnalyticsDialog = None
     IndustrialAnalyticsFilterDialog = None
@@ -278,11 +280,13 @@ def test_tabular_analytics_dialog_interactivity_controls_are_visible_and_in_requ
         assert not dialog.dashboard_interactivity_button.isHidden()
         assert (
             dialog.dashboard_interactivity_summary_label.text()
-            == "Auto, 50,000 interactive random sample limit; POPULATION layer auto"
+            == "Auto, 50,000 interactive random sample limit"
         )
+        assert not dialog.population_layer_button.isHidden()
+        assert dialog.population_layer_summary_label.text() == "Auto"
         assert dialog.dashboard_interactivity_row_label.text() == "Dashboard interactivity"
         assert "chart interactivity" in dialog.dashboard_interactivity_button.toolTip()
-        assert "POPULATION layer" in dialog.dashboard_interactivity_button.toolTip()
+        assert "random sample" in dialog.dashboard_interactivity_button.toolTip()
 
         dialog.dashboard_interactivity_options = DashboardInteractivityOptions(
             mode="sampled",
@@ -292,11 +296,11 @@ def test_tabular_analytics_dialog_interactivity_controls_are_visible_and_in_requ
         dialog._sync_dashboard_interactivity_controls()
         assert (
             dialog.dashboard_interactivity_summary_label.text()
-            == "Interactive random sample, 75,000 interactive random sample limit; POPULATION layer static image"
+            == "Interactive random sample, 75,000 interactive random sample limit"
         )
-        assert "interactive, or rendered as a static image" in (
-            dialog.dashboard_interactivity_summary_label.toolTip()
-        )
+        dialog._sync_population_layer_controls()
+        assert dialog.population_layer_summary_label.text() == "Static image"
+        assert "random sampling limit" in dialog.dashboard_interactivity_summary_label.toolTip()
         request = dialog._build_analytics_request()
 
         assert request.dashboard_interactivity_options == DashboardInteractivityOptions(
@@ -314,9 +318,30 @@ def test_tabular_analytics_dialog_interactivity_controls_are_visible_and_in_requ
         dialog.close()
 
 
-def test_dashboard_interactivity_dialog_exposes_population_layer_mode() -> None:
+def test_dashboard_interactivity_dialog_keeps_population_layer_separate() -> None:
     _app()
     dialog = DashboardInteractivityOptionsDialog(
+        options=DashboardInteractivityOptions(
+            mode="sampled",
+            sample_size=75000,
+            population_layer_mode="interactive",
+        )
+    )
+    try:
+        assert not hasattr(dialog, "population_layer_combo")
+
+        assert dialog.interactivity_options() == DashboardInteractivityOptions(
+            mode="sampled",
+            sample_size=75000,
+            population_layer_mode="interactive",
+        )
+    finally:
+        dialog.close()
+
+
+def test_population_layer_dialog_updates_only_population_layer_mode() -> None:
+    _app()
+    dialog = DashboardPopulationLayerOptionsDialog(
         options=DashboardInteractivityOptions(
             mode="sampled",
             sample_size=75000,
@@ -353,6 +378,9 @@ def test_production_analytics_dialog_hides_interactivity_controls() -> None:
         assert dialog.dashboard_interactivity_row_label.isHidden()
         assert dialog.dashboard_interactivity_summary_label.isHidden()
         assert dialog.dashboard_interactivity_button.isHidden()
+        assert dialog.population_layer_row_label.isHidden()
+        assert dialog.population_layer_summary_label.isHidden()
+        assert dialog.population_layer_button.isHidden()
     finally:
         dialog.close()
 
@@ -390,10 +418,54 @@ def test_tabular_analytics_interactivity_button_launches_dialog(monkeypatch) -> 
             mode="static",
             sample_size=50000,
         )
-        assert (
-            dialog.dashboard_interactivity_summary_label.text()
-            == "Snapshots only; POPULATION layer auto"
+        assert dialog.dashboard_interactivity_summary_label.text() == "Snapshots only"
+        assert dialog.population_layer_summary_label.text() == "Auto"
+    finally:
+        dialog.close()
+
+
+def test_tabular_analytics_population_layer_button_launches_dialog(monkeypatch) -> None:
+    _app()
+    calls = {}
+
+    class FakeDashboardPopulationLayerOptionsDialog:
+        def __init__(self, parent=None, *, options=None):
+            calls["parent"] = parent
+            calls["options"] = options
+
+        def exec(self):
+            calls["exec_called"] = True
+            return QDialog.DialogCode.Accepted
+
+        def interactivity_options(self):
+            return DashboardInteractivityOptions(
+                mode="auto",
+                sample_size=50000,
+                population_layer_mode="static",
+            )
+
+    monkeypatch.setitem(
+        IndustrialAnalyticsDialog.open_population_layer_options.__globals__,
+        "DashboardPopulationLayerOptionsDialog",
+        FakeDashboardPopulationLayerOptionsDialog,
+    )
+
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.open_population_layer_options()
+
+        assert calls["parent"] is dialog
+        assert calls["options"] == DashboardInteractivityOptions(mode="auto", sample_size=50000)
+        assert calls["exec_called"] is True
+        assert dialog.dashboard_interactivity_options == DashboardInteractivityOptions(
+            mode="auto",
+            sample_size=50000,
+            population_layer_mode="static",
         )
+        assert dialog.dashboard_interactivity_summary_label.text() == (
+            "Auto, 50,000 interactive random sample limit"
+        )
+        assert dialog.population_layer_summary_label.text() == "Static image"
     finally:
         dialog.close()
 

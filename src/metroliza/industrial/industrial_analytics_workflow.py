@@ -40,7 +40,8 @@ from metroliza.industrial.industrial_analytics_workbook import (
 from metroliza.shared.progress_status import build_three_line_status, format_progress_duration
 from metroliza.shared.dashboard_interactivity import (
     normalize_dashboard_interactivity_mapping,
-    summarize_dashboard_interactivity_options,
+    summarize_dashboard_population_layer_options,
+    summarize_dashboard_sampling_options,
 )
 from metroliza.tabular.tabular_analytics_service import (
     TABULAR_GROUP_COLUMN,
@@ -550,12 +551,16 @@ def _dashboard_interactivity_label(
     source_row_count: int | None = None,
     dashboard_row_count: int | None = None,
 ) -> str:
-    return summarize_dashboard_interactivity_options(
+    return summarize_dashboard_sampling_options(
         options,
         default_sample_size=int(TABULAR_FAST_DASHBOARD_ROW_LIMIT),
         source_row_count=source_row_count,
         dashboard_row_count=dashboard_row_count,
     )
+
+
+def _dashboard_population_layer_label(options: dict[str, int | str]) -> str:
+    return summarize_dashboard_population_layer_options(options)
 
 
 def _tabular_dashboard_context(
@@ -589,6 +594,7 @@ def _tabular_dashboard_context(
             source_row_count=source_row_count,
             dashboard_row_count=dashboard_row_count,
         ),
+        "population_layer_detail": _dashboard_population_layer_label(interactivity_options),
     }
 
 

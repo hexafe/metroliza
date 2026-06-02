@@ -195,8 +195,11 @@ def test_run_tabular_file_analytics_reuses_shared_dashboard_and_parameter_workbo
     assert '<div class="metric-label">Rows rendered</div>' in html_text
     assert '<div class="metric-label">Dashboard interactivity</div>' in html_text
     assert (
-        '<span class="metric-value-line">All rows; '
-        "POPULATION layer auto</span>"
+        '<span class="metric-value-line">All rows</span>'
+    ) in html_text
+    assert '<div class="metric-label">POPULATION layer</div>' in html_text
+    assert (
+        '<span class="metric-value-line">Auto</span>'
     ) in html_text
     assert "Metroliza CSV Summary Dashboard" in html_text
     assert "Cached production data dashboard" not in html_text
@@ -371,8 +374,12 @@ def test_run_tabular_file_analytics_sampled_dashboard_renders_sampling_copy(
     )
     assert (
         '<div class="metric-label">Dashboard interactivity</div><div class="metric-value">'
-        '<span class="metric-value-line">Auto, 5,000 interactive random sample limit; '
-        "POPULATION layer auto</span></div>"
+        '<span class="metric-value-line">Auto, 5,000 interactive random sample limit</span></div>'
+        in html_text
+    )
+    assert (
+        '<div class="metric-label">POPULATION layer</div><div class="metric-value">'
+        '<span class="metric-value-line">Auto</span></div>'
         in html_text
     )
     assert (
@@ -448,8 +455,12 @@ def test_run_tabular_file_analytics_static_population_for_small_dataset_uses_all
     assert [trace["name"] for trace in spec["data"]] == ["POPULATION static layer"]
     assert spec["layout"]["images"][0]["metroliza_static_population_layer_label"] == "POPULATION"
     assert (
-        '<span class="metric-value-line">Interactive random sample, all 5,000 rows rendered; '
-        "POPULATION layer static image</span>"
+        '<span class="metric-value-line">Interactive random sample, all 5,000 rows rendered</span>'
+        in html_text
+    )
+    assert (
+        '<div class="metric-label">POPULATION layer</div><div class="metric-value">'
+        '<span class="metric-value-line">Static image in 1 chart(s)</span></div>'
         in html_text
     )
     assert "Interactive charts use all selected rows; random sampling was not needed." in html_text
