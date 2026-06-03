@@ -1087,6 +1087,19 @@ def _static_population_opacity(trace: dict[str, Any]) -> float:
     return min(1.0, max(0.62, 0.36 + parsed * 0.64))
 
 
+def _datetime_series_to_epoch_ms(values: pd.Series) -> pd.Series:
+    parsed = pd.to_datetime(values, errors="coerce", utc=True)
+    if not isinstance(parsed, pd.Series):
+        parsed = pd.Series(parsed, index=values.index)
+    valid_mask = parsed.notna()
+    # Pandas may keep parsed datetimes at ns/us/ms resolution depending on the input and
+    # version. Convert through an explicit UTC millisecond dtype so Plotly date math stays
+    # stable across pandas releases.
+    utc_naive = parsed.dt.tz_convert("UTC").dt.tz_localize(None)
+    epoch_ms = utc_naive.astype("datetime64[ms]").astype("int64").astype(float)
+    return epoch_ms.where(valid_mask, np.nan)
+
+
 def _coerce_trace_xy(trace: dict[str, Any]) -> pd.DataFrame:
     x_values = trace.get("x")
     y_values = trace.get("y")
@@ -1110,7 +1123,7 @@ def _coerce_trace_xy(trace: dict[str, Any]) -> pd.DataFrame:
         x_datetime = pd.to_datetime(raw["__x_raw"], errors="coerce", utc=True)
         datetime_count = int(x_datetime.notna().sum())
         if datetime_count and datetime_count >= max(1, int(non_null_x * 0.8)):
-            x_numeric = x_datetime.astype("int64").astype(float) / 1_000_000.0
+            x_numeric = _datetime_series_to_epoch_ms(raw["__x_raw"])
             mode = "date"
             valid_mask = x_datetime.notna() & y_series.notna()
         else:
@@ -2303,7 +2316,7 @@ def _hybrid_trace_x_numeric(value: Any, *, mode: str) -> float | None:
         timestamp = pd.to_datetime(value, errors="coerce", utc=True)
         if pd.isna(timestamp):
             return None
-        return float(timestamp.value / 1_000_000.0)
+        return float(timestamp.timestamp() * 1000.0)
     try:
         number = float(value)
     except (TypeError, ValueError):
@@ -2336,7 +2349,7 @@ def _coerce_time_series_xy(
         x_datetime = pd.to_datetime(x_raw, errors="coerce", utc=True)
         datetime_count = int(x_datetime.notna().sum())
         if datetime_count and datetime_count >= max(1, int(non_null_x * 0.8)):
-            x_numeric = x_datetime.astype("int64").astype(float) / 1_000_000.0
+            x_numeric = _datetime_series_to_epoch_ms(x_raw)
             mode = "date"
             valid_mask = x_datetime.notna() & y_series.notna()
         else:

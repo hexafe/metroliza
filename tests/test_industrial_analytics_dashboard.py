@@ -1349,6 +1349,22 @@ def _epoch_ms(value: str) -> float:
     return float(pd.Timestamp(value).timestamp() * 1000.0)
 
 
+def test_datetime_series_to_epoch_ms_normalizes_microsecond_resolution() -> None:
+    values = pd.Series(
+        pd.array(
+            [
+                "2026-05-10T08:00:00+00:00",
+                "2026-05-10T08:00:07+00:00",
+            ],
+            dtype="datetime64[us, UTC]",
+        )
+    )
+
+    epoch_ms = dashboard_module._datetime_series_to_epoch_ms(values)
+
+    assert epoch_ms.iloc[1] - epoch_ms.iloc[0] == pytest.approx(7_000.0)
+
+
 def test_plotly_trace_axis_bounds_datetime_seconds_are_not_collapsed() -> None:
     traces = [
         {
