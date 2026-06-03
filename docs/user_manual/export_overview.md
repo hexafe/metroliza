@@ -2,18 +2,26 @@
 
 ## What Export is for
 
-Use **Export** to create the main Metroliza **Excel file** from a Metroliza **database file**.
+Use **Export** to create the main Metroliza **Excel workbook** and, when selected or
+required by grouping, the companion **HTML dashboard** from a Metroliza **database file**.
 
-This is the main reporting step after [Parsing](parsing.md). It can also use optional filtering, optional grouping, and a preset before the export runs.
+This is the main reporting step after [Parsing](parsing.md). It can also use optional
+filtering, optional grouping, and a preset before the export runs.
+
+For grouped exports, read the HTML dashboard first. Export group analysis is
+**HTML dashboard only**: Metroliza does not add the standard group-analysis report as
+extra Excel worksheets. The workbook remains the editable measurement package with the
+main exported sheets and selected workbook charts.
 
 If you are new to the app, think of Export like this:
 
 - choose the source **database file**,
-- choose the output **.xlsx file**,
+- choose the output **.xlsx workbook**,
 - optionally filter the data,
 - optionally group the data,
 - choose the export preset,
 - choose the output options,
+- use the dashboard for grouped comparisons when grouping is applied,
 - run the export.
 
 ## Before you start
@@ -21,7 +29,11 @@ If you are new to the app, think of Export like this:
 Before export, you usually need:
 
 - a database created by [Parsing](parsing.md), and
-- an output location for the final **Excel file**.
+- an output location for the final **Excel workbook**.
+
+If you plan to compare groups, also plan to open the generated HTML dashboard after
+export. Grouped analysis is dashboard-first, and Metroliza enables the dashboard
+automatically when grouping is applied.
 
 Optional preparation steps:
 
@@ -60,7 +72,9 @@ The selected output path is shown in the dialog in a compact field with the full
 
 ## Data
 
-This section controls which data is included before the workbook is built. In the Export dialog, the status rows show whether each step is **Applied** or **Not applied**.
+This section controls which data is included before the workbook and dashboard outputs
+are built. In the Export dialog, the status rows show whether each step is **Applied** or
+**Not applied**.
 
 ### Select filters (optional)
 
@@ -90,12 +104,13 @@ group comparison.
 
 See [Export grouping](export_grouping.md) for details.
 
-Important behavior: if grouping is applied, Export automatically includes standard group
-analysis in the HTML dashboard. The Excel workbook stays focused on the main export sheets.
+Important behavior: if grouping is applied, Export automatically enables the HTML
+dashboard and includes standard group analysis there. The Excel workbook stays focused on
+the main export sheets and selected workbook charts.
 
 ## Output
 
-This section controls the overall export style and optional sidecar outputs.
+This section controls the overall export style and optional or automatic sidecar outputs.
 
 ### Export preset
 
@@ -116,7 +131,7 @@ This is the simpler preset for regular use.
 
 Use **Extended plots** when you want a deeper report with extra summary output.
 
-This is better when you want a more analysis-heavy workbook.
+This is better when you want a more analysis-heavy dashboard/workbook package.
 
 Because presets update other fields in the dialog, do not be surprised if chart-related settings change when you switch presets.
 
@@ -129,19 +144,39 @@ This means:
 - Metroliza still creates the local **.xlsx file**, and
 - it also tries to create a Google Sheets version.
 
-This option is optional. The local Excel workbook remains the base output.
+This option is optional. The local Excel workbook remains the base editable output.
+
+### Choosing the right output
+
+Use this guidance when deciding which outputs to create:
+
+- **Excel workbook only** is enough for routine exports when you need editable
+  measurement sheets, selected workbook charts, and no grouped comparison review.
+- **HTML dashboard plus workbook** is the normal review package when you want browser
+  navigation, larger chart viewing, offline sharing, or grouped comparisons.
+- **Grouped export** is dashboard-first. If grouping is applied, Metroliza creates the
+  dashboard automatically even if you did not manually check **HTML dashboard**.
+- **Google Sheets version** is only for cloud sharing/sync. It does not replace the
+  local workbook or the dashboard used for grouped analysis.
 
 ### HTML dashboard
 
-You can optionally check **HTML dashboard**.
+You can optionally check **HTML dashboard**. If grouping is applied, Metroliza turns this
+on automatically because grouped analysis is written to the dashboard.
 
-This adds a local `*_dashboard.html` file and a matching asset folder next to the exported workbook.
+This adds a local `*_dashboard.html` file and a matching asset folder next to the
+exported workbook. Keep the HTML file and its asset folder together when you move,
+archive, or share the dashboard; the asset folder contains the files needed for chart
+snapshots and offline dashboard viewing.
 
 Use it when you want:
 
 - a browser view of the exported charts,
 - larger click-to-enlarge chart viewing, and
 - a simpler way to review results without opening Excel first.
+
+For grouped exports, this is also where the standard group-analysis summary, comparison
+sections, statistics, cautions, and interpretation notes are shown.
 
 Extended summary sections include a report metadata panel when available. It can show report count, sample count, date range, part, revision, template variant, template family, operator, sample kind, comment, and source file context.
 
@@ -151,7 +186,8 @@ Interactive Plotly histograms use the same bin range as the workbook/native hist
 
 CSV Summary has a separate **POPULATION layer** setting for very dense background point layers. Export dashboards do not use that CSV Summary-only control; they keep workbook chart snapshots plus interactive Plotly views where available.
 
-This option does not replace the workbook. It adds an extra review file alongside it.
+This option does not replace the workbook. It adds a review file alongside it. When
+grouping is applied, that review file is required for the grouped-analysis output.
 
 #### Dashboard visuals
 
@@ -228,14 +264,16 @@ Choose the option that best matches how you want to read the workbook.
 
 ## Group analysis
 
-Group analysis is automatic:
+Group analysis is dashboard-first and automatic:
 
 - if grouping is **Not applied**, group analysis is off;
-- if grouping is **Applied**, standard group analysis is added to the HTML dashboard.
+- if grouping is **Applied**, standard group analysis is added to the HTML dashboard and
+  the dashboard is enabled automatically.
 
-The dashboard is enabled automatically for grouped exports, because group comparison is easier
-to review in the browser layout than as extra workbook sheets. The workbook still contains the
-main exported measurement sheets and selected workbook charts.
+Export group analysis is not added as extra workbook sheets. Use the dashboard for the
+group summary, per-metric comparison blocks, pairwise tables, plots, diagnostics, and
+caution notes. Use the workbook for editable exported measurement sheets and selected
+workbook charts.
 
 ## Advanced options
 
@@ -272,7 +310,7 @@ This can help reduce clutter when you mainly want to focus on results that need 
 3. Optionally click **Edit...** next to **Filters**.
 4. Optionally click **Edit...** next to **Grouping**.
 5. Choose the preset and output options.
-6. Choose **Group analysis** settings if needed.
+6. If grouping is applied, plan to review the HTML dashboard for group analysis.
 7. Expand **Show advanced options** if needed.
 8. Click **Export**.
 
@@ -294,7 +332,15 @@ If the worker confirms cancellation, you get an **Export canceled** message.
 
 ### Local Excel output
 
-A local **.xlsx file** is always part of the result.
+A local **.xlsx file** is always part of the result. It contains the main exported
+measurement sheets and selected workbook charts.
+
+### HTML dashboard output and assets
+
+When **HTML dashboard** is selected, or when grouping makes it automatic, Metroliza writes
+the dashboard HTML file and its matching asset folder next to the workbook. Keep both
+together. If the asset folder is missing after moving files, dashboard chart snapshots,
+styles, or offline resources may not load correctly.
 
 ### Optional Google Sheets output
 
@@ -302,7 +348,10 @@ If you enabled Google Sheets export, Metroliza also attempts that extra output, 
 
 ### Completion message
 
-When export finishes, Metroliza shows a completion message. Depending on the result, this message can include clickable links for the exported output or its location.
+When export finishes, Metroliza shows a completion message. Depending on the result, this
+message can include clickable links for the exported workbook, generated dashboard, and
+output location. Use those links before moving files so you can confirm the workbook,
+dashboard HTML, and dashboard assets were all created.
 
 ## Which manual to read next
 

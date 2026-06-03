@@ -16,6 +16,7 @@ Complete before announcing code freeze or cutting an RC branch.
 - [x] `python scripts/sync_release_metadata.py --check` passes (release metadata, README, and CHANGELOG are aligned).
 - [x] Open blockers are triaged against the defect criteria in section 6.
 - [x] Open implementation-item gate triage is completed in [`implementation_item_triage.md`](./implementation_item_triage.md) (Gate/Owner/Target RC/Rationale filled) before freeze proceeds.
+- [ ] Feature freeze is active for the RC line; any late-scope exception is recorded with release-owner approval before merge.
 
 ## 2) Documentation readiness
 
@@ -37,9 +38,10 @@ Complete before beginning open testing on an RC build.
 Complete before beginning open testing on an RC build.
 
 - [ ] Feature freeze timestamp is recorded in release tracker and announcement thread. *(Owner: Release manager)*
+- [ ] Late-scope exception register is empty, or every exception has rationale, owner, target RC, test evidence, rollback/deferral option, and explicit release-owner approval. *(Owner: Release owner)*
 - [ ] Active RC branch name is confirmed and documented (for example `release/2026.05-rc1`; validation branches are not final RC branches). *(Owner: Release engineer)*
 - [ ] Build identifier for open testing is published (artifact/version/hash) and linked in tracker. *(Owner: Release engineer)*
-- [ ] Mandatory CI baseline is completed and linked (build/lint/tests) before open testing starts. *(Owner: Release owner)*
+- [x] Mandatory CI baseline is completed and linked (build/lint/tests) before open testing starts for validation SHA `05b5049558509060df43778d7b39424726e56ff1`: GitHub Actions run [`26875151720`](https://github.com/hexafe/metroliza/actions/runs/26875151720). *(Owner: Release owner)*
 - [ ] Known-issues document link is prepared and shared with open testers. *(Owner: QA/Product)*
 - [ ] Bug reporting channel is announced (for example issue board + chat channel) and monitored. *(Owner: Release manager/QA)*
 
@@ -112,7 +114,7 @@ python -m maturin build --manifest-path src/metroliza/native/distribution_fit_ad
 - [ ] Produced artifacts are named/versioned as expected for RC distribution. *(Owner: Release manager)*
 - [ ] Third-party notices/license attribution are bundled or attached to release artifacts, including RapidOCR, ONNX Runtime, OpenCV, NumPy, Excel reader packages, hexafe-plotstats, and Oznak. *(Owner: Release manager/QA)*
 
-- [ ] GitHub CI checks for the RC branch/PR are green before merge/tag. *(Owner: Release owner)*
+- [ ] GitHub CI checks for the final pushed rc2 merge commit are green before tag/promotion; pre-merge validation run [`26875151720`](https://github.com/hexafe/metroliza/actions/runs/26875151720) passed for commit `05b5049558509060df43778d7b39424726e56ff1`. *(Owner: Release owner)*
 - [ ] CMM parser perf gate evidence (`cmm-parser-perf-gate` + `cmm-parser-perf-artifacts`) is reviewed when parser/backend changes are present; triage follows [`cmm_parser_perf_guardrail.md`](./cmm_parser_perf_guardrail.md). *(Owner: Release owner/QA)*
 - [ ] Coverage threshold from `unit-tests` passes, and `unit-test-coverage` artifact `coverage.xml` is reviewed as RC confidence evidence. *(Owner: Release owner/QA)*
 - [ ] Manual release smoke evidence is linked before open-testing promotion when applicable. Google conversion smoke is release-blocking for promoted RC artifacts; skipped default CI does not satisfy that gate. *(Owner: Release owner)*
@@ -153,7 +155,7 @@ Current plotstats hotfix pin:
   suite passed (`1825 passed, 259 skipped, 95 warnings, 60 subtests passed`),
   focused dashboard/contract tests passed, and the combined coverage gate passed
   with isolated real-Qt UI shards at `81%` against the raised `80%` threshold.
-  Fresh pushed-SHA CI evidence is still required before merge/tag.
+  The current pushed-SHA CI baseline below covers this slice before merge/tag.
 - Oznak access-check and CSV Summary static POPULATION regression QA passed
   locally on 2026-06-02. `Check access` no longer requests a reference column
   unless reference filtering is configured, and 5,000-row all-POPULATION CSV
@@ -163,7 +165,7 @@ Current plotstats hotfix pin:
   Oznak/dashboard tests (`17 passed` and `57 passed`), full headless suite
   (`1828 passed, 261 skipped, 95 warnings, 60 subtests passed`), and the
   CI-shaped combined coverage gate at `81%` against the `80%` threshold.
-  Fresh pushed-SHA CI evidence is still required before merge/tag.
+  The current pushed-SHA CI baseline below covers this slice before merge/tag.
 - Export/CSV Summary cleanup QA passed locally on 2026-06-02. Export grouping
   now infers standard group analysis from applied grouping, creates the HTML
   dashboard automatically for grouped exports, and keeps Group Analysis out of
@@ -175,7 +177,19 @@ Current plotstats hotfix pin:
   audit with no known vulnerabilities), the full headless suite passed
   (`1828 passed, 259 skipped, 95 warnings, 60 subtests passed`), and the
   CI-shaped combined coverage gate passed at `81%` against the `80%` threshold.
-  Fresh pushed-SHA CI evidence is still required before merge/tag.
+  The final docs/freeze merge commit still needs pushed rc2 CI evidence.
+- Pre-merge validation branch CI passed: GitHub Actions run [`26875151720`](https://github.com/hexafe/metroliza/actions/runs/26875151720)
+  for commit `05b5049558509060df43778d7b39424726e56ff1` (`Fix dashboard
+  datetime axis scaling`) on 2026-06-03. Green automatic jobs were Static checks,
+  Unit tests with combined coverage artifact upload, Native wheel build and
+  smoke checks, CMM parser perf guardrail, and the non-blocking Performance
+  benchmark trend check. Manual/opt-in jobs were skipped: Packaging smoke,
+  Windows startup benchmark, and Google conversion smoke.
+- This pre-merge CI satisfies the default branch/PR CI baseline for that commit
+  only. The final docs/freeze merge commit needs its own pushed rc2 CI evidence
+  after merge. It does not close release-promotion evidence for packaging smoke,
+  Windows executable clean-machine launch/startup, Google conversion, or
+  third-party notice artifact review.
 - Post-reorganization follow-up local audit passed after docs/reference cleanup,
   parser-plugin productionization coverage, architecture guardrail hardening, and
   release-status refresh.
@@ -194,9 +208,11 @@ Current plotstats hotfix pin:
 - GitHub Actions CI passed for hexafe-plotstats run `26337409366` on the
   package `main` commit
   `1e2c72107d342f44a37e5fb78d7d76992ea60315`.
-- Manual packaging smoke, Windows executable clean-machine launch, Google conversion
-  smoke, and third-party notice artifact evidence are not recorded for the RC4
-  promotion artifact yet and remain release-promotion blockers.
+- Manual packaging smoke, Windows executable clean-machine launch/startup,
+  Google conversion smoke, third-party notice artifact evidence, and any open
+  must-fix triage item are not recorded for the current RC4 promotion artifact
+  yet and remain release-promotion blockers unless the release owner records an
+  explicit waiver.
 
 Optional CI/manual smoke commands (non-blocking for regular PRs/pushes):
 

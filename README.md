@@ -2,7 +2,9 @@
 
 [![CI](https://github.com/hexafe/metroliza/actions/workflows/ci.yml/badge.svg)](https://github.com/hexafe/metroliza/actions/workflows/ci.yml)
 
-Metroliza is a Python desktop app for industrial metrology workflows: parsing measurement reports, organizing data in SQLite, and creating analysis-ready Excel summaries, dashboards, and grouped statistics.
+Metroliza is a Python desktop app for industrial metrology workflows: parsing measurement
+reports, organizing data in SQLite, and creating analysis-ready Excel summaries,
+dashboard-first grouped analysis, and CSV/production dashboards.
 
 ## Quickstart
 
@@ -121,11 +123,15 @@ also confirm the generated parser diagnostics report
 1. Parse metrology PDFs/ZIPs and CSV data.
 2. Store normalized records in SQLite.
 3. Apply grouping labels where needed (default POPULATION rows stay white; user-created groups are auto color-coded with persistent pastel backgrounds).
-4. Export Excel reports with summaries and plots.
-5. Optionally generate a Google Sheets version while always keeping a local `.xlsx` fallback.
+4. Export local Excel workbooks with editable measurement sheets, summaries, and plots.
+5. Review grouped Export analysis in the HTML dashboard; grouping enables dashboard output
+   automatically.
+6. Optionally generate a Google Sheets version while always keeping a local `.xlsx` fallback.
    - OAuth uses the minimal Drive scope: `https://www.googleapis.com/auth/drive.file`.
-6. Optionally analyze CSV/Excel files or cached production-line rows with grouped dashboards and Excel workbooks, including marker-only scatter time series and histogram statistics tables.
-7. Optionally generate an HTML dashboard sidecar with offline Plotly interactions, an Auto/Light/Dark theme switch, and workbook-matching PNG snapshots.
+7. Optionally analyze CSV/Excel files or cached production-line rows with dashboard-first
+   grouped analytics and optional Excel workbooks.
+8. Optionally generate an HTML dashboard sidecar with offline Plotly interactions, an
+   Auto/Light/Dark theme switch, and workbook-matching PNG snapshots.
 
 
 ## CMM parser backend policy
@@ -183,57 +189,28 @@ python -m maturin build --manifest-path src/metroliza/native/chart_renderer/Carg
 
 ## Group Analysis
 
-Grouped Export runs now add standard group analysis to the HTML dashboard automatically. The workbook stays focused on the main exported measurement sheets and selected workbook charts.
+Grouped Export analysis is dashboard-first. When grouping is applied, Export enables the
+HTML dashboard automatically and writes the standard group comparison there. The workbook
+stays focused on the main exported measurement sheets and selected workbook charts; do not
+look for the standard group-analysis report as extra workbook worksheets.
 
-Use Export grouping when you want named groups compared in the browser dashboard. Without grouping, group analysis is off.
+Use Export grouping when you want named groups compared in the browser dashboard. Without
+grouping, group analysis is off.
 
-For background on the statistical output, see the Group Analysis user manual: [`docs/user_manual/group_analysis/user_manual.md`](docs/user_manual/group_analysis/user_manual.md). Printable companion: [`docs/user_manual/group_analysis/user_manual.pdf`](docs/user_manual/group_analysis/user_manual.pdf).
-- A **light visual style**: no user-facing freeze panes, hidden gridlines, selective borders, and explicit widths/heights tuned for readability.
+Current end-user training lives in the manuals:
 
-### Light vs Standard
+- Export workflow and output choices:
+  [`docs/user_manual/export_overview.md`](docs/user_manual/export_overview.md)
+- CSV/Excel dashboard workflow, large-dataset options, sampling, snapshots, and
+  troubleshooting: [`docs/user_manual/csv_summary.md`](docs/user_manual/csv_summary.md)
+- Group analysis interpretation guide:
+  [`docs/user_manual/group_analysis/user_manual.md`](docs/user_manual/group_analysis/user_manual.md)
+- Printable group analysis companion:
+  [`docs/user_manual/group_analysis/user_manual.pdf`](docs/user_manual/group_analysis/user_manual.pdf)
 
-Both export levels use the same core Group Analysis reading order, but they differ in how much supporting detail is shown:
-
-- **Light** is the faster, more compact read. Start here when you want the worksheet title, the summary, the key per-metric comparison blocks, and concise interpretation notes without extra visual density.
-- **Standard** keeps the same reading order and adds a separate plots sheet plus extra detail that helps users inspect how the distributions differ.
-
-A simple rule for users: **read the top summary first, then move into the metric block for the measurement you care about, and only then use the pairwise table and plot for deeper inspection**.
-
-Metroliza chooses the comparison method automatically based on the data, so most users should focus on the final label, adjusted p-value, effect size, and caution notes before worrying about the test name.
-
-### How to read pairwise results
-
-For each metric, the pairwise section answers a practical question: **which specific groups differ from which other groups?**
-
-- Start with the **adjusted p-value**, because that is the version intended for the final yes/no significance decision after multiple comparisons.
-- Then check the **effect size** to judge whether the observed difference looks small or large in practical terms.
-- Read the text **status label** next to the metric or pair first:
-  - **DIFFERENCE** = the corrected evidence supports a difference.
-  - **NO DIFFERENCE** = the export did not find enough corrected evidence for a difference.
-  - **APPROXIMATE** = the gap may matter, but evidence is not yet firm.
-  - **USE CAUTION** = sample or comparability limits mean the result needs extra care.
-- If the worksheet also shows a **distribution-shape comparison** or Wasserstein distance, treat that as a sign of how differently the full distributions behave, not just whether the averages move.
-- If two groups do **not** show statistical significance, that does not automatically mean they are equivalent; it can also mean the sample is small, noisy, or imbalanced.
-
-### What users should read first
-
-For most users, the recommended order is:
-
-1. The sheet title and top summary.
-2. The metric block for the characteristic you are evaluating.
-3. The pairwise table for the exact groups you need to compare.
-4. The nearby interpretation note.
-5. The plot, if present, to visually confirm whether the numeric result matches the distribution pattern.
-
-### What cautions mean in user-facing language
-
-Cautions are there to slow down overconfident conclusions, not to hide results.
-
-- A caution about **small samples** means the result may swing more than usual if you collect a little more data.
-- A caution about **imbalanced groups** means one group has much more data than another, so comparisons may be less stable.
-- A caution about **non-significant p-values with visible effect size** means the worksheet sees a meaningful-looking difference, but the data is not strong enough yet for a confident significance claim.
-- A caution about **distribution shape** means the groups may differ in spread, skew, or tails even if the centers look similar.
-- Severity labels or descriptive distance cues should be read as **general interpretation help**, not as automatic pass/fail limits.
+A practical reading order for grouped dashboard output is: start with the dashboard
+summary, open the metric section you care about, then use the pairwise table, plots,
+diagnostics, and caution notes for deeper review.
 
 ## Capability metrics legend (summary report)
 

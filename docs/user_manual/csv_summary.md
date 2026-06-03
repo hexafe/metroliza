@@ -9,12 +9,13 @@ Open it from **Tools > CSV Summary...** in the main window.
 
 This workflow is separate from the normal **Parsing -> database file -> Export** flow. It
 uses the shared analytics workflow, so file data can use the same grouping, time buckets,
-charts, statistics, and workbook output as cached production data.
+charts, statistics, dashboard output, and optional workbook output as cached production
+data.
 
 Use CSV Summary when:
 
 - your source is already a CSV or Excel file,
-- you want a dashboard or summary workbook, or
+- you want a dashboard or optional summary workbook, or
 - you do not need the main database-based reporting flow.
 
 ## Full Workflow
@@ -30,7 +31,7 @@ Main controls:
 - **Reload metrics** when source or column choices change
 - **Edit row groups, then choose time bucket and aggregation**
 - **Choose charts and statistics**
-- **Select dashboard and workbook output paths**
+- **Select dashboard and optional workbook output paths**
 - **Create analytics**
 
 ### 1. Select Input File
@@ -43,7 +44,7 @@ After a valid file is loaded:
 - numeric-looking columns are loaded automatically as metrics,
 - time and reference columns can be auto-detected or selected explicitly,
 - grouping columns can be selected,
-- dashboard and workbook output can be created.
+- dashboard and optional workbook output can be created.
 
 For Excel files, Metroliza lists workbook sheets after file selection. Choose a different
 sheet and click **Reload metrics** when needed. If automatic detection does not pick the
@@ -85,8 +86,8 @@ several values at once, such as `Part IN (body*, cap)` or `Sample IN (1, 2, 3)`.
 **Assign all filtered rows** applies that current search or filter across all matching pages.
 
 The selected groups are written as the `GROUP` column and are used by aggregation, charts,
-groupstats, and workbook output. Choose a time bucket and aggregation method in the main
-dialog.
+groupstats, dashboard output, and optional workbook output. Choose a time bucket and
+aggregation method in the main dialog.
 
 To make specific references, IDs, batches, or other row values stand out, use **Edit
 groups** instead of a separate references field. Select the source column that identifies
@@ -115,8 +116,8 @@ Choose chart/statistics outputs:
 - box plot,
 - groupstats.
 
-Choose an HTML dashboard path. Optionally enable workbook output and **Separate sheet per
-selected parameter**.
+Choose an HTML dashboard path first. Optionally enable workbook output and
+**Separate sheet per selected parameter**.
 
 The saved page is titled **Metroliza CSV Summary Dashboard**. Its front-page cards show
 the source, sheet when available, filters, groups, rows rendered into dashboard chart data,
@@ -132,28 +133,51 @@ charts only; they do not change the source data or the selected metrics.
 Use **Dashboard interactivity > Change...** when the selected file is large enough that
 fully interactive charts may make the saved dashboard too heavy for a browser. **Auto** is
 the default: small selections stay fully interactive, while large selections ask for a
-strategy before processing. **Interactive random sample** keeps interactive charts by using
-a reproducible random visual sample, defaulting to 50,000 rows. **Snapshots only** writes
-image snapshots instead of interactive charts and uses the same bounded visual sample for
-very large selections. **All rows** attempts all selected rows, but Metroliza can still
-replace individual interactive charts with image snapshots if the saved dashboard would
-otherwise be too large. Statistics, group comparison, aggregate tables, and workbook output
-continue to use all selected rows. When a visual sample is used, the dashboard run notes
-state how many rows were rendered into dashboard charts and how many selected source rows
-were included in the statistics.
+strategy before processing. Statistics, group comparison, aggregate tables, and workbook
+output continue to use all selected rows even when dashboard charts use a bounded visual
+sample.
+
+Practical choices for large datasets:
+
+- **Auto** is the safest first choice. It keeps small files interactive and prompts for a
+  safer strategy when a large file may create a slow or oversized dashboard.
+- **Interactive random sample** keeps Plotly hover/zoom/legend interactions by drawing a
+  reproducible random visual sample, defaulting to 50,000 rows. Use it for exploration
+  when you need responsive charts but do not need every source point drawn in the browser.
+- **Snapshots only** writes image snapshots instead of interactive charts and uses the
+  same bounded visual sample for very large selections. Use it for review packages that
+  must open reliably on ordinary computers.
+- **All rows** attempts to draw every selected row interactively. Use it only when the row
+  count is manageable or the reviewer has a browser/computer that can handle the file.
+  Metroliza can still replace individual interactive charts with snapshots if the
+  dashboard would otherwise exceed the configured size budget.
+
+When a visual sample is used, the dashboard run notes state how many rows were rendered
+into dashboard charts and how many selected source rows were included in the statistics.
+If a reviewer questions why the plotted point count is lower than the selected row count,
+check those run notes first.
 
 The **Dashboard size limit** control in the same dialog defines when oversized Plotly
 payloads are replaced with image snapshots. **Default limit** uses Metroliza's normal
-browser-safety budget, **Custom limit** lets you enter a larger MB budget, and **No size
-limit** keeps all generated interactive Plotly charts even when the resulting HTML file may
-be very large or slow to open. Use the no-limit option only when the receiving computer and
-browser can handle the exported dashboard size.
+browser-safety budget. **Custom limit** lets you enter a larger MB budget when reviewers
+need more interactive charts and can handle a larger HTML file. **No size limit** keeps all
+generated interactive Plotly charts even when the resulting HTML file may be very large or
+slow to open. Use the no-limit option only when the receiving computer and browser can
+handle the exported dashboard size.
 
-The same dialog also includes **POPULATION layer**. **Auto** renders an oversized
-POPULATION background as a static image when that keeps a supported time-series chart
-responsive. **Interactive** keeps the POPULATION background as normal Plotly points.
-**Static image** uses the image-backed POPULATION background whenever the chart supports
-it. Static POPULATION layers keep the process background visible, but hover and point
+The same dialog also includes **POPULATION layer**. This controls the large background
+population in grouped time-series charts:
+
+- **Auto** renders an oversized POPULATION background as a static image when that keeps a
+  supported time-series chart responsive.
+- **Interactive** keeps the POPULATION background as normal Plotly points. Use it when
+  reviewers need hover labels or point selection on the background population and the row
+  count is small enough.
+- **Static image** uses the image-backed POPULATION background whenever the chart supports
+  it. Use it when the process background should remain visible but the dashboard needs to
+  stay responsive.
+
+Static POPULATION layers keep the process background visible, but hover and point
 selection are unavailable for that background layer; selected/custom groups remain
 interactive where Plotly is enabled.
 
@@ -183,6 +207,23 @@ The workbook can include:
 - diagnostics,
 - selected charts,
 - separate sheets for each selected parameter.
+
+## Troubleshooting
+
+- If the dashboard is slow to open, recreate it with **Auto** or **Snapshots only** and
+  keep the default dashboard size limit.
+- If the dashboard file is too large to share, use **Snapshots only**, reduce the selected
+  metrics, filter the rows before processing, or keep workbook output for detailed tables.
+- If a reviewer needs hover labels for every POPULATION point, use **Interactive**
+  POPULATION and avoid **Snapshots only**, but expect larger and slower dashboards.
+- If the plotted point count looks lower than the selected row count, check the dashboard
+  run notes. Random sampling and snapshots limit visual chart rows; statistics and tables
+  still use all selected rows.
+- If a chart appears as an image instead of an interactive Plotly chart, the selected
+  interactivity mode or dashboard size limit likely converted that chart to a snapshot.
+- If a workbook value does not appear to match a sampled dashboard view, trust the workbook,
+  aggregate tables, and statistical sections for all-row calculations; the sampled chart is
+  only a visual representation.
 
 ## Progress And Cancel Behavior
 

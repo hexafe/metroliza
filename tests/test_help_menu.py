@@ -88,6 +88,14 @@ class TestHelpMenu(unittest.TestCase):
                 self.assertNotIn('file://', expected)
                 self.assertNotIn(str(self.help_menu.REPO_ROOT), expected)
 
+    def test_help_menu_manuals_are_discoverable_from_user_manual_hub(self):
+        hub_text = Path("docs/user_manual/README.md").read_text(encoding="utf-8")
+
+        for key, relative_path in self.help_menu.MANUAL_RELATIVE_PATHS.items():
+            with self.subTest(key=key):
+                manual_name = Path(relative_path).name
+                self.assertIn(manual_name, hub_text)
+
     def test_docs_ref_defaults_to_release_constant(self):
         self.assertEqual(
             self.help_menu.GITHUB_RENDERED_DOCS_REF,

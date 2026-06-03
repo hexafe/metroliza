@@ -1,7 +1,7 @@
 # Static POPULATION Layer Dashboard Optimization Plan
 
-Status: Active implementation plan  
-Date: 2026-06-01  
+Status: Active implementation plan
+Date: 2026-06-01
 Scope: CSV Summary dashboard first, shared dashboard renderer support for Export parity where the same chart payloads apply.
 
 ## Summary

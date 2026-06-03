@@ -47,6 +47,7 @@ git push -u origin release/2026.05-rc1
 - `release/*`:
   - Allowed: bug fixes, regression fixes, release notes/version metadata, docs needed for release readiness.
   - Not allowed: new features, large refactors, scope-expanding changes.
+  - Late-scope exception: after feature freeze, any scope-expanding change can enter the RC line only when [`implementation_item_triage.md`](./implementation_item_triage.md) records the rationale, owner, target RC, test evidence, rollback/deferral option, and explicit release-owner approval. Manual release evidence gates still apply.
 - `hotfix/*`:
   - Allowed: minimal-risk production fixes and required tests/docs for that fix.
   - Not allowed: unrelated cleanup, feature development, broad dependency upgrades.

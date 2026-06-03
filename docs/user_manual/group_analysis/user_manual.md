@@ -1,85 +1,204 @@
 # Group Analysis User Manual
 
-This guide explains how to read exported **Group Analysis** output in plain English. It is the main end-user reading guide for grouped dashboard analysis and related grouped export output.
+This guide explains how to read exported **Group Analysis** output in plain English.
+The active reading surface is the **HTML dashboard**. Use the workbook only as a
+secondary detail or internal/debug surface when it is present.
 
-Printable companion: [`user_manual.pdf`](user_manual.pdf).
+Printable companion: [user_manual.pdf](user_manual.pdf).
 
-If you are not sure where to start, read the top summary first, then move to the metric block you care about, then use the pairwise table and caution notes before acting on the result.
+If you are setting up grouping or export options, start with [Export grouping](../export_grouping.md)
+and [Export overview](../export_overview.md). This page focuses on reading the result after export.
 
-## A quick real-world example
+## What Group Analysis Answers
 
-Imagine you measure the same feature from three production lines: **Line A**, **Line B**, and **Line C**.
+Group Analysis helps you compare named groups for each measured characteristic.
 
-You open Group Analysis because you want to answer practical questions such as:
+Use it when you want to answer practical questions such as:
 
-- Are the lines behaving similarly or differently?
+- Are the groups behaving similarly or differently?
 - If they differ, is the difference probably real or just noise?
 - Is the gap large enough to matter in practice?
-- Are any groups drifting toward a specification limit?
+- Are any groups moving toward a specification limit?
+- Which metric deserves attention first?
 
-Group Analysis helps you answer those questions from the grouped dashboard section, with visual detail available beside the metric summaries.
+Grouped exports add Group Analysis to the HTML dashboard automatically. Without grouping, Group
+Analysis is off.
 
-## What the sheet is for
+## Fast Dashboard Reading Path
 
-The Group Analysis sheet is a **single place to compare groups for each measured characteristic**.
+If you only have a minute, read the dashboard in this order:
 
-Use it when you want to:
+1. Open the exported HTML dashboard.
+2. Go to **Group comparison** from the dashboard jump list.
+3. Read the top summary: status, analysis level, scope, metric count, group count, reference count,
+   and warning count.
+4. Read any **Warnings**, **Run notes**, or skipped-analysis message before interpreting metrics.
+5. Use the metric jump list to open the measured characteristic you care about.
+6. In the metric block, read **Key takeaways** first.
+7. Read **Metric summary** next for spec status, restrictions, the main takeaway, recommended
+   action, and flags.
+8. Review the plots as visual confirmation.
+9. Open **Detailed tables** only when you need the supporting numbers.
 
-- compare one group against another,
-- spot metrics that need attention first,
-- see whether a difference is statistically supported,
-- judge whether the difference is small or meaningful in practice,
-- check whether specification performance looks healthy or risky, and
-- decide what to review next.
+That sequence usually tells you:
 
-It is designed for non-technical and semi-technical readers first. You do not need to be a statistician to use it safely.
+- whether there is evidence of a group difference,
+- whether the difference is practically important,
+- whether the result is safe to act on now, and
+- which follow-up question to ask next.
 
-## Fastest way to read the sheet
+## A Quick Real-World Example
 
-If you only have a minute, use this order:
+Imagine you measure the same feature from three production lines: **Line A**, **Line B**, and
+**Line C**.
 
-1. Read the **top summary** to confirm what export you are looking at.
-2. Jump to the **metric block** for the feature you care about.
-3. In the pairwise area, read the **adjusted p-value** first.
-4. Then read the **effect size** and **Delta mean**.
-5. Check the **spec status** and any caution note.
-6. If a plot is available, use it as a visual confirmation.
+Open the dashboard and jump to **Group comparison**. The section summary tells you whether the
+analysis ran, how many metrics and groups were compared, and whether warnings exist. Then choose
+the metric for the feature you care about.
 
-That quick sequence usually tells you:
+Inside that metric block, start with **Key takeaways**. If the takeaway says one line is separated
+from the others and the recommended action points to review, then check the plot and the detailed
+pairwise table. If the detailed table also shows a small adjusted p-value and a meaningful effect
+size, the difference is more likely to be both statistically supported and operationally relevant.
 
-- whether there is evidence of a difference,
-- whether the difference is practically important, and
-- whether the result is safe to act on immediately.
+## Dashboard Section Map
 
-## Plain-English meanings of the key terms
+### Group comparison summary
+
+The **Group comparison** section is the dashboard home for grouped statistics. It shows:
+
+- **Level**: how much Group Analysis detail was produced.
+- **Scope**: whether the comparison was treated as single-reference or multi-reference.
+- **Metrics**: how many metric blocks are available.
+- A summary table with status, level, scope, metrics, groups, references, and warnings.
+
+Read this before any metric block. It confirms that you are looking at the expected export and
+shows whether the analysis was complete, skipped, or warning-heavy.
+
+### Warnings and run notes
+
+Warnings and run notes tell you when the result needs caution. Do not treat them as cosmetic text.
+They may explain:
+
+- small or uneven group counts,
+- missing numeric measurements,
+- metrics excluded by comparability policy,
+- chart or histogram coverage limits,
+- grouping assignments that did not match exported rows, or
+- scope mismatches between the requested analysis and exported data.
+
+If a warning disagrees with a strong-looking chart, trust the warning and inspect the detail before
+acting.
+
+### Metric jump list
+
+When metrics are available, the dashboard provides a jump list for the metric blocks. Use it instead
+of scrolling through the whole dashboard.
+
+Each metric block includes a **Back to group comparison** control. Use it to return to the jump list
+after reading one metric.
+
+### Metric blocks
+
+Each metric block keeps one measured characteristic together. Depending on the export and data, it
+can include:
+
+- **Key takeaways**,
+- **Metric summary**,
+- plots,
+- **Detailed tables**,
+- descriptive statistics,
+- pairwise comparisons,
+- distribution difference context, and
+- distribution pairwise comparisons.
+
+The dashboard is designed so routine users can stop after the takeaways, summary, notes, and plots.
+The detailed tables are there for verification, review, and deeper investigation.
+
+## Reading A Metric Block
+
+### Key takeaways
+
+Read **Key takeaways** first. These cards convert the statistical result into a plain-language
+signal. They may describe the main difference, the comparison that matters most, or why the result
+is limited.
+
+Use them as orientation, not as a replacement for judgment. A takeaway can tell you where to look;
+the warnings, metric summary, and detailed table tell you how much confidence to place in it.
+
+### Metric summary
+
+The **Metric summary** is the next stop. It can show:
+
+- **Spec status**: how the groups relate to specification limits.
+- **Restrictions**: whether the metric is fully comparable or limited.
+- **Takeaway**: the main reading for the metric.
+- **Recommended action**: what the dashboard suggests you review next.
+- **Flags**: compact indicators for caution, risk, or notable behavior.
+
+This block is the best place to decide whether the metric is routine, needs review, or should be
+escalated.
+
+### Plots
+
+Plots give a fast visual check of the numeric result. Use them to see group separation, spread,
+tails, and possible outliers.
+
+Important habits:
+
+- Do not act from a plot alone.
+- Compare the plot with the key takeaway and metric summary.
+- If the chart is skipped or sparse, use the detailed tables and warnings instead.
+- Treat visible overlap as a reason to read the effect size and Delta mean carefully.
+
+### Detailed tables
+
+Open **Detailed tables** when you need the supporting numbers. The dashboard may include:
+
+- **Descriptive stats**: per-group counts, means, spread, medians, ranges, capability fields, fit
+  model, fit quality, and flags.
+- **Pairwise comparisons**: group A, group B, Delta mean, adjusted p-value, effect size, difference
+  label, comment, takeaway, and test rationale.
+- **Distribution difference**: context for how the full distributions differ.
+- **Distribution pairwise comparison**: pair-by-pair distribution-shape detail when available.
+
+Most training and routine review should start in the dashboard summary and metric blocks. Detailed
+tables are secondary unless you are validating a decision, investigating a warning, or preparing a
+technical review.
+
+## How To Read Group Comparisons
+
+Pairwise comparisons answer:
+
+> Which specific groups differ from which other groups?
+
+Read the main fields in this order:
+
+1. **Adjusted p-value**
+2. **Effect size**
+3. **Delta mean**
+4. **Difference/comment/takeaway**
+5. **Test rationale**
 
 ### Adjusted p-value
 
-The **adjusted p-value** answers this question:
+The **adjusted p-value** answers:
 
-> After accounting for multiple comparisons, how strong is the evidence that the groups are truly different?
-
-Why it matters:
-
-- the worksheet may compare many groups and many pairs,
-- more comparisons increase the chance of false alarms, and
-- the adjusted p-value is the safer value to use for the final significance decision.
+> After accounting for multiple comparisons, how strong is the evidence that the groups are truly
+> different?
 
 Simple reading guide:
 
-- **Smaller is stronger evidence** of a real difference.
-- **Larger means weaker evidence**.
-- A common guide rail is:
-  - **<= 0.05**: evidence supports a difference,
-  - **> 0.05**: not enough corrected evidence for a confident difference claim.
+- **<= 0.05**: evidence supports a difference.
+- **> 0.05**: not enough corrected evidence for a confident difference claim.
 
-Important: **not significant** does **not** automatically mean **the groups are equivalent**. It can also mean the sample is small, noisy, or uneven.
+Important: **not significant** does not automatically mean **the groups are equivalent**. It can
+also mean the sample is small, noisy, or uneven.
 
 ### Effect size
 
-The **effect size** tells you how big the difference looks in practical terms.
-
-Think of it as the **size of the gap**, not just whether a test detected it.
+The **effect size** tells you how large the difference looks in practical terms. Think of it as the
+size of the gap, not just whether a test detected it.
 
 Simple reading guide:
 
@@ -87,11 +206,12 @@ Simple reading guide:
 - **Moderate effect**: the gap is more noticeable and may matter.
 - **Large effect**: the groups are meaningfully separated and usually deserve attention.
 
-Different statistical methods can use different effect-size formulas. You do not need to memorize the formulas. The main point is to read effect size as the worksheet's **practical importance signal**.
+Different statistical methods can use different effect-size formulas. You do not need to memorize
+the formulas. Read effect size as the dashboard's practical-importance signal.
 
 ### Delta mean
 
-**Delta mean** is the plainest number on the sheet: it is the **difference between average values**.
+**Delta mean** is the difference between average values.
 
 It answers:
 
@@ -104,141 +224,32 @@ Simple reading guide:
 - **Negative**: the first group average is lower than the comparison group.
 - **Larger absolute values** mean a bigger average shift.
 
-Delta mean is easy to understand, but it should not be used alone. Two groups can have a similar average and still differ in spread or shape.
+Delta mean is easy to understand, but it should not be used alone. Two groups can have similar
+averages and still differ in spread or shape.
 
-## Why adjusted p-value and effect size should be read together
+### Difference, comment, and takeaway
 
-These two fields answer different questions:
+These fields translate the statistical result into a short interpretation. They are useful for
+quick review, but they depend on the data quality and comparison context.
 
-- **Adjusted p-value** asks: *Is there enough evidence that the difference is real?*
-- **Effect size** asks: *If it is real, is it small or large in practice?*
+If the comment says the result is approximate, limited, or cautionary, do not reduce the decision to
+the adjusted p-value alone.
 
-Read them together because either one alone can mislead:
+### Test rationale
 
-- **Small adjusted p-value + tiny effect size**: the difference is probably real, but may not matter much operationally.
-- **Large adjusted p-value + visible effect size**: the gap may matter, but the data is not yet strong enough for a confident significance claim.
-- **Small adjusted p-value + large effect size**: this is usually the clearest signal that the groups differ in a practically important way.
-- **Large adjusted p-value + small effect size**: most likely there is nothing actionable yet.
+Metroliza chooses the comparison method automatically based on the data. The **Test rationale**
+explains why that method was selected or why the result needs caution.
 
-A safe habit is: **significance first, practical size second**.
+You do not need to choose the test yourself. Your job is to read the outcome, warnings, and action
+signals correctly.
 
-## What is inside each metric block
+## Reading Spec And Capability Context
 
-Each metric block keeps the key information for one measured characteristic together.
+### Spec status
 
-Depending on the export level, a metric block may include:
-
-- the metric or characteristic name,
-- analysis status or interpretation label,
-- descriptive statistics for each group,
-- pairwise comparison results,
-- adjusted p-values,
-- effect size,
-- Delta mean,
-- distribution-shape or distance context,
-- specification-related context such as capability and spec status,
-- caution notes, and
-- a linked plot on the separate **Group Analysis Plots** sheet in the Standard export.
-
-The goal is to let you stay in one place while reading one metric from summary to conclusion.
-
-## Optional HTML dashboard view
-
-If you enable the optional **HTML dashboard** during export, Metroliza also saves a browser-friendly view of the charts.
-
-For **Group Analysis** plots in that dashboard, the plot callouts are intentionally simplified for faster non-technical review. In practical terms, the dashboard focuses on the main capability/status message and does not repeat extra confidence-interval callouts on those plots.
-
-Each grouped metric includes a return button back to the Group Analysis jump list, so you can move through grouped metrics without scrolling back manually.
-
-Use the dashboard when you want a quick visual review. Use the workbook when you need the fuller worksheet detail.
-
-## Column guide
-
-Exact column placement can vary a little by export level, but the meaning stays the same.
-
-### Context and status columns
-
-These columns help you orient yourself before reading the numbers.
-
-- **Metric / Characteristic**: the feature being analyzed.
-- **Status / Interpretation**: plain-language signal such as DIFFERENCE, NO DIFFERENCE, APPROXIMATE, or USE CAUTION.
-- **Analysis level**: how much analysis depth was enabled for the export.
-- **Notes / Warnings**: user-facing caveats about sample size, imbalance, comparability, or distribution behavior.
-
-### Group summary columns
-
-These tell you what each group looks like on its own.
-
-- **N / Count**: number of observations used for that group.
-- **Mean**: average value.
-- **Std / Standard deviation**: how spread out the values are.
-- **Min / Max / Range**: rough low-to-high span.
-- **Median or quartile fields**, if shown: center and spread viewed more robustly.
-
-### Pairwise comparison columns
-
-These answer which specific groups differ from which others.
-
-- **Group A / Group B**: the two groups being compared.
-- **Adjusted p-value**: corrected evidence for a true difference.
-- **Effect size**: practical size of the difference.
-- **Delta mean**: signed difference in averages.
-- **Comparison status**: quick interpretation label.
-
-### Distribution and specification columns
-
-These add context beyond the average.
-
-- **Distribution shape**: whether the groups look similar in spread, skew, or tail behavior.
-- **Spec status**: where the group appears to sit relative to specification limits.
-- **Cp / Cpk / Capability**: capability indicators that help show how comfortably a process sits within spec.
-
-## Guide rails and interpretation ranges
-
-These are interpretation aids, not replacements for engineering judgment.
-
-### Adjusted p-value guide rail
-
-Use the adjusted p-value as the final significance checkpoint.
-
-- **<= 0.05**: evidence supports a difference.
-- **> 0.05**: not enough corrected evidence for a confident difference claim.
-
-If the worksheet labels a result as approximate or cautionary, trust the label and read the note before acting.
-
-### Cp / Cpk / Capability guide rails
-
-Capability metrics describe how comfortably the process fits inside specification limits.
-
-Practical reading guide:
-
-- **Below 1.00**: process performance is usually not comfortably within spec.
-- **Around 1.00**: borderline capability; watch closely.
-- **Around 1.33 or higher**: often treated as healthier capability in many manufacturing settings.
-- **Much higher than 1.33**: more comfort relative to the spec window, assuming the data is representative.
-
-Helpful reminders:
-
-- **Cp** reflects potential capability when the process is centered well.
-- **Cpk** reflects actual capability after centering is considered.
-- For one-sided specs, the sheet may show a one-sided capability form instead of the usual two-sided pair.
-- Capability should be treated carefully when sample size is small or the distribution is strongly non-normal.
-
-### Delta mean guide rail
-
-Delta mean has no universal pass/fail threshold because it depends on the unit, tolerance, and engineering meaning of the metric.
-
-Use this practical rule:
-
-- **Near zero**: little average movement.
-- **Noticeable but still small compared with tolerance**: probably limited practical impact.
-- **Large relative to tolerance, process spread, or known engineering margin**: potentially important.
-
-Always read Delta mean alongside effect size and spec status.
-
-### Spec status guide rail
-
-Spec status is a plain-language indication of how the data relates to specification limits.
+Spec status connects the statistical result to a manufacturing decision. Even if a difference is
+statistically supported, the practical urgency depends on whether the process is comfortably inside
+spec, moving toward a limit, or already showing risk.
 
 Typical safe interpretation:
 
@@ -247,33 +258,27 @@ Typical safe interpretation:
 - **At risk / out of spec**: this metric needs prompt review.
 - **Unavailable / not applicable**: spec limits were not suitable for this calculation.
 
-Treat spec status as an operational priority signal, especially when it agrees with a meaningful Delta mean or weak capability result.
+### Cp / Cpk / capability
 
-## Why different tests are chosen
+Capability metrics describe how comfortably the process fits inside specification limits.
 
-You may notice that the worksheet does not always rely on one single statistical test.
+Practical reading guide:
 
-That is intentional.
+- **Below 1.00**: process performance is usually not comfortably within spec.
+- **Around 1.00**: borderline capability; watch closely.
+- **Around 1.33 or higher**: often treated as healthier capability in many manufacturing settings.
+- **Much higher than 1.33**: more comfort relative to the spec window, assuming the data is
+  representative.
 
-Different tests are better suited to different situations, for example:
+Helpful reminders:
 
-- how many groups are being compared,
-- how much data each group has,
-- whether the groups are balanced or imbalanced,
-- whether the data looks roughly well-behaved or clearly skewed, and
-- whether assumptions for a stricter test are reasonable.
+- **Cp** reflects potential capability when the process is centered well.
+- **Cpk** reflects actual capability after centering is considered.
+- For one-sided specs, the dashboard may show a one-sided capability form instead of the usual
+  two-sided pair.
+- Capability needs caution when sample size is small or the distribution is strongly non-normal.
 
-A simple way to think about it:
-
-- when the data is well-behaved, the worksheet can use stronger, more direct tests,
-- when the data is messier, it can use safer or more robust alternatives,
-- and the export still presents the result in the same user-friendly way so you can focus on interpretation.
-
-You do **not** need to choose the test yourself. Your job is mainly to read the outcome and the caution notes correctly.
-
-## Distribution shape, spec status, and analysis level
-
-### Distribution shape
+## Reading Distribution Context
 
 Two groups can have similar averages but still behave differently.
 
@@ -284,51 +289,87 @@ For example, one group may:
 - have heavier tails, or
 - contain more extreme values.
 
-That is why distribution-shape information matters. It helps explain differences that the mean alone would hide.
+That is why distribution context matters. It helps explain differences that the mean alone would
+hide. Treat distribution difference as supporting context alongside adjusted p-value, effect size,
+Delta mean, and spec status.
 
-### Spec status
+## Skipped Or Insufficient-Data Messages
 
-Spec status connects the statistical result to a manufacturing decision.
+Sometimes Group Analysis cannot produce a full comparison. That is still a useful result, because
+the dashboard tells you why the comparison should not be trusted or cannot be run.
 
-Even if a difference is statistically real, the practical urgency depends on whether the process is still comfortably inside spec, moving toward a limit, or already showing risk.
+Common messages include:
 
-### Analysis level
+- **Group Analysis skipped: at least 2 groups are required.**
+- **Group Analysis skipped: no numeric MEAS values are available.**
+- **Group Analysis skipped: no eligible metrics are available.**
+- **Group Analysis skipped: grouping assignments could not be matched to the exported measurement
+  rows.**
+- **Single-reference group analysis skipped: grouped rows span multiple references.**
+- **Multi-reference group analysis skipped: grouped rows span only one reference.**
 
-The analysis level tells you how much detail the export includes.
+How to respond:
 
-In plain terms:
+- If there are fewer than 2 populated groups, fix the grouping or export more data.
+- If numeric MEAS values are missing, check parsing and filters.
+- If no eligible metrics are available, check characteristic names, aliases, and whether the export
+  contains comparable measurements.
+- If grouping assignments could not be matched, revisit [Export grouping](../export_grouping.md)
+  and confirm that the grouping was built for the exported rows.
+- If the selected scope conflicts with the data, use automatic scope or choose the scope that
+  matches the number of references in the export.
 
-- a lighter level is meant for faster reading and lower visual density,
-- a fuller level includes more supporting detail such as a separate plots sheet and extra interpretation context.
+Do not treat a skipped message as a failed app run. Treat it as a data-readiness message.
 
-The reading order stays the same either way.
+## Workbook Details Are Secondary
 
-## Safe interpretation checklist
+The normal grouped-export reading path is the dashboard.
+
+The workbook remains useful for:
+
+- the main exported measurement sheets,
+- selected workbook charts,
+- records that need spreadsheet review,
+- technical verification of detailed numbers, and
+- internal/debug diagnostics when explicitly enabled.
+
+If a workbook includes a **Group Analysis** sheet or **Group Analysis Plots** sheet, use it as a
+secondary view of the same analysis. Start with the dashboard first, then open workbook details only
+when you need spreadsheet-level review, audit evidence, or troubleshooting.
+
+If a separate **Diagnostics** worksheet appears, treat it as internal/debug information. Routine
+users should use the dashboard warnings, run notes, and metric blocks instead.
+
+## Safe Interpretation Checklist
 
 Before you make a process decision, run through this checklist:
 
-- Confirm you are reading the **correct metric** and **correct groups**.
-- Check the **sample counts**. Very small or very uneven groups need extra caution.
-- Read the **adjusted p-value** first.
-- Read the **effect size** next.
-- Check **Delta mean** so you know the direction and size of the average shift.
-- Look at **distribution shape** if shown; averages are not the whole story.
-- Review **spec status** and **capability** before deciding operational urgency.
-- Read all **warnings or caution labels** instead of skipping them.
+- Confirm you are reading the correct metric and correct groups.
+- Check warnings and run notes before reading charts.
+- Check the sample counts. Very small or very uneven groups need extra caution.
+- Read the key takeaway and metric summary before opening detailed tables.
+- Read the adjusted p-value first in pairwise rows.
+- Read the effect size next.
+- Check Delta mean so you know the direction and size of the average shift.
+- Look at distribution context if shown; averages are not the whole story.
+- Review spec status and capability before deciding operational urgency.
 - If the result is borderline, treat it as a signal to review more data, not as proof.
 - If significance and practical importance disagree, slow down and investigate.
 
-## Final takeaway
+## Final Takeaway
 
-Group Analysis is meant to help you move from **"Are these groups different?"** to **"Does that difference matter, and what should I do next?"**
+Group Analysis is meant to help you move from **"Are these groups different?"** to
+**"Does that difference matter, and what should I do next?"**
 
-The safest reading pattern is:
+The safest dashboard reading pattern is:
 
-1. **Adjusted p-value** for evidence,
-2. **Effect size** for practical importance,
-3. **Delta mean** for direction and magnitude,
-4. **Distribution shape** for deeper context,
-5. **Spec status and capability** for operational risk.
+1. **Group comparison summary** for scope, status, and warnings.
+2. **Metric jump list** to choose the characteristic.
+3. **Key takeaways** for the plain-language signal.
+4. **Metric summary** for spec status, restrictions, action, and flags.
+5. **Plots** for visual confirmation.
+6. **Detailed tables** for adjusted p-value, effect size, Delta mean, and technical review.
 
-If those signals point in the same direction, you can usually act with more confidence.
-If they disagree, the worksheet is telling you to slow down, review the cautions, and gather context before making a decision.
+If those signals point in the same direction, you can usually act with more confidence. If they
+disagree, the dashboard is telling you to slow down, review the cautions, and gather context before
+making a decision.

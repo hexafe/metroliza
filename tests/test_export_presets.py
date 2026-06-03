@@ -11,6 +11,7 @@ from modules.export_preset_utils import (
     EXPORT_PRESET_FULL_REPORT,
     EXPORT_PRESET_HTML_DASHBOARD_ONLY,
     build_export_options_for_preset,
+    get_export_preset_labels,
     get_export_preset_id_for_label,
     load_export_dialog_config,
     migrate_export_dialog_config,
@@ -89,6 +90,13 @@ class TestExportPresetOptionMapping(unittest.TestCase):
         self.assertEqual(get_export_preset_label(EXPORT_PRESET_FAST_DIAGNOSTICS), 'Main plots')
         self.assertEqual(get_export_preset_label(EXPORT_PRESET_FULL_REPORT), 'Extended plots')
         self.assertEqual(get_export_preset_label(EXPORT_PRESET_HTML_DASHBOARD_ONLY), 'HTML dashboard only')
+
+    def test_export_overview_documents_all_export_presets(self):
+        manual_text = Path("docs/user_manual/export_overview.md").read_text(encoding="utf-8")
+
+        for label in get_export_preset_labels():
+            with self.subTest(label=label):
+                self.assertIn(label, manual_text)
 
     def test_validate_export_options_keeps_preset(self):
         full = build_export_options_for_preset(EXPORT_PRESET_FULL_REPORT)
