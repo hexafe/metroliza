@@ -1,10 +1,13 @@
 import base64
 import importlib
-from metroliza.resources import base64_encoded_files
+from time import perf_counter
+
+from metroliza.app.startup_profile import record_event
+from metroliza.resources.app_assets import encoded_icon
 from metroliza.shared.custom_logger import CustomLogger
 from metroliza.ui.help_menu import build_help_menu
-from PyQt6.QtCore import QByteArray
-from PyQt6.QtGui import QIcon, QPixmap, QAction
+from PyQt6.QtCore import QByteArray, QTimer
+from PyQt6.QtGui import QAction, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
@@ -39,12 +42,25 @@ FEATURE_IMPORT_WARMUP_MODULES = (
 
 def warm_feature_imports(importer=importlib.import_module):
     """Preload feature modules so opening them from the main window is immediate."""
+    record_event("feature_warmup_start", module_count=len(FEATURE_IMPORT_WARMUP_MODULES))
+    warmup_start = perf_counter()
     loaded_modules = []
     failed_modules = []
-    for _label, module_name in FEATURE_IMPORT_WARMUP_MODULES:
+    for label, module_name in FEATURE_IMPORT_WARMUP_MODULES:
+        module_start = perf_counter()
+        record_event("feature_warmup_module_start", label=label, module=module_name)
         try:
             importer(module_name)
         except Exception as exc:  # pragma: no cover - exercised through tests with fakes
+            elapsed_ms = (perf_counter() - module_start) * 1000
+            record_event(
+                "feature_warmup_module_done",
+                label=label,
+                module=module_name,
+                status="failed",
+                elapsed_ms=round(elapsed_ms, 3),
+                error_type=type(exc).__name__,
+            )
             failed_modules.append(
                 {
                     "module": module_name,
@@ -53,7 +69,21 @@ def warm_feature_imports(importer=importlib.import_module):
                 }
             )
         else:
+            elapsed_ms = (perf_counter() - module_start) * 1000
+            record_event(
+                "feature_warmup_module_done",
+                label=label,
+                module=module_name,
+                status="loaded",
+                elapsed_ms=round(elapsed_ms, 3),
+            )
             loaded_modules.append(module_name)
+    record_event(
+        "feature_warmup_done",
+        loaded_count=len(loaded_modules),
+        failed_count=len(failed_modules),
+        elapsed_ms=round((perf_counter() - warmup_start) * 1000, 3),
+    )
     return loaded_modules, failed_modules
 
 
@@ -82,8 +112,8 @@ class MainWindow(QMainWindow):
         self.central_widget.setLayout(self.layout)
         self.days_until_expiration = days_until_expiration
 
-        # Set the window icon
-        self.setWindowIcon(self.decode_icon(base64_encoded_files.encoded_icon))
+        # Set the window icon without importing the loading GIF asset bundle.
+        self.setWindowIcon(self.decode_icon(encoded_icon))
 
         # Initialize the dialogs and attributes
         self.parsing_dialog = None
@@ -96,6 +126,7 @@ class MainWindow(QMainWindow):
         self.directory = None
         self.db_file = None
         self._feature_import_warmup_completed = False
+        self._feature_import_warmup_scheduled = False
         self._feature_import_warmup_failures = []
 
         # Initialize and set up command-center widgets
@@ -122,13 +153,22 @@ class MainWindow(QMainWindow):
         self.setup_buttons_layout()
         self._sync_context_rows()
         apply_metroliza_theme(self)
-        self._preload_feature_imports()
+
+    def schedule_feature_import_warmup(self, *, delay_ms: int = 100) -> None:
+        """Schedule feature import warmup after the first visible window paint."""
+        if self._feature_import_warmup_completed or self._feature_import_warmup_scheduled:
+            return
+        self._feature_import_warmup_scheduled = True
+        record_event("feature_warmup_scheduled", delay_ms=max(0, int(delay_ms)))
+        QTimer.singleShot(max(0, int(delay_ms)), self._preload_feature_imports)
 
     def _preload_feature_imports(self):
-        """Load main feature modules during startup before the user can open them."""
+        """Load main feature modules after the first window is visible."""
         if self._feature_import_warmup_completed:
             return
 
+        self._feature_import_warmup_scheduled = False
+        self.statusBar().showMessage("Loading tools...", 2000)
         loaded_modules, failed_modules = warm_feature_imports()
         self._feature_import_warmup_completed = True
         self._feature_import_warmup_failures = list(failed_modules)
@@ -148,16 +188,9 @@ class MainWindow(QMainWindow):
         if loaded_modules:
             self.statusBar().showMessage("Tools ready", 2000)
 
-    def decode_icon(self, encoded_icon):
-        """Decode the base64 encoded icon and return an QIcon object.
-
-        Args:
-            encoded_icon (str): The base64 encoded icon.
-
-        Returns:
-            QIcon: The decoded icon.
-        """
-        icon_decoded = base64.b64decode(encoded_icon)
+    def decode_icon(self, encoded_icon_payload):
+        """Decode the base64 encoded icon and return a QIcon object."""
+        icon_decoded = base64.b64decode(encoded_icon_payload)
         byte_array = QByteArray(icon_decoded)
         pixmap = QPixmap()
         pixmap.loadFromData(byte_array)

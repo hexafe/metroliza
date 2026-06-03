@@ -21,8 +21,16 @@ EXPORT_STAGE_METRICS = (
     'excel_export_high_header_cardinality_compare:after_histogram_payload',
     'excel_export_high_header_cardinality_compare:after_trend_payload',
     'csv_summary_export_path:chart_generation',
+    'csv_summary_export_path:dashboard_writer_plotly_json_measurement',
+    'csv_summary_export_path:dashboard_writer_html_rendering',
+    'csv_summary_export_path:dashboard_writer_html_write',
     'csv_summary_export_path:workbook_write',
     'csv_summary_export_path:workbook_close',
+    'production_dashboard_workbook_path:dashboard_writer_static_population_layer',
+    'production_dashboard_workbook_path:dashboard_writer_plotly_budget_resolution',
+    'production_dashboard_workbook_path:dashboard_writer_plotly_json_measurement',
+    'production_dashboard_workbook_path:dashboard_writer_html_rendering',
+    'production_dashboard_workbook_path:dashboard_writer_html_write',
 )
 
 

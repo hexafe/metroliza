@@ -95,8 +95,16 @@ _STAT_DASH_BY_LABEL = {
 def _new_dashboard_timing_summary() -> dict[str, float]:
     return {
         "image_asset_writes": 0.0,
+        "image_asset_writes_section_charts": 0.0,
+        "image_asset_writes_group_analysis": 0.0,
         "payload_metadata": 0.0,
         "plotly_spec_generation": 0.0,
+        "plotly_spec_generation_section_charts": 0.0,
+        "plotly_spec_generation_group_analysis": 0.0,
+        "plotly_json_measurement": 0.0,
+        "plotly_json_measurement_initial": 0.0,
+        "plotly_json_measurement_embedded": 0.0,
+        "plotly_budget_pruning": 0.0,
         "group_analysis_normalization": 0.0,
         "plotly_runtime_asset": 0.0,
         "html_rendering": 0.0,
@@ -348,7 +356,9 @@ def write_export_html_dashboard(
             image_path = asset_directory / image_name
             asset_start = perf_counter()
             image_path.write_bytes(image_bytes)
-            timings_s["image_asset_writes"] += perf_counter() - asset_start
+            image_write_elapsed = perf_counter() - asset_start
+            timings_s["image_asset_writes"] += image_write_elapsed
+            timings_s["image_asset_writes_section_charts"] += image_write_elapsed
             metadata_start = perf_counter()
             payload_summary = summarize_dashboard_chart_payload(raw_chart.get("payload"))
             payload_details = extract_dashboard_chart_details(raw_chart.get("payload"))
@@ -359,7 +369,9 @@ def write_export_html_dashboard(
                 title=str(raw_chart.get("title") or raw_chart.get("chart_type") or "Chart"),
                 plotly_visual_settings=plotly_visual_settings,
             )
-            timings_s["plotly_spec_generation"] += perf_counter() - spec_start
+            spec_elapsed = perf_counter() - spec_start
+            timings_s["plotly_spec_generation"] += spec_elapsed
+            timings_s["plotly_spec_generation_section_charts"] += spec_elapsed
             if plotly_spec:
                 plotly_spec_count += 1
             charts.append(
@@ -404,10 +416,14 @@ def write_export_html_dashboard(
     chart_count += int(normalized_group_analysis.get("plot_count") or 0) if normalized_group_analysis else 0
     interactive_chart_count = _count_plotly_specs(section_entries, normalized_group_analysis)
     plotly_spec_count = interactive_chart_count
+    json_measurement_start = perf_counter()
     plotly_serialized_json_bytes = _measure_plotly_specs_json_bytes(
         section_entries,
         normalized_group_analysis,
     )
+    json_measurement_elapsed = perf_counter() - json_measurement_start
+    timings_s["plotly_json_measurement"] += json_measurement_elapsed
+    timings_s["plotly_json_measurement_initial"] += json_measurement_elapsed
     plotly_budget_status = "within_budget"
     plotly_budget_reason = ""
     count_budget = _normalize_plotly_budget_value(plotly_spec_count_budget)
@@ -415,12 +431,14 @@ def write_export_html_dashboard(
     over_count_budget = _is_over_plotly_count_budget(plotly_spec_count, count_budget)
     over_json_budget = _is_over_plotly_json_budget(plotly_serialized_json_bytes, json_bytes_budget)
     if interactive_chart_count > 0 and (over_count_budget or over_json_budget):
+        pruning_start = perf_counter()
         _drop_plotly_specs_over_budget(
             section_entries,
             normalized_group_analysis,
             count_budget=count_budget,
             json_bytes_budget=json_bytes_budget,
         )
+        timings_s["plotly_budget_pruning"] += perf_counter() - pruning_start
         interactive_chart_count = _count_plotly_specs(section_entries, normalized_group_analysis)
         plotly_budget_status = "over_budget"
         reasons = []
@@ -446,10 +464,14 @@ def write_export_html_dashboard(
     elif plotly_js_path:
         plotly_runtime_status = "local"
 
+    embedded_json_measurement_start = perf_counter()
     embedded_plotly_serialized_json_bytes = _measure_plotly_specs_json_bytes(
         section_entries,
         normalized_group_analysis,
     )
+    embedded_json_measurement_elapsed = perf_counter() - embedded_json_measurement_start
+    timings_s["plotly_json_measurement"] += embedded_json_measurement_elapsed
+    timings_s["plotly_json_measurement_embedded"] += embedded_json_measurement_elapsed
     timings_s["total"] = perf_counter() - total_start
     manifest = {
         "excel_file": str(Path(str(excel_file)).name) if excel_file else "",
@@ -2307,9 +2329,14 @@ def _normalize_group_analysis_manifest(
                 plotly_visual_settings=plotly_visual_settings,
             )
             if timings_s is not None:
+                spec_elapsed = perf_counter() - spec_start
                 timings_s["plotly_spec_generation"] = (
                     float(timings_s.get("plotly_spec_generation", 0.0))
-                    + (perf_counter() - spec_start)
+                    + spec_elapsed
+                )
+                timings_s["plotly_spec_generation_group_analysis"] = (
+                    float(timings_s.get("plotly_spec_generation_group_analysis", 0.0))
+                    + spec_elapsed
                 )
             if image_buffer is None and not plotly_spec:
                 continue
@@ -2320,9 +2347,14 @@ def _normalize_group_analysis_manifest(
                 asset_start = perf_counter()
                 image_path.write_bytes(_coerce_image_bytes(image_buffer))
                 if timings_s is not None:
+                    image_write_elapsed = perf_counter() - asset_start
                     timings_s["image_asset_writes"] = (
                         float(timings_s.get("image_asset_writes", 0.0))
-                        + (perf_counter() - asset_start)
+                        + image_write_elapsed
+                    )
+                    timings_s["image_asset_writes_group_analysis"] = (
+                        float(timings_s.get("image_asset_writes_group_analysis", 0.0))
+                        + image_write_elapsed
                     )
                 image_relative_path = f"{asset_directory.name}/{image_name}"
             plots.append(

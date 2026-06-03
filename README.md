@@ -32,6 +32,8 @@ python metroliza.py
   - missing/invalid values fall back to the default (`disabled`).
 - When license verification is enabled and validation fails, the app shows the hardware-id dialog and exits instead of launching the main window.
 - `METROLIZA_STARTUP_SMOKE` remains available for non-interactive startup smoke checks.
+- `METROLIZA_STARTUP_SPLASH=auto|1|0` controls launch feedback. The default `auto`
+  shows a splash during normal GUI launch and disables it for headless UI-smoke runs.
 
 Dependency files:
 - `requirements.txt` - runtime

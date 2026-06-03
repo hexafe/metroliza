@@ -230,6 +230,12 @@ cannot include PyInstaller/Nuitka bootloader extraction time, so compare the
 helper's wall-clock time against the first profile event to understand onefile
 extraction and antivirus overhead.
 
+For local diagnosis, run `python scripts/summarize_startup_profile.py
+<profile.jsonl>` on a captured profile. The summary reports first feedback,
+first main-window show, first event-loop tick, and post-paint feature warmup
+module timings. The visual startup splash defaults to `METROLIZA_STARTUP_SPLASH=auto`
+for normal GUI launches and stays disabled for offscreen UI smoke unless forced.
+
 
 ## Nuitka inclusion rules and smoke checks
 

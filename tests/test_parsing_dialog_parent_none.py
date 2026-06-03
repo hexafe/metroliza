@@ -194,7 +194,7 @@ class TestParsingDialogParentNoneSafety(unittest.TestCase):
         parse_reports_thread.ParseReportsThread = type("ParseReportsThread", (), {})
         worker_progress_dialog = types.ModuleType("modules.worker_progress_dialog")
         worker_progress_dialog.create_worker_progress_dialog = lambda *_args, **_kwargs: (None, None, None, None)
-        contracts = types.ModuleType("metroliza.shared.contracts")
+        contracts = types.ModuleType("metroliza.shared.parse_contracts")
         contracts.ParseRequest = object
         contracts.validate_parse_request = lambda request: request
         with patch.dict(
@@ -208,7 +208,7 @@ class TestParsingDialogParentNoneSafety(unittest.TestCase):
                 "metroliza.parsing.parse_reports_thread": parse_reports_thread,
                 "modules.worker_progress_dialog": worker_progress_dialog,
                 "metroliza.ui.worker_progress_dialog": worker_progress_dialog,
-                "metroliza.shared.contracts": contracts,
+                "metroliza.shared.parse_contracts": contracts,
             },
             clear=False,
         ):

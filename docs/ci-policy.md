@@ -86,6 +86,9 @@ These checks are explicitly non-blocking for normal PR CI:
 - It launches both artifacts with `METROLIZA_STARTUP_PROFILE=1` and
   `METROLIZA_STARTUP_UI_SMOKE=1`, so the app records startup timing JSONL and
   exits after the first Qt event-loop tick.
+- Visual startup splash is disabled by default for offscreen/UI-smoke launches.
+  Normal GUI launches use `METROLIZA_STARTUP_SPLASH=auto`; set
+  `METROLIZA_STARTUP_SPLASH=1` only when manually validating splash rendering.
 - The job uploads `startup-artifacts/`, including raw profile JSONL files and
   `startup-summary.json`, as release evidence for onefile-vs-onedir startup
   comparisons.

@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import metroliza
 from metroliza.app import bootstrap
+from metroliza.app.startup_splash import should_show_startup_splash
 from modules.license_bootstrap import validate_license_bootstrap
 
 
@@ -84,8 +85,14 @@ class TestBootstrapStartup(unittest.TestCase):
             def show(self):
                 call_order.append("main_window_show")
 
+            def schedule_feature_import_warmup(self, *, delay_ms=100):
+                call_order.append(f"main_window_schedule:{delay_ms}")
+
         fake_qtwidgets = types.SimpleNamespace(QApplication=FakeApplication)
-        fake_license_manager = types.SimpleNamespace(generate_hardware_id=lambda: "hwid")
+        def unexpected_hardware_id():
+            raise AssertionError("hardware ID should not be generated when license checks are disabled")
+
+        fake_license_manager = types.SimpleNamespace(generate_hardware_id=unexpected_hardware_id)
         fake_license_module = types.SimpleNamespace(LicenseKeyManager=fake_license_manager)
         fake_main_window_module = types.SimpleNamespace(MainWindow=FakeMainWindow)
         real_import = __import__
@@ -111,9 +118,18 @@ class TestBootstrapStartup(unittest.TestCase):
             license_verification_enabled=False,
         )
 
+        fake_splash = types.SimpleNamespace(
+            show_message=lambda *_args, **_kwargs: None,
+            close=lambda: None,
+            finish=lambda _widget: None,
+        )
+
         with patch("builtins.__import__", side_effect=tracked_import), patch(
             "metroliza.app.bootstrap.validate_license_bootstrap",
             return_value=types.SimpleNamespace(is_valid=True, days_until_expiration=7),
+        ), patch(
+            "metroliza.app.bootstrap.create_startup_splash",
+            return_value=fake_splash,
         ):
             result = bootstrap.launch_ui(config)
 
@@ -123,10 +139,10 @@ class TestBootstrapStartup(unittest.TestCase):
             [
                 "import_qtwidgets",
                 "qapplication_created",
-                "import_license_manager",
                 "import_main_window",
                 "main_window_init",
                 "main_window_show",
+                "main_window_schedule:100",
                 "app_exec",
             ],
         )
@@ -155,6 +171,29 @@ class TestBootstrapStartup(unittest.TestCase):
 
         self.assertFalse(config.license_verification_enabled)
         self.assertTrue(config.startup_ui_smoke_mode)
+
+    def test_startup_splash_auto_disables_for_offscreen_ui_smoke(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "METROLIZA_STARTUP_UI_SMOKE": "1",
+                "QT_QPA_PLATFORM": "offscreen",
+            },
+            clear=True,
+        ):
+            self.assertFalse(should_show_startup_splash(ui_smoke_mode=True))
+
+    def test_startup_splash_can_be_forced_for_smoke(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "METROLIZA_STARTUP_SPLASH": "1",
+                "METROLIZA_STARTUP_UI_SMOKE": "1",
+                "QT_QPA_PLATFORM": "offscreen",
+            },
+            clear=True,
+        ):
+            self.assertTrue(should_show_startup_splash(ui_smoke_mode=True))
 
     def test_validate_license_bootstrap_skips_validation_when_disabled(self):
         with patch("metroliza.app.license_bootstrap.verify_license") as verify_mock:

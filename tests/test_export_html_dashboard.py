@@ -386,6 +386,12 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertGreater(plotly_asset.stat().st_size, 1_000_000)
             timings = result['html_dashboard_timings_s']
             self.assertIn('plotly_spec_generation', timings)
+            self.assertIn('plotly_spec_generation_section_charts', timings)
+            self.assertIn('plotly_spec_generation_group_analysis', timings)
+            self.assertIn('plotly_json_measurement', timings)
+            self.assertIn('plotly_budget_pruning', timings)
+            self.assertIn('image_asset_writes_section_charts', timings)
+            self.assertIn('image_asset_writes_group_analysis', timings)
             self.assertIn('html_write', timings)
             self.assertGreaterEqual(timings['total'], timings['plotly_spec_generation'])
             self.assertEqual(result['html_dashboard_plotly_spec_count'], 3)

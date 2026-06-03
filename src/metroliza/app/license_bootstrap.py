@@ -2,7 +2,7 @@ import base64
 from dataclasses import dataclass
 from datetime import datetime
 
-from metroliza.resources.base64_encoded_files import encoded_icon, public_key_b64
+from metroliza.resources.app_assets import encoded_icon, public_key_b64
 
 
 @dataclass(frozen=True)

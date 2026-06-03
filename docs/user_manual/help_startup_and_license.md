@@ -10,6 +10,10 @@ If license verification is not enabled, the app opens normally.
 
 If license verification is enabled and the license check fails, the app does not continue into the main window.
 
+During a normal desktop launch, Metroliza can show a small startup splash so the
+user gets immediate feedback while the main window and tools load. Automated
+startup smoke checks disable that splash by default.
+
 ## Invalid license / hardware ID dialog
 
 If there is no valid license, Metroliza can show a blocking dialog that includes a **Hardware ID** field.

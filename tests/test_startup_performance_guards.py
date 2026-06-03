@@ -48,6 +48,27 @@ def test_main_window_feature_warmup_uses_canonical_import_paths():
     assert all(not module_name.startswith("modules.") for module_name in warmed_modules)
 
 
+def test_parse_contract_import_does_not_load_heavy_analytics_stacks():
+    script = """
+import json
+import sys
+from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
+
+validate_parse_request(ParseRequest(source_directory="reports", db_file="metroliza.db"))
+print(json.dumps({name: name in sys.modules for name in ("pandas", "matplotlib", "scipy")}))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        check=True,
+        env={**os.environ, "PYTHONPATH": "src:."},
+        text=True,
+        capture_output=True,
+    )
+
+    loaded_modules = json.loads(result.stdout)
+    assert loaded_modules == {"pandas": False, "matplotlib": False, "scipy": False}
+
+
 def test_startup_profile_writes_jsonl_events(tmp_path):
     profile_path = tmp_path / "startup-profile.jsonl"
     script = """

@@ -32,6 +32,26 @@ from metroliza.charts.matplotlib_runtime import configure_headless_matplotlib
 
 configure_headless_matplotlib()
 
+_DASHBOARD_WRITER_TIMING_KEYS = (
+    'static_population_layer',
+    'plotly_budget_resolution',
+    'plotly_json_measurement',
+    'html_rendering',
+    'html_write',
+)
+
+
+def _dashboard_writer_stage_timings(result: dict[str, Any] | None) -> dict[str, float]:
+    if not isinstance(result, dict):
+        return {}
+    timings = result.get('html_dashboard_timings_s')
+    if not isinstance(timings, dict):
+        return {}
+    return {
+        f'dashboard_writer_{key}': float(timings.get(key, 0.0))
+        for key in _DASHBOARD_WRITER_TIMING_KEYS
+    }
+
 
 def _install_headless_stubs() -> None:
     custom_logger_stub = types.ModuleType('metroliza.shared.custom_logger')
@@ -1118,6 +1138,7 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
         'dashboard_write': 0.0,
         'workbook_export': 0.0,
     }
+    dashboard_writer_timings: dict[str, float] = {}
 
     original_write_dashboard = workflow_module._write_dashboard
     original_export_tabular_workbook = workflow_module._export_tabular_workbook_with_temp
@@ -1140,10 +1161,13 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
                 )
 
         def timed_write_production_dashboard(*dashboard_args, **dashboard_kwargs):
+            nonlocal dashboard_writer_timings
             nonlocal html_write_timing_start
             html_write_timing_start = time.perf_counter()
             try:
-                return original_write_production_dashboard(*dashboard_args, **dashboard_kwargs)
+                result = original_write_production_dashboard(*dashboard_args, **dashboard_kwargs)
+                dashboard_writer_timings.update(_dashboard_writer_stage_timings(result))
+                return result
             finally:
                 direct_timings['dashboard_html_write'] += (
                     time.perf_counter() - html_write_timing_start
@@ -1221,34 +1245,37 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
         else 0.0
     )
 
+    stage_timings = {
+        'shared_analytics_total': run_s,
+        'groupstats_analysis': groupstats_analysis_s,
+        'chart_generation': chart_generation_s,
+        'workbook_write': workbook_write_s,
+        'dashboard_manifest': float(direct_timings['dashboard_manifest']),
+        'dashboard_html_write': float(direct_timings['dashboard_html_write']),
+        'dashboard_write': float(direct_timings['dashboard_write']),
+        'dashboard_write_overhead': max(
+            0.0,
+            float(direct_timings['dashboard_write'])
+            - float(direct_timings['dashboard_manifest'])
+            - float(direct_timings['dashboard_html_write']),
+        ),
+        'workbook_export': float(direct_timings['workbook_export']),
+        'workbook_sheet_writes': float(writer_timings.get('workbook_sheet_writes', 0.0)),
+        'workbook_close': float(writer_timings.get('workbook_close', 0.0)),
+        'workbook_export_overhead': max(
+            0.0,
+            float(direct_timings['workbook_export'])
+            - float(writer_timings.get('workbook_sheet_writes', 0.0))
+            - float(writer_timings.get('workbook_close', 0.0)),
+        ),
+        'progress_messages': float(len(progress_messages)),
+    }
+    stage_timings.update(dashboard_writer_timings)
+
     return ScenarioResult(
         scenario='csv_summary_export_path',
         wall_time_s=run_s,
-        stage_timings_s={
-            'shared_analytics_total': run_s,
-            'groupstats_analysis': groupstats_analysis_s,
-            'chart_generation': chart_generation_s,
-            'workbook_write': workbook_write_s,
-            'dashboard_manifest': float(direct_timings['dashboard_manifest']),
-            'dashboard_html_write': float(direct_timings['dashboard_html_write']),
-            'dashboard_write': float(direct_timings['dashboard_write']),
-            'dashboard_write_overhead': max(
-                0.0,
-                float(direct_timings['dashboard_write'])
-                - float(direct_timings['dashboard_manifest'])
-                - float(direct_timings['dashboard_html_write']),
-            ),
-            'workbook_export': float(direct_timings['workbook_export']),
-            'workbook_sheet_writes': float(writer_timings.get('workbook_sheet_writes', 0.0)),
-            'workbook_close': float(writer_timings.get('workbook_close', 0.0)),
-            'workbook_export_overhead': max(
-                0.0,
-                float(direct_timings['workbook_export'])
-                - float(writer_timings.get('workbook_sheet_writes', 0.0))
-                - float(writer_timings.get('workbook_close', 0.0)),
-            ),
-            'progress_messages': float(len(progress_messages)),
-        },
+        stage_timings_s=stage_timings,
         input_metrics={
             'rows': fixture_metrics['rows'],
             'headers': fixture_metrics['headers'],
@@ -1377,24 +1404,27 @@ def benchmark_production_dashboard_workbook_path(
     workbook_s = time.perf_counter() - workbook_start
 
     budget = dashboard_result.get('html_dashboard_plotly_budget') or {}
+    stage_timings = {
+        'aggregation': aggregate_s,
+        'dashboard_manifest': manifest_s,
+        'dashboard_html_write': dashboard_s,
+        'dashboard_write': dashboard_s,
+        'workbook_export': workbook_s,
+        'workbook_sheet_writes': float(writer_timings.get('workbook_sheet_writes', 0.0)),
+        'workbook_close': float(writer_timings.get('workbook_close', 0.0)),
+        'workbook_export_overhead': max(
+            0.0,
+            workbook_s
+            - float(writer_timings.get('workbook_sheet_writes', 0.0))
+            - float(writer_timings.get('workbook_close', 0.0)),
+        ),
+    }
+    stage_timings.update(_dashboard_writer_stage_timings(dashboard_result))
+
     return ScenarioResult(
         scenario='production_dashboard_workbook_path',
         wall_time_s=aggregate_s + manifest_s + dashboard_s + workbook_s,
-        stage_timings_s={
-            'aggregation': aggregate_s,
-            'dashboard_manifest': manifest_s,
-            'dashboard_html_write': dashboard_s,
-            'dashboard_write': dashboard_s,
-            'workbook_export': workbook_s,
-            'workbook_sheet_writes': float(writer_timings.get('workbook_sheet_writes', 0.0)),
-            'workbook_close': float(writer_timings.get('workbook_close', 0.0)),
-            'workbook_export_overhead': max(
-                0.0,
-                workbook_s
-                - float(writer_timings.get('workbook_sheet_writes', 0.0))
-                - float(writer_timings.get('workbook_close', 0.0)),
-            ),
-        },
+        stage_timings_s=stage_timings,
         input_metrics={
             'rows': safe_row_count,
             'headers': safe_metric_count,

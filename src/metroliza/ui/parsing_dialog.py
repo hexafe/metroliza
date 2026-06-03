@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
 )
 import logging
-from metroliza.shared.contracts import ParseRequest, validate_parse_request
+from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
 try:
     from metroliza.ui.worker_progress_dialog import (
         create_delayed_worker_progress_dialog as create_worker_progress_dialog,

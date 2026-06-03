@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import shutil
-from metroliza.shared.contracts import ParseRequest, validate_parse_request
+from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
 from metroliza.reports.cmm_schema import ensure_cmm_report_schema
 from metroliza.reports.db import execute_with_retry, sqlite_connection_scope
 from metroliza.shared.env_utils import env_bool, env_int

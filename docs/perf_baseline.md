@@ -16,6 +16,10 @@ This document defines canonical benchmark scenarios and pass/fail policy for CI 
   canonical export stage medians in `stage_metric_results`. These stage medians
   are advisory diagnostics only; they do not add failure conditions beyond the
   existing scenario wall-time trend comparison.
+- **Startup profile diagnostics:** startup JSONL files can be summarized with
+  `python scripts/summarize_startup_profile.py <profile.jsonl>` to report first
+  feedback, first main-window show, event-loop tick, and post-paint feature
+  warmup spans.
 
 ## Canonical Scenarios
 
@@ -75,6 +79,11 @@ Expected stage-level timings include:
 - CSV summary path: `groupstats_analysis`, `transform_grouping`,
   `detail_sheet_to_excel`, `worksheet_writes`, `chart_generation`,
   `overview_sheet_write`, `workbook_write`, and `workbook_close`.
+- Dashboard writer subspans use the `dashboard_writer_` prefix, including
+  `dashboard_writer_plotly_json_measurement`, `dashboard_writer_html_rendering`,
+  and `dashboard_writer_html_write`. Production dashboard scenarios also record
+  `dashboard_writer_static_population_layer` and
+  `dashboard_writer_plotly_budget_resolution`.
 - Static POPULATION render probe: `array_generation`, `full_density_render`,
   and `sampled_marker_render`.
 

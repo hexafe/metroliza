@@ -26,32 +26,11 @@ from metroliza.industrial.industrial_analytics_state import (
     ReferenceCohortState,
     require_identifier as require_analytics_identifier,
 )
+from metroliza.shared.parse_contracts import (
+    ParseRequest as ParseRequest,
+    validate_parse_request as validate_parse_request,
+)
 from metroliza.tabular.tabular_analytics_service import TabularAnalyticsLoadResult, TabularColumnFilter
-
-
-@dataclass(frozen=True)
-class ParseRequest:
-    """Request payload for parsing a source directory into a target database.
-
-    Attributes:
-        source_directory: Input folder containing source files to parse.
-        db_file: Output database path where parsed content is written.
-        metadata_parsing_mode: Metadata extraction depth. ``"light"`` skips OCR
-            fallback for faster ingestion; ``"complete"`` keeps OCR fallback for
-            stronger header metadata coverage.
-        run_background_metadata_enrichment: When true, a light parse can be
-            followed by a user-enabled complete metadata pass in the parser
-            thread without reparsing measurements.
-
-    Usage notes:
-        Pass to ``validate_parse_request`` before use so required string fields are
-        checked and path validation is applied consistently.
-    """
-
-    source_directory: str
-    db_file: str
-    metadata_parsing_mode: str = "complete"
-    run_background_metadata_enrichment: bool = False
 
 
 @dataclass(frozen=True)
@@ -335,14 +314,6 @@ _GROUP_ANALYSIS_SCOPE_ALIASES = {
     "multi_reference": "multi_reference",
     "multi reference": "multi_reference",
 }
-_PARSE_METADATA_MODE_ALIASES = {
-    "light": "light",
-    "fast": "light",
-    "lite": "light",
-    "complete": "complete",
-    "full": "complete",
-    "standard": "complete",
-}
 _ANALYTICS_SOURCE_KINDS = {"production_cache", "tabular_file"}
 _DASHBOARD_DETAIL_MODES = {"fast", "full"}
 
@@ -388,50 +359,6 @@ def validate_paths(paths: AppPaths) -> AppPaths:
             raise ValueError("HTML dashboard file must use the .html extension.")
 
     return paths
-
-
-def validate_parse_request(request: ParseRequest) -> ParseRequest:
-    """Validate parse request inputs.
-
-    Args:
-        request: Parse request where ``source_directory`` and ``db_file`` are both
-            required non-empty strings.
-
-    Returns:
-        ParseRequest: A request instance with normalized metadata parsing mode.
-
-    Raises:
-        ValueError: If ``request`` is not a ``ParseRequest`` instance or required
-        fields are missing/empty.
-
-    Invariants:
-        Reuses ``validate_paths`` for ``db_file`` validation to keep path rules
-        consistent between parse and export workflows.
-    """
-
-    if not isinstance(request, ParseRequest):
-        raise ValueError("Parse request must be provided as a ParseRequest instance.")
-
-    if not isinstance(request.source_directory, str) or not request.source_directory.strip():
-        raise ValueError("A source directory is required.")
-
-    validate_paths(AppPaths(db_file=request.db_file))
-
-    mode_value = getattr(request, "metadata_parsing_mode", ParseRequest.metadata_parsing_mode)
-    if not isinstance(mode_value, str):
-        raise ValueError("metadata_parsing_mode must be provided as a string.")
-    metadata_parsing_mode = _PARSE_METADATA_MODE_ALIASES.get(mode_value.strip().lower())
-    if metadata_parsing_mode is None:
-        raise ValueError(f"Unsupported metadata parsing mode '{mode_value}'.")
-    if not isinstance(request.run_background_metadata_enrichment, bool):
-        raise ValueError("run_background_metadata_enrichment must be a boolean.")
-
-    return ParseRequest(
-        source_directory=request.source_directory,
-        db_file=request.db_file,
-        metadata_parsing_mode=metadata_parsing_mode,
-        run_background_metadata_enrichment=request.run_background_metadata_enrichment,
-    )
 
 
 def validate_export_options(options: ExportOptions) -> ExportOptions:

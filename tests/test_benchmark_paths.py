@@ -73,6 +73,9 @@ def test_csv_summary_benchmark_runs_groupstats_path(tmp_path):
     assert result.stage_timings_s['dashboard_html_write'] > 0.0
     assert result.stage_timings_s['dashboard_write'] > 0.0
     assert result.stage_timings_s['dashboard_write_overhead'] >= 0.0
+    assert result.stage_timings_s['dashboard_writer_plotly_json_measurement'] >= 0.0
+    assert result.stage_timings_s['dashboard_writer_html_rendering'] >= 0.0
+    assert result.stage_timings_s['dashboard_writer_html_write'] >= 0.0
     assert result.stage_timings_s['workbook_export'] > 0.0
     assert result.stage_timings_s['workbook_sheet_writes'] > 0.0
     assert result.stage_timings_s['workbook_close'] >= 0.0
@@ -97,6 +100,11 @@ def test_production_dashboard_workbook_benchmark_captures_output_timings(tmp_pat
     assert result.stage_timings_s['dashboard_manifest'] >= 0.0
     assert result.stage_timings_s['dashboard_html_write'] > 0.0
     assert result.stage_timings_s['dashboard_write'] > 0.0
+    assert result.stage_timings_s['dashboard_writer_static_population_layer'] >= 0.0
+    assert result.stage_timings_s['dashboard_writer_plotly_budget_resolution'] >= 0.0
+    assert result.stage_timings_s['dashboard_writer_plotly_json_measurement'] >= 0.0
+    assert result.stage_timings_s['dashboard_writer_html_rendering'] >= 0.0
+    assert result.stage_timings_s['dashboard_writer_html_write'] >= 0.0
     assert result.stage_timings_s['workbook_export'] > 0.0
     assert result.stage_timings_s['workbook_sheet_writes'] > 0.0
     assert result.stage_timings_s['workbook_close'] >= 0.0

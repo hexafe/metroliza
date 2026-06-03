@@ -24,7 +24,7 @@ class TestMainWindowMetadataUi(unittest.TestCase):
             raise unittest.SkipTest(f"PyQt6 is unavailable in this environment: {PYQT_IMPORT_ERROR}")
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_main_window_preloads_feature_imports_on_init(self):
+    def test_main_window_schedules_feature_imports_after_init(self):
         calls = []
 
         def fake_warm_feature_imports():
@@ -33,12 +33,16 @@ class TestMainWindowMetadataUi(unittest.TestCase):
 
         with patch("modules.main_window.warm_feature_imports", side_effect=fake_warm_feature_imports):
             window = MainWindow(version_label="test", days_until_expiration=None)
-        try:
-            self.assertEqual(calls, ["preload"])
-            self.assertTrue(window._feature_import_warmup_completed)
-            self.assertEqual(window._feature_import_warmup_failures, [])
-        finally:
-            window.close()
+            try:
+                self.assertEqual(calls, [])
+                self.assertFalse(window._feature_import_warmup_completed)
+                window.schedule_feature_import_warmup(delay_ms=0)
+                self.app.processEvents()
+                self.assertEqual(calls, ["preload"])
+                self.assertTrue(window._feature_import_warmup_completed)
+                self.assertEqual(window._feature_import_warmup_failures, [])
+            finally:
+                window.close()
 
     def test_metadata_enrichment_is_tools_action_without_launcher_button(self):
         window = MainWindow(version_label="test", days_until_expiration=None)

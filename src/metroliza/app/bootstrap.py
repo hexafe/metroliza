@@ -9,6 +9,7 @@ from metroliza.app.license_bootstrap import (
     show_invalid_license_message,
     validate_license_bootstrap,
 )
+from metroliza.app.startup_splash import create_startup_splash
 from metroliza.app.startup_profile import record_event, ui_smoke_enabled
 from metroliza.shared.logging_utils import ensure_application_logging
 
@@ -143,23 +144,22 @@ def launch_ui(config: StartupConfig) -> int:
     # QApplication exists before importing the main window dependency graph.
     record_event("launch_ui_start")
     app = get_or_create_qapplication()
-    record_event("license_manager_import_start")
-    from metroliza.app.license_key_manager import LicenseKeyManager
+    splash = create_startup_splash(app, ui_smoke_mode=config.startup_ui_smoke_mode)
+    splash.show_message("Checking license...", phase="license")
 
-    record_event("license_manager_import_done")
-    record_event("main_window_import_start")
-    from metroliza.ui.main_window import MainWindow
-
-    record_event("main_window_import_done")
-
-    record_event("license_hardware_id_start")
-    hardware_id = LicenseKeyManager.generate_hardware_id()
-    record_event("license_hardware_id_done")
     record_event("license_validation_start")
     license_result = validate_license_bootstrap(config.license_verification_enabled)
     record_event("license_validation_done", is_valid=license_result.is_valid)
 
     if not license_result.is_valid:
+        splash.close()
+        record_event("license_manager_import_start")
+        from metroliza.app.license_key_manager import LicenseKeyManager
+
+        record_event("license_manager_import_done")
+        record_event("license_hardware_id_start")
+        hardware_id = LicenseKeyManager.generate_hardware_id()
+        record_event("license_hardware_id_done")
         show_invalid_license_message(
             "Invalid or no license key found",
             "To request license key send the hardware id to the author",
@@ -168,13 +168,23 @@ def launch_ui(config: StartupConfig) -> int:
         record_event("launch_ui_invalid_license")
         return 1
 
+    splash.show_message("Loading main window...", phase="main_window")
+    record_event("main_window_import_start")
+    from metroliza.ui.main_window import MainWindow
+
+    record_event("main_window_import_done")
+
     record_event("main_window_construct_start")
     main_window = MainWindow(VersionDate.VERSION_LABEL, license_result.days_until_expiration)
     record_event("main_window_construct_done")
+    splash.show_message("Opening dashboard...", phase="show")
     main_window.show()
     record_event("main_window_show_called")
+    splash.finish(main_window)
     if config.startup_ui_smoke_mode:
         _schedule_startup_ui_smoke_exit(app)
+    else:
+        main_window.schedule_feature_import_warmup(delay_ms=100)
     record_event("event_loop_enter")
     exit_code = app.exec()
     record_event("event_loop_exit", exit_code=exit_code)

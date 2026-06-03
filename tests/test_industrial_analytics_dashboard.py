@@ -356,6 +356,15 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     ]
     assert result["html_dashboard_html_bytes"] > 0
     assert result["html_dashboard_plotly_budget"]["status"] == "within_budget"
+    timings = result["html_dashboard_timings_s"]
+    assert "manifest_clone" in timings
+    assert "static_population_layer" in timings
+    assert "plotly_json_measurement" in timings
+    assert "plotly_budget_resolution" in timings
+    assert "plotly_runtime_asset" in timings
+    assert "html_rendering" in timings
+    assert "html_write" in timings
+    assert timings["total"] >= timings["html_write"]
     assert html_path.exists()
     assert (assets_path / "plotly-2.27.0.min.js").exists()
 

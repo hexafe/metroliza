@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import re
 import shutil
+from time import perf_counter
 from typing import Any
 
 import numpy as np
@@ -285,6 +286,20 @@ def write_production_dashboard(
 ) -> dict[str, Any]:
     """Write an offline production analytics dashboard and local Plotly asset."""
 
+    total_start = perf_counter()
+    timings_s = {
+        "manifest_clone": 0.0,
+        "static_population_layer": 0.0,
+        "plotly_json_measurement": 0.0,
+        "plotly_json_measurement_initial": 0.0,
+        "plotly_json_measurement_embedded": 0.0,
+        "plotly_json_measurement_final": 0.0,
+        "plotly_budget_resolution": 0.0,
+        "plotly_runtime_asset": 0.0,
+        "html_rendering": 0.0,
+        "html_write": 0.0,
+        "total": 0.0,
+    }
     destination = Path(output_path)
     if destination.suffix.lower() != ".html":
         destination = destination.with_suffix(".html")
@@ -309,15 +324,24 @@ def write_production_dashboard(
         json_bytes_budget = configured_size_limit
     plotly_budget_status = "within_budget"
     plotly_budget_reason = ""
+    manifest_clone_start = perf_counter()
     base_dashboard_manifest = _copy_manifest_for_render(manifest)
+    timings_s["manifest_clone"] += perf_counter() - manifest_clone_start
+    static_population_start = perf_counter()
     population_layer_summary = _apply_static_population_layer_options(
         base_dashboard_manifest,
         interactivity=interactivity,
     )
+    timings_s["static_population_layer"] += perf_counter() - static_population_start
     plotly_spec_count = _count_plotly_specs(base_dashboard_manifest)
+    json_measurement_start = perf_counter()
     plotly_serialized_json_bytes = _measure_plotly_specs_json_bytes(base_dashboard_manifest)
+    json_measurement_elapsed = perf_counter() - json_measurement_start
+    timings_s["plotly_json_measurement"] += json_measurement_elapsed
+    timings_s["plotly_json_measurement_initial"] += json_measurement_elapsed
     dashboard_manifest = base_dashboard_manifest
     if interactivity["mode"] == "static" and plotly_spec_count > 0:
+        budget_start = perf_counter()
         dashboard_manifest = _copy_manifest_without_plotly_specs(
             base_dashboard_manifest,
             note_message=(
@@ -325,7 +349,9 @@ def write_production_dashboard(
                 "mode was selected; summary content remains available."
             ),
         )
+        timings_s["plotly_budget_resolution"] += perf_counter() - budget_start
     else:
+        budget_start = perf_counter()
         dashboard_manifest, plotly_budget_status, plotly_budget_reason = (
             _copy_manifest_with_plotly_budget(
                 base_dashboard_manifest,
@@ -333,8 +359,13 @@ def write_production_dashboard(
                 json_bytes_budget=json_bytes_budget,
             )
         )
+        timings_s["plotly_budget_resolution"] += perf_counter() - budget_start
     embedded_plotly_spec_count = _count_plotly_specs(dashboard_manifest)
+    embedded_json_measurement_start = perf_counter()
     embedded_plotly_serialized_json_bytes = _measure_plotly_specs_json_bytes(dashboard_manifest)
+    embedded_json_measurement_elapsed = perf_counter() - embedded_json_measurement_start
+    timings_s["plotly_json_measurement"] += embedded_json_measurement_elapsed
+    timings_s["plotly_json_measurement_embedded"] += embedded_json_measurement_elapsed
     if (
         interactivity["mode"] != "static"
         and plotly_spec_count > 0
@@ -355,10 +386,13 @@ def write_production_dashboard(
     if interactivity["mode"] == "static" and plotly_spec_count > 0:
         plotly_runtime_status = "static_snapshot_only"
     elif _manifest_requires_plotly(dashboard_manifest):
+        runtime_asset_start = perf_counter()
         plotly_js_path = _copy_plotly_runtime_asset(asset_directory)
+        timings_s["plotly_runtime_asset"] += perf_counter() - runtime_asset_start
         if plotly_js_path:
             plotly_runtime_status = "local"
         else:
+            budget_start = perf_counter()
             dashboard_manifest = _copy_manifest_without_plotly_specs(
                 dashboard_manifest,
                 note_message=(
@@ -366,12 +400,17 @@ def write_production_dashboard(
                     "chart library was unavailable; summary and statistics remain available."
                 ),
             )
+            timings_s["plotly_budget_resolution"] += perf_counter() - budget_start
             plotly_runtime_status = "snapshot_only"
     elif plotly_spec_count > 0 and plotly_budget_status == "over_budget":
         plotly_runtime_status = "budget_snapshot_only"
 
     embedded_plotly_spec_count = _count_plotly_specs(dashboard_manifest)
+    final_json_measurement_start = perf_counter()
     embedded_plotly_serialized_json_bytes = _measure_plotly_specs_json_bytes(dashboard_manifest)
+    final_json_measurement_elapsed = perf_counter() - final_json_measurement_start
+    timings_s["plotly_json_measurement"] += final_json_measurement_elapsed
+    timings_s["plotly_json_measurement_final"] += final_json_measurement_elapsed
     _apply_dashboard_interactivity_summary(
         dashboard_manifest,
         interactivity,
@@ -391,13 +430,18 @@ def write_production_dashboard(
     _apply_plotly_runtime_summary(dashboard_manifest, status=plotly_runtime_status)
     _strip_static_population_private_payloads(dashboard_manifest)
 
+    render_start = perf_counter()
     html_text = _render_dashboard_html(
         dashboard_manifest,
         asset_directory_name=asset_directory.name,
         dashboard_visual_settings=dashboard_visual_settings,
     )
+    timings_s["html_rendering"] += perf_counter() - render_start
     html_bytes = len(html_text.encode("utf-8"))
+    write_start = perf_counter()
     destination.write_text(html_text, encoding="utf-8")
+    timings_s["html_write"] += perf_counter() - write_start
+    timings_s["total"] = perf_counter() - total_start
     return {
         "html_dashboard_path": str(destination),
         "html_dashboard_assets_path": str(asset_directory),
@@ -418,6 +462,7 @@ def write_production_dashboard(
         },
         "html_dashboard_plotly_runtime_status": plotly_runtime_status,
         "html_dashboard_static_population_layer": population_layer_summary,
+        "html_dashboard_timings_s": {key: float(value) for key, value in timings_s.items()},
     }
 
 
