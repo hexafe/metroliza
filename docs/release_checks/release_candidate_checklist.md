@@ -114,7 +114,7 @@ python -m maturin build --manifest-path src/metroliza/native/distribution_fit_ad
 - [ ] Produced artifacts are named/versioned as expected for RC distribution. *(Owner: Release manager)*
 - [ ] Third-party notices/license attribution are bundled or attached to release artifacts, including RapidOCR, ONNX Runtime, OpenCV, NumPy, Excel reader packages, hexafe-plotstats, and Oznak. *(Owner: Release manager/QA)*
 
-- [ ] GitHub CI checks for the final pushed rc2 merge commit are green before tag/promotion; pre-merge validation run [`26875151720`](https://github.com/hexafe/metroliza/actions/runs/26875151720) passed for commit `05b5049558509060df43778d7b39424726e56ff1`. *(Owner: Release owner)*
+- [x] GitHub CI checks for the final pushed rc2 merge commit are green before tag/promotion: run [`26891179285`](https://github.com/hexafe/metroliza/actions/runs/26891179285) passed for commit `24a50ed069cd45c927f40d10ea0c989a7800915f`. Pre-merge validation run [`26875151720`](https://github.com/hexafe/metroliza/actions/runs/26875151720) passed for commit `05b5049558509060df43778d7b39424726e56ff1`. *(Owner: Release owner)*
 - [ ] CMM parser perf gate evidence (`cmm-parser-perf-gate` + `cmm-parser-perf-artifacts`) is reviewed when parser/backend changes are present; triage follows [`cmm_parser_perf_guardrail.md`](./cmm_parser_perf_guardrail.md). *(Owner: Release owner/QA)*
 - [ ] Coverage threshold from `unit-tests` passes, and `unit-test-coverage` artifact `coverage.xml` is reviewed as RC confidence evidence. *(Owner: Release owner/QA)*
 - [ ] Manual release smoke evidence is linked before open-testing promotion when applicable. Google conversion smoke is release-blocking for promoted RC artifacts; skipped default CI does not satisfy that gate. *(Owner: Release owner)*
@@ -177,7 +177,8 @@ Current plotstats hotfix pin:
   audit with no known vulnerabilities), the full headless suite passed
   (`1828 passed, 259 skipped, 95 warnings, 60 subtests passed`), and the
   CI-shaped combined coverage gate passed at `81%` against the `80%` threshold.
-  The final docs/freeze merge commit still needs pushed rc2 CI evidence.
+  The final docs/freeze merge commit passed pushed rc2 CI in run
+  [`26891179285`](https://github.com/hexafe/metroliza/actions/runs/26891179285).
 - Pre-merge validation branch CI passed: GitHub Actions run [`26875151720`](https://github.com/hexafe/metroliza/actions/runs/26875151720)
   for commit `05b5049558509060df43778d7b39424726e56ff1` (`Fix dashboard
   datetime axis scaling`) on 2026-06-03. Green automatic jobs were Static checks,
@@ -185,11 +186,18 @@ Current plotstats hotfix pin:
   smoke checks, CMM parser perf guardrail, and the non-blocking Performance
   benchmark trend check. Manual/opt-in jobs were skipped: Packaging smoke,
   Windows startup benchmark, and Google conversion smoke.
-- This pre-merge CI satisfies the default branch/PR CI baseline for that commit
-  only. The final docs/freeze merge commit needs its own pushed rc2 CI evidence
-  after merge. It does not close release-promotion evidence for packaging smoke,
-  Windows executable clean-machine launch/startup, Google conversion, or
-  third-party notice artifact review.
+- The pre-merge CI run is kept as history for the dashboard/freeze work before
+  merge. The rc2 run below is the current pushed-branch CI evidence. Neither run
+  closes release-promotion evidence for packaging smoke, Windows executable
+  clean-machine launch/startup, Google conversion, or third-party notice
+  artifact review.
+- rc2 docs/freeze merge CI passed: GitHub Actions run [`26891179285`](https://github.com/hexafe/metroliza/actions/runs/26891179285)
+  for commit `24a50ed069cd45c927f40d10ea0c989a7800915f` (`Update dashboard
+  training docs`) on 2026-06-03. Green automatic jobs were Static checks, Unit
+  tests with combined coverage artifact upload, Native wheel build and smoke
+  checks, CMM parser perf guardrail, and the non-blocking Performance benchmark
+  trend check. Manual/opt-in jobs were skipped: Packaging smoke, Windows startup
+  benchmark, and Google conversion smoke.
 - Post-reorganization follow-up local audit passed after docs/reference cleanup,
   parser-plugin productionization coverage, architecture guardrail hardening, and
   release-status refresh.
