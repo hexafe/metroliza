@@ -37,7 +37,9 @@ from metroliza.shared.contracts import (
     validate_industrial_analytics_request,
 )
 from metroliza.shared.dashboard_interactivity import (
+    DASHBOARD_SIZE_LIMIT_DEFAULT_MB,
     summarize_dashboard_population_layer_options,
+    summarize_dashboard_size_limit_options,
     summarize_dashboard_sampling_options,
 )
 from metroliza.charts.dashboard_visual_options import (
@@ -95,7 +97,9 @@ SOURCE_TABULAR_FILE = "tabular_file"
 
 
 def dashboard_interactivity_options_summary(options: DashboardInteractivityOptions) -> str:
-    return summarize_dashboard_sampling_options(options)
+    sampling = summarize_dashboard_sampling_options(options)
+    size_limit = summarize_dashboard_size_limit_options(options)
+    return f"{sampling}; {size_limit}"
 
 
 def dashboard_population_layer_options_summary(options: DashboardInteractivityOptions) -> str:
@@ -142,10 +146,28 @@ class DashboardInteractivityOptionsDialog(QDialog):
         self.sample_size_spin.setSingleStep(5_000)
         self.sample_size_spin.setValue(self._options.sample_size)
         form.addRow("Random sample limit", self.sample_size_spin)
+
+        self.size_limit_combo = QComboBox()
+        self.size_limit_combo.addItem("Default limit", "default")
+        self.size_limit_combo.addItem("Custom limit", "custom")
+        self.size_limit_combo.addItem("No size limit", "unlimited")
+        size_index = self.size_limit_combo.findData(self._options.size_limit_mode)
+        self.size_limit_combo.setCurrentIndex(size_index if size_index >= 0 else 0)
+        self.size_limit_combo.currentIndexChanged.connect(self._sync_size_limit_enabled)
+        form.addRow("Dashboard size limit", self.size_limit_combo)
+
+        self.size_limit_spin = QSpinBox()
+        self.size_limit_spin.setRange(1, 100_000)
+        self.size_limit_spin.setSingleStep(24)
+        self.size_limit_spin.setSuffix(" MB")
+        self.size_limit_spin.setValue(
+            self._options.size_limit_mb or DASHBOARD_SIZE_LIMIT_DEFAULT_MB
+        )
+        form.addRow("Size limit", self.size_limit_spin)
         layout.addLayout(form)
         layout.addWidget(
             status_chip(
-                "The random sample limit only controls interactive Plotly rows. POPULATION rendering is configured separately.",
+                "No size limit can create very large HTML files and may freeze the browser.",
                 "neutral",
             )
         )
@@ -159,16 +181,24 @@ class DashboardInteractivityOptionsDialog(QDialog):
 
         configure_accessibility(self.mode_combo, name="Dashboard interactivity mode")
         configure_accessibility(self.sample_size_spin, name="Dashboard interactivity sample size")
+        configure_accessibility(self.size_limit_combo, name="Dashboard size limit mode")
+        configure_accessibility(self.size_limit_spin, name="Dashboard size limit megabytes")
         self._sync_sample_size_enabled()
+        self._sync_size_limit_enabled()
 
     def _sync_sample_size_enabled(self) -> None:
         self.sample_size_spin.setEnabled(self.mode_combo.currentData() in {"auto", "sampled"})
+
+    def _sync_size_limit_enabled(self) -> None:
+        self.size_limit_spin.setEnabled(self.size_limit_combo.currentData() == "custom")
 
     def interactivity_options(self) -> DashboardInteractivityOptions:
         return DashboardInteractivityOptions(
             mode=str(self.mode_combo.currentData() or "auto"),
             sample_size=self.sample_size_spin.value(),
             population_layer_mode=self._options.population_layer_mode,
+            size_limit_mode=str(self.size_limit_combo.currentData() or "default"),
+            size_limit_mb=self.size_limit_spin.value(),
         )
 
 

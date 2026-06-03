@@ -280,7 +280,7 @@ def test_tabular_analytics_dialog_interactivity_controls_are_visible_and_in_requ
         assert not dialog.dashboard_interactivity_button.isHidden()
         assert (
             dialog.dashboard_interactivity_summary_label.text()
-            == "Auto, 50,000 interactive random sample limit"
+            == "Auto, 50,000 interactive random sample limit; 24 MB dashboard size limit"
         )
         assert not dialog.population_layer_button.isHidden()
         assert dialog.population_layer_summary_label.text() == "Auto"
@@ -292,11 +292,14 @@ def test_tabular_analytics_dialog_interactivity_controls_are_visible_and_in_requ
             mode="sampled",
             sample_size=75000,
             population_layer_mode="static",
+            size_limit_mode="custom",
+            size_limit_mb=128,
         )
         dialog._sync_dashboard_interactivity_controls()
         assert (
             dialog.dashboard_interactivity_summary_label.text()
-            == "Interactive random sample, 75,000 interactive random sample limit"
+            == "Interactive random sample, 75,000 interactive random sample limit; "
+            "128 MB dashboard size limit"
         )
         dialog._sync_population_layer_controls()
         assert dialog.population_layer_summary_label.text() == "Static image"
@@ -307,12 +310,16 @@ def test_tabular_analytics_dialog_interactivity_controls_are_visible_and_in_requ
             mode="sampled",
             sample_size=75000,
             population_layer_mode="static",
+            size_limit_mode="custom",
+            size_limit_mb=128,
         )
         thread = dialog.create_analytics_thread()
         assert thread.dashboard_interactivity_options == DashboardInteractivityOptions(
             mode="sampled",
             sample_size=75000,
             population_layer_mode="static",
+            size_limit_mode="custom",
+            size_limit_mb=128,
         )
     finally:
         dialog.close()
@@ -329,11 +336,23 @@ def test_dashboard_interactivity_dialog_keeps_population_layer_separate() -> Non
     )
     try:
         assert not hasattr(dialog, "population_layer_combo")
+        assert dialog.size_limit_combo.currentData() == "default"
+        assert dialog.size_limit_spin.value() == 24
 
         assert dialog.interactivity_options() == DashboardInteractivityOptions(
             mode="sampled",
             sample_size=75000,
             population_layer_mode="interactive",
+        )
+
+        dialog.size_limit_combo.setCurrentIndex(dialog.size_limit_combo.findData("unlimited"))
+        assert not dialog.size_limit_spin.isEnabled()
+        assert dialog.interactivity_options() == DashboardInteractivityOptions(
+            mode="sampled",
+            sample_size=75000,
+            population_layer_mode="interactive",
+            size_limit_mode="unlimited",
+            size_limit_mb=24,
         )
     finally:
         dialog.close()
@@ -418,7 +437,10 @@ def test_tabular_analytics_interactivity_button_launches_dialog(monkeypatch) -> 
             mode="static",
             sample_size=50000,
         )
-        assert dialog.dashboard_interactivity_summary_label.text() == "Snapshots only"
+        assert (
+            dialog.dashboard_interactivity_summary_label.text()
+            == "Snapshots only; 24 MB dashboard size limit"
+        )
         assert dialog.population_layer_summary_label.text() == "Auto"
     finally:
         dialog.close()
@@ -463,7 +485,7 @@ def test_tabular_analytics_population_layer_button_launches_dialog(monkeypatch) 
             population_layer_mode="static",
         )
         assert dialog.dashboard_interactivity_summary_label.text() == (
-            "Auto, 50,000 interactive random sample limit"
+            "Auto, 50,000 interactive random sample limit; 24 MB dashboard size limit"
         )
         assert dialog.population_layer_summary_label.text() == "Static image"
     finally:

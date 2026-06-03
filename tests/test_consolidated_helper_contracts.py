@@ -36,7 +36,13 @@ def test_plotly_stat_helpers_extract_payload_distribution_series() -> None:
 
 def test_dashboard_interactivity_shared_contracts() -> None:
     options = normalize_dashboard_interactivity_options(
-        {"mode": "sampled", "sample_size": "50000", "populationLayerMode": "static"},
+        {
+            "mode": "sampled",
+            "sample_size": "50000",
+            "populationLayerMode": "static",
+            "sizeLimitMode": "custom",
+            "sizeLimitMb": "96",
+        },
         strict=True,
     )
 
@@ -44,14 +50,23 @@ def test_dashboard_interactivity_shared_contracts() -> None:
         mode="sampled",
         sample_size=50_000,
         population_layer_mode="static",
+        size_limit_mode="custom",
+        size_limit_mb=96,
     )
     assert normalize_dashboard_interactivity_mapping(
         {"mode": "bad", "sample_size": "bad"},
         strict=False,
         default_mode="full",
         default_sample_size=12_345,
-    ) == {"mode": "full", "sample_size": 12_345, "population_layer_mode": "auto"}
+    ) == {
+        "mode": "full",
+        "sample_size": 12_345,
+        "population_layer_mode": "auto",
+        "size_limit_mode": "default",
+        "size_limit_mb": 24,
+    }
     assert "Interactive random sample" in summarize_dashboard_interactivity_options(options)
+    assert "96 mb dashboard size limit" in summarize_dashboard_interactivity_options(options).lower()
 
 
 def test_dashboard_interactivity_strict_sample_bounds() -> None:

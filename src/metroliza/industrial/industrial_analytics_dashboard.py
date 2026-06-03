@@ -70,7 +70,10 @@ from metroliza.industrial.industrial_analytics_state import (
     ReferenceCohortState,
 )
 from metroliza.charts.summary_plot_palette import SUMMARY_PLOT_PALETTE
-from metroliza.shared.dashboard_interactivity import normalize_dashboard_interactivity_mapping
+from metroliza.shared.dashboard_interactivity import (
+    dashboard_size_limit_bytes,
+    normalize_dashboard_interactivity_mapping,
+)
 
 
 DASHBOARD_SCHEMA = "metroliza.production_analytics_dashboard.v1"
@@ -98,10 +101,11 @@ _MANUAL_GROUP_FIELD_NAMES = {"group", "group_name", "csv_group", "tabular_group"
 DASHBOARD_RAW_POINT_LIMIT = 50_000
 DASHBOARD_AGGREGATE_TRACE_TARGET_POINTS = 2_500
 DEFAULT_PLOTLY_SPEC_COUNT_BUDGET = 160
-DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET = 8_000_000
+DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET = 24_000_000
 STATIC_POPULATION_LAYER_OPTIMIZATION = "static_population_layer"
 _STATIC_POPULATION_SOURCE_XY_KEY = "_metroliza_static_population_source_xy"
 _STATIC_POPULATION_DENSITY_POINT_THRESHOLD = DASHBOARD_RAW_POINT_LIMIT
+_AXIS_DEGENERATE_ABS_TOL = 1e-12
 
 
 def _metric_population_source_frame(
@@ -274,8 +278,8 @@ def write_production_dashboard(
     output_path: str | Path,
     *,
     assets_dir: str | Path | None = None,
-    plotly_spec_count_budget: int = DEFAULT_PLOTLY_SPEC_COUNT_BUDGET,
-    plotly_serialized_json_bytes_budget: int = DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET,
+    plotly_spec_count_budget: int | None = DEFAULT_PLOTLY_SPEC_COUNT_BUDGET,
+    plotly_serialized_json_bytes_budget: int | None = DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET,
     dashboard_visual_settings: dict[str, Any] | None = None,
     dashboard_interactivity_options: Any = None,
 ) -> dict[str, Any]:
@@ -290,11 +294,19 @@ def write_production_dashboard(
         if assets_dir is not None
         else destination.with_name(f"{destination.stem}_assets")
     )
-    plotly_spec_count = _count_plotly_specs(manifest)
-    plotly_serialized_json_bytes = _measure_plotly_specs_json_bytes(manifest)
-    count_budget = max(0, int(plotly_spec_count_budget))
-    json_bytes_budget = max(0, int(plotly_serialized_json_bytes_budget))
     interactivity = _normalize_dashboard_interactivity_options(dashboard_interactivity_options)
+    count_budget = _normalize_plotly_budget_value(plotly_spec_count_budget)
+    json_bytes_budget = _normalize_plotly_budget_value(plotly_serialized_json_bytes_budget)
+    configured_size_limit = dashboard_size_limit_bytes(
+        interactivity,
+        default_mb=max(1, DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET // 1_000_000),
+    )
+    if str(interactivity.get("size_limit_mode") or "default") == "unlimited":
+        count_budget = None
+        json_bytes_budget = None
+    elif str(interactivity.get("size_limit_mode") or "default") == "custom":
+        count_budget = None
+        json_bytes_budget = configured_size_limit
     plotly_budget_status = "within_budget"
     plotly_budget_reason = ""
     base_dashboard_manifest = _copy_manifest_for_render(manifest)
@@ -302,6 +314,8 @@ def write_production_dashboard(
         base_dashboard_manifest,
         interactivity=interactivity,
     )
+    plotly_spec_count = _count_plotly_specs(base_dashboard_manifest)
+    plotly_serialized_json_bytes = _measure_plotly_specs_json_bytes(base_dashboard_manifest)
     dashboard_manifest = base_dashboard_manifest
     if interactivity["mode"] == "static" and plotly_spec_count > 0:
         dashboard_manifest = _copy_manifest_without_plotly_specs(
@@ -328,9 +342,9 @@ def write_production_dashboard(
     ):
         plotly_budget_status = "over_budget"
         reasons = []
-        if plotly_spec_count > count_budget:
+        if count_budget is not None and plotly_spec_count > count_budget:
             reasons.append(f"spec_count>{count_budget}")
-        if plotly_serialized_json_bytes > json_bytes_budget:
+        if json_bytes_budget is not None and plotly_serialized_json_bytes > json_bytes_budget:
             reasons.append(f"serialized_json_bytes>{json_bytes_budget}")
         if not reasons:
             reasons.append("specs_omitted")
@@ -367,6 +381,12 @@ def write_production_dashboard(
         dashboard_manifest,
         status=plotly_budget_status,
         reason=plotly_budget_reason,
+        spec_count=plotly_spec_count,
+        embedded_spec_count=embedded_plotly_spec_count,
+        serialized_json_bytes=plotly_serialized_json_bytes,
+        embedded_serialized_json_bytes=embedded_plotly_serialized_json_bytes,
+        spec_count_budget=count_budget,
+        serialized_json_bytes_budget=json_bytes_budget,
     )
     _apply_plotly_runtime_summary(dashboard_manifest, status=plotly_runtime_status)
     _strip_static_population_private_payloads(dashboard_manifest)
@@ -393,8 +413,8 @@ def write_production_dashboard(
         "html_dashboard_plotly_budget": {
             "status": plotly_budget_status,
             "reason": plotly_budget_reason,
-            "spec_count_budget": int(count_budget),
-            "serialized_json_bytes_budget": int(json_bytes_budget),
+            "spec_count_budget": _budget_summary_value(count_budget),
+            "serialized_json_bytes_budget": _budget_summary_value(json_bytes_budget),
         },
         "html_dashboard_plotly_runtime_status": plotly_runtime_status,
         "html_dashboard_static_population_layer": population_layer_summary,
@@ -505,6 +525,54 @@ def _measure_plotly_spec_json_bytes(plotly_spec: dict[str, Any]) -> int:
             ).encode("utf-8")
         )
     )
+
+
+def _normalize_plotly_budget_value(value: Any) -> int | None:
+    if value is None:
+        return None
+    return max(0, int(value))
+
+
+def _budget_summary_value(value: int | None) -> int | None:
+    return None if value is None else int(value)
+
+
+def _is_over_plotly_count_budget(count: int, budget: int | None) -> bool:
+    return budget is not None and int(count) > int(budget)
+
+
+def _is_over_plotly_json_budget(size_bytes: int, budget: int | None) -> bool:
+    return budget is not None and int(size_bytes) > int(budget)
+
+
+def _axis_range_is_degenerate(minimum: float, maximum: float, *, mode: str = "linear") -> bool:
+    if not np.isfinite([minimum, maximum]).all():
+        return True
+    if str(mode or "").casefold() == "date":
+        return maximum <= minimum
+    return bool(np.isclose(minimum, maximum, rtol=0.0, atol=_AXIS_DEGENERATE_ABS_TOL))
+
+
+def _normalize_x_axis_bounds(
+    x_min: float,
+    x_max: float,
+    *,
+    mode: str = "linear",
+) -> tuple[float, float]:
+    x_min = float(x_min)
+    x_max = float(x_max)
+    if _axis_range_is_degenerate(x_min, x_max, mode=mode):
+        x_max = x_min + 1.0
+    return x_min, x_max
+
+
+def _normalize_y_axis_bounds(y_min: float, y_max: float) -> tuple[float, float]:
+    y_min = float(y_min)
+    y_max = float(y_max)
+    if _axis_range_is_degenerate(y_min, y_max):
+        return y_min - 0.5, y_max + 0.5
+    padding = max((y_max - y_min) * 0.04, 1e-9)
+    return y_min - padding, y_max + padding
 
 
 def _normalize_dashboard_interactivity_options(options: Any) -> dict[str, int | str]:
@@ -822,6 +890,7 @@ def _convert_static_population_layer(
         image_bounds = _axis_bounds_with_xy_frame(view_bounds, source_xy)
     else:
         render_xy = xy
+    view_bounds = dict(image_bounds)
     sample_limit = int(option.get("sample_point_limit") or DASHBOARD_RAW_POINT_LIMIT)
     color = _trace_color(population_trace) or _plot_color(population_index, "POPULATION")
     marker_size = _static_population_marker_size(population_trace)
@@ -1074,17 +1143,11 @@ def _plotly_trace_axis_bounds(traces: list[Any]) -> dict[str, Any] | None:
     x_max = max(float(xy["__x_numeric"].max()) for xy in prepared)
     y_min = min(float(xy["__y"].min()) for xy in prepared)
     y_max = max(float(xy["__y"].max()) for xy in prepared)
-    if np.isclose(x_min, x_max):
-        x_max = x_min + 1.0
-    if np.isclose(y_min, y_max):
-        y_min -= 0.5
-        y_max += 0.5
-    else:
-        padding = max((y_max - y_min) * 0.04, 1e-9)
-        y_min -= padding
-        y_max += padding
+    x_mode = next(iter(x_modes))
+    x_min, x_max = _normalize_x_axis_bounds(x_min, x_max, mode=x_mode)
+    y_min, y_max = _normalize_y_axis_bounds(y_min, y_max)
     return {
-        "x_mode": next(iter(x_modes)),
+        "x_mode": x_mode,
         "x_min": x_min,
         "x_max": x_max,
         "y_min": y_min,
@@ -1103,9 +1166,12 @@ def _axis_bounds_with_xy_frame(
     merged["x_max"] = max(float(bounds["x_max"]), float(xy["__x_numeric"].max()))
     merged["y_min"] = min(float(bounds["y_min"]), float(xy["__y"].min()))
     merged["y_max"] = max(float(bounds["y_max"]), float(xy["__y"].max()))
-    if np.isclose(float(merged["x_min"]), float(merged["x_max"])):
-        merged["x_max"] = float(merged["x_min"]) + 1.0
-    if np.isclose(float(merged["y_min"]), float(merged["y_max"])):
+    merged["x_min"], merged["x_max"] = _normalize_x_axis_bounds(
+        float(merged["x_min"]),
+        float(merged["x_max"]),
+        mode=str(merged.get("x_mode") or "linear"),
+    )
+    if _axis_range_is_degenerate(float(merged["y_min"]), float(merged["y_max"])):
         merged["y_min"] = float(merged["y_min"]) - 0.5
         merged["y_max"] = float(merged["y_max"]) + 0.5
     return merged
@@ -1144,6 +1210,8 @@ def _append_static_population_layout_image(
             "y": float(bounds["y_max"]),
             "sizex": float(bounds["x_max"]) - float(bounds["x_min"]),
             "sizey": float(bounds["y_max"]) - float(bounds["y_min"]),
+            "xanchor": "left",
+            "yanchor": "top",
             "sizing": "stretch",
             "layer": "below",
             "opacity": 1.0,
@@ -1231,12 +1299,16 @@ def _apply_static_population_axis_ranges(layout: dict[str, Any], bounds: dict[st
 def _copy_manifest_with_plotly_budget(
     manifest: dict[str, Any],
     *,
-    count_budget: int,
-    json_bytes_budget: int,
+    count_budget: int | None,
+    json_bytes_budget: int | None,
 ) -> tuple[dict[str, Any], str, str]:
     rendered_manifest = _copy_manifest_for_render(manifest)
-    if _count_plotly_specs(rendered_manifest) <= count_budget and (
-        _measure_plotly_specs_json_bytes(rendered_manifest) <= json_bytes_budget
+    if not _is_over_plotly_count_budget(
+        _count_plotly_specs(rendered_manifest),
+        count_budget,
+    ) and not _is_over_plotly_json_budget(
+        _measure_plotly_specs_json_bytes(rendered_manifest),
+        json_bytes_budget,
     ):
         return rendered_manifest, "within_budget", ""
 
@@ -1252,9 +1324,9 @@ def _copy_manifest_with_plotly_budget(
     current_count = 0
     current_bytes = 0
     for spec_size, index in candidates:
-        if current_count >= count_budget:
+        if count_budget is not None and current_count >= count_budget:
             continue
-        if current_bytes + spec_size > json_bytes_budget:
+        if json_bytes_budget is not None and current_bytes + spec_size > json_bytes_budget:
             continue
         kept_indexes.add(index)
         current_count += 1
@@ -1270,9 +1342,9 @@ def _copy_manifest_with_plotly_budget(
             if isinstance(chart, dict):
                 _omit_chart_plotly_spec(chart, note_message=note)
     reasons = []
-    if _count_plotly_specs(manifest) > count_budget:
+    if _is_over_plotly_count_budget(_count_plotly_specs(manifest), count_budget):
         reasons.append(f"spec_count>{count_budget}")
-    if _measure_plotly_specs_json_bytes(manifest) > json_bytes_budget:
+    if _is_over_plotly_json_budget(_measure_plotly_specs_json_bytes(manifest), json_bytes_budget):
         reasons.append(f"serialized_json_bytes>{json_bytes_budget}")
     return rendered_manifest, "over_budget", ",".join(reasons)
 
@@ -1342,6 +1414,8 @@ def _apply_dashboard_interactivity_summary(
         "mode": str(interactivity.get("mode") or "auto"),
         "sample_size": int(interactivity.get("sample_size") or DASHBOARD_RAW_POINT_LIMIT),
         "population_layer_mode": str(interactivity.get("population_layer_mode") or "auto"),
+        "size_limit_mode": str(interactivity.get("size_limit_mode") or "default"),
+        "size_limit_mb": int(interactivity.get("size_limit_mb") or 0),
     }
     if population_layer_summary:
         summary["static_population_layer"] = dict(population_layer_summary)
@@ -1352,6 +1426,12 @@ def _apply_plotly_budget_summary(
     *,
     status: str,
     reason: str,
+    spec_count: int,
+    embedded_spec_count: int,
+    serialized_json_bytes: int,
+    embedded_serialized_json_bytes: int,
+    spec_count_budget: int | None,
+    serialized_json_bytes_budget: int | None,
 ) -> None:
     summary = manifest.get("summary")
     if not isinstance(summary, dict):
@@ -1361,6 +1441,17 @@ def _apply_plotly_budget_summary(
         summary["plotly_budget_reason"] = reason
     else:
         summary.pop("plotly_budget_reason", None)
+    summary["plotly_budget"] = {
+        "status": status,
+        "reason": reason,
+        "plotly_spec_count": int(spec_count),
+        "embedded_plotly_spec_count": int(embedded_spec_count),
+        "replaced_plotly_spec_count": max(0, int(spec_count) - int(embedded_spec_count)),
+        "serialized_json_bytes": int(serialized_json_bytes),
+        "embedded_serialized_json_bytes": int(embedded_serialized_json_bytes),
+        "spec_count_budget": _budget_summary_value(spec_count_budget),
+        "serialized_json_bytes_budget": _budget_summary_value(serialized_json_bytes_budget),
+    }
 
 
 def _apply_plotly_runtime_summary(
@@ -2073,15 +2164,8 @@ def _time_series_raw_image_layers(
     x_max = max(float(xy["__x_numeric"].max()) for _label, xy in prepared)
     y_min = min(float(xy["__y"].min()) for _label, xy in prepared)
     y_max = max(float(xy["__y"].max()) for _label, xy in prepared)
-    if np.isclose(x_min, x_max):
-        x_max = x_min + 1.0
-    if np.isclose(y_min, y_max):
-        y_min -= 0.5
-        y_max += 0.5
-    else:
-        padding = max((y_max - y_min) * 0.04, 1e-9)
-        y_min -= padding
-        y_max += padding
+    x_min, x_max = _normalize_x_axis_bounds(x_min, x_max, mode=mode)
+    y_min, y_max = _normalize_y_axis_bounds(y_min, y_max)
 
     allocations = _sample_allocations(
         [len(xy.index) for _label, xy in prepared],
@@ -2200,9 +2284,8 @@ def _hybrid_chart_axis_bounds(
                 x_min = min(x_min, x_numeric)
                 x_max = max(x_max, x_numeric)
 
-    if np.isclose(x_min, x_max):
-        x_max = x_min + 1.0
-    if np.isclose(y_min, y_max):
+    x_min, x_max = _normalize_x_axis_bounds(x_min, x_max, mode=x_mode)
+    if _axis_range_is_degenerate(y_min, y_max):
         y_min -= 0.5
         y_max += 0.5
 
@@ -3027,15 +3110,22 @@ def _render_time_series_density_layer_png(
     y = y[finite]
     x_min, x_max = float(x_range[0]), float(x_range[1])
     y_min, y_max = float(y_range[0]), float(y_range[1])
-    if not np.isfinite(x_min) or not np.isfinite(x_max) or np.isclose(x_min, x_max):
+    if (
+        not np.isfinite(x_min)
+        or not np.isfinite(x_max)
+        or _axis_range_is_degenerate(x_min, x_max)
+    ):
         x_min = float(np.nanmin(x))
         x_max = float(np.nanmax(x))
-        if np.isclose(x_min, x_max):
-            x_max = x_min + 1.0
-    if not np.isfinite(y_min) or not np.isfinite(y_max) or np.isclose(y_min, y_max):
+        x_min, x_max = _normalize_x_axis_bounds(x_min, x_max)
+    if (
+        not np.isfinite(y_min)
+        or not np.isfinite(y_max)
+        or _axis_range_is_degenerate(y_min, y_max)
+    ):
         y_min = float(np.nanmin(y))
         y_max = float(np.nanmax(y))
-        if np.isclose(y_min, y_max):
+        if _axis_range_is_degenerate(y_min, y_max):
             y_min -= 0.5
             y_max += 0.5
 
@@ -3383,11 +3473,30 @@ def _render_dashboard_html(
             'instead.</p>'
         )
     elif str(summary.get("plotly_budget_status") or "") == "over_budget":
-        plotly_budget_notice = (
-            '<p class="runtime-note">Some interactive charts were replaced with image snapshots '
-            'because the saved dashboard would otherwise be too large. Summary content remains '
-            'available.</p>'
-        )
+        budget = summary.get("plotly_budget") if isinstance(summary.get("plotly_budget"), dict) else {}
+        total_specs = _summary_int(budget.get("plotly_spec_count")) if budget else None
+        embedded_specs = _summary_int(budget.get("embedded_plotly_spec_count")) if budget else None
+        replaced_specs = _summary_int(budget.get("replaced_plotly_spec_count")) if budget else None
+        json_budget = _summary_int(budget.get("serialized_json_bytes_budget")) if budget else None
+        if total_specs is not None and embedded_specs is not None and replaced_specs is not None:
+            budget_text = f" within the {json_budget / 1_000_000:.0f} MB Plotly data budget" if json_budget else ""
+            replaced_noun = "chart" if replaced_specs == 1 else "charts"
+            replaced_verb = "was" if replaced_specs == 1 else "were"
+            embedded_noun = "chart" if embedded_specs == 1 else "charts"
+            embedded_verb = "remains" if embedded_specs == 1 else "remain"
+            plotly_budget_notice = (
+                '<p class="runtime-note">'
+                f'{replaced_specs:,} interactive {replaced_noun} {replaced_verb} replaced with '
+                f'image snapshots to keep the saved dashboard{budget_text}. '
+                f'{embedded_specs:,} of {total_specs:,} interactive {embedded_noun} '
+                f'{embedded_verb} available.</p>'
+            )
+        else:
+            plotly_budget_notice = (
+                '<p class="runtime-note">Some interactive charts were replaced with image snapshots '
+                'because the saved dashboard would otherwise be too large. Summary content remains '
+                'available.</p>'
+            )
     used_section_ids = {
         "dashboard-start",
         "key-takeaways",
@@ -4267,6 +4376,11 @@ def _render_plotly_runtime(
       }
       return null;
     };
+    const plotlySpecHasStaticImageLayer = (spec) => (
+      Boolean(spec && Array.isArray(spec.data) && spec.data.some(
+        (trace) => staticImageLayerIndexForTrace(trace) !== null
+      ))
+    );
     const attachRawLayerLegendHandler = (target, chart) => {
       if (!target || typeof target.on !== 'function' || target.dataset.rawLegendHandler === '1') return;
       target.dataset.rawLegendHandler = '1';
@@ -4284,6 +4398,10 @@ def _render_plotly_runtime(
         Plotly.restyle(target, { visible: nextVisible ? true : 'legendonly' }, [curveNumber]);
         return false;
       });
+      target.on('plotly_legenddoubleclick', function() {
+        const spec = (chart && chart.plotly_spec) || {};
+        return !plotlySpecHasStaticImageLayer(spec);
+      });
     };
     function renderPlotlyChart(target, chart, configOverrides = {}, force = false) {
       if (!target || !chart || !chart.plotly_spec || !window.Plotly) return;
@@ -4291,6 +4409,9 @@ def _render_plotly_runtime(
       const visualSpec = applyDashboardVisualsToPlotlySpec(baseSpec);
       const spec = applyThemeToPlotlySpec(visualSpec);
       const config = Object.assign({}, spec.config || {}, configOverrides);
+      if (plotlySpecHasStaticImageLayer(spec) && !Object.prototype.hasOwnProperty.call(config, 'doubleClick')) {
+        config.doubleClick = 'reset';
+      }
       if (force && target.dataset.plotlyReady === '1') {
         Plotly.react(target, spec.data || [], spec.layout || {}, config);
       } else {
@@ -4406,6 +4527,437 @@ def _summary_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _summary_float(value: Any) -> float | None:
+    if value in (None, "") or isinstance(value, bool):
+        return None
+    if isinstance(value, int | float | np.integer | np.floating):
+        number = float(value)
+        return number if np.isfinite(number) else None
+    text = str(value).strip()
+    if not text or text.casefold() in {"n/a", "na", "nan", "none", "-"}:
+        return None
+    match = re.search(
+        r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?",
+        text.replace(",", ""),
+    )
+    if not match:
+        return None
+    try:
+        number = float(match.group(0))
+    except ValueError:
+        return None
+    return number if np.isfinite(number) else None
+
+
+def _format_takeaway_number(value: Any) -> str:
+    number = _summary_float(value)
+    if number is None:
+        return ""
+    magnitude = abs(number)
+    if magnitude >= 1000:
+        text = f"{number:,.0f}" if float(number).is_integer() else f"{number:,.1f}"
+    elif magnitude >= 100:
+        text = f"{number:.1f}"
+    elif magnitude >= 10:
+        text = f"{number:.2f}"
+    elif magnitude >= 1:
+        text = f"{number:.3f}"
+    else:
+        text = f"{number:.3g}"
+    if "." in text and "e" not in text.casefold():
+        text = text.rstrip("0").rstrip(".")
+    return text
+
+
+def _format_takeaway_count(value: Any) -> str:
+    number = _summary_float(value)
+    if number is None:
+        return ""
+    nearest = int(round(number))
+    if np.isclose(number, nearest, rtol=0.0, atol=1e-9):
+        return f"{nearest:,}"
+    return _format_takeaway_number(number)
+
+
+def _format_takeaway_percent(value: Any) -> str:
+    text = str(value or "").strip()
+    if "%" in text and text.casefold() not in {"n/a", "na", "nan"}:
+        return clean_dashboard_copy(text)
+    number = _summary_float(value)
+    if number is None:
+        return ""
+    percent = number if abs(number) > 1 else number * 100.0
+    formatted = f"{percent:.2f}".rstrip("0").rstrip(".")
+    return f"{formatted}%"
+
+
+def _truthy_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int | float):
+        return bool(value)
+    return str(value or "").strip().casefold() in {"1", "true", "yes", "y", "significant"}
+
+
+def _metric_title(metric: dict[str, Any]) -> str:
+    for key in ("metric", "display_label", "label", "field_name"):
+        text = str(metric.get(key) or "").strip()
+        if text:
+            return _friendly_group_field_name(text) if key == "field_name" else text
+    return "Metric"
+
+
+def _sentence_case(value: Any) -> str:
+    text = clean_dashboard_copy(value)
+    if not text:
+        return ""
+    return text[:1].upper() + text[1:] if text[:1].islower() else text
+
+
+def _sentence(value: Any) -> str:
+    text = _sentence_case(value)
+    if text and text[-1] not in ".!?":
+        text = f"{text}."
+    return text
+
+
+def _join_takeaway_sentences(*parts: Any) -> str:
+    sentences: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        sentence = _sentence(part)
+        key = sentence.casefold()
+        if sentence and key not in seen:
+            seen.add(key)
+            sentences.append(sentence)
+    return " ".join(sentences)
+
+
+def _groupstats_metrics(groupstats: dict[str, Any]) -> list[dict[str, Any]]:
+    metrics = groupstats.get("metrics") if isinstance(groupstats.get("metrics"), list) else []
+    return [metric for metric in metrics if isinstance(metric, dict)]
+
+
+def _metric_priority(metric: dict[str, Any]) -> float:
+    primary = metric.get("primary_insight") if isinstance(metric.get("primary_insight"), dict) else {}
+    priority = _summary_float(primary.get("priority_score"))
+    if priority is not None:
+        return priority
+    significant_rows = [
+        row
+        for row in metric.get("pairwise_rows", [])
+        if isinstance(row, dict) and _truthy_flag(row.get("significant"))
+    ]
+    if significant_rows:
+        return 75.0
+    capability = _metric_capability_candidate(metric)
+    if capability is not None:
+        _group, value, _label = capability
+        if value < 1.0:
+            return 70.0
+        if value < 1.33:
+            return 55.0
+    return 0.0
+
+
+def _metric_primary_takeaway(metric: dict[str, Any]) -> tuple[str, str] | None:
+    primary = metric.get("primary_insight")
+    metric_name = _metric_title(metric)
+    if isinstance(primary, dict):
+        headline = primary.get("headline")
+        why = primary.get("why")
+        combined = _join_takeaway_sentences(headline, why)
+        if combined:
+            return "Group insight", f"{metric_name}: {combined}"
+    takeaway = metric.get("metric_takeaway")
+    if takeaway:
+        return "Metric insight", f"{metric_name}: {_sentence(takeaway)}"
+    legacy = metric.get("insights")
+    if isinstance(legacy, list):
+        combined = _join_takeaway_sentences(*legacy[:2])
+        if combined:
+            return "Metric insight", f"{metric_name}: {combined}"
+    return None
+
+
+def _metric_action_takeaway(metric: dict[str, Any]) -> tuple[str, str] | None:
+    primary = metric.get("primary_insight")
+    action = primary.get("first_action") if isinstance(primary, dict) else None
+    action = action or metric.get("recommended_action")
+    if not action:
+        return None
+    return "Recommended action", f"{_metric_title(metric)}: {_sentence(action)}"
+
+
+def _best_pairwise_row(metric: dict[str, Any]) -> dict[str, Any] | None:
+    rows = metric.get("pairwise_rows") if isinstance(metric.get("pairwise_rows"), list) else []
+    significant_rows = [
+        row for row in rows if isinstance(row, dict) and _truthy_flag(row.get("significant"))
+    ]
+    if not significant_rows:
+        return None
+
+    def rank(row: dict[str, Any]) -> tuple[float, float]:
+        p_value = _summary_float(row.get("adjusted_p_value"))
+        if p_value is None:
+            p_value = _summary_float(row.get("p_value"))
+        effect = abs(_summary_float(row.get("effect_size")) or 0.0)
+        return (p_value if p_value is not None else float("inf"), -effect)
+
+    return min(significant_rows, key=rank)
+
+
+def _metric_pairwise_takeaway(metric: dict[str, Any]) -> tuple[str, str] | None:
+    best = _best_pairwise_row(metric)
+    if best is None:
+        return None
+    metric_name = _metric_title(metric)
+    group_a = clean_dashboard_copy(best.get("group_a")) or "Group A"
+    group_b = clean_dashboard_copy(best.get("group_b")) or "Group B"
+    details = [f"{metric_name}: {group_a} and {group_b} differ"]
+    delta = _format_takeaway_number(best.get("delta_mean"))
+    if delta:
+        details.append(f"mean shift {delta}")
+    p_value = _format_takeaway_number(best.get("adjusted_p_value") or best.get("p_value"))
+    if p_value:
+        details.append(f"adjusted p={p_value}")
+    effect = _format_takeaway_number(best.get("effect_size"))
+    if effect:
+        effect_type = clean_dashboard_copy(best.get("effect_type")) or "effect"
+        details.append(f"{effect_type}={effect}")
+    return "Group difference", f"{'; '.join(details)}."
+
+
+def _metric_similarity_takeaway(metric: dict[str, Any]) -> tuple[str, str] | None:
+    rows = metric.get("pairwise_rows") if isinstance(metric.get("pairwise_rows"), list) else []
+    valid_rows = [row for row in rows if isinstance(row, dict)]
+    if not valid_rows or any(_truthy_flag(row.get("significant")) for row in valid_rows):
+        return None
+    return (
+        "Group similarity",
+        f"{_metric_title(metric)}: compared groups do not show a statistically significant "
+        "difference in the available pairwise tests.",
+    )
+
+
+def _metric_capability_candidate(metric: dict[str, Any]) -> tuple[str, float, str] | None:
+    candidates: list[tuple[str, float, str]] = []
+    rows = metric.get("descriptive_stats") if isinstance(metric.get("descriptive_stats"), list) else []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        group = clean_dashboard_copy(row.get("group")) or "all rows"
+        for key, label in (("cpk", "Cpk"), ("capability", "capability"), ("cp", "Cp")):
+            value = _summary_float(row.get(key))
+            if value is not None:
+                candidates.append((group, value, label))
+                break
+    capability = metric.get("capability") if isinstance(metric.get("capability"), dict) else {}
+    for key, label in (("cpk", "Cpk"), ("capability", "capability"), ("cp", "Cp")):
+        value = _summary_float(capability.get(key))
+        if value is not None:
+            candidates.append(("all rows", value, label))
+            break
+    if not candidates:
+        return None
+    return min(candidates, key=lambda item: item[1])
+
+
+def _metric_capability_takeaway(metric: dict[str, Any]) -> tuple[str, str] | None:
+    spec_status = str(metric.get("spec_status") or "").strip().casefold()
+    if spec_status in {"", "no_spec", "not_applicable", "missing_specs"}:
+        return None
+    candidate = _metric_capability_candidate(metric)
+    if candidate is None:
+        return None
+    group, value, capability_label = candidate
+    formatted = _format_takeaway_number(value)
+    metric_name = _metric_title(metric)
+    if value < 1.0:
+        return (
+            "Capability risk",
+            f"{metric_name}: {group} is below the capability target "
+            f"({capability_label}={formatted}); review centering and variation.",
+        )
+    if value < 1.33:
+        return (
+            "Capability watch",
+            f"{metric_name}: {group} is marginal against the common 1.33 capability target "
+            f"({capability_label}={formatted}).",
+        )
+    return (
+        "Capability",
+        f"{metric_name}: reported groups meet the common 1.33 capability target "
+        f"(lowest {capability_label}={formatted} in {group}).",
+    )
+
+
+def _chart_stats_rows(table: dict[str, Any]) -> dict[str, Any]:
+    rows = table.get("rows") if isinstance(table.get("rows"), list) else []
+    normalized: dict[str, Any] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        label = str(row.get("label") or "").strip().casefold()
+        if label:
+            normalized[label] = row.get("value")
+    return normalized
+
+
+def _chart_spec_takeaway(charts: list[Any]) -> tuple[str, str] | None:
+    candidates: list[dict[str, Any]] = []
+    valid_tables = 0
+    for chart in charts:
+        if not isinstance(chart, dict):
+            continue
+        chart_title = clean_dashboard_copy(chart.get("title")) or "Chart"
+        stats_tables = chart.get("stats_tables") if isinstance(chart.get("stats_tables"), list) else []
+        for table in stats_tables:
+            if not isinstance(table, dict):
+                continue
+            row_map = _chart_stats_rows(table)
+            nok = _summary_float(row_map.get("nok"))
+            samples = _summary_float(row_map.get("samples"))
+            if nok is None:
+                continue
+            valid_tables += 1
+            group = clean_dashboard_copy(table.get("title")) or "all rows"
+            percent = _format_takeaway_percent(row_map.get("nok %"))
+            candidates.append(
+                {
+                    "chart": chart_title,
+                    "group": group,
+                    "nok": nok,
+                    "samples": samples,
+                    "percent": percent,
+                }
+            )
+    nonconforming = [candidate for candidate in candidates if candidate["nok"] > 0]
+    if nonconforming:
+        nonconforming.sort(
+            key=lambda item: (
+                _summary_float(str(item["percent"]).replace("%", "")) or -1.0,
+                item["nok"],
+            ),
+            reverse=True,
+        )
+        top = nonconforming[0]
+        count = _format_takeaway_count(top["nok"])
+        count_number = int(round(top["nok"]))
+        part_text = (
+            _plural_summary_count(count_number, "part")
+            if np.isclose(top["nok"], count_number, rtol=0.0, atol=1e-9)
+            else f"{count} parts"
+        )
+        verb = "is" if np.isclose(top["nok"], 1.0, rtol=0.0, atol=1e-9) else "are"
+        sample_text = ""
+        sample_count = _format_takeaway_count(top["samples"])
+        if sample_count:
+            sample_text = f" out of {sample_count}"
+        percent_text = f" ({top['percent']})" if top["percent"] else ""
+        return (
+            "Out of spec",
+            f"{top['chart']}: {part_text}{sample_text} {verb} out of spec{percent_text} "
+            f"in {top['group']}.",
+        )
+    if valid_tables:
+        return (
+            "Specification",
+            "No out-of-spec parts are reported in the rendered chart statistics.",
+        )
+    return None
+
+
+def _chart_capability_takeaway(charts: list[Any]) -> tuple[str, str] | None:
+    candidates: list[tuple[str, str, float]] = []
+    for chart in charts:
+        if not isinstance(chart, dict):
+            continue
+        chart_title = clean_dashboard_copy(chart.get("title")) or "Chart"
+        stats_tables = chart.get("stats_tables") if isinstance(chart.get("stats_tables"), list) else []
+        for table in stats_tables:
+            if not isinstance(table, dict):
+                continue
+            row_map = _chart_stats_rows(table)
+            cpk = _summary_float(row_map.get("cpk"))
+            if cpk is None:
+                continue
+            group = clean_dashboard_copy(table.get("title")) or "all rows"
+            candidates.append((chart_title, group, cpk))
+    if not candidates:
+        return None
+    chart_title, group, cpk = min(candidates, key=lambda item: item[2])
+    formatted = _format_takeaway_number(cpk)
+    if cpk < 1.0:
+        return (
+            "Capability risk",
+            f"{chart_title}: {group} has Cpk={formatted}, below the usual capability target.",
+        )
+    if cpk < 1.33:
+        return (
+            "Capability watch",
+            f"{chart_title}: {group} has Cpk={formatted}; keep this characteristic under review.",
+        )
+    return (
+        "Capability",
+        f"{chart_title}: all reported groups meet the common 1.33 Cpk target "
+        f"(lowest Cpk={formatted} in {group}).",
+    )
+
+
+def _chart_outlier_takeaway(charts: list[Any]) -> tuple[str, str] | None:
+    candidates: list[tuple[str, str, int]] = []
+    inspected = 0
+    for chart in charts:
+        if not isinstance(chart, dict):
+            continue
+        chart_type = str(chart.get("chart_type") or "").casefold()
+        if chart_type not in {"box", "violin"}:
+            continue
+        spec = chart.get("plotly_spec") if isinstance(chart.get("plotly_spec"), dict) else {}
+        traces = spec.get("data") if isinstance(spec.get("data"), list) else []
+        for trace in traces:
+            if not isinstance(trace, dict):
+                continue
+            raw_values = trace.get("y") if isinstance(trace.get("y"), list) else []
+            values = [
+                number
+                for number in (_summary_float(value) for value in raw_values)
+                if number is not None
+            ]
+            if len(values) < 4:
+                continue
+            inspected += 1
+            series = np.asarray(values, dtype=float)
+            q1, q3 = np.percentile(series, [25, 75])
+            iqr = q3 - q1
+            if not np.isfinite(iqr) or iqr <= 0:
+                continue
+            lower = q1 - 1.5 * iqr
+            upper = q3 + 1.5 * iqr
+            count = int(np.count_nonzero((series < lower) | (series > upper)))
+            if count > 0:
+                chart_title = clean_dashboard_copy(chart.get("title")) or "Distribution chart"
+                group = clean_dashboard_copy(trace.get("name")) or "all rows"
+                candidates.append((chart_title, group, count))
+    if candidates:
+        candidates.sort(key=lambda item: item[2], reverse=True)
+        chart_title, group, count = candidates[0]
+        verb = "is" if count == 1 else "are"
+        return (
+            "Outliers",
+            f"{chart_title}: {_plural_summary_count(count, 'possible Tukey outlier')} "
+            f"{verb} visible "
+            f"in {group}.",
+        )
+    if inspected:
+        return (
+            "Outliers",
+            "No Tukey outliers were detected in the rendered box or violin charts.",
+        )
+    return None
 
 
 def _friendly_time_bucket(value: Any) -> str:
@@ -4563,131 +5115,55 @@ def _dashboard_takeaway_rows(
     groupstats: dict[str, Any],
     charts: list[Any],
 ) -> list[dict[str, str]]:
-    context = summary.get("dashboard_context") if isinstance(summary.get("dashboard_context"), dict) else {}
     rows: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
 
     def add(label: str, value: Any) -> None:
+        if len(rows) >= 8:
+            return
         text = clean_dashboard_copy(value)
         if not text:
             return
         key = (label.casefold(), text.casefold())
-        existing = {(row["label"].casefold(), row["value"].casefold()) for row in rows}
-        if key not in existing:
+        if key not in seen:
+            seen.add(key)
             rows.append({"label": label, "value": text})
 
-    source_rows = _summary_int(summary.get("source_rows"))
-    rendered_rows = _summary_int(summary.get("rows", summary.get("source_rows")))
-    if rendered_rows is not None:
-        add("Rows rendered", f"{rendered_rows:,} rows are rendered into dashboard chart data.")
-    if source_rows is not None and rendered_rows is not None and source_rows > rendered_rows:
-        add("Source rows", f"{source_rows:,} selected rows are included in statistics and summaries.")
+    del summary, diagnostics
 
-    chart_detail = str(context.get("chart_detail") or "").strip()
-    interactivity = summary.get("dashboard_interactivity")
-    if isinstance(interactivity, dict):
-        mode = str(interactivity.get("mode") or "").strip().casefold()
-        sample_size = _summary_int(interactivity.get("sample_size"))
-        population_layer_mode = str(interactivity.get("population_layer_mode") or "auto").strip()
-        if mode in {"auto", "sampled"} and sample_size:
-            if (
-                source_rows is not None
-                and rendered_rows is not None
-                and source_rows <= sample_size
-                and rendered_rows >= source_rows
-            ):
-                add(
-                    "Dashboard interactivity",
-                    "Interactive charts use all selected rows; random sampling was not needed.",
-                )
-            else:
-                add(
-                    "Dashboard interactivity",
-                    f"Interactive charts use a reproducible random sample of up to "
-                    f"{sample_size:,} rows; aggregate tables and group comparison use all selected rows.",
-                )
-        elif mode == "static":
-            add("Dashboard interactivity", "Charts are saved as static snapshots for faster browser loading.")
-        elif mode == "full":
-            add("Dashboard interactivity", "Interactive charts use all selected rows unless dashboard size limits apply.")
-        if population_layer_mode:
-            population_label = {
-                "auto": "automatic",
-                "interactive": "interactive points",
-                "static": "static image",
-            }.get(population_layer_mode, population_layer_mode)
-            add("POPULATION mode", f"POPULATION layer mode: {population_label}.")
-    elif chart_detail:
-        add("Dashboard interactivity", chart_detail)
+    metrics = sorted(_groupstats_metrics(groupstats), key=_metric_priority, reverse=True)
+    for metric in metrics:
+        if metric.get("skipped"):
+            continue
+        primary = _metric_primary_takeaway(metric)
+        if primary is not None:
+            add(*primary)
+            action = _metric_action_takeaway(metric)
+            if action is not None:
+                add(*action)
+            continue
+        pairwise = _metric_pairwise_takeaway(metric)
+        if pairwise is not None:
+            add(*pairwise)
+            continue
+        similarity = _metric_similarity_takeaway(metric)
+        if similarity is not None:
+            add(*similarity)
 
-    metric_count = _summary_int(summary.get("metric_count"))
-    chart_count = _summary_int(summary.get("chart_count"))
-    if metric_count is not None and chart_count is not None:
-        add(
-            "Coverage",
-            f"{chart_count:,} charts summarize {_plural_summary_count(metric_count, 'metric')}.",
-        )
+    for metric in metrics:
+        if metric.get("skipped"):
+            continue
+        capability = _metric_capability_takeaway(metric)
+        if capability is not None:
+            add(*capability)
 
-    available_options = summary.get("available_optimization_options")
-    if (
-        isinstance(available_options, list)
-        and STATIC_POPULATION_LAYER_OPTIMIZATION in available_options
+    for insight in (
+        _chart_spec_takeaway(charts),
+        _chart_capability_takeaway(charts),
+        _chart_outlier_takeaway(charts),
     ):
-        add(
-            "Optimization option",
-            "Large POPULATION marker layers can be reviewed as static image layers to keep the saved dashboard responsive.",
-        )
-    static_population = summary.get("static_population_layer")
-    if isinstance(static_population, dict) and _summary_int(static_population.get("applied_chart_count")):
-        strategy_counts = static_population.get("render_strategy_counts")
-        source_points = _summary_int(static_population.get("source_point_count"))
-        contributed_points = _summary_int(static_population.get("contributed_point_count"))
-        if isinstance(strategy_counts, dict) and _summary_int(strategy_counts.get("full_density")):
-            point_text = (
-                f" from {contributed_points:,} source points"
-                if contributed_points is not None
-                else ""
-            )
-            add(
-                "Static layer",
-                "Static POPULATION density layers keep the full process background visible"
-                f"{point_text}; hover and point selection are unavailable for that background layer.",
-            )
-        elif source_points is not None and contributed_points is not None and contributed_points < source_points:
-            add(
-                "Static layer",
-                f"Static POPULATION layers show {contributed_points:,} sampled points from "
-                f"{source_points:,}; hover and point selection are unavailable for that background layer.",
-            )
-        else:
-            add(
-                "Static layer",
-                "Static POPULATION layers keep the process background visible; hover and point selection are unavailable for that background layer.",
-            )
-
-    groupstats_metric_count = _summary_int(summary.get("groupstats_metric_count"))
-    if groupstats_metric_count and groupstats_metric_count > 0:
-        add(
-            "Group comparison",
-            f"Group comparison is available for "
-            f"{_plural_summary_count(groupstats_metric_count, 'metric')}.",
-        )
-    elif groupstats:
-        add("Group comparison", "Group comparison was evaluated and any skipped metrics are listed below.")
-
-    filter_label = str(context.get("filter_label") or "").strip()
-    if filter_label and filter_label.casefold() != "none":
-        add("Filters", "CSV filters were applied before dashboard generation.")
-    group_label = str(context.get("group_label") or "").strip()
-    group_fields = _friendly_group_fields(summary.get("group_fields"))
-    if group_label and group_label.casefold() != "none":
-        add("Groups", f"Rows are organized by {group_label.lower()}.")
-    elif group_fields:
-        add("Groups", f"Rows are organized by {group_fields.lower()}.")
-
-    if getattr(diagnostics, "attention", ()):
-        add("Needs review", diagnostics.attention[0])
-    elif not charts:
-        add("Charts", "No chart sections were generated for the selected metrics.")
+        if insight is not None:
+            add(*insight)
 
     return rows
 

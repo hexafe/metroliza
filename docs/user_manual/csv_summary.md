@@ -142,6 +142,13 @@ continue to use all selected rows. When a visual sample is used, the dashboard r
 state how many rows were rendered into dashboard charts and how many selected source rows
 were included in the statistics.
 
+The **Dashboard size limit** control in the same dialog defines when oversized Plotly
+payloads are replaced with image snapshots. **Default limit** uses Metroliza's normal
+browser-safety budget, **Custom limit** lets you enter a larger MB budget, and **No size
+limit** keeps all generated interactive Plotly charts even when the resulting HTML file may
+be very large or slow to open. Use the no-limit option only when the receiving computer and
+browser can handle the exported dashboard size.
+
 The same dialog also includes **POPULATION layer**. **Auto** renders an oversized
 POPULATION background as a static image when that keeps a supported time-series chart
 responsive. **Interactive** keeps the POPULATION background as normal Plotly points.

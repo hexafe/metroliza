@@ -98,6 +98,110 @@ def _production_dashboard_fixture(tmp_path, *, include_plotly_specs: bool = True
     return manifest
 
 
+def test_dashboard_takeaways_use_analysis_insights_not_runtime_diagnostics() -> None:
+    rows = dashboard_module._dashboard_takeaway_rows(
+        summary={
+            "rows": 50_000,
+            "source_rows": 350_000,
+            "dashboard_interactivity": {
+                "mode": "sampled",
+                "sample_size": 50_000,
+                "population_layer_mode": "static",
+            },
+            "plotly_budget": {"status": "over_budget"},
+        },
+        diagnostics=object(),
+        groupstats={
+            "metrics": [
+                {
+                    "metric": "Length mm",
+                    "primary_insight": {
+                        "headline": "meaningful group difference",
+                        "why": "Group B runs higher than POPULATION.",
+                        "first_action": "Inspect the Group B process window.",
+                        "priority_score": 90,
+                    },
+                    "pairwise_rows": [],
+                    "descriptive_stats": [],
+                }
+            ]
+        },
+        charts=[],
+    )
+
+    labels = [row["label"] for row in rows]
+    values = " ".join(row["value"] for row in rows)
+
+    assert labels == ["Group insight", "Recommended action"]
+    assert "Length mm: Meaningful group difference. Group B runs higher than POPULATION." in values
+    assert "Inspect the Group B process window." in values
+    assert "Rows rendered" not in labels
+    assert "Dashboard interactivity" not in labels
+    assert "POPULATION mode" not in labels
+    assert "Plotly" not in values
+
+
+def test_dashboard_takeaways_include_spec_capability_and_outlier_insights() -> None:
+    rows = dashboard_module._dashboard_takeaway_rows(
+        summary={},
+        diagnostics=object(),
+        groupstats={},
+        charts=[
+            {
+                "title": "Length mm distribution",
+                "chart_type": "histogram",
+                "stats_tables": [
+                    {
+                        "title": "Group B",
+                        "rows": [
+                            {"label": "Samples", "value": "20"},
+                            {"label": "NOK", "value": "3"},
+                            {"label": "NOK %", "value": "15.00%"},
+                            {"label": "Cpk", "value": "0.92"},
+                        ],
+                    }
+                ],
+            },
+            {
+                "title": "Length mm box plot",
+                "chart_type": "box",
+                "plotly_spec": {
+                    "data": [
+                        {
+                            "type": "box",
+                            "name": "Group B",
+                            "y": [10.0, 10.1, 10.2, 10.2, 10.3, 12.8],
+                        }
+                    ]
+                },
+            },
+        ],
+    )
+
+    by_label = {row["label"]: row["value"] for row in rows}
+
+    assert by_label["Out of spec"] == (
+        "Length mm distribution: 3 parts out of 20 are out of spec (15.00%) in Group B."
+    )
+    assert by_label["Capability risk"] == (
+        "Length mm distribution: Group B has Cpk=0.92, below the usual capability target."
+    )
+    assert by_label["Outliers"] == (
+        "Length mm box plot: 1 possible Tukey outlier is visible in Group B."
+    )
+
+
+def test_dashboard_takeaways_are_omitted_without_analysis_insights() -> None:
+    rows = dashboard_module._dashboard_takeaway_rows(
+        summary={"rows": 10, "source_rows": 10},
+        diagnostics=object(),
+        groupstats={},
+        charts=[],
+    )
+
+    assert rows == []
+
+
 def test_build_production_dashboard_manifest_contains_requested_chart_families(tmp_path) -> None:
     manifest = _production_dashboard_fixture(tmp_path)
 
@@ -264,6 +368,11 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     assert '.theme-option[data-active="1"]' in html_text
     assert 'data-theme-choice="auto"' in html_text
     assert 'data-theme-choice="light"' in html_text
+    assert '<section id="key-takeaways"' in html_text
+    assert "Meaningful group difference" in html_text
+    assert "Recommended action" in html_text
+    assert "rows are rendered into dashboard chart data" not in html_text
+    assert "Interactive charts use all selected rows; random sampling was not needed." not in html_text
     assert 'data-theme-choice="dark"' in html_text
     assert "metroliza-dashboard-theme" in html_text
     assert "prefers-color-scheme: dark" in html_text
@@ -364,7 +473,8 @@ def test_write_production_dashboard_omits_plotly_when_payload_exceeds_budget(tmp
     assert "Cycle Time S distribution" in html_text
     assert "Cycle Time S violin" in html_text
     assert "Cycle Time S box" in html_text
-    assert "Some interactive charts were replaced with image snapshots" in html_text
+    assert "5 interactive charts were replaced with image snapshots" in html_text
+    assert "0 of 5 interactive charts remain available" in html_text
     assert "Interactive chart replaced with an image snapshot because this chart would make" in html_text
     assert not (Path(result["html_dashboard_assets_path"]) / "plotly-2.27.0.min.js").exists()
     assert any("plotly_spec" in chart for chart in manifest["charts"])
@@ -391,7 +501,8 @@ def test_write_production_dashboard_omits_plotly_chart_by_chart_when_payload_exc
     assert result["html_dashboard_plotly_budget"]["status"] == "over_budget"
     assert "production-dashboard-charts" in html_text
     assert "plotly-2.27.0.min.js" in html_text
-    assert "Some interactive charts were replaced with image snapshots" in html_text
+    assert "1 interactive chart was replaced with image snapshots" in html_text
+    assert "4 of 5 interactive charts remain available" in html_text
     assert "Interactive chart replaced with an image snapshot because this chart would make" in html_text
     chart_payload = json.loads(
         re.search(
@@ -401,6 +512,47 @@ def test_write_production_dashboard_omits_plotly_chart_by_chart_when_payload_exc
         ).group(1)
     )
     assert len(chart_payload) == spec_count - 1
+
+
+def test_write_production_dashboard_unlimited_size_limit_keeps_all_plotly_specs(
+    tmp_path,
+) -> None:
+    manifest = _production_dashboard_fixture(tmp_path)
+    output_file = tmp_path / "production_dashboard.html"
+    spec_count = dashboard_module._count_plotly_specs(manifest)
+
+    result = write_production_dashboard(
+        manifest,
+        output_file,
+        plotly_spec_count_budget=0,
+        plotly_serialized_json_bytes_budget=1,
+        dashboard_interactivity_options={"size_limit_mode": "unlimited"},
+    )
+
+    html_text = output_file.read_text(encoding="utf-8")
+    assert result["html_dashboard_plotly_spec_count"] == spec_count
+    assert result["html_dashboard_embedded_plotly_spec_count"] == spec_count
+    assert result["html_dashboard_plotly_budget"]["status"] == "within_budget"
+    assert result["html_dashboard_plotly_budget"]["spec_count_budget"] is None
+    assert result["html_dashboard_plotly_budget"]["serialized_json_bytes_budget"] is None
+    assert "production-dashboard-charts" in html_text
+    assert "too large" not in html_text
+
+
+def test_write_production_dashboard_custom_size_limit_sets_json_budget(
+    tmp_path,
+) -> None:
+    manifest = _production_dashboard_fixture(tmp_path)
+    output_file = tmp_path / "production_dashboard.html"
+
+    result = write_production_dashboard(
+        manifest,
+        output_file,
+        dashboard_interactivity_options={"size_limit_mode": "custom", "size_limit_mb": 96},
+    )
+
+    assert result["html_dashboard_plotly_budget"]["spec_count_budget"] is None
+    assert result["html_dashboard_plotly_budget"]["serialized_json_bytes_budget"] == 96_000_000
 
 
 def test_write_production_dashboard_static_interactivity_suppresses_plotly_specs(
@@ -1134,7 +1286,7 @@ def test_static_population_layer_converts_single_population_group_under_sample_c
     assert static_population["skipped_chart_count"] == 0
     assert static_population["sample_size"] == 50_000
     assert static_population["status"] == "applied"
-    assert "Interactive charts use all selected rows; random sampling was not needed." in html_text
+    assert "Interactive charts use all selected rows; random sampling was not needed." not in html_text
 
 
 def _static_population_layer_manifest(point_count: int = 8) -> dict[str, object]:
@@ -1193,6 +1345,85 @@ def _embedded_dashboard_charts(html_text: str) -> list[dict[str, object]]:
     return json.loads(match.group(1))
 
 
+def _epoch_ms(value: str) -> float:
+    return float(pd.Timestamp(value).timestamp() * 1000.0)
+
+
+def test_plotly_trace_axis_bounds_datetime_seconds_are_not_collapsed() -> None:
+    traces = [
+        {
+            "type": "scatter",
+            "mode": "markers",
+            "name": "POPULATION",
+            "x": [
+                "2026-05-10T08:00:00+00:00",
+                "2026-05-10T08:00:05+00:00",
+            ],
+            "y": [10.0, 10.2],
+        },
+        {
+            "type": "scatter",
+            "mode": "markers",
+            "name": "A",
+            "x": [
+                "2026-05-10T08:00:06+00:00",
+                "2026-05-10T08:00:07+00:00",
+            ],
+            "y": [10.35, 10.45],
+        },
+    ]
+
+    bounds = dashboard_module._plotly_trace_axis_bounds(traces)
+
+    assert bounds is not None
+    assert bounds["x_mode"] == "date"
+    assert bounds["x_max"] - bounds["x_min"] == pytest.approx(7_000.0)
+
+
+def test_static_population_datetime_axis_preserves_extra_group_range(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        dashboard_module,
+        "_render_time_series_raw_layer_png",
+        lambda *_args, **_kwargs: b"png",
+    )
+    manifest = _static_population_layer_manifest(point_count=6)
+    manifest["charts"][0]["plotly_spec"]["data"][1]["x"] = [
+        "2026-05-10T08:00:06+00:00",
+        "2026-05-10T08:00:07+00:00",
+    ]
+    manifest["charts"][0]["plotly_spec"]["data"][1]["y"] = [10.35, 10.45]
+
+    result = write_production_dashboard(
+        manifest,
+        tmp_path / "population_static_datetime.html",
+        dashboard_interactivity_options={"population_layer_mode": "static"},
+    )
+
+    html_text = Path(result["html_dashboard_path"]).read_text(encoding="utf-8")
+    chart = _embedded_dashboard_charts(html_text)[0]
+    spec = chart["plotly_spec"]
+    traces = spec["data"]
+    image = spec["layout"]["images"][0]
+    proxy_trace = next(trace for trace in traces if trace["name"] == "POPULATION static layer")
+    x_range = spec["layout"]["xaxis"]["range"]
+    assert [trace["name"] for trace in traces] == ["POPULATION static layer", "A"]
+    assert spec["layout"]["xaxis"]["type"] == "date"
+    assert _epoch_ms(x_range[0]) <= _epoch_ms("2026-05-10T08:00:00+00:00")
+    assert _epoch_ms(x_range[1]) >= _epoch_ms("2026-05-10T08:00:07+00:00")
+    assert image["sizex"] == pytest.approx(7_000.0)
+    assert image["xanchor"] == "left"
+    assert image["yanchor"] == "top"
+    assert proxy_trace["x"] == x_range
+    assert proxy_trace["metroliza_static_population_view_bounds"] == (
+        proxy_trace["metroliza_static_population_image_bounds"]
+    )
+    assert "config.doubleClick = 'reset';" in html_text
+    assert "plotly_legenddoubleclick" in html_text
+
+
 def test_write_dashboard_static_population_layer_mode_converts_supported_time_series(
     tmp_path,
     monkeypatch,
@@ -1223,8 +1454,8 @@ def test_write_dashboard_static_population_layer_mode_converts_supported_time_se
     assert spec["layout"]["yaxis"]["autorange"] is False
     assert result["html_dashboard_static_population_layer"]["status"] == "applied"
     assert result["html_dashboard_static_population_layer"]["applied_chart_count"] == 1
-    assert "Static POPULATION layers keep the process background visible" in html_text
-    assert "hover and point selection are unavailable" in html_text
+    assert '<div class="metric-label">POPULATION layer</div>' in html_text
+    assert '<span class="metric-value-line">Static image in 1 chart(s)</span>' in html_text
     assert "plotly_spec" in manifest["charts"][0]
 
 
@@ -1394,8 +1625,9 @@ def test_write_dashboard_static_population_layer_converts_sampled_dashboard_fram
     assert spec["layout"]["images"][0]["metroliza_static_population_layer_label"] == "POPULATION"
     image_bounds = proxy_trace["metroliza_static_population_image_bounds"]
     view_bounds = proxy_trace["metroliza_static_population_view_bounds"]
-    assert image_bounds["x_max"] > view_bounds["x_max"]
-    assert image_bounds["y_max"] > view_bounds["y_max"]
+    assert image_bounds == view_bounds
+    assert image_bounds["x_max"] > image_bounds["x_min"]
+    assert image_bounds["y_max"] > image_bounds["y_min"]
     assert spec["layout"]["yaxis"]["range"][1] == pytest.approx(view_bounds["y_max"])
     assert proxy_trace["x"] != [None]
     assert proxy_trace["y"][0] == pytest.approx(view_bounds["y_min"])
@@ -1408,7 +1640,11 @@ def test_write_dashboard_static_population_layer_converts_sampled_dashboard_fram
     assert static_population["rendered_point_count"] == 12
     assert static_population["contributed_point_count"] == 12
     assert static_population["render_strategy_counts"] == {"full_density": 1}
-    assert "Static POPULATION density layers keep the full process background visible" in html_text
+    assert '<div class="metric-label">POPULATION layer</div>' in html_text
+    assert (
+        '<span class="metric-value-line">Full-source density image in 1 chart(s)</span>'
+        in html_text
+    )
 
 
 def test_write_dashboard_static_population_layer_keeps_unsupported_chart_honest(

@@ -42,6 +42,7 @@ from metroliza.shared.dashboard_interactivity import (
     normalize_dashboard_interactivity_mapping,
     summarize_dashboard_population_layer_options,
     summarize_dashboard_sampling_options,
+    summarize_dashboard_size_limit_options,
 )
 from metroliza.tabular.tabular_analytics_service import (
     TABULAR_GROUP_COLUMN,
@@ -551,12 +552,14 @@ def _dashboard_interactivity_label(
     source_row_count: int | None = None,
     dashboard_row_count: int | None = None,
 ) -> str:
-    return summarize_dashboard_sampling_options(
+    sampling = summarize_dashboard_sampling_options(
         options,
         default_sample_size=int(TABULAR_FAST_DASHBOARD_ROW_LIMIT),
         source_row_count=source_row_count,
         dashboard_row_count=dashboard_row_count,
     )
+    size_limit = summarize_dashboard_size_limit_options(options)
+    return f"{sampling}; {size_limit}"
 
 
 def _dashboard_population_layer_label(options: dict[str, int | str]) -> str:

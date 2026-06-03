@@ -290,6 +290,8 @@ class TestValidateIndustrialAnalyticsRequest(unittest.TestCase):
                     'mode': ' Sampled ',
                     'sample_size': '75000',
                     'population_layer_mode': ' Static ',
+                    'size_limit_mode': ' Custom ',
+                    'size_limit_mb': '128',
                 },
             )
         )
@@ -300,6 +302,8 @@ class TestValidateIndustrialAnalyticsRequest(unittest.TestCase):
                 mode='sampled',
                 sample_size=75000,
                 population_layer_mode='static',
+                size_limit_mode='custom',
+                size_limit_mb=128,
             ),
         )
 
@@ -352,6 +356,41 @@ class TestValidateIndustrialAnalyticsRequest(unittest.TestCase):
                     source_kind='production_cache',
                     output_dashboard_file='dashboard.html',
                     dashboard_interactivity_options={'mode': 'sampled', 'sample_size': 4999},
+                )
+            )
+
+    def test_normalizes_dashboard_interactivity_size_limit_unlimited_alias(self):
+        validated = validate_industrial_analytics_request(
+            IndustrialAnalyticsRequest(
+                source_kind='production_cache',
+                output_dashboard_file='dashboard.html',
+                dashboard_interactivity_options={
+                    'dashboardSizeLimitMode': 'No Limit',
+                    'dashboardSizeLimitMb': 4096,
+                },
+            )
+        )
+
+        self.assertEqual(validated.dashboard_interactivity_options.size_limit_mode, 'unlimited')
+        self.assertEqual(validated.dashboard_interactivity_options.size_limit_mb, 4096)
+
+    def test_rejects_unknown_dashboard_size_limit_mode(self):
+        with self.assertRaisesRegex(ValueError, 'Unsupported dashboard size limit mode'):
+            validate_industrial_analytics_request(
+                IndustrialAnalyticsRequest(
+                    source_kind='production_cache',
+                    output_dashboard_file='dashboard.html',
+                    dashboard_interactivity_options={'size_limit_mode': 'massive-ish'},
+                )
+            )
+
+    def test_rejects_dashboard_size_limit_below_minimum(self):
+        with self.assertRaisesRegex(ValueError, 'at least 1 MB'):
+            validate_industrial_analytics_request(
+                IndustrialAnalyticsRequest(
+                    source_kind='production_cache',
+                    output_dashboard_file='dashboard.html',
+                    dashboard_interactivity_options={'size_limit_mode': 'custom', 'size_limit_mb': 0},
                 )
             )
 

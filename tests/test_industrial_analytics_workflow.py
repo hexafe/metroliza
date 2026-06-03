@@ -196,7 +196,12 @@ def test_run_tabular_file_analytics_reuses_shared_dashboard_and_parameter_workbo
     assert '<div class="metric-label">Dashboard interactivity</div>' in html_text
     assert (
         '<span class="metric-value-line">All rows</span>'
-    ) in html_text
+        not in html_text
+    )
+    assert (
+        '<span class="metric-value-line">All rows; 24 MB dashboard size limit</span>'
+        in html_text
+    )
     assert '<div class="metric-label">POPULATION layer</div>' in html_text
     assert (
         '<span class="metric-value-line">Auto</span>'
@@ -374,7 +379,8 @@ def test_run_tabular_file_analytics_sampled_dashboard_renders_sampling_copy(
     )
     assert (
         '<div class="metric-label">Dashboard interactivity</div><div class="metric-value">'
-        '<span class="metric-value-line">Auto, 5,000 interactive random sample limit</span></div>'
+        '<span class="metric-value-line">Auto, 5,000 interactive random sample limit; '
+        '24 MB dashboard size limit</span></div>'
         in html_text
     )
     assert (
@@ -385,7 +391,7 @@ def test_run_tabular_file_analytics_sampled_dashboard_renders_sampling_copy(
     assert (
         "Interactive charts use a reproducible random sample of up to 5,000 rows; "
         "aggregate tables and group comparison use all selected rows."
-        in html_text
+        not in html_text
     )
     assert "<title>Metroliza CSV Summary Dashboard</title>" in html_text
     assert '<p class="eyebrow">Metroliza CSV Summary Dashboard</p>' in html_text
@@ -455,7 +461,8 @@ def test_run_tabular_file_analytics_static_population_for_small_dataset_uses_all
     assert [trace["name"] for trace in spec["data"]] == ["POPULATION static layer"]
     assert spec["layout"]["images"][0]["metroliza_static_population_layer_label"] == "POPULATION"
     assert (
-        '<span class="metric-value-line">Interactive random sample, all 5,000 rows rendered</span>'
+        '<span class="metric-value-line">Interactive random sample, all 5,000 rows rendered; '
+        '24 MB dashboard size limit</span>'
         in html_text
     )
     assert (
@@ -463,7 +470,7 @@ def test_run_tabular_file_analytics_static_population_for_small_dataset_uses_all
         '<span class="metric-value-line">Static image in 1 chart(s)</span></div>'
         in html_text
     )
-    assert "Interactive charts use all selected rows; random sampling was not needed." in html_text
+    assert "Interactive charts use all selected rows; random sampling was not needed." not in html_text
 
 
 def test_run_tabular_file_analytics_fast_detail_preserves_middle_population_group(
@@ -596,6 +603,8 @@ def test_run_tabular_file_analytics_sampled_interactivity_uses_sample_size(
         "mode": "sampled",
         "sample_size": 5000,
         "population_layer_mode": "auto",
+        "size_limit_mode": "default",
+        "size_limit_mb": 24,
     }
     assert any(
         diagnostic.code == "tabular_dashboard_fast_sample"
@@ -646,6 +655,8 @@ def test_run_tabular_file_analytics_static_interactivity_uses_sample_size(
         "mode": "static",
         "sample_size": 5000,
         "population_layer_mode": "auto",
+        "size_limit_mode": "default",
+        "size_limit_mb": 24,
     }
     assert any(
         diagnostic.code == "tabular_dashboard_fast_sample"

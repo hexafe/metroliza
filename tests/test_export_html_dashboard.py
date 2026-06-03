@@ -540,6 +540,106 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn('Interactive charts are unavailable in this export', html_text)
             self.assertFalse((assets_dir / 'plotly-2.27.0.min.js').exists())
 
+    def test_write_export_html_dashboard_none_budget_keeps_plotly_specs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            excel_file = Path(tmpdir) / 'report.xlsx'
+            html_path = resolve_html_dashboard_path(excel_file)
+            assets_dir = resolve_html_dashboard_assets_dir(html_path)
+
+            result = write_export_html_dashboard(
+                excel_file=excel_file,
+                output_path=html_path,
+                assets_dir=assets_dir,
+                sections=[
+                    {
+                        'header': 'Diameter / X',
+                        'charts': [
+                            {
+                                'chart_type': 'histogram',
+                                'title': 'Diameter / X',
+                                'backend': 'native',
+                                'image_buffer': BytesIO(b'png-bytes'),
+                                'payload': {
+                                    'type': 'histogram',
+                                    'values': [9.9, 10.0, 10.1],
+                                    'lsl': 9.8,
+                                    'usl': 10.2,
+                                },
+                            }
+                        ],
+                    }
+                ],
+                plotly_spec_count_budget=None,
+                plotly_serialized_json_bytes_budget=None,
+            )
+
+            html_text = html_path.read_text(encoding='utf-8')
+            self.assertEqual(result['html_dashboard_plotly_spec_count'], 1)
+            self.assertEqual(result['html_dashboard_interactive_chart_count'], 1)
+            self.assertEqual(result['html_dashboard_plotly_budget']['status'], 'within_budget')
+            self.assertIsNone(result['html_dashboard_plotly_budget']['spec_count_budget'])
+            self.assertIsNone(
+                result['html_dashboard_plotly_budget']['serialized_json_bytes_budget']
+            )
+            self.assertIn('<div class="plotly-shell">', html_text)
+            self.assertTrue((assets_dir / 'plotly-2.27.0.min.js').exists())
+
+    def test_write_export_html_dashboard_keeps_plotly_subset_when_budget_exceeded(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            excel_file = Path(tmpdir) / 'report.xlsx'
+            html_path = resolve_html_dashboard_path(excel_file)
+            assets_dir = resolve_html_dashboard_assets_dir(html_path)
+            chart_payload = {
+                'type': 'histogram',
+                'values': [9.9, 10.0, 10.1],
+                'lsl': 9.8,
+                'usl': 10.2,
+            }
+
+            result = write_export_html_dashboard(
+                excel_file=excel_file,
+                output_path=html_path,
+                assets_dir=assets_dir,
+                sections=[
+                    {
+                        'header': 'Diameter / X',
+                        'charts': [
+                            {
+                                'chart_type': 'histogram',
+                                'title': 'Diameter / X',
+                                'backend': 'native',
+                                'image_buffer': BytesIO(b'png-bytes'),
+                                'payload': chart_payload,
+                            },
+                            {
+                                'chart_type': 'histogram',
+                                'title': 'Diameter / Y',
+                                'backend': 'native',
+                                'image_buffer': BytesIO(b'png-bytes'),
+                                'payload': dict(chart_payload, values=[10.2, 10.3, 10.4]),
+                            },
+                        ],
+                    }
+                ],
+                plotly_spec_count_budget=1,
+                plotly_serialized_json_bytes_budget=10_000_000,
+            )
+
+            html_text = html_path.read_text(encoding='utf-8')
+            self.assertEqual(result['html_dashboard_plotly_spec_count'], 2)
+            self.assertEqual(result['html_dashboard_interactive_chart_count'], 1)
+            self.assertEqual(result['html_dashboard_embedded_plotly_spec_count'], 1)
+            self.assertGreater(result['html_dashboard_embedded_plotly_serialized_json_bytes'], 0)
+            self.assertLess(
+                result['html_dashboard_embedded_plotly_serialized_json_bytes'],
+                result['html_dashboard_plotly_serialized_json_bytes'],
+            )
+            self.assertEqual(result['html_dashboard_plotly_budget']['status'], 'over_budget')
+            self.assertIn('spec_count>1', result['html_dashboard_plotly_budget']['reason'])
+            self.assertIn('<div class="plotly-shell">', html_text)
+            self.assertIn('1 interactive chart was replaced with image snapshots', html_text)
+            self.assertTrue((assets_dir / 'plotly-2.27.0.min.js').exists())
+
     def test_plotly_chart_spec_bundle_exposes_light_and_dark_variants(self):
         with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
             bundle = _build_plotly_chart_spec_bundle(
