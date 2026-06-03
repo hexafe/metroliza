@@ -180,11 +180,15 @@ def launch_ui(config: StartupConfig) -> int:
     splash.show_message("Opening dashboard...", phase="show")
     main_window.show()
     record_event("main_window_show_called")
-    splash.finish(main_window)
     if config.startup_ui_smoke_mode:
+        splash.finish(main_window)
         _schedule_startup_ui_smoke_exit(app)
     else:
-        main_window.schedule_feature_import_warmup(delay_ms=100)
+        main_window.schedule_feature_import_warmup(
+            delay_ms=0,
+            on_finished=lambda: splash.finish(main_window),
+            status_callback=lambda message: splash.show_message(message, phase="warmup"),
+        )
     record_event("event_loop_enter")
     exit_code = app.exec()
     record_event("event_loop_exit", exit_code=exit_code)

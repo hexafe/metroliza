@@ -1,6 +1,7 @@
 import base64
 import importlib
 from time import perf_counter
+from typing import Callable
 
 from metroliza.app.startup_profile import record_event
 from metroliza.resources.app_assets import encoded_icon
@@ -47,37 +48,15 @@ def warm_feature_imports(importer=importlib.import_module):
     loaded_modules = []
     failed_modules = []
     for label, module_name in FEATURE_IMPORT_WARMUP_MODULES:
-        module_start = perf_counter()
-        record_event("feature_warmup_module_start", label=label, module=module_name)
-        try:
-            importer(module_name)
-        except Exception as exc:  # pragma: no cover - exercised through tests with fakes
-            elapsed_ms = (perf_counter() - module_start) * 1000
-            record_event(
-                "feature_warmup_module_done",
-                label=label,
-                module=module_name,
-                status="failed",
-                elapsed_ms=round(elapsed_ms, 3),
-                error_type=type(exc).__name__,
-            )
-            failed_modules.append(
-                {
-                    "module": module_name,
-                    "error_type": type(exc).__name__,
-                    "message": str(exc),
-                }
-            )
-        else:
-            elapsed_ms = (perf_counter() - module_start) * 1000
-            record_event(
-                "feature_warmup_module_done",
-                label=label,
-                module=module_name,
-                status="loaded",
-                elapsed_ms=round(elapsed_ms, 3),
-            )
-            loaded_modules.append(module_name)
+        loaded_module, failed_module = _warm_feature_module(
+            label,
+            module_name,
+            importer=importer,
+        )
+        if loaded_module is not None:
+            loaded_modules.append(loaded_module)
+        if failed_module is not None:
+            failed_modules.append(failed_module)
     record_event(
         "feature_warmup_done",
         loaded_count=len(loaded_modules),
@@ -85,6 +64,38 @@ def warm_feature_imports(importer=importlib.import_module):
         elapsed_ms=round((perf_counter() - warmup_start) * 1000, 3),
     )
     return loaded_modules, failed_modules
+
+
+def _warm_feature_module(label, module_name, *, importer):
+    module_start = perf_counter()
+    record_event("feature_warmup_module_start", label=label, module=module_name)
+    try:
+        importer(module_name)
+    except Exception as exc:  # pragma: no cover - exercised through tests with fakes
+        elapsed_ms = (perf_counter() - module_start) * 1000
+        record_event(
+            "feature_warmup_module_done",
+            label=label,
+            module=module_name,
+            status="failed",
+            elapsed_ms=round(elapsed_ms, 3),
+            error_type=type(exc).__name__,
+        )
+        return None, {
+            "module": module_name,
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+        }
+
+    elapsed_ms = (perf_counter() - module_start) * 1000
+    record_event(
+        "feature_warmup_module_done",
+        label=label,
+        module=module_name,
+        status="loaded",
+        elapsed_ms=round(elapsed_ms, 3),
+    )
+    return module_name, None
 
 
 class MainWindow(QMainWindow):
@@ -128,6 +139,12 @@ class MainWindow(QMainWindow):
         self._feature_import_warmup_completed = False
         self._feature_import_warmup_scheduled = False
         self._feature_import_warmup_failures = []
+        self._feature_import_warmup_loaded_modules = []
+        self._feature_import_warmup_queue = []
+        self._feature_import_warmup_start = None
+        self._feature_import_warmup_on_finished = None
+        self._feature_import_warmup_status_callback = None
+        self._feature_import_warmup_importer = importlib.import_module
 
         # Initialize and set up command-center widgets
         self.workflow_label = section_label("Workflow")
@@ -154,24 +171,80 @@ class MainWindow(QMainWindow):
         self._sync_context_rows()
         apply_metroliza_theme(self)
 
-    def schedule_feature_import_warmup(self, *, delay_ms: int = 100) -> None:
+    def schedule_feature_import_warmup(
+        self,
+        *,
+        delay_ms: int = 100,
+        on_finished: Callable[[], None] | None = None,
+        status_callback: Callable[[str], None] | None = None,
+    ) -> None:
         """Schedule feature import warmup after the first visible window paint."""
+        if self._feature_import_warmup_completed:
+            if on_finished is not None:
+                QTimer.singleShot(0, on_finished)
+            return
         if self._feature_import_warmup_completed or self._feature_import_warmup_scheduled:
             return
         self._feature_import_warmup_scheduled = True
+        self._feature_import_warmup_on_finished = on_finished
+        self._feature_import_warmup_status_callback = status_callback
+        self._feature_import_warmup_loaded_modules = []
+        self._feature_import_warmup_failures = []
+        self._feature_import_warmup_queue = list(FEATURE_IMPORT_WARMUP_MODULES)
+        self._feature_import_warmup_start = None
         record_event("feature_warmup_scheduled", delay_ms=max(0, int(delay_ms)))
-        QTimer.singleShot(max(0, int(delay_ms)), self._preload_feature_imports)
+        self.statusBar().showMessage("Loading tools...", 2000)
+        if status_callback is not None:
+            status_callback("Loading tools...")
+        QTimer.singleShot(max(0, int(delay_ms)), self._preload_next_feature_import)
 
-    def _preload_feature_imports(self):
-        """Load main feature modules after the first window is visible."""
+    def _preload_next_feature_import(self):
+        """Load the next feature module and yield back to Qt before continuing."""
         if self._feature_import_warmup_completed:
             return
 
-        self._feature_import_warmup_scheduled = False
-        self.statusBar().showMessage("Loading tools...", 2000)
-        loaded_modules, failed_modules = warm_feature_imports()
+        if not self._feature_import_warmup_queue:
+            self._finish_feature_import_warmup()
+            return
+
+        if len(self._feature_import_warmup_queue) == len(FEATURE_IMPORT_WARMUP_MODULES):
+            self._feature_import_warmup_start = perf_counter()
+            record_event("feature_warmup_start", module_count=len(FEATURE_IMPORT_WARMUP_MODULES))
+
+        label, module_name = self._feature_import_warmup_queue.pop(0)
+        self.statusBar().showMessage(f"Loading {label}...", 2000)
+        if self._feature_import_warmup_status_callback is not None:
+            self._feature_import_warmup_status_callback(f"Loading {label}...")
+
+        loaded_module, failed_module = _warm_feature_module(
+            label,
+            module_name,
+            importer=self._feature_import_warmup_importer,
+        )
+        if loaded_module is not None:
+            self._feature_import_warmup_loaded_modules.append(loaded_module)
+        if failed_module is not None:
+            self._feature_import_warmup_failures.append(failed_module)
+
+        QTimer.singleShot(0, self._preload_next_feature_import)
+
+    def _finish_feature_import_warmup(self):
+        loaded_modules = list(self._feature_import_warmup_loaded_modules)
+        failed_modules = list(self._feature_import_warmup_failures)
+        warmup_start = self._feature_import_warmup_start or perf_counter()
+        record_event(
+            "feature_warmup_done",
+            loaded_count=len(loaded_modules),
+            failed_count=len(failed_modules),
+            elapsed_ms=round((perf_counter() - warmup_start) * 1000, 3),
+        )
         self._feature_import_warmup_completed = True
+        self._feature_import_warmup_scheduled = False
         self._feature_import_warmup_failures = list(failed_modules)
+        self._feature_import_warmup_queue = []
+        on_finished = self._feature_import_warmup_on_finished
+        self._feature_import_warmup_on_finished = None
+        self._feature_import_warmup_status_callback = None
         if failed_modules:
             self.statusBar().showMessage(
                 "Some tools will finish loading when opened.",
@@ -183,10 +256,14 @@ class MainWindow(QMainWindow):
                     f"{failure['module']}: {failure['error_type']}: {failure['message']}"
                 )
                 CustomLogger(exception, reraise=False)
+            if on_finished is not None:
+                on_finished()
             return
 
         if loaded_modules:
             self.statusBar().showMessage("Tools ready", 2000)
+        if on_finished is not None:
+            on_finished()
 
     def decode_icon(self, encoded_icon_payload):
         """Decode the base64 encoded icon and return a QIcon object."""

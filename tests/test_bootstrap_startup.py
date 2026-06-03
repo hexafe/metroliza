@@ -85,8 +85,18 @@ class TestBootstrapStartup(unittest.TestCase):
             def show(self):
                 call_order.append("main_window_show")
 
-            def schedule_feature_import_warmup(self, *, delay_ms=100):
+            def schedule_feature_import_warmup(
+                self,
+                *,
+                delay_ms=100,
+                on_finished=None,
+                status_callback=None,
+            ):
                 call_order.append(f"main_window_schedule:{delay_ms}")
+                if status_callback is not None:
+                    status_callback("Loading tools...")
+                if on_finished is not None:
+                    on_finished()
 
         fake_qtwidgets = types.SimpleNamespace(QApplication=FakeApplication)
         def unexpected_hardware_id():
@@ -121,7 +131,7 @@ class TestBootstrapStartup(unittest.TestCase):
         fake_splash = types.SimpleNamespace(
             show_message=lambda *_args, **_kwargs: None,
             close=lambda: None,
-            finish=lambda _widget: None,
+            finish=lambda _widget: call_order.append("splash_finish"),
         )
 
         with patch("builtins.__import__", side_effect=tracked_import), patch(
@@ -142,7 +152,8 @@ class TestBootstrapStartup(unittest.TestCase):
                 "import_main_window",
                 "main_window_init",
                 "main_window_show",
-                "main_window_schedule:100",
+                "main_window_schedule:0",
+                "splash_finish",
                 "app_exec",
             ],
         )

@@ -25,24 +25,35 @@ class TestMainWindowMetadataUi(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def test_main_window_schedules_feature_imports_after_init(self):
-        calls = []
+        imported_modules = []
+        callback_calls = []
+        status_messages = []
 
-        def fake_warm_feature_imports():
-            calls.append("preload")
-            return ["modules.parsing_dialog"], []
+        def fake_importer(module_name):
+            imported_modules.append(module_name)
+            return object()
 
-        with patch("modules.main_window.warm_feature_imports", side_effect=fake_warm_feature_imports):
-            window = MainWindow(version_label="test", days_until_expiration=None)
-            try:
-                self.assertEqual(calls, [])
-                self.assertFalse(window._feature_import_warmup_completed)
-                window.schedule_feature_import_warmup(delay_ms=0)
+        window = MainWindow(version_label="test", days_until_expiration=None)
+        try:
+            window._feature_import_warmup_importer = fake_importer
+            self.assertEqual(imported_modules, [])
+            self.assertFalse(window._feature_import_warmup_completed)
+            window.schedule_feature_import_warmup(
+                delay_ms=0,
+                on_finished=lambda: callback_calls.append("finished"),
+                status_callback=status_messages.append,
+            )
+            for _ in range(len(FEATURE_IMPORT_WARMUP_MODULES) + 2):
                 self.app.processEvents()
-                self.assertEqual(calls, ["preload"])
-                self.assertTrue(window._feature_import_warmup_completed)
-                self.assertEqual(window._feature_import_warmup_failures, [])
-            finally:
-                window.close()
+            expected_modules = [module_name for _label, module_name in FEATURE_IMPORT_WARMUP_MODULES]
+            self.assertEqual(imported_modules, expected_modules)
+            self.assertTrue(window._feature_import_warmup_completed)
+            self.assertEqual(window._feature_import_warmup_failures, [])
+            self.assertEqual(callback_calls, ["finished"])
+            self.assertEqual(status_messages[0], "Loading tools...")
+            self.assertTrue(status_messages[-1].startswith("Loading "))
+        finally:
+            window.close()
 
     def test_metadata_enrichment_is_tools_action_without_launcher_button(self):
         window = MainWindow(version_label="test", days_until_expiration=None)

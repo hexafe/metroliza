@@ -89,6 +89,7 @@ These checks are explicitly non-blocking for normal PR CI:
 - Visual startup splash is disabled by default for offscreen/UI-smoke launches.
   Normal GUI launches use `METROLIZA_STARTUP_SPLASH=auto`; set
   `METROLIZA_STARTUP_SPLASH=1` only when manually validating splash rendering.
+  In normal GUI mode, the splash remains visible until feature warmup completes.
 - The job uploads `startup-artifacts/`, including raw profile JSONL files and
   `startup-summary.json`, as release evidence for onefile-vs-onedir startup
   comparisons.
