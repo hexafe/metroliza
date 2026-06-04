@@ -212,6 +212,19 @@ Current plotstats hotfix pin:
   combined coverage gate (`1857 passed`, `261 skipped`, `95 warnings`,
   `71 subtests passed`, plus isolated UI coverage shards; total coverage `81%`
   against the `80%` threshold).
+- Local rc2 analytics/export/grouping hardening audit passed on 2026-06-04 before
+  push. This slice restored one-sided zero-bound GD&T handling in modeled tail
+  risk, capability/statistics payloads, workbook formulas, observed NOK counts,
+  and plotstats payload adaptation; removed the histogram KDE reference overlay;
+  reduced inserted workbook image display size without lowering rendered image
+  quality; and made Export grouping search/filter behavior match the visible
+  list fields. Local gates passed: `git diff --check`, `ruff`, `compileall`,
+  release metadata sync, release hygiene, packaged PDF parser validation,
+  security audit with no known vulnerabilities, full headless pytest with
+  coverage (`1869 passed`, `261 skipped`, `95 warnings`, `71 subtests passed`),
+  and the CI-shaped combined coverage gate with isolated UI shards at `81%`
+  against the `80%` threshold. Pushed-SHA CI evidence for this slice must be
+  recorded below before merge/tag.
 - Post-reorganization follow-up local audit passed after docs/reference cleanup,
   parser-plugin productionization coverage, architecture guardrail hardening, and
   release-status refresh.

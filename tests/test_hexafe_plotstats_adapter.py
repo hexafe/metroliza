@@ -220,6 +220,41 @@ def test_build_chart_artifact_uses_plotstats_metroliza_artifact_adapter(monkeypa
     assert calls["static"] is False
 
 
+def test_build_chart_artifact_sends_one_sided_gdt_limits_as_active_upper_only(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    def fake_artifact(payload, *, target, theme, backend, include_plotly, include_png, static):
+        calls["payload"] = payload
+        return {
+            "plotly_spec": {"data": [], "layout": {}, "config": {}, "metadata": {}},
+            "backend": "hexafe-plotstats:matplotlib",
+        }
+
+    package = ModuleType("hexafe_plotstats")
+    adapters = ModuleType("hexafe_plotstats.adapters")
+    adapters.chart_artifact_from_metroliza_payload = fake_artifact
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats", package)
+    monkeypatch.setitem(sys.modules, "hexafe_plotstats.adapters", adapters)
+
+    artifact = build_chart_artifact(
+        {
+            "type": "histogram",
+            "values": [0.01, 0.02, 0.04],
+            "limits": {"lsl": 0.0, "nominal": 0.0, "usl": 0.1},
+        },
+        target="html_dashboard",
+    )
+
+    assert artifact is not None
+    assert calls["payload"]["limits"] == {
+        "lsl": None,
+        "nominal": 0.0,
+        "usl": 0.1,
+        "physical_lower_bound": 0.0,
+        "spec_type": "one_sided_upper",
+    }
+
+
 def test_plotstats_dashboard_spec_normalizes_histogram_plotly_semantics(monkeypatch) -> None:
     def fake_artifact(_payload, **_kwargs):
         return {

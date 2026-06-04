@@ -89,6 +89,28 @@ class TestExportSheetWriter(unittest.TestCase):
         self.assertTrue(any(w[2] == 'NOK %' for w in worksheet.writes if isinstance(w[2], str)))
         self.assertTrue(any((w[0], w[1], w[2]) == (0, 2, 'MIN') for w in worksheet.writes))
 
+    def test_write_measurement_block_skips_lower_conditional_rule_for_one_sided_gdt(self):
+        header_group = pd.DataFrame(
+            {
+                'DATE': ['2024-01-01', '2024-01-02'],
+                'SAMPLE_NUMBER': ['1', '2'],
+                'MEAS': [0.02, 0.12],
+                'NOM': [0.0, 0.0],
+                '+TOL': [0.1, 0.1],
+                '-TOL': [0.0, 0.0],
+            }
+        )
+        bundle = build_measurement_write_bundle('A-V3 - TP', header_group, 0)
+        worksheet = DummyWorksheet()
+        formats = {'percent': object(), 'wrap': object(), 'red': object()}
+
+        write_measurement_block(worksheet, bundle, formats, base_col=0)
+
+        self.assertEqual(len(worksheet.conditional_formats), 2)
+        self.assertEqual(worksheet.conditional_formats[0][4]['value'], '=($B$1+$B$2)')
+        self.assertFalse(
+            any(item[4].get('value') == '=($B$1+$B$3)' for item in worksheet.conditional_formats)
+        )
 
     def test_build_measurement_summary_row_layout_keeps_legacy_coordinates(self):
         stat_rows = [

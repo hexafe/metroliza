@@ -191,6 +191,22 @@ def _infer_support_mode(values: np.ndarray, tolerance: float = 1e-9) -> str:
     return 'bilateral_signed'
 
 
+def _infer_support_mode_from_spec(*, nom=None, lsl=None, usl=None, tolerance: float = 1e-12) -> str | None:
+    try:
+        nominal_value = float(nom)
+        lsl_value = float(lsl)
+        usl_value = float(usl)
+    except (TypeError, ValueError):
+        return None
+    if not all(np.isfinite(value) for value in (nominal_value, lsl_value, usl_value)):
+        return None
+    if abs(nominal_value) <= tolerance and abs(lsl_value) <= tolerance and usl_value > 0:
+        return 'one_sided_zero_bound_positive'
+    if abs(nominal_value) <= tolerance and abs(usl_value) <= tolerance and lsl_value < 0:
+        return 'one_sided_zero_bound_negative'
+    return None
+
+
 def _candidate_pool_for_mode(mode: str) -> tuple[_CandidateDistribution, ...]:
     if mode == 'one_sided_zero_bound_positive':
         return _POSITIVE_CANDIDATES
@@ -237,6 +253,7 @@ def _measurement_fingerprint(values: np.ndarray):
 def _fit_cache_key(
     *,
     fit_signature: tuple[int, str],
+    support_mode: str,
     point_count: int,
     include_kde_reference: bool,
     gof_acceptance_alpha: float,
@@ -249,6 +266,7 @@ def _fit_cache_key(
     return (
         _FIT_PAYLOAD_CACHE_NAMESPACE,
         fit_signature,
+        str(support_mode),
         int(point_count),
         bool(include_kde_reference),
         float(gof_acceptance_alpha),
@@ -1014,12 +1032,14 @@ def fit_measurement_distribution(
     Returns a dictionary payload for compatibility with existing render/export paths.
     """
 
-    del nom  # kept for backwards compatibility in call-sites.
-
     values = _coerce_measurements_array(measurements)
     sample_size = int(values.size)
     lsl_value = _safe_float(lsl)
     usl_value = _safe_float(usl)
+    spec_support_mode = _infer_support_mode_from_spec(nom=nom, lsl=lsl_value, usl=usl_value)
+    inferred_mode = spec_support_mode or 'unknown'
+    if sample_size >= 1 and spec_support_mode is None:
+        inferred_mode = _infer_support_mode(values)
     resolved_gof_sample_policy = _normalize_gof_sample_policy(gof_sample_policy)
     resolved_gof_max_sample_size = _normalize_gof_max_sample_size(gof_max_sample_size)
     resolved_gof_subsample_method = _normalize_gof_subsample_method(gof_subsample_method)
@@ -1029,6 +1049,7 @@ def fit_measurement_distribution(
         fit_signature = measurement_signature if measurement_signature is not None else _measurement_fingerprint(values)
         cache_key = _fit_cache_key(
             fit_signature=fit_signature,
+            support_mode=inferred_mode,
             point_count=point_count,
             include_kde_reference=include_kde_reference,
             gof_acceptance_alpha=gof_acceptance_alpha,
@@ -1041,10 +1062,6 @@ def fit_measurement_distribution(
         cached = memoization_cache.get(cache_key)
         if cached is not None:
             return _clone_fit_payload_for_spec(cached, lsl=lsl_value, usl=usl_value)
-
-    inferred_mode = 'unknown'
-    if sample_size >= 1:
-        inferred_mode = _infer_support_mode(values)
 
     if sample_size < 3:
         return _failure_result(

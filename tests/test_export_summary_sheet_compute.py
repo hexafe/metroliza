@@ -57,6 +57,36 @@ def test_resolve_sampling_context_normalizes_numeric_measurements_once_and_retur
     assert context['iqr_payload']['values'] == [[1.0, 2.0], [3.5, 4.5]]
 
 
+def test_retrieve_summary_statistics_recomputes_sql_nok_for_one_sided_gdt_zero_bound():
+    frame = pd.DataFrame(
+        {
+            'MEAS': [-0.01, 0.02, 0.12],
+        }
+    )
+    stale_sql_summary = {
+        'sample_size': 3,
+        'average': 0.03,
+        'minimum': -0.01,
+        'maximum': 0.12,
+        'sigma': 0.05,
+        'nok_count': 2,
+    }
+
+    summary = retrieve_summary_statistics(
+        frame,
+        sql_summary=stale_sql_summary,
+        nom=0.0,
+        usl=0.1,
+        lsl=0.0,
+    )
+
+    assert summary['spec_type'] == 'one_sided_upper'
+    assert summary['nok_count'] == 1
+    assert summary['observed_nok_count'] == 1
+    assert summary['observed_nok_below_lsl_count'] == 0
+    assert summary['observed_nok_above_usl_count'] == 1
+
+
 def test_resolve_sampling_context_ungrouped_uses_total_finite_rows_for_violin_threshold():
     frame = normalize_summary_group_frame(
         pd.DataFrame(

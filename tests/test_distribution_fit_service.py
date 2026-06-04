@@ -110,6 +110,25 @@ class TestDistributionFitService(unittest.TestCase):
                 # scipy continuous parameter order is (*shape, loc, scale)
                 self.assertAlmostEqual(candidate['params'][-2], 0.0, places=7)
 
+    def test_zero_bound_spec_infers_positive_support_without_zero_sample(self):
+        result = fit_measurement_distribution(
+            [0.012, 0.018, 0.021, 0.034, 0.041, 0.052, 0.064, 0.079],
+            nom=0.0,
+            lsl=0.0,
+            usl=0.1,
+            include_kde_reference=False,
+        )
+
+        risk_estimates = result['risk_estimates']
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(result['inferred_support_mode'], 'one_sided_zero_bound_positive')
+        self.assertEqual(risk_estimates['spec_type'], 'upper_only')
+        self.assertEqual(risk_estimates['below_lsl_probability'], 0.0)
+        self.assertAlmostEqual(
+            risk_estimates['outside_probability'],
+            risk_estimates['above_usl_probability'],
+        )
+
     def test_tail_risk_spec_types(self):
         bilateral = fit_measurement_distribution([-2, -1, -0.2, 0.1, 0.6, 1.3, 2.1], lsl=-1.5, usl=1.5)
         upper_only = fit_measurement_distribution([0.0, 0.1, 0.2, 0.4, 0.9, 1.2], usl=1.0)

@@ -107,7 +107,14 @@ class ListSelectionUtils:
             event.accept()
         return True
 
-    def preserve_selection_during_filter(self, list_widget, search_text, canonical_text_getter=None):
+    def preserve_selection_during_filter(
+        self,
+        list_widget,
+        search_text,
+        canonical_text_getter=None,
+        *,
+        include_item_text=True,
+    ):
         selected_items = list_widget.selectedItems()
         list_widget.clearSelection()
 
@@ -119,13 +126,13 @@ class ListSelectionUtils:
                 item.setHidden(False)
                 continue
 
-            item_text = item.text().lower()
+            item_text = item.text().lower() if include_item_text else ""
             canonical_text = ""
             if callable(canonical_text_getter):
                 canonical_text = str(canonical_text_getter(item) or "").lower()
 
             item.setHidden(
-                normalized_search_text not in item_text
+                (not include_item_text or normalized_search_text not in item_text)
                 and (not canonical_text or normalized_search_text not in canonical_text)
             )
 

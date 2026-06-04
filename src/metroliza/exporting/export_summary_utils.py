@@ -130,7 +130,10 @@ def compute_measurement_summary(header_group: pd.DataFrame, usl: float, lsl: flo
     sigma = meas.std()
     average = meas.mean()
     sample_size = meas.count()
-    nok_count = header_group[(meas > usl) | (meas < lsl)]['MEAS'].count()
+    one_sided_mode = bool(is_one_sided_geometric_tolerance(nom, lsl))
+    above_usl_count = int((meas > usl).sum()) if usl is not None else 0
+    below_lsl_count = 0 if one_sided_mode else int((meas < lsl).sum()) if lsl is not None else 0
+    nok_count = above_usl_count + below_lsl_count
 
     cp, cpk = safe_process_capability(nom, usl, lsl, sigma, average)
     capability_ci = compute_capability_confidence_intervals(
@@ -138,7 +141,6 @@ def compute_measurement_summary(header_group: pd.DataFrame, usl: float, lsl: flo
         cp=None if cp == 'N/A' else cp,
         cpk=None if cpk == 'N/A' else cpk,
     )
-    one_sided_mode = bool(is_one_sided_geometric_tolerance(nom, lsl))
     normality = compute_normality_status(meas, one_sided=one_sided_mode, location_bound=lsl)
 
     return {
@@ -154,10 +156,16 @@ def compute_measurement_summary(header_group: pd.DataFrame, usl: float, lsl: flo
         'nok_count': nok_count,
         'nok_pct': (nok_count / sample_size) if sample_size else 0,
         'observed_nok_count': nok_count,
+        'observed_nok_below_lsl_count': below_lsl_count,
+        'observed_nok_above_usl_count': above_usl_count,
         'observed_nok_pct': (nok_count / sample_size) if sample_size else 0,
         'estimated_nok_pct': None,
         'estimated_nok_ppm': None,
         'estimated_yield_pct': None,
+        'nom': nom,
+        'lsl': lsl,
+        'usl': usl,
+        'spec_type': 'one_sided_upper' if one_sided_mode else 'two_sided',
         'normality_status': normality['status'],
         'normality_text': normality['text'],
         'normality_test_name': normality.get('test_name', 'Shapiro'),

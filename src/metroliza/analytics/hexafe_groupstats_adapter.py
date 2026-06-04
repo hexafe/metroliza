@@ -14,6 +14,7 @@ from hexafe_groupstats import (
     format_correction_method,
 )
 from metroliza.shared.numeric_coercion import coerce_finite_float as _coerce_float
+from metroliza.shared.stats_utils import compute_capability_confidence_intervals
 try:
     from hexafe_groupstats.adapters import (
         capability_rows as _package_capability_rows,
@@ -92,6 +93,34 @@ def _normalize_spec_record(spec_record: Mapping[str, Any] | None) -> dict[str, f
     }
 
 
+def _is_zeroish(value: Any, *, tolerance: float = 1e-12) -> bool:
+    numeric = _coerce_float(value)
+    return numeric is not None and abs(numeric) <= tolerance
+
+
+def _one_sided_geometric_spec_mode(spec_payload: Mapping[str, Any]) -> str | None:
+    nominal = _coerce_float(spec_payload.get('nominal'))
+    lsl = _coerce_float(spec_payload.get('lsl'))
+    usl = _coerce_float(spec_payload.get('usl'))
+    if nominal is None:
+        return None
+    if _is_zeroish(nominal) and _is_zeroish(lsl) and usl is not None and usl > 0:
+        return 'upper_only'
+    if _is_zeroish(nominal) and _is_zeroish(usl) and lsl is not None and lsl < 0:
+        return 'lower_only'
+    return None
+
+
+def _statistical_spec_payload(spec_payload: Mapping[str, Any]) -> dict[str, float | None]:
+    normalized = dict(spec_payload)
+    mode = _one_sided_geometric_spec_mode(spec_payload)
+    if mode == 'upper_only':
+        normalized['lsl'] = None
+    elif mode == 'lower_only':
+        normalized['usl'] = None
+    return normalized
+
+
 def _analysis_policy_payload(result) -> dict[str, Any]:
     return {
         'include_metric': bool(result.analysis_policy.include_metric),
@@ -139,6 +168,154 @@ def _capability_mode(spec_payload: Mapping[str, Any]) -> str:
     if lsl is not None:
         return 'lower_only'
     return 'unusable'
+
+
+def _capability_from_values(
+    values: Sequence[Any],
+    spec_payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    mode = _capability_mode(spec_payload)
+    if arr.size == 0:
+        return {
+            'cp': None,
+            'capability': None,
+            'capability_type': None,
+            'cpk': None,
+            'capability_ci': {'cp': None, 'cpk': None},
+            'status': 'insufficient_data',
+            'sigma': None,
+            'mean': None,
+            'capability_mode': mode,
+        }
+    sigma = float(np.std(arr, ddof=1)) if arr.size > 1 else 0.0
+    mean_value = float(np.mean(arr))
+    if sigma <= 0.0 or not np.isfinite(sigma):
+        return {
+            'cp': None,
+            'capability': None,
+            'capability_type': None,
+            'cpk': None,
+            'capability_ci': {'cp': None, 'cpk': None},
+            'status': 'not_applicable',
+            'sigma': sigma,
+            'mean': mean_value,
+            'capability_mode': mode,
+        }
+
+    capability_value = None
+    capability_type = None
+    usl = _coerce_float(spec_payload.get('usl'))
+    lsl = _coerce_float(spec_payload.get('lsl'))
+    if mode == 'upper_only' and usl is not None:
+        capability_value = float((usl - mean_value) / (3.0 * sigma))
+        capability_type = 'Cpk+'
+    elif mode == 'lower_only' and lsl is not None:
+        capability_value = float((mean_value - lsl) / (3.0 * sigma))
+        capability_type = 'Cpk-'
+
+    capability_ci = compute_capability_confidence_intervals(
+        sample_size=int(arr.size),
+        cp=None,
+        cpk=capability_value,
+    )
+    return {
+        'cp': None,
+        'capability': capability_value,
+        'capability_type': capability_type,
+        'cpk': capability_value,
+        'capability_ci': capability_ci,
+        'status': 'ok' if capability_value is not None else 'not_applicable',
+        'sigma': sigma,
+        'mean': mean_value,
+        'capability_mode': mode,
+    }
+
+
+def _one_sided_capability_rows(
+    metric_identity: str,
+    grouped_values: Mapping[str, Sequence[Any]],
+    spec_payload: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    mode = _capability_mode(spec_payload)
+    for group_name in sorted(grouped_values):
+        capability = _capability_from_values(grouped_values[group_name], spec_payload)
+        cpk_ci = capability.get('capability_ci', {}).get('cpk')
+        rows.append(
+            {
+                'metric': metric_identity,
+                'group': group_name,
+                'n': int(np.isfinite(np.asarray(grouped_values[group_name], dtype=float)).sum()),
+                'mean': capability.get('mean'),
+                'sigma': capability.get('sigma'),
+                'lsl': spec_payload.get('lsl'),
+                'nominal': spec_payload.get('nominal'),
+                'usl': spec_payload.get('usl'),
+                'cp': None,
+                'cpl': capability.get('capability') if mode == 'lower_only' else None,
+                'cpu': capability.get('capability') if mode == 'upper_only' else None,
+                'cpk': capability.get('capability'),
+                'cp_ci': None,
+                'cpl_ci': cpk_ci if mode == 'lower_only' else None,
+                'cpu_ci': cpk_ci if mode == 'upper_only' else None,
+                'cpk_ci': cpk_ci,
+                'warnings': ['one_sided_spec'],
+            }
+        )
+    return rows
+
+
+def _one_sided_metric_capability_payload(
+    grouped_values: Mapping[str, Sequence[Any]],
+    spec_payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    candidates = [
+        _capability_from_values(values, spec_payload)
+        for values in grouped_values.values()
+    ]
+    usable = [payload for payload in candidates if payload.get('capability') is not None]
+    if not usable:
+        selected = candidates[0] if candidates else _capability_from_values([], spec_payload)
+    else:
+        selected = min(usable, key=lambda payload: float(payload.get('capability')))
+    return {
+        **selected,
+        'capability': _round_float(selected.get('capability')),
+        'cpk': _round_float(selected.get('cpk')),
+        'sigma': _round_float(selected.get('sigma')),
+        'mean': _round_float(selected.get('mean')),
+    }
+
+
+def _apply_one_sided_capability_to_descriptive_rows(
+    rows: list[dict[str, Any]],
+    grouped_values: Mapping[str, Sequence[Any]],
+    spec_payload: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    mode = _capability_mode(spec_payload)
+    updated_rows: list[dict[str, Any]] = []
+    for row in rows:
+        group_name = str(row.get('group'))
+        if group_name not in grouped_values:
+            updated_rows.append(row)
+            continue
+        capability = _capability_from_values(grouped_values[group_name], spec_payload)
+        updated = dict(row)
+        updated.update(
+            {
+                'cp': None,
+                'cpl': capability.get('capability') if mode == 'lower_only' else None,
+                'cpu': capability.get('capability') if mode == 'upper_only' else None,
+                'cpk': capability.get('capability'),
+                'capability': _round_float(capability.get('capability')),
+                'capability_type': capability.get('capability_type'),
+                'capability_ci': capability.get('capability_ci'),
+            }
+        )
+        updated_rows.append(updated)
+    return updated_rows
 
 
 def _capability_ci_payload(capability_row) -> dict[str, dict[str, float] | None]:
@@ -468,22 +645,52 @@ def analyze_group_metric(
             distribution_diagnostics=bool(distribution_diagnostics),
         ),
     )
-    spec_payload = normalized_spec_records[0] if normalized_spec_records else {'lsl': None, 'nominal': None, 'usl': None}
+    source_spec_payload = (
+        normalized_spec_records[0]
+        if normalized_spec_records
+        else {'lsl': None, 'nominal': None, 'usl': None}
+    )
+    spec_payload = source_spec_payload
+    statistical_spec_payload = _statistical_spec_payload(source_spec_payload)
+    one_sided_mode = _one_sided_geometric_spec_mode(source_spec_payload)
     metric_summary = _metric_summary_row(result)
     structured_insights = _structured_insight_payloads(result)
     legacy_insights = [str(item) for item in (getattr(result, 'insights', ()) or ()) if str(item).strip()]
+    descriptive_rows = _descriptive_rows(result)
+    capability_rows = _package_rows(_package_capability_rows, result)
+    capability_payload = _metric_capability_payload(result, grouped_values, statistical_spec_payload)
+    if one_sided_mode:
+        structured_insights = []
+        legacy_insights = []
+        metric_summary = {
+            **metric_summary,
+            'structured_insights': [],
+            'insights': [],
+        }
+        descriptive_rows = _apply_one_sided_capability_to_descriptive_rows(
+            descriptive_rows,
+            grouped_values,
+            statistical_spec_payload,
+        )
+        capability_rows = _one_sided_capability_rows(
+            metric_identity,
+            grouped_values,
+            statistical_spec_payload,
+        )
+        capability_payload = _one_sided_metric_capability_payload(grouped_values, statistical_spec_payload)
     return {
         'result': result,
         'spec_status': result.spec_status.value,
         'spec_payload': spec_payload,
+        'statistical_spec_payload': statistical_spec_payload,
         'analysis_policy': _analysis_policy_payload(result),
-        'descriptive_stats': _descriptive_rows(result),
+        'descriptive_stats': descriptive_rows,
         'distribution_rows': _distribution_rows(result),
         'omnibus': _omnibus_payload(result, alpha=float(alpha)),
         'pairwise_rows': _pairwise_rows(result, grouped_values),
         'posthoc_rows': _package_rows(_package_posthoc_rows, result),
-        'capability_rows': _package_rows(_package_capability_rows, result),
-        'capability': _metric_capability_payload(result, grouped_values, spec_payload),
+        'capability_rows': capability_rows,
+        'capability': capability_payload,
         'metric_summary': metric_summary,
         'backend_used': result.backend_used,
         'selection_detail': result.assumptions.selection_detail,

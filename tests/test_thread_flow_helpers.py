@@ -1934,7 +1934,7 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertIn(panel_slots['histogram'], inserted_positions)
         self.assertIn(panel_slots['trend'], inserted_positions)
 
-    def test_summary_sheet_fill_shifts_iqr_slot_when_distribution_span_grows(self):
+    def test_summary_sheet_fill_scales_distribution_slot_when_distribution_span_grows(self):
         import pandas as pd
 
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
@@ -1946,8 +1946,8 @@ class TestExportBackendSmoke(unittest.TestCase):
             def write(self, *_args, **_kwargs):
                 return None
 
-            def insert_image(self, row, col, *_args, **_kwargs):
-                self.inserted_images.append((row, col))
+            def insert_image(self, row, col, _path, options):
+                self.inserted_images.append((row, col, options))
 
         request = ExportRequest(
             paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
@@ -1959,7 +1959,7 @@ class TestExportBackendSmoke(unittest.TestCase):
 
         # Force a larger calculated span for extended charts to emulate a wide
         # categorical export and verify iqr placement advances accordingly.
-        thread._resolve_chart_cell_span = lambda _fig: {'col_span': 14, 'row_span': 1}
+        thread._resolve_chart_cell_span = lambda _fig, **_kwargs: {'col_span': 14, 'row_span': 1}
 
         worksheet = _FakeSummaryWorksheet()
         header_group = pd.DataFrame(
@@ -1977,8 +1977,10 @@ class TestExportBackendSmoke(unittest.TestCase):
 
         panel_slots = build_summary_image_anchor_plan(5)
         inserted = worksheet.inserted_images
-        self.assertEqual(inserted[0], panel_slots['distribution'])
-        self.assertGreater(inserted[1][1], panel_slots['iqr'][1])
+        self.assertEqual(inserted[0][:2], panel_slots['distribution'])
+        self.assertEqual(inserted[1][:2], panel_slots['iqr'])
+        self.assertLess(inserted[0][2]['x_scale'], 1.0)
+        self.assertEqual(inserted[0][2]['x_scale'], inserted[0][2]['y_scale'])
 
     def test_summary_sheet_fill_iqr_finalizes_layout_after_scaled_ylim_applied(self):
         import pandas as pd
@@ -4170,9 +4172,13 @@ class TestExportBackendSmoke(unittest.TestCase):
         assert matplotlib_worksheet.insert_calls
         assert native_thread._chart_renderer.figure_calls == 0
         assert native_thread._chart_renderer.histogram_calls == 1
-        native_row, native_col, _native_options = native_worksheet.insert_calls[-1]
-        mpl_row, mpl_col, _mpl_options = matplotlib_worksheet.insert_calls[-1]
+        native_row, native_col, native_options = native_worksheet.insert_calls[-1]
+        mpl_row, mpl_col, mpl_options = matplotlib_worksheet.insert_calls[-1]
         assert (native_row, native_col) == (mpl_row, mpl_col)
+        assert 0.0 < native_options['x_scale'] < 1.0
+        assert native_options['x_scale'] == native_options['y_scale']
+        assert 0.0 < mpl_options['x_scale'] < 1.0
+        assert mpl_options['x_scale'] == mpl_options['y_scale']
 
     def test_summary_sheet_fill_collects_html_dashboard_section_for_histogram(self):
         import pandas as pd

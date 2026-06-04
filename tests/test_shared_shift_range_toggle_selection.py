@@ -195,6 +195,29 @@ class TestSharedShiftRangeToggleSelection(unittest.TestCase):
         self.assertTrue(list_widget.item(0).isSelected())
         self.assertTrue(list_widget.item(1).isHidden())
 
+    def _run_filter_uses_explicit_search_key_test(self, list_selection_utils_cls):
+        helper = list_selection_utils_cls(keyboard_modifiers=lambda: 0)
+        list_widget = _FakeListWidget()
+        list_widget.addItem(_FakeItem("Sample: 42 | Part: Front Plate", user_role="Front Plate"))
+
+        helper.preserve_selection_during_filter(
+            list_widget,
+            "42",
+            lambda item: item.data(_FakeQt.ItemDataRole.UserRole),
+            include_item_text=False,
+        )
+
+        self.assertTrue(list_widget.item(0).isHidden())
+
+        helper.preserve_selection_during_filter(
+            list_widget,
+            "front",
+            lambda item: item.data(_FakeQt.ItemDataRole.UserRole),
+            include_item_text=False,
+        )
+
+        self.assertFalse(list_widget.item(0).isHidden())
+
     def test_list_selection_utils_shift_click_selects_then_toggles_selected_range(self):
         pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
         with patch.dict(
@@ -229,6 +252,7 @@ class TestSharedShiftRangeToggleSelection(unittest.TestCase):
             utils_module = importlib.import_module("modules.list_selection_utils")
             self._run_filter_preserve_selection_test(utils_module.ListSelectionUtils, canonical=False)
             self._run_filter_preserve_selection_test(utils_module.ListSelectionUtils, canonical=True)
+            self._run_filter_uses_explicit_search_key_test(utils_module.ListSelectionUtils)
 
     def test_list_selection_utils_prefers_post_click_signal_when_available(self):
         pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()

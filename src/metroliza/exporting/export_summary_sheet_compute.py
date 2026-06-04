@@ -43,13 +43,16 @@ def retrieve_summary_statistics(
 
     meas_series = pd.to_numeric(header_group.get('MEAS'), errors='coerce')
     summary_stats = None
+    one_sided_mode = bool(is_one_sided_geometric_tolerance(nom, lsl))
+    below_lsl_count = 0 if one_sided_mode or lsl is None else int((meas_series < lsl).sum())
+    above_usl_count = 0 if usl is None else int((meas_series > usl).sum())
+    observed_nok_count = below_lsl_count + above_usl_count
     if sql_summary is not None:
         sample_size = int(sql_summary.get('sample_size') or 0)
         average_raw = sql_summary.get('average')
         minimum_raw = sql_summary.get('minimum')
         maximum_raw = sql_summary.get('maximum')
         sigma_raw = sql_summary.get('sigma')
-        nok_count = int(sql_summary.get('nok_count') or 0)
         has_complete_sql_summary = (
             sample_size > 0
             and average_raw is not None
@@ -60,7 +63,6 @@ def retrieve_summary_statistics(
             average = float(average_raw)
             sigma = float(sigma_raw or 0.0)
             cp, cpk = safe_process_capability(nom, usl, lsl, sigma, average)
-            one_sided_mode = bool(is_one_sided_geometric_tolerance(nom, lsl))
             normality = compute_normality_status(
                 meas_series,
                 one_sided=one_sided_mode,
@@ -75,10 +77,12 @@ def retrieve_summary_statistics(
                 'cp': cp,
                 'cpk': cpk,
                 'sample_size': sample_size,
-                'nok_count': nok_count,
-                'nok_pct': (nok_count / sample_size),
-                'observed_nok_count': nok_count,
-                'observed_nok_pct': (nok_count / sample_size),
+                'nok_count': observed_nok_count,
+                'nok_pct': (observed_nok_count / sample_size),
+                'observed_nok_count': observed_nok_count,
+                'observed_nok_below_lsl_count': below_lsl_count,
+                'observed_nok_above_usl_count': above_usl_count,
+                'observed_nok_pct': (observed_nok_count / sample_size),
                 'estimated_nok_pct': None,
                 'estimated_nok_ppm': None,
                 'estimated_yield_pct': None,
@@ -86,24 +90,31 @@ def retrieve_summary_statistics(
                 'normality_text': normality['text'],
                 'normality_test_name': normality.get('test_name', 'Shapiro'),
                 'normality_p_value': normality.get('p_value'),
+                'nom': nom,
+                'lsl': lsl,
                 'usl': usl,
+                'spec_type': 'one_sided_upper' if one_sided_mode else 'two_sided',
             }
 
     if summary_stats is None:
         summary_stats = compute_measurement_summary(header_group, usl=usl, lsl=lsl, nom=nom)
 
+    sample_size = int(summary_stats.get('sample_size') or 0)
+    summary_stats['nom'] = nom
+    summary_stats['lsl'] = lsl
+    summary_stats['usl'] = usl
+    summary_stats['spec_type'] = 'one_sided_upper' if one_sided_mode else 'two_sided'
+    summary_stats['observed_nok_below_lsl_count'] = below_lsl_count
+    summary_stats['observed_nok_above_usl_count'] = above_usl_count
+    summary_stats['observed_nok_count'] = observed_nok_count
+    summary_stats['nok_count'] = observed_nok_count
+    summary_stats['observed_nok_pct'] = (observed_nok_count / sample_size) if sample_size else 0
+    summary_stats['nok_pct'] = summary_stats['observed_nok_pct']
     summary_stats.setdefault('normality_test_name', 'Shapiro')
     summary_stats.setdefault('normality_p_value', None)
-    summary_stats.setdefault('observed_nok_count', summary_stats.get('nok_count', 0))
-    summary_stats.setdefault('observed_nok_pct', summary_stats.get('nok_pct', 0))
     summary_stats.setdefault('estimated_nok_pct', None)
     summary_stats.setdefault('estimated_nok_ppm', None)
     summary_stats.setdefault('estimated_yield_pct', None)
-    if lsl is not None:
-        summary_stats.setdefault('observed_nok_below_lsl_count', int((meas_series < lsl).sum()))
-    if usl is not None:
-        summary_stats.setdefault('observed_nok_above_usl_count', int((meas_series > usl).sum()))
-    summary_stats['usl'] = usl
     return summary_stats
 
 

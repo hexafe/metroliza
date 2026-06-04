@@ -695,7 +695,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             usl=10.5,
         )
 
-        self.assertEqual(rows[1], ('Est. NOK %', '0.1234%\nL: 0.0000%, U: 0.2300%'))
+        self.assertEqual(rows[1], ('Est. NOK %', '0.2300%\nU: 0.2300%'))
 
     def test_distribution_fit_table_rows_fallback_to_na_when_fit_unreliable(self):
         rows = _build_distribution_fit_table_rows(
@@ -1270,7 +1270,6 @@ class TestExportPlotHelpers(unittest.TestCase):
             nominal=None,
             distribution_fit_result={
                 'selected_model_pdf': {'x': [0.0, 2.0, 4.0], 'y': [0.2, 0.6, 0.2]},
-                'kde_reference_pdf': {'x': [0.0, 2.0, 4.0], 'y': [0.1, 0.5, 0.1]},
             },
             count_scale_factor=7.5,
             probability_scale_factor=0.25,
@@ -1278,12 +1277,10 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         overlays = metadata['modeled_overlays']['rows']
         selected = next(row for row in overlays if row.get('label') == 'Selected model curve')
-        kde = next(row for row in overlays if row.get('label') == 'KDE reference')
 
         self.assertEqual(selected['y'], [1.5, 4.5, 1.5])
         self.assertEqual(selected['plotly_y'], [0.05, 0.15, 0.05])
-        self.assertEqual(kde['y'], [0.75, 3.75, 0.75])
-        self.assertEqual(kde['plotly_y'], [0.025, 0.125, 0.025])
+        self.assertFalse(any(row.get('label') == 'KDE reference' for row in overlays))
 
     def test_render_histogram_sets_xlim_beyond_variable_data_min_max(self):
         fig, ax = plt.subplots()
@@ -1747,6 +1744,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(formulas['cp'], '="N/A"')
         self.assertIn('(B1 + B2)', formulas['cpk'])
         self.assertNotIn('MIN(', formulas['cpk'])
+        self.assertEqual(formulas['nok_total'], '=COUNTIF(C22:C30, ">"&($B$1+$B$2))+0')
 
     def test_build_measurement_stat_formulas_uses_single_sided_cpk_when_nominal_and_lsl_are_near_zero(self):
         formulas = build_measurement_stat_formulas(
@@ -3298,6 +3296,24 @@ class TestExportPlotHelpers(unittest.TestCase):
         finally:
             plt.close(fig)
 
+    def test_summary_image_display_scale_keeps_rendered_png_inside_slot(self):
+        fig, _ = plt.subplots(figsize=(8.8, 4.0), dpi=100)
+        try:
+            scale = ExportDataThread._resolve_summary_image_display_scale(
+                fig,
+                available_cols=14,
+                available_rows=18,
+                export_dpi=150.0,
+            )
+
+            rendered_width = 8.8 * 150.0 * scale
+            rendered_height = 4.0 * 150.0 * scale
+            self.assertLess(scale, 1.0)
+            self.assertLessEqual(rendered_width, 14 * 64.0 * 0.96)
+            self.assertLessEqual(rendered_height, 18 * 20.0 * 0.96)
+        finally:
+            plt.close(fig)
+
     def test_shared_x_axis_label_strategy_force_sparse_thins_even_small_sets(self):
         fig, ax = plt.subplots()
         positions = list(range(12))
@@ -3904,33 +3920,6 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertIn('Fit reliability: medium', lines)
         self.assertFalse(any('limited sample size' in line for line in lines))
 
-    def test_kde_footer_note_uses_bbox_background_for_readability(self):
-        fig, ax = plt.subplots(figsize=(6.0, 4.0))
-        try:
-            artist = ax.text(
-                0.02,
-                0.02,
-                'Dashed KDE: descriptive only',
-                transform=ax.transAxes,
-                ha='left',
-                va='bottom',
-                fontsize=6.5,
-                color='#4d5968',
-                bbox={
-                    'boxstyle': 'round,pad=0.16',
-                    'facecolor': (1.0, 1.0, 1.0, 0.74),
-                    'edgecolor': '#c7ced7',
-                    'linewidth': 0.45,
-                },
-                zorder=8,
-            )
-            self.assertEqual(artist.get_text(), 'Dashed KDE: descriptive only')
-            self.assertIsNotNone(artist.get_bbox_patch())
-            self.assertGreaterEqual(artist.get_position()[0], 0.0)
-            self.assertGreaterEqual(artist.get_position()[1], 0.0)
-        finally:
-            plt.close(fig)
-
     def test_histogram_native_visual_metadata_labels_plotly_scaled_overlays(self):
         visual_metadata = _build_histogram_native_visual_metadata(
             summary_stats={
@@ -3957,10 +3946,6 @@ class TestExportPlotHelpers(unittest.TestCase):
                     'x': [9.0, 9.5, 10.0, 10.5, 11.0],
                     'y': [0.1, 0.2, 0.4, 0.2, 0.1],
                 },
-                'kde_reference_pdf': {
-                    'x': [9.0, 9.5, 10.0, 10.5, 11.0],
-                    'y': [0.2, 0.3, 0.5, 0.3, 0.2],
-                },
                 'fit_quality': {'label': 'strong'},
             },
             count_scale_factor=10.0,
@@ -3971,7 +3956,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         labels = [row.get('label') for row in curve_rows]
 
         self.assertIn('Selected model curve', labels)
-        self.assertIn('KDE reference', labels)
+        self.assertNotIn('KDE reference', labels)
         self.assertIn('Tail shading', labels)
         self.assertNotIn('overlay 1', {str(label).casefold() for label in labels})
 
@@ -3979,6 +3964,48 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(selected_curve['plotly_y_unit'], 'probability')
         self.assertAlmostEqual(max(selected_curve['y']), 4.0)
         self.assertAlmostEqual(max(selected_curve['plotly_y']), 0.2)
+
+    def test_histogram_native_visual_metadata_skips_inactive_zero_bound_lower_tail(self):
+        visual_metadata = _build_histogram_native_visual_metadata(
+            summary_stats={
+                'minimum': 0.01,
+                'maximum': 0.11,
+                'average': 0.05,
+                'median': 0.05,
+                'sigma': 0.02,
+                'cp': 'N/A',
+                'cpk': 0.8,
+                'sample_size': 20,
+                'nok_pct': 0.0,
+                'nok_count': 0,
+                'observed_nok_below_lsl_count': 0,
+                'observed_nok_above_usl_count': 0,
+                'lsl': 0.0,
+                'usl': 0.1,
+                'nom': 0.0,
+                'spec_type': 'one_sided_upper',
+            },
+            lsl=0.0,
+            usl=0.1,
+            nominal=0.0,
+            distribution_fit_result={
+                'inferred_support_mode': 'one_sided_zero_bound_positive',
+                'selected_model_pdf': {
+                    'x': [-0.02, 0.0, 0.05, 0.1, 0.12],
+                    'y': [0.05, 0.1, 0.5, 0.2, 0.05],
+                },
+            },
+            count_scale_factor=10.0,
+        )
+
+        tail_rows = [
+            row
+            for row in visual_metadata['modeled_overlays']['rows']
+            if row.get('label') == 'Tail shading'
+        ]
+
+        self.assertEqual(len(tail_rows), 1)
+        self.assertEqual(tail_rows[0]['x'], [0.1, 0.12])
 
 
     def test_distribution_fit_table_rows_use_small_probability_notation(self):

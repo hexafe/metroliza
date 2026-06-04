@@ -149,6 +149,7 @@ def build_dashboard_plotly_spec(
     Callers keep their existing static-image fallback when this returns ``None``.
     """
 
+    payload = _payload_with_active_statistical_limits(payload)
     payload = _payload_with_resolved_histogram_bin_count(payload)
     payload_type = str(payload.get("type") or "").strip().casefold()
     if payload_type in {"distribution", "iqr"}:
@@ -380,6 +381,54 @@ def _optional_float(value: Any) -> float | None:
     return parsed if math.isfinite(parsed) else None
 
 
+def _one_sided_zero_bound_limits_mode(limits: Mapping[str, Any]) -> str | None:
+    nominal = _optional_float(limits.get("nominal"))
+    lsl = _optional_float(limits.get("lsl"))
+    usl = _optional_float(limits.get("usl"))
+    if nominal is None:
+        return None
+    if (
+        abs(nominal) <= 1e-12
+        and lsl is not None
+        and abs(lsl) <= 1e-12
+        and usl is not None
+        and usl > 0
+    ):
+        return "one_sided_upper"
+    if (
+        abs(nominal) <= 1e-12
+        and usl is not None
+        and abs(usl) <= 1e-12
+        and lsl is not None
+        and lsl < 0
+    ):
+        return "one_sided_lower"
+    return None
+
+
+def _payload_with_active_statistical_limits(payload: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = dict(payload)
+    for limits_key in ("limits", "spec_limits"):
+        limits = payload.get(limits_key)
+        if not isinstance(limits, Mapping):
+            continue
+
+        mode = _one_sided_zero_bound_limits_mode(limits)
+        if mode is None:
+            continue
+
+        normalized_limits = dict(limits)
+        if mode == "one_sided_upper":
+            normalized_limits.setdefault("physical_lower_bound", normalized_limits.get("lsl"))
+            normalized_limits["lsl"] = None
+        elif mode == "one_sided_lower":
+            normalized_limits.setdefault("physical_upper_bound", normalized_limits.get("usl"))
+            normalized_limits["usl"] = None
+        normalized_limits["spec_type"] = mode
+        normalized[limits_key] = normalized_limits
+    return normalized
+
+
 def _normalize_payload_limit_trace_labels(spec: Mapping[str, Any], payload: Mapping[str, Any]) -> None:
     limits = payload.get("limits") if isinstance(payload.get("limits"), Mapping) else {}
     if not limits:
@@ -439,7 +488,7 @@ def build_chart_artifact(
     except Exception:
         return None
 
-    payload_mapping = dict(payload)
+    payload_mapping = _payload_with_active_statistical_limits(payload)
     if title is not None and not payload_mapping.get("title"):
         payload_mapping["title"] = title
     try:
@@ -466,6 +515,7 @@ def build_plotstats_dashboard_spec(
 ) -> dict[str, Any] | None:
     """Build an HTML-dashboard Plotly spec through the new artifact contract."""
 
+    payload = _payload_with_active_statistical_limits(payload)
     payload = _payload_with_resolved_histogram_bin_count(payload)
     dashboard_theme = metroliza_dashboard_plotstats_theme()
     dashboard_theme["dashboard_theme"] = str(theme or "light")

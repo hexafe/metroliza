@@ -43,6 +43,21 @@ class TestExportSummaryUtils(unittest.TestCase):
         self.assertEqual(summary['maximum'], 10.25)
 
 
+    def test_compute_measurement_summary_ignores_inactive_lower_side_for_gdt_zero_bound(self):
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [-0.01, 0.02, 0.12],
+            }
+        )
+
+        summary = compute_measurement_summary(header_group, usl=0.1, lsl=0.0, nom=0.0)
+
+        self.assertEqual(summary['spec_type'], 'one_sided_upper')
+        self.assertEqual(summary['nok_count'], 1)
+        self.assertEqual(summary['observed_nok_below_lsl_count'], 0)
+        self.assertEqual(summary['observed_nok_above_usl_count'], 1)
+        self.assertAlmostEqual(summary['nok_pct'], 1 / 3)
+
 
     def test_compute_estimated_tail_metrics_uses_bilateral_cdf_tails(self):
         distribution_fit_result = {

@@ -1294,6 +1294,13 @@ def _build_distribution_fit_table_rows(distribution_fit_result, *, lsl=None, usl
     below_lsl = risk_estimates.get('below_lsl_probability')
     above_usl = risk_estimates.get('above_usl_probability')
     sample_size = (summary_stats or {}).get('sample_size')
+    one_sided_zero_bound_positive = (
+        inferred_support_mode == 'one_sided_zero_bound_positive'
+        and _is_effectively_zero(lsl)
+    )
+    if one_sided_zero_bound_positive:
+        below_lsl = 0.0
+        spec_type = 'upper_only'
 
     raw_rows = [
         ('Model', selected_model.get('display_name', 'N/A')),
@@ -1306,17 +1313,23 @@ def _build_distribution_fit_table_rows(distribution_fit_result, *, lsl=None, usl
     est_nok_value = None
     if show_modeled_risk_rows:
         side_parts = []
-        allow_lower_tail = spec_type in {'bilateral', 'lower_only'} and lsl is not None
+        allow_lower_tail = (
+            spec_type in {'bilateral', 'lower_only'}
+            and lsl is not None
+            and not one_sided_zero_bound_positive
+        )
         lower_tail_value = below_lsl
-        if inferred_support_mode == 'one_sided_zero_bound_positive' and _is_effectively_zero(lsl):
-            lower_tail_value = 0.0
         if allow_lower_tail:
             side_parts.append(f"L: {_format_probability_percent(lower_tail_value, decimals=4)}")
         if spec_type in {'bilateral', 'upper_only'} and usl is not None:
             side_parts.append(f"U: {_format_probability_percent(above_usl, decimals=4)}")
 
         est_nok_numeric = _as_float_or_none(risk_estimates.get('nok_percent'))
+        if one_sided_zero_bound_positive and _as_float_or_none(above_usl) is not None:
+            est_nok_numeric = _as_float_or_none(above_usl) * 100.0
         est_nok_value = _format_percent(risk_estimates.get('nok_percent'), decimals=4)
+        if est_nok_numeric is not None:
+            est_nok_value = _format_percent(est_nok_numeric, decimals=4)
         if side_parts and (est_nok_numeric is None or est_nok_numeric >= 0.0001):
             est_nok_value = f"{est_nok_value}\n{', '.join(side_parts)}"
         raw_rows.append(('Estimated NOK %', est_nok_value))
@@ -1609,6 +1622,10 @@ def _build_histogram_native_visual_metadata(*, summary_stats, lsl, usl, nominal,
 
     overlay_rows = []
     fit_result = distribution_fit_result or {}
+    one_sided_zero_bound_positive = (
+        fit_result.get('inferred_support_mode') == 'one_sided_zero_bound_positive'
+        and _is_effectively_zero(lsl)
+    )
     if fit_result:
         selected_model_curve = fit_result.get('selected_model_pdf') or {}
         model_x = np.asarray(selected_model_curve.get('x', []), dtype=float)
@@ -1627,10 +1644,12 @@ def _build_histogram_native_visual_metadata(*, summary_stats, lsl, usl, nominal,
                     linewidth=float(model_style['linewidth']),
                 )
             )
-            for limit_value, mask in (
-                (lsl, model_x <= float(lsl) if lsl is not None else None),
-                (usl, model_x >= float(usl) if usl is not None else None),
-            ):
+            tail_masks = []
+            if lsl is not None and not one_sided_zero_bound_positive:
+                tail_masks.append((lsl, model_x <= float(lsl)))
+            if usl is not None:
+                tail_masks.append((usl, model_x >= float(usl)))
+            for limit_value, mask in tail_masks:
                 if limit_value is None or mask is None or np.count_nonzero(mask) < 2:
                     continue
                 overlay_rows.append(
@@ -1647,30 +1666,6 @@ def _build_histogram_native_visual_metadata(*, summary_stats, lsl, usl, nominal,
                         linewidth=1.0,
                     )
                 )
-
-        kde_reference_curve = fit_result.get('kde_reference_pdf') or {}
-        kde_x = np.asarray(kde_reference_curve.get('x', []), dtype=float)
-        kde_y = np.asarray(kde_reference_curve.get('y', []), dtype=float)
-        if kde_x.size > 1 and kde_y.size == kde_x.size:
-            kde_y, kde_plotly_y = _scaled_overlay_y(kde_y)
-            overlay_rows.append(
-                _overlay_payload(
-                    label='KDE reference',
-                    x=kde_x,
-                    y=kde_y,
-                    probability_y=kde_plotly_y,
-                    color=SUMMARY_PLOT_PALETTE['density_line'],
-                    alpha=0.22,
-                    linewidth=1.0,
-                    dash=[5, 4],
-                )
-            )
-            overlay_rows.append(
-                {
-                    'kind': 'curve_note',
-                    'label': 'KDE reference: descriptive only',
-                }
-            )
 
     return {
         'schema_version': 1,
@@ -2838,7 +2833,8 @@ def render_density_line(ax, x, p, *, color=None, alpha=1.0, linewidth=1.4, lines
 def render_modeled_tail_shading(ax, distribution_fit_result, *, lsl=None, usl=None):
     """Shade count-scaled modeled tails beyond active specification limits."""
 
-    selected_model_curve = (distribution_fit_result or {}).get('selected_model_pdf') or {}
+    fit_result = distribution_fit_result or {}
+    selected_model_curve = fit_result.get('selected_model_pdf') or {}
     x_values = np.asarray(selected_model_curve.get('x', []), dtype=float)
     density_values = np.asarray(selected_model_curve.get('y', []), dtype=float)
     if x_values.size < 2 or density_values.size != x_values.size:
@@ -2857,10 +2853,17 @@ def render_modeled_tail_shading(ax, distribution_fit_result, *, lsl=None, usl=No
     except (TypeError, ValueError):
         parsed_usl = None
 
-    for limit_value, mask in (
-        (parsed_lsl, x_values <= parsed_lsl if parsed_lsl is not None else None),
-        (parsed_usl, x_values >= parsed_usl if parsed_usl is not None else None),
-    ):
+    one_sided_zero_bound_positive = (
+        fit_result.get('inferred_support_mode') == 'one_sided_zero_bound_positive'
+        and parsed_lsl is not None
+        and _is_effectively_zero(parsed_lsl)
+    )
+    tail_masks = []
+    if parsed_lsl is not None and not one_sided_zero_bound_positive:
+        tail_masks.append((parsed_lsl, x_values <= parsed_lsl))
+    if parsed_usl is not None:
+        tail_masks.append((parsed_usl, x_values >= parsed_usl))
+    for limit_value, mask in tail_masks:
         if limit_value is None or mask is None:
             continue
         if np.count_nonzero(mask) < 2:
@@ -2881,6 +2884,16 @@ _EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE = 3.15
 _EXTENDED_HISTOGRAM_STATISTIC_COL_WIDTH_RATIO = 0.39
 _UNIFIED_HISTOGRAM_LABEL_FRACTION = 0.44
 _UNIFIED_HISTOGRAM_VALUE_FRACTION = 0.56
+_SUMMARY_IMAGE_SLOT_COLS = {
+    'distribution': 10,
+    'iqr': 10,
+    'histogram': 14,
+    'trend': 14,
+}
+_SUMMARY_IMAGE_SLOT_ROWS = 18
+_SUMMARY_IMAGE_SLOT_PADDING = 0.96
+_SUMMARY_WORKSHEET_DEFAULT_COL_PX = 64.0
+_SUMMARY_WORKSHEET_DEFAULT_ROW_PX = 20.0
 
 
 def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, capability_row_badges=None):
@@ -4056,10 +4069,75 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         }
 
     @staticmethod
+    def _resolve_summary_image_display_scale(
+        fig,
+        *,
+        available_cols,
+        available_rows=_SUMMARY_IMAGE_SLOT_ROWS,
+        px_per_col=_SUMMARY_WORKSHEET_DEFAULT_COL_PX,
+        px_per_row=_SUMMARY_WORKSHEET_DEFAULT_ROW_PX,
+        padding=_SUMMARY_IMAGE_SLOT_PADDING,
+        export_dpi=150.0,
+    ):
+        """Return an Excel display scale that keeps summary images inside their slot."""
+
+        if fig is None:
+            return 1.0
+        if isinstance(fig, dict):
+            width_px = max(1.0, float(fig.get('width_px') or 1.0))
+            height_px = max(1.0, float(fig.get('height_px') or 1.0))
+        else:
+            resolved_export_dpi = max(1.0, float(export_dpi))
+            width_px = max(1.0, float(fig.get_figwidth()) * resolved_export_dpi)
+            height_px = max(1.0, float(fig.get_figheight()) * resolved_export_dpi)
+
+        max_width_px = max(1.0, float(available_cols) * float(px_per_col) * float(padding))
+        max_height_px = max(1.0, float(available_rows) * float(px_per_row) * float(padding))
+        scale = min(1.0, max_width_px / width_px, max_height_px / height_px)
+        return max(0.05, float(scale))
+
+    @classmethod
+    def _summary_image_slot_with_scale(cls, chart_name, slot, fig):
+        """Attach x/y insert scales so images do not overlap neighboring panels."""
+
+        scaled_slot = dict(slot)
+        available_cols = _SUMMARY_IMAGE_SLOT_COLS.get(str(chart_name), 10)
+        scale = cls._resolve_summary_image_display_scale(
+            fig,
+            available_cols=available_cols,
+        )
+        if scale < 0.999:
+            scaled_slot['x_scale'] = scale
+            scaled_slot['y_scale'] = scale
+        return scaled_slot
+
+    @classmethod
+    def _resolve_scaled_summary_image_cell_span(cls, fig, slot):
+        """Translate the scaled inserted image into occupied worksheet cells."""
+
+        span = cls._resolve_chart_cell_span(
+            fig,
+            px_per_col=_SUMMARY_WORKSHEET_DEFAULT_COL_PX,
+            px_per_row=_SUMMARY_WORKSHEET_DEFAULT_ROW_PX,
+            padding_cols=0,
+            padding_rows=0,
+        )
+        x_scale = float(slot.get('x_scale') or 1.0)
+        y_scale = float(slot.get('y_scale') or 1.0)
+        return {
+            'col_span': max(1, int(np.ceil(float(span.get('col_span', 1)) * x_scale))),
+            'row_span': max(1, int(np.ceil(float(span.get('row_span', 1)) * y_scale))),
+        }
+
+    @staticmethod
     def _insert_summary_image(worksheet, slot, image_data):
         """Insert summary image and guard against missing worksheet backends."""
 
-        worksheet.insert_image(slot['row'], slot['col'], '', {'image_data': image_data})
+        options = {'image_data': image_data}
+        for key in ('x_scale', 'y_scale'):
+            if slot.get(key) is not None:
+                options[key] = slot[key]
+        worksheet.insert_image(slot['row'], slot['col'], '', options)
 
     def _build_iqr_plot_payload(self, labels, values, sampled_group, *, grouping_active=False):
         if not grouping_active and sampled_group is not None and 'MEAS' in sampled_group:
@@ -5689,7 +5767,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                             usl=USL,
                             nom=nom,
                             point_count=40 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 100,
-                            include_kde_reference=self._optimization_toggles['chart_density_mode'] != 'reduced',
+                            include_kde_reference=False,
                         )
                     trend_future = self._chart_executor.submit(
                         build_trend_plot_payload,
@@ -5781,20 +5859,23 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 nonlocal distribution_overflow_cols
 
                 default_slot = dict(default_image_slots.get(chart_name, default_image_slots['distribution']))
+                scaled_slot = self._summary_image_slot_with_scale(chart_name, default_slot, fig)
                 if chart_name == 'distribution':
-                    span = self._resolve_chart_cell_span(fig)
-                    distribution_end_col = int(default_slot['col']) + int(span.get('col_span', 1))
+                    span = self._resolve_scaled_summary_image_cell_span(fig, scaled_slot)
+                    distribution_end_col = int(scaled_slot['col']) + int(span.get('col_span', 1))
                     default_iqr_col = int(default_image_slots.get('iqr', default_slot)['col'])
                     distribution_overflow_cols = max(0, distribution_end_col - default_iqr_col)
-                    return default_slot
+                    return scaled_slot
 
                 if chart_name == 'iqr':
-                    return {
+                    shifted_slot = {
+                        **scaled_slot,
                         'row': default_slot['row'],
                         'col': int(default_slot['col']) + int(distribution_overflow_cols),
                     }
+                    return shifted_slot
 
-                return default_slot
+                return scaled_slot
 
             write_start = time.perf_counter()
             summary_worksheet.write(header_cell['row'], header_cell['col'], header_cell['value'])
@@ -6144,7 +6225,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                             usl=USL,
                             nom=nom,
                             point_count=40 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 100,
-                            include_kde_reference=self._optimization_toggles['chart_density_mode'] != 'reduced',
+                            include_kde_reference=False,
                             memoization_cache=self._distribution_fit_memo,
                         )
 
@@ -6306,7 +6387,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                             native_payload=histogram_native_payload,
                         )
                         image_data = self._register_chart_image(histogram_render_result.png_bytes)
-                        histogram_slot = _reserve_summary_image_slot('histogram', None)
+                        histogram_slot = _reserve_summary_image_slot('histogram', native_canvas)
                     else:
                         histogram_figsize = base_histogram_figsize
                         fig = plt.figure(figsize=histogram_figsize)
@@ -6440,39 +6521,6 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                                 'y': model_curve_y,
                             }
                             render_modeled_tail_shading(plot_ax, distribution_fit_result, lsl=LSL, usl=USL)
-                        kde_reference_curve = distribution_fit_result.get('kde_reference_pdf')
-                        if kde_reference_curve is not None:
-                            kde_curve_y = np.asarray(kde_reference_curve['y'], dtype=float)
-                            count_scale_factor = histogram_render_meta.get('count_scale_factor')
-                            if count_scale_factor is not None:
-                                kde_curve_y = kde_curve_y * float(count_scale_factor)
-                            render_density_line(
-                                plot_ax,
-                                kde_reference_curve['x'],
-                                kde_curve_y,
-                                color=SUMMARY_PLOT_PALETTE['density_line'],
-                                alpha=0.22,
-                                linewidth=0.9,
-                                linestyle='--',
-                            )
-                            plot_ax.text(
-                                0.02,
-                                0.02,
-                                'Dashed KDE: descriptive only',
-                                transform=plot_ax.transAxes,
-                                ha='left',
-                                va='bottom',
-                                fontsize=max(6.5, histogram_font_sizes['table_fontsize'] - 1.0),
-                                color='#4d5968',
-                                bbox={
-                                    'boxstyle': 'round,pad=0.16',
-                                    'facecolor': (1.0, 1.0, 1.0, 0.74),
-                                    'edgecolor': '#c7ced7',
-                                    'linewidth': 0.45,
-                                },
-                                zorder=8,
-                            )
-
                         lock_histogram_y_axis_to_bar_heights(plot_ax)
 
                         fit_warning = distribution_fit_result.get('warning')

@@ -19,7 +19,7 @@ from metroliza.tabular.data_grouping_service import (
     reassign_group_keys_to_default,
 )
 from metroliza.exporting.export_grouping_utils import set_default_group_label
-from metroliza.shared.grouping_filter_core import apply_filter_specs, parse_filter_expression
+from metroliza.shared.grouping_filter_core import parse_filter_expression
 from metroliza.reports.report_schema import ensure_report_schema
 from metroliza.shared.list_selection_utils import GroupingShortcutBindings, ListSelectionUtils
 from metroliza.ui import ui_theme_tokens
@@ -62,19 +62,61 @@ import pandas as pd
 
 
 _GROUPING_LIST_PREVIEW_LIMIT = 1000
-_SCOPE_FILTER_PLACEHOLDER = "Filter rows, e.g. Supplier IN (SUPPLIER, Partner*) AND Date>=2026-05-01"
+_SCOPE_FILTER_PLACEHOLDER = "Filter rows (Enter), e.g. Status=NOK AND Part=Body*"
+_SCOPE_FILTER_DISPLAY_COLUMNS = {
+    "Sample": "__metroliza_grouping_filter_sample",
+    "Date": "__metroliza_grouping_filter_date",
+    "Part": "__metroliza_grouping_filter_part",
+    "Supplier": "__metroliza_grouping_filter_supplier",
+    "Rev": "__metroliza_grouping_filter_revision",
+    "Revision": "__metroliza_grouping_filter_revision",
+    "Variant": "__metroliza_grouping_filter_variant",
+    "Status": "__metroliza_grouping_filter_status",
+    "Op": "__metroliza_grouping_filter_operator",
+    "Operator": "__metroliza_grouping_filter_operator",
+    "File": "__metroliza_grouping_filter_file",
+    "Rows": "__metroliza_grouping_filter_rows",
+}
 _SCOPE_FILTER_ALIAS_CANDIDATES = (
     ("Sample", ("SAMPLE_NUMBER", "sample_number")),
     ("Date", ("DATE", "date", "report_date")),
     ("Part", ("PART_NAME", "part_name")),
-    ("Status", ("STATUS_CODE", "status_code")),
     ("Supplier", ("SUPPLIER", "supplier", "SUPPLIER_NAME", "supplier_name")),
+    ("Rev", ("REVISION", "revision")),
+    ("Revision", ("REVISION", "revision")),
+    ("Variant", ("TEMPLATE_VARIANT", "template_variant")),
+    ("Status", ("STATUS_CODE", "status_code")),
+    ("Op", ("OPERATOR_NAME", "operator_name")),
+    ("Operator", ("OPERATOR_NAME", "operator_name")),
+    ("File", ("FILENAME", "file_name", "filename")),
+    ("Rows", ("ROW_COUNT", "row_count")),
+)
+_SCOPE_FILTER_DISPLAY_FIELD_SPECS = {
+    _SCOPE_FILTER_DISPLAY_COLUMNS["Sample"]: ("SAMPLE_NUMBER", "sample_number"),
+    _SCOPE_FILTER_DISPLAY_COLUMNS["Date"]: ("DATE", "date", "report_date"),
+    _SCOPE_FILTER_DISPLAY_COLUMNS["Part"]: ("PART_NAME", "part_name"),
+    _SCOPE_FILTER_DISPLAY_COLUMNS["Supplier"]: (
+        "SUPPLIER",
+        "Supplier",
+        "supplier",
+        "SUPPLIER_NAME",
+        "supplier_name",
+    ),
+    _SCOPE_FILTER_DISPLAY_COLUMNS["Rev"]: ("REVISION", "revision"),
+    _SCOPE_FILTER_DISPLAY_COLUMNS["Variant"]: ("TEMPLATE_VARIANT", "template_variant"),
+    _SCOPE_FILTER_DISPLAY_COLUMNS["Op"]: ("OPERATOR_NAME", "operator_name"),
+    _SCOPE_FILTER_DISPLAY_COLUMNS["File"]: ("FILENAME", "file_name", "filename"),
+    _SCOPE_FILTER_DISPLAY_COLUMNS["Rows"]: ("ROW_COUNT", "row_count"),
+}
+_SCOPE_FILTER_FIELD_SUGGESTIONS = (
+    "Sample, Date, Part, Supplier, Rev/Revision, Variant, Status, Op/Operator, File, Rows"
 )
 _SCOPE_FILTER_TERM_SPLIT_RE = re.compile(r"(\s+(?:AND|OR)\s+)", flags=re.IGNORECASE)
 _SCOPE_FILTER_FIELD_RE = re.compile(
     r"^(?P<leading>\s*)(?P<field>.+?)(?P<operator>\s*(?:>=|<=|!=|=|>|<|\bNOT\s+IN\b|\bIN\b)\s*)",
     flags=re.IGNORECASE,
 )
+_GROUPING_SEARCH_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 
 
 class DataGrouping(QDialog):
@@ -179,11 +221,11 @@ class DataGrouping(QDialog):
             self.reference_search_input = QLineEdit()
             self.reference_search_input.setPlaceholderText("Search reference...")
             self.part_search_input = QLineEdit()
-            self.part_search_input.setPlaceholderText("Search part...")
+            self.part_search_input.setPlaceholderText("Search part name...")
             self.group_search_input = QLineEdit()
             self.group_search_input.setPlaceholderText("Search group...")
             self.part_group_search_input = QLineEdit()
-            self.part_group_search_input.setPlaceholderText("Search selected group...")
+            self.part_group_search_input.setPlaceholderText("Search selected group part name...")
 
             # Create buttons
             self.create_group_button = QPushButton("Create or add")
@@ -324,10 +366,10 @@ class DataGrouping(QDialog):
         """
 
         try:
-            self.reference_search_input.returnPressed.connect(lambda: self.search_list_widgets(self.reference_list, self.reference_search_input.text()))
-            self.part_search_input.returnPressed.connect(lambda: self.search_list_widgets(self.part_list, self.part_search_input.text()))
-            self.group_search_input.returnPressed.connect(lambda: self.search_list_widgets(self.groups_list, self.group_search_input.text()))
-            self.part_group_search_input.returnPressed.connect(lambda: self.search_list_widgets(self.part_group_list, self.part_group_search_input.text()))
+            self._connect_live_search_input(self.reference_search_input, self.reference_list)
+            self._connect_live_search_input(self.part_search_input, self.part_list)
+            self._connect_live_search_input(self.group_search_input, self.groups_list)
+            self._connect_live_search_input(self.part_group_search_input, self.part_group_list)
             self.scope_filter_input.returnPressed.connect(self._apply_scope_filter)
 
             # Connect the itemSelectionChanged signal of the "REFERENCE" list to the on_reference_selection_changed method
@@ -408,6 +450,13 @@ class DataGrouping(QDialog):
                 list_widget.itemSelectionChanged.connect(self._refresh_selection_summary)
         except Exception as e:
             self.log_and_exit(e)
+
+    def _connect_live_search_input(self, line_edit, list_widget):
+        def _apply_search(*_args):
+            self.search_list_widgets(list_widget, line_edit.text())
+
+        line_edit.textChanged.connect(_apply_search)
+        line_edit.returnPressed.connect(_apply_search)
 
     def _connect_shift_range_for_list(self, list_widget):
         self._list_selection_utils.connect_shift_range_behavior(list_widget)
@@ -689,7 +738,13 @@ class DataGrouping(QDialog):
         text = DataGrouping._display_text(value)
         if not text:
             return False
-        return text.lower() not in {"0", "false", "no", "none"}
+        normalized = text.lower()
+        if normalized in {"false", "no", "none"}:
+            return False
+        try:
+            return float(normalized.replace(",", ".")) != 0.0
+        except ValueError:
+            return normalized != "0"
 
     @staticmethod
     def _scope_filter_placeholder():
@@ -731,6 +786,11 @@ class DataGrouping(QDialog):
         column_lookup = {str(column).casefold(): str(column) for column in columns}
         aliases = {}
         for alias, candidate_columns in _SCOPE_FILTER_ALIAS_CANDIDATES:
+            display_column = _SCOPE_FILTER_DISPLAY_COLUMNS.get(alias)
+            resolved_display_column = column_lookup.get(str(display_column or "").casefold())
+            if resolved_display_column:
+                aliases[alias] = resolved_display_column
+                continue
             for candidate_column in candidate_columns:
                 resolved_column = column_lookup.get(str(candidate_column).casefold())
                 if resolved_column:
@@ -776,19 +836,52 @@ class DataGrouping(QDialog):
         normalized_expression = cls._normalize_scope_filter_aliases(expression, aliases)
         return parse_filter_expression(normalized_expression, columns)
 
-    def _status_display_text(self, row):
-        status_code = self._display_text(self._row_field_value(row, 'STATUS_CODE'))
-        has_nok = self._row_field_value(row, 'HAS_NOK')
-        nok_count = self._display_text(self._row_field_value(row, 'NOK_COUNT'))
+    @classmethod
+    def _scope_filter_error_text(cls, exc):
+        return f"Scope: invalid filter ({exc}). Fields: {_SCOPE_FILTER_FIELD_SUGGESTIONS}"
+
+    @classmethod
+    def _display_filter_series(cls, data_frame, field_names):
+        values = pd.Series("", index=data_frame.index, dtype="object")
+        for field_name in field_names:
+            if field_name not in data_frame.columns:
+                continue
+            candidate_values = data_frame[field_name].map(cls._display_text)
+            values = values.mask(values.eq(""), candidate_values)
+        return values
+
+    @classmethod
+    def _scope_filter_dataframe(cls, data_frame):
+        if not isinstance(data_frame, pd.DataFrame):
+            return pd.DataFrame()
+
+        filter_frame = data_frame.copy()
+        for column, field_names in _SCOPE_FILTER_DISPLAY_FIELD_SPECS.items():
+            filter_frame[column] = cls._display_filter_series(data_frame, field_names)
+        filter_frame[_SCOPE_FILTER_DISPLAY_COLUMNS["Status"]] = pd.Series(
+            (cls._status_filter_text(row) for row in data_frame.itertuples(index=False)),
+            index=data_frame.index,
+            dtype="object",
+        )
+        return filter_frame
+
+    @classmethod
+    def _status_filter_text(cls, row):
+        status_code = cls._display_text(cls._row_field_value(row, 'STATUS_CODE'))
+        has_nok = cls._row_field_value(row, 'HAS_NOK')
+        nok_count = cls._display_text(cls._row_field_value(row, 'NOK_COUNT'))
 
         if status_code:
-            status_text = status_code.upper()
-        elif has_nok is not None and self._display_text(has_nok) != "":
-            status_text = "NOK" if self._truthy_text(has_nok) else "OK"
-        elif nok_count and nok_count not in {"0", "0.0"}:
-            status_text = "NOK"
-        else:
-            status_text = ""
+            return status_code.upper()
+        if has_nok is not None and cls._display_text(has_nok) != "":
+            return "NOK" if cls._truthy_text(has_nok) else "OK"
+        if nok_count and nok_count not in {"0", "0.0"}:
+            return "NOK"
+        return ""
+
+    def _status_display_text(self, row):
+        status_text = self._status_filter_text(row)
+        nok_count = self._display_text(self._row_field_value(row, 'NOK_COUNT'))
 
         if status_text and nok_count and nok_count not in {"0", "0.0"}:
             return f"{status_text} ({nok_count})"
@@ -840,6 +933,10 @@ class DataGrouping(QDialog):
 
         return " | ".join(tokens)
 
+    @classmethod
+    def _part_search_label(cls, row):
+        return cls._display_text(cls._row_field_value(row, 'PART_NAME'))
+
     def _scope_filter_text(self):
         scope_filter_input = self._safe_attr(self, "scope_filter_input")
         if scope_filter_input is None or not hasattr(scope_filter_input, "text"):
@@ -874,11 +971,13 @@ class DataGrouping(QDialog):
             self._cached_filtered_grouping_dataframe = df
             return df
         try:
-            parsed = self._parse_scope_filter_expression(expression, df.columns)
-            filtered = apply_filter_specs(df, parsed.specs, match_mode=parsed.match_mode)
+            filter_frame = self._scope_filter_dataframe(df)
+            parsed = self._parse_scope_filter_expression(expression, filter_frame.columns)
+            mask = parsed.mask(filter_frame).reindex(df.index, fill_value=False).astype(bool)
+            filtered = df.loc[mask].copy()
         except (KeyError, TypeError, ValueError) as exc:
             if summary_label is not None and hasattr(summary_label, "setText"):
-                summary_label.setText(f"Scope: invalid filter ({exc})")
+                summary_label.setText(self._scope_filter_error_text(exc))
             filtered = df.iloc[0:0].copy()
             self._cached_filtered_grouping_dataframe = filtered
             return filtered
@@ -951,6 +1050,7 @@ class DataGrouping(QDialog):
         for row in rows_df.itertuples(index=False):
             item = QListWidgetItem(self._part_display_label(row))
             item.setData(Qt.ItemDataRole.UserRole, row.GROUP_KEY)
+            item.setData(_GROUPING_SEARCH_ROLE, self._part_search_label(row))
             self._apply_item_color(item, self._group_color_for_row(row))
             self.part_list.addItem(item)
         self._add_list_limit_marker(self.part_list, total_rows)
@@ -966,6 +1066,7 @@ class DataGrouping(QDialog):
         for row in rows_df.itertuples(index=False):
             item = QListWidgetItem(self._part_display_label(row))
             item.setData(Qt.ItemDataRole.UserRole, row.GROUP_KEY)
+            item.setData(_GROUPING_SEARCH_ROLE, self._part_search_label(row))
             self._apply_item_color(item, self._group_color_for_row(row))
             self.part_group_list.addItem(item)
         self._add_list_limit_marker(self.part_group_list, total_rows)
@@ -1162,13 +1263,36 @@ class DataGrouping(QDialog):
         """
 
         try:
+            canonical_text_getter = self._search_text_getter_for_list(list_widget)
             self._list_selection_utils.preserve_selection_during_filter(
                 list_widget,
                 search_text,
-                canonical_text_getter=lambda item: item.data(Qt.ItemDataRole.UserRole),
+                canonical_text_getter=canonical_text_getter,
+                include_item_text=self._include_item_text_for_search(list_widget),
             )
         except Exception as e:
             self.log_and_exit(e)
+
+    def _search_text_getter_for_list(self, list_widget):
+        part_lists = (
+            self._safe_attr(self, "part_list"),
+            self._safe_attr(self, "part_group_list"),
+        )
+        role = (
+            _GROUPING_SEARCH_ROLE
+            if any(list_widget is managed_list for managed_list in part_lists)
+            else Qt.ItemDataRole.UserRole
+        )
+        return lambda item: item.data(role)
+
+    def _include_item_text_for_search(self, list_widget):
+        managed_lists = (
+            self._safe_attr(self, "reference_list"),
+            self._safe_attr(self, "part_list"),
+            self._safe_attr(self, "groups_list"),
+            self._safe_attr(self, "part_group_list"),
+        )
+        return not any(list_widget is managed_list for managed_list in managed_lists)
 
     def on_reference_selection_changed(self):
         """Handle `on_reference_selection_changed` for `DataGrouping`.

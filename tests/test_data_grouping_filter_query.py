@@ -121,6 +121,7 @@ class TestDataGroupingPartDisplayLabel(unittest.TestCase):
         self.assertEqual(DataGrouping._display_text(pd.NA), '')
         self.assertEqual(DataGrouping._display_text('  value  '), 'value')
         self.assertFalse(DataGrouping._truthy_text('0'))
+        self.assertFalse(DataGrouping._truthy_text('0.0'))
         self.assertFalse(DataGrouping._truthy_text('false'))
         self.assertTrue(DataGrouping._truthy_text('yes'))
 
@@ -182,26 +183,35 @@ class TestDataGroupingScopeFilterAliases(unittest.TestCase):
 
         self.assertEqual(
             placeholder,
-            'Filter rows, e.g. Supplier IN (SUPPLIER, Partner*) AND Date>=2026-05-01',
+            'Filter rows (Enter), e.g. Status=NOK AND Part=Body*',
         )
-        self.assertIn('Supplier IN', placeholder)
-        self.assertIn('Date>=2026-05-01', placeholder)
+        self.assertIn('Status=NOK', placeholder)
+        self.assertIn('Part=Body*', placeholder)
 
     def test_scope_filter_aliases_include_present_columns(self):
         aliases = DataGrouping._scope_filter_field_aliases(
-            ['SAMPLE_NUMBER', 'DATE', 'PART_NAME', 'STATUS_CODE', 'Supplier']
+            ['SAMPLE_NUMBER', 'DATE', 'PART_NAME', 'STATUS_CODE', 'Supplier', 'REVISION']
         )
 
-        self.assertEqual(
-            aliases,
-            {
-                'Sample': 'SAMPLE_NUMBER',
-                'Date': 'DATE',
-                'Part': 'PART_NAME',
-                'Status': 'STATUS_CODE',
-                'Supplier': 'Supplier',
-            },
+        self.assertEqual(aliases['Sample'], 'SAMPLE_NUMBER')
+        self.assertEqual(aliases['Date'], 'DATE')
+        self.assertEqual(aliases['Part'], 'PART_NAME')
+        self.assertEqual(aliases['Status'], 'STATUS_CODE')
+        self.assertEqual(aliases['Supplier'], 'Supplier')
+        self.assertEqual(aliases['Rev'], 'REVISION')
+        self.assertEqual(aliases['Revision'], 'REVISION')
+
+    def test_scope_filter_aliases_prefer_display_columns_when_available(self):
+        display_columns = DataGrouping._scope_filter_field_aliases.__globals__[
+            '_SCOPE_FILTER_DISPLAY_COLUMNS'
+        ]
+
+        aliases = DataGrouping._scope_filter_field_aliases(
+            [display_columns['Part'], display_columns['Status'], 'PART_NAME', 'STATUS_CODE']
         )
+
+        self.assertEqual(aliases['Part'], display_columns['Part'])
+        self.assertEqual(aliases['Status'], display_columns['Status'])
 
     def test_scope_filter_aliases_are_rewritten_for_current_parser(self):
         from modules.grouping_filter_core import apply_filter_specs
@@ -457,6 +467,8 @@ class _FakeListItem:
         return self._text
 
     def data(self, role):
+        if isinstance(self._user_role, dict):
+            return self._user_role.get(role)
         return self._user_role
 
     def setHidden(self, value):
@@ -486,9 +498,44 @@ class _FakeListWidget:
         return None
 
 
+class _FakeSignal:
+    def __init__(self):
+        self.callbacks = []
+
+    def connect(self, callback):
+        self.callbacks.append(callback)
+
+    def emit(self, *args):
+        for callback in list(self.callbacks):
+            callback(*args)
+
+
+class _FakeLineEdit:
+    def __init__(self, text=''):
+        self._text = text
+        self.textChanged = _FakeSignal()
+        self.returnPressed = _FakeSignal()
+
+    def text(self):
+        return self._text
+
+    def setText(self, text):
+        self._text = text
+        self.textChanged.emit(text)
+
+
+class _FakeSignalListWidget(_FakeListWidget):
+    def __init__(self, name):
+        super().__init__()
+        self.name = name
+        self.itemSelectionChanged = _FakeSignal()
+        self.itemDoubleClicked = _FakeSignal()
+
+
 class _FakeButton:
     def __init__(self):
         self.disabled = None
+        self.clicked = _FakeSignal()
 
     def setDisabled(self, value):
         self.disabled = value
@@ -708,6 +755,94 @@ class TestDataGroupingGroupLabels(unittest.TestCase):
         dialog.search_list_widgets(dialog.groups_list, 'canonical')
 
         self.assertFalse(dialog.groups_list.item(0).hidden)
+
+    def test_group_search_ignores_display_counts_and_indexes(self):
+        from modules.list_selection_utils import ListSelectionUtils
+
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog._list_selection_utils = ListSelectionUtils()
+        dialog.groups_list = _FakeListWidget(
+            [_FakeListItem(text='Ops Team [42] (n=99)', user_role='Ops Team')]
+        )
+
+        dialog.search_list_widgets(dialog.groups_list, '99')
+        self.assertTrue(dialog.groups_list.item(0).hidden)
+
+        dialog.search_list_widgets(dialog.groups_list, 'ops')
+        self.assertFalse(dialog.groups_list.item(0).hidden)
+
+    def test_part_search_matches_part_name_not_row_metadata_or_group_key(self):
+        from modules.list_selection_utils import ListSelectionUtils
+
+        user_role = DataGrouping.search_list_widgets.__globals__['Qt'].ItemDataRole.UserRole
+        search_role = DataGrouping.search_list_widgets.__globals__['_GROUPING_SEARCH_ROLE']
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog._list_selection_utils = ListSelectionUtils()
+        dialog.part_list = _FakeListWidget(
+            [
+                _FakeListItem(
+                    text='Sample: 42 | Date: 2024-01-15 | Part: Front Plate | File: batch-42.csv',
+                    user_role={user_role: 'group-key-42', search_role: 'Front Plate'},
+                )
+            ]
+        )
+
+        dialog.search_list_widgets(dialog.part_list, '42')
+        self.assertTrue(dialog.part_list.item(0).hidden)
+
+        dialog.search_list_widgets(dialog.part_list, 'front')
+        self.assertFalse(dialog.part_list.item(0).hidden)
+
+    def test_search_inputs_update_live_but_scope_filter_waits_for_enter(self):
+        dialog = DataGrouping.__new__(DataGrouping)
+        calls = []
+
+        dialog.reference_search_input = _FakeLineEdit()
+        dialog.part_search_input = _FakeLineEdit()
+        dialog.group_search_input = _FakeLineEdit()
+        dialog.part_group_search_input = _FakeLineEdit()
+        dialog.scope_filter_input = _FakeLineEdit()
+        dialog.reference_list = _FakeSignalListWidget('reference')
+        dialog.part_list = _FakeSignalListWidget('part')
+        dialog.groups_list = _FakeSignalListWidget('groups')
+        dialog.part_group_list = _FakeSignalListWidget('part_group')
+        dialog.create_group_button = _FakeButton()
+        dialog.rename_group_button = _FakeButton()
+        dialog.remove_from_group_button = _FakeButton()
+        dialog.delete_group_button = _FakeButton()
+        dialog.use_grouping_button = _FakeButton()
+        dialog.dont_use_grouping_button = _FakeButton()
+        dialog._connect_shift_range_for_list = lambda _list_widget: None
+        dialog.search_list_widgets = lambda list_widget, text: calls.append((list_widget.name, text))
+        dialog._apply_scope_filter = lambda: calls.append(('scope', 'applied'))
+        dialog.on_reference_selection_changed = lambda: None
+        dialog.on_reference_item_double_clicked = lambda _item: None
+        dialog.on_group_selection_changed = lambda: None
+        dialog.on_group_item_double_clicked = lambda _item: None
+        dialog.on_part_selection_changed = lambda: None
+        dialog.on_part_item_double_clicked = lambda _item: None
+        dialog.on_part_group_selection_changed = lambda: None
+        dialog._refresh_selection_summary = lambda: None
+        dialog.create_group = lambda: None
+        dialog.rename_group = lambda: None
+        dialog.remove_from_group = lambda: None
+        dialog.delete_group = lambda: None
+        dialog.use_grouping = lambda: None
+        dialog.dont_use_grouping = lambda: None
+        dialog._delete_selected_parts_from_part_list = lambda: None
+        dialog._delete_selected_parts_from_group = lambda: None
+        dialog.log_and_exit = lambda exc: (_ for _ in ()).throw(exc)
+
+        DataGrouping.connect_signals(dialog)
+
+        dialog.part_search_input.setText('Front')
+        self.assertIn(('part', 'Front'), calls)
+
+        dialog.scope_filter_input.setText('Part=Front')
+        self.assertNotIn(('scope', 'applied'), calls)
+
+        dialog.scope_filter_input.returnPressed.emit()
+        self.assertIn(('scope', 'applied'), calls)
 
     def test_double_click_group_item_triggers_rename(self):
         from unittest.mock import Mock
@@ -1166,6 +1301,60 @@ class TestDataGroupingSelectionRetention(unittest.TestCase):
         )
         self.assertEqual(dialog.scope_filter_summary_label.value, 'Scope: 1 of 3 rows')
 
+    def test_scope_filter_status_alias_uses_parts_list_display_status(self):
+        class _Label:
+            def __init__(self):
+                self.value = ''
+
+            def setText(self, value):
+                self.value = value
+
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.df = pd.DataFrame(
+            {
+                'REFERENCE': ['REF-1', 'REF-2', 'REF-3'],
+                'GROUP_KEY': ['k1', 'k2', 'k3'],
+                'HAS_NOK': [0, 1, None],
+                'NOK_COUNT': [0, 3, 2],
+            }
+        )
+        dialog._applied_scope_filter_text = 'Status=NOK'
+        dialog._cached_filtered_grouping_dataframe = None
+        dialog.scope_filter_summary_label = _Label()
+
+        filtered = dialog._filtered_grouping_dataframe()
+
+        self.assertEqual(filtered['GROUP_KEY'].tolist(), ['k2', 'k3'])
+        self.assertEqual(dialog._status_display_text(dialog.df.iloc[1]), 'NOK (3)')
+        self.assertEqual(dialog.scope_filter_summary_label.value, 'Scope: 2 of 3 rows')
+
+    def test_scope_filter_accepts_parts_display_field_aliases(self):
+        dialog = DataGrouping.__new__(DataGrouping)
+        frame = pd.DataFrame(
+            {
+                'SAMPLE_NUMBER': [42, 43],
+                'DATE': ['2026-05-01', '2026-05-02'],
+                'PART_NAME': ['Body Panel', 'Cover'],
+                'SUPPLIER_NAME': ['ACME', 'Other'],
+                'REVISION': ['A', 'B'],
+                'TEMPLATE_VARIANT': ['Header Box', 'Compact'],
+                'OPERATOR_NAME': ['Jane', 'John'],
+                'FILENAME': ['body.csv', 'cover.csv'],
+                'ROW_COUNT': [4, 1],
+                'HAS_NOK': [1, 0],
+                'NOK_COUNT': [2, 0],
+            }
+        )
+        filter_frame = dialog._scope_filter_dataframe(frame)
+        parsed = dialog._parse_scope_filter_expression(
+            'Sample=42 AND Supplier=ACME AND Rev=A AND Variant=Header* '
+            'AND Status=NOK AND Op=Jane AND File=body.csv AND Rows=4',
+            filter_frame.columns,
+        )
+
+        self.assertEqual(filter_frame.loc[0, parsed.specs[0].column], '42')
+        self.assertEqual(parsed.mask(filter_frame).tolist(), [True, False])
+
     def test_invalid_scope_membership_filter_yields_empty_frame_and_summary(self):
         class _Label:
             def __init__(self):
@@ -1190,6 +1379,7 @@ class TestDataGroupingSelectionRetention(unittest.TestCase):
 
         self.assertTrue(filtered.empty)
         self.assertTrue(dialog.scope_filter_summary_label.value.startswith('Scope: invalid filter'))
+        self.assertIn('Fields: Sample, Date, Part', dialog.scope_filter_summary_label.value)
 
     def test_populate_list_widgets_reuses_cached_row_indexes_without_filter_or_data_change(self):
         from modules.data_grouping_service import build_grouping_row_index as real_build_grouping_row_index

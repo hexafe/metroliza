@@ -34,7 +34,8 @@ def build_measurement_stat_formulas(summary_col, stats_col, data_range_y, nom_ce
     sigma_formula = f"({stats_col}4)"
     average_formula = f"({stats_col}2)"
 
-    if is_one_sided_geometric_tolerance(nom_value, lsl_value):
+    one_sided_gdt = is_one_sided_geometric_tolerance(nom_value, lsl_value)
+    if one_sided_gdt:
         cp_formula = '="N/A"'
         cpk_formula = f"=ROUND(({usl_formula} - {average_formula})/(3 * {sigma_formula}), 3)"
     else:
@@ -47,7 +48,7 @@ def build_measurement_stat_formulas(summary_col, stats_col, data_range_y, nom_ce
         )
 
     nok_high = f'COUNTIF({data_range_y}, ">"&({nom_cell}+{usl_cell}))'
-    nok_low = f'COUNTIF({data_range_y}, "<"&({nom_cell}+{lsl_cell}))'
+    nok_low = '0' if one_sided_gdt else f'COUNTIF({data_range_y}, "<"&({nom_cell}+{lsl_cell}))'
     nok_cell = f"${summary_col}$6"
     sample_size_cell = f"${stats_col}$7"
 
@@ -361,13 +362,14 @@ def write_measurement_block(worksheet, write_bundle, formats, *, base_col):
         measurement_plan['y_column'],
         {'type': 'cell', 'criteria': '>', 'value': f'=({nom_cell}+{usl_cell})', 'format': formats['red']},
     )
-    worksheet.conditional_format(
-        measurement_plan['data_start_row'],
-        measurement_plan['y_column'],
-        measurement_plan['last_data_row'],
-        measurement_plan['y_column'],
-        {'type': 'cell', 'criteria': '<', 'value': f'=({nom_cell}+{lsl_cell})', 'format': formats['red']},
-    )
+    if not is_one_sided_geometric_tolerance(header_plan['nom'], header_plan['lsl']):
+        worksheet.conditional_format(
+            measurement_plan['data_start_row'],
+            measurement_plan['y_column'],
+            measurement_plan['last_data_row'],
+            measurement_plan['y_column'],
+            {'type': 'cell', 'criteria': '<', 'value': f'=({nom_cell}+{lsl_cell})', 'format': formats['red']},
+        )
     worksheet.conditional_format(
         measurement_plan['nok_percent_row'],
         measurement_plan['summary_column'],

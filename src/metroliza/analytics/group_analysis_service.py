@@ -1541,6 +1541,7 @@ def _partition_metric_analysis_inputs(
     )
     spec_status = package_analysis['spec_status']
     spec_payload = package_analysis['spec_payload']
+    statistical_spec_payload = package_analysis.get('statistical_spec_payload') or spec_payload
     policy = dict(package_analysis['analysis_policy'])
     return {
         'metric': metric_identity,
@@ -1549,6 +1550,7 @@ def _partition_metric_analysis_inputs(
         'populated_groups': populated_groups,
         'spec_status': spec_status,
         'spec_payload': spec_payload,
+        'statistical_spec_payload': statistical_spec_payload,
         'analysis_policy': policy,
         'package_analysis': package_analysis,
     }
@@ -1618,6 +1620,7 @@ def _assemble_metric_payload(
 
     spec_status = metric_partition['spec_status']
     spec_payload = metric_partition['spec_payload']
+    statistical_spec_payload = metric_partition.get('statistical_spec_payload') or spec_payload
     policy = metric_partition['analysis_policy']
     metric_level_flags = _join_flags(_build_metric_level_flags((row.get('n', 0) for row in descriptive_stats), spec_status=spec_status))
     comparability_summary = build_comparability_summary(spec_status, policy)
@@ -1689,7 +1692,7 @@ def _assemble_metric_payload(
         'chart_payload': (
             _build_metric_chart_payload(
                 grouped_values=metric_partition['grouped_values'],
-                spec_payload=spec_payload,
+                spec_payload=statistical_spec_payload,
             )
             if include_chart_payloads
             else None

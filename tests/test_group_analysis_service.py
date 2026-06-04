@@ -1111,6 +1111,15 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertEqual(metric['spec_status'], 'EXACT_MATCH')
         self.assertEqual(metric['spec_status_label'], 'Exact match')
         self.assertEqual(metric['spec'], {'lsl': 0.0, 'nominal': 0.0, 'usl': 0.5})
+        self.assertEqual(metric['capability']['capability_mode'], 'upper_only')
+        self.assertEqual(metric['capability']['capability_type'], 'Cpk+')
+        self.assertIsNone(metric['capability']['cp'])
+        self.assertTrue(all(row['cpl'] is None for row in metric['capability_rows']))
+        self.assertTrue(all(row['cpu'] is not None for row in metric['capability_rows']))
+        self.assertEqual(
+            metric['chart_payload']['spec_limits'],
+            {'lsl': None, 'nominal': 0.0, 'usl': 0.5},
+        )
 
         diagnostics_row = payload['diagnostics']['metric_diagnostics_rows'][0]
         self.assertEqual(diagnostics_row['metric'], 'AA-C11 - TP')
