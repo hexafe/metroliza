@@ -948,7 +948,7 @@ def build_dashboard_visual_preview_html(
         / "html_dashboard_assets"
         / "plotly-2.27.0.min.js"
     )
-    spec_json = json.dumps(spec, ensure_ascii=False)
+    spec_json = json.dumps(spec, ensure_ascii=False).replace("</", "<\\/")
     asset_uri = plotly_asset.resolve().as_uri()
     qwebchannel_script = ""
     if enable_selection_bridge:

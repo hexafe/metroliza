@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from io import BytesIO
 
 import pandas as pd
@@ -510,6 +511,36 @@ def test_dashboard_visual_preview_bridge_uses_dialog_stat_target_key() -> None:
     assert "target: `stat:${group}:${statName}`" not in html
     assert "target: `${role}:${targetPart(name)}`" in html
     assert "target: `series:${name}`" not in html
+
+
+def test_dashboard_visual_preview_html_escapes_script_closing_sequence_in_spec_json() -> None:
+    label = "</script><script>alert(1)</script>"
+    html = dashboard_visual_options.build_dashboard_visual_preview_html(
+        {
+            "data": [
+                {
+                    "type": "scatter",
+                    "mode": "markers",
+                    "name": label,
+                    "x": [1],
+                    "y": [2],
+                }
+            ],
+            "layout": {"title": {"text": label}},
+            "config": {},
+        }
+    )
+
+    spec_json = html.split("const spec = ", 1)[1].split(
+        ";\nlet metrolizaVisualBridge",
+        1,
+    )[0]
+
+    assert "</script><script>alert" not in spec_json
+    assert "<\\/script><script>alert(1)<\\/script>" in spec_json
+    parsed = json.loads(spec_json)
+    assert parsed["data"][0]["name"] == label
+    assert parsed["layout"]["title"]["text"] == label
 
 
 def test_dashboard_visual_preview_line_renderer_uses_dash_styles() -> None:
