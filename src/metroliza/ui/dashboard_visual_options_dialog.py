@@ -1465,6 +1465,8 @@ class DashboardVisualOptionsDialog(QDialog):
             key = _preview_label_key(label)
             if role == "series" and _is_population_preview_label(label, self._population_baseline):
                 self._population_baseline = dict(default_dashboard_visual_settings()["population_baseline"])
+            elif role == "series":
+                self._reset_selected_series_palette_entry(label)
             self._series_overrides.pop(key, None)
         elif role == "reference":
             defaults = default_dashboard_visual_settings()["reference_lines"]
@@ -1484,6 +1486,21 @@ class DashboardVisualOptionsDialog(QDialog):
                 self._reference_width_control_value = float(defaults[key].get("width", 1.5))
                 self.reference_width_spin.setValue(self._reference_width_control_value)
         self._handle_control_changed()
+
+    def _reset_selected_series_palette_entry(self, label: str) -> None:
+        palette_index = _preview_palette_index_for_label(label, self._preview_palette_labels)
+        if palette_index is None or palette_index >= len(self._palette_buttons):
+            return
+        reset_palette = dashboard_visual_swatch_palette(
+            self._settings,
+            count=max(6, len(self._preview_palette_labels)),
+        )
+        if not reset_palette:
+            reset_palette = list(DEFAULT_DASHBOARD_PALETTE)
+        self._set_button_color(
+            self._palette_buttons[palette_index],
+            reset_palette[palette_index % len(reset_palette)],
+        )
 
     def _stat_override_key(self, target: Mapping[str, Any]) -> str:
         stat = str(target.get("stat") or "").casefold()

@@ -326,6 +326,16 @@ def test_dashboard_visual_dialog_group_color_edit_updates_palette_and_chips(monk
         assert settings["population_baseline"]["draw_first"] is True
         assert settings["population_baseline"]["color"] == "#8a949e"
         assert settings["comparison_focus"]["outline_width"] > 0
+
+        dialog._set_button_color(dialog._palette_buttons[0], "#010203")
+        dialog._reset_selected_element_style()
+
+        reset_settings = dialog.visual_settings()
+        assert reset_settings["palette"][0] == "#010203"
+        assert reset_settings["palette"][1] == "#d66e2f"
+        assert dialog._palette_buttons[1].property("color") == "#d66e2f"
+        assert dialog._preview_color_buttons[2].property("color") == "#d66e2f"
+        assert "group 2" not in reset_settings["series_overrides"]
     finally:
         dialog.close()
         dialog.deleteLater()
