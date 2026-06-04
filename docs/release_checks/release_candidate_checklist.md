@@ -225,6 +225,14 @@ Current plotstats hotfix pin:
   and the CI-shaped combined coverage gate with isolated UI shards at `81%`
   against the `80%` threshold. Pushed-SHA CI evidence for this slice must be
   recorded below before merge/tag.
+- rc2 analytics/export/grouping hardening CI passed: GitHub Actions run
+  [`26951307852`](https://github.com/hexafe/metroliza/actions/runs/26951307852)
+  for commit `ad186fa0a748b65ba941e11916d322771a6771fe` (`Harden export
+  analytics and grouping`) on 2026-06-04. Green automatic jobs were Static
+  checks, Unit tests with combined coverage artifact upload, Native wheel build
+  and smoke checks, CMM parser perf guardrail, and the non-blocking Performance
+  benchmark trend check. Manual/opt-in jobs were skipped: Packaging smoke,
+  Windows startup benchmark, and Google conversion smoke.
 - Post-reorganization follow-up local audit passed after docs/reference cleanup,
   parser-plugin productionization coverage, architecture guardrail hardening, and
   release-status refresh.
