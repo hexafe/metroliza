@@ -197,17 +197,44 @@ def test_schema_migrates_legacy_sync_run_status_constraint(tmp_path):
         table_sql = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'industrial_sync_runs'"
         ).fetchone()[0]
-        legacy_table_sql = table_sql.replace("'completed_with_warnings', ", "")
+        legacy_table_sql = table_sql.replace("industrial_sync_runs", "industrial_sync_runs_legacy", 1)
+        legacy_table_sql = legacy_table_sql.replace("'completed_with_warnings', ", "")
         assert legacy_table_sql != table_sql
-        conn.execute("PRAGMA writable_schema=ON")
-        conn.execute(
-            "UPDATE sqlite_master SET sql = ? WHERE type = 'table' AND name = 'industrial_sync_runs'",
-            (legacy_table_sql,),
+        columns = (
+            "id",
+            "source_profile_id",
+            "started_at",
+            "finished_at",
+            "status",
+            "row_count",
+            "error_summary",
+            "filters_json",
+            "oznak_version",
+            "oznak_commit",
+            "diagnostics_json",
         )
-        conn.execute("PRAGMA writable_schema=OFF")
+        column_list = ", ".join(columns)
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys=OFF")
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 0
+        conn.execute("DROP TABLE IF EXISTS industrial_sync_runs_legacy")
+        conn.execute(legacy_table_sql)
+        conn.execute(
+            f"""
+            INSERT INTO industrial_sync_runs_legacy ({column_list})
+            SELECT {column_list}
+            FROM industrial_sync_runs
+            """
+        )
+        conn.execute("DROP TABLE industrial_sync_runs")
+        conn.execute("ALTER TABLE industrial_sync_runs_legacy RENAME TO industrial_sync_runs")
         conn.commit()
 
-    ensure_industrial_data_schema(db_path)
+    with sqlite_connection_scope(db_path) as conn:
+        conn.execute("UPDATE app_schema SET value = value WHERE key = 'industrial_schema_version'")
+        ensure_industrial_data_schema(db_path, connection=conn)
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
     warning_run_id = repository.create_sync_run(source_profile_id=profile.id)
     repository.finish_sync_run(
         sync_run_id=warning_run_id,

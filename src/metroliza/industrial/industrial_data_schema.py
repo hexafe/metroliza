@@ -216,7 +216,23 @@ def _ensure_sync_run_status_constraint(cursor) -> None:
         "diagnostics_json",
     )
     column_list = ", ".join(columns)
-    cursor.execute("PRAGMA foreign_keys=OFF")
+    cursor.execute("DROP TABLE IF EXISTS temp._metroliza_sync_run_links")
+    cursor.execute(
+        """
+        CREATE TEMP TABLE _metroliza_sync_run_links (
+            record_id INTEGER PRIMARY KEY,
+            sync_run_id INTEGER NOT NULL
+        )
+        """
+    )
+    cursor.execute(
+        """
+        INSERT INTO _metroliza_sync_run_links (record_id, sync_run_id)
+        SELECT id, sync_run_id
+        FROM industrial_records
+        WHERE sync_run_id IS NOT NULL
+        """
+    )
     cursor.execute("DROP TABLE IF EXISTS industrial_sync_runs_new")
     cursor.execute(_industrial_sync_runs_table_statement("industrial_sync_runs_new"))
     cursor.execute(
@@ -228,3 +244,22 @@ def _ensure_sync_run_status_constraint(cursor) -> None:
     )
     cursor.execute("DROP TABLE industrial_sync_runs")
     cursor.execute("ALTER TABLE industrial_sync_runs_new RENAME TO industrial_sync_runs")
+    cursor.execute(
+        """
+        UPDATE industrial_records
+        SET sync_run_id = (
+            SELECT links.sync_run_id
+            FROM _metroliza_sync_run_links AS links
+            WHERE links.record_id = industrial_records.id
+        )
+        WHERE sync_run_id IS NULL
+          AND id IN (SELECT record_id FROM _metroliza_sync_run_links)
+          AND EXISTS (
+              SELECT 1
+              FROM industrial_sync_runs AS runs
+              JOIN _metroliza_sync_run_links AS links ON links.sync_run_id = runs.id
+              WHERE links.record_id = industrial_records.id
+          )
+        """
+    )
+    cursor.execute("DROP TABLE IF EXISTS temp._metroliza_sync_run_links")

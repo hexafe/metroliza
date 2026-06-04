@@ -236,10 +236,17 @@ Current plotstats hotfix pin:
 - Codex review follow-up local gate passed on 2026-06-04 after the pushed
   analytics CI evidence: stale industrial dynamic values are deleted when a
   source record is replaced with a row that no longer carries that dynamic
-  field, and dashboard visual runtime JSON escapes `</script>` before embedding
-  labels/settings in inline scripts. Focused regression tests passed
-  (`19 passed`), and follow-up gates passed for `git diff --check`, full
-  `ruff`, `compileall`, release metadata sync, and release hygiene.
+  field, dashboard visual runtime JSON escapes `</script>` before embedding
+  labels/settings in inline scripts, and legacy industrial sync-run table
+  rebuilds preserve `industrial_records.sync_run_id` links under caller-owned
+  active transactions. Focused regression tests passed (`19 passed` for the
+  first review follow-up and `5 passed` for the strengthened schema migration
+  regression), and follow-up gates passed for `git diff --check`, full `ruff`,
+  `compileall`, release metadata sync, release hygiene, security audit with no
+  known vulnerabilities, full headless pytest with coverage (`1870 passed`,
+  `261 skipped`, `95 warnings`, `71 subtests passed`; raw total coverage `75%`),
+  and the CI-shaped combined coverage gate with isolated UI shards at `81%`
+  against the `80%` threshold.
 - Post-reorganization follow-up local audit passed after docs/reference cleanup,
   parser-plugin productionization coverage, architecture guardrail hardening, and
   release-status refresh.
