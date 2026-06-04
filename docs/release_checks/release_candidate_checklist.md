@@ -249,6 +249,19 @@ Current plotstats hotfix pin:
   (`1871 passed`, `261 skipped`, `95 warnings`, `71 subtests passed`), and the
   CI-shaped combined coverage gate with isolated UI shards at `81%` against the
   `80%` threshold.
+- Histogram overlay UI/UX and logic audit passed on 2026-06-04 after fixing the
+  HTML dashboard Plotly path where package-generated histogram overlay traces
+  could keep stale `x` coordinates while Metroliza supplied the resolved
+  selected-model and tail-shading `plotly_y` values. Package-backed histogram
+  overlays now replace both `x` and `y` from the resolved Metroliza overlay rows,
+  filled/tail traces are recognized as modeled overlays before reference-line
+  filtering, and fallback HTML dashboard coverage asserts selected model, KDE,
+  and tail-shading coordinate parity. Focused export/chart regressions passed
+  (`67 passed`), full `ruff`, `compileall`, release metadata sync, release
+  hygiene, security audit with no known vulnerabilities, full headless pytest
+  with CI coverage tracking (`1871 passed`, `261 skipped`, `95 warnings`,
+  `71 subtests passed`), and the CI-shaped combined coverage gate with isolated
+  UI shards passed at `81%` against the `80%` threshold.
 - Post-reorganization follow-up local audit passed after docs/reference cleanup,
   parser-plugin productionization coverage, architecture guardrail hardening, and
   release-status refresh.

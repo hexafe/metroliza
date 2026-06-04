@@ -1918,6 +1918,9 @@ def _finite_positive_values(values: Any) -> list[float]:
 def _is_histogram_overlay_trace(trace: Mapping[str, Any]) -> bool:
     if str(trace.get("type") or "").strip().casefold() != "scatter":
         return False
+    fill = str(trace.get("fill") or "").strip().casefold()
+    if fill and fill != "none":
+        return True
     axis, value = _constant_line_axis_and_value(trace)
     if axis and value is not None:
         return False
@@ -1928,11 +1931,14 @@ def _is_histogram_overlay_trace(trace: Mapping[str, Any]) -> bool:
         or "selected model" in name_key
         or "kde reference" in name_key
         or "best fit" in name_key
+        or "tail" in name_key
     )
 
 
 def _histogram_overlay_trace_name(trace: Mapping[str, Any], overlay_index: int) -> str:
     current_name = str(trace.get("name") or "").strip().casefold()
+    if "tail" in current_name:
+        return "Tail shading"
     if "kde" in current_name:
         return "KDE reference"
     if "selected model" in current_name or "best fit" in current_name:
@@ -2005,17 +2011,21 @@ def _apply_payload_histogram_overlay_plotly_y(
         if row_index is None:
             continue
         used.add(row_index)
-        _row_label, y_values = overlay_rows[row_index]
-        x_values = _finite_trace_values(trace.get("x"))
-        if x_values and len(y_values) != len(x_values):
+        _row_label, row_x_values, y_values = overlay_rows[row_index]
+        trace_x_values = _finite_trace_values(trace.get("x"))
+        if row_x_values and len(y_values) != len(row_x_values):
             continue
+        if not row_x_values and trace_x_values and len(y_values) != len(trace_x_values):
+            continue
+        if row_x_values:
+            trace["x"] = list(row_x_values)
         trace["y"] = list(y_values)
         trace["hovertemplate"] = str(trace.get("hovertemplate") or "%{x}<br>%{y:.2%}<extra></extra>")
 
 
-def _histogram_plotly_overlay_rows(payload: Mapping[str, Any]) -> list[tuple[str, list[float]]]:
+def _histogram_plotly_overlay_rows(payload: Mapping[str, Any]) -> list[tuple[str, list[float], list[float]]]:
     rows = _histogram_modeled_overlay_rows(payload)
-    output: list[tuple[str, list[float]]] = []
+    output: list[tuple[str, list[float], list[float]]] = []
     for index, row in enumerate(rows, start=1):
         if not isinstance(row, Mapping):
             continue
@@ -2025,7 +2035,10 @@ def _histogram_plotly_overlay_rows(payload: Mapping[str, Any]) -> list[tuple[str
         y_values = _finite_trace_values(row.get("plotly_y"))
         if len(y_values) < 2:
             continue
-        output.append((_histogram_overlay_row_label(row, index=index), y_values))
+        x_values = _finite_trace_values(row.get("x"))
+        if x_values and len(x_values) != len(y_values):
+            continue
+        output.append((_histogram_overlay_row_label(row, index=index), x_values, y_values))
     return output
 
 
@@ -2057,11 +2070,11 @@ def _histogram_overlay_row_label(row: Mapping[str, Any], *, index: int) -> str:
 
 def _matching_histogram_overlay_row_index(
     trace_label: str,
-    overlay_rows: list[tuple[str, list[float]]],
+    overlay_rows: list[tuple[str, list[float], list[float]]],
     used: set[int],
 ) -> int | None:
     normalized_trace_label = _normalized_histogram_overlay_label(trace_label)
-    for index, (row_label, _y_values) in enumerate(overlay_rows):
+    for index, (row_label, _x_values, _y_values) in enumerate(overlay_rows):
         if index in used:
             continue
         if _normalized_histogram_overlay_label(row_label) == normalized_trace_label:
@@ -2070,7 +2083,7 @@ def _matching_histogram_overlay_row_index(
 
 
 def _next_unused_histogram_overlay_row_index(
-    overlay_rows: list[tuple[str, list[float]]],
+    overlay_rows: list[tuple[str, list[float], list[float]]],
     used: set[int],
 ) -> int | None:
     for index, _row in enumerate(overlay_rows):

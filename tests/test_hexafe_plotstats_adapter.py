@@ -657,7 +657,7 @@ def test_plotstats_dashboard_spec_keeps_probability_scaled_resolved_overlays(mon
     assert spec["layout"]["yaxis"]["range"] == [0.0, 0.54]
 
 
-def test_plotstats_dashboard_spec_prefers_payload_plotly_overlay_y(monkeypatch) -> None:
+def test_plotstats_dashboard_spec_prefers_payload_plotly_overlay_coordinates(monkeypatch) -> None:
     def fake_artifact(_payload, **_kwargs):
         return {
             "plotly_spec": {
@@ -667,7 +667,7 @@ def test_plotstats_dashboard_spec_prefers_payload_plotly_overlay_y(monkeypatch) 
                         "type": "scatter",
                         "mode": "lines",
                         "name": "Selected model curve",
-                        "x": [1.0, 1.5, 2.0],
+                        "x": [10.0, 15.0, 20.0],
                         "y": [4.0, 8.0, 4.0],
                         "meta": {"data_policy": "resolved_curve"},
                     },
@@ -675,9 +675,18 @@ def test_plotstats_dashboard_spec_prefers_payload_plotly_overlay_y(monkeypatch) 
                         "type": "scatter",
                         "mode": "lines",
                         "name": "KDE reference",
-                        "x": [1.0, 1.5, 2.0],
+                        "x": [10.0, 15.0, 20.0],
                         "y": [2.0, 6.0, 2.0],
                         "line": {"dash": "dash"},
+                        "meta": {"data_policy": "resolved_curve"},
+                    },
+                    {
+                        "type": "scatter",
+                        "mode": "lines",
+                        "name": "Tail shading",
+                        "x": [10.0, 20.0],
+                        "y": [3.0, 3.0],
+                        "fill": "tozeroy",
                         "meta": {"data_policy": "resolved_curve"},
                     },
                 ],
@@ -702,17 +711,25 @@ def test_plotstats_dashboard_spec_prefers_payload_plotly_overlay_y(monkeypatch) 
                         {
                             "kind": "curve",
                             "label": "Selected model curve",
-                            "x": [1.0, 1.5, 2.0],
+                            "x": [1.0, 1.25, 1.5],
                             "y": [4.0, 8.0, 4.0],
                             "plotly_y": [0.1, 0.2, 0.1],
                         },
                         {
                             "kind": "curve",
                             "label": "KDE reference",
-                            "x": [1.0, 1.5, 2.0],
+                            "x": [1.0, 1.25, 1.5],
                             "y": [2.0, 6.0, 2.0],
                             "plotly_y": [0.05, 0.15, 0.05],
                             "dash": [5, 4],
+                        },
+                        {
+                            "kind": "curve",
+                            "label": "Tail shading",
+                            "x": [1.25, 1.5],
+                            "y": [8.0, 4.0],
+                            "plotly_y": [0.2, 0.1],
+                            "fill_to_baseline": True,
                         },
                     ]
                 }
@@ -724,8 +741,13 @@ def test_plotstats_dashboard_spec_prefers_payload_plotly_overlay_y(monkeypatch) 
 
     selected = next(trace for trace in spec["data"] if trace.get("name") == "Selected model curve")
     kde = next(trace for trace in spec["data"] if trace.get("name") == "KDE reference")
+    tail = next(trace for trace in spec["data"] if trace.get("name") == "Tail shading")
+    assert selected["x"] == [1.0, 1.25, 1.5]
     assert selected["y"] == [0.1, 0.2, 0.1]
+    assert kde["x"] == [1.0, 1.25, 1.5]
     assert kde["y"] == [0.05, 0.15, 0.05]
+    assert tail["x"] == [1.25, 1.5]
+    assert tail["y"] == [0.2, 0.1]
     assert spec["layout"]["yaxis"]["range"] == [0.0, 0.54]
 
 

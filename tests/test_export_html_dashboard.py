@@ -1092,6 +1092,14 @@ class TestExportHtmlDashboard(unittest.TestCase):
                                     'plotly_y': [0.075, 0.15, 0.075],
                                     'dash': [5, 4],
                                 },
+                                {
+                                    'kind': 'curve',
+                                    'label': 'Tail shading',
+                                    'x': [5.0, 10.0],
+                                    'y': [8.0, 4.0],
+                                    'plotly_y': [0.20, 0.10],
+                                    'fill_to_baseline': True,
+                                },
                             ]
                         }
                     },
@@ -1117,8 +1125,14 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertIn('Frequency=%{y:.2%}', spec['data'][0]['hovertemplate'])
         selected_curve = next(trace for trace in spec['data'] if trace.get('name') == 'Selected model curve')
         kde_curve = next(trace for trace in spec['data'] if trace.get('name') == 'KDE reference')
+        tail_shading = next(trace for trace in spec['data'] if trace.get('name') == 'Tail shading')
+        self.assertEqual(selected_curve['x'], [0.0, 5.0, 10.0])
         self.assertEqual(selected_curve['y'], [0.1, 0.2, 0.1])
+        self.assertEqual(kde_curve['x'], [0.0, 5.0, 10.0])
         self.assertEqual(kde_curve['y'], [0.075, 0.15, 0.075])
+        self.assertEqual(tail_shading['x'], [5.0, 10.0])
+        self.assertEqual(tail_shading['y'], [0.2, 0.1])
+        self.assertEqual(tail_shading['fill'], 'tozeroy')
 
     def test_summary_histogram_mean_legend_precision_is_capped_at_four_decimals(self):
         with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
