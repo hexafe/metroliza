@@ -114,14 +114,14 @@ python -m maturin build --manifest-path src/metroliza/native/distribution_fit_ad
 - [ ] Produced artifacts are named/versioned as expected for RC distribution. *(Owner: Release manager)*
 - [ ] Third-party notices/license attribution are bundled or attached to release artifacts, including RapidOCR, ONNX Runtime, OpenCV, NumPy, Excel reader packages, hexafe-plotstats, and Oznak. *(Owner: Release manager/QA)*
 
-- [x] GitHub CI checks for the final pushed rc2 merge commit are green before tag/promotion: run [`26891179285`](https://github.com/hexafe/metroliza/actions/runs/26891179285) passed for commit `24a50ed069cd45c927f40d10ea0c989a7800915f`. Pre-merge validation run [`26875151720`](https://github.com/hexafe/metroliza/actions/runs/26875151720) passed for commit `05b5049558509060df43778d7b39424726e56ff1`. *(Owner: Release owner)*
+- [x] GitHub CI checks for the final pushed rc2 hardening commit are green before tag/promotion: run [`26947482310`](https://github.com/hexafe/metroliza/actions/runs/26947482310) passed for commit `60e0278739d3d696715f94c3c2eefe155a7f11fd`. Previous rc2 merge evidence run [`26891179285`](https://github.com/hexafe/metroliza/actions/runs/26891179285) passed for commit `24a50ed069cd45c927f40d10ea0c989a7800915f`. *(Owner: Release owner)*
 - [ ] CMM parser perf gate evidence (`cmm-parser-perf-gate` + `cmm-parser-perf-artifacts`) is reviewed when parser/backend changes are present; triage follows [`cmm_parser_perf_guardrail.md`](./cmm_parser_perf_guardrail.md). *(Owner: Release owner/QA)*
 - [ ] Coverage threshold from `unit-tests` passes, and `unit-test-coverage` artifact `coverage.xml` is reviewed as RC confidence evidence. *(Owner: Release owner/QA)*
 - [ ] Manual release smoke evidence is linked before open-testing promotion when applicable. Google conversion smoke is release-blocking for promoted RC artifacts; skipped default CI does not satisfy that gate. *(Owner: Release owner)*
 
-### 2026.05 RC4 directory-reorganization audit evidence
+### 2026.05 RC4 rc2 hardening evidence
 
-Current validation branch: `codex/directory-reorg-plan`.
+Current validation branch: `rc2`.
 Current RC metadata: `2026.05rc4(260602)`.
 Current plotstats hotfix pin:
 `1e2c72107d342f44a37e5fb78d7d76992ea60315`.
@@ -198,6 +198,20 @@ Current plotstats hotfix pin:
   checks, CMM parser perf guardrail, and the non-blocking Performance benchmark
   trend check. Manual/opt-in jobs were skipped: Packaging smoke, Windows startup
   benchmark, and Google conversion smoke.
+- rc2 startup/dashboard hardening CI passed: GitHub Actions run [`26947482310`](https://github.com/hexafe/metroliza/actions/runs/26947482310)
+  for commit `60e0278739d3d696715f94c3c2eefe155a7f11fd` (`Fix dashboard
+  selected style reset`) on 2026-06-04. Green automatic jobs were Static checks,
+  Unit tests with combined coverage artifact upload, Native wheel build and
+  smoke checks, CMM parser perf guardrail, and the non-blocking Performance
+  benchmark trend check. Manual/opt-in jobs were skipped: Packaging smoke,
+  Windows startup benchmark, and Google conversion smoke.
+- Local rc2 hardening release gate passed before the `60e0278` push: `git diff
+  --check`, `ruff`, `compileall`, release metadata sync, release hygiene,
+  packaged PDF parser validation, security audit with no known vulnerabilities,
+  focused selected-style reset regression (`1 passed`), and the CI-shaped
+  combined coverage gate (`1857 passed`, `261 skipped`, `95 warnings`,
+  `71 subtests passed`, plus isolated UI coverage shards; total coverage `81%`
+  against the `80%` threshold).
 - Post-reorganization follow-up local audit passed after docs/reference cleanup,
   parser-plugin productionization coverage, architecture guardrail hardening, and
   release-status refresh.
