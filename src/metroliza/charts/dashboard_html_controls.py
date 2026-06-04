@@ -731,7 +731,7 @@ def dashboard_visual_runtime_config_json(
         },
         ensure_ascii=False,
         separators=(",", ":"),
-    )
+    ).replace("</", "<\\/")
 
 
 def render_dashboard_visual_runtime_js(

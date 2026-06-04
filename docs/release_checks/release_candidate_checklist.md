@@ -233,6 +233,13 @@ Current plotstats hotfix pin:
   and smoke checks, CMM parser perf guardrail, and the non-blocking Performance
   benchmark trend check. Manual/opt-in jobs were skipped: Packaging smoke,
   Windows startup benchmark, and Google conversion smoke.
+- Codex review follow-up local gate passed on 2026-06-04 after the pushed
+  analytics CI evidence: stale industrial dynamic values are deleted when a
+  source record is replaced with a row that no longer carries that dynamic
+  field, and dashboard visual runtime JSON escapes `</script>` before embedding
+  labels/settings in inline scripts. Focused regression tests passed
+  (`19 passed`), and follow-up gates passed for `git diff --check`, full
+  `ruff`, `compileall`, release metadata sync, and release hygiene.
 - Post-reorganization follow-up local audit passed after docs/reference cleanup,
   parser-plugin productionization coverage, architecture guardrail hardening, and
   release-status refresh.

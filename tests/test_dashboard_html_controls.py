@@ -109,6 +109,20 @@ def test_dashboard_visual_dialog_and_runtime_embed_real_preview_labels() -> None
     assert "paletteIndexForPreviewLabel(" in runtime_js
 
 
+def test_dashboard_visual_runtime_escapes_script_closing_sequence_in_json() -> None:
+    labels = ("</script><script>alert(1)</script>",)
+    config_json = dashboard_visual_runtime_config_json(preview_labels=labels)
+    runtime_js = render_dashboard_visual_runtime_js(preview_labels=labels)
+
+    config = json.loads(config_json)
+
+    assert config["previewLabels"][1] == "</script><script>alert(1)</script>"
+    assert "</script>" not in config_json
+    assert "<\\/script>" in config_json
+    assert "</script>" not in runtime_js
+    assert "<\\/script>" in runtime_js
+
+
 def test_dashboard_visual_dialog_pairs_ranges_with_number_readouts() -> None:
     dialog_html = render_dashboard_visual_dialog()
 

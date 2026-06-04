@@ -300,7 +300,7 @@ def test_upsert_records_and_summarize_counts_from_synthetic_rows(tmp_path):
     assert counts.source_profiles == 1
     assert counts.sync_runs == 1
     assert counts.records == 2
-    assert counts.record_values == 4
+    assert counts.record_values == 3
     assert counts.join_rules == 0
     assert counts.link_candidates == 0
 
@@ -333,6 +333,17 @@ def test_upsert_records_and_summarize_counts_from_synthetic_rows(tmp_path):
             """,
             (profile.id,),
         ).fetchone()[0]
+        stale_measurements = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM industrial_record_values values_row
+            JOIN industrial_records records_row ON records_row.id = values_row.record_id
+            WHERE records_row.source_profile_id = ?
+              AND records_row.source_record_key = 'ROW-1'
+              AND values_row.field_name = 'measurements'
+            """,
+            (profile.id,),
+        ).fetchone()[0]
         row2_raw_record_json = conn.execute(
             """
             SELECT raw_record_json
@@ -352,3 +363,4 @@ def test_upsert_records_and_summarize_counts_from_synthetic_rows(tmp_path):
     assert "dynamic-secret" not in (quality_payload or "")
     assert json.loads(quality_payload)["apiKey"] == "<redacted>"
     assert token_values == 0
+    assert stale_measurements == 0
