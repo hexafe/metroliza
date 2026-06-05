@@ -64,6 +64,7 @@ IMPORT_TO_PACKAGE = {
     "oznak": "oznak",
     "pandas": "pandas",
     "pymupdf": "PyMuPDF",
+    "pyi_splash": "pyinstaller",
     "pytest": "pytest",
     "rapidocr": "rapidocr",
     "scipy": "scipy",
