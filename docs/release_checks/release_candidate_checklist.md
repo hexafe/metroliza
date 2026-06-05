@@ -276,6 +276,16 @@ Current plotstats hotfix pin:
   checks, CMM parser perf guardrail, and the non-blocking Performance benchmark
   trend check. Manual/opt-in jobs were skipped: Packaging smoke, Windows startup
   benchmark, and Google conversion smoke.
+- Post-plan summary-sheet planning extraction and release-evidence refresh passed
+  local gates and GitHub Actions CI on 2026-06-05. Commit
+  `aaa0ebdc32d31b9c05005da8408bca4a240f8373` (`Refresh release evidence and
+  summary planning`) passed default CI in run
+  [`27021152454`](https://github.com/hexafe/metroliza/actions/runs/27021152454).
+  Green automatic jobs were Static checks, Unit tests with combined coverage
+  artifact upload, Native wheel build and smoke checks, CMM parser perf
+  guardrail, and the non-blocking Performance benchmark trend check. Manual and
+  opt-in jobs were skipped: Packaging smoke, Windows startup benchmark, and
+  Google conversion smoke.
 - Post-reorganization follow-up local audit passed after docs/reference cleanup,
   parser-plugin productionization coverage, architecture guardrail hardening, and
   release-status refresh.
