@@ -8,7 +8,11 @@ from unittest.mock import patch
 
 import metroliza
 from metroliza.app import bootstrap
-from metroliza.app.startup_splash import should_show_startup_splash
+from metroliza.app.startup_splash import (
+    close_bootloader_splash,
+    should_show_startup_splash,
+    update_bootloader_splash,
+)
 from modules.license_bootstrap import validate_license_bootstrap
 
 
@@ -205,6 +209,32 @@ class TestBootstrapStartup(unittest.TestCase):
             clear=True,
         ):
             self.assertTrue(should_show_startup_splash(ui_smoke_mode=True))
+
+    def test_bootloader_splash_helpers_update_and_close_when_available(self):
+        calls = []
+
+        fake_pyi_splash = types.SimpleNamespace(
+            is_alive=lambda: True,
+            update_text=lambda message: calls.append(("update", message)),
+            close=lambda: calls.append(("close", None)),
+        )
+
+        with patch.dict("sys.modules", {"pyi_splash": fake_pyi_splash}):
+            update_bootloader_splash("Loading dashboard...", phase="test")
+            close_bootloader_splash(phase="test")
+
+        self.assertEqual(
+            calls,
+            [
+                ("update", "Loading dashboard..."),
+                ("close", None),
+            ],
+        )
+
+    def test_bootloader_splash_helpers_are_noop_when_unavailable(self):
+        with patch.dict("sys.modules", {"pyi_splash": None}):
+            update_bootloader_splash("Loading dashboard...", phase="test")
+            close_bootloader_splash(phase="test")
 
     def test_validate_license_bootstrap_skips_validation_when_disabled(self):
         with patch("metroliza.app.license_bootstrap.verify_license") as verify_mock:

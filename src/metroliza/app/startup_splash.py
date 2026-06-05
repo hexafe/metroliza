@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import os
+import sys
 from typing import Protocol
 
 from metroliza.app.startup_profile import record_event
@@ -35,6 +36,62 @@ class NullStartupSplash:
 
     def close(self) -> None:
         record_event("splash_close_skipped")
+
+
+def _load_bootloader_splash_module():
+    existing_module = sys.modules.get("pyi_splash")
+    if existing_module is not None:
+        return existing_module
+
+    if "_PYI_SPLASH_IPC" not in os.environ:
+        return None
+
+    try:
+        import pyi_splash
+    except Exception as exc:
+        record_event("bootloader_splash_unavailable", error_type=type(exc).__name__)
+        return None
+    return pyi_splash
+
+
+def update_bootloader_splash(message: str, *, phase: str) -> None:
+    """Update PyInstaller's pre-Python splash when it is available."""
+    pyi_splash = _load_bootloader_splash_module()
+    if pyi_splash is None:
+        return
+
+    try:
+        if pyi_splash.is_alive():
+            pyi_splash.update_text(message or "Metroliza is loading...")
+            record_event("bootloader_splash_update", phase=phase)
+        else:
+            record_event("bootloader_splash_inactive", phase=phase)
+    except Exception as exc:  # pragma: no cover - defensive packaged-startup guard.
+        record_event(
+            "bootloader_splash_update_failed",
+            phase=phase,
+            error_type=type(exc).__name__,
+        )
+
+
+def close_bootloader_splash(*, phase: str) -> None:
+    """Close PyInstaller's pre-Python splash when Metroliza UI feedback has taken over."""
+    pyi_splash = _load_bootloader_splash_module()
+    if pyi_splash is None:
+        return
+
+    try:
+        if pyi_splash.is_alive():
+            pyi_splash.close()
+            record_event("bootloader_splash_closed", phase=phase)
+        else:
+            record_event("bootloader_splash_close_skipped", phase=phase)
+    except Exception as exc:  # pragma: no cover - defensive packaged-startup guard.
+        record_event(
+            "bootloader_splash_close_failed",
+            phase=phase,
+            error_type=type(exc).__name__,
+        )
 
 
 def _normalized_mode() -> str:

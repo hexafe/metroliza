@@ -90,6 +90,9 @@ These checks are explicitly non-blocking for normal PR CI:
   Normal GUI launches use `METROLIZA_STARTUP_SPLASH=auto`; set
   `METROLIZA_STARTUP_SPLASH=1` only when manually validating splash rendering.
   In normal GUI mode, the splash remains visible until feature warmup completes.
+- Windows PyInstaller onefile artifacts also include a bootloader splash for the
+  pre-Python extraction window. It is separate from the Qt splash and is closed
+  by startup bootstrap when UI smoke exits or when the Qt splash takes over.
 - The job uploads `startup-artifacts/`, including raw profile JSONL files and
   `startup-summary.json`, as release evidence for onefile-vs-onedir startup
   comparisons.

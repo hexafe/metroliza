@@ -163,6 +163,11 @@ Distribution audit status:
 - `pyinstaller packaging/metroliza_onedir.spec` produces the faster-starting
   folder artifact under `dist/metroliza_P_<RELEASE_VERSION>(<VERSION_DATE>)_onedir/`.
 - default PyInstaller output filename follows release metadata: `metroliza_P_<RELEASE_VERSION>(<VERSION_DATE>).exe`
+- Windows onefile builds include a PyInstaller bootloader splash image at
+  `packaging/metroliza_bootloader_splash.png`. This splash is shown while the
+  onefile bootloader extracts the bundle, before Python and the Qt splash can
+  start. The app updates it through `pyi_splash` and closes it once the Qt
+  startup splash or smoke path has taken over.
 - the root `build_windows_exe.ps1` wrapper supports
   `-Mode onefile|onedir|both` and defaults to `both` for RC testing.
 - The spec explicitly preserves the known fragile runtime pieces for this app: optional native parser module, PyMuPDF backends, and Windows CPython runtime DLLs.
@@ -212,6 +217,11 @@ bootloader extraction of the full scientific/OCR payload on every cold launch
 and gives Windows Defender a more stable file set to cache. Treat both outputs
 as contingent on packaged-artifact smoke runs and at least one clean-machine
 launch check.
+
+The onefile bootloader splash improves perceived responsiveness but does not
+make extraction itself faster. To reduce actual startup time, compare onefile
+against onedir, review the packaged payload size, and run targeted Windows
+startup benchmarks before changing compression or bundled OCR/runtime assets.
 
 Startup profiling:
 

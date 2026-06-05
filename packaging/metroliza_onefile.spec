@@ -14,6 +14,7 @@ from pyinstaller_common import build_pyinstaller_collection, read_version_label
 VERSION_LABEL = read_version_label(ROOT_DIR)
 OUTPUT_NAME = f"metroliza_P_{VERSION_LABEL}"
 ICON_PATH = SPEC_DIR / "metroliza_icon2.ico"
+SPLASH_IMAGE_PATH = SPEC_DIR / "metroliza_bootloader_splash.png"
 COLLECTION = build_pyinstaller_collection(ROOT_DIR)
 
 
@@ -33,13 +34,28 @@ a = Analysis(
     noarchive=False,
 )
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+splash = None
+if sys.platform == "win32":
+    splash = Splash(
+        str(SPLASH_IMAGE_PATH),
+        binaries=a.binaries,
+        datas=a.datas,
+        text_pos=(28, 188),
+        text_size=13,
+        text_color="#f8fafc",
+        text_default="Metroliza is loading...",
+    )
+splash_target = [splash] if splash is not None else []
+splash_binaries = splash.binaries if splash is not None else []
 
 exe = EXE(
     pyz,
+    *splash_target,
     a.scripts,
     a.binaries,
     a.zipfiles,
     a.datas,
+    splash_binaries,
     [],
     name=OUTPUT_NAME,
     debug=False,

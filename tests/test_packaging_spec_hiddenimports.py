@@ -138,3 +138,19 @@ def test_onefile_spec_uses_release_metadata_pyinstaller_output_name():
     assert 'OUTPUT_DIR_NAME = f"metroliza_P_{VERSION_LABEL}_onedir"' in onedir_text
     assert 'EXE_NAME = "metroliza"' in onedir_text
     assert 'metroliza_package_entry.py' in onedir_text
+
+
+def test_onefile_spec_enables_windows_bootloader_splash_only():
+    spec_text = Path("packaging/metroliza_onefile.spec").read_text(encoding="utf-8")
+    onedir_text = Path("packaging/metroliza_onedir.spec").read_text(encoding="utf-8")
+    splash_asset = Path("packaging/metroliza_bootloader_splash.png")
+
+    assert splash_asset.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+    assert 'SPLASH_IMAGE_PATH = SPEC_DIR / "metroliza_bootloader_splash.png"' in spec_text
+    assert 'if sys.platform == "win32":' in spec_text
+    assert "splash = Splash(" in spec_text
+    assert 'text_default="Metroliza is loading..."' in spec_text
+    assert "*splash_target" in spec_text
+    assert "splash.binaries" in spec_text
+    assert "Splash(" not in onedir_text
+    assert "metroliza_bootloader_splash.png" not in onedir_text

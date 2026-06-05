@@ -9,7 +9,11 @@ from metroliza.app.license_bootstrap import (
     show_invalid_license_message,
     validate_license_bootstrap,
 )
-from metroliza.app.startup_splash import create_startup_splash
+from metroliza.app.startup_splash import (
+    close_bootloader_splash,
+    create_startup_splash,
+    update_bootloader_splash,
+)
 from metroliza.app.startup_profile import record_event, ui_smoke_enabled
 from metroliza.shared.logging_utils import ensure_application_logging
 
@@ -66,6 +70,7 @@ def load_startup_config() -> StartupConfig:
 
 def initialize_logging() -> logging.Logger:
     """Initialize application logging and return the entrypoint logger."""
+    update_bootloader_splash("Preparing Metroliza...", phase="logging")
     record_event("logging_init_start")
     ensure_application_logging()
     record_event("logging_init_done")
@@ -103,6 +108,7 @@ def _schedule_startup_ui_smoke_exit(app) -> None:
 def log_and_exit(exception: Exception) -> None:
     """Handles logging exceptions using CustomLogger."""
     record_event("top_level_exception", error_type=type(exception).__name__)
+    close_bootloader_splash(phase="top_level_exception")
     from metroliza.shared.custom_logger import CustomLogger
 
     CustomLogger(exception, reraise=False)
@@ -110,6 +116,7 @@ def log_and_exit(exception: Exception) -> None:
 
 def run_startup_smoke_mode(logger: logging.Logger) -> int:
     """Run startup smoke mode and return process exit code."""
+    close_bootloader_splash(phase="startup_smoke")
     record_event("startup_smoke_start")
     from metroliza.app.license_key_manager import LicenseKeyManager
 
@@ -124,6 +131,7 @@ def run_startup_smoke_mode(logger: logging.Logger) -> int:
 
 def run_pdf_parser_smoke_mode(logger: logging.Logger, fixture_path: str, expected_text: str) -> int:
     """Run packaged PDF parser smoke mode and return process exit code."""
+    close_bootloader_splash(phase="pdf_parser_smoke")
     record_event("pdf_parser_smoke_start")
     from metroliza.parsing.pdf_parser_smoke import run_pdf_parser_smoke
 
@@ -143,8 +151,10 @@ def launch_ui(config: StartupConfig) -> int:
     # Some packaged/Windows import paths touch UI modules eagerly, so make sure
     # QApplication exists before importing the main window dependency graph.
     record_event("launch_ui_start")
+    update_bootloader_splash("Starting Metroliza interface...", phase="qt")
     app = get_or_create_qapplication()
     splash = create_startup_splash(app, ui_smoke_mode=config.startup_ui_smoke_mode)
+    close_bootloader_splash(phase="qt_splash_ready")
     splash.show_message("Checking license...", phase="license")
 
     record_event("license_validation_start")
@@ -198,6 +208,7 @@ def launch_ui(config: StartupConfig) -> int:
 def bootstrap_application() -> int:
     """Entrypoint orchestration for startup configuration, logging, and UI launch."""
     record_event("bootstrap_start")
+    update_bootloader_splash("Starting Metroliza...", phase="bootstrap")
     logger = initialize_logging()
     config = load_startup_config()
 
