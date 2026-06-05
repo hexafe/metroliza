@@ -288,6 +288,43 @@ def build_summary_worksheet_plan(*, header: str, col: int, panel_subtitle: str) 
     }
 
 
+_METADATA_SUBTITLE_SEPARATOR = " \u2022 "
+
+
+def _truncate_metadata_subtitle_value(value: object, *, max_length: int = 34) -> str:
+    text = str(value or "").strip()
+    if len(text) <= max_length:
+        return text
+    return text[: max_length - 3].rstrip() + "..."
+
+
+def build_summary_panel_metadata_subtitle(
+    panel_subtitle: object,
+    metadata_rows: list[dict[str, object]] | None,
+) -> str:
+    """Append high-signal report metadata to the compact summary-sheet subtitle."""
+
+    base_text = str(panel_subtitle or "").strip()
+    row_by_label = {
+        str(row.get("label") or "").strip(): str(row.get("value") or "").strip()
+        for row in (metadata_rows or [])
+        if isinstance(row, dict)
+    }
+    segments: list[str] = []
+    for label in ("Part", "Revision", "Template", "Operator"):
+        value = row_by_label.get(label)
+        if value:
+            display_label = "Rev" if label == "Revision" else label
+            segments.append(f"{display_label}: {_truncate_metadata_subtitle_value(value)}")
+        if len(segments) >= 3:
+            break
+
+    metadata_text = _METADATA_SUBTITLE_SEPARATOR.join(segments)
+    if base_text and metadata_text:
+        return f"{base_text}{_METADATA_SUBTITLE_SEPARATOR}{metadata_text}"
+    return base_text or metadata_text
+
+
 def compute_group_sample_counts(sampled_group: pd.DataFrame, grouping_key: str) -> dict[str, int]:
     if sampled_group is None or sampled_group.empty:
         return {}
@@ -318,20 +355,21 @@ def resolve_summary_stages(
     violin_plot_min_samplesize: int,
     header: str,
     col: int,
+    metadata_rows: list[dict[str, object]] | None = None,
 ) -> dict[str, Any]:
     """Compute all pure summary planning stages in one contract-friendly payload."""
 
     limits = resolve_nominal_and_limits(header_group)
-    summary_stats = retrieve_summary_statistics(
+    normalized_group = normalize_summary_group_frame(
         header_group,
+        grouping_key='GROUP' if grouping_applied else 'SAMPLE_NUMBER',
+    )
+    summary_stats = retrieve_summary_statistics(
+        normalized_group,
         sql_summary=sql_summary,
         nom=limits['nom'],
         usl=limits['usl'],
         lsl=limits['lsl'],
-    )
-    normalized_group = normalize_summary_group_frame(
-        header_group,
-        grouping_key='GROUP' if grouping_applied else 'SAMPLE_NUMBER',
     )
     from metroliza.charts.chart_render_service import resolve_chart_sampling_policy
 
@@ -350,7 +388,10 @@ def resolve_summary_stages(
     worksheet_plan = build_summary_worksheet_plan(
         header=header,
         col=col,
-        panel_subtitle=chart_payloads['composition']['panel_subtitle'],
+        panel_subtitle=build_summary_panel_metadata_subtitle(
+            chart_payloads['composition']['panel_subtitle'],
+            metadata_rows,
+        ),
     )
     return {
         'limits': limits,

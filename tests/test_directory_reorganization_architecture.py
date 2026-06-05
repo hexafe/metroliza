@@ -16,7 +16,7 @@ IMPLEMENTATION_IMPORT_ROOTS = (
     REPO_ROOT / "scripts",
     REPO_ROOT / "packaging",
 )
-TEST_LEGACY_REFERENCE_BUDGET = 1144
+TEST_LEGACY_REFERENCE_BUDGET = 1142
 TEST_LEGACY_REFERENCE_EXCLUDED_FILES = {
     "tests/test_directory_reorganization_architecture.py",
     "tests/test_packaging_spec_hiddenimports.py",

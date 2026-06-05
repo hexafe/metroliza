@@ -173,13 +173,10 @@ from metroliza.exporting.export_summary_composition_service import (
 )
 from metroliza.exporting.export_summary_sheet_compute import (
     append_group_sample_counts as _append_group_sample_counts_compute,
-    build_summary_worksheet_plan as _build_summary_worksheet_plan_compute,
+    build_summary_panel_metadata_subtitle,  # noqa: F401 - re-exported for compatibility
     compute_group_sample_counts as _compute_group_sample_counts_compute,
     finalize_histogram_summary_payload as _finalize_histogram_summary_payload_compute,
-    normalize_summary_group_frame as _normalize_summary_group_frame_compute,
-    prepare_summary_chart_payloads as _prepare_summary_chart_payloads_compute,
-    resolve_sampling_context as _resolve_sampling_context_compute,
-    retrieve_summary_statistics as _retrieve_summary_statistics_compute,
+    resolve_summary_stages as _resolve_summary_stages_compute,
 )
 from metroliza.exporting.export_group_analysis_annotation_service import (
     build_violin_group_annotation_payload as _build_violin_group_annotation_payload,
@@ -480,36 +477,6 @@ def build_dashboard_report_metadata(header_group):
         rows.append({'label': 'Source files', 'value': file_value})
 
     return rows
-
-
-def _truncate_metadata_subtitle_value(value, *, max_length=34):
-    text = str(value or '').strip()
-    if len(text) <= max_length:
-        return text
-    return text[: max_length - 3].rstrip() + '...'
-
-
-def build_summary_panel_metadata_subtitle(panel_subtitle, metadata_rows):
-    """Append high-signal report metadata to the compact summary-sheet subtitle."""
-    base_text = str(panel_subtitle or '').strip()
-    row_by_label = {
-        str(row.get('label') or '').strip(): str(row.get('value') or '').strip()
-        for row in (metadata_rows or [])
-        if isinstance(row, dict)
-    }
-    segments = []
-    for label in ('Part', 'Revision', 'Template', 'Operator'):
-        value = row_by_label.get(label)
-        if value:
-            display_label = 'Rev' if label == 'Revision' else label
-            segments.append(f'{display_label}: {_truncate_metadata_subtitle_value(value)}')
-        if len(segments) >= 3:
-            break
-
-    metadata_text = ' • '.join(segments)
-    if base_text and metadata_text:
-        return f'{base_text} • {metadata_text}'
-    return base_text or metadata_text
 
 
 # Chart wrappers preserve existing call signatures used throughout this file and
@@ -5712,13 +5679,6 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                     usl=USL,
                     lsl=LSL,
                 )
-            summary_stats = _retrieve_summary_statistics_compute(
-                header_group,
-                sql_summary=sql_summary,
-                nom=nom,
-                usl=USL,
-                lsl=LSL,
-            )
             self._record_stage_timing('summary_stat_retrieval', time.perf_counter() - summary_start)
 
             grouping_start = time.perf_counter()
@@ -5728,24 +5688,35 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 grouping_df,
                 fallback_group_label=_get_default_group_label(grouping_df),
             )
-            distribution_key = 'GROUP' if grouping_applied else 'SAMPLE_NUMBER'
             scatter_key = 'SAMPLE_NUMBER'
-            normalized_group = _normalize_summary_group_frame_compute(header_group, grouping_key=distribution_key)
+            dashboard_metadata_rows = build_dashboard_report_metadata(header_group)
             self._record_stage_timing('transform_grouping', time.perf_counter() - grouping_start)
 
-            sampling_start = time.perf_counter()
-            sampling_policy = resolve_chart_sampling_policy(density_mode=self._optimization_toggles['chart_density_mode'])
-            sampling_context = _resolve_sampling_context_compute(
-                normalized_group,
+            planning_start = time.perf_counter()
+            summary_stages = _resolve_summary_stages_compute(
+                header_group,
+                sql_summary=sql_summary,
                 grouping_applied=grouping_applied,
-                sampling_policy=sampling_policy,
+                density_mode=self._optimization_toggles['chart_density_mode'],
                 violin_plot_min_samplesize=self.violin_plot_min_samplesize,
+                header=header,
+                col=col,
+                metadata_rows=dashboard_metadata_rows,
             )
+            limits = summary_stages['limits']
+            nom = limits['nom']
+            USL = limits['usl']
+            LSL = limits['lsl']
+            summary_stats = summary_stages['summary_stats']
+            normalized_group = summary_stages['normalized_group']
+            sampling_context = summary_stages['sampling_context']
             sampled_distribution_group = sampling_context['sampled_frames']['distribution']
             sampled_iqr_group = sampling_context['sampled_frames']['iqr']
             sampled_histogram_group = sampling_context['sampled_frames']['histogram']
             sampled_trend_group = sampling_context['sampled_frames']['trend']
-            self._record_stage_timing('sampling_plan_resolution', time.perf_counter() - sampling_start)
+            chart_payloads = summary_stages['chart_payloads']
+            worksheet_plan = summary_stages['worksheet_plan']
+            self._record_stage_timing('sampling_plan_resolution', time.perf_counter() - planning_start)
 
             chart_prep_start = time.perf_counter()
             chart_mp_enabled = self._chart_executor is not None and len(normalized_group) >= 2500
@@ -5787,21 +5758,11 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             iqr_labels = sampling_context['iqr_payload']['labels']
             iqr_values = sampling_context['iqr_payload']['values']
 
-            chart_payloads = _prepare_summary_chart_payloads_compute(
-                header=header,
-                grouping_applied=grouping_applied,
-                sampling_context=sampling_context,
-                summary_stats=summary_stats,
-            )
             histogram_table_payload = chart_payloads['histogram']['histogram_table_payload']
             summary_table_composition = chart_payloads['composition']
             capability_badge = summary_table_composition['capability_badge']
             histogram_row_badges = summary_table_composition['histogram_row_badges']
-            dashboard_metadata_rows = build_dashboard_report_metadata(header_group)
-            panel_subtitle = build_summary_panel_metadata_subtitle(
-                summary_table_composition['panel_subtitle'],
-                dashboard_metadata_rows,
-            )
+            panel_subtitle = worksheet_plan['subtitle_value']
             dashboard_section = self._begin_html_dashboard_section(
                 header=header,
                 subtitle=panel_subtitle,
@@ -5844,16 +5805,10 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             use_dynamic_annotation_offsets = annotation_strategy['annotation_mode'] == 'dynamic'
             show_violin_annotation_legend = annotation_strategy['show_violin_legend']
 
-            write_plan_start = time.perf_counter()
-            worksheet_plan = _build_summary_worksheet_plan_compute(
-                header=header,
-                col=col,
-                panel_subtitle=panel_subtitle,
-            )
             header_cell = worksheet_plan['header_cell']
             default_image_slots = worksheet_plan['image_slots']
             distribution_overflow_cols = 0
-            self._record_stage_timing('worksheet_write_planning', time.perf_counter() - write_plan_start)
+            self._record_stage_timing('worksheet_write_planning', 0.0)
 
             def _reserve_summary_image_slot(chart_name, fig):
                 nonlocal distribution_overflow_cols

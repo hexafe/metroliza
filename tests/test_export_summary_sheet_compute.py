@@ -1,11 +1,13 @@
 import pandas as pd
 
-from modules.chart_render_service import ChartSamplingPolicy, resolve_chart_sampling_policy
-from modules.export_summary_sheet_compute import (
+from metroliza.charts.chart_render_service import ChartSamplingPolicy, resolve_chart_sampling_policy
+from metroliza.exporting.export_summary_sheet_compute import (
+    build_summary_panel_metadata_subtitle,
     build_summary_worksheet_plan,
     normalize_summary_group_frame,
     prepare_summary_chart_payloads,
     resolve_sampling_context,
+    resolve_summary_stages,
     retrieve_summary_statistics,
 )
 
@@ -35,6 +37,43 @@ def test_build_summary_worksheet_plan_preserves_legacy_layout_contract():
     assert plan['image_slots']['iqr'] == {'row': 1, 'col': 11}
     assert plan['image_slots']['histogram'] == {'row': 1, 'col': 21}
     assert plan['image_slots']['trend'] == {'row': 1, 'col': 35}
+
+
+def test_build_summary_panel_metadata_subtitle_adds_high_signal_context():
+    subtitle = build_summary_panel_metadata_subtitle(
+        'n=4 | NOK 0%',
+        [
+            {'label': 'Part', 'value': 'Housing Assembly'},
+            {'label': 'Revision', 'value': 'B'},
+            {'label': 'Template', 'value': 'CMM final dimensional report with extended configuration'},
+            {'label': 'Operator', 'value': 'ignored after first three segments'},
+        ],
+    )
+
+    assert (
+        subtitle
+        == 'n=4 | NOK 0% \u2022 Part: Housing Assembly \u2022 Rev: B '
+        '\u2022 Template: CMM final dimensional report wi...'
+    )
+
+
+def test_resolve_summary_stages_returns_complete_planning_payload():
+    stages = resolve_summary_stages(
+        _header_group(),
+        sql_summary=None,
+        grouping_applied=True,
+        density_mode='full',
+        violin_plot_min_samplesize=1,
+        header='H1',
+        col=5,
+        metadata_rows=[{'label': 'Part', 'value': 'Fixture'}],
+    )
+
+    assert stages['limits'] == {'nom': 2.5, 'usl': 3.5, 'lsl': 1.5}
+    assert stages['normalized_group']['MEAS'].dtype.kind in {'f', 'i'}
+    assert stages['sampling_context']['distribution_payload']['labels'] == ['A', 'B']
+    assert stages['chart_payloads']['distribution']['labels'] == ['A (n=2)', 'B (n=2)']
+    assert stages['worksheet_plan']['subtitle_value'].endswith(' \u2022 Part: Fixture')
 
 
 def test_resolve_sampling_context_normalizes_numeric_measurements_once_and_returns_typed_payloads():

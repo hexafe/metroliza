@@ -262,6 +262,20 @@ Current plotstats hotfix pin:
   with CI coverage tracking (`1871 passed`, `261 skipped`, `95 warnings`,
   `71 subtests passed`), and the CI-shaped combined coverage gate with isolated
   UI shards passed at `81%` against the `80%` threshold.
+- PyInstaller onefile bootloader splash support passed local Linux packaging and
+  startup smoke on 2026-06-05. The slice adds a Windows onefile bootloader splash
+  asset/spec hook, updates it through `pyi_splash` during Python startup, and
+  closes it when Qt startup gating hands off to the app splash/main window. Local
+  focused gates passed for app bootstrap/splash tests, packaging hidden-import
+  tests, CI-policy sync, `ruff`, and Linux onefile packaging/startup smoke. The
+  final pushed rc2 head passed GitHub Actions CI in run
+  [`27006471511`](https://github.com/hexafe/metroliza/actions/runs/27006471511)
+  for commit `80a1802fce2ff58c7c70e6dfa86ff5e1c5656c8c` (`Classify PyInstaller
+  splash import`) on 2026-06-05. Green automatic jobs were Static checks, Unit
+  tests with combined coverage artifact upload, Native wheel build and smoke
+  checks, CMM parser perf guardrail, and the non-blocking Performance benchmark
+  trend check. Manual/opt-in jobs were skipped: Packaging smoke, Windows startup
+  benchmark, and Google conversion smoke.
 - Post-reorganization follow-up local audit passed after docs/reference cleanup,
   parser-plugin productionization coverage, architecture guardrail hardening, and
   release-status refresh.

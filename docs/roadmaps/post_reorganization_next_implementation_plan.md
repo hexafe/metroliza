@@ -265,6 +265,15 @@ python scripts/security_audit.py --ci --sibling-root /home/hexaf/Projects
 python scripts/check_release_hygiene.py
 ```
 
+2026-06-05 dependency hygiene note:
+
+- GitHub tag inspection found only prerelease-style tags for the pinned sibling
+  packages (`hexafe-groupstats` `v0.1.0rc2`/`v0.1.0rc3`,
+  `hexafe-plotstats` `v0.1.0a1`, and `oznak` `v0.2.0rc1`). Runtime release
+  policy still requires full-SHA Git pins for these packages, so
+  `requirements.txt`, CI sibling checkouts, and dependency-hygiene tests remain
+  unchanged in this slice.
+
 ## Implementation Subagent Split
 
 Use subagents for parallel audit/research and for bounded implementation slices.
