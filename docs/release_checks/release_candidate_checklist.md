@@ -296,8 +296,15 @@ Current plotstats hotfix pin:
   focused workflow/dashboard/release tests (`71 passed`), full headless pytest
   with coverage tracking (`1878 passed`, `263 skipped`, `95 warnings`,
   `71 subtests passed`), and the CI-shaped combined coverage gate with isolated
-  UI shards at `81%` against the `80%` threshold. Pushed-SHA CI evidence for this
-  slice must be recorded here before merge/tag.
+  UI shards at `81%` against the `80%` threshold. Pushed rc2 CI passed in
+  GitHub Actions run
+  [`27155205470`](https://github.com/hexafe/metroliza/actions/runs/27155205470)
+  for commit `e0af5d8ec4075aa266a76610b4b6f608fffb2bd7` (`Add CSV Summary file
+  groups`) on 2026-06-08. Green automatic jobs were Static checks, Unit tests
+  with combined coverage artifact upload, Native wheel build and smoke checks,
+  CMM parser perf guardrail, and the non-blocking Performance benchmark trend
+  check. Manual and opt-in jobs were skipped: Packaging smoke, Windows startup
+  benchmark, and Google conversion smoke.
 - Post-reorganization follow-up local audit passed after docs/reference cleanup,
   parser-plugin productionization coverage, architecture guardrail hardening, and
   release-status refresh.
