@@ -69,10 +69,12 @@ from metroliza.tabular.tabular_analytics_service import (
     TABULAR_DEFAULT_GROUP,
     TABULAR_GROUP_COLUMN,
     TabularColumnFilter,
+    build_tabular_file_grouping_dataframe,
     cleanup_tabular_load_result,
     count_tabular_materialized_rows,
     list_tabular_excel_sheets,
     materialize_tabular_dataframe,
+    tabular_file_group_labels,
     tabular_load_result_row_count,
 )
 from metroliza.ui.ui_foundation import (
@@ -505,6 +507,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.tabular_column_filters: tuple[TabularColumnFilter, ...] = ()
         self.df_for_grouping = None
         self.grouping_applied = False
+        self._auto_group_selected_files = False
         self._tabular_reload_notice = ""
         self.dashboard_interactivity_options = DashboardInteractivityOptions()
 
@@ -1138,6 +1141,7 @@ class IndustrialAnalyticsDialog(QDialog):
     def clear_tabular_filter_and_groups(self) -> None:
         if self.is_production_source:
             return
+        self._auto_group_selected_files = False
         self._clear_tabular_filter()
         self._clear_tabular_grouping()
         self._sync_ui_state()
@@ -1145,6 +1149,7 @@ class IndustrialAnalyticsDialog(QDialog):
     def clear_tabular_groups(self) -> None:
         if self.is_production_source:
             return
+        self._auto_group_selected_files = False
         self._clear_tabular_grouping()
         self._sync_ui_state()
 
@@ -1230,6 +1235,7 @@ class IndustrialAnalyticsDialog(QDialog):
         if not filenames:
             return
         selected_files = tuple(str(Path(filename)) for filename in filenames)
+        self._auto_group_selected_files = False
         if len(selected_files) > 1 and any(Path(filename).suffix.lower() != ".csv" for filename in selected_files):
             QMessageBox.warning(
                 self,
@@ -1237,6 +1243,7 @@ class IndustrialAnalyticsDialog(QDialog):
                 "Select only CSV files when loading multiple CSV Summary inputs.",
             )
             return
+        self._auto_group_selected_files = self._confirm_auto_group_selected_files(selected_files)
         self.input_files = selected_files
         self.input_file = selected_files[0]
         output_seed = self.input_file
@@ -1256,6 +1263,30 @@ class IndustrialAnalyticsDialog(QDialog):
         self._reset_tabular_column_options()
         self._reset_group_options(())
         self.show_tabular_load_screen()
+
+    def _confirm_auto_group_selected_files(self, selected_files: tuple[str, ...]) -> bool:
+        if len(selected_files) <= 1:
+            return False
+        labels = tabular_file_group_labels(selected_files)
+        if not labels:
+            return False
+        group_names = [group_name for _source_name, group_name in labels]
+        preview = ", ".join(group_names[:5])
+        if len(group_names) > 5:
+            preview = f"{preview}, +{len(group_names) - 5} more"
+        result = QMessageBox.question(
+            self,
+            self.windowTitle(),
+            (
+                "Create groups from the selected file names?\n\n"
+                f"Groups: {preview}\n\n"
+                "Each loaded row will be assigned to the group for its source file. "
+                "No POPULATION group will be created unless you add or rename one later."
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        return result == QMessageBox.StandardButton.Yes
 
     def handle_load_metrics_clicked(self) -> None:
         if self.is_production_source:
@@ -1382,9 +1413,27 @@ class IndustrialAnalyticsDialog(QDialog):
             timestamp_column=loaded.timestamp_column,
             reference_column=loaded.reference_column,
         )
+        self._apply_auto_file_grouping(loaded)
         if populate_metrics:
             self._populate_metrics()
             self._sync_ui_state()
+
+    def _apply_auto_file_grouping(self, loaded) -> None:
+        if self.is_production_source or not self._auto_group_selected_files:
+            return
+        source_files = tuple(getattr(loaded, "source_files", ()) or self._selected_input_files())
+        if len(source_files) <= 1:
+            return
+        grouping_df = build_tabular_file_grouping_dataframe(
+            getattr(loaded, "dataframe", None),
+            source_files=source_files,
+            source_snapshots=tuple(getattr(loaded, "source_snapshots", ()) or ()),
+        )
+        if grouping_df.empty:
+            self._clear_tabular_grouping()
+            return
+        self.set_df_for_grouping(grouping_df)
+        self.set_grouping_applied(True)
 
     def _tabular_source_label(self, loaded) -> str:
         row_count = tabular_load_result_row_count(loaded)
@@ -1857,37 +1906,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self._sync_ui_state()
         if not self.start_button.isEnabled():
             return
-        if not self._confirm_large_dashboard_interactivity():
-            return
         self.show_loading_screen()
-
-    def _confirm_large_dashboard_interactivity(self) -> bool:
-        if self.is_production_source or self.tabular_load_result is None:
-            return True
-        options = self.dashboard_interactivity_options
-        if options.mode != "auto":
-            return True
-        row_count = self._tabular_filtered_row_count()
-        if row_count <= options.sample_size:
-            return True
-        dialog = DashboardInteractivityOptionsDialog(
-            self,
-            options=options,
-            row_count=row_count,
-        )
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return False
-        request = validate_industrial_analytics_request(
-            IndustrialAnalyticsRequest(
-                source_kind=self.source_kind,
-                output_dashboard_file=self.output_dashboard_file,
-                dashboard_interactivity_options=dialog.interactivity_options(),
-            )
-        )
-        self.dashboard_interactivity_options = request.dashboard_interactivity_options
-        self._sync_dashboard_interactivity_controls()
-        self._sync_population_layer_controls()
-        return True
 
     def show_tabular_load_screen(self) -> None:
         if self.is_production_source:

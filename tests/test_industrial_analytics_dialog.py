@@ -10,7 +10,7 @@ from tests.industrial_analytics_fixtures import seed_production_analytics_cache
 from modules.contracts import DashboardInteractivityOptions
 
 try:
-    from PyQt6.QtWidgets import QApplication, QDialog
+    from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox
     from modules.industrial_analytics_dialog import (
         build_analytics_completion_message,
         DashboardInteractivityOptionsDialog,
@@ -35,6 +35,7 @@ except ImportError as exc:  # pragma: no cover - environment/order dependent
     DashboardInteractivityOptionsDialog = None
     DashboardPopulationLayerOptionsDialog = None
     QDialog = None
+    QMessageBox = None
     IndustrialAnalyticsDialog = None
     IndustrialAnalyticsFilterDialog = None
     IndustrialAnalyticsThread = None
@@ -492,48 +493,44 @@ def test_tabular_analytics_population_layer_button_launches_dialog(monkeypatch) 
         dialog.close()
 
 
-def test_large_tabular_dashboard_auto_mode_prompts_for_interactivity(monkeypatch) -> None:
+def test_large_tabular_dashboard_auto_mode_starts_without_interactivity_prompt(monkeypatch) -> None:
     _app()
     calls = {}
 
     class FakeDashboardInteractivityOptionsDialog:
-        def __init__(self, parent=None, *, options=None, row_count=None):
-            calls["parent"] = parent
-            calls["options"] = options
-            calls["row_count"] = row_count
-
-        def exec(self):
-            calls["exec_called"] = True
-            return QDialog.DialogCode.Accepted
-
-        def interactivity_options(self):
-            return DashboardInteractivityOptions(mode="sampled", sample_size=50000)
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("Create analytics must not open the interactivity dialog")
 
     monkeypatch.setitem(
-        IndustrialAnalyticsDialog._confirm_large_dashboard_interactivity.__globals__,
+        IndustrialAnalyticsDialog.open_dashboard_interactivity_options.__globals__,
         "DashboardInteractivityOptionsDialog",
         FakeDashboardInteractivityOptionsDialog,
+    )
+    monkeypatch.setattr(
+        IndustrialAnalyticsDialog,
+        "_tabular_filtered_row_count",
+        lambda _self: 350000,
+    )
+    monkeypatch.setattr(
+        IndustrialAnalyticsDialog,
+        "show_loading_screen",
+        lambda self: calls.setdefault("show_loading_screen", self),
     )
 
     dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
     try:
-        dialog.tabular_load_result = object()
-        monkeypatch.setattr(
-            IndustrialAnalyticsDialog,
-            "_tabular_filtered_row_count",
-            lambda _self: 350000,
+        dialog.input_file = "table.csv"
+        dialog.output_dashboard_file = "table_analytics.html"
+        dialog.tabular_load_result = types.SimpleNamespace(row_count=350000, sqlite_store=None)
+        dialog.metric_candidates = (
+            ProductionMetricSelection("length_mm", display_label="Length mm"),
         )
+        dialog._populate_metrics()
 
-        assert dialog._confirm_large_dashboard_interactivity() is True
+        dialog.handle_start_button()
 
-        assert calls["parent"] is dialog
-        assert calls["options"] == DashboardInteractivityOptions(mode="auto", sample_size=50000)
-        assert calls["row_count"] == 350000
-        assert calls["exec_called"] is True
-        assert dialog.dashboard_interactivity_options == DashboardInteractivityOptions(
-            mode="sampled",
-            sample_size=50000,
-        )
+        assert calls["show_loading_screen"] is dialog
+        assert dialog.dashboard_interactivity_options == DashboardInteractivityOptions()
     finally:
         dialog.tabular_load_result = None
         dialog.close()
@@ -629,6 +626,12 @@ def test_tabular_analytics_dialog_auto_loads_metrics_after_file_selection(
         "modules.industrial_analytics_dialog.QFileDialog.getOpenFileNames",
         lambda *_args, **_kwargs: ([str(input_file)], "CSV (*.csv)"),
     )
+    monkeypatch.setattr(
+        "modules.industrial_analytics_dialog.QMessageBox.question",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("single-file CSV Summary load must not prompt for file groups")
+        ),
+    )
 
     dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
     try:
@@ -683,6 +686,12 @@ def test_tabular_analytics_dialog_loads_multiple_csv_files(
         "modules.industrial_analytics_dialog.QFileDialog.getOpenFileNames",
         lambda *_args, **_kwargs: ([str(first_file), str(second_file)], "CSV (*.csv)"),
     )
+    question_calls = []
+    monkeypatch.setattr(
+        "modules.industrial_analytics_dialog.QMessageBox.question",
+        lambda *args, **_kwargs: question_calls.append(args)
+        or QMessageBox.StandardButton.Yes,
+    )
 
     dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
     try:
@@ -698,6 +707,85 @@ def test_tabular_analytics_dialog_loads_multiple_csv_files(
         assert not dialog.sheet_name_combo.isEnabled()
         assert dialog.metrics_list.count() == 1
         assert dialog.input_file_field.text().startswith("2 CSV files:")
+        assert question_calls
+        assert "line_a" in question_calls[0][2]
+        assert "line_b" in question_calls[0][2]
+        assert dialog.grouping_applied is True
+        assert set(dialog.df_for_grouping["GROUP"]) == {"line_a", "line_b"}
+        assert dialog.grouping_summary_label.text() == "Groups: 2 custom"
+    finally:
+        dialog.close()
+
+
+def test_tabular_analytics_dialog_can_decline_multi_file_auto_groups(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _app()
+    first_file = tmp_path / "dataset1.csv"
+    second_file = tmp_path / "supplier1.csv"
+    for path, offset in ((first_file, 0), (second_file, 2)):
+        pd.DataFrame(
+            {
+                "Time Stamp": pd.date_range("2026-05-10 08:00", periods=2, freq="h"),
+                "Length mm": [10.0 + offset, 10.2 + offset],
+            }
+        ).to_csv(path, index=False)
+    monkeypatch.setattr(
+        "modules.industrial_analytics_dialog.QFileDialog.getOpenFileNames",
+        lambda *_args, **_kwargs: ([str(first_file), str(second_file)], "CSV (*.csv)"),
+    )
+    monkeypatch.setattr(
+        "modules.industrial_analytics_dialog.QMessageBox.question",
+        lambda *_args, **_kwargs: QMessageBox.StandardButton.No,
+    )
+
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.select_input_file()
+        _wait_for_tabular_load(dialog)
+
+        assert dialog.input_files == (str(first_file), str(second_file))
+        assert dialog.grouping_applied is False
+        assert dialog.df_for_grouping is None
+        assert dialog.grouping_summary_label.text() == "Groups: not applied"
+    finally:
+        dialog.close()
+
+
+def test_tabular_analytics_dialog_rejects_mixed_multi_file_without_group_prompt(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _app()
+    csv_file = tmp_path / "dataset.csv"
+    excel_file = tmp_path / "supplier.xlsx"
+    pd.DataFrame({"Length mm": [10.0, 10.2]}).to_csv(csv_file, index=False)
+    pd.DataFrame({"Length mm": [10.4, 10.6]}).to_excel(excel_file, index=False)
+    warning_calls = []
+    monkeypatch.setattr(
+        "modules.industrial_analytics_dialog.QFileDialog.getOpenFileNames",
+        lambda *_args, **_kwargs: ([str(csv_file), str(excel_file)], "All files (*)"),
+    )
+    monkeypatch.setattr(
+        "modules.industrial_analytics_dialog.QMessageBox.question",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("invalid mixed multi-file selection must not prompt for file groups")
+        ),
+    )
+    monkeypatch.setattr(
+        "modules.industrial_analytics_dialog.QMessageBox.warning",
+        lambda *args, **_kwargs: warning_calls.append(args),
+    )
+
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.select_input_file()
+
+        assert dialog.input_files == ()
+        assert dialog.input_file == ""
+        assert warning_calls
+        assert "Select only CSV files" in warning_calls[0][2]
     finally:
         dialog.close()
 

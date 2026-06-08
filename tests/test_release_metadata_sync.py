@@ -13,7 +13,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}(?:rc\d+)?$")
         self.assertRegex(metadata.build, r"^\d{6}$")
         self.assertEqual(metadata.version_label, f"{metadata.release_version}({metadata.build})")
-        self.assertEqual(metadata.public_version_label, "2026.05 RC4 (build 260602)")
+        self.assertEqual(metadata.public_version_label, "2026.05 RC4 (build 260608)")
         self.assertTrue(metadata.highlight)
 
     def test_in_app_current_release_notes_show_current_version_only(self):
@@ -54,6 +54,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
                 "- Google Sheets export now checks converted workbook tabs and warns when a local Excel fallback should be used<br>",
                 "- Canceling long parsing, export, and metadata tasks is more reliable from progress windows<br>",
                 "- Dashboard plot visuals can now be customized<br>",
+                "- CSV Summary can auto-create one group per selected CSV file name without adding a POPULATION group<br>",
                 "- CSV Summary dashboards can render dense POPULATION background layers as static images while keeping smaller groups interactive<br>",
                 "- CSV Summary static POPULATION layers now remain visible when all selected rows belong to POPULATION and no random sampling is needed<br>",
                 "- Oznak Check access no longer requests a reference column unless reference filtering is configured<br>",

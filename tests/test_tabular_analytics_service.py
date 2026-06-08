@@ -27,12 +27,15 @@ from modules.industrial_analytics_state import (
     ProductionMetricSelection,
 )
 from modules.tabular_analytics_service import (
+    TABULAR_DEFAULT_GROUP,
     TABULAR_GROUP_COLUMN,
     TabularColumnFilter,
     TabularLoadCancelled,
+    TabularSourceSnapshot,
     TabularSqliteFilterExpression,
     apply_tabular_row_filter,
     apply_tabular_grouping,
+    build_tabular_file_grouping_dataframe,
     build_tabular_grouping_dataframe,
     cleanup_tabular_load_result,
     compile_tabular_sqlite_grouping_filter,
@@ -81,6 +84,60 @@ def test_load_tabular_analytics_file_detects_csv_metrics_and_contract_columns(tm
     assert "reference" in result.dataframe.columns
     assert set(result.dataframe["reference"]) == {"R1", "R2", "R3"}
     assert result.csv_config["delimiter"] == ","
+
+
+def test_build_tabular_file_grouping_dataframe_assigns_custom_file_groups_only() -> None:
+    frame = pd.DataFrame(
+        {
+            "source_row_number": [1, 2, 3, 4],
+            "source_file": ["dataset1.csv", "dataset1.csv", "supplier1.csv", "test123.csv"],
+            "length_mm": [10.0, 10.2, 10.4, 10.6],
+        }
+    )
+
+    grouping = build_tabular_file_grouping_dataframe(frame)
+    grouped = apply_tabular_grouping(frame, grouping)
+
+    assert grouping.to_dict("list") == {
+        "REPORT_ID": [1, 2, 3, 4],
+        "GROUP": ["dataset1", "dataset1", "supplier1", "test123"],
+    }
+    assert grouped.applied is True
+    assert grouped.custom_group_count == 3
+    assert TABULAR_DEFAULT_GROUP not in set(grouped.dataframe[TABULAR_GROUP_COLUMN])
+
+
+def test_build_tabular_file_grouping_dataframe_disambiguates_duplicate_and_reserved_stems() -> None:
+    snapshots = (
+        TabularSourceSnapshot(
+            path="/tmp/first/dataset.csv",
+            name="dataset.csv",
+            size=10,
+            mtime_ns=1,
+            row_count=2,
+        ),
+        TabularSourceSnapshot(
+            path="/tmp/second/dataset.csv",
+            name="dataset.csv",
+            size=10,
+            mtime_ns=2,
+            row_count=1,
+        ),
+        TabularSourceSnapshot(
+            path="/tmp/third/POPULATION.csv",
+            name="POPULATION.csv",
+            size=10,
+            mtime_ns=3,
+            row_count=1,
+        ),
+    )
+
+    grouping = build_tabular_file_grouping_dataframe(source_snapshots=snapshots)
+
+    assert grouping.to_dict("list") == {
+        "REPORT_ID": [1, 2, 3, 4],
+        "GROUP": ["dataset", "dataset", "dataset 2", "POPULATION file"],
+    }
 
 
 def test_load_tabular_analytics_file_uses_explicit_time_and_reference_columns(tmp_path) -> None:

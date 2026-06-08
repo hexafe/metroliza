@@ -2065,6 +2065,80 @@ def build_tabular_grouping_dataframe(
     )
 
 
+def tabular_file_group_labels(
+    source_files: tuple[str | Path, ...] | list[str | Path],
+    *,
+    default_group: str = TABULAR_DEFAULT_GROUP,
+) -> tuple[tuple[str, str], ...]:
+    """Return deterministic display group labels for CSV Summary source files."""
+
+    labels: list[tuple[str, str]] = []
+    used: set[str] = set()
+    for source_file in source_files or ():
+        path = Path(source_file)
+        source_name = path.name or str(source_file)
+        base_label = path.stem.strip() or source_name.strip() or "File"
+        if base_label.casefold() == default_group.casefold():
+            base_label = f"{default_group} file"
+        candidate = base_label
+        suffix = 2
+        while candidate.casefold() in used:
+            candidate = f"{base_label} {suffix}"
+            suffix += 1
+        used.add(candidate.casefold())
+        labels.append((source_name, candidate))
+    return tuple(labels)
+
+
+def build_tabular_file_grouping_dataframe(
+    dataframe: pd.DataFrame | None = None,
+    *,
+    source_files: tuple[str | Path, ...] | list[str | Path] | None = None,
+    source_snapshots: tuple[TabularSourceSnapshot, ...] | list[TabularSourceSnapshot] | None = None,
+    default_group: str = TABULAR_DEFAULT_GROUP,
+) -> pd.DataFrame:
+    """Build manual grouping rows that assign each CSV Summary row to its source file."""
+
+    columns = ["REPORT_ID", "GROUP"]
+    snapshots = tuple(source_snapshots or ())
+    if snapshots:
+        labels = tabular_file_group_labels(
+            tuple(snapshot.path or snapshot.name for snapshot in snapshots),
+            default_group=default_group,
+        )
+        report_ids: list[int] = []
+        groups: list[str] = []
+        next_report_id = 1
+        for snapshot, (_source_name, group_label) in zip(snapshots, labels, strict=False):
+            row_count = max(0, int(snapshot.row_count or 0))
+            if row_count:
+                report_ids.extend(range(next_report_id, next_report_id + row_count))
+                groups.extend([group_label] * row_count)
+            next_report_id += row_count
+        return pd.DataFrame({"REPORT_ID": report_ids, "GROUP": groups}, columns=columns)
+
+    if not isinstance(dataframe, pd.DataFrame) or dataframe.empty or "source_file" not in dataframe.columns:
+        return pd.DataFrame(columns=columns)
+
+    frame = dataframe.loc[:, ["source_file"]].copy().reset_index(drop=True)
+    row_numbers = _source_row_numbers(dataframe.reset_index(drop=True))
+    source_names = _display_series(frame.get("source_file"), fallback="File", row_count=len(frame.index))
+    ordered_sources = tuple(dict.fromkeys(source_names))
+    source_file_order = tuple(source_files or ordered_sources)
+    labels_by_source = {
+        source_name: group_label
+        for source_name, group_label in tabular_file_group_labels(
+            source_file_order,
+            default_group=default_group,
+        )
+    }
+    groups = [
+        labels_by_source.get(source_name, labels_by_source.get(Path(source_name).name, "File"))
+        for source_name in source_names
+    ]
+    return pd.DataFrame({"REPORT_ID": row_numbers, "GROUP": groups}, columns=columns)
+
+
 def _selector_display_labels(
     frame: pd.DataFrame,
     *,
@@ -3721,6 +3795,7 @@ __all__ = [
     "TabularGroupingResult",
     "apply_tabular_row_filter",
     "apply_tabular_grouping",
+    "build_tabular_file_grouping_dataframe",
     "build_tabular_grouping_dataframe",
     "cleanup_tabular_load_result",
     "compile_tabular_sqlite_grouping_filter",
@@ -3732,5 +3807,6 @@ __all__ = [
     "load_tabular_analytics_files",
     "materialize_tabular_dataframe",
     "selectable_tabular_source_columns",
+    "tabular_file_group_labels",
     "tabular_load_result_row_count",
 ]

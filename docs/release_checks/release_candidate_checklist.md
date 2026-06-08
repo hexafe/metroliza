@@ -122,7 +122,7 @@ python -m maturin build --manifest-path src/metroliza/native/distribution_fit_ad
 ### 2026.05 RC4 rc2 hardening evidence
 
 Current validation branch: `rc2`.
-Current RC metadata: `2026.05rc4(260602)`.
+Current RC metadata: `2026.05rc4(260608)`.
 Current plotstats hotfix pin:
 `1e2c72107d342f44a37e5fb78d7d76992ea60315`.
 
@@ -286,6 +286,18 @@ Current plotstats hotfix pin:
   guardrail, and the non-blocking Performance benchmark trend check. Manual and
   opt-in jobs were skipped: Packaging smoke, Windows startup benchmark, and
   Google conversion smoke.
+- CSV Summary file-name grouping QA passed locally on 2026-06-08 for build
+  `260608`. Multi-CSV loads can now offer one custom group per source file name
+  without creating a `POPULATION` group, and the export path now uses the
+  in-window dashboard optimization settings without a second export-time prompt.
+  Local gates passed: `git diff --check`, `ruff`, `compileall`, release metadata
+  sync, release hygiene, packaged PDF parser validation, security audit with no
+  known vulnerabilities, focused CSV Summary dialog/service tests (`81 passed`),
+  focused workflow/dashboard/release tests (`71 passed`), full headless pytest
+  with coverage tracking (`1878 passed`, `263 skipped`, `95 warnings`,
+  `71 subtests passed`), and the CI-shaped combined coverage gate with isolated
+  UI shards at `81%` against the `80%` threshold. Pushed-SHA CI evidence for this
+  slice must be recorded here before merge/tag.
 - Post-reorganization follow-up local audit passed after docs/reference cleanup,
   parser-plugin productionization coverage, architecture guardrail hardening, and
   release-status refresh.

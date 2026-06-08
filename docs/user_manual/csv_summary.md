@@ -24,9 +24,9 @@ The dialog is a compact analytics launcher.
 
 Main controls:
 
-- **Select input file (CSV or Excel)**
+- **Select input file(s) (CSV or Excel)**
 - **Choose sheet, time, and reference columns**
-- **Filter rows from the selected file**
+- **Filter rows from the selected input**
 - **Choose metrics**
 - **Reload metrics** when source or column choices change
 - **Edit row groups, then choose time bucket and aggregation**
@@ -45,6 +45,16 @@ After a valid file is loaded:
 - time and reference columns can be auto-detected or selected explicitly,
 - grouping columns can be selected,
 - dashboard and optional workbook output can be created.
+
+You can select more than one CSV file at the same time. When multiple CSV files
+are loaded, Metroliza asks whether to auto-create one group per file name. For
+example, selecting `dataset1.csv`, `supplier1.csv`, and `test123.csv` can create
+the groups `dataset1`, `supplier1`, and `test123`, with every row from each file
+assigned to its matching group.
+
+Auto-created file groups do not include a **POPULATION** group. If you want a
+population-style comparison later, open **Edit groups** and rename or add groups
+manually after the files are loaded.
 
 For Excel files, Metroliza lists workbook sheets after file selection. Choose a different
 sheet and click **Reload metrics** when needed. If automatic detection does not pick the
@@ -70,14 +80,16 @@ to separate workbook sheets.
 
 ### 4. Choose Grouping And Aggregation
 
-Click **Edit groups** when you want export-style groups for the CSV/Excel rows. The
-grouping dialog starts empty and leaves every row in **POPULATION** until you create a
-custom group. Search for a source column and double-click it to choose the first column
-used to select parts, such as `TraceCode`. Double-click another available column when you
-want to refine the visible combinations, or double-click a selected column to remove it.
-The matching list shows each selected column chain as values like `TraceCode | Cavity`, so
-you can select the rows for a named group and leave the remaining rows in **POPULATION**
-for selected-vs-rest comparisons.
+Click **Edit groups** when you want export-style groups for the CSV/Excel rows. For a
+single input file, the grouping dialog starts empty and leaves every row in
+**POPULATION** until you create a custom group. For multiple CSV files, accepting the
+auto-create prompt starts the dialog with one group per file name and no **POPULATION**
+rows. Search for a source column and double-click it to choose the first column used to
+select parts, such as `TraceCode`. Double-click another available column when you want to
+refine the visible combinations, or double-click a selected column to remove it. The
+matching list shows each selected column chain as values like `TraceCode | Cavity`, so you
+can select the rows for a named group and leave the remaining rows in **POPULATION** for
+selected-vs-rest comparisons when you choose to create that population manually.
 
 Use the matching-row search field either as a normal value search or as a row filter. Plain
 text searches visible value labels. Expressions such as `Supplier=SUPPLIER AND Value > 1`
@@ -130,17 +142,18 @@ the visible recipe and saved-theme controls; use **Customize...** for detailed c
 opacity, line, or selected-element styling. These choices affect the interactive dashboard
 charts only; they do not change the source data or the selected metrics.
 
-Use **Dashboard interactivity > Change...** when the selected file is large enough that
+Use **Dashboard interactivity > Change...** when the selected input is large enough that
 fully interactive charts may make the saved dashboard too heavy for a browser. **Auto** is
-the default: small selections stay fully interactive, while large selections ask for a
-strategy before processing. Statistics, group comparison, aggregate tables, and workbook
-output continue to use all selected rows even when dashboard charts use a bounded visual
-sample.
+the default: small selections stay fully interactive, while large selections use the
+configured in-window dashboard interactivity settings before processing. Statistics, group
+comparison, aggregate tables, and workbook output continue to use all selected rows even
+when dashboard charts use a bounded visual sample.
 
 Practical choices for large datasets:
 
-- **Auto** is the safest first choice. It keeps small files interactive and prompts for a
-  safer strategy when a large file may create a slow or oversized dashboard.
+- **Auto** is the safest first choice. It keeps small files interactive and applies the
+  configured browser-safety limits when a large file may create a slow or oversized
+  dashboard.
 - **Interactive random sample** keeps Plotly hover/zoom/legend interactions by drawing a
   reproducible random visual sample, defaulting to 50,000 rows. Use it for exploration
   when you need responsive charts but do not need every source point drawn in the browser.
@@ -165,8 +178,8 @@ generated interactive Plotly charts even when the resulting HTML file may be ver
 slow to open. Use the no-limit option only when the receiving computer and browser can
 handle the exported dashboard size.
 
-The same dialog also includes **POPULATION layer**. This controls the large background
-population in grouped time-series charts:
+The CSV Summary window also includes **POPULATION layer > Change...**. This controls the
+large background population in grouped time-series charts:
 
 - **Auto** renders an oversized POPULATION background as a static image when that keeps a
   supported time-series chart responsive.
