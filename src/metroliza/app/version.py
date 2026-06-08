@@ -1,11 +1,15 @@
 RELEASE_VERSION = "2026.05rc4"
-VERSION_DATE = "260608"
+VERSION_DATE = "260609"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
-CURRENT_RELEASE_HIGHLIGHT = "Parser profile self-service, export reliability, safer long-task cancellation, dashboard plot visual customization, CSV Summary file-name grouping, static POPULATION layers, and dashboard-first Export group analysis."
-PUBLIC_VERSION_LABEL = "2026.05 RC4 (build 260608)"
+CURRENT_RELEASE_HIGHLIGHT = "Parser profile self-service, export reliability, CSV Summary file-name grouping, static POPULATION layers, dashboard-first Export group analysis, and release-gate audit hardening."
+PUBLIC_VERSION_LABEL = "2026.05 RC4 (build 260609)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
+    - Saved report updates are safer if a database write fails partway through<br>
+    - HTML dashboard-only exports now report a failure instead of success when dashboard creation fails<br>
+    - CSV Summary filters and multi-file exports behave more consistently across regular and large-file paths<br>
+    - Packaging, startup timing, and performance checks now fail when required release evidence is missing<br>
     - Parser profiles can now be prepared from Tools > Parser profiles... for new supplier report templates without writing Python code<br>
     - Google Sheets export now checks converted workbook tabs and warns when a local Excel fallback should be used<br>
     - Canceling long parsing, export, and metadata tasks is more reliable from progress windows<br>

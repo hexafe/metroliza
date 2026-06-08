@@ -1,6 +1,10 @@
 # Changelog (for end users)
 
-## 2026.05 RC4 (build 260608) — current version
+## 2026.05 RC4 (build 260609) — current version
+- Saved report updates are safer if a database write fails partway through.
+- HTML dashboard-only exports now report a failure instead of success when dashboard creation fails.
+- CSV Summary filters and multi-file exports behave more consistently across regular and large-file paths.
+- Packaging, startup timing, and performance checks now fail when required release evidence is missing.
 - Parser profiles can now be prepared from **Tools > Parser profiles...** for new supplier report templates without writing Python code.
 - Google Sheets export now checks converted workbook tabs and warns when a local Excel fallback should be used.
 - Canceling long parsing, export, and metadata tasks is more reliable from progress windows.

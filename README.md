@@ -256,12 +256,12 @@ Examples of metric availability by spec type:
 
 ## Release metadata
 
-Current release highlight (`2026.05 RC4 (build 260608)`): Parser profile self-service, export reliability, safer long-task cancellation, dashboard plot visual customization, CSV Summary file-name grouping, static POPULATION layers, and dashboard-first Export group analysis.
+Current release highlight (`2026.05 RC4 (build 260609)`): Parser profile self-service, export reliability, CSV Summary file-name grouping, static POPULATION layers, dashboard-first Export group analysis, and release-gate audit hardening.
 
 Canonical release metadata is in `src/metroliza/app/version.py`. The root `VersionDate.py`
 module remains as a compatibility import for existing scripts.
 
-### Changelog highlights (release `2026.05 RC4 (build 260608)`)
+### Changelog highlights (release `2026.05 RC4 (build 260609)`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 

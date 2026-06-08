@@ -108,6 +108,16 @@ def main() -> int:
         help='Optional scenario keys to compare. When provided, only these scenarios are evaluated.',
     )
     parser.add_argument(
+        '--require-baselines',
+        action='store_true',
+        help='Fail when a requested or observed scenario has no positive baseline median.',
+    )
+    parser.add_argument(
+        '--require-observed',
+        action='store_true',
+        help='Fail when a requested scenario has no observed benchmark rows.',
+    )
+    parser.add_argument(
         '--stage-metrics',
         nargs='*',
         default=[],
@@ -140,16 +150,30 @@ def main() -> int:
 
     scenario_names = sorted(set(run_times.keys()) | set(baseline_times.keys()))
     if args.scenarios:
-        requested = {name.strip() for name in args.scenarios if str(name).strip()}
-        scenario_names = [name for name in scenario_names if name in requested]
+        requested = [name.strip() for name in args.scenarios if str(name).strip()]
+        available = set(scenario_names)
+        scenario_names = [
+            name
+            for name in requested
+            if name in available or args.require_baselines or args.require_observed
+        ]
 
     for scenario_name in scenario_names:
-        observed_median = _median(run_times.get(scenario_name, []))
+        observed_values = run_times.get(scenario_name, [])
+        observed_median = _median(observed_values)
         baseline_median = float(baseline_times.get(scenario_name, 0.0))
         if baseline_median <= 0:
             regression_pct = 0.0
             regression_s = 0.0
             status = 'missing_baseline'
+            if args.require_baselines:
+                failures.append(scenario_name)
+        elif not observed_values:
+            regression_pct = 0.0
+            regression_s = 0.0
+            status = 'missing_observed'
+            if args.require_observed:
+                failures.append(scenario_name)
         else:
             regression_s = observed_median - baseline_median
             regression_pct = ((observed_median - baseline_median) / baseline_median) * 100.0

@@ -11,6 +11,8 @@ def test_build_native_and_package_helper_covers_native_build_and_packaging_paths
     assert "[string]$EntryPoint = 'packaging/metroliza_package_entry.py'" in script
     assert "metroliza_onedir.spec" in script
     assert "'src/metroliza/native/cmm_parser/Cargo.toml'" in script
+    assert "from metroliza.native_bridges.cmm_native_parser import native_backend_available" in script
+    assert "native_persistence_backend_available" not in script
     assert "'src/metroliza/native/chart_renderer/Cargo.toml'" in script
     assert "'src/metroliza/native/group_stats_coercion/Cargo.toml'" in script
     assert "'src/metroliza/native/comparison_stats_bootstrap/Cargo.toml'" in script
@@ -23,6 +25,8 @@ def test_build_native_and_package_helper_covers_native_build_and_packaging_paths
     assert "Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $AllowMissingOznakBuild.IsPresent -SwitchName '-AllowMissingOznakBuild'" in script
     assert "[AllowEmptyCollection()]\n        [System.Collections.Generic.List[string]]$Arguments" in script
     assert "@('-m', 'maturin', 'develop', '--release', '--manifest-path', $target.ManifestPath)" in script
+    assert "requirements-ocr.txt" in script
+    assert "@('scripts/validate_packaged_pdf_parser.py', '--require-header-ocr')" in script
     assert "build_backend_diagnostic_summary" in script
     assert "build_nuitka.ps1" in script
     assert "Get-PyInstallerSpecPathsForMode" in script

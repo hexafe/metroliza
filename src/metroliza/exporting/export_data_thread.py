@@ -16,6 +16,7 @@ import statistics
 import math
 from io import BytesIO
 import os
+from pathlib import Path
 import time
 from concurrent.futures import ProcessPoolExecutor
 from metroliza.charts.matplotlib_runtime import configure_headless_matplotlib
@@ -3577,6 +3578,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
     def _write_html_dashboard_if_requested(self):
         if not self.generate_html_dashboard or not self.html_dashboard_file or not self.html_dashboard_assets_dir:
             return
+        html_only_export = self.export_target == "html_dashboard"
         dashboard_start = time.perf_counter()
         self.update_label.emit(
             build_three_line_status(
@@ -3609,11 +3611,29 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             elapsed = time.perf_counter() - dashboard_start
             self._record_stage_timing('dashboard_finalization', elapsed)
             self._record_stage_timing('html_dashboard_total', elapsed)
+            if html_only_export:
+                logger.exception("HTML dashboard export failed")
+                raise RuntimeError(f"HTML dashboard export failed: {exc}") from exc
             warning_message = f"HTML dashboard export skipped: {exc}"
             logger.warning(warning_message, exc_info=True)
             self.completion_metadata.setdefault('html_dashboard_warnings', []).append(warning_message)
             self._log_export_stage(
                 "HTML dashboard generation skipped after workbook export",
+                stage="dashboard_warning",
+                level="warning",
+                dashboard_warning=warning_message,
+            )
+            return
+
+        dashboard_output_error = self._html_dashboard_output_error(dashboard_result)
+        if dashboard_output_error:
+            if html_only_export:
+                raise RuntimeError(dashboard_output_error)
+            warning_message = f"HTML dashboard export skipped: {dashboard_output_error}"
+            logger.warning(warning_message)
+            self.completion_metadata.setdefault('html_dashboard_warnings', []).append(warning_message)
+            self._log_export_stage(
+                "HTML dashboard output missing after workbook export",
                 stage="dashboard_warning",
                 level="warning",
                 dashboard_warning=warning_message,
@@ -3671,6 +3691,20 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 else None
             ),
         )
+
+    def _html_dashboard_output_error(self, dashboard_result):
+        dashboard_path = None
+        if isinstance(dashboard_result, dict):
+            dashboard_path = dashboard_result.get('html_dashboard_path')
+        output_path = Path(str(dashboard_path or self.html_dashboard_file))
+        try:
+            if not output_path.exists():
+                return f"HTML dashboard file was not created: {output_path}"
+            if output_path.stat().st_size <= 0:
+                return f"HTML dashboard file is empty: {output_path}"
+        except OSError as exc:
+            return f"HTML dashboard file could not be verified: {output_path} ({exc})"
+        return ""
 
     def _begin_workbook_close(self):
         self.update_label.emit(
@@ -4663,15 +4697,21 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 return
             self.log_and_exit(e)
         except Exception as e:
+            if self.export_target == "html_dashboard":
+                failure_title = "HTML dashboard export failed."
+                failure_detail = "Dashboard generation aborted before completion."
+            else:
+                failure_title = "Export failed during local workbook generation."
+                failure_detail = "Export aborted before cloud conversion."
             self.update_label.emit(
                 build_three_line_status(
-                    "Export failed during local workbook generation.",
-                    "Export aborted before cloud conversion.",
+                    failure_title,
+                    failure_detail,
                     "ETA --",
                 )
             )
             self._log_export_stage(
-                "Export failed during local workbook generation",
+                failure_title.rstrip("."),
                 stage="local_export_failed",
                 level="error",
             )

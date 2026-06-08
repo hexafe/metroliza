@@ -992,6 +992,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             return
         except Exception as e:
             self.log_and_exit(e)
+            raise
 
     def _normalized_rows_for_persistence(self, use_native=False):
         if self._prepared_measurement_rows is not None:

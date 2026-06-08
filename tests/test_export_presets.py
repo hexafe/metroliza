@@ -93,10 +93,12 @@ class TestExportPresetOptionMapping(unittest.TestCase):
 
     def test_export_overview_documents_all_export_presets(self):
         manual_text = Path("docs/user_manual/export_overview.md").read_text(encoding="utf-8")
+        preset_section = manual_text.split("Available presets are:", 1)[1].split("#### Main plots", 1)[0]
 
         for label in get_export_preset_labels():
             with self.subTest(label=label):
-                self.assertIn(label, manual_text)
+                self.assertIn(f"- **{label}**", preset_section)
+        self.assertIn("For **HTML dashboard only**, choose a **.html dashboard file** instead.", manual_text)
 
     def test_validate_export_options_keeps_preset(self):
         full = build_export_options_for_preset(EXPORT_PRESET_FULL_REPORT)

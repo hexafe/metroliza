@@ -1,9 +1,11 @@
 import json
 import sqlite3
+import types
 from pathlib import Path
 
 import pytest
 
+from modules.cmm_report_parser import CMMReportParser
 from modules.cmm_native_parser import (
     native_backend_available,
     native_persistence_backend_available,
@@ -38,6 +40,42 @@ def test_cmm_report_parser_wired_to_interface_layer():
     parser_source = Path("src/metroliza/parsing/cmm_report_parser.py").read_text()
     assert "parse_blocks_with_backend_and_telemetry(self.pdf_raw_text)" in parser_source
     assert "parse_blocks_with_backend_and_telemetry(self.pdf_raw_text, use_native=False)" not in parser_source
+
+
+def test_cmm_to_sqlite_reraises_repository_failures(tmp_path, monkeypatch):
+    report_file = tmp_path / "broken.pdf"
+    report_file.write_bytes(b"%PDF-1.7")
+    parser = CMMReportParser(str(report_file), str(tmp_path / "reports.db"))
+    parser.blocks_text = [("Feature", ["measurement"])]
+    parser._metadata_selection_result = types.SimpleNamespace(
+        metadata=types.SimpleNamespace(
+            parser_id="cmm",
+            template_family="cmm_pdf_header_box",
+            template_variant="default",
+            warnings=(),
+            page_count=1,
+            metadata_confidence=1.0,
+        ),
+        candidates=(),
+    )
+    parser._normalized_rows_for_persistence = lambda: [{"is_nok": False}]
+    parser.build_report_identity_hash = lambda: "identity"
+
+    class FailingRepository:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def persist_parsed_report(self, **_kwargs):
+            raise RuntimeError("persist failed")
+
+    logged_errors = []
+    parser.log_and_exit = lambda exc: logged_errors.append(exc)
+    monkeypatch.setitem(CMMReportParser.to_sqlite.__globals__, "ReportRepository", FailingRepository)
+
+    with pytest.raises(RuntimeError, match="persist failed"):
+        parser.to_sqlite()
+
+    assert [str(error) for error in logged_errors] == ["persist failed"]
 
 
 @pytest.mark.parametrize("fixture", _load_fixtures(), ids=lambda f: f["name"])

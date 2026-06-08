@@ -93,6 +93,8 @@ def test_ci_workflow_keeps_manual_smoke_gates_non_blocking() -> None:
     )
     assert 'METROLIZA_PDF_PARSER_SMOKE_FIXTURE: tests/fixtures/pdf/cmm_smoke_fixture.pdf' in workflow
     assert 'METROLIZA_PDF_PARSER_SMOKE_EXPECTED_TEXT: METROLIZA PDF PARSER SMOKE' in workflow
+    assert 'requirements-ocr.txt' in workflow
+    assert 'python scripts/validate_packaged_pdf_parser.py --require-header-ocr' in workflow
     assert "find dist -maxdepth 1 -type f -name 'metroliza_P_*'" in workflow
     assert 'timeout 60s "${{ steps.packaged-artifact.outputs.path }}"' in workflow
     assert 'name: packaging-smoke-artifacts' in workflow
@@ -174,6 +176,8 @@ def test_perf_benchmark_trend_filters_to_baseline_backed_scenarios() -> None:
 
     assert 'name: Performance benchmark trend check (non-blocking)' in workflow
     assert 'name: Trend comparison against checked-in baseline\n        continue-on-error: true' in workflow
+    assert '--require-baselines' in workflow
+    assert '--require-observed' in workflow
     assert '--export-stage-metrics' in workflow
     assert (
         '--scenarios pdf_parse_path cmm_parser_backend_compare excel_export_path '

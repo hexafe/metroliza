@@ -2122,53 +2122,92 @@ class TestExportBackendSmoke(unittest.TestCase):
     def test_html_dashboard_write_timings_are_recorded_in_export_metadata(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
-        request = ExportRequest(
-            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
-            options=ExportOptions(generate_html_dashboard=True),
-        )
-        thread = ExportDataThread(request)
-        dashboard_timings = {
-            'plotly_spec_generation': 1.5,
-            'image_asset_writes': 0.2,
-            'plotly_runtime_asset': 0.3,
-            'html_rendering': 0.4,
-            'html_write': 0.1,
-            'total': 2.5,
-        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dashboard_file = Path(tmpdir) / 'out_dashboard.html'
+            dashboard_file.write_text('<html></html>', encoding='utf-8')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=str(Path(tmpdir) / 'out.xlsx')),
+                options=ExportOptions(generate_html_dashboard=True),
+            )
+            thread = ExportDataThread(request)
+            dashboard_timings = {
+                'plotly_spec_generation': 1.5,
+                'image_asset_writes': 0.2,
+                'plotly_runtime_asset': 0.3,
+                'html_rendering': 0.4,
+                'html_write': 0.1,
+                'total': 2.5,
+            }
 
-        with mock.patch(
-            'modules.export_data_thread._write_export_html_dashboard',
-            return_value={
-                'html_dashboard_path': 'out_dashboard.html',
-                'html_dashboard_assets_path': 'out_dashboard_assets',
-                'html_dashboard_chart_count': 4,
-                'html_dashboard_plotly_spec_count': 3,
-                'html_dashboard_embedded_plotly_spec_count': 3,
-                'html_dashboard_plotly_serialized_json_bytes': 1234,
-                'html_dashboard_embedded_plotly_serialized_json_bytes': 1234,
-                'html_dashboard_html_bytes': 5678,
-                'html_dashboard_timings_s': dashboard_timings,
-            },
-        ):
-            progress_values = []
-            emitted_labels = []
-            thread.update_progress.emit = lambda value: progress_values.append(value)
-            thread.update_label.emit = lambda text: emitted_labels.append(text)
-            thread._write_html_dashboard_if_requested()
+            with mock.patch(
+                'modules.export_data_thread._write_export_html_dashboard',
+                return_value={
+                    'html_dashboard_path': str(dashboard_file),
+                    'html_dashboard_assets_path': str(Path(tmpdir) / 'out_dashboard_assets'),
+                    'html_dashboard_chart_count': 4,
+                    'html_dashboard_plotly_spec_count': 3,
+                    'html_dashboard_embedded_plotly_spec_count': 3,
+                    'html_dashboard_plotly_serialized_json_bytes': 1234,
+                    'html_dashboard_embedded_plotly_serialized_json_bytes': 1234,
+                    'html_dashboard_html_bytes': 5678,
+                    'html_dashboard_timings_s': dashboard_timings,
+                },
+            ):
+                progress_values = []
+                emitted_labels = []
+                thread.update_progress.emit = lambda value: progress_values.append(value)
+                thread.update_label.emit = lambda text: emitted_labels.append(text)
+                thread._write_html_dashboard_if_requested()
 
-        self.assertEqual(thread._stage_timings['html_dashboard_plotly_spec_generation'], 1.5)
-        self.assertEqual(thread._stage_timings['html_dashboard_asset_writes'], 0.5)
-        self.assertEqual(thread._stage_timings['html_dashboard_html_rendering'], 0.4)
-        self.assertEqual(thread._stage_timings['html_dashboard_html_write'], 0.1)
-        self.assertEqual(thread._stage_timings['html_dashboard_total'], 2.5)
-        self.assertEqual(thread._stage_timings['dashboard_finalization'], 2.5)
-        self.assertEqual(thread.completion_metadata['html_dashboard_timings_s'], dashboard_timings)
-        self.assertEqual(thread.completion_metadata['dashboard_finalization_s'], 2.5)
-        self.assertEqual(thread.completion_metadata['html_dashboard_plotly_spec_count'], 3)
-        self.assertEqual(thread.completion_metadata['html_dashboard_html_bytes'], 5678)
-        self.assertTrue(any('Writing HTML dashboard...' in label for label in emitted_labels))
-        self.assertTrue(progress_values)
-        self.assertLess(max(progress_values), 100)
+            self.assertEqual(thread._stage_timings['html_dashboard_plotly_spec_generation'], 1.5)
+            self.assertEqual(thread._stage_timings['html_dashboard_asset_writes'], 0.5)
+            self.assertEqual(thread._stage_timings['html_dashboard_html_rendering'], 0.4)
+            self.assertEqual(thread._stage_timings['html_dashboard_html_write'], 0.1)
+            self.assertEqual(thread._stage_timings['html_dashboard_total'], 2.5)
+            self.assertEqual(thread._stage_timings['dashboard_finalization'], 2.5)
+            self.assertEqual(thread.completion_metadata['html_dashboard_timings_s'], dashboard_timings)
+            self.assertEqual(thread.completion_metadata['dashboard_finalization_s'], 2.5)
+            self.assertEqual(thread.completion_metadata['html_dashboard_plotly_spec_count'], 3)
+            self.assertEqual(thread.completion_metadata['html_dashboard_html_bytes'], 5678)
+            self.assertTrue(any('Writing HTML dashboard...' in label for label in emitted_labels))
+            self.assertTrue(progress_values)
+            self.assertLess(max(progress_values), 100)
+
+    def test_html_only_dashboard_write_failure_aborts_without_completed_signal(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dashboard_file = Path(tmpdir) / 'dashboard.html'
+            db_file = Path(tmpdir) / 'reports.db'
+            request = ExportRequest(
+                paths=AppPaths(db_file=str(db_file), html_dashboard_file=str(dashboard_file)),
+                options=ExportOptions(export_target='html_dashboard'),
+            )
+            thread = ExportDataThread(request)
+
+            class _Backend:
+                def run(self, _thread):
+                    return True
+
+            thread.get_export_backend = lambda: _Backend()
+            emitted = []
+            errors = []
+            finished = []
+            thread.update_label.emit = lambda text: emitted.append(text)
+            thread.update_progress.emit = lambda *_: None
+            thread.error_occurred.emit = lambda message: errors.append(message)
+            thread.completed.emit = lambda: finished.append('finished')
+
+            with mock.patch(
+                'modules.export_data_thread._write_export_html_dashboard',
+                side_effect=RuntimeError('renderer exploded'),
+            ):
+                thread.run()
+
+            self.assertEqual(finished, [])
+            self.assertFalse(any('Export completed successfully.' in label for label in emitted))
+            self.assertTrue(any('HTML dashboard export failed.' in label for label in emitted))
+            self.assertTrue(any('HTML dashboard export failed: renderer exploded' in error for error in errors))
 
     def test_excel_backend_records_workbook_close_timing_and_status(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest

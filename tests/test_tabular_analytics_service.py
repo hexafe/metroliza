@@ -269,6 +269,28 @@ def test_load_tabular_analytics_files_combines_multiple_csvs_in_sqlite(tmp_path)
     assert not sqlite_path.exists()
 
 
+def test_multi_csv_sqlite_uses_global_header_mapping_for_sanitized_collisions(tmp_path) -> None:
+    first_file = tmp_path / "line_a.csv"
+    second_file = tmp_path / "line_b.csv"
+    pd.DataFrame({"A": ["first-a"], "A!": ["first-bang"]}).to_csv(first_file, index=False)
+    pd.DataFrame({"A!": ["second-bang"]}).to_csv(second_file, index=False)
+
+    result = load_tabular_analytics_files((first_file, second_file))
+    try:
+        materialized = materialize_tabular_dataframe(
+            result,
+            required_columns=("source_file", "a", "a_2"),
+        ).dataframe
+
+        assert result.storage_mode == "sqlite"
+        assert result.column_mapping["A"] == "a"
+        assert result.column_mapping["A!"] == "a_2"
+        assert materialized["a"].tolist() == ["first-a", None]
+        assert materialized["a_2"].tolist() == ["first-bang", "second-bang"]
+    finally:
+        cleanup_tabular_load_result(result)
+
+
 def test_load_tabular_analytics_file_can_use_sqlite_for_single_csv_filters(tmp_path) -> None:
     input_file = tmp_path / "single_large_path.csv"
     pd.DataFrame(
@@ -1060,6 +1082,43 @@ def test_sqlite_tabular_numeric_filters_match_expected_rows(tmp_path) -> None:
         ) == 3
     finally:
         cleanup_tabular_load_result(loaded)
+
+
+def test_tabular_not_equal_filters_exclude_invalid_values_in_pandas_and_sqlite(tmp_path) -> None:
+    input_file = tmp_path / "not_equal_filter_parity.csv"
+    pd.DataFrame(
+        {
+            "Event Date": ["2026-01-01", "bad-date", "", "2026-01-02"],
+            "Value": ["1", "x", "", "2"],
+            "TraceCode": ["TC-001", "TC-002", "TC-003", "TC-004"],
+        }
+    ).to_csv(input_file, index=False)
+    pandas_loaded = load_tabular_analytics_file(input_file)
+    sqlite_loaded = load_tabular_analytics_file(input_file, force_sqlite=True)
+    try:
+        for loaded in (pandas_loaded, sqlite_loaded):
+            numeric_result = materialize_tabular_dataframe(
+                loaded,
+                column_filters=(TabularColumnFilter("value", numeric_operator="!=", numeric_value="1"),),
+                required_columns=("source_row_number",),
+            )
+            date_result = materialize_tabular_dataframe(
+                loaded,
+                column_filters=(
+                    TabularColumnFilter(
+                        "event_date",
+                        date_operator="!=",
+                        date_value="2026-01-01",
+                    ),
+                ),
+                required_columns=("source_row_number",),
+            )
+
+            assert numeric_result.dataframe["source_row_number"].tolist() == [4]
+            assert date_result.dataframe["source_row_number"].tolist() == [4]
+    finally:
+        cleanup_tabular_load_result(pandas_loaded)
+        cleanup_tabular_load_result(sqlite_loaded)
 
 
 def test_sqlite_materialization_projects_columns_and_count_uses_pushdown(

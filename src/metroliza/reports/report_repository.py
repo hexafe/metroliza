@@ -318,76 +318,120 @@ class ReportRepository:
         now = utc_timestamp()
 
         def _upsert(cursor) -> int:
-            cursor.execute(
-                """
-                INSERT INTO parsed_reports (
-                    source_file_id,
-                    parser_id,
-                    parser_version,
-                    template_family,
-                    template_variant,
-                    parse_status,
-                    parse_started_at,
-                    parse_finished_at,
-                    parse_duration_ms,
-                    page_count,
-                    measurement_count,
-                    has_nok,
-                    nok_count,
-                    metadata_confidence,
-                    identity_hash,
-                    raw_report_json,
-                    created_at,
-                    updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(source_file_id) DO UPDATE SET
-                    parser_id = excluded.parser_id,
-                    parser_version = excluded.parser_version,
-                    template_family = excluded.template_family,
-                    template_variant = excluded.template_variant,
-                    parse_status = excluded.parse_status,
-                    parse_started_at = excluded.parse_started_at,
-                    parse_finished_at = excluded.parse_finished_at,
-                    parse_duration_ms = excluded.parse_duration_ms,
-                    page_count = excluded.page_count,
-                    measurement_count = excluded.measurement_count,
-                    has_nok = excluded.has_nok,
-                    nok_count = excluded.nok_count,
-                    metadata_confidence = excluded.metadata_confidence,
-                    identity_hash = excluded.identity_hash,
-                    raw_report_json = excluded.raw_report_json,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    int(source_file_id),
-                    parser_id,
-                    parser_version,
-                    template_family,
-                    template_variant,
-                    parse_status,
-                    parse_started_at,
-                    parse_finished_at,
-                    parse_duration_ms,
-                    page_count,
-                    int(measurement_count),
-                    _coerce_bool_int(has_nok),
-                    int(nok_count),
-                    metadata_confidence,
-                    identity_hash,
-                    _to_json(raw_report_json),
-                    now,
-                    now,
-                ),
+            return self._upsert_parsed_report(
+                cursor,
+                source_file_id=source_file_id,
+                parser_id=parser_id,
+                parser_version=parser_version,
+                template_family=template_family,
+                template_variant=template_variant,
+                parse_status=parse_status,
+                parse_started_at=parse_started_at,
+                parse_finished_at=parse_finished_at,
+                parse_duration_ms=parse_duration_ms,
+                page_count=page_count,
+                measurement_count=measurement_count,
+                has_nok=has_nok,
+                nok_count=nok_count,
+                metadata_confidence=metadata_confidence,
+                identity_hash=identity_hash,
+                raw_report_json=raw_report_json,
+                now=now,
             )
-            cursor.execute("SELECT id FROM parsed_reports WHERE source_file_id = ?", (int(source_file_id),))
-            report_id = int(cursor.fetchone()[0])
-            cursor.execute("DELETE FROM report_measurements WHERE report_id = ?", (report_id,))
-            cursor.execute("DELETE FROM report_metadata_candidates WHERE report_id = ?", (report_id,))
-            cursor.execute("DELETE FROM report_metadata_warnings WHERE report_id = ?", (report_id,))
-            return report_id
 
         return run_transaction_with_retry(self.database, _upsert, connection=self.connection)
+
+    def _upsert_parsed_report(
+        self,
+        cursor,
+        *,
+        source_file_id: int,
+        parser_id: str,
+        template_family: str,
+        parse_status: str,
+        parser_version: str | None = None,
+        template_variant: str | None = None,
+        parse_started_at: str | None = None,
+        parse_finished_at: str | None = None,
+        parse_duration_ms: int | None = None,
+        page_count: int | None = None,
+        measurement_count: int = 0,
+        has_nok: bool = False,
+        nok_count: int = 0,
+        metadata_confidence: float | None = None,
+        identity_hash: str | None = None,
+        raw_report_json: Any = None,
+        now: str | None = None,
+    ) -> int:
+        now = now or utc_timestamp()
+        cursor.execute(
+            """
+            INSERT INTO parsed_reports (
+                source_file_id,
+                parser_id,
+                parser_version,
+                template_family,
+                template_variant,
+                parse_status,
+                parse_started_at,
+                parse_finished_at,
+                parse_duration_ms,
+                page_count,
+                measurement_count,
+                has_nok,
+                nok_count,
+                metadata_confidence,
+                identity_hash,
+                raw_report_json,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_file_id) DO UPDATE SET
+                parser_id = excluded.parser_id,
+                parser_version = excluded.parser_version,
+                template_family = excluded.template_family,
+                template_variant = excluded.template_variant,
+                parse_status = excluded.parse_status,
+                parse_started_at = excluded.parse_started_at,
+                parse_finished_at = excluded.parse_finished_at,
+                parse_duration_ms = excluded.parse_duration_ms,
+                page_count = excluded.page_count,
+                measurement_count = excluded.measurement_count,
+                has_nok = excluded.has_nok,
+                nok_count = excluded.nok_count,
+                metadata_confidence = excluded.metadata_confidence,
+                identity_hash = excluded.identity_hash,
+                raw_report_json = excluded.raw_report_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                int(source_file_id),
+                parser_id,
+                parser_version,
+                template_family,
+                template_variant,
+                parse_status,
+                parse_started_at,
+                parse_finished_at,
+                parse_duration_ms,
+                page_count,
+                int(measurement_count),
+                _coerce_bool_int(has_nok),
+                int(nok_count),
+                metadata_confidence,
+                identity_hash,
+                _to_json(raw_report_json),
+                now,
+                now,
+            ),
+        )
+        cursor.execute("SELECT id FROM parsed_reports WHERE source_file_id = ?", (int(source_file_id),))
+        report_id = int(cursor.fetchone()[0])
+        cursor.execute("DELETE FROM report_measurements WHERE report_id = ?", (report_id,))
+        cursor.execute("DELETE FROM report_metadata_candidates WHERE report_id = ?", (report_id,))
+        cursor.execute("DELETE FROM report_metadata_warnings WHERE report_id = ?", (report_id,))
+        return report_id
 
     def _replace_report_metadata(
         self,
@@ -687,6 +731,14 @@ class ReportRepository:
     def replace_measurements(self, report_id: int, measurements: Iterable[Any]) -> None:
         """Replace flat measurements for a parsed report."""
 
+        rows = self._measurement_rows(report_id, measurements)
+
+        def _replace(cursor) -> None:
+            self._replace_measurements(cursor, report_id, rows)
+
+        run_transaction_with_retry(self.database, _replace, connection=self.connection)
+
+    def _measurement_rows(self, report_id: int, measurements: Iterable[Any]) -> list[tuple[Any, ...]]:
         rows = []
         for row_order, measurement in enumerate(measurements, start=1):
             explicit_order = _get_value(measurement, "row_order")
@@ -721,39 +773,38 @@ class ReportRepository:
                     _to_json(_get_value(measurement, "raw_measurement_json", _as_mapping(measurement))),
                 )
             )
+        return rows
 
-        def _replace(cursor) -> None:
-            cursor.execute("DELETE FROM report_measurements WHERE report_id = ?", (int(report_id),))
-            cursor.executemany(
-                """
-                INSERT INTO report_measurements (
-                    report_id,
-                    page_number,
-                    row_order,
-                    header,
-                    section_name,
-                    feature_label,
-                    characteristic_name,
-                    characteristic_family,
-                    description,
-                    ax,
-                    nominal,
-                    tol_plus,
-                    tol_minus,
-                    bonus,
-                    meas,
-                    dev,
-                    outtol,
-                    is_nok,
-                    status_code,
-                    raw_measurement_json
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                rows,
+    def _replace_measurements(self, cursor, report_id: int, rows: Iterable[tuple[Any, ...]]) -> None:
+        cursor.execute("DELETE FROM report_measurements WHERE report_id = ?", (int(report_id),))
+        cursor.executemany(
+            """
+            INSERT INTO report_measurements (
+                report_id,
+                page_number,
+                row_order,
+                header,
+                section_name,
+                feature_label,
+                characteristic_name,
+                characteristic_family,
+                description,
+                ax,
+                nominal,
+                tol_plus,
+                tol_minus,
+                bonus,
+                meas,
+                dev,
+                outtol,
+                is_nok,
+                status_code,
+                raw_measurement_json
             )
-
-        run_transaction_with_retry(self.database, _replace, connection=self.connection)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
 
     def update_report_metadata_fields(
         self,
@@ -1150,36 +1201,46 @@ class ReportRepository:
 
         self.ensure_schema()
         source_record = self.upsert_source_file(source_path, sha256=source_sha256)
-        report_id = self.upsert_parsed_report(
-            source_file_id=source_record.id,
-            parser_id=parser_id,
-            parser_version=parser_version,
-            template_family=template_family,
-            template_variant=template_variant,
-            parse_status=parse_status,
-            parse_started_at=parse_started_at,
-            parse_finished_at=parse_finished_at,
-            parse_duration_ms=parse_duration_ms,
-            page_count=page_count,
-            measurement_count=measurement_count,
-            has_nok=has_nok,
-            nok_count=nok_count,
-            metadata_confidence=metadata_confidence,
-            identity_hash=identity_hash,
-            raw_report_json=raw_report_json,
-        )
-        self.replace_report_metadata(
-            report_id,
-            metadata,
-            metadata_version=metadata_version,
-            metadata_profile_id=metadata_profile_id,
-            metadata_profile_version=metadata_profile_version,
-        )
-        self.replace_metadata_candidates(report_id, candidates)
-        self.replace_metadata_warnings(report_id, warnings)
-        self.replace_measurements(report_id, measurements)
-        self.persist_semantic_duplicate_warnings(report_id, identity_hash)
-        return report_id
+        now = utc_timestamp()
+        measurement_values = tuple(measurements)
+
+        def _persist(cursor) -> int:
+            report_id = self._upsert_parsed_report(
+                cursor,
+                source_file_id=source_record.id,
+                parser_id=parser_id,
+                parser_version=parser_version,
+                template_family=template_family,
+                template_variant=template_variant,
+                parse_status=parse_status,
+                parse_started_at=parse_started_at,
+                parse_finished_at=parse_finished_at,
+                parse_duration_ms=parse_duration_ms,
+                page_count=page_count,
+                measurement_count=measurement_count,
+                has_nok=has_nok,
+                nok_count=nok_count,
+                metadata_confidence=metadata_confidence,
+                identity_hash=identity_hash,
+                raw_report_json=raw_report_json,
+                now=now,
+            )
+            self._replace_report_metadata(
+                cursor,
+                report_id,
+                metadata,
+                metadata_version=metadata_version,
+                metadata_profile_id=metadata_profile_id,
+                metadata_profile_version=metadata_profile_version,
+            )
+            self._replace_metadata_candidates(cursor, report_id, candidates)
+            self._replace_metadata_warnings(cursor, report_id, warnings)
+            measurement_rows = self._measurement_rows(report_id, measurement_values)
+            self._replace_measurements(cursor, report_id, measurement_rows)
+            self._persist_semantic_duplicate_warnings(cursor, report_id, identity_hash)
+            return report_id
+
+        return run_transaction_with_retry(self.database, _persist, connection=self.connection)
 
 
 def source_path_exists(path: str | Path) -> bool:
