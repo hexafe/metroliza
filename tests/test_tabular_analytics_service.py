@@ -285,7 +285,8 @@ def test_multi_csv_sqlite_uses_global_header_mapping_for_sanitized_collisions(tm
         assert result.storage_mode == "sqlite"
         assert result.column_mapping["A"] == "a"
         assert result.column_mapping["A!"] == "a_2"
-        assert materialized["a"].tolist() == ["first-a", None]
+        assert materialized["a"].iloc[0] == "first-a"
+        assert pd.isna(materialized["a"].iloc[1])
         assert materialized["a_2"].tolist() == ["first-bang", "second-bang"]
     finally:
         cleanup_tabular_load_result(result)
