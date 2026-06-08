@@ -1440,8 +1440,10 @@ def _load_csv_files_into_sqlite(
         load_timings[name] = load_timings.get(name, 0.0) + (time.perf_counter() - started_at)
 
     diagnostics: list[ProductionAnalyticsDiagnostic] = []
+    sampled_specs: list[dict[str, Any]] = []
     file_specs: list[dict[str, Any]] = []
-    global_mapping: dict[str, str] = {}
+    global_original_columns: list[str] = []
+    seen_original_columns: set[str] = set()
     source_columns: list[str] = []
     date_filter_source_columns: set[str] = set()
     timestamp_field: str | None = None
@@ -1465,14 +1467,37 @@ def _load_csv_files_into_sqlite(
             low_memory=False,
             nrows=200,
         )
-        normalized_sample, mapping = _normalize_columns(sample_frame)
-        normalized_sample, mapping = _reserve_internal_columns(normalized_sample, mapping)
+        for column in sample_frame.columns:
+            original = str(column)
+            if original in seen_original_columns:
+                continue
+            seen_original_columns.add(original)
+            global_original_columns.append(original)
+        sampled_specs.append(
+            {
+                "path": path,
+                "csv_config": csv_config,
+                "sample_frame": sample_frame,
+            }
+        )
+        _record_load_timing("sampling", sampling_started_at)
+
+    global_sample = pd.DataFrame(columns=global_original_columns)
+    normalized_global_sample, global_mapping = _normalize_columns(global_sample)
+    _, global_mapping = _reserve_internal_columns(normalized_global_sample, global_mapping)
+    source_columns = list(dict.fromkeys(global_mapping.values()))
+
+    for sampled_spec in sampled_specs:
+        path = sampled_spec["path"]
+        sample_frame = sampled_spec["sample_frame"]
+        csv_config = sampled_spec["csv_config"]
+        mapping = {
+            str(column): global_mapping[str(column)]
+            for column in sample_frame.columns
+            if str(column) in global_mapping
+        }
+        normalized_sample = sample_frame.rename(columns=mapping).copy()
         normalized_columns = tuple(str(column) for column in normalized_sample.columns)
-        for original, normalized in mapping.items():
-            global_mapping.setdefault(original, normalized)
-        for column in normalized_columns:
-            if column not in source_columns:
-                source_columns.append(column)
 
         file_timestamp_field = _resolve_requested_column(timestamp_column, mapping, normalized_columns)
         if file_timestamp_field is None:
@@ -1504,7 +1529,6 @@ def _load_csv_files_into_sqlite(
                 "reference_field": file_reference_field,
             }
         )
-        _record_load_timing("sampling", sampling_started_at)
 
     sqlite_setup_started_at = time.perf_counter()
     if timestamp_field is None:
@@ -3296,22 +3320,23 @@ def _parse_tabular_filter_number(value: float | int | str | None) -> float | Non
 def _tabular_date_filter_mask(series: pd.Series, column_filter: TabularColumnFilter) -> pd.Series:
     parsed = pd.to_datetime(series, errors="coerce")
     dates = parsed.dt.date
+    valid_dates = dates.notna()
     mask = pd.Series(True, index=series.index)
     date_operator = str(column_filter.date_operator or "").strip()
     date_value = _parse_tabular_filter_date(column_filter.date_value)
     if date_operator in _TABULAR_DATE_OPERATORS and date_value is not None:
         if date_operator == "=":
-            mask &= dates == date_value
+            mask &= valid_dates & (dates == date_value)
         elif date_operator == "!=":
-            mask &= dates != date_value
+            mask &= valid_dates & (dates != date_value)
         elif date_operator == ">":
-            mask &= dates > date_value
+            mask &= valid_dates & (dates > date_value)
         elif date_operator == ">=":
-            mask &= dates >= date_value
+            mask &= valid_dates & (dates >= date_value)
         elif date_operator == "<":
-            mask &= dates < date_value
+            mask &= valid_dates & (dates < date_value)
         else:
-            mask &= dates <= date_value
+            mask &= valid_dates & (dates <= date_value)
         return mask.fillna(False)
     lower = _parse_tabular_filter_date(column_filter.date_from)
     upper = _parse_tabular_filter_date(column_filter.date_to)
@@ -3328,18 +3353,19 @@ def _tabular_numeric_filter_mask(series: pd.Series, column_filter: TabularColumn
     if operator not in _TABULAR_NUMERIC_OPERATORS or value is None:
         return pd.Series(True, index=series.index)
     numeric_series = pd.to_numeric(series, errors="coerce")
+    valid_numeric = numeric_series.notna()
     if operator == "=":
-        mask = numeric_series == value
+        mask = valid_numeric & (numeric_series == value)
     elif operator == "!=":
-        mask = numeric_series != value
+        mask = valid_numeric & (numeric_series != value)
     elif operator == ">":
-        mask = numeric_series > value
+        mask = valid_numeric & (numeric_series > value)
     elif operator == ">=":
-        mask = numeric_series >= value
+        mask = valid_numeric & (numeric_series >= value)
     elif operator == "<":
-        mask = numeric_series < value
+        mask = valid_numeric & (numeric_series < value)
     else:
-        mask = numeric_series <= value
+        mask = valid_numeric & (numeric_series <= value)
     return mask.fillna(False)
 
 

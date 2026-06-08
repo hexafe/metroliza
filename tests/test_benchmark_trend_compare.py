@@ -130,6 +130,78 @@ def test_trend_compare_stage_metrics_remain_advisory_when_wall_time_fails(tmp_pa
     assert report['stage_metric_results'][0]['status'] == 'observed'
 
 
+def test_trend_compare_required_baseline_fails_missing_requested_baseline(
+    tmp_path,
+    monkeypatch,
+):
+    baseline_path = tmp_path / 'baseline.json'
+    run_path = tmp_path / 'run.json'
+    output_path = tmp_path / 'trend-report.json'
+    baseline_path.write_text(json.dumps({'scenarios': {}}), encoding='utf-8')
+    run_path.write_text(
+        json.dumps({'results': [{'scenario': 'cmm_parser_backend_compare', 'wall_time_s': 1.0}]}),
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(
+        sys,
+        'argv',
+        [
+            'benchmark_trend_compare.py',
+            '--baseline',
+            str(baseline_path),
+            '--runs',
+            str(run_path),
+            '--output-json',
+            str(output_path),
+            '--scenarios',
+            'cmm_parser_backend_compare',
+            '--require-baselines',
+        ],
+    )
+
+    assert benchmark_trend_compare.main() == 1
+
+    report = json.loads(output_path.read_text(encoding='utf-8'))
+    assert report['failed_scenarios'] == ['cmm_parser_backend_compare']
+    assert report['results'][0]['status'] == 'missing_baseline'
+
+
+def test_trend_compare_required_observed_fails_missing_requested_rows(
+    tmp_path,
+    monkeypatch,
+):
+    baseline_path = tmp_path / 'baseline.json'
+    run_path = tmp_path / 'run.json'
+    output_path = tmp_path / 'trend-report.json'
+    baseline_path.write_text(
+        json.dumps({'scenarios': {'cmm_parser_backend_compare': {'median_wall_time_s': 1.0}}}),
+        encoding='utf-8',
+    )
+    run_path.write_text(json.dumps({'results': []}), encoding='utf-8')
+    monkeypatch.setattr(
+        sys,
+        'argv',
+        [
+            'benchmark_trend_compare.py',
+            '--baseline',
+            str(baseline_path),
+            '--runs',
+            str(run_path),
+            '--output-json',
+            str(output_path),
+            '--scenarios',
+            'cmm_parser_backend_compare',
+            '--require-observed',
+        ],
+    )
+
+    assert benchmark_trend_compare.main() == 1
+
+    report = json.loads(output_path.read_text(encoding='utf-8'))
+    assert report['failed_scenarios'] == ['cmm_parser_backend_compare']
+    assert report['results'][0]['status'] == 'missing_observed'
+
+
 def test_parse_stage_metric_specs_rejects_ambiguous_values():
     with pytest.raises(ValueError, match='SCENARIO:STAGE'):
         benchmark_trend_compare._parse_stage_metric_specs(['excel_export_path'])

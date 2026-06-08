@@ -94,3 +94,16 @@ record_event("test_event", detail="ok")
     assert events[-1]["name"] == "test_event"
     assert events[-1]["detail"] == "ok"
     assert events[-1]["elapsed_ms"] >= 0
+
+
+def test_windows_startup_benchmark_fails_on_crash_or_missing_profile_evidence():
+    script = Path("scripts/measure_windows_startup.ps1").read_text(encoding="utf-8")
+
+    assert "$RequiredStartupEvents = @(" in script
+    assert "'first_event_loop_tick'" in script
+    assert "function Assert-StartupRunSucceeded" in script
+    assert "Startup run failed with exit code" in script
+    assert "Startup profile JSONL was not created" in script
+    assert "Startup profile JSONL is empty" in script
+    assert "missing required event" in script
+    assert "Assert-StartupRunSucceeded -Run $run -ProfilePath $profilePath -Events $events" in script

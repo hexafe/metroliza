@@ -761,6 +761,117 @@ def test_replace_report_metadata_enrichment_rolls_back_as_one_transaction(tmp_pa
     assert parse_status == "parsed"
 
 
+def test_persist_parsed_report_rolls_back_full_replacement_on_measurement_failure(tmp_path):
+    db_path = str(tmp_path / "reports.db")
+    repository = ReportRepository(db_path)
+    repository.ensure_schema()
+    report_id = _persist_basic_report(tmp_path, repository, file_name="rollback_full.pdf")
+
+    class FailingMeasurementRepository(ReportRepository):
+        def _replace_measurements(self, cursor, report_id, rows):
+            raise sqlite3.IntegrityError("synthetic measurement failure")
+
+    failing_repository = FailingMeasurementRepository(db_path)
+    source_path = tmp_path / "rollback_full.pdf"
+
+    try:
+        failing_repository.persist_parsed_report(
+            source_path=source_path,
+            parser_id="cmm",
+            parser_version="1.1",
+            template_family="cmm_pdf_header_box",
+            template_variant="variant",
+            parse_status="parsed_with_warnings",
+            metadata={
+                "reference": "REF-NEW",
+                "reference_raw": "REF-NEW",
+                "report_date": "2024-02-01",
+                "report_time": "11:00",
+                "part_name": "Part",
+                "revision": "B",
+                "sample_number": "2",
+                "sample_number_kind": "explicit_sample_number",
+                "operator_name": "Operator",
+                "metadata_json": {"field_sources": {"reference": "position_cell"}},
+            },
+            candidates=[
+                {
+                    "field_name": "reference",
+                    "raw_value": "REF-NEW",
+                    "normalized_value": "REF-NEW",
+                    "source_type": "header",
+                    "rule_id": "new_candidate",
+                    "confidence": 0.99,
+                    "selected": True,
+                }
+            ],
+            warnings=[
+                {
+                    "code": "new_warning",
+                    "field_name": "reference",
+                    "severity": "warning",
+                    "message": "New warning.",
+                }
+            ],
+            measurements=[
+                {
+                    "page_number": 1,
+                    "row_order": 1,
+                    "header": "Feature 2",
+                    "section_name": "Feature 2",
+                    "feature_label": "Feature 2",
+                    "characteristic_name": "LOC",
+                    "characteristic_family": "LOC",
+                    "description": "Feature 2",
+                    "ax": "Y",
+                    "nominal": 20.0,
+                    "tol_plus": 0.2,
+                    "tol_minus": -0.2,
+                    "meas": 20.1,
+                    "dev": 0.1,
+                    "outtol": 0.0,
+                }
+            ],
+            metadata_version="report_metadata_v1",
+            page_count=1,
+            measurement_count=1,
+            metadata_confidence=0.99,
+            identity_hash="identity-new",
+        )
+    except sqlite3.IntegrityError:
+        pass
+    else:
+        raise AssertionError("Expected parsed-report replacement to fail")
+
+    with sqlite3.connect(db_path) as conn:
+        parsed_row = conn.execute(
+            "SELECT parse_status, parser_version, metadata_confidence, identity_hash FROM parsed_reports WHERE id = ?",
+            (report_id,),
+        ).fetchone()
+        metadata_row = conn.execute(
+            "SELECT reference, revision FROM report_metadata WHERE report_id = ?",
+            (report_id,),
+        ).fetchone()
+        measurement_rows = conn.execute(
+            "SELECT row_order, header, ax, meas FROM report_measurements WHERE report_id = ?",
+            (report_id,),
+        ).fetchall()
+        candidate_count = conn.execute(
+            "SELECT COUNT(*) FROM report_metadata_candidates WHERE report_id = ?",
+            (report_id,),
+        ).fetchone()[0]
+        warning_count = conn.execute(
+            "SELECT COUNT(*) FROM report_metadata_warnings WHERE report_id = ?",
+            (report_id,),
+        ).fetchone()[0]
+
+    assert parsed_row == ("parsed", "1.0", 1.0, _identity_hash())
+    assert metadata_row == ("REF-1", "A")
+    assert measurement_rows == [(1, "Feature 1", "X", 10.0)]
+    assert candidate_count == 0
+    assert warning_count == 0
+
+
 def test_update_measurement_fields_keeps_status_aggregate_and_raw_json_coherent(tmp_path):
     db_path = str(tmp_path / "reports.db")
     repository = ReportRepository(db_path)

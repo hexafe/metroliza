@@ -13,7 +13,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}(?:rc\d+)?$")
         self.assertRegex(metadata.build, r"^\d{6}$")
         self.assertEqual(metadata.version_label, f"{metadata.release_version}({metadata.build})")
-        self.assertEqual(metadata.public_version_label, "2026.05 RC4 (build 260608)")
+        self.assertEqual(metadata.public_version_label, "2026.05 RC4 (build 260609)")
         self.assertTrue(metadata.highlight)
 
     def test_in_app_current_release_notes_show_current_version_only(self):
@@ -50,6 +50,10 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertEqual(
             current_bullets,
             [
+                "- Saved report updates are safer if a database write fails partway through<br>",
+                "- HTML dashboard-only exports now report a failure instead of success when dashboard creation fails<br>",
+                "- CSV Summary filters and multi-file exports behave more consistently across regular and large-file paths<br>",
+                "- Packaging, startup timing, and performance checks now fail when required release evidence is missing<br>",
                 "- Parser profiles can now be prepared from Tools > Parser profiles... for new supplier report templates without writing Python code<br>",
                 "- Google Sheets export now checks converted workbook tabs and warns when a local Excel fallback should be used<br>",
                 "- Canceling long parsing, export, and metadata tasks is more reliable from progress windows<br>",

@@ -621,6 +621,30 @@ def test_native_distribution_renderer_falls_back_when_native_call_raises():
         assert len(result.png_bytes) > 0
 
 
+def test_native_histogram_renderer_falls_back_when_native_call_raises(monkeypatch):
+    monkeypatch.setenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", "histogram")
+    fig, ax = plt.subplots()
+    ax.hist([1.0, 1.2, 1.4, 1.8], bins=4)
+    payload = build_histogram_native_payload(
+        values=[1.0, 1.2, 1.4, 1.8],
+        lsl=0.9,
+        usl=1.9,
+        title="Histogram fallback",
+    )
+    payload["resolved_render_spec"] = build_resolved_histogram_spec(payload)
+
+    def _raise_runtime_error(_payload):
+        raise RuntimeError("native histogram failed")
+
+    with mock.patch("modules.chart_renderer._native_render_histogram_png", _raise_runtime_error):
+        result = NativeChartRenderer().render_histogram_png(payload, fallback_fig=fig)
+
+    plt.close(fig)
+    assert result.backend == "matplotlib"
+    assert isinstance(result.png_bytes, bytes)
+    assert len(result.png_bytes) > 0
+
+
 def test_native_distribution_renderer_falls_back_when_resolved_geometry_is_missing():
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", "distribution")
@@ -734,6 +758,69 @@ def test_native_trend_renderer_uses_native_when_finalized_geometry_is_attached(m
     native.assert_called_once_with(payload)
     assert result.backend == "native"
     assert result.png_bytes == b"native"
+
+
+def test_native_iqr_renderer_falls_back_when_native_call_raises(monkeypatch):
+    monkeypatch.setenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", "iqr")
+    fig, ax = plt.subplots()
+    ax.boxplot([[1.0, 1.1, 1.2, 1.3]])
+    payload = {
+        "type": "iqr",
+        "labels": ["Only"],
+        "series": [[1.0, 1.1, 1.2, 1.3]],
+        "title": "IQR fallback",
+        "lsl": 0.8,
+        "usl": 1.5,
+        "nominal": 1.2,
+        "one_sided": False,
+        "layout": {"rotation": 0, "display_positions": [1.0], "display_labels": ["Only"], "bottom_margin": 0.18},
+        "canvas": {"width_px": 960, "height_px": 540, "dpi": 150},
+        "x_label": "Group",
+        "y_label": "Measurement",
+        "legend": {"items": []},
+    }
+    payload["resolved_render_spec"] = build_resolved_iqr_spec(payload)
+
+    def _raise_runtime_error(_payload):
+        raise RuntimeError("native iqr failed")
+
+    with mock.patch("modules.chart_renderer._native_render_iqr_png", _raise_runtime_error):
+        result = NativeChartRenderer().render_iqr_png(payload, fallback_fig=fig)
+
+    plt.close(fig)
+    assert result.backend == "matplotlib"
+    assert isinstance(result.png_bytes, bytes)
+    assert len(result.png_bytes) > 0
+
+
+def test_native_trend_renderer_falls_back_when_native_call_raises(monkeypatch):
+    monkeypatch.setenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", "trend")
+    fig, ax = plt.subplots()
+    ax.plot([0.0, 1.0, 2.0], [1.0, 1.2, 1.1])
+    payload = {
+        "type": "trend",
+        "x_values": [0.0, 1.0, 2.0],
+        "y_values": [1.0, 1.2, 1.1],
+        "labels": ["S1", "S2", "S3"],
+        "title": "Trend fallback",
+        "x_label": "Sample #",
+        "y_label": "Measurement",
+        "horizontal_limits": [0.9, 1.4],
+        "layout": {"rotation": 0, "display_positions": [0.0, 1.0, 2.0], "display_labels": ["S1", "S2", "S3"], "bottom_margin": 0.22},
+        "canvas": {"width_px": 960, "height_px": 540, "dpi": 150},
+    }
+    payload["resolved_render_spec"] = build_resolved_trend_spec(payload)
+
+    def _raise_runtime_error(_payload):
+        raise RuntimeError("native trend failed")
+
+    with mock.patch("modules.chart_renderer._native_render_trend_png", _raise_runtime_error):
+        result = NativeChartRenderer().render_trend_png(payload, fallback_fig=fig)
+
+    plt.close(fig)
+    assert result.backend == "matplotlib"
+    assert isinstance(result.png_bytes, bytes)
+    assert len(result.png_bytes) > 0
 
 
 def test_native_iqr_renderer_validates_payload_contract():

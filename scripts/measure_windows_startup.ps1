@@ -12,6 +12,10 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+$RequiredStartupEvents = @(
+    'first_event_loop_tick'
+)
+
 function Set-EnvVar {
     param(
         [Parameter(Mandatory = $true)]
@@ -75,6 +79,36 @@ function Invoke-StartupRun {
     }
 }
 
+function Assert-StartupRunSucceeded {
+    param(
+        [Parameter(Mandatory = $true)]
+        [pscustomobject]$Run,
+        [Parameter(Mandatory = $true)]
+        [string]$ProfilePath,
+        [Parameter(Mandatory = $true)]
+        [object[]]$Events
+    )
+
+    if ([int]$Run.ExitCode -ne 0) {
+        throw "Startup run failed with exit code $($Run.ExitCode): $ProfilePath"
+    }
+
+    if (-not (Test-Path -LiteralPath $ProfilePath)) {
+        throw "Startup profile JSONL was not created: $ProfilePath"
+    }
+
+    if ($Events.Count -eq 0) {
+        throw "Startup profile JSONL is empty: $ProfilePath"
+    }
+
+    $eventNames = @($Events | ForEach-Object { [string]$_.name })
+    foreach ($requiredEvent in $RequiredStartupEvents) {
+        if ($eventNames -notcontains $requiredEvent) {
+            throw "Startup profile JSONL is missing required event '$requiredEvent': $ProfilePath"
+        }
+    }
+}
+
 if ($Iterations -lt 1) {
     throw '-Iterations must be at least 1.'
 }
@@ -110,6 +144,7 @@ foreach ($artifact in $ArtifactPath) {
         if (Test-Path -LiteralPath $profilePath) {
             $events = @(Get-Content -LiteralPath $profilePath | ForEach-Object { $_ | ConvertFrom-Json })
         }
+        Assert-StartupRunSucceeded -Run $run -ProfilePath $profilePath -Events $events
         $lastEvent = $events | Select-Object -Last 1
         $pythonElapsed = if ($lastEvent) { [double]$lastEvent.elapsed_ms } else { $null }
 

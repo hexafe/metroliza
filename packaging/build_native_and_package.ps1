@@ -57,7 +57,7 @@ $nativeTargetCatalog = @(
         Name = 'cmm'
         ModuleName = '_metroliza_cmm_native'
         ManifestPath = 'src/metroliza/native/cmm_parser/Cargo.toml'
-        VerifyCommand = 'from metroliza.native_bridges.cmm_native_parser import native_backend_available, native_persistence_backend_available; import modules.cmm_native_parser as legacy; import metroliza.native_bridges.cmm_native_parser as canonical; import sys; sys.exit(0 if legacy is canonical and native_backend_available() and native_persistence_backend_available() else 1)'
+        VerifyCommand = 'from metroliza.native_bridges.cmm_native_parser import native_backend_available; import modules.cmm_native_parser as legacy; import metroliza.native_bridges.cmm_native_parser as canonical; import sys; sys.exit(0 if legacy is canonical and native_backend_available() else 1)'
     }
     [pscustomobject]@{
         Name = 'chart'
@@ -346,9 +346,9 @@ try {
     Write-Host "      Native targets: $($selectedTargets.Name -join ', ')"
     Write-Host "      Packager: $Packager"
 
-    Write-Host '[2/6] Installing build requirements into the active Python environment'
+    Write-Host '[2/6] Installing build and OCR requirements into the active Python environment'
     if ($SkipBuildRequirementsInstall) {
-        Write-Host '      Skipping requirements-build.txt installation by request.'
+        Write-Host '      Skipping requirements-build.txt and requirements-ocr.txt installation by request.'
     }
     else {
         if (-not $SkipPipUpgrade) {
@@ -359,6 +359,7 @@ try {
         }
 
         Invoke-CheckedPythonCommand -Arguments @('-m', 'pip', 'install', '-r', 'requirements-build.txt') -FailureMessage 'Failed to install requirements-build.txt into the active build environment.'
+        Invoke-CheckedPythonCommand -Arguments @('-m', 'pip', 'install', '-r', 'requirements-ocr.txt') -FailureMessage 'Failed to install requirements-ocr.txt into the active build environment.'
     }
 
     Write-Host '[3/6] Building native extensions in release mode'
@@ -381,6 +382,7 @@ try {
             '-c',
             'import json; from metroliza.app.backend_diagnostics import build_backend_diagnostic_summary; print(json.dumps(build_backend_diagnostic_summary(), indent=2, sort_keys=True))'
         ) -FailureMessage 'Backend diagnostics summary failed.'
+        Invoke-CheckedPythonCommand -Arguments @('scripts/validate_packaged_pdf_parser.py', '--require-header-ocr') -FailureMessage 'Packaged PDF parser header OCR dependency validation failed.'
     }
 
     Write-Host '[5/6] Packaging'

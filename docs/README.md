@@ -31,6 +31,7 @@ This directory contains active operational, maintenance, and end-user documentat
 - `roadmaps/static_population_layer_dashboard_plan.md` — completed implementation record for static POPULATION layer optimization in large HTML dashboards.
 - `roadmaps/directory_reorganization_long_term.md` — completed directory reorganization record for the canonical `src/metroliza/` layout, legacy shims, packaging guardrails, and validation evidence.
 - `roadmaps/post_reorganization_next_implementation_plan.md` — active next implementation plan after the completed directory reorganization.
+- `roadmaps/full_module_audit_2026_06.md` — active full-module audit matrix, implemented fixes, and deferred follow-up backlog.
 - `roadmaps/exporter_audit_2026_03.md` — focused exporter-path follow-up audit with the remaining structural refactor backlog.
 - `roadmaps/rust_acceleration_scope.md` — native-acceleration scope and promotion-gate decision record.
 
@@ -44,6 +45,7 @@ pre-reorganization context and must be refreshed against canonical
 | Roadmap | Status | Notes |
 |---|---|---|
 | `roadmaps/post_reorganization_next_implementation_plan.md` | Active | Current post-reorganization implementation plan and workstream hub. |
+| `roadmaps/full_module_audit_2026_06.md` | Active | Full-module audit matrix for parser/report persistence, export/charting, CSV Summary, UI/UX, CI, packaging, and release gates. |
 | `roadmaps/OZNAK_PRODUCTION_ANALYTICS_IMPLEMENTATION_PLAN.md` | Active | Production and tabular analytics roadmap; paths are canonicalized to `src/metroliza/*`. |
 | `roadmaps/OCR_BENCHMARKING_MASTER.md` | Active | OCR benchmarking and acceleration handoff; new work follows the post-reorganization path policy. |
 | `roadmaps/static_population_layer_dashboard_plan.md` | Completed record | Static POPULATION layer optimization closeout for large CSV Summary dashboards and shared dashboard renderer parity. |
@@ -102,6 +104,7 @@ Canonical release operations docs (release gate/source-of-truth set):
 - `release_checks/branching_strategy.md` — authoritative branch naming/rules used during release work.
 - `release_checks/google_conversion_smoke.md` — required release smoke evidence log for Google conversion checks.
 - `release_checks/cmm_parser_perf_guardrail.md` — CMM parser performance guardrail policy, variance expectations, and CI-failure triage steps.
+- `release_checks/full_module_audit_2026-06-08.md` — build `260609` full-module audit hardening release-check evidence.
 
 Supplemental tutorial/playbook docs (how-to guidance that supports, but does not override, canonical docs):
 

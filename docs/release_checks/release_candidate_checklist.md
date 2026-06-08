@@ -122,7 +122,7 @@ python -m maturin build --manifest-path src/metroliza/native/distribution_fit_ad
 ### 2026.05 RC4 rc2 hardening evidence
 
 Current validation branch: `rc2`.
-Current RC metadata: `2026.05rc4(260608)`.
+Current RC metadata: `2026.05rc4(260609)`.
 Current plotstats hotfix pin:
 `1e2c72107d342f44a37e5fb78d7d76992ea60315`.
 
@@ -305,6 +305,17 @@ Current plotstats hotfix pin:
   CMM parser perf guardrail, and the non-blocking Performance benchmark trend
   check. Manual and opt-in jobs were skipped: Packaging smoke, Windows startup
   benchmark, and Google conversion smoke.
+- Full-module audit hardening QA passed locally on 2026-06-08 for build
+  `260609`. The branch `codex/full-module-audit-20260608` hardens parsed-report
+  persistence atomicity, CMM persistence error propagation, HTML-only dashboard
+  failure handling, CSV Summary SQLite/header/filter parity, native chart
+  fallback behavior, packaging OCR smoke gates, Windows startup evidence checks,
+  and CMM performance trend baseline/observed-run requirements. Local gates
+  passed: `git diff --check`, `ruff`, `compileall`, release metadata sync,
+  release hygiene, security audit with no known vulnerabilities, and full
+  headless pytest (`1889 passed`, `263 skipped`, `6 warnings`,
+  `71 subtests passed`). Evidence is recorded in
+  [`full_module_audit_2026-06-08.md`](./full_module_audit_2026-06-08.md).
 - Post-reorganization follow-up local audit passed after docs/reference cleanup,
   parser-plugin productionization coverage, architecture guardrail hardening, and
   release-status refresh.

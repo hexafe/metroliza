@@ -160,7 +160,15 @@ class NativeChartRenderer(ChartRenderer):
                 chart_type="histogram",
                 reason="Native histogram rendering requires finalized matplotlib geometry or a matplotlib fallback figure.",
             )
-        png_bytes = _native_render_histogram_png(payload)
+        try:
+            png_bytes = _native_render_histogram_png(payload)
+        except Exception:
+            return self._render_matplotlib_fallback(
+                fallback_fig=fallback_fig,
+                mode=mode,
+                chart_type="histogram",
+                reason="Native histogram rendering failed and no matplotlib fallback figure provided.",
+            )
         if not isinstance(png_bytes, (bytes, bytearray)):
             raise RuntimeError("Native chart renderer returned non-bytes payload.")
         return ChartRenderResult(png_bytes=bytes(png_bytes), backend="native")
@@ -226,7 +234,15 @@ class NativeChartRenderer(ChartRenderer):
                 chart_type="iqr",
                 reason="Native IQR rendering requires finalized matplotlib geometry or a matplotlib fallback figure.",
             )
-        png_bytes = _native_render_iqr_png(payload)
+        try:
+            png_bytes = _native_render_iqr_png(payload)
+        except Exception:
+            return self._render_matplotlib_fallback(
+                fallback_fig=fallback_fig,
+                mode=mode,
+                chart_type="iqr",
+                reason="Native IQR rendering failed and no matplotlib fallback figure provided.",
+            )
         if not isinstance(png_bytes, (bytes, bytearray)):
             raise RuntimeError("Native IQR renderer returned non-bytes payload.")
         return ChartRenderResult(png_bytes=bytes(png_bytes), backend="native")
@@ -255,7 +271,15 @@ class NativeChartRenderer(ChartRenderer):
                 chart_type="trend",
                 reason="Native trend rendering requires finalized matplotlib geometry or a matplotlib fallback figure.",
             )
-        png_bytes = _native_render_trend_png(payload)
+        try:
+            png_bytes = _native_render_trend_png(payload)
+        except Exception:
+            return self._render_matplotlib_fallback(
+                fallback_fig=fallback_fig,
+                mode=mode,
+                chart_type="trend",
+                reason="Native trend rendering failed and no matplotlib fallback figure provided.",
+            )
         if not isinstance(png_bytes, (bytes, bytearray)):
             raise RuntimeError("Native trend renderer returned non-bytes payload.")
         return ChartRenderResult(png_bytes=bytes(png_bytes), backend="native")

@@ -60,11 +60,15 @@ This helps prevent accidentally reusing filters or groups from a different datab
 
 The dialog keeps the selected database in a compact read-only field so long file paths do not stretch the window.
 
-### Select an Excel file
+### Select an output file
 
-Choose where the output **.xlsx file** should be saved.
+Choose where the output should be saved.
 
-The **Export** button stays disabled until an output Excel file is selected.
+For workbook and Google Sheets exports, choose a local **.xlsx file**.
+
+For **HTML dashboard only**, choose a **.html dashboard file** instead.
+
+The **Export** button stays disabled until the required output file for the selected preset is selected.
 
 Even if you also use Google Sheets export, the local **.xlsx file** is still required and is always kept.
 
@@ -120,6 +124,7 @@ Available presets are:
 
 - **Main plots**
 - **Extended plots**
+- **HTML dashboard only**
 
 #### Main plots
 
