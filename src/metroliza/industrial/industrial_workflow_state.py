@@ -24,6 +24,107 @@ INDUSTRIAL_GROUPING_FIELDS: tuple[tuple[str, str], ...] = (
 )
 INDUSTRIAL_GROUPING_FIELD_LABELS = dict(INDUSTRIAL_GROUPING_FIELDS)
 INDUSTRIAL_GROUPING_ALLOWED_FIELDS = set(INDUSTRIAL_GROUPING_FIELD_LABELS)
+INDUSTRIAL_QUERY_FILTER_OPERATORS = frozenset(
+    {
+        "=",
+        "!=",
+        "<",
+        "<=",
+        ">",
+        ">=",
+        "LIKE",
+        "NOT LIKE",
+        "IN",
+        "NOT IN",
+        "IS NULL",
+        "IS NOT NULL",
+    }
+)
+
+
+@dataclass(frozen=True)
+class IndustrialQueryFilter:
+    """One server-side source filter for industrial data fetches."""
+
+    column: str
+    operator: str
+    values: tuple[str, ...] = ()
+
+    def validated(self) -> "IndustrialQueryFilter":
+        require_identifier("filter column", self.column)
+        operator = str(self.operator or "").strip().upper()
+        if operator not in INDUSTRIAL_QUERY_FILTER_OPERATORS:
+            raise ValueError(f"Unsupported industrial filter operator: {self.operator}")
+        values = tuple(str(value).strip() for value in self.values if str(value).strip())
+        if operator in {"IS NULL", "IS NOT NULL"}:
+            values = ()
+        elif operator in {"IN", "NOT IN"}:
+            if not values:
+                raise ValueError(f"{operator} filters require at least one value.")
+        elif len(values) != 1:
+            raise ValueError(f"{operator} filters require exactly one value.")
+        return IndustrialQueryFilter(column=self.column.strip(), operator=operator, values=values)
+
+
+@dataclass(frozen=True)
+class IndustrialFetchState:
+    """User-selected fetch scope for database-backed industrial sources."""
+
+    filters: tuple[IndustrialQueryFilter, ...] = ()
+    limit_rows: int | None = 5_000
+    fetch_all_confirmed: bool = False
+
+    @property
+    def is_bounded(self) -> bool:
+        return bool(self.filters) or self.limit_rows is not None or self.fetch_all_confirmed
+
+    def validated(self) -> "IndustrialFetchState":
+        filters = tuple(filter_state.validated() for filter_state in self.filters)
+        limit_rows = self.limit_rows
+        if limit_rows is not None:
+            limit_rows = max(1, int(limit_rows))
+        if not filters and limit_rows is None and not self.fetch_all_confirmed:
+            raise ValueError("Choose filters, set a LIMIT, or explicitly confirm fetch all.")
+        return IndustrialFetchState(
+            filters=filters,
+            limit_rows=limit_rows,
+            fetch_all_confirmed=bool(self.fetch_all_confirmed),
+        )
+
+    def summary(self) -> str:
+        parts: list[str] = []
+        if self.filters:
+            parts.append(f"Filters: {len(self.filters)}")
+        else:
+            parts.append("Filters: none")
+        if self.limit_rows is None:
+            parts.append("LIMIT: all rows confirmed" if self.fetch_all_confirmed else "LIMIT: none")
+        else:
+            parts.append(f"LIMIT: {int(self.limit_rows):,}")
+        return "; ".join(parts)
+
+    @classmethod
+    def from_reference_state(
+        cls,
+        state: "IndustrialFilterState",
+        *,
+        limit_rows: int | None = 5_000,
+        fetch_all_confirmed: bool = False,
+    ) -> "IndustrialFetchState":
+        filters: tuple[IndustrialQueryFilter, ...] = ()
+        if state.references:
+            filters = (
+                IndustrialQueryFilter(
+                    column=state.reference_column,
+                    operator="IN",
+                    values=state.references,
+                ),
+            )
+        return cls(
+            filters=filters,
+            limit_rows=limit_rows,
+            fetch_all_confirmed=fetch_all_confirmed,
+        ).validated()
 
 
 @dataclass(frozen=True)

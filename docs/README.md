@@ -28,7 +28,7 @@ This directory contains active operational, maintenance, and end-user documentat
 - `roadmaps/OCR_BENCHMARKING_MASTER.md` — canonical OCR benchmarking, acceleration, privacy, and next-session handoff.
 - `roadmaps/OZNAK_PRODUCTION_ANALYTICS_IMPLEMENTATION_PLAN.md` — active production-analytics roadmap using canonical `src/metroliza/*` implementation paths.
 - `roadmaps/PLOTSTATS_CENTRALIZATION_IMPLEMENTATION_PLAN.md` — future implementation plan for moving reusable Metroliza plot definitions into `hexafe-plotstats`.
-- `roadmaps/static_population_layer_dashboard_plan.md` — completed implementation record for static POPULATION layer optimization in large HTML dashboards.
+- `roadmaps/static_population_layer_dashboard_plan.md` — completed implementation record for static large-group layer optimization in large HTML dashboards.
 - `roadmaps/directory_reorganization_long_term.md` — completed directory reorganization record for the canonical `src/metroliza/` layout, legacy shims, packaging guardrails, and validation evidence.
 - `roadmaps/post_reorganization_next_implementation_plan.md` — active next implementation plan after the completed directory reorganization.
 - `roadmaps/full_module_audit_2026_06.md` — active full-module audit matrix, implemented fixes, and deferred follow-up backlog.
@@ -48,7 +48,7 @@ pre-reorganization context and must be refreshed against canonical
 | `roadmaps/full_module_audit_2026_06.md` | Active | Full-module audit matrix for parser/report persistence, export/charting, CSV Summary, UI/UX, CI, packaging, and release gates. |
 | `roadmaps/OZNAK_PRODUCTION_ANALYTICS_IMPLEMENTATION_PLAN.md` | Active | Production and tabular analytics roadmap; paths are canonicalized to `src/metroliza/*`. |
 | `roadmaps/OCR_BENCHMARKING_MASTER.md` | Active | OCR benchmarking and acceleration handoff; new work follows the post-reorganization path policy. |
-| `roadmaps/static_population_layer_dashboard_plan.md` | Completed record | Static POPULATION layer optimization closeout for large CSV Summary dashboards and shared dashboard renderer parity. |
+| `roadmaps/static_population_layer_dashboard_plan.md` | Completed record | Static large-group layer optimization closeout for large CSV Summary dashboards and shared dashboard renderer parity. |
 | `roadmaps/PLOTSTATS_CENTRALIZATION_IMPLEMENTATION_PLAN.md` | Future active | Plotstats boundary migration plan. |
 | `roadmaps/exporter_audit_2026_03.md` | Active follow-up | Exporter Phase-B structural backlog after RC2 seam closeout. |
 | `roadmaps/rust_acceleration_scope.md` | Active decision record | Native-acceleration promotion gate and candidate-scope decision record. |
@@ -87,7 +87,7 @@ The legacy `docs/group_analysis/user_manual.md` path is retained only as a redir
   - `src/metroliza/charts/export_chart_payload_helpers.py` for chart payload/table shaping.
   - `src/metroliza/exporting/export_workbook_planning_helpers.py` for workbook/table layout sizing heuristics.
   - `src/metroliza/exporting/export_row_aggregation_utils.py` for row/group aggregation computations.
-- CSV/Excel Summary is routed through `src/metroliza/ui/industrial_analytics_dialog.py` and the shared tabular analytics workflow; large-dashboard chart interactivity is controlled by the CSV Summary dashboard interactivity contract in `src/metroliza/shared/contracts.py`.
+- CSV/Excel Summary is routed through `src/metroliza/ui/industrial_analytics_dialog.py` and the shared tabular analytics workflow; large-dashboard chart interactivity and large-group layer thresholds are controlled by the CSV Summary dashboard interactivity contract in `src/metroliza/shared/contracts.py`.
 - `src/metroliza/ui/data_grouping.py` keeps widget/event orchestration and delegates data/query mutations to `src/metroliza/tabular/data_grouping_service.py`.
 - Grouping dialog colors use shared semantic tokens from `src/metroliza/ui/ui_theme_tokens.py` so dialogs stay visually consistent across light/dark themes.
 - Group Analysis statistical computation is bridged through `src/metroliza/analytics/hexafe_groupstats_adapter.py`; workbook, dashboard, export orchestration, and UI remain Metroliza-owned.
@@ -105,6 +105,7 @@ Canonical release operations docs (release gate/source-of-truth set):
 - `release_checks/google_conversion_smoke.md` — required release smoke evidence log for Google conversion checks.
 - `release_checks/cmm_parser_perf_guardrail.md` — CMM parser performance guardrail policy, variance expectations, and CI-failure triage steps.
 - `release_checks/full_module_audit_2026-06-08.md` — build `260609` full-module audit hardening release-check evidence.
+- `release_checks/rc5_dashboard_industrial_cache_check_2026-06-09.md` — build `260609` RC5 dashboard large-group, dashboard visuals, and Industrial Data cache release-check evidence.
 
 Supplemental tutorial/playbook docs (how-to guidance that supports, but does not override, canonical docs):
 

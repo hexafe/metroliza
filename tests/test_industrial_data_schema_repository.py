@@ -229,6 +229,11 @@ def test_schema_migrates_legacy_sync_run_status_constraint(tmp_path):
         conn.execute("DROP TABLE industrial_sync_runs")
         conn.execute("ALTER TABLE industrial_sync_runs_legacy RENAME TO industrial_sync_runs")
         conn.commit()
+        legacy_link = conn.execute(
+            "SELECT sync_run_id FROM industrial_records WHERE source_record_key = 'legacy-row'"
+        ).fetchone()[0]
+
+    assert legacy_link == sync_run_id
 
     with sqlite_connection_scope(db_path) as conn:
         conn.execute("UPDATE app_schema SET value = value WHERE key = 'industrial_schema_version'")
@@ -371,6 +376,19 @@ def test_upsert_records_and_summarize_counts_from_synthetic_rows(tmp_path):
             """,
             (profile.id,),
         ).fetchone()[0]
+        row1_dynamic_fields = {
+            row[0]
+            for row in conn.execute(
+                """
+                SELECT values_row.field_name
+                FROM industrial_record_values values_row
+                JOIN industrial_records records_row ON records_row.id = values_row.record_id
+                WHERE records_row.source_profile_id = ?
+                  AND records_row.source_record_key = 'ROW-1'
+                """,
+                (profile.id,),
+            ).fetchall()
+        }
         row2_raw_record_json = conn.execute(
             """
             SELECT raw_record_json
@@ -391,3 +409,4 @@ def test_upsert_records_and_summarize_counts_from_synthetic_rows(tmp_path):
     assert json.loads(quality_payload)["apiKey"] == "<redacted>"
     assert token_values == 0
     assert stale_measurements == 0
+    assert row1_dynamic_fields == {"temperature_c"}

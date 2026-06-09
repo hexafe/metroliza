@@ -32,7 +32,7 @@ from metroliza.industrial.industrial_source_config import (
     default_industrial_source_config_path,
     load_source_profiles_from_config,
 )
-from metroliza.industrial.industrial_workflow_state import IndustrialFilterState
+from metroliza.industrial.industrial_workflow_state import IndustrialFetchState, IndustrialFilterState
 from metroliza.industrial.industrial_workers import IndustrialOznakAccessCheckThread, IndustrialOznakSyncThread
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
@@ -64,7 +64,7 @@ class IndustrialSyncDialog(QDialog):
         self.oznak_sync_thread = None
         self._loading_profiles = False
         self.setWindowTitle("Sync industrial data")
-        configure_window_size(self, minimum=(560, 360), initial=(680, 420))
+        configure_window_size(self, minimum=(560, 360), initial=(680, 460))
 
         self.status_label = status_chip(
             "Select a production source and enter production database credentials.",
@@ -80,6 +80,11 @@ class IndustrialSyncDialog(QDialog):
         self.limit_spin = QSpinBox()
         self.limit_spin.setRange(1, 1_000_000)
         self.limit_spin.setValue(5000)
+        self.fetch_all_checkbox = QCheckBox("Fetch all rows")
+        self.fetch_all_checkbox.setToolTip(
+            "Fetch every row visible to the configured source and filters after a warning confirmation."
+        )
+        self.fetch_all_checkbox.stateChanged.connect(lambda _state: self._sync_limit_controls())
         self.timeout_spin = QSpinBox()
         self.timeout_spin.setRange(1, 3600)
         self.timeout_spin.setValue(30)
@@ -96,7 +101,7 @@ class IndustrialSyncDialog(QDialog):
             "Reads up to one production row to verify credentials, table, columns, and query access. Nothing is saved."
         )
         self.sync_now_button.setToolTip(
-            "Fetches rows matching the selected reference/ID values and saves them in the local Metroliza cache."
+            "Fetches rows matching the selected filters or LIMIT and saves them in the local Metroliza cache."
         )
         self.edit_filter_button.setToolTip(
             "Choose the production reference/ID column and paste values separated by comma, semicolon, spaces, tabs, or new lines."
@@ -134,6 +139,7 @@ class IndustrialSyncDialog(QDialog):
         form.addRow("Production DB password", self.password_edit)
         form.addRow("", self.remember_credentials_checkbox)
         form.addRow("Sync row limit", self.limit_spin)
+        form.addRow("", self.fetch_all_checkbox)
         form.addRow("Query timeout seconds", self.timeout_spin)
         layout.addLayout(form)
 
@@ -221,12 +227,12 @@ class IndustrialSyncDialog(QDialog):
     def _load_stored_credentials_for_current_profile(self) -> None:
         profile = self.current_profile()
         if profile is None:
+            self.username_edit.clear()
+            self.password_edit.clear()
             return
         stored = load_industrial_credentials(profile.profile_key)
-        if stored.username and not self.username_edit.text().strip():
-            self.username_edit.setText(stored.username)
-        if stored.password and not self.password_edit.text():
-            self.password_edit.setText(stored.password)
+        self.username_edit.setText(stored.username)
+        self.password_edit.setText(stored.password)
 
     def _profile_for_current_filter(self) -> IndustrialSourceProfile:
         profile = self.current_profile()
@@ -303,7 +309,27 @@ class IndustrialSyncDialog(QDialog):
                     "Access-only mode supports Check access only. Select a Metroliza report database to enable Sync now."
                 )
             if not test_only:
-                self.filter_state.validate_for_sync()
+                if self.fetch_all_checkbox.isChecked():
+                    confirmed = QMessageBox.question(
+                        self,
+                        "Fetch all industrial data",
+                        (
+                            "Fetch all rows from the selected production source? This can take a long time "
+                            "and may create a large local SQLite cache."
+                        ),
+                    )
+                    if confirmed != QMessageBox.StandardButton.Yes:
+                        return
+                fetch_state = IndustrialFetchState.from_reference_state(
+                    self.filter_state,
+                    limit_rows=None if self.fetch_all_checkbox.isChecked() else self.limit_spin.value(),
+                    fetch_all_confirmed=self.fetch_all_checkbox.isChecked(),
+                )
+            else:
+                fetch_state = IndustrialFetchState.from_reference_state(
+                    self.filter_state,
+                    limit_rows=1,
+                )
             if self.remember_credentials_checkbox.isChecked():
                 save_industrial_credentials(
                     profile.profile_key,
@@ -343,6 +369,7 @@ class IndustrialSyncDialog(QDialog):
                 else None,
                 reference_values=self.filter_state.references,
                 test_only=test_only,
+                fetch_state=fetch_state,
             )
         self.oznak_sync_thread.progress_message.connect(self.on_oznak_progress)
         self.oznak_sync_thread.result_ready.connect(self.on_oznak_result)
@@ -360,6 +387,7 @@ class IndustrialSyncDialog(QDialog):
             self.test_connection_button,
             self.sync_now_button,
             self.close_button,
+            self.fetch_all_checkbox,
         ):
             button.setEnabled(enabled)
 
@@ -454,8 +482,13 @@ class IndustrialSyncDialog(QDialog):
         self.edit_filter_button.setEnabled(has_source and not self.access_only)
         self.test_connection_button.setEnabled(has_source)
         self.sync_now_button.setEnabled(
-            has_source and (not self.access_only) and self.filter_state.is_applied
+            has_source and (not self.access_only)
         )
+        self._sync_limit_controls()
+
+    def _sync_limit_controls(self) -> None:
+        if hasattr(self, "limit_spin"):
+            self.limit_spin.setEnabled(not self.fetch_all_checkbox.isChecked())
 
     def _format_failed_result_status(self, result: dict[str, Any]) -> str:
         if result.get("status") == "cancelled":

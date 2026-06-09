@@ -119,6 +119,42 @@ databases:
     assert profiles[0].order_by_enabled is False
 
 
+def test_source_config_rejects_scalar_allowed_columns_from_manual_file(tmp_path):
+    config_path = tmp_path / "industrial_sources.yaml"
+    config_path.write_text(
+        """
+databases:
+  line_a:
+    type: mysql
+    host: db.example.invalid
+    port: 3306
+    database: processdb
+    table: events
+    allowed_columns: reference
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(IndustrialSourceConfigError, match="allowed_columns.*sequence"):
+        load_source_profiles_from_config(config_path)
+
+
+@pytest.mark.parametrize("raw_columns", ["reference", 123])
+def test_build_source_profile_rejects_scalar_allowed_columns(raw_columns):
+    with pytest.raises(IndustrialSourceConfigError, match="allowed_columns.*sequence"):
+        build_source_profile(
+            profile_key="line_a",
+            profile_name="Line A",
+            source_db_alias="line_a",
+            database_type="mysql",
+            host="db.example.invalid",
+            port=3306,
+            database_name="processdb",
+            source_object_name="events",
+            allowed_columns=raw_columns,
+        )
+
+
 def test_source_config_rejects_credential_like_keys(tmp_path):
     config_path = tmp_path / "industrial_sources.yaml"
     config_path.write_text(

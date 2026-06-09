@@ -228,9 +228,10 @@ def _ensure_sync_run_status_constraint(cursor) -> None:
     cursor.execute(
         """
         INSERT INTO _metroliza_sync_run_links (record_id, sync_run_id)
-        SELECT id, sync_run_id
-        FROM industrial_records
-        WHERE sync_run_id IS NOT NULL
+        SELECT records.id, records.sync_run_id
+        FROM industrial_records AS records
+        JOIN industrial_sync_runs AS runs ON runs.id = records.sync_run_id
+        WHERE records.sync_run_id IS NOT NULL
         """
     )
     cursor.execute("DROP TABLE IF EXISTS industrial_sync_runs_new")

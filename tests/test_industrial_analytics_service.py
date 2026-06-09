@@ -328,6 +328,38 @@ def test_load_frame_applies_dynamic_text_filters(tmp_path) -> None:
     assert set(result.dataframe["fixture_text_code"]) == {"alpha"}
 
 
+@pytest.mark.parametrize(
+    ("dynamic_filter", "expected_rows"),
+    [
+        (DynamicFieldFilter("missing_dynamic_field", "eq", "abc"), 0),
+        (DynamicFieldFilter("missing_dynamic_field", "contains", "abc"), 0),
+        (DynamicFieldFilter("missing_dynamic_field", "gt", 10, value_kind="numeric"), 0),
+        (DynamicFieldFilter("missing_dynamic_field", "is_null"), "all"),
+        (DynamicFieldFilter("missing_dynamic_field", "is_not_null"), 0),
+    ],
+)
+def test_dynamic_filters_apply_operator_semantics_for_missing_fields(
+    tmp_path,
+    dynamic_filter,
+    expected_rows,
+) -> None:
+    db_path = str(tmp_path / "production_only.db")
+    fixture = seed_production_analytics_cache(db_path)
+    expected_count = fixture["row_count"] if expected_rows == "all" else expected_rows
+
+    result = load_production_analytics_frame(
+        db_path,
+        filter_state=ProductionFilterState(dynamic_filters=(dynamic_filter,)),
+        metric_selection=(ProductionMetricSelection("cycle_time_s"),),
+    )
+
+    assert result.row_count == expected_count
+    assert "missing_filter_field" in {diagnostic.code for diagnostic in result.diagnostics}
+    if expected_count == 0:
+        assert not result.has_rows
+        assert "dynamic_filters_applied" in {diagnostic.code for diagnostic in result.diagnostics}
+
+
 def test_apply_production_filters_handles_time_range_on_loaded_frame(tmp_path) -> None:
     db_path = str(tmp_path / "production_only.db")
     seed_production_analytics_cache(db_path)

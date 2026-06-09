@@ -62,6 +62,9 @@ def test_dashboard_interactivity_shared_contracts() -> None:
         "mode": "full",
         "sample_size": 12_345,
         "population_layer_mode": "auto",
+        "large_group_layer_mode": "auto",
+        "large_group_static_threshold": 5_000,
+        "large_group_total_static_threshold": 50_000,
         "size_limit_mode": "default",
         "size_limit_mb": 24,
     }

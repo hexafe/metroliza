@@ -9,7 +9,6 @@ import json
 from metroliza.charts.dashboard_visual_options import (
     DEFAULT_DASHBOARD_PALETTE,
     DEFAULT_HIGHLIGHT_ANCHOR,
-    DEFAULT_OPACITY,
     DASHBOARD_VISUAL_MARKER_SYMBOLS,
     DASHBOARD_VISUAL_PATTERN_SHAPES,
     DASHBOARD_VISUAL_RECIPES,
@@ -195,27 +194,6 @@ def render_dashboard_visual_dialog(
         )
         for index, color in enumerate(DEFAULT_DASHBOARD_PALETTE[:6])
     )
-    opacity_controls = (
-        ("histogram", "Histogram"),
-        ("grouped_histogram", "Grouped histogram"),
-        ("distribution", "Violin"),
-        ("iqr", "IQR"),
-        ("scatter", "Scatter"),
-        ("trend", "Trend"),
-    )
-    opacity_inputs = "".join(
-        (
-            _render_visual_range_field(
-                label=label,
-                value=DEFAULT_OPACITY[key],
-                minimum="0.10",
-                maximum="1",
-                step="0.01",
-                extra_attrs=f' data-visual-opacity="{html.escape(key)}"',
-            )
-        )
-        for key, label in opacity_controls
-    )
     marker_symbol_options = "".join(
         (
             f'<option value="{html.escape(symbol)}">'
@@ -256,14 +234,6 @@ def render_dashboard_visual_dialog(
             minimum="0.5",
             maximum="6",
             step="0.25",
-        )
-        + _render_visual_range_field(
-            label="Model curve opacity",
-            value=DEFAULT_OPACITY["model_curve"],
-            minimum="0.10",
-            maximum="1",
-            step="0.01",
-            extra_attrs=' data-visual-opacity="model_curve"',
         )
         + '<label class="visual-field visual-check"><input type="checkbox" id="dashboard-visual-stat-accent">'
         '<span>Stat accents</span></label>'
@@ -391,7 +361,6 @@ def render_dashboard_visual_dialog(
         '<div class="visual-section-title">Fine tuning</div>'
         f'<div class="visual-grid">{fine_tuning_controls}</div>'
         '</section>'
-        f'<section class="visual-section visual-grid">{opacity_inputs}</section>'
         f'<section class="visual-section visual-grid">{selection_controls}</section>'
         '</div>'
         '<section class="visual-section visual-actions">'
@@ -844,10 +813,6 @@ def render_dashboard_visual_runtime_js(
         while (state.palette.length < 6) {{
           state.palette.push(defaults.palette[state.palette.length] || '#245a5a');
         }}
-        state.opacity = Object.assign({{}}, defaults.opacity, state.opacity || {{}});
-        Object.keys(defaults.opacity).forEach((key) => {{
-          state.opacity[key] = boundedNumber(state.opacity[key], defaults.opacity[key], 0.05, 1);
-        }});
         state.marker_size = boundedNumber(state.marker_size, defaults.marker_size, 2, 18);
         if (state.preset === 'distinct') {{
           state.palette_preset = 'okabe_ito';
@@ -1193,7 +1158,6 @@ def render_dashboard_visual_runtime_js(
           preserve_colors_on_theme: true,
           series: {{
             palette: resolvedVisualPalette(state, 6),
-            opacity: Object.assign({{}}, state.opacity),
             marker_size: state.marker_size,
             marker_symbols: useDistinguishers ? {config_var}.markerSymbols.slice() : [],
             patterns: useDistinguishers ? {config_var}.patterns.slice() : [],
@@ -1714,9 +1678,6 @@ def render_dashboard_visual_runtime_js(
           }}
 
           const traceChartKind = chartKindForTrace(trace, chartKind);
-          const opacity = series.opacity && Object.prototype.hasOwnProperty.call(series.opacity, traceChartKind)
-            ? Number(series.opacity[traceChartKind])
-            : Number(series.opacity && series.opacity.default);
           const isTrendLine = ['trend', 'model_curve'].includes(traceChartKind)
             && (traceLooksLikeTrend(trace) || traceLooksLikeModelCurve(trace));
           const rawLabel = stripGroupCount(name);
@@ -1756,7 +1717,7 @@ def render_dashboard_visual_runtime_js(
             if (isTrendLine) setTrendTraceColor(trace, color);
             else setTraceColor(trace, color);
           }}
-          const resolvedOpacity = Number.isFinite(Number(style.opacity)) ? Number(style.opacity) : opacity;
+          const resolvedOpacity = Number(style.opacity);
           if (Number.isFinite(resolvedOpacity)) {{
             trace.opacity = Math.max(0, Math.min(1, resolvedOpacity));
           }}
@@ -1967,10 +1928,6 @@ def render_dashboard_visual_runtime_js(
         setValue('dashboard-visual-stat-width', state.stat_lines.width);
         const statAccent = document.getElementById('dashboard-visual-stat-accent');
         if (statAccent) statAccent.checked = Boolean(state.stat_lines.accent_by_stat);
-        document.querySelectorAll('[data-visual-opacity]').forEach((input) => {{
-          const key = input.getAttribute('data-visual-opacity');
-          if (key && Object.prototype.hasOwnProperty.call(state.opacity, key)) input.value = state.opacity[key];
-        }});
         syncRangeNumberReadouts();
         refreshResolvedPalettePreview(state);
         syncVisualControlAvailability(state);
@@ -2005,10 +1962,6 @@ def render_dashboard_visual_runtime_js(
             if (Number.isInteger(index)) state.palette[index] = input.value;
           }});
         }}
-        document.querySelectorAll('[data-visual-opacity]').forEach((input) => {{
-          const key = input.getAttribute('data-visual-opacity');
-          if (key) state.opacity[key] = Number(input.value);
-        }});
         return sanitizeVisualState(state);
       }};
 
@@ -2667,7 +2620,7 @@ def render_dashboard_visual_runtime_js(
         document.querySelectorAll(
           '#dashboard-visual-palette-preset, #dashboard-visual-palette-mode, #dashboard-visual-anchor, #dashboard-visual-gradient-spread, '
           + '#dashboard-visual-distinguish, #dashboard-visual-marker-size, #dashboard-visual-stat-width, '
-          + '#dashboard-visual-stat-accent, [data-visual-palette-index], [data-visual-opacity]'
+          + '#dashboard-visual-stat-accent, [data-visual-palette-index]'
         ).forEach((control) => {{
           control.addEventListener('input', () => setDashboardVisualState(collectVisualStateFromControls()));
           control.addEventListener('change', () => setDashboardVisualState(collectVisualStateFromControls()));

@@ -137,10 +137,11 @@ and dashboard interactivity mode so reviewers can see when they are looking at a
 a bounded visual sample.
 
 Use **Dashboard style > Change...** when you want the CSV/Excel dashboard to use a saved
-visual recipe, palette, marker emphasis, opacity, or group/stat-line style. Start with
-the visible recipe and saved-theme controls; use **Customize...** for detailed color,
-opacity, line, or selected-element styling. These choices affect the interactive dashboard
-charts only; they do not change the source data or the selected metrics.
+visual recipe, palette, marker emphasis, group/stat-line style, or selected-element
+opacity. Start with the visible recipe and saved-theme controls; use **Customize...** for
+detailed color, line, per-element opacity, or selected-element styling. These choices
+affect the interactive dashboard charts only; they do not change the source data or the
+selected metrics.
 
 Use **Dashboard interactivity > Change...** when the selected input is large enough that
 fully interactive charts may make the saved dashboard too heavy for a browser. **Auto** is
@@ -178,21 +179,23 @@ generated interactive Plotly charts even when the resulting HTML file may be ver
 slow to open. Use the no-limit option only when the receiving computer and browser can
 handle the exported dashboard size.
 
-The CSV Summary window also includes **POPULATION layer > Change...**. This controls the
-large background population in grouped time-series charts:
+The CSV Summary window also includes **Large group layers > Change...**. This controls
+when very large grouped time-series point layers are kept interactive or pre-rendered as
+static image layers:
 
-- **Auto** renders an oversized POPULATION background as a static image when that keeps a
-  supported time-series chart responsive.
-- **Interactive** keeps the POPULATION background as normal Plotly points. Use it when
-  reviewers need hover labels or point selection on the background population and the row
-  count is small enough.
-- **Static image** uses the image-backed POPULATION background whenever the chart supports
-  it. Use it when the process background should remain visible but the dashboard needs to
-  stay responsive.
+- **Auto** renders a group as a static image when that group is above the configured
+  threshold, and can pre-render every supported group layer when the selected dashboard
+  data is above the total threshold. The default thresholds are 5,000 rows per group and
+  50,000 rows in total.
+- **Interactive** keeps group layers as normal Plotly points. Use it when reviewers need
+  hover labels or point selection and the row count is small enough.
+- **Static image** uses image-backed group layers whenever the chart supports it. Use it
+  when process backgrounds and large comparison groups should remain visible but the
+  dashboard needs to stay responsive.
 
-Static POPULATION layers keep the process background visible, but hover and point
-selection are unavailable for that background layer; selected/custom groups remain
-interactive where Plotly is enabled.
+Static large-group layers keep the process background and large comparisons visible, but
+hover and point selection are unavailable for those pre-rendered layers. Smaller groups
+remain interactive where Plotly is enabled.
 
 Selected plots are included in the dashboard and in the workbook chart sheet. Grouped time
 series use separate marker-only scatter traces. Multi-group histograms are normalized to
@@ -227,8 +230,9 @@ The workbook can include:
   keep the default dashboard size limit.
 - If the dashboard file is too large to share, use **Snapshots only**, reduce the selected
   metrics, filter the rows before processing, or keep workbook output for detailed tables.
-- If a reviewer needs hover labels for every POPULATION point, use **Interactive**
-  POPULATION and avoid **Snapshots only**, but expect larger and slower dashboards.
+- If a reviewer needs hover labels for every point in a large group, use **Interactive**
+  large group layers and avoid **Snapshots only**, but expect larger and slower
+  dashboards.
 - If the plotted point count looks lower than the selected row count, check the dashboard
   run notes. Random sampling and snapshots limit visual chart rows; statistics and tables
   still use all selected rows.

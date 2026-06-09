@@ -189,7 +189,7 @@ Use the metric jump buttons at the top of the dashboard to move between measurem
 
 Interactive Plotly histograms use the same bin range as the workbook/native histogram snapshots. Plotly scatter and trend views show points only, without connecting lines between samples.
 
-CSV Summary has a separate **POPULATION layer** setting for very dense background point layers. Export dashboards do not use that CSV Summary-only control; they keep workbook chart snapshots plus interactive Plotly views where available.
+CSV Summary has a separate **Large group layers** setting for very dense grouped point layers. Export dashboards do not use that CSV Summary-only control; they keep workbook chart snapshots plus interactive Plotly views where available.
 
 This option does not replace the workbook. It adds a review file alongside it. When
 grouping is applied, that review file is required for the grouped-analysis output.
@@ -198,7 +198,7 @@ grouping is applied, that review file is required for the grouped-analysis outpu
 
 When **HTML dashboard** is enabled, use **Dashboard style > Change...** to adjust how
 exported Plotly charts look in the HTML dashboard. The main choices are visual recipes,
-saved themes, color palettes, group differentiation, opacity, marker size,
+saved themes, color palettes, group differentiation, marker size,
 stat/reference line styling, and selected chart elements.
 
 Use the recipes first for routine output:
@@ -217,15 +217,15 @@ Use the recipes first for routine output:
 - **Custom** keeps your manual choices.
 
 Fine-tuning controls are meant for visual review, not data changes. Sliders are used for
-relative visual adjustments with immediate preview, such as opacity and marker emphasis.
-Exact values, such as line width or marker size, are also shown numerically so you can
-type or step to a precise value when needed.
+relative visual adjustments with immediate preview, such as marker emphasis and
+selected-element opacity. Exact values, such as line width or marker size, are also shown
+numerically so you can type or step to a precise value when needed.
 
 The dialog opens with recipes, saved themes, and preview visible. Use **Customize...** to
-show detailed color, opacity, line, and selected-element controls when routine recipes are
-not enough. Selected-element controls are chart-aware: histogram/bar elements show color,
-opacity, and pattern controls; scatter markers show marker size/shape/border controls;
-line-like elements show width and dash controls.
+show detailed color, line, per-element opacity, and selected-element controls when routine
+recipes are not enough. Selected-element controls are chart-aware: histogram/bar elements
+show color, opacity, and pattern controls; scatter markers show marker size/shape/border
+controls; line-like elements show width and dash controls.
 
 ### Industrial context
 
@@ -233,7 +233,7 @@ You can optionally check **Industrial context**.
 
 This adds cached production context from accepted local links to the measurement export and writes industrial context/diagnostics worksheets when linked production-process records exist in the selected Metroliza report database.
 
-Before using this option, open **Tools > Industrial data...** from the main window. Configure production line sources either by editing `~/.metroliza/industrial_sources.yaml` directly or by using **Production sources...**, which reads/writes the same Oznak-style config file. If the launcher was opened before a report database was selected, use **Select DB...** first. Then use **Connect / check / sync...** to enter reference/ID values, check production database access with a one-row read that saves nothing, sync selected production rows into the local Metroliza cache, and refresh links.
+Before using this option, open **Tools > Industrial data...** from the main window. Configure production line sources either by editing `~/.metroliza/industrial_sources.yaml` directly or by using **Production sources...**, which reads/writes the same Oznak-style config file. If the launcher was opened before a report database was selected, use **Select DB...** first. Then use **Connect / check / sync...** to check production database access with a one-row read that saves nothing, fetch selected production rows by reference filters, row limit, or explicit fetch-all confirmation, load those rows into the local Metroliza cache, and refresh links.
 
 If the report reference and production reference are not the same value, open **Production links...** after sync. Manual links connect one Metroliza report to one cached production row and take priority over automatic exact-reference links.
 
@@ -243,9 +243,10 @@ The industrial data launcher can also open dedicated Oznak export and analytics 
 With a selected Metroliza report database, **Export...** creates a workbook from cached
 rows only. Without a selected report database, **Export...** can fetch live production rows
 directly from a configured source and create a production workbook without filling the
-local cache. **Analyze...** creates an HTML dashboard and optional workbook from cached
-production rows, with grouping, time buckets, reference marking, histograms, time series,
-violin plots, box plots, and grouped statistics.
+local cache. **Analyze...** loads cached production rows into the CSV Summary workflow, so
+the same filtering, grouping, dashboard, workbook, and export controls are available for
+industrial data. Each cached row carries a **source** value, so dashboards and groups can
+separate rows from different configured production databases.
 
 ### Chart type
 

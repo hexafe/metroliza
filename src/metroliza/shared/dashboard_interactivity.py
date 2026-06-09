@@ -11,6 +11,8 @@ DASHBOARD_SIZE_LIMIT_MODES = frozenset({"default", "custom", "unlimited"})
 DASHBOARD_INTERACTIVITY_DEFAULT_SAMPLE_SIZE = 50_000
 DASHBOARD_INTERACTIVITY_MIN_SAMPLE_SIZE = 5_000
 DASHBOARD_INTERACTIVITY_MAX_SAMPLE_SIZE = 200_000
+DASHBOARD_LARGE_GROUP_STATIC_THRESHOLD = 5_000
+DASHBOARD_LARGE_GROUP_TOTAL_STATIC_THRESHOLD = 50_000
 DASHBOARD_SIZE_LIMIT_DEFAULT_MB = 24
 DASHBOARD_SIZE_LIMIT_MIN_MB = 1
 
@@ -25,6 +27,7 @@ DASHBOARD_POPULATION_LAYER_LABELS = {
     "interactive": "Interactive points",
     "static": "Static image",
 }
+DASHBOARD_LARGE_GROUP_LAYER_LABELS = DASHBOARD_POPULATION_LAYER_LABELS
 DASHBOARD_SIZE_LIMIT_LABELS = {
     "default": f"{DASHBOARD_SIZE_LIMIT_DEFAULT_MB} MB dashboard size limit",
     "custom": "Custom dashboard size limit",
@@ -39,8 +42,31 @@ class DashboardInteractivityOptions:
     mode: str = "auto"
     sample_size: int = DASHBOARD_INTERACTIVITY_DEFAULT_SAMPLE_SIZE
     population_layer_mode: str = "auto"
+    large_group_layer_mode: str = "auto"
+    large_group_static_threshold: int = DASHBOARD_LARGE_GROUP_STATIC_THRESHOLD
+    large_group_total_static_threshold: int = DASHBOARD_LARGE_GROUP_TOTAL_STATIC_THRESHOLD
     size_limit_mode: str = "default"
     size_limit_mb: int = DASHBOARD_SIZE_LIMIT_DEFAULT_MB
+
+    def __post_init__(self) -> None:
+        large_mode = str(self.large_group_layer_mode or "auto").strip().casefold()
+        population_mode = str(self.population_layer_mode or "auto").strip().casefold()
+        if large_mode == "auto" and population_mode in DASHBOARD_POPULATION_LAYER_MODES:
+            large_mode = population_mode
+        if large_mode not in DASHBOARD_POPULATION_LAYER_MODES:
+            large_mode = "auto"
+        object.__setattr__(self, "large_group_layer_mode", large_mode)
+        object.__setattr__(self, "population_layer_mode", large_mode)
+        object.__setattr__(
+            self,
+            "large_group_static_threshold",
+            max(1, int(self.large_group_static_threshold)),
+        )
+        object.__setattr__(
+            self,
+            "large_group_total_static_threshold",
+            max(1, int(self.large_group_total_static_threshold)),
+        )
 
 
 def normalize_dashboard_interactivity_options(
@@ -49,6 +75,9 @@ def normalize_dashboard_interactivity_options(
     default_mode: str = "auto",
     default_sample_size: int = DASHBOARD_INTERACTIVITY_DEFAULT_SAMPLE_SIZE,
     default_population_layer_mode: str = "auto",
+    default_large_group_layer_mode: str | None = None,
+    default_large_group_static_threshold: int = DASHBOARD_LARGE_GROUP_STATIC_THRESHOLD,
+    default_large_group_total_static_threshold: int = DASHBOARD_LARGE_GROUP_TOTAL_STATIC_THRESHOLD,
     default_size_limit_mode: str = "default",
     default_size_limit_mb: int = DASHBOARD_SIZE_LIMIT_DEFAULT_MB,
     strict: bool = True,
@@ -69,9 +98,25 @@ def normalize_dashboard_interactivity_options(
         _raw_option(value, "population_layer_mode", "populationLayerMode"),
         default=default_population_layer_mode,
         allowed=DASHBOARD_POPULATION_LAYER_MODES,
-        field_name="dashboard POPULATION layer mode",
+        field_name="dashboard large group layer mode",
         strict=strict,
     )
+    large_group_layer_mode = _normalize_mode(
+        _raw_option(
+            value,
+            "large_group_layer_mode",
+            "largeGroupLayerMode",
+            "group_layer_mode",
+            "groupLayerMode",
+            "population_layer_mode",
+            "populationLayerMode",
+        ),
+        default=default_large_group_layer_mode or population_layer_mode,
+        allowed=DASHBOARD_POPULATION_LAYER_MODES,
+        field_name="dashboard large group layer mode",
+        strict=strict,
+    )
+    population_layer_mode = large_group_layer_mode
     size_limit_mode = _normalize_size_limit_mode(
         _raw_option(
             value,
@@ -89,6 +134,32 @@ def normalize_dashboard_interactivity_options(
         strict=strict,
         min_sample_size=min_sample_size,
         max_sample_size=max_sample_size,
+    )
+    large_group_static_threshold = _normalize_positive_int(
+        _raw_option(
+            value,
+            "large_group_static_threshold",
+            "largeGroupStaticThreshold",
+            "group_static_threshold",
+            "groupStaticThreshold",
+        ),
+        default=default_large_group_static_threshold,
+        field_name="dashboard large group static threshold",
+        strict=strict,
+        minimum=1,
+    )
+    large_group_total_static_threshold = _normalize_positive_int(
+        _raw_option(
+            value,
+            "large_group_total_static_threshold",
+            "largeGroupTotalStaticThreshold",
+            "total_static_threshold",
+            "totalStaticThreshold",
+        ),
+        default=default_large_group_total_static_threshold,
+        field_name="dashboard large group total static threshold",
+        strict=strict,
+        minimum=1,
     )
     size_limit_mb = _normalize_size_limit_mb(
         _raw_option(
@@ -108,6 +179,9 @@ def normalize_dashboard_interactivity_options(
         mode=mode,
         sample_size=sample_size,
         population_layer_mode=population_layer_mode,
+        large_group_layer_mode=large_group_layer_mode,
+        large_group_static_threshold=large_group_static_threshold,
+        large_group_total_static_threshold=large_group_total_static_threshold,
         size_limit_mode=size_limit_mode,
         size_limit_mb=size_limit_mb,
     )
@@ -119,6 +193,9 @@ def normalize_dashboard_interactivity_mapping(
     default_mode: str = "auto",
     default_sample_size: int = DASHBOARD_INTERACTIVITY_DEFAULT_SAMPLE_SIZE,
     default_population_layer_mode: str = "auto",
+    default_large_group_layer_mode: str | None = None,
+    default_large_group_static_threshold: int = DASHBOARD_LARGE_GROUP_STATIC_THRESHOLD,
+    default_large_group_total_static_threshold: int = DASHBOARD_LARGE_GROUP_TOTAL_STATIC_THRESHOLD,
     default_size_limit_mode: str = "default",
     default_size_limit_mb: int = DASHBOARD_SIZE_LIMIT_DEFAULT_MB,
     strict: bool = False,
@@ -132,6 +209,9 @@ def normalize_dashboard_interactivity_mapping(
         default_mode=default_mode,
         default_sample_size=default_sample_size,
         default_population_layer_mode=default_population_layer_mode,
+        default_large_group_layer_mode=default_large_group_layer_mode,
+        default_large_group_static_threshold=default_large_group_static_threshold,
+        default_large_group_total_static_threshold=default_large_group_total_static_threshold,
         default_size_limit_mode=default_size_limit_mode,
         default_size_limit_mb=default_size_limit_mb,
         strict=strict,
@@ -142,6 +222,9 @@ def normalize_dashboard_interactivity_mapping(
         "mode": options.mode,
         "sample_size": options.sample_size,
         "population_layer_mode": options.population_layer_mode,
+        "large_group_layer_mode": options.large_group_layer_mode,
+        "large_group_static_threshold": options.large_group_static_threshold,
+        "large_group_total_static_threshold": options.large_group_total_static_threshold,
         "size_limit_mode": options.size_limit_mode,
         "size_limit_mb": options.size_limit_mb,
     }
@@ -162,9 +245,9 @@ def summarize_dashboard_interactivity_options(
         source_row_count=source_row_count,
         dashboard_row_count=dashboard_row_count,
     )
-    population_label = summarize_dashboard_population_layer_options(value)
+    group_label = summarize_dashboard_large_group_layer_options(value)
     size_limit = summarize_dashboard_size_limit_options(value)
-    return f"{detail}; POPULATION layer {population_label.casefold()}; {size_limit.casefold()}"
+    return f"{detail}; large group layers {group_label.casefold()}; {size_limit.casefold()}"
 
 
 def summarize_dashboard_sampling_options(
@@ -203,7 +286,13 @@ def summarize_dashboard_sampling_options(
 
 
 def summarize_dashboard_population_layer_options(value: object) -> str:
-    """Return the concise user-facing summary for the POPULATION layer render setting."""
+    """Return the legacy POPULATION-layer summary alias for large group rendering."""
+
+    return summarize_dashboard_large_group_layer_options(value)
+
+
+def summarize_dashboard_large_group_layer_options(value: object) -> str:
+    """Return the concise user-facing summary for large group layer rendering."""
 
     options = normalize_dashboard_interactivity_options(
         value,
@@ -211,9 +300,9 @@ def summarize_dashboard_population_layer_options(value: object) -> str:
         min_sample_size=1,
         max_sample_size=None,
     )
-    return DASHBOARD_POPULATION_LAYER_LABELS.get(
-        options.population_layer_mode,
-        options.population_layer_mode.replace("_", " ").strip().title() or "Auto",
+    return DASHBOARD_LARGE_GROUP_LAYER_LABELS.get(
+        options.large_group_layer_mode,
+        options.large_group_layer_mode.replace("_", " ").strip().title() or "Auto",
     )
 
 
@@ -375,4 +464,26 @@ def _normalize_sample_size(
         parsed = max(lower_bound, parsed)
         if upper_bound is not None:
             parsed = min(parsed, upper_bound)
+    return parsed
+
+
+def _normalize_positive_int(
+    value: object,
+    *,
+    default: int,
+    field_name: str,
+    strict: bool,
+    minimum: int = 1,
+) -> int:
+    try:
+        parsed = int(default if value is None else value)
+    except (TypeError, ValueError) as exc:
+        if strict:
+            raise ValueError(f"{field_name.title()} must be an integer.") from exc
+        parsed = int(default)
+    lower_bound = max(1, int(minimum))
+    if parsed < lower_bound:
+        if strict:
+            raise ValueError(f"{field_name.title()} must be at least {lower_bound}.")
+        parsed = lower_bound
     return parsed

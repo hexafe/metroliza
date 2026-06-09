@@ -202,7 +202,7 @@ def test_run_tabular_file_analytics_reuses_shared_dashboard_and_parameter_workbo
         '<span class="metric-value-line">All rows; 24 MB dashboard size limit</span>'
         in html_text
     )
-    assert '<div class="metric-label">POPULATION layer</div>' in html_text
+    assert '<div class="metric-label">Large group layers</div>' in html_text
     assert (
         '<span class="metric-value-line">Auto</span>'
     ) in html_text
@@ -384,8 +384,8 @@ def test_run_tabular_file_analytics_sampled_dashboard_renders_sampling_copy(
         in html_text
     )
     assert (
-        '<div class="metric-label">POPULATION layer</div><div class="metric-value">'
-        '<span class="metric-value-line">Auto</span></div>'
+        '<div class="metric-label">Large group layers</div><div class="metric-value">'
+        '<span class="metric-value-line">Static image in 1 chart(s)</span></div>'
         in html_text
     )
     assert (
@@ -466,7 +466,7 @@ def test_run_tabular_file_analytics_static_population_for_small_dataset_uses_all
         in html_text
     )
     assert (
-        '<div class="metric-label">POPULATION layer</div><div class="metric-value">'
+        '<div class="metric-label">Large group layers</div><div class="metric-value">'
         '<span class="metric-value-line">Static image in 1 chart(s)</span></div>'
         in html_text
     )
@@ -603,6 +603,9 @@ def test_run_tabular_file_analytics_sampled_interactivity_uses_sample_size(
         "mode": "sampled",
         "sample_size": 5000,
         "population_layer_mode": "auto",
+        "large_group_layer_mode": "auto",
+        "large_group_static_threshold": 5000,
+        "large_group_total_static_threshold": 50000,
         "size_limit_mode": "default",
         "size_limit_mb": 24,
     }
@@ -655,6 +658,9 @@ def test_run_tabular_file_analytics_static_interactivity_uses_sample_size(
         "mode": "static",
         "sample_size": 5000,
         "population_layer_mode": "auto",
+        "large_group_layer_mode": "auto",
+        "large_group_static_threshold": 5000,
+        "large_group_total_static_threshold": 50000,
         "size_limit_mode": "default",
         "size_limit_mb": 24,
     }

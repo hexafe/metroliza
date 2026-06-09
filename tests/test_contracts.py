@@ -278,6 +278,9 @@ class TestValidateIndustrialAnalyticsRequest(unittest.TestCase):
                 mode='auto',
                 sample_size=50000,
                 population_layer_mode='auto',
+                large_group_layer_mode='auto',
+                large_group_static_threshold=5000,
+                large_group_total_static_threshold=50000,
             ),
         )
 
@@ -290,6 +293,8 @@ class TestValidateIndustrialAnalyticsRequest(unittest.TestCase):
                     'mode': ' Sampled ',
                     'sample_size': '75000',
                     'population_layer_mode': ' Static ',
+                    'large_group_static_threshold': '6000',
+                    'large_group_total_static_threshold': '60000',
                     'size_limit_mode': ' Custom ',
                     'size_limit_mb': '128',
                 },
@@ -302,6 +307,9 @@ class TestValidateIndustrialAnalyticsRequest(unittest.TestCase):
                 mode='sampled',
                 sample_size=75000,
                 population_layer_mode='static',
+                large_group_layer_mode='static',
+                large_group_static_threshold=6000,
+                large_group_total_static_threshold=60000,
                 size_limit_mode='custom',
                 size_limit_mb=128,
             ),
@@ -326,6 +334,7 @@ class TestValidateIndustrialAnalyticsRequest(unittest.TestCase):
                 mode='auto',
                 sample_size=50000,
                 population_layer_mode='interactive',
+                large_group_layer_mode='interactive',
             ),
         )
 
@@ -340,12 +349,22 @@ class TestValidateIndustrialAnalyticsRequest(unittest.TestCase):
             )
 
     def test_rejects_unknown_dashboard_population_layer_mode(self):
-        with self.assertRaisesRegex(ValueError, 'Unsupported dashboard POPULATION layer mode'):
+        with self.assertRaisesRegex(ValueError, 'Unsupported dashboard large group layer mode'):
             validate_industrial_analytics_request(
                 IndustrialAnalyticsRequest(
                     source_kind='production_cache',
                     output_dashboard_file='dashboard.html',
                     dashboard_interactivity_options={'population_layer_mode': 'animated'},
+                )
+            )
+
+    def test_rejects_invalid_dashboard_large_group_threshold(self):
+        with self.assertRaisesRegex(ValueError, 'Dashboard Large Group Static Threshold'):
+            validate_industrial_analytics_request(
+                IndustrialAnalyticsRequest(
+                    source_kind='production_cache',
+                    output_dashboard_file='dashboard.html',
+                    dashboard_interactivity_options={'large_group_static_threshold': 0},
                 )
             )
 

@@ -24,7 +24,7 @@ def test_metroliza_dashboard_plotstats_theme_includes_visual_settings() -> None:
 
     assert theme["colors"]["colorway"]
     assert theme["visual"]["series"]["palette"] == theme["colors"]["colorway"]
-    assert theme["visual"]["series"]["opacity"]["grouped_histogram"] == 0.55
+    assert "opacity" not in theme["visual"]["series"]
     assert "marker_symbols" in theme["visual"]["series"]
     assert "patterns" in theme["visual"]["series"]
 

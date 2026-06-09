@@ -212,15 +212,6 @@ class DashboardVisualOptionsDialog(QDialog):
         settings["anchor_color"] = str(self.anchor_color_button.property("color") or "#facc15")
         settings["gradient_spread"] = str(self.gradient_spread_combo.currentData() or "normal")
         settings["distinguish"] = str(self.distinguish_combo.currentData() or "when_similar")
-        settings["opacity"] = {
-            "histogram": self.histogram_opacity_slider.value() / 100.0,
-            "grouped_histogram": self.grouped_histogram_opacity_slider.value() / 100.0,
-            "distribution": self.distribution_opacity_slider.value() / 100.0,
-            "iqr": self.iqr_opacity_slider.value() / 100.0,
-            "scatter": self.scatter_opacity_slider.value() / 100.0,
-            "trend": self.trend_opacity_slider.value() / 100.0,
-            "model_curve": self.model_curve_opacity_slider.value() / 100.0,
-        }
         settings["marker_size"] = self.marker_size_spin.value()
         settings["stat_lines"] = {
             "accent_by_stat": self.stat_accent_combo.currentData() == "accent",
@@ -342,7 +333,7 @@ class DashboardVisualOptionsDialog(QDialog):
         self.customize_button = QPushButton("Customize...")
         self.customize_button.setCheckable(True)
         self.customize_button.setToolTip(
-            "Show detailed color, opacity, line, and selected-element controls."
+            "Show detailed color, line, marker, and selected-element controls."
         )
         controls_layout.addWidget(self.customize_button)
 
@@ -389,41 +380,6 @@ class DashboardVisualOptionsDialog(QDialog):
         series_form.addRow("Differentiate", self.distinguish_combo)
         series_form.addRow("Default marker size", self.marker_size_spin)
         customize_layout.addWidget(series_group)
-
-        opacity_group = QGroupBox("Opacity")
-        opacity_form = QFormLayout(opacity_group)
-        self.histogram_opacity_slider = self._opacity_slider()
-        self.histogram_opacity_spin = self._opacity_spin()
-        self.grouped_histogram_opacity_slider = self._opacity_slider()
-        self.grouped_histogram_opacity_spin = self._opacity_spin()
-        self.distribution_opacity_slider = self._opacity_slider()
-        self.distribution_opacity_spin = self._opacity_spin()
-        self.iqr_opacity_slider = self._opacity_slider()
-        self.iqr_opacity_spin = self._opacity_spin()
-        self.scatter_opacity_slider = self._opacity_slider()
-        self.scatter_opacity_spin = self._opacity_spin()
-        self.trend_opacity_slider = self._opacity_slider()
-        self.trend_opacity_spin = self._opacity_spin()
-        self.model_curve_opacity_slider = self._opacity_slider()
-        self.model_curve_opacity_spin = self._opacity_spin()
-        for slider, spin in (
-            (self.histogram_opacity_slider, self.histogram_opacity_spin),
-            (self.grouped_histogram_opacity_slider, self.grouped_histogram_opacity_spin),
-            (self.distribution_opacity_slider, self.distribution_opacity_spin),
-            (self.iqr_opacity_slider, self.iqr_opacity_spin),
-            (self.scatter_opacity_slider, self.scatter_opacity_spin),
-            (self.trend_opacity_slider, self.trend_opacity_spin),
-            (self.model_curve_opacity_slider, self.model_curve_opacity_spin),
-        ):
-            self._bind_opacity_controls(slider, spin, changed=self._handle_control_changed)
-        opacity_form.addRow("Histogram", self._slider_spin_row(self.histogram_opacity_slider, self.histogram_opacity_spin))
-        opacity_form.addRow("Grouped histogram", self._slider_spin_row(self.grouped_histogram_opacity_slider, self.grouped_histogram_opacity_spin))
-        opacity_form.addRow("Violin", self._slider_spin_row(self.distribution_opacity_slider, self.distribution_opacity_spin))
-        opacity_form.addRow("IQR", self._slider_spin_row(self.iqr_opacity_slider, self.iqr_opacity_spin))
-        opacity_form.addRow("Scatter", self._slider_spin_row(self.scatter_opacity_slider, self.scatter_opacity_spin))
-        opacity_form.addRow("Trend", self._slider_spin_row(self.trend_opacity_slider, self.trend_opacity_spin))
-        opacity_form.addRow("Model curve", self._slider_spin_row(self.model_curve_opacity_slider, self.model_curve_opacity_spin))
-        customize_layout.addWidget(opacity_group)
 
         line_group = QGroupBox("Lines")
         line_form = QFormLayout(line_group)
@@ -647,14 +603,6 @@ class DashboardVisualOptionsDialog(QDialog):
         for index, button in enumerate(self._palette_buttons):
             self._set_button_color(button, palette[index % len(palette)])
         self._set_button_color(self.anchor_color_button, settings["anchor_color"])
-        opacity = settings["opacity"]
-        self.histogram_opacity_slider.setValue(round(opacity["histogram"] * 100))
-        self.grouped_histogram_opacity_slider.setValue(round(opacity["grouped_histogram"] * 100))
-        self.distribution_opacity_slider.setValue(round(opacity["distribution"] * 100))
-        self.iqr_opacity_slider.setValue(round(opacity["iqr"] * 100))
-        self.scatter_opacity_slider.setValue(round(opacity["scatter"] * 100))
-        self.trend_opacity_slider.setValue(round(opacity["trend"] * 100))
-        self.model_curve_opacity_slider.setValue(round(opacity["model_curve"] * 100))
         self.marker_size_spin.setValue(float(settings["marker_size"]))
         self.stat_width_spin.setValue(float(settings["stat_lines"]["width"]))
         reference = settings["reference_lines"]
@@ -1309,7 +1257,7 @@ class DashboardVisualOptionsDialog(QDialog):
             _first_style_value(
                 first_style.get("opacity"),
                 second_style.get("opacity"),
-                settings["opacity"].get("model_curve" if role == "model_curve" else role, 0.85),
+                1.0,
             ),
         )
         style.setdefault("width", _first_style_value(first_style.get("width"), second_style.get("width"), 2.0))

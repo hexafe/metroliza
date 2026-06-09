@@ -117,14 +117,6 @@ def metroliza_dashboard_plotstats_theme() -> dict[str, Any]:
         "visual": {
             "series": {
                 "palette": list(_PLOTLY_GROUP_COLORWAY),
-                "opacity": {
-                    "histogram": 0.86,
-                    "grouped_histogram": 0.55,
-                    "distribution": 0.84,
-                    "iqr": 0.62,
-                    "scatter": 0.82,
-                    "trend": 0.35,
-                },
                 "marker_symbols": [],
                 "patterns": [],
                 "auto_distinguish": False,

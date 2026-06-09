@@ -393,7 +393,7 @@ class ExportDialog(QDialog):
             self.dashboard_visuals_summary_label = status_chip("", "neutral")
             self.dashboard_visuals_button = QPushButton("Change...")
             self.dashboard_visuals_button.setToolTip(
-                "Adjust HTML dashboard colors, opacity, markers, and reference/stat lines."
+                "Adjust HTML dashboard colors, markers, selected-element opacity, and reference/stat lines."
             )
             self.dashboard_visuals_button.clicked.connect(self.open_dashboard_visual_options)
 
@@ -1282,7 +1282,7 @@ class ExportDialog(QDialog):
             widget.setVisible(enabled)
             widget.setEnabled(enabled)
         self.dashboard_visuals_button.setToolTip(
-            "Adjust HTML dashboard colors, opacity, markers, and reference/stat lines."
+            "Adjust HTML dashboard colors, markers, selected-element opacity, and reference/stat lines."
             if enabled
             else "Enable HTML dashboard output to adjust dashboard visuals."
         )

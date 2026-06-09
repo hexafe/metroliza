@@ -104,7 +104,9 @@ DASHBOARD_AGGREGATE_TRACE_TARGET_POINTS = 2_500
 DEFAULT_PLOTLY_SPEC_COUNT_BUDGET = 160
 DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET = 24_000_000
 STATIC_POPULATION_LAYER_OPTIMIZATION = "static_population_layer"
+STATIC_GROUP_LAYER_OPTIMIZATION = "static_group_layer"
 _STATIC_POPULATION_SOURCE_XY_KEY = "_metroliza_static_population_source_xy"
+_STATIC_GROUP_SOURCE_XY_KEY = "_metroliza_static_group_source_xy"
 _STATIC_POPULATION_DENSITY_POINT_THRESHOLD = DASHBOARD_RAW_POINT_LIMIT
 _AXIS_DEGENERATE_ABS_TOL = 1e-12
 
@@ -121,15 +123,7 @@ def _metric_population_source_frame(
     required_columns = ["process_datetime", metric_field_name, *group_columns]
     if any(column not in source_frame.columns for column in required_columns):
         return None
-    population_group = _population_layer_group(
-        source_frame,
-        group_columns,
-        default_name=default_name,
-    )
-    if population_group is None:
-        return None
-    _label, group = population_group
-    return group.loc[group[metric_field_name].notna(), required_columns].copy()
+    return source_frame.loc[source_frame[metric_field_name].notna(), required_columns].copy()
 
 
 def build_production_dashboard_manifest(
@@ -158,7 +152,11 @@ def build_production_dashboard_manifest(
     charts = chart_selection or ProductionChartSelection()
     cohort = cohort_state or ReferenceCohortState()
     interactivity = _normalize_dashboard_interactivity_options(dashboard_interactivity_options)
-    population_layer_mode = str(interactivity.get("population_layer_mode") or "auto")
+    population_layer_mode = str(
+        interactivity.get("large_group_layer_mode")
+        or interactivity.get("population_layer_mode")
+        or "auto"
+    )
     rendered_row_count = int(dashboard_row_count if dashboard_row_count is not None else len(frame.index))
     selected_source_row_count = int(
         source_row_count if source_row_count is not None else len(frame.index)
@@ -635,15 +633,25 @@ def _apply_static_population_layer_options(
     *,
     interactivity: dict[str, int | str],
 ) -> dict[str, Any]:
-    selected_mode = str(interactivity.get("population_layer_mode") or "auto")
+    selected_mode = str(
+        interactivity.get("large_group_layer_mode")
+        or interactivity.get("population_layer_mode")
+        or "auto"
+    )
+    group_threshold = int(interactivity.get("large_group_static_threshold") or 5_000)
+    total_threshold = int(interactivity.get("large_group_total_static_threshold") or 50_000)
     summary: dict[str, Any] = {
         "mode": selected_mode,
+        "group_static_threshold": group_threshold,
+        "total_static_threshold": total_threshold,
         "applied_chart_count": 0,
         "source_point_count": 0,
         "rendered_point_count": 0,
         "contributed_point_count": 0,
         "render_strategy_counts": {},
         "skipped_chart_count": 0,
+        "applied_group_count": 0,
+        "total_triggered_chart_count": 0,
     }
     manifest_summary = manifest.get("summary")
     if isinstance(manifest_summary, dict):
@@ -670,14 +678,15 @@ def _apply_static_population_layer_options(
     for chart in charts:
         if not isinstance(chart, dict):
             continue
-        option = _static_population_layer_option_for_chart(chart)
-        if option is None:
-            already_static = _static_population_layer_existing_result(
+        options = _static_group_layer_options_for_chart(chart)
+        if not options:
+            already_static = _static_group_layer_existing_result(
                 chart,
                 selected_mode=selected_mode,
             )
             if already_static is not None and selected_mode != "interactive":
                 summary["applied_chart_count"] += 1
+                summary["applied_group_count"] += int(already_static.get("applied_group_count") or 0)
                 summary["source_point_count"] += int(already_static.get("source_point_count") or 0)
                 summary["rendered_point_count"] += int(already_static.get("rendered_point_count") or 0)
                 summary["contributed_point_count"] += int(
@@ -686,35 +695,51 @@ def _apply_static_population_layer_options(
                     or 0
                 )
                 continue
-            if selected_mode == "static" and _chart_has_population_like_plotly_trace(chart):
+            if selected_mode == "static" and _chart_has_static_group_candidate_trace(chart):
                 _mark_static_population_layer_skipped(
                     chart,
                     reason="unsupported_chart_type",
-                    message="Static POPULATION image layers are not available for this chart type yet.",
+                    message="Static group image layers are not available for this chart type yet.",
                 )
                 summary["skipped_chart_count"] += 1
             continue
-        source_point_count = int(option.get("source_point_count") or 0)
-        should_apply = selected_mode == "static" or (
-            selected_mode == "auto" and source_point_count >= int(DASHBOARD_RAW_POINT_LIMIT)
-        )
-        option["selected_mode"] = selected_mode
-        option["applied"] = False
-        if not should_apply:
-            option["skipped_reason"] = "below_auto_threshold"
-            continue
-        result = _convert_static_population_layer(chart, option=option)
-        if result.get("applied"):
+        chart_total_source_count = sum(int(option.get("source_point_count") or 0) for option in options)
+        total_triggered = selected_mode == "auto" and chart_total_source_count > total_threshold
+        if total_triggered:
+            summary["total_triggered_chart_count"] += 1
+        chart_applied = False
+        chart_skipped = False
+        for option in options:
+            source_point_count = int(option.get("source_point_count") or 0)
+            should_apply = selected_mode == "static" or (
+                selected_mode == "auto"
+                and (source_point_count > group_threshold or total_triggered)
+            )
+            option["selected_mode"] = selected_mode
+            option["applied"] = False
+            option["group_static_threshold"] = group_threshold
+            option["total_static_threshold"] = total_threshold
+            option["chart_total_source_point_count"] = chart_total_source_count
+            if not should_apply:
+                option["skipped_reason"] = "below_auto_threshold"
+                continue
+            result = _convert_static_population_layer(chart, option=option)
+            if result.get("applied"):
+                chart_applied = True
+                summary["applied_group_count"] += 1
+                summary["source_point_count"] += int(result.get("source_point_count") or 0)
+                summary["rendered_point_count"] += int(result.get("rendered_point_count") or 0)
+                summary["contributed_point_count"] += int(result.get("contributed_point_count") or 0)
+                render_strategy = str(result.get("render_strategy") or "").strip()
+                if render_strategy:
+                    strategy_counts = summary["render_strategy_counts"]
+                    if isinstance(strategy_counts, dict):
+                        strategy_counts[render_strategy] = int(strategy_counts.get(render_strategy) or 0) + 1
+            else:
+                chart_skipped = True
+        if chart_applied:
             summary["applied_chart_count"] += 1
-            summary["source_point_count"] += int(result.get("source_point_count") or 0)
-            summary["rendered_point_count"] += int(result.get("rendered_point_count") or 0)
-            summary["contributed_point_count"] += int(result.get("contributed_point_count") or 0)
-            render_strategy = str(result.get("render_strategy") or "").strip()
-            if render_strategy:
-                strategy_counts = summary["render_strategy_counts"]
-                if isinstance(strategy_counts, dict):
-                    strategy_counts[render_strategy] = int(strategy_counts.get(render_strategy) or 0) + 1
-        else:
+        elif chart_skipped:
             summary["skipped_chart_count"] += 1
     if summary["applied_chart_count"]:
         summary["status"] = "applied"
@@ -725,7 +750,7 @@ def _apply_static_population_layer_options(
     return summary
 
 
-def _static_population_layer_existing_result(
+def _static_group_layer_existing_result(
     chart: dict[str, Any],
     *,
     selected_mode: str,
@@ -743,8 +768,11 @@ def _static_population_layer_existing_result(
         if isinstance(image, dict)
         and image.get("visible") is not False
         and (
-            image.get("metroliza_static_population_layer")
+            image.get("metroliza_static_group_layer")
+            or image.get("metroliza_static_population_layer")
+            or image.get("metroliza_static_group_layer_label")
             or _is_population_layer_label(image.get("metroliza_static_population_layer_label"))
+            or image.get("metroliza_raw_layer_label")
             or _is_population_layer_label(image.get("metroliza_raw_layer_label"))
         )
     ]
@@ -758,7 +786,7 @@ def _static_population_layer_existing_result(
         for option in raw_options:
             if not isinstance(option, dict):
                 continue
-            if option.get("id") != STATIC_POPULATION_LAYER_OPTIMIZATION:
+            if not _is_static_layer_option(option):
                 continue
             source_point_count += int(option.get("source_point_count") or 0)
             rendered_point_count += int(option.get("sample_point_limit") or 0)
@@ -774,6 +802,7 @@ def _static_population_layer_existing_result(
             option.setdefault("render_strategy", "sampled_marker_image")
     return {
         "applied": True,
+        "applied_group_count": len(static_image_indexes),
         "source_point_count": source_point_count,
         "rendered_point_count": rendered_point_count,
         "contributed_point_count": contributed_point_count,
@@ -781,94 +810,134 @@ def _static_population_layer_existing_result(
     }
 
 
-def _static_population_layer_option_for_chart(chart: dict[str, Any]) -> dict[str, Any] | None:
+def _static_group_layer_options_for_chart(chart: dict[str, Any]) -> list[dict[str, Any]]:
     chart_type = str(chart.get("chart_type") or "").casefold()
     if not _supports_static_population_layer(chart_type):
-        return None
+        return []
     plotly_spec = chart.get("plotly_spec")
     if not isinstance(plotly_spec, dict):
-        return None
+        return []
     traces = plotly_spec.get("data")
     if not isinstance(traces, list):
-        return None
-    population_indexes = [
-        index
-        for index, trace in enumerate(traces)
-        if _is_population_marker_trace(trace)
-    ]
-    existing_option = _existing_static_population_layer_option(chart)
-    if (
-        not population_indexes
-        and existing_option is not None
-        and _is_population_layer_label(existing_option.get("group_label"))
-    ):
-        marker_indexes = [
-            index
-            for index, trace in enumerate(traces)
-            if _is_static_population_candidate_marker_trace(trace)
-        ]
-        if len(marker_indexes) == 1:
-            population_indexes = marker_indexes
-    if len(population_indexes) != 1:
-        return None
-    population_trace = traces[population_indexes[0]]
-    trace_point_count = _trace_point_count(population_trace)
-    existing_source_count = (
-        int(existing_option.get("source_point_count") or 0)
-        if isinstance(existing_option, dict)
-        else 0
-    )
-    source_point_count = max(int(trace_point_count), int(existing_source_count))
-    if source_point_count <= 0 or trace_point_count <= 0:
-        return None
-    option = _ensure_static_population_layer_option(chart)
-    option.update(
-        {
-            "id": STATIC_POPULATION_LAYER_OPTIMIZATION,
-            "available": True,
-            "reason": "population_marker_layer_available",
-            "group_label": _population_trace_label(population_trace),
-            "source_point_count": int(source_point_count),
-            "plotly_trace_point_count": int(trace_point_count),
-            "sample_point_limit": int(DASHBOARD_RAW_POINT_LIMIT),
-            "supported": True,
-            "applied": False,
-        }
-    )
-    return option
+        return []
+    options: list[dict[str, Any]] = []
+    for trace_index, trace in enumerate(traces):
+        if not _is_static_group_candidate_marker_trace(trace):
+            continue
+        trace_point_count = _trace_point_count(trace)
+        if trace_point_count <= 0:
+            continue
+        group_label = _trace_group_label(trace)
+        existing_option = _existing_static_group_layer_option(
+            chart,
+            group_label=group_label,
+            trace_index=trace_index,
+        )
+        existing_source_count = (
+            int(existing_option.get("source_point_count") or 0)
+            if isinstance(existing_option, dict)
+            else 0
+        )
+        source_point_count = max(int(trace_point_count), int(existing_source_count))
+        if source_point_count <= 0:
+            continue
+        option = _ensure_static_group_layer_option(
+            chart,
+            group_label=group_label,
+            trace_index=trace_index,
+            prefer_population_id=_is_population_layer_label(group_label),
+        )
+        option.update(
+            {
+                "available": True,
+                "reason": "group_marker_layer_available",
+                "group_label": group_label,
+                "trace_index": int(trace_index),
+                "source_point_count": int(source_point_count),
+                "plotly_trace_point_count": int(trace_point_count),
+                "sample_point_limit": int(DASHBOARD_RAW_POINT_LIMIT),
+                "supported": True,
+                "applied": False,
+            }
+        )
+        options.append(option)
+    return options
 
 
-def _existing_static_population_layer_option(chart: dict[str, Any]) -> dict[str, Any] | None:
+def _existing_static_group_layer_option(
+    chart: dict[str, Any],
+    *,
+    group_label: str | None = None,
+    trace_index: int | None = None,
+) -> dict[str, Any] | None:
     raw_options = chart.get("optimization_options")
     if not isinstance(raw_options, list):
         return None
     for option in raw_options:
-        if isinstance(option, dict) and option.get("id") == STATIC_POPULATION_LAYER_OPTIMIZATION:
+        if not isinstance(option, dict) or not _is_static_layer_option(option):
+            continue
+        if trace_index is not None and _static_option_trace_index(option) == int(trace_index):
+            return option
+        if group_label is not None and _normalize_group_label(option.get("group_label")) == _normalize_group_label(
+            group_label
+        ):
             return option
     return None
 
 
-def _ensure_static_population_layer_option(chart: dict[str, Any]) -> dict[str, Any]:
+def _ensure_static_group_layer_option(
+    chart: dict[str, Any],
+    *,
+    group_label: str | None = None,
+    trace_index: int | None = None,
+    prefer_population_id: bool = False,
+) -> dict[str, Any]:
     raw_options = chart.get("optimization_options")
     options = raw_options if isinstance(raw_options, list) else []
     for option in options:
-        if isinstance(option, dict) and option.get("id") == STATIC_POPULATION_LAYER_OPTIMIZATION:
+        if not isinstance(option, dict) or not _is_static_layer_option(option):
+            continue
+        if trace_index is not None and _static_option_trace_index(option) == int(trace_index):
             return option
-    option: dict[str, Any] = {"id": STATIC_POPULATION_LAYER_OPTIMIZATION}
+        if group_label is not None and _normalize_group_label(option.get("group_label")) == _normalize_group_label(
+            group_label
+        ):
+            return option
+    option_id = STATIC_POPULATION_LAYER_OPTIMIZATION if prefer_population_id else STATIC_GROUP_LAYER_OPTIMIZATION
+    option: dict[str, Any] = {"id": option_id}
+    if group_label is not None:
+        option["group_label"] = group_label
+    if trace_index is not None:
+        option["trace_index"] = int(trace_index)
     options.append(option)
     chart["optimization_options"] = options
     return option
+
+
+def _is_static_layer_option(option: dict[str, Any]) -> bool:
+    return option.get("id") in {STATIC_POPULATION_LAYER_OPTIMIZATION, STATIC_GROUP_LAYER_OPTIMIZATION}
+
+
+def _static_option_trace_index(option: dict[str, Any]) -> int:
+    try:
+        return int(option.get("trace_index"))
+    except (TypeError, ValueError):
+        return -1
 
 
 def _supports_static_population_layer(chart_type: str) -> bool:
     return chart_type.startswith("time_series") or chart_type in {"scatter", "point_series"}
 
 
-def _chart_has_population_like_plotly_trace(chart: dict[str, Any]) -> bool:
+def _chart_has_static_group_candidate_trace(chart: dict[str, Any]) -> bool:
     plotly_spec = chart.get("plotly_spec")
     if not isinstance(plotly_spec, dict) or not isinstance(plotly_spec.get("data"), list):
         return False
-    return any(_is_population_marker_trace(trace) for trace in plotly_spec["data"])
+    return any(_is_static_group_candidate_marker_trace(trace) for trace in plotly_spec["data"])
+
+
+def _normalize_group_label(label: Any) -> str:
+    return _strip_group_count_suffix(str(label or "").strip()).casefold()
 
 
 def _mark_static_population_layer_skipped(
@@ -877,7 +946,7 @@ def _mark_static_population_layer_skipped(
     reason: str,
     message: str,
 ) -> None:
-    option = _ensure_static_population_layer_option(chart)
+    option = _ensure_static_group_layer_option(chart)
     option.update(
         {
             "available": False,
@@ -902,27 +971,18 @@ def _convert_static_population_layer(
         option["skipped_reason"] = "missing_plotly_spec"
         return {"applied": False}
     traces = plotly_spec["data"]
-    population_indexes = [
-        index
-        for index, trace in enumerate(traces)
-        if _is_population_marker_trace(trace)
-    ]
-    if not population_indexes and _is_population_layer_label(option.get("group_label")):
-        marker_indexes = [
-            index
-            for index, trace in enumerate(traces)
-            if _is_static_population_candidate_marker_trace(trace)
-        ]
-        if len(marker_indexes) == 1:
-            population_indexes = marker_indexes
-    if len(population_indexes) != 1:
-        option["skipped_reason"] = "ambiguous_population_layer"
+    trace_index = _static_option_trace_index(option)
+    if trace_index < 0 or trace_index >= len(traces):
+        option["skipped_reason"] = "missing_group_layer"
         return {"applied": False}
-    population_index = population_indexes[0]
+    population_index = trace_index
     population_trace = traces[population_index]
+    if not _is_static_group_candidate_marker_trace(population_trace):
+        option["skipped_reason"] = "unsupported_group_layer_trace"
+        return {"applied": False}
     xy = _coerce_trace_xy(population_trace)
     if xy.empty:
-        option["skipped_reason"] = "empty_population_layer"
+        option["skipped_reason"] = "empty_group_layer"
         return {"applied": False}
     view_bounds = _plotly_trace_axis_bounds(traces)
     if not view_bounds:
@@ -937,7 +997,8 @@ def _convert_static_population_layer(
         render_xy = xy
     view_bounds = dict(image_bounds)
     sample_limit = int(option.get("sample_point_limit") or DASHBOARD_RAW_POINT_LIMIT)
-    color = _trace_color(population_trace) or _plot_color(population_index, "POPULATION")
+    group_label = str(option.get("group_label") or _trace_group_label(population_trace))
+    color = _trace_color(population_trace) or _plot_color(population_index, group_label)
     marker_size = _static_population_marker_size(population_trace)
     opacity = _static_population_opacity(population_trace)
     render_strategy = "marker_static"
@@ -967,11 +1028,11 @@ def _convert_static_population_layer(
         rendered_fallback = _sample_xy_frame(
             render_xy,
             min(len(render_xy.index), max(1, sample_limit)),
-            seed=_stable_seed(
-                str(chart.get("id") or ""),
-                str(option.get("group_label") or "POPULATION"),
-                "static-fallback",
-            ),
+        seed=_stable_seed(
+            str(chart.get("id") or ""),
+            group_label,
+            "static-fallback",
+        ),
         )
         png_bytes = _render_time_series_raw_layer_png(
             rendered_fallback["__x_numeric"].to_numpy(dtype=float),
@@ -992,14 +1053,14 @@ def _convert_static_population_layer(
     image_index = _append_static_population_layout_image(
         layout,
         png_bytes=png_bytes,
-        label=str(option.get("group_label") or "POPULATION"),
+        label=group_label,
         bounds=image_bounds,
     )
     traces.pop(population_index)
     traces.insert(
         population_index,
         _static_population_layer_proxy_trace(
-            label=str(option.get("group_label") or "POPULATION"),
+            label=group_label,
             color=color,
             image_index=image_index,
             render_strategy=render_strategy,
@@ -1009,18 +1070,18 @@ def _convert_static_population_layer(
     )
     _apply_static_population_axis_ranges(layout, view_bounds)
     note = (
-        "POPULATION layer rendered as a static image; hover and point selection are unavailable "
-        "for that background layer."
+        f"{group_label} layer rendered as a static image; hover and point selection are unavailable "
+        "for that layer."
     )
     if render_strategy == "full_density":
         note = (
-            "POPULATION layer rendered as a static density image from all source points; "
-            "hover and point selection are unavailable for that background layer."
+            f"{group_label} layer rendered as a static density image from all source points; "
+            "hover and point selection are unavailable for that layer."
         )
     elif render_strategy == "sampled_marker_fallback":
         note = (
-            f"POPULATION layer rendered as a sampled static fallback with {len(render_xy.index):,} "
-            "points; hover and point selection are unavailable for that background layer."
+            f"{group_label} layer rendered as a sampled static fallback with {len(render_xy.index):,} "
+            "points; hover and point selection are unavailable for that layer."
         )
     notes = list(chart.get("notes") or []) if isinstance(chart.get("notes"), list) else []
     if note not in notes:
@@ -1055,20 +1116,32 @@ def _convert_static_population_layer(
 def _is_population_marker_trace(trace: Any) -> bool:
     if not isinstance(trace, dict):
         return False
-    if not _is_static_population_candidate_marker_trace(trace):
+    if not _is_static_group_candidate_marker_trace(trace):
         return False
-    return _is_population_layer_label(_population_trace_label(trace))
+    return _is_population_layer_label(_trace_group_label(trace))
 
 
-def _is_static_population_candidate_marker_trace(trace: Any) -> bool:
+def _is_static_group_candidate_marker_trace(trace: Any) -> bool:
     if not isinstance(trace, dict):
+        return False
+    if trace.get("metroliza_static_group_layer_index") is not None:
+        return False
+    if trace.get("metroliza_static_population_layer_index") is not None:
+        return False
+    meta = trace.get("meta") if isinstance(trace.get("meta"), dict) else {}
+    role = str(meta.get("metroliza_role") or "").casefold()
+    if role in {"static_group_layer", "static_population_layer"}:
         return False
     trace_type = str(trace.get("type") or "").casefold()
     mode = str(trace.get("mode") or "").casefold()
     return trace_type == "scatter" and "markers" in mode
 
 
-def _population_trace_label(trace: dict[str, Any]) -> str:
+def _is_static_population_candidate_marker_trace(trace: Any) -> bool:
+    return _is_static_group_candidate_marker_trace(trace)
+
+
+def _trace_group_label(trace: dict[str, Any]) -> str:
     meta = trace.get("meta") if isinstance(trace.get("meta"), dict) else {}
     for candidate in (
         meta.get("metroliza_legend_label"),
@@ -1079,6 +1152,10 @@ def _population_trace_label(trace: dict[str, Any]) -> str:
         if label:
             return label
     return "POPULATION"
+
+
+def _population_trace_label(trace: dict[str, Any]) -> str:
+    return _trace_group_label(trace)
 
 
 def _trace_point_count(trace: Any) -> int:
@@ -1236,7 +1313,9 @@ def _axis_bounds_with_xy_frame(
 
 
 def _static_population_source_xy(option: dict[str, Any]) -> pd.DataFrame:
-    source = option.get(_STATIC_POPULATION_SOURCE_XY_KEY)
+    source = option.get(_STATIC_GROUP_SOURCE_XY_KEY)
+    if not isinstance(source, pd.DataFrame):
+        source = option.get(_STATIC_POPULATION_SOURCE_XY_KEY)
     if isinstance(source, pd.DataFrame):
         required = {"__x_numeric", "__y", "__x_mode"}
         if required.issubset(source.columns):
@@ -1274,6 +1353,8 @@ def _append_static_population_layout_image(
             "layer": "below",
             "opacity": 1.0,
             "visible": True,
+            "metroliza_static_group_layer": True,
+            "metroliza_static_group_layer_label": label,
             "metroliza_static_population_layer": True,
             "metroliza_static_population_layer_label": label,
         }
@@ -1291,6 +1372,7 @@ def _static_population_layer_proxy_trace(
     image_bounds: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     target_id = f"series:{normalize_population_label_key(label)}"
+    role = "static_population_layer" if _is_population_layer_label(label) else "static_group_layer"
     x_values: list[Any] = [None]
     y_values: list[Any] = [None]
     if view_bounds:
@@ -1317,7 +1399,7 @@ def _static_population_layer_proxy_trace(
         },
         "meta": {
             "metroliza_trace_schema": "metroliza.plotly_trace.v1",
-            "metroliza_role": "static_population_layer",
+            "metroliza_role": role,
             "metroliza_target_id": target_id,
             "metroliza_series_id": normalize_population_label_key(label),
             "metroliza_legend_label": label,
@@ -1325,6 +1407,9 @@ def _static_population_layer_proxy_trace(
             "metroliza_chart_kind": "scatter",
             "metroliza_style_capabilities": [],
         },
+        "metroliza_static_group_layer_index": int(image_index),
+        "metroliza_static_group_layer_label": label,
+        "metroliza_static_group_render_strategy": render_strategy,
         "metroliza_static_population_layer_index": int(image_index),
         "metroliza_static_population_layer_label": label,
         "metroliza_static_population_render_strategy": render_strategy,
@@ -1472,11 +1557,21 @@ def _apply_dashboard_interactivity_summary(
         "mode": str(interactivity.get("mode") or "auto"),
         "sample_size": int(interactivity.get("sample_size") or DASHBOARD_RAW_POINT_LIMIT),
         "population_layer_mode": str(interactivity.get("population_layer_mode") or "auto"),
+        "large_group_layer_mode": str(
+            interactivity.get("large_group_layer_mode")
+            or interactivity.get("population_layer_mode")
+            or "auto"
+        ),
+        "large_group_static_threshold": int(interactivity.get("large_group_static_threshold") or 5_000),
+        "large_group_total_static_threshold": int(
+            interactivity.get("large_group_total_static_threshold") or 50_000
+        ),
         "size_limit_mode": str(interactivity.get("size_limit_mode") or "default"),
         "size_limit_mb": int(interactivity.get("size_limit_mb") or 0),
     }
     if population_layer_summary:
         summary["static_population_layer"] = dict(population_layer_summary)
+        summary["static_group_layers"] = dict(population_layer_summary)
 
 
 def _apply_plotly_budget_summary(
@@ -2014,7 +2109,7 @@ def _time_series_optimization_options(
     group_columns: list[str],
     default_name: str,
 ) -> list[dict[str, Any]]:
-    option = _static_population_layer_optimization_option(
+    return _static_group_layer_optimization_options(
         frame,
         static_population_source_frame=static_population_source_frame,
         x_column=x_column,
@@ -2022,10 +2117,9 @@ def _time_series_optimization_options(
         group_columns=group_columns,
         default_name=default_name,
     )
-    return [option] if option else []
 
 
-def _static_population_layer_optimization_option(
+def _static_group_layer_optimization_options(
     frame: pd.DataFrame,
     *,
     static_population_source_frame: pd.DataFrame | None = None,
@@ -2033,42 +2127,74 @@ def _static_population_layer_optimization_option(
     y_column: str,
     group_columns: list[str],
     default_name: str,
-) -> dict[str, Any] | None:
-    population_group = _population_layer_group(frame, group_columns, default_name=default_name)
-    if population_group is None:
-        return None
-    group_label, population_frame = population_group
-    source_xy = pd.DataFrame()
+) -> list[dict[str, Any]]:
+    options: list[dict[str, Any]] = []
+    source_groups: dict[str, pd.DataFrame] = {}
     if static_population_source_frame is not None and not static_population_source_frame.empty:
-        source_group = _population_layer_group(
-            static_population_source_frame,
-            group_columns,
-            default_name=default_name,
-        )
-        if source_group is not None:
-            _source_group_label, source_frame = source_group
-            source_xy = _coerce_time_series_xy(
-                source_frame,
-                x_column=x_column,
-                y_column=y_column,
+        source_groups = {
+            _normalize_group_label(label): group
+            for label, group in _grouped_frames(
+                static_population_source_frame,
+                group_columns,
+                default_name=default_name,
             )
+        }
+    for group_label, population_frame in _grouped_frames(
+        frame,
+        group_columns,
+        default_name=default_name,
+    ):
+        option = _static_group_layer_optimization_option(
+            group_label=group_label,
+            frame=population_frame,
+            source_frame=source_groups.get(_normalize_group_label(group_label)),
+            x_column=x_column,
+            y_column=y_column,
+        )
+        if option is not None:
+            options.append(option)
+    return options
+
+
+def _static_group_layer_optimization_option(
+    *,
+    group_label: str,
+    frame: pd.DataFrame,
+    source_frame: pd.DataFrame | None = None,
+    x_column: str,
+    y_column: str,
+) -> dict[str, Any] | None:
+    source_xy = pd.DataFrame()
+    if source_frame is not None and not source_frame.empty:
+        source_xy = _coerce_time_series_xy(
+            source_frame,
+            x_column=x_column,
+            y_column=y_column,
+        )
     point_count = _time_series_point_count(
-        population_frame,
+        frame,
         x_column=x_column,
         y_column=y_column,
     )
     source_point_count = max(int(point_count), int(len(source_xy.index)))
-    if source_point_count <= DASHBOARD_RAW_POINT_LIMIT and source_xy.empty:
+    if source_point_count <= DASHBOARD_RAW_POINT_LIMIT and (
+        source_xy.empty or len(source_xy.index) <= int(point_count)
+    ):
         return None
     option: dict[str, Any] = {
-        "id": STATIC_POPULATION_LAYER_OPTIMIZATION,
+        "id": (
+            STATIC_POPULATION_LAYER_OPTIMIZATION
+            if _is_population_layer_label(group_label)
+            else STATIC_GROUP_LAYER_OPTIMIZATION
+        ),
         "available": True,
-        "reason": "population_raw_points_exceed_interactive_limit",
+        "reason": "group_raw_points_exceed_interactive_limit",
         "group_label": group_label,
         "source_point_count": int(source_point_count),
         "sample_point_limit": int(DASHBOARD_RAW_POINT_LIMIT),
     }
     if not source_xy.empty and len(source_xy.index) > int(point_count):
+        option[_STATIC_GROUP_SOURCE_XY_KEY] = source_xy
         option[_STATIC_POPULATION_SOURCE_XY_KEY] = source_xy
         option["full_source_point_count"] = int(len(source_xy.index))
     return option
@@ -2273,6 +2399,8 @@ def _time_series_raw_image_layers(
                     "visible": True,
                     "metroliza_raw_layer": True,
                     "metroliza_raw_layer_label": label,
+                    "metroliza_static_group_layer": True,
+                    "metroliza_static_group_layer_label": label,
                     **(
                         {
                             "metroliza_static_population_layer": True,
@@ -2438,6 +2566,8 @@ def _raw_layer_legend_traces(raw_layers: list[dict[str, Any]]) -> list[dict[str,
                     "opacity": 0.75,
                 },
                 "metroliza_raw_layer_index": index,
+                "metroliza_static_group_layer_index": index,
+                "metroliza_static_group_layer_label": label,
                 **(
                     {
                         "metroliza_static_population_layer_index": index,
@@ -2498,6 +2628,12 @@ def _time_series_traces(
                 "x": x_values,
                 "y": y_values,
                 "marker": marker,
+                "meta": {
+                    "metroliza_trace_schema": "metroliza.plotly_trace.v1",
+                    "metroliza_series_id": normalize_population_label_key(label),
+                    "metroliza_legend_label": label,
+                    "metroliza_chart_kind": "scatter",
+                },
                 "hovertemplate": f"{html.escape(label)}<br>Time=%{{x}}<br>Value=%{{y}}<extra></extra>",
             }
         )
@@ -5143,7 +5279,7 @@ def _summary_card_rows(summary: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
     )
     population_layer_detail = str(context.get("population_layer_detail") or "").strip()
     if population_layer_detail and not static_population_applied:
-        rows.append(("POPULATION layer", population_layer_detail))
+        rows.append(("Large group layers", population_layer_detail))
     if isinstance(static_population, dict) and static_population_applied:
         strategy_counts = static_population.get("render_strategy_counts")
         if isinstance(strategy_counts, dict) and _summary_int(strategy_counts.get("full_density")):
@@ -5158,7 +5294,7 @@ def _summary_card_rows(summary: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
             )
         rows.append(
             (
-                "POPULATION layer",
+                "Large group layers",
                 layer_value,
             )
         )

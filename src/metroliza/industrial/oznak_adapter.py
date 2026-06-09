@@ -14,7 +14,8 @@ import inspect
 import json
 from typing import Any, Mapping
 
-from metroliza.industrial.industrial_data_repository import redact_sensitive_text
+from metroliza.industrial.industrial_data_repository import looks_sensitive_key, redact_sensitive_text
+from metroliza.industrial.industrial_workflow_state import IndustrialQueryFilter
 
 
 OZNAK_IMPORT_PATH = "oznak"
@@ -399,6 +400,55 @@ def _normalize_runtime_columns(
     return tuple(normalized)
 
 
+def _normalize_query_filters(filters: Any) -> tuple[IndustrialQueryFilter, ...]:
+    normalized: list[IndustrialQueryFilter] = []
+    for filter_state in filters or ():
+        if isinstance(filter_state, IndustrialQueryFilter):
+            normalized.append(filter_state.validated())
+            continue
+        if isinstance(filter_state, Mapping):
+            values = filter_state.get("values")
+            if values is None and "value" in filter_state:
+                values = (filter_state.get("value"),)
+            elif isinstance(values, (str, bytes)):
+                values = (values,)
+            normalized.append(
+                IndustrialQueryFilter(
+                    column=str(filter_state.get("column") or ""),
+                    operator=str(filter_state.get("operator") or ""),
+                    values=tuple(values or ()),
+                ).validated()
+            )
+    return tuple(normalized)
+
+
+def _build_oznak_query_filters(
+    query_filter_type: Any,
+    filters: tuple[IndustrialQueryFilter, ...],
+) -> tuple[Any, ...]:
+    if not filters:
+        return ()
+    if query_filter_type is None:
+        raise RuntimeError("oznak.QueryFilter is unavailable.")
+    built: list[Any] = []
+    for filter_state in filters:
+        value: Any
+        if filter_state.operator in {"IS NULL", "IS NOT NULL"}:
+            value = None
+        elif filter_state.operator in {"IN", "NOT IN"}:
+            value = filter_state.values
+        else:
+            value = filter_state.values[0] if filter_state.values else ""
+        built.append(
+            query_filter_type(
+                column=filter_state.column,
+                operator=filter_state.operator,
+                value=value,
+            )
+        )
+    return tuple(built)
+
+
 def map_oznak_rows_to_industrial_records(payload: Any, *, profile: Any) -> tuple[dict[str, Any], ...]:
     """Normalize Oznak rows into synthetic industrial record dictionaries."""
 
@@ -432,6 +482,11 @@ def map_oznak_rows_to_industrial_records(payload: Any, *, profile: Any) -> tuple
         for source_name, target_name in _REPOSITORY_FIELD_ALIASES.items():
             if record.get(source_name) is not None and record.get(target_name) is None:
                 record[target_name] = record[source_name]
+        for column_name, value in row_dict.items():
+            field_name = str(column_name or "").strip()
+            if not field_name or field_name in record or looks_sensitive_key(field_name):
+                continue
+            record[field_name] = value
         record["raw_record"] = row_dict
         records.append(record)
     return tuple(records)
@@ -457,6 +512,7 @@ def fetch_oznak_records_for_source_profile(
     timeout_seconds: float | None = None,
     reference_filter_column: str | None = None,
     reference_values: tuple[str, ...] | list[str] | None = None,
+    query_filters: tuple[IndustrialQueryFilter, ...] | list[IndustrialQueryFilter] | None = None,
     chunk_size: int | None = DEFAULT_OZNAK_FETCH_CHUNK_SIZE,
     reference_batch_size: int = DEFAULT_REFERENCE_BATCH_SIZE,
     allow_unbounded: bool = False,
@@ -481,7 +537,8 @@ def fetch_oznak_records_for_source_profile(
     normalized_reference_values = tuple(
         str(value).strip() for value in (reference_values or ()) if str(value).strip()
     )
-    if not normalized_reference_values and limit is None and not allow_unbounded:
+    normalized_query_filters = _normalize_query_filters(query_filters or ())
+    if not normalized_reference_values and not normalized_query_filters and limit is None and not allow_unbounded:
         return OznakAdapterFetchResult(
             status=status,
             implemented=True,
@@ -533,6 +590,7 @@ def fetch_oznak_records_for_source_profile(
         timestamp_column,
         pagination_column,
         reference_filter_column,
+        *[filter_state.column for filter_state in normalized_query_filters],
     )
 
     try:
@@ -583,12 +641,16 @@ def fetch_oznak_records_for_source_profile(
             batch_limit = remaining_limit if remaining_limit is not None else None
             if batch_limit is not None and batch_limit <= 0:
                 break
-            filters = ()
+            filters = _build_oznak_query_filters(
+                query_filter_type,
+                normalized_query_filters,
+            )
             if reference_batch:
                 if query_filter_type is None:
                     raise RuntimeError("oznak.QueryFilter is unavailable.")
                 filter_column = str(reference_filter_column or "reference").strip()
                 filters = (
+                    *filters,
                     query_filter_type(
                         column=filter_column,
                         operator="IN",
@@ -654,6 +716,15 @@ def fetch_oznak_records_for_source_profile(
         "reference_batches": len(reference_batches),
         "reference_filter_column": reference_filter_column,
         "reference_filter_count": len(normalized_reference_values),
+        "query_filter_count": len(normalized_query_filters),
+        "query_filters": tuple(
+            {
+                "column": filter_state.column,
+                "operator": filter_state.operator,
+                "value_count": len(filter_state.values),
+            }
+            for filter_state in normalized_query_filters
+        ),
         "order_by_enabled": order_by_enabled,
         "max_workers": max_workers,
         "max_pending_events": max_pending_events if use_chunked_fetch else None,

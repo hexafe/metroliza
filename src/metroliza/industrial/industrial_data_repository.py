@@ -617,20 +617,10 @@ class IndustrialDataRepository:
                     for field_name, field_value in normalized.items()
                     if field_name not in KNOWN_RECORD_FIELDS and not _looks_sensitive_key(field_name)
                 ]
-                if dynamic_items:
-                    placeholders = ",".join("?" for _field_name, _field_value in dynamic_items)
-                    cursor.execute(
-                        f"""
-                        DELETE FROM industrial_record_values
-                        WHERE record_id = ? AND field_name NOT IN ({placeholders})
-                        """,
-                        (record_id, *(field_name for field_name, _field_value in dynamic_items)),
-                    )
-                else:
-                    cursor.execute(
-                        "DELETE FROM industrial_record_values WHERE record_id = ?",
-                        (record_id,),
-                    )
+                cursor.execute(
+                    "DELETE FROM industrial_record_values WHERE record_id = ?",
+                    (record_id,),
+                )
 
                 for field_name, field_value in dynamic_items:
                     if isinstance(field_value, (dict, list, tuple)):

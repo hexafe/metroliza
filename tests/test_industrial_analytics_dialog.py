@@ -376,7 +376,7 @@ def test_population_layer_dialog_updates_only_population_layer_mode() -> None:
         assert dialog.population_layer_combo.itemText(
             dialog.population_layer_combo.findData("interactive")
         ) == "Interactive points"
-        assert "CSV Summary POPULATION layer" in dialog.population_layer_combo.toolTip()
+        assert "large CSV Summary groups" in dialog.population_layer_combo.toolTip()
 
         dialog.population_layer_combo.setCurrentIndex(
             dialog.population_layer_combo.findData("static")

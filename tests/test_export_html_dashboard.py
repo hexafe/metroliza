@@ -297,7 +297,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn('id="dashboard-visual-preset"', html_text)
             self.assertIn('<option value="auto" selected>', html_text)
             self.assertIn('data-visual-palette-index="0"', html_text)
-            self.assertIn('data-visual-opacity="grouped_histogram"', html_text)
+            self.assertNotIn('data-visual-opacity', html_text)
             self.assertIn('report_dashboard_assets/plotly-2.27.0.min.js', html_text)
             self.assertNotIn('cdn.plot.ly/plotly-2.27.0.min.js', html_text)
             self.assertIn('data-theme-choice="auto"', html_text)

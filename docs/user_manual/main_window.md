@@ -61,13 +61,13 @@ Use this when you want to connect assembly-process data from Oznak-supported pro
 The launcher opens separate workflows:
 
 - **Production sources...** edits non-secret production line connection setup such as database type, host, database name, table/view, columns, record key, and timestamp column. This stays available even before a Metroliza report database is selected.
-- **Connect / check / sync...** asks for the production database username/password for the current session, lets you edit the reference/ID values to fetch, checks production database access with a one-row read that saves nothing, syncs selected rows into the local Metroliza cache, and can cancel a running sync.
+- **Connect / check / sync...** asks for the production database username/password for the current session, lets you fetch rows by reference/ID values, row limit, or explicit fetch-all confirmation, checks production database access with a one-row read that saves nothing, syncs selected rows into the local Metroliza cache, and can cancel a running sync.
 - **Production links...** lets you manually link a Metroliza report to a cached production row when both systems use different reference values.
 - **Export...** creates a cached industrial workbook when a Metroliza report database is selected. If no report database is selected, it can fetch live production rows directly from a configured source and create a production workbook without writing to the local cache.
-- **Analyze...** creates dashboards, grouped statistics, time-bucket summaries, and optional
-  workbooks from cached production rows without requiring CMM measurements. The analytics
-  setup includes production filters, pasted-reference cohorts, grouping, time buckets, and
-  chart selection.
+- **Analyze...** opens cached production rows in the CSV Summary workflow without
+  requiring CMM measurements. Use the CSV Summary filters, grouping, dashboards, workbook,
+  and export options; the loaded table includes a **source** column for the configured
+  production database that produced each row.
 - **Refresh links** refreshes local report-to-process links before the main Metroliza export.
 
 There are two ways to configure production line databases:
@@ -83,13 +83,13 @@ Industrial export from cached data does not connect directly to the production l
 
 **Check access** reads up to one production row to verify credentials, table, columns, and query access. It does not save rows into the Metroliza cache.
 
-**Sync now** is reference-scoped. It requires at least one reference before it fetches production-line rows, so Metroliza does not pull an entire historical source table.
+**Sync now** can fetch by reference values, by a row limit, or by explicit fetch-all confirmation. Fetch-all shows a warning first because a production source may contain a large historical table.
 
-Use **Edit references...** in the sync dialog to paste reference/ID values quickly as a comma-separated, semicolon-separated, space-separated, tab-separated, or line-separated list. During sync, Metroliza batches long reference lists. Bounded sync and access checks use bounded Oznak requests; chunked Oznak fetching is reserved for explicit unbounded fetch paths when the source profile has a record key/pagination column.
+Use **Edit references...** in the sync dialog to paste reference/ID values quickly as a comma-separated, semicolon-separated, space-separated, tab-separated, or line-separated list. During sync, Metroliza batches long reference lists. Bounded sync and access checks use bounded Oznak requests; chunked Oznak fetching is reserved for explicit fetch-all paths when the source profile has a record key/pagination column.
 
 If the Metroliza report reference and production reference are different, use **Production links...** after sync. Select one Metroliza report, select one cached production row, then click **Link selected**. Manual links take priority over automatic exact-reference links during export.
 
-Use **Edit...** next to grouping in the industrial export dialog to choose production-line grouping fields such as station, line, work order, batch/lot, operator, or process status. The export dialog uses those fields for the summary sheet and optional plots.
+Use **Analyze...** when you need production-line grouping fields such as station, line, work order, batch/lot, operator, process status, or source. It opens the cached industrial rows in CSV Summary, where every fetched source column can be used for filtering and grouping.
 
 ### Tools > Parser profiles...
 

@@ -13,7 +13,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}(?:rc\d+)?$")
         self.assertRegex(metadata.build, r"^\d{6}$")
         self.assertEqual(metadata.version_label, f"{metadata.release_version}({metadata.build})")
-        self.assertEqual(metadata.public_version_label, "2026.05 RC4 (build 260609)")
+        self.assertEqual(metadata.public_version_label, "2026.05 RC5 (build 260609)")
         self.assertTrue(metadata.highlight)
 
     def test_in_app_current_release_notes_show_current_version_only(self):
@@ -58,10 +58,16 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
                 "- Google Sheets export now checks converted workbook tabs and warns when a local Excel fallback should be used<br>",
                 "- Canceling long parsing, export, and metadata tasks is more reliable from progress windows<br>",
                 "- Dashboard plot visuals can now be customized<br>",
+                "- CSV Summary dashboards can turn very large group point layers into static images automatically, with thresholds still adjustable in Dashboard interactivity<br>",
+                "- CSV Summary and Export dashboard visual settings now focus on per-element styling instead of one shared opacity control<br>",
                 "- CSV Summary can auto-create one group per selected CSV file name without adding a POPULATION group<br>",
                 "- CSV Summary dashboards can render dense POPULATION background layers as static images while keeping smaller groups interactive<br>",
                 "- CSV Summary static POPULATION layers now remain visible when all selected rows belong to POPULATION and no random sampling is needed<br>",
                 "- Oznak Check access no longer requests a reference column unless reference filtering is configured<br>",
+                "- Industrial data sync can fetch by filters, row limits, or explicit fetch-all confirmation, then analyze cached rows through the CSV Summary tools<br>",
+                "- Industrial data dashboards can group and filter by fetched columns plus source, so rows from multiple production databases stay traceable<br>",
+                "- Industrial data source switching now refreshes stored credentials for the selected source and rejects invalid column-list config values<br>",
+                "- Industrial data filters and cache refreshes now handle missing or removed production fields more predictably<br>",
                 "- CSV Summary and Export dashboards now use clearer run notes, image snapshot wording, and group comparison takeaways<br>",
                 "- CSV Summary now uses Edit groups for selected-reference comparisons and keeps dashboard rendering controls in Dashboard interactivity<br>",
                 "- Grouped Export runs now add standard group analysis to the HTML dashboard instead of adding extra workbook sheets<br>",
@@ -91,7 +97,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
             updated = temp_readme.read_text(encoding="utf-8")
             self.assertIn(f"Current release highlight (`{metadata.public_version_label}`):", updated)
             self.assertIn(f"### Changelog highlights (release `{metadata.public_version_label}`)", updated)
-            self.assertIn("RC4", updated)
+            self.assertIn("RC5", updated)
             self.assertNotIn("rc1", updated)
 
     def test_sync_changelog_writes_current_header(self):

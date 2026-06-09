@@ -37,7 +37,11 @@ from metroliza.industrial.industrial_export_service import (
     export_live_industrial_workbook,
 )
 from metroliza.industrial.industrial_join_service import materialize_industrial_report_links
-from metroliza.industrial.industrial_workflow_state import IndustrialFilterState, IndustrialGroupingState
+from metroliza.industrial.industrial_workflow_state import (
+    IndustrialFetchState,
+    IndustrialFilterState,
+    IndustrialGroupingState,
+)
 from metroliza.industrial.oznak_adapter import (
     create_oznak_cancellation_token,
     fetch_oznak_records_for_source_profile,
@@ -433,6 +437,7 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
         reference_filter_column: str | None,
         reference_values: tuple[str, ...],
         test_only: bool,
+        fetch_state: IndustrialFetchState | None = None,
     ):
         super().__init__()
         self.db_file = db_file
@@ -443,6 +448,7 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
         self.timeout_seconds = timeout_seconds
         self.reference_filter_column = reference_filter_column
         self.reference_values = reference_values
+        self.fetch_state = fetch_state
         self.test_only = test_only
         self.cancellation_token = None
         self._init_cancellation_state()
@@ -457,13 +463,33 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                     self.cancellation_token = create_oznak_cancellation_token()
                 except Exception:
                     self.cancellation_token = None
-            requested_limit = 1 if self.test_only else self.limit
+            fetch_state = self.fetch_state
+            if fetch_state is None:
+                fetch_state = IndustrialFetchState.from_reference_state(
+                    IndustrialFilterState(
+                        reference_column=self.reference_filter_column or "reference",
+                        references=tuple(self.reference_values),
+                    ),
+                    limit_rows=self.limit,
+                )
+            else:
+                fetch_state = fetch_state.validated()
+            requested_limit = 1 if self.test_only else fetch_state.limit_rows
             if not self.test_only:
                 sync_run_id = repository.create_sync_run(
                     source_profile_id=self.profile.id,
                     filters={
                         "limit": requested_limit,
                         "timeout_seconds": self.timeout_seconds,
+                        "fetch_all_confirmed": fetch_state.fetch_all_confirmed,
+                        "query_filters": tuple(
+                            {
+                                "column": filter_state.column,
+                                "operator": filter_state.operator,
+                                "value_count": len(filter_state.values),
+                            }
+                            for filter_state in fetch_state.filters
+                        ),
                         "reference_filter_column": self.reference_filter_column,
                         "reference_count": len(self.reference_values),
                         "order_by_enabled": self.profile.order_by_enabled,
@@ -480,6 +506,8 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                 timeout_seconds=self.timeout_seconds,
                 reference_filter_column=self.reference_filter_column,
                 reference_values=self.reference_values,
+                query_filters=fetch_state.filters,
+                allow_unbounded=bool(fetch_state.fetch_all_confirmed),
                 cancellation_token=self.cancellation_token,
                 progress_callback=self._emit_progress_from_diagnostic,
             )

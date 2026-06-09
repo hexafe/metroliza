@@ -435,7 +435,7 @@ def test_dashboard_visual_dialog_group_edit_keeps_population_first_in_histogram(
         dialog.deleteLater()
 
 
-def test_dashboard_visual_dialog_opacity_controls_show_synced_numeric_companions(
+def test_dashboard_visual_dialog_generic_opacity_controls_are_removed(
     monkeypatch,
 ) -> None:
     _qapp()
@@ -453,16 +453,11 @@ def test_dashboard_visual_dialog_opacity_controls_show_synced_numeric_companions
     try:
         dialog._preview_timer.stop()
 
-        assert dialog.histogram_opacity_slider.value() == 42
-        assert dialog.histogram_opacity_spin.value() == 42
-
-        dialog.histogram_opacity_slider.setValue(67)
-        assert dialog.histogram_opacity_spin.value() == 67
-        assert dialog.visual_settings()["opacity"]["histogram"] == 0.67
-
-        dialog.histogram_opacity_spin.setValue(85)
-        assert dialog.histogram_opacity_slider.value() == 85
-        assert dialog.visual_settings()["opacity"]["histogram"] == 0.85
+        assert not hasattr(dialog, "histogram_opacity_slider")
+        assert not hasattr(dialog, "histogram_opacity_spin")
+        assert "opacity" not in dialog.visual_settings()
+        assert dialog.element_opacity_slider is not None
+        assert dialog.element_opacity_spin is not None
     finally:
         dialog.close()
         dialog.deleteLater()

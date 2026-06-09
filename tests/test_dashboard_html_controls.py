@@ -129,7 +129,7 @@ def test_dashboard_visual_dialog_pairs_ranges_with_number_readouts() -> None:
     assert dialog_html.index("Visual preset") < dialog_html.index("Palette")
     assert dialog_html.index("Palette") < dialog_html.index("Fine tuning")
     assert dialog_html.index("Fine tuning") < dialog_html.index("Selection inspector")
-    assert dialog_html.count('class="visual-range-number"') >= 12
+    assert dialog_html.count('class="visual-range-number"') >= 6
     assert 'data-visual-range-value-for="dashboard-visual-marker-size"' in dialog_html
     assert 'data-visual-range-value-for="dashboard-visual-stat-width"' in dialog_html
     assert 'data-visual-range-value-for="dashboard-visual-element-opacity"' in dialog_html
@@ -270,7 +270,8 @@ def test_dashboard_visual_runtime_carries_population_focus_contract() -> None:
     assert "const paletteIndexForLabel" in runtime_js
     assert "mergeRoleStyle(Object.assign(style, override), roleStyle, override)" in runtime_js
     assert "&& !populationLike && useDistinguishers && markerSymbols.length" in runtime_js
-    assert "const opacity = Object.assign(" in runtime_js
+    assert "state.opacity" not in runtime_js
+    assert "data-visual-opacity" not in render_dashboard_visual_dialog()
     assert "opacity[selectedTargetChartKind(target)] = populationStyle.opacity;" in runtime_js
     assert "if (['histogram', 'grouped_histogram', 'distribution', 'iqr', 'scatter', 'trend', 'model_curve'].includes(raw))" in runtime_js
     assert "const resetSelectedSeriesPaletteEntry" in runtime_js

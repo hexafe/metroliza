@@ -1,6 +1,6 @@
 # Changelog (for end users)
 
-## 2026.05 RC4 (build 260609) — current version
+## 2026.05 RC5 (build 260609) — current version
 - Saved report updates are safer if a database write fails partway through.
 - HTML dashboard-only exports now report a failure instead of success when dashboard creation fails.
 - CSV Summary filters and multi-file exports behave more consistently across regular and large-file paths.
@@ -9,12 +9,25 @@
 - Google Sheets export now checks converted workbook tabs and warns when a local Excel fallback should be used.
 - Canceling long parsing, export, and metadata tasks is more reliable from progress windows.
 - Dashboard plot visuals can now be customized.
+- CSV Summary dashboards can turn very large group point layers into static images automatically, with thresholds still adjustable in Dashboard interactivity.
+- CSV Summary and Export dashboard visual settings now focus on per-element styling instead of one shared opacity control.
 - CSV Summary can auto-create one group per selected CSV file name without adding a POPULATION group.
 - CSV Summary dashboards can render dense POPULATION background layers as static images while keeping smaller groups interactive.
 - CSV Summary static POPULATION layers now remain visible when all selected rows belong to POPULATION and no random sampling is needed.
 - Oznak Check access no longer requests a reference column unless reference filtering is configured.
+- Industrial data sync can fetch by filters, row limits, or explicit fetch-all confirmation, then analyze cached rows through the CSV Summary tools.
+- Industrial data dashboards can group and filter by fetched columns plus source, so rows from multiple production databases stay traceable.
+- Industrial data source switching now refreshes stored credentials for the selected source and rejects invalid column-list config values.
+- Industrial data filters and cache refreshes now handle missing or removed production fields more predictably.
 - CSV Summary and Export dashboards now use clearer run notes, image snapshot wording, and group comparison takeaways.
 - CSV Summary now uses Edit groups for selected-reference comparisons and keeps dashboard rendering controls in Dashboard interactivity.
+- Grouped Export runs now add standard group analysis to the HTML dashboard instead of adding extra workbook sheets.
+
+## 2026.05 RC4 (build 260609)
+- Parser profiles can now be prepared from **Tools > Parser profiles...** for new supplier report templates without writing Python code.
+- CSV Summary can auto-create one group per selected CSV file name without adding a POPULATION group.
+- CSV Summary dashboards can render dense POPULATION background layers as static images while keeping smaller groups interactive.
+- CSV Summary and Export dashboards now use clearer run notes, image snapshot wording, and group comparison takeaways.
 - Grouped Export runs now add standard group analysis to the HTML dashboard instead of adding extra workbook sheets.
 
 ## 2026.05 RC3 (build 260519)

@@ -37,8 +37,10 @@ from metroliza.shared.contracts import (
     validate_industrial_analytics_request,
 )
 from metroliza.shared.dashboard_interactivity import (
+    DASHBOARD_LARGE_GROUP_STATIC_THRESHOLD,
+    DASHBOARD_LARGE_GROUP_TOTAL_STATIC_THRESHOLD,
     DASHBOARD_SIZE_LIMIT_DEFAULT_MB,
-    summarize_dashboard_population_layer_options,
+    summarize_dashboard_large_group_layer_options,
     summarize_dashboard_size_limit_options,
     summarize_dashboard_sampling_options,
 )
@@ -105,7 +107,7 @@ def dashboard_interactivity_options_summary(options: DashboardInteractivityOptio
 
 
 def dashboard_population_layer_options_summary(options: DashboardInteractivityOptions) -> str:
-    return summarize_dashboard_population_layer_options(options)
+    return summarize_dashboard_large_group_layer_options(options)
 
 
 class DashboardInteractivityOptionsDialog(QDialog):
@@ -199,13 +201,16 @@ class DashboardInteractivityOptionsDialog(QDialog):
             mode=str(self.mode_combo.currentData() or "auto"),
             sample_size=self.sample_size_spin.value(),
             population_layer_mode=self._options.population_layer_mode,
+            large_group_layer_mode=self._options.large_group_layer_mode,
+            large_group_static_threshold=self._options.large_group_static_threshold,
+            large_group_total_static_threshold=self._options.large_group_total_static_threshold,
             size_limit_mode=str(self.size_limit_combo.currentData() or "default"),
             size_limit_mb=self.size_limit_spin.value(),
         )
 
 
 class DashboardPopulationLayerOptionsDialog(QDialog):
-    """Edit CSV Summary POPULATION layer rendering options."""
+    """Edit CSV Summary large group layer rendering options."""
 
     def __init__(
         self,
@@ -214,9 +219,9 @@ class DashboardPopulationLayerOptionsDialog(QDialog):
         options: DashboardInteractivityOptions | None = None,
     ):
         super().__init__(parent)
-        self.setWindowTitle("POPULATION layer")
+        self.setWindowTitle("Large group layers")
         self._options = options or DashboardInteractivityOptions()
-        configure_window_size(self, minimum=(360, 180), initial=(440, 240))
+        configure_window_size(self, minimum=(380, 240), initial=(460, 320))
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -226,16 +231,37 @@ class DashboardPopulationLayerOptionsDialog(QDialog):
         self.population_layer_combo.addItem("Auto", "auto")
         self.population_layer_combo.addItem("Interactive points", "interactive")
         self.population_layer_combo.addItem("Static image", "static")
-        population_index = self.population_layer_combo.findData(self._options.population_layer_mode)
+        population_index = self.population_layer_combo.findData(
+            self._options.large_group_layer_mode
+        )
         self.population_layer_combo.setCurrentIndex(population_index if population_index >= 0 else 0)
         self.population_layer_combo.setToolTip(
-            "Choose whether the CSV Summary POPULATION layer is interactive or rendered as a static image."
+            "Choose whether large CSV Summary groups stay interactive or render as static image layers."
         )
         form.addRow("Render as", self.population_layer_combo)
+
+        self.group_threshold_spin = QSpinBox()
+        self.group_threshold_spin.setRange(1, 10_000_000)
+        self.group_threshold_spin.setSingleStep(1_000)
+        self.group_threshold_spin.setValue(
+            self._options.large_group_static_threshold
+            or DASHBOARD_LARGE_GROUP_STATIC_THRESHOLD
+        )
+        form.addRow("Group threshold", self.group_threshold_spin)
+
+        self.total_threshold_spin = QSpinBox()
+        self.total_threshold_spin.setRange(1, 100_000_000)
+        self.total_threshold_spin.setSingleStep(5_000)
+        self.total_threshold_spin.setValue(
+            self._options.large_group_total_static_threshold
+            or DASHBOARD_LARGE_GROUP_TOTAL_STATIC_THRESHOLD
+        )
+        form.addRow("Total threshold", self.total_threshold_spin)
+
         layout.addLayout(form)
         layout.addWidget(
             status_chip(
-                "Static POPULATION uses the full source layer when available and follows the POPULATION style in Dashboard style.",
+                "Auto renders a group as a static image above the group threshold, or all supported groups above the total threshold.",
                 "neutral",
             )
         )
@@ -249,13 +275,25 @@ class DashboardPopulationLayerOptionsDialog(QDialog):
 
         configure_accessibility(
             self.population_layer_combo,
-            name="Dashboard POPULATION layer mode",
+            name="Dashboard large group layer mode",
+        )
+        configure_accessibility(
+            self.group_threshold_spin,
+            name="Dashboard large group static threshold",
+        )
+        configure_accessibility(
+            self.total_threshold_spin,
+            name="Dashboard total static threshold",
         )
 
     def interactivity_options(self) -> DashboardInteractivityOptions:
+        mode = str(self.population_layer_combo.currentData() or "auto")
         return replace(
             self._options,
-            population_layer_mode=str(self.population_layer_combo.currentData() or "auto"),
+            population_layer_mode=mode,
+            large_group_layer_mode=mode,
+            large_group_static_threshold=self.group_threshold_spin.value(),
+            large_group_total_static_threshold=self.total_threshold_spin.value(),
         )
 
 
@@ -485,14 +523,18 @@ class IndustrialAnalyticsDialog(QDialog):
         *,
         db_file: str | None = None,
         source_kind: str = SOURCE_PRODUCTION_CACHE,
+        tabular_load_result=None,
+        input_file: str | None = None,
+        source_label_override: str | None = None,
     ):
         super().__init__(parent)
         if source_kind not in {SOURCE_PRODUCTION_CACHE, SOURCE_TABULAR_FILE}:
             raise ValueError(f"Unsupported analytics source kind: {source_kind}")
         self.db_file = db_file or ""
         self.source_kind = source_kind
-        self.input_file = ""
-        self.input_files: tuple[str, ...] = ()
+        self.input_file = input_file or ""
+        self.input_files: tuple[str, ...] = (self.input_file,) if self.input_file else ()
+        self._source_label_override = source_label_override
         self.output_dashboard_file = default_dashboard_path(self.db_file or "production_analytics")
         self.output_workbook_file = default_workbook_path(self.db_file or "production_analytics")
         self.analytics_thread = None
@@ -537,18 +579,18 @@ class IndustrialAnalyticsDialog(QDialog):
             "Adjust CSV Summary chart interactivity and random sample limits for large datasets."
         )
         self.dashboard_interactivity_button.clicked.connect(self.open_dashboard_interactivity_options)
-        self.population_layer_row_label = section_label("POPULATION layer")
+        self.population_layer_row_label = section_label("Large group layers")
         self.population_layer_summary_label = status_chip("", "neutral")
         self.population_layer_button = QPushButton("Change...")
         self.population_layer_button.setToolTip(
-            "Choose whether the CSV Summary POPULATION layer is interactive or static."
+            "Choose whether large CSV Summary groups are interactive or static, and tune thresholds."
         )
         self.population_layer_button.clicked.connect(self.open_population_layer_options)
         self.dashboard_visuals_row_label = section_label("Dashboard style")
         self.dashboard_visuals_summary_label = status_chip("", "neutral")
         self.dashboard_visuals_button = QPushButton("Change...")
         self.dashboard_visuals_button.setToolTip(
-            "Adjust dashboard style, colors, opacity, markers, POPULATION appearance, and reference/stat lines."
+            "Adjust dashboard style, colors, markers, selected-element opacity, group appearance, and reference/stat lines."
         )
         self.dashboard_visuals_button.clicked.connect(self.open_dashboard_visual_options)
         self.readiness_label = status_chip("Load metrics and choose an output path.", "warning")
@@ -667,6 +709,10 @@ class IndustrialAnalyticsDialog(QDialog):
         self._configure_accessibility()
         self._sync_source_visibility()
         self._reset_group_options(())
+        if tabular_load_result is not None:
+            self._apply_tabular_load_result(tabular_load_result, populate_metrics=True)
+            if source_label_override:
+                self.source_label.setText(source_label_override)
         self._sync_ui_state()
         apply_metroliza_theme(self)
 
@@ -912,7 +958,7 @@ class IndustrialAnalyticsDialog(QDialog):
         )
         configure_accessibility(
             self.population_layer_button,
-            name="Edit dashboard POPULATION layer",
+            name="Edit dashboard large group layers",
             description=self.population_layer_button.toolTip(),
         )
         configure_accessibility(self.groupstats_checkbox, name="Include groupstats output")
@@ -923,6 +969,8 @@ class IndustrialAnalyticsDialog(QDialog):
         configure_accessibility(self.start_button, name="Create analytics output")
 
     def _source_summary(self) -> str:
+        if self._source_label_override:
+            return self._source_label_override
         if self.is_production_source:
             return "Cached Oznak production data"
         return "CSV or Excel table"
@@ -1011,7 +1059,7 @@ class IndustrialAnalyticsDialog(QDialog):
         summary = dashboard_population_layer_options_summary(self.dashboard_interactivity_options)
         self.population_layer_summary_label.setText(summary)
         self.population_layer_summary_label.setToolTip(
-            f"{summary}. Static image appearance follows the POPULATION element in Dashboard style."
+            f"{summary}. Static image appearance follows each group element in Dashboard style."
         )
 
     def open_dashboard_interactivity_options(self) -> None:

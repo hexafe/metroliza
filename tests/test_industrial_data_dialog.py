@@ -522,16 +522,41 @@ def test_sync_dialog_labels_bounded_access_check_clearly(tmp_path):
     dialog.close()
 
 
-def test_launcher_analytics_uses_shared_production_cache_workflow(monkeypatch, tmp_path):
+def test_launcher_analytics_uses_csv_summary_tabular_cache_workflow(monkeypatch, tmp_path):
     _app()
     db_path = str(tmp_path / "metroliza.db")
+    repository = IndustrialDataRepository(db_path)
+    profile = repository.upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="events",
+    )
+    repository.upsert_industrial_records_from_rows(
+        source_profile_id=profile.id,
+        source_db_alias=profile.source_db_alias,
+        rows=({"source_record_key": "row-1", "reference": "REF-1", "length_mm": "12.5"},),
+    )
     launched = {}
 
     class FakeAnalyticsDialog:
-        def __init__(self, parent, *, db_file, source_kind):
+        def __init__(
+            self,
+            parent,
+            *,
+            db_file,
+            source_kind,
+            tabular_load_result=None,
+            input_file=None,
+            source_label_override=None,
+        ):
             launched["parent"] = parent
             launched["db_file"] = db_file
             launched["source_kind"] = source_kind
+            launched["tabular_load_result"] = tabular_load_result
+            launched["input_file"] = input_file
+            launched["source_label_override"] = source_label_override
             self.executed = False
 
         def exec(self):
@@ -544,7 +569,10 @@ def test_launcher_analytics_uses_shared_production_cache_workflow(monkeypatch, t
 
     assert launched["parent"] is dialog
     assert launched["db_file"] == db_path
-    assert launched["source_kind"] == "production_cache"
+    assert launched["source_kind"] == "tabular_file"
+    assert launched["tabular_load_result"].row_count == 1
+    assert launched["input_file"] == db_path
+    assert "Industrial data cache" in launched["source_label_override"]
     assert launched["executed"] is True
     dialog.close()
 

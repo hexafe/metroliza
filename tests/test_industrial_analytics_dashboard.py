@@ -1172,7 +1172,7 @@ def test_large_time_series_static_population_mode_marks_existing_raw_layer(
     )
 
     assert result["html_dashboard_static_population_layer"]["status"] == "applied"
-    assert result["html_dashboard_static_population_layer"]["source_point_count"] == 6
+    assert result["html_dashboard_static_population_layer"]["source_point_count"] == 8
 
 
 def test_static_population_layer_optimization_marked_available(monkeypatch) -> None:
@@ -1434,7 +1434,7 @@ def test_static_population_datetime_axis_preserves_extra_group_range(
     image = spec["layout"]["images"][0]
     proxy_trace = next(trace for trace in traces if trace["name"] == "POPULATION static layer")
     x_range = spec["layout"]["xaxis"]["range"]
-    assert [trace["name"] for trace in traces] == ["POPULATION static layer", "A"]
+    assert [trace["name"] for trace in traces] == ["POPULATION static layer", "A static layer"]
     assert spec["layout"]["xaxis"]["type"] == "date"
     assert _epoch_ms(x_range[0]) <= _epoch_ms("2026-05-10T08:00:00+00:00")
     assert _epoch_ms(x_range[1]) >= _epoch_ms("2026-05-10T08:00:07+00:00")
@@ -1470,7 +1470,7 @@ def test_write_dashboard_static_population_layer_mode_converts_supported_time_se
     chart = _embedded_dashboard_charts(html_text)[0]
     spec = chart["plotly_spec"]
     traces = spec["data"]
-    assert [trace["name"] for trace in traces] == ["POPULATION static layer", "A"]
+    assert [trace["name"] for trace in traces] == ["POPULATION static layer", "A static layer"]
     assert traces[0]["metroliza_static_population_layer_index"] == 0
     assert traces[0]["meta"]["metroliza_role"] == "static_population_layer"
     assert spec["layout"]["images"][0]["source"].startswith("data:image/png;base64,")
@@ -1479,7 +1479,7 @@ def test_write_dashboard_static_population_layer_mode_converts_supported_time_se
     assert spec["layout"]["yaxis"]["autorange"] is False
     assert result["html_dashboard_static_population_layer"]["status"] == "applied"
     assert result["html_dashboard_static_population_layer"]["applied_chart_count"] == 1
-    assert '<div class="metric-label">POPULATION layer</div>' in html_text
+    assert '<div class="metric-label">Large group layers</div>' in html_text
     assert '<span class="metric-value-line">Static image in 1 chart(s)</span>' in html_text
     assert "plotly_spec" in manifest["charts"][0]
 
@@ -1488,10 +1488,10 @@ def test_static_population_layer_uses_population_marker_style(
     tmp_path,
     monkeypatch,
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: list[dict[str, object]] = []
 
     def fake_raw_layer(*_args, **kwargs):
-        captured.update(kwargs)
+        captured.append(dict(kwargs))
         return b"png"
 
     monkeypatch.setattr(dashboard_module, "_render_time_series_raw_layer_png", fake_raw_layer)
@@ -1506,9 +1506,9 @@ def test_static_population_layer_uses_population_marker_style(
         dashboard_interactivity_options={"population_layer_mode": "static"},
     )
 
-    assert captured["color"] == "#245a5a"
-    assert captured["marker_size"] == pytest.approx(10.0)
-    assert captured["opacity"] == pytest.approx(0.68)
+    assert captured[0]["color"] == "#245a5a"
+    assert captured[0]["marker_size"] == pytest.approx(10.0)
+    assert captured[0]["opacity"] == pytest.approx(0.68)
 
 
 def test_write_dashboard_static_population_layer_interactive_mode_keeps_trace(
@@ -1550,12 +1550,18 @@ def test_write_dashboard_static_population_layer_auto_applies_only_above_thresho
     large_result = write_production_dashboard(
         _static_population_layer_manifest(point_count=8),
         tmp_path / "population_auto_large.html",
-        dashboard_interactivity_options={"population_layer_mode": "auto"},
+        dashboard_interactivity_options={
+            "population_layer_mode": "auto",
+            "large_group_static_threshold": 5,
+        },
     )
     small_result = write_production_dashboard(
         _static_population_layer_manifest(point_count=4),
         tmp_path / "population_auto_small.html",
-        dashboard_interactivity_options={"population_layer_mode": "auto"},
+        dashboard_interactivity_options={
+            "population_layer_mode": "auto",
+            "large_group_static_threshold": 5,
+        },
     )
 
     large_html = Path(large_result["html_dashboard_path"]).read_text(encoding="utf-8")
@@ -1564,6 +1570,65 @@ def test_write_dashboard_static_population_layer_auto_applies_only_above_thresho
     assert "images" not in _embedded_dashboard_charts(small_html)[0]["plotly_spec"]["layout"]
     assert large_result["html_dashboard_static_population_layer"]["status"] == "applied"
     assert small_result["html_dashboard_static_population_layer"]["status"] == "not_applicable"
+
+
+def test_write_dashboard_static_group_layer_auto_applies_to_non_population_group(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        dashboard_module,
+        "_render_time_series_raw_layer_png",
+        lambda *_args, **_kwargs: b"png",
+    )
+    manifest = _static_population_layer_manifest(point_count=6)
+    manifest["charts"][0]["plotly_spec"]["data"][0]["name"] = "Line A"
+
+    result = write_production_dashboard(
+        manifest,
+        tmp_path / "group_static.html",
+        dashboard_interactivity_options={
+            "large_group_layer_mode": "auto",
+            "large_group_static_threshold": 5,
+            "large_group_total_static_threshold": 50_000,
+        },
+    )
+
+    html_text = Path(result["html_dashboard_path"]).read_text(encoding="utf-8")
+    chart = _embedded_dashboard_charts(html_text)[0]
+    traces = chart["plotly_spec"]["data"]
+    assert traces[0]["name"] == "Line A static layer"
+    assert traces[0]["meta"]["metroliza_role"] == "static_group_layer"
+    assert chart["plotly_spec"]["layout"]["images"][0]["metroliza_static_group_layer_label"] == "Line A"
+    assert result["html_dashboard_static_population_layer"]["applied_group_count"] == 1
+
+
+def test_write_dashboard_static_group_layer_auto_uses_strict_threshold(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        dashboard_module,
+        "_render_time_series_raw_layer_png",
+        lambda *_args, **_kwargs: b"png",
+    )
+    manifest = _static_population_layer_manifest(point_count=5)
+    manifest["charts"][0]["plotly_spec"]["data"][0]["name"] = "Line A"
+
+    result = write_production_dashboard(
+        manifest,
+        tmp_path / "group_static_equal_threshold.html",
+        dashboard_interactivity_options={
+            "large_group_layer_mode": "auto",
+            "large_group_static_threshold": 5,
+            "large_group_total_static_threshold": 50_000,
+        },
+    )
+
+    html_text = Path(result["html_dashboard_path"]).read_text(encoding="utf-8")
+    chart = _embedded_dashboard_charts(html_text)[0]
+    assert "images" not in chart["plotly_spec"]["layout"]
+    assert result["html_dashboard_static_population_layer"]["status"] == "not_applicable"
 
 
 def test_write_dashboard_static_population_layer_converts_sampled_dashboard_frame(
@@ -1665,7 +1730,7 @@ def test_write_dashboard_static_population_layer_converts_sampled_dashboard_fram
     assert static_population["rendered_point_count"] == 12
     assert static_population["contributed_point_count"] == 12
     assert static_population["render_strategy_counts"] == {"full_density": 1}
-    assert '<div class="metric-label">POPULATION layer</div>' in html_text
+    assert '<div class="metric-label">Large group layers</div>' in html_text
     assert (
         '<span class="metric-value-line">Full-source density image in 1 chart(s)</span>'
         in html_text
@@ -1695,7 +1760,7 @@ def test_write_dashboard_static_population_layer_keeps_unsupported_chart_honest(
     chart = _embedded_dashboard_charts(html_text)[0]
     assert [trace["name"] for trace in chart["plotly_spec"]["data"]] == ["POPULATION", "A"]
     assert "images" not in chart["plotly_spec"]["layout"]
-    assert "Static POPULATION image layers are not available for this chart type yet." in html_text
+    assert "Static group image layers are not available for this chart type yet." in html_text
     assert chart["optimization_options"][0]["skipped_reason"] == "unsupported_chart_type"
 
 

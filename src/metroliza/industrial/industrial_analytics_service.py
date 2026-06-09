@@ -1137,8 +1137,10 @@ def _apply_dynamic_filters(
         field_name = dynamic_filter.field_name
         if field_name not in filtered.columns:
             diagnostics.append(_missing_filter_field_diagnostic(field_name))
-            continue
-        mask = _dynamic_filter_mask(filtered[field_name], dynamic_filter)
+            series = pd.Series(pd.NA, index=filtered.index, dtype="object")
+        else:
+            series = filtered[field_name]
+        mask = _dynamic_filter_mask(series, dynamic_filter)
         filtered = filtered[mask].copy()
     output_count = int(len(filtered.index))
     if input_count != output_count:

@@ -332,7 +332,6 @@ def default_dashboard_visual_settings() -> dict[str, Any]:
         "anchor_color": DEFAULT_HIGHLIGHT_ANCHOR,
         "gradient_spread": "normal",
         "distinguish": "when_similar",
-        "opacity": dict(DEFAULT_OPACITY),
         "marker_size": 7.0,
         "population_baseline": copy.deepcopy(DEFAULT_POPULATION_BASELINE),
         "comparison_focus": copy.deepcopy(DEFAULT_COMPARISON_FOCUS),
@@ -656,12 +655,6 @@ def normalize_dashboard_visual_settings(settings: Any) -> dict[str, Any]:
         DASHBOARD_VISUAL_DISTINGUISH_MODES,
         defaults["distinguish"],
     )
-    opacity = settings.get("opacity")
-    if isinstance(opacity, Mapping):
-        normalized["opacity"] = {
-            key: _bounded_float(opacity.get(key), fallback=value, minimum=0.05, maximum=1.0)
-            for key, value in defaults["opacity"].items()
-        }
     normalized["marker_size"] = _bounded_float(
         settings.get("marker_size"),
         fallback=defaults["marker_size"],
@@ -877,7 +870,6 @@ def dashboard_visual_settings_to_plotly_settings(settings: Any) -> dict[str, Any
         "preserve_colors_on_theme": True,
         "series": {
             "palette": palette,
-            "opacity": dict(normalized["opacity"]),
             "marker_size": normalized["marker_size"],
             "marker_symbols": list(_MARKER_SYMBOLS if use_distinguishers else ()),
             "patterns": list(_PATTERN_SHAPES if use_distinguishers else ()),
@@ -1300,7 +1292,6 @@ def _focused_group_recipe_payload(
     palette_preset: str,
     palette: Sequence[str] | None = None,
     distinguish: str = "when_similar",
-    opacity: Mapping[str, float] | None = None,
     marker_size: float = 7.0,
     population_color: str = "#6b7280",
     population_opacity: Mapping[str, float] | None = None,
@@ -1321,7 +1312,6 @@ def _focused_group_recipe_payload(
         "palette_mode": "fixed",
         "palette": palette_values,
         "distinguish": distinguish,
-        "opacity": {**dict(DEFAULT_OPACITY), **dict(opacity or {})},
         "marker_size": marker_size,
         "population_baseline": {
             "aliases": list(DEFAULT_POPULATION_ALIASES),
@@ -1386,7 +1376,6 @@ def _visual_recipe_payload(recipe: str) -> dict[str, Any]:
             recipe_id,
             palette_preset="colorbrewer_dark2",
             distinguish="when_similar",
-            opacity={"grouped_histogram": 0.52, "distribution": 0.82, "trend": 0.30},
             population_color="#6b7280",
             population_marker_size=4.0,
             comparison_marker_size=8.8,
@@ -1398,15 +1387,6 @@ def _visual_recipe_payload(recipe: str) -> dict[str, Any]:
             palette_preset="custom",
             palette=TONED_REPORT_DASHBOARD_PALETTE,
             distinguish="when_similar",
-            opacity={
-                "histogram": 0.78,
-                "grouped_histogram": 0.50,
-                "distribution": 0.76,
-                "iqr": 0.60,
-                "scatter": 0.78,
-                "trend": 0.30,
-                "model_curve": 0.58,
-            },
             population_color="#8a949e",
             population_opacity={"scatter": 0.24, "grouped_histogram": 0.32},
             comparison_marker_size=8.0,
@@ -1418,14 +1398,6 @@ def _visual_recipe_payload(recipe: str) -> dict[str, Any]:
             recipe_id,
             palette_preset="colorbrewer_set2",
             distinguish="when_similar",
-            opacity={
-                "histogram": 0.92,
-                "grouped_histogram": 0.68,
-                "distribution": 0.88,
-                "iqr": 0.74,
-                "scatter": 0.86,
-                "trend": 0.40,
-            },
             population_color="#a3aab5",
             population_opacity={"scatter": 0.22, "grouped_histogram": 0.40},
             comparison_marker_size=9.0,
@@ -1445,7 +1417,6 @@ def _visual_recipe_payload(recipe: str) -> dict[str, Any]:
             recipe_id,
             palette_preset="rdbu",
             distinguish="when_similar",
-            opacity={"distribution": 0.78, "iqr": 0.72, "scatter": 0.86, "trend": 0.35},
             population_color="#8b95a1",
             comparison_marker_size=8.6,
             comparison_outline_width=1.35,
@@ -1466,14 +1437,6 @@ def _visual_recipe_payload(recipe: str) -> dict[str, Any]:
             palette_preset="custom",
             palette=PRINT_DASHBOARD_PALETTE,
             distinguish="always",
-            opacity={
-                "grouped_histogram": 0.72,
-                "distribution": 0.74,
-                "iqr": 0.70,
-                "scatter": 0.78,
-                "trend": 0.55,
-                "model_curve": 0.72,
-            },
             population_color="#9ca3af",
             population_opacity={"scatter": 0.30, "grouped_histogram": 0.46},
             population_marker_size=4.5,

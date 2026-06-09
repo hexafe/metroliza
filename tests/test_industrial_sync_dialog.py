@@ -83,6 +83,59 @@ def test_sync_dialog_prefills_locally_saved_credentials(monkeypatch, tmp_path):
     dialog.close()
 
 
+def test_sync_dialog_profile_switch_replaces_or_clears_stored_credentials(monkeypatch, tmp_path):
+    _app()
+    db_path = str(tmp_path / "industrial.db")
+    repository = IndustrialDataRepository(db_path)
+    for profile_key, profile_name in (
+        ("assembly_mes", "Assembly MES"),
+        ("paint_mes", "Paint MES"),
+        ("weld_mes", "Weld MES"),
+    ):
+        repository.upsert_source_profile(
+            profile_key=profile_key,
+            profile_name=profile_name,
+            source_db_alias=profile_key,
+            database_type="mssql",
+            source_object_name="events",
+            host=f"{profile_key}.example.invalid",
+            port=1433,
+            database_name="plantdb",
+        )
+    stored_credentials = {
+        "assembly_mes": IndustrialStoredCredentials(
+            username="assembly-user",
+            password="assembly-secret",
+        ),
+        "paint_mes": IndustrialStoredCredentials(),
+        "weld_mes": IndustrialStoredCredentials(
+            username="weld-user",
+            password="weld-secret",
+        ),
+    }
+    monkeypatch.setattr(
+        industrial_sync_dialog,
+        "load_industrial_credentials",
+        lambda profile_key: stored_credentials[profile_key],
+    )
+
+    dialog = IndustrialSyncDialog(db_file=db_path)
+
+    assert dialog.username_edit.text() == "assembly-user"
+    assert dialog.password_edit.text() == "assembly-secret"
+
+    dialog.profile_combo.setCurrentIndex(dialog.profile_combo.findText("Paint MES"))
+
+    assert dialog.username_edit.text() == ""
+    assert dialog.password_edit.text() == ""
+
+    dialog.profile_combo.setCurrentIndex(dialog.profile_combo.findText("Weld MES"))
+
+    assert dialog.username_edit.text() == "weld-user"
+    assert dialog.password_edit.text() == "weld-secret"
+    dialog.close()
+
+
 def test_sync_dialog_adds_filter_column_to_runtime_profile_without_persisting(tmp_path):
     _app()
     db_path = str(tmp_path / "industrial.db")
@@ -136,7 +189,7 @@ def test_sync_dialog_does_not_add_default_reference_column_without_filter_values
     dialog.close()
 
 
-def test_sync_dialog_keeps_connection_test_enabled_until_references_are_selected(tmp_path):
+def test_sync_dialog_allows_limited_sync_without_reference_values(tmp_path):
     _app()
     db_path = str(tmp_path / "industrial.db")
     IndustrialDataRepository(db_path).upsert_source_profile(
@@ -152,7 +205,8 @@ def test_sync_dialog_keeps_connection_test_enabled_until_references_are_selected
     dialog = IndustrialSyncDialog(db_file=db_path)
 
     assert dialog.test_connection_button.isEnabled()
-    assert not dialog.sync_now_button.isEnabled()
+    assert dialog.sync_now_button.isEnabled()
+    assert dialog.limit_spin.value() == 5000
 
     dialog.set_industrial_filter_state(
         IndustrialFilterState(reference_column="reference", references=("REF-1",))

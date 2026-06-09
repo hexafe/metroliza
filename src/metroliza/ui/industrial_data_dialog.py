@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
 )
 
 from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
+from metroliza.industrial.industrial_tabular_bridge import load_industrial_cache_tabular_result
 from metroliza.ui.industrial_analytics_dialog import IndustrialAnalyticsDialog
 from metroliza.ui.industrial_export_dialog import IndustrialExportDialog
 from metroliza.ui.industrial_linking_dialog import IndustrialLinkingDialog
@@ -348,10 +349,32 @@ class IndustrialDataDialog(QDialog):
         self.refresh_status()
 
     def open_analytics_dialog(self) -> None:
+        if not self.db_file:
+            QMessageBox.warning(
+                self,
+                self.windowTitle(),
+                "Select a Metroliza report database before analyzing industrial data.",
+            )
+            return
+        try:
+            loaded = load_industrial_cache_tabular_result(self.db_file)
+        except Exception as exc:
+            QMessageBox.warning(self, self.windowTitle(), f"Could not load industrial cache: {exc}")
+            return
+        if int(getattr(loaded, "row_count", 0) or 0) <= 0:
+            QMessageBox.warning(
+                self,
+                self.windowTitle(),
+                "Fetch industrial data into the local cache before creating CSV Summary analytics.",
+            )
+            return
         self.analytics_window = IndustrialAnalyticsDialog(
             self,
             db_file=self.db_file,
-            source_kind="production_cache",
+            source_kind="tabular_file",
+            tabular_load_result=loaded,
+            input_file=self.db_file,
+            source_label_override=f"Industrial data cache: {int(loaded.row_count or 0):,} rows",
         )
         self.analytics_window.exec()
         self.refresh_status()

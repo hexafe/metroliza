@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -269,7 +270,7 @@ def _profile_from_entry(alias: str, entry: Mapping[str, Any], *, path: Path) -> 
         port=int(entry["port"]) if entry.get("port") is not None else None,
         database_name=str(entry.get("database") or ""),
         source_object_name=str(entry.get("table") or ""),
-        allowed_columns=entry.get("allowed_columns") or (),
+        allowed_columns=entry.get("allowed_columns") if "allowed_columns" in entry else (),
         timestamp_column=entry.get("timestamp_column"),
         default_pagination_column=entry.get("pagination_column"),
         order_by_enabled=_bool_config_value(
@@ -350,6 +351,12 @@ def _bool_config_value(value: Any, *, profile_alias: str, key: str, path: Path) 
 
 
 def _normalize_columns(columns: Iterable[str] | None) -> tuple[str, ...]:
+    if columns is None:
+        return ()
+    if isinstance(columns, (str, bytes)) or not isinstance(columns, Sequence):
+        raise IndustrialSourceConfigError(
+            "allowed_columns must be a YAML list or sequence of column names."
+        )
     if not columns:
         return ()
     seen: set[str] = set()
