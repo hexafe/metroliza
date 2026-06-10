@@ -21,6 +21,7 @@ release_notes = f"""
     - CSV Summary static POPULATION layers now remain visible when all selected rows belong to POPULATION and no random sampling is needed<br>
     - Oznak Check access no longer requests a reference column unless reference filtering is configured<br>
     - Industrial data sync can fetch by filters, row limits, or explicit fetch-all confirmation, then analyze cached rows through the CSV Summary tools<br>
+    - Industrial data now presents Oznak access as fetch-to-cache first, then opens cached source rows in CSV Summary for filtering, grouping, dashboards, and optional workbooks<br>
     - Industrial data dashboards can group and filter by fetched columns plus source, so rows from multiple production databases stay traceable<br>
     - Industrial data source switching now refreshes stored credentials for the selected source and rejects invalid column-list config values<br>
     - Industrial data filters and cache refreshes now handle missing or removed production fields more predictably<br>

@@ -233,20 +233,21 @@ You can optionally check **Industrial context**.
 
 This adds cached production context from accepted local links to the measurement export and writes industrial context/diagnostics worksheets when linked production-process records exist in the selected Metroliza report database.
 
-Before using this option, open **Tools > Industrial data...** from the main window. Configure production line sources either by editing `~/.metroliza/industrial_sources.yaml` directly or by using **Production sources...**, which reads/writes the same Oznak-style config file. If the launcher was opened before a report database was selected, use **Select DB...** first. Then use **Connect / check / sync...** to check production database access with a one-row read that saves nothing, fetch selected production rows by reference filters, row limit, or explicit fetch-all confirmation, load those rows into the local Metroliza cache, and refresh links.
+Before using this option, open **Tools > Industrial data...** from the main window. Configure production line sources either by editing `~/.metroliza/industrial_sources.yaml` directly or by using **Production sources...**, which reads/writes the same Oznak-style config file. If the launcher was opened before a report database was selected, use **Select DB...** first. Then use **Fetch to cache...** to check production database access with a one-row read that saves nothing, fetch selected production rows by reference filters, row limit, or explicit fetch-all confirmation, load those rows into the local Metroliza cache, and refresh links.
 
 If the report reference and production reference are not the same value, open **Production links...** after sync. Manual links connect one Metroliza report to one cached production row and take priority over automatic exact-reference links.
 
 Export uses only local cached industrial rows from the Metroliza report database. It does not connect to production line databases or query Oznak while the workbook is being created. The chain is: Oznak sync fills the local cache, automatic link refresh or manual links create accepted local links, and normal export joins one accepted production link per report, prioritizing manual links. If no industrial rows have been synced or no report links exist yet, the normal export still works, but no industrial context is added.
 
-The industrial data launcher can also open dedicated Oznak export and analytics dialogs.
-With a selected Metroliza report database, **Export...** creates a workbook from cached
-rows only. Without a selected report database, **Export...** can fetch live production rows
-directly from a configured source and create a production workbook without filling the
-local cache. **Analyze...** loads cached production rows into the CSV Summary workflow, so
+The industrial data launcher can also open dedicated Oznak export and CSV Summary cache dialogs.
+With a selected Metroliza report database, **Export workbook...** creates a workbook from
+cached rows only. Without a selected report database, **Export workbook...** can fetch live
+production rows directly from a configured source and create a production workbook without
+filling the local cache. **CSV Summary...** loads cached production rows into the CSV Summary workflow, so
 the same filtering, grouping, dashboard, workbook, and export controls are available for
 industrial data. Each cached row carries a **source** value, so dashboards and groups can
-separate rows from different configured production databases.
+separate rows from different configured production databases. When multiple sources have
+been cached, choose all sources or one source before opening CSV Summary.
 
 ### Chart type
 

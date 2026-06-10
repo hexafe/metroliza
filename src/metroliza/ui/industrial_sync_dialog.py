@@ -63,7 +63,7 @@ class IndustrialSyncDialog(QDialog):
         self.filter_window = None
         self.oznak_sync_thread = None
         self._loading_profiles = False
-        self.setWindowTitle("Sync industrial data")
+        self.setWindowTitle("Fetch industrial data")
         configure_window_size(self, minimum=(560, 360), initial=(680, 460))
 
         self.status_label = status_chip(
@@ -94,7 +94,7 @@ class IndustrialSyncDialog(QDialog):
 
         self.edit_filter_button = QPushButton("Edit references...")
         self.test_connection_button = QPushButton("Check access")
-        self.sync_now_button = QPushButton("Sync now")
+        self.sync_now_button = QPushButton("Fetch to cache")
         self.cancel_sync_button = QPushButton("Cancel")
         self.close_button = QPushButton("Close")
         self.test_connection_button.setToolTip(
@@ -116,11 +116,12 @@ class IndustrialSyncDialog(QDialog):
         self.cancel_sync_button.setEnabled(False)
 
         self._build_layout()
+        self._sync_access_only_visibility()
         self.reload_profiles()
         self._sync_filter_status()
         if self.access_only:
             self.sync_now_button.setToolTip(
-                "Sync now requires a selected Metroliza report database with initialized industrial cache."
+                "Fetching to cache requires a selected Metroliza report database with initialized industrial cache."
             )
         apply_metroliza_theme(self)
 
@@ -128,7 +129,7 @@ class IndustrialSyncDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
-        layout.addWidget(section_label("Production database access and sync"))
+        layout.addWidget(section_label("Production database access and cache fetch"))
         layout.addWidget(self.status_label)
 
         form = QFormLayout()
@@ -138,8 +139,10 @@ class IndustrialSyncDialog(QDialog):
         form.addRow("Production DB username", self.username_edit)
         form.addRow("Production DB password", self.password_edit)
         form.addRow("", self.remember_credentials_checkbox)
-        form.addRow("Sync row limit", self.limit_spin)
+        form.addRow("Fetch row limit", self.limit_spin)
+        self.limit_row_label = form.labelForField(self.limit_spin)
         form.addRow("", self.fetch_all_checkbox)
+        self.fetch_all_row_label = form.labelForField(self.fetch_all_checkbox)
         form.addRow("Query timeout seconds", self.timeout_spin)
         layout.addLayout(form)
 
@@ -161,6 +164,25 @@ class IndustrialSyncDialog(QDialog):
         actions.addWidget(self.cancel_sync_button)
         layout.addLayout(actions)
 
+    def _sync_access_only_visibility(self) -> None:
+        show_cache_write_controls = not self.access_only
+        for widget in (
+            self.limit_spin,
+            self.fetch_all_checkbox,
+            self.filter_status_label,
+            self.edit_filter_button,
+            self.sync_now_button,
+        ):
+            widget.setVisible(show_cache_write_controls)
+        for label in (
+            getattr(self, "limit_row_label", None),
+            getattr(self, "fetch_all_row_label", None),
+        ):
+            if label is not None:
+                label.setVisible(show_cache_write_controls)
+        if self.access_only:
+            self.fetch_all_checkbox.setChecked(False)
+
     def reload_profiles(self) -> None:
         if self._loading_profiles:
             return
@@ -178,7 +200,7 @@ class IndustrialSyncDialog(QDialog):
             profiles = []
             self._set_ready_state(
                 False,
-                "Select a Metroliza report database first so synced production rows have a local cache.",
+                "Select a Metroliza report database first so fetched production rows have a local cache.",
             )
         else:
             try:
@@ -194,12 +216,12 @@ class IndustrialSyncDialog(QDialog):
             if self.access_only:
                 self._set_ready_state(
                     True,
-                    "Access-only mode: Check access reads up to one row and never saves data. Select a Metroliza report database to enable Sync now.",
+                    "Access-only mode: Check access reads up to one row and never saves data. Select a Metroliza report database to fetch rows into the cache.",
                 )
             else:
                 self._set_ready_state(
                     True,
-                    "Production source selected. Check access with a one-row read or sync selected reference/ID values.",
+                    "Production source selected. Check access with a one-row read or fetch selected rows into the cache.",
                 )
             self._load_stored_credentials_for_current_profile()
         else:
@@ -209,7 +231,7 @@ class IndustrialSyncDialog(QDialog):
                     "Access-only mode: configure at least one production source before checking access.",
                 )
             else:
-                self._set_ready_state(False, "Create a production source before syncing.")
+                self._set_ready_state(False, "Create a production source before fetching rows.")
 
     def _set_ready_state(self, enabled: bool, message: str) -> None:
         self.status_label.setText(message)
@@ -237,7 +259,7 @@ class IndustrialSyncDialog(QDialog):
     def _profile_for_current_filter(self) -> IndustrialSourceProfile:
         profile = self.current_profile()
         if profile is None:
-            raise ValueError("Create or select a production source before syncing.")
+            raise ValueError("Create or select a production source before fetching rows.")
         if not self.filter_state.references:
             return profile
         filter_column = self.filter_state.reference_column
@@ -287,12 +309,12 @@ class IndustrialSyncDialog(QDialog):
         thread = self.oznak_sync_thread
         if thread is not None and thread.isRunning():
             thread.cancel()
-            self.status_label.setText("Cancelling industrial sync...")
+            self.status_label.setText("Cancelling industrial fetch...")
             set_status_variant(self.status_label, "neutral")
 
     def _start_oznak_operation(self, *, test_only: bool) -> None:
         if self.oznak_sync_thread is not None and self.oznak_sync_thread.isRunning():
-            self.status_label.setText("Industrial sync already running")
+            self.status_label.setText("Industrial operation already running")
             set_status_variant(self.status_label, "neutral")
             return
         try:
@@ -306,7 +328,7 @@ class IndustrialSyncDialog(QDialog):
             username, password = self._read_credentials()
             if self.access_only and not test_only:
                 raise ValueError(
-                    "Access-only mode supports Check access only. Select a Metroliza report database to enable Sync now."
+                    "Access-only mode supports Check access only. Select a Metroliza report database to fetch rows into the cache."
                 )
             if not test_only:
                 if self.fetch_all_checkbox.isChecked():
@@ -337,10 +359,10 @@ class IndustrialSyncDialog(QDialog):
                     password=password,
                 )
         except (OSError, ValueError) as exc:
-            QMessageBox.warning(self, "Industrial sync", str(exc))
+            QMessageBox.warning(self, "Industrial data fetch", str(exc))
             return
 
-        action = "Checking production database access" if test_only else "Syncing production data"
+        action = "Checking production database access" if test_only else "Fetching production data"
         self.status_label.setText(f"{action}...")
         set_status_variant(self.status_label, "neutral")
         self._set_action_buttons_enabled(False)
@@ -388,6 +410,7 @@ class IndustrialSyncDialog(QDialog):
             self.sync_now_button,
             self.close_button,
             self.fetch_all_checkbox,
+            self.limit_spin,
         ):
             button.setEnabled(enabled)
 
@@ -409,7 +432,7 @@ class IndustrialSyncDialog(QDialog):
             else:
                 upsert_summary = result.get("upsert_summary") or {}
                 base = (
-                    "Sync complete with warnings: "
+                    "Fetch complete with warnings: "
                     f"{upsert_summary.get('processed', result.get('row_count', 0))} rows"
                 )
             self.status_label.setText(f"{base}: {detail}" if detail else base)
@@ -443,14 +466,14 @@ class IndustrialSyncDialog(QDialog):
                 f"{link_summary.ambiguous_reports} ambiguous"
             )
         self.status_label.setText(
-            f"Sync complete: {upsert_summary.get('processed', result['row_count'])} rows{link_text}"
+            f"Fetch complete: {upsert_summary.get('processed', result['row_count'])} rows{link_text}"
         )
         set_status_variant(self.status_label, "success")
 
     def on_oznak_error(self, message: str) -> None:
         QMessageBox.warning(
             self,
-            "Industrial sync",
+            "Industrial data fetch",
             f"Oznak operation failed: {redact_sensitive_text(message)}",
         )
         parent = self.parent()
@@ -466,7 +489,7 @@ class IndustrialSyncDialog(QDialog):
     def closeEvent(self, event) -> None:
         thread = self.oznak_sync_thread
         if thread is not None and thread.isRunning():
-            QMessageBox.information(self, "Industrial sync", "Cancel or wait for the sync to finish.")
+            QMessageBox.information(self, "Industrial data fetch", "Cancel or wait for the operation to finish.")
             event.ignore()
             return
         super().closeEvent(event)
@@ -488,15 +511,19 @@ class IndustrialSyncDialog(QDialog):
 
     def _sync_limit_controls(self) -> None:
         if hasattr(self, "limit_spin"):
-            self.limit_spin.setEnabled(not self.fetch_all_checkbox.isChecked())
+            self.limit_spin.setEnabled(
+                (not self.access_only) and not self.fetch_all_checkbox.isChecked()
+            )
+        if hasattr(self, "fetch_all_checkbox"):
+            self.fetch_all_checkbox.setEnabled(not self.access_only)
 
     def _format_failed_result_status(self, result: dict[str, Any]) -> str:
         if result.get("status") == "cancelled":
-            base = "Industrial sync cancelled"
+            base = "Industrial fetch cancelled"
         elif result.get("test_only"):
             base = "Access check failed"
         else:
-            base = "Industrial sync failed"
+            base = "Industrial fetch failed"
         detail = self._result_error_detail(result)
         return f"{base}: {detail}" if detail else base
 

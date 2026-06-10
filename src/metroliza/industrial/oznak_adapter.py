@@ -422,6 +422,35 @@ def _normalize_query_filters(filters: Any) -> tuple[IndustrialQueryFilter, ...]:
     return tuple(normalized)
 
 
+def deduplicate_reference_query_filters(
+    filters: Any,
+    *,
+    reference_filter_column: str | None,
+    reference_values: tuple[str, ...] | list[str] | None,
+) -> tuple[tuple[IndustrialQueryFilter, ...], int]:
+    """Drop generic filters that exactly duplicate the explicit reference scope."""
+
+    normalized_filters = _normalize_query_filters(filters or ())
+    reference_lookup = tuple(
+        str(value).strip() for value in (reference_values or ()) if str(value).strip()
+    )
+    if not normalized_filters or not reference_lookup:
+        return normalized_filters, 0
+    filter_column = str(reference_filter_column or "reference").strip() or "reference"
+    deduplicated: list[IndustrialQueryFilter] = []
+    removed = 0
+    for filter_state in normalized_filters:
+        if (
+            filter_state.column == filter_column
+            and filter_state.operator == "IN"
+            and filter_state.values == reference_lookup
+        ):
+            removed += 1
+            continue
+        deduplicated.append(filter_state)
+    return tuple(deduplicated), removed
+
+
 def _build_oznak_query_filters(
     query_filter_type: Any,
     filters: tuple[IndustrialQueryFilter, ...],
@@ -537,7 +566,13 @@ def fetch_oznak_records_for_source_profile(
     normalized_reference_values = tuple(
         str(value).strip() for value in (reference_values or ()) if str(value).strip()
     )
-    normalized_query_filters = _normalize_query_filters(query_filters or ())
+    normalized_query_filters, deduplicated_reference_query_filter_count = (
+        deduplicate_reference_query_filters(
+            query_filters or (),
+            reference_filter_column=reference_filter_column,
+            reference_values=normalized_reference_values,
+        )
+    )
     if not normalized_reference_values and not normalized_query_filters and limit is None and not allow_unbounded:
         return OznakAdapterFetchResult(
             status=status,
@@ -717,6 +752,7 @@ def fetch_oznak_records_for_source_profile(
         "reference_filter_column": reference_filter_column,
         "reference_filter_count": len(normalized_reference_values),
         "query_filter_count": len(normalized_query_filters),
+        "deduplicated_reference_query_filter_count": deduplicated_reference_query_filter_count,
         "query_filters": tuple(
             {
                 "column": filter_state.column,

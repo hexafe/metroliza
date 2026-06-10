@@ -337,7 +337,7 @@ class IndustrialSourceProfilesDialog(QDialog):
 
     def _saved_source_status(self, profile: IndustrialSourceProfile) -> str:
         next_step = (
-            "Use Connect / check / sync in the Industrial data window to check access or fetch rows."
+            "Use Fetch to cache in the Industrial data window to check access or fetch rows."
             if self.db_file
             else (
                 "Use Export in the Industrial data window to fetch directly, or select a "

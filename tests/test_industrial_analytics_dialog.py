@@ -405,6 +405,69 @@ def test_production_analytics_dialog_hides_interactivity_controls() -> None:
         dialog.close()
 
 
+def test_preloaded_industrial_cache_uses_csv_summary_without_file_controls() -> None:
+    _app()
+
+    class MetricCandidate:
+        field_name = "length_mm"
+
+        def to_selection(self):
+            return ProductionMetricSelection("length_mm", display_label="Length mm")
+
+    loaded = types.SimpleNamespace(
+        dataframe=pd.DataFrame(
+            {
+                "source_row_number": [1],
+                "source": ["Assembly MES"],
+                "reference": ["REF-1"],
+                "length_mm": [12.5],
+            }
+        ),
+        metric_candidates=(MetricCandidate(),),
+        column_mapping={
+            "source_row_number": "source_row_number",
+            "source": "source",
+            "reference": "reference",
+            "length_mm": "length_mm",
+        },
+        timestamp_column=None,
+        reference_column="reference",
+        source_files=("industrial.db",),
+        sqlite_store=None,
+        row_count=1,
+        csv_config={"source": "industrial_cache", "storage": "sqlite"},
+    )
+
+    dialog = IndustrialAnalyticsDialog(
+        db_file="industrial.db",
+        source_kind=SOURCE_TABULAR_FILE,
+        tabular_load_result=loaded,
+        input_file="industrial.db",
+        source_label_override="Industrial cache for CSV Summary: 1 row",
+        presentation_mode="industrial_cache",
+    )
+    try:
+        assert dialog.is_preloaded_tabular_source
+        assert dialog.is_industrial_cache_presentation
+        assert dialog.windowTitle() == "Industrial cache CSV Summary"
+        assert dialog.source_label.text() == "Industrial cache for CSV Summary: 1 row"
+        assert not dialog.database_row_label.isHidden()
+        assert dialog.input_file_row_label.isHidden()
+        assert dialog.browse_input_button.isHidden()
+        assert dialog.sheet_name_row_label.isHidden()
+        assert dialog.timestamp_column_row_label.isHidden()
+        assert dialog.reference_column_row_label.isHidden()
+        assert dialog.filters_button.text() == "Filter cached rows..."
+        assert not dialog.dashboard_interactivity_button.isHidden()
+        assert not dialog.filters_button.isHidden()
+        assert not dialog.edit_groups_button.isHidden()
+        assert dialog.load_metrics_button.text() == "Refresh cached metrics"
+        assert dialog.start_button.isEnabled()
+    finally:
+        dialog.tabular_load_result = None
+        dialog.close()
+
+
 def test_tabular_analytics_interactivity_button_launches_dialog(monkeypatch) -> None:
     _app()
     calls = {}

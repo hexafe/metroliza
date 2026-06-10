@@ -98,6 +98,7 @@ except ImportError:  # pragma: no cover - compatibility with lightweight test st
 
 SOURCE_PRODUCTION_CACHE = "production_cache"
 SOURCE_TABULAR_FILE = "tabular_file"
+PRESENTATION_INDUSTRIAL_CACHE = "industrial_cache"
 
 
 def dashboard_interactivity_options_summary(options: DashboardInteractivityOptions) -> str:
@@ -526,6 +527,7 @@ class IndustrialAnalyticsDialog(QDialog):
         tabular_load_result=None,
         input_file: str | None = None,
         source_label_override: str | None = None,
+        presentation_mode: str | None = None,
     ):
         super().__init__(parent)
         if source_kind not in {SOURCE_PRODUCTION_CACHE, SOURCE_TABULAR_FILE}:
@@ -535,6 +537,13 @@ class IndustrialAnalyticsDialog(QDialog):
         self.input_file = input_file or ""
         self.input_files: tuple[str, ...] = (self.input_file,) if self.input_file else ()
         self._source_label_override = source_label_override
+        self.presentation_mode = self._normalize_presentation_mode(
+            presentation_mode,
+            tabular_load_result=tabular_load_result,
+        )
+        self._preloaded_tabular_source = bool(
+            source_kind == SOURCE_TABULAR_FILE and tabular_load_result is not None
+        )
         self.output_dashboard_file = default_dashboard_path(self.db_file or "production_analytics")
         self.output_workbook_file = default_workbook_path(self.db_file or "production_analytics")
         self.analytics_thread = None
@@ -553,7 +562,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self._tabular_reload_notice = ""
         self.dashboard_interactivity_options = DashboardInteractivityOptions()
 
-        self.setWindowTitle("Production analytics" if self.is_production_source else "CSV Summary")
+        self.setWindowTitle(self._window_title_for_source())
         configure_window_size(self, minimum=(720, 560), initial=(880, 680))
 
         self.source_label = status_chip(self._source_summary(), "neutral")
@@ -719,6 +728,40 @@ class IndustrialAnalyticsDialog(QDialog):
     @property
     def is_production_source(self) -> bool:
         return self.source_kind == SOURCE_PRODUCTION_CACHE
+
+    @property
+    def is_preloaded_tabular_source(self) -> bool:
+        return bool(self._preloaded_tabular_source and not self.is_production_source)
+
+    @property
+    def is_industrial_cache_presentation(self) -> bool:
+        return bool(
+            self.is_preloaded_tabular_source
+            and self.presentation_mode == PRESENTATION_INDUSTRIAL_CACHE
+        )
+
+    @staticmethod
+    def _normalize_presentation_mode(
+        presentation_mode: str | None,
+        *,
+        tabular_load_result=None,
+    ) -> str:
+        value = str(presentation_mode or "").strip().lower()
+        if not value:
+            csv_config = getattr(tabular_load_result, "csv_config", {}) or {}
+            if isinstance(csv_config, dict) and csv_config.get("source") == PRESENTATION_INDUSTRIAL_CACHE:
+                return PRESENTATION_INDUSTRIAL_CACHE
+            return ""
+        if value != PRESENTATION_INDUSTRIAL_CACHE:
+            raise ValueError(f"Unsupported analytics presentation mode: {presentation_mode}")
+        return value
+
+    def _window_title_for_source(self) -> str:
+        if self.is_production_source:
+            return "Production analytics"
+        if self.is_industrial_cache_presentation:
+            return "Industrial cache CSV Summary"
+        return "CSV Summary"
 
     def _build_layout(self) -> None:
         layout = QVBoxLayout(self)
@@ -973,10 +1016,16 @@ class IndustrialAnalyticsDialog(QDialog):
             return self._source_label_override
         if self.is_production_source:
             return "Cached Oznak production data"
+        if self.is_industrial_cache_presentation:
+            return "Industrial cache for CSV Summary"
+        if self.is_preloaded_tabular_source:
+            return "Preloaded CSV Summary data"
         return "CSV or Excel table"
 
     def _sync_source_visibility(self) -> None:
-        show_file = not self.is_production_source
+        show_tabular = not self.is_production_source
+        show_file = show_tabular and not self.is_preloaded_tabular_source
+        show_database = self.is_production_source or self.is_industrial_cache_presentation
         self.input_file_row_label.setVisible(show_file)
         self.sheet_name_row_label.setVisible(show_file)
         self.timestamp_column_row_label.setVisible(show_file)
@@ -989,16 +1038,26 @@ class IndustrialAnalyticsDialog(QDialog):
             self.reference_column_combo,
         ):
             widget.setVisible(show_file)
-        self.filter_row_label.setText("Filters" if self.is_production_source else "Row filter")
+        if self.is_production_source:
+            self.filter_row_label.setText("Filters")
+        elif self.is_industrial_cache_presentation:
+            self.filter_row_label.setText("Cache row filter")
+        else:
+            self.filter_row_label.setText("Row filter")
         self._sync_filter_visibility()
-        self.filters_button.setText("Filters..." if self.is_production_source else "Filter rows...")
-        self.clear_filter_button.setVisible(show_file)
-        self.dashboard_interactivity_row_label.setVisible(show_file)
-        self.dashboard_interactivity_summary_label.setVisible(show_file)
-        self.dashboard_interactivity_button.setVisible(show_file)
-        self.population_layer_row_label.setVisible(show_file)
-        self.population_layer_summary_label.setVisible(show_file)
-        self.population_layer_button.setVisible(show_file)
+        if self.is_production_source:
+            self.filters_button.setText("Filters...")
+        elif self.is_industrial_cache_presentation:
+            self.filters_button.setText("Filter cached rows...")
+        else:
+            self.filters_button.setText("Filter rows...")
+        self.clear_filter_button.setVisible(show_tabular)
+        self.dashboard_interactivity_row_label.setVisible(show_tabular)
+        self.dashboard_interactivity_summary_label.setVisible(show_tabular)
+        self.dashboard_interactivity_button.setVisible(show_tabular)
+        self.population_layer_row_label.setVisible(show_tabular)
+        self.population_layer_summary_label.setVisible(show_tabular)
+        self.population_layer_button.setVisible(show_tabular)
         show_reference_cohort = self.is_production_source
         for widget in (
             self.reference_mode_row_label,
@@ -1008,13 +1067,13 @@ class IndustrialAnalyticsDialog(QDialog):
             self.reference_mode_hint_label,
         ):
             widget.setVisible(show_reference_cohort)
-        self.database_row_label.setVisible(self.is_production_source)
-        self.database_field.setVisible(self.is_production_source)
+        self.database_row_label.setVisible(show_database)
+        self.database_field.setVisible(show_database)
         self.grouping_row_label.setText("Group by" if self.is_production_source else "Groups")
         self.group_field_combo.setVisible(self.is_production_source)
-        self.grouping_summary_label.setVisible(show_file)
-        self.edit_groups_button.setVisible(show_file)
-        self.clear_groups_button.setVisible(show_file)
+        self.grouping_summary_label.setVisible(show_tabular)
+        self.edit_groups_button.setVisible(show_tabular)
+        self.clear_groups_button.setVisible(show_tabular)
         self._sync_filter_summary()
         self._sync_dashboard_interactivity_controls()
         self._sync_population_layer_controls()
@@ -1340,6 +1399,18 @@ class IndustrialAnalyticsDialog(QDialog):
         if self.is_production_source:
             self.load_metrics()
             return
+        if self.is_preloaded_tabular_source:
+            if self.tabular_load_result is None:
+                QMessageBox.warning(self, self.windowTitle(), "Cached industrial rows are not loaded.")
+                return
+            if not self.metric_candidates:
+                self.metric_candidates = tuple(
+                    candidate.to_selection()
+                    for candidate in self.tabular_load_result.metric_candidates
+                )
+                self._populate_metrics()
+            self._sync_ui_state()
+            return
         self.show_tabular_load_screen()
 
     def open_filters_dialog(self) -> None:
@@ -1484,6 +1555,8 @@ class IndustrialAnalyticsDialog(QDialog):
         self.set_grouping_applied(True)
 
     def _tabular_source_label(self, loaded) -> str:
+        if self._source_label_override:
+            return self._source_label_override
         row_count = tabular_load_result_row_count(loaded)
         source_files = tuple(getattr(loaded, "source_files", ()) or self._selected_input_files())
         if len(source_files) > 1:
@@ -1867,7 +1940,13 @@ class IndustrialAnalyticsDialog(QDialog):
         self.parameter_sheets_checkbox.setEnabled(self.workbook_checkbox.isChecked())
 
         metrics = self._selected_metrics()
-        source_ready = bool(self.db_file) if self.is_production_source else bool(self._selected_input_files())
+        source_ready = (
+            bool(self.db_file)
+            if self.is_production_source
+            else bool(self.tabular_load_result)
+            if self.is_preloaded_tabular_source
+            else bool(self._selected_input_files())
+        )
         candidate_count = len(self.metric_candidates)
         filtered_row_count = None
         if not self.is_production_source and self.tabular_load_result is not None:
@@ -1888,6 +1967,10 @@ class IndustrialAnalyticsDialog(QDialog):
         self.load_metrics_button.setEnabled(source_ready)
         if self.is_production_source:
             self.load_metrics_button.setText("Reload metrics" if candidate_count else "Load metrics")
+        elif self.is_preloaded_tabular_source:
+            self.load_metrics_button.setText(
+                "Refresh cached metrics" if candidate_count else "Load cached metrics"
+            )
         else:
             self.load_metrics_button.setText(
                 "Reload CSV/Excel data" if candidate_count else "Load CSV/Excel data"
@@ -1939,7 +2022,8 @@ class IndustrialAnalyticsDialog(QDialog):
             self.readiness_label.setText("Load metrics and select at least one parameter.")
             set_status_variant(self.readiness_label, "warning")
         elif not tabular_rows_ready:
-            self.readiness_label.setText("Row filter matches no CSV/Excel rows.")
+            source_label = "cached industrial rows" if self.is_preloaded_tabular_source else "CSV/Excel rows"
+            self.readiness_label.setText(f"Row filter matches no {source_label}.")
             set_status_variant(self.readiness_label, "danger")
         elif not charts_ready:
             self.readiness_label.setText("Select at least one chart or groupstats output.")
@@ -1961,6 +2045,12 @@ class IndustrialAnalyticsDialog(QDialog):
             self.load_metrics()
             return
         input_files = self._selected_input_files()
+        if self.is_preloaded_tabular_source:
+            if self.tabular_load_result is None:
+                QMessageBox.warning(self, self.windowTitle(), "Cached industrial rows are not loaded.")
+            else:
+                self._sync_ui_state()
+            return
         if not input_files:
             QMessageBox.warning(self, self.windowTitle(), "Select a CSV or Excel file first.")
             return
@@ -2187,6 +2277,7 @@ __all__ = [
     "build_analytics_completion_message",
     "IndustrialAnalyticsDialog",
     "MetricSelectionDialog",
+    "PRESENTATION_INDUSTRIAL_CACHE",
     "SOURCE_PRODUCTION_CACHE",
     "SOURCE_TABULAR_FILE",
 ]

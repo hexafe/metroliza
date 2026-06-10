@@ -10,6 +10,7 @@ from typing import Any
 
 import pandas as pd
 
+from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
 from metroliza.industrial.industrial_data_schema import ensure_industrial_data_schema
 from metroliza.reports.db import read_sql_dataframe, sqlite_connection_scope
 from metroliza.tabular.tabular_analytics_service import (
@@ -34,16 +35,24 @@ def load_industrial_cache_tabular_result(
 
     database = str(db_file)
     ensure_industrial_data_schema(database)
+    normalized_source_profile_ids = tuple(int(item) for item in (source_profile_ids or ()))
+    normalized_source_db_aliases = tuple(str(item) for item in (source_db_aliases or ()))
+    summary_profile_id = None
+    if len(normalized_source_profile_ids) == 1:
+        summary_profile_id = normalized_source_profile_ids[0]
+    cache_summary = IndustrialDataRepository(database).summarize_counts(
+        source_profile_id=summary_profile_id
+    ).as_dict()
     where_parts: list[str] = []
     params: list[Any] = []
-    if source_profile_ids:
-        placeholders = ", ".join("?" for _item in source_profile_ids)
+    if normalized_source_profile_ids:
+        placeholders = ", ".join("?" for _item in normalized_source_profile_ids)
         where_parts.append(f"records.source_profile_id IN ({placeholders})")
-        params.extend(int(item) for item in source_profile_ids)
-    if source_db_aliases:
-        placeholders = ", ".join("?" for _item in source_db_aliases)
+        params.extend(normalized_source_profile_ids)
+    if normalized_source_db_aliases:
+        placeholders = ", ".join("?" for _item in normalized_source_db_aliases)
         where_parts.append(f"records.source_db_alias IN ({placeholders})")
-        params.extend(str(item) for item in source_db_aliases)
+        params.extend(normalized_source_db_aliases)
     where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
     records = read_sql_dataframe(
         database,
@@ -114,7 +123,11 @@ def load_industrial_cache_tabular_result(
         sheet_name="Industrial cache",
         timestamp_column="process_datetime",
         reference_column="reference",
-        csv_config={"source": "industrial_cache", "storage": "sqlite"},
+        csv_config={
+            "source": "industrial_cache",
+            "storage": "sqlite",
+            "cache_summary": cache_summary,
+        },
         source_files=(str(db_file),),
         storage_mode="sqlite",
         sqlite_store=store,

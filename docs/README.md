@@ -106,6 +106,7 @@ Canonical release operations docs (release gate/source-of-truth set):
 - `release_checks/cmm_parser_perf_guardrail.md` — CMM parser performance guardrail policy, variance expectations, and CI-failure triage steps.
 - `release_checks/full_module_audit_2026-06-08.md` — build `260609` full-module audit hardening release-check evidence.
 - `release_checks/rc5_dashboard_industrial_cache_check_2026-06-09.md` — build `260609` RC5 dashboard large-group, dashboard visuals, and Industrial Data cache release-check evidence.
+- `release_checks/rc5_industrial_data_csv_summary_followup_2026-06-10.md` — build `260609` Industrial Data fetch-to-cache and CSV Summary follow-up evidence.
 
 Supplemental tutorial/playbook docs (how-to guidance that supports, but does not override, canonical docs):
 

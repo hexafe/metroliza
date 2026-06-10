@@ -44,6 +44,7 @@ from metroliza.industrial.industrial_workflow_state import (
 )
 from metroliza.industrial.oznak_adapter import (
     create_oznak_cancellation_token,
+    deduplicate_reference_query_filters,
     fetch_oznak_records_for_source_profile,
     get_oznak_adapter_status,
 )
@@ -475,6 +476,13 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
             else:
                 fetch_state = fetch_state.validated()
             requested_limit = 1 if self.test_only else fetch_state.limit_rows
+            query_filters, deduplicated_reference_query_filter_count = (
+                deduplicate_reference_query_filters(
+                    fetch_state.filters,
+                    reference_filter_column=self.reference_filter_column,
+                    reference_values=self.reference_values,
+                )
+            )
             if not self.test_only:
                 sync_run_id = repository.create_sync_run(
                     source_profile_id=self.profile.id,
@@ -488,7 +496,10 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                                 "operator": filter_state.operator,
                                 "value_count": len(filter_state.values),
                             }
-                            for filter_state in fetch_state.filters
+                            for filter_state in query_filters
+                        ),
+                        "deduplicated_reference_query_filter_count": (
+                            deduplicated_reference_query_filter_count
                         ),
                         "reference_filter_column": self.reference_filter_column,
                         "reference_count": len(self.reference_values),
@@ -506,7 +517,7 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                 timeout_seconds=self.timeout_seconds,
                 reference_filter_column=self.reference_filter_column,
                 reference_values=self.reference_values,
-                query_filters=fetch_state.filters,
+                query_filters=query_filters,
                 allow_unbounded=bool(fetch_state.fetch_all_confirmed),
                 cancellation_token=self.cancellation_token,
                 progress_callback=self._emit_progress_from_diagnostic,
@@ -527,6 +538,7 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                 error = None
 
             upsert_summary: dict[str, int] = {}
+            cache_summary = repository.summarize_counts(source_profile_id=self.profile.id).as_dict()
             link_summary = None
             if not self.test_only and final_status in {"succeeded", "completed_with_warnings"}:
                 upsert_summary = repository.upsert_industrial_records_from_rows(
@@ -536,6 +548,7 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                     sync_run_id=sync_run_id,
                 )
                 link_summary = materialize_industrial_report_links(self.db_file)
+                cache_summary = repository.summarize_counts(source_profile_id=self.profile.id).as_dict()
 
             if sync_run_id is not None:
                 repository.finish_sync_run(
@@ -555,6 +568,7 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                     "row_count": result.row_count,
                     "upsert_summary": upsert_summary,
                     "link_summary": link_summary,
+                    "cache_summary": cache_summary,
                     "diagnostics": result.diagnostics,
                 }
             )

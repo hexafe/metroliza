@@ -489,10 +489,11 @@ def test_launcher_dialog_keeps_connection_fields_out_of_main_surface(tmp_path):
     assert not hasattr(dialog, "password_edit")
     assert dialog.select_database_button.text() == "Select DB..."
     assert dialog.sources_button.text() == "Production sources..."
-    assert dialog.sync_button.text() == "Check access / sync..."
-    assert "Test connection performs a one-row read" in dialog.sync_button.toolTip()
+    assert dialog.sync_button.text() == "Fetch to cache..."
+    assert "Fetch rows" in dialog.sync_button.toolTip()
     assert dialog.links_button.text() == "Production links..."
-    assert dialog.export_button.text() == "Export..."
+    assert dialog.export_button.text() == "Export workbook..."
+    assert dialog.analyze_button.text() == "CSV Summary..."
     assert dialog.sizeHint().height() <= 520
     dialog.close()
 
@@ -516,7 +517,7 @@ def test_sync_dialog_labels_bounded_access_check_clearly(tmp_path):
 
     assert dialog.test_connection_button.text() == "Check access"
     assert "one production row" in dialog.test_connection_button.toolTip()
-    assert dialog.sync_now_button.text() == "Sync now"
+    assert dialog.sync_now_button.text() == "Fetch to cache"
     assert "saves them in the local Metroliza cache" in dialog.sync_now_button.toolTip()
     assert dialog.edit_filter_button.text() == "Edit references..."
     dialog.close()
@@ -550,6 +551,7 @@ def test_launcher_analytics_uses_csv_summary_tabular_cache_workflow(monkeypatch,
             tabular_load_result=None,
             input_file=None,
             source_label_override=None,
+            presentation_mode=None,
         ):
             launched["parent"] = parent
             launched["db_file"] = db_file
@@ -557,6 +559,7 @@ def test_launcher_analytics_uses_csv_summary_tabular_cache_workflow(monkeypatch,
             launched["tabular_load_result"] = tabular_load_result
             launched["input_file"] = input_file
             launched["source_label_override"] = source_label_override
+            launched["presentation_mode"] = presentation_mode
             self.executed = False
 
         def exec(self):
@@ -564,6 +567,9 @@ def test_launcher_analytics_uses_csv_summary_tabular_cache_workflow(monkeypatch,
 
     monkeypatch.setattr(industrial_data_dialog, "IndustrialAnalyticsDialog", FakeAnalyticsDialog)
     dialog = IndustrialDataDialog(db_file=db_path)
+    source_index = dialog.analysis_source_combo.findData(profile.id)
+    assert source_index >= 0
+    dialog.analysis_source_combo.setCurrentIndex(source_index)
 
     dialog.open_analytics_dialog()
 
@@ -572,7 +578,9 @@ def test_launcher_analytics_uses_csv_summary_tabular_cache_workflow(monkeypatch,
     assert launched["source_kind"] == "tabular_file"
     assert launched["tabular_load_result"].row_count == 1
     assert launched["input_file"] == db_path
-    assert "Industrial data cache" in launched["source_label_override"]
+    assert launched["presentation_mode"] == "industrial_cache"
+    assert "Industrial cache for CSV Summary" in launched["source_label_override"]
+    assert "Assembly MES" in launched["source_label_override"]
     assert launched["executed"] is True
     dialog.close()
 
@@ -588,9 +596,10 @@ def test_launcher_keeps_source_configuration_available_without_database(tmp_path
     assert not dialog.links_button.isEnabled()
     assert not dialog.export_button.isEnabled()
     assert not dialog.initialize_button.isEnabled()
+    assert not dialog.analysis_source_combo.isEnabled()
     assert "Select a report DB" in dialog.analytics_status_label.text()
     assert dialog.select_database_button.isEnabled()
-    assert "use Export to fetch directly" in dialog.status_label.text()
+    assert "Export can fetch directly" in dialog.status_label.text()
     dialog.close()
 
 
@@ -618,18 +627,20 @@ def test_launcher_enables_direct_export_when_source_config_exists(tmp_path):
 
     assert dialog.sources_button.isEnabled()
     assert dialog.export_button.isEnabled()
-    assert dialog.sync_button.isEnabled()
+    assert not dialog.sync_button.isEnabled()
     assert not dialog.links_button.isEnabled()
     assert not dialog.initialize_button.isEnabled()
     assert not dialog.refresh_links_button.isEnabled()
     assert not dialog.analyze_button.isEnabled()
+    assert not dialog.analysis_source_combo.isEnabled()
     assert "Select a report DB" in dialog.analytics_status_label.text()
     dialog.close()
 
 
-def test_launcher_opens_access_only_sync_without_metroliza_database(monkeypatch, tmp_path):
+def test_launcher_blocks_cache_fetch_without_metroliza_database(monkeypatch, tmp_path):
     _app()
     launched = {}
+    warnings = []
 
     class FakeSyncDialog:
         def __init__(self, parent, *, db_file, config_path, access_only, filter_state):
@@ -643,17 +654,14 @@ def test_launcher_opens_access_only_sync_without_metroliza_database(monkeypatch,
             launched["executed"] = True
 
     monkeypatch.setattr(industrial_data_dialog, "IndustrialSyncDialog", FakeSyncDialog)
+    monkeypatch.setattr(industrial_data_dialog.QMessageBox, "warning", lambda *args: warnings.append(args))
     dialog = IndustrialDataDialog(db_file=None)
     dialog.config_path = tmp_path / "industrial_sources.yaml"
 
     dialog.open_sync_dialog()
 
-    assert launched["parent"] is dialog
-    assert launched["db_file"] is None
-    assert launched["config_path"] == dialog.config_path
-    assert launched["access_only"] is True
-    assert launched["filter_state"] is dialog.sync_filter_state
-    assert launched["executed"] is True
+    assert launched == {}
+    assert "Select a Metroliza report database" in warnings[0][2]
     dialog.close()
 
 
@@ -723,8 +731,8 @@ def test_launcher_can_select_metroliza_database_and_enable_oznak_actions(monkeyp
     assert dialog.initialize_button.isEnabled()
     assert dialog.links_button.isEnabled()
     assert dialog.export_button.isEnabled()
-    assert "Local industrial cache empty" in dialog.status_label.text()
-    assert "needs synced rows" in dialog.analytics_status_label.text()
+    assert "Industrial cache empty" in dialog.status_label.text()
+    assert "needs fetched rows" in dialog.analytics_status_label.text()
     dialog.close()
     parent.close()
 
@@ -760,7 +768,7 @@ def test_launcher_initializes_cache_and_opens_owned_child_dialogs(monkeypatch, t
     dialog.open_sources_dialog()
     dialog.open_links_dialog()
 
-    assert "Local industrial cache empty" in dialog.status_label.text()
+    assert "Industrial cache empty" in dialog.status_label.text()
     assert opened[0] == ("sources", dialog, db_path, initial_config_path)
     assert opened[1] == ("sources_exec",)
     assert dialog.config_path == tmp_path / "new_sources.yaml"
@@ -840,11 +848,11 @@ def test_launcher_reports_ready_state_when_cache_has_synced_rows(tmp_path):
 
     dialog = IndustrialDataDialog(db_file=db_path)
 
-    assert "Local industrial cache ready with synced production rows" in dialog.status_label.text()
-    assert "Analytics ready" in dialog.analytics_status_label.text()
+    assert "Industrial cache ready" in dialog.status_label.text()
+    assert "CSV Summary ready" in dialog.analytics_status_label.text()
     assert dialog.cache_label.accessibleName() == "Industrial cache readiness"
-    assert dialog.analytics_status_label.accessibleName() == "Industrial analytics readiness"
-    assert dialog.sync_button.accessibleName() == "Open industrial access check and sync"
+    assert dialog.analytics_status_label.accessibleName() == "Industrial CSV Summary readiness"
+    assert dialog.sync_button.accessibleName() == "Fetch industrial rows into cache"
     dialog.close()
 
 

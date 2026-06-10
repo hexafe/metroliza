@@ -140,7 +140,7 @@ class IndustrialFilterState:
 
     def summary(self) -> str:
         if not self.references:
-            return "References: none selected"
+            return "No reference filter"
         preview = ", ".join(self.references[:3])
         if len(self.references) > 3:
             preview = f"{preview}, ..."

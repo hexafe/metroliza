@@ -241,7 +241,7 @@ def test_sync_dialog_shows_sanitized_failed_and_cancelled_status(tmp_path):
         }
     )
 
-    assert dialog.status_label.text() == "Industrial sync failed: Fetch failed password=<redacted>"
+    assert dialog.status_label.text() == "Industrial fetch failed: Fetch failed password=<redacted>"
     assert "super-secret" not in dialog.status_label.text()
 
     dialog.on_oznak_result(
@@ -253,7 +253,7 @@ def test_sync_dialog_shows_sanitized_failed_and_cancelled_status(tmp_path):
         }
     )
 
-    assert dialog.status_label.text() == "Industrial sync cancelled: Sync cancelled by user."
+    assert dialog.status_label.text() == "Industrial fetch cancelled: Sync cancelled by user."
     dialog.close()
 
 
@@ -285,7 +285,7 @@ def test_sync_dialog_shows_completed_with_warnings_status(tmp_path):
 
     assert (
         dialog.status_label.text()
-        == "Sync complete with warnings: 3 rows: secondary source timed out password=<redacted>"
+        == "Fetch complete with warnings: 3 rows: secondary source timed out password=<redacted>"
     )
     assert "super-secret" not in dialog.status_label.text()
     dialog.close()
@@ -342,8 +342,11 @@ def test_sync_dialog_access_only_loads_profiles_from_config(tmp_path):
 
     assert dialog.profile_combo.count() == 1
     assert dialog.test_connection_button.isEnabled()
-    assert not dialog.sync_now_button.isEnabled()
-    assert not dialog.edit_filter_button.isEnabled()
+    assert dialog.sync_now_button.isHidden()
+    assert dialog.edit_filter_button.isHidden()
+    assert dialog.limit_spin.isHidden()
+    assert dialog.fetch_all_checkbox.isHidden()
+    assert dialog.filter_status_label.isHidden()
     assert "Access-only mode" in dialog.status_label.text()
     assert "never saves data" in dialog.status_label.text()
     dialog.close()
@@ -356,7 +359,7 @@ def test_sync_dialog_no_database_non_access_mode_stays_disabled(tmp_path):
     assert dialog.current_profile() is None
     assert not dialog.test_connection_button.isEnabled()
     assert not dialog.sync_now_button.isEnabled()
-    assert "Create a production source before syncing" in dialog.status_label.text()
+    assert "Create a production source before fetching rows" in dialog.status_label.text()
     with pytest.raises(ValueError, match="Create or select"):
         dialog._profile_for_current_filter()
     dialog.close()
@@ -431,7 +434,7 @@ def test_sync_dialog_starts_sync_thread_without_external_connection(monkeypatch,
     assert dialog.cancel_sync_button.isEnabled()
 
     dialog.cancel_sync()
-    assert "Cancelling industrial sync" in dialog.status_label.text()
+    assert "Cancelling industrial fetch" in dialog.status_label.text()
     dialog.on_oznak_thread_stopped()
     assert dialog.oznak_sync_thread is None
     assert not dialog.cancel_sync_button.isEnabled()
@@ -578,7 +581,7 @@ def test_sync_dialog_error_and_close_running_paths(monkeypatch, tmp_path):
 
     assert "password=<redacted>" in warnings[0][2]
     assert "super-secret" not in warnings[0][2]
-    assert infos[0][2] == "Cancel or wait for the sync to finish."
+    assert infos[0][2] == "Cancel or wait for the operation to finish."
     assert not event.isAccepted()
     dialog.oznak_sync_thread = None
     dialog.close()

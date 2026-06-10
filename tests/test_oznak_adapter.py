@@ -3,6 +3,7 @@ from __future__ import annotations
 import types
 
 from modules import oznak_adapter
+from modules.industrial_workflow_state import IndustrialQueryFilter
 
 
 def test_adapter_status_reports_unavailable_package_with_import_diagnostics(monkeypatch):
@@ -319,6 +320,101 @@ def test_fetch_source_profile_builds_current_public_oznak_contract(monkeypatch):
     assert captured["cancellation_token"] is token
     assert progress_messages == ["Fetched 1 row"]
     assert result.diagnostics["order_by_enabled"] is False
+
+
+def test_fetch_source_profile_deduplicates_reference_query_filter_and_keeps_generic_filters(
+    monkeypatch,
+):
+    captured = {}
+
+    class FakeDatabaseProfile:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+            captured["profile"] = kwargs
+
+    class FakeFetchRequest:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+            captured["request"] = self
+
+    class FakeCredentialProvider:
+        def __init__(self, mapping):
+            self.mapping = mapping
+
+    class FakeQueryFilter:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeResult:
+        data = [{"event_id": "ROW-1", "reference": "REF-1", "station": "S1"}]
+        source_results = ()
+        warnings = ()
+        errors = ()
+        row_count = 1
+        has_errors = False
+        partial_success = False
+
+    def fake_fetch_records(request, **_kwargs):
+        captured["filters"] = request.filters
+        return FakeResult()
+
+    oznak_module = types.ModuleType("oznak")
+    oznak_module.__version__ = "0.1.0"
+    oznak_module.DatabaseProfile = FakeDatabaseProfile
+    oznak_module.FetchRequest = FakeFetchRequest
+    oznak_module.FetchResult = object
+    oznak_module.MappingCredentialProvider = FakeCredentialProvider
+    oznak_module.QueryFilter = FakeQueryFilter
+    oznak_module.fetch_records = fake_fetch_records
+
+    fetcher_module = types.ModuleType("oznak.fetcher")
+    fetcher_module.fetch_records = fake_fetch_records
+
+    def _fake_import(module_name: str):
+        if module_name == "oznak":
+            return oznak_module
+        if module_name == "oznak.fetcher":
+            return fetcher_module
+        raise AssertionError(f"Unexpected import: {module_name}")
+
+    monkeypatch.setattr(oznak_adapter.importlib, "import_module", _fake_import)
+    profile = types.SimpleNamespace(
+        id=12,
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+        source_object_name="events",
+        allowed_columns=("event_id", "reference"),
+        timestamp_column=None,
+        default_pagination_column=None,
+    )
+
+    result = oznak_adapter.fetch_oznak_records_for_source_profile(
+        profile,
+        username="operator",
+        password="secret",
+        limit=100,
+        reference_filter_column="reference",
+        reference_values=("REF-1", "REF-2"),
+        query_filters=(
+            IndustrialQueryFilter("reference", "IN", ("REF-1", "REF-2")),
+            IndustrialQueryFilter("station", "=", ("S1",)),
+        ),
+    )
+
+    assert result.error is None
+    assert result.row_count == 1
+    assert [(item.column, item.operator, item.value) for item in captured["filters"]] == [
+        ("station", "=", "S1"),
+        ("reference", "IN", ("REF-1", "REF-2")),
+    ]
+    assert captured["profile"]["allowed_columns"] == ("event_id", "reference", "station")
+    assert result.diagnostics["query_filter_count"] == 1
+    assert result.diagnostics["deduplicated_reference_query_filter_count"] == 1
+    assert result.diagnostics["reference_filter_count"] == 2
 
 
 def test_fetch_source_profile_falls_back_to_fetcher_module_when_root_fetch_missing(monkeypatch):

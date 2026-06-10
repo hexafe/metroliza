@@ -61,10 +61,10 @@ Use this when you want to connect assembly-process data from Oznak-supported pro
 The launcher opens separate workflows:
 
 - **Production sources...** edits non-secret production line connection setup such as database type, host, database name, table/view, columns, record key, and timestamp column. This stays available even before a Metroliza report database is selected.
-- **Connect / check / sync...** asks for the production database username/password for the current session, lets you fetch rows by reference/ID values, row limit, or explicit fetch-all confirmation, checks production database access with a one-row read that saves nothing, syncs selected rows into the local Metroliza cache, and can cancel a running sync.
+- **Fetch to cache...** asks for the production database username/password for the current session, checks production database access with a one-row read that saves nothing, and can fetch rows by reference/ID values, row limit, or explicit fetch-all confirmation into the local Metroliza cache.
 - **Production links...** lets you manually link a Metroliza report to a cached production row when both systems use different reference values.
-- **Export...** creates a cached industrial workbook when a Metroliza report database is selected. If no report database is selected, it can fetch live production rows directly from a configured source and create a production workbook without writing to the local cache.
-- **Analyze...** opens cached production rows in the CSV Summary workflow without
+- **Export workbook...** creates a cached industrial workbook when a Metroliza report database is selected. If no report database is selected, it can fetch live production rows directly from a configured source and create a production workbook without writing to the local cache.
+- **CSV Summary...** opens cached production rows in the CSV Summary workflow without
   requiring CMM measurements. Use the CSV Summary filters, grouping, dashboards, workbook,
   and export options; the loaded table includes a **source** column for the configured
   production database that produced each row.
@@ -79,17 +79,17 @@ Each production source can disable server-side `ORDER BY` for limited SQL reads.
 
 Metroliza stores the source setup, cache rows, sync diagnostics, and links in the selected Metroliza report database. It does not store the production database username or password in the report database or config file.
 
-Industrial export from cached data does not connect directly to the production line database. Live production database access happens only when the user explicitly runs **Check access** or **Sync now** in the sync dialog opened from **Connect / check / sync...**, or starts **Export...** without a selected Metroliza report database to create a live production workbook.
+Industrial export from cached data does not connect directly to the production line database. Live production database access happens only when the user explicitly runs **Check access** or **Fetch to cache** in the fetch dialog opened from **Fetch to cache...**, or starts **Export workbook...** without a selected Metroliza report database to create a live production workbook.
 
 **Check access** reads up to one production row to verify credentials, table, columns, and query access. It does not save rows into the Metroliza cache.
 
-**Sync now** can fetch by reference values, by a row limit, or by explicit fetch-all confirmation. Fetch-all shows a warning first because a production source may contain a large historical table.
+**Fetch to cache** can fetch by reference values, by a row limit, or by explicit fetch-all confirmation. Fetch-all shows a warning first because a production source may contain a large historical table.
 
-Use **Edit references...** in the sync dialog to paste reference/ID values quickly as a comma-separated, semicolon-separated, space-separated, tab-separated, or line-separated list. During sync, Metroliza batches long reference lists. Bounded sync and access checks use bounded Oznak requests; chunked Oznak fetching is reserved for explicit fetch-all paths when the source profile has a record key/pagination column.
+Use **Edit references...** in the sync dialog to paste reference/ID values quickly as a comma-separated, semicolon-separated, space-separated, tab-separated, or line-separated list. If no reference filter is set, **Fetch to cache** uses the configured row limit by default. During cache fetches, Metroliza batches long reference lists. Bounded fetches and access checks use bounded Oznak requests; chunked Oznak fetching is reserved for explicit fetch-all paths when the source profile has a record key/pagination column.
 
 If the Metroliza report reference and production reference are different, use **Production links...** after sync. Select one Metroliza report, select one cached production row, then click **Link selected**. Manual links take priority over automatic exact-reference links during export.
 
-Use **Analyze...** when you need production-line grouping fields such as station, line, work order, batch/lot, operator, process status, or source. It opens the cached industrial rows in CSV Summary, where every fetched source column can be used for filtering and grouping.
+Use **CSV Summary...** when you need production-line grouping fields such as station, line, work order, batch/lot, operator, process status, or source. It opens all cached rows or the selected cached source in CSV Summary, where every fetched source column can be used for filtering and grouping.
 
 ### Tools > Parser profiles...
 

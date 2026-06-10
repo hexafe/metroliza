@@ -130,6 +130,16 @@ class IndustrialCacheCounts:
     join_rules: int
     link_candidates: int
 
+    def as_dict(self) -> dict[str, int]:
+        return {
+            "source_profiles": self.source_profiles,
+            "sync_runs": self.sync_runs,
+            "records": self.records,
+            "record_values": self.record_values,
+            "join_rules": self.join_rules,
+            "link_candidates": self.link_candidates,
+        }
+
 
 def utc_timestamp() -> str:
     """Return an ISO-8601 UTC timestamp suitable for SQLite text columns."""

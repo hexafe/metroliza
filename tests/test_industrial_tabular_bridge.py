@@ -40,6 +40,8 @@ def test_industrial_cache_bridge_exposes_source_and_dynamic_columns(tmp_path) ->
 
     assert loaded.storage_mode == "sqlite"
     assert loaded.row_count == 2
+    assert loaded.csv_config["cache_summary"]["source_profiles"] == 1
+    assert loaded.csv_config["cache_summary"]["records"] == 2
     assert "source" in loaded.dataframe.columns
     assert "length_mm" in loaded.dataframe.columns
     assert loaded.dataframe.loc[0, "source"] == "Line A"

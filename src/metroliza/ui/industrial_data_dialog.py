@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QMessageBox,
+    QComboBox,
     QPushButton,
     QVBoxLayout,
 )
@@ -63,13 +64,16 @@ class IndustrialDataDialog(QDialog):
         self.include_plots = True
 
         self.setWindowTitle("Industrial data")
-        configure_window_size(self, minimum=(560, 380), initial=(680, 500))
+        configure_window_size(self, minimum=(620, 380), initial=(820, 500), screen_margin=20)
 
         self.database_field = path_field(
             str(db_file or ""),
             empty_text="No Metroliza report database selected",
         )
-        self.status_label = status_chip("Industrial cache idle", "neutral")
+        self.status_label = status_chip(
+            "Fetch production rows into the local cache, then open CSV Summary.",
+            "neutral",
+        )
         self.oznak_label = status_chip("Oznak connector: checking...", "neutral")
         self.cache_label = status_chip("Local industrial cache: not checked", "neutral")
         self.sources_label = status_chip("Production sources: none", "neutral")
@@ -77,27 +81,31 @@ class IndustrialDataDialog(QDialog):
         self.export_filter_label = status_chip(self.export_filter_state.summary(), "neutral")
         self.grouping_label = status_chip(self.grouping_state.summary(), "neutral")
         self.export_options_label = status_chip("Export plots: included", "neutral")
-        self.analytics_status_label = status_chip("Analytics needs cached production rows.", "neutral")
+        self.analytics_status_label = status_chip("CSV Summary needs cached production rows.", "neutral")
+        self.analysis_source_combo = QComboBox()
+        self.analysis_source_combo.setToolTip(
+            "Choose which cached production source rows are opened in CSV Summary."
+        )
 
         self.select_database_button = QPushButton("Select DB...")
         self.sources_button = QPushButton("Production sources...")
-        self.sync_button = QPushButton("Check access / sync...")
+        self.sync_button = QPushButton("Fetch to cache...")
         self.links_button = QPushButton("Production links...")
-        self.export_button = QPushButton("Export...")
-        self.analyze_button = QPushButton("Analyze...")
+        self.export_button = QPushButton("Export workbook...")
+        self.analyze_button = QPushButton("CSV Summary...")
         self.initialize_button = QPushButton("Initialize cache")
         self.refresh_links_button = QPushButton("Refresh links")
         self.close_button = QPushButton("Close")
         self.sync_button.setToolTip(
-            "Open the production access dialog. Test connection performs a one-row read; "
-            "Sync now stores selected references in the local cache."
+            "Fetch rows from the selected production source into the local industrial cache. "
+            "Select a Metroliza report database first so cached rows have a destination."
         )
         self.export_button.setToolTip(
             "Create an industrial workbook from the local cache, or fetch directly from a "
             "configured production source when no Metroliza report database is selected."
         )
         self.analyze_button.setToolTip(
-            "Analyze cached industrial data with the shared CSV Summary analytics workflow."
+            "Open cached industrial rows in the shared CSV Summary workflow."
         )
 
         self.select_database_button.clicked.connect(self.select_database_file)
@@ -145,26 +153,31 @@ class IndustrialDataDialog(QDialog):
         grid.addWidget(self.sources_button, row, 2)
 
         row += 1
-        grid.addWidget(section_label("References to fetch"), row, 0)
+        grid.addWidget(section_label("Fetch scope"), row, 0)
         grid.addWidget(self.sync_filter_label, row, 1)
         grid.addWidget(self.sync_button, row, 2)
 
         row += 1
-        grid.addWidget(section_label("Export filter"), row, 0)
+        grid.addWidget(section_label("Industrial workbook filter"), row, 0)
         grid.addWidget(self.export_filter_label, row, 1)
         grid.addWidget(self.export_button, row, 2)
 
         row += 1
-        grid.addWidget(section_label("Analytics"), row, 0)
-        grid.addWidget(self.analytics_status_label, row, 1)
+        analytics_row = QHBoxLayout()
+        analytics_row.setContentsMargins(0, 0, 0, 0)
+        analytics_row.setSpacing(8)
+        analytics_row.addWidget(self.analytics_status_label, 1)
+        analytics_row.addWidget(self.analysis_source_combo)
+        grid.addWidget(section_label("CSV Summary cache"), row, 0)
+        grid.addLayout(analytics_row, row, 1)
         grid.addWidget(self.analyze_button, row, 2)
 
         row += 1
-        grid.addWidget(section_label("Grouping"), row, 0)
+        grid.addWidget(section_label("Industrial workbook grouping"), row, 0)
         grid.addWidget(self.grouping_label, row, 1, 1, 2)
 
         row += 1
-        grid.addWidget(section_label("Export options"), row, 0)
+        grid.addWidget(section_label("Industrial workbook options"), row, 0)
         grid.addWidget(self.export_options_label, row, 1, 1, 2)
 
         row += 1
@@ -212,7 +225,7 @@ class IndustrialDataDialog(QDialog):
             empty_text="No Metroliza report database selected",
         )
         self.oznak_label.setText(self._format_oznak_status())
-        self.sync_filter_label.setText(self.sync_filter_state.summary())
+        self.sync_filter_label.setText(self._sync_scope_summary())
         self.export_filter_label.setText(self.export_filter_state.summary())
         self.grouping_label.setText(self.grouping_state.summary())
         self.export_options_label.setText(
@@ -220,7 +233,7 @@ class IndustrialDataDialog(QDialog):
         )
         set_status_variant(
             self.sync_filter_label,
-            "success" if self.sync_filter_state.is_applied else "warning",
+            "success" if self.sync_filter_state.is_applied else "neutral",
         )
         set_status_variant(
             self.export_filter_label,
@@ -234,11 +247,12 @@ class IndustrialDataDialog(QDialog):
         if not self.db_file:
             self.cache_label.setText("Local industrial cache: unavailable until a report DB is selected")
             self.sources_label.setText(self._format_config_source_status())
-            self.analytics_status_label.setText("Select a report DB with cached rows to analyze.")
+            self.analytics_status_label.setText("Select a report DB with cached rows to open CSV Summary.")
+            self._populate_analysis_source_options(None, (), 0)
             set_status_variant(self.analytics_status_label, "warning")
             self._set_action_buttons_enabled(db_available=False)
             self.status_label.setText(
-                "Configure production sources, then use Check access / sync for access-only checks or use Export to fetch directly. Select a Metroliza report database when you want cache sync, links, or analytics."
+                "Configure production sources and select a report DB to fetch rows into the cache. Export can fetch directly without a report DB."
             )
             set_status_variant(self.status_label, "warning")
             return
@@ -266,28 +280,29 @@ class IndustrialDataDialog(QDialog):
             f"{counts.records} records, {counts.sync_runs} sync runs, {counts.link_candidates} links"
         )
         self.sources_label.setText(f"{len(profiles)} production source(s) configured")
+        self._populate_analysis_source_options(repository, profiles, counts.records)
         if counts.records > 0:
-            self.analytics_status_label.setText("Analytics ready from cached production rows.")
+            self.analytics_status_label.setText("CSV Summary ready from cached production rows.")
             set_status_variant(self.analytics_status_label, "success")
         else:
-            self.analytics_status_label.setText("Analytics needs synced rows in the local cache.")
+            self.analytics_status_label.setText("CSV Summary needs fetched rows in the local cache.")
             set_status_variant(self.analytics_status_label, "warning")
         if config_error:
             self.status_label.setText(config_error)
             set_status_variant(self.status_label, "warning")
         elif counts.records > 0:
             self.status_label.setText(
-                "Local industrial cache ready with synced production rows."
+                "Industrial cache ready. Open CSV Summary to analyze cached production rows."
             )
             set_status_variant(self.status_label, "success")
         elif profiles:
             self.status_label.setText(
-                "Local industrial cache empty. Check production access or sync selected rows for the selected source."
+                "Industrial cache empty. Fetch selected production rows into the local cache before opening CSV Summary."
             )
             set_status_variant(self.status_label, "warning")
         else:
             self.status_label.setText(
-                "Local industrial cache empty. Create or import a production source before syncing."
+                "Industrial cache empty. Create or import a production source before fetching rows."
             )
             set_status_variant(self.status_label, "warning")
 
@@ -326,11 +341,19 @@ class IndustrialDataDialog(QDialog):
         self.refresh_status()
 
     def open_sync_dialog(self) -> None:
+        if not self.db_file:
+            QMessageBox.warning(
+                self,
+                self.windowTitle(),
+                "Select a Metroliza report database before fetching industrial rows into the cache.",
+            )
+            self.refresh_status()
+            return
         self.sync_window = IndustrialSyncDialog(
             self,
             db_file=self.db_file,
             config_path=self.config_path,
-            access_only=not bool(self.db_file),
+            access_only=False,
             filter_state=self.sync_filter_state,
         )
         self.sync_window.exec()
@@ -356,8 +379,13 @@ class IndustrialDataDialog(QDialog):
                 "Select a Metroliza report database before analyzing industrial data.",
             )
             return
+        source_profile_id = self.analysis_source_combo.currentData()
+        source_profile_ids = (int(source_profile_id),) if source_profile_id is not None else None
         try:
-            loaded = load_industrial_cache_tabular_result(self.db_file)
+            loaded = load_industrial_cache_tabular_result(
+                self.db_file,
+                source_profile_ids=source_profile_ids,
+            )
         except Exception as exc:
             QMessageBox.warning(self, self.windowTitle(), f"Could not load industrial cache: {exc}")
             return
@@ -368,13 +396,18 @@ class IndustrialDataDialog(QDialog):
                 "Fetch industrial data into the local cache before creating CSV Summary analytics.",
             )
             return
+        source_label = self.analysis_source_combo.currentText().strip()
+        source_suffix = f" ({source_label})" if source_label and source_profile_id is not None else ""
         self.analytics_window = IndustrialAnalyticsDialog(
             self,
             db_file=self.db_file,
             source_kind="tabular_file",
             tabular_load_result=loaded,
             input_file=self.db_file,
-            source_label_override=f"Industrial data cache: {int(loaded.row_count or 0):,} rows",
+            source_label_override=(
+                f"Industrial cache for CSV Summary{source_suffix}: {int(loaded.row_count or 0):,} rows"
+            ),
+            presentation_mode="industrial_cache",
         )
         self.analytics_window.exec()
         self.refresh_status()
@@ -436,6 +469,50 @@ class IndustrialDataDialog(QDialog):
         self.include_plots = bool(include_plots)
         self.refresh_status()
 
+    def _sync_scope_summary(self) -> str:
+        if self.sync_filter_state.is_applied:
+            return self.sync_filter_state.summary()
+        return "No reference filter; fetch uses the row limit by default"
+
+    def _populate_analysis_source_options(
+        self,
+        repository: IndustrialDataRepository | None,
+        profiles,
+        total_records: int,
+    ) -> None:
+        current = self.analysis_source_combo.currentData()
+        self.analysis_source_combo.blockSignals(True)
+        try:
+            self.analysis_source_combo.clear()
+            if repository is None:
+                self.analysis_source_combo.addItem("Select report DB", None)
+                self.analysis_source_combo.setEnabled(False)
+                return
+            if total_records <= 0:
+                self.analysis_source_combo.addItem("No cached rows", None)
+                self.analysis_source_combo.setEnabled(False)
+                return
+            self.analysis_source_combo.addItem(f"All sources ({int(total_records):,} rows)", None)
+            for profile in profiles:
+                try:
+                    source_records = repository.summarize_counts(
+                        source_profile_id=profile.id
+                    ).records
+                except Exception:
+                    source_records = 0
+                if source_records <= 0:
+                    continue
+                self.analysis_source_combo.addItem(
+                    f"{profile.profile_name} ({int(source_records):,} rows)",
+                    profile.id,
+                )
+            selected_index = self.analysis_source_combo.findData(current)
+            if selected_index >= 0:
+                self.analysis_source_combo.setCurrentIndex(selected_index)
+            self.analysis_source_combo.setEnabled(True)
+        finally:
+            self.analysis_source_combo.blockSignals(False)
+
     def _format_config_source_status(self) -> str:
         try:
             profiles = load_source_profiles_from_config(self.config_path)
@@ -452,11 +529,10 @@ class IndustrialDataDialog(QDialog):
             return False
 
     def _set_action_buttons_enabled(self, *, db_available: bool) -> None:
-        access_only_sync_available = (not self.db_file) and self._has_configured_sources()
         self.select_database_button.setEnabled(True)
         self.sources_button.setEnabled(True)
         self.initialize_button.setEnabled(db_available)
-        self.sync_button.setEnabled(db_available or access_only_sync_available)
+        self.sync_button.setEnabled(db_available)
         self.links_button.setEnabled(db_available)
         self.export_button.setEnabled(db_available or self._has_configured_sources())
         self.analyze_button.setEnabled(db_available)
@@ -469,15 +545,15 @@ class IndustrialDataDialog(QDialog):
         configure_accessibility(self.sources_label, name="Production source readiness")
         configure_accessibility(self.sync_filter_label, name="Industrial references-to-fetch summary")
         configure_accessibility(self.export_filter_label, name="Industrial export filter summary")
-        configure_accessibility(self.analytics_status_label, name="Industrial analytics readiness")
+        configure_accessibility(self.analytics_status_label, name="Industrial CSV Summary readiness")
         configure_accessibility(self.grouping_label, name="Industrial export grouping summary")
         configure_accessibility(self.export_options_label, name="Industrial export option summary")
         configure_accessibility(self.select_database_button, name="Select Metroliza report database")
         configure_accessibility(self.sources_button, name="Open production sources")
-        configure_accessibility(self.sync_button, name="Open industrial access check and sync")
+        configure_accessibility(self.sync_button, name="Fetch industrial rows into cache")
         configure_accessibility(self.links_button, name="Open production links")
         configure_accessibility(self.export_button, name="Open industrial workbook export")
-        configure_accessibility(self.analyze_button, name="Open industrial analytics")
+        configure_accessibility(self.analyze_button, name="Open industrial cache in CSV Summary")
         configure_accessibility(self.initialize_button, name="Initialize industrial cache")
         configure_accessibility(self.refresh_links_button, name="Refresh industrial links")
         configure_accessibility(self.close_button, name="Close industrial data")
