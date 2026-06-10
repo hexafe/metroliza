@@ -71,7 +71,7 @@ class IndustrialDataDialog(QDialog):
             empty_text="No Metroliza report database selected",
         )
         self.status_label = status_chip(
-            "Fetch production rows into the local cache, then open CSV Summary.",
+            "Fetch rows to cache, then open CSV Summary.",
             "neutral",
         )
         self.oznak_label = status_chip("Oznak connector: checking...", "neutral")
@@ -158,7 +158,7 @@ class IndustrialDataDialog(QDialog):
         grid.addWidget(self.sync_button, row, 2)
 
         row += 1
-        grid.addWidget(section_label("Industrial workbook filter"), row, 0)
+        grid.addWidget(section_label("Workbook filter"), row, 0)
         grid.addWidget(self.export_filter_label, row, 1)
         grid.addWidget(self.export_button, row, 2)
 
@@ -173,11 +173,11 @@ class IndustrialDataDialog(QDialog):
         grid.addWidget(self.analyze_button, row, 2)
 
         row += 1
-        grid.addWidget(section_label("Industrial workbook grouping"), row, 0)
+        grid.addWidget(section_label("Workbook groups"), row, 0)
         grid.addWidget(self.grouping_label, row, 1, 1, 2)
 
         row += 1
-        grid.addWidget(section_label("Industrial workbook options"), row, 0)
+        grid.addWidget(section_label("Workbook options"), row, 0)
         grid.addWidget(self.export_options_label, row, 1, 1, 2)
 
         row += 1
