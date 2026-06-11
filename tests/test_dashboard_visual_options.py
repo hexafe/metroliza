@@ -1108,6 +1108,31 @@ def test_dashboard_visual_multi_group_histogram_uses_grouped_style_bucket() -> N
     }
 
 
+def test_dashboard_visual_settings_skip_static_image_proxy_traces() -> None:
+    spec = {
+        "data": [
+            {
+                "type": "scatter",
+                "mode": "markers",
+                "name": "POPULATION static layer",
+                "marker": {"color": "#245a5a"},
+                "metroliza_static_group_layer_index": 0,
+                "metroliza_static_population_layer_index": 0,
+            }
+        ],
+        "layout": {},
+    }
+
+    apply_dashboard_visual_settings(
+        spec,
+        visual_settings=dashboard_visual_settings_to_plotly_settings(
+            {"preset": "custom", "palette": ["#123456"]}
+        ),
+    )
+
+    assert spec["data"][0]["marker"]["color"] == "#245a5a"
+
+
 def test_dashboard_visual_clears_stale_marker_symbols_when_distinguishers_turn_off() -> None:
     spec = {
         "data": [

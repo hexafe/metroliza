@@ -22,17 +22,28 @@ Use CSV Summary when:
 
 The dialog is a compact analytics launcher.
 
+The first screen is dashboard-first. It keeps the routine path visible and moves
+rarely needed tuning into **Advanced**.
+
 Main controls:
 
 - **Select input file(s) (CSV or Excel)**
-- **Choose sheet, time, and reference columns**
+- **Review detected rows, files, metrics, time column, and Part / ID column**
 - **Filter rows from the selected input**
 - **Choose metrics**
-- **Reload metrics** when source or column choices change
-- **Edit row groups, then choose time bucket and aggregation**
-- **Choose charts and statistics**
-- **Select dashboard and optional workbook output paths**
+- **Load CSV/Excel data and detect metrics** or reload the data when source or column choices change
+- **Edit row groups**
+- **Select the dashboard output path**
 - **Create analytics**
+
+Advanced controls:
+
+- time bucket and aggregation method,
+- chart and statistics output toggles,
+- optional workbook output and separate parameter sheets,
+- dashboard interactivity and dashboard size handling,
+- large group static-layer settings, and
+- dashboard style/custom visual tuning.
 
 ### 1. Select Input File
 
@@ -45,6 +56,10 @@ After a valid file is loaded:
 - time and reference columns can be auto-detected or selected explicitly,
 - grouping columns can be selected,
 - dashboard and optional workbook output can be created.
+
+The source status row tells you what Metroliza detected, including row count,
+source file count, metric count, detected time column, detected Part / ID column,
+and whether a large-file row store is being used.
 
 You can select more than one CSV file at the same time. When multiple CSV files
 are loaded, Metroliza asks whether to auto-create one group per file name. For
@@ -99,7 +114,7 @@ several values at once, such as `Part IN (body*, cap)` or `Sample IN (1, 2, 3)`.
 
 The selected groups are written as the `GROUP` column and are used by aggregation, charts,
 groupstats, dashboard output, and optional workbook output. Choose a time bucket and
-aggregation method in the main dialog.
+aggregation method in **Advanced** when the default raw-row view is not enough.
 
 To make specific references, IDs, batches, or other row values stand out, use **Edit
 groups** instead of a separate references field. Select the source column that identifies
@@ -120,7 +135,9 @@ deviation, and percentiles.
 
 ### 5. Choose Outputs
 
-Choose chart/statistics outputs:
+Choose an HTML dashboard path first. This is the routine CSV Summary output.
+
+Use **Advanced** when you want to change chart/statistics outputs:
 
 - time series,
 - histogram,
@@ -128,7 +145,7 @@ Choose chart/statistics outputs:
 - box plot,
 - groupstats.
 
-Choose an HTML dashboard path first. Optionally enable workbook output and
+Also use **Advanced** when you want to enable workbook output and
 **Separate sheet per selected parameter**.
 
 The saved page is titled **Metroliza CSV Summary Dashboard**. Its front-page cards show
@@ -136,14 +153,14 @@ the source, sheet when available, filters, groups, rows rendered into dashboard 
 and dashboard interactivity mode so reviewers can see when they are looking at all rows or
 a bounded visual sample.
 
-Use **Dashboard style > Change...** when you want the CSV/Excel dashboard to use a saved
+Use **Advanced > Dashboard style > Change...** when you want the CSV/Excel dashboard to use a saved
 visual recipe, palette, marker emphasis, group/stat-line style, or selected-element
 opacity. Start with the visible recipe and saved-theme controls; use **Customize...** for
 detailed color, line, per-element opacity, or selected-element styling. These choices
 affect the interactive dashboard charts only; they do not change the source data or the
 selected metrics.
 
-Use **Dashboard interactivity > Change...** when the selected input is large enough that
+Use **Advanced > Dashboard interactivity > Change...** when the selected input is large enough that
 fully interactive charts may make the saved dashboard too heavy for a browser. **Auto** is
 the default: small selections stay fully interactive, while large selections use the
 configured in-window dashboard interactivity settings before processing. Statistics, group
@@ -179,7 +196,7 @@ generated interactive Plotly charts even when the resulting HTML file may be ver
 slow to open. Use the no-limit option only when the receiving computer and browser can
 handle the exported dashboard size.
 
-The CSV Summary window also includes **Large group layers > Change...**. This controls
+The CSV Summary window also includes **Advanced > Large group layers > Change...**. This controls
 when very large grouped time-series point layers are kept interactive or pre-rendered as
 static image layers:
 
@@ -194,7 +211,9 @@ static image layers:
   dashboard needs to stay responsive.
 
 Static large-group layers keep the process background and large comparisons visible, but
-hover and point selection are unavailable for those pre-rendered layers. Smaller groups
+hover and point selection are unavailable for those pre-rendered layers. Static layers use
+the dashboard style/group color resolved at export time; change the dashboard style and
+regenerate the dashboard if a pre-rendered layer needs a different color. Smaller groups
 remain interactive where Plotly is enabled.
 
 Selected plots are included in the dashboard and in the workbook chart sheet. Grouped time

@@ -1054,6 +1054,7 @@ def _convert_static_population_layer(
         layout,
         png_bytes=png_bytes,
         label=group_label,
+        color=color,
         bounds=image_bounds,
     )
     traces.pop(population_index)
@@ -1098,6 +1099,7 @@ def _convert_static_population_layer(
             "contributed_point_count": contributed_count,
             "render_strategy": render_strategy,
             "image_index": int(image_index),
+            "render_color": color,
             "raster_width": 900,
             "raster_height": 520,
         }
@@ -1330,6 +1332,7 @@ def _append_static_population_layout_image(
     *,
     png_bytes: bytes,
     label: str,
+    color: str,
     bounds: dict[str, Any],
 ) -> int:
     images = layout.setdefault("images", [])
@@ -1353,8 +1356,10 @@ def _append_static_population_layout_image(
             "layer": "below",
             "opacity": 1.0,
             "visible": True,
+            "metroliza_static_group_layer_color": color,
             "metroliza_static_group_layer": True,
             "metroliza_static_group_layer_label": label,
+            "metroliza_static_population_layer_color": color,
             "metroliza_static_population_layer": True,
             "metroliza_static_population_layer_label": label,
         }
@@ -1404,14 +1409,17 @@ def _static_population_layer_proxy_trace(
             "metroliza_series_id": normalize_population_label_key(label),
             "metroliza_legend_label": label,
             "metroliza_render_strategy": render_strategy,
+            "metroliza_resolved_color": color,
             "metroliza_chart_kind": "scatter",
             "metroliza_style_capabilities": [],
         },
         "metroliza_static_group_layer_index": int(image_index),
         "metroliza_static_group_layer_label": label,
+        "metroliza_static_group_layer_color": color,
         "metroliza_static_group_render_strategy": render_strategy,
         "metroliza_static_population_layer_index": int(image_index),
         "metroliza_static_population_layer_label": label,
+        "metroliza_static_population_layer_color": color,
         "metroliza_static_population_render_strategy": render_strategy,
         "metroliza_static_population_view_bounds": dict(view_bounds or {}),
         "metroliza_static_population_image_bounds": dict(image_bounds or view_bounds or {}),
@@ -2061,6 +2069,8 @@ def _build_hybrid_time_series_chart(
         group_columns=group_columns,
         default_name=metric.display_label,
         seed_parts=(chart_id, metric.field_name),
+        plotly_visual_settings=plotly_visual_settings,
+        chart_type=chart_type,
     )
     if raw_layers:
         layout_images = [layer["image"] for layer in raw_layers]
@@ -2320,6 +2330,49 @@ def _display_aggregate_time_series_traces(
     return traces
 
 
+def _resolved_static_group_colors(
+    *,
+    labels: list[str],
+    default_colors: dict[str, str],
+    plotly_visual_settings: dict[str, Any] | None = None,
+    chart_type: str = "time_series",
+) -> dict[str, str]:
+    if not labels:
+        return {}
+    colors = dict(default_colors)
+    if not plotly_visual_settings:
+        return colors
+    style_probe = {
+        "data": [
+            {
+                "type": "scatter",
+                "mode": "markers",
+                "name": label,
+                "marker": {"color": colors.get(label) or _plot_color(index, label)},
+                "meta": {
+                    "metroliza_trace_schema": "metroliza.plotly_trace.v1",
+                    "metroliza_series_id": normalize_population_label_key(label),
+                    "metroliza_legend_label": label,
+                    "metroliza_chart_kind": "scatter",
+                },
+            }
+            for index, label in enumerate(labels)
+        ],
+        "layout": {},
+        "metadata": {"kind": chart_type},
+    }
+    apply_dashboard_visual_settings(
+        style_probe,
+        visual_settings=plotly_visual_settings,
+        theme=metroliza_dashboard_plotstats_theme(),
+    )
+    for label, trace in zip(labels, style_probe["data"], strict=False):
+        resolved = _trace_color(trace)
+        if resolved:
+            colors[label] = resolved
+    return colors
+
+
 def _time_series_raw_image_layers(
     frame: pd.DataFrame,
     *,
@@ -2328,6 +2381,8 @@ def _time_series_raw_image_layers(
     group_columns: list[str],
     default_name: str,
     seed_parts: tuple[str, ...],
+    plotly_visual_settings: dict[str, Any] | None = None,
+    chart_type: str = "time_series",
 ) -> tuple[list[dict[str, Any]], str | None, dict[str, Any] | None]:
     groups = _grouped_frames(frame, group_columns, default_name=default_name)
     prepared: list[tuple[str, pd.DataFrame]] = []
@@ -2355,6 +2410,16 @@ def _time_series_raw_image_layers(
         [len(xy.index) for _label, xy in prepared],
         DASHBOARD_RAW_POINT_LIMIT,
     )
+    default_colors = {
+        label: _plot_color(index, label)
+        for index, (label, _xy) in enumerate(prepared)
+    }
+    resolved_colors = _resolved_static_group_colors(
+        labels=[label for label, _xy in prepared],
+        default_colors=default_colors,
+        plotly_visual_settings=plotly_visual_settings,
+        chart_type=chart_type,
+    )
     layers: list[dict[str, Any]] = []
     sampled_points = 0
     for index, ((label, xy), allocation) in enumerate(zip(prepared, allocations, strict=False)):
@@ -2368,7 +2433,7 @@ def _time_series_raw_image_layers(
             seed=_stable_seed(*seed_parts, label),
         )
         sampled_points += len(sampled.index)
-        color = _plot_color(index, label)
+        color = resolved_colors.get(label) or default_colors[label]
         png_bytes = _render_time_series_raw_layer_png(
             sampled["__x_numeric"].to_numpy(dtype=float),
             sampled["__y"].to_numpy(dtype=float),
@@ -2397,12 +2462,14 @@ def _time_series_raw_image_layers(
                     "layer": "below",
                     "opacity": 1.0,
                     "visible": True,
+                    "metroliza_static_group_layer_color": color,
                     "metroliza_raw_layer": True,
                     "metroliza_raw_layer_label": label,
                     "metroliza_static_group_layer": True,
                     "metroliza_static_group_layer_label": label,
                     **(
                         {
+                            "metroliza_static_population_layer_color": color,
                             "metroliza_static_population_layer": True,
                             "metroliza_static_population_layer_label": label,
                         }
@@ -2565,11 +2632,30 @@ def _raw_layer_legend_traces(raw_layers: list[dict[str, Any]]) -> list[dict[str,
                     "symbol": "circle",
                     "opacity": 0.75,
                 },
+                "meta": {
+                    "metroliza_trace_schema": "metroliza.plotly_trace.v1",
+                    "metroliza_role": "static_population_layer"
+                    if _is_population_layer_label(label)
+                    else "static_group_layer",
+                    "metroliza_series_id": normalize_population_label_key(label),
+                    "metroliza_legend_label": label,
+                    "metroliza_chart_kind": "scatter",
+                    "metroliza_resolved_color": str(
+                        layer.get("color") or SUMMARY_PLOT_PALETTE["distribution_foreground"]
+                    ),
+                    "metroliza_style_capabilities": [],
+                },
                 "metroliza_raw_layer_index": index,
+                "metroliza_static_group_layer_color": str(
+                    layer.get("color") or SUMMARY_PLOT_PALETTE["distribution_foreground"]
+                ),
                 "metroliza_static_group_layer_index": index,
                 "metroliza_static_group_layer_label": label,
                 **(
                     {
+                        "metroliza_static_population_layer_color": str(
+                            layer.get("color") or SUMMARY_PLOT_PALETTE["distribution_foreground"]
+                        ),
                         "metroliza_static_population_layer_index": index,
                         "metroliza_static_population_layer_label": label,
                     }

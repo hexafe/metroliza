@@ -188,8 +188,10 @@ python -m maturin build --manifest-path src/metroliza/native/chart_renderer/Carg
 - Default selection is strict and accepts parser probes only with confidence `>=80`; ties are resolved by confidence, plugin priority, then plugin id.
 - To relax selection temporarily, set `PARSER_STRICT_MATCHING=false`.
 - Probe results are cached per plugin/path during process runtime to reduce repeated probe work in batch parses.
+- Normal report import discovers parser-supported `.pdf`, `.csv`, `.xlsx`, and `.xls` files, so approved CSV/Excel declarative profiles feed the same SQLite, CSV Summary, export, and dashboard path as PDF parsers.
 - Advanced override: `PARSER_EXTERNAL_PLUGIN_PATHS` can point to extra plugin files or directories.
 - Active parser plugin onboarding docs live under [`docs/parser_plugins/README.md`](docs/parser_plugins/README.md).
+- Parser profile and generated-plugin handoff folders include self-contained LLM contracts, contract snippets, small prompts, a privacy checklist, and a manifest so external/local models do not need repository access.
 
 ## Group Analysis
 
@@ -256,12 +258,12 @@ Examples of metric availability by spec type:
 
 ## Release metadata
 
-Current release highlight (`2026.05 RC5 (build 260609)`): Large-group dashboard optimization, simplified dashboard visuals, Industrial Data cache analysis, parser profile self-service, export reliability, and release-gate audit hardening.
+Current release highlight (`2026.05 RC5 (build 260611)`): Large-group dashboard optimization, simplified dashboard visuals, Industrial Data cache analysis, parser profile self-service with hardened LLM handoff, export reliability, and release-gate audit hardening.
 
 Canonical release metadata is in `src/metroliza/app/version.py`. The root `VersionDate.py`
 module remains as a compatibility import for existing scripts.
 
-### Changelog highlights (release `2026.05 RC5 (build 260609)`)
+### Changelog highlights (release `2026.05 RC5 (build 260611)`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 

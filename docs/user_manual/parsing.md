@@ -120,6 +120,14 @@ After that, the Parsing dialog closes.
 
 Your next likely step is [Export overview](export_overview.md).
 
+If some report files could not be parsed, the completion message says how many files were
+saved and how many were skipped. Saved files remain available in the database. Skipped
+files are listed in the log for follow-up.
+
+If no supported report files were found in the selected source, the completion message says
+that nothing was written. Choose a folder/archive that contains supported report files and
+try again.
+
 ### If parsing is canceled
 
 You get a message saying parsing was canceled.

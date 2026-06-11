@@ -154,6 +154,10 @@ class MainWindow(QMainWindow):
         self.workflow_hint_label = secondary_label(
             "Parse reports, clean database values when needed, match names, then export the workbook."
         )
+        self.workflow_next_step_label = status_chip(
+            "Next step: choose reports and create or select a database.",
+            "warning",
+        )
         self.parse_button = QPushButton("Parse Reports")
         self.modifydb_button = QPushButton("Modify Database")
         self.export_button = QPushButton("Export Workbook")
@@ -305,7 +309,14 @@ class MainWindow(QMainWindow):
         self.tools_menu.addAction(self.enrich_metadata_action)
         self.tools_menu.addAction(self.industrial_data_action)
         self.tools_menu.addAction(self.parser_profiles_action)
-        _, self.help_menu = build_help_menu(self, [("Main window manual", 'main_window')], menu_bar=self.menuBar())
+        _, self.help_menu = build_help_menu(
+            self,
+            [
+                ("Main window manual", 'main_window'),
+                ("Startup, license, and support", 'help_startup_and_license'),
+            ],
+            menu_bar=self.menuBar(),
+        )
         if hasattr(self.help_menu, "addSeparator"):
             self.help_menu.addSeparator()
         self.help_menu.addAction(self.release_notes_action)
@@ -319,6 +330,7 @@ class MainWindow(QMainWindow):
         self.layout.addWidget(separator())
         self.layout.addWidget(self.workflow_label)
         self.layout.addWidget(self.workflow_hint_label)
+        self.layout.addWidget(self.workflow_next_step_label)
 
         primary_row = QHBoxLayout()
         primary_row.setContentsMargins(0, 0, 0, 0)
@@ -350,6 +362,7 @@ class MainWindow(QMainWindow):
         configure_accessibility(self.export_button, name="Export Workbook")
         configure_accessibility(self.modifydb_button, name="Modify Database")
         configure_accessibility(self.map_characteristics_button, name="Match Characteristic Names")
+        configure_accessibility(self.workflow_next_step_label, name="Recommended next workflow step")
         configure_accessibility(self.cancel_metadata_enrichment_button, name="Cancel metadata enrichment")
 
     def _sync_context_rows(self):
@@ -359,6 +372,27 @@ class MainWindow(QMainWindow):
         self.database_status_label.setText(f"Database: {database_text}")
         set_status_variant(self.source_status_label, "success" if self.directory else "neutral")
         set_status_variant(self.database_status_label, "success" if self.db_file else "neutral")
+        self._sync_workflow_next_step()
+
+    def _sync_workflow_next_step(self):
+        if not hasattr(self, "workflow_next_step_label"):
+            return
+        has_source = bool(self.directory)
+        has_database = bool(self.db_file)
+        if has_source and has_database:
+            text = "Next step: parse reports, then export or clean the database if needed."
+            variant = "success"
+        elif has_database:
+            text = "Next step: export this database, or choose reports to add more data."
+            variant = "info"
+        elif has_source:
+            text = "Next step: select or create a database file for these reports."
+            variant = "warning"
+        else:
+            text = "Next step: choose reports and create or select a database."
+            variant = "warning"
+        self.workflow_next_step_label.setText(text)
+        set_status_variant(self.workflow_next_step_label, variant)
 
     def is_metadata_enrichment_active(self):
         return (

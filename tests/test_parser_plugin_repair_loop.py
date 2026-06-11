@@ -33,4 +33,9 @@ def test_render_repair_prompt_includes_failures_and_constraints():
     assert "Repair request for parser plugin: demo" in prompt
     assert "probe_returns_probe_result (returned str)" in prompt
     assert "Do not change plugin_id." in prompt
+    assert "PluginManifest" in prompt
+    assert "ParseResultV2" in prompt
+    assert "sample_file,reference,report_date" in prompt
+    assert "complete updated file contents" in prompt.casefold()
+    assert "Do not write SQLite" in prompt
     assert "Use fixture-based parser extraction." in prompt

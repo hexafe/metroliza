@@ -418,7 +418,7 @@ class TestDataGroupingDeleteKey(unittest.TestCase):
             self.assertEqual(untouched["GROUP"], "CUSTOM")
 
 
-    def test_enter_key_on_reference_list_is_consumed_without_create_group(self):
+    def test_enter_key_on_reference_list_opens_create_group_for_reference(self):
         pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
         fake_db = _fake_db_module()
 
@@ -446,7 +446,8 @@ class TestDataGroupingDeleteKey(unittest.TestCase):
             data_grouping_module.DataGrouping.keyPressEvent(dialog, event)
 
             self.assertTrue(event.accepted)
-            self.assertIsNone(captured["value"])
+            self.assertEqual(captured["value"], "REF1")
+            self.assertTrue(all(item.isSelected() for item in dialog.part_list._items))
 
     def test_enter_key_in_scope_filter_applies_filter_without_create_shortcut(self):
         pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()

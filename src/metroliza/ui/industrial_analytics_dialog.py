@@ -566,6 +566,10 @@ class IndustrialAnalyticsDialog(QDialog):
         configure_window_size(self, minimum=(720, 560), initial=(880, 680))
 
         self.source_label = status_chip(self._source_summary(), "neutral")
+        self.tabular_source_status_label = status_chip(
+            "Load CSV/Excel data to review detected rows, files, and columns.",
+            "neutral",
+        )
         self.database_row_label = section_label("Report database")
         self.input_file_row_label = section_label("CSV/Excel file(s)")
         self.sheet_name_row_label = section_label("Excel sheet")
@@ -608,6 +612,15 @@ class IndustrialAnalyticsDialog(QDialog):
         self.metrics_summary_label = status_chip("No metrics loaded", "warning")
         self.grouping_row_label = section_label("Group by")
         self.grouping_summary_label = status_chip("Groups: not applied", "neutral")
+        self.advanced_section_label = section_label("Advanced")
+        self.advanced_toggle_button = QPushButton("Show advanced options")
+        self.advanced_toggle_button.setCheckable(True)
+        self.advanced_toggle_button.setToolTip(
+            "Show dashboard tuning, optional workbook output, and advanced chart settings."
+        )
+        self.advanced_toggle_button.toggled.connect(self._toggle_advanced_options)
+        self.advanced_options_container = QWidget()
+        self.advanced_options_container.setVisible(False)
 
         self.sheet_name_combo = QComboBox()
         self.sheet_name_combo.setEditable(True)
@@ -791,6 +804,9 @@ class IndustrialAnalyticsDialog(QDialog):
         grid.addWidget(self.source_label, row, 1, 1, 2)
 
         row += 1
+        grid.addWidget(self.tabular_source_status_label, row, 0, 1, 3)
+
+        row += 1
         grid.addWidget(self.database_row_label, row, 0)
         grid.addWidget(self.database_field, row, 1, 1, 2)
 
@@ -875,6 +891,49 @@ class IndustrialAnalyticsDialog(QDialog):
         row += 1
         grid.addWidget(self.reference_mode_hint_label, row, 1, 1, 2)
 
+        if self.is_production_source:
+            row = self._add_chart_option_rows(grid, row)
+            row = self._add_dashboard_output_row(grid, row)
+            row = self._add_dashboard_tuning_rows(grid, row)
+            row = self._add_workbook_rows(grid, row)
+        else:
+            row = self._add_dashboard_output_row(grid, row)
+            self._build_advanced_options_layout()
+            row += 1
+            grid.addWidget(self.advanced_section_label, row, 0, 1, 3)
+
+            row += 1
+            grid.addWidget(self.advanced_toggle_button, row, 0, 1, 3)
+
+            row += 1
+            grid.addWidget(self.advanced_options_container, row, 0, 1, 3)
+
+        row += 1
+        grid.addWidget(self.readiness_label, row, 0, 1, 3)
+        content_layout.addLayout(grid)
+        scroll_area.setWidget(content)
+        layout.addWidget(scroll_area, 1)
+
+        actions = QHBoxLayout()
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.setSpacing(8)
+        actions.addStretch(1)
+        actions.addWidget(self.close_button)
+        actions.addWidget(self.start_button)
+        layout.addLayout(actions)
+
+    def _build_advanced_options_layout(self) -> None:
+        advanced_layout = QGridLayout(self.advanced_options_container)
+        advanced_layout.setContentsMargins(0, 0, 0, 0)
+        advanced_layout.setHorizontalSpacing(10)
+        advanced_layout.setVerticalSpacing(8)
+        advanced_layout.setColumnStretch(1, 1)
+        row = -1
+        row = self._add_chart_option_rows(advanced_layout, row)
+        row = self._add_dashboard_tuning_rows(advanced_layout, row)
+        self._add_workbook_rows(advanced_layout, row)
+
+    def _add_chart_option_rows(self, grid: QGridLayout, row: int) -> int:
         row += 1
         chart_actions = QHBoxLayout()
         chart_actions.setContentsMargins(0, 0, 0, 0)
@@ -901,12 +960,16 @@ class IndustrialAnalyticsDialog(QDialog):
 
         row += 1
         grid.addWidget(self.groupstats_reason_label, row, 1, 1, 2)
+        return row
 
+    def _add_dashboard_output_row(self, grid: QGridLayout, row: int) -> int:
         row += 1
         grid.addWidget(section_label("Dashboard"), row, 0)
         grid.addWidget(self.dashboard_path_field, row, 1)
         grid.addWidget(self.dashboard_button, row, 2)
+        return row
 
+    def _add_dashboard_tuning_rows(self, grid: QGridLayout, row: int) -> int:
         row += 1
         dashboard_interactivity_actions = QHBoxLayout()
         dashboard_interactivity_actions.setContentsMargins(0, 0, 0, 0)
@@ -936,7 +999,9 @@ class IndustrialAnalyticsDialog(QDialog):
         dashboard_visuals_actions.addStretch(1)
         grid.addWidget(self.dashboard_visuals_row_label, row, 0)
         grid.addLayout(dashboard_visuals_actions, row, 1, 1, 2)
+        return row
 
+    def _add_workbook_rows(self, grid: QGridLayout, row: int) -> int:
         row += 1
         grid.addWidget(section_label("Workbook"), row, 0)
         grid.addWidget(self.workbook_path_field, row, 1)
@@ -950,23 +1015,11 @@ class IndustrialAnalyticsDialog(QDialog):
         workbook_options.addWidget(self.parameter_sheets_checkbox)
         workbook_options.addStretch(1)
         grid.addLayout(workbook_options, row, 1, 1, 2)
-
-        row += 1
-        grid.addWidget(self.readiness_label, row, 0, 1, 3)
-        content_layout.addLayout(grid)
-        scroll_area.setWidget(content)
-        layout.addWidget(scroll_area, 1)
-
-        actions = QHBoxLayout()
-        actions.setContentsMargins(0, 0, 0, 0)
-        actions.setSpacing(8)
-        actions.addStretch(1)
-        actions.addWidget(self.close_button)
-        actions.addWidget(self.start_button)
-        layout.addLayout(actions)
+        return row
 
     def _configure_accessibility(self) -> None:
         configure_accessibility(self.source_label, name="Analytics source summary")
+        configure_accessibility(self.tabular_source_status_label, name="Detected CSV Summary source")
         configure_accessibility(self.database_field, name="Analytics report database")
         configure_accessibility(self.input_file_field, name="CSV or Excel input file")
         configure_accessibility(self.browse_input_button, name="Browse CSV or Excel input")
@@ -1006,6 +1059,11 @@ class IndustrialAnalyticsDialog(QDialog):
         )
         configure_accessibility(self.groupstats_checkbox, name="Include groupstats output")
         configure_accessibility(self.dashboard_visuals_button, name="Edit dashboard visuals")
+        configure_accessibility(
+            self.advanced_toggle_button,
+            name="Show advanced CSV Summary analytics options",
+            description=self.advanced_toggle_button.toolTip(),
+        )
         configure_accessibility(self.dashboard_button, name="Select analytics dashboard path")
         configure_accessibility(self.workbook_button, name="Select analytics workbook path")
         configure_accessibility(self.close_button, name="Close analytics dialog")
@@ -1026,6 +1084,7 @@ class IndustrialAnalyticsDialog(QDialog):
         show_tabular = not self.is_production_source
         show_file = show_tabular and not self.is_preloaded_tabular_source
         show_database = self.is_production_source or self.is_industrial_cache_presentation
+        self.tabular_source_status_label.setVisible(show_tabular and self.tabular_load_result is not None)
         self.input_file_row_label.setVisible(show_file)
         self.sheet_name_row_label.setVisible(show_file)
         self.timestamp_column_row_label.setVisible(show_file)
@@ -1075,9 +1134,107 @@ class IndustrialAnalyticsDialog(QDialog):
         self.edit_groups_button.setVisible(show_tabular)
         self.clear_groups_button.setVisible(show_tabular)
         self._sync_filter_summary()
+        self._sync_tabular_source_status()
+        self._sync_advanced_options_visibility()
         self._sync_dashboard_interactivity_controls()
         self._sync_population_layer_controls()
         self._sync_dashboard_visual_controls()
+
+    def _toggle_advanced_options(self, expanded: bool) -> None:
+        self._sync_advanced_options_visibility(expanded=expanded)
+
+    def _sync_advanced_options_visibility(self, *, expanded: bool | None = None) -> None:
+        if not hasattr(self, "advanced_options_container"):
+            return
+        show_advanced = not self.is_production_source
+        if expanded is None:
+            expanded = self.advanced_toggle_button.isChecked()
+        self.advanced_section_label.setVisible(show_advanced)
+        self.advanced_toggle_button.setVisible(show_advanced)
+        self.advanced_options_container.setVisible(show_advanced and bool(expanded))
+        self.advanced_toggle_button.setText(
+            "Hide advanced options" if show_advanced and expanded else "Show advanced options"
+        )
+
+    def _sync_tabular_source_status(self) -> None:
+        if not hasattr(self, "tabular_source_status_label"):
+            return
+        if self.is_production_source or self.tabular_load_result is None:
+            self.tabular_source_status_label.setText(
+                "Load CSV/Excel data to review detected rows, files, and columns."
+            )
+            self.tabular_source_status_label.setVisible(False)
+            set_status_variant(self.tabular_source_status_label, "neutral")
+            return
+        self.tabular_source_status_label.setText(
+            self._tabular_source_status_summary(self.tabular_load_result)
+        )
+        self.tabular_source_status_label.setVisible(True)
+        set_status_variant(self.tabular_source_status_label, "success")
+
+    def _tabular_source_status_summary(self, loaded) -> str:
+        row_count = tabular_load_result_row_count(loaded)
+        metric_count = len(tuple(getattr(loaded, "metric_candidates", ()) or ()))
+        source_files = tuple(getattr(loaded, "source_files", ()) or self._selected_input_files())
+        source_text = self._tabular_source_status_source_text(source_files)
+        details = [
+            f"Detected source: {self._count_phrase(row_count, 'row')} from {source_text}",
+            f"{self._count_phrase(metric_count, 'metric')}",
+        ]
+        sheet_name = str(getattr(loaded, "sheet_name", "") or "").strip()
+        if sheet_name:
+            details.append(f"sheet {sheet_name}")
+        details.append(
+            "time column "
+            + self._tabular_column_status_label(
+                loaded,
+                getattr(loaded, "timestamp_column", None),
+                missing="not detected",
+            )
+        )
+        details.append(
+            "part / ID column "
+            + self._tabular_column_status_label(
+                loaded,
+                getattr(loaded, "reference_column", None),
+                missing="not detected",
+            )
+        )
+        if str(getattr(loaded, "storage_mode", "") or "") == "sqlite":
+            details.append("large-file row store")
+        return "; ".join(details) + "."
+
+    def _tabular_source_status_source_text(self, source_files: tuple[str, ...]) -> str:
+        if len(source_files) > 1:
+            return self._count_phrase(len(source_files), "CSV file")
+        if source_files:
+            return Path(source_files[0]).name
+        if self.input_file:
+            return Path(self.input_file).name
+        return "loaded table"
+
+    @staticmethod
+    def _tabular_column_status_label(loaded, normalized_column: str | None, *, missing: str) -> str:
+        normalized = str(normalized_column or "").strip()
+        if not normalized:
+            return missing
+        for original, mapped in (getattr(loaded, "column_mapping", {}) or {}).items():
+            if str(mapped) != normalized:
+                continue
+            original_text = str(original)
+            return (
+                f"{original_text} ({normalized})"
+                if original_text and original_text != normalized
+                else normalized
+            )
+        return normalized
+
+    @staticmethod
+    def _count_phrase(count: int, singular: str) -> str:
+        count = int(count or 0)
+        if count == 1:
+            return f"{count:,} {singular}"
+        return f"{count:,} {singular}s"
 
     def _sync_filter_summary(self) -> None:
         if self.is_production_source:
@@ -1938,6 +2095,7 @@ class IndustrialAnalyticsDialog(QDialog):
         )
         self.workbook_button.setEnabled(self.workbook_checkbox.isChecked())
         self.parameter_sheets_checkbox.setEnabled(self.workbook_checkbox.isChecked())
+        self._sync_tabular_source_status()
 
         metrics = self._selected_metrics()
         source_ready = (
@@ -1969,11 +2127,16 @@ class IndustrialAnalyticsDialog(QDialog):
             self.load_metrics_button.setText("Reload metrics" if candidate_count else "Load metrics")
         elif self.is_preloaded_tabular_source:
             self.load_metrics_button.setText(
-                "Refresh cached metrics" if candidate_count else "Load cached metrics"
+                "Refresh cached CSV Summary metrics"
+                if candidate_count
+                else "Load cached CSV Summary metrics"
             )
         else:
+            needs_reload = bool(candidate_count or self._tabular_reload_notice)
             self.load_metrics_button.setText(
-                "Reload CSV/Excel data" if candidate_count else "Load CSV/Excel data"
+                "Reload CSV/Excel data and refresh metrics"
+                if needs_reload
+                else "Load CSV/Excel data and detect metrics"
             )
         self._sync_filter_visibility()
         groupstats_unavailable_reason = self._tabular_groupstats_unavailable_reason()

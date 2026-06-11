@@ -131,6 +131,26 @@ class TestMainWindowMetadataUi(unittest.TestCase):
         finally:
             window.close()
 
+    def test_workflow_next_step_tracks_source_and_database_context(self):
+        window = MainWindow(version_label="test", days_until_expiration=None)
+        try:
+            self.assertIn("choose reports", window.workflow_next_step_label.text())
+            self.assertEqual(window.workflow_next_step_label.property("statusVariant"), "warning")
+
+            window.set_directory("/tmp/metroliza-reports")
+            self.assertIn("select or create a database", window.workflow_next_step_label.text())
+            self.assertEqual(window.workflow_next_step_label.property("statusVariant"), "warning")
+
+            window.set_db_file("/tmp/metroliza.db")
+            self.assertIn("parse reports", window.workflow_next_step_label.text())
+            self.assertEqual(window.workflow_next_step_label.property("statusVariant"), "success")
+
+            window.set_directory("")
+            self.assertIn("export this database", window.workflow_next_step_label.text())
+            self.assertEqual(window.workflow_next_step_label.property("statusVariant"), "info")
+        finally:
+            window.close()
+
     def test_launch_modifydb_closes_other_transient_dialogs_and_reuses_visible_dialog(self):
         window = MainWindow(version_label="test", days_until_expiration=None)
 
@@ -228,6 +248,7 @@ class TestMainWindowMetadataUi(unittest.TestCase):
 
             help_action_texts = [action.text() for action in window.help_menu.actions()]
             self.assertIn("Main window manual", help_action_texts)
+            self.assertIn("Startup, license, and support", help_action_texts)
             self.assertIn("Release notes", help_action_texts)
             self.assertIn("About", help_action_texts)
         finally:

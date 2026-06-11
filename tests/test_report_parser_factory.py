@@ -1,7 +1,9 @@
 import importlib
 import importlib.machinery
+import json
 import logging
 import os
+import sqlite3
 import sys
 import types
 
@@ -41,9 +43,15 @@ parser_plugin_paths_module = importlib.import_module("modules.parser_plugin_path
 CMMReportParser = importlib.import_module("modules.cmm_report_parser").CMMReportParser
 BaseReportParser = base_module.BaseReportParser
 BaseReportParserPlugin = contracts_module.BaseReportParserPlugin
+MeasurementBlockV2 = contracts_module.MeasurementBlockV2
+MeasurementV2 = contracts_module.MeasurementV2
+ParseMetaV2 = contracts_module.ParseMetaV2
+ParseResultV2 = contracts_module.ParseResultV2
+ParseWarning = contracts_module.ParseWarning
 PluginManifest = contracts_module.PluginManifest
 ProbeContext = contracts_module.ProbeContext
 ProbeResult = contracts_module.ProbeResult
+ReportInfoV2 = contracts_module.ReportInfoV2
 infer_source_format = contracts_module.infer_source_format
 PARSER_MANIFESTS = factory_module.PARSER_MANIFESTS
 PARSER_MAP = factory_module.PARSER_MAP
@@ -304,6 +312,158 @@ def test_register_parser_allows_runtime_extension(tmp_path):
         PARSER_MANIFESTS.update(original_manifests)
         PARSER_DETECTORS.clear()
         PARSER_DETECTORS.update(original_detectors)
+
+
+def test_generated_v2_parser_persists_through_base_repository_bridge(tmp_path):
+    class GeneratedCsvParser(BaseReportParser, BaseReportParserPlugin):
+        manifest = PluginManifest(
+            plugin_id="generated_csv",
+            display_name="Generated CSV",
+            version="0.1.0",
+            supported_formats=("csv",),
+            template_ids=("generated_fixture",),
+        )
+
+        @classmethod
+        def probe(cls, _path, _context: ProbeContext) -> ProbeResult:
+            return ProbeResult(
+                plugin_id=cls.manifest.plugin_id,
+                can_parse=True,
+                confidence=95,
+                matched_template_id="generated_fixture",
+            )
+
+        def open_report(self):
+            self.raw_text = ["generated fixture"]
+
+        def split_text_to_blocks(self):
+            self.blocks_text = [[["MAIN FEATURE"], [["X", 10.0, 0.1, -0.1, None, 10.2, 0.2, 0.2]]]]
+
+        def parse_to_v2(self):
+            if not self.raw_text:
+                self.open_report()
+            return ParseResultV2(
+                meta=ParseMetaV2(
+                    source_file=self.source_path,
+                    source_format="csv",
+                    plugin_id=self.manifest.plugin_id,
+                    plugin_version=self.manifest.version,
+                    template_id="generated_fixture",
+                    parse_timestamp="2026-01-01T00:00:00Z",
+                    locale_detected="en-US",
+                    confidence=95,
+                ),
+                report=ReportInfoV2(
+                    reference="REF-GEN",
+                    report_date="2026-01-05",
+                    sample_number="0001",
+                    file_name=self.file_name,
+                    file_path=self.file_path,
+                ),
+                blocks=(
+                    MeasurementBlockV2(
+                        header_raw=("MAIN FEATURE",),
+                        header_normalized="MAIN FEATURE",
+                        dimensions=(
+                            MeasurementV2(
+                                axis_code="X",
+                                nominal=10.0,
+                                tol_plus=0.1,
+                                tol_minus=-0.1,
+                                bonus=None,
+                                measured=10.2,
+                                deviation=0.2,
+                                out_of_tolerance=0.2,
+                                raw_tokens=("X", "10.2"),
+                                raw_line_refs=(4,),
+                                extensions={
+                                    "characteristic_name": "Position X",
+                                    "characteristic_family": "position",
+                                },
+                            ),
+                        ),
+                        block_index=0,
+                    ),
+                ),
+                warnings=(ParseWarning(code="rounded_value", message="Rounded value in source", field="X"),),
+            )
+
+        @staticmethod
+        def to_legacy_blocks(parse_result_v2):
+            return [
+                [
+                    [list(block.header_raw)],
+                    [
+                        [
+                            row.axis_code,
+                            row.nominal,
+                            row.tol_plus,
+                            row.tol_minus,
+                            row.bonus,
+                            row.measured,
+                            row.deviation,
+                            row.out_of_tolerance,
+                        ]
+                        for row in block.dimensions
+                    ],
+                ]
+                for block in parse_result_v2.blocks
+            ]
+
+    sample_path = tmp_path / "generated.csv"
+    sample_path.write_text("generated fixture\n", encoding="utf-8")
+    database_path = tmp_path / "reports.db"
+    original_map = dict(PARSER_MAP)
+    original_manifests = dict(PARSER_MANIFESTS)
+    original_detectors = dict(PARSER_DETECTORS)
+    try:
+        register_parser(GeneratedCsvParser)
+        parser = get_parser(sample_path, database=str(database_path))
+        report_id = parser.open_database_and_check_filename()
+    finally:
+        PARSER_MAP.clear()
+        PARSER_MAP.update(original_map)
+        PARSER_MANIFESTS.clear()
+        PARSER_MANIFESTS.update(original_manifests)
+        PARSER_DETECTORS.clear()
+        PARSER_DETECTORS.update(original_detectors)
+
+    assert report_id > 0
+    assert parser.canonical_metadata.reference == "REF-GEN"
+
+    with sqlite3.connect(database_path) as connection:
+        parsed_row = connection.execute(
+            """
+            SELECT parser_id, parse_status, measurement_count, has_nok, nok_count
+            FROM parsed_reports
+            WHERE id = ?
+            """,
+            (report_id,),
+        ).fetchone()
+        metadata_row = connection.execute(
+            "SELECT reference, report_date, sample_number FROM report_metadata WHERE report_id = ?",
+            (report_id,),
+        ).fetchone()
+        warning_row = connection.execute(
+            "SELECT code, field_name, message FROM report_metadata_warnings WHERE report_id = ?",
+            (report_id,),
+        ).fetchone()
+        measurement_row = connection.execute(
+            """
+            SELECT header, ax, meas, outtol, status_code, raw_measurement_json
+            FROM report_measurements
+            WHERE report_id = ?
+            """,
+            (report_id,),
+        ).fetchone()
+
+    assert parsed_row == ("generated_csv", "parsed_with_warnings", 1, 1, 1)
+    assert metadata_row == ("REF-GEN", "2026-01-05", "0001")
+    assert warning_row == ("rounded_value", "X", "Rounded value in source")
+    assert measurement_row[:5] == ("MAIN FEATURE", "X", 10.2, 0.2, "nok")
+    raw_measurement = json.loads(measurement_row[5])
+    assert raw_measurement["extensions"]["characteristic_name"] == "Position X"
+    assert raw_measurement["raw_tokens"] == ["X", "10.2"]
 
 
 def test_register_parser_supports_legacy_signature_with_detector(tmp_path):

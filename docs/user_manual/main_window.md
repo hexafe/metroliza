@@ -15,6 +15,10 @@ From here you can open:
 
 It also gives you quick access to the **Tools** and **Help** menus from the menu bar.
 
+The main window shows the current source, current database, and a **Next step** status
+row. That row changes as you select reports or a database, so a new user can tell whether
+to parse, select/create a database, clean existing data, or export.
+
 ## What each button does
 
 ### Parse Reports
@@ -58,6 +62,22 @@ Opens the compact industrial data launcher. It keeps two database concepts separ
 
 Use this when you want to connect assembly-process data from Oznak-supported production line databases to the metrology reports already saved in Metroliza.
 
+The launcher shows a simple progress strip:
+
+```text
+Source -> Access -> Cache -> CSV Summary
+```
+
+Use it as the non-technical path through the module:
+
+1. configure or select a production source,
+2. check production database access,
+3. fetch rows into the local Metroliza cache, and
+4. open cached rows in CSV Summary.
+
+The launcher also shows the last sync/cache outcome, including the source, status,
+row count, timestamp, and a redacted warning/error detail when one exists.
+
 The launcher opens separate workflows:
 
 - **Production sources...** edits non-secret production line connection setup such as database type, host, database name, table/view, columns, record key, and timestamp column. This stays available even before a Metroliza report database is selected.
@@ -69,6 +89,9 @@ The launcher opens separate workflows:
   and export options; the loaded table includes a **source** column for the configured
   production database that produced each row.
 - **Refresh links** refreshes local report-to-process links before the main Metroliza export.
+- **Diagnostics...** contains maintenance actions such as **Initialize cache**. Normal
+  users usually do not need this button; Metroliza prompts for cache initialization when
+  it is required.
 
 There are two ways to configure production line databases:
 
@@ -78,6 +101,11 @@ There are two ways to configure production line databases:
 Each production source can disable server-side `ORDER BY` for limited SQL reads. Leave it enabled for deterministic rows; turn it off when a low-memory SQL Server cannot run the sort.
 
 Metroliza stores the source setup, cache rows, sync diagnostics, and links in the selected Metroliza report database. It does not store the production database username or password in the report database or config file.
+
+If you check **Remember on this computer** in the fetch/access dialog, Metroliza saves
+the production database username/password only after the access check or fetch succeeds
+or completes with warnings. The dialog shows where remembered credentials are stored and
+includes **Forget saved credentials** for the selected source.
 
 Industrial export from cached data does not connect directly to the production line database. Live production database access happens only when the user explicitly runs **Check access** or **Fetch to cache** in the fetch dialog opened from **Fetch to cache...**, or starts **Export workbook...** without a selected Metroliza report database to create a live production workbook.
 
@@ -99,10 +127,11 @@ Use this when a new supplier report template needs parser support. The dialog sh
 
 - a `profile.yaml` template,
 - a `samples/` folder,
-- an `expected_results.csv` file for values checked by hand,
-- an `llm_handoff.md` note for an approved external LLM or human review workflow.
+- an `expected_results.csv` file for every parsed row checked by hand,
+- an `llm_handoff.md` note for an approved external LLM or human review workflow,
+- `contracts/`, compact contract snippets, microtask prompts, a manifest, and a privacy-redaction checklist.
 
-Metroliza does not call an LLM from this dialog. It only prepares local files. After creating a folder, use **Open Folder** or **Copy Path** to get to the hidden profile workspace. A parser profile is not active until an operator validates and approves it.
+Metroliza does not call an LLM from this dialog. It only prepares local files. After creating a folder, use **Open Folder** or **Copy Path** to get to the hidden profile workspace. Use **Check Package**, **Validate**, **Diagnose**, and **Repair Prompt** before **Install**. A parser profile is not active until an operator validates and approves it.
 
 ### Match Characteristic Names
 

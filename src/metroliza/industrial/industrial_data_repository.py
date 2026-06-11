@@ -141,6 +141,22 @@ class IndustrialCacheCounts:
         }
 
 
+@dataclass(frozen=True)
+class IndustrialSyncRunSummary:
+    """Compact, redacted summary of one persisted industrial sync run."""
+
+    id: int
+    source_profile_id: int
+    profile_key: str
+    profile_name: str
+    started_at: str
+    finished_at: str | None
+    status: str
+    row_count: int
+    error_summary: str | None
+    diagnostics: Mapping[str, Any]
+
+
 def utc_timestamp() -> str:
     """Return an ISO-8601 UTC timestamp suitable for SQLite text columns."""
 
@@ -509,6 +525,66 @@ class IndustrialDataRepository:
                 raise ValueError(f"sync_run_id not found: {sync_run_id}")
 
         run_transaction_with_retry(self.database, _finish, connection=self.connection)
+
+    def latest_sync_run(
+        self,
+        *,
+        source_profile_id: int | None = None,
+    ) -> IndustrialSyncRunSummary | None:
+        """Return the most recent persisted sync run, if one exists."""
+
+        self.ensure_schema()
+
+        def _latest(cursor) -> IndustrialSyncRunSummary | None:
+            params: tuple[Any, ...]
+            profile_filter = ""
+            if source_profile_id is None:
+                params = ()
+            else:
+                profile_filter = "WHERE runs.source_profile_id = ?"
+                params = (source_profile_id,)
+            cursor.execute(
+                f"""
+                SELECT
+                    runs.id,
+                    runs.source_profile_id,
+                    profiles.profile_key,
+                    profiles.profile_name,
+                    runs.started_at,
+                    runs.finished_at,
+                    runs.status,
+                    runs.row_count,
+                    runs.error_summary,
+                    runs.diagnostics_json
+                FROM industrial_sync_runs AS runs
+                JOIN industrial_source_profiles AS profiles
+                    ON profiles.id = runs.source_profile_id
+                {profile_filter}
+                ORDER BY COALESCE(runs.finished_at, runs.started_at) DESC, runs.id DESC
+                LIMIT 1
+                """,
+                params,
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            diagnostics = _from_json(row[9], {})
+            if not isinstance(diagnostics, dict):
+                diagnostics = {}
+            return IndustrialSyncRunSummary(
+                id=int(row[0]),
+                source_profile_id=int(row[1]),
+                profile_key=str(row[2]),
+                profile_name=str(row[3]),
+                started_at=str(row[4]),
+                finished_at=str(row[5]) if row[5] else None,
+                status=str(row[6]),
+                row_count=int(row[7]),
+                error_summary=row[8],
+                diagnostics=diagnostics,
+            )
+
+        return run_transaction_with_retry(self.database, _latest, connection=self.connection)
 
     def upsert_industrial_records_from_rows(
         self,

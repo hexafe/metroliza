@@ -25,7 +25,12 @@ from metroliza.industrial.industrial_data_repository import (
     IndustrialSourceProfile,
     redact_sensitive_text,
 )
-from metroliza.industrial.industrial_credentials import load_industrial_credentials, save_industrial_credentials
+from metroliza.industrial.industrial_credentials import (
+    default_industrial_credential_path,
+    forget_industrial_credentials,
+    load_industrial_credentials,
+    save_industrial_credentials,
+)
 from metroliza.ui.industrial_filter_dialog import IndustrialFilterDialog
 from metroliza.industrial.industrial_source_config import (
     IndustrialSourceConfigError,
@@ -62,9 +67,11 @@ class IndustrialSyncDialog(QDialog):
         self.filter_state = filter_state or IndustrialFilterState()
         self.filter_window = None
         self.oznak_sync_thread = None
+        self._pending_credential_save: tuple[str, str, str] | None = None
+        self._can_forget_credentials = False
         self._loading_profiles = False
         self.setWindowTitle("Fetch industrial data")
-        configure_window_size(self, minimum=(560, 360), initial=(680, 460))
+        configure_window_size(self, minimum=(580, 410), initial=(720, 520))
 
         self.status_label = status_chip(
             "Select a production source and enter production database credentials.",
@@ -77,6 +84,10 @@ class IndustrialSyncDialog(QDialog):
         self.password_edit = QLineEdit()
         self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.remember_credentials_checkbox = QCheckBox("Remember on this computer")
+        self.credentials_location_label = status_chip(
+            f"No saved credentials for this source. File store: {default_industrial_credential_path()}",
+            "neutral",
+        )
         self.limit_spin = QSpinBox()
         self.limit_spin.setRange(1, 1_000_000)
         self.limit_spin.setValue(5000)
@@ -96,6 +107,7 @@ class IndustrialSyncDialog(QDialog):
         self.test_connection_button = QPushButton("Check access")
         self.sync_now_button = QPushButton("Fetch to cache")
         self.cancel_sync_button = QPushButton("Cancel")
+        self.forget_credentials_button = QPushButton("Forget saved credentials")
         self.close_button = QPushButton("Close")
         self.test_connection_button.setToolTip(
             "Reads up to one production row to verify credentials, table, columns, and query access. Nothing is saved."
@@ -111,9 +123,11 @@ class IndustrialSyncDialog(QDialog):
         self.test_connection_button.clicked.connect(self.test_connection)
         self.sync_now_button.clicked.connect(self.sync_now)
         self.cancel_sync_button.clicked.connect(self.cancel_sync)
+        self.forget_credentials_button.clicked.connect(self.forget_saved_credentials)
         self.close_button.clicked.connect(self.reject)
         self.profile_combo.currentIndexChanged.connect(self._handle_profile_changed)
         self.cancel_sync_button.setEnabled(False)
+        self.forget_credentials_button.setEnabled(False)
 
         self._build_layout()
         self._sync_access_only_visibility()
@@ -139,6 +153,12 @@ class IndustrialSyncDialog(QDialog):
         form.addRow("Production DB username", self.username_edit)
         form.addRow("Production DB password", self.password_edit)
         form.addRow("", self.remember_credentials_checkbox)
+        credentials_row = QHBoxLayout()
+        credentials_row.setContentsMargins(0, 0, 0, 0)
+        credentials_row.setSpacing(8)
+        credentials_row.addWidget(self.credentials_location_label, 1)
+        credentials_row.addWidget(self.forget_credentials_button)
+        form.addRow("Saved credentials", credentials_row)
         form.addRow("Fetch row limit", self.limit_spin)
         self.limit_row_label = form.labelForField(self.limit_spin)
         form.addRow("", self.fetch_all_checkbox)
@@ -232,6 +252,7 @@ class IndustrialSyncDialog(QDialog):
                 )
             else:
                 self._set_ready_state(False, "Create a production source before fetching rows.")
+            self._update_credentials_location_label(None)
 
     def _set_ready_state(self, enabled: bool, message: str) -> None:
         self.status_label.setText(message)
@@ -251,10 +272,60 @@ class IndustrialSyncDialog(QDialog):
         if profile is None:
             self.username_edit.clear()
             self.password_edit.clear()
+            self._update_credentials_location_label(None)
             return
         stored = load_industrial_credentials(profile.profile_key)
         self.username_edit.setText(stored.username)
         self.password_edit.setText(stored.password)
+        self._update_credentials_location_label(stored)
+
+    def _update_credentials_location_label(self, stored=None, *, saved_path: Path | None = None) -> None:
+        profile = self.current_profile()
+        default_path = default_industrial_credential_path()
+        forget_enabled = False
+        variant = "neutral"
+        if profile is None:
+            text = f"No production source selected. File store: {default_path}"
+        elif saved_path is not None:
+            text = f"Credentials saved in {saved_path}"
+            forget_enabled = True
+            variant = "success"
+        elif stored is not None and getattr(stored, "source", "") == "environment":
+            text = f"Credentials loaded from environment. File store: {default_path}"
+            variant = "success"
+        elif stored is not None and stored.has_values and stored.source:
+            text = f"Credentials loaded from {stored.source}"
+            forget_enabled = True
+            variant = "success"
+        else:
+            text = f"No saved credentials for this source. File store: {default_path}"
+        self.credentials_location_label.setText(text)
+        set_status_variant(self.credentials_location_label, variant)
+        self._can_forget_credentials = forget_enabled
+        self.forget_credentials_button.setEnabled(
+            forget_enabled and not self._is_oznak_operation_running()
+        )
+
+    def forget_saved_credentials(self) -> None:
+        profile = self.current_profile()
+        if profile is None:
+            self._update_credentials_location_label(None)
+            return
+        try:
+            credential_path = forget_industrial_credentials(profile.profile_key)
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                "Industrial data credentials",
+                f"Could not forget saved credentials: {redact_sensitive_text(exc)}",
+            )
+            return
+        self.remember_credentials_checkbox.setChecked(False)
+        self.username_edit.clear()
+        self.password_edit.clear()
+        self._update_credentials_location_label(None)
+        self.status_label.setText(f"Saved credentials forgotten from {credential_path}")
+        set_status_variant(self.status_label, "neutral")
 
     def _profile_for_current_filter(self) -> IndustrialSourceProfile:
         profile = self.current_profile()
@@ -312,6 +383,10 @@ class IndustrialSyncDialog(QDialog):
             self.status_label.setText("Cancelling industrial fetch...")
             set_status_variant(self.status_label, "neutral")
 
+    def _is_oznak_operation_running(self) -> bool:
+        thread = self.oznak_sync_thread
+        return bool(thread is not None and thread.isRunning())
+
     def _start_oznak_operation(self, *, test_only: bool) -> None:
         if self.oznak_sync_thread is not None and self.oznak_sync_thread.isRunning():
             self.status_label.setText("Industrial operation already running")
@@ -352,12 +427,11 @@ class IndustrialSyncDialog(QDialog):
                     self.filter_state,
                     limit_rows=1,
                 )
-            if self.remember_credentials_checkbox.isChecked():
-                save_industrial_credentials(
-                    profile.profile_key,
-                    username=username,
-                    password=password,
-                )
+            self._pending_credential_save = (
+                (profile.profile_key, username, password)
+                if self.remember_credentials_checkbox.isChecked()
+                else None
+            )
         except (OSError, ValueError) as exc:
             QMessageBox.warning(self, "Industrial data fetch", str(exc))
             return
@@ -403,8 +477,19 @@ class IndustrialSyncDialog(QDialog):
         if enabled:
             self._sync_action_buttons()
             self.close_button.setEnabled(True)
+            self.profile_combo.setEnabled(True)
+            self.username_edit.setEnabled(True)
+            self.password_edit.setEnabled(True)
+            self.remember_credentials_checkbox.setEnabled(True)
+            self.timeout_spin.setEnabled(True)
             return
         for button in (
+            self.profile_combo,
+            self.username_edit,
+            self.password_edit,
+            self.remember_credentials_checkbox,
+            self.timeout_spin,
+            self.forget_credentials_button,
             self.edit_filter_button,
             self.test_connection_button,
             self.sync_now_button,
@@ -419,6 +504,7 @@ class IndustrialSyncDialog(QDialog):
         set_status_variant(self.status_label, "neutral")
 
     def on_oznak_result(self, result: dict[str, Any]) -> None:
+        self._save_pending_credentials_after_success(result)
         parent = self.parent()
         if parent is not None and hasattr(parent, "refresh_status"):
             parent.refresh_status()
@@ -471,6 +557,7 @@ class IndustrialSyncDialog(QDialog):
         set_status_variant(self.status_label, "success")
 
     def on_oznak_error(self, message: str) -> None:
+        self._pending_credential_save = None
         QMessageBox.warning(
             self,
             "Industrial data fetch",
@@ -481,10 +568,35 @@ class IndustrialSyncDialog(QDialog):
             parent.refresh_status()
 
     def on_oznak_thread_stopped(self) -> None:
+        self._pending_credential_save = None
         self._sync_action_buttons()
         self.close_button.setEnabled(True)
         self.cancel_sync_button.setEnabled(False)
         self.oznak_sync_thread = None
+
+    def _save_pending_credentials_after_success(self, result: dict[str, Any]) -> None:
+        pending = self._pending_credential_save
+        if result.get("status") not in {"succeeded", "completed_with_warnings"}:
+            self._pending_credential_save = None
+            return
+        self._pending_credential_save = None
+        if pending is None:
+            return
+        profile_key, username, password = pending
+        try:
+            saved_path = save_industrial_credentials(
+                profile_key,
+                username=username,
+                password=password,
+            )
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                "Industrial data credentials",
+                f"Access passed, but credentials could not be saved: {redact_sensitive_text(exc)}",
+            )
+            return
+        self._update_credentials_location_label(saved_path=saved_path)
 
     def closeEvent(self, event) -> None:
         thread = self.oznak_sync_thread
@@ -502,6 +614,9 @@ class IndustrialSyncDialog(QDialog):
             self.sync_now_button.setEnabled(False)
             return
         has_source = self.current_profile() is not None
+        self.forget_credentials_button.setEnabled(
+            has_source and self._can_forget_credentials
+        )
         self.edit_filter_button.setEnabled(has_source and not self.access_only)
         self.test_connection_button.setEnabled(has_source)
         self.sync_now_button.setEnabled(

@@ -395,6 +395,7 @@ class DataGrouping(QDialog):
                 groups_list=self.groups_list,
                 assigned_list=self.part_group_list,
                 create_group=self.create_group,
+                create_group_from_reference=self._create_group_from_selected_reference,
                 rename_group=self.rename_group,
                 delete_group=self.delete_group,
                 remove_from_source=self._delete_selected_parts_from_part_list,
@@ -1350,10 +1351,12 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
 
     def on_reference_item_double_clicked(self, item):
-        """Keep reference double-clicks navigation-only."""
+        """Open create-group flow for the selected reference."""
 
         try:
-            return
+            if item is None:
+                return
+            self._create_group_from_selected_reference()
         except Exception as e:
             self.log_and_exit(e)
 
@@ -1590,7 +1593,28 @@ class DataGrouping(QDialog):
         return False
 
     def _create_group_from_selected_reference(self):
-        return None
+        reference_name = self._selected_reference_name()
+        self._select_visible_parts_for_grouping()
+        self.create_group(initial_group_name=reference_name or "")
+
+    def _select_visible_parts_for_grouping(self):
+        part_list = self._safe_attr(self, "part_list")
+        if part_list is None:
+            return
+
+        items = []
+        if hasattr(part_list, "count") and hasattr(part_list, "item"):
+            items = [part_list.item(row) for row in range(part_list.count())]
+        elif hasattr(part_list, "_items"):
+            items = list(getattr(part_list, "_items", ()) or ())
+
+        for item in items:
+            if item is None or not hasattr(item, "setSelected"):
+                continue
+            hidden = False
+            if hasattr(item, "isHidden"):
+                hidden = bool(item.isHidden())
+            item.setSelected(not hidden)
 
     def keyPressEvent(self, event):
         """Handle keyboard shortcuts for list-driven grouping workflows."""
@@ -1603,6 +1627,11 @@ class DataGrouping(QDialog):
                 groups_list=getattr(self, "groups_list", None),
                 assigned_list=getattr(self, "part_group_list", None),
                 create_group=getattr(self, "create_group", None),
+                create_group_from_reference=getattr(
+                    self,
+                    "_create_group_from_selected_reference",
+                    None,
+                ),
                 rename_group=getattr(self, "rename_group", None),
                 delete_group=getattr(self, "delete_group", None),
                 remove_from_source=getattr(self, "_delete_selected_parts_from_part_list", None),

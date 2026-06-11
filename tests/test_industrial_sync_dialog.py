@@ -49,6 +49,9 @@ def test_sync_dialog_requires_saved_source_and_masks_password(tmp_path):
     assert not dialog.sync_now_button.isEnabled()
     assert dialog.password_edit.echoMode() == dialog.password_edit.EchoMode.Password
     assert dialog.remember_credentials_checkbox.text() == "Remember on this computer"
+    assert "File store:" in dialog.credentials_location_label.text()
+    assert dialog.forget_credentials_button.text() == "Forget saved credentials"
+    assert not dialog.forget_credentials_button.isEnabled()
     dialog.close()
 
 
@@ -79,7 +82,52 @@ def test_sync_dialog_prefills_locally_saved_credentials(monkeypatch, tmp_path):
 
     assert dialog.username_edit.text() == "operator"
     assert dialog.password_edit.text() == "secret-password"
+    assert "Credentials loaded from test" in dialog.credentials_location_label.text()
+    assert dialog.forget_credentials_button.isEnabled()
     assert not dialog.remember_credentials_checkbox.isChecked()
+    dialog.close()
+
+
+def test_sync_dialog_forgets_locally_saved_credentials(monkeypatch, tmp_path):
+    _app()
+    db_path = str(tmp_path / "industrial.db")
+    credential_path = tmp_path / "industrial_credentials.env"
+    IndustrialDataRepository(db_path).upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="events",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+    )
+    forgotten = []
+    monkeypatch.setattr(
+        industrial_sync_dialog,
+        "load_industrial_credentials",
+        lambda _profile_key: IndustrialStoredCredentials(
+            username="operator",
+            password="secret-password",
+            source=str(credential_path),
+        ),
+    )
+    monkeypatch.setattr(
+        industrial_sync_dialog,
+        "forget_industrial_credentials",
+        lambda profile_key: forgotten.append(profile_key) or credential_path,
+    )
+    dialog = IndustrialSyncDialog(db_file=db_path)
+
+    dialog.remember_credentials_checkbox.setChecked(True)
+    dialog.forget_saved_credentials()
+
+    assert forgotten == ["assembly_mes"]
+    assert dialog.username_edit.text() == ""
+    assert dialog.password_edit.text() == ""
+    assert not dialog.remember_credentials_checkbox.isChecked()
+    assert "No saved credentials" in dialog.credentials_location_label.text()
+    assert "Saved credentials forgotten" in dialog.status_label.text()
     dialog.close()
 
 
@@ -427,11 +475,22 @@ def test_sync_dialog_starts_sync_thread_without_external_connection(monkeypatch,
 
     dialog.sync_now()
 
-    assert saved_credentials == [("assembly_mes", "operator", "secret-password")]
+    assert saved_credentials == []
     assert started_threads[0].started is True
     assert started_threads[0].kwargs["reference_filter_column"] == "reference"
     assert started_threads[0].kwargs["reference_values"] == ("REF-1",)
     assert dialog.cancel_sync_button.isEnabled()
+
+    dialog.on_oznak_result(
+        {
+            "status": "succeeded",
+            "test_only": False,
+            "row_count": 1,
+            "upsert_summary": {"processed": 1},
+        }
+    )
+
+    assert saved_credentials == [("assembly_mes", "operator", "secret-password")]
 
     dialog.cancel_sync()
     assert "Cancelling industrial fetch" in dialog.status_label.text()
@@ -481,13 +540,24 @@ def test_sync_dialog_access_check_thread_and_result_statuses(monkeypatch, tmp_pa
             return False
 
     monkeypatch.setattr(industrial_sync_dialog, "IndustrialOznakAccessCheckThread", FakeAccessThread)
+    saved_credentials = []
+    monkeypatch.setattr(
+        industrial_sync_dialog,
+        "save_industrial_credentials",
+        lambda profile_key, *, username, password: saved_credentials.append(
+            (profile_key, username, password)
+        ),
+    )
     dialog = IndustrialSyncDialog(db_file=None, config_path=config_path, access_only=True)
     dialog.username_edit.setText("operator")
     dialog.password_edit.setText("secret-password")
+    dialog.remember_credentials_checkbox.setChecked(True)
 
     dialog.test_connection()
+    assert saved_credentials == []
     dialog.on_oznak_progress("Reading one row")
     dialog.on_oznak_result({"status": "succeeded", "test_only": True, "row_count": 0})
+    assert saved_credentials == [("assembly_mes", "operator", "secret-password")]
     assert started[0].kwargs["profile"].profile_key == "assembly_mes"
     assert started[0].kwargs["reference_filter_column"] is None
     assert started[0].kwargs["reference_values"] == ()

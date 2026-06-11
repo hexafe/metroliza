@@ -33,6 +33,13 @@ from metroliza.parsing.declarative_parser_profiles import (  # noqa: E402
     sha256_file,
     validate_profile_file,
 )
+from metroliza.parsing.parser_profile_handoff import (  # noqa: E402
+    HandoffWorkspace,
+    create_profile_handoff_workspace,
+    format_handoff_integrity_report,
+    render_profile_repair_prompt,
+    validate_handoff_workspace,
+)
 
 
 def _path(value: str | None) -> Path | None:
@@ -49,18 +56,23 @@ def _sample_paths(args: argparse.Namespace) -> tuple[Path, ...]:
     return expected_sample_paths(workspace, expected_results)
 
 
-def _print_validation_report(report) -> None:
+def _format_validation_report(report) -> str:
     status = "PASS" if report.passed else "FAIL"
-    print(f"[{status}] {report.plugin_id}")
+    lines = [f"[{status}] {report.plugin_id}"]
     for check in report.checks:
         marker = "ok" if check.passed else "x"
         suffix = f" ({check.detail})" if check.detail else ""
-        print(f"  - {marker} {check.name}{suffix}")
+        lines.append(f"  - {marker} {check.name}{suffix}")
     for contract_report in report.contract_reports:
         for check in contract_report.checks:
             marker = "ok" if check.passed else "x"
             suffix = f" ({check.detail})" if check.detail else ""
-            print(f"  - {marker} contract:{check.name}{suffix}")
+            lines.append(f"  - {marker} contract:{check.name}{suffix}")
+    return "\n".join(lines)
+
+
+def _print_validation_report(report) -> None:
+    print(_format_validation_report(report))
 
 
 def _add_validation_args(parser: argparse.ArgumentParser) -> None:
@@ -96,6 +108,28 @@ def _cmd_init(args: argparse.Namespace) -> int:
     )
     print(f"Wrote profile template: {output}")
     return 0
+
+
+def _cmd_handoff(args: argparse.Namespace) -> int:
+    workspace = create_profile_handoff_workspace(
+        plugin_id=args.plugin_id,
+        display_name=args.display_name or args.plugin_id.replace("_", " ").title(),
+        source_format=args.source_format,
+        home=_path(args.home),
+        output_dir=_path(args.output_dir),
+    )
+    print(f"Handoff folder: {workspace.root}")
+    print(f"Profile: {workspace.profile_path}")
+    print(f"Expected results: {workspace.expected_results_path}")
+    print(f"Next: open {workspace.root / 'NON_TECHNICAL_STEPS.md'}")
+    print(f"Check: PYTHONPATH=src:. python scripts/parser_plugin_self_service.py integrity {workspace.root}")
+    return 0
+
+
+def _cmd_integrity(args: argparse.Namespace) -> int:
+    report = validate_handoff_workspace(args.workspace)
+    print(format_handoff_integrity_report(report))
+    return 0 if report.passed else 1
 
 
 def _cmd_validate(args: argparse.Namespace) -> int:
@@ -178,6 +212,36 @@ def _cmd_install(args: argparse.Namespace) -> int:
     if result.backup_dir is not None:
         print(f"Backup: {result.backup_dir}")
     return 0
+
+
+def _cmd_repair(args: argparse.Namespace) -> int:
+    samples = _sample_paths(args)
+    report = validate_profile_file(
+        args.profile,
+        sample_paths=samples,
+        expected_results_ref=args.expected_results,
+    )
+    print(_format_validation_report(report))
+    if report.passed:
+        print("Validation passed; no repair prompt was written.")
+        return 0
+
+    workspace_root = Path(args.workspace) if args.workspace else Path(args.profile).parent
+    expected_results = (
+        Path(args.expected_results) if args.expected_results else workspace_root / "expected_results.csv"
+    )
+    workspace = HandoffWorkspace(
+        root=workspace_root,
+        profile_path=Path(args.profile),
+        handoff_path=workspace_root / "llm_handoff.md",
+        expected_results_path=expected_results,
+    )
+    prompt = render_profile_repair_prompt(workspace, _format_validation_report(report))
+    output = Path(args.output) if args.output else workspace_root / "artifacts" / "profile_repair_prompt.md"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(prompt, encoding="utf-8")
+    print(f"Repair prompt: {output}")
+    return 1
 
 
 def _cmd_list(args: argparse.Namespace) -> int:
@@ -267,6 +331,27 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--force", action="store_true")
     init_parser.set_defaults(func=_cmd_init)
 
+    handoff_parser = subparsers.add_parser("handoff", help="Create a complete LLM handoff folder")
+    handoff_parser.add_argument("--plugin-id", required=True)
+    handoff_parser.add_argument("--display-name")
+    handoff_parser.add_argument("--source-format", default="pdf", choices=("pdf", "excel", "csv"))
+    handoff_parser.add_argument(
+        "--output-dir",
+        help="Optional handoff output directory; defaults to the incoming profile store",
+    )
+    handoff_parser.set_defaults(func=_cmd_handoff)
+
+    integrity_parser = subparsers.add_parser("integrity", help="Check that a handoff folder is self-contained")
+    integrity_parser.add_argument("workspace", help="Handoff workspace root")
+    integrity_parser.set_defaults(func=_cmd_integrity)
+
+    check_handoff_parser = subparsers.add_parser(
+        "check-handoff",
+        help="Alias for integrity",
+    )
+    check_handoff_parser.add_argument("workspace", help="Handoff workspace root")
+    check_handoff_parser.set_defaults(func=_cmd_integrity)
+
     validate_parser = subparsers.add_parser("validate", help="Validate a declarative profile")
     _add_validation_args(validate_parser)
     validate_parser.set_defaults(func=_cmd_validate)
@@ -281,6 +366,11 @@ def build_parser() -> argparse.ArgumentParser:
     install_parser.add_argument("--approved-by", default="operator")
     install_parser.add_argument("--dry-run", action="store_true")
     install_parser.set_defaults(func=_cmd_install)
+
+    repair_parser = subparsers.add_parser("repair", help="Write a profile-only repair prompt after validation fails")
+    _add_validation_args(repair_parser)
+    repair_parser.add_argument("--output", help="Repair prompt output path")
+    repair_parser.set_defaults(func=_cmd_repair)
 
     list_parser = subparsers.add_parser("list", help="List installed declarative profiles")
     list_parser.set_defaults(func=_cmd_list)

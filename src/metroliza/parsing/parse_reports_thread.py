@@ -7,7 +7,7 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from metroliza.reports.report_parser_factory import get_parser
+from metroliza.reports import report_parser_factory
 import metroliza.shared.custom_logger as custom_logger
 from PyQt6.QtCore import QThread, pyqtSignal
 from dataclasses import dataclass
@@ -27,8 +27,12 @@ from metroliza.shared.progress_status import (
 from metroliza.reports.report_identity import build_report_identity_hash
 from metroliza.reports.report_metadata_models import CanonicalReportMetadata
 from metroliza.reports.report_repository import ReportRepository, compute_sha256
+from metroliza.parsing.base_report_parser import BaseReportParser
 from metroliza.parsing.cmm_report_parser import CMMReportParser
 from metroliza.reports.report_metadata_profiles import DEFAULT_CMM_PDF_HEADER_BOX_PROFILE
+
+
+get_parser = report_parser_factory.get_parser
 
 
 @dataclass(frozen=True)
@@ -140,7 +144,11 @@ def parse_new_reports(
                     stage_timings["stage2_queue_wait_s"] = max(0.0, time.perf_counter() - stage1_completed_at)
 
                 if fingerprint not in report_fingerprints:
-                    persist_report(parser)
+                    try:
+                        persist_report(parser)
+                    except Exception as exc:
+                        _record_file_failure(report, exc)
+                        continue
                     report_fingerprints.add(fingerprint)
 
                 parsed_files += 1
@@ -174,7 +182,11 @@ def parse_new_reports(
                 _record_file_failure(report, exc)
                 continue
 
-            persist_report(parser)
+            try:
+                persist_report(parser)
+            except Exception as exc:
+                _record_file_failure(report, exc)
+                continue
             report_fingerprints.add(fingerprint)
         else:
             parser = None
@@ -254,10 +266,30 @@ def enrich_report_metadata(
 
 logger = get_operation_logger(logging.getLogger(__name__), "parse_reports")
 
+_REPORT_EXTENSIONS_BY_SOURCE_FORMAT = {
+    "pdf": {".pdf"},
+    "excel": {".xls", ".xlsx"},
+    "csv": {".csv"},
+}
 _CURRENT_CMM_METADATA_PARSER_ID = DEFAULT_CMM_PDF_HEADER_BOX_PROFILE.parser_id
 _CURRENT_CMM_PARSER_VERSION = getattr(getattr(CMMReportParser, "manifest", None), "version", "1.1.0")
 _HEADER_EXTRACTION_DIAGNOSTIC_MARKER = '%"header_extraction_mode"%'
 _HEADER_EXTRACTION_NONE_MARKER = '%"header_extraction_mode": "none"%'
+
+
+def supported_report_file_extensions() -> set[str]:
+    """Return suffixes supported by registered parser manifests."""
+
+    try:
+        report_parser_factory.load_external_plugins()
+    except Exception:
+        logger.warning("Could not load external parser plugins during discovery", exc_info=True)
+
+    extensions = set(_REPORT_EXTENSIONS_BY_SOURCE_FORMAT["pdf"])
+    for manifest in report_parser_factory.PARSER_MANIFESTS.values():
+        for source_format in getattr(manifest, "supported_formats", ()) or ():
+            extensions.update(_REPORT_EXTENSIONS_BY_SOURCE_FORMAT.get(str(source_format).lower(), ()))
+    return extensions
 _HEADER_OCR_ERROR_MARKER = '%"header_ocr_error"%'
 _REFERENCE_FILENAME_MARKER = '%"reference": "filename_candidate"%'
 _REPORT_DATE_FILENAME_MARKER = '%"report_date": "filename_candidate"%'
@@ -457,11 +489,16 @@ def selection_result_for_complete_metadata_parser(parser):
     parser.open_report()
     selection_result = getattr(parser, "_metadata_selection_result", None)
     if selection_result is None:
+        extract_metadata = getattr(type(parser), "extract_metadata", None)
+        if extract_metadata is None or extract_metadata is BaseReportParser.extract_metadata:
+            return None
         selection_result = parser.extract_metadata()
     return selection_result
 
 
 def persist_complete_metadata_enrichment(db_file, report_id, selection_result, *, connection=None):
+    if selection_result is None:
+        return None, {"skipped": True, "reason": "metadata_parser_not_available"}
     current_row = report_metadata_row_for_enrichment(db_file, report_id, connection=connection)
     merged_metadata, merge_summary = merge_enriched_metadata_for_persistence(
         current_row,
@@ -516,6 +553,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         self.run_background_metadata_enrichment = validated_request.run_background_metadata_enrichment
         self.parsing_canceled = False
         self._extracted_archive_dir = None
+        self.last_parse_result = ParseBatchResult(parsed_files=0, total_files=0)
         self._last_emitted_progress = -1
         self._progress_stage_ranges = dict(self.PROGRESS_STAGE_RANGES)
         if self.run_background_metadata_enrichment and self.metadata_parsing_mode == "light":
@@ -588,8 +626,9 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
 
     def get_list_of_reports(self):
         try:
-            pdf_files = []
+            report_files = []
             report_root = self._resolve_report_root()
+            supported_extensions = supported_report_file_extensions()
             logger.info(
                 "Parse discovery started",
                 extra=build_parse_log_extra(
@@ -606,23 +645,28 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 )
             )
             self._emit_stage_progress('discover_reports', 0.0)
-            for path in report_root.glob("**/*.[Pp][Dd][Ff]"):
+            candidates = (report_root,) if report_root.is_file() else report_root.rglob("*")
+            for path in candidates:
                 if self.parsing_canceled:
                     break
-                if path.is_file() and path.stat().st_size:
-                    pdf_files.append(path)
+                if (
+                    path.is_file()
+                    and path.suffix.lower() in supported_extensions
+                    and path.stat().st_size
+                ):
+                    report_files.append(path)
 
             self._emit_stage_progress('discover_reports', 1.0)
             logger.info(
                 "Parse discovery finished",
                 extra=build_parse_log_extra(
                     source_path=report_root,
-                    total_files=len(pdf_files),
+                    total_files=len(report_files),
                     parsed_count=0,
                     cancel_flag=self.parsing_canceled,
                 ),
             )
-            return pdf_files
+            return report_files
         except Exception as e:
             self.log_and_exit(e)
 
@@ -781,7 +825,9 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
 
         def _parser_factory(report):
             parser = get_parser(report, self.db_file, connection=connection)
-            selection_result_for_complete_metadata_parser(parser)
+            selection_result = selection_result_for_complete_metadata_parser(parser)
+            if selection_result is not None:
+                parser._metadata_selection_result = selection_result
             return parser
 
         def _persist_enrichment(report, parser):
@@ -791,7 +837,9 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
 
             selection_result = getattr(parser, "_metadata_selection_result", None)
             if selection_result is None:
-                selection_result = parser.extract_metadata()
+                selection_result = selection_result_for_complete_metadata_parser(parser)
+            if selection_result is None:
+                return False
             persist_complete_metadata_enrichment(
                 self.db_file,
                 report_id,
@@ -831,6 +879,10 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         try:
             list_of_reports = self.get_list_of_reports()
             if self.parsing_canceled:
+                self.last_parse_result = ParseBatchResult(
+                    parsed_files=0,
+                    total_files=len(list_of_reports),
+                )
                 logger.info(
                     "Parse ended before processing due to cancellation",
                     extra=build_parse_log_extra(
@@ -999,6 +1051,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                     enable_two_stage_pipeline=two_stage_enabled,
                     worker_count=two_stage_workers,
                 )
+                self.last_parse_result = result
 
                 if not self.parsing_canceled and self.run_background_metadata_enrichment:
                     self._run_background_metadata_enrichment(list_of_reports, connection)
@@ -1008,7 +1061,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 self.update_label.emit(
                     build_three_line_status(
                         "Parsing reports...",
-                        "No reports found to parse",
+                        "No supported report files found in the selected source",
                         "ETA 0:00",
                     )
                 )

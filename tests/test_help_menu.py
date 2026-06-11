@@ -74,6 +74,7 @@ class TestHelpMenu(unittest.TestCase):
         cls.help_menu = _import_help_menu_with_stubs()
 
     def test_manual_path_keys_point_to_existing_manuals(self):
+        self.assertIn('help_startup_and_license', self.help_menu.MANUAL_RELATIVE_PATHS)
         for key, path in self.help_menu.MANUAL_PATHS.items():
             with self.subTest(key=key):
                 self.assertEqual(self.help_menu.manual_path(key), path)
@@ -169,6 +170,19 @@ class TestHelpMenu(unittest.TestCase):
         opened_url = open_url_mock.call_args.args[0].toString()
         self.assertEqual(opened_url, self.help_menu.manual_url('parsing'))
         self.assertTrue(opened_url.startswith('https://github.com/hexafe/metroliza/blob/'))
+
+    def test_open_manual_warns_when_browser_open_fails(self):
+        with patch.object(self.help_menu.QMessageBox, 'warning') as warning_mock:
+            with patch.object(self.help_menu.QDesktopServices, 'openUrl', return_value=False):
+                result = self.help_menu.open_manual(None, 'help_startup_and_license')
+
+        self.assertFalse(result)
+        warning_mock.assert_called_once()
+        self.assertEqual(warning_mock.call_args.args[1], 'Could not open manual')
+        self.assertIn(
+            self.help_menu.manual_url('help_startup_and_license'),
+            warning_mock.call_args.args[2],
+        )
 
     def test_open_manual_warns_for_unknown_manual_key(self):
         with patch.object(self.help_menu.QMessageBox, 'warning') as warning_mock:

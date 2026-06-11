@@ -115,6 +115,15 @@ the main export sheets and selected workbook charts.
 ## Output
 
 This section controls the overall export style and optional or automatic sidecar outputs.
+The Export dialog also shows a **Deliverables** summary before you run the export.
+Read this row when you want to confirm what Metroliza will create:
+
+- the selected database,
+- the local workbook or dashboard file,
+- whether an HTML dashboard will be created,
+- whether Google Sheets conversion is enabled,
+- whether grouping is active, and
+- whether industrial context is included.
 
 ### Export preset
 
@@ -150,6 +159,8 @@ This means:
 - it also tries to create a Google Sheets version.
 
 This option is optional. The local Excel workbook remains the base editable output.
+When conversion succeeds, the final success message includes both the local file link
+and the Google Sheet link.
 
 ### Choosing the right output
 
@@ -239,15 +250,15 @@ If the report reference and production reference are not the same value, open **
 
 Export uses only local cached industrial rows from the Metroliza report database. It does not connect to production line databases or query Oznak while the workbook is being created. The chain is: Oznak sync fills the local cache, automatic link refresh or manual links create accepted local links, and normal export joins one accepted production link per report, prioritizing manual links. If no industrial rows have been synced or no report links exist yet, the normal export still works, but no industrial context is added.
 
-The industrial data launcher can also open dedicated Oznak export and CSV Summary cache dialogs.
-With a selected Metroliza report database, **Export workbook...** creates a workbook from
-cached rows only. Without a selected report database, **Export workbook...** can fetch live
-production rows directly from a configured source and create a production workbook without
-filling the local cache. **CSV Summary...** loads cached production rows into the CSV Summary workflow, so
-the same filtering, grouping, dashboard, workbook, and export controls are available for
-industrial data. Each cached row carries a **source** value, so dashboards and groups can
-separate rows from different configured production databases. When multiple sources have
-been cached, choose all sources or one source before opening CSV Summary.
+The industrial data launcher also opens cached-row workbook export and CSV Summary cache
+dialogs. Select a Metroliza report database before exporting industrial data; the launcher
+does not fetch live production rows into a workbook directly. **Export workbook...** creates a
+workbook from cached rows in the selected report database. **CSV Summary...** loads cached
+production rows into the CSV Summary workflow, so the same filtering, grouping, dashboard,
+workbook, and export controls are available for industrial data. Each cached row carries a
+**source** value, so dashboards and groups can separate rows from different configured
+production databases. When multiple sources have been cached, choose all sources or one
+source before opening CSV Summary.
 
 ### Chart type
 

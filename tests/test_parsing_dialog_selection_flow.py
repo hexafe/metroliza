@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 try:
@@ -272,6 +273,40 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         self.assertEqual(parent.db_file, '/tmp/reports.db')
         self.assertEqual(parent.enrichment_launches, 0)
         self.assertFalse(dialog._pending_modeless_metadata_enrichment)
+
+    def test_zero_report_completion_summary_explains_nothing_was_written(self):
+        dialog = ParsingDialog(parent=None, directory='/tmp/reports', db_file='/tmp/reports.db')
+        dialog.loading_dialog = _ProgressDialog()
+        dialog.parse_thread = SimpleNamespace(
+            last_parse_result=SimpleNamespace(total_files=0, parsed_files=0, failed_files=0),
+        )
+
+        with patch('modules.parsing_dialog.QMessageBox.information') as information_mock:
+            with patch('modules.parsing_dialog.QMessageBox.warning') as warning_mock:
+                dialog.on_parse_finished()
+
+        warning_mock.assert_not_called()
+        information_mock.assert_called_once()
+        self.assertEqual(information_mock.call_args.args[1], "No reports parsed")
+        self.assertIn("No supported report files", information_mock.call_args.args[2])
+        self.assertIn("Nothing was written to /tmp/reports.db", information_mock.call_args.args[2])
+
+    def test_partial_parse_completion_summary_warns_about_skipped_reports(self):
+        dialog = ParsingDialog(parent=None, directory='/tmp/reports', db_file='/tmp/reports.db')
+        dialog.loading_dialog = _ProgressDialog()
+        dialog.parse_thread = SimpleNamespace(
+            last_parse_result=SimpleNamespace(total_files=3, parsed_files=2, failed_files=1),
+        )
+
+        with patch('modules.parsing_dialog.QMessageBox.information') as information_mock:
+            with patch('modules.parsing_dialog.QMessageBox.warning') as warning_mock:
+                dialog.on_parse_finished()
+
+        information_mock.assert_not_called()
+        warning_mock.assert_called_once()
+        self.assertEqual(warning_mock.call_args.args[1], "Parsing completed with warnings")
+        self.assertIn("2 of 3 report files completed successfully", warning_mock.call_args.args[2])
+        self.assertIn("1 report file could not be parsed", warning_mock.call_args.args[2])
 
     def test_canceled_parse_does_not_request_modeless_metadata_enrichment(self):
         parent = _DummyParent()

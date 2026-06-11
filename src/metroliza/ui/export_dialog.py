@@ -350,6 +350,12 @@ class ExportDialog(QDialog):
             self._set_path_field_value(self.database_text_label, self.db_file)
             self._set_path_field_value(self.excel_file_text_label, self.excel_file)
             self.path_readiness_label = status_chip("", "warning")
+            self.deliverables_summary_label = status_chip("", "warning")
+            self.deliverables_summary_label.setWordWrap(True)
+            self.deliverables_summary_label.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Preferred,
+            )
 
             # Export preset selector
             self.preset_label = QLabel("Preset:")
@@ -366,17 +372,21 @@ class ExportDialog(QDialog):
             )
             self.preset_combobox.setToolTip(self.preset_label.toolTip())
 
-            self.export_target_label = QLabel("Additional outputs:")
+            self.cloud_output_label = QLabel("Cloud output:")
             self.include_google_sheets_checkbox = QCheckBox("Google Sheets")
             self.include_google_sheets_checkbox.setChecked(False)
             google_tooltip = (
                 "Keep the local .xlsx workbook and also try to upload and convert it "
                 "to Google Sheets."
             )
-            self.export_target_label.setToolTip(google_tooltip)
+            self.cloud_output_label.setToolTip(google_tooltip)
             self.include_google_sheets_checkbox.setToolTip(google_tooltip)
             self.google_sheets_info_button = self._build_info_button(google_tooltip)
+            self.include_google_sheets_checkbox.stateChanged.connect(
+                lambda _state: self._refresh_deliverables_summary()
+            )
 
+            self.local_sidecar_label = QLabel("Local sidecar:")
             self.html_dashboard_label = QLabel("")
             self.generate_html_dashboard_checkbox = QCheckBox("HTML dashboard")
             self.generate_html_dashboard_checkbox.setChecked(False)
@@ -389,6 +399,9 @@ class ExportDialog(QDialog):
             self.generate_html_dashboard_checkbox.stateChanged.connect(
                 lambda _state: self._sync_dashboard_visual_controls()
             )
+            self.generate_html_dashboard_checkbox.stateChanged.connect(
+                lambda _state: self._refresh_deliverables_summary()
+            )
             self.dashboard_visuals_label = QLabel("Dashboard style:")
             self.dashboard_visuals_summary_label = status_chip("", "neutral")
             self.dashboard_visuals_button = QPushButton("Change...")
@@ -397,14 +410,19 @@ class ExportDialog(QDialog):
             )
             self.dashboard_visuals_button.clicked.connect(self.open_dashboard_visual_options)
 
+            self.context_output_label = QLabel("Context:")
             self.include_industrial_context_checkbox = QCheckBox("Industrial context")
             self.include_industrial_context_checkbox.setChecked(False)
             industrial_context_tooltip = (
                 "Append cached production context from accepted local links to the measurement "
                 "export and add a context worksheet when linked records exist."
             )
+            self.context_output_label.setToolTip(industrial_context_tooltip)
             self.include_industrial_context_checkbox.setToolTip(industrial_context_tooltip)
             self.industrial_context_info_button = self._build_info_button(industrial_context_tooltip)
+            self.include_industrial_context_checkbox.stateChanged.connect(
+                lambda _state: self._refresh_deliverables_summary()
+            )
 
             # Add dropdown list for chart type
             self.export_type_label = QLabel("Chart type:")
@@ -480,10 +498,10 @@ class ExportDialog(QDialog):
             self.advanced_toggle_button.toggled.connect(self._toggle_advanced_options)
             self.advanced_toggle_button.setToolTip("Show or hide the rarely needed advanced export options.")
 
-            self.preset_output_section_label = section_label("Preset and output")
+            self.preset_output_section_label = section_label("Source, preset, and destination")
             self.filters_grouping_section_label = section_label("Filters and grouping")
-            self.chart_analysis_section_label = section_label("Chart settings")
-            self.optional_outputs_section_label = section_label("Optional outputs")
+            self.chart_analysis_section_label = section_label("Export configuration")
+            self.optional_outputs_section_label = section_label("Deliverables")
             self.advanced_section_label = section_label("Advanced")
 
             self._set_compact_row_label_widths()
@@ -572,23 +590,44 @@ class ExportDialog(QDialog):
             content_layout.addWidget(self.optional_outputs_section_label, row, 0, 1, 4)
 
             row += 1
-            content_layout.addWidget(self.export_target_label, row, 0)
-            optional_outputs_widget = QWidget()
-            optional_outputs_layout = QGridLayout(optional_outputs_widget)
-            optional_outputs_layout.setContentsMargins(0, 0, 0, 0)
-            optional_outputs_layout.setHorizontalSpacing(6)
-            optional_outputs_layout.setVerticalSpacing(4)
-            optional_outputs_layout.addWidget(self.include_google_sheets_checkbox, 0, 0)
-            optional_outputs_layout.addWidget(self.google_sheets_info_button, 0, 1)
-            optional_outputs_layout.addWidget(self.generate_html_dashboard_checkbox, 0, 2)
-            optional_outputs_layout.addWidget(self.html_dashboard_info_button, 0, 3)
-            optional_outputs_layout.addWidget(self.dashboard_visuals_label, 1, 2)
-            optional_outputs_layout.addWidget(self.dashboard_visuals_summary_label, 1, 3)
-            optional_outputs_layout.addWidget(self.dashboard_visuals_button, 1, 4)
-            optional_outputs_layout.addWidget(self.include_industrial_context_checkbox, 1, 0)
-            optional_outputs_layout.addWidget(self.industrial_context_info_button, 1, 1)
-            optional_outputs_layout.setColumnStretch(6, 1)
-            content_layout.addWidget(optional_outputs_widget, row, 1, 1, 3)
+            content_layout.addWidget(self.cloud_output_label, row, 0)
+            cloud_output_widget = QWidget()
+            cloud_output_layout = QHBoxLayout(cloud_output_widget)
+            cloud_output_layout.setContentsMargins(0, 0, 0, 0)
+            cloud_output_layout.setSpacing(6)
+            cloud_output_layout.addWidget(self.include_google_sheets_checkbox)
+            cloud_output_layout.addWidget(self.google_sheets_info_button)
+            cloud_output_layout.addStretch(1)
+            content_layout.addWidget(cloud_output_widget, row, 1, 1, 3)
+
+            row += 1
+            content_layout.addWidget(self.local_sidecar_label, row, 0)
+            local_sidecar_widget = QWidget()
+            local_sidecar_layout = QHBoxLayout(local_sidecar_widget)
+            local_sidecar_layout.setContentsMargins(0, 0, 0, 0)
+            local_sidecar_layout.setSpacing(6)
+            local_sidecar_layout.addWidget(self.generate_html_dashboard_checkbox)
+            local_sidecar_layout.addWidget(self.html_dashboard_info_button)
+            local_sidecar_layout.addSpacing(8)
+            local_sidecar_layout.addWidget(self.dashboard_visuals_label)
+            local_sidecar_layout.addWidget(self.dashboard_visuals_summary_label)
+            local_sidecar_layout.addWidget(self.dashboard_visuals_button)
+            local_sidecar_layout.addStretch(1)
+            content_layout.addWidget(local_sidecar_widget, row, 1, 1, 3)
+
+            row += 1
+            content_layout.addWidget(self.context_output_label, row, 0)
+            context_output_widget = QWidget()
+            context_output_layout = QHBoxLayout(context_output_widget)
+            context_output_layout.setContentsMargins(0, 0, 0, 0)
+            context_output_layout.setSpacing(6)
+            context_output_layout.addWidget(self.include_industrial_context_checkbox)
+            context_output_layout.addWidget(self.industrial_context_info_button)
+            context_output_layout.addStretch(1)
+            content_layout.addWidget(context_output_widget, row, 1, 1, 3)
+
+            row += 1
+            content_layout.addWidget(self.deliverables_summary_label, row, 0, 1, 4)
 
             row += 1
             content_layout.addWidget(self.advanced_section_label, row, 0, 1, 4)
@@ -655,6 +694,7 @@ class ExportDialog(QDialog):
         configure_accessibility(self.generate_html_dashboard_checkbox, name="Create HTML dashboard")
         configure_accessibility(self.dashboard_visuals_button, name="Edit dashboard visuals")
         configure_accessibility(self.include_industrial_context_checkbox, name="Include industrial context")
+        configure_accessibility(self.deliverables_summary_label, name="Export deliverables summary")
         configure_accessibility(self.advanced_toggle_button, name="Show advanced export options")
         configure_accessibility(self.violin_plot_min_samplesize, name="Violin plot minimum sample count")
         configure_accessibility(self.summary_plot_scale, name="Summary plot Y limit scale")
@@ -695,7 +735,9 @@ class ExportDialog(QDialog):
             self.select_excel_label,
             self.export_type_label,
             self.sort_measurements_label,
-            self.export_target_label,
+            self.cloud_output_label,
+            self.local_sidecar_label,
+            self.context_output_label,
             self.violin_plot_min_samplesize_label,
             self.summary_plot_scale_label,
         ):
@@ -737,12 +779,12 @@ class ExportDialog(QDialog):
         )
 
     def _update_export_button_enabled_state(self):
-        if not hasattr(self, "export_button"):
-            return
-        has_database = bool(str(self.db_file or "").strip())
-        has_output = bool(str(self.excel_file or "").strip())
-        self.export_button.setEnabled(has_database and has_output)
+        has_database = bool(str(getattr(self, "db_file", "") or "").strip())
+        has_output = bool(str(getattr(self, "excel_file", "") or "").strip())
+        if hasattr(self, "export_button"):
+            self.export_button.setEnabled(has_database and has_output)
         self._refresh_path_readiness_state(has_database=has_database, has_output=has_output)
+        self._refresh_deliverables_summary(has_database=has_database, has_output=has_output)
 
     def _selected_preset_options(self):
         combobox = getattr(self, "preset_combobox", None)
@@ -824,9 +866,9 @@ class ExportDialog(QDialog):
         if label is None:
             return
         if has_database is None:
-            has_database = bool(str(self.db_file or "").strip())
+            has_database = bool(str(getattr(self, "db_file", "") or "").strip())
         if has_output is None:
-            has_output = bool(str(self.excel_file or "").strip())
+            has_output = bool(str(getattr(self, "excel_file", "") or "").strip())
 
         output_label = "HTML dashboard" if self._is_html_dashboard_only() else "output workbook"
         if has_database and has_output:
@@ -843,6 +885,74 @@ class ExportDialog(QDialog):
             return
         label.setText(f"Select both a database file and {output_label} path to enable export.")
         set_status_variant(label, "warning")
+
+    def _summary_path_name(self, value, *, missing_label):
+        text = str(value or "").strip()
+        if not text:
+            return missing_label
+        try:
+            return Path(text).name or text
+        except (TypeError, ValueError):
+            return text
+
+    def _refresh_deliverables_summary(self, *, has_database=None, has_output=None):
+        label = getattr(self, "deliverables_summary_label", None)
+        if label is None:
+            return
+        db_file = getattr(self, "db_file", "")
+        output_file = getattr(self, "excel_file", "")
+        if has_database is None:
+            has_database = bool(str(db_file or "").strip())
+        if has_output is None:
+            has_output = bool(str(output_file or "").strip())
+
+        html_only = self._is_html_dashboard_only()
+        grouped = self._grouping_is_applied()
+        html_checkbox = getattr(self, "generate_html_dashboard_checkbox", None)
+        google_checkbox = getattr(self, "include_google_sheets_checkbox", None)
+        industrial_checkbox = getattr(self, "include_industrial_context_checkbox", None)
+        html_checked = bool(html_checkbox is not None and html_checkbox.isChecked())
+        google_checked = bool(google_checkbox is not None and google_checkbox.isChecked())
+        industrial_checked = bool(industrial_checkbox is not None and industrial_checkbox.isChecked())
+
+        output_kind = "Dashboard" if html_only else "Workbook"
+        db_summary = self._summary_path_name(db_file, missing_label="not selected")
+        output_summary = self._summary_path_name(output_file, missing_label="not selected")
+        preset_combobox = getattr(self, "preset_combobox", None)
+        preset_summary = preset_combobox.currentText() if preset_combobox is not None else "unknown"
+
+        if html_only:
+            html_summary = "standalone"
+            google_summary = "off (dashboard only)"
+        else:
+            html_enabled = html_checked or grouped
+            html_summary = "on (grouping)" if grouped else ("on" if html_enabled else "off")
+            google_summary = "on" if google_checked else "off"
+
+        summary_parts = [
+            f"Database: {db_summary}",
+            f"{output_kind}: {output_summary}",
+            f"Preset: {preset_summary}",
+            f"HTML dashboard: {html_summary}",
+            f"Google Sheets: {google_summary}",
+            f"Grouping: {'on' if grouped else 'off'}",
+            f"Industrial context: {'on' if industrial_checked else 'off'}",
+        ]
+        label.setText("Deliverables: " + "; ".join(summary_parts))
+        label.setToolTip(
+            "Database: {db}; output: {output}; preset: {preset}; "
+            "HTML dashboard: {html}; Google Sheets: {google}; grouping: {grouping}; "
+            "industrial context: {industrial}.".format(
+                db=str(db_file or "not selected"),
+                output=str(output_file or "not selected"),
+                preset=preset_summary,
+                html=html_summary,
+                google=google_summary,
+                grouping="on" if grouped else "off",
+                industrial="on" if industrial_checked else "off",
+            )
+        )
+        set_status_variant(label, "success" if has_database and has_output else "warning")
 
     def _show_database_required_warning(self, action_name):
         QMessageBox.information(

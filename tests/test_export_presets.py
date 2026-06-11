@@ -348,7 +348,7 @@ class TestExportCompletionMessaging(unittest.TestCase):
     def setUpClass(cls):
         TestExportPresetFlowIntegration.setUpClass()
 
-    def test_google_success_uses_standard_success_message(self):
+    def test_google_success_includes_local_output_and_google_sheet_url(self):
         from modules.export_dialog import build_export_completion_message
 
         metadata = {
@@ -371,7 +371,9 @@ class TestExportCompletionMessaging(unittest.TestCase):
             message,
             'Data exported successfully!\n'
             '\n'
-            f'Export file: {expected_file_uri}',
+            f'Export file: {expected_file_uri}\n'
+            '\n'
+            'Google Sheet: https://docs.google.com/spreadsheets/d/abc/edit',
         )
 
     def test_google_fallback_promotes_warning_dialog(self):

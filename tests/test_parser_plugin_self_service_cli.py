@@ -96,6 +96,71 @@ def test_init_writes_profile_template(tmp_path, capsys):
     assert "Wrote profile template" in captured
 
 
+def test_handoff_and_integrity_commands_create_self_contained_package(tmp_path, capsys):
+    module = _load_cli_module()
+    output_dir = tmp_path / "handoff"
+
+    result = module.main(
+        [
+            "handoff",
+            "--plugin-id",
+            "supplier_beta",
+            "--display-name",
+            "Supplier Beta",
+            "--source-format",
+            "csv",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+    output = capsys.readouterr().out
+    assert result == 0
+    assert "Handoff folder:" in output
+    assert (output_dir / "NON_TECHNICAL_STEPS.md").exists()
+    assert (output_dir / "handoff_manifest.json").exists()
+    assert (output_dir / "contracts" / "07_privacy_redaction_checklist.md").exists()
+
+    integrity_result = module.main(["integrity", str(output_dir)])
+    integrity_output = capsys.readouterr().out
+    assert integrity_result == 0
+    assert "[PASS] supplier_beta" in integrity_output
+
+    alias_result = module.main(["check-handoff", str(output_dir)])
+    alias_output = capsys.readouterr().out
+    assert alias_result == 0
+    assert "manifest_declarative_installation_path" in alias_output
+
+
+def test_repair_command_writes_profile_only_prompt_on_validation_failure(tmp_path, capsys):
+    module = _load_cli_module()
+    workspace, profile, _sample, expected = _write_fixture_workspace(
+        tmp_path,
+        marker="MISSING SUPPLIER MARKER",
+    )
+    repair_prompt = workspace / "artifacts" / "repair.md"
+
+    result = module.main(
+        [
+            "repair",
+            str(profile),
+            "--expected-results",
+            str(expected),
+            "--workspace",
+            str(workspace),
+            "--output",
+            str(repair_prompt),
+        ]
+    )
+    output = capsys.readouterr().out
+
+    assert result == 1
+    assert "[FAIL] supplier_alpha" in output
+    assert "Repair prompt:" in output
+    prompt_text = repair_prompt.read_text(encoding="utf-8")
+    assert "Return complete corrected `profile.yaml` only" in prompt_text
+    assert "Do not return Python code" in prompt_text
+
+
 def test_validate_and_diagnose_plain_text_pdf_profile(tmp_path, capsys):
     module = _load_cli_module()
     workspace, profile, sample, expected = _write_fixture_workspace(tmp_path)

@@ -14,6 +14,7 @@ testing.py
 metroliza.log
 __pycache__/VersionDate.cpython-39.pyc
 license.key
+loc_summary.md
 
 # Local Python caches and scratch data
 __pycache__/

@@ -462,6 +462,7 @@ class _FakeListItem:
         self._text = text
         self._user_role = user_role
         self.hidden = False
+        self.selected = False
 
     def text(self):
         return self._text
@@ -473,6 +474,12 @@ class _FakeListItem:
 
     def setHidden(self, value):
         self.hidden = bool(value)
+
+    def isHidden(self):
+        return self.hidden
+
+    def setSelected(self, value):
+        self.selected = bool(value)
 
 
 class _FakeListWidget:
@@ -1090,7 +1097,7 @@ class TestDataGroupingCreateGroupSelectionPriority(unittest.TestCase):
 
 
 class TestDataGroupingReferenceDoubleClick(unittest.TestCase):
-    def test_reference_double_click_is_navigation_only(self):
+    def test_reference_double_click_opens_create_group_with_reference_name(self):
         dialog = DataGrouping.__new__(DataGrouping)
         captured = {'initial_group_name': None}
 
@@ -1098,10 +1105,13 @@ class TestDataGroupingReferenceDoubleClick(unittest.TestCase):
             captured['initial_group_name'] = initial_group_name
 
         dialog.create_group = _capture_create_group
+        dialog._selected_reference_name = lambda: 'REF-42'
+        dialog.part_list = _FakeListWidget()
+        dialog.part_list._items = [_FakeListItem(text='1', user_role='k1')]
 
         dialog.on_reference_item_double_clicked(_FakeListItem(text='REF-42'))
 
-        self.assertIsNone(captured['initial_group_name'])
+        self.assertEqual(captured['initial_group_name'], 'REF-42')
 
 
 class TestDataGroupingPartDoubleClick(unittest.TestCase):

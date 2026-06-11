@@ -21,8 +21,8 @@ This directory contains active operational, maintenance, and end-user documentat
 - `google_conversion_smoke_runbook.md` — local Google Sheets conversion smoke guidance.
 - `native_build_distribution.md` — native build/distribution workflow and packaging references.
 - `../THIRD_PARTY_NOTICES.md` — third-party license and notice inventory for packaged distributions.
-- `parser_plugins/README.md` — active hub for declarative parser profiles, advanced parser plugin generation, validation, installation, and rollout docs.
-- `parser_plugins/parser_plugin_specification.md` — exact contract for declarative Metroliza parser profiles and advanced generated parser plugins.
+- `parser_plugins/README.md` — active hub for declarative parser profiles, self-contained LLM handoff packages, package integrity checks, repair prompts, validation, installation, and rollout docs.
+- `parser_plugins/parser_plugin_specification.md` — exact contract for declarative Metroliza parser profiles, generated handoff packages, V2 parser output, runtime discovery, and advanced generated parser plugins.
 - `parser_plugins/non_technical_workflow.md` — non-technical step-by-step workflow for adding a new supplier report parser.
 - `roadmaps/2026_03_rc2_stabilization_execution.md` — RC2 stabilization closeout/reference tracker for the completed parity-first slice.
 - `roadmaps/OCR_BENCHMARKING_MASTER.md` — canonical OCR benchmarking, acceleration, privacy, and next-session handoff.
@@ -107,6 +107,7 @@ Canonical release operations docs (release gate/source-of-truth set):
 - `release_checks/full_module_audit_2026-06-08.md` — build `260609` full-module audit hardening release-check evidence.
 - `release_checks/rc5_dashboard_industrial_cache_check_2026-06-09.md` — build `260609` RC5 dashboard large-group, dashboard visuals, and Industrial Data cache release-check evidence.
 - `release_checks/rc5_industrial_data_csv_summary_followup_2026-06-10.md` — build `260609` Industrial Data fetch-to-cache and CSV Summary follow-up evidence.
+- `release_checks/rc5_parser_ux_release_closeout_2026-06-11.md` — build `260611` RC5 parser handoff, Industrial Data cache-first UX, coverage, and release-gate closeout evidence.
 
 Supplemental tutorial/playbook docs (how-to guidance that supports, but does not override, canonical docs):
 

@@ -119,10 +119,10 @@ python -m maturin build --manifest-path src/metroliza/native/distribution_fit_ad
 - [ ] Coverage threshold from `unit-tests` passes, and `unit-test-coverage` artifact `coverage.xml` is reviewed as RC confidence evidence. *(Owner: Release owner/QA)*
 - [ ] Manual release smoke evidence is linked before open-testing promotion when applicable. Google conversion smoke is release-blocking for promoted RC artifacts; skipped default CI does not satisfy that gate. *(Owner: Release owner)*
 
-### 2026.05 RC4 rc2 hardening evidence
+### 2026.05 RC5 rc2 hardening evidence
 
 Current validation branch: `rc2`.
-Current RC metadata: `2026.05rc4(260609)`.
+Current RC metadata: `2026.05rc5(260611)`.
 Current plotstats hotfix pin:
 `1e2c72107d342f44a37e5fb78d7d76992ea60315`.
 
@@ -316,6 +316,19 @@ Current plotstats hotfix pin:
   headless pytest (`1889 passed`, `263 skipped`, `6 warnings`,
   `71 subtests passed`). Evidence is recorded in
   [`full_module_audit_2026-06-08.md`](./full_module_audit_2026-06-08.md).
+- RC5 parser and UX release closeout QA passed locally on 2026-06-11 for build
+  `260611`. The slice fixes parser handoff manifest prompt ordering and
+  integrity validation, blocks routine live Industrial Data workbook export
+  without a local cache target, adds direct `ParseResultV2` persistence and
+  Industrial sync-run repository coverage, and refreshes release metadata. Local
+  gates passed: `git diff --check`, `ruff`, `compileall`, release metadata sync,
+  release hygiene, packaged PDF parser validation, security audit with no known
+  vulnerabilities, focused parser tests (`36 passed`), focused Industrial Data
+  tests (`45 passed`), release metadata tests (`5 passed`), full headless pytest
+  with CI coverage tracking (`1922 passed`, `273 skipped`, `97 warnings`,
+  `74 subtests passed`), and the CI-shaped combined coverage gate with isolated
+  UI shards at `82%` against the `80%` threshold. Evidence is recorded in
+  [`rc5_parser_ux_release_closeout_2026-06-11.md`](./rc5_parser_ux_release_closeout_2026-06-11.md).
 - Post-reorganization follow-up local audit passed after docs/reference cleanup,
   parser-plugin productionization coverage, architecture guardrail hardening, and
   release-status refresh.
@@ -336,7 +349,7 @@ Current plotstats hotfix pin:
   `1e2c72107d342f44a37e5fb78d7d76992ea60315`.
 - Manual packaging smoke, Windows executable clean-machine launch/startup,
   Google conversion smoke, third-party notice artifact evidence, and any open
-  must-fix triage item are not recorded for the current RC4 promotion artifact
+  must-fix triage item are not recorded for the current RC5 promotion artifact
   yet and remain release-promotion blockers unless the release owner records an
   explicit waiver.
 

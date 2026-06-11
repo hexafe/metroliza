@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -54,16 +55,30 @@ class TestParserPluginWizard(unittest.TestCase):
             self.assertTrue(workspace.profile_path.is_file())
             self.assertTrue(workspace.handoff_path.is_file())
             self.assertTrue(workspace.expected_results_path.is_file())
+            self.assertTrue((workspace.root / "handoff_manifest.json").is_file())
+            self.assertTrue((workspace.root / "NON_TECHNICAL_STEPS.md").is_file())
+            self.assertTrue((workspace.root / "contracts" / "01_parser_api_contract.md").is_file())
+            self.assertTrue((workspace.root / "reference" / "contract_snippets.md").is_file())
+            self.assertTrue((workspace.root / "prompts" / "01_identify_template_markers.md").is_file())
+            self.assertTrue((workspace.root / "prompts" / "06_fix_validation_failures.md").is_file())
 
             profile_text = workspace.profile_path.read_text(encoding="utf-8")
             handoff_text = workspace.handoff_path.read_text(encoding="utf-8")
+            manifest = json.loads((workspace.root / "handoff_manifest.json").read_text(encoding="utf-8"))
+            snippets = (workspace.root / "reference" / "contract_snippets.md").read_text(encoding="utf-8")
             profile = yaml.safe_load(profile_text)
             self.assertEqual(profile["plugin"]["plugin_id"], "supplier_alpha")
             self.assertIn("source_format: pdf", profile_text)
             self.assertIn("Do not ask for Python code", handoff_text)
+            self.assertIn("database writes", handoff_text)
             self.assertIn("measurement row capture names", handoff_text)
             self.assertIn("parser_plugin_self_service.py validate", handoff_text)
             self.assertIn("approval evidence records", handoff_text)
+            self.assertEqual(manifest["package_type"], "declarative_profile")
+            self.assertEqual(manifest["allowed_outputs"], ["profile.yaml"])
+            self.assertIn("PluginManifest", snippets)
+            self.assertIn("ParseResultV2", snippets)
+            self.assertIn("Do not write SQLite", snippets)
             self.assertIn("sample_file,reference,report_date", workspace.expected_results_path.read_text(encoding="utf-8"))
 
     def test_store_summary_initializes_empty_store(self):
@@ -91,6 +106,56 @@ class TestParserPluginWizard(unittest.TestCase):
                 self.assertEqual(dialog.plugin_id_edit.text(), "supplier_beta")
                 self.assertTrue(dialog.open_folder_button.isEnabled())
                 self.assertTrue(dialog.copy_path_button.isEnabled())
+                self.assertTrue(dialog.check_package_button.isEnabled())
+                self.assertTrue(dialog.validate_button.isEnabled())
+                self.assertTrue(dialog.repair_button.isEnabled())
+            finally:
+                dialog.close()
+
+    def test_dialog_writes_integrity_validation_and_repair_artifacts(self):
+        with tempfile.TemporaryDirectory() as home_dir:
+            dialog = ParserPluginWizardDialog(home=Path(home_dir))
+            try:
+                dialog.plugin_id_edit.setText("Supplier Epsilon")
+                dialog.create_handoff_workspace()
+
+                dialog.check_handoff_package()
+                self.assertIn("Package check passed", dialog.result_label.text())
+                self.assertTrue(
+                    (dialog.last_handoff_workspace.root / "artifacts" / "handoff_integrity.txt").is_file()
+                )
+                sample = dialog.last_handoff_workspace.root / "samples" / "sample_report_01.pdf"
+                sample.write_text(
+                    "\n".join(
+                        (
+                            "SUPPLIER TEMPLATE MARKER",
+                            "Reference: REF123",
+                            "Date: 2026-01-05",
+                            "Sample: 0001",
+                            "DIM X 10.0 0.1 -0.1 - 10.02 0.02 0",
+                            "",
+                        )
+                    ),
+                    encoding="utf-8",
+                )
+                dialog.last_handoff_workspace.expected_results_path.write_text(
+                    "sample_file,reference,report_date,sample_number,block_index,header_normalized,"
+                    "axis_code,nominal,tol_plus,tol_minus,bonus,measured,deviation,out_of_tolerance\n"
+                    "sample_report_01.pdf,REF123,2026-01-05,0001,0,MAIN FEATURE,Y,10.0,0.1,-0.1,,10.02,0.02,0\n",
+                    encoding="utf-8",
+                )
+
+                dialog.validate_handoff_profile()
+                self.assertIn("Validation failed", dialog.result_label.text())
+                self.assertTrue(
+                    (dialog.last_handoff_workspace.root / "artifacts" / "profile_validation.txt").is_file()
+                )
+
+                dialog.create_repair_prompt()
+                self.assertIn("Repair prompt written", dialog.result_label.text())
+                self.assertTrue(
+                    (dialog.last_handoff_workspace.root / "artifacts" / "profile_repair_prompt.md").is_file()
+                )
             finally:
                 dialog.close()
 

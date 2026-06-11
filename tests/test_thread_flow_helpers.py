@@ -193,6 +193,47 @@ class TestParseHelpers(unittest.TestCase):
             thread._extracted_archive_dir.cleanup()
             thread._extracted_archive_dir = None
 
+    def test_get_list_of_reports_supports_registered_csv_and_excel_formats(self):
+        from metroliza.parsing.parser_plugin_contracts import PluginManifest
+        from modules.parse_reports_thread import ParseReportsThread
+        from modules.contracts import ParseRequest
+        import modules.parse_reports_thread as parse_thread_module
+
+        factory = parse_thread_module.report_parser_factory
+        original_manifests = dict(factory.PARSER_MANIFESTS)
+        original_load_external_plugins = factory.load_external_plugins
+        try:
+            factory.PARSER_MANIFESTS["csv_excel_test"] = PluginManifest(
+                plugin_id="csv_excel_test",
+                display_name="CSV Excel Test",
+                version="0.1.0",
+                supported_formats=("csv", "excel"),
+            )
+            factory.load_external_plugins = lambda *_args, **_kwargs: None
+            with tempfile.TemporaryDirectory() as tmpdir:
+                root = Path(tmpdir)
+                for name, contents in (
+                    ("one.pdf", b"pdf content"),
+                    ("two.csv", b"csv content"),
+                    ("three.xlsx", b"xlsx content"),
+                    ("four.xls", b"xls content"),
+                    ("skip.txt", b"text content"),
+                    ("empty.csv", b""),
+                ):
+                    (root / name).write_bytes(contents)
+
+                thread = ParseReportsThread(ParseRequest(source_directory=tmpdir, db_file="test.db"))
+                reports = thread.get_list_of_reports()
+
+            self.assertEqual(
+                {Path(report).name for report in reports},
+                {"one.pdf", "two.csv", "three.xlsx", "four.xls"},
+            )
+        finally:
+            factory.PARSER_MANIFESTS.clear()
+            factory.PARSER_MANIFESTS.update(original_manifests)
+            factory.load_external_plugins = original_load_external_plugins
+
 
 
     def test_get_report_fingerprints_loads_source_hashes(self):
@@ -473,16 +514,22 @@ class TestParseHelpers(unittest.TestCase):
 
             progress_updates = []
 
-            with self.assertRaises(RuntimeError):
-                parse_new_reports(
-                    [report],
-                    set(),
-                    parser_factory=DummyParser,
-                    persist_report=lambda _parser: (_ for _ in ()).throw(RuntimeError('persist failed')),
-                    on_progress=lambda parsed, total: progress_updates.append((parsed, total)),
-                )
+            failed = []
+            result = parse_new_reports(
+                [report],
+                set(),
+                parser_factory=DummyParser,
+                persist_report=lambda _parser: (_ for _ in ()).throw(RuntimeError('persist failed')),
+                on_progress=lambda parsed, total: progress_updates.append((parsed, total)),
+                on_file_failed=lambda report, exc, processed, total: failed.append(
+                    (os.path.basename(report), type(exc).__name__, processed, total)
+                ),
+            )
 
-            self.assertEqual(progress_updates, [])
+            self.assertEqual(result.parsed_files, 0)
+            self.assertEqual(result.failed_files, 1)
+            self.assertEqual(progress_updates, [(1, 1)])
+            self.assertEqual(failed, [('broken.pdf', 'RuntimeError', 1, 1)])
 
     def test_parse_new_reports_skips_parser_failures_and_continues(self):
         class DummyParser:
@@ -643,6 +690,51 @@ class TestParseHelpers(unittest.TestCase):
             self.assertEqual(result.failed_files, 1)
             self.assertCountEqual(persisted, ['ok-1.pdf', 'ok-2.pdf'])
             self.assertEqual(failed, [('broken.pdf', 'ValueError', 3)])
+
+    def test_parse_new_reports_two_stage_does_not_count_failed_persistence_as_success(self):
+        class DummyParser:
+            def __init__(self, report):
+                self.FILE_PATH = str(report)
+                self.stage_timings_s = {}
+
+            def prepare_for_two_stage_pipeline(self):
+                return None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            reports = []
+            for name in ('ok-1.pdf', 'broken.pdf', 'ok-2.pdf'):
+                path = os.path.join(tmpdir, name)
+                with open(path, 'wb') as report_file:
+                    report_file.write(name.encode('utf-8'))
+                reports.append(path)
+
+            persisted = []
+            failed = []
+
+            def persist_report(parser):
+                report_name = os.path.basename(parser.FILE_PATH)
+                if report_name == "broken.pdf":
+                    raise RuntimeError("persist failed")
+                persisted.append(report_name)
+
+            result = parse_new_reports(
+                reports,
+                set(),
+                parser_factory=DummyParser,
+                persist_report=persist_report,
+                on_file_failed=lambda report, exc, processed, total: failed.append(
+                    (os.path.basename(report), type(exc).__name__, processed, total)
+                ),
+                enable_two_stage_pipeline=True,
+                worker_count=2,
+            )
+
+            self.assertEqual(result.parsed_files, 2)
+            self.assertEqual(result.failed_files, 1)
+            self.assertCountEqual(persisted, ['ok-1.pdf', 'ok-2.pdf'])
+            self.assertEqual(len(failed), 1)
+            self.assertEqual(failed[0][0], 'broken.pdf')
+            self.assertEqual(failed[0][1], 'RuntimeError')
 
     def test_parse_new_reports_two_stage_deterministic_end_state_matches_sequential(self):
         class DummyParser:

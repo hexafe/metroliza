@@ -34,8 +34,16 @@ class _FakeDialog(_FakeWidget):
 
 
 class _FakeLabel(_FakeWidget):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.text = args[0] if args else ""
+        self.text_interaction_flags = None
+
     def setMovie(self, movie):
         self.movie = movie
+
+    def setTextInteractionFlags(self, flags):
+        self.text_interaction_flags = flags
 
 
 class _FakeVBoxLayout:
@@ -92,6 +100,10 @@ def _install_qt_stubs():
     qtcore.Qt = types.SimpleNamespace(
         AlignmentFlag=types.SimpleNamespace(AlignCenter=0, AlignHCenter=1),
         CursorShape=types.SimpleNamespace(PointingHandCursor=0),
+        TextInteractionFlag=types.SimpleNamespace(
+            TextSelectableByMouse=1,
+            TextSelectableByKeyboard=2,
+        ),
     )
     qtcore.QUrl = lambda value: value
 
@@ -152,6 +164,26 @@ class TestAboutWindowGifLifetime(unittest.TestCase):
 
             self.assertTrue(gif_buffer.closed)
             self.assertIsNone(dialog._gif_label.movie)
+
+    def test_support_build_info_is_copyable(self):
+        qtcore, qtgui, qtwidgets = _install_qt_stubs()
+        with patch.dict(
+            sys.modules,
+            {
+                "PyQt6.QtCore": qtcore,
+                "PyQt6.QtGui": qtgui,
+                "PyQt6.QtWidgets": qtwidgets,
+            },
+            clear=False,
+        ):
+            sys.modules.pop("modules.about_window", None)
+            about_module = importlib.import_module("modules.about_window")
+            dialog = about_module.AboutWindow()
+
+            self.assertIn("Support/build info", dialog.support_info_label.text)
+            self.assertIn(about_module.VersionDate.PUBLIC_VERSION_LABEL, dialog.support_info_label.text)
+            self.assertIn("Help > Startup, license, and support", dialog.support_info_label.text)
+            self.assertEqual(dialog.support_info_label.text_interaction_flags, 3)
 
 if __name__ == "__main__":
     unittest.main()

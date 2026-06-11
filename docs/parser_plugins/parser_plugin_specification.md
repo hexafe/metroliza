@@ -20,8 +20,52 @@ The handoff folder contains:
 - `samples/`
 - `expected_results.csv`
 - `llm_handoff.md`
+- `handoff_manifest.json`
+- `NON_TECHNICAL_STEPS.md`
+- `contracts/`
+- `reference/contract_snippets.md`
+- `prompts/`
+- `responses/`
+- `artifacts/`
 
-The dialog does not call an LLM. It only prepares the local files that a user can give to an approved external workflow or a human reviewer, and it provides open-folder/copy-path actions for the hidden profile-store location.
+The dialog does not call an LLM. It prepares the local files that a user can give to an approved external workflow or a human reviewer, and it provides open-folder, copy-path, package-check, validate, diagnose, repair-prompt, and install actions for the hidden profile-store location.
+
+## Self-contained LLM handoff package
+
+Every generated LLM handoff package must contain enough information for a disconnected LLM to build or repair the parser/profile without browsing the repository.
+
+Required package files:
+
+- `handoff_manifest.json` with `schema_version`, `package_type`, `plugin_id`, `display_name`, `source_format`, `allowed_outputs`, validation commands, prompt order, and runtime persistence boundary.
+- `contracts/00_read_this_first.md` with the package target and hard boundaries.
+- `contracts/01_parser_api_contract.md` with the API snippets for `PluginManifest`, `ProbeResult`, `ParseResultV2`, `ReportInfoV2`, `MeasurementBlockV2`, and `MeasurementV2`.
+- `contracts/02_runtime_selection_contract.md` with probe confidence rules and strict selection threshold.
+- `contracts/03_sqlite_persistence_contract.md` stating that Metroliza owns SQLite writes and plugins must return `ParseResultV2`.
+- `contracts/04_expected_results_contract.md` with the expected-results CSV columns and review rules.
+- `contracts/05_security_and_safety_contract.md` forbidding network calls, shell commands, package installation, credential access, dynamic code execution, and plugin-owned database writes.
+- `contracts/06_github_references.md` with source links as supplemental references only.
+- `contracts/07_privacy_redaction_checklist.md` with the minimum sample-redaction review before external LLM sharing.
+- `reference/contract_snippets.md` as the compact single-file version for cheap/local LLMs.
+- `NON_TECHNICAL_STEPS.md` with step-by-step instructions for a non-technical user.
+
+Prompt files must support two usage patterns:
+
+- full prompts for stronger models or human reviewers,
+- microtask prompts that split analysis, manifest/probe work, source extraction, V2 mapping, tests, and repair into small tasks.
+- `handoff_manifest.json` must keep `full_prompt_order` and `microtask_prompt_order` separate so a user does not mix the two routes accidentally.
+
+Repair prompts must also be self-contained. They must include failed validation checks, the compact API/persistence snippets, expected-results columns, allowed outputs, and the instruction to return complete updated file contents only.
+
+Future Codex sessions that refine the LLM parser plugin builder should start here, then check:
+
+1. `src/metroliza/parsing/llm_plugin_factory/scaffold.py` for generated package files.
+2. `src/metroliza/parsing/parser_profile_handoff.py` for declarative handoff package creation, integrity checks, validation artifacts, repair prompts, and install helpers.
+3. `src/metroliza/ui/parser_plugin_wizard.py` for the in-app handoff/validation actions.
+4. `scripts/parser_plugin_self_service.py` for the non-technical/operator CLI.
+5. `src/metroliza/parsing/parser_plugin_repair_loop.py` for advanced generated-plugin repair prompts.
+6. `src/metroliza/parsing/parse_result_v2_persistence.py` and `src/metroliza/parsing/base_report_parser.py` for the generic V2-to-SQLite bridge.
+7. `src/metroliza/parsing/parse_reports_thread.py` and `src/metroliza/reports/report_parser_factory.py` for runtime discovery, source-format filtering, and batch failure isolation.
+8. `tests/test_parser_plugin_contracts.py`, `tests/test_parser_plugin_wizard.py`, `tests/test_parser_plugin_repair_loop.py`, `tests/test_parser_plugin_scripts.py`, `tests/test_parser_plugin_self_service_cli.py`, `tests/test_thread_flow_helpers.py`, and `tests/test_report_parser_factory.py` for acceptance coverage.
 
 ## Declarative profile contract
 
@@ -93,6 +137,8 @@ The output must be a Python plugin file that Metroliza can load through the pars
 - `expected_results_template.csv` with manually verified expected values
 - `prompts/01_analysis_prompt.md`
 - `prompts/02_implementation_prompt.md`
+- `prompts/microtasks/` when using a small/local LLM
+- `contracts/` or `reference/contract_snippets.md`
 - the scaffold files generated in the workspace
 
 ## Required plugin files
@@ -187,6 +233,20 @@ This method must:
 
 This adapter must convert a `ParseResultV2` back into the legacy `blocks_text` shape used by compatibility paths.
 
+### Persistence
+
+Generated plugins should not implement database writes. The generic base parser bridge persists `ParseResultV2` through `ReportRepository.persist_parsed_report(...)`.
+
+The bridge maps:
+
+- `ParseResultV2.report/meta` to canonical report metadata,
+- each `MeasurementV2` to one `report_measurements` row,
+- parser warnings to metadata warnings,
+- positive `out_of_tolerance` values to NOK status,
+- raw tokens, line references, extensions, and block index to `raw_measurement_json`.
+
+If `ParseResultV2.errors` is not empty, the bridge raises an error and does not create a successful parsed-report row. Built-in parsers can still override the persistence path when they need richer metadata extraction.
+
 ## Output quality rules
 
 The generated plugin must:
@@ -197,6 +257,7 @@ The generated plugin must:
 - avoid new package dependencies
 - avoid non-deterministic behavior
 - avoid changing global runtime flags or factory logic
+- avoid direct SQLite connections, table creation, or database writes
 
 ## Test requirements
 
@@ -222,8 +283,11 @@ with:
 Use the declarative self-service CLI for this path:
 
 ```bash
+PYTHONPATH=src:. python scripts/parser_plugin_self_service.py handoff --plugin-id <profile-id> --source-format pdf --output-dir <handoff-folder>
+PYTHONPATH=src:. python scripts/parser_plugin_self_service.py integrity <handoff-folder>
 PYTHONPATH=src:. python scripts/parser_plugin_self_service.py validate <handoff-folder>/profile.yaml --expected-results <handoff-folder>/expected_results.csv --workspace <handoff-folder>
 PYTHONPATH=src:. python scripts/parser_plugin_self_service.py diagnose <handoff-folder>/profile.yaml <handoff-folder>/samples/sample_report_01.pdf
+PYTHONPATH=src:. python scripts/parser_plugin_self_service.py repair <handoff-folder>/profile.yaml --expected-results <handoff-folder>/expected_results.csv --workspace <handoff-folder> --output <handoff-folder>/artifacts/profile_repair_prompt.md
 PYTHONPATH=src:. python scripts/parser_plugin_self_service.py install <handoff-folder>/profile.yaml --expected-results <handoff-folder>/expected_results.csv --workspace <handoff-folder> --approved-by operator
 PYTHONPATH=src:. python scripts/parser_plugin_self_service.py evidence <profile-id>
 ```
@@ -239,11 +303,12 @@ Metroliza will auto-discover that file and include it in parser factory resoluti
 ### Declarative parser profile
 
 - declarative profile validation passes via `scripts/parser_plugin_self_service.py validate`
+- the handoff package passes `scripts/parser_plugin_self_service.py integrity`
 - declarative profile approval uses `scripts/parser_plugin_self_service.py install` with at least one sample and `expected_results.csv`
 - the parsed result matches every manually verified value in `expected_results.csv`
 - no extra parsed measurement rows are left unchecked by `expected_results.csv`
 - the profile is installed in its approved runtime location with a matching `approval.json` checksum
-- Metroliza selects the profile for the intended supplier report format
+- Metroliza discovers the profile's report file type during normal import and selects the profile for the intended supplier report format
 - rollout approval follows the parser plugin runbook
 
 ### Advanced Python plugin

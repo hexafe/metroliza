@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-import re
 
 from PyQt6.QtCore import QUrl
 from PyQt6.QtGui import QDesktopServices
@@ -20,11 +18,18 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-from metroliza.parsing.declarative_parser_profiles import (
-    ensure_profile_store_dirs,
-    list_profiles,
-    profile_store_root,
-    render_profile_template,
+from metroliza.parsing.declarative_parser_profiles import list_profiles
+from metroliza.parsing.parser_profile_handoff import (
+    HandoffWorkspace,
+    create_profile_handoff_workspace,
+    format_handoff_integrity_report,
+    install_profile_handoff,
+    safe_profile_id,
+    summarize_profile_store,
+    validate_handoff_workspace,
+    write_profile_diagnose_artifact,
+    write_profile_repair_prompt,
+    write_profile_validation_artifact,
 )
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
@@ -38,152 +43,7 @@ from metroliza.ui.ui_foundation import (
 )
 
 
-@dataclass(frozen=True)
-class ProfileStoreSummary:
-    root: Path
-    total: int
-    enabled: int
-    approved: int
-    disabled: int
-
-
-@dataclass(frozen=True)
-class HandoffWorkspace:
-    root: Path
-    profile_path: Path
-    handoff_path: Path
-    expected_results_path: Path
-
-
-def safe_profile_id(value: str) -> str:
-    """Return the filesystem/profile id used for a new handoff workspace."""
-    normalized = re.sub(r"[^a-z0-9_]+", "_", value.strip().casefold()).strip("_")
-    if not normalized or not normalized[0].isalpha():
-        normalized = f"supplier_{normalized or 'profile'}"
-    if len(normalized) < 3:
-        normalized = f"{normalized}_profile"
-    return normalized[:64]
-
-
-def summarize_profile_store(*, home: Path | None = None) -> ProfileStoreSummary:
-    ensure_profile_store_dirs(home=home)
-    profiles = list_profiles(home=home)
-    enabled = sum(1 for profile in profiles if profile.enabled)
-    approved = sum(1 for profile in profiles if profile.approved)
-    disabled = sum(1 for profile in profiles if not profile.enabled)
-    return ProfileStoreSummary(
-        root=profile_store_root(home=home),
-        total=len(profiles),
-        enabled=enabled,
-        approved=approved,
-        disabled=disabled,
-    )
-
-
-def create_llm_handoff_workspace(
-    *,
-    plugin_id: str,
-    display_name: str,
-    source_format: str,
-    home: Path | None = None,
-) -> HandoffWorkspace:
-    """Create a data-only profile handoff folder for an external LLM workflow."""
-    safe_id = safe_profile_id(plugin_id)
-    readable_name = display_name.strip() or safe_id.replace("_", " ").title()
-    root = profile_store_root(home=home) / "incoming" / safe_id
-    samples_dir = root / "samples"
-    root.mkdir(parents=True, exist_ok=True)
-    samples_dir.mkdir(exist_ok=True)
-
-    profile_path = root / "profile.yaml"
-    expected_results_path = root / "expected_results.csv"
-    handoff_path = root / "llm_handoff.md"
-
-    if not profile_path.exists():
-        profile_path.write_text(
-            render_profile_template(
-                plugin_id=safe_id,
-                display_name=readable_name,
-                source_format=source_format,
-            ),
-            encoding="utf-8",
-        )
-    if not expected_results_path.exists():
-        expected_results_path.write_text(
-            "sample_file,reference,report_date,sample_number,block_index,header_normalized,"
-            "axis_code,nominal,tol_plus,tol_minus,bonus,measured,deviation,out_of_tolerance\n",
-            encoding="utf-8",
-        )
-    expected_columns = (
-        "sample_file, reference, report_date, sample_number, block_index, header_normalized, "
-        "axis_code, nominal, tol_plus, tol_minus, bonus, measured, deviation, out_of_tolerance"
-    )
-    handoff_path.write_text(
-        "\n".join(
-            [
-                f"# Parser Profile Handoff: {readable_name}",
-                "",
-                "Use an approved external LLM workflow or manual review to complete profile.yaml.",
-                "Do not paste private reports into an external tool unless your release owner approves it.",
-                "",
-                "Give the reviewer or assistant:",
-                "",
-                "- profile.yaml",
-                "- 3-5 reports from samples/",
-                "- expected_results.csv with manually checked values",
-                "- supplier/template notes, including visible labels, date format, and decimal separator",
-                "",
-                "Ask for a declarative Metroliza parser profile only.",
-                "Do not ask for Python code, package changes, network calls, or installer changes.",
-                "",
-                "Required profile contract:",
-                "",
-                "- schema_version: 1",
-                "- plugin.plugin_id must stay as " + safe_id,
-                "- plugin.source_format must stay as " + source_format,
-                "- probe.required_markers must contain supplier/template text visible in every sample",
-                "- extraction.report_fields must extract reference, report_date, and sample_number",
-                "- extraction.blocks[].pattern must be line-anchored with ^",
-                "- measurement row capture names: axis_code, nominal, tol_plus, tol_minus, bonus, measured, deviation, out_of_tolerance",
-                "- regexes must avoid Python code, backreferences, nested repeats, and unbounded dot wildcards",
-                "",
-                "expected_results.csv columns:",
-                "",
-                expected_columns,
-                "",
-                "Validation and install commands from the Metroliza source checkout:",
-                "",
-                (
-                    f'PYTHONPATH=src:. python scripts/parser_plugin_self_service.py validate "{profile_path}" '
-                    f'--expected-results "{expected_results_path}" --workspace "{root}"'
-                ),
-                (
-                    f'PYTHONPATH=src:. python scripts/parser_plugin_self_service.py diagnose "{profile_path}" '
-                    f'"{samples_dir}/<sample-file>"'
-                ),
-                (
-                    f'PYTHONPATH=src:. python scripts/parser_plugin_self_service.py install "{profile_path}" '
-                    f'--expected-results "{expected_results_path}" --workspace "{root}" --approved-by <approver>'
-                ),
-                "PYTHONPATH=src:. python scripts/parser_plugin_self_service.py evidence " + safe_id,
-                "",
-                "Acceptance criteria:",
-                "",
-                "- validation passes with at least one sample report and expected_results.csv",
-                "- diagnose selects this profile and shows the expected reference/date/sample values",
-                "- the profile stays data-only YAML",
-                "- approval evidence records validation_passed=true, sample_count greater than zero, and matching checksums",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    return HandoffWorkspace(
-        root=root,
-        profile_path=profile_path,
-        handoff_path=handoff_path,
-        expected_results_path=expected_results_path,
-    )
+create_llm_handoff_workspace = create_profile_handoff_workspace
 
 
 class ParserPluginWizardDialog(QDialog):
@@ -210,11 +70,15 @@ class ParserPluginWizardDialog(QDialog):
         self.create_button = QPushButton("Create Handoff Folder")
         self.open_folder_button = QPushButton("Open Folder")
         self.copy_path_button = QPushButton("Copy Path")
+        self.check_package_button = QPushButton("Check Package")
+        self.validate_button = QPushButton("Validate")
+        self.diagnose_button = QPushButton("Diagnose")
+        self.repair_button = QPushButton("Repair Prompt")
+        self.install_button = QPushButton("Install")
         self.refresh_button = QPushButton("Refresh")
         self.close_button = QPushButton("Close")
         self.result_label = status_chip("No handoff folder created yet", "neutral")
-        self.open_folder_button.setEnabled(False)
-        self.copy_path_button.setEnabled(False)
+        self._set_handoff_actions_enabled(False)
 
         self._build_layout()
         self.refresh_status()
@@ -253,12 +117,26 @@ class ParserPluginWizardDialog(QDialog):
         button_row.addWidget(self.create_button)
         button_row.addWidget(self.close_button)
         layout.addLayout(button_row)
+
+        validation_row = QHBoxLayout()
+        validation_row.addStretch(1)
+        validation_row.addWidget(self.check_package_button)
+        validation_row.addWidget(self.validate_button)
+        validation_row.addWidget(self.diagnose_button)
+        validation_row.addWidget(self.repair_button)
+        validation_row.addWidget(self.install_button)
+        layout.addLayout(validation_row)
         layout.addWidget(self.result_label)
 
         self.refresh_button.clicked.connect(self.refresh_status)
         self.create_button.clicked.connect(self.create_handoff_workspace)
         self.open_folder_button.clicked.connect(self.open_handoff_folder)
         self.copy_path_button.clicked.connect(self.copy_handoff_path)
+        self.check_package_button.clicked.connect(self.check_handoff_package)
+        self.validate_button.clicked.connect(self.validate_handoff_profile)
+        self.diagnose_button.clicked.connect(self.diagnose_handoff_profile)
+        self.repair_button.clicked.connect(self.create_repair_prompt)
+        self.install_button.clicked.connect(self.install_handoff_profile)
         self.close_button.clicked.connect(self.accept)
 
         configure_accessibility(self.plugin_id_edit, name="Parser profile id")
@@ -267,6 +145,23 @@ class ParserPluginWizardDialog(QDialog):
         configure_accessibility(self.create_button, name="Create parser profile handoff folder")
         configure_accessibility(self.open_folder_button, name="Open parser profile handoff folder")
         configure_accessibility(self.copy_path_button, name="Copy parser profile handoff folder path")
+        configure_accessibility(self.check_package_button, name="Check parser profile handoff package")
+        configure_accessibility(self.validate_button, name="Validate parser profile handoff")
+        configure_accessibility(self.diagnose_button, name="Diagnose parser profile handoff")
+        configure_accessibility(self.repair_button, name="Create parser profile repair prompt")
+        configure_accessibility(self.install_button, name="Install approved parser profile")
+
+    def _set_handoff_actions_enabled(self, enabled: bool):
+        for button in (
+            self.open_folder_button,
+            self.copy_path_button,
+            self.check_package_button,
+            self.validate_button,
+            self.diagnose_button,
+            self.repair_button,
+            self.install_button,
+        ):
+            button.setEnabled(enabled)
 
     def refresh_status(self):
         summary = summarize_profile_store(home=self.home)
@@ -296,8 +191,7 @@ class ParserPluginWizardDialog(QDialog):
             home=self.home,
         )
         self.last_handoff_workspace = workspace
-        self.open_folder_button.setEnabled(True)
-        self.copy_path_button.setEnabled(True)
+        self._set_handoff_actions_enabled(True)
         self.result_label.setText(f"Handoff folder ready. Add reports to samples/: {workspace.root}")
         set_status_variant(self.result_label, "success")
         self.refresh_status()
@@ -316,3 +210,72 @@ class ParserPluginWizardDialog(QDialog):
         QApplication.clipboard().setText(str(self.last_handoff_workspace.root))
         self.result_label.setText(f"Copied handoff folder path: {self.last_handoff_workspace.root}")
         set_status_variant(self.result_label, "success")
+
+    def _current_workspace(self) -> HandoffWorkspace | None:
+        if self.last_handoff_workspace is None:
+            self.result_label.setText("No handoff folder created yet")
+            set_status_variant(self.result_label, "neutral")
+            return None
+        return self.last_handoff_workspace
+
+    def check_handoff_package(self):
+        workspace = self._current_workspace()
+        if workspace is None:
+            return
+        report = validate_handoff_workspace(workspace.root)
+        output = workspace.root / "artifacts" / "handoff_integrity.txt"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(format_handoff_integrity_report(report) + "\n", encoding="utf-8")
+        if report.passed:
+            self.result_label.setText(f"Package check passed. Evidence: {output}")
+            set_status_variant(self.result_label, "success")
+        else:
+            self.result_label.setText(f"Package check failed. Evidence: {output}")
+            set_status_variant(self.result_label, "warning")
+
+    def validate_handoff_profile(self):
+        workspace = self._current_workspace()
+        if workspace is None:
+            return
+        output, passed = write_profile_validation_artifact(workspace)
+        if passed:
+            self.result_label.setText(f"Validation passed. Evidence: {output}")
+            set_status_variant(self.result_label, "success")
+        else:
+            self.result_label.setText(f"Validation failed. Evidence: {output}")
+            set_status_variant(self.result_label, "warning")
+
+    def diagnose_handoff_profile(self):
+        workspace = self._current_workspace()
+        if workspace is None:
+            return
+        try:
+            output = write_profile_diagnose_artifact(workspace)
+        except (FileNotFoundError, ValueError) as exc:
+            self.result_label.setText(str(exc))
+            set_status_variant(self.result_label, "warning")
+            return
+        self.result_label.setText(f"Diagnose evidence written: {output}")
+        set_status_variant(self.result_label, "success")
+
+    def create_repair_prompt(self):
+        workspace = self._current_workspace()
+        if workspace is None:
+            return
+        output = write_profile_repair_prompt(workspace)
+        self.result_label.setText(f"Repair prompt written: {output}")
+        set_status_variant(self.result_label, "success")
+
+    def install_handoff_profile(self):
+        workspace = self._current_workspace()
+        if workspace is None:
+            return
+        try:
+            result = install_profile_handoff(workspace, approved_by="wizard", home=self.home)
+        except ValueError as exc:
+            self.result_label.setText(str(exc))
+            set_status_variant(self.result_label, "warning")
+            return
+        self.result_label.setText(f"Installed profile: {result.plugin_id}")
+        set_status_variant(self.result_label, "success")
+        self.refresh_status()

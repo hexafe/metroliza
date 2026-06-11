@@ -185,6 +185,7 @@ def build_export_completion_message(*, excel_file, export_target, completion_met
 
         if converted_url:
             message_lines = list(base_success_lines)
+            message_lines.extend(["", f"Google Sheet: {converted_url}"])
             if dashboard_warnings:
                 message_lines.extend(["", "HTML dashboard warnings:", *[f"- {warning}" for warning in dashboard_warnings]])
             return 'info', 'Export successful', "\n".join(message_lines)

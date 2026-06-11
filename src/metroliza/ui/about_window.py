@@ -8,6 +8,33 @@ from metroliza.app import version as VersionDate
 import base64
 
 
+SUPPORT_URL = "https://www.github.com/hexafe/"
+
+
+def build_support_build_info() -> str:
+    """Return compact support metadata that users can copy from the About dialog."""
+    public_version = getattr(VersionDate, "PUBLIC_VERSION_LABEL", VersionDate.VERSION_LABEL)
+    return "\n".join(
+        [
+            "Support/build info",
+            f"Version: {public_version}",
+            f"Internal version: {VersionDate.VERSION_LABEL}",
+            f"Build: {VersionDate.VERSION_DATE}",
+            "Manual: Help > Startup, license, and support",
+            f"Support URL: {SUPPORT_URL}",
+        ]
+    )
+
+
+def _make_selectable(label):
+    if hasattr(label, "setTextInteractionFlags") and hasattr(Qt, "TextInteractionFlag"):
+        label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+    return label
+
+
 class ClickableLabel(QLabel):
     """Label that behaves like a hyperlink and opens a fixed URL when clicked."""
 
@@ -79,8 +106,13 @@ class AboutWindow(QDialog):
         author_label.setOpenExternalLinks(True)
         self.layout.addWidget(author_label)
 
+        support_info_label = _make_selectable(QLabel(build_support_build_info()))
+        support_info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.support_info_label = support_info_label
+        self.layout.addWidget(support_info_label)
+
         # Add the text with a link to www.github.com
-        link_label = ClickableLabel("Github: https://www.github.com/hexafe/", "https://www.github.com/hexafe/")
+        link_label = ClickableLabel(f"Github: {SUPPORT_URL}", SUPPORT_URL)
         link_label.setOpenExternalLinks(True)
         link_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         self.layout.addWidget(link_label)

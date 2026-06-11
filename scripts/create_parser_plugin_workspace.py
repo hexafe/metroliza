@@ -58,9 +58,10 @@ def main(argv: list[str] | None = None) -> int:
     print("Next steps:")
     print("  1. Put 3-5 sample reports into samples/.")
     print("  2. Fill supplier_intake.md and expected_results_template.csv.")
-    print("  3. Run the prompts in prompts/ with your LLM and paste the results back into the workspace.")
-    print("  4. Validate the generated parser before installation.")
-    print(f"  5. Install the validated plugin into {default_external_plugin_dir_display()}/<plugin-id>.py")
+    print("  3. For small/local models, follow NON_TECHNICAL_STEPS.md and prompts/microtasks/.")
+    print("  4. For larger models, run prompts/01_analysis_prompt.md then prompts/02_implementation_prompt.md.")
+    print("  5. Validate the generated parser before installation.")
+    print(f"  6. Install the validated plugin into {default_external_plugin_dir_display()}/<plugin-id>.py")
     return 0
 
 

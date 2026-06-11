@@ -391,6 +391,64 @@ class ParsingDialog(QDialog):
             self.log_and_exit(e)
 
 
+    @staticmethod
+    def _report_file_label(count):
+        return "report file" if count == 1 else "report files"
+
+    def _build_parse_completion_feedback(self):
+        result = getattr(self.parse_thread, "last_parse_result", None)
+        if result is None:
+            return (
+                "info",
+                "Parsing successful",
+                f"Measurements data saved to {self.db_file}!",
+            )
+
+        total_files = max(0, int(getattr(result, "total_files", 0) or 0))
+        parsed_files = max(0, int(getattr(result, "parsed_files", 0) or 0))
+        failed_files = max(0, int(getattr(result, "failed_files", 0) or 0))
+
+        if total_files == 0:
+            return (
+                "info",
+                "No reports parsed",
+                (
+                    "No supported report files were found in the selected source. "
+                    f"Nothing was written to {self.db_file}."
+                ),
+            )
+
+        if failed_files and parsed_files == 0:
+            return (
+                "warning",
+                "No reports parsed",
+                (
+                    f"Metroliza found {total_files} {self._report_file_label(total_files)}, "
+                    f"but none were saved to {self.db_file}. "
+                    f"{failed_files} {self._report_file_label(failed_files)} could not be parsed. "
+                    "Review the log for details, then check the report format and retry."
+                ),
+            )
+
+        if failed_files:
+            return (
+                "warning",
+                "Parsing completed with warnings",
+                (
+                    f"{parsed_files} of {total_files} {self._report_file_label(total_files)} "
+                    f"completed successfully and are available in {self.db_file}. "
+                    f"{failed_files} {self._report_file_label(failed_files)} could not be parsed. "
+                    "Skipped files are listed in the log."
+                ),
+            )
+
+        return (
+            "info",
+            "Parsing successful",
+            f"Measurements data saved to {self.db_file}!",
+        )
+
+
     @pyqtSlot(str)
     def on_parse_error(self, message):
         """Capture parse errors for final summary when the worker finishes."""
@@ -413,7 +471,11 @@ class ParsingDialog(QDialog):
                 QMessageBox.information(self, "Parsing canceled", "Parsing has been canceled")
             elif not should_request_modeless_enrichment:
                 # Show a message box to inform the user that parsing is complete
-                QMessageBox.information(self, "Parsing successful", f"Measurements data saved to {self.db_file}!")
+                severity, title, message = self._build_parse_completion_feedback()
+                if severity == "warning":
+                    QMessageBox.warning(self, title, message)
+                else:
+                    QMessageBox.information(self, title, message)
 
             # Close the loading dialog
             self.loading_dialog.accept()

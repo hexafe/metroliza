@@ -494,7 +494,11 @@ def test_launcher_dialog_keeps_connection_fields_out_of_main_surface(tmp_path):
     assert dialog.links_button.text() == "Production links..."
     assert dialog.export_button.text() == "Export workbook..."
     assert dialog.analyze_button.text() == "CSV Summary..."
-    assert dialog.sizeHint().height() <= 520
+    assert dialog.diagnostics_button.text() == "Diagnostics..."
+    assert dialog.initialize_button.isHidden()
+    assert "Source -> Access -> Cache -> CSV Summary" in dialog.workflow_label.text()
+    assert "Last sync/cache outcome" in dialog.sync_summary_label.text()
+    assert dialog.sizeHint().height() <= 560
     dialog.close()
 
 
@@ -599,11 +603,12 @@ def test_launcher_keeps_source_configuration_available_without_database(tmp_path
     assert not dialog.analysis_source_combo.isEnabled()
     assert "Select a report DB" in dialog.analytics_status_label.text()
     assert dialog.select_database_button.isEnabled()
-    assert "Export can fetch directly" in dialog.status_label.text()
+    assert "select a report DB" in dialog.status_label.text()
+    assert "fetch rows into the local cache" in dialog.status_label.text()
     dialog.close()
 
 
-def test_launcher_enables_direct_export_when_source_config_exists(tmp_path):
+def test_launcher_keeps_export_disabled_when_source_config_exists_without_database(tmp_path):
     _app()
     config_path = tmp_path / "industrial_sources.yaml"
     upsert_source_profile_in_config(
@@ -626,7 +631,7 @@ def test_launcher_enables_direct_export_when_source_config_exists(tmp_path):
     dialog.refresh_status()
 
     assert dialog.sources_button.isEnabled()
-    assert dialog.export_button.isEnabled()
+    assert not dialog.export_button.isEnabled()
     assert not dialog.sync_button.isEnabled()
     assert not dialog.links_button.isEnabled()
     assert not dialog.initialize_button.isEnabled()
@@ -665,9 +670,10 @@ def test_launcher_blocks_cache_fetch_without_metroliza_database(monkeypatch, tmp
     dialog.close()
 
 
-def test_launcher_opens_direct_export_without_metroliza_database(monkeypatch, tmp_path):
+def test_launcher_blocks_export_without_metroliza_database(monkeypatch, tmp_path):
     _app()
     launched = {}
+    warnings = []
 
     class FakeExportDialog:
         def __init__(
@@ -691,15 +697,15 @@ def test_launcher_opens_direct_export_without_metroliza_database(monkeypatch, tm
             launched["executed"] = True
 
     monkeypatch.setattr(industrial_data_dialog, "IndustrialExportDialog", FakeExportDialog)
+    monkeypatch.setattr(industrial_data_dialog.QMessageBox, "warning", lambda *args: warnings.append(args))
     dialog = IndustrialDataDialog(db_file=None)
     dialog.config_path = tmp_path / "industrial_sources.yaml"
 
     dialog.open_export_dialog()
 
-    assert launched["parent"] is dialog
-    assert launched["db_file"] is None
-    assert launched["config_path"] == dialog.config_path
-    assert launched["executed"] is True
+    assert launched == {}
+    assert "Select a Metroliza report database" in warnings[0][2]
+    assert "fetch rows into the local cache" in warnings[0][2]
     dialog.close()
 
 
@@ -850,9 +856,51 @@ def test_launcher_reports_ready_state_when_cache_has_synced_rows(tmp_path):
 
     assert "Industrial cache ready" in dialog.status_label.text()
     assert "CSV Summary ready" in dialog.analytics_status_label.text()
+    assert "Source -> Access -> Cache -> CSV Summary" in dialog.workflow_label.text()
+    assert "Source: 1 configured" in dialog.workflow_label.text()
+    assert "Access: last passed" in dialog.workflow_label.text()
+    assert "Cache: 1 row" in dialog.workflow_label.text()
+    assert "CSV Summary: ready" in dialog.workflow_label.text()
+    assert "Last sync/cache outcome: Assembly MES succeeded, 1 row" in (
+        dialog.sync_summary_label.text()
+    )
     assert dialog.cache_label.accessibleName() == "Industrial cache readiness"
+    assert dialog.workflow_label.accessibleName() == "Industrial workflow status"
+    assert dialog.sync_summary_label.accessibleName() == "Industrial last cache outcome"
     assert dialog.analytics_status_label.accessibleName() == "Industrial CSV Summary readiness"
     assert dialog.sync_button.accessibleName() == "Fetch industrial rows into cache"
+    dialog.close()
+
+
+def test_launcher_reports_last_sync_warning_from_cached_diagnostics(tmp_path):
+    _app()
+    db_path = str(tmp_path / "metroliza.db")
+    repository = IndustrialDataRepository(db_path)
+    profile = repository.upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="events",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+    )
+    sync_run_id = repository.create_sync_run(source_profile_id=profile.id)
+    repository.finish_sync_run(
+        sync_run_id=sync_run_id,
+        status="failed",
+        row_count=0,
+        error_summary="fetch failed password=super-secret",
+        diagnostics={"warnings": ["timeout password=also-secret"]},
+    )
+
+    dialog = IndustrialDataDialog(db_file=db_path)
+
+    assert "Access: failed" in dialog.workflow_label.text()
+    assert "fetch failed password=<redacted>" in dialog.sync_summary_label.text()
+    assert "super-secret" not in dialog.sync_summary_label.text()
+    assert "also-secret" not in dialog.sync_summary_label.text()
     dialog.close()
 
 

@@ -1,6 +1,7 @@
 import importlib
 import importlib.machinery
 import importlib.util
+import json
 import os
 import sys
 import types
@@ -210,16 +211,25 @@ class SupplierAlphaReportParser(BaseReportParser, BaseReportParserPlugin):
 '''
 
 
-def test_create_parser_plugin_workspace_script_creates_workspace(tmp_path):
+def test_create_parser_plugin_workspace_script_creates_workspace(tmp_path, capsys):
     module = _load_script_module("create_parser_plugin_workspace.py")
     output_dir = tmp_path / "workspace"
 
     result = module.main(["--plugin-id", "supplier_alpha", "--output-dir", str(output_dir)])
+    output = capsys.readouterr().out
 
     assert result == 0
     assert (output_dir / "README.md").exists()
     assert (output_dir / "generated_plugin.py").exists()
     assert (output_dir / "artifacts" / "README.md").exists()
+    assert (output_dir / "handoff_manifest.json").exists()
+    assert (output_dir / "reference" / "contract_snippets.md").exists()
+    assert (output_dir / "prompts" / "microtasks" / "01_template_analysis.md").exists()
+    manifest = json.loads((output_dir / "handoff_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["package_type"] == "python_plugin"
+    assert manifest["plugin_id"] == "supplier_alpha"
+    assert "NON_TECHNICAL_STEPS.md" in output
+    assert "prompts/microtasks/" in output
 
 
 def test_generated_workspace_plugin_validates_and_resolves_from_explicit_path(
@@ -511,7 +521,12 @@ class BadExternalParser(BaseReportParser, BaseReportParserPlugin):
 
     assert result == 1
     assert output_path.exists()
-    assert "probe_returns_probe_result" in output_path.read_text(encoding="utf-8")
+    prompt_text = output_path.read_text(encoding="utf-8")
+    assert "probe_returns_probe_result" in prompt_text
+    assert "PluginManifest" in prompt_text
+    assert "ParseResultV2" in prompt_text
+    assert "sample_file,reference,report_date" in prompt_text
+    assert "complete updated file contents" in prompt_text.casefold()
 
 
 def test_build_parser_plugin_repair_prompt_script_includes_semantic_mismatch_checks(tmp_path):

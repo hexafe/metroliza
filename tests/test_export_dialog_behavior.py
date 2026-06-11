@@ -166,6 +166,48 @@ def test_output_mode_and_option_synchronization(monkeypatch, tmp_path):
         dialog.close()
 
 
+def test_deliverables_summary_tracks_export_context(monkeypatch, tmp_path):
+    dialog = _build_dialog(monkeypatch, tmp_path)
+    try:
+        summary = dialog.deliverables_summary_label.text()
+        assert "Database: not selected" in summary
+        assert "Workbook: not selected" in summary
+        assert "Preset: Main plots" in summary
+        assert "HTML dashboard: off" in summary
+        assert "Google Sheets: off" in summary
+        assert "Grouping: off" in summary
+        assert "Industrial context: off" in summary
+
+        dialog._update_database_context(str(tmp_path / "source.db"))
+        dialog.excel_file = tmp_path / "export.xlsx"
+        dialog._set_path_field_value(dialog.excel_file_text_label, dialog.excel_file)
+        dialog._update_export_button_enabled_state()
+        dialog.include_google_sheets_checkbox.setChecked(True)
+        dialog.generate_html_dashboard_checkbox.setChecked(True)
+        dialog.include_industrial_context_checkbox.setChecked(True)
+        dialog.set_grouping_applied(True)
+
+        summary = dialog.deliverables_summary_label.text()
+        assert "Database: source.db" in summary
+        assert "Workbook: export.xlsx" in summary
+        assert "HTML dashboard: on (grouping)" in summary
+        assert "Google Sheets: on" in summary
+        assert "Grouping: on" in summary
+        assert "Industrial context: on" in summary
+        assert dialog.deliverables_summary_label.property("statusVariant") == "success"
+
+        dialog.set_grouping_applied(False)
+        _set_combo_to_existing_label(dialog.preset_combobox, "HTML dashboard only")
+        dialog._sync_html_dashboard_only_state()
+
+        summary = dialog.deliverables_summary_label.text()
+        assert "Dashboard: export_dashboard.html" in summary
+        assert "HTML dashboard: standalone" in summary
+        assert "Google Sheets: off (dashboard only)" in summary
+    finally:
+        dialog.close()
+
+
 def test_select_excel_file_and_validation_warning_branches(monkeypatch, tmp_path):
     dialog = _build_dialog(monkeypatch, tmp_path, db_file=str(tmp_path / "source.db"))
     try:

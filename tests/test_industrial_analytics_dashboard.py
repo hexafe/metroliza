@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from modules.dashboard_visual_options import dashboard_visual_settings_to_plotly_settings
 import modules.industrial_analytics_dashboard as dashboard_module
 from modules.industrial_analytics_dashboard import (
     DASHBOARD_RAW_POINT_LIMIT,
@@ -1472,9 +1473,12 @@ def test_write_dashboard_static_population_layer_mode_converts_supported_time_se
     traces = spec["data"]
     assert [trace["name"] for trace in traces] == ["POPULATION static layer", "A static layer"]
     assert traces[0]["metroliza_static_population_layer_index"] == 0
+    assert traces[0]["metroliza_static_population_layer_color"] == "#245a5a"
     assert traces[0]["meta"]["metroliza_role"] == "static_population_layer"
+    assert traces[0]["meta"]["metroliza_resolved_color"] == "#245a5a"
     assert spec["layout"]["images"][0]["source"].startswith("data:image/png;base64,")
     assert spec["layout"]["images"][0]["metroliza_static_population_layer_label"] == "POPULATION"
+    assert spec["layout"]["images"][0]["metroliza_static_population_layer_color"] == "#245a5a"
     assert spec["layout"]["xaxis"]["autorange"] is False
     assert spec["layout"]["yaxis"]["autorange"] is False
     assert result["html_dashboard_static_population_layer"]["status"] == "applied"
@@ -1601,6 +1605,118 @@ def test_write_dashboard_static_group_layer_auto_applies_to_non_population_group
     assert traces[0]["meta"]["metroliza_role"] == "static_group_layer"
     assert chart["plotly_spec"]["layout"]["images"][0]["metroliza_static_group_layer_label"] == "Line A"
     assert result["html_dashboard_static_population_layer"]["applied_group_count"] == 1
+
+
+def test_static_group_layer_uses_resolved_dashboard_visual_color(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    rendered_colors: list[str] = []
+
+    def fake_raw_layer_png(*_args, color: str, **_kwargs) -> bytes:
+        rendered_colors.append(color)
+        return b"png"
+
+    monkeypatch.setattr(
+        dashboard_module,
+        "_render_time_series_raw_layer_png",
+        fake_raw_layer_png,
+    )
+    frame = pd.DataFrame(
+        {
+            "process_datetime": pd.date_range("2026-05-10 08:00", periods=8, freq="s", tz="UTC"),
+            "line": ["Line A"] * 6 + ["Line B"] * 2,
+            "length_mm": [10.0, 10.1, 10.2, 10.3, 10.4, 10.5, 9.9, 9.8],
+        }
+    )
+    visual_settings = dashboard_visual_settings_to_plotly_settings(
+        {"preset": "custom", "palette": ["#123456", "#abcdef"]}
+    )
+    manifest = build_production_dashboard_manifest(
+        frame=frame,
+        metric_selection=(ProductionMetricSelection("length_mm", "Length Mm"),),
+        aggregation_state=ProductionAggregationState(group_fields=("line",)),
+        chart_selection=ProductionChartSelection(
+            time_series=True,
+            histogram=False,
+            violin=False,
+            box=False,
+            groupstats=False,
+        ),
+        plotly_visual_settings=visual_settings,
+    )
+
+    result = write_production_dashboard(
+        manifest,
+        tmp_path / "group_static_visual_color.html",
+        dashboard_interactivity_options={
+            "large_group_layer_mode": "auto",
+            "large_group_static_threshold": 5,
+            "large_group_total_static_threshold": 50_000,
+        },
+    )
+
+    html_text = Path(result["html_dashboard_path"]).read_text(encoding="utf-8")
+    chart = _embedded_dashboard_charts(html_text)[0]
+    spec = chart["plotly_spec"]
+    proxy_trace = next(trace for trace in spec["data"] if trace["name"] == "Line A static layer")
+    image = spec["layout"]["images"][proxy_trace["metroliza_static_group_layer_index"]]
+    assert rendered_colors == ["#123456"]
+    assert proxy_trace["marker"]["color"] == "#123456"
+    assert proxy_trace["metroliza_static_group_layer_color"] == "#123456"
+    assert proxy_trace["meta"]["metroliza_resolved_color"] == "#123456"
+    assert image["metroliza_static_group_layer_color"] == "#123456"
+
+
+def test_sampled_raw_image_layer_uses_resolved_dashboard_visual_color(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(dashboard_module, "DASHBOARD_RAW_POINT_LIMIT", 5)
+    rendered_colors: list[str] = []
+
+    def fake_raw_layer_png(*_args, color: str, **_kwargs) -> bytes:
+        rendered_colors.append(color)
+        return b"png"
+
+    monkeypatch.setattr(
+        dashboard_module,
+        "_render_time_series_raw_layer_png",
+        fake_raw_layer_png,
+    )
+    frame = pd.DataFrame(
+        {
+            "process_datetime": pd.date_range("2026-05-10 08:00", periods=8, freq="s", tz="UTC"),
+            "line": ["Line A"] * 8,
+            "length_mm": [10.0 + (index * 0.01) for index in range(8)],
+        }
+    )
+    visual_settings = dashboard_visual_settings_to_plotly_settings(
+        {"preset": "custom", "palette": ["#334455"]}
+    )
+
+    manifest = build_production_dashboard_manifest(
+        frame=frame,
+        metric_selection=(ProductionMetricSelection("length_mm", "Length Mm"),),
+        aggregation_state=ProductionAggregationState(group_fields=("line",)),
+        chart_selection=ProductionChartSelection(
+            time_series=True,
+            histogram=False,
+            violin=False,
+            box=False,
+            groupstats=False,
+        ),
+        plotly_visual_settings=visual_settings,
+    )
+
+    chart = manifest["charts"][0]
+    spec = chart["plotly_spec"]
+    proxy_trace = spec["data"][0]
+    image = spec["layout"]["images"][0]
+    assert rendered_colors == ["#334455"]
+    assert proxy_trace["marker"]["color"] == "#334455"
+    assert proxy_trace["metroliza_static_group_layer_color"] == "#334455"
+    assert image["metroliza_static_group_layer_color"] == "#334455"
 
 
 def test_write_dashboard_static_group_layer_auto_uses_strict_threshold(

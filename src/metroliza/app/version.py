@@ -1,8 +1,8 @@
 RELEASE_VERSION = "2026.05rc5"
-VERSION_DATE = "260609"
+VERSION_DATE = "260611"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
-CURRENT_RELEASE_HIGHLIGHT = "Large-group dashboard optimization, simplified dashboard visuals, Industrial Data cache analysis, parser profile self-service, export reliability, and release-gate audit hardening."
-PUBLIC_VERSION_LABEL = "2026.05 RC5 (build 260609)"
+CURRENT_RELEASE_HIGHLIGHT = "Large-group dashboard optimization, simplified dashboard visuals, Industrial Data cache analysis, parser profile self-service with hardened LLM handoff, export reliability, and release-gate audit hardening."
+PUBLIC_VERSION_LABEL = "2026.05 RC5 (build 260611)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
@@ -11,6 +11,11 @@ release_notes = f"""
     - CSV Summary filters and multi-file exports behave more consistently across regular and large-file paths<br>
     - Packaging, startup timing, and performance checks now fail when required release evidence is missing<br>
     - Parser profiles can now be prepared from Tools > Parser profiles... for new supplier report templates without writing Python code<br>
+    - Parser profile handoff folders now include self-contained LLM contracts, small step-by-step prompts, and a manifest for local or inexpensive model workflows<br>
+    - Parser profile workflows now include package integrity checks, validation evidence, diagnose output, repair prompts, and install actions in the app and CLI<br>
+    - Parser handoff instructions now require expected results for every parsed approval row and include a privacy-redaction checklist for external LLM use<br>
+    - CSV and Excel parser profiles are now discovered by normal report import, and parser persistence failures are isolated to the failed file instead of stopping the batch<br>
+    - Advanced generated parser plugins now persist ParseResultV2 output through Metroliza's existing SQLite repository path<br>
     - Google Sheets export now checks converted workbook tabs and warns when a local Excel fallback should be used<br>
     - Canceling long parsing, export, and metadata tasks is more reliable from progress windows<br>
     - Dashboard plot visuals can now be customized<br>

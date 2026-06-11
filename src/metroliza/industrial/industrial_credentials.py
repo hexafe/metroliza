@@ -87,6 +87,23 @@ def save_industrial_credentials(
     return path
 
 
+def forget_industrial_credentials(
+    profile_key: str,
+    *,
+    credential_path: str | Path | None = None,
+) -> Path:
+    """Remove locally saved credentials for one production source profile."""
+
+    path = Path(credential_path or default_industrial_credential_path()).expanduser()
+    username_key, password_key = credential_env_keys(profile_key)
+    values = _read_env_file(path)
+    values.pop(username_key, None)
+    values.pop(password_key, None)
+    if path.exists():
+        _write_env_file(path, values)
+    return path
+
+
 def _read_env_file(path: Path) -> dict[str, str]:
     if not path.exists():
         return {}

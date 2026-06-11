@@ -1,11 +1,16 @@
 # Changelog (for end users)
 
-## 2026.05 RC5 (build 260609) — current version
+## 2026.05 RC5 (build 260611) — current version
 - Saved report updates are safer if a database write fails partway through.
 - HTML dashboard-only exports now report a failure instead of success when dashboard creation fails.
 - CSV Summary filters and multi-file exports behave more consistently across regular and large-file paths.
 - Packaging, startup timing, and performance checks now fail when required release evidence is missing.
 - Parser profiles can now be prepared from **Tools > Parser profiles...** for new supplier report templates without writing Python code.
+- Parser profile handoff folders now include self-contained LLM contracts, small step-by-step prompts, and a manifest so local or inexpensive models can complete profiles with less context.
+- Parser profile workflows now include package integrity checks, profile validation evidence, diagnose output, repair-prompt generation, and install actions in the app and CLI.
+- Parser handoff instructions now require expected results for every parsed approval row and include a privacy-redaction checklist for external LLM use.
+- CSV and Excel parser profiles are now discovered by normal report import, and parser persistence failures are isolated to the failed file instead of stopping the batch.
+- Advanced generated parser plugins now persist `ParseResultV2` output through Metroliza's existing SQLite repository path, so generated parsers feed CSV Summary, filtering, grouping, exports, and dashboards consistently.
 - Google Sheets export now checks converted workbook tabs and warns when a local Excel fallback should be used.
 - Canceling long parsing, export, and metadata tasks is more reliable from progress windows.
 - Dashboard plot visuals can now be customized.

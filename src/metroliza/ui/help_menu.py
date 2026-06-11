@@ -34,6 +34,7 @@ USER_MANUAL_ROOT = REPO_ROOT / 'docs' / 'user_manual'
 MANUAL_RELATIVE_PATHS = {
     'main_window': 'docs/user_manual/main_window.md',
     'parsing': 'docs/user_manual/parsing.md',
+    'help_startup_and_license': 'docs/user_manual/help_startup_and_license.md',
     'modify_database': 'docs/user_manual/modify_database.md',
     'export_overview': 'docs/user_manual/export_overview.md',
     'export_filtering': 'docs/user_manual/export_filtering.md',
@@ -124,7 +125,15 @@ def open_manual(parent, manual_key: str) -> bool:
     except KeyError:
         QMessageBox.warning(parent, 'Manual not found', f'Unknown user manual key: {manual_key}')
         return False
-    return bool(QDesktopServices.openUrl(QUrl(url)))
+    if QDesktopServices.openUrl(QUrl(url)):
+        return True
+    QMessageBox.warning(
+        parent,
+        'Could not open manual',
+        'Metroliza could not open the manual in your default browser. '
+        f'Open this link manually:\n\n{url}',
+    )
+    return False
 
 
 

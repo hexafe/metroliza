@@ -5,6 +5,7 @@ import yaml
 
 from modules.industrial_credentials import (
     credential_env_keys,
+    forget_industrial_credentials,
     load_industrial_credentials,
     save_industrial_credentials,
 )
@@ -229,3 +230,15 @@ def test_local_credential_store_round_trip_uses_user_env_file(tmp_path):
     assert loaded.username == "operator"
     assert loaded.password == "secret password"
     assert loaded.source == str(credential_path)
+
+    forgotten_path = forget_industrial_credentials("assembly_mes", credential_path=credential_path)
+
+    assert forgotten_path == credential_path
+    forgotten = load_industrial_credentials(
+        "assembly_mes",
+        credential_path=credential_path,
+        environ={},
+    )
+    assert forgotten.username == ""
+    assert forgotten.password == ""
+    assert forgotten.source == ""

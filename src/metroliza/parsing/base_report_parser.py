@@ -225,9 +225,9 @@ class BaseReportParser(ABC):
         raise NotImplementedError("Parser-specific identity hashing must be implemented by subclasses.")
 
     def persist_report(self):
-        """Persist parser output using the report repository."""
+        """Persist parser output using the default V2 plugin repository bridge."""
 
-        raise NotImplementedError("Parser-specific persistence must be implemented by subclasses.")
+        return self.open_database_and_check_filename()
 
     @abstractmethod
     def open_report(self):
@@ -278,5 +278,84 @@ class BaseReportParser(ABC):
         if df_list:
             self.df = pandas.concat(df_list)
 
+    def _parse_result_v2_for_persistence(self):
+        """Build or reuse ``ParseResultV2`` for generic plugin persistence."""
+
+        prepared = getattr(self, "_prepared_parse_result_v2", None)
+        parse_result = prepared
+        if parse_result is None:
+            parse_to_v2 = getattr(self, "parse_to_v2", None)
+            if not callable(parse_to_v2):
+                raise NotImplementedError(
+                    "Parser-specific SQLite persistence must be implemented by subclasses "
+                    "or the parser must implement parse_to_v2()."
+                )
+            parse_result = parse_to_v2()
+
+        self._sync_state_from_parse_result_v2(parse_result)
+        return parse_result
+
+    def _sync_state_from_parse_result_v2(self, parse_result):
+        """Keep legacy parser attributes coherent after V2 parsing."""
+
+        report = getattr(parse_result, "report", None)
+        if report is not None:
+            if not self._reference:
+                self.reference = getattr(report, "reference", None)
+            if not self._date:
+                self.date = getattr(report, "report_date", None)
+            if not self._sample_number:
+                self.sample_number = getattr(report, "sample_number", None)
+
+        if not self.blocks_text:
+            legacy_adapter = getattr(self, "to_legacy_blocks", None)
+            if callable(legacy_adapter):
+                try:
+                    self.blocks_text = legacy_adapter(parse_result)
+                except NotImplementedError:
+                    pass
+
+    def _persist_parse_result_v2(self, parse_result):
+        """Persist V2 output through the shared repository adapter."""
+
+        from metroliza.parsing.parse_result_v2_persistence import (
+            build_persistence_payload,
+            persist_parse_result_v2_payload,
+        )
+
+        payload = build_persistence_payload(
+            parse_result,
+            source_path=self.source_path,
+            manifest=getattr(self, "manifest", None),
+        )
+        self.canonical_metadata = payload.metadata
+        return persist_parse_result_v2_payload(
+            payload,
+            parse_result=parse_result,
+            source_path=self.source_path,
+            database=self.database,
+            connection=self.connection,
+        )
+
+    def open_database_and_check_filename(self):
+        """Compatibility entrypoint used by the report import thread."""
+
+        return self._persist_parse_result_v2(self._parse_result_v2_for_persistence())
+
+    def prepare_for_two_stage_pipeline(self):
+        """Prepare generic plugin output for delayed persistence."""
+
+        parse_result = self._parse_result_v2_for_persistence()
+        self._prepared_parse_result_v2 = parse_result
+        return parse_result
+
+    def persist_prepared_report(self):
+        """Persist a previously prepared generic plugin parse result."""
+
+        parse_result = getattr(self, "_prepared_parse_result_v2", None)
+        if parse_result is None:
+            parse_result = self._parse_result_v2_for_persistence()
+        return self._persist_parse_result_v2(parse_result)
+
     def to_sqlite(self):
-        raise NotImplementedError("Parser-specific SQLite persistence must be implemented by subclasses.")
+        return self.open_database_and_check_filename()

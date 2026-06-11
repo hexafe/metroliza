@@ -168,6 +168,72 @@ def test_finish_sync_run_rejects_non_terminal_running_status(tmp_path):
         repository.finish_sync_run(sync_run_id=sync_run_id, status="running", row_count=0)
 
 
+def test_latest_sync_run_orders_filters_and_ignores_bad_diagnostics_json(tmp_path):
+    db_path = str(tmp_path / "industrial.db")
+    repository = IndustrialDataRepository(db_path)
+    line_a = repository.upsert_source_profile(
+        profile_key="line-a",
+        profile_name="Line A",
+        source_db_alias="plant_a",
+        database_type="mssql",
+        source_object_name="dbo.events",
+    )
+    line_b = repository.upsert_source_profile(
+        profile_key="line-b",
+        profile_name="Line B",
+        source_db_alias="plant_b",
+        database_type="mssql",
+        source_object_name="dbo.events",
+    )
+    older_run_id = repository.create_sync_run(source_profile_id=line_a.id)
+    newer_run_id = repository.create_sync_run(source_profile_id=line_b.id)
+    repository.finish_sync_run(
+        sync_run_id=older_run_id,
+        status="succeeded",
+        row_count=3,
+        diagnostics={"rows": 3},
+    )
+    repository.finish_sync_run(
+        sync_run_id=newer_run_id,
+        status="failed",
+        row_count=0,
+        error_summary="fetch failed password=secret",
+        diagnostics={"warnings": ["timeout"]},
+    )
+
+    with sqlite_connection_scope(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE industrial_sync_runs
+            SET finished_at = ?, diagnostics_json = ?
+            WHERE id = ?
+            """,
+            ("2026-06-10T10:00:00Z", "{bad json", older_run_id),
+        )
+        conn.execute(
+            """
+            UPDATE industrial_sync_runs
+            SET finished_at = ?
+            WHERE id = ?
+            """,
+            ("2026-06-11T10:00:00Z", newer_run_id),
+        )
+        conn.commit()
+
+    latest_any = repository.latest_sync_run()
+    latest_line_a = repository.latest_sync_run(source_profile_id=line_a.id)
+
+    assert latest_any is not None
+    assert latest_any.id == newer_run_id
+    assert latest_any.profile_key == "line-b"
+    assert latest_any.error_summary == "fetch failed password=<redacted>"
+    assert latest_line_a is not None
+    assert latest_line_a.id == older_run_id
+    assert latest_line_a.profile_key == "line-a"
+    assert latest_line_a.diagnostics == {}
+    assert repository.latest_sync_run(source_profile_id=999_999) is None
+
+
 def test_schema_migrates_legacy_sync_run_status_constraint(tmp_path):
     db_path = str(tmp_path / "industrial.db")
     repository = IndustrialDataRepository(db_path)

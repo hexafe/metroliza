@@ -198,6 +198,12 @@ def test_tabular_analytics_dialog_loads_csv_metrics_and_group_columns(tmp_path) 
         assert "line" in group_values
         assert dialog.timestamp_column_combo.currentData() == "time_stamp"
         assert dialog.reference_column_combo.currentData() == "reference_id"
+        source_status = dialog.tabular_source_status_label.text()
+        assert not dialog.tabular_source_status_label.isHidden()
+        assert "Detected source: 4 rows from table.csv" in source_status
+        assert "2 metrics" in source_status
+        assert "time column Time Stamp (time_stamp)" in source_status
+        assert "part / ID column Reference ID (reference_id)" in source_status
         assert not dialog.workbook_checkbox.isChecked()
         assert not dialog.workbook_button.isEnabled()
         assert not dialog.parameter_sheets_checkbox.isEnabled()
@@ -278,6 +284,10 @@ def test_tabular_analytics_dialog_interactivity_controls_are_visible_and_in_requ
     _app()
     dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
     try:
+        assert dialog.advanced_options_container.isHidden()
+        assert dialog.advanced_options_container.layout().indexOf(
+            dialog.dashboard_interactivity_row_label
+        ) >= 0
         assert not dialog.dashboard_interactivity_button.isHidden()
         assert (
             dialog.dashboard_interactivity_summary_label.text()
@@ -286,6 +296,7 @@ def test_tabular_analytics_dialog_interactivity_controls_are_visible_and_in_requ
         assert not dialog.population_layer_button.isHidden()
         assert dialog.population_layer_summary_label.text() == "Auto"
         assert dialog.dashboard_interactivity_row_label.text() == "Dashboard interactivity"
+        assert dialog.dashboard_visuals_button.parent() == dialog.advanced_options_container
         assert "chart interactivity" in dialog.dashboard_interactivity_button.toolTip()
         assert "random sample" in dialog.dashboard_interactivity_button.toolTip()
 
@@ -322,6 +333,35 @@ def test_tabular_analytics_dialog_interactivity_controls_are_visible_and_in_requ
             size_limit_mode="custom",
             size_limit_mb=128,
         )
+    finally:
+        dialog.close()
+
+
+def test_tabular_analytics_dialog_advanced_section_hides_optional_outputs_by_default() -> None:
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        assert dialog.advanced_toggle_button.text() == "Show advanced options"
+        assert dialog.advanced_options_container.isHidden()
+        assert dialog.time_series_checkbox.parent() == dialog.advanced_options_container
+        assert dialog.groupstats_checkbox.parent() == dialog.advanced_options_container
+        assert dialog.workbook_path_field.parent() == dialog.advanced_options_container
+        assert dialog.dashboard_visuals_row_label.parent() == dialog.advanced_options_container
+
+        request = dialog._build_analytics_request()
+
+        assert request.chart_selection.time_series is True
+        assert request.chart_selection.histogram is True
+        assert request.chart_selection.violin is True
+        assert request.chart_selection.box is True
+        assert request.output_workbook_file == ""
+        assert request.separate_parameter_sheets is False
+        assert request.dashboard_interactivity_options == DashboardInteractivityOptions()
+
+        dialog.advanced_toggle_button.setChecked(True)
+
+        assert dialog.advanced_toggle_button.text() == "Hide advanced options"
+        assert not dialog.advanced_options_container.isHidden()
     finally:
         dialog.close()
 
@@ -461,7 +501,10 @@ def test_preloaded_industrial_cache_uses_csv_summary_without_file_controls() -> 
         assert not dialog.dashboard_interactivity_button.isHidden()
         assert not dialog.filters_button.isHidden()
         assert not dialog.edit_groups_button.isHidden()
-        assert dialog.load_metrics_button.text() == "Refresh cached metrics"
+        assert dialog.load_metrics_button.text() == "Refresh cached CSV Summary metrics"
+        assert not dialog.tabular_source_status_label.isHidden()
+        assert "Detected source: 1 row from industrial.db" in dialog.tabular_source_status_label.text()
+        assert "part / ID column reference" in dialog.tabular_source_status_label.text()
         assert dialog.start_button.isEnabled()
     finally:
         dialog.tabular_load_result = None
@@ -605,14 +648,19 @@ def test_analytics_dashboard_visuals_button_is_visible_for_production_and_tabula
         "modules.industrial_analytics_dialog.load_dashboard_visual_settings",
         lambda: {"preset": "auto"},
     )
-    dialogs = [
-        IndustrialAnalyticsDialog(source_kind=SOURCE_PRODUCTION_CACHE),
-        IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE),
-    ]
+    production_dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_PRODUCTION_CACHE)
+    tabular_dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    dialogs = [production_dialog, tabular_dialog]
     try:
         for dialog in dialogs:
             dialog.show()
         app.processEvents()
+
+        assert production_dialog.dashboard_visuals_button.isVisible()
+        assert not tabular_dialog.dashboard_visuals_button.isVisible()
+        tabular_dialog.advanced_toggle_button.setChecked(True)
+        app.processEvents()
+        assert tabular_dialog.dashboard_visuals_button.isVisible()
 
         for dialog in dialogs:
             assert dialog.dashboard_visuals_button.isVisible()
@@ -705,7 +753,7 @@ def test_tabular_analytics_dialog_auto_loads_metrics_after_file_selection(
         assert dialog.metrics_list.count() == 2
         assert dialog.metrics_summary_label.text() == "2 of 2 metrics selected"
         assert dialog.choose_metrics_button.isEnabled()
-        assert dialog.load_metrics_button.text() == "Reload CSV/Excel data"
+        assert dialog.load_metrics_button.text() == "Reload CSV/Excel data and refresh metrics"
         assert not dialog.filter_row_label.isHidden()
         assert not dialog.filter_summary_label.isHidden()
         assert not dialog.filters_button.isHidden()
@@ -715,7 +763,7 @@ def test_tabular_analytics_dialog_auto_loads_metrics_after_file_selection(
 
         assert dialog.metric_candidates == ()
         assert dialog.metrics_list.count() == 0
-        assert dialog.load_metrics_button.text() == "Load CSV/Excel data"
+        assert dialog.load_metrics_button.text() == "Reload CSV/Excel data and refresh metrics"
         assert dialog.filter_row_label.isHidden()
         assert dialog.filter_summary_label.isHidden()
         assert dialog.filters_button.isHidden()
@@ -765,6 +813,8 @@ def test_tabular_analytics_dialog_loads_multiple_csv_files(
         assert dialog.input_files == (str(first_file), str(second_file))
         assert dialog.tabular_load_result.storage_mode == "sqlite"
         assert dialog.source_label.text() == "2 CSV files: 4 rows"
+        assert "Detected source: 4 rows from 2 CSV files" in dialog.tabular_source_status_label.text()
+        assert "large-file row store" in dialog.tabular_source_status_label.text()
         assert dialog.filter_summary_label.text() == "All rows (4)"
         assert dialog.sheet_name_combo.itemText(0) == "CSV files"
         assert not dialog.sheet_name_combo.isEnabled()
@@ -1099,7 +1149,8 @@ def test_tabular_analytics_dialog_starts_with_load_before_row_filter() -> None:
     _app()
     dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
     try:
-        assert dialog.load_metrics_button.text() == "Load CSV/Excel data"
+        assert dialog.load_metrics_button.text() == "Load CSV/Excel data and detect metrics"
+        assert dialog.tabular_source_status_label.isHidden()
         assert dialog.filter_row_label.isHidden()
         assert dialog.filter_summary_label.isHidden()
         assert dialog.filters_button.isHidden()

@@ -178,6 +178,8 @@ def apply_dashboard_visual_settings(
     for trace_index, trace in enumerate(data):
         if not isinstance(trace, dict):
             continue
+        if _is_static_image_layer_proxy_trace(trace):
+            continue
         name = str(trace.get("name") or "")
         group_stat = _group_stat_match(name)
         if group_stat is not None:
@@ -269,6 +271,17 @@ def apply_dashboard_visual_settings(
     if isinstance(metadata, dict):
         metadata["dashboard_visual_settings_applied"] = True
     return spec
+
+
+def _is_static_image_layer_proxy_trace(trace: Mapping[str, Any]) -> bool:
+    return any(
+        isinstance(trace.get(key), int)
+        for key in (
+            "metroliza_raw_layer_index",
+            "metroliza_static_group_layer_index",
+            "metroliza_static_population_layer_index",
+        )
+    )
 
 
 def _payload_visual_settings(payload: Mapping[str, Any]) -> dict[str, Any]:
