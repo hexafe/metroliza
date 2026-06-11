@@ -75,11 +75,19 @@ Results:
   - total coverage: `82%` against the blocking `80%` threshold
   - `coverage.xml` written locally as generated evidence and remains untracked.
 
-## Pending GitHub Evidence
+## GitHub Evidence
 
-Pushed-SHA GitHub Actions evidence must be recorded after the final `rc2` push is green.
-Default CI green is required for branch readiness, but it does not satisfy manual
-release-promotion evidence.
+Commit `9a9310604604077b26fc5b2a4523459a4e14c5de` (`Finalize RC5 parser and UX
+release`) passed default GitHub Actions CI in run
+[`27327220468`](https://github.com/hexafe/metroliza/actions/runs/27327220468)
+on 2026-06-11.
+
+Green automatic jobs were Static checks, Unit tests with combined coverage
+artifact upload, Native wheel build and smoke checks, CMM parser perf guardrail,
+and the non-blocking Performance benchmark trend check. Manual/opt-in Packaging
+smoke, Windows startup benchmark, and Google conversion smoke were skipped as
+expected for default push CI and remain separate release-promotion evidence
+gates.
 
 ## Pending Release Owner Evidence
 

@@ -329,6 +329,14 @@ Current plotstats hotfix pin:
   `74 subtests passed`), and the CI-shaped combined coverage gate with isolated
   UI shards at `82%` against the `80%` threshold. Evidence is recorded in
   [`rc5_parser_ux_release_closeout_2026-06-11.md`](./rc5_parser_ux_release_closeout_2026-06-11.md).
+  Pushed rc2 CI passed in GitHub Actions run
+  [`27327220468`](https://github.com/hexafe/metroliza/actions/runs/27327220468)
+  for commit `9a9310604604077b26fc5b2a4523459a4e14c5de` (`Finalize RC5 parser
+  and UX release`) on 2026-06-11. Green automatic jobs were Static checks, Unit
+  tests with combined coverage artifact upload, Native wheel build and smoke
+  checks, CMM parser perf guardrail, and the non-blocking Performance benchmark
+  trend check. Manual and opt-in jobs were skipped: Packaging smoke, Windows
+  startup benchmark, and Google conversion smoke.
 - Post-reorganization follow-up local audit passed after docs/reference cleanup,
   parser-plugin productionization coverage, architecture guardrail hardening, and
   release-status refresh.
