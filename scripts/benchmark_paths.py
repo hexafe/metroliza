@@ -255,6 +255,152 @@ def _create_csv_fixture(csv_path: Path, *, row_count: int, data_columns: int) ->
     return {'rows': row_count, 'headers': data_columns + 1}
 
 
+def _create_high_cardinality_grouping_csv_fixture(
+    csv_path: Path,
+    *,
+    row_count: int,
+    group_count: int,
+) -> dict[str, int]:
+    safe_row_count = max(1, int(row_count))
+    safe_group_count = max(1, min(int(group_count), safe_row_count))
+    with csv_path.open('w', newline='', encoding='utf-8') as handle:
+        writer = csv.writer(handle)
+        writer.writerow(('PART', 'GROUP_KEY', 'SUBGROUP', 'DIM_01', 'DIM_02'))
+        for row_index in range(1, safe_row_count + 1):
+            group_index = (row_index - 1) % safe_group_count
+            writer.writerow(
+                (
+                    f'P-{row_index:08d}',
+                    f'G-{group_index:08d}',
+                    f'S-{group_index % 16:02d}',
+                    f'{10.0 + (row_index % 101) * 0.001:.6f}',
+                    f'{20.0 + (row_index % 89) * 0.002:.6f}',
+                )
+            )
+    return {'rows': safe_row_count, 'groups': safe_group_count, 'headers': 5}
+
+
+def _industrial_cache_rows(
+    *,
+    start_index: int,
+    row_count: int,
+    dynamic_fields: int,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    safe_dynamic_fields = max(1, int(dynamic_fields))
+    for offset in range(max(0, int(row_count))):
+        row_index = start_index + offset
+        row: dict[str, Any] = {
+            'source_record_key': f'ROW-{row_index:09d}',
+            'process_timestamp': f'2026-06-{(row_index % 28) + 1:02d}T'
+            f'{row_index % 24:02d}:{row_index % 60:02d}:00Z',
+            'reference': f'REF-{row_index % 4096:04d}',
+            'part_number': f'PN-{row_index % 128:03d}',
+            'part_name': f'Part {row_index % 128:03d}',
+            'revision': f'R{row_index % 4}',
+            'serial': f'SN-{row_index:09d}',
+            'batch_lot': f'LOT-{row_index % 512:04d}',
+            'work_order': f'WO-{row_index % 2048:05d}',
+            'station': f'ST-{row_index % 12:02d}',
+            'line': f'L{row_index % 4 + 1}',
+            'operator_name': f'OP-{row_index % 24:02d}',
+            'process_status': 'nok' if row_index % 97 == 0 else 'ok',
+        }
+        for field_index in range(1, safe_dynamic_fields + 1):
+            row[f'metric_{field_index:02d}'] = round(
+                10.0 + field_index + ((row_index % 997) * 0.0007),
+                6,
+            )
+        rows.append(row)
+    return rows
+
+
+def _populate_industrial_cache_fixture(
+    db_path: Path,
+    *,
+    row_count: int,
+    dynamic_fields: int,
+    source_count: int,
+) -> dict[str, int]:
+    from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
+
+    safe_row_count = max(1, int(row_count))
+    safe_dynamic_fields = max(1, int(dynamic_fields))
+    safe_source_count = max(1, int(source_count))
+    repository = IndustrialDataRepository(str(db_path))
+    repository.ensure_schema()
+
+    processed = 0
+    inserted = 0
+    updated = 0
+    value_rows = 0
+    next_row_index = 1
+    for source_index in range(safe_source_count):
+        source_rows = safe_row_count // safe_source_count
+        if source_index < safe_row_count % safe_source_count:
+            source_rows += 1
+        if source_rows <= 0:
+            continue
+        profile = repository.upsert_source_profile(
+            profile_key=f'bench_source_{source_index + 1}',
+            profile_name=f'Benchmark Source {source_index + 1}',
+            source_db_alias=f'bench_db_{source_index + 1}',
+            database_type='sqlite',
+            source_object_name='synthetic_records',
+            allowed_columns=(
+                'source_record_key',
+                'process_timestamp',
+                'reference',
+                'line',
+                'station',
+                *(f'metric_{index:02d}' for index in range(1, safe_dynamic_fields + 1)),
+            ),
+            timestamp_column='process_timestamp',
+            default_pagination_column='source_record_key',
+        )
+        sync_run_id = repository.create_sync_run(
+            source_profile_id=profile.id,
+            filters={'benchmark': 'industrial_cache_fixture', 'rows': source_rows},
+            diagnostics={'source_index': source_index + 1},
+        )
+        result = repository.upsert_industrial_records_from_rows(
+            source_profile_id=profile.id,
+            source_db_alias=profile.source_db_alias,
+            rows=_industrial_cache_rows(
+                start_index=next_row_index,
+                row_count=source_rows,
+                dynamic_fields=safe_dynamic_fields,
+            ),
+            sync_run_id=sync_run_id,
+        )
+        repository.finish_sync_run(
+            sync_run_id=sync_run_id,
+            status='succeeded',
+            row_count=int(result.get('processed', 0)),
+            diagnostics={'benchmark': True},
+        )
+        next_row_index += source_rows
+        processed += int(result.get('processed', 0))
+        inserted += int(result.get('inserted', 0))
+        updated += int(result.get('updated', 0))
+        value_rows += int(result.get('value_rows', 0))
+
+    counts = repository.summarize_counts().as_dict()
+    return {
+        'rows': safe_row_count,
+        'dynamic_fields': safe_dynamic_fields,
+        'sources': safe_source_count,
+        'processed': processed,
+        'inserted': inserted,
+        'updated': updated,
+        'value_rows': value_rows,
+        'source_profiles': int(counts.get('source_profiles', 0)),
+        'sync_runs': int(counts.get('sync_runs', 0)),
+        'records': int(counts.get('records', 0)),
+        'record_values': int(counts.get('record_values', 0)),
+    }
+
+
 def _run_excel_export_with_close_timing(thread: Any) -> tuple[bool, dict[str, float]]:
     from metroliza.exporting.export_backends import ExcelExportBackend
 
@@ -1674,6 +1820,451 @@ def benchmark_csv_summary_large_data_probe(
     )
 
 
+def benchmark_industrial_cache_ingest_probe(
+    temp_dir: Path,
+    *,
+    row_count: int,
+    dynamic_fields: int,
+    source_count: int,
+) -> ScenarioResult:
+    """Probe synthetic industrial cache insert/upsert throughput.
+
+    This covers the post-fetch cache storage path without requiring a live Oznak
+    database. Release checks can raise --industrial-cache-rows for larger data.
+    """
+
+    from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
+
+    db_path = temp_dir / 'industrial_cache_ingest_probe.sqlite'
+    safe_row_count = max(1, int(row_count))
+    safe_dynamic_fields = max(1, int(dynamic_fields))
+    safe_source_count = max(1, int(source_count))
+
+    schema_start = time.perf_counter()
+    repository = IndustrialDataRepository(str(db_path))
+    repository.ensure_schema()
+    schema_s = time.perf_counter() - schema_start
+
+    source_setup_s = 0.0
+    cache_insert_s = 0.0
+    sync_finish_s = 0.0
+    processed = 0
+    inserted = 0
+    updated = 0
+    value_rows = 0
+    next_row_index = 1
+
+    for source_index in range(safe_source_count):
+        source_rows = safe_row_count // safe_source_count
+        if source_index < safe_row_count % safe_source_count:
+            source_rows += 1
+        if source_rows <= 0:
+            continue
+
+        setup_start = time.perf_counter()
+        profile = repository.upsert_source_profile(
+            profile_key=f'bench_source_{source_index + 1}',
+            profile_name=f'Benchmark Source {source_index + 1}',
+            source_db_alias=f'bench_db_{source_index + 1}',
+            database_type='sqlite',
+            source_object_name='synthetic_records',
+            allowed_columns=(
+                'source_record_key',
+                'process_timestamp',
+                'reference',
+                'line',
+                'station',
+                *(f'metric_{index:02d}' for index in range(1, safe_dynamic_fields + 1)),
+            ),
+            timestamp_column='process_timestamp',
+            default_pagination_column='source_record_key',
+        )
+        sync_run_id = repository.create_sync_run(
+            source_profile_id=profile.id,
+            filters={'benchmark': 'industrial_cache_ingest_probe', 'rows': source_rows},
+            diagnostics={'source_index': source_index + 1},
+        )
+        source_setup_s += time.perf_counter() - setup_start
+
+        insert_start = time.perf_counter()
+        result = repository.upsert_industrial_records_from_rows(
+            source_profile_id=profile.id,
+            source_db_alias=profile.source_db_alias,
+            rows=_industrial_cache_rows(
+                start_index=next_row_index,
+                row_count=source_rows,
+                dynamic_fields=safe_dynamic_fields,
+            ),
+            sync_run_id=sync_run_id,
+        )
+        cache_insert_s += time.perf_counter() - insert_start
+
+        finish_start = time.perf_counter()
+        repository.finish_sync_run(
+            sync_run_id=sync_run_id,
+            status='succeeded',
+            row_count=int(result.get('processed', 0)),
+            diagnostics={'benchmark': True},
+        )
+        sync_finish_s += time.perf_counter() - finish_start
+        next_row_index += source_rows
+        processed += int(result.get('processed', 0))
+        inserted += int(result.get('inserted', 0))
+        updated += int(result.get('updated', 0))
+        value_rows += int(result.get('value_rows', 0))
+
+    summary_start = time.perf_counter()
+    counts = repository.summarize_counts().as_dict()
+    summary_s = time.perf_counter() - summary_start
+    wall_time_s = schema_s + source_setup_s + cache_insert_s + sync_finish_s + summary_s
+
+    return ScenarioResult(
+        scenario='industrial_cache_ingest_probe',
+        wall_time_s=wall_time_s,
+        stage_timings_s={
+            'schema_setup': schema_s,
+            'source_profile_and_sync_setup': source_setup_s,
+            'cache_insert': cache_insert_s,
+            'sync_finish': sync_finish_s,
+            'cache_summary': summary_s,
+        },
+        input_metrics={
+            'rows': safe_row_count,
+            'headers': safe_dynamic_fields,
+            'source_count': safe_source_count,
+            'processed_rows': processed,
+            'inserted_rows': inserted,
+            'updated_rows': updated,
+            'dynamic_value_rows': value_rows,
+            'cache_source_profiles': int(counts.get('source_profiles', 0)),
+            'cache_sync_runs': int(counts.get('sync_runs', 0)),
+            'cache_records': int(counts.get('records', 0)),
+            'cache_record_values': int(counts.get('record_values', 0)),
+            'cache_db_bytes': db_path.stat().st_size if db_path.exists() else 0,
+        },
+    )
+
+
+def benchmark_industrial_cache_to_csv_summary_bridge_probe(
+    temp_dir: Path,
+    *,
+    row_count: int,
+    dynamic_fields: int,
+    source_count: int,
+    materialize_columns: int,
+) -> ScenarioResult:
+    """Probe the industrial-cache to CSV Summary SQLite bridge path."""
+
+    from metroliza.industrial.industrial_tabular_bridge import load_industrial_cache_tabular_result
+    from metroliza.tabular.tabular_analytics_service import materialize_tabular_dataframe
+
+    db_path = temp_dir / 'industrial_bridge_probe.sqlite'
+    populate_start = time.perf_counter()
+    fixture_metrics = _populate_industrial_cache_fixture(
+        db_path,
+        row_count=row_count,
+        dynamic_fields=dynamic_fields,
+        source_count=source_count,
+    )
+    populate_s = time.perf_counter() - populate_start
+
+    bridge_start = time.perf_counter()
+    loaded = load_industrial_cache_tabular_result(db_path)
+    bridge_s = time.perf_counter() - bridge_start
+
+    store = loaded.sqlite_store
+    if store is None:
+        raise RuntimeError('industrial bridge did not return a SQLite-backed CSV Summary store')
+
+    try:
+        source_preview_start = time.perf_counter()
+        source_rows, source_total = store.preview_group_rows(('source',), limit=100)
+        source_preview_s = time.perf_counter() - source_preview_start
+
+        group_preview_start = time.perf_counter()
+        group_rows, group_total = store.preview_group_rows(('source', 'line'), limit=100)
+        group_preview_s = time.perf_counter() - group_preview_start
+
+        metric_columns = tuple(
+            candidate.field_name
+            for candidate in loaded.metric_candidates[: max(1, int(materialize_columns))]
+        )
+        required_columns = (
+            'source_row_number',
+            'source',
+            'reference',
+            'line',
+            *metric_columns,
+        )
+        materialize_start = time.perf_counter()
+        materialized = materialize_tabular_dataframe(loaded, required_columns=required_columns)
+        materialize_s = time.perf_counter() - materialize_start
+    finally:
+        store.cleanup()
+
+    wall_time_s = populate_s + bridge_s + source_preview_s + group_preview_s + materialize_s
+    return ScenarioResult(
+        scenario='industrial_cache_to_csv_summary_bridge_probe',
+        wall_time_s=wall_time_s,
+        stage_timings_s={
+            'industrial_cache_populate': populate_s,
+            'bridge_to_tabular_sqlite': bridge_s,
+            'source_group_preview': source_preview_s,
+            'source_line_group_preview': group_preview_s,
+            'materialize_required_columns': materialize_s,
+        },
+        input_metrics={
+            'rows': int(fixture_metrics['rows']),
+            'headers': int(fixture_metrics['dynamic_fields']),
+            'source_count': int(fixture_metrics['sources']),
+            'cache_records': int(fixture_metrics['records']),
+            'cache_record_values': int(fixture_metrics['record_values']),
+            'bridge_row_count': int(loaded.row_count or 0),
+            'bridge_preview_rows': int(len(loaded.dataframe.index)),
+            'bridge_columns': int(len(store.columns)),
+            'metric_candidates': int(len(loaded.metric_candidates)),
+            'source_preview_rows': int(len(source_rows)),
+            'source_preview_total': int(source_total),
+            'source_line_preview_rows': int(len(group_rows)),
+            'source_line_preview_total': int(group_total),
+            'materialized_rows': int(len(materialized.dataframe.index)),
+            'materialized_columns': int(len(materialized.dataframe.columns)),
+        },
+    )
+
+
+def benchmark_dashboard_static_multi_group_probe(
+    temp_dir: Path,
+    *,
+    group_count: int,
+    rows_per_group: int,
+) -> ScenarioResult:
+    """Probe static image layer rendering for multiple large CSV Summary groups."""
+
+    from metroliza.industrial.industrial_analytics_dashboard import (
+        DASHBOARD_RAW_POINT_LIMIT,
+        _render_time_series_density_layer_png,
+        _render_time_series_raw_layer_png,
+    )
+
+    safe_group_count = max(1, int(group_count))
+    safe_rows_per_group = max(1, int(rows_per_group))
+    colors = (
+        '#1f77b4',
+        '#d62728',
+        '#2ca02c',
+        '#9467bd',
+        '#ff7f0e',
+        '#17becf',
+        '#8c564b',
+        '#e377c2',
+    )
+
+    generation_start = time.perf_counter()
+    x_values = np.linspace(0.0, float(safe_rows_per_group - 1), num=safe_rows_per_group, dtype=np.float64)
+    group_values: list[np.ndarray] = []
+    y_min = float('inf')
+    y_max = float('-inf')
+    phase = np.linspace(0.0, 80.0, num=safe_rows_per_group, dtype=np.float64)
+    for group_index in range(safe_group_count):
+        values = (
+            10.0
+            + group_index * 0.45
+            + np.sin(phase + group_index * 0.35) * 0.18
+            + ((np.arange(safe_rows_per_group) % 131) * 0.0006)
+        )
+        group_values.append(values)
+        y_min = min(y_min, float(np.min(values)))
+        y_max = max(y_max, float(np.max(values)))
+    generation_s = time.perf_counter() - generation_start
+
+    x_range = (float(x_values[0]), float(x_values[-1] if safe_rows_per_group > 1 else 1.0))
+    y_padding = max((y_max - y_min) * 0.04, 1e-9)
+    y_range = (y_min - y_padding, y_max + y_padding)
+
+    density_png_bytes = 0
+    density_non_empty_pixels = 0
+    density_start = time.perf_counter()
+    for group_index, y_values in enumerate(group_values):
+        density_png, non_empty_pixels = _render_time_series_density_layer_png(
+            x_values,
+            y_values,
+            x_range=x_range,
+            y_range=y_range,
+            color=colors[group_index % len(colors)],
+        )
+        density_png_bytes += len(density_png)
+        density_non_empty_pixels += int(non_empty_pixels)
+        (temp_dir / f'static-group-density-{group_index + 1}.png').write_bytes(density_png)
+    density_s = time.perf_counter() - density_start
+
+    sample_size = min(safe_rows_per_group, int(DASHBOARD_RAW_POINT_LIMIT))
+    sampled_png_bytes = 0
+    sampled_start = time.perf_counter()
+    for group_index, y_values in enumerate(group_values):
+        marker_png = _render_time_series_raw_layer_png(
+            x_values[:sample_size],
+            y_values[:sample_size],
+            x_range=x_range,
+            y_range=y_range,
+            color=colors[group_index % len(colors)],
+        )
+        sampled_png_bytes += len(marker_png)
+    sampled_s = time.perf_counter() - sampled_start
+
+    total_rows = safe_group_count * safe_rows_per_group
+    return ScenarioResult(
+        scenario='dashboard_static_multi_group_probe',
+        wall_time_s=generation_s + density_s + sampled_s,
+        stage_timings_s={
+            'array_generation': generation_s,
+            'density_layer_render': density_s,
+            'sampled_marker_layer_render': sampled_s,
+        },
+        input_metrics={
+            'rows': total_rows,
+            'headers': safe_group_count,
+            'group_count': safe_group_count,
+            'rows_per_group': safe_rows_per_group,
+            'density_layer_count': safe_group_count,
+            'density_contributed_points': total_rows,
+            'density_png_bytes': density_png_bytes,
+            'density_non_empty_pixels': density_non_empty_pixels,
+            'sampled_marker_points_per_group': sample_size,
+            'sampled_marker_total_points': sample_size * safe_group_count,
+            'sampled_marker_png_bytes': sampled_png_bytes,
+            'raw_point_limit': int(DASHBOARD_RAW_POINT_LIMIT),
+        },
+    )
+
+
+def benchmark_sqlite_grouping_high_cardinality_probe(
+    temp_dir: Path,
+    *,
+    row_count: int,
+    group_count: int,
+    search_text: str,
+    materialize_columns: int,
+) -> ScenarioResult:
+    """Probe SQLite-backed grouping preview and materialization with many groups."""
+
+    from metroliza.reports.db import sqlite_connection_scope
+    from metroliza.tabular.tabular_analytics_service import (
+        load_tabular_analytics_files,
+        materialize_tabular_dataframe,
+    )
+
+    csv_path = temp_dir / 'sqlite_grouping_high_cardinality_probe.csv'
+    fixture_metrics = _create_high_cardinality_grouping_csv_fixture(
+        csv_path,
+        row_count=row_count,
+        group_count=group_count,
+    )
+    search = str(search_text or '').strip()
+
+    load_start = time.perf_counter()
+    loaded = load_tabular_analytics_files((str(csv_path),), reference_column='PART', force_sqlite=True)
+    load_s = time.perf_counter() - load_start
+    store = loaded.sqlite_store
+    if store is None:
+        raise RuntimeError('high-cardinality grouping probe did not create a SQLite store')
+
+    try:
+        value_preview_start = time.perf_counter()
+        value_rows, value_total = store.preview_value_rows('group_key', search_text=search, limit=100)
+        value_preview_s = time.perf_counter() - value_preview_start
+
+        group_preview_start = time.perf_counter()
+        group_rows, group_total = store.preview_group_rows(('group_key',), search_text=search, limit=100)
+        group_preview_s = time.perf_counter() - group_preview_start
+
+        multi_group_preview_start = time.perf_counter()
+        multi_group_rows, multi_group_total = store.preview_group_rows(
+            ('group_key', 'subgroup'),
+            search_text=search,
+            limit=100,
+        )
+        multi_group_preview_s = time.perf_counter() - multi_group_preview_start
+
+        row_ids_start = time.perf_counter()
+        row_ids = store.row_ids_for_group_search(('group_key',), search_text=search)
+        row_ids_s = time.perf_counter() - row_ids_start
+
+        assign_scope_start = time.perf_counter()
+        scope_query, scope_params = store.source_row_number_query_for_group_search(
+            ('group_key',),
+            search_text=search,
+        )
+        with sqlite_connection_scope(store.path) as connection:
+            connection.execute(
+                'CREATE TEMP TABLE IF NOT EXISTS bench_high_cardinality_scope '
+                '(row_id INTEGER PRIMARY KEY)'
+            )
+            connection.execute('DELETE FROM bench_high_cardinality_scope')
+            if scope_query:
+                connection.execute(
+                    'INSERT OR IGNORE INTO bench_high_cardinality_scope (row_id) '
+                    f'SELECT source_row_number FROM ({scope_query})',
+                    scope_params,
+                )
+            assign_scope_rows = int(
+                connection.execute('SELECT COUNT(*) FROM bench_high_cardinality_scope').fetchone()[0]
+                or 0
+            )
+        assign_scope_s = time.perf_counter() - assign_scope_start
+
+        metric_columns = tuple(
+            candidate.field_name
+            for candidate in loaded.metric_candidates[: max(1, int(materialize_columns))]
+        )
+        required_columns = ('source_row_number', 'reference', 'group_key', 'subgroup', *metric_columns)
+        materialize_start = time.perf_counter()
+        materialized = materialize_tabular_dataframe(loaded, required_columns=required_columns)
+        materialize_s = time.perf_counter() - materialize_start
+    finally:
+        store.cleanup()
+
+    return ScenarioResult(
+        scenario='sqlite_grouping_high_cardinality_probe',
+        wall_time_s=(
+            load_s
+            + value_preview_s
+            + group_preview_s
+            + multi_group_preview_s
+            + row_ids_s
+            + assign_scope_s
+            + materialize_s
+        ),
+        stage_timings_s={
+            'csv_sqlite_load': load_s,
+            'value_preview': value_preview_s,
+            'single_column_group_preview': group_preview_s,
+            'multi_column_group_preview': multi_group_preview_s,
+            'row_ids_for_group_search': row_ids_s,
+            'assign_filtered_scope': assign_scope_s,
+            'materialize_required_columns': materialize_s,
+        },
+        input_metrics={
+            'rows': int(fixture_metrics['rows']),
+            'headers': int(fixture_metrics['headers']),
+            'configured_group_count': int(fixture_metrics['groups']),
+            'storage_mode_sqlite': 1 if loaded.storage_mode == 'sqlite' else 0,
+            'sqlite_row_count': int(store.row_count),
+            'metric_candidates': int(len(loaded.metric_candidates)),
+            'value_preview_rows': int(len(value_rows)),
+            'value_preview_total': int(value_total),
+            'group_preview_rows': int(len(group_rows)),
+            'group_preview_total': int(group_total),
+            'multi_group_preview_rows': int(len(multi_group_rows)),
+            'multi_group_preview_total': int(multi_group_total),
+            'row_ids_for_search': int(len(row_ids)),
+            'assign_filtered_scope_rows': int(assign_scope_rows),
+            'materialized_rows': int(len(materialized.dataframe.index)),
+            'materialized_columns': int(len(materialized.dataframe.columns)),
+        },
+    )
+
+
 def _max_rss_kb() -> int:
     if resource is None:
         return 0
@@ -1981,6 +2572,16 @@ def main() -> int:
     parser.add_argument('--large-csv-search', default='P-00')
     parser.add_argument('--large-csv-materialize-columns', type=int, default=5)
     parser.add_argument('--population-static-render-rows', type=int, default=1_000_000)
+    parser.add_argument('--industrial-cache-rows', type=int, default=50_000)
+    parser.add_argument('--industrial-cache-dynamic-fields', type=int, default=6)
+    parser.add_argument('--industrial-cache-source-count', type=int, default=2)
+    parser.add_argument('--industrial-bridge-materialize-columns', type=int, default=5)
+    parser.add_argument('--static-group-count', type=int, default=4)
+    parser.add_argument('--static-group-rows-per-group', type=int, default=250_000)
+    parser.add_argument('--grouping-high-cardinality-rows', type=int, default=250_000)
+    parser.add_argument('--grouping-high-cardinality-groups', type=int, default=250_000)
+    parser.add_argument('--grouping-high-cardinality-search', default='G-000')
+    parser.add_argument('--grouping-high-cardinality-materialize-columns', type=int, default=2)
     parser.add_argument('--fit-group-count', type=int, default=40)
     parser.add_argument('--fit-sample-size', type=int, default=120)
     parser.add_argument('--fit-monte-carlo-samples', type=int, default=250)
@@ -2021,6 +2622,10 @@ def main() -> int:
             'production_dashboard_workbook_path',
             'csv_summary_large_data_probe',
             'population_static_render_probe',
+            'industrial_cache_ingest_probe',
+            'industrial_cache_to_csv_summary_bridge_probe',
+            'dashboard_static_multi_group_probe',
+            'sqlite_grouping_high_cardinality_probe',
             'distribution_fit_monte_carlo_path',
             'distribution_fit_gof_policy_compare',
             'group_preprocess_mixed_types_compare',
@@ -2064,6 +2669,31 @@ def main() -> int:
             temp_path,
             row_count=max(1, args.population_static_render_rows),
         ),
+        'industrial_cache_ingest_probe': lambda temp_path: benchmark_industrial_cache_ingest_probe(
+            temp_path,
+            row_count=max(1, args.industrial_cache_rows),
+            dynamic_fields=max(1, args.industrial_cache_dynamic_fields),
+            source_count=max(1, args.industrial_cache_source_count),
+        ),
+        'industrial_cache_to_csv_summary_bridge_probe': lambda temp_path: benchmark_industrial_cache_to_csv_summary_bridge_probe(
+            temp_path,
+            row_count=max(1, args.industrial_cache_rows),
+            dynamic_fields=max(1, args.industrial_cache_dynamic_fields),
+            source_count=max(1, args.industrial_cache_source_count),
+            materialize_columns=max(1, args.industrial_bridge_materialize_columns),
+        ),
+        'dashboard_static_multi_group_probe': lambda temp_path: benchmark_dashboard_static_multi_group_probe(
+            temp_path,
+            group_count=max(1, args.static_group_count),
+            rows_per_group=max(1, args.static_group_rows_per_group),
+        ),
+        'sqlite_grouping_high_cardinality_probe': lambda temp_path: benchmark_sqlite_grouping_high_cardinality_probe(
+            temp_path,
+            row_count=max(1, args.grouping_high_cardinality_rows),
+            group_count=max(1, args.grouping_high_cardinality_groups),
+            search_text=args.grouping_high_cardinality_search,
+            materialize_columns=max(1, args.grouping_high_cardinality_materialize_columns),
+        ),
         'distribution_fit_monte_carlo_path': lambda temp_path: benchmark_distribution_fit_monte_carlo_path(
             temp_path,
             group_count=args.fit_group_count,
@@ -2099,7 +2729,14 @@ def main() -> int:
             iterations=max(1, args.chart_type_benchmark_iterations),
         ),
     }
-    manual_scenarios = {'csv_summary_large_data_probe', 'population_static_render_probe'}
+    manual_scenarios = {
+        'csv_summary_large_data_probe',
+        'population_static_render_probe',
+        'industrial_cache_ingest_probe',
+        'industrial_cache_to_csv_summary_bridge_probe',
+        'dashboard_static_multi_group_probe',
+        'sqlite_grouping_high_cardinality_probe',
+    }
     selected_scenarios = args.scenarios or [
         scenario for scenario in scenario_runners if scenario not in manual_scenarios
     ]

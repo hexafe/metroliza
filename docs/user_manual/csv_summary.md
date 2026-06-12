@@ -15,8 +15,34 @@ data.
 Use CSV Summary when:
 
 - your source is already a CSV or Excel file,
+- you opened cached production rows from [Industrial Data](industrial_data.md),
 - you want a dashboard or optional summary workbook, or
 - you do not need the main database-based reporting flow.
+
+### When CSV Summary opens from Industrial Data
+
+When you click **CSV Summary...** in the Industrial Data launcher, the table is already
+loaded from cached production rows in the active industrial cache. You do not need to
+pick a CSV file.
+
+When you click **Fetch to CSV Summary** in the Industrial Data fetch dialog, Metroliza
+first stores the fetched rows in the selected cache target, then opens those rows here.
+That cache target can be temporary for a one-time review, an opened Metroliza report
+database, or a newly created industrial cache database for later reuse.
+
+Every cached row includes a **source** column that identifies the configured production
+database that produced the row. Use that column like any other filter or grouping field.
+For example:
+
+- filter `source = Assembly line MES` to review one production source,
+- group by `source | station` to compare stations across sources,
+- group by `process_status` to compare OK/NOK or process states,
+- select metrics such as `cycle_time_s`, `torque_nm`, or another numeric production
+  column, then create the dashboard.
+
+The cached rows stay in the active local cache chosen in Industrial Data. CSV Summary does
+not connect to the production line database while creating the dashboard or optional
+workbook.
 
 ## Full Workflow
 
@@ -156,7 +182,8 @@ a bounded visual sample.
 Use **Advanced > Dashboard style > Change...** when you want the CSV/Excel dashboard to use a saved
 visual recipe, palette, marker emphasis, group/stat-line style, or selected-element
 opacity. Start with the visible recipe and saved-theme controls; use **Customize...** for
-detailed color, line, per-element opacity, or selected-element styling. These choices
+detailed color, line, per-element opacity, or selected-element styling. See
+[Dashboard visuals](dashboard_visuals.md) for the recipe names and examples. These choices
 affect the interactive dashboard charts only; they do not change the source data or the
 selected metrics.
 
@@ -245,6 +272,18 @@ The workbook can include:
 
 ## Troubleshooting
 
+- If **Create analytics** is disabled, check that a source is loaded, at least one metric
+  is selected, at least one chart/statistics output is selected, and the required
+  dashboard or workbook path is filled in.
+- If you changed the Excel sheet, time column, or Part / ID column, click **Reload
+  metrics** before creating analytics.
+- If filtering leaves zero rows, clear or loosen the filter and try again.
+- If multiple input files are needed, select multiple CSV files. Multi-file loading is
+  not available for Excel workbooks.
+- If groupstats is selected but no groupstats output appears, create at least two
+  non-empty manual groups in **Edit groups**.
+- If a filter expression is rejected, use simple value selection first, then retry the
+  expression with one condition at a time.
 - If the dashboard is slow to open, recreate it with **Auto** or **Snapshots only** and
   keep the default dashboard size limit.
 - If the dashboard file is too large to share, use **Snapshots only**, reduce the selected

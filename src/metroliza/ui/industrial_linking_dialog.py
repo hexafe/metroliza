@@ -25,6 +25,7 @@ from metroliza.industrial.industrial_join_service import (
     set_manual_industrial_report_link,
 )
 from metroliza.reports.report_schema import ensure_report_schema
+from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
     configure_table,
@@ -241,6 +242,7 @@ class IndustrialLinkingDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
+        attach_help_menu_to_layout(layout, self, [("Industrial Data manual", "industrial_data")])
         layout.addWidget(section_label("Manual report-to-production links"))
         layout.addWidget(self.status_label)
 

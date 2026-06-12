@@ -258,3 +258,92 @@ def test_sync_thread_deduplicates_reference_query_filter_before_fetch_and_metada
         {"column": "station", "operator": "=", "value_count": 1}
     ]
     assert filters_payload["deduplicated_reference_query_filter_count"] == 1
+
+
+def test_sync_thread_fetches_sql_rows_and_records_only_sql_metadata(monkeypatch, tmp_path):
+    db_path = str(tmp_path / "industrial.db")
+    repository = IndustrialDataRepository(db_path)
+    profile = repository.upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="events",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+        allowed_columns=("event_id", "reference"),
+    )
+    status = OznakAdapterStatus(available=True, version="0.2.0rc2", fetch_available=True)
+    result = OznakAdapterFetchResult(
+        status=status,
+        records=(
+            {
+                "source_primary_key": "ROW-SQL-1",
+                "reference": "REF-SQL-1",
+                "station": "S1",
+                "raw_record": {"event_id": "ROW-SQL-1", "reference": "REF-SQL-1", "station": "S1"},
+            },
+        ),
+        row_count=1,
+        implemented=True,
+        diagnostics={"stage": "mapped", "fetch_mode": "sql", "sql_hash": "abc123"},
+    )
+    fetch_kwargs = {}
+
+    monkeypatch.setattr(industrial_workers, "get_oznak_adapter_status", lambda: status)
+    monkeypatch.setattr(industrial_workers, "create_oznak_cancellation_token", lambda: None)
+    monkeypatch.setattr(
+        industrial_workers,
+        "materialize_industrial_report_links",
+        lambda _db: SimpleNamespace(accepted_links=0, ambiguous_reports=0, unmatched_reports=0),
+    )
+
+    def fake_fetch_sql(*args, **kwargs):
+        fetch_kwargs.update(kwargs)
+        return result
+
+    monkeypatch.setattr(industrial_workers, "fetch_oznak_records_for_source_sql", fake_fetch_sql)
+    thread = IndustrialOznakSyncThread(
+        db_file=db_path,
+        profile=profile,
+        username="operator",
+        password="secret-password",
+        limit=50,
+        timeout_seconds=30,
+        reference_filter_column=None,
+        reference_values=(),
+        test_only=False,
+        fetch_state=IndustrialFetchState.from_sql(
+            "SELECT event_id, reference, station FROM events",
+            limit_rows=50,
+            sql_preview_limit=5,
+            sql_recipe_path="/tmp/sql_recipes/line.sql",
+        ),
+    )
+    emitted = []
+    _capture_signal(thread.result_ready, emitted)
+
+    thread.run()
+
+    assert emitted[0]["status"] == "succeeded"
+    assert emitted[0]["upsert_summary"]["processed"] == 1
+    assert fetch_kwargs["sql_text"] == "SELECT event_id, reference, station FROM events"
+    assert fetch_kwargs["limit"] == 50
+    assert fetch_kwargs["mode"] == "fetch"
+    with sqlite_connection_scope(db_path) as conn:
+        filters_json = conn.execute("SELECT filters_json FROM industrial_sync_runs").fetchone()[0]
+        station_value = conn.execute(
+            """
+            SELECT station
+            FROM industrial_records
+            WHERE source_record_key = 'ROW-SQL-1'
+            """
+        ).fetchone()[0]
+    filters_payload = json.loads(filters_json)
+    assert filters_payload["mode"] == "sql"
+    assert filters_payload["sql_recipe"] == "line.sql"
+    assert filters_payload["sql_preview_limit"] == 5
+    assert filters_payload["sql_hash"]
+    assert "SELECT" not in filters_json
+    assert station_value == "S1"

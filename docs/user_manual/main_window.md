@@ -55,12 +55,18 @@ Excel workbooks with separate sheets for selected parameters.
 
 ### Tools > Industrial data...
 
-Opens the compact industrial data launcher. It keeps two database concepts separate:
+Opens the compact [Industrial Data](industrial_data.md) launcher. It keeps cache storage
+and production database access separate:
 
-- **Metroliza report database**: the SQLite file Metroliza creates from CMM/metrology reports. This stores report metadata, measurements, local industrial cache rows, sync diagnostics, and report-to-production links. Use **Select DB...** in the Industrial data window when the launcher was opened before a report database was selected in the main window.
+- **Active local cache**: a temporary SQLite cache, an opened Metroliza report database,
+  or a persistent industrial cache database. This is where fetched production rows are
+  stored.
 - **Production line database**: an existing MySQL/MSSQL source that Oznak reads from. It belongs to the production line and can contain sensor/process rows for many years of assemblies.
 
-Use this when you want to connect assembly-process data from Oznak-supported production line databases to the metrology reports already saved in Metroliza.
+Use this when you want to fetch assembly-process data from Oznak-supported production
+line databases, then filter, group, export, or dashboard those rows in CSV Summary.
+Choose an opened Metroliza report database only when you also need report-to-production
+links or industrial context in the normal Metroliza export.
 
 The launcher shows a simple progress strip:
 
@@ -72,7 +78,7 @@ Use it as the non-technical path through the module:
 
 1. configure or select a production source,
 2. check production database access,
-3. fetch rows into the local Metroliza cache, and
+3. fetch rows into the active local industrial cache, and
 4. open cached rows in CSV Summary.
 
 The launcher also shows the last sync/cache outcome, including the source, status,
@@ -80,10 +86,14 @@ row count, timestamp, and a redacted warning/error detail when one exists.
 
 The launcher opens separate workflows:
 
+- **Temp**, **Open...**, and **Create...** choose where fetched rows are cached: a
+  session temporary cache, an existing Metroliza report database, or a persistent
+  industrial cache database.
 - **Production sources...** edits non-secret production line connection setup such as database type, host, database name, table/view, columns, record key, and timestamp column. This stays available even before a Metroliza report database is selected.
-- **Fetch to cache...** asks for the production database username/password for the current session, checks production database access with a one-row read that saves nothing, and can fetch rows by reference/ID values, row limit, or explicit fetch-all confirmation into the local Metroliza cache.
+- **Fetch to cache...** asks for the production database username/password for the current session, checks production database access with a one-row read that saves nothing, and can fetch rows by guided filters, row limit, explicit fetch-all confirmation, or a reviewed SQL query into the active local industrial cache.
+- **Fetch to CSV Summary** in the fetch dialog runs the same fetch, stores the rows in the active local cache, and then opens them in CSV Summary for filtering, grouping, dashboards, and optional workbook output.
 - **Production links...** lets you manually link a Metroliza report to a cached production row when both systems use different reference values.
-- **Export workbook...** creates a cached industrial workbook when a Metroliza report database is selected. If no report database is selected, it can fetch live production rows directly from a configured source and create a production workbook without writing to the local cache.
+- **Export workbook...** creates a workbook from cached industrial rows in the active local industrial cache.
 - **CSV Summary...** opens cached production rows in the CSV Summary workflow without
   requiring CMM measurements. Use the CSV Summary filters, grouping, dashboards, workbook,
   and export options; the loaded table includes a **source** column for the configured
@@ -100,20 +110,25 @@ There are two ways to configure production line databases:
 
 Each production source can disable server-side `ORDER BY` for limited SQL reads. Leave it enabled for deterministic rows; turn it off when a low-memory SQL Server cannot run the sort.
 
-Metroliza stores the source setup, cache rows, sync diagnostics, and links in the selected Metroliza report database. It does not store the production database username or password in the report database or config file.
+Metroliza stores fetched rows and sync diagnostics in the active local industrial cache.
+Report-to-production links are stored only when that cache is an opened Metroliza report
+database. Metroliza does not store the production database username or password in the
+report database, industrial cache database, or config file.
 
 If you check **Remember on this computer** in the fetch/access dialog, Metroliza saves
 the production database username/password only after the access check or fetch succeeds
 or completes with warnings. The dialog shows where remembered credentials are stored and
 includes **Forget saved credentials** for the selected source.
 
-Industrial export from cached data does not connect directly to the production line database. Live production database access happens only when the user explicitly runs **Check access** or **Fetch to cache** in the fetch dialog opened from **Fetch to cache...**, or starts **Export workbook...** without a selected Metroliza report database to create a live production workbook.
+Industrial export from cached data does not connect directly to the production line database. Live production database access happens only when the user explicitly runs **Check access** or **Fetch to cache** in the fetch dialog opened from **Fetch to cache...**.
 
 **Check access** reads up to one production row to verify credentials, table, columns, and query access. It does not save rows into the Metroliza cache.
 
-**Fetch to cache** can fetch by reference values, by a row limit, or by explicit fetch-all confirmation. Fetch-all shows a warning first because a production source may contain a large historical table.
+**Fetch to cache** can fetch by guided reference/source-column filters, by a row limit, by a reviewed SQL query, or by explicit fetch-all confirmation. Fetch-all shows a warning first because a production source may contain a large historical table.
 
-Use **Edit references...** in the sync dialog to paste reference/ID values quickly as a comma-separated, semicolon-separated, space-separated, tab-separated, or line-separated list. If no reference filter is set, **Fetch to cache** uses the configured row limit by default. During cache fetches, Metroliza batches long reference lists. Bounded fetches and access checks use bounded Oznak requests; chunked Oznak fetching is reserved for explicit fetch-all paths when the source profile has a record key/pagination column.
+Use **Edit filters...** in the fetch dialog to paste reference/ID values quickly as a comma-separated, semicolon-separated, space-separated, tab-separated, or line-separated list. You can also add simple source-column filters such as station, status, work order, or date. If no guided filter is set, **Fetch to cache** uses the configured row limit by default.
+
+Use the **SQL query** tab only when guided filters are not enough or when IT/MES support gives you a reviewed read-only query. **Preview SQL** reads a small sample first; the default preview is `5` rows. Use **Open recipe...** and **Save recipe...** for reusable SQL queries such as a shift, station, work order, or date range.
 
 If the Metroliza report reference and production reference are different, use **Production links...** after sync. Select one Metroliza report, select one cached production row, then click **Link selected**. Manual links take priority over automatic exact-reference links during export.
 
@@ -121,7 +136,7 @@ Use **CSV Summary...** when you need production-line grouping fields such as sta
 
 ### Tools > Parser profiles...
 
-Opens the parser profile handoff dialog.
+Opens the [Parser Profiles](parser_profiles.md) handoff dialog.
 
 Use this when a new supplier report template needs parser support. The dialog shows the local profile store status and can create a local handoff folder with:
 
@@ -217,7 +232,7 @@ Use:
 
 Use:
 
-1. **Tools > Parser profiles...**
+1. [Parser Profiles](parser_profiles.md)
 2. Create a handoff folder.
 3. Add sample reports and checked expected values.
 4. Send the handoff folder through the approved review process.
@@ -229,9 +244,9 @@ Use:
 Metroliza uses both modal and modeless dialogs.
 
 - **Modal dialogs** stay in front and block other app interaction until you close them. Examples include **About**, **Release notes**, **CSV Summary**, and **Characteristic Name Matching**.
-- **Modeless major workflow windows** such as **Parsing**, **Modify Database**, and **Export** can be opened from the launcher window and then used as their own working dialog.
+- **Modeless major workflow windows** such as **Parsing** and **Export** can be opened from the launcher window and then used as their own working dialog.
 
-In practice, this means some windows behave like a temporary popup, while others behave more like a separate workspace.
+In practice, this means some windows behave like a temporary popup, while others behave more like a separate workspace. **Modify Database** is opened as a focused editing dialog so you finish or cancel that cleanup before returning to other workflows.
 
 ### Opening one major workflow can close another one
 

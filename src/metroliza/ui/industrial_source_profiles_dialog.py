@@ -33,6 +33,7 @@ from metroliza.industrial.industrial_source_config import (
     upsert_source_profile_in_config,
     upsert_source_profile_to_repository,
 )
+from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
     configure_window_size,
@@ -141,6 +142,7 @@ class IndustrialSourceProfilesDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
+        attach_help_menu_to_layout(layout, self, [("Industrial Data manual", "industrial_data")])
         layout.addWidget(section_label("Production line database configuration"))
         config_row = QHBoxLayout()
         config_row.setContentsMargins(0, 0, 0, 0)
@@ -220,12 +222,12 @@ class IndustrialSourceProfilesDialog(QDialog):
                 if config_error:
                     config_error = (
                         f"{config_error} Also could not load cached production sources "
-                        f"from the Metroliza report database: {exc}"
+                        f"from the active local cache: {exc}"
                     )
                 else:
                     config_error = (
-                        "Could not load cached production sources from the Metroliza "
-                        f"report database: {exc}"
+                        "Could not load cached production sources from the active local cache: "
+                        f"{exc}"
                     )
         for profile in db_profiles:
             profiles_by_key.setdefault(profile.profile_key, profile)
@@ -241,7 +243,7 @@ class IndustrialSourceProfilesDialog(QDialog):
             self.status_label.setText(config_error)
         elif profiles_by_key:
             suffix = (
-                " and synchronized with the selected Metroliza report database"
+                " and synchronized with the active local cache"
                 if self.db_file
                 else ""
             )
@@ -340,8 +342,8 @@ class IndustrialSourceProfilesDialog(QDialog):
             "Use Fetch to cache in the Industrial data window to check access or fetch rows."
             if self.db_file
             else (
-                "Use Export in the Industrial data window to fetch directly, or select a "
-                "Metroliza report database when you want to sync rows into the local cache."
+                "Select, create, or skip a local cache in the Industrial data window, then use "
+                "Fetch to cache or Fetch to CSV Summary."
             )
         )
         return f"Saved production source: {profile.profile_name}. {next_step}"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -112,8 +113,8 @@ def test_source_dialog_can_configure_file_before_metroliza_database_is_selected(
     assert "reference" not in config_text
     assert "order_by_enabled" not in config_text
     assert "password" not in config_text.lower()
-    assert "Use Export" in dialog.status_label.text()
-    assert "sync rows into the local cache" in dialog.status_label.text()
+    assert "Fetch to CSV Summary" in dialog.status_label.text()
+    assert "local cache" in dialog.status_label.text()
     dialog.close()
 
 
@@ -487,7 +488,9 @@ def test_launcher_dialog_keeps_connection_fields_out_of_main_surface(tmp_path):
 
     assert not hasattr(dialog, "source_name_edit")
     assert not hasattr(dialog, "password_edit")
-    assert dialog.select_database_button.text() == "Select DB..."
+    assert dialog.use_temp_button.text() == "Temp"
+    assert dialog.select_database_button.text() == "Open..."
+    assert dialog.create_database_button.text() == "Create..."
     assert dialog.sources_button.text() == "Production sources..."
     assert dialog.sync_button.text() == "Fetch to cache..."
     assert "Fetch rows" in dialog.sync_button.toolTip()
@@ -522,8 +525,8 @@ def test_sync_dialog_labels_bounded_access_check_clearly(tmp_path):
     assert dialog.test_connection_button.text() == "Check access"
     assert "one production row" in dialog.test_connection_button.toolTip()
     assert dialog.sync_now_button.text() == "Fetch to cache"
-    assert "saves them in the local Metroliza cache" in dialog.sync_now_button.toolTip()
-    assert dialog.edit_filter_button.text() == "Edit references..."
+    assert "saves them in the local industrial cache" in dialog.sync_now_button.toolTip()
+    assert dialog.edit_filter_button.text() == "Edit filters..."
     dialog.close()
 
 
@@ -594,21 +597,25 @@ def test_launcher_keeps_source_configuration_available_without_database(tmp_path
     dialog = IndustrialDataDialog(db_file=None)
     dialog.config_path = tmp_path / "industrial_sources.yaml"
     dialog.refresh_status()
+    cache_path = Path(dialog.db_file)
 
     assert dialog.sources_button.isEnabled()
-    assert not dialog.sync_button.isEnabled()
+    assert dialog.sync_button.isEnabled()
     assert not dialog.links_button.isEnabled()
-    assert not dialog.export_button.isEnabled()
-    assert not dialog.initialize_button.isEnabled()
+    assert dialog.export_button.isEnabled()
+    assert dialog.initialize_button.isEnabled()
     assert not dialog.analysis_source_combo.isEnabled()
-    assert "Select a report DB" in dialog.analytics_status_label.text()
+    assert "needs fetched rows" in dialog.analytics_status_label.text()
     assert dialog.select_database_button.isEnabled()
-    assert "select a report DB" in dialog.status_label.text()
-    assert "fetch rows into the local cache" in dialog.status_label.text()
+    assert dialog.create_database_button.isEnabled()
+    assert dialog.report_db_file is None
+    assert "Temporary cache" in dialog.database_field.text()
+    assert cache_path.exists()
     dialog.close()
+    assert not cache_path.exists()
 
 
-def test_launcher_keeps_export_disabled_when_source_config_exists_without_database(tmp_path):
+def test_launcher_keeps_cache_actions_enabled_when_source_config_exists_without_database(tmp_path):
     _app()
     config_path = tmp_path / "industrial_sources.yaml"
     upsert_source_profile_in_config(
@@ -631,26 +638,37 @@ def test_launcher_keeps_export_disabled_when_source_config_exists_without_databa
     dialog.refresh_status()
 
     assert dialog.sources_button.isEnabled()
-    assert not dialog.export_button.isEnabled()
-    assert not dialog.sync_button.isEnabled()
+    assert dialog.export_button.isEnabled()
+    assert dialog.sync_button.isEnabled()
     assert not dialog.links_button.isEnabled()
-    assert not dialog.initialize_button.isEnabled()
+    assert dialog.initialize_button.isEnabled()
     assert not dialog.refresh_links_button.isEnabled()
-    assert not dialog.analyze_button.isEnabled()
+    assert dialog.analyze_button.isEnabled()
     assert not dialog.analysis_source_combo.isEnabled()
-    assert "Select a report DB" in dialog.analytics_status_label.text()
+    assert "needs fetched rows" in dialog.analytics_status_label.text()
+    assert "Fetch selected production rows" in dialog.status_label.text()
     dialog.close()
 
 
-def test_launcher_blocks_cache_fetch_without_metroliza_database(monkeypatch, tmp_path):
+def test_launcher_fetch_uses_temporary_cache_without_metroliza_database(monkeypatch, tmp_path):
     _app()
     launched = {}
     warnings = []
 
     class FakeSyncDialog:
-        def __init__(self, parent, *, db_file, config_path, access_only, filter_state):
+        def __init__(
+            self,
+            parent,
+            *,
+            db_file,
+            report_db_file,
+            config_path,
+            access_only,
+            filter_state,
+        ):
             launched["parent"] = parent
             launched["db_file"] = db_file
+            launched["report_db_file"] = report_db_file
             launched["config_path"] = config_path
             launched["access_only"] = access_only
             launched["filter_state"] = filter_state
@@ -662,15 +680,19 @@ def test_launcher_blocks_cache_fetch_without_metroliza_database(monkeypatch, tmp
     monkeypatch.setattr(industrial_data_dialog.QMessageBox, "warning", lambda *args: warnings.append(args))
     dialog = IndustrialDataDialog(db_file=None)
     dialog.config_path = tmp_path / "industrial_sources.yaml"
+    temp_cache = dialog.db_file
 
     dialog.open_sync_dialog()
 
-    assert launched == {}
-    assert "Select a Metroliza report database" in warnings[0][2]
+    assert launched["parent"] is dialog
+    assert launched["db_file"] == temp_cache
+    assert launched["report_db_file"] is None
+    assert launched["access_only"] is False
+    assert warnings == []
     dialog.close()
 
 
-def test_launcher_blocks_export_without_metroliza_database(monkeypatch, tmp_path):
+def test_launcher_export_uses_temporary_cache_without_metroliza_database(monkeypatch, tmp_path):
     _app()
     launched = {}
     warnings = []
@@ -681,6 +703,7 @@ def test_launcher_blocks_export_without_metroliza_database(monkeypatch, tmp_path
             parent,
             *,
             db_file,
+            report_db_file,
             filter_state,
             grouping_state,
             include_plots,
@@ -688,6 +711,7 @@ def test_launcher_blocks_export_without_metroliza_database(monkeypatch, tmp_path
         ):
             launched["parent"] = parent
             launched["db_file"] = db_file
+            launched["report_db_file"] = report_db_file
             launched["config_path"] = config_path
             launched["filter_state"] = filter_state
             launched["grouping_state"] = grouping_state
@@ -700,12 +724,14 @@ def test_launcher_blocks_export_without_metroliza_database(monkeypatch, tmp_path
     monkeypatch.setattr(industrial_data_dialog.QMessageBox, "warning", lambda *args: warnings.append(args))
     dialog = IndustrialDataDialog(db_file=None)
     dialog.config_path = tmp_path / "industrial_sources.yaml"
+    temp_cache = dialog.db_file
 
     dialog.open_export_dialog()
 
-    assert launched == {}
-    assert "Select a Metroliza report database" in warnings[0][2]
-    assert "fetch rows into the local cache" in warnings[0][2]
+    assert launched["parent"] is dialog
+    assert launched["db_file"] == temp_cache
+    assert launched["report_db_file"] is None
+    assert warnings == []
     dialog.close()
 
 
@@ -739,6 +765,49 @@ def test_launcher_can_select_metroliza_database_and_enable_oznak_actions(monkeyp
     assert dialog.export_button.isEnabled()
     assert "Industrial cache empty" in dialog.status_label.text()
     assert "needs fetched rows" in dialog.analytics_status_label.text()
+    dialog.close()
+    parent.close()
+
+
+def test_launcher_can_create_persistent_industrial_cache_without_report_context(monkeypatch, tmp_path):
+    _app()
+    db_path = tmp_path / "industrial_cache.sqlite"
+
+    class ParentWindow(QWidget):
+        def __init__(self):
+            super().__init__()
+            self.selected_db_file = None
+
+        def set_db_file(self, db_file):
+            self.selected_db_file = db_file
+
+    parent = ParentWindow()
+    dialog = IndustrialDataDialog(parent=parent, db_file=None)
+    monkeypatch.setattr(
+        industrial_data_dialog.QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: (str(db_path), "SQLite database (*.db *.sqlite *.sqlite3)"),
+    )
+
+    dialog.create_database_file()
+
+    assert parent.selected_db_file is None
+    assert dialog.db_file == str(db_path)
+    assert dialog.report_db_file is None
+    assert dialog.sync_button.isEnabled()
+    assert dialog.export_button.isEnabled()
+    assert dialog.initialize_button.isEnabled()
+    assert not dialog.links_button.isEnabled()
+    assert not dialog.refresh_links_button.isEnabled()
+    with sqlite_connection_scope(str(db_path)) as conn:
+        tables = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+    assert "industrial_records" in tables
+    assert "report_metadata" not in tables
     dialog.close()
     parent.close()
 

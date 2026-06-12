@@ -19,6 +19,7 @@ from metroliza.industrial.industrial_workflow_state import (
     INDUSTRIAL_GROUPING_FIELDS,
     IndustrialGroupingState,
 )
+from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.ui_foundation import apply_metroliza_theme, configure_window_size, status_chip
 
 
@@ -49,6 +50,7 @@ class IndustrialGroupingDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
+        attach_help_menu_to_layout(layout, self, [("Industrial Data manual", "industrial_data")])
         layout.addWidget(self.summary_label)
         layout.addWidget(QLabel("Fields"))
         layout.addWidget(self.search_input)

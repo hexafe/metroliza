@@ -96,7 +96,7 @@ If you delete a custom group, its parts also go back to **POPULATION**.
 ### Create a new group from selected parts
 
 1. In **PART #**, select one or more parts.
-2. Click **Create/add to group**.
+2. Click **Create or add**.
 3. Enter the group name.
 4. Confirm.
 
@@ -106,11 +106,30 @@ If the group name already exists, the selected parts are added to that existing 
 
 ### Create a group from the selected reference
 
-If no parts are selected, **Create/add to group** can still work from the currently selected reference.
+To group the visible parts for one reference:
 
-In that case, the dialog uses the selected reference’s rows as the target set.
+1. Select the reference in **REFERENCE**.
+2. Check the rows currently visible in **PART #**.
+3. Double-click the reference, or press **Enter** while **REFERENCE** has focus.
+4. The group name is prefilled from the reference name.
+5. Confirm the name or type a clearer name.
 
-This is helpful when you want to group an entire reference quickly.
+This uses the selected reference's visible **PART #** rows as the target set. If you used
+**Filter rows** or a **PART #** search, review the visible rows first so you do not group
+less than you intended.
+
+You can also select visible rows in **PART #** directly and press **Enter** or click
+**Create or add**. That is better when one reference contains rows that belong to
+different groups.
+
+### Simple examples
+
+- To compare suppliers, select rows from `Supplier A`, click **Create or add**, and name
+  the group `Supplier A`. Repeat for `Supplier B`.
+- To compare two revisions of one part, filter rows to `Part=Housing`, select the Rev A
+  rows, and create group `Rev A`. Then select the Rev B rows and create group `Rev B`.
+- To put one complete reference into a group, select it in **REFERENCE** and press
+  **Enter**. Confirm the prefilled group name or replace it with a friendlier name.
 
 ### Color-coded groups
 
@@ -120,26 +139,26 @@ Custom groups are automatically color-coded so they are easier to distinguish in
 
 ## Renaming, removing, and deleting
 
-### Rename selected group
+### Rename group
 
 1. Select a group in **GROUPS**.
-2. Click **Rename selected group**.
+2. Click **Rename group**.
 3. Enter the new name.
 
 You can also double-click the group to open the rename flow.
 
-### Remove from selected group
+### Remove from group
 
 1. Select a custom group.
 2. In **PART IN SELECTED GROUP**, select the part or parts you want to remove.
-3. Click **Remove from selected group**.
+3. Click **Remove from group**.
 
 The removed items return to **POPULATION**.
 
-### Delete selected group
+### Delete group
 
 1. Select a custom group in **GROUPS**.
-2. Click **Delete selected group**.
+2. Click **Delete group**.
 3. Confirm deletion.
 
 Deleting the group does not delete the parts. It only removes that custom group assignment and returns its members to **POPULATION**.
@@ -162,7 +181,7 @@ When you click **Use grouping**:
 
 Important behavior: if grouping is applied while **Group analysis** was **Off**, Export automatically switches it to **Standard** so grouped analysis can be included.
 
-### Do not use grouping
+### Clear grouping
 
 This closes the dialog and tells Export not to use grouping.
 
@@ -186,14 +205,17 @@ The dialog includes several shortcuts.
 
 ### Double-click shortcuts
 
-- Double-click a **REFERENCE** item to start group creation with that reference name prefilled.
-- Double-click a **PART #** item to start group creation.
+- Double-click a **REFERENCE** item to select the visible **PART #** rows for that
+  reference and start group creation with the reference name prefilled.
+- Double-click a **PART #** item to start group creation from the selected visible parts.
 - Double-click a **GROUPS** item to rename that group.
 
 ### Keyboard shortcuts
 
-- Press **Enter** while the **REFERENCE** list has focus to start group creation for the selected reference, with the selected reference name prefilled.
-- Press **Enter** while the **PART #** list has focus to start group creation for the selected part selection.
+- Press **Enter** while the **REFERENCE** list has focus to select the visible **PART #**
+  rows for that reference and start group creation with the reference name prefilled.
+- Press **Enter** while the **PART #** list has focus to start group creation for the
+  selected visible parts.
 - Press **Enter** while the **GROUPS** list has focus to rename the selected group.
 - Press **Enter** while **PART IN SELECTED GROUP** has focus to keep focus in that pane; it does not apply or clear grouping.
 - Press **Delete** or **Backspace** in **PART #** to remove the selected parts from their current custom group and return them to **POPULATION**.
@@ -218,4 +240,4 @@ Removing from a group sends it back to **POPULATION**. It does not delete the pa
 
 ### I created grouping but do not see it in Export
 
-Make sure you clicked **Use grouping**. If you close the dialog or click **Do not use grouping**, Export will not use the grouping setup.
+Make sure you clicked **Use grouping**. If you close the dialog or click **Clear grouping**, Export will not use the grouping setup.

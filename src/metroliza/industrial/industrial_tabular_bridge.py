@@ -12,7 +12,7 @@ import pandas as pd
 
 from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
 from metroliza.industrial.industrial_data_schema import ensure_industrial_data_schema
-from metroliza.reports.db import read_sql_dataframe, sqlite_connection_scope
+from metroliza.reports.db import sqlite_connection_scope
 from metroliza.tabular.tabular_analytics_service import (
     TABULAR_SQLITE_PREVIEW_ROWS,
     TabularAnalyticsLoadResult,
@@ -23,6 +23,26 @@ from metroliza.tabular.tabular_analytics_service import (
 
 _INDUSTRIAL_TABULAR_TABLE = "industrial_tabular_rows"
 _SAFE_COLUMN_RE = re.compile(r"[^A-Za-z0-9_]+")
+_BASE_INDUSTRIAL_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("source", "COALESCE(NULLIF(profiles.profile_name, ''), records.source_db_alias)"),
+    ("source_db_alias", "records.source_db_alias"),
+    ("source_profile_id", "records.source_profile_id"),
+    ("sync_run_id", "records.sync_run_id"),
+    ("source_record_key", "records.source_record_key"),
+    ("process_timestamp", "records.process_timestamp"),
+    ("process_datetime", "records.process_timestamp"),
+    ("reference", "records.reference"),
+    ("part_number", "records.part_number"),
+    ("part_name", "records.part_name"),
+    ("revision", "records.revision"),
+    ("serial", "records.serial"),
+    ("batch_lot", "records.batch_lot"),
+    ("work_order", "records.work_order"),
+    ("station", "records.station"),
+    ("line", "records.line"),
+    ("operator_name", "records.operator_name"),
+    ("process_status", "records.process_status"),
+)
 
 
 def load_industrial_cache_tabular_result(
@@ -54,56 +74,20 @@ def load_industrial_cache_tabular_result(
         where_parts.append(f"records.source_db_alias IN ({placeholders})")
         params.extend(normalized_source_db_aliases)
     where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
-    records = read_sql_dataframe(
+    sqlite_path, columns, row_count = _write_tabular_sqlite_from_industrial_cache(
         database,
-        f"""
-        SELECT
-            records.id AS record_id,
-            COALESCE(NULLIF(profiles.profile_name, ''), records.source_db_alias) AS source,
-            records.source_db_alias,
-            records.source_profile_id,
-            records.sync_run_id,
-            records.source_record_key,
-            records.process_timestamp,
-            records.process_timestamp AS process_datetime,
-            records.reference,
-            records.part_number,
-            records.part_name,
-            records.revision,
-            records.serial,
-            records.batch_lot,
-            records.work_order,
-            records.station,
-            records.line,
-            records.operator_name,
-            records.process_status
-        FROM industrial_records records
-        LEFT JOIN industrial_source_profiles profiles
-            ON profiles.id = records.source_profile_id
-        {where_sql}
-        ORDER BY records.id
-        """,
-        params=params,
+        where_sql=where_sql,
+        params=tuple(params),
     )
-    if records.empty:
-        dataframe = _empty_industrial_tabular_frame()
-    else:
-        dataframe = records.copy()
-        dataframe.insert(0, "source_row_number", range(1, len(dataframe.index) + 1))
-        dataframe = _merge_dynamic_values(database, dataframe)
-        dataframe = dataframe.drop(columns=["record_id"], errors="ignore")
-    dataframe = _deduplicate_columns(dataframe)
-    columns = tuple(str(column) for column in dataframe.columns)
-    sqlite_path = _write_tabular_sqlite(dataframe, columns=columns)
     store = TabularSqliteStore(
         path=sqlite_path,
         table_name=_INDUSTRIAL_TABULAR_TABLE,
         columns=columns,
         source_columns=columns,
-        row_count=int(len(dataframe.index)),
+        row_count=row_count,
         date_filter_columns={"process_datetime": "process_datetime"},
     )
-    preview = dataframe.head(TABULAR_SQLITE_PREVIEW_ROWS).copy()
+    preview = store.read_dataframe(limit=TABULAR_SQLITE_PREVIEW_ROWS)
     metric_candidates = discover_tabular_metric_candidates(
         preview,
         reserved_columns=(
@@ -131,42 +115,121 @@ def load_industrial_cache_tabular_result(
         source_files=(str(db_file),),
         storage_mode="sqlite",
         sqlite_store=store,
-        row_count=int(len(dataframe.index)),
+        row_count=row_count,
     )
 
 
-def _merge_dynamic_values(database: str, dataframe: pd.DataFrame) -> pd.DataFrame:
-    record_ids = tuple(int(value) for value in dataframe["record_id"].tolist())
-    if not record_ids:
-        return dataframe
-    placeholders = ", ".join("?" for _item in record_ids)
-    values = read_sql_dataframe(
-        database,
-        f"""
-        SELECT record_id, field_name, field_value_text, field_value_json
-        FROM industrial_record_values
-        WHERE record_id IN ({placeholders})
-        ORDER BY record_id, field_name
-        """,
-        params=list(record_ids),
-    )
-    if values.empty:
-        return dataframe
-    values["__value"] = [
-        _dynamic_value(text, json_value)
-        for text, json_value in zip(
-            values["field_value_text"].tolist(),
-            values["field_value_json"].tolist(),
-            strict=False,
+def _write_tabular_sqlite_from_industrial_cache(
+    database: str,
+    *,
+    where_sql: str,
+    params: tuple[Any, ...],
+) -> tuple[str, tuple[str, ...], int]:
+    temp = tempfile.NamedTemporaryFile(prefix="metroliza-industrial-tabular-", suffix=".sqlite", delete=False)
+    temp.close()
+    sqlite_path = temp.name
+    with sqlite_connection_scope(sqlite_path) as connection:
+        connection.create_function("metroliza_dynamic_value", 2, _dynamic_value)
+        connection.execute("ATTACH DATABASE ? AS source_db", (database,))
+        row_count = int(
+            connection.execute(
+                f"SELECT COUNT(*) FROM source_db.industrial_records records {where_sql}",
+                params,
+            ).fetchone()[0]
+            or 0
         )
+        if row_count <= 0:
+            columns = tuple(str(column) for column in _empty_industrial_tabular_frame().columns)
+            _create_tabular_table(connection, columns)
+            connection.commit()
+            connection.execute("DETACH DATABASE source_db")
+            return sqlite_path, columns, 0
+
+        dynamic_fields = _dynamic_field_names(connection, where_sql=where_sql, params=params)
+        columns, dynamic_columns = _industrial_tabular_columns(dynamic_fields)
+        _create_tabular_table(connection, columns)
+        _insert_industrial_tabular_rows(
+            connection,
+            where_sql=where_sql,
+            params=params,
+            columns=columns,
+            dynamic_fields=dynamic_fields,
+            dynamic_columns=dynamic_columns,
+        )
+        _create_tabular_indexes(connection, columns)
+        connection.commit()
+        connection.execute("DETACH DATABASE source_db")
+    return sqlite_path, columns, row_count
+
+
+def _dynamic_field_names(connection, *, where_sql: str, params: tuple[Any, ...]) -> tuple[str, ...]:
+    records = connection.execute(
+        f"""
+        SELECT DISTINCT values_row.field_name
+        FROM source_db.industrial_record_values values_row
+        JOIN source_db.industrial_records records
+            ON records.id = values_row.record_id
+        {where_sql}
+        ORDER BY values_row.field_name COLLATE NOCASE
+        """,
+        params,
+    ).fetchall()
+    return tuple(str(row[0]) for row in records if str(row[0] or "").strip())
+
+
+def _industrial_tabular_columns(dynamic_fields: tuple[str, ...]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    raw_columns = ("source_row_number", *(column for column, _expr in _BASE_INDUSTRIAL_COLUMNS), *dynamic_fields)
+    columns = _deduplicated_column_names(raw_columns)
+    dynamic_offset = 1 + len(_BASE_INDUSTRIAL_COLUMNS)
+    return columns, columns[dynamic_offset:]
+
+
+def _insert_industrial_tabular_rows(
+    connection,
+    *,
+    where_sql: str,
+    params: tuple[Any, ...],
+    columns: tuple[str, ...],
+    dynamic_fields: tuple[str, ...],
+    dynamic_columns: tuple[str, ...],
+) -> None:
+    selected_columns = [
+        "records.id AS record_id",
+        "ROW_NUMBER() OVER (ORDER BY records.id) AS source_row_number",
     ]
-    wide = values.pivot_table(
-        index="record_id",
-        columns="field_name",
-        values="__value",
-        aggfunc="first",
-    ).reset_index()
-    return dataframe.merge(wide, how="left", on="record_id")
+    selected_columns.extend(
+        f"{expression} AS {_quote_identifier(column)}"
+        for column, expression in _BASE_INDUSTRIAL_COLUMNS
+    )
+    output_columns = ", ".join(_quote_identifier(column) for column in columns)
+    selected_output_columns = [
+        f"selected.{_quote_identifier(column)}"
+        for column in columns[: 1 + len(_BASE_INDUSTRIAL_COLUMNS)]
+    ]
+    selected_output_columns.extend(
+        "MAX(CASE WHEN values_row.field_name = ? "
+        "THEN metroliza_dynamic_value(values_row.field_value_text, values_row.field_value_json) "
+        f"END) AS {_quote_identifier(output_column)}"
+        for output_column in dynamic_columns
+    )
+    query = f"""
+        WITH selected AS (
+            SELECT {', '.join(selected_columns)}
+            FROM source_db.industrial_records records
+            LEFT JOIN source_db.industrial_source_profiles profiles
+                ON profiles.id = records.source_profile_id
+            {where_sql}
+            ORDER BY records.id
+        )
+        INSERT INTO {_quote_identifier(_INDUSTRIAL_TABULAR_TABLE)} ({output_columns})
+        SELECT {', '.join(selected_output_columns)}
+        FROM selected
+        LEFT JOIN source_db.industrial_record_values values_row
+            ON values_row.record_id = selected.record_id
+        GROUP BY selected.record_id
+        ORDER BY selected.record_id
+    """
+    connection.execute(query, (*params, *dynamic_fields))
 
 
 def _dynamic_value(text: Any, json_value: Any) -> str | None:
@@ -197,18 +260,23 @@ def _empty_industrial_tabular_frame() -> pd.DataFrame:
 
 
 def _deduplicate_columns(dataframe: pd.DataFrame) -> pd.DataFrame:
+    columns = _deduplicated_column_names(tuple(str(column) for column in dataframe.columns))
+    return dataframe.rename(columns=dict(zip(dataframe.columns, columns, strict=False)))
+
+
+def _deduplicated_column_names(raw_columns: tuple[str, ...]) -> tuple[str, ...]:
     used: set[str] = set()
-    renamed: dict[Any, str] = {}
-    for column in dataframe.columns:
-        base = _safe_column_name(str(column))
+    columns: list[str] = []
+    for column in raw_columns:
+        base = _safe_column_name(column)
         candidate = base
         suffix = 2
         while candidate in used:
             candidate = f"{base}_{suffix}"
             suffix += 1
         used.add(candidate)
-        renamed[column] = candidate
-    return dataframe.rename(columns=renamed)
+        columns.append(candidate)
+    return tuple(columns)
 
 
 def _safe_column_name(value: str) -> str:
@@ -216,20 +284,37 @@ def _safe_column_name(value: str) -> str:
     return name or "column"
 
 
-def _write_tabular_sqlite(dataframe: pd.DataFrame, *, columns: tuple[str, ...]) -> str:
-    temp = tempfile.NamedTemporaryFile(prefix="metroliza-industrial-tabular-", suffix=".sqlite", delete=False)
-    temp.close()
-    sqlite_path = temp.name
-    output = dataframe.copy()
+def _quote_identifier(identifier: str) -> str:
+    escaped = str(identifier).replace('"', '""')
+    return f'"{escaped}"'
+
+
+def _create_tabular_table(connection, columns: tuple[str, ...]) -> None:
+    column_defs = []
     for column in columns:
-        if column == "source_row_number":
-            output[column] = pd.to_numeric(output[column], errors="coerce").fillna(0).astype(int)
-        else:
-            output[column] = output[column].where(output[column].notna(), None)
-    with sqlite_connection_scope(sqlite_path) as connection:
-        output.to_sql(_INDUSTRIAL_TABULAR_TABLE, connection, index=False, if_exists="replace")
-        connection.commit()
-    return sqlite_path
+        column_type = "INTEGER" if column == "source_row_number" else "TEXT"
+        column_defs.append(f"{_quote_identifier(column)} {column_type}")
+    connection.execute(
+        f"CREATE TABLE {_quote_identifier(_INDUSTRIAL_TABULAR_TABLE)} ({', '.join(column_defs)})"
+    )
+
+
+def _create_tabular_indexes(connection, columns: tuple[str, ...]) -> None:
+    for column in (
+        "source_row_number",
+        "source",
+        "source_db_alias",
+        "source_profile_id",
+        "process_datetime",
+        "reference",
+    ):
+        if column not in columns:
+            continue
+        index_name = f"idx_{_INDUSTRIAL_TABULAR_TABLE}_{column}"
+        connection.execute(
+            f"CREATE INDEX IF NOT EXISTS {_quote_identifier(index_name)} "
+            f"ON {_quote_identifier(_INDUSTRIAL_TABULAR_TABLE)} ({_quote_identifier(column)})"
+        )
 
 
 __all__ = ["load_industrial_cache_tabular_result"]

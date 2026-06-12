@@ -122,12 +122,17 @@ python -m maturin build --manifest-path src/metroliza/native/distribution_fit_ad
 ### 2026.05 RC5 rc2 hardening evidence
 
 Current validation branch: `rc2`.
-Current RC metadata: `2026.05rc5(260611)`.
+Current RC metadata: `2026.05rc5(260612)`.
 Current plotstats hotfix pin:
 `1e2c72107d342f44a37e5fb78d7d76992ea60315`.
 
 - Static scatter annotation audit evidence lives in
   [`rc4_static_scatter_annotation_backgrounds_2026-05-23.md`](./rc4_static_scatter_annotation_backgrounds_2026-05-23.md).
+- June 12 RC audit implementation evidence, local validation results, pushed-CI
+  follow-up, and remaining manual release blockers are tracked in
+  [`rc5_rc_audit_evidence_2026-06-12.md`](./rc5_rc_audit_evidence_2026-06-12.md).
+  Local gate passed for build `260612`; pushed GitHub CI status is pending until
+  this commit is published.
 - Previous RC2 audit evidence remains historical in
   [`rc2_release_audit_2026-05-17.md`](./rc2_release_audit_2026-05-17.md).
 - Local release gates passed for the current directory-reorganization audit

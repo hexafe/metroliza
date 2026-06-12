@@ -1,8 +1,10 @@
 # Group Analysis User Manual
 
 This guide explains how to read exported **Group Analysis** output in plain English.
-The active reading surface is the **HTML dashboard**. Use the workbook only as a
-secondary detail or internal/debug surface when it is present.
+For standard grouped Export, the active reading surface is the **HTML dashboard**.
+Do not expect standard grouped Export to add separate Group Analysis workbook sheets.
+Use workbook details only as a secondary, legacy, technical, or internal/debug surface
+when they are present.
 
 Printable companion: [user_manual.pdf](user_manual.pdf).
 
@@ -323,7 +325,9 @@ Do not treat a skipped message as a failed app run. Treat it as a data-readiness
 
 ## Workbook Details Are Secondary
 
-The normal grouped-export reading path is the dashboard.
+The normal grouped Export reading path is the dashboard. Standard grouped Export adds
+Group Analysis to the HTML dashboard rather than adding extra Group Analysis workbook
+sheets.
 
 The workbook remains useful for:
 
@@ -331,11 +335,11 @@ The workbook remains useful for:
 - selected workbook charts,
 - records that need spreadsheet review,
 - technical verification of detailed numbers, and
-- internal/debug diagnostics when explicitly enabled.
+- legacy or internal/debug diagnostics when explicitly enabled.
 
-If a workbook includes a **Group Analysis** sheet or **Group Analysis Plots** sheet, use it as a
-secondary view of the same analysis. Start with the dashboard first, then open workbook details only
-when you need spreadsheet-level review, audit evidence, or troubleshooting.
+If a workbook includes a **Group Analysis** sheet or **Group Analysis Plots** sheet, treat it as
+a secondary or legacy/debug view of the same analysis. Start with the dashboard first, then open
+workbook details only when you need spreadsheet-level review, audit evidence, or troubleshooting.
 
 If a separate **Diagnostics** worksheet appears, treat it as internal/debug information. Routine
 users should use the dashboard warnings, run notes, and metric blocks instead.

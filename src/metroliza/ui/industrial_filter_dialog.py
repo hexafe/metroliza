@@ -16,10 +16,13 @@ from PyQt6.QtWidgets import (
 from metroliza.reports.db import sqlite_connection_scope
 from metroliza.industrial.industrial_workflow_state import (
     IndustrialFilterState,
+    format_industrial_query_filters,
+    parse_industrial_query_filter_lines,
     parse_reference_values,
     require_identifier,
 )
 from metroliza.reports.report_schema import ensure_report_schema
+from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.ui_foundation import apply_metroliza_theme, configure_window_size, status_chip
 
 
@@ -39,10 +42,20 @@ class IndustrialFilterDialog(QDialog):
         self.references_edit = QPlainTextEdit()
         self.references_edit.setPlainText("\n".join(self.state.references))
         self.references_edit.setPlaceholderText("REF1, REF2; REF3 REF4")
+        self.query_filters_edit = QPlainTextEdit()
+        self.query_filters_edit.setPlainText(format_industrial_query_filters(self.state.query_filters))
+        self.query_filters_edit.setPlaceholderText(
+            "station = S1\nstatus IN OK, NOK\nprocess_timestamp >= 2026-01-01"
+        )
 
         self.load_db_references_button = QPushButton("Use report DB values")
-        self.clear_button = QPushButton("Clear values")
-        self.apply_button = QPushButton("Apply references")
+        self.load_db_references_button.setEnabled(bool(self.db_file))
+        self.load_db_references_button.setToolTip(
+            "Load references from the open Metroliza report database. "
+            "Paste values manually when using a temporary industrial cache."
+        )
+        self.clear_button = QPushButton("Clear filters")
+        self.apply_button = QPushButton("Apply filters")
         self.cancel_button = QPushButton("Cancel")
 
         self.load_db_references_button.clicked.connect(self.load_database_references)
@@ -53,11 +66,14 @@ class IndustrialFilterDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
+        attach_help_menu_to_layout(layout, self, [("Industrial Data manual", "industrial_data")])
         layout.addWidget(self.summary_label)
         layout.addWidget(QLabel("Reference/ID column in production data"))
         layout.addWidget(self.reference_column_edit)
         layout.addWidget(QLabel("Reference/ID values to fetch"))
         layout.addWidget(self.references_edit, 1)
+        layout.addWidget(QLabel("Additional filters, one per line"))
+        layout.addWidget(self.query_filters_edit, 1)
 
         actions = QHBoxLayout()
         actions.setContentsMargins(0, 0, 0, 0)
@@ -75,6 +91,7 @@ class IndustrialFilterDialog(QDialog):
         return IndustrialFilterState(
             reference_column=self.reference_column_edit.text().strip() or "reference",
             references=parse_reference_values(self.references_edit.toPlainText()),
+            query_filters=parse_industrial_query_filter_lines(self.query_filters_edit.toPlainText()),
         )
 
     def load_database_references(self) -> None:
@@ -108,7 +125,8 @@ class IndustrialFilterDialog(QDialog):
 
     def clear_filter(self) -> None:
         self.references_edit.clear()
-        self.summary_label.setText("Reference/ID values cleared")
+        self.query_filters_edit.clear()
+        self.summary_label.setText("Filters cleared")
 
     def apply_filter(self) -> None:
         try:

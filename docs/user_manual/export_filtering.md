@@ -82,6 +82,10 @@ This is a convenience view. It helps you confirm the active header selection in 
 
 It is especially useful when the header list is long.
 
+To remove headers from this list, select them in **SELECTED HEADERS** and press
+**Delete** or **Backspace**. Metroliza clears those same headers in the main
+**HEADER** list and refreshes the confirmation list.
+
 ### PART NAME, REVISION, TEMPLATE VARIANT, SAMPLE NUMBER
 
 These lists narrow the export to specific report metadata values.
@@ -181,6 +185,16 @@ If you want to revise filters instead, reopen the dialog, change the selections,
 1. Set **MEASUREMENT DATE FROM** to your starting date.
 2. Use **Select today** for the end date if needed.
 3. Click **Apply filters**.
+
+### Example 4: Review NOK rows from one operator and source file
+
+1. In Export, click **Edit...** next to **Filters**.
+2. In **STATUS CODE**, choose `nok`, or use **HAS NOK ONLY** if you simply want rows with
+   NOK results.
+3. On the **Source** tab, choose the source file in **FILENAME**.
+4. On the **Report metadata** tab, choose the person in **OPERATOR NAME**.
+5. Leave other lists on **SELECT ALL** unless you need more restrictions.
+6. Click **Apply filters**.
 
 ## Common confusion points
 

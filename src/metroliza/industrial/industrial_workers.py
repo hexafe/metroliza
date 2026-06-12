@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
 from typing import Any
 
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -46,6 +48,7 @@ from metroliza.industrial.oznak_adapter import (
     create_oznak_cancellation_token,
     deduplicate_reference_query_filters,
     fetch_oznak_records_for_source_profile,
+    fetch_oznak_records_for_source_sql,
     get_oznak_adapter_status,
 )
 from metroliza.shared.progress_status import diagnostic_progress_message
@@ -439,6 +442,7 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
         reference_values: tuple[str, ...],
         test_only: bool,
         fetch_state: IndustrialFetchState | None = None,
+        report_db_file: str | None = None,
     ):
         super().__init__()
         self.db_file = db_file
@@ -450,6 +454,7 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
         self.reference_filter_column = reference_filter_column
         self.reference_values = reference_values
         self.fetch_state = fetch_state
+        self.report_db_file = report_db_file
         self.test_only = test_only
         self.cancellation_token = None
         self._init_cancellation_state()
@@ -475,53 +480,124 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                 )
             else:
                 fetch_state = fetch_state.validated()
-            requested_limit = 1 if self.test_only else fetch_state.limit_rows
-            query_filters, deduplicated_reference_query_filter_count = (
-                deduplicate_reference_query_filters(
-                    fetch_state.filters,
-                    reference_filter_column=self.reference_filter_column,
-                    reference_values=self.reference_values,
-                )
+            is_sql_mode = fetch_state.mode == "sql"
+            requested_limit = (
+                fetch_state.sql_preview_limit
+                if self.test_only and is_sql_mode
+                else 1
+                if self.test_only
+                else fetch_state.limit_rows
             )
+            if is_sql_mode:
+                query_filters = ()
+                deduplicated_reference_query_filter_count = 0
+                sql_hash = hashlib.sha256(fetch_state.sql_text.encode("utf-8")).hexdigest()
+            else:
+                query_filters, deduplicated_reference_query_filter_count = (
+                    deduplicate_reference_query_filters(
+                        fetch_state.filters,
+                        reference_filter_column=self.reference_filter_column,
+                        reference_values=self.reference_values,
+                    )
+                )
+            streamed_upsert_summary = {
+                "processed": 0,
+                "inserted": 0,
+                "updated": 0,
+                "value_rows": 0,
+            }
+            streamed_upsert_used = False
+
+            def _merge_upsert_summary(summary: dict[str, int]) -> None:
+                for key in streamed_upsert_summary:
+                    streamed_upsert_summary[key] += int(summary.get(key, 0) or 0)
+
+            def _upsert_sql_batch(records: tuple[dict[str, Any], ...]) -> None:
+                nonlocal streamed_upsert_used
+                if not records or sync_run_id is None:
+                    return
+                if self._cancel_requested:
+                    raise RuntimeError("Industrial fetch cancelled by user.")
+                streamed_upsert_used = True
+                summary = repository.upsert_industrial_records_from_rows(
+                    source_profile_id=self.profile.id,
+                    source_db_alias=self.profile.source_db_alias,
+                    rows=records,
+                    sync_run_id=sync_run_id,
+                )
+                _merge_upsert_summary(summary)
             if not self.test_only:
+                filters_payload: dict[str, Any] = {
+                    "mode": fetch_state.mode,
+                    "limit": requested_limit,
+                    "timeout_seconds": self.timeout_seconds,
+                    "fetch_all_confirmed": fetch_state.fetch_all_confirmed,
+                    "order_by_enabled": self.profile.order_by_enabled,
+                }
+                if is_sql_mode:
+                    filters_payload.update(
+                        {
+                            "sql_hash": sql_hash,
+                            "sql_recipe": (
+                                Path(fetch_state.sql_recipe_path).name
+                                if fetch_state.sql_recipe_path
+                                else None
+                            ),
+                            "sql_preview_limit": fetch_state.sql_preview_limit,
+                        }
+                    )
+                else:
+                    filters_payload.update(
+                        {
+                            "query_filters": tuple(
+                                {
+                                    "column": filter_state.column,
+                                    "operator": filter_state.operator,
+                                    "value_count": len(filter_state.values),
+                                }
+                                for filter_state in query_filters
+                            ),
+                            "deduplicated_reference_query_filter_count": (
+                                deduplicated_reference_query_filter_count
+                            ),
+                            "reference_filter_column": self.reference_filter_column,
+                            "reference_count": len(self.reference_values),
+                        }
+                    )
                 sync_run_id = repository.create_sync_run(
                     source_profile_id=self.profile.id,
-                    filters={
-                        "limit": requested_limit,
-                        "timeout_seconds": self.timeout_seconds,
-                        "fetch_all_confirmed": fetch_state.fetch_all_confirmed,
-                        "query_filters": tuple(
-                            {
-                                "column": filter_state.column,
-                                "operator": filter_state.operator,
-                                "value_count": len(filter_state.values),
-                            }
-                            for filter_state in query_filters
-                        ),
-                        "deduplicated_reference_query_filter_count": (
-                            deduplicated_reference_query_filter_count
-                        ),
-                        "reference_filter_column": self.reference_filter_column,
-                        "reference_count": len(self.reference_values),
-                        "order_by_enabled": self.profile.order_by_enabled,
-                    },
+                    filters=filters_payload,
                     oznak_version=status.version,
                     diagnostics={"adapter": status.diagnostics},
                 )
 
-            result = fetch_oznak_records_for_source_profile(
-                self.profile,
-                username=self.username,
-                password=self.password,
-                limit=requested_limit,
-                timeout_seconds=self.timeout_seconds,
-                reference_filter_column=self.reference_filter_column,
-                reference_values=self.reference_values,
-                query_filters=query_filters,
-                allow_unbounded=bool(fetch_state.fetch_all_confirmed),
-                cancellation_token=self.cancellation_token,
-                progress_callback=self._emit_progress_from_diagnostic,
-            )
+            if is_sql_mode:
+                result = fetch_oznak_records_for_source_sql(
+                    self.profile,
+                    username=self.username,
+                    password=self.password,
+                    sql_text=fetch_state.sql_text,
+                    limit=requested_limit,
+                    timeout_seconds=self.timeout_seconds,
+                    mode="preview" if self.test_only else "fetch",
+                    cancellation_token=self.cancellation_token,
+                    progress_callback=self._emit_progress_from_diagnostic,
+                    record_batch_callback=_upsert_sql_batch if not self.test_only else None,
+                )
+            else:
+                result = fetch_oznak_records_for_source_profile(
+                    self.profile,
+                    username=self.username,
+                    password=self.password,
+                    limit=requested_limit,
+                    timeout_seconds=self.timeout_seconds,
+                    reference_filter_column=self.reference_filter_column,
+                    reference_values=self.reference_values,
+                    query_filters=query_filters,
+                    allow_unbounded=bool(fetch_state.fetch_all_confirmed),
+                    cancellation_token=self.cancellation_token,
+                    progress_callback=self._emit_progress_from_diagnostic,
+                )
 
             warning_detail = _oznak_warning_detail(result.diagnostics)
             if self._cancel_requested:
@@ -541,13 +617,17 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
             cache_summary = repository.summarize_counts(source_profile_id=self.profile.id).as_dict()
             link_summary = None
             if not self.test_only and final_status in {"succeeded", "completed_with_warnings"}:
-                upsert_summary = repository.upsert_industrial_records_from_rows(
-                    source_profile_id=self.profile.id,
-                    source_db_alias=self.profile.source_db_alias,
-                    rows=result.records,
-                    sync_run_id=sync_run_id,
-                )
-                link_summary = materialize_industrial_report_links(self.db_file)
+                if streamed_upsert_used:
+                    upsert_summary = dict(streamed_upsert_summary)
+                else:
+                    upsert_summary = repository.upsert_industrial_records_from_rows(
+                        source_profile_id=self.profile.id,
+                        source_db_alias=self.profile.source_db_alias,
+                        rows=result.records,
+                        sync_run_id=sync_run_id,
+                    )
+                if self.report_db_file:
+                    link_summary = materialize_industrial_report_links(self.report_db_file)
                 cache_summary = repository.summarize_counts(source_profile_id=self.profile.id).as_dict()
 
             if sync_run_id is not None:
@@ -570,6 +650,7 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                     "link_summary": link_summary,
                     "cache_summary": cache_summary,
                     "diagnostics": result.diagnostics,
+                    "preview_records": result.records if self.test_only else (),
                 }
             )
         except Exception as exc:

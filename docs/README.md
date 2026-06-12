@@ -12,6 +12,9 @@ This directory contains active operational, maintenance, and end-user documentat
 - `user_manual/export_filtering.md` — focused end-user guide to Export filtering.
 - `user_manual/export_grouping.md` — focused end-user guide to Export grouping.
 - `user_manual/csv_summary.md` — end-user guide to the CSV Summary workflow.
+- `user_manual/industrial_data.md` — end-user guide to the Industrial Data/Oznak cache-first workflow.
+- `user_manual/dashboard_visuals.md` — end-user guide to dashboard visual recipes and customization.
+- `user_manual/parser_profiles.md` — end-user guide to Parser Profiles and LLM handoff folders.
 - `user_manual/characteristic_name_matching.md` — end-user guide to Characteristic Name Matching.
 - `user_manual/help_startup_and_license.md` — short support/reference page for startup, license, About, and Release notes.
 - `user_manual/group_analysis/README.md` — index for the exported Group Analysis worksheet manual.
@@ -108,6 +111,7 @@ Canonical release operations docs (release gate/source-of-truth set):
 - `release_checks/rc5_dashboard_industrial_cache_check_2026-06-09.md` — build `260609` RC5 dashboard large-group, dashboard visuals, and Industrial Data cache release-check evidence.
 - `release_checks/rc5_industrial_data_csv_summary_followup_2026-06-10.md` — build `260609` Industrial Data fetch-to-cache and CSV Summary follow-up evidence.
 - `release_checks/rc5_parser_ux_release_closeout_2026-06-11.md` — build `260611` RC5 parser handoff, Industrial Data cache-first UX, coverage, and release-gate closeout evidence.
+- `release_checks/rc5_rc_audit_evidence_2026-06-12.md` — build `260612` June 12 RC audit implementation evidence, local validation results, pushed-CI follow-up, and remaining manual release blockers.
 
 Supplemental tutorial/playbook docs (how-to guidance that supports, but does not override, canonical docs):
 

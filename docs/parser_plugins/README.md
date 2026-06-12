@@ -1,61 +1,157 @@
 # Parser Plugin Docs
 
-This directory is the active documentation set for creating, validating, installing, and operating Metroliza parser support for new supplier report templates.
+This directory is the active documentation set for adding Metroliza support for
+new supplier report templates.
 
-Most supplier-template work should use **declarative parser profiles**. A profile is a reviewed YAML file that Metroliza reads with trusted in-app code. Generated Python parser plugins remain an advanced/operator-only path.
+## Default Route: Declarative YAML Profile
 
-## Use these docs
+Most work should use a **declarative parser profile**. This is a reviewed
+`profile.yaml` file that trusted Metroliza code reads at runtime. It is the
+normal route for non-technical users and for LLM-assisted handoff.
 
-- [`parser_plugin_specification.md`](./parser_plugin_specification.md) — the exact contract and output requirements for declarative profiles and advanced generated parser plugins.
-- [`non_technical_workflow.md`](./non_technical_workflow.md) — step-by-step guide for a non-technical user from sample collection to installation.
-- [`../release_checks/parser_plugin_rollout_runbook.md`](../release_checks/parser_plugin_rollout_runbook.md) — rollout, rollback, and review controls for production activation.
+Use this route when the supplier report can be described with:
 
-## In-app self-service
+- stable text markers that identify the template,
+- regex patterns for report reference, report date, and sample number,
+- line-based measurement row patterns,
+- date and decimal normalization rules.
 
-Open **Tools > Parser profiles...** from the main window.
+Open the in-app workflow from:
 
-The dialog shows the local profile store status and can create a handoff folder for a new supplier template. The folder includes:
+```text
+Tools > Parser profiles...
+```
+
+The dialog can create a handoff folder, open it, copy its path, check the
+package, validate the profile, diagnose parser selection, create a repair
+prompt, and install an approved profile. After installation, restart Metroliza
+and parse reports through the normal report import flow.
+
+## Advanced Route: Python Plugin
+
+Use an advanced generated Python plugin only when the YAML profile route cannot
+model the supplier template. Examples include reports that need custom
+pre-processing, multi-stage parsing, unusual document decoding, or logic that
+cannot be expressed as data-only extraction rules.
+
+This route is operator-only. Python plugin output must stay inside the existing
+Metroliza parser architecture and must not add network calls, package
+installation, shell commands, direct database writes, or unrelated runtime
+changes.
+
+## Use These Docs
+
+- [`../user_manual/parser_profiles.md`](../user_manual/parser_profiles.md):
+  plain-English in-app manual for **Tools > Parser profiles...**.
+- [`non_technical_workflow.md`](./non_technical_workflow.md): step-by-step
+  YAML profile workflow from sample collection to installation.
+- [`parser_plugin_specification.md`](./parser_plugin_specification.md): exact
+  contract for declarative profiles and the advanced Python fallback.
+- [`../release_checks/parser_plugin_rollout_runbook.md`](../release_checks/parser_plugin_rollout_runbook.md):
+  rollout, rollback, and review controls for production activation.
+
+## Glossary
+
+- **Parser profile**: a data-only YAML file that tells Metroliza how to parse
+  one report template.
+- **Handoff folder**: the local workspace created by the app for samples,
+  expected results, prompts, contracts, and profile drafts.
+- **Sample report**: a real report from the supplier/template you want to parse.
+- **Expected results**: the manually checked rows in `expected_results.csv` that
+  validation must match exactly.
+- **Probe**: the quick check that decides whether a parser probably matches a
+  report.
+- **Diagnose**: the action that explains profile selection and parse evidence
+  for one sample report.
+- **Repair prompt**: a focused prompt built from a validation failure so a
+  reviewer or LLM can return a corrected `profile.yaml`.
+- **Advanced Python plugin**: a Python parser file for operator-only cases where
+  YAML is not expressive enough.
+
+## In-App Self-Service
+
+The handoff folder created by **Tools > Parser profiles... > Create Handoff
+Folder** includes:
 
 - `profile.yaml` with the declarative parser profile template,
 - `samples/` for representative supplier reports,
 - `expected_results.csv` for every parsed row in each approval sample,
-- `llm_handoff.md` for instructions to use with an external LLM or manual authoring workflow,
-- `handoff_manifest.json` for package identity, allowed outputs, and validation commands,
-- `contracts/` and `reference/contract_snippets.md` with the parser API, runtime selection, SQLite persistence, expected-results, safety boundaries, and privacy-redaction checklist,
+- `llm_handoff.md` for instructions to use with an approved LLM or reviewer,
+- `handoff_manifest.json` for package identity, allowed outputs, and validation
+  commands,
+- `contracts/` and `reference/contract_snippets.md` with the parser API,
+  runtime selection, SQLite persistence boundary, expected-results contract,
+  safety rules, and privacy-redaction checklist,
 - `prompts/` with small sequential tasks for local, cheap, or disconnected LLMs,
 - `NON_TECHNICAL_STEPS.md` with the same workflow written as a checklist.
 
-Metroliza does not call an LLM from this dialog. It prepares local files for review and handoff, then offers folder actions plus package check, validation, diagnose, repair-prompt, and install actions for the hidden profile workspace.
+Metroliza does not call an LLM from this dialog. It prepares local files for
+review and handoff, then provides folder actions plus package check, validation,
+diagnose, repair-prompt, and install actions for the hidden profile workspace.
 
-## LLM handoff package
+## Tiny Copyable Example
 
-Generated handoff folders are self-contained. A user should give the LLM the prompt, sample reports, expected-results file, and either the whole `contracts/` folder or the compact `reference/contract_snippets.md`. The GitHub links in `contracts/06_github_references.md` are helpful but optional; the local snippets are the source of truth for disconnected models.
+Sample report text:
 
-There are two prompt styles:
+```text
+SYNTHETIC SUPPLIER ALPHA
+Reference: REF123
+Date: 2026-01-05
+Sample: 0001
+DIM X 10.0 0.1 -0.1 - 10.02 0.02 0
+```
 
-- full prompts: `prompts/01_analysis_prompt.md` and `prompts/02_implementation_prompt.md` for stronger models or human reviewers,
-- microtasks: one small prompt at a time for cheaper/local models that need narrow instructions.
+One `expected_results.csv` row:
 
-Parser code must return `ParseResultV2`. Metroliza owns persistence: it converts V2 output into local SQLite rows through the report repository so CSV Summary, filtering, grouping, Excel export, and dashboards keep using the existing data path.
+```csv
+sample_file,reference,report_date,sample_number,block_index,header_normalized,axis_code,nominal,tol_plus,tol_minus,bonus,measured,deviation,out_of_tolerance
+sample_report_01.pdf,REF123,2026-01-05,0001,0,MAIN FEATURE,X,10.0,0.1,-0.1,,10.02,0.02,0
+```
 
-## Runtime loading
+Minimal `profile.yaml` fragment:
 
-- Metroliza automatically discovers parser plugin files placed in `~/.metroliza/parser_plugins/`.
-- Metroliza also discovers approved declarative profiles under `~/.metroliza/parser_plugins/profiles/approved/`.
-- Normal report import discovers `.pdf`, `.csv`, `.xlsx`, and `.xls` files when an installed parser manifest supports the corresponding source format.
-- The parser factory infers the report source format from the file suffix, filters plugins whose manifests declare that format, asks each remaining plugin to `probe(...)`, and selects the best match by confidence, then manifest priority, then plugin id.
-- Probe results are cached per plugin/path during the process lifetime so batch parsing does not repeat the same work.
-- `PARSER_EXTERNAL_PLUGIN_PATHS` remains available for advanced overrides and developer testing.
+```yaml
+schema_version: 1
+plugin:
+  plugin_id: supplier_alpha
+  display_name: Supplier Alpha
+  version: 0.1.0
+  source_format: pdf
+  supported_locales: ["*"]
+  template_ids: ["synthetic_fixture"]
+  priority: 900
+probe:
+  required_markers:
+    - "SYNTHETIC SUPPLIER ALPHA"
+  confidence: 92
+extraction:
+  report_fields:
+    reference: 'Reference:\s*(?P<value>\S+)'
+    report_date: 'Date:\s*(?P<value>\d{4}-\d{2}-\d{2})'
+    sample_number: 'Sample:\s*(?P<value>\S+)'
+  blocks:
+    - header: "MAIN FEATURE"
+      pattern: '^DIM\s+(?P<axis_code>\w+)\s+(?P<nominal>[-0-9.,]+)\s+(?P<tol_plus>[-0-9.,]+)\s+(?P<tol_minus>[-0-9.,]+)\s+(?P<bonus>[-0-9.,]+|-)\s+(?P<measured>[-0-9.,]+)\s+(?P<deviation>[-0-9.,]+)\s+(?P<out_of_tolerance>[-0-9.,]+)$'
+normalization:
+  decimal_separator: "."
+  date_formats: ["%Y-%m-%d"]
+  missing_value_tokens: ["", "-", "NA", "N/A"]
+```
 
-## Manifest governance
+## When To Ask For Help
 
-- `plugin_id` must be stable and unique because it is the registry key.
-- `display_name` is for human-facing UI and logs.
-- `supported_formats` must list every format the parser is allowed to consider during selection.
-- `supported_locales`, `template_ids`, and `capabilities` are metadata fields used for policy, diagnostics, and review, not for hidden registration logic.
-- `priority` is a tie-breaker only. Higher values win when confidence is equal.
+Stop and ask an operator, release owner, or data owner when:
 
-## Quick commands
+- privacy is uncertain or you are unsure whether samples may be shared,
+- you do not have representative samples,
+- validation fails repeatedly after repair,
+- Diagnose shows that the wrong parser is selected,
+- parsed values pass technically but do not match the report's business meaning,
+- the sample set includes multiple visible layouts,
+- any LLM output adds Python, network access, package installation, shell
+  commands, database-write behavior, or installer changes.
+
+## YAML Profile Commands
 
 Create a declarative profile handoff folder from the app:
 
@@ -63,7 +159,7 @@ Create a declarative profile handoff folder from the app:
 Tools > Parser profiles... > Create Handoff Folder
 ```
 
-Validate and approve a declarative profile from a handoff folder:
+The matching CLI commands are available for operators and automation:
 
 ```bash
 PYTHONPATH=src:. python scripts/parser_plugin_self_service.py handoff --plugin-id supplier_alpha --source-format pdf --output-dir <handoff-folder>
@@ -75,13 +171,40 @@ PYTHONPATH=src:. python scripts/parser_plugin_self_service.py install <handoff-f
 PYTHONPATH=src:. python scripts/parser_plugin_self_service.py evidence supplier_alpha
 ```
 
+## Runtime Loading
+
+- Metroliza automatically discovers approved declarative profiles under
+  `~/.metroliza/parser_plugins/profiles/approved/`.
+- Metroliza automatically discovers advanced parser plugin files placed in
+  `~/.metroliza/parser_plugins/`.
+- Normal report import discovers `.pdf`, `.csv`, `.xlsx`, and `.xls` files when
+  an installed parser manifest supports the corresponding source format.
+- The parser factory infers the report source format from the file suffix,
+  filters plugins whose manifests declare that format, asks each remaining
+  plugin to `probe(...)`, and selects the best match by confidence, then
+  manifest priority, then plugin id.
+- Probe results are cached per plugin/path during the process lifetime so batch
+  parsing does not repeat the same work.
+- `PARSER_EXTERNAL_PLUGIN_PATHS` remains available for advanced overrides and
+  developer testing.
+
+## Manifest Governance
+
+- `plugin_id` must be stable and unique because it is the registry key.
+- `display_name` is for human-facing UI and logs.
+- `supported_formats` must list every format the parser is allowed to consider
+  during selection.
+- `supported_locales`, `template_ids`, and `capabilities` are metadata fields
+  used for policy, diagnostics, and review, not for hidden registration logic.
+- `priority` is a tie-breaker only. Higher values win when confidence is equal.
+
+## Advanced Python Commands
+
 Create an advanced generated-plugin workspace:
 
 ```bash
 python scripts/create_parser_plugin_workspace.py --plugin-id supplier_alpha --source-format pdf
 ```
-
-For small/local LLMs, follow the generated `NON_TECHNICAL_STEPS.md` and send one file from `prompts/microtasks/` at a time with `reference/contract_snippets.md`.
 
 Validate an advanced generated Python plugin:
 
@@ -89,7 +212,7 @@ Validate an advanced generated Python plugin:
 python scripts/validate_parser_plugins.py --paths generated_plugin.py --plugin-id supplier_alpha --sample-input samples/sample_report_01.pdf --expected-results expected_results_template.csv
 ```
 
-Generate a repair prompt after failed validation:
+Generate a repair prompt after failed advanced-plugin validation:
 
 ```bash
 python scripts/build_parser_plugin_repair_prompt.py --paths generated_plugin.py --plugin-id supplier_alpha --sample-input samples/sample_report_01.pdf --expected-results expected_results_template.csv --output artifacts/repair_prompt.md
@@ -101,6 +224,7 @@ Explain why a specific report selects one plugin over another:
 python scripts/explain_parser_resolution.py samples/sample_report_01.pdf --paths generated_plugin.py
 ```
 
-## Historical design context
+## Historical Design Context
 
-Archived parser-plugin design notes and superseded quickstart/status docs are under [`../archive/2026/feature-parser-plugin-factory/README.md`](../archive/2026/feature-parser-plugin-factory/README.md).
+Archived parser-plugin design notes and superseded quickstart/status docs are
+under [`../archive/2026/feature-parser-plugin-factory/README.md`](../archive/2026/feature-parser-plugin-factory/README.md).

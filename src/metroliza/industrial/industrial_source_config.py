@@ -219,20 +219,23 @@ def build_source_profile(
     if type(order_by_enabled) is not bool:
         raise IndustrialSourceConfigError("Server ORDER BY setting must be true or false.")
 
-    for field_name, value in (
-        ("source alias", normalized_key),
-        ("source database alias", normalized_alias),
-        ("database name", normalized_database),
-        ("table/view name", normalized_table),
-    ):
-        require_identifier(field_name, value)
-    for field_name, value in (
-        ("record key column", normalized_pagination),
-        ("timestamp column", normalized_timestamp),
-        *[(f"column '{column}'", column) for column in normalized_columns],
-    ):
-        if value:
+    try:
+        for field_name, value in (
+            ("source alias", normalized_key),
+            ("source database alias", normalized_alias),
+            ("database name", normalized_database),
+        ):
             require_identifier(field_name, value)
+        require_identifier("table/view name", normalized_table)
+        for field_name, value in (
+            ("record key column", normalized_pagination),
+            ("timestamp column", normalized_timestamp),
+            *[(f"column '{column}'", column) for column in normalized_columns],
+        ):
+            if value:
+                require_identifier(field_name, value)
+    except ValueError as exc:
+        raise IndustrialSourceConfigError(str(exc)) from exc
 
     now = utc_timestamp()
     return IndustrialSourceProfile(

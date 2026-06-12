@@ -41,6 +41,9 @@ MANUAL_RELATIVE_PATHS = {
     'export_grouping': 'docs/user_manual/export_grouping.md',
     'csv_summary': 'docs/user_manual/csv_summary.md',
     'characteristic_name_matching': 'docs/user_manual/characteristic_name_matching.md',
+    'industrial_data': 'docs/user_manual/industrial_data.md',
+    'dashboard_visuals': 'docs/user_manual/dashboard_visuals.md',
+    'parser_profiles': 'docs/user_manual/parser_profiles.md',
 }
 MANUAL_PATHS = {key: REPO_ROOT / relative_path for key, relative_path in MANUAL_RELATIVE_PATHS.items()}
 

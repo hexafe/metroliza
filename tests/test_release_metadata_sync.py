@@ -13,7 +13,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}(?:rc\d+)?$")
         self.assertRegex(metadata.build, r"^\d{6}$")
         self.assertEqual(metadata.version_label, f"{metadata.release_version}({metadata.build})")
-        self.assertEqual(metadata.public_version_label, "2026.05 RC5 (build 260611)")
+        self.assertEqual(metadata.public_version_label, "2026.05 RC5 (build 260612)")
         self.assertTrue(metadata.highlight)
 
     def test_in_app_current_release_notes_show_current_version_only(self):
@@ -72,6 +72,10 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
                 "- Industrial data sync can fetch by filters, row limits, or explicit fetch-all confirmation, then analyze cached rows through the CSV Summary tools<br>",
                 "- Industrial data now presents Oznak access as fetch-to-cache first, then opens cached source rows in CSV Summary for filtering, grouping, dashboards, and optional workbooks<br>",
                 "- Industrial data dashboards can group and filter by fetched columns plus source, so rows from multiple production databases stay traceable<br>",
+                "- Industrial SQL recipes now reject unsafe read-lock and write-output queries, and large SQL fetch-all operations save rows to the local cache in chunks<br>",
+                "- Industrial-only temporary caches no longer create report-link tables unless an opened Metroliza report database is the active target<br>",
+                "- Guided Industrial source setup now uses simple table/view names for Oznak compatibility; two-part database object names belong in SQL recipes or IT-provided views<br>",
+                "- Industrial Data and grouping release checks now include extra large-data performance probes for cache loading, CSV Summary handoff, static multi-group rendering, and high-cardinality grouping previews<br>",
                 "- Industrial data source switching now refreshes stored credentials for the selected source and rejects invalid column-list config values<br>",
                 "- Industrial data filters and cache refreshes now handle missing or removed production fields more predictably<br>",
                 "- CSV Summary and Export dashboards now use clearer run notes, image snapshot wording, and group comparison takeaways<br>",

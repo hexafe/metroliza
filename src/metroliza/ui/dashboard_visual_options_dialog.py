@@ -55,6 +55,7 @@ from metroliza.charts.dashboard_visual_options import (
     upsert_dashboard_visual_theme,
 )
 from metroliza.charts.plotly_stat_helpers import normalize_group_label_key
+from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.ui_foundation import apply_metroliza_theme, configure_accessibility, configure_window_size
 
 try:  # Optional. PyQt WebEngine is intentionally not a hard runtime dependency.
@@ -269,6 +270,7 @@ class DashboardVisualOptionsDialog(QDialog):
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 14, 14, 14)
         root.setSpacing(10)
+        attach_help_menu_to_layout(root, self, [("Dashboard visuals manual", "dashboard_visuals")])
 
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)

@@ -16,7 +16,7 @@ Before you click **Parse reports**, you need:
 The source can be:
 
 - a directory of report files, or
-- a supported archive file, if you do not choose a directory first.
+- a supported archive file.
 
 ## Buttons and fields
 
@@ -25,21 +25,23 @@ The source can be:
 This area shows the current source selection.
 
 - The text line shows either the selected path or **None selected**.
-- Click **Browse** to choose where Parsing should read reports from.
+- Click **Browse folder** to choose a normal folder of report files.
+- Click **Browse archive** to choose a supported archive file directly.
 
 ### How source selection works
 
-The dialog tries **directory selection first**.
+Use **Browse folder** when your reports are already in a folder.
 
-1. Click **Browse**.
-2. The app first asks you to select a directory.
-3. If you do select a directory, that becomes the source.
-4. If you do **not** select a directory, the app asks:
+1. Click **Browse folder**.
+2. Choose the folder that contains the reports.
+3. The selected folder becomes the source.
+
+If you cancel the folder picker, Metroliza asks:
    **“No directory was selected. Do you want to choose an archive file instead?”**
-5. If you answer **Yes**, you can choose a supported archive file.
-6. If you answer **No**, the source stays unchanged.
 
-This means the normal path is folder-first, with archive selection as a fallback.
+If you answer **Yes**, choose the archive file. If you answer **No**, the source stays unchanged.
+
+Use **Browse archive** when you already know the reports are inside an archive. This skips the folder picker and opens the archive picker immediately.
 
 ### Select a database file
 
@@ -49,6 +51,8 @@ This area shows the current database destination.
 - Click **Browse** to choose or create the destination **database file**.
 
 The database button stays disabled until a source has been selected.
+
+When the save dialog opens, Metroliza suggests a database name based on the selected source. If the suggested or typed name does not end in `.db`, Metroliza adds `.db` automatically. You can choose an existing `.db` file to add reports to it, or type a new filename to create a new database.
 
 ### Metadata mode
 
@@ -74,11 +78,11 @@ The **Parse reports** button is disabled until both of these are selected:
 Here is a simple example workflow.
 
 1. Open **Parse Reports** from the main window.
-2. Under **Reports directory or archive**, click **Browse**.
+2. Under **Reports directory or archive**, click **Browse folder**.
 3. Choose a folder that contains the reports you want to import.
-   - If you cancel directory selection, you can choose a supported archive instead.
+   - If the reports are in an archive, click **Browse archive** instead.
 4. Under **Database file**, click **Browse**.
-5. Choose a new or existing `.db` file.
+5. Choose a new or existing `.db` file. If you leave off `.db`, Metroliza adds it.
 6. Choose the metadata mode you want.
 7. Click **Parse reports**.
 8. Wait for the progress dialog to finish.
@@ -128,6 +132,8 @@ If no supported report files were found in the selected source, the completion m
 that nothing was written. Choose a folder/archive that contains supported report files and
 try again.
 
+If the files are from a new supplier template that Metroliza does not recognize yet, do not try to fix that in Modify Database. Use **Tools > Parser profiles...** from the main window to prepare support for the new template, then parse again after the profile is approved and installed.
+
 ### If parsing is canceled
 
 You get a message saying parsing was canceled.
@@ -155,7 +161,19 @@ Check that you have selected both:
 
 That is normal if you answered **No** when the app asked whether to choose an archive file instead.
 
-Click **Browse** again if you want to choose a source.
+Click **Browse folder** again to choose a folder, or click **Browse archive** to choose an archive directly.
+
+### My database filename changed to end in `.db`
+
+That is expected.
+
+Parsing writes to a SQLite database file. If the filename you typed does not already end in `.db`, Metroliza adds `.db` so the destination is clearly a database file.
+
+### My supplier report template is not supported
+
+Parsing can only import report templates that Metroliza knows how to read.
+
+For a new supplier layout, open **Tools > Parser profiles...** and create a parser-profile handoff instead of editing the parsed database by hand.
 
 ### I expected a report file, but Parsing created a database file
 

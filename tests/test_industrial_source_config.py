@@ -120,6 +120,37 @@ databases:
     assert profiles[0].order_by_enabled is False
 
 
+def test_source_config_rejects_schema_qualified_guided_source_object(tmp_path):
+    config_path = tmp_path / "industrial_sources.yaml"
+    config_path.write_text(
+        """
+databases:
+  line_a:
+    type: mssql
+    host: db.example.invalid
+    port: 1433
+    database: processdb
+    table: dbo.events
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises((IndustrialSourceConfigError, ValueError), match="table/view name"):
+        load_source_profiles_from_config(config_path)
+
+    with pytest.raises((IndustrialSourceConfigError, ValueError), match="table/view name"):
+        build_source_profile(
+            profile_key="line_b",
+            profile_name="Line B",
+            source_db_alias="line_b",
+            database_type="mysql",
+            host="db.example.invalid",
+            port=3306,
+            database_name="processdb",
+            source_object_name="factory.events",
+        )
+
+
 def test_source_config_rejects_scalar_allowed_columns_from_manual_file(tmp_path):
     config_path = tmp_path / "industrial_sources.yaml"
     config_path.write_text(

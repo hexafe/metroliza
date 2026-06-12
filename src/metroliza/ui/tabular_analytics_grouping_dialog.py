@@ -252,6 +252,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._initial_group_assignments = self._group_assignments(grouping_dataframe)
         self._temp_group_assignments: dict[int, tuple[str, str]] = {}
         self._sqlite_assignment_operations: list[_SqliteAssignmentOperation] = []
+        self._sqlite_assignment_table_name = f"__metroliza_grouping_assignments_{id(self):x}"
+        self._sqlite_assignment_operations_applied = 0
+        self._sqlite_assignment_operations_applied_snapshot: tuple[_SqliteAssignmentOperation, ...] = ()
         self._base_grouping_dataframe_cache: pd.DataFrame | None = None
         self.df = self._empty_grouping_dataframe()
         self._apply_group_assignments(self._initial_group_assignments)
@@ -900,15 +903,30 @@ class TabularAnalyticsGroupingDialog(QDialog):
         return colors
 
     def _populate_sqlite_effective_assignment_table(self, connection) -> str:
-        table_name = "temp_grouping_assignments"
+        table_name = str(
+            vars(self).get("_sqlite_assignment_table_name")
+            or f"__metroliza_grouping_assignments_{id(self):x}"
+        )
+        operations = tuple(vars(self).get("_sqlite_assignment_operations", ()))
+        applied_count = int(vars(self).get("_sqlite_assignment_operations_applied", 0) or 0)
+        applied_snapshot = tuple(
+            vars(self).get("_sqlite_assignment_operations_applied_snapshot", ())
+        )
         connection.execute(
-            f"CREATE TEMP TABLE IF NOT EXISTS {table_name} ("
+            f"CREATE TABLE IF NOT EXISTS {table_name} ("
             "row_id INTEGER PRIMARY KEY, "
             "group_name TEXT NOT NULL, "
             "color TEXT NOT NULL)"
         )
-        connection.execute(f"DELETE FROM {table_name}")
-        for operation in vars(self).get("_sqlite_assignment_operations", ()):
+        if applied_count > len(operations) or operations[:applied_count] != applied_snapshot:
+            connection.execute(f"DELETE FROM {table_name}")
+            applied_count = 0
+        if applied_count == len(operations):
+            return table_name
+        if applied_count <= 0:
+            connection.execute(f"DELETE FROM {table_name}")
+            applied_count = 0
+        for operation in operations[applied_count:]:
             if operation.kind == "rows":
                 self._apply_sqlite_row_assignment_operation(connection, table_name, operation)
             elif operation.kind == "scope":
@@ -927,7 +945,28 @@ class TabularAnalyticsGroupingDialog(QDialog):
                         operation.group_name,
                     ),
                 )
+        connection.commit()
+        self._sqlite_assignment_operations_applied = len(operations)
+        self._sqlite_assignment_operations_applied_snapshot = operations
         return table_name
+
+    def _invalidate_sqlite_assignment_cache(self) -> None:
+        self._sqlite_assignment_operations_applied = 0
+        self._sqlite_assignment_operations_applied_snapshot = ()
+
+    def _drop_sqlite_assignment_cache_table(self) -> None:
+        if not self._is_sqlite_backed():
+            return
+        table_name = str(vars(self).get("_sqlite_assignment_table_name") or "").strip()
+        if not table_name:
+            return
+        try:
+            with sqlite_connection_scope(self.sqlite_store.path) as connection:
+                connection.execute(f"DROP TABLE IF EXISTS {table_name}")
+                connection.commit()
+        except Exception:
+            pass
+        self._invalidate_sqlite_assignment_cache()
 
     def _apply_sqlite_row_assignment_operation(
         self,
@@ -1229,6 +1268,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         sqlite_operations = vars(self).get("_sqlite_assignment_operations")
         if sqlite_operations is not None:
             sqlite_operations.clear()
+        self._invalidate_sqlite_assignment_cache()
         for report_id, assignment in assignments.items():
             if isinstance(assignment, tuple):
                 group_name, color = assignment
@@ -2327,6 +2367,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         parent = self.parent()
         self._temp_assignments().clear()
         self._sqlite_assignment_operations.clear()
+        self._invalidate_sqlite_assignment_cache()
         self.df = self._empty_grouping_dataframe()
         if parent is not None:
             parent.set_df_for_grouping(None)
@@ -2335,14 +2376,17 @@ class TabularAnalyticsGroupingDialog(QDialog):
 
     def accept(self) -> None:
         self._detach_sqlite_selector_preview_threads()
+        self._drop_sqlite_assignment_cache_table()
         super().accept()
 
     def reject(self) -> None:
         self._detach_sqlite_selector_preview_threads()
+        self._drop_sqlite_assignment_cache_table()
         super().reject()
 
     def closeEvent(self, event) -> None:
         self._detach_sqlite_selector_preview_threads()
+        self._drop_sqlite_assignment_cache_table()
         super().closeEvent(event)
 
 

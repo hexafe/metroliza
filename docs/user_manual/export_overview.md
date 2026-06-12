@@ -212,19 +212,22 @@ exported Plotly charts look in the HTML dashboard. The main choices are visual r
 saved themes, color palettes, group differentiation, marker size,
 stat/reference line styling, and selected chart elements.
 
+For a full plain-English guide to that dialog, see [Dashboard visuals](dashboard_visuals.md).
+
 Use the recipes first for routine output:
 
-- **Default** keeps Metroliza's normal dashboard styling.
-- **Professional contrast** is the routine report recipe. It tones population/baseline
+- **Metroliza default** keeps Metroliza's normal dashboard styling.
+- **Corporate contrast** is the routine report recipe. It tones population/baseline
   points down and keeps comparison groups prominent.
-- **Colorblind distinct** uses stronger non-color differentiation for grouped comparisons.
-- **High-color groups** favors many visible comparison groups in dense dashboards.
-- **Toned report** uses muted professional colors while keeping small comparison groups
+- **Accessible groups** uses stronger non-color differentiation for grouped comparisons.
+- **Dense group scan** favors many visible comparison groups in dense dashboards.
+- **Executive report** uses muted professional colors while keeping small comparison groups
   readable against a large population baseline.
-- **Soft pastel review** is a calmer exploratory palette with outlined comparison points.
-- **Scientific gradient** is intended for ordered process states or ranked groups.
-- **Diverging from nominal** is intended for deviation around a real target or nominal.
-- **Print gray** favors monochrome-friendly output.
+- **Soft review** is a calmer exploratory palette with outlined comparison points.
+- **Scientific sequential** is intended for ordered process states or ranked groups.
+- **Nominal divergence** is intended for deviation around a real target or nominal.
+- **Print mono** favors monochrome-friendly output.
+- **Highlight story** makes one selected comparison stand out in a presentation.
 - **Custom** keeps your manual choices.
 
 Fine-tuning controls are meant for visual review, not data changes. Sliders are used for
@@ -244,16 +247,17 @@ You can optionally check **Industrial context**.
 
 This adds cached production context from accepted local links to the measurement export and writes industrial context/diagnostics worksheets when linked production-process records exist in the selected Metroliza report database.
 
-Before using this option, open **Tools > Industrial data...** from the main window. Configure production line sources either by editing `~/.metroliza/industrial_sources.yaml` directly or by using **Production sources...**, which reads/writes the same Oznak-style config file. If the launcher was opened before a report database was selected, use **Select DB...** first. Then use **Fetch to cache...** to check production database access with a one-row read that saves nothing, fetch selected production rows by reference filters, row limit, or explicit fetch-all confirmation, load those rows into the local Metroliza cache, and refresh links.
+Before using this option, follow the cache-first flow in [Industrial Data](industrial_data.md). In short: open **Tools > Industrial data...**, choose **Open...** and select the Metroliza report database, configure the production source, run **Check access**, use **Fetch to cache...**, and refresh links.
 
 If the report reference and production reference are not the same value, open **Production links...** after sync. Manual links connect one Metroliza report to one cached production row and take priority over automatic exact-reference links.
 
 Export uses only local cached industrial rows from the Metroliza report database. It does not connect to production line databases or query Oznak while the workbook is being created. The chain is: Oznak sync fills the local cache, automatic link refresh or manual links create accepted local links, and normal export joins one accepted production link per report, prioritizing manual links. If no industrial rows have been synced or no report links exist yet, the normal export still works, but no industrial context is added.
 
 The industrial data launcher also opens cached-row workbook export and CSV Summary cache
-dialogs. Select a Metroliza report database before exporting industrial data; the launcher
-does not fetch live production rows into a workbook directly. **Export workbook...** creates a
-workbook from cached rows in the selected report database. **CSV Summary...** loads cached
+dialogs. These cache-only workflows can use a temporary cache, an opened Metroliza report
+database, or a persistent industrial cache database. The launcher does not query
+production databases while creating a workbook. **Export workbook...** creates a workbook
+from cached rows in the active local industrial cache. **CSV Summary...** loads cached
 production rows into the CSV Summary workflow, so the same filtering, grouping, dashboard,
 workbook, and export controls are available for industrial data. Each cached row carries a
 **source** value, so dashboards and groups can separate rows from different configured
@@ -324,7 +328,7 @@ This can help reduce clutter when you mainly want to focus on results that need 
 ## Running the export
 
 1. Select the **database file**.
-2. Select the output **Excel file**.
+2. Select the output file: an **Excel file** for workbook presets, or an **HTML file** for **HTML dashboard only**.
 3. Optionally click **Edit...** next to **Filters**.
 4. Optionally click **Edit...** next to **Grouping**.
 5. Choose the preset and output options.
@@ -350,8 +354,11 @@ If the worker confirms cancellation, you get an **Export canceled** message.
 
 ### Local Excel output
 
-A local **.xlsx file** is always part of the result. It contains the main exported
+For workbook presets, Metroliza creates a local **.xlsx file** with the main exported
 measurement sheets and selected workbook charts.
+
+For **HTML dashboard only**, Metroliza creates the dashboard file directly and does not
+create a workbook. Google Sheets conversion is not used for dashboard-only output.
 
 ### HTML dashboard output and assets
 

@@ -10,6 +10,8 @@ try:
     import metroliza.ui.industrial_filter_dialog as industrial_filter_dialog
     from metroliza.industrial.industrial_workflow_state import (
         IndustrialFilterState,
+        IndustrialQueryFilter,
+        parse_industrial_query_filter_lines,
         parse_reference_values,
     )
     from metroliza.reports.report_schema import ensure_report_schema
@@ -19,7 +21,9 @@ except Exception as exc:  # pragma: no cover - depends on local Qt runtime avail
     QDialog = None
     IndustrialFilterDialog = None
     IndustrialFilterState = None
+    IndustrialQueryFilter = None
     ensure_report_schema = None
+    parse_industrial_query_filter_lines = None
     parse_reference_values = None
     PYQT_IMPORT_ERROR = exc
 else:
@@ -51,6 +55,16 @@ def test_reference_parser_accepts_common_paste_formats():
     assert parse_reference_values("REF1 REF1,REF2") == ("REF1", "REF2")
 
 
+def test_query_filter_parser_accepts_simple_filter_lines():
+    assert parse_industrial_query_filter_lines(
+        "station = S1\nstatus IN OK, NOK\nprocess_timestamp >= 2026-01-01"
+    ) == (
+        IndustrialQueryFilter("station", "=", ("S1",)),
+        IndustrialQueryFilter("status", "IN", ("OK", "NOK")),
+        IndustrialQueryFilter("process_timestamp", ">=", ("2026-01-01",)),
+    )
+
+
 def test_filter_dialog_apply_uses_parent_callback():
     _app()
     class _ParentDialog(QDialog):
@@ -65,10 +79,15 @@ def test_filter_dialog_apply_uses_parent_callback():
     dialog = IndustrialFilterDialog(parent=parent, state=IndustrialFilterState())
     dialog.reference_column_edit.setText("reference")
     dialog.references_edit.setPlainText("REF1, REF2")
+    dialog.query_filters_edit.setPlainText("station = S1")
 
     dialog.apply_filter()
 
-    assert parent.state == IndustrialFilterState(reference_column="reference", references=("REF1", "REF2"))
+    assert parent.state == IndustrialFilterState(
+        reference_column="reference",
+        references=("REF1", "REF2"),
+        query_filters=(IndustrialQueryFilter("station", "=", ("S1",)),),
+    )
 
 
 def test_filter_dialog_rejects_invalid_reference_column():

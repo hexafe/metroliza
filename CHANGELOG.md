@@ -1,6 +1,6 @@
 # Changelog (for end users)
 
-## 2026.05 RC5 (build 260611) — current version
+## 2026.05 RC5 (build 260612) — current version
 - Saved report updates are safer if a database write fails partway through.
 - HTML dashboard-only exports now report a failure instead of success when dashboard creation fails.
 - CSV Summary filters and multi-file exports behave more consistently across regular and large-file paths.
@@ -23,6 +23,10 @@
 - Industrial data sync can fetch by filters, row limits, or explicit fetch-all confirmation, then analyze cached rows through the CSV Summary tools.
 - Industrial data now presents Oznak access as fetch-to-cache first, then opens cached source rows in CSV Summary for filtering, grouping, dashboards, and optional workbooks.
 - Industrial data dashboards can group and filter by fetched columns plus source, so rows from multiple production databases stay traceable.
+- Industrial SQL recipes now reject read-lock/write-output `SELECT` forms, and fallback SQL fetches stream rows into the local cache in chunks for large fetch-all operations.
+- Industrial-only temporary caches no longer create report-link schema unless an opened Metroliza report database is the active target.
+- Guided Industrial source setup now uses simple table/view identifiers for pinned Oznak compatibility; schema-qualified access belongs in SQL recipes or IT-provided views.
+- Industrial Data and grouping release checks now include advisory benchmark probes for cache ingest, cache-to-CSV Summary handoff, static multi-group rendering, and high-cardinality grouping previews.
 - Industrial data source switching now refreshes stored credentials for the selected source and rejects invalid column-list config values.
 - Industrial data filters and cache refreshes now handle missing or removed production fields more predictably.
 - CSV Summary and Export dashboards now use clearer run notes, image snapshot wording, and group comparison takeaways.

@@ -783,6 +783,8 @@ class IndustrialAnalyticsDialog(QDialog):
         help_entries = [("Export manual", "export_overview")]
         if not self.is_production_source:
             help_entries.append(("CSV Summary manual", "csv_summary"))
+        if self.is_industrial_cache_presentation:
+            help_entries.append(("Industrial Data manual", "industrial_data"))
         self.dialog_menu_bar, self.help_menu = attach_help_menu_to_layout(layout, self, help_entries)
 
         scroll_area = QScrollArea()

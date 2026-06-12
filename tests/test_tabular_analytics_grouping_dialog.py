@@ -946,6 +946,88 @@ def test_sqlite_create_group_defers_selected_key_row_id_expansion_until_material
         cleanup_tabular_load_result(loaded)
 
 
+def test_sqlite_group_refresh_reuses_effective_assignment_table(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _app()
+    input_file = tmp_path / "sqlite_assignment_cache.csv"
+    pd.DataFrame(
+        {
+            "Line": ["A", "A", "A", "B", "B"],
+            "Station": ["S1", "S2", "S3", "S1", "S2"],
+            "TraceCode": ["TC-001", "TC-002", "TC-003", "TC-004", "TC-005"],
+        }
+    ).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file, force_sqlite=True)
+    assert loaded.sqlite_store is not None
+
+    monkeypatch.setattr(grouping_dialog_module, "_GROUP_MEMBER_PREVIEW_LIMIT", 2)
+
+    dialog = TabularAnalyticsGroupingDialog(
+        dataframe=loaded.dataframe,
+        column_mapping=loaded.column_mapping,
+        sqlite_store=loaded.sqlite_store,
+    )
+    try:
+        replay_count = 0
+        original_apply_scope = dialog._apply_sqlite_scope_assignment_operation
+
+        def apply_scope_spy(connection, table_name, operation):
+            nonlocal replay_count
+            replay_count += 1
+            return original_apply_scope(connection, table_name, operation)
+
+        monkeypatch.setattr(dialog, "_apply_sqlite_scope_assignment_operation", apply_scope_spy)
+
+        dialog.selector_columns = ["line"]
+        dialog._selector_index = None
+        dialog._refresh_all()
+        a_item = _item_for_data(dialog.selector_list, ("A",))
+        dialog.selector_list.setCurrentItem(a_item)
+        a_item.setSelected(True)
+        dialog._store_current_selection()
+
+        dialog.create_group(initial_group_name="Line A")
+
+        assert replay_count == 1
+        group_labels = {
+            dialog.groups_list.item(index).text()
+            for index in range(dialog.groups_list.count())
+        }
+        assert group_labels == {"POPULATION (n=2)", "Line A [1] (n=3)"}
+        assert dialog.group_members_list.count() == 3
+        assert dialog.group_members_list.item(2).text() == "Showing first 2 of 3 row(s)."
+
+        dialog._refresh_groups(preferred_group="Line A")
+        dialog._populate_group_members()
+        dialog._materialize_grouping_dataframe()
+
+        assert replay_count == 1
+
+        b_item = _item_for_data(dialog.selector_list, ("B",))
+        dialog.selector_list.setCurrentItem(b_item)
+        b_item.setSelected(True)
+        dialog._store_current_selection()
+        dialog.create_group(initial_group_name="Line B")
+
+        assert len(dialog._sqlite_assignment_operations) == 2
+        assert replay_count == 2
+
+        dialog._sqlite_assignment_operations.clear()
+        dialog._refresh_groups()
+
+        cleared_group_labels = {
+            dialog.groups_list.item(index).text()
+            for index in range(dialog.groups_list.count())
+        }
+        assert cleared_group_labels == {"POPULATION (n=5)"}
+        assert replay_count == 2
+    finally:
+        dialog.close()
+        cleanup_tabular_load_result(loaded)
+
+
 def test_delete_and_backspace_remove_focused_selected_grouping_column() -> None:
     app = _app()
     dialog = TabularAnalyticsGroupingDialog(

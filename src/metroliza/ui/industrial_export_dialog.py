@@ -31,6 +31,7 @@ from metroliza.industrial.industrial_workflow_state import IndustrialFilterState
 from metroliza.industrial.industrial_workers import IndustrialExportThread, IndustrialLiveExportThread
 from metroliza.exporting.export_dialog_service import build_export_artifact_link_line
 from metroliza.shared.progress_status import build_three_line_status
+from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
     configure_window_size,
@@ -43,6 +44,9 @@ from metroliza.ui.ui_foundation import (
 from metroliza.ui.worker_progress_dialog import create_worker_progress_dialog
 
 
+_REPORT_DB_FILE_UNSET = object()
+
+
 class IndustrialExportDialog(QDialog):
     """Configure and run cached or live industrial workbook export."""
 
@@ -51,6 +55,7 @@ class IndustrialExportDialog(QDialog):
         parent=None,
         *,
         db_file: str | None = None,
+        report_db_file: str | None | object = _REPORT_DB_FILE_UNSET,
         filter_state: IndustrialFilterState | None = None,
         grouping_state: IndustrialGroupingState | None = None,
         include_plots: bool = True,
@@ -58,6 +63,7 @@ class IndustrialExportDialog(QDialog):
     ):
         super().__init__(parent)
         self.db_file = db_file
+        self.report_db_file = db_file if report_db_file is _REPORT_DB_FILE_UNSET else report_db_file
         self.config_path = Path(config_path or default_industrial_source_config_path()).expanduser()
         self.live_mode = not bool(db_file)
         self._live_profile_load_error = ""
@@ -73,7 +79,7 @@ class IndustrialExportDialog(QDialog):
 
         self.database_field = path_field(
             str(db_file or ""),
-            empty_text="No Metroliza report database selected",
+            empty_text="No industrial cache selected",
         )
         self.profile_combo = QComboBox()
         self.cache_status_label = status_chip("Local industrial cache not checked", "neutral")
@@ -129,6 +135,7 @@ class IndustrialExportDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
+        attach_help_menu_to_layout(layout, self, [("Industrial Data manual", "industrial_data")])
         title = "Live production workbook" if self.live_mode else "Cached industrial workbook"
         layout.addWidget(section_label(title))
 
@@ -169,7 +176,7 @@ class IndustrialExportDialog(QDialog):
             row += 1
             grid.addWidget(self.live_fetch_hint_label, row, 1, 1, 2)
         else:
-            grid.addWidget(section_label("Metroliza report database"), row, 0)
+            grid.addWidget(section_label("Industrial cache"), row, 0)
             grid.addWidget(self.database_field, row, 1, 1, 2)
 
             row += 1
@@ -226,7 +233,7 @@ class IndustrialExportDialog(QDialog):
                 return f"{self.profile_combo.count()} production source(s) configured in file"
             return "No production sources configured in the local source file"
         if not self.db_file:
-            return "No Metroliza report database selected"
+            return "No industrial cache selected"
         try:
             counts = IndustrialDataRepository(self.db_file).summarize_counts()
         except Exception as exc:
@@ -254,7 +261,7 @@ class IndustrialExportDialog(QDialog):
         update_path_field(
             self.database_field,
             str(self.db_file or ""),
-            empty_text="No Metroliza report database selected",
+            empty_text="No industrial cache selected",
         )
         update_path_field(self.output_path_field, self.output_file, empty_text="No output workbook selected")
         self.cache_status_label.setText(self._cache_summary())
@@ -302,7 +309,7 @@ class IndustrialExportDialog(QDialog):
             self.readiness_label.setText("Select an output workbook to enable export.")
             set_status_variant(self.readiness_label, "warning")
         else:
-            self.readiness_label.setText("Select a Metroliza report database before exporting.")
+            self.readiness_label.setText("Select an industrial cache before exporting.")
             set_status_variant(self.readiness_label, "warning")
 
     def set_industrial_filter_state(self, state: IndustrialFilterState) -> None:
@@ -359,7 +366,11 @@ class IndustrialExportDialog(QDialog):
         self.set_industrial_grouping_state(IndustrialGroupingState())
 
     def open_filter_dialog(self) -> None:
-        self.filter_window = IndustrialFilterDialog(self, db_file=self.db_file, state=self.filter_state)
+        self.filter_window = IndustrialFilterDialog(
+            self,
+            db_file=self.report_db_file,
+            state=self.filter_state,
+        )
         self.filter_window.exec()
 
     def open_grouping_dialog(self) -> None:
@@ -435,7 +446,7 @@ class IndustrialExportDialog(QDialog):
                     (
                         "Creating workbook from live Oznak data"
                         if self.live_mode
-                        else "Creating workbook from local Metroliza cache"
+                        else "Creating workbook from local industrial cache"
                     ),
                     "ETA --",
                 ),

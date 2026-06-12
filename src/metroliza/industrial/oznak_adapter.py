@@ -12,6 +12,9 @@ import hashlib
 import importlib
 import inspect
 import json
+import re
+from time import perf_counter
+from types import SimpleNamespace
 from typing import Any, Mapping
 
 from metroliza.industrial.industrial_data_repository import looks_sensitive_key, redact_sensitive_text
@@ -22,6 +25,28 @@ OZNAK_IMPORT_PATH = "oznak"
 OZNAK_FETCHER_IMPORT_PATH = "oznak.fetcher"
 DEFAULT_OZNAK_FETCH_CHUNK_SIZE = 5_000
 DEFAULT_REFERENCE_BATCH_SIZE = 100
+_BLOCKED_RAW_SQL_KEYWORDS = frozenset(
+    {
+        "ALTER",
+        "CALL",
+        "CREATE",
+        "DELETE",
+        "DROP",
+        "EXEC",
+        "EXECUTE",
+        "GRANT",
+        "INSERT",
+        "MERGE",
+        "REVOKE",
+        "TRUNCATE",
+        "UPDATE",
+    }
+)
+_BLOCKED_RAW_SQL_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bINTO\b", flags=re.IGNORECASE), "INTO"),
+    (re.compile(r"\bFOR\s+UPDATE\b", flags=re.IGNORECASE), "FOR UPDATE"),
+    (re.compile(r"\bLOCK\s+IN\s+SHARE\s+MODE\b", flags=re.IGNORECASE), "LOCK IN SHARE MODE"),
+)
 
 _ROW_KEY_ALIASES: dict[str, tuple[str, ...]] = {
     "source_primary_key": ("source_primary_key", "id", "pk", "row_id", "record_id", "external_id"),
@@ -67,6 +92,7 @@ class OznakAdapterStatus:
     fetch_available: bool = False
     chunked_fetch_available: bool = False
     streaming_fetch_available: bool = False
+    raw_sql_available: bool = False
     cancellation_available: bool = False
     diagnostics: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
@@ -324,6 +350,324 @@ def _combine_fetch_diagnostics(payloads: list[Any]) -> dict[str, Any]:
         "errors": tuple(combined_errors),
         "source_results": tuple(combined_sources),
     }
+
+
+def _scrub_raw_sql_literals_and_comments(sql: str) -> str:
+    output: list[str] = []
+    index = 0
+    length = len(sql)
+    in_single = False
+    in_double = False
+    in_bracket = False
+    while index < length:
+        char = sql[index]
+        next_char = sql[index + 1] if index + 1 < length else ""
+        if in_single:
+            output.append(" ")
+            if char == "'" and next_char == "'":
+                output.append(" ")
+                index += 2
+                continue
+            if char == "'":
+                in_single = False
+            index += 1
+            continue
+        if in_double:
+            output.append(" ")
+            if char == '"' and next_char == '"':
+                output.append(" ")
+                index += 2
+                continue
+            if char == '"':
+                in_double = False
+            index += 1
+            continue
+        if in_bracket:
+            output.append(" ")
+            if char == "]":
+                in_bracket = False
+            index += 1
+            continue
+        if char == "-" and next_char == "-":
+            output.extend("  ")
+            index += 2
+            while index < length and sql[index] not in "\r\n":
+                output.append(" ")
+                index += 1
+            continue
+        if char == "/" and next_char == "*":
+            output.extend("  ")
+            index += 2
+            while index < length - 1 and not (sql[index] == "*" and sql[index + 1] == "/"):
+                output.append(" ")
+                index += 1
+            if index < length - 1:
+                output.extend("  ")
+                index += 2
+            continue
+        if char == "'":
+            in_single = True
+            output.append(" ")
+            index += 1
+            continue
+        if char == '"':
+            in_double = True
+            output.append(" ")
+            index += 1
+            continue
+        if char == "[":
+            in_bracket = True
+            output.append(" ")
+            index += 1
+            continue
+        output.append(char)
+        index += 1
+    return "".join(output)
+
+
+def _validate_raw_select_sql(sql_text: str) -> str:
+    normalized = str(sql_text or "").strip()
+    if not normalized:
+        raise ValueError("SQL query cannot be empty.")
+    if normalized.endswith(";"):
+        normalized = normalized[:-1].strip()
+    scrubbed = _scrub_raw_sql_literals_and_comments(normalized)
+    if ";" in scrubbed:
+        raise ValueError("SQL query must contain one read-only statement.")
+    first_keyword_match = re.search(r"\b([A-Za-z_][A-Za-z0-9_]*)\b", scrubbed)
+    first_keyword = first_keyword_match.group(1).upper() if first_keyword_match else ""
+    if first_keyword not in {"SELECT", "WITH"}:
+        raise ValueError("Only SELECT queries are supported.")
+    if first_keyword == "WITH" and not re.search(r"\bSELECT\b", scrubbed, flags=re.IGNORECASE):
+        raise ValueError("WITH queries must contain a SELECT statement.")
+    blocked = sorted(
+        keyword
+        for keyword in _BLOCKED_RAW_SQL_KEYWORDS
+        if re.search(rf"\b{keyword}\b", scrubbed, flags=re.IGNORECASE)
+    )
+    if blocked:
+        raise ValueError(f"SQL query contains unsupported keyword: {blocked[0]}.")
+    for pattern, label in _BLOCKED_RAW_SQL_PATTERNS:
+        if pattern.search(scrubbed):
+            raise ValueError(f"SQL query contains unsupported read-lock or write-output clause: {label}.")
+    return normalized
+
+
+def _raise_if_cancelled(cancellation_token: Any) -> None:
+    if cancellation_token is None:
+        return
+    raise_if_cancelled = getattr(cancellation_token, "raise_if_cancelled", None)
+    if callable(raise_if_cancelled):
+        raise_if_cancelled()
+
+
+def _raw_sql_engine_factory(importer: Any, oznak_module: Any) -> Any:
+    factory = getattr(oznak_module, "create_sqlalchemy_engine", None)
+    if callable(factory):
+        return factory
+    engines_module = importer("oznak.engines")
+    factory = getattr(engines_module, "create_sqlalchemy_engine", None)
+    if not callable(factory):
+        raise AttributeError("oznak create_sqlalchemy_engine contract is unavailable.")
+    return factory
+
+
+def _raw_sql_fallback_available(importer: Any, oznak_module: Any) -> bool:
+    try:
+        _raw_sql_engine_factory(importer, oznak_module)
+    except Exception:
+        return False
+    return True
+
+
+def _fetch_raw_sql_records_with_metroliza_fallback(
+    *,
+    importer: Any,
+    oznak_module: Any,
+    oznak_profile: Any,
+    credential_provider: Any,
+    sql_text: str,
+    limit: int | None,
+    timeout_seconds: float | None,
+    mode: str,
+    cancellation_token: Any,
+    progress_callback: Any,
+    record_batch_callback: Any = None,
+    metroliza_profile: Any = None,
+) -> Any:
+    """Run read-only SQL through Oznak's existing engine contract.
+
+    This compatibility path keeps Metroliza usable with the current pinned Oznak
+    package while newer Oznak releases grow a first-class raw SQL helper.
+    """
+
+    started_at = perf_counter()
+    alias = str(getattr(oznak_profile, "alias", "") or "")
+    dialect = getattr(getattr(oznak_profile, "dialect", None), "value", None) or getattr(
+        oznak_profile, "dialect", "unknown"
+    )
+    normalized_sql = _validate_raw_select_sql(sql_text)
+    normalized_mode = "preview" if str(mode or "").strip().lower() == "preview" else "fetch"
+    row_limit = int(limit) if limit is not None else None
+    query_summary = (
+        f"raw SQL {normalized_mode} on {alias or 'source'} "
+        f"({dialect}, {'all rows' if row_limit is None else f'limit {row_limit}'})"
+    )
+
+    def _diagnostic_payload(
+        *,
+        status: str,
+        row_count: int,
+        message: str,
+        error_code: str | None = None,
+    ) -> SimpleNamespace:
+        payload: dict[str, Any] = {
+            "source_alias": alias,
+            "status": SimpleNamespace(value=status),
+            "row_count": row_count,
+            "elapsed_seconds": perf_counter() - started_at,
+            "message": message,
+            "query_summary": query_summary,
+            "metadata": {
+                "mode": normalized_mode,
+                "limit": row_limit,
+                "execution_contract": "metroliza_engine_fallback",
+            },
+        }
+        if error_code:
+            payload["error_code"] = error_code
+        return SimpleNamespace(**payload)
+
+    engine = None
+    try:
+        _raise_if_cancelled(cancellation_token)
+        engine_factory = _raw_sql_engine_factory(importer, oznak_module)
+        get_credentials = getattr(credential_provider, "get_credentials", None)
+        credentials = get_credentials(alias) if callable(get_credentials) else None
+        _raise_if_cancelled(cancellation_token)
+        engine = engine_factory(oznak_profile, credentials)
+        _raise_if_cancelled(cancellation_token)
+
+        sqlalchemy_module = importer("sqlalchemy")
+        text = getattr(sqlalchemy_module, "text")
+
+        with engine.connect() as connection:
+            cursor = connection.execute(text(normalized_sql))
+            mapping_cursor = cursor.mappings()
+            data: list[dict[str, Any]] = []
+            row_count = 0
+            fetch_size = min(row_limit, DEFAULT_OZNAK_FETCH_CHUNK_SIZE) if row_limit else DEFAULT_OZNAK_FETCH_CHUNK_SIZE
+            while True:
+                _raise_if_cancelled(cancellation_token)
+                if timeout_seconds is not None and perf_counter() - started_at > float(timeout_seconds):
+                    raise TimeoutError(f"Query exceeded timeout of {timeout_seconds} seconds")
+                remaining = None if row_limit is None else row_limit - row_count
+                if remaining is not None and remaining <= 0:
+                    break
+                batch_size = fetch_size if remaining is None else min(fetch_size, remaining)
+                rows = [dict(row) for row in mapping_cursor.fetchmany(batch_size)]
+                if not rows:
+                    break
+                for row in rows:
+                    row.setdefault("source_alias", alias)
+                    row.setdefault("source_database", alias)
+                row_count += len(rows)
+                if record_batch_callback is not None:
+                    batch_records = map_oznak_rows_to_industrial_records(
+                        SimpleNamespace(data=tuple(rows)),
+                        profile=metroliza_profile or oznak_profile,
+                    )
+                    if batch_records:
+                        record_batch_callback(batch_records)
+                else:
+                    data.extend(rows)
+                if progress_callback is not None and row_limit is None:
+                    progress_callback(
+                        _diagnostic_payload(
+                            status="running",
+                            row_count=row_count,
+                            message=f"Fetched {row_count} rows from source '{alias}'...",
+                        )
+                    )
+                if len(rows) < batch_size:
+                    break
+            _raise_if_cancelled(cancellation_token)
+            if timeout_seconds is not None and perf_counter() - started_at > float(timeout_seconds):
+                raise TimeoutError(f"Query exceeded timeout of {timeout_seconds} seconds")
+    except Exception as exc:
+        message = f"Source '{alias}' raw SQL fallback failed: {_safe_exception_summary(exc)}"
+        diagnostic = _diagnostic_payload(
+            status="failed",
+            row_count=0,
+            message=message,
+            error_code="raw_sql_fallback_error",
+        )
+        if progress_callback is not None:
+            progress_callback(diagnostic)
+        return SimpleNamespace(
+            data=(),
+            source_results=(diagnostic,),
+            warnings=(),
+            errors=(message,),
+            row_count=0,
+            has_errors=True,
+            partial_success=False,
+        )
+    finally:
+        dispose = getattr(engine, "dispose", None)
+        if callable(dispose):
+            dispose()
+
+    if not data:
+        if record_batch_callback is not None and row_count > 0:
+            diagnostic = _diagnostic_payload(
+                status="success",
+                row_count=row_count,
+                message=f"Fetched {row_count} rows from source '{alias}'",
+            )
+            if progress_callback is not None:
+                progress_callback(diagnostic)
+            return SimpleNamespace(
+                data=(),
+                source_results=(diagnostic,),
+                warnings=(),
+                errors=(),
+                row_count=row_count,
+                has_errors=False,
+                partial_success=False,
+                streamed_to_callback=True,
+            )
+        message = f"Source '{alias}' returned no rows"
+        diagnostic = _diagnostic_payload(status="no_rows", row_count=0, message=message)
+        if progress_callback is not None:
+            progress_callback(diagnostic)
+        return SimpleNamespace(
+            data=(),
+            source_results=(diagnostic,),
+            warnings=(message,),
+            errors=(),
+            row_count=0,
+            has_errors=False,
+            partial_success=False,
+        )
+
+    row_count = len(data)
+    diagnostic = _diagnostic_payload(
+        status="success",
+        row_count=row_count,
+        message=f"Fetched {row_count} rows from source '{alias}'",
+    )
+    if progress_callback is not None:
+        progress_callback(diagnostic)
+    return SimpleNamespace(
+        data=data,
+        source_results=(diagnostic,),
+        warnings=(),
+        errors=(),
+        row_count=row_count,
+        has_errors=False,
+        partial_success=False,
+    )
 
 
 def _batched(values: tuple[str, ...], batch_size: int) -> tuple[tuple[str, ...], ...]:
@@ -782,6 +1126,181 @@ def fetch_oznak_records_for_source_profile(
     )
 
 
+def fetch_oznak_records_for_source_sql(
+    profile: Any,
+    *,
+    username: str,
+    password: str,
+    sql_text: str,
+    limit: int | None = None,
+    timeout_seconds: float | None = None,
+    mode: str = "fetch",
+    cancellation_token: Any = None,
+    progress_callback: Any = None,
+    record_batch_callback: Any = None,
+    import_module: Any = None,
+) -> OznakAdapterFetchResult:
+    """Fetch live Oznak rows for one saved source profile using user-provided SELECT SQL."""
+
+    importer = import_module or importlib.import_module
+    status = get_oznak_adapter_status(import_module=importer)
+    if not status.available:
+        return OznakAdapterFetchResult(
+            status=status,
+            implemented=False,
+            diagnostics={"stage": "availability"},
+            error=status.error,
+        )
+
+    try:
+        oznak_module = importer(OZNAK_IMPORT_PATH)
+        database_profile_type = getattr(oznak_module, "DatabaseProfile")
+        credential_provider_type = getattr(oznak_module, "MappingCredentialProvider")
+        raw_request_type = getattr(oznak_module, "RawSqlRequest", None)
+        fetch_raw_sql_records = getattr(oznak_module, "fetch_raw_sql_records", None)
+        if raw_request_type is None or not callable(fetch_raw_sql_records):
+            try:
+                raw_sql_module = importer("oznak.raw_sql")
+            except Exception:
+                raw_sql_module = None
+            if raw_sql_module is not None:
+                raw_request_type = getattr(raw_sql_module, "RawSqlRequest", None)
+                fetch_raw_sql_records = getattr(raw_sql_module, "fetch_raw_sql_records", None)
+        raw_contract_available = raw_request_type is not None and callable(fetch_raw_sql_records)
+        raw_fallback_available = _raw_sql_fallback_available(importer, oznak_module)
+        if not raw_contract_available and not raw_fallback_available:
+            raise AttributeError("oznak raw SQL and engine fetch contracts are unavailable.")
+    except Exception as exc:
+        return OznakAdapterFetchResult(
+            status=status,
+            implemented=False,
+            diagnostics={"stage": "raw_sql_contract_import"},
+            error=_safe_exception_summary(exc),
+        )
+
+    alias = str(_profile_value(profile, "source_db_alias", "database_alias", "alias") or "").strip()
+    database_type = str(_profile_value(profile, "database_type", "dialect") or "").strip().lower()
+    host = str(_profile_value(profile, "host") or "").strip()
+    port = _profile_value(profile, "port")
+    database_name = str(_profile_value(profile, "database_name", "database") or "").strip()
+    table_name = str(_profile_value(profile, "source_object_name", "table") or "").strip()
+    timestamp_column = _profile_value(profile, "timestamp_column")
+    pagination_column = _profile_value(profile, "default_pagination_column", "pagination_column")
+    raw_order_by_enabled = _profile_value(profile, "order_by_enabled")
+    order_by_enabled = True if raw_order_by_enabled is None else bool(raw_order_by_enabled)
+    allowed_columns = _normalize_runtime_columns(
+        tuple(_profile_value(profile, "allowed_columns") or ()),
+        timestamp_column,
+        pagination_column,
+    )
+
+    try:
+        oznak_profile = _construct_with_supported_kwargs(
+            database_profile_type,
+            {
+                "alias": alias,
+                "dialect": database_type,
+                "host": host,
+                "port": int(port) if port is not None else 0,
+                "database": database_name,
+                "table": table_name,
+                "allowed_columns": allowed_columns,
+                "timestamp_column": timestamp_column,
+                "pagination_column": pagination_column,
+                "display_name": _profile_value(profile, "profile_name"),
+                "connect_timeout_seconds": timeout_seconds,
+                "query_timeout_seconds": timeout_seconds,
+                "order_by_enabled": order_by_enabled,
+                "metadata": {"metroliza_source_profile_id": _profile_value(profile, "id", "profile_id")},
+            },
+        )
+        request = None
+        if raw_contract_available:
+            request = _construct_with_supported_kwargs(
+                raw_request_type,
+                {
+                    "profile": oznak_profile,
+                    "sql": sql_text,
+                    "limit": limit,
+                    "timeout_seconds": timeout_seconds,
+                    "mode": mode,
+                },
+            )
+        else:
+            _validate_raw_select_sql(sql_text)
+        credential_provider = credential_provider_type({alias: (username, password)})
+    except Exception as exc:
+        return OznakAdapterFetchResult(
+            status=status,
+            implemented=True,
+            diagnostics={"stage": "raw_sql_request_build"},
+            error=_safe_exception_summary(exc),
+        )
+
+    try:
+        if raw_contract_available:
+            payload = _call_with_supported_kwargs(
+                fetch_raw_sql_records,
+                request,
+                credential_provider=credential_provider,
+                cancellation_token=cancellation_token,
+                progress_callback=progress_callback,
+                record_batch_callback=record_batch_callback,
+                metroliza_profile=profile,
+            )
+        else:
+            payload = _fetch_raw_sql_records_with_metroliza_fallback(
+                importer=importer,
+                oznak_module=oznak_module,
+                oznak_profile=oznak_profile,
+                credential_provider=credential_provider,
+                sql_text=sql_text,
+                limit=limit,
+                timeout_seconds=timeout_seconds,
+                mode=mode,
+                cancellation_token=cancellation_token,
+                progress_callback=progress_callback,
+            )
+    except Exception as exc:
+        return OznakAdapterFetchResult(
+            status=status,
+            implemented=True,
+            diagnostics={"stage": "raw_sql_fetch_call", "reason": "runtime_error"},
+            error=_safe_exception_summary(exc),
+        )
+
+    streamed_to_callback = bool(getattr(payload, "streamed_to_callback", False))
+    records = () if streamed_to_callback else map_oznak_rows_to_industrial_records(payload, profile=profile)
+    if record_batch_callback is not None and records:
+        record_batch_callback(records)
+        streamed_to_callback = True
+        records = ()
+    diagnostics = {
+        "stage": "mapped",
+        "fetch_mode": "sql",
+        "sql_hash": hashlib.sha256(str(sql_text or "").encode("utf-8")).hexdigest(),
+        "sql_limit": limit,
+        "sql_operation_mode": mode,
+        "raw_sql_contract": "oznak" if raw_contract_available else "metroliza_engine_fallback",
+        "raw_payload_type": type(payload).__name__,
+        "streamed_to_callback": streamed_to_callback,
+    }
+    diagnostics.update(_fetch_result_diagnostics(payload))
+    errors = diagnostics.get("errors") or ()
+    warnings = diagnostics.get("warnings") or ()
+    error = "; ".join(str(item) for item in errors) if errors and not records else None
+    if warnings:
+        diagnostics["completed_with_warnings"] = True
+    return OznakAdapterFetchResult(
+        status=status,
+        records=records,
+        row_count=int(diagnostics.get("row_count") or 0) if streamed_to_callback else len(records),
+        implemented=True,
+        diagnostics=diagnostics,
+        error=error,
+    )
+
+
 def _call_fetch_records(fetch_records: Any, *, profile: Any, request: Any) -> Any:
     """Call the moving Oznak fetch API while it transitions to its final shape."""
 
@@ -838,6 +1357,10 @@ def get_oznak_adapter_status(*, import_module: Any = None) -> OznakAdapterStatus
     )
 
     fetch_available = callable(getattr(oznak_module, "fetch_records", None))
+    raw_sql_contract_available = callable(getattr(oznak_module, "fetch_raw_sql_records", None)) and hasattr(
+        oznak_module, "RawSqlRequest"
+    )
+    raw_sql_available = raw_sql_contract_available
     root_fetch_records = getattr(oznak_module, "fetch_records", None)
     root_fetch_records_chunked = getattr(oznak_module, "fetch_records_chunked", None)
     root_iter_records_chunked = getattr(oznak_module, "iter_records_chunked", None)
@@ -865,10 +1388,23 @@ def get_oznak_adapter_status(*, import_module: Any = None) -> OznakAdapterStatus
             _callable_accepts_keyword(candidate, "max_workers")
             for candidate in (root_fetch_records, root_fetch_records_chunked)
         )
+    try:
+        raw_sql_module = importer("oznak.raw_sql")
+        raw_sql_contract_available = raw_sql_contract_available or (
+            callable(getattr(raw_sql_module, "fetch_raw_sql_records", None))
+            and hasattr(raw_sql_module, "RawSqlRequest")
+        )
+    except Exception as exc:
+        diagnostics["raw_sql_import_error"] = _safe_exception_summary(exc)
+    raw_sql_engine_fallback_available = _raw_sql_fallback_available(importer, oznak_module)
+    raw_sql_available = raw_sql_contract_available or raw_sql_engine_fallback_available
 
     diagnostics.update(
         {
             "query_request_available": hasattr(oznak_module, "QueryRequest"),
+            "raw_sql_available": raw_sql_available,
+            "raw_sql_contract_available": raw_sql_contract_available,
+            "raw_sql_engine_fallback_available": raw_sql_engine_fallback_available,
             "chunked_fetch_available": chunked_fetch_available,
             "streaming_fetch_available": streaming_fetch_available,
             "cancellation_available": cancellation_available,
@@ -895,6 +1431,7 @@ def get_oznak_adapter_status(*, import_module: Any = None) -> OznakAdapterStatus
         fetch_available=fetch_available,
         chunked_fetch_available=chunked_fetch_available,
         streaming_fetch_available=streaming_fetch_available,
+        raw_sql_available=raw_sql_available,
         cancellation_available=cancellation_available,
         diagnostics=diagnostics,
         error=None,

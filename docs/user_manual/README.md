@@ -27,12 +27,16 @@ If you are new to the app, start here:
 2. [Parsing](parsing.md) — create or update a database file from reports.
 3. [Modify Database](modify_database.md) — optional cleanup for stored names and labels.
 4. [Characteristic Name Matching](characteristic_name_matching.md) — optional normalization when the same characteristic appears under different names.
-5. [Export overview](export_overview.md) — create the main Excel report.
-6. [Export filtering](export_filtering.md) — narrow the export to the data you want.
-7. [Export grouping](export_grouping.md) — create groups for grouped reporting and dashboard analysis.
-8. [Group Analysis guide](group_analysis/README.md) — learn how to read grouped statistical output.
+5. [Industrial Data](industrial_data.md) — optional production-line cache workflow for Oznak-supported databases.
+6. [Export overview](export_overview.md) — create the main Excel report or dashboard.
+7. [Export filtering](export_filtering.md) — narrow the export to the data you want.
+8. [Export grouping](export_grouping.md) — create groups for grouped reporting and dashboard analysis.
+9. [Group Analysis guide](group_analysis/README.md) — learn how to read grouped statistical output.
 
 If you are using CSV Summary instead of the database workflow, jump to [CSV Summary](csv_summary.md).
+
+If a supplier sends a report layout Metroliza does not recognize, use
+[Parser Profiles](parser_profiles.md).
 
 ## Current documentation focus
 
@@ -53,12 +57,15 @@ These pages follow the main app workflows.
 - [Export filtering](export_filtering.md)
 - [Export grouping](export_grouping.md)
 - [CSV Summary](csv_summary.md)
+- [Industrial Data](industrial_data.md)
+- [Parser Profiles](parser_profiles.md)
 
 ## Reference/help manuals
 
 These pages support the main workflows.
 
 - [Characteristic Name Matching](characteristic_name_matching.md)
+- [Dashboard Visuals](dashboard_visuals.md)
 - [Help, startup, and license](help_startup_and_license.md)
 
 ## Exported report interpretation manuals

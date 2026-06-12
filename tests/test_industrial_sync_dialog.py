@@ -4,7 +4,7 @@ import pytest
 
 try:
     from PyQt6.QtGui import QCloseEvent
-    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtWidgets import QApplication, QDialog
 
     import modules.industrial_sync_dialog as industrial_sync_dialog
     from modules.industrial_credentials import IndustrialStoredCredentials
@@ -15,6 +15,7 @@ try:
 except Exception as exc:  # pragma: no cover - depends on local Qt runtime availability.
     QCloseEvent = None
     QApplication = None
+    QDialog = None
     industrial_sync_dialog = None
     IndustrialDataRepository = None
     IndustrialStoredCredentials = None
@@ -38,6 +39,36 @@ def _app():
     global _QT_APP
     _QT_APP = QApplication.instance() or QApplication([])
     return _QT_APP
+
+
+class _Signal:
+    def __init__(self):
+        self.callbacks = []
+
+    def connect(self, callback):
+        self.callbacks.append(callback)
+
+
+class _CapturingSyncThread:
+    instances = []
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.progress_message = _Signal()
+        self.result_ready = _Signal()
+        self.error_occurred = _Signal()
+        self.finished = _Signal()
+        self.started = False
+        self.instances.append(self)
+
+    def start(self):
+        self.started = True
+
+    def isRunning(self):
+        return self.started
+
+    def cancel(self):
+        self.started = False
 
 
 def test_sync_dialog_requires_saved_source_and_masks_password(tmp_path):
@@ -497,6 +528,342 @@ def test_sync_dialog_starts_sync_thread_without_external_connection(monkeypatch,
     dialog.on_oznak_thread_stopped()
     assert dialog.oznak_sync_thread is None
     assert not dialog.cancel_sync_button.isEnabled()
+    dialog.close()
+
+
+def test_sync_dialog_sql_preview_and_fetch_to_csv_summary(monkeypatch, tmp_path):
+    _app()
+    db_path = str(tmp_path / "industrial.db")
+    IndustrialDataRepository(db_path).upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="events",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+        allowed_columns=("event_id", "reference"),
+    )
+    started_threads = []
+
+    class Signal:
+        def __init__(self):
+            self.callbacks = []
+
+        def connect(self, callback):
+            self.callbacks.append(callback)
+
+    class FakeSyncThread:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.progress_message = Signal()
+            self.result_ready = Signal()
+            self.error_occurred = Signal()
+            self.finished = Signal()
+            self.started = False
+            started_threads.append(self)
+
+        def start(self):
+            self.started = True
+
+        def isRunning(self):
+            return self.started
+
+        def cancel(self):
+            self.started = False
+
+    class ParentDialog(QDialog):
+        def __init__(self):
+            super().__init__()
+            self.analytics_opened = 0
+
+        def refresh_status(self):
+            pass
+
+        def open_analytics_dialog(self):
+            self.analytics_opened += 1
+
+    monkeypatch.setattr(industrial_sync_dialog, "IndustrialOznakSyncThread", FakeSyncThread)
+    parent = ParentDialog()
+    dialog = IndustrialSyncDialog(parent=parent, db_file=db_path)
+    dialog.username_edit.setText("operator")
+    dialog.password_edit.setText("secret-password")
+    dialog.mode_tabs.setCurrentIndex(1)
+    dialog.sql_query_edit.setPlainText("SELECT event_id, reference, station FROM events")
+    dialog.sql_preview_limit_spin.setValue(7)
+
+    dialog.preview_sql()
+
+    preview_state = started_threads[0].kwargs["fetch_state"]
+    assert started_threads[0].kwargs["test_only"] is True
+    assert preview_state.mode == "sql"
+    assert preview_state.sql_text == "SELECT event_id, reference, station FROM events"
+    assert preview_state.sql_preview_limit == 7
+
+    dialog.on_oznak_result(
+        {
+            "status": "succeeded",
+            "test_only": True,
+            "row_count": 1,
+            "preview_records": (
+                {
+                    "raw_record": {
+                        "event_id": "ROW-1",
+                        "reference": "REF-1",
+                        "station": "S1",
+                    }
+                },
+            ),
+        }
+    )
+
+    assert "SQL preview passed" in dialog.status_label.text()
+    assert dialog.sql_preview_table.rowCount() == 1
+    assert dialog.sql_preview_table.columnCount() == 3
+
+    started_threads[0].started = False
+    dialog.on_oznak_thread_stopped()
+    dialog.fetch_to_csv_summary()
+    fetch_state = started_threads[1].kwargs["fetch_state"]
+    assert started_threads[1].kwargs["test_only"] is False
+    assert fetch_state.mode == "sql"
+    assert fetch_state.limit_rows == dialog.limit_spin.value()
+
+    dialog.on_oznak_result(
+        {
+            "status": "succeeded",
+            "test_only": False,
+            "row_count": 1,
+            "upsert_summary": {"processed": 1},
+        }
+    )
+
+    assert parent.analytics_opened == 1
+    started_threads[1].started = False
+    dialog.on_oznak_thread_stopped()
+    dialog.close()
+    parent.close()
+
+
+def test_sync_dialog_guided_fetch_all_requires_confirmation_and_removes_limit(
+    monkeypatch,
+    tmp_path,
+):
+    _app()
+    db_path = str(tmp_path / "industrial.db")
+    IndustrialDataRepository(db_path).upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="events",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+        allowed_columns=("event_id", "reference"),
+    )
+    _CapturingSyncThread.instances = []
+    monkeypatch.setattr(
+        industrial_sync_dialog,
+        "IndustrialOznakSyncThread",
+        _CapturingSyncThread,
+    )
+    responses = [
+        industrial_sync_dialog.QMessageBox.StandardButton.No,
+        industrial_sync_dialog.QMessageBox.StandardButton.Yes,
+    ]
+    monkeypatch.setattr(
+        industrial_sync_dialog.QMessageBox,
+        "question",
+        lambda *args: responses.pop(0),
+    )
+    dialog = IndustrialSyncDialog(db_file=db_path)
+    dialog.username_edit.setText("operator")
+    dialog.password_edit.setText("secret-password")
+    dialog.fetch_all_checkbox.setChecked(True)
+
+    dialog.sync_now()
+
+    assert _CapturingSyncThread.instances == []
+
+    dialog.sync_now()
+
+    assert len(_CapturingSyncThread.instances) == 1
+    fetch_state = _CapturingSyncThread.instances[0].kwargs["fetch_state"]
+    assert fetch_state.mode == "guided"
+    assert fetch_state.fetch_all_confirmed is True
+    assert fetch_state.limit_rows is None
+    assert _CapturingSyncThread.instances[0].started is True
+
+    _CapturingSyncThread.instances[0].started = False
+    dialog.on_oznak_thread_stopped()
+    dialog.close()
+
+
+def test_sync_dialog_sql_fetch_all_requires_confirmation_and_removes_limit(
+    monkeypatch,
+    tmp_path,
+):
+    _app()
+    db_path = str(tmp_path / "industrial.db")
+    IndustrialDataRepository(db_path).upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="events",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+        allowed_columns=("event_id", "reference"),
+    )
+    _CapturingSyncThread.instances = []
+    monkeypatch.setattr(
+        industrial_sync_dialog,
+        "IndustrialOznakSyncThread",
+        _CapturingSyncThread,
+    )
+    responses = [
+        industrial_sync_dialog.QMessageBox.StandardButton.No,
+        industrial_sync_dialog.QMessageBox.StandardButton.Yes,
+    ]
+    monkeypatch.setattr(
+        industrial_sync_dialog.QMessageBox,
+        "question",
+        lambda *args: responses.pop(0),
+    )
+    dialog = IndustrialSyncDialog(db_file=db_path)
+    dialog.username_edit.setText("operator")
+    dialog.password_edit.setText("secret-password")
+    dialog.mode_tabs.setCurrentIndex(1)
+    dialog.sql_query_edit.setPlainText("SELECT event_id, reference FROM dbo.events")
+    dialog.fetch_all_checkbox.setChecked(True)
+
+    dialog.fetch_to_csv_summary()
+
+    assert _CapturingSyncThread.instances == []
+
+    dialog.fetch_to_csv_summary()
+
+    assert len(_CapturingSyncThread.instances) == 1
+    fetch_state = _CapturingSyncThread.instances[0].kwargs["fetch_state"]
+    assert fetch_state.mode == "sql"
+    assert fetch_state.sql_text == "SELECT event_id, reference FROM dbo.events"
+    assert fetch_state.fetch_all_confirmed is True
+    assert fetch_state.limit_rows is None
+    assert _CapturingSyncThread.instances[0].started is True
+
+    _CapturingSyncThread.instances[0].started = False
+    dialog.on_oznak_thread_stopped()
+    dialog.close()
+
+
+def test_sync_dialog_sql_recipe_open_and_save_cancel_keep_state(monkeypatch, tmp_path):
+    _app()
+    dialog = IndustrialSyncDialog(db_file=str(tmp_path / "industrial.db"))
+    dialog.sql_query_edit.setPlainText("SELECT 1")
+    status_text = dialog.sql_status_label.text()
+
+    monkeypatch.setattr(
+        industrial_sync_dialog.QFileDialog,
+        "getOpenFileName",
+        lambda *args: ("", ""),
+    )
+    dialog.open_sql_recipe()
+
+    assert dialog.sql_query_edit.toPlainText() == "SELECT 1"
+    assert dialog._sql_recipe_path is None
+    assert dialog.sql_status_label.text() == status_text
+
+    monkeypatch.setattr(
+        industrial_sync_dialog.QFileDialog,
+        "getSaveFileName",
+        lambda *args: ("", ""),
+    )
+    dialog.save_sql_recipe()
+
+    assert dialog._sql_recipe_path is None
+    assert dialog.sql_status_label.text() == status_text
+    dialog.close()
+
+
+def test_sync_dialog_sql_recipe_reports_open_and_save_errors(monkeypatch, tmp_path):
+    _app()
+    warnings = []
+    dialog = IndustrialSyncDialog(db_file=str(tmp_path / "industrial.db"))
+    dialog.sql_query_edit.setPlainText("SELECT 1")
+    missing_recipe = tmp_path / "missing.sql"
+    monkeypatch.setattr(
+        industrial_sync_dialog.QFileDialog,
+        "getOpenFileName",
+        lambda *args: (str(missing_recipe), ""),
+    )
+    monkeypatch.setattr(
+        industrial_sync_dialog.QMessageBox,
+        "warning",
+        lambda *args: warnings.append(args),
+    )
+
+    dialog.open_sql_recipe()
+
+    assert warnings[-1][1] == "SQL recipe"
+    assert "Could not open SQL recipe" in warnings[-1][2]
+    assert dialog.sql_query_edit.toPlainText() == "SELECT 1"
+    assert dialog._sql_recipe_path is None
+
+    blocked_parent = tmp_path / "not_a_directory"
+    blocked_parent.write_text("not a directory", encoding="utf-8")
+    monkeypatch.setattr(
+        industrial_sync_dialog.QFileDialog,
+        "getSaveFileName",
+        lambda *args: (str(blocked_parent / "query.sql"), ""),
+    )
+
+    dialog.save_sql_recipe()
+
+    assert warnings[-1][1] == "SQL recipe"
+    assert "Could not save SQL recipe" in warnings[-1][2]
+    assert dialog._sql_recipe_path is None
+    dialog.close()
+
+
+def test_sync_dialog_sql_recipe_save_appends_sql_suffix(monkeypatch, tmp_path):
+    _app()
+    dialog = IndustrialSyncDialog(db_file=str(tmp_path / "industrial.db"))
+    dialog.sql_query_edit.setPlainText("SELECT event_id FROM events")
+    recipe_without_suffix = tmp_path / "recipes" / "line_a"
+    monkeypatch.setattr(
+        industrial_sync_dialog.QFileDialog,
+        "getSaveFileName",
+        lambda *args: (str(recipe_without_suffix), ""),
+    )
+
+    dialog.save_sql_recipe()
+
+    recipe_path = recipe_without_suffix.with_suffix(".sql")
+    assert recipe_path.read_text(encoding="utf-8") == "SELECT event_id FROM events"
+    assert dialog._sql_recipe_path == recipe_path
+    assert dialog.sql_status_label.text() == "SQL recipe saved: line_a.sql"
+    dialog.close()
+
+
+def test_sync_dialog_sql_recipe_open_loads_file(monkeypatch, tmp_path):
+    _app()
+    recipe_path = tmp_path / "line_a.sql"
+    recipe_path.write_text("SELECT event_id FROM events", encoding="utf-8")
+    dialog = IndustrialSyncDialog(db_file=str(tmp_path / "industrial.db"))
+    monkeypatch.setattr(
+        industrial_sync_dialog.QFileDialog,
+        "getOpenFileName",
+        lambda *args: (str(recipe_path), ""),
+    )
+
+    dialog.open_sql_recipe()
+
+    assert dialog.sql_query_edit.toPlainText() == "SELECT event_id FROM events"
+    assert dialog._sql_recipe_path == recipe_path
+    assert dialog.sql_status_label.text() == "SQL recipe loaded: line_a.sql"
     dialog.close()
 
 

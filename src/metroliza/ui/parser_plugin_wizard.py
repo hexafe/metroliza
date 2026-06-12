@@ -31,6 +31,7 @@ from metroliza.parsing.parser_profile_handoff import (
     write_profile_repair_prompt,
     write_profile_validation_artifact,
 )
+from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
     configure_accessibility,
@@ -88,6 +89,7 @@ class ParserPluginWizardDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
+        attach_help_menu_to_layout(layout, self, [("Parser profiles manual", "parser_profiles")])
 
         layout.addWidget(section_label("Profile store"))
         layout.addWidget(self.store_status_label)

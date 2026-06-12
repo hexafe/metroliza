@@ -11,11 +11,15 @@ from scripts.benchmark_paths import (
     _collect_distribution_gof_metrics,
     _coerce_legacy,
     _write_outputs,
+    benchmark_dashboard_static_multi_group_probe,
     benchmark_csv_summary_large_data_probe,
     benchmark_csv_summary_path,
     benchmark_distribution_fit_gof_policy_compare,
+    benchmark_industrial_cache_ingest_probe,
+    benchmark_industrial_cache_to_csv_summary_bridge_probe,
     benchmark_population_static_render_probe,
     benchmark_production_dashboard_workbook_path,
+    benchmark_sqlite_grouping_high_cardinality_probe,
     build_benchmark_run_summary,
 )
 
@@ -173,6 +177,115 @@ def test_population_static_render_probe_smoke(tmp_path):
     assert result.input_metrics['density_non_empty_pixels'] > 0
     assert result.input_metrics['sampled_marker_points'] == 256
     assert result.input_metrics['sampled_marker_png_bytes'] > 0
+
+
+def test_industrial_cache_ingest_probe_smoke(tmp_path):
+    result = benchmark_industrial_cache_ingest_probe(
+        tmp_path,
+        row_count=12,
+        dynamic_fields=2,
+        source_count=2,
+    )
+
+    assert result.scenario == 'industrial_cache_ingest_probe'
+    assert result.stage_timings_s['schema_setup'] >= 0.0
+    assert result.stage_timings_s['source_profile_and_sync_setup'] >= 0.0
+    assert result.stage_timings_s['cache_insert'] > 0.0
+    assert result.stage_timings_s['sync_finish'] >= 0.0
+    assert result.stage_timings_s['cache_summary'] >= 0.0
+    assert result.input_metrics['rows'] == 12
+    assert result.input_metrics['headers'] == 2
+    assert result.input_metrics['source_count'] == 2
+    assert result.input_metrics['processed_rows'] == 12
+    assert result.input_metrics['inserted_rows'] == 12
+    assert result.input_metrics['updated_rows'] == 0
+    assert result.input_metrics['dynamic_value_rows'] == 24
+    assert result.input_metrics['cache_records'] == 12
+    assert result.input_metrics['cache_record_values'] == 24
+    assert result.input_metrics['cache_db_bytes'] > 0
+
+
+def test_industrial_cache_to_csv_summary_bridge_probe_smoke(tmp_path):
+    result = benchmark_industrial_cache_to_csv_summary_bridge_probe(
+        tmp_path,
+        row_count=10,
+        dynamic_fields=2,
+        source_count=2,
+        materialize_columns=2,
+    )
+
+    assert result.scenario == 'industrial_cache_to_csv_summary_bridge_probe'
+    assert result.stage_timings_s['industrial_cache_populate'] > 0.0
+    assert result.stage_timings_s['bridge_to_tabular_sqlite'] > 0.0
+    assert result.stage_timings_s['source_group_preview'] >= 0.0
+    assert result.stage_timings_s['source_line_group_preview'] >= 0.0
+    assert result.stage_timings_s['materialize_required_columns'] >= 0.0
+    assert result.input_metrics['rows'] == 10
+    assert result.input_metrics['headers'] == 2
+    assert result.input_metrics['source_count'] == 2
+    assert result.input_metrics['cache_records'] == 10
+    assert result.input_metrics['cache_record_values'] == 20
+    assert result.input_metrics['bridge_row_count'] == 10
+    assert result.input_metrics['bridge_columns'] >= 20
+    assert result.input_metrics['source_preview_total'] == 2
+    assert result.input_metrics['source_line_preview_total'] >= 2
+    assert result.input_metrics['materialized_rows'] == 10
+    assert result.input_metrics['materialized_columns'] >= 5
+
+
+def test_dashboard_static_multi_group_probe_smoke(tmp_path):
+    result = benchmark_dashboard_static_multi_group_probe(
+        tmp_path,
+        group_count=3,
+        rows_per_group=64,
+    )
+
+    assert result.scenario == 'dashboard_static_multi_group_probe'
+    assert result.stage_timings_s['array_generation'] >= 0.0
+    assert result.stage_timings_s['density_layer_render'] > 0.0
+    assert result.stage_timings_s['sampled_marker_layer_render'] > 0.0
+    assert result.input_metrics['rows'] == 192
+    assert result.input_metrics['headers'] == 3
+    assert result.input_metrics['group_count'] == 3
+    assert result.input_metrics['rows_per_group'] == 64
+    assert result.input_metrics['density_layer_count'] == 3
+    assert result.input_metrics['density_contributed_points'] == 192
+    assert result.input_metrics['density_png_bytes'] > 0
+    assert result.input_metrics['density_non_empty_pixels'] > 0
+    assert result.input_metrics['sampled_marker_points_per_group'] == 64
+    assert result.input_metrics['sampled_marker_total_points'] == 192
+    assert result.input_metrics['sampled_marker_png_bytes'] > 0
+
+
+def test_sqlite_grouping_high_cardinality_probe_smoke(tmp_path):
+    result = benchmark_sqlite_grouping_high_cardinality_probe(
+        tmp_path,
+        row_count=24,
+        group_count=24,
+        search_text='G-0000000',
+        materialize_columns=2,
+    )
+
+    assert result.scenario == 'sqlite_grouping_high_cardinality_probe'
+    assert result.stage_timings_s['csv_sqlite_load'] >= 0.0
+    assert result.stage_timings_s['value_preview'] >= 0.0
+    assert result.stage_timings_s['single_column_group_preview'] >= 0.0
+    assert result.stage_timings_s['multi_column_group_preview'] >= 0.0
+    assert result.stage_timings_s['row_ids_for_group_search'] >= 0.0
+    assert result.stage_timings_s['assign_filtered_scope'] >= 0.0
+    assert result.stage_timings_s['materialize_required_columns'] >= 0.0
+    assert result.input_metrics['rows'] == 24
+    assert result.input_metrics['headers'] == 5
+    assert result.input_metrics['configured_group_count'] == 24
+    assert result.input_metrics['storage_mode_sqlite'] == 1
+    assert result.input_metrics['sqlite_row_count'] == 24
+    assert result.input_metrics['value_preview_total'] >= 1
+    assert result.input_metrics['group_preview_total'] >= 1
+    assert result.input_metrics['multi_group_preview_total'] >= 1
+    assert result.input_metrics['row_ids_for_search'] >= 1
+    assert result.input_metrics['assign_filtered_scope_rows'] >= 1
+    assert result.input_metrics['materialized_rows'] == 24
+    assert result.input_metrics['materialized_columns'] >= 5
 
 
 def test_distribution_fit_gof_policy_compare_smoke(tmp_path):
@@ -380,6 +493,85 @@ def test_benchmark_main_runs_selected_mocked_scenarios_and_writes_summary(
     }
 
 
+def test_benchmark_main_registers_rc_manual_probe_scenarios(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    calls: list[str] = []
+
+    def runner(name: str):
+        def _run(_temp_path: Path, **_kwargs) -> ScenarioResult:
+            calls.append(name)
+            return ScenarioResult(
+                scenario=name,
+                wall_time_s=0.01,
+                stage_timings_s={},
+                input_metrics={},
+            )
+
+        return _run
+
+    monkeypatch.setattr(
+        benchmark_paths,
+        'benchmark_industrial_cache_ingest_probe',
+        runner('industrial_cache_ingest_probe'),
+    )
+    monkeypatch.setattr(
+        benchmark_paths,
+        'benchmark_industrial_cache_to_csv_summary_bridge_probe',
+        runner('industrial_cache_to_csv_summary_bridge_probe'),
+    )
+    monkeypatch.setattr(
+        benchmark_paths,
+        'benchmark_dashboard_static_multi_group_probe',
+        runner('dashboard_static_multi_group_probe'),
+    )
+    monkeypatch.setattr(
+        benchmark_paths,
+        'benchmark_sqlite_grouping_high_cardinality_probe',
+        runner('sqlite_grouping_high_cardinality_probe'),
+    )
+    monkeypatch.setattr(
+        sys,
+        'argv',
+        [
+            'benchmark_paths.py',
+            '--output-dir',
+            str(tmp_path),
+            '--industrial-cache-rows',
+            '12',
+            '--industrial-cache-dynamic-fields',
+            '2',
+            '--industrial-cache-source-count',
+            '2',
+            '--static-group-count',
+            '3',
+            '--static-group-rows-per-group',
+            '64',
+            '--grouping-high-cardinality-rows',
+            '24',
+            '--grouping-high-cardinality-groups',
+            '24',
+            '--scenarios',
+            'industrial_cache_ingest_probe',
+            'industrial_cache_to_csv_summary_bridge_probe',
+            'dashboard_static_multi_group_probe',
+            'sqlite_grouping_high_cardinality_probe',
+        ],
+    )
+
+    assert benchmark_paths.main() == 0
+    assert calls == [
+        'industrial_cache_ingest_probe',
+        'industrial_cache_to_csv_summary_bridge_probe',
+        'dashboard_static_multi_group_probe',
+        'sqlite_grouping_high_cardinality_probe',
+    ]
+    json_path = next(tmp_path.glob('benchmark-*.json'))
+    payload = json.loads(json_path.read_text(encoding='utf-8'))
+    assert payload['config']['scenarios'] == calls
+
+
 def test_benchmark_main_default_selection_skips_manual_large_csv_probe(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -432,6 +624,26 @@ def test_benchmark_main_default_selection_skips_manual_large_csv_probe(
     )
     monkeypatch.setattr(
         benchmark_paths,
+        'benchmark_industrial_cache_ingest_probe',
+        runner('industrial_cache_ingest_probe'),
+    )
+    monkeypatch.setattr(
+        benchmark_paths,
+        'benchmark_industrial_cache_to_csv_summary_bridge_probe',
+        runner('industrial_cache_to_csv_summary_bridge_probe'),
+    )
+    monkeypatch.setattr(
+        benchmark_paths,
+        'benchmark_dashboard_static_multi_group_probe',
+        runner('dashboard_static_multi_group_probe'),
+    )
+    monkeypatch.setattr(
+        benchmark_paths,
+        'benchmark_sqlite_grouping_high_cardinality_probe',
+        runner('sqlite_grouping_high_cardinality_probe'),
+    )
+    monkeypatch.setattr(
+        benchmark_paths,
         'benchmark_distribution_fit_monte_carlo_path',
         runner('distribution_fit_monte_carlo_path'),
     )
@@ -469,6 +681,10 @@ def test_benchmark_main_default_selection_skips_manual_large_csv_probe(
     assert benchmark_paths.main() == 0
     assert 'csv_summary_large_data_probe' not in called
     assert 'population_static_render_probe' not in called
+    assert 'industrial_cache_ingest_probe' not in called
+    assert 'industrial_cache_to_csv_summary_bridge_probe' not in called
+    assert 'dashboard_static_multi_group_probe' not in called
+    assert 'sqlite_grouping_high_cardinality_probe' not in called
     assert called == [
         'pdf_parse_path',
         'excel_export_path',

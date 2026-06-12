@@ -28,6 +28,8 @@ You must select a **database file** before you can apply changes.
 
 If the dialog was opened from the main window with a database already selected, it may already be filled in. If not, use **Select DB file**.
 
+Choose the `.db` file that was created or updated by [Parsing](parsing.md). If you select the wrong file, the tables may be empty or may show values from another job.
+
 ## Tabs
 
 The dialog has three tabs.
@@ -122,6 +124,14 @@ That means you click directly in a table cell and change the text there. You do 
 
 The tool supports row selection in the visible table.
 
+### Empty cells and numeric fields
+
+In **Report records** and **Measurement rows**, clearing an editable cell saves that value as empty/`NULL`.
+
+In **Normalize values**, an empty **New value** means "rename this stored text to blank" for every matching occurrence. Use that only when you really want the stored text cleared everywhere.
+
+For numeric measurement fields such as **NOM**, **+TOL**, **-TOL**, **BONUS**, **MEAS**, **DEV**, and **OUTTOL**, enter plain numbers. A blank numeric cell clears the value. Do not type units, comments, commas as thousands separators, or words into numeric cells.
+
 ## How to rename one value
 
 1. Open **Modify database**.
@@ -181,6 +191,43 @@ This makes it easier to review the full set of edits before saving them.
 **Cancel** closes the dialog without applying the pending changes from the current session.
 
 If you have typed edits but have not clicked **Apply changes**, those edits are not written to the database.
+
+## Recovery and validation
+
+### I selected the wrong database
+
+Click **Select DB file** and choose the correct `.db` file. Check that the values in the tables match the reports you meant to edit before applying changes.
+
+If you already applied changes to the wrong database, close the dialog, reopen the correct database, and restore the wrong database from a backup or re-parse the original reports if needed.
+
+### The database is invalid or cannot be read
+
+Select the `.db` file created by Metroliza Parsing. Do not select an Excel workbook, CSV file, archive, report PDF, or unrelated SQLite file.
+
+If the file should be a Metroliza database but still will not load, close the dialog and try opening the database from the main window workflow. If it still fails, keep the file unchanged and contact support with the error message.
+
+### The tables are empty
+
+Empty tables usually mean one of these:
+
+- the selected database has no parsed reports yet,
+- the search box is filtering all rows out,
+- the selected file is not the database you intended to edit, or
+- the selected database contains a schema Metroliza cannot use for these tables.
+
+Clear the search box first. If the tables are still empty, choose the database created by Parsing or parse reports into a new `.db` file.
+
+### Apply changes says there are no changes
+
+This means Metroliza did not detect any edited cells.
+
+Check that you changed an editable cell, not a read-only identifier column such as **REPORT_ID** or **MEASUREMENT_ID**. If you changed a value and then changed it back to the original text, there is nothing to save.
+
+### Saving changes fails
+
+Do not keep editing the same open dialog after a failed save. Note the error message, close the dialog, and reopen the database to check what was saved.
+
+Common causes are a read-only database file, a database opened by another process, an invalid value such as an unsupported **STATUS_CODE**, or a file that is not a Metroliza report database.
 
 ## Notes and cautions
 

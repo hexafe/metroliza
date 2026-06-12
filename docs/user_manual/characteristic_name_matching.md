@@ -60,6 +60,8 @@ Use **Add from selected** after selecting a report/export name from the database
 
 Use **Add manually** only when you need to type a mapping that is not currently visible in the selected database.
 
+**Add from selected** opens the same editor as manual add, but it pre-fills the original report/export name from the selected row. It also starts with the same name as the common name and **All references** selected, so you only change the fields that need to be different.
+
 The editor includes these fields:
 
 - **Original report/export name**
@@ -87,6 +89,14 @@ Choose whether the match applies across the database or only when the report bel
 This field is used when the match is limited to **One reference only**.
 
 Use the exact reference value used in the database/export context.
+
+### Clear, Cancel, and Save match
+
+In the add/edit window:
+
+- **Clear** empties the fields and returns the scope to **All references**. It does not delete saved matches.
+- **Cancel** closes the add/edit window without saving the current entry.
+- **Save match** validates the fields and stores the match in the selected database.
 
 ## Global vs single-reference scope
 
@@ -124,6 +134,28 @@ Reference-specific matches are the safer choice when a short report name is reus
 3. Confirm deletion.
 
 Deleting a match stops Metroliza from using that replacement rule in future work.
+
+## Troubleshooting
+
+### A button is disabled
+
+Disabled buttons usually mean a required selection is missing.
+
+- **Add manually**, **Import CSV**, and **Export CSV** need a selected database.
+- **Add from selected** needs a selected database and a selected row in **Report/export names in this database**.
+- **Edit selected** and **Delete selected** need a selected row in **Saved name matches**.
+
+If the database path is empty, click **Browse DB** first.
+
+### The search shows no report/export names
+
+If the message says no names match the current search, clear or shorten the search text.
+
+If the message says no report/export names were found in the database, check that you selected the database created by Parsing and that it contains parsed measurement rows. If the database is empty, parse reports first and reopen this dialog.
+
+### Add from selected does nothing
+
+Select one row in **Report/export names in this database** first. If no rows are visible, clear the search or choose the correct database.
 
 ## Import/export CSV
 
