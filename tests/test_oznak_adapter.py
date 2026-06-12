@@ -839,6 +839,73 @@ def test_raw_sql_validator_allows_schema_qualified_objects_in_sql_mode():
     assert oznak_adapter._validate_raw_select_sql(sql_text) == sql_text
 
 
+def test_fetch_source_sql_raw_contract_rejects_write_statement_before_request(monkeypatch):
+    calls = {"request": 0, "fetch": 0}
+
+    class FakeDatabaseProfile:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeRawSqlRequest:
+        def __init__(self, **kwargs):
+            calls["request"] += 1
+            self.__dict__.update(kwargs)
+
+    class FakeCredentialProvider:
+        def __init__(self, mapping):
+            self.mapping = mapping
+
+    def fake_fetch_raw_sql_records(*_args, **_kwargs):
+        calls["fetch"] += 1
+        return {"rows": []}
+
+    oznak_module = types.ModuleType("oznak")
+    oznak_module.DatabaseProfile = FakeDatabaseProfile
+    oznak_module.FetchRequest = object
+    oznak_module.FetchResult = object
+    oznak_module.MappingCredentialProvider = FakeCredentialProvider
+    oznak_module.RawSqlRequest = FakeRawSqlRequest
+    oznak_module.fetch_raw_sql_records = fake_fetch_raw_sql_records
+
+    fetcher_module = types.ModuleType("oznak.fetcher")
+
+    def _fake_import(module_name: str):
+        if module_name == "oznak":
+            return oznak_module
+        if module_name == "oznak.fetcher":
+            return fetcher_module
+        if module_name == "oznak.raw_sql":
+            return oznak_module
+        raise AssertionError(f"Unexpected import: {module_name}")
+
+    monkeypatch.setattr(oznak_adapter.importlib, "import_module", _fake_import)
+
+    result = oznak_adapter.fetch_oznak_records_for_source_sql(
+        types.SimpleNamespace(
+            id=12,
+            profile_name="Assembly MES",
+            source_db_alias="assembly_mes",
+            database_type="mssql",
+            host="mes.example.invalid",
+            port=1433,
+            database_name="plantdb",
+            source_object_name="events",
+            allowed_columns=("event_id", "reference"),
+            timestamp_column=None,
+            default_pagination_column="event_id",
+        ),
+        username="operator",
+        password="secret",
+        sql_text="DELETE FROM events",
+        limit=5,
+        mode="preview",
+    )
+
+    assert result.implemented is True
+    assert "Only SELECT queries are supported" in (result.error or "")
+    assert calls == {"request": 0, "fetch": 0}
+
+
 def test_fetch_source_sql_fallback_rejects_write_statement(monkeypatch):
     class FakeDatabaseProfile:
         def __init__(self, **kwargs):

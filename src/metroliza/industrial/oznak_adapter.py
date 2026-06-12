@@ -1217,6 +1217,7 @@ def fetch_oznak_records_for_source_sql(
                 "metadata": {"metroliza_source_profile_id": _profile_value(profile, "id", "profile_id")},
             },
         )
+        _validate_raw_select_sql(sql_text)
         request = None
         if raw_contract_available:
             request = _construct_with_supported_kwargs(
@@ -1229,8 +1230,6 @@ def fetch_oznak_records_for_source_sql(
                     "mode": mode,
                 },
             )
-        else:
-            _validate_raw_select_sql(sql_text)
         credential_provider = credential_provider_type({alias: (username, password)})
     except Exception as exc:
         return OznakAdapterFetchResult(
