@@ -964,8 +964,11 @@ def fetch_oznak_records_for_source_profile(
     pagination_column = _profile_value(profile, "default_pagination_column", "pagination_column")
     raw_order_by_enabled = _profile_value(profile, "order_by_enabled")
     order_by_enabled = True if raw_order_by_enabled is None else bool(raw_order_by_enabled)
-    allowed_columns = _normalize_runtime_columns(
+    configured_columns = _normalize_runtime_columns(
         tuple(_profile_value(profile, "allowed_columns") or ()),
+    )
+    validation_columns = _normalize_runtime_columns(
+        configured_columns,
         timestamp_column,
         pagination_column,
         reference_filter_column,
@@ -982,7 +985,7 @@ def fetch_oznak_records_for_source_profile(
                 "port": int(port) if port is not None else 0,
                 "database": database_name,
                 "table": table_name,
-                "allowed_columns": allowed_columns,
+                "allowed_columns": validation_columns,
                 "timestamp_column": timestamp_column,
                 "pagination_column": pagination_column,
                 "display_name": _profile_value(profile, "profile_name"),
@@ -992,7 +995,7 @@ def fetch_oznak_records_for_source_profile(
                 "metadata": {"metroliza_source_profile_id": _profile_value(profile, "id", "profile_id")},
             },
         )
-        fetch_columns = allowed_columns or None
+        fetch_columns = configured_columns or None
         credential_provider = credential_provider_type({alias: (username, password)})
     except Exception as exc:
         return OznakAdapterFetchResult(

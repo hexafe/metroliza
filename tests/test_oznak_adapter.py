@@ -342,6 +342,12 @@ def test_fetch_source_profile_builds_current_public_oznak_contract(monkeypatch):
     assert captured["request"]["limit"] == 25
     assert captured["request"]["timeout_seconds"] == 10
     assert captured["request"]["order_by_enabled"] is False
+    assert captured["request"]["columns"] == (
+        "event_id",
+        "event_at",
+        "reference",
+        "station",
+    )
     assert captured["request"]["filters"][0].column == "reference"
     assert captured["request"]["filters"][0].operator == "IN"
     assert captured["request"]["filters"][0].value == ("REF-77", "REF-78")
@@ -352,6 +358,106 @@ def test_fetch_source_profile_builds_current_public_oznak_contract(monkeypatch):
     assert captured["cancellation_token"] is token
     assert progress_messages == ["Fetched 1 row"]
     assert result.diagnostics["order_by_enabled"] is False
+
+
+def test_fetch_source_profile_keeps_unrestricted_projection_for_empty_allowed_columns(
+    monkeypatch,
+):
+    captured = {}
+
+    class FakeDatabaseProfile:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+            captured["profile"] = kwargs
+
+    class FakeFetchRequest:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+            captured["request"] = kwargs
+
+    class FakeCredentialProvider:
+        def __init__(self, mapping):
+            self.mapping = mapping
+
+    class FakeQueryFilter:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeResult:
+        data = [
+            {
+                "event_id": "ROW-1",
+                "event_at": "2026-05-10T12:30:00Z",
+                "reference": "REF-1",
+                "station": "S1",
+                "length_mm": 10.5,
+            }
+        ]
+        source_results = ()
+        warnings = ()
+        errors = ()
+        row_count = 1
+        has_errors = False
+        partial_success = False
+
+    def fake_fetch_records(request, **_kwargs):
+        captured["fetch_request"] = request
+        return FakeResult()
+
+    oznak_module = types.ModuleType("oznak")
+    oznak_module.__version__ = "0.1.0"
+    oznak_module.DatabaseProfile = FakeDatabaseProfile
+    oznak_module.FetchRequest = FakeFetchRequest
+    oznak_module.FetchResult = object
+    oznak_module.MappingCredentialProvider = FakeCredentialProvider
+    oznak_module.QueryFilter = FakeQueryFilter
+    oznak_module.fetch_records = fake_fetch_records
+
+    fetcher_module = types.ModuleType("oznak.fetcher")
+    fetcher_module.fetch_records = fake_fetch_records
+
+    def _fake_import(module_name: str):
+        if module_name == "oznak":
+            return oznak_module
+        if module_name == "oznak.fetcher":
+            return fetcher_module
+        raise AssertionError(f"Unexpected import: {module_name}")
+
+    monkeypatch.setattr(oznak_adapter.importlib, "import_module", _fake_import)
+    profile = types.SimpleNamespace(
+        id=12,
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+        source_object_name="events",
+        allowed_columns=(),
+        timestamp_column="event_at",
+        default_pagination_column="event_id",
+    )
+
+    result = oznak_adapter.fetch_oznak_records_for_source_profile(
+        profile,
+        username="operator",
+        password="secret",
+        limit=10,
+        reference_filter_column="reference",
+        reference_values=("REF-1",),
+        query_filters=(IndustrialQueryFilter("station", "=", ("S1",)),),
+    )
+
+    assert result.error is None
+    assert result.row_count == 1
+    assert captured["profile"]["allowed_columns"] == (
+        "event_at",
+        "event_id",
+        "reference",
+        "station",
+    )
+    assert captured["request"]["columns"] is None
+    assert result.records[0]["length_mm"] == 10.5
 
 
 def test_fetch_source_profile_deduplicates_reference_query_filter_and_keeps_generic_filters(

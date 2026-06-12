@@ -211,6 +211,20 @@ def test_dashboard_visual_runtime_reference_reset_uses_embedded_initial_settings
     )
 
 
+def test_dashboard_visual_runtime_keeps_defaults_when_sanitizing_partial_state() -> None:
+    runtime_js = render_dashboard_visual_runtime_js(
+        initial_settings={
+            "reference_lines": {
+                "lsl": {"color": "#123456"},
+            }
+        }
+    )
+
+    assert "const state = Object.assign({}, defaults, source);" in runtime_js
+    assert "const state = Object.assign(defaults, source);" not in runtime_js
+    assert "defaults.reference_lines[key]" in runtime_js
+
+
 def test_dashboard_visual_runtime_recipes_update_controls_and_palette_preview() -> None:
     runtime_js = render_dashboard_visual_runtime_js()
 

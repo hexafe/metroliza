@@ -780,7 +780,7 @@ def render_dashboard_visual_runtime_js(
       const sanitizeVisualState = (value) => {{
         const defaults = clonePlotlySpec({config_var}.defaults);
         const source = (value && typeof value === 'object') ? value : {{}};
-        const state = Object.assign(defaults, source);
+        const state = Object.assign({{}}, defaults, source);
         const recipeIds = Array.isArray({config_var}.recipeIds)
           ? {config_var}.recipeIds
           : ['auto', 'distinct', 'print', 'custom'];

@@ -120,7 +120,7 @@ class IndustrialSyncDialog(QDialog):
         self.password_edit.setPlaceholderText("local credential store or session password")
 
         self.mode_tabs = QTabWidget()
-        self.mode_tabs.setFixedHeight(300)
+        self.mode_tabs.setFixedHeight(280)
         self.edit_filter_button = QPushButton("Edit filters...")
         self.sql_query_edit = QPlainTextEdit()
         self.sql_query_edit.setFixedHeight(90)
