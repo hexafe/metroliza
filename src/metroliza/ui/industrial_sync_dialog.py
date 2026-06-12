@@ -407,6 +407,8 @@ class IndustrialSyncDialog(QDialog):
         profile = self.current_profile()
         if profile is None:
             raise ValueError("Create or select a production source before fetching rows.")
+        if not profile.allowed_columns:
+            return profile
         required_columns: list[str] = []
         if self.filter_state.references:
             required_columns.append(self.filter_state.reference_column)

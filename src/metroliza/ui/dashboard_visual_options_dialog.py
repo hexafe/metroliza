@@ -1001,8 +1001,9 @@ class DashboardVisualOptionsDialog(QDialog):
         match = name and re.match(r"^(?:\((.+?)\)\s*)?(Min|Q1|Median|Mean|Q3|Max)=", name, re.IGNORECASE)
         if match:
             group = str(match.group(1) or "")
-            stat = str(match.group(2) or "").casefold()
-            key = f"{group.casefold()}::{stat}" if group else stat
+            stat = _preview_label_key(str(match.group(2) or ""))
+            group_key = _preview_label_key(group)
+            key = f"{group_key}::{stat}" if group_key else stat
             return {
                 "target": f"stat:{key}",
                 "role": "stat",
@@ -1017,9 +1018,10 @@ class DashboardVisualOptionsDialog(QDialog):
                 "style": target_style,
             }
         if name:
-            role = "model_curve" if "curve" in name.casefold() or "kde" in name.casefold() else "series"
+            key = _preview_label_key(name)
+            role = "model_curve" if "curve" in key or "kde" in key else "series"
             return {
-                "target": f"{role}:{name.casefold()}",
+                "target": f"{role}:{key}",
                 "role": role,
                 "label": name,
                 "trace": index,
@@ -1453,8 +1455,8 @@ class DashboardVisualOptionsDialog(QDialog):
         )
 
     def _stat_override_key(self, target: Mapping[str, Any]) -> str:
-        stat = str(target.get("stat") or "").casefold()
-        group = str(target.get("group") or "").casefold()
+        stat = _preview_label_key(str(target.get("stat") or ""))
+        group = _preview_label_key(str(target.get("group") or ""))
         return f"{group}::{stat}" if group else stat
 
     def _schedule_preview(self) -> None:

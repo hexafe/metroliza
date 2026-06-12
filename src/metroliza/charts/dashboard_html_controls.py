@@ -1319,10 +1319,11 @@ def render_dashboard_visual_runtime_js(
 
       const chartKindForSpec = (spec) => {{
         const metadata = (spec.metadata && typeof spec.metadata === 'object') ? spec.metadata : {{}};
-        const kind = String(metadata.kind || '').toLowerCase();
-        if (kind) return kind;
         const traces = Array.isArray(spec.data) ? spec.data : [];
         const histogramCount = traces.filter((trace) => ['histogram', 'bar'].includes(String(trace.type || '').toLowerCase())).length;
+        const kind = String(metadata.kind || '').toLowerCase();
+        if (kind === 'histogram' && histogramCount > 1) return 'grouped_histogram';
+        if (kind) return kind;
         if (histogramCount > 1) return 'grouped_histogram';
         if (histogramCount === 1) return 'histogram';
         if (traces.some((trace) => String(trace.type || '').toLowerCase() === 'violin')) return 'distribution';

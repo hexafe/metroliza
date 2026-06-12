@@ -952,7 +952,10 @@ if (window.qt && window.QWebChannel && qt.webChannelTransport) {
     metrolizaVisualBridge = channel.objects.metrolizaVisualBridge || null;
   });
 }
-const targetPart = (value) => String(value || '').trim().toLowerCase();
+const targetPart = (value) => String(value || '')
+  .replace(/\\s*\\(n\\s*=\\s*\\d+\\)\\s*$/i, '')
+  .trim()
+  .toLowerCase();
 const statTargetKey = (group, stat) => {
   const groupKey = targetPart(group);
   const statKey = targetPart(stat);

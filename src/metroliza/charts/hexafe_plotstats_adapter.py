@@ -1766,7 +1766,7 @@ def _stagger_histogram_x_annotations(spec: Mapping[str, Any]) -> None:
 
 def _is_histogram_plotly_spec(spec: Mapping[str, Any]) -> bool:
     metadata = spec.get("metadata") if isinstance(spec.get("metadata"), Mapping) else {}
-    if str(metadata.get("kind") or "").strip().casefold() == "histogram":
+    if str(metadata.get("kind") or "").strip().casefold() in {"histogram", "grouped_histogram"}:
         return True
     if str(metadata.get("histogram_y_mode") or "").strip():
         return True

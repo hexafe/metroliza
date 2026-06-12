@@ -7,6 +7,7 @@ from types import ModuleType, SimpleNamespace
 from modules.hexafe_plotstats_adapter import (
     PLOTSTATS_EXPORT_CHARTS_ENV_VAR,
     _fallback_dashboard_plotly_spec,
+    _is_histogram_plotly_spec,
     build_chart_artifact,
     build_dashboard_plotly_spec,
     build_histogram_stats_table,
@@ -368,6 +369,10 @@ def test_plotstats_dashboard_spec_marks_multi_group_histograms(monkeypatch) -> N
 
     assert spec is not None
     assert spec["metadata"]["kind"] == "grouped_histogram"
+
+
+def test_histogram_spec_detection_accepts_grouped_histogram_metadata() -> None:
+    assert _is_histogram_plotly_spec({"data": [], "metadata": {"kind": "grouped_histogram"}})
 
 
 def test_plotstats_dashboard_spec_promotes_valued_histogram_reference_traces(monkeypatch) -> None:

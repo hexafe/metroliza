@@ -287,6 +287,7 @@ def test_dashboard_visual_runtime_carries_population_focus_contract() -> None:
     assert "state.opacity" not in runtime_js
     assert "data-visual-opacity" not in render_dashboard_visual_dialog()
     assert "opacity[selectedTargetChartKind(target)] = populationStyle.opacity;" in runtime_js
+    assert "if (kind === 'histogram' && histogramCount > 1) return 'grouped_histogram';" in runtime_js
     assert "if (['histogram', 'grouped_histogram', 'distribution', 'iqr', 'scatter', 'trend', 'model_curve'].includes(raw))" in runtime_js
     assert "const resetSelectedSeriesPaletteEntry" in runtime_js
     assert "resetSelectedSeriesPaletteEntry(state, embedded, target);" in runtime_js

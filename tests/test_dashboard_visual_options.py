@@ -505,6 +505,7 @@ def test_dashboard_visual_preview_bridge_uses_dialog_stat_target_key() -> None:
     )
 
     assert "const targetPart" in html
+    assert "replace(/\\s*\\(n\\s*=\\s*\\d+\\)\\s*$/i, '')" in html
     assert "const statTargetKey" in html
     assert "const fallbackRoleForName" in html
     assert "target: `stat:${statTargetKey(group, statName)}`" in html

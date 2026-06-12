@@ -939,9 +939,9 @@ def test_dashboard_visual_dialog_target_extraction_handles_meta_fallbacks_and_du
                     "meta": {"dashboard_visual_target": "series:raw"},
                 },
                 {"name": "LSL=1.0", "line": {"color": "#aa0000"}},
-                {"name": "(Group 1) Mean=3.0", "line": {"color": "#00aa00"}},
+                {"name": "(Group 1 (n=4)) Mean=3.0", "line": {"color": "#00aa00"}},
                 {"name": "KDE curve", "line": {"color": "#0000aa"}},
-                {"name": "Measurements", "type": "bar", "marker": {"pattern": {"shape": "/"}}},
+                {"name": "Group 2 (n=8)", "type": "bar", "marker": {"pattern": {"shape": "/"}}},
                 {"name": ""},
             ]
         }
@@ -955,11 +955,12 @@ def test_dashboard_visual_dialog_target_extraction_handles_meta_fallbacks_and_du
             "reference:lsl",
             "stat:group 1::mean",
             "model_curve:kde curve",
-            "series:measurements",
+            "series:group 2",
         ]
         assert targets[0]["capabilities"] == ["color", "opacity"]
         assert targets[1]["role"] == "reference"
-        assert targets[2]["group"] == "Group 1"
+        assert targets[2]["group"] == "Group 1 (n=4)"
+        assert dialog._stat_override_key(targets[2]) == "group 1::mean"
         assert targets[3]["role"] == "model_curve"
         assert "pattern_shape" in targets[4]["capabilities"]
     finally:

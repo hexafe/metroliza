@@ -11,7 +11,7 @@ try:
     from modules.industrial_data_repository import IndustrialDataRepository
     from modules.industrial_source_config import build_source_profile, upsert_source_profile_in_config
     from modules.industrial_sync_dialog import IndustrialSyncDialog
-    from modules.industrial_workflow_state import IndustrialFilterState
+    from modules.industrial_workflow_state import IndustrialFilterState, IndustrialQueryFilter
 except Exception as exc:  # pragma: no cover - depends on local Qt runtime availability.
     QCloseEvent = None
     QApplication = None
@@ -23,6 +23,7 @@ except Exception as exc:  # pragma: no cover - depends on local Qt runtime avail
     upsert_source_profile_in_config = None
     IndustrialSyncDialog = None
     IndustrialFilterState = None
+    IndustrialQueryFilter = None
     PYQT_IMPORT_ERROR = exc
 else:
     PYQT_IMPORT_ERROR = None
@@ -265,6 +266,39 @@ def test_sync_dialog_does_not_add_default_reference_column_without_filter_values
     runtime_profile = dialog._profile_for_current_filter()
 
     assert runtime_profile.allowed_columns == ("event_id", "station")
+    dialog.close()
+
+
+def test_sync_dialog_keeps_unrestricted_profile_unrestricted_with_filters(tmp_path):
+    _app()
+    db_path = str(tmp_path / "industrial.db")
+    repository = IndustrialDataRepository(db_path)
+    repository.upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="events",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+        allowed_columns=(),
+        default_pagination_column="event_id",
+    )
+
+    dialog = IndustrialSyncDialog(
+        db_file=db_path,
+        filter_state=IndustrialFilterState(
+            reference_column="reference",
+            references=("REF-1",),
+            query_filters=(IndustrialQueryFilter("station", "=", ("S1",)),),
+        ),
+    )
+    runtime_profile = dialog._profile_for_current_filter()
+    stored_profile = repository.list_source_profiles()[0]
+
+    assert runtime_profile.allowed_columns == ()
+    assert stored_profile.allowed_columns == ()
     dialog.close()
 
 
