@@ -5,7 +5,7 @@ from __future__ import annotations
 from metroliza.reports.db import run_transaction_with_retry
 
 
-SCHEMA_VERSION = "industrial_data_v3"
+SCHEMA_VERSION = "industrial_data_v4"
 
 SYNC_RUN_STATUSES = ("running", "succeeded", "completed_with_warnings", "failed", "cancelled")
 JOIN_MATCH_MODES = ("exact", "time_window")
@@ -121,6 +121,113 @@ SCHEMA_TABLE_STATEMENTS = (
         FOREIGN KEY (join_rule_id) REFERENCES industrial_join_rules(id) ON DELETE SET NULL,
         UNIQUE(report_id, measurement_id, industrial_record_id, join_rule_id)
     )""",
+    """CREATE TABLE IF NOT EXISTS industrial_stream_offsets (
+        id INTEGER PRIMARY KEY,
+        source_profile_id INTEGER NOT NULL,
+        stream_key TEXT NOT NULL,
+        cursor_column TEXT NOT NULL,
+        cursor_value TEXT,
+        event_time_watermark TEXT,
+        last_success_at TEXT,
+        last_error TEXT,
+        lag_seconds REAL,
+        status TEXT NOT NULL DEFAULT 'idle',
+        FOREIGN KEY (source_profile_id) REFERENCES industrial_source_profiles(id) ON DELETE CASCADE,
+        UNIQUE(source_profile_id, stream_key)
+    )""",
+    """CREATE TABLE IF NOT EXISTS industrial_signal_definitions (
+        id INTEGER PRIMARY KEY,
+        source_profile_id INTEGER NOT NULL,
+        signal_key TEXT NOT NULL,
+        metric_name TEXT NOT NULL,
+        unit TEXT,
+        nominal REAL,
+        lsl REAL,
+        usl REAL,
+        lower_warning REAL,
+        upper_warning REAL,
+        segment_fields_json TEXT NOT NULL DEFAULT '[]',
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (source_profile_id) REFERENCES industrial_source_profiles(id) ON DELETE CASCADE,
+        UNIQUE(source_profile_id, signal_key)
+    )""",
+    """CREATE TABLE IF NOT EXISTS industrial_samples (
+        id INTEGER PRIMARY KEY,
+        source_profile_id INTEGER NOT NULL,
+        signal_id INTEGER NOT NULL,
+        source_record_key TEXT NOT NULL,
+        event_time TEXT NOT NULL,
+        ingest_time TEXT NOT NULL,
+        metric_name TEXT NOT NULL,
+        value REAL NOT NULL,
+        reference TEXT,
+        part_number TEXT,
+        revision TEXT,
+        station TEXT,
+        line TEXT,
+        work_order TEXT,
+        batch_lot TEXT,
+        segment_key_json TEXT NOT NULL DEFAULT '{}',
+        quality_flags_json TEXT NOT NULL DEFAULT '[]',
+        raw_record_json TEXT,
+        FOREIGN KEY (source_profile_id) REFERENCES industrial_source_profiles(id) ON DELETE CASCADE,
+        FOREIGN KEY (signal_id) REFERENCES industrial_signal_definitions(id) ON DELETE CASCADE,
+        UNIQUE(source_profile_id, signal_id, source_record_key)
+    )""",
+    """CREATE TABLE IF NOT EXISTS industrial_detector_configs (
+        id INTEGER PRIMARY KEY,
+        detector_key TEXT NOT NULL UNIQUE,
+        detector_type TEXT NOT NULL,
+        parameters_json TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+        severity_map_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS industrial_baselines (
+        id INTEGER PRIMARY KEY,
+        signal_id INTEGER NOT NULL,
+        segment_key_json TEXT NOT NULL DEFAULT '{}',
+        baseline_version TEXT NOT NULL,
+        window_start TEXT,
+        window_end TEXT,
+        n INTEGER NOT NULL,
+        mean REAL,
+        std REAL,
+        median REAL,
+        mad REAL,
+        q1 REAL,
+        q3 REAL,
+        iqr REAL,
+        p01 REAL,
+        p99 REAL,
+        model_artifact_id INTEGER,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (signal_id) REFERENCES industrial_signal_definitions(id) ON DELETE CASCADE
+    )""",
+    """CREATE TABLE IF NOT EXISTS industrial_anomaly_events (
+        id INTEGER PRIMARY KEY,
+        sample_id INTEGER NOT NULL,
+        signal_id INTEGER NOT NULL,
+        event_time TEXT NOT NULL,
+        detector_key TEXT NOT NULL,
+        severity TEXT NOT NULL CHECK (severity IN ('info', 'warning', 'major', 'critical')),
+        score REAL NOT NULL,
+        observed_value REAL NOT NULL,
+        expected_value REAL,
+        threshold_json TEXT NOT NULL DEFAULT '{}',
+        explanation TEXT NOT NULL DEFAULT '',
+        context_json TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'acknowledged', 'resolved', 'false_positive')),
+        ack_by TEXT,
+        ack_at TEXT,
+        comment TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (sample_id) REFERENCES industrial_samples(id) ON DELETE CASCADE,
+        FOREIGN KEY (signal_id) REFERENCES industrial_signal_definitions(id) ON DELETE CASCADE
+    )""",
 )
 
 SCHEMA_INDEX_STATEMENTS = (
@@ -137,6 +244,17 @@ SCHEMA_INDEX_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_industrial_join_rules_enabled_priority ON industrial_join_rules(is_enabled, priority)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_link_candidates_record_status ON industrial_link_candidates(industrial_record_id, status)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_link_candidates_report_measurement ON industrial_link_candidates(report_id, measurement_id)",
+    "CREATE INDEX IF NOT EXISTS idx_industrial_stream_offsets_profile_stream ON industrial_stream_offsets(source_profile_id, stream_key)",
+    "CREATE INDEX IF NOT EXISTS idx_industrial_signal_definitions_profile_enabled ON industrial_signal_definitions(source_profile_id, enabled)",
+    "CREATE INDEX IF NOT EXISTS idx_industrial_samples_signal_time ON industrial_samples(signal_id, event_time)",
+    "CREATE INDEX IF NOT EXISTS idx_industrial_samples_profile_time ON industrial_samples(source_profile_id, event_time)",
+    "CREATE INDEX IF NOT EXISTS idx_industrial_samples_profile_signal_time ON industrial_samples(source_profile_id, signal_id, event_time)",
+    "CREATE INDEX IF NOT EXISTS idx_industrial_detector_configs_enabled ON industrial_detector_configs(enabled)",
+    "CREATE INDEX IF NOT EXISTS idx_industrial_baselines_signal_segment_created ON industrial_baselines(signal_id, segment_key_json, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_industrial_anomaly_events_signal_time ON industrial_anomaly_events(signal_id, event_time)",
+    "CREATE INDEX IF NOT EXISTS idx_industrial_anomaly_events_severity_status_time ON industrial_anomaly_events(severity, status, event_time)",
+    "CREATE INDEX IF NOT EXISTS idx_industrial_anomaly_events_detector_time ON industrial_anomaly_events(detector_key, event_time)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_industrial_anomaly_events_sample_detector_unique ON industrial_anomaly_events(sample_id, detector_key)",
 )
 
 
