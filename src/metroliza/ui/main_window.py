@@ -1,5 +1,7 @@
 import base64
 import importlib
+from pathlib import Path
+import tempfile
 from time import perf_counter
 from typing import Callable
 
@@ -7,8 +9,8 @@ from metroliza.app.startup_profile import record_event
 from metroliza.resources.app_assets import encoded_icon
 from metroliza.shared.custom_logger import CustomLogger
 from metroliza.ui.help_menu import build_help_menu
-from PyQt6.QtCore import QByteArray, QTimer
-from PyQt6.QtGui import QAction, QIcon, QPixmap
+from PyQt6.QtCore import QByteArray, QTimer, QUrl
+from PyQt6.QtGui import QAction, QDesktopServices, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
@@ -133,6 +135,7 @@ class MainWindow(QMainWindow):
         self.metadata_enrichment_thread = None
         self.metadata_enrichment_error_message = None
         self.industrial_data_dialog = None
+        self.last_realtime_dashboard_path = None
         self.parser_plugin_wizard_dialog = None
         self.directory = None
         self.db_file = None
@@ -301,6 +304,13 @@ class MainWindow(QMainWindow):
         self.industrial_data_action = QAction("Industrial data...", self)
         self.industrial_data_action.setToolTip("Configure, sync, link, and export cached Oznak industrial data")
         self.industrial_data_action.triggered.connect(self.launch_industrial_data_dialog)
+        self.realtime_monitoring_action = QAction("Real-time Industrial Monitoring...", self)
+        self.realtime_monitoring_action.setToolTip(
+            "Open a read-only dashboard from persisted realtime anomaly events."
+        )
+        self.realtime_monitoring_action.triggered.connect(
+            self.launch_realtime_industrial_monitoring_dashboard
+        )
         self.parser_profiles_action = QAction("Parser profiles...", self)
         self.parser_profiles_action.setToolTip("Create a local handoff folder for a new supplier parser profile")
         self.parser_profiles_action.triggered.connect(self.launch_parser_plugin_wizard)
@@ -308,6 +318,7 @@ class MainWindow(QMainWindow):
         self.tools_menu.addAction(self.csv_summary_action)
         self.tools_menu.addAction(self.enrich_metadata_action)
         self.tools_menu.addAction(self.industrial_data_action)
+        self.tools_menu.addAction(self.realtime_monitoring_action)
         self.tools_menu.addAction(self.parser_profiles_action)
         _, self.help_menu = build_help_menu(
             self,
@@ -592,6 +603,38 @@ class MainWindow(QMainWindow):
 
             self.industrial_data_dialog.raise_()
             self.industrial_data_dialog.activateWindow()
+        except Exception as e:
+            self.log_and_exit(e)
+
+    def launch_realtime_industrial_monitoring_dashboard(self):
+        try:
+            if not self.db_file:
+                self.statusBar().showMessage(
+                    "Select a Metroliza database before opening real-time monitoring.",
+                    5000,
+                )
+                return
+
+            from metroliza.industrial.realtime.realtime_dashboard_html import (
+                write_realtime_dashboard_html,
+            )
+            from metroliza.industrial.realtime.realtime_dashboard_service import (
+                RealtimeDashboardService,
+            )
+
+            snapshot = RealtimeDashboardService(self.db_file).dashboard_snapshot()
+            output_dir = Path(tempfile.gettempdir()) / "metroliza" / "realtime_dashboards"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_path = output_dir / "realtime_industrial_monitoring.html"
+            self.last_realtime_dashboard_path = write_realtime_dashboard_html(snapshot, output_path)
+            opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.last_realtime_dashboard_path)))
+            if opened:
+                self.statusBar().showMessage("Real-time industrial monitoring dashboard opened.", 5000)
+            else:
+                self.statusBar().showMessage(
+                    f"Dashboard written to {self.last_realtime_dashboard_path}",
+                    8000,
+                )
         except Exception as e:
             self.log_and_exit(e)
 
