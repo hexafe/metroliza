@@ -11,7 +11,7 @@ known-good checkpoint.
 
 - Active integration worktree: `/tmp/metroliza-rc2`
 - Active integration branch: `rc2`
-- Current local head: `19ab5d6` (`Allow realtime monitoring without report DB`).
+- Current local head: latest local commit records the temporary realtime DB UX follow-up.
 - Remote status at last update: `rc2` push completed through `dfe988d`; GitHub CI run `27493528691` completed green.
 - Current step in progress: push `19ab5d6` and verify the new GitHub Actions run.
 
@@ -27,7 +27,7 @@ known-good checkpoint.
 | Done | `feature/realtime-industrial-dashboard-docs` | `df959b2` | Added read-only dashboard service/HTML, menu action, operator docs, rollout checklist. |
 | Done | `feature/realtime-industrial-ml-anomaly-rc2` | `4ab5498` | Added optional lazy ML dependencies, features, model registry, isolation forest, online drift, calibration script/tests. |
 | Done | `rc2` hygiene follow-up | `2ba3b40` | Allowed checked-in deterministic realtime CSV fixtures in release hygiene policy. |
-| Done | realtime dashboard temp DB UX follow-up | `19ab5d6` | Removes the accidental Metroliza DB precondition when opening realtime monitoring; defaults to a session temporary SQLite store when no report DB is selected. |
+| Done | realtime dashboard temp DB UX follow-up | `a31de2a` | Removes the accidental Metroliza DB precondition when opening realtime monitoring; defaults to a session temporary SQLite store when no report DB is selected. |
 
 ## Validation Evidence So Far
 
@@ -60,7 +60,7 @@ known-good checkpoint.
 - [x] Check GitHub Actions for the pushed commit until terminal green.
 - [x] Update this checklist with final CI run IDs and conclusions.
 - [x] Validate the temporary realtime DB UX follow-up locally.
-- [ ] Push `19ab5d6` and verify its GitHub Actions run.
+- [ ] Push the temporary realtime DB UX follow-up and verify its GitHub Actions run.
 
 ## Notes For Next Session
 
