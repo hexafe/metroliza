@@ -1,0 +1,190 @@
+"""Validated configuration objects for realtime industrial polling."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field, replace
+from typing import Any, Mapping
+
+from metroliza.industrial.industrial_data_repository import looks_sensitive_key
+from metroliza.industrial.industrial_workflow_state import require_identifier
+
+
+class RealtimeStreamConfigError(ValueError):
+    """Raised when a realtime industrial stream config is invalid or unsafe."""
+
+
+DEFAULT_SEGMENT_FIELDS = ("reference", "part_number", "revision", "station", "line")
+DEFAULT_CONTEXT_FIELDS = (
+    "reference",
+    "part_number",
+    "revision",
+    "station",
+    "line",
+    "work_order",
+    "batch_lot",
+)
+
+
+@dataclass(frozen=True)
+class RealtimePollConfig:
+    """Configuration for one bounded realtime polling stream."""
+
+    source_profile_id: int
+    stream_key: str
+    cursor_column: str
+    event_time_column: str
+    record_key_column: str
+    signal_keys: tuple[str, ...]
+    signal_columns: Mapping[str, str] = field(default_factory=dict)
+    enabled: bool = True
+    polling_interval_seconds: float = 60.0
+    chunk_size: int = 500
+    max_catchup_rows_per_cycle: int = 5_000
+    allowed_lateness_seconds: float = 0.0
+    timeout_seconds: float = 30.0
+    segment_fields: tuple[str, ...] = DEFAULT_SEGMENT_FIELDS
+    context_fields: tuple[str, ...] = DEFAULT_CONTEXT_FIELDS
+    detectors: tuple[str, ...] = ("spec_limits",)
+    fetch_all_confirmed: bool = False
+
+    def validated(self) -> "RealtimePollConfig":
+        """Return a normalized, bounded realtime config or raise a safety error."""
+
+        if int(self.source_profile_id) <= 0:
+            raise RealtimeStreamConfigError("Realtime source profile id must be positive.")
+        if type(self.enabled) is not bool:
+            raise RealtimeStreamConfigError("Realtime enabled setting must be true or false.")
+        if self.fetch_all_confirmed:
+            raise RealtimeStreamConfigError(
+                "Realtime polling never accepts fetch-all confirmation; configure a cursor and limit."
+            )
+        stream_key = _require_simple_identifier("stream key", self.stream_key)
+        cursor_column = _require_simple_identifier("cursor column", self.cursor_column)
+        event_time_column = _require_simple_identifier("event time column", self.event_time_column)
+        record_key_column = _require_simple_identifier("record key column", self.record_key_column)
+        signal_keys = _normalize_identifier_tuple("signal key", self.signal_keys)
+        if not signal_keys:
+            raise RealtimeStreamConfigError("Configure at least one realtime signal key.")
+
+        signal_columns = {
+            signal_key: _require_simple_identifier(
+                f"metric column for signal '{signal_key}'",
+                self.signal_columns.get(signal_key, signal_key),
+            )
+            for signal_key in signal_keys
+        }
+        segment_fields = _normalize_identifier_tuple("segment field", self.segment_fields)
+        context_fields = _normalize_identifier_tuple("context field", self.context_fields)
+        detectors = tuple(str(detector).strip() for detector in self.detectors if str(detector).strip())
+        if not detectors:
+            raise RealtimeStreamConfigError("Configure at least one detector for realtime polling.")
+
+        polling_interval = _positive_float(
+            "polling interval seconds",
+            self.polling_interval_seconds,
+        )
+        chunk_size = _positive_int("chunk size", self.chunk_size)
+        max_catchup = _positive_int("max catchup rows per cycle", self.max_catchup_rows_per_cycle)
+        if max_catchup < chunk_size:
+            raise RealtimeStreamConfigError(
+                "Max catchup rows per cycle must be greater than or equal to chunk size."
+            )
+        allowed_lateness = float(self.allowed_lateness_seconds)
+        if allowed_lateness < 0:
+            raise RealtimeStreamConfigError("Allowed lateness seconds must not be negative.")
+        timeout = _positive_float("timeout seconds", self.timeout_seconds)
+
+        return replace(
+            self,
+            source_profile_id=int(self.source_profile_id),
+            stream_key=stream_key,
+            cursor_column=cursor_column,
+            event_time_column=event_time_column,
+            record_key_column=record_key_column,
+            signal_keys=signal_keys,
+            signal_columns=signal_columns,
+            enabled=bool(self.enabled),
+            polling_interval_seconds=polling_interval,
+            chunk_size=chunk_size,
+            max_catchup_rows_per_cycle=max_catchup,
+            allowed_lateness_seconds=allowed_lateness,
+            timeout_seconds=timeout,
+            segment_fields=segment_fields,
+            context_fields=context_fields,
+            detectors=detectors,
+            fetch_all_confirmed=False,
+        )
+
+    @property
+    def cycle_limit(self) -> int:
+        """Return the enforced per-query row bound for one polling cycle."""
+
+        return min(int(self.chunk_size), int(self.max_catchup_rows_per_cycle))
+
+
+def reject_sensitive_config_payload(payload: Mapping[str, Any]) -> None:
+    """Reject credential-like keys in a user-provided realtime config payload."""
+
+    sensitive_paths = sorted(_sensitive_paths(payload))
+    if sensitive_paths:
+        joined = ", ".join(sensitive_paths)
+        raise RealtimeStreamConfigError(
+            f"Realtime streaming config contains credential-like key(s): {joined}. "
+            "Move credentials to the local credential store or environment variables."
+        )
+
+
+def _require_simple_identifier(field_name: str, value: Any) -> str:
+    text = str(value or "").strip()
+    try:
+        require_identifier(field_name, text)
+    except ValueError as exc:
+        raise RealtimeStreamConfigError(str(exc)) from exc
+    return text
+
+
+def _normalize_identifier_tuple(field_name: str, values: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values or ():
+        text = _require_simple_identifier(field_name, value)
+        if text in seen:
+            continue
+        seen.add(text)
+        normalized.append(text)
+    return tuple(normalized)
+
+
+def _positive_int(field_name: str, value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise RealtimeStreamConfigError(f"Realtime {field_name} must be a positive integer.") from exc
+    if parsed <= 0:
+        raise RealtimeStreamConfigError(f"Realtime {field_name} must be greater than zero.")
+    return parsed
+
+
+def _positive_float(field_name: str, value: Any) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise RealtimeStreamConfigError(f"Realtime {field_name} must be a positive number.") from exc
+    if parsed <= 0:
+        raise RealtimeStreamConfigError(f"Realtime {field_name} must be greater than zero.")
+    return parsed
+
+
+def _sensitive_paths(value: Any, *, prefix: str = "") -> set[str]:
+    found: set[str] = set()
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            key_text = str(key)
+            path = f"{prefix}.{key_text}" if prefix else key_text
+            if looks_sensitive_key(key_text):
+                found.add(path)
+            found.update(_sensitive_paths(nested, prefix=path))
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            found.update(_sensitive_paths(nested, prefix=f"{prefix}[{index}]"))
+    return found

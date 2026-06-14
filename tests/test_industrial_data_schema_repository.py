@@ -152,6 +152,83 @@ def test_source_profile_upsert_list_and_sync_run_lifecycle(tmp_path):
     assert json.loads(diagnostics_json)["trace"][0]["accessToken"] == "<redacted>"
 
 
+def test_sync_payload_redacts_nested_text_values_and_uri_credentials(tmp_path):
+    db_path = str(tmp_path / "industrial.db")
+    repository = IndustrialDataRepository(db_path)
+    profile = repository.upsert_source_profile(
+        profile_key="line-redaction",
+        profile_name="Line Redaction",
+        source_db_alias="plant_redaction",
+        database_type="mysql",
+        source_object_name="events",
+    )
+
+    sync_run_id = repository.create_sync_run(
+        source_profile_id=profile.id,
+        filters={
+            "connection_uri": "mysql://operator:uri-secret@db.example.invalid/processdb",
+            "nested": [
+                {"message": "retry password=plain-secret"},
+                {"note": "token:token-secret api_key=key-secret"},
+            ],
+        },
+        diagnostics={"status": "mssql://reader:start-secret@db.example.invalid/processdb"},
+    )
+    repository.finish_sync_run(
+        sync_run_id=sync_run_id,
+        status="failed",
+        row_count=0,
+        error_summary="failed mysql://reader:error-secret@db.example.invalid/processdb",
+        diagnostics={
+            "events": [
+                {"detail": "passwd=passwd-secret {'clientSecret': 'json-secret'}"},
+                {"uri": "mysql://reader:diag-secret@db.example.invalid/processdb"},
+            ],
+        },
+    )
+
+    with sqlite_connection_scope(db_path) as conn:
+        filters_json, diagnostics_json, error_summary = conn.execute(
+            """
+            SELECT filters_json, diagnostics_json, error_summary
+            FROM industrial_sync_runs
+            WHERE id = ?
+            """,
+            (sync_run_id,),
+        ).fetchone()
+
+    persisted_text = "\n".join((filters_json or "", diagnostics_json or "", error_summary or ""))
+    for secret in (
+        "uri-secret",
+        "plain-secret",
+        "token-secret",
+        "key-secret",
+        "start-secret",
+        "passwd-secret",
+        "json-secret",
+        "diag-secret",
+        "error-secret",
+    ):
+        assert secret not in persisted_text
+
+    filters_payload = json.loads(filters_json)
+    diagnostics_payload = json.loads(diagnostics_json)
+    assert (
+        filters_payload["connection_uri"]
+        == "mysql://operator:<redacted>@db.example.invalid/processdb"
+    )
+    assert filters_payload["nested"][0]["message"] == "retry password=<redacted>"
+    assert filters_payload["nested"][1]["note"] == "token:<redacted> api_key=<redacted>"
+    assert (
+        diagnostics_payload["events"][1]["uri"]
+        == "mysql://reader:<redacted>@db.example.invalid/processdb"
+    )
+    assert diagnostics_payload["events"][0]["detail"] == (
+        "passwd=<redacted> {'clientSecret': '<redacted>'}"
+    )
+    assert error_summary == "failed mysql://reader:<redacted>@db.example.invalid/processdb"
+
+
 def test_finish_sync_run_rejects_non_terminal_running_status(tmp_path):
     db_path = str(tmp_path / "industrial.db")
     repository = IndustrialDataRepository(db_path)

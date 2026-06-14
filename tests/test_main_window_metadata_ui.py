@@ -1,4 +1,6 @@
+from pathlib import Path
 import sys
+import tempfile
 import types
 import unittest
 from unittest.mock import patch
@@ -90,6 +92,67 @@ class TestMainWindowMetadataUi(unittest.TestCase):
 
             action_texts = [action.text() for action in window.tools_menu.actions()]
             self.assertIn("Industrial data...", action_texts)
+        finally:
+            window.close()
+
+    def test_realtime_monitoring_is_tools_action_without_launcher_button(self):
+        window = MainWindow(version_label="test", days_until_expiration=None)
+        try:
+            button_texts = [button.text() for button in window.findChildren(QPushButton)]
+            self.assertNotIn("Real-time Industrial Monitoring", button_texts)
+
+            action_texts = [action.text() for action in window.tools_menu.actions()]
+            self.assertIn("Real-time Industrial Monitoring...", action_texts)
+        finally:
+            window.close()
+
+    def test_realtime_monitoring_dashboard_uses_temporary_session_database_when_none_selected(self):
+        window = MainWindow(version_label="test", days_until_expiration=None)
+        session_db_path = None
+        try:
+            with patch(
+                "metroliza.ui.main_window.QDesktopServices.openUrl",
+                return_value=True,
+            ) as open_url:
+                window.launch_realtime_industrial_monitoring_dashboard()
+
+            open_url.assert_called_once()
+            self.assertIsNotNone(window.last_realtime_dashboard_path)
+            html = Path(window.last_realtime_dashboard_path).read_text(encoding="utf-8")
+            self.assertIn("Real-time Industrial Monitoring", html)
+            self.assertIn('data-section="summary-cards"', html)
+            self.assertIsNotNone(window.last_realtime_dashboard_db_path)
+            session_db_path = Path(window.last_realtime_dashboard_db_path)
+            self.assertTrue(session_db_path.exists())
+            self.assertEqual(session_db_path.suffix, ".sqlite")
+            self.assertIn("temporary session DB", window.statusBar().currentMessage())
+
+            window.close()
+            self.assertFalse(session_db_path.exists())
+        finally:
+            window.close()
+
+    def test_realtime_monitoring_dashboard_generates_static_html_from_selected_database(self):
+        window = MainWindow(version_label="test", days_until_expiration=None)
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                db_path = str(Path(temp_dir) / "monitoring.db")
+                window.set_db_file(db_path)
+
+                with patch(
+                    "metroliza.ui.main_window.QDesktopServices.openUrl",
+                    return_value=True,
+                ) as open_url:
+                    window.launch_realtime_industrial_monitoring_dashboard()
+
+                open_url.assert_called_once()
+                self.assertIsNotNone(window.last_realtime_dashboard_path)
+                self.assertEqual(window.last_realtime_dashboard_db_path, db_path)
+                html = Path(window.last_realtime_dashboard_path).read_text(encoding="utf-8")
+                self.assertIn("Real-time Industrial Monitoring", html)
+                self.assertIn('data-section="summary-cards"', html)
+                self.assertIn("dashboard opened", window.statusBar().currentMessage())
+                self.assertNotIn("temporary", window.statusBar().currentMessage().lower())
         finally:
             window.close()
 

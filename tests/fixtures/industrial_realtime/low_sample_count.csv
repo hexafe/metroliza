@@ -1,0 +1,11 @@
+record_id,process_timestamp,part_number,revision,station,line,metric_value,metric_name,expected_label,event_id,event_time,cycle_time_s
+S1-0001,2026-06-13T10:00:00Z,PN-100,A,S1,L1,100.3,cycle_time_s,low_count,S1-0001,2026-06-13T10:00:00Z,100.3
+S1-0002,2026-06-13T10:01:00Z,PN-100,A,S1,L1,99.7,cycle_time_s,low_count,S1-0002,2026-06-13T10:01:00Z,99.7
+S1-0003,2026-06-13T10:02:00Z,PN-100,A,S1,L1,100.3,cycle_time_s,low_count,S1-0003,2026-06-13T10:02:00Z,100.3
+S1-0004,2026-06-13T10:03:00Z,PN-100,A,S1,L1,99.7,cycle_time_s,low_count,S1-0004,2026-06-13T10:03:00Z,99.7
+S1-0005,2026-06-13T10:04:00Z,PN-100,A,S1,L1,100.3,cycle_time_s,low_count,S1-0005,2026-06-13T10:04:00Z,100.3
+S1-0006,2026-06-13T10:05:00Z,PN-100,A,S1,L1,99.7,cycle_time_s,low_count,S1-0006,2026-06-13T10:05:00Z,99.7
+S1-0007,2026-06-13T10:06:00Z,PN-100,A,S1,L1,100.3,cycle_time_s,low_count,S1-0007,2026-06-13T10:06:00Z,100.3
+S1-0008,2026-06-13T10:07:00Z,PN-100,A,S1,L1,99.7,cycle_time_s,low_count,S1-0008,2026-06-13T10:07:00Z,99.7
+S1-0009,2026-06-13T10:08:00Z,PN-100,A,S1,L1,100.3,cycle_time_s,low_count,S1-0009,2026-06-13T10:08:00Z,100.3
+S1-0010,2026-06-13T10:09:00Z,PN-100,A,S1,L1,99.7,cycle_time_s,low_count,S1-0010,2026-06-13T10:09:00Z,99.7

@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 import tempfile
 from dataclasses import replace
 from pathlib import Path
@@ -62,6 +63,24 @@ SUPPORTED_METADATA_PARSING_MODES = {
     METADATA_PARSING_MODE_LIGHT,
     METADATA_PARSING_MODE_COMPLETE,
 }
+CMM_PROBE_SAMPLE_BYTES = 64 * 1024
+CMM_PROBE_MIN_CONFIDENCE = 80
+CMM_PROBE_HIGH_CONFIDENCE = 95
+CMM_PROBE_EXTENSION_CONFIDENCE = 0
+
+_CMM_PROBE_DIMENSION_PATTERN = re.compile(r"(?im)^\s*DIM(?:ENSION)?S?\s*$")
+_CMM_PROBE_HEADER_PATTERN = re.compile(r"(?m)^\s*#[A-Z0-9 _./:-]{2,}")
+_CMM_PROBE_AXIS_VALUE_PATTERN = re.compile(
+    r"(?i)\b(?:X|Y|Z|TP|D[1-3]?|M)\b(?:\s+[A-Z:+-]+)*\s+-?\d+(?:[.,]\d+)?"
+)
+_CMM_PROBE_MEASUREMENT_MARKERS = (
+    ("nominal", re.compile(r"(?i)\bNOM(?:INAL)?\b")),
+    ("tolerance", re.compile(r"(?i)(?:\+TOL\b|-TOL\b|\bTOL\b)")),
+    ("measured", re.compile(r"(?i)\b(?:MEAS|ACT)\b")),
+    ("deviation", re.compile(r"(?i)\bDEV\b")),
+    ("out_of_tolerance", re.compile(r"(?i)\b(?:OUTTOL|OUT)\b")),
+    ("bonus", re.compile(r"(?i)\bBONUS\b")),
+)
 
 def _resolve_pymupdf_backend_module() -> str | None:
     """Return the import name for a valid PyMuPDF backend, if available."""
@@ -88,25 +107,91 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         capabilities={"ocr_required": False, "table_extraction_mode": "mixed"},
     )
 
+    @staticmethod
+    def _read_probe_text_sample(input_ref: str | Path) -> tuple[str, str | None]:
+        try:
+            with Path(input_ref).open("rb") as handle:
+                sample = handle.read(CMM_PROBE_SAMPLE_BYTES)
+        except OSError:
+            return "", "probe_sample_unavailable"
+
+        if not sample:
+            return "", "probe_sample_empty"
+
+        return sample.decode("utf-8", errors="ignore"), None
+
+    @staticmethod
+    def _score_probe_text_sample(sample_text: str) -> tuple[int, tuple[str, ...]]:
+        reasons: list[str] = []
+        score = 0
+
+        if _CMM_PROBE_DIMENSION_PATTERN.search(sample_text):
+            score += 18
+            reasons.append("dimension_marker")
+
+        if _CMM_PROBE_HEADER_PATTERN.search(sample_text):
+            score += 6
+            reasons.append("measurement_header_marker")
+
+        matched_measurement_markers = [
+            reason for reason, pattern in _CMM_PROBE_MEASUREMENT_MARKERS if pattern.search(sample_text)
+        ]
+        if matched_measurement_markers:
+            score += min(60, len(matched_measurement_markers) * 12)
+            reasons.extend(f"{reason}_marker" for reason in matched_measurement_markers)
+
+        if _CMM_PROBE_AXIS_VALUE_PATTERN.search(sample_text):
+            score += 16
+            reasons.append("axis_value_marker")
+
+        if score >= CMM_PROBE_MIN_CONFIDENCE:
+            return min(CMM_PROBE_HIGH_CONFIDENCE, score), tuple(reasons)
+
+        if reasons:
+            reasons.append("partial_cmm_markers")
+        else:
+            reasons.append("missing_cmm_markers")
+        return CMM_PROBE_EXTENSION_CONFIDENCE, tuple(reasons)
+
     @classmethod
     def probe(cls, input_ref: str | Path, context: ProbeContext) -> ProbeResult:
         """Return parser detection result for a candidate report file."""
 
         path_text = str(input_ref)
-        if path_text.lower().endswith(".pdf"):
+        source_format = (context.source_format or "").strip().lower()
+        if source_format and source_format != "pdf":
             return ProbeResult(
                 plugin_id=cls.manifest.plugin_id,
-                can_parse=True,
-                confidence=100,
-                matched_template_id="default",
-                reasons=("pdf_extension",),
+                can_parse=False,
+                confidence=0,
+                reasons=("unsupported_source_format",),
             )
 
+        if not path_text.lower().endswith(".pdf"):
+            return ProbeResult(
+                plugin_id=cls.manifest.plugin_id,
+                can_parse=False,
+                confidence=0,
+                reasons=("unsupported_extension",),
+            )
+
+        sample_text, sample_issue = cls._read_probe_text_sample(input_ref)
+        if sample_issue:
+            return ProbeResult(
+                plugin_id=cls.manifest.plugin_id,
+                can_parse=False,
+                confidence=CMM_PROBE_EXTENSION_CONFIDENCE,
+                reasons=("pdf_extension", sample_issue),
+            )
+
+        confidence, evidence_reasons = cls._score_probe_text_sample(sample_text)
+        can_parse = confidence >= CMM_PROBE_MIN_CONFIDENCE
         return ProbeResult(
             plugin_id=cls.manifest.plugin_id,
-            can_parse=False,
-            confidence=0,
-            reasons=("unsupported_extension",),
+            can_parse=can_parse,
+            confidence=confidence,
+            matched_template_id="default" if can_parse else None,
+            reasons=("pdf_extension", *evidence_reasons),
         )
 
     def __init__(

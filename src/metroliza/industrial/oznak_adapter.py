@@ -47,6 +47,18 @@ _BLOCKED_RAW_SQL_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bFOR\s+UPDATE\b", flags=re.IGNORECASE), "FOR UPDATE"),
     (re.compile(r"\bLOCK\s+IN\s+SHARE\s+MODE\b", flags=re.IGNORECASE), "LOCK IN SHARE MODE"),
 )
+_RAW_SQL_DIAGNOSTIC_SQL_KEYS = frozenset(
+    {
+        "sql",
+        "sqltext",
+        "rawsql",
+        "rawquery",
+        "query",
+        "querytext",
+        "statement",
+        "statementtext",
+    }
+)
 
 _ROW_KEY_ALIASES: dict[str, tuple[str, ...]] = {
     "source_primary_key": ("source_primary_key", "id", "pk", "row_id", "record_id", "external_id"),
@@ -451,6 +463,38 @@ def _validate_raw_select_sql(sql_text: str) -> str:
         if pattern.search(scrubbed):
             raise ValueError(f"SQL query contains unsupported read-lock or write-output clause: {label}.")
     return normalized
+
+
+def _raw_sql_query_summary(profile: Any, *, mode: str, limit: int | None) -> str:
+    alias = str(_profile_value(profile, "source_db_alias", "database_alias", "alias") or "").strip()
+    database_type = str(_profile_value(profile, "database_type", "dialect") or "unknown").strip()
+    normalized_mode = "preview" if str(mode or "").strip().lower() == "preview" else "fetch"
+    row_limit = int(limit) if limit is not None else None
+    limit_summary = "all rows" if row_limit is None else f"limit {row_limit}"
+    return f"raw SQL {normalized_mode} on {alias or 'source'} ({database_type or 'unknown'}, {limit_summary})"
+
+
+def _scrub_raw_sql_diagnostics(value: Any, *, query_summary: str) -> Any:
+    if isinstance(value, Mapping):
+        scrubbed: dict[str, Any] = {}
+        for key, nested in value.items():
+            key_text = str(key)
+            compact_key = re.sub(r"[^a-z0-9]+", "", key_text.lower())
+            if key_text == "query_summary":
+                scrubbed[key_text] = query_summary
+            elif compact_key in _RAW_SQL_DIAGNOSTIC_SQL_KEYS:
+                scrubbed[key_text] = "<redacted>"
+            else:
+                scrubbed[key_text] = _scrub_raw_sql_diagnostics(
+                    nested,
+                    query_summary=query_summary,
+                )
+        return scrubbed
+    if isinstance(value, list):
+        return [_scrub_raw_sql_diagnostics(item, query_summary=query_summary) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_scrub_raw_sql_diagnostics(item, query_summary=query_summary) for item in value)
+    return value
 
 
 def _raise_if_cancelled(cancellation_token: Any) -> None:
@@ -1277,10 +1321,12 @@ def fetch_oznak_records_for_source_sql(
         record_batch_callback(records)
         streamed_to_callback = True
         records = ()
+    query_summary = _raw_sql_query_summary(profile, mode=mode, limit=limit)
     diagnostics = {
         "stage": "mapped",
         "fetch_mode": "sql",
         "sql_hash": hashlib.sha256(str(sql_text or "").encode("utf-8")).hexdigest(),
+        "query_summary": query_summary,
         "sql_limit": limit,
         "sql_operation_mode": mode,
         "raw_sql_contract": "oznak" if raw_contract_available else "metroliza_engine_fallback",
@@ -1288,6 +1334,8 @@ def fetch_oznak_records_for_source_sql(
         "streamed_to_callback": streamed_to_callback,
     }
     diagnostics.update(_fetch_result_diagnostics(payload))
+    diagnostics["query_summary"] = query_summary
+    diagnostics = _scrub_raw_sql_diagnostics(diagnostics, query_summary=query_summary)
     errors = diagnostics.get("errors") or ()
     warnings = diagnostics.get("warnings") or ()
     error = "; ".join(str(item) for item in errors) if errors and not records else None

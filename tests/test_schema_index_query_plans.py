@@ -215,6 +215,17 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
                 'idx_industrial_join_rules_enabled_priority',
                 'idx_industrial_link_candidates_record_status',
                 'idx_industrial_link_candidates_report_measurement',
+                'idx_industrial_stream_offsets_profile_stream',
+                'idx_industrial_signal_definitions_profile_enabled',
+                'idx_industrial_samples_signal_time',
+                'idx_industrial_samples_profile_time',
+                'idx_industrial_samples_profile_signal_time',
+                'idx_industrial_detector_configs_enabled',
+                'idx_industrial_baselines_signal_segment_created',
+                'idx_industrial_anomaly_events_signal_time',
+                'idx_industrial_anomaly_events_severity_status_time',
+                'idx_industrial_anomaly_events_detector_time',
+                'idx_industrial_anomaly_events_sample_detector_unique',
             }
             self.assertEqual(actual_index_names, expected_index_names)
 

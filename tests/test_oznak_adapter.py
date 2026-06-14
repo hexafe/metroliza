@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import types
 
 import pytest
@@ -589,8 +590,11 @@ def test_fetch_source_sql_builds_raw_sql_contract(monkeypatch):
                 row_count=1,
                 elapsed_seconds=0.1,
                 message="Fetched 1 row",
-                query_summary="raw SQL preview",
-                metadata={"mode": "preview"},
+                query_summary="SELECT event_id FROM events WHERE token = 'raw-sql-secret'",
+                metadata={
+                    "mode": "preview",
+                    "sql_text": "SELECT event_id FROM events WHERE token = 'raw-sql-secret'",
+                },
             ),
         )
         warnings = ()
@@ -677,6 +681,14 @@ def test_fetch_source_sql_builds_raw_sql_contract(monkeypatch):
     assert result.diagnostics["fetch_mode"] == "sql"
     assert result.diagnostics["sql_limit"] == 5
     assert "sql_hash" in result.diagnostics
+    assert result.diagnostics["query_summary"] == "raw SQL preview on assembly_mes (mssql, limit 5)"
+    assert result.diagnostics["source_results"][0]["query_summary"] == (
+        "raw SQL preview on assembly_mes (mssql, limit 5)"
+    )
+    assert result.diagnostics["source_results"][0]["metadata"]["sql_text"] == "<redacted>"
+    diagnostics_text = json.dumps(result.diagnostics)
+    assert "SELECT event_id" not in diagnostics_text
+    assert "raw-sql-secret" not in diagnostics_text
 
 
 def test_fetch_source_sql_uses_engine_fallback_when_raw_contract_missing(monkeypatch):

@@ -222,6 +222,8 @@ def _redact_sensitive_payload(value: Any) -> Any:
         return [_redact_sensitive_payload(item) for item in value]
     if isinstance(value, tuple):
         return tuple(_redact_sensitive_payload(item) for item in value)
+    if isinstance(value, str):
+        return redact_sensitive_text(value, max_len=None)
     return value
 
 

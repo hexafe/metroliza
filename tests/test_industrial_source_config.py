@@ -236,6 +236,34 @@ databases:
     assert "options.nested.refreshToken" in message
 
 
+def test_source_config_rejects_streaming_credential_like_keys_on_existing_profile(tmp_path):
+    config_path = tmp_path / "industrial_sources.yaml"
+    config_path.write_text(
+        """
+databases:
+  line_a:
+    type: mysql
+    host: db.example.invalid
+    port: 3306
+    database: processdb
+    table: events
+    streaming:
+      consumers:
+        - api_key: should-not-be-here
+      options:
+        secretName: also-secret
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(IndustrialSourceConfigError) as excinfo:
+        load_source_profiles_from_config(config_path)
+
+    message = str(excinfo.value)
+    assert "streaming.consumers[0].api_key" in message
+    assert "streaming.options.secretName" in message
+
+
 def test_local_credential_store_round_trip_uses_user_env_file(tmp_path):
     credential_path = tmp_path / "industrial_credentials.env"
     username_key, password_key = credential_env_keys("assembly_mes")

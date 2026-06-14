@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""Replay CSV industrial samples into the realtime anomaly foundation."""
+
+from __future__ import annotations
+
+import argparse
+from collections.abc import Sequence
+
+from metroliza.industrial.realtime.replay import ReplayRequest, replay_industrial_stream
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--input", required=True)
+    parser.add_argument("--db", required=True)
+    parser.add_argument("--source-profile-id", required=True, type=int)
+    parser.add_argument("--signal-key", required=True)
+    parser.add_argument("--metric-column", required=True)
+    parser.add_argument("--event-time-column", required=True)
+    parser.add_argument("--record-key-column", required=True)
+    parser.add_argument("--detectors", default="spec_limits")
+    parser.add_argument("--limit", type=int)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--lsl", type=float)
+    parser.add_argument("--usl", type=float)
+    parser.add_argument("--lower-warning", type=float)
+    parser.add_argument("--upper-warning", type=float)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    summary = replay_industrial_stream(
+        ReplayRequest(
+            input_file=args.input,
+            database=args.db,
+            source_profile_id=args.source_profile_id,
+            signal_key=args.signal_key,
+            metric_column=args.metric_column,
+            event_time_column=args.event_time_column,
+            record_key_column=args.record_key_column,
+            detectors=tuple(part.strip() for part in args.detectors.split(",") if part.strip()),
+            limit=args.limit,
+            dry_run=args.dry_run,
+            lsl=args.lsl,
+            usl=args.usl,
+            lower_warning=args.lower_warning,
+            upper_warning=args.upper_warning,
+        )
+    )
+    for line in summary.as_lines():
+        print(line)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

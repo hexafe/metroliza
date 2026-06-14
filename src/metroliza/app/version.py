@@ -1,11 +1,25 @@
-RELEASE_VERSION = "2026.05rc5"
-VERSION_DATE = "260612"
+RELEASE_VERSION = "2026.06rc1"
+VERSION_DATE = "260614"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
-CURRENT_RELEASE_HIGHLIGHT = "Large-group dashboard optimization, simplified dashboard visuals, Industrial Data cache-first CSV Summary analysis, parser profile self-service with hardened LLM handoff, SQL fetch safety, and release-gate audit hardening."
-PUBLIC_VERSION_LABEL = "2026.05 RC5 (build 260612)"
+CURRENT_RELEASE_HIGHLIGHT = "Realtime Industrial Monitoring foundation for tester pilots, deterministic anomaly detectors, bounded polling safety, stronger parser probing, safer industrial diagnostics, and optional ML anomaly tooling kept out of normal runtime dependencies."
+PUBLIC_VERSION_LABEL = "2026.06 RC1 (build 260614)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
+    - Realtime Industrial Monitoring now has a separate foundation for append-only samples, signal definitions, stream offsets, explainable anomaly events, replay, and dashboard review<br>
+    - Deterministic anomaly detectors now cover specification limits, warning limits, IQR fences, MAD robust z-score, rolling z-score, and stale-source checks with operator-readable explanations<br>
+    - Realtime polling now uses generated bounded queries, cursor offsets, chunk limits, safe diagnostics, and offset advancement only after local persistence succeeds<br>
+    - Realtime dashboard review can open without selecting a Metroliza report database first; the app uses a temporary session SQLite store unless a persistent database is selected<br>
+    - Synthetic realtime fixtures and replay validation are available for pre-live testing without a production database<br>
+    - Optional advanced anomaly tooling stays separate from normal app startup, so standard users do not need extra ML packages<br>
+    - Industrial diagnostics now redact nested credentials, URI passwords, token-like fields, and raw SQL text from operator-facing status and persisted diagnostics<br>
+    - CMM parser probing now uses marker-based confidence so generic PDFs no longer look like perfect CMM report matches<br>
+    - Parser plugin handoff packages now have stronger tests that require local API contract content and small step-by-step prompts for LLM-assisted plugin work<br>
+    - Realtime rollout docs now include operator concepts, production safety checks, synthetic replay evidence, source lag review, and rollback steps<br>
+
+    <br><b>Archive:</b><br>
+
+    <br><b>Version 2026.05rc5 (build 260612):</b><br>
     - Saved report updates are safer if a database write fails partway through<br>
     - HTML dashboard-only exports now report a failure instead of success when dashboard creation fails<br>
     - CSV Summary filters and multi-file exports behave more consistently across regular and large-file paths<br>
@@ -37,8 +51,6 @@ release_notes = f"""
     - CSV Summary and Export dashboards now use clearer run notes, image snapshot wording, and group comparison takeaways<br>
     - CSV Summary now uses Edit groups for selected-reference comparisons and keeps dashboard rendering controls in Dashboard interactivity<br>
     - Grouped Export runs now add standard group analysis to the HTML dashboard instead of adding extra workbook sheets<br>
-
-    <br><b>Archive:</b><br>
 
     <br><b>Version 2026.05rc4 (build 260609):</b><br>
     - Parser profiles can now be prepared from Tools > Parser profiles... for new supplier report templates without writing Python code<br>

@@ -13,6 +13,7 @@ This directory contains active operational, maintenance, and end-user documentat
 - `user_manual/export_grouping.md` — focused end-user guide to Export grouping.
 - `user_manual/csv_summary.md` — end-user guide to the CSV Summary workflow.
 - `user_manual/industrial_data.md` — end-user guide to the Industrial Data/Oznak cache-first workflow.
+- `user_manual/realtime_industrial_monitoring.md` — operator guide to realtime industrial monitoring concepts, setup, event review, and false-positive handling.
 - `user_manual/dashboard_visuals.md` — end-user guide to dashboard visual recipes and customization.
 - `user_manual/parser_profiles.md` — end-user guide to Parser Profiles and LLM handoff folders.
 - `user_manual/characteristic_name_matching.md` — end-user guide to Characteristic Name Matching.
@@ -21,6 +22,8 @@ This directory contains active operational, maintenance, and end-user documentat
 - `user_manual/group_analysis/user_manual.md` — plain-English end-user guide for interpreting the exported Group Analysis worksheet.
 - `user_manual/group_analysis/user_manual.pdf` — optional printable companion version.
 - `documentation_policy.md` — policy for permanent vs temporary docs, archival, and ownership.
+- `realtime_industrial_validation.md` — deterministic fixture matrix for realtime industrial detector validation.
+- `perf_realtime_detectors.md` — local throughput benchmark guide for deterministic realtime industrial detectors.
 - `google_conversion_smoke_runbook.md` — local Google Sheets conversion smoke guidance.
 - `native_build_distribution.md` — native build/distribution workflow and packaging references.
 - `../THIRD_PARTY_NOTICES.md` — third-party license and notice inventory for packaged distributions.
@@ -30,6 +33,7 @@ This directory contains active operational, maintenance, and end-user documentat
 - `roadmaps/2026_03_rc2_stabilization_execution.md` — RC2 stabilization closeout/reference tracker for the completed parity-first slice.
 - `roadmaps/OCR_BENCHMARKING_MASTER.md` — canonical OCR benchmarking, acceleration, privacy, and next-session handoff.
 - `roadmaps/OZNAK_PRODUCTION_ANALYTICS_IMPLEMENTATION_PLAN.md` — active production-analytics roadmap using canonical `src/metroliza/*` implementation paths.
+- `roadmaps/realtime_industrial_monitoring_plan.md` — active rollout plan for realtime industrial monitoring source safety, replay, operator workflow, and rollback.
 - `roadmaps/PLOTSTATS_CENTRALIZATION_IMPLEMENTATION_PLAN.md` — future implementation plan for moving reusable Metroliza plot definitions into `hexafe-plotstats`.
 - `roadmaps/static_population_layer_dashboard_plan.md` — completed implementation record for static large-group layer optimization in large HTML dashboards.
 - `roadmaps/directory_reorganization_long_term.md` — completed directory reorganization record for the canonical `src/metroliza/` layout, legacy shims, packaging guardrails, and validation evidence.
@@ -50,6 +54,7 @@ pre-reorganization context and must be refreshed against canonical
 | `roadmaps/post_reorganization_next_implementation_plan.md` | Active | Current post-reorganization implementation plan and workstream hub. |
 | `roadmaps/full_module_audit_2026_06.md` | Active | Full-module audit matrix for parser/report persistence, export/charting, CSV Summary, UI/UX, CI, packaging, and release gates. |
 | `roadmaps/OZNAK_PRODUCTION_ANALYTICS_IMPLEMENTATION_PLAN.md` | Active | Production and tabular analytics roadmap; paths are canonicalized to `src/metroliza/*`. |
+| `roadmaps/realtime_industrial_monitoring_plan.md` | Active | Realtime industrial monitoring rollout plan for source safety, replay, operator workflow, and rollback. |
 | `roadmaps/OCR_BENCHMARKING_MASTER.md` | Active | OCR benchmarking and acceleration handoff; new work follows the post-reorganization path policy. |
 | `roadmaps/static_population_layer_dashboard_plan.md` | Completed record | Static large-group layer optimization closeout for large CSV Summary dashboards and shared dashboard renderer parity. |
 | `roadmaps/PLOTSTATS_CENTRALIZATION_IMPLEMENTATION_PLAN.md` | Future active | Plotstats boundary migration plan. |
@@ -101,12 +106,16 @@ Canonical release operations docs (release gate/source-of-truth set):
 
 - `release_checks/release_status.md` — current release operational status and entry-point links.
 - `release_checks/release_candidate_checklist.md` — primary RC gate checklist and required sign-offs.
-- `release_checks/rc2_release_audit_2026-05-17.md` — historical RC2 release audit evidence and blocker summary.
-- `release_checks/rc2_performance_optimization_check_2026-05-20.md` — CSV Summary/grouping/dashboard performance optimization evidence and remaining bottlenecks.
 - `release_checks/open_testing_runbook.md` — open-testing execution runbook and evidence expectations.
 - `release_checks/branching_strategy.md` — authoritative branch naming/rules used during release work.
 - `release_checks/google_conversion_smoke.md` — required release smoke evidence log for Google conversion checks.
 - `release_checks/cmm_parser_perf_guardrail.md` — CMM parser performance guardrail policy, variance expectations, and CI-failure triage steps.
+- `release_checks/realtime_industrial_rollout_checklist.md` — current 2026.06 RC1 realtime industrial tester rollout gate for replay, bounded reads, source lag, threshold review, and rollback.
+
+Historical RC/rc2 evidence:
+
+- `release_checks/rc2_release_audit_2026-05-17.md` — historical RC2 release audit evidence and blocker summary.
+- `release_checks/rc2_performance_optimization_check_2026-05-20.md` — CSV Summary/grouping/dashboard performance optimization evidence and remaining bottlenecks.
 - `release_checks/full_module_audit_2026-06-08.md` — build `260609` full-module audit hardening release-check evidence.
 - `release_checks/rc5_dashboard_industrial_cache_check_2026-06-09.md` — build `260609` RC5 dashboard large-group, dashboard visuals, and Industrial Data cache release-check evidence.
 - `release_checks/rc5_industrial_data_csv_summary_followup_2026-06-10.md` — build `260609` Industrial Data fetch-to-cache and CSV Summary follow-up evidence.

@@ -71,6 +71,18 @@ def _oznak_warning_detail(diagnostics: dict[str, Any]) -> str | None:
     return None
 
 
+def _raw_sql_sync_query_summary(
+    profile: IndustrialSourceProfile,
+    *,
+    mode: str,
+    limit: int | None,
+) -> str:
+    normalized_mode = "preview" if str(mode or "").strip().lower() == "preview" else "fetch"
+    limit_summary = "all rows" if limit is None else f"limit {int(limit)}"
+    database_type = profile.database_type or "unknown"
+    return f"raw SQL {normalized_mode} on {profile.source_db_alias or 'source'} ({database_type}, {limit_summary})"
+
+
 class IndustrialLinkRefreshThread(QThread):
     """Run local industrial link refresh outside the Qt main thread."""
 
@@ -599,7 +611,20 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                     progress_callback=self._emit_progress_from_diagnostic,
                 )
 
-            warning_detail = _oznak_warning_detail(result.diagnostics)
+            result_diagnostics = result.diagnostics
+            if is_sql_mode:
+                result_diagnostics = dict(result.diagnostics or {})
+                result_diagnostics.setdefault("sql_hash", sql_hash)
+                result_diagnostics.setdefault(
+                    "query_summary",
+                    _raw_sql_sync_query_summary(
+                        self.profile,
+                        mode="preview" if self.test_only else "fetch",
+                        limit=requested_limit,
+                    ),
+                )
+
+            warning_detail = _oznak_warning_detail(result_diagnostics)
             if self._cancel_requested:
                 final_status = "cancelled"
                 error = "Sync cancelled by user."
@@ -636,7 +661,7 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                     status=final_status,
                     row_count=result.row_count,
                     error_summary=error,
-                    diagnostics=result.diagnostics,
+                    diagnostics=result_diagnostics,
                 )
 
             self.result_ready.emit(
@@ -649,7 +674,7 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                     "upsert_summary": upsert_summary,
                     "link_summary": link_summary,
                     "cache_summary": cache_summary,
-                    "diagnostics": result.diagnostics,
+                    "diagnostics": result_diagnostics,
                     "preview_records": result.records if self.test_only else (),
                 }
             )

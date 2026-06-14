@@ -1,5 +1,7 @@
 import base64
 import importlib
+from pathlib import Path
+import tempfile
 from time import perf_counter
 from typing import Callable
 
@@ -7,8 +9,8 @@ from metroliza.app.startup_profile import record_event
 from metroliza.resources.app_assets import encoded_icon
 from metroliza.shared.custom_logger import CustomLogger
 from metroliza.ui.help_menu import build_help_menu
-from PyQt6.QtCore import QByteArray, QTimer
-from PyQt6.QtGui import QAction, QIcon, QPixmap
+from PyQt6.QtCore import QByteArray, QTimer, QUrl
+from PyQt6.QtGui import QAction, QDesktopServices, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
@@ -133,6 +135,9 @@ class MainWindow(QMainWindow):
         self.metadata_enrichment_thread = None
         self.metadata_enrichment_error_message = None
         self.industrial_data_dialog = None
+        self.last_realtime_dashboard_path = None
+        self.last_realtime_dashboard_db_path = None
+        self._realtime_session_db_path = None
         self.parser_plugin_wizard_dialog = None
         self.directory = None
         self.db_file = None
@@ -301,6 +306,13 @@ class MainWindow(QMainWindow):
         self.industrial_data_action = QAction("Industrial data...", self)
         self.industrial_data_action.setToolTip("Configure, sync, link, and export cached Oznak industrial data")
         self.industrial_data_action.triggered.connect(self.launch_industrial_data_dialog)
+        self.realtime_monitoring_action = QAction("Real-time Industrial Monitoring...", self)
+        self.realtime_monitoring_action.setToolTip(
+            "Open a read-only dashboard from persisted realtime anomaly events."
+        )
+        self.realtime_monitoring_action.triggered.connect(
+            self.launch_realtime_industrial_monitoring_dashboard
+        )
         self.parser_profiles_action = QAction("Parser profiles...", self)
         self.parser_profiles_action.setToolTip("Create a local handoff folder for a new supplier parser profile")
         self.parser_profiles_action.triggered.connect(self.launch_parser_plugin_wizard)
@@ -308,6 +320,7 @@ class MainWindow(QMainWindow):
         self.tools_menu.addAction(self.csv_summary_action)
         self.tools_menu.addAction(self.enrich_metadata_action)
         self.tools_menu.addAction(self.industrial_data_action)
+        self.tools_menu.addAction(self.realtime_monitoring_action)
         self.tools_menu.addAction(self.parser_profiles_action)
         _, self.help_menu = build_help_menu(
             self,
@@ -482,6 +495,7 @@ class MainWindow(QMainWindow):
             self.stop_metadata_enrichment()
             event.ignore()
             return
+        self._cleanup_realtime_session_db()
         super().closeEvent(event)
 
     def launch_parsing_dialog(self):
@@ -594,6 +608,78 @@ class MainWindow(QMainWindow):
             self.industrial_data_dialog.activateWindow()
         except Exception as e:
             self.log_and_exit(e)
+
+    def launch_realtime_industrial_monitoring_dashboard(self):
+        try:
+            from metroliza.industrial.realtime.realtime_dashboard_html import (
+                write_realtime_dashboard_html,
+            )
+            from metroliza.industrial.realtime.realtime_dashboard_service import (
+                RealtimeDashboardService,
+            )
+
+            dashboard_db_path, using_session_db = self._realtime_dashboard_db_file()
+            self.last_realtime_dashboard_db_path = dashboard_db_path
+            snapshot = RealtimeDashboardService(dashboard_db_path).dashboard_snapshot()
+            output_dir = Path(tempfile.gettempdir()) / "metroliza" / "realtime_dashboards"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_path = output_dir / "realtime_industrial_monitoring.html"
+            self.last_realtime_dashboard_path = write_realtime_dashboard_html(snapshot, output_path)
+            opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.last_realtime_dashboard_path)))
+            if opened:
+                if using_session_db:
+                    self.statusBar().showMessage(
+                        "Real-time industrial monitoring dashboard opened with temporary session DB.",
+                        5000,
+                    )
+                else:
+                    self.statusBar().showMessage(
+                        "Real-time industrial monitoring dashboard opened.",
+                        5000,
+                    )
+            else:
+                session_note = " using temporary session DB" if using_session_db else ""
+                self.statusBar().showMessage(
+                    f"Dashboard written to {self.last_realtime_dashboard_path}{session_note}",
+                    8000,
+                )
+        except Exception as e:
+            self.log_and_exit(e)
+
+    def _realtime_dashboard_db_file(self):
+        if self.db_file:
+            return self.db_file, False
+        if self._realtime_session_db_path is None or not self._realtime_session_db_path.exists():
+            session_dir = Path(tempfile.gettempdir()) / "metroliza" / "realtime_sessions"
+            session_dir.mkdir(parents=True, exist_ok=True)
+            session_file = tempfile.NamedTemporaryFile(
+                prefix="metroliza_realtime_session_",
+                suffix=".sqlite",
+                dir=session_dir,
+                delete=False,
+            )
+            session_file.close()
+            self._realtime_session_db_path = Path(session_file.name)
+        return str(self._realtime_session_db_path), True
+
+    def _cleanup_realtime_session_db(self):
+        session_db_path = self._realtime_session_db_path
+        self._realtime_session_db_path = None
+        if session_db_path is None:
+            return
+        for path in (
+            session_db_path,
+            Path(f"{session_db_path}-wal"),
+            Path(f"{session_db_path}-shm"),
+        ):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        try:
+            session_db_path.parent.rmdir()
+        except OSError:
+            pass
 
     def launch_parser_plugin_wizard(self):
         try:

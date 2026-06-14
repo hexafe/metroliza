@@ -49,6 +49,33 @@ DECLARATIVE_MICROTASK_PROMPT_ORDER = [
     "prompts/06_fix_validation_failures.md",
 ]
 
+LOCAL_CONTRACT_CONTENT_FILES = [
+    "contracts/01_parser_api_contract.md",
+    "contracts/02_runtime_selection_contract.md",
+    "contracts/03_sqlite_persistence_contract.md",
+    "contracts/04_expected_results_contract.md",
+    "contracts/05_security_and_safety_contract.md",
+    "reference/contract_snippets.md",
+]
+CONCRETE_CONTRACT_SNIPPETS = [
+    "class PluginManifest",
+    "class ProbeResult",
+    "class ParseMetaV2",
+    "class ReportInfoV2",
+    "class MeasurementV2",
+    "class MeasurementBlockV2",
+    "class ParseResultV2",
+    "class GeneratedParser(BaseReportParser, BaseReportParserPlugin)",
+    "def probe(cls, input_ref: str | Path, context: ProbeContext) -> ProbeResult",
+    "def parse_to_v2(self) -> ParseResultV2",
+    "def to_legacy_blocks(parse_result_v2: ParseResultV2)",
+    "MeasurementV2.axis_code",
+    "Strict matching requires confidence >= 80",
+    "Metroliza converts `ParseResultV2` into local SQLite rows",
+    "sample_file,reference,report_date,sample_number,block_index,header_normalized",
+    "Network calls",
+]
+
 
 def _load_handoff_manifest(workspace):
     return json.loads((workspace.root / "handoff_manifest.json").read_text(encoding="utf-8"))
@@ -63,6 +90,30 @@ def _write_handoff_manifest(workspace, manifest):
 
 def _integrity_check(report, name):
     return next(check for check in report.checks if check.name == name)
+
+
+def _assert_package_has_local_contract_content(bundle):
+    package_text = "\n\n".join(bundle.values())
+    if "src/metroliza/" not in package_text:
+        return
+
+    missing_files = [
+        path
+        for path in LOCAL_CONTRACT_CONTENT_FILES
+        if not bundle.get(path, "").strip()
+    ]
+    assert not missing_files, f"source-linked handoff package is missing local files: {missing_files}"
+
+    local_contract_text = "\n\n".join(bundle[path] for path in LOCAL_CONTRACT_CONTENT_FILES)
+    missing_snippets = [
+        snippet
+        for snippet in CONCRETE_CONTRACT_SNIPPETS
+        if snippet not in local_contract_text
+    ]
+    assert not missing_snippets, (
+        "source-linked handoff package must include local parser API contract content, "
+        f"missing: {missing_snippets}"
+    )
 
 
 def test_cmm_parse_to_v2_and_back_to_legacy_roundtrip_shape():
@@ -139,6 +190,47 @@ def test_llm_plugin_workspace_bundle_contains_install_and_validation_guidance():
     assert "Metroliza owns database writes" in bundle["contracts/00_read_this_first.md"]
     assert "Strict matching requires confidence >= 80" in bundle["contracts/02_runtime_selection_contract.md"]
     assert "every parsed measurement row" in bundle["contracts/04_expected_results_contract.md"]
+
+
+def test_llm_plugin_workspace_bundle_is_not_only_source_path_references():
+    bundle = build_plugin_workspace_bundle(plugin_id="supplier_alpha", source_format="pdf")
+
+    assert "src/metroliza/parsing/parser_plugin_contracts.py" in bundle[
+        "contracts/06_github_references.md"
+    ]
+    _assert_package_has_local_contract_content(bundle)
+
+    broken_bundle = dict(bundle)
+    for path in LOCAL_CONTRACT_CONTENT_FILES:
+        broken_bundle[path] = "# See `src/metroliza/parsing/parser_plugin_contracts.py`.\n"
+
+    try:
+        _assert_package_has_local_contract_content(broken_bundle)
+    except AssertionError as exc:
+        assert "local parser API contract content" in str(exc)
+    else:  # pragma: no cover - proves this regression guard is active
+        raise AssertionError("Expected source-only handoff package to fail contract completeness check")
+
+
+def test_llm_plugin_workspace_bundle_includes_small_step_by_step_microtasks():
+    bundle = build_plugin_workspace_bundle(plugin_id="supplier_alpha", source_format="pdf")
+    manifest = json.loads(bundle["handoff_manifest.json"])
+    non_technical_steps = bundle["NON_TECHNICAL_STEPS.md"]
+
+    assert manifest["microtask_prompt_order"] == PYTHON_MICROTASK_PROMPT_ORDER
+    assert "## Prepare the package" in non_technical_steps
+    assert "## Run the LLM in small tasks" in non_technical_steps
+    assert "1. Put 3-5 reports" in non_technical_steps
+    assert "1. Send `prompts/microtasks/01_template_analysis.md`" in non_technical_steps
+    assert "Continue one prompt at a time" in non_technical_steps
+    assert "Only paste complete returned file contents" in non_technical_steps
+
+    for index, prompt_path in enumerate(PYTHON_MICROTASK_PROMPT_ORDER, start=1):
+        prompt = bundle[prompt_path]
+        nonblank_lines = [line for line in prompt.splitlines() if line.strip()]
+        assert prompt.startswith(f"# Task {index} - ")
+        assert "Return" in prompt
+        assert len(nonblank_lines) <= 18
 
 
 def test_declarative_handoff_manifest_is_self_contained(tmp_path):

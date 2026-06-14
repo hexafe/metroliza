@@ -1,0 +1,9 @@
+record_id,process_timestamp,part_number,revision,station,line,metric_value,metric_name,expected_label,event_id,event_time,cycle_time_s
+S1-0001,2026-06-13T10:00:00Z,PN-100,A,S1,L1,99.82,cycle_time_s,normal,S1-0001,2026-06-13T10:00:00Z,99.82
+S1-0002,2026-06-13T10:01:00Z,PN-100,A,S1,L1,100,cycle_time_s,normal,S1-0002,2026-06-13T10:01:00Z,100
+S1-0003,2026-06-13T10:02:00Z,PN-100,A,S1,L1,100.2,cycle_time_s,normal,S1-0003,2026-06-13T10:02:00Z,100.2
+S1-0004,2026-06-13T10:03:00Z,PN-100,A,S1,L1,100.12,cycle_time_s,normal,S1-0004,2026-06-13T10:03:00Z,100.12
+S1-0005,2026-06-13T10:04:00Z,PN-100,A,S1,L1,99.92,cycle_time_s,normal,S1-0005,2026-06-13T10:04:00Z,99.92
+S1-0006,2026-06-13T10:05:00Z,PN-100,A,S1,L1,99.8,cycle_time_s,normal,S1-0006,2026-06-13T10:05:00Z,99.8
+S1-0007,2026-06-13T10:06:00Z,PN-100,A,S1,L1,111,cycle_time_s,usl_breach,S1-0007,2026-06-13T10:06:00Z,111
+S1-0008,2026-06-13T10:07:00Z,PN-100,A,S1,L1,89,cycle_time_s,lsl_breach,S1-0008,2026-06-13T10:07:00Z,89

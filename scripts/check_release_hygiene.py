@@ -51,6 +51,22 @@ ALLOWED_TRACKED_PATHS = {
     "config/google/credentials.example.json",
     "docs/user_manual/group_analysis/user_manual.pdf",
     "tests/fixtures/pdf/cmm_smoke_fixture.pdf",
+    "tests/fixtures/industrial_realtime/gradual_drift.csv",
+    "tests/fixtures/industrial_realtime/gradual_drift_upward.csv",
+    "tests/fixtures/industrial_realtime/low_sample_count.csv",
+    "tests/fixtures/industrial_realtime/missing_stale_data.csv",
+    "tests/fixtures/industrial_realtime/normal_stable_process.csv",
+    "tests/fixtures/industrial_realtime/single_high_outlier.csv",
+    "tests/fixtures/industrial_realtime/single_low_outlier.csv",
+    "tests/fixtures/industrial_realtime/single_point_outlier.csv",
+    "tests/fixtures/industrial_realtime/spec_limit_breach.csv",
+    "tests/fixtures/industrial_realtime/stable_normal_process.csv",
+    "tests/fixtures/industrial_realtime/station_segment_baselines.csv",
+    "tests/fixtures/industrial_realtime/stuck_sensor.csv",
+    "tests/fixtures/industrial_realtime/stuck_value.csv",
+    "tests/fixtures/industrial_realtime/sudden_step_change.csv",
+    "tests/fixtures/industrial_realtime/usl_lsl_breach.csv",
+    "tests/fixtures/industrial_realtime/warning_limit_breach.csv",
 }
 ALLOWED_TRACKED_PATHS_LOWER = {path.lower() for path in ALLOWED_TRACKED_PATHS}
 

@@ -1,6 +1,18 @@
 # Changelog (for end users)
 
-## 2026.05 RC5 (build 260612) — current version
+## 2026.06 RC1 (build 260614) — current version
+- Realtime Industrial Monitoring now has a separate foundation for append-only samples, signal definitions, stream offsets, explainable anomaly events, replay, and dashboard review.
+- Deterministic anomaly detectors now cover specification limits, warning limits, IQR fences, MAD robust z-score, rolling z-score, and stale-source checks with operator-readable explanations.
+- Realtime polling now uses generated bounded queries, cursor offsets, chunk limits, safe diagnostics, and offset advancement only after local persistence succeeds.
+- Realtime dashboard review can open without selecting a Metroliza report database first; the app uses a temporary session SQLite store unless a persistent database is selected.
+- Synthetic realtime fixtures and replay validation are available for pre-live testing without a production database.
+- Optional advanced anomaly tooling stays separate from normal app startup, so standard users do not need extra ML packages.
+- Industrial diagnostics now redact nested credentials, URI passwords, token-like fields, and raw SQL text from operator-facing status and persisted diagnostics.
+- CMM parser probing now uses marker-based confidence so generic PDFs no longer look like perfect CMM report matches.
+- Parser plugin handoff packages now have stronger tests that require local API contract content and small step-by-step prompts for LLM-assisted plugin work.
+- Realtime rollout docs now include operator concepts, production safety checks, synthetic replay evidence, source lag review, and rollback steps.
+
+## 2026.05 RC5 (build 260612)
 - Saved report updates are safer if a database write fails partway through.
 - HTML dashboard-only exports now report a failure instead of success when dashboard creation fails.
 - CSV Summary filters and multi-file exports behave more consistently across regular and large-file paths.
