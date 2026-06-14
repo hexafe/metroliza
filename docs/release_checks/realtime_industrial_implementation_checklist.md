@@ -12,8 +12,8 @@ known-good checkpoint.
 - Active integration worktree: `/tmp/metroliza-rc2`
 - Active integration branch: `rc2`
 - Current local head: this checklist commit (`Record realtime implementation checklist`).
-- Remote status at last update: local `rc2` ahead of `origin/rc2`; not pushed yet.
-- Current step in progress: commit checklist, push `rc2`, and verify GitHub CI.
+- Remote status at last update: `rc2` push completed; GitHub CI verification pending.
+- Current step in progress: poll GitHub Actions for the pushed `rc2` commit until green.
 
 ## Integrated Checkpoints
 
@@ -42,6 +42,7 @@ known-good checkpoint.
 | Pass | `QT_QPA_PLATFORM=offscreen PYTHONPATH=src:. python -m pytest tests -q --maxfail=1` | `2086 passed, 298 skipped, 6 warnings, 83 subtests passed` in 109.29s. |
 | Pass | CI-shaped coverage sequence from `.github/workflows/ci.yml` | Primary suite plus appended UI/dialog slices passed; `coverage report --fail-under=80` reported `82%`; `coverage.xml` generated. |
 | Pass | `python scripts/check_release_hygiene.py` | Passed after coverage artifacts were present. |
+| Pass | `git push origin rc2` | Pushed integrated realtime implementation to GitHub. |
 
 ## Remaining Release Checklist
 
@@ -52,7 +53,7 @@ known-good checkpoint.
   `QT_QPA_PLATFORM=offscreen PYTHONPATH=src:. python -m pytest tests -q --cov=. --cov-report=term --cov-report=xml:coverage.xml`
 - [x] Re-run release hygiene after coverage, because `coverage.xml` must remain untracked/ignored.
 - [x] Review `git status --short --branch` in `/tmp/metroliza-rc2`.
-- [ ] Push `rc2` to GitHub.
+- [x] Push `rc2` to GitHub.
 - [ ] Check GitHub Actions for the pushed commit until terminal green.
 - [ ] Update this checklist with final CI run IDs and conclusions.
 
