@@ -53,6 +53,10 @@ ALLOWED_TRACKED_PATHS = {
     "tests/fixtures/pdf/cmm_smoke_fixture.pdf",
 }
 ALLOWED_TRACKED_PATHS_LOWER = {path.lower() for path in ALLOWED_TRACKED_PATHS}
+ALLOWED_TRACKED_PREFIXES = (
+    "tests/fixtures/industrial_realtime/",
+)
+ALLOWED_TRACKED_PREFIXES_LOWER = tuple(prefix.lower() for prefix in ALLOWED_TRACKED_PREFIXES)
 
 
 def _git_lines(*args: str) -> list[str]:
@@ -69,6 +73,8 @@ def _is_blocked(path: str) -> str | None:
     normalized = path.replace("\\", "/")
     normalized_lower = normalized.lower()
     if normalized_lower in ALLOWED_TRACKED_PATHS_LOWER:
+        return None
+    if any(normalized_lower.startswith(prefix) for prefix in ALLOWED_TRACKED_PREFIXES_LOWER):
         return None
     if Path(normalized_lower).name in BLOCKED_FILENAMES_LOWER:
         return "generated release report"
