@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from metroliza.industrial.industrial_data_repository import redact_sensitive_text
 from metroliza.industrial.industrial_data_schema import ensure_industrial_data_schema
 from metroliza.industrial.realtime.sample_repository import utc_timestamp
 from metroliza.industrial.realtime.stream_contracts import StreamOffset
@@ -52,7 +53,7 @@ class StreamOffsetStore:
                     offset.cursor_value,
                     offset.event_time_watermark,
                     offset.last_success_at or utc_timestamp(),
-                    offset.last_error,
+                    redact_sensitive_text(offset.last_error) if offset.last_error else None,
                     offset.lag_seconds,
                     offset.status,
                 ),

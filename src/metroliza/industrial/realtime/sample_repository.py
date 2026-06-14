@@ -8,6 +8,7 @@ import json
 from typing import Any, Iterable
 
 from metroliza.industrial.industrial_data_schema import ensure_industrial_data_schema
+from metroliza.industrial.industrial_data_repository import looks_sensitive_key, redact_sensitive_text
 from metroliza.industrial.realtime.stream_contracts import (
     IndustrialSample,
     SampleBatchResult,
@@ -35,6 +36,27 @@ def from_json(value: Any, default: Any) -> Any:
         return json.loads(value)
     except (TypeError, ValueError, json.JSONDecodeError):
         return default
+
+
+def redact_sample_payload(value: Any) -> Any:
+    """Redact credential-like fields before persisting raw realtime source rows."""
+
+    if isinstance(value, dict):
+        redacted: dict[str, Any] = {}
+        for key, nested in value.items():
+            key_text = str(key)
+            if looks_sensitive_key(key_text):
+                redacted[key_text] = "<redacted>"
+            else:
+                redacted[key_text] = redact_sample_payload(nested)
+        return redacted
+    if isinstance(value, list):
+        return [redact_sample_payload(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(redact_sample_payload(item) for item in value)
+    if isinstance(value, str):
+        return redact_sensitive_text(value)
+    return value
 
 
 class RealtimeSampleRepository:
@@ -246,7 +268,11 @@ class RealtimeSampleRepository:
                         sample.batch_lot,
                         to_json(dict(sample.segment_key)),
                         to_json(list(sample.quality_flags)),
-                        to_json(dict(sample.raw_record or {})) if sample.raw_record is not None else None,
+                        (
+                            to_json(redact_sample_payload(dict(sample.raw_record or {})))
+                            if sample.raw_record is not None
+                            else None
+                        ),
                     ),
                 )
                 if cursor.rowcount:

@@ -80,6 +80,46 @@ def test_signal_definition_upsert_and_sample_idempotency(tmp_path):
     assert loaded[0].raw_record == {"event_id": "ROW-1", "cycle_time_s": 10.2}
 
 
+def test_sample_repository_redacts_raw_record_credentials(tmp_path):
+    db_path = str(tmp_path / "samples_redaction.db")
+    profile = _source_profile(db_path)
+    repository = RealtimeSampleRepository(db_path)
+    signal = repository.upsert_signal_definition(
+        SignalDefinition(
+            source_profile_id=profile.id,
+            signal_key="cycle_time",
+            metric_name="cycle_time_s",
+        )
+    )
+
+    repository.insert_samples(
+        [
+            IndustrialSample(
+                source_profile_id=profile.id,
+                signal_id=signal.id,
+                source_record_key="ROW-SECRET",
+                event_time="2026-06-13T10:00:00Z",
+                metric_name="cycle_time_s",
+                value=10.2,
+                raw_record={
+                    "event_id": "ROW-SECRET",
+                    "password": "secret123",
+                    "nested": {
+                        "apiToken": "token-secret",
+                        "message": "mysql://user:secret123@db.example.invalid/prod",
+                    },
+                },
+            )
+        ]
+    )
+    loaded = repository.list_samples(signal_id=signal.id)
+
+    assert loaded[0].raw_record["password"] == "<redacted>"
+    assert loaded[0].raw_record["nested"]["apiToken"] == "<redacted>"
+    assert "secret123" not in repr(loaded[0].raw_record)
+    assert "db.example.invalid" not in repr(loaded[0].raw_record)
+
+
 def test_insert_samples_accepts_generator_batches(tmp_path):
     db_path = str(tmp_path / "sample_generator.db")
     profile = _source_profile(db_path)
@@ -188,3 +228,24 @@ def test_stream_offset_watermark_is_scoped_by_profile_and_stream(tmp_path):
     assert loaded_pressure.id == pressure.id
     assert loaded_pressure.cursor_value == "77"
     assert loaded_pressure.event_time_watermark == "2026-06-13T09:59:00Z"
+
+
+def test_stream_offset_store_redacts_last_error(tmp_path):
+    db_path = str(tmp_path / "offset_error_redaction.db")
+    profile = _source_profile(db_path)
+    store = StreamOffsetStore(db_path)
+
+    saved = store.upsert_offset(
+        StreamOffset(
+            source_profile_id=profile.id,
+            stream_key="cycle_time",
+            cursor_column="event_id",
+            last_error="connection failed password=secret123 url=mysql://user:secret123@db.example.invalid/prod",
+            status="error",
+        )
+    )
+
+    assert saved.last_error is not None
+    assert "secret123" not in saved.last_error
+    assert "db.example.invalid" not in saved.last_error
+    assert "<redacted>" in saved.last_error
