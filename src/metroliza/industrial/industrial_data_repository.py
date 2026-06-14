@@ -13,12 +13,30 @@ from metroliza.industrial.industrial_data_schema import SYNC_RUN_STATUSES, ensur
 
 
 _FINISHED_SYNC_RUN_STATUSES = tuple(status for status in SYNC_RUN_STATUSES if status != "running")
-_REDACT_URI_CREDENTIALS = re.compile(r"([a-zA-Z][a-zA-Z0-9+.\-]*://[^:/\s]+:)([^@/\s]+)@")
+_REDACT_URI_CREDENTIALS = re.compile(
+    r"([a-zA-Z][a-zA-Z0-9+.\-]*://)([^:/@\s]+):([^@/\s]+)@([^/\s?#]+)"
+)
+_SENSITIVE_TEXT_KEY_PATTERN = (
+    r"password|passwd|pwd|[a-z0-9_-]*token|[a-z0-9_-]*secret|credential|"
+    r"api[_-]?key|access[_-]?key|connection[_-]?string|sqlalchemy[_-]?url|"
+    r"user(?:name)?|user\s+id|uid|login|host|hostname|server|data\s+source|address|"
+    r"sql|sql[_-]?text|statement|query|query[_-]?summary"
+)
+_SQL_TEXT_KEY_PATTERN = r"sql(?:[_-]?text)?|statement|query(?:[_-]?summary)?"
+_REDACT_SQL_TEXT_VALUE = re.compile(
+    r"(?is)\b("
+    + _SQL_TEXT_KEY_PATTERN
+    + r")\s*([=:])\s*(?:'[^']*'|\"[^\"]*\"|.*)"
+)
 _REDACT_KEY_VALUE = re.compile(
-    r"(?i)\b(password|passwd|pwd|[a-z0-9_-]*token|[a-z0-9_-]*secret|credential|api[_-]?key|access[_-]?key)\s*([=:])\s*([^,\s;]+)"
+    r"(?i)\b("
+    + _SENSITIVE_TEXT_KEY_PATTERN
+    + r")\s*([=:])\s*(?:'[^']*'|\"[^\"]*\"|[^,\s;]+)"
 )
 _REDACT_QUOTED_KEY_VALUE = re.compile(
-    r"(?i)(['\"]?(?:password|passwd|pwd|[a-z0-9_-]*token|[a-z0-9_-]*secret|credential|api[_-]?key|access[_-]?key)['\"]?\s*:\s*['\"])([^'\",;}]+)(['\"]?)"
+    r"(?i)(['\"]?(?:"
+    + _SENSITIVE_TEXT_KEY_PATTERN
+    + r")['\"]?\s*:\s*['\"])([^'\",;}]+)(['\"]?)"
 )
 
 SENSITIVE_KEY_NAMES = frozenset(
@@ -36,6 +54,9 @@ SENSITIVE_KEY_NAMES = frozenset(
         "client_secret",
         "credential",
         "credentials",
+        "connection_string",
+        "dsn",
+        "sqlalchemy_url",
     }
 )
 SENSITIVE_COMPACT_KEY_NAMES = frozenset(
@@ -184,7 +205,8 @@ def redact_sensitive_text(value: Any, *, max_len: int | None = 320) -> str:
     """Redact credential-like fragments from free-form diagnostics text."""
 
     text = str(value or "").strip()
-    text = _REDACT_URI_CREDENTIALS.sub(r"\1<redacted>@", text)
+    text = _REDACT_URI_CREDENTIALS.sub(r"\1<redacted>:<redacted>@<redacted>", text)
+    text = _REDACT_SQL_TEXT_VALUE.sub(r"\1\2<redacted>", text)
     text = _REDACT_KEY_VALUE.sub(r"\1\2<redacted>", text)
     text = _REDACT_QUOTED_KEY_VALUE.sub(r"\1<redacted>\3", text)
     if max_len is not None and len(text) > max_len:
@@ -222,6 +244,12 @@ def _redact_sensitive_payload(value: Any) -> Any:
         return [_redact_sensitive_payload(item) for item in value]
     if isinstance(value, tuple):
         return tuple(_redact_sensitive_payload(item) for item in value)
+    if isinstance(value, BaseException):
+        return redact_sensitive_text(value)
+    if isinstance(value, str):
+        redacted_text = redact_sensitive_text(value, max_len=None)
+        if redacted_text != value.strip():
+            return redacted_text
     return value
 
 
@@ -709,14 +737,15 @@ class IndustrialDataRepository:
                 )
 
                 for field_name, field_value in dynamic_items:
-                    if isinstance(field_value, (dict, list, tuple)):
+                    redacted_field_value = _redact_sensitive_payload(field_value)
+                    if isinstance(redacted_field_value, (dict, list, tuple)):
                         value_text = None
-                        value_json = _to_json(_redact_sensitive_payload(field_value))
-                    elif field_value is None:
+                        value_json = _to_json(redacted_field_value)
+                    elif redacted_field_value is None:
                         value_text = None
                         value_json = None
                     else:
-                        value_text = str(field_value)
+                        value_text = str(redacted_field_value)
                         value_json = None
                     cursor.execute(
                         """

@@ -7,7 +7,8 @@ This module keeps compatibility with both:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import hashlib
 from importlib import metadata as importlib_metadata
 import importlib.util
 import inspect
@@ -64,7 +65,8 @@ class ExternalPluginLoadResult:
 PARSER_MAP: dict[str, ParserType] = {}
 PARSER_MANIFESTS: dict[str, PluginManifest] = {}
 PARSER_DETECTORS: dict[str, DetectorType] = {}
-PROBE_RESULT_CACHE: dict[tuple[str, str], ProbeResult] = {}
+PROBE_RESULT_CACHE: dict[tuple[str, str, tuple[object, ...]], ProbeResult] = {}
+PROBE_CACHE_HASH_CHUNK_BYTES = 1024 * 1024
 
 _EXTERNAL_PLUGINS_LOADED = False
 _EXTERNAL_PLUGIN_CONFIG_SIGNATURE: ExternalPluginConfigSignature | None = None
@@ -239,13 +241,31 @@ def _minimum_confidence_for_selection() -> int:
     return 80 if _strict_matching_enabled() else 1
 
 
+def _probe_cache_identity(normalized_path: str) -> tuple[object, ...]:
+    """Return a cheap file identity for content-sensitive probe cache entries."""
+
+    path = Path(normalized_path)
+    try:
+        stat = path.stat()
+    except OSError:
+        return ("missing",)
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(PROBE_CACHE_HASH_CHUNK_BYTES), b""):
+                digest.update(chunk)
+    except OSError:
+        return (stat.st_mtime_ns, stat.st_size, "unreadable")
+    return (stat.st_mtime_ns, stat.st_size, digest.hexdigest())
+
+
 def _probe_with_cache(
     plugin_id: str,
     parser_cls: ParserType,
     normalized_path: str,
     probe_context: ProbeContext,
 ) -> ProbeResult:
-    cache_key = (plugin_id, normalized_path)
+    cache_key = (plugin_id, normalized_path, _probe_cache_identity(normalized_path))
     cached = PROBE_RESULT_CACHE.get(cache_key)
     if cached is not None:
         return cached
@@ -253,6 +273,35 @@ def _probe_with_cache(
     result = _safe_probe(plugin_id, parser_cls, normalized_path, probe_context)
     PROBE_RESULT_CACHE[cache_key] = result
     return result
+
+
+def _non_strict_pdf_extension_fallback(candidates: list[ProbeResult]) -> ProbeResult | None:
+    """Keep diagnostics/backward-compat fallback explicit when strict matching is disabled."""
+
+    if _strict_matching_enabled():
+        return None
+    extension_candidates = [
+        candidate
+        for candidate in candidates
+        if candidate.plugin_id == "cmm"
+        and candidate.confidence > 0
+        and "pdf_extension" in candidate.reasons
+    ]
+    if not extension_candidates:
+        return None
+    selected = max(
+        extension_candidates,
+        key=lambda match: (
+            match.confidence,
+            PARSER_MANIFESTS[match.plugin_id].priority,
+            match.plugin_id,
+        ),
+    )
+    return replace(
+        selected,
+        can_parse=True,
+        reasons=tuple(dict.fromkeys((*selected.reasons, "non_strict_pdf_extension_fallback"))),
+    )
 
 
 def _iter_external_plugin_candidate_files(path_entry: str) -> list[Path]:
@@ -518,6 +567,14 @@ def resolve_parser_with_diagnostics(file_path: str | Path) -> ResolverDiagnostic
     minimum_confidence = _minimum_confidence_for_selection()
     parseable = [c for c in candidates if c.can_parse and c.confidence >= minimum_confidence]
     if not parseable:
+        fallback = _non_strict_pdf_extension_fallback(candidates)
+        if fallback is not None:
+            return ResolverDiagnostics(
+                source_path=normalized_path,
+                source_format=source_format,
+                candidates_considered=tuple(candidates),
+                selected=fallback,
+            )
         rejected_reason = "no_plugin_can_parse"
         if any(c.can_parse for c in candidates):
             rejected_reason = "no_plugin_above_confidence_threshold"
@@ -591,14 +648,7 @@ def get_parser(
 
 
 def _default_cmm_detector(file_path: str) -> ProbeResult:
-    if file_path.lower().endswith('.pdf'):
-        return ProbeResult(
-            plugin_id='cmm',
-            can_parse=True,
-            confidence=80,
-            reasons=('pdf_extension',),
-        )
-    return ProbeResult(plugin_id='cmm', can_parse=False, confidence=0, reasons=('unsupported_extension',))
+    return CMMReportParser.probe_pdf_candidate(file_path)
 
 
 def _infer_plugin_id_from_parser_cls(parser_cls: ParserType) -> str:

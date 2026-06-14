@@ -3,6 +3,7 @@ import importlib.machinery
 import json
 import logging
 import os
+from pathlib import Path
 import sqlite3
 import sys
 import types
@@ -74,15 +75,25 @@ def _restore_real_cmm_registration():
         supported_formats=("pdf",),
         priority=100,
     )
-    PARSER_DETECTORS["cmm"] = lambda path: ProbeResult(
-        plugin_id="cmm",
-        can_parse=infer_source_format(path) == "pdf",
-        confidence=80 if infer_source_format(path) == "pdf" else 0,
+    PARSER_DETECTORS["cmm"] = CMMReportParser.probe_pdf_candidate
+
+
+def _write_cmm_probe_fixture(path: Path) -> Path:
+    path.write_bytes(
+        b"%PDF-1.4\n"
+        b"CMM REPORT\n"
+        b"REFERENCE: REF01\n"
+        b"DATE: 2024-01-02\n"
+        b"PART NAME: BRACKET\n"
+        b"MEASUREMENT MADE BY: CMM OPERATOR A\n"
+        b"NOMINAL TOL MEASURED DEVIATION OUTTOL\n"
     )
+    return path
 
 
 def test_detect_format_accepts_pathlike(tmp_path):
     report_path = tmp_path / "A1234_2024-01-01_001.PDF"
+    _write_cmm_probe_fixture(report_path)
     assert detect_format(report_path) == "cmm"
 
 
@@ -92,6 +103,7 @@ def test_factory_uses_statically_imported_builtin_cmm_parser():
 
 def test_get_parser_returns_cmm_parser_for_pdf(tmp_path):
     report_path = tmp_path / "A1234_2024-01-01_001.pdf"
+    _write_cmm_probe_fixture(report_path)
 
     original_map = dict(PARSER_MAP)
     original_manifests = dict(PARSER_MANIFESTS)
@@ -1041,10 +1053,14 @@ class BrokenProbeParser(BaseReportParser, BaseReportParserPlugin):
         assert "broken_probe" in load_result.loaded_plugin_ids
 
         diagnostics = resolve_parser_with_diagnostics(tmp_path / "broken_probe_report.pdf")
-        broken_candidate = next(candidate for candidate in diagnostics.candidates_considered if candidate.plugin_id == "broken_probe")
+        broken_candidate = next(
+            candidate
+            for candidate in diagnostics.candidates_considered
+            if candidate.plugin_id == "broken_probe"
+        )
 
-        assert diagnostics.selected is not None
-        assert diagnostics.selected.plugin_id == "cmm"
+        assert diagnostics.selected is None
+        assert diagnostics.rejected_reason == "no_plugin_can_parse"
         assert broken_candidate.can_parse is False
         assert broken_candidate.confidence == 0
         assert "probe_exception" in broken_candidate.reasons
@@ -1200,7 +1216,16 @@ class LateExternalParser(BaseReportParser, BaseReportParserPlugin):
         reset_probe_cache()
         _restore_real_cmm_registration()
 
-        initial = resolve_parser_with_diagnostics(tmp_path / "before_config.pdf")
+        initial_report = tmp_path / "REF01_2024-01-02_001.pdf"
+        initial_report.write_bytes(
+            b"%PDF-1.4\n"
+            b"REFERENCE: REF01\n"
+            b"DATE: 2024-01-02\n"
+            b"PART NAME: BRACKET\n"
+            b"NOMINAL TOL MEASURED\n"
+        )
+
+        initial = resolve_parser_with_diagnostics(initial_report)
         assert initial.selected is not None
         assert initial.selected.plugin_id == "cmm"
 

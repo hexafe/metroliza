@@ -85,7 +85,7 @@ class IndustrialLinkRefreshThread(QThread):
         try:
             self.summary_ready.emit(materialize_industrial_report_links(self.db_file))
         except Exception as exc:
-            self.error_occurred.emit(str(exc))
+            self.error_occurred.emit(redact_sensitive_text(exc))
 
 
 class IndustrialExportThread(WorkerCancellationMixin, QThread):
@@ -125,7 +125,7 @@ class IndustrialExportThread(WorkerCancellationMixin, QThread):
                 )
             )
         except IndustrialExportCancelled as exc:
-            self.cancelled.emit(str(exc))
+            self.cancelled.emit(redact_sensitive_text(exc))
         except Exception as exc:
             self.error_occurred.emit(redact_sensitive_text(exc))
 
@@ -165,7 +165,7 @@ class IndustrialLiveExportThread(WorkerCancellationMixin, QThread):
         self._init_cancellation_state()
 
     def _emit_progress_from_diagnostic(self, diagnostic: Any) -> None:
-        self.update_label.emit(diagnostic_progress_message(diagnostic))
+        self.update_label.emit(redact_sensitive_text(diagnostic_progress_message(diagnostic)))
 
     def run(self):
         try:
@@ -192,7 +192,7 @@ class IndustrialLiveExportThread(WorkerCancellationMixin, QThread):
                 )
             )
         except IndustrialExportCancelled as exc:
-            self.cancelled.emit(str(exc))
+            self.cancelled.emit(redact_sensitive_text(exc))
         except Exception as exc:
             if self._is_cancelled():
                 self.cancelled.emit("Live industrial export was cancelled.")
@@ -334,9 +334,9 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
                 raise ValueError(f"Unsupported analytics source kind: {self.source_kind}")
             self.result_ready.emit(result)
         except AnalyticsCancelled as exc:
-            self.cancelled.emit(str(exc))
+            self.cancelled.emit(redact_sensitive_text(exc))
         except Exception as exc:
-            self.error_occurred.emit(str(exc))
+            self.error_occurred.emit(redact_sensitive_text(exc))
 
 
 class TabularAnalyticsLoadThread(WorkerCancellationMixin, QThread):
@@ -414,12 +414,12 @@ class TabularAnalyticsLoadThread(WorkerCancellationMixin, QThread):
                 return
             self.result_ready.emit(result)
         except TabularLoadCancelled as exc:
-            self.cancelled.emit(str(exc))
+            self.cancelled.emit(redact_sensitive_text(exc))
         except Exception as exc:
             if self._is_cancelled():
                 self.cancelled.emit("CSV/Excel loading was canceled.")
             else:
-                self.error_occurred.emit(str(exc))
+                self.error_occurred.emit(redact_sensitive_text(exc))
 
 
 class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
@@ -669,7 +669,7 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
             self.error_occurred.emit(sanitized_error)
 
     def _emit_progress_from_diagnostic(self, diagnostic: Any) -> None:
-        self.progress_message.emit(diagnostic_progress_message(diagnostic))
+        self.progress_message.emit(redact_sensitive_text(diagnostic_progress_message(diagnostic)))
 
 
 class IndustrialOznakAccessCheckThread(WorkerCancellationMixin, QThread):
@@ -749,4 +749,4 @@ class IndustrialOznakAccessCheckThread(WorkerCancellationMixin, QThread):
             self.error_occurred.emit(redact_sensitive_text(exc))
 
     def _emit_progress_from_diagnostic(self, diagnostic: Any) -> None:
-        self.progress_message.emit(diagnostic_progress_message(diagnostic))
+        self.progress_message.emit(redact_sensitive_text(diagnostic_progress_message(diagnostic)))

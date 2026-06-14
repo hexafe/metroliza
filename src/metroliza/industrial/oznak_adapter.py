@@ -119,6 +119,77 @@ def _safe_exception_summary(exc: BaseException) -> str:
     return exc.__class__.__name__
 
 
+_DIAGNOSTIC_SENSITIVE_COMPACT_KEYS = frozenset(
+    {
+        "connectionstring",
+        "datasource",
+        "dsn",
+        "host",
+        "hostname",
+        "login",
+        "querysummary",
+        "server",
+        "sql",
+        "sqlalchemyurl",
+        "sqltext",
+        "statement",
+        "uid",
+        "uri",
+        "url",
+        "user",
+        "userid",
+        "username",
+    }
+)
+
+
+def _looks_sensitive_diagnostic_key(key: str) -> bool:
+    compact_key = re.sub(r"[^a-z0-9]+", "", str(key or "").strip().lower())
+    return looks_sensitive_key(key) or compact_key in _DIAGNOSTIC_SENSITIVE_COMPACT_KEYS
+
+
+def _redact_diagnostic_value(value: Any, *, key: str | None = None) -> Any:
+    if key is not None and _looks_sensitive_diagnostic_key(key):
+        return "<redacted>"
+    if isinstance(value, Mapping):
+        return {
+            str(nested_key): _redact_diagnostic_value(nested_value, key=str(nested_key))
+            for nested_key, nested_value in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_diagnostic_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_diagnostic_value(item) for item in value)
+    if isinstance(value, BaseException):
+        return _safe_exception_summary(value)
+    if isinstance(value, str):
+        return _redact_error_text(value)
+    return value
+
+
+def _redact_diagnostic_mapping(payload: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        str(key): _redact_diagnostic_value(value, key=str(key))
+        for key, value in payload.items()
+    }
+
+
+def _redact_progress_diagnostic(diagnostic: Any) -> Any:
+    if isinstance(diagnostic, Mapping):
+        return SimpleNamespace(**_redact_diagnostic_mapping(diagnostic))
+    return SimpleNamespace(**_diagnostic_to_dict(diagnostic))
+
+
+def _sanitize_progress_callback(progress_callback: Any) -> Any:
+    if progress_callback is None:
+        return None
+
+    def _emit_redacted_diagnostic(diagnostic: Any) -> None:
+        progress_callback(_redact_progress_diagnostic(diagnostic))
+
+    return _emit_redacted_diagnostic
+
+
 def _get_mapping_value(obj: Any, key: str) -> Any:
     if isinstance(obj, Mapping):
         return obj.get(key)
@@ -291,7 +362,7 @@ def _stable_row_key(row: Mapping[str, Any]) -> str:
 
 def _diagnostic_to_dict(diagnostic: Any) -> dict[str, Any]:
     if isinstance(diagnostic, Mapping):
-        return {str(key): value for key, value in diagnostic.items()}
+        return _redact_diagnostic_mapping({str(key): value for key, value in diagnostic.items()})
     result: dict[str, Any] = {}
     for key in (
         "source_alias",
@@ -309,7 +380,7 @@ def _diagnostic_to_dict(diagnostic: Any) -> dict[str, Any]:
         if key == "status":
             value = getattr(value, "value", value)
         result[key] = value
-    return result
+    return _redact_diagnostic_mapping(result)
 
 
 def _fetch_result_diagnostics(payload: Any) -> dict[str, Any]:
@@ -927,6 +998,7 @@ def fetch_oznak_records_for_source_profile(
                 "Refusing an unbounded production-table read."
             ),
         )
+    safe_progress_callback = _sanitize_progress_callback(progress_callback)
 
     try:
         oznak_module = importer(OZNAK_IMPORT_PATH)
@@ -1060,7 +1132,7 @@ def fetch_oznak_records_for_source_profile(
                     pagination_column=str(pagination_column),
                     credential_provider=credential_provider,
                     cancellation_token=cancellation_token,
-                    progress_callback=progress_callback,
+                    progress_callback=safe_progress_callback,
                     max_workers=max_workers,
                     max_pending_events=max_pending_events,
                 )
@@ -1070,7 +1142,7 @@ def fetch_oznak_records_for_source_profile(
                     request,
                     credential_provider=credential_provider,
                     cancellation_token=cancellation_token,
-                    progress_callback=progress_callback,
+                    progress_callback=safe_progress_callback,
                     max_workers=max_workers,
                 )
             payloads.append(payload)
@@ -1154,6 +1226,7 @@ def fetch_oznak_records_for_source_sql(
             diagnostics={"stage": "availability"},
             error=status.error,
         )
+    safe_progress_callback = _sanitize_progress_callback(progress_callback)
 
     try:
         oznak_module = importer(OZNAK_IMPORT_PATH)
@@ -1246,7 +1319,7 @@ def fetch_oznak_records_for_source_sql(
                 request,
                 credential_provider=credential_provider,
                 cancellation_token=cancellation_token,
-                progress_callback=progress_callback,
+                progress_callback=safe_progress_callback,
                 record_batch_callback=record_batch_callback,
                 metroliza_profile=profile,
             )
@@ -1261,7 +1334,7 @@ def fetch_oznak_records_for_source_sql(
                 timeout_seconds=timeout_seconds,
                 mode=mode,
                 cancellation_token=cancellation_token,
-                progress_callback=progress_callback,
+                progress_callback=safe_progress_callback,
             )
     except Exception as exc:
         return OznakAdapterFetchResult(
