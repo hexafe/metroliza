@@ -106,14 +106,19 @@ class TestMainWindowMetadataUi(unittest.TestCase):
         finally:
             window.close()
 
-    def test_realtime_monitoring_dashboard_requires_database(self):
+    def test_realtime_monitoring_dashboard_uses_temporary_database_when_none_selected(self):
         window = MainWindow(version_label="test", days_until_expiration=None)
         try:
-            with patch("metroliza.ui.main_window.QDesktopServices.openUrl") as open_url:
+            with patch("metroliza.ui.main_window.QDesktopServices.openUrl", return_value=True) as open_url:
                 window.launch_realtime_industrial_monitoring_dashboard()
 
-            open_url.assert_not_called()
-            self.assertIn("Select a Metroliza database", window.statusBar().currentMessage())
+            open_url.assert_called_once()
+            self.assertIsNotNone(window.last_realtime_dashboard_path)
+            self.assertIsNotNone(window._realtime_monitoring_temp_db_file)
+            self.assertTrue(Path(window._realtime_monitoring_temp_db_file).exists())
+            html = Path(window.last_realtime_dashboard_path).read_text(encoding="utf-8")
+            self.assertIn("Real-time Industrial Monitoring", html)
+            self.assertIn("temporary session database", window.statusBar().currentMessage())
         finally:
             window.close()
 

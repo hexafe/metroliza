@@ -128,6 +128,15 @@ Industrial export from cached data does not connect directly to the production l
 
 Use **Edit filters...** in the fetch dialog to paste reference/ID values quickly as a comma-separated, semicolon-separated, space-separated, tab-separated, or line-separated list. You can also add simple source-column filters such as station, status, work order, or date. If no guided filter is set, **Fetch to cache** uses the configured row limit by default.
 
+### Tools > Real-time Industrial Monitoring...
+
+Opens the read-only [Realtime Industrial Monitoring](realtime_industrial_monitoring.md)
+dashboard from the local realtime sample/event store. Selecting a Metroliza report
+database first is optional. If no database is selected, Metroliza creates a temporary
+session SQLite store so the dashboard and future monitoring setup can open without
+changing a report database. Select or create a persistent database only when you want
+the realtime samples and anomaly events to remain available after the session.
+
 Use the **SQL query** tab only when guided filters are not enough or when IT/MES support gives you a reviewed read-only query. **Preview SQL** reads a small sample first; the default preview is `5` rows. Use **Open recipe...** and **Save recipe...** for reusable SQL queries such as a shift, station, work order, or date range.
 
 If the Metroliza report reference and production reference are different, use **Production links...** after sync. Select one Metroliza report, select one cached production row, then click **Link selected**. Manual links take priority over automatic exact-reference links during export.

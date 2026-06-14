@@ -136,6 +136,7 @@ class MainWindow(QMainWindow):
         self.metadata_enrichment_error_message = None
         self.industrial_data_dialog = None
         self.last_realtime_dashboard_path = None
+        self._realtime_monitoring_temp_db_file = None
         self.parser_plugin_wizard_dialog = None
         self.directory = None
         self.db_file = None
@@ -493,6 +494,7 @@ class MainWindow(QMainWindow):
             self.stop_metadata_enrichment()
             event.ignore()
             return
+        self._cleanup_realtime_monitoring_temp_db()
         super().closeEvent(event)
 
     def launch_parsing_dialog(self):
@@ -608,13 +610,6 @@ class MainWindow(QMainWindow):
 
     def launch_realtime_industrial_monitoring_dashboard(self):
         try:
-            if not self.db_file:
-                self.statusBar().showMessage(
-                    "Select a Metroliza database before opening real-time monitoring.",
-                    5000,
-                )
-                return
-
             from metroliza.industrial.realtime.realtime_dashboard_html import (
                 write_realtime_dashboard_html,
             )
@@ -622,14 +617,19 @@ class MainWindow(QMainWindow):
                 RealtimeDashboardService,
             )
 
-            snapshot = RealtimeDashboardService(self.db_file).dashboard_snapshot()
+            database = self._realtime_monitoring_database_file()
+            using_temporary_database = database != self.db_file
+            snapshot = RealtimeDashboardService(database).dashboard_snapshot()
             output_dir = Path(tempfile.gettempdir()) / "metroliza" / "realtime_dashboards"
             output_dir.mkdir(parents=True, exist_ok=True)
             output_path = output_dir / "realtime_industrial_monitoring.html"
             self.last_realtime_dashboard_path = write_realtime_dashboard_html(snapshot, output_path)
             opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.last_realtime_dashboard_path)))
             if opened:
-                self.statusBar().showMessage("Real-time industrial monitoring dashboard opened.", 5000)
+                message = "Real-time industrial monitoring dashboard opened."
+                if using_temporary_database:
+                    message += " Using a temporary session database."
+                self.statusBar().showMessage(message, 5000)
             else:
                 self.statusBar().showMessage(
                     f"Dashboard written to {self.last_realtime_dashboard_path}",
@@ -637,6 +637,34 @@ class MainWindow(QMainWindow):
                 )
         except Exception as e:
             self.log_and_exit(e)
+
+    def _realtime_monitoring_database_file(self) -> str:
+        if self.db_file:
+            return self.db_file
+        if not self._realtime_monitoring_temp_db_file:
+            temp = tempfile.NamedTemporaryFile(
+                prefix="metroliza-realtime-monitoring-",
+                suffix=".sqlite",
+                delete=False,
+            )
+            temp.close()
+            self._realtime_monitoring_temp_db_file = temp.name
+        return self._realtime_monitoring_temp_db_file
+
+    def _cleanup_realtime_monitoring_temp_db(self) -> None:
+        db_file = self._realtime_monitoring_temp_db_file
+        if not db_file:
+            return
+        for candidate in (
+            Path(db_file),
+            Path(f"{db_file}-wal"),
+            Path(f"{db_file}-shm"),
+        ):
+            try:
+                candidate.unlink(missing_ok=True)
+            except OSError:
+                pass
+        self._realtime_monitoring_temp_db_file = None
 
     def launch_parser_plugin_wizard(self):
         try:

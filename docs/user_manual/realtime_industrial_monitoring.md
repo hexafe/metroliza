@@ -11,6 +11,12 @@ words used in the monitor, how to prepare a safe setup, and how to respond to
 events. It does not replace the normal [Industrial Data](industrial_data.md)
 workflow for manual fetches and CSV Summary analysis.
 
+Realtime monitoring keeps samples and anomaly events in a local SQLite store.
+You do not need to select a Metroliza report database before opening the
+monitoring dashboard. Without a selected database, Metroliza uses a temporary
+session store. Choose an existing or newly created database only when the
+realtime history should be kept for later review.
+
 ## Important Words
 
 | Word | Plain meaning |
