@@ -112,7 +112,9 @@ docs, tickets, screenshots, or logs.
       and should stay visible in future optimization reviews.
 - [x] 2026-06-14: Final staged release hygiene passed after adding a narrow
       allowlist for the named synthetic realtime CSV fixtures.
-- [ ] Pushed GitHub CI after branch publication.
+- [x] 2026-06-14: Pushed GitHub CI passed for commit
+      `307acd16031c5622093ba52a9a64d2b2146d7f02` in run
+      [`27506446912`](https://github.com/hexafe/metroliza/actions/runs/27506446912).
 
 ## Rollback Steps
 

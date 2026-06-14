@@ -41,7 +41,7 @@ Complete before beginning open testing on an RC build.
 - [ ] Late-scope exception register is empty, or every exception has rationale, owner, target RC, test evidence, rollback/deferral option, and explicit release-owner approval. *(Owner: Release owner)*
 - [ ] Active RC branch name is confirmed and documented (for example `release/2026.06-rc1`; validation branches are not final RC branches). *(Owner: Release engineer)*
 - [ ] Build identifier for open testing is published (artifact/version/hash) and linked in tracker. *(Owner: Release engineer)*
-- [ ] Mandatory CI baseline is completed and linked (build/lint/tests) before open testing starts for the final `2026.06 RC1` tester-build SHA. *(Owner: Release owner)*
+- [x] Mandatory CI baseline is completed and linked (build/lint/tests) before open testing starts for final `2026.06 RC1` tester-build commit `307acd16031c5622093ba52a9a64d2b2146d7f02`: GitHub Actions run [`27506446912`](https://github.com/hexafe/metroliza/actions/runs/27506446912). *(Owner: Release owner)*
 - [ ] Known-issues document link is prepared and shared with open testers. *(Owner: QA/Product)*
 - [ ] Bug reporting channel is announced (for example issue board + chat channel) and monitored. *(Owner: Release manager/QA)*
 
@@ -114,7 +114,7 @@ python -m maturin build --manifest-path src/metroliza/native/distribution_fit_ad
 - [ ] Produced artifacts are named/versioned as expected for RC distribution. *(Owner: Release manager)*
 - [ ] Third-party notices/license attribution are bundled or attached to release artifacts, including RapidOCR, ONNX Runtime, OpenCV, NumPy, Excel reader packages, hexafe-plotstats, and Oznak. *(Owner: Release manager/QA)*
 
-- [ ] GitHub CI checks for the final pushed `2026.06rc1(260614)` commit are green before tag/promotion; record commit SHA and run URL after push. *(Owner: Release owner)*
+- [x] GitHub CI checks for final pushed `2026.06rc1(260614)` commit `307acd16031c5622093ba52a9a64d2b2146d7f02` are green before tag/promotion: run [`27506446912`](https://github.com/hexafe/metroliza/actions/runs/27506446912). *(Owner: Release owner)*
 - [ ] CMM parser perf gate evidence (`cmm-parser-perf-gate` + `cmm-parser-perf-artifacts`) is reviewed when parser/backend changes are present; triage follows [`cmm_parser_perf_guardrail.md`](./cmm_parser_perf_guardrail.md). *(Owner: Release owner/QA)*
 - [ ] Coverage threshold from `unit-tests` passes, and `unit-test-coverage` artifact `coverage.xml` is reviewed as RC confidence evidence. *(Owner: Release owner/QA)*
 - [ ] Manual release smoke evidence is linked before open-testing promotion when applicable. Google conversion smoke is release-blocking for promoted RC artifacts; skipped default CI does not satisfy that gate. *(Owner: Release owner)*
@@ -139,7 +139,9 @@ Current RC metadata: `2026.06rc1(260614)`.
 - Realtime/anomaly source slice coverage measured `89%`.
 - Final CI-shaped combined coverage rerun passed at `82%`, above the `80%`
   release gate, after the release metadata refresh.
-- Pushed GitHub CI for the final `260614` commit is pending until publication.
+- Pushed GitHub CI passed for final `260614` commit
+  `307acd16031c5622093ba52a9a64d2b2146d7f02` in run
+  [`27506446912`](https://github.com/hexafe/metroliza/actions/runs/27506446912).
 - Manual packaging smoke, Windows executable clean-machine launch/startup,
   Google conversion smoke, third-party notice artifact evidence, and security
   owner triage/waiver for report-only findings remain release-promotion
