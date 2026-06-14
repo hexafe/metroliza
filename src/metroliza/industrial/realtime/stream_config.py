@@ -88,7 +88,7 @@ class RealtimeStreamConfig:
     upper_warning: float | None = None
     segment_fields: tuple[str, ...] = ()
     context_columns: tuple[str, ...] = ()
-    detectors: tuple[str, ...] = ("spec_limits", "warning_limits", "rolling_zscore")
+    detectors: tuple[str, ...] = ("spec_limits", "rolling_zscore")
     policy: StreamPollPolicy = field(default_factory=StreamPollPolicy)
 
     def validated(self, *, profile: IndustrialSourceProfile | None = None) -> "RealtimeStreamConfig":
@@ -140,6 +140,9 @@ class RealtimeStreamConfig:
             detectors=detectors,
             policy=policy,
         )
+
+
+RealtimePollConfig = RealtimeStreamConfig
 
 
 def load_realtime_stream_configs(config_path: str | Path) -> list[RealtimeStreamConfig]:
