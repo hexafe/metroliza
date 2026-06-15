@@ -103,7 +103,7 @@ class RequirementsHygieneTests(unittest.TestCase):
         matches = [entry for entry in runtime_entries if entry.lower().startswith('oznak @ ')]
 
         self.assertEqual(matches, [
-            'oznak @ git+https://github.com/hexafe/oznak.git@46eba3f63eab1d65e3117c238324eade9118d242'
+            'oznak @ git+https://github.com/hexafe/oznak.git@ed51580dfdec9f91f6320c7937af6d65dd5a1290'
         ])
 
     def test_ci_security_audit_checks_same_internal_commits_as_runtime_requirements(self):

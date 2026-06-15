@@ -565,6 +565,54 @@ def test_sync_dialog_starts_sync_thread_without_external_connection(monkeypatch,
     dialog.close()
 
 
+def test_sync_dialog_access_check_restores_filter_tabs_after_thread_finishes(
+    monkeypatch,
+    tmp_path,
+):
+    _app()
+    db_path = str(tmp_path / "industrial.db")
+    IndustrialDataRepository(db_path).upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="events",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+        allowed_columns=("event_id", "reference"),
+    )
+    _CapturingSyncThread.instances.clear()
+    monkeypatch.setattr(
+        industrial_sync_dialog,
+        "IndustrialOznakSyncThread",
+        _CapturingSyncThread,
+    )
+    dialog = IndustrialSyncDialog(db_file=db_path)
+    dialog.username_edit.setText("operator")
+    dialog.password_edit.setText("secret-password")
+
+    assert dialog.mode_tabs.isEnabled()
+    assert dialog.edit_filter_button.isEnabled()
+    assert dialog.preview_sql_button.isEnabled()
+
+    dialog.test_connection()
+
+    assert not dialog.mode_tabs.isEnabled()
+    assert not dialog.edit_filter_button.isEnabled()
+    assert not dialog.preview_sql_button.isEnabled()
+
+    _CapturingSyncThread.instances[0].started = False
+    dialog.on_oznak_thread_stopped()
+
+    assert dialog.mode_tabs.isEnabled()
+    assert dialog.edit_filter_button.isEnabled()
+    assert dialog.preview_sql_button.isEnabled()
+    assert dialog.test_connection_button.isEnabled()
+    assert dialog.oznak_sync_thread is None
+    dialog.close()
+
+
 def test_sync_dialog_sql_preview_and_fetch_to_csv_summary(monkeypatch, tmp_path):
     _app()
     db_path = str(tmp_path / "industrial.db")

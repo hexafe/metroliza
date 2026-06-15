@@ -1,5 +1,8 @@
 import json
+from datetime import date, datetime
+from decimal import Decimal
 
+import pandas as pd
 import pytest
 
 from modules.db import sqlite_connection_scope
@@ -553,3 +556,119 @@ def test_upsert_records_and_summarize_counts_from_synthetic_rows(tmp_path):
     assert token_values == 0
     assert stale_measurements == 0
     assert row1_dynamic_fields == {"temperature_c"}
+
+
+def test_sync_and_record_payloads_normalize_datetime_like_scalars_for_storage(tmp_path):
+    db_path = str(tmp_path / "industrial.db")
+    repository = IndustrialDataRepository(db_path)
+    profile = repository.upsert_source_profile(
+        profile_key="line-timestamps",
+        profile_name="Line Timestamps",
+        source_db_alias="plant_ts",
+        database_type="mssql",
+        source_object_name="factory.events",
+        allowed_columns=["reference", "station"],
+    )
+
+    sync_run_id = repository.create_sync_run(
+        source_profile_id=profile.id,
+        filters={
+            "date": date(2026, 6, 15),
+            "started": pd.Timestamp("2026-06-15T08:30:00"),
+        },
+        diagnostics={
+            "checked_at": datetime(2026, 6, 15, 8, 31),
+            "threshold": Decimal("1.25"),
+        },
+    )
+    repository.upsert_industrial_records_from_rows(
+        source_profile_id=profile.id,
+        source_db_alias=profile.source_db_alias,
+        sync_run_id=sync_run_id,
+        rows=[
+            {
+                "source_record_key": "ROW-TS",
+                "process_timestamp": pd.Timestamp("2026-06-15T12:00:00"),
+                "reference": "REF-TS",
+                "station": "S1",
+                "cycle_time": Decimal("10.50"),
+                "measurements": {
+                    "observed_at": pd.Timestamp("2026-06-15T12:00:01"),
+                    "missing": pd.NaT,
+                    "not_a_number": float("nan"),
+                    "amount": Decimal("3.140"),
+                },
+                "raw_record": {
+                    "event_id": "ROW-TS",
+                    "event_time": pd.Timestamp("2026-06-15T12:00:00"),
+                    "missing": pd.NaT,
+                    "amount": Decimal("3.140"),
+                },
+            }
+        ],
+    )
+    repository.finish_sync_run(
+        sync_run_id=sync_run_id,
+        status="succeeded",
+        row_count=1,
+        diagnostics={"finished_at": pd.Timestamp("2026-06-15T12:01:00")},
+    )
+
+    with sqlite_connection_scope(db_path) as conn:
+        record = conn.execute(
+            """
+            SELECT process_timestamp, raw_record_json
+            FROM industrial_records
+            WHERE source_profile_id = ? AND source_record_key = 'ROW-TS'
+            """,
+            (profile.id,),
+        ).fetchone()
+        cycle_time_text = conn.execute(
+            """
+            SELECT values_row.field_value_text
+            FROM industrial_record_values values_row
+            JOIN industrial_records records_row ON records_row.id = values_row.record_id
+            WHERE records_row.source_profile_id = ?
+              AND records_row.source_record_key = 'ROW-TS'
+              AND values_row.field_name = 'cycle_time'
+            """,
+            (profile.id,),
+        ).fetchone()[0]
+        measurement_json = conn.execute(
+            """
+            SELECT values_row.field_value_json
+            FROM industrial_record_values values_row
+            JOIN industrial_records records_row ON records_row.id = values_row.record_id
+            WHERE records_row.source_profile_id = ?
+              AND records_row.source_record_key = 'ROW-TS'
+              AND values_row.field_name = 'measurements'
+            """,
+            (profile.id,),
+        ).fetchone()[0]
+        filters_json, diagnostics_json = conn.execute(
+            """
+            SELECT filters_json, diagnostics_json
+            FROM industrial_sync_runs
+            WHERE id = ?
+            """,
+            (sync_run_id,),
+        ).fetchone()
+
+    assert record is not None
+    process_timestamp, raw_record_json = record
+    raw_record = json.loads(raw_record_json)
+    measurements = json.loads(measurement_json)
+    filters = json.loads(filters_json)
+    diagnostics = json.loads(diagnostics_json)
+    assert process_timestamp == "2026-06-15T12:00:00"
+    assert raw_record["event_time"] == "2026-06-15T12:00:00"
+    assert raw_record["missing"] is None
+    assert raw_record["amount"] == "3.140"
+    assert cycle_time_text == "10.50"
+    assert measurements["observed_at"] == "2026-06-15T12:00:01"
+    assert measurements["missing"] is None
+    assert measurements["not_a_number"] is None
+    assert measurements["amount"] == "3.140"
+    assert filters["date"] == "2026-06-15"
+    assert filters["started"] == "2026-06-15T08:30:00"
+    assert diagnostics["finished_at"] == "2026-06-15T12:01:00"

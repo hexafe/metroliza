@@ -812,10 +812,9 @@ class IndustrialSyncDialog(QDialog):
     def on_oznak_thread_stopped(self) -> None:
         self._pending_credential_save = None
         self._pending_sql_preview = False
-        self._sync_action_buttons()
-        self.close_button.setEnabled(True)
-        self.cancel_sync_button.setEnabled(False)
         self.oznak_sync_thread = None
+        self._set_action_buttons_enabled(True)
+        self.cancel_sync_button.setEnabled(False)
 
     def _save_pending_credentials_after_success(self, result: dict[str, Any]) -> None:
         pending = self._pending_credential_save

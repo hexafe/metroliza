@@ -10,6 +10,7 @@ from typing import Any, Iterable, Mapping
 
 from metroliza.reports.db import run_transaction_with_retry
 from metroliza.industrial.industrial_data_schema import SYNC_RUN_STATUSES, ensure_industrial_data_schema
+from metroliza.industrial.json_safety import to_json_storage_text, to_sqlite_storage_text
 
 
 _FINISHED_SYNC_RUN_STATUSES = tuple(status for status in SYNC_RUN_STATUSES if status != "running")
@@ -164,9 +165,7 @@ def utc_timestamp() -> str:
 
 
 def _to_json(value: Any) -> str | None:
-    if value is None:
-        return None
-    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return to_json_storage_text(value)
 
 
 def _from_json(value: Any, default: Any) -> Any:
@@ -672,18 +671,18 @@ class IndustrialDataRepository:
                         sync_run_id,
                         source_db_alias,
                         record_key,
-                        normalized.get("process_timestamp"),
-                        normalized.get("reference"),
-                        normalized.get("part_number"),
-                        normalized.get("part_name"),
-                        normalized.get("revision"),
-                        normalized.get("serial"),
-                        normalized.get("batch_lot"),
-                        normalized.get("work_order"),
-                        normalized.get("station"),
-                        normalized.get("line"),
-                        normalized.get("operator_name"),
-                        normalized.get("process_status"),
+                        to_sqlite_storage_text(normalized.get("process_timestamp")),
+                        to_sqlite_storage_text(normalized.get("reference")),
+                        to_sqlite_storage_text(normalized.get("part_number")),
+                        to_sqlite_storage_text(normalized.get("part_name")),
+                        to_sqlite_storage_text(normalized.get("revision")),
+                        to_sqlite_storage_text(normalized.get("serial")),
+                        to_sqlite_storage_text(normalized.get("batch_lot")),
+                        to_sqlite_storage_text(normalized.get("work_order")),
+                        to_sqlite_storage_text(normalized.get("station")),
+                        to_sqlite_storage_text(normalized.get("line")),
+                        to_sqlite_storage_text(normalized.get("operator_name")),
+                        to_sqlite_storage_text(normalized.get("process_status")),
                         _to_json(redacted_raw_record) or "{}",
                         now,
                         now,
@@ -718,7 +717,7 @@ class IndustrialDataRepository:
                         value_text = None
                         value_json = None
                     else:
-                        value_text = str(field_value)
+                        value_text = to_sqlite_storage_text(field_value)
                         value_json = None
                     cursor.execute(
                         """

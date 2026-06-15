@@ -1,3 +1,7 @@
+from decimal import Decimal
+
+import pandas as pd
+
 from modules.industrial_data_repository import IndustrialDataRepository
 from metroliza.industrial.realtime.offset_store import StreamOffsetStore
 from metroliza.industrial.realtime.sample_repository import RealtimeSampleRepository
@@ -108,6 +112,49 @@ def test_insert_samples_accepts_generator_batches(tmp_path):
     assert result.processed == 2
     assert result.inserted == 2
     assert len(result.sample_ids) == 2
+
+
+def test_insert_samples_normalizes_datetime_like_raw_record_scalars(tmp_path):
+    db_path = str(tmp_path / "sample_json_safe.db")
+    profile = _source_profile(db_path)
+    repository = RealtimeSampleRepository(db_path)
+    signal = repository.upsert_signal_definition(
+        SignalDefinition(
+            source_profile_id=profile.id,
+            signal_key="cycle_time",
+            metric_name="cycle_time_s",
+        )
+    )
+
+    result = repository.insert_samples(
+        [
+            IndustrialSample(
+                source_profile_id=profile.id,
+                signal_id=signal.id,
+                source_record_key="ROW-TS",
+                event_time="2026-06-13T10:00:00Z",
+                metric_name="cycle_time_s",
+                value=10.0,
+                segment_key={"observed_at": pd.Timestamp("2026-06-13T10:00:00")},
+                raw_record={
+                    "event_time": pd.Timestamp("2026-06-13T10:00:00"),
+                    "missing": pd.NaT,
+                    "amount": Decimal("10.25"),
+                    "not_a_number": float("nan"),
+                },
+            )
+        ]
+    )
+    loaded = repository.list_samples(signal_id=signal.id)
+
+    assert result.inserted == 1
+    assert loaded[0].segment_key == {"observed_at": "2026-06-13T10:00:00"}
+    assert loaded[0].raw_record == {
+        "amount": "10.25",
+        "event_time": "2026-06-13T10:00:00",
+        "missing": None,
+        "not_a_number": None,
+    }
 
 
 def test_stream_offset_upsert_replaces_cursor(tmp_path):

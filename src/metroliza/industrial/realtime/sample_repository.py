@@ -8,6 +8,7 @@ import json
 from typing import Any, Iterable
 
 from metroliza.industrial.industrial_data_schema import ensure_industrial_data_schema
+from metroliza.industrial.json_safety import to_json_storage_text
 from metroliza.industrial.realtime.stream_contracts import (
     IndustrialSample,
     SampleBatchResult,
@@ -23,7 +24,7 @@ def utc_timestamp() -> str:
 
 
 def to_json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return to_json_storage_text(value) or "null"
 
 
 def from_json(value: Any, default: Any) -> Any:
