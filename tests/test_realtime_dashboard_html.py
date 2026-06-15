@@ -3,6 +3,7 @@ from pathlib import Path
 from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
 from metroliza.industrial.realtime.realtime_dashboard_service import RealtimeDashboardService
 from metroliza.industrial.realtime.realtime_dashboard_html import (
+    DashboardAggregateRow,
     DashboardAnomalyEvent,
     DashboardSamplePoint,
     DashboardSignalSeries,
@@ -75,6 +76,7 @@ def test_static_dashboard_renders_required_sections_cards_tables_and_chart() -> 
     assert 'data-section="open-events"' in html
     assert 'data-section="severity-timeline"' in html
     assert 'data-section="top-signals"' in html
+    assert 'data-section="sample-aggregates"' in html
     assert 'data-section="source-health"' in html
     assert 'data-section="signal-charts"' in html
     assert "Open events" in html
@@ -154,6 +156,65 @@ def test_service_source_health_prefers_operator_health_over_raw_status() -> None
     assert "status-lagging" in html
     assert ">lagging</span>" in html
     assert '<span class="status status-running">' not in html
+
+
+def test_static_dashboard_renders_sample_aggregates_without_open_events() -> None:
+    html = render_realtime_dashboard_html(
+        RealtimeDashboardSnapshot(
+            generated_at="2026-06-13T12:30:00Z",
+            signals=(
+                DashboardSignalSeries(
+                    signal_id=10,
+                    signal_key="cycle_time",
+                    metric_name="cycle_time_s",
+                    unit="s",
+                    source_name="Assembly MES",
+                    samples=(
+                        DashboardSamplePoint(
+                            sample_id=1,
+                            event_time="2026-06-13T12:00:00Z",
+                            value=10.0,
+                        ),
+                        DashboardSamplePoint(
+                            sample_id=2,
+                            event_time="2026-06-13T12:01:00Z",
+                            value=13.5,
+                        ),
+                    ),
+                ),
+            ),
+            aggregate_rows=(
+                DashboardAggregateRow(
+                    signal_id=10,
+                    signal_key="cycle_time",
+                    metric_name="cycle_time_s",
+                    unit="s",
+                    source_name="Assembly MES",
+                    sample_count=3,
+                    minimum=10.0,
+                    average=12.0,
+                    maximum=13.5,
+                    latest_value=13.5,
+                    nominal=10.0,
+                    lsl=8.0,
+                    usl=12.0,
+                    above_usl_count=2,
+                    nok_count=2,
+                    nok_pct=2 / 3,
+                    first_event_time="2026-06-13T12:00:00Z",
+                    last_event_time="2026-06-13T12:02:00Z",
+                ),
+            ),
+        )
+    )
+
+    assert "No open persisted anomaly events in this snapshot." in html
+    assert "Sample Aggregates" in html
+    assert "cycle_time_s (s)" in html
+    assert "2 (66.7%)" in html
+    assert "LSL 8 / NOM 10 / USL 12" in html
+    assert "2026-06-13T12:00:00Z to 2026-06-13T12:02:00Z" in html
+    assert "observed-line" in html
 
 
 def test_secret_like_text_is_redacted_before_rendering() -> None:

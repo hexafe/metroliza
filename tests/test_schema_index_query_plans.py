@@ -216,6 +216,7 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
                 'idx_industrial_link_candidates_record_status',
                 'idx_industrial_link_candidates_report_measurement',
                 'idx_industrial_stream_offsets_profile_stream',
+                'idx_industrial_realtime_monitor_configs_enabled',
                 'idx_industrial_signal_definitions_profile_enabled',
                 'idx_industrial_samples_signal_time',
                 'idx_industrial_samples_profile_time',

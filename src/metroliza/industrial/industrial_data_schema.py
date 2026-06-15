@@ -5,7 +5,7 @@ from __future__ import annotations
 from metroliza.reports.db import run_transaction_with_retry
 
 
-SCHEMA_VERSION = "industrial_data_v4"
+SCHEMA_VERSION = "industrial_data_v5"
 
 SYNC_RUN_STATUSES = ("running", "succeeded", "completed_with_warnings", "failed", "cancelled")
 JOIN_MATCH_MODES = ("exact", "time_window")
@@ -135,6 +135,34 @@ SCHEMA_TABLE_STATEMENTS = (
         FOREIGN KEY (source_profile_id) REFERENCES industrial_source_profiles(id) ON DELETE CASCADE,
         UNIQUE(source_profile_id, stream_key)
     )""",
+    """CREATE TABLE IF NOT EXISTS industrial_realtime_monitor_configs (
+        id INTEGER PRIMARY KEY,
+        source_profile_id INTEGER NOT NULL,
+        stream_key TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+        cursor_column TEXT NOT NULL,
+        event_time_column TEXT NOT NULL,
+        record_key_column TEXT NOT NULL,
+        signal_keys_json TEXT NOT NULL DEFAULT '[]',
+        signal_columns_json TEXT NOT NULL DEFAULT '{}',
+        polling_interval_seconds REAL NOT NULL DEFAULT 60,
+        timeout_seconds REAL NOT NULL DEFAULT 30,
+        chunk_size INTEGER NOT NULL DEFAULT 500,
+        max_catchup_rows_per_cycle INTEGER NOT NULL DEFAULT 5000,
+        allowed_lateness_seconds REAL NOT NULL DEFAULT 0,
+        segment_fields_json TEXT NOT NULL DEFAULT '[]',
+        context_fields_json TEXT NOT NULL DEFAULT '[]',
+        detectors_json TEXT NOT NULL DEFAULT '[]',
+        display_mode TEXT NOT NULL DEFAULT 'raw' CHECK (display_mode IN ('raw', 'aggregated')),
+        aggregation_time_bucket TEXT NOT NULL DEFAULT 'none',
+        aggregation_methods_json TEXT NOT NULL DEFAULT '[]',
+        aggregation_group_fields_json TEXT NOT NULL DEFAULT '[]',
+        dashboard_output_path TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (source_profile_id) REFERENCES industrial_source_profiles(id) ON DELETE CASCADE,
+        UNIQUE(source_profile_id, stream_key)
+    )""",
     """CREATE TABLE IF NOT EXISTS industrial_signal_definitions (
         id INTEGER PRIMARY KEY,
         source_profile_id INTEGER NOT NULL,
@@ -245,6 +273,7 @@ SCHEMA_INDEX_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_industrial_link_candidates_record_status ON industrial_link_candidates(industrial_record_id, status)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_link_candidates_report_measurement ON industrial_link_candidates(report_id, measurement_id)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_stream_offsets_profile_stream ON industrial_stream_offsets(source_profile_id, stream_key)",
+    "CREATE INDEX IF NOT EXISTS idx_industrial_realtime_monitor_configs_enabled ON industrial_realtime_monitor_configs(enabled, source_profile_id)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_signal_definitions_profile_enabled ON industrial_signal_definitions(source_profile_id, enabled)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_samples_signal_time ON industrial_samples(signal_id, event_time)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_samples_profile_time ON industrial_samples(source_profile_id, event_time)",

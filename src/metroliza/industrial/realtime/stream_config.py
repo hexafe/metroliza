@@ -93,6 +93,10 @@ class RealtimePollConfig:
         if allowed_lateness < 0:
             raise RealtimeStreamConfigError("Allowed lateness seconds must not be negative.")
         timeout = _positive_float("timeout seconds", self.timeout_seconds)
+        if timeout > polling_interval:
+            raise RealtimeStreamConfigError(
+                "Realtime query timeout seconds must be less than or equal to polling interval seconds."
+            )
 
         return replace(
             self,

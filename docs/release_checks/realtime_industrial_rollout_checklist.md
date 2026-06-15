@@ -115,6 +115,22 @@ docs, tickets, screenshots, or logs.
 - [x] 2026-06-14: Pushed GitHub CI passed for commit
       `307acd16031c5622093ba52a9a64d2b2146d7f02` in run
       [`27506446912`](https://github.com/hexafe/metroliza/actions/runs/27506446912).
+- [x] 2026-06-15: Replaced the static monitor launch with a modeless
+      realtime monitoring dialog that supports multi-source checkboxes,
+      persisted polling configuration, status, diagnostics, raw/aggregated
+      dashboard output, and live bounded polling through the existing Oznak
+      credential store.
+- [x] 2026-06-15: Focused realtime/UI validation passed:
+      `96 passed` across realtime config, poller, schema, Oznak realtime
+      adapter, monitor dialog, dashboard service/HTML, and main-window tests.
+- [x] 2026-06-15: Local release gates passed:
+      `ruff check .`, `compileall`, release metadata sync, release hygiene,
+      and full offscreen pytest (`2078 passed, 293 skipped, 6 warnings,
+      83 subtests passed`).
+- [x] 2026-06-15: Security audit passed after allowing the temporary
+      `pip-audit` environment to upgrade. `pip-audit` reported no known
+      vulnerabilities; existing Bandit findings remain report-only baseline
+      warnings.
 
 ## Rollback Steps
 

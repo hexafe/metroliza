@@ -538,6 +538,7 @@ def _fetch_raw_sql_records_with_metroliza_fallback(
     progress_callback: Any,
     record_batch_callback: Any = None,
     metroliza_profile: Any = None,
+    parameters: tuple[Any, ...] = (),
 ) -> Any:
     """Run read-only SQL through Oznak's existing engine contract.
 
@@ -575,6 +576,7 @@ def _fetch_raw_sql_records_with_metroliza_fallback(
             "metadata": {
                 "mode": normalized_mode,
                 "limit": row_limit,
+                "sql_parameter_count": len(tuple(parameters or ())),
                 "execution_contract": "metroliza_engine_fallback",
             },
         }
@@ -594,9 +596,10 @@ def _fetch_raw_sql_records_with_metroliza_fallback(
 
         sqlalchemy_module = importer("sqlalchemy")
         text = getattr(sqlalchemy_module, "text")
+        query_parameters = tuple(parameters or ())
 
         with engine.connect() as connection:
-            cursor = connection.execute(text(normalized_sql))
+            cursor = _execute_raw_sql(connection, text, normalized_sql, query_parameters)
             mapping_cursor = cursor.mappings()
             data: list[dict[str, Any]] = []
             row_count = 0
@@ -719,6 +722,17 @@ def _batched(values: tuple[str, ...], batch_size: int) -> tuple[tuple[str, ...],
         return ((),)
     safe_batch_size = max(1, int(batch_size))
     return tuple(values[index : index + safe_batch_size] for index in range(0, len(values), safe_batch_size))
+
+
+def _execute_raw_sql(connection: Any, text_factory: Any, sql_text: str, parameters: tuple[Any, ...]) -> Any:
+    """Execute raw SQL with driver parameters when the SQL contains placeholders."""
+
+    if parameters:
+        exec_driver_sql = getattr(connection, "exec_driver_sql", None)
+        if callable(exec_driver_sql):
+            return exec_driver_sql(sql_text, parameters)
+        return connection.execute(text_factory(sql_text), parameters)
+    return connection.execute(text_factory(sql_text))
 
 
 def _construct_with_supported_kwargs(factory: Any, kwargs: dict[str, Any]) -> Any:
@@ -1179,6 +1193,7 @@ def fetch_oznak_records_for_source_sql(
     username: str,
     password: str,
     sql_text: str,
+    parameters: tuple[Any, ...] | None = None,
     limit: int | None = None,
     timeout_seconds: float | None = None,
     mode: str = "fetch",
@@ -1198,6 +1213,8 @@ def fetch_oznak_records_for_source_sql(
             diagnostics={"stage": "availability"},
             error=status.error,
         )
+
+    query_parameters = tuple(parameters or ())
 
     try:
         oznak_module = importer(OZNAK_IMPORT_PATH)
@@ -1269,6 +1286,8 @@ def fetch_oznak_records_for_source_sql(
                 {
                     "profile": oznak_profile,
                     "sql": sql_text,
+                    "parameters": query_parameters,
+                    "params": query_parameters,
                     "limit": limit,
                     "timeout_seconds": timeout_seconds,
                     "mode": mode,
@@ -1293,6 +1312,7 @@ def fetch_oznak_records_for_source_sql(
                 progress_callback=progress_callback,
                 record_batch_callback=record_batch_callback,
                 metroliza_profile=profile,
+                parameters=query_parameters,
             )
         else:
             payload = _fetch_raw_sql_records_with_metroliza_fallback(
@@ -1301,6 +1321,7 @@ def fetch_oznak_records_for_source_sql(
                 oznak_profile=oznak_profile,
                 credential_provider=credential_provider,
                 sql_text=sql_text,
+                parameters=query_parameters,
                 limit=limit,
                 timeout_seconds=timeout_seconds,
                 mode=mode,
@@ -1329,6 +1350,7 @@ def fetch_oznak_records_for_source_sql(
         "query_summary": query_summary,
         "sql_limit": limit,
         "sql_operation_mode": mode,
+        "sql_parameter_count": len(query_parameters),
         "raw_sql_contract": "oznak" if raw_contract_available else "metroliza_engine_fallback",
         "raw_payload_type": type(payload).__name__,
         "streamed_to_callback": streamed_to_callback,

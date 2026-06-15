@@ -51,6 +51,11 @@ from metroliza.industrial.oznak_adapter import (
     fetch_oznak_records_for_source_sql,
     get_oznak_adapter_status,
 )
+from metroliza.industrial.realtime.db_poller import SourceDbAdapter
+from metroliza.industrial.realtime.monitor_config import RealtimeMonitorConfig
+from metroliza.industrial.realtime.oznak_source_adapter import OznakRealtimeSourceAdapter
+from metroliza.industrial.realtime.source_runtime import RealtimeSourceRuntime
+from metroliza.industrial.realtime.stream_config import RealtimePollConfig
 from metroliza.shared.progress_status import diagnostic_progress_message
 from metroliza.shared.worker_cancellation import WorkerCancellationMixin
 
@@ -98,6 +103,69 @@ class IndustrialLinkRefreshThread(QThread):
             self.summary_ready.emit(materialize_industrial_report_links(self.db_file))
         except Exception as exc:
             self.error_occurred.emit(str(exc))
+
+
+class RealtimeMonitorPollThread(WorkerCancellationMixin, QThread):
+    """Run one realtime industrial polling cycle outside the Qt main thread."""
+
+    result_ready = pyqtSignal(object)
+    error_occurred = pyqtSignal(str)
+    cancelled = pyqtSignal(str)
+    update_label = pyqtSignal(str)
+
+    def __init__(
+        self,
+        *,
+        db_file: str,
+        configs: tuple[RealtimeMonitorConfig | RealtimePollConfig, ...],
+        adapter: SourceDbAdapter | None = None,
+    ):
+        super().__init__()
+        self.db_file = db_file
+        self.configs = tuple(configs or ())
+        self.adapter = adapter
+        self.cancellation_token = None
+        self._init_cancellation_state()
+
+    def _poll_configs(self) -> tuple[RealtimePollConfig, ...]:
+        poll_configs: list[RealtimePollConfig] = []
+        for config in self.configs:
+            if isinstance(config, RealtimeMonitorConfig):
+                poll_configs.append(config.to_poll_config().validated())
+            else:
+                poll_configs.append(config.validated())
+        return tuple(poll_configs)
+
+    def _default_adapter(self) -> SourceDbAdapter:
+        status = get_oznak_adapter_status()
+        if status.available:
+            try:
+                self.cancellation_token = create_oznak_cancellation_token()
+            except Exception:
+                self.cancellation_token = None
+        return OznakRealtimeSourceAdapter(cancellation_token=self.cancellation_token)
+
+    def run(self):
+        try:
+            if self._is_cancelled():
+                self.cancelled.emit("Realtime industrial polling was cancelled.")
+                return
+            runtime = RealtimeSourceRuntime(
+                database=self.db_file,
+                configs=self._poll_configs(),
+                adapter=self.adapter or self._default_adapter(),
+            )
+            self.update_label.emit("Polling realtime industrial sources...")
+            results = runtime.poll_once()
+            if self._is_cancelled():
+                self.cancelled.emit("Realtime industrial polling was cancelled.")
+                return
+            self.result_ready.emit(results)
+        except Exception as exc:
+            if self._is_cancelled():
+                self.cancelled.emit("Realtime industrial polling was cancelled.")
+            else:
+                self.error_occurred.emit(redact_sensitive_text(exc))
 
 
 class IndustrialExportThread(WorkerCancellationMixin, QThread):

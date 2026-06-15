@@ -4,7 +4,8 @@
 - Realtime Industrial Monitoring now has a separate foundation for append-only samples, signal definitions, stream offsets, explainable anomaly events, replay, and dashboard review.
 - Deterministic anomaly detectors now cover specification limits, warning limits, IQR fences, MAD robust z-score, rolling z-score, and stale-source checks with operator-readable explanations.
 - Realtime polling now uses generated bounded queries, cursor offsets, chunk limits, safe diagnostics, and offset advancement only after local persistence succeeds.
-- Realtime dashboard review can open without selecting a Metroliza report database first; the app uses a temporary session SQLite store unless a persistent database is selected.
+- Realtime Industrial Monitoring now opens a configurable monitor dialog with source checkboxes, polling interval and timeout settings, bounded row limits, raw or aggregated dashboard mode, status, diagnostics, and dashboard output controls.
+- Realtime dashboard review still works without selecting a Metroliza report database first; the app uses a temporary session SQLite store unless a persistent database is selected.
 - Synthetic realtime fixtures and replay validation are available for pre-live testing without a production database.
 - Optional advanced anomaly tooling stays separate from normal app startup, so standard users do not need extra ML packages.
 - Industrial diagnostics now redact nested credentials, URI passwords, token-like fields, and raw SQL text from operator-facing status and persisted diagnostics.

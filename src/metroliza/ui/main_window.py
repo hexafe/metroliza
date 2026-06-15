@@ -9,8 +9,8 @@ from metroliza.app.startup_profile import record_event
 from metroliza.resources.app_assets import encoded_icon
 from metroliza.shared.custom_logger import CustomLogger
 from metroliza.ui.help_menu import build_help_menu
-from PyQt6.QtCore import QByteArray, QTimer, QUrl
-from PyQt6.QtGui import QAction, QDesktopServices, QIcon, QPixmap
+from PyQt6.QtCore import QByteArray, QTimer
+from PyQt6.QtGui import QAction, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
@@ -135,6 +135,7 @@ class MainWindow(QMainWindow):
         self.metadata_enrichment_thread = None
         self.metadata_enrichment_error_message = None
         self.industrial_data_dialog = None
+        self.realtime_monitoring_dialog = None
         self.last_realtime_dashboard_path = None
         self.last_realtime_dashboard_db_path = None
         self._realtime_session_db_path = None
@@ -308,11 +309,9 @@ class MainWindow(QMainWindow):
         self.industrial_data_action.triggered.connect(self.launch_industrial_data_dialog)
         self.realtime_monitoring_action = QAction("Real-time Industrial Monitoring...", self)
         self.realtime_monitoring_action.setToolTip(
-            "Open a read-only dashboard from persisted realtime anomaly events."
+            "Configure and run realtime polling for industrial source databases."
         )
-        self.realtime_monitoring_action.triggered.connect(
-            self.launch_realtime_industrial_monitoring_dashboard
-        )
+        self.realtime_monitoring_action.triggered.connect(self.launch_realtime_industrial_monitoring_dialog)
         self.parser_profiles_action = QAction("Parser profiles...", self)
         self.parser_profiles_action.setToolTip("Create a local handoff folder for a new supplier parser profile")
         self.parser_profiles_action.triggered.connect(self.launch_parser_plugin_wizard)
@@ -495,6 +494,8 @@ class MainWindow(QMainWindow):
             self.stop_metadata_enrichment()
             event.ignore()
             return
+        if self.realtime_monitoring_dialog is not None and self.realtime_monitoring_dialog.isVisible():
+            self.realtime_monitoring_dialog.close()
         self._cleanup_realtime_session_db()
         super().closeEvent(event)
 
@@ -609,42 +610,43 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.log_and_exit(e)
 
-    def launch_realtime_industrial_monitoring_dashboard(self):
+    def launch_realtime_industrial_monitoring_dialog(self):
         try:
-            from metroliza.industrial.realtime.realtime_dashboard_html import (
-                write_realtime_dashboard_html,
-            )
-            from metroliza.industrial.realtime.realtime_dashboard_service import (
-                RealtimeDashboardService,
-            )
-
             dashboard_db_path, using_session_db = self._realtime_dashboard_db_file()
             self.last_realtime_dashboard_db_path = dashboard_db_path
-            snapshot = RealtimeDashboardService(dashboard_db_path).dashboard_snapshot()
-            output_dir = Path(tempfile.gettempdir()) / "metroliza" / "realtime_dashboards"
-            output_dir.mkdir(parents=True, exist_ok=True)
-            output_path = output_dir / "realtime_industrial_monitoring.html"
-            self.last_realtime_dashboard_path = write_realtime_dashboard_html(snapshot, output_path)
-            opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.last_realtime_dashboard_path)))
-            if opened:
-                if using_session_db:
-                    self.statusBar().showMessage(
-                        "Real-time industrial monitoring dashboard opened with temporary session DB.",
-                        5000,
-                    )
-                else:
-                    self.statusBar().showMessage(
-                        "Real-time industrial monitoring dashboard opened.",
-                        5000,
-                    )
-            else:
-                session_note = " using temporary session DB" if using_session_db else ""
-                self.statusBar().showMessage(
-                    f"Dashboard written to {self.last_realtime_dashboard_path}{session_note}",
-                    8000,
+            from metroliza.ui.realtime_industrial_monitoring_dialog import (
+                RealtimeIndustrialMonitoringDialog,
+            )
+
+            if (
+                self.realtime_monitoring_dialog is not None
+                and self.realtime_monitoring_dialog.isVisible()
+                and self.realtime_monitoring_dialog.db_file != dashboard_db_path
+            ):
+                self.realtime_monitoring_dialog.close()
+                self.realtime_monitoring_dialog = None
+            if self.realtime_monitoring_dialog is None or not self.realtime_monitoring_dialog.isVisible():
+                self.realtime_monitoring_dialog = RealtimeIndustrialMonitoringDialog(
+                    self,
+                    dashboard_db_path,
                 )
+                self.realtime_monitoring_dialog.show()
+            else:
+                self.realtime_monitoring_dialog.reload_from_database()
+            self.realtime_monitoring_dialog.raise_()
+            self.realtime_monitoring_dialog.activateWindow()
+            if using_session_db:
+                self.statusBar().showMessage(
+                    "Real-time industrial monitoring opened with temporary session DB.",
+                    5000,
+                )
+            else:
+                self.statusBar().showMessage("Real-time industrial monitoring opened.", 5000)
         except Exception as e:
             self.log_and_exit(e)
+
+    def launch_realtime_industrial_monitoring_dashboard(self):
+        self.launch_realtime_industrial_monitoring_dialog()
 
     def _realtime_dashboard_db_file(self):
         if self.db_file:

@@ -71,11 +71,14 @@ def build_bounded_poll_query(
         where = f" WHERE {cursor} > ?"
         parameters.append(offset.cursor_value)
     limit = validated.cycle_limit
-    parameters.append(limit)
-    sql_text = (
-        f"SELECT {', '.join(_quote_identifier('selected column', column) for column in selected_columns)} "
-        f"FROM {table_name}{where} ORDER BY {cursor} ASC LIMIT ?"
-    )
+    dialect = _normalized_dialect(profile.database_type)
+    columns_sql = ", ".join(_quote_identifier("selected column", column) for column in selected_columns)
+    if dialect == "mssql":
+        parameters = [limit, *parameters]
+        sql_text = f"SELECT TOP (?) {columns_sql} FROM {table_name}{where} ORDER BY {cursor} ASC"
+    else:
+        parameters.append(limit)
+        sql_text = f"SELECT {columns_sql} FROM {table_name}{where} ORDER BY {cursor} ASC LIMIT ?"
     sql_hash = hashlib.sha256(sql_text.encode("utf-8")).hexdigest()
     return PollQuery(
         sql_text=sql_text,
@@ -89,6 +92,7 @@ def build_bounded_poll_query(
             "stream_key": validated.stream_key,
             "cursor_column": validated.cursor_column,
             "limit": limit,
+            "dialect": dialect,
             "has_cursor": bool(offset and offset.cursor_value not in (None, "")),
             "selected_columns": selected_columns,
             "sql_hash": sql_hash,
@@ -144,3 +148,14 @@ def _quote_dotted_identifier(field_name: str, value: str) -> str:
     except ValueError as exc:
         raise RealtimeStreamConfigError(str(exc)) from exc
     return ".".join(f'"{part}"' for part in str(value).split("."))
+
+
+def _normalized_dialect(database_type: str | None) -> str:
+    dialect = str(database_type or "").strip().lower()
+    if dialect in {"sqlserver", "sql_server", "mssql", "ms_sql"}:
+        return "mssql"
+    if dialect in {"mysql", "mariadb"}:
+        return "mysql"
+    if dialect in {"sqlite", "sqlite3"}:
+        return "sqlite"
+    return dialect or "unknown"

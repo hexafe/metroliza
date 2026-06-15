@@ -42,6 +42,7 @@ def test_realtime_poll_config_normalizes_bounds_and_signal_columns():
         {"chunk_size": 0},
         {"max_catchup_rows_per_cycle": 10, "chunk_size": 20},
         {"timeout_seconds": 0},
+        {"timeout_seconds": 61, "polling_interval_seconds": 60},
         {"allowed_lateness_seconds": -1},
         {"signal_keys": ()},
         {"fetch_all_confirmed": True},

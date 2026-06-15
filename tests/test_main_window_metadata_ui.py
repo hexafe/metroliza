@@ -106,25 +106,19 @@ class TestMainWindowMetadataUi(unittest.TestCase):
         finally:
             window.close()
 
-    def test_realtime_monitoring_dashboard_uses_temporary_session_database_when_none_selected(self):
+    def test_realtime_monitoring_dialog_uses_temporary_session_database_when_none_selected(self):
         window = MainWindow(version_label="test", days_until_expiration=None)
         session_db_path = None
         try:
-            with patch(
-                "metroliza.ui.main_window.QDesktopServices.openUrl",
-                return_value=True,
-            ) as open_url:
-                window.launch_realtime_industrial_monitoring_dashboard()
+            window.launch_realtime_industrial_monitoring_dialog()
 
-            open_url.assert_called_once()
-            self.assertIsNotNone(window.last_realtime_dashboard_path)
-            html = Path(window.last_realtime_dashboard_path).read_text(encoding="utf-8")
-            self.assertIn("Real-time Industrial Monitoring", html)
-            self.assertIn('data-section="summary-cards"', html)
+            self.assertIsNotNone(window.realtime_monitoring_dialog)
+            self.assertTrue(window.realtime_monitoring_dialog.isVisible())
             self.assertIsNotNone(window.last_realtime_dashboard_db_path)
             session_db_path = Path(window.last_realtime_dashboard_db_path)
             self.assertTrue(session_db_path.exists())
             self.assertEqual(session_db_path.suffix, ".sqlite")
+            self.assertEqual(window.realtime_monitoring_dialog.db_file, str(session_db_path))
             self.assertIn("temporary session DB", window.statusBar().currentMessage())
 
             window.close()
@@ -132,27 +126,40 @@ class TestMainWindowMetadataUi(unittest.TestCase):
         finally:
             window.close()
 
-    def test_realtime_monitoring_dashboard_generates_static_html_from_selected_database(self):
+    def test_realtime_monitoring_dialog_uses_selected_database(self):
         window = MainWindow(version_label="test", days_until_expiration=None)
         try:
             with tempfile.TemporaryDirectory() as temp_dir:
                 db_path = str(Path(temp_dir) / "monitoring.db")
                 window.set_db_file(db_path)
 
-                with patch(
-                    "metroliza.ui.main_window.QDesktopServices.openUrl",
-                    return_value=True,
-                ) as open_url:
-                    window.launch_realtime_industrial_monitoring_dashboard()
+                window.launch_realtime_industrial_monitoring_dashboard()
 
-                open_url.assert_called_once()
-                self.assertIsNotNone(window.last_realtime_dashboard_path)
+                self.assertIsNotNone(window.realtime_monitoring_dialog)
+                self.assertTrue(window.realtime_monitoring_dialog.isVisible())
                 self.assertEqual(window.last_realtime_dashboard_db_path, db_path)
-                html = Path(window.last_realtime_dashboard_path).read_text(encoding="utf-8")
-                self.assertIn("Real-time Industrial Monitoring", html)
-                self.assertIn('data-section="summary-cards"', html)
-                self.assertIn("dashboard opened", window.statusBar().currentMessage())
+                self.assertEqual(window.realtime_monitoring_dialog.db_file, db_path)
+                self.assertIn("monitoring opened", window.statusBar().currentMessage())
                 self.assertNotIn("temporary", window.statusBar().currentMessage().lower())
+        finally:
+            window.close()
+
+    def test_realtime_monitoring_dialog_rebinds_after_database_change(self):
+        window = MainWindow(version_label="test", days_until_expiration=None)
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                first_db = str(Path(temp_dir) / "first.db")
+                second_db = str(Path(temp_dir) / "second.db")
+                window.set_db_file(first_db)
+                window.launch_realtime_industrial_monitoring_dialog()
+                first_dialog = window.realtime_monitoring_dialog
+
+                window.set_db_file(second_db)
+                window.launch_realtime_industrial_monitoring_dialog()
+
+                self.assertIsNot(window.realtime_monitoring_dialog, first_dialog)
+                self.assertEqual(window.realtime_monitoring_dialog.db_file, second_db)
+                self.assertFalse(first_dialog.isVisible())
         finally:
             window.close()
 

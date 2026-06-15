@@ -142,6 +142,15 @@ Current RC metadata: `2026.06rc1(260614)`.
 - Pushed GitHub CI passed for final `260614` commit
   `307acd16031c5622093ba52a9a64d2b2146d7f02` in run
   [`27506446912`](https://github.com/hexafe/metroliza/actions/runs/27506446912).
+- 2026-06-15 realtime monitoring follow-up local gates passed on
+  `feature/realtime-industrial-ml-anomaly`: configurable monitor dialog,
+  persisted polling config, multi-source selection, status/diagnostics, raw and
+  aggregate dashboard output, and parameterized Oznak realtime polling. Focused
+  realtime/UI validation passed (`96 passed`), and full offscreen pytest passed
+  (`2078 passed, 293 skipped, 6 warnings, 83 subtests passed`). Security audit
+  passed after temporary `pip-audit` environment setup; `pip-audit` reported no
+  known vulnerabilities and existing Bandit findings remain report-only
+  baseline warnings.
 - Manual packaging smoke, Windows executable clean-machine launch/startup,
   Google conversion smoke, third-party notice artifact evidence, and security
   owner triage/waiver for report-only findings remain release-promotion

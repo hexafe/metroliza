@@ -55,14 +55,45 @@ def test_bounded_poll_query_uses_cursor_limit_order_and_safe_diagnostics(tmp_pat
     query = build_bounded_poll_query(profile=profile, config=config, offset=offset)
     diagnostics = safe_query_diagnostics(query)
 
+    assert query.sql_text.startswith("SELECT TOP (?)")
     assert 'FROM "dbo"."events"' in query.sql_text
     assert 'WHERE "event_id" > ?' in query.sql_text
-    assert 'ORDER BY "event_id" ASC LIMIT ?' in query.sql_text
-    assert query.parameters == ("500", 250)
+    assert 'ORDER BY "event_id" ASC' in query.sql_text
+    assert "LIMIT" not in query.sql_text
+    assert query.parameters == (250, "500")
     assert query.limit == 250
+    assert diagnostics["summary"]["dialect"] == "mssql"
     assert diagnostics["sql_hash"] == query.sql_hash
     assert "sql_text" not in diagnostics
     assert "SELECT" not in str(diagnostics)
+
+
+def test_bounded_poll_query_uses_limit_placeholder_for_mysql_and_sqlite(tmp_path):
+    db_path = str(tmp_path / "poller.db")
+    repository = IndustrialDataRepository(db_path)
+    profile = repository.upsert_source_profile(
+        profile_key="assembly",
+        profile_name="Assembly",
+        source_db_alias="assembly_mes",
+        database_type="mysql",
+        source_object_name="events",
+        allowed_columns=("event_id", "process_timestamp", "record_id", "cycle_time_s", "station"),
+    )
+
+    query = build_bounded_poll_query(
+        profile=profile,
+        config=_config(profile.id),
+        offset=StreamOffset(
+            source_profile_id=profile.id,
+            stream_key="cycle_time",
+            cursor_column="event_id",
+            cursor_value="500",
+        ),
+    )
+
+    assert 'ORDER BY "event_id" ASC LIMIT ?' in query.sql_text
+    assert query.parameters == ("500", 250)
+    assert query.summary["dialect"] == "mysql"
 
 
 def test_bounded_poll_query_rejects_columns_outside_source_allowlist(tmp_path):

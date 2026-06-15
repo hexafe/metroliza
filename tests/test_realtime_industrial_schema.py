@@ -5,7 +5,7 @@ from modules.industrial_data_repository import IndustrialDataRepository
 from modules.industrial_data_schema import SCHEMA_VERSION, ensure_industrial_data_schema
 
 
-def test_realtime_schema_creates_v4_tables_and_indexes_idempotently(tmp_path):
+def test_realtime_schema_creates_v5_tables_and_indexes_idempotently(tmp_path):
     db_path = str(tmp_path / "realtime.db")
     ensure_industrial_data_schema(db_path)
     ensure_industrial_data_schema(db_path)
@@ -26,8 +26,9 @@ def test_realtime_schema_creates_v4_tables_and_indexes_idempotently(tmp_path):
         ).fetchall()
 
     assert len(schema_version_rows) == 1
-    assert schema_version_rows[0][0] == SCHEMA_VERSION == "industrial_data_v4"
+    assert schema_version_rows[0][0] == SCHEMA_VERSION == "industrial_data_v5"
     assert {
+        "industrial_realtime_monitor_configs",
         "industrial_stream_offsets",
         "industrial_signal_definitions",
         "industrial_samples",
@@ -36,6 +37,7 @@ def test_realtime_schema_creates_v4_tables_and_indexes_idempotently(tmp_path):
         "industrial_anomaly_events",
     }.issubset(tables)
     assert {
+        "idx_industrial_realtime_monitor_configs_enabled",
         "idx_industrial_samples_signal_time",
         "idx_industrial_samples_profile_time",
         "idx_industrial_samples_profile_signal_time",

@@ -66,6 +66,31 @@ class DashboardSourceHealth:
 
 
 @dataclass(frozen=True)
+class DashboardAggregateRow:
+    """One persisted sample aggregate row rendered in the static dashboard."""
+
+    signal_key: str
+    metric_name: str
+    sample_count: int
+    minimum: float | None
+    maximum: float | None
+    average: float | None
+    latest_value: float | None
+    signal_id: int | None = None
+    source_name: str | None = None
+    unit: str | None = None
+    first_event_time: str = ""
+    last_event_time: str = ""
+    nominal: float | None = None
+    lsl: float | None = None
+    usl: float | None = None
+    below_lsl_count: int = 0
+    above_usl_count: int = 0
+    nok_count: int = 0
+    nok_pct: float = 0.0
+
+
+@dataclass(frozen=True)
 class DashboardSummaryCard:
     """Small summary metric rendered at the top of the dashboard."""
 
@@ -83,6 +108,7 @@ class RealtimeDashboardSnapshot:
     source_health: tuple[DashboardSourceHealth, ...] = ()
     signals: tuple[DashboardSignalSeries, ...] = ()
     events: tuple[DashboardAnomalyEvent, ...] = ()
+    aggregate_rows: tuple[DashboardAggregateRow, ...] = ()
     summary_cards: tuple[DashboardSummaryCard, ...] = ()
 
 
@@ -141,6 +167,7 @@ def render_realtime_dashboard_html(snapshot: RealtimeDashboardSnapshot | Mapping
             _render_open_events_table(open_events),
             _render_severity_timeline(open_events),
             _render_top_signals(normalized.signals, open_events),
+            _render_aggregate_rows(normalized.aggregate_rows),
             _render_source_health(normalized.source_health, normalized.signals, open_events),
             _render_signal_charts(normalized.signals),
             "</main>",
@@ -187,6 +214,10 @@ def _normalize_snapshot(raw: RealtimeDashboardSnapshot | Mapping[str, Any] | Any
         _normalize_signal(item, explicit_events=events)
         for item in _as_sequence(_field(raw, "signals", "signal_series", "series"))
     )
+    aggregate_rows = tuple(
+        _normalize_aggregate_row(item)
+        for item in _as_sequence(_field(raw, "aggregate_rows", "sample_aggregates", "aggregates"))
+    )
     summary_cards = tuple(
         _normalize_summary_card(item)
         for item in _as_sequence(_field(raw, "summary_cards", "cards"))
@@ -198,6 +229,7 @@ def _normalize_snapshot(raw: RealtimeDashboardSnapshot | Mapping[str, Any] | Any
             source_health=source_health,
             signals=signals,
             events=events,
+            aggregate_rows=aggregate_rows,
             summary_cards=summary_cards,
         )
     )
@@ -337,6 +369,48 @@ def _normalize_source_health(
     )
 
 
+def _normalize_aggregate_row(
+    raw: DashboardAggregateRow | Mapping[str, Any] | Any,
+) -> DashboardAggregateRow:
+    if isinstance(raw, DashboardAggregateRow):
+        return raw
+
+    signal_id = _to_int(_field(raw, "signal_id", "id"))
+    signal_key = _raw_text(_field(raw, "signal_key", "key", "name"), default="")
+    metric_name = _raw_text(_field(raw, "metric_name", "metric", "metric_key"), default=signal_key)
+    if not signal_key:
+        signal_key = metric_name or "signal"
+    if not metric_name:
+        metric_name = signal_key
+
+    source_name = _optional_text(
+        _field(raw, "source_name", "profile_name", "profile_key", "source", "source_db_alias")
+    )
+    return DashboardAggregateRow(
+        signal_id=signal_id,
+        signal_key=signal_key,
+        metric_name=metric_name,
+        source_name=source_name,
+        unit=_optional_text(_field(raw, "unit")),
+        sample_count=_to_int(_field(raw, "sample_count", "record_count", "count", "sample_size")) or 0,
+        first_event_time=_raw_text(_field(raw, "first_event_time", "window_start"), default=""),
+        last_event_time=_raw_text(_field(raw, "last_event_time", "window_end"), default=""),
+        minimum=_to_float(_field(raw, "minimum", "min")),
+        maximum=_to_float(_field(raw, "maximum", "max")),
+        average=_to_float(_field(raw, "average", "mean")),
+        latest_value=_to_float(_field(raw, "latest_value", "last_value")),
+        nominal=_to_float(_field(raw, "nominal", "nom")),
+        lsl=_to_float(_field(raw, "lsl", "lower_spec_limit")),
+        usl=_to_float(_field(raw, "usl", "upper_spec_limit")),
+        below_lsl_count=_to_int(_field(raw, "below_lsl_count", "observed_nok_below_lsl_count"))
+        or 0,
+        above_usl_count=_to_int(_field(raw, "above_usl_count", "observed_nok_above_usl_count"))
+        or 0,
+        nok_count=_to_int(_field(raw, "nok_count", "observed_nok_count")) or 0,
+        nok_pct=_to_float(_field(raw, "nok_pct", "observed_nok_pct")) or 0.0,
+    )
+
+
 def _normalize_summary_card(raw: DashboardSummaryCard | Mapping[str, Any] | Any) -> DashboardSummaryCard:
     if isinstance(raw, DashboardSummaryCard):
         return raw
@@ -354,7 +428,11 @@ def _all_events(snapshot: RealtimeDashboardSnapshot) -> tuple[DashboardAnomalyEv
 def _open_events(events: tuple[DashboardAnomalyEvent, ...]) -> tuple[DashboardAnomalyEvent, ...]:
     return tuple(
         sorted(
-            (event for event in events if event.status not in {"acknowledged", "closed", "resolved"}),
+            (
+                event
+                for event in events
+                if event.status not in {"acknowledged", "closed", "resolved", "false_positive"}
+            ),
             key=_event_sort_key,
         )
     )
@@ -514,6 +592,44 @@ def _render_top_signals(
         "<table>"
         "<thead><tr><th>Signal</th><th>Source</th><th>Open</th><th>Critical</th>"
         "<th>Latest value</th></tr></thead>"
+        f"<tbody>{body}</tbody>"
+        "</table>"
+        "</div>"
+        "</section>"
+    )
+
+
+def _render_aggregate_rows(rows: tuple[DashboardAggregateRow, ...]) -> str:
+    if not rows:
+        return (
+            '<section class="section" data-section="sample-aggregates">'
+            "<h2>Sample Aggregates</h2>"
+            '<p class="empty">No persisted sample aggregates available.</p>'
+            "</section>"
+        )
+    body = "\n".join(
+        "<tr>"
+        f"<td>{_safe_text(_aggregate_signal_title(row))}</td>"
+        f"<td>{_safe_text(row.source_name or '')}</td>"
+        f"<td>{row.sample_count}</td>"
+        f"<td>{_safe_text(_format_optional_number(row.minimum))}</td>"
+        f"<td>{_safe_text(_format_optional_number(row.average))}</td>"
+        f"<td>{_safe_text(_format_optional_number(row.maximum))}</td>"
+        f"<td>{_safe_text(_format_optional_number(row.latest_value))}</td>"
+        f"<td>{_safe_text(_format_nok(row))}</td>"
+        f"<td>{_safe_text(_format_limits(row))}</td>"
+        f"<td>{_safe_text(_format_period(row))}</td>"
+        "</tr>"
+        for row in rows
+    )
+    return (
+        '<section class="section" data-section="sample-aggregates">'
+        "<h2>Sample Aggregates</h2>"
+        '<div class="table-scroll">'
+        "<table>"
+        "<thead><tr><th>Signal</th><th>Source</th><th>Samples</th><th>Min</th>"
+        "<th>Mean</th><th>Max</th><th>Latest</th><th>NOK</th><th>Limits</th><th>Period</th>"
+        "</tr></thead>"
         f"<tbody>{body}</tbody>"
         "</table>"
         "</div>"
@@ -839,6 +955,13 @@ def _signal_label_from_event(event: DashboardAnomalyEvent) -> str:
     return "signal"
 
 
+def _aggregate_signal_title(row: DashboardAggregateRow) -> str:
+    title = row.metric_name or row.signal_key
+    if row.unit:
+        return f"{title} ({row.unit})"
+    return title
+
+
 def _event_title(event: DashboardAnomalyEvent) -> str:
     observed = _format_optional_number(event.observed_value)
     return (
@@ -929,6 +1052,33 @@ def _format_number(value: float | int) -> str:
     if math.isclose(number, round(number)):
         return str(int(round(number)))
     return f"{number:.4g}"
+
+
+def _format_nok(row: DashboardAggregateRow) -> str:
+    if row.sample_count <= 0:
+        return "0 (0%)"
+    return f"{row.nok_count} ({_format_percent(row.nok_pct)})"
+
+
+def _format_limits(row: DashboardAggregateRow) -> str:
+    parts = []
+    if row.lsl is not None:
+        parts.append(f"LSL {_format_number(row.lsl)}")
+    if row.nominal is not None:
+        parts.append(f"NOM {_format_number(row.nominal)}")
+    if row.usl is not None:
+        parts.append(f"USL {_format_number(row.usl)}")
+    return " / ".join(parts)
+
+
+def _format_period(row: DashboardAggregateRow) -> str:
+    if row.first_event_time and row.last_event_time and row.first_event_time != row.last_event_time:
+        return f"{row.first_event_time} to {row.last_event_time}"
+    return row.last_event_time or row.first_event_time
+
+
+def _format_percent(value: float | int) -> str:
+    return f"{float(value) * 100:.1f}%"
 
 
 def _safe_text(value: Any) -> str:
@@ -1099,6 +1249,7 @@ th {
 
 
 __all__ = [
+    "DashboardAggregateRow",
     "DashboardAnomalyEvent",
     "DashboardSamplePoint",
     "DashboardSignalSeries",
