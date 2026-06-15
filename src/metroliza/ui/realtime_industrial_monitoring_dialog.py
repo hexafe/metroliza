@@ -70,7 +70,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.poll_thread: RealtimeMonitorPollThread | None = None
         self.profiles: list[IndustrialSourceProfile] = []
         self.configs_by_profile_id: dict[int, RealtimeMonitorConfig] = {}
-        self.last_saved_configs: tuple[RealtimeMonitorConfig, ...] = ()
+        self.active_configs: tuple[RealtimeMonitorConfig, ...] = ()
         self.last_poll_results: tuple[Any, ...] = ()
         self.last_dashboard_path: Path | None = None
 
@@ -110,6 +110,17 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.source_list.currentItemChanged.connect(self._on_current_source_changed)
         self.source_list.itemChanged.connect(self._on_source_check_changed)
         layout.addWidget(self.source_list)
+        self.source_summary_label = QLabel("No production sources in this database.")
+        self.source_summary_label.setWordWrap(True)
+        layout.addWidget(self.source_summary_label)
+        source_actions = QHBoxLayout()
+        self.select_all_sources_button = QPushButton("Select All")
+        self.clear_sources_button = QPushButton("Clear")
+        self.select_all_sources_button.clicked.connect(self.select_all_sources)
+        self.clear_sources_button.clicked.connect(self.clear_selected_sources)
+        source_actions.addWidget(self.select_all_sources_button)
+        source_actions.addWidget(self.clear_sources_button)
+        layout.addLayout(source_actions)
         self.reload_button = QPushButton("Reload")
         self.reload_button.clicked.connect(self.reload_from_database)
         layout.addWidget(self.reload_button)
@@ -181,14 +192,16 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
 
     def _build_action_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
-        self.save_button = QPushButton("Save Config")
-        self.start_button = QPushButton("Start")
+        self.save_button = QPushButton("Save Current Source")
+        self.apply_checked_button = QPushButton("Apply Current to Checked")
+        self.start_button = QPushButton("Start Checked")
         self.poll_once_button = QPushButton("Poll Once")
         self.stop_button = QPushButton("Stop")
         self.open_dashboard_button = QPushButton("Open Dashboard")
         self.close_button = QPushButton("Close")
 
-        self.save_button.clicked.connect(self.save_selected_configs)
+        self.save_button.clicked.connect(self.save_current_source_config)
+        self.apply_checked_button.clicked.connect(self.apply_current_to_checked_configs)
         self.start_button.clicked.connect(self.start_monitoring)
         self.poll_once_button.clicked.connect(self.poll_once)
         self.stop_button.clicked.connect(self.stop_monitoring)
@@ -197,6 +210,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
 
         for button in (
             self.save_button,
+            self.apply_checked_button,
             self.start_button,
             self.poll_once_button,
             self.stop_button,
@@ -242,29 +256,63 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
     def _populate_sources(self) -> None:
         self.source_list.blockSignals(True)
         self.source_list.clear()
-        for index, profile in enumerate(self.profiles):
+        first_enabled_item: QListWidgetItem | None = None
+        first_item: QListWidgetItem | None = None
+        for profile in self.profiles:
             item = QListWidgetItem(_profile_label(profile))
             item.setData(Qt.ItemDataRole.UserRole, profile.id)
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            if profile.is_enabled:
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            else:
+                item.setFlags(
+                    (item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
+                    & ~Qt.ItemFlag.ItemIsEnabled
+                )
             saved = self.configs_by_profile_id.get(profile.id)
-            checked = bool(saved and saved.enabled) or (len(self.profiles) == 1 and saved is None)
+            checked = profile.is_enabled and (
+                bool(saved and saved.enabled) or (len(self.profiles) == 1 and saved is None)
+            )
             item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
             self.source_list.addItem(item)
-            if index == 0:
-                self.source_list.setCurrentItem(item)
+            first_item = first_item or item
+            if profile.is_enabled and first_enabled_item is None:
+                first_enabled_item = item
+        if first_enabled_item is not None:
+            self.source_list.setCurrentItem(first_enabled_item)
+        elif first_item is not None:
+            self.source_list.setCurrentItem(first_item)
         self.source_list.blockSignals(False)
         self._load_current_source_config()
+        self._update_source_summary()
+
+    def select_all_sources(self) -> None:
+        for index in range(self.source_list.count()):
+            item = self.source_list.item(index)
+            if item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+                item.setCheckState(Qt.CheckState.Checked)
+        self._on_source_check_changed(None)
+
+    def clear_selected_sources(self) -> None:
+        for index in range(self.source_list.count()):
+            item = self.source_list.item(index)
+            if item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+                item.setCheckState(Qt.CheckState.Unchecked)
+        self._on_source_check_changed(None)
 
     def _on_current_source_changed(self, _current, _previous) -> None:
         self._load_current_source_config()
 
     def _on_source_check_changed(self, _item) -> None:
+        if not self.poll_timer.isActive():
+            self.active_configs = ()
+        self._update_source_summary()
         self._sync_buttons()
 
     def _load_current_source_config(self) -> None:
         profile = self.current_profile()
-        if profile is None:
+        if profile is None or not profile.is_enabled:
             self._apply_config_to_form(None)
+            self._sync_buttons()
             return
         self._apply_config_to_form(self.configs_by_profile_id.get(profile.id) or _default_config(profile))
         self._sync_buttons()
@@ -282,7 +330,23 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             item = self.source_list.item(index)
             if item.checkState() == Qt.CheckState.Checked:
                 selected_ids.add(int(item.data(Qt.ItemDataRole.UserRole)))
-        return tuple(profile for profile in self.profiles if profile.id in selected_ids)
+        return tuple(
+            profile for profile in self.profiles if profile.id in selected_ids and profile.is_enabled
+        )
+
+    def _update_source_summary(self) -> None:
+        enabled_count = sum(1 for profile in self.profiles if profile.is_enabled)
+        disabled_count = len(self.profiles) - enabled_count
+        selected_count = len(self.selected_profiles())
+        if not self.profiles:
+            text = "No production sources in this database."
+        elif enabled_count == 0:
+            text = f"{disabled_count} disabled source(s)."
+        elif disabled_count:
+            text = f"{selected_count} of {enabled_count} enabled source(s) selected; {disabled_count} disabled."
+        else:
+            text = f"{selected_count} of {enabled_count} source(s) selected."
+        self.source_summary_label.setText(text)
 
     def _apply_config_to_form(self, config: RealtimeMonitorConfig | None) -> None:
         if config is None:
@@ -352,7 +416,24 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             dashboard_output_path=_field_path(self.dashboard_path_field.text()),
         ).validated()
 
-    def save_selected_configs(self) -> tuple[RealtimeMonitorConfig, ...]:
+    def save_current_source_config(self) -> tuple[RealtimeMonitorConfig, ...]:
+        profile = self.current_profile()
+        if profile is None or not profile.is_enabled:
+            self._set_status("Select an enabled source to save.", "warning")
+            return ()
+        try:
+            config = self.repository.upsert_config(self._config_from_form(profile))
+            self.configs_by_profile_id[profile.id] = config
+            self.active_configs = ()
+            self._set_status(f"Saved realtime monitor config for {profile.profile_name}.", "success")
+            self._sync_buttons()
+            return (config,)
+        except Exception as exc:
+            self._set_status(f"Config save failed: {exc}", "danger")
+            QMessageBox.warning(self, "Realtime monitor config", str(exc))
+            return ()
+
+    def apply_current_to_checked_configs(self) -> tuple[RealtimeMonitorConfig, ...]:
         profiles = self.selected_profiles()
         if not profiles:
             self._set_status("Select at least one source to monitor.", "warning")
@@ -363,8 +444,8 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
                 config = self.repository.upsert_config(self._config_from_form(profile))
                 self.configs_by_profile_id[profile.id] = config
                 saved.append(config)
-            self.last_saved_configs = tuple(saved)
-            self._set_status(f"Saved {len(saved)} realtime monitor config(s).", "success")
+            self.active_configs = ()
+            self._set_status(f"Applied current settings to {len(saved)} checked source(s).", "success")
             self._sync_buttons()
             return tuple(saved)
         except Exception as exc:
@@ -372,10 +453,39 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             QMessageBox.warning(self, "Realtime monitor config", str(exc))
             return ()
 
+    def save_selected_configs(self) -> tuple[RealtimeMonitorConfig, ...]:
+        """Compatibility wrapper for older callers that saved all checked sources."""
+
+        return self.apply_current_to_checked_configs()
+
+    def _configs_for_checked_sources(self, *, save_current: bool) -> tuple[RealtimeMonitorConfig, ...]:
+        profiles = self.selected_profiles()
+        if not profiles:
+            self._set_status("Select at least one source to monitor.", "warning")
+            return ()
+        current_profile = self.current_profile()
+        configs: list[RealtimeMonitorConfig] = []
+        try:
+            for profile in profiles:
+                config = self.configs_by_profile_id.get(profile.id)
+                if save_current and current_profile is not None and profile.id == current_profile.id:
+                    config = self.repository.upsert_config(self._config_from_form(profile))
+                    self.configs_by_profile_id[profile.id] = config
+                elif config is None:
+                    config = self.repository.upsert_config(_default_config(profile))
+                    self.configs_by_profile_id[profile.id] = config
+                configs.append(config)
+        except Exception as exc:
+            self._set_status(f"Config save failed: {exc}", "danger")
+            QMessageBox.warning(self, "Realtime monitor config", str(exc))
+            return ()
+        return tuple(configs)
+
     def start_monitoring(self) -> None:
-        configs = self.save_selected_configs()
+        configs = self._configs_for_checked_sources(save_current=True)
         if not configs:
             return
+        self.active_configs = configs
         interval_ms = max(1_000, int(min(config.polling_interval_seconds for config in configs) * 1_000))
         self.poll_timer.start(interval_ms)
         self._sync_running_state(True)
@@ -387,18 +497,14 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             self.poll_thread.cancel()
             if wait_for_thread:
                 self.poll_thread.wait(3_000)
+        self.active_configs = ()
         self._sync_running_state(False)
         self._set_status("Stopped", "neutral")
 
     def poll_once(self) -> None:
-        configs = self.last_saved_configs or tuple(
-            self.configs_by_profile_id.get(profile.id)
-            for profile in self.selected_profiles()
-            if self.configs_by_profile_id.get(profile.id) is not None
-        )
-        configs = tuple(config for config in configs if config is not None)
+        configs = self.active_configs if self.poll_timer.isActive() else ()
         if not configs:
-            configs = self.save_selected_configs()
+            configs = self._configs_for_checked_sources(save_current=True)
             if not configs:
                 return
         if self.poll_thread is not None and self.poll_thread.isRunning():
@@ -497,14 +603,23 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.stop_button.setEnabled(running)
         self.poll_once_button.setEnabled(not running)
         self.reload_button.setEnabled(not running)
+        self.source_list.setEnabled(not running)
         self._sync_buttons()
 
     def _sync_buttons(self) -> None:
         has_sources = bool(self.selected_profiles())
-        self.save_button.setEnabled(has_sources)
+        current = self.current_profile()
+        current_is_enabled = bool(current and current.is_enabled)
+        running = self.poll_timer.isActive()
+        has_enabled_sources = any(profile.is_enabled for profile in self.profiles)
+        self.save_button.setEnabled(current_is_enabled and not running)
+        self.apply_checked_button.setEnabled(has_sources and current_is_enabled and not running)
         self.start_button.setEnabled(has_sources and not self.poll_timer.isActive())
         self.poll_once_button.setEnabled(has_sources and not self.poll_timer.isActive())
-        self.open_dashboard_button.setEnabled(True)
+        self.select_all_sources_button.setEnabled(has_enabled_sources and not running)
+        self.clear_sources_button.setEnabled(has_sources and not running)
+        has_dashboard_context = bool(self.last_poll_results or self.configs_by_profile_id or has_sources)
+        self.open_dashboard_button.setEnabled(has_dashboard_context)
 
     def _set_status(self, text: str, variant: str) -> None:
         self.status_label.setText(text)

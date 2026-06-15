@@ -1,14 +1,16 @@
 RELEASE_VERSION = "2026.06rc1"
-VERSION_DATE = "260614"
+VERSION_DATE = "260615"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
-CURRENT_RELEASE_HIGHLIGHT = "Realtime Industrial Monitoring foundation for tester pilots, deterministic anomaly detectors, bounded polling safety, stronger parser probing, safer industrial diagnostics, and optional ML anomaly tooling kept out of normal runtime dependencies."
-PUBLIC_VERSION_LABEL = "2026.06 RC1 (build 260614)"
+CURRENT_RELEASE_HIGHLIGHT = "Realtime Industrial Monitoring tester workflow with deterministic anomaly detectors, bounded polling safety, guarded source selection, clearer diagnostics, and a compact About dialog."
+PUBLIC_VERSION_LABEL = "2026.06 RC1 (build 260615)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
     - Realtime Industrial Monitoring now has a separate foundation for append-only samples, signal definitions, stream offsets, explainable anomaly events, replay, and dashboard review<br>
     - Deterministic anomaly detectors now cover specification limits, warning limits, IQR fences, MAD robust z-score, rolling z-score, and stale-source checks with operator-readable explanations<br>
     - Realtime polling now uses generated bounded queries, cursor offsets, chunk limits, safe diagnostics, and offset advancement only after local persistence succeeds<br>
+    - Realtime Industrial Monitoring now opens an operator dialog with checked-source selection, polling interval and timeout settings, row limits, status, diagnostics, and dashboard output controls<br>
+    - Realtime source selection now keeps disabled production sources out of polling and separates saving one source from intentionally applying settings to all checked sources<br>
     - Realtime dashboard review can open without selecting a Metroliza report database first; the app uses a temporary session SQLite store unless a persistent database is selected<br>
     - Synthetic realtime fixtures and replay validation are available for pre-live testing without a production database<br>
     - Optional advanced anomaly tooling stays separate from normal app startup, so standard users do not need extra ML packages<br>
@@ -16,6 +18,7 @@ release_notes = f"""
     - CMM parser probing now uses marker-based confidence so generic PDFs no longer look like perfect CMM report matches<br>
     - Parser plugin handoff packages now have stronger tests that require local API contract content and small step-by-step prompts for LLM-assisted plugin work<br>
     - Realtime rollout docs now include operator concepts, production safety checks, synthetic replay evidence, source lag review, and rollback steps<br>
+    - The About dialog now stays focused on the duck animation, version, author, and GitHub project link<br>
 
     <br><b>Archive:</b><br>
 

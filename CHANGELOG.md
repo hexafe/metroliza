@@ -1,10 +1,11 @@
 # Changelog (for end users)
 
-## 2026.06 RC1 (build 260614) — current version
+## 2026.06 RC1 (build 260615) — current version
 - Realtime Industrial Monitoring now has a separate foundation for append-only samples, signal definitions, stream offsets, explainable anomaly events, replay, and dashboard review.
 - Deterministic anomaly detectors now cover specification limits, warning limits, IQR fences, MAD robust z-score, rolling z-score, and stale-source checks with operator-readable explanations.
 - Realtime polling now uses generated bounded queries, cursor offsets, chunk limits, safe diagnostics, and offset advancement only after local persistence succeeds.
 - Realtime Industrial Monitoring now opens a configurable monitor dialog with source checkboxes, polling interval and timeout settings, bounded row limits, raw or aggregated dashboard mode, status, diagnostics, and dashboard output controls.
+- Realtime source selection now keeps disabled production sources out of polling and separates saving one source from intentionally applying settings to all checked sources.
 - Realtime dashboard review still works without selecting a Metroliza report database first; the app uses a temporary session SQLite store unless a persistent database is selected.
 - Synthetic realtime fixtures and replay validation are available for pre-live testing without a production database.
 - Optional advanced anomaly tooling stays separate from normal app startup, so standard users do not need extra ML packages.
@@ -12,6 +13,7 @@
 - CMM parser probing now uses marker-based confidence so generic PDFs no longer look like perfect CMM report matches.
 - Parser plugin handoff packages now have stronger tests that require local API contract content and small step-by-step prompts for LLM-assisted plugin work.
 - Realtime rollout docs now include operator concepts, production safety checks, synthetic replay evidence, source lag review, and rollback steps.
+- The About dialog now stays focused on the duck animation, version, author, and GitHub project link.
 
 ## 2026.05 RC5 (build 260612)
 - Saved report updates are safer if a database write fails partway through.

@@ -120,13 +120,18 @@ docs, tickets, screenshots, or logs.
       persisted polling configuration, status, diagnostics, raw/aggregated
       dashboard output, and live bounded polling through the existing Oznak
       credential store.
-- [x] 2026-06-15: Focused realtime/UI validation passed:
-      `96 passed` across realtime config, poller, schema, Oznak realtime
-      adapter, monitor dialog, dashboard service/HTML, and main-window tests.
+- [x] 2026-06-15: Monitor UI/UX follow-up implemented for build `260615`:
+      checked-source summary/actions, disabled-source polling prevention,
+      current-source save semantics, explicit bulk apply, compact About dialog,
+      and updated operator manuals.
+- [x] 2026-06-15: Focused realtime UI/runtime/About/metadata validation
+      passed: `15 passed` across monitor dialog, source runtime, About, and
+      release metadata tests.
 - [x] 2026-06-15: Local release gates passed:
       `ruff check .`, `compileall`, release metadata sync, release hygiene,
-      and full offscreen pytest (`2078 passed, 293 skipped, 6 warnings,
-      83 subtests passed`).
+      full offscreen pytest (`2079 passed, 296 skipped, 6 warnings, 83
+      subtests passed`), and exact CI-shaped combined coverage (`81%`, above
+      the `80%` threshold).
 - [x] 2026-06-15: Security audit passed after allowing the temporary
       `pip-audit` environment to upgrade. `pip-audit` reported no known
       vulnerabilities; existing Bandit findings remain report-only baseline

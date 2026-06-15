@@ -114,7 +114,8 @@ python -m maturin build --manifest-path src/metroliza/native/distribution_fit_ad
 - [ ] Produced artifacts are named/versioned as expected for RC distribution. *(Owner: Release manager)*
 - [ ] Third-party notices/license attribution are bundled or attached to release artifacts, including RapidOCR, ONNX Runtime, OpenCV, NumPy, Excel reader packages, hexafe-plotstats, and Oznak. *(Owner: Release manager/QA)*
 
-- [x] GitHub CI checks for final pushed `2026.06rc1(260614)` commit `307acd16031c5622093ba52a9a64d2b2146d7f02` are green before tag/promotion: run [`27506446912`](https://github.com/hexafe/metroliza/actions/runs/27506446912). *(Owner: Release owner)*
+- [x] GitHub CI checks for pushed `2026.06rc1(260614)` commit `307acd16031c5622093ba52a9a64d2b2146d7f02` are green: run [`27506446912`](https://github.com/hexafe/metroliza/actions/runs/27506446912). *(Owner: Release owner)*
+- [ ] GitHub CI checks for final pushed `2026.06rc1(260615)` commit are green before tag/promotion. *(Owner: Release owner)*
 - [ ] CMM parser perf gate evidence (`cmm-parser-perf-gate` + `cmm-parser-perf-artifacts`) is reviewed when parser/backend changes are present; triage follows [`cmm_parser_perf_guardrail.md`](./cmm_parser_perf_guardrail.md). *(Owner: Release owner/QA)*
 - [ ] Coverage threshold from `unit-tests` passes, and `unit-test-coverage` artifact `coverage.xml` is reviewed as RC confidence evidence. *(Owner: Release owner/QA)*
 - [ ] Manual release smoke evidence is linked before open-testing promotion when applicable. Google conversion smoke is release-blocking for promoted RC artifacts; skipped default CI does not satisfy that gate. *(Owner: Release owner)*
@@ -122,7 +123,7 @@ python -m maturin build --manifest-path src/metroliza/native/distribution_fit_ad
 ### 2026.06 RC1 realtime industrial tester evidence
 
 Current validation branch: `feature/realtime-industrial-ml-anomaly`.
-Current RC metadata: `2026.06rc1(260614)`.
+Current RC metadata: `2026.06rc1(260615)`.
 
 - Local realtime/anomaly tester-build evidence is recorded in
   [`realtime_industrial_rollout_checklist.md`](./realtime_industrial_rollout_checklist.md).
@@ -139,18 +140,20 @@ Current RC metadata: `2026.06rc1(260614)`.
 - Realtime/anomaly source slice coverage measured `89%`.
 - Final CI-shaped combined coverage rerun passed at `82%`, above the `80%`
   release gate, after the release metadata refresh.
-- Pushed GitHub CI passed for final `260614` commit
+- Pushed GitHub CI passed for build `260614` commit
   `307acd16031c5622093ba52a9a64d2b2146d7f02` in run
   [`27506446912`](https://github.com/hexafe/metroliza/actions/runs/27506446912).
-- 2026-06-15 realtime monitoring follow-up local gates passed on
-  `feature/realtime-industrial-ml-anomaly`: configurable monitor dialog,
-  persisted polling config, multi-source selection, status/diagnostics, raw and
-  aggregate dashboard output, and parameterized Oznak realtime polling. Focused
-  realtime/UI validation passed (`96 passed`), and full offscreen pytest passed
-  (`2078 passed, 293 skipped, 6 warnings, 83 subtests passed`). Security audit
-  passed after temporary `pip-audit` environment setup; `pip-audit` reported no
-  known vulnerabilities and existing Bandit findings remain report-only
-  baseline warnings.
+- 2026-06-15 realtime monitor UI/UX follow-up local gates passed on
+  `feature/realtime-industrial-ml-anomaly`: checked-source selection feedback,
+  disabled-source polling prevention, current-source save semantics, monitor
+  manual updates, compact About dialog, and build `260615` release notes.
+  Focused realtime UI/runtime/About/metadata validation passed (`15 passed`);
+  full offscreen pytest passed (`2079 passed, 296 skipped, 6 warnings, 83
+  subtests passed`); exact CI-shaped combined coverage passed at `81%`, above
+  the 80% threshold; release metadata sync, release hygiene, Ruff, compileall,
+  and security audit passed. Security audit required temporary `pip-audit`
+  environment setup; `pip-audit` reported no known vulnerabilities and existing
+  Bandit findings remain report-only baseline warnings.
 - Manual packaging smoke, Windows executable clean-machine launch/startup,
   Google conversion smoke, third-party notice artifact evidence, and security
   owner triage/waiver for report-only findings remain release-promotion

@@ -258,12 +258,12 @@ Examples of metric availability by spec type:
 
 ## Release metadata
 
-Current release highlight (`2026.06 RC1 (build 260614)`): Realtime Industrial Monitoring foundation for tester pilots, deterministic anomaly detectors, bounded polling safety, stronger parser probing, safer industrial diagnostics, and optional ML anomaly tooling kept out of normal runtime dependencies.
+Current release highlight (`2026.06 RC1 (build 260615)`): Realtime Industrial Monitoring tester workflow with deterministic anomaly detectors, bounded polling safety, guarded source selection, clearer diagnostics, and a compact About dialog.
 
 Canonical release metadata is in `src/metroliza/app/version.py`. The root `VersionDate.py`
 module remains as a compatibility import for existing scripts.
 
-### Changelog highlights (release `2026.06 RC1 (build 260614)`)
+### Changelog highlights (release `2026.06 RC1 (build 260615)`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 

@@ -11,6 +11,7 @@ From here you can open:
 - Export,
 - Characteristic Name Matching,
 - Industrial data source setup, sync, and cached Oznak link refresh.
+- Real-time Industrial Monitoring for configured production sources.
 - Parser profile handoff for new supplier report templates.
 
 It also gives you quick access to the **Tools** and **Help** menus from the menu bar.
@@ -134,6 +135,15 @@ If the Metroliza report reference and production reference are different, use **
 
 Use **CSV Summary...** when you need production-line grouping fields such as station, line, work order, batch/lot, operator, process status, or source. It opens all cached rows or the selected cached source in CSV Summary, where every fetched source column can be used for filtering and grouping.
 
+### Tools > Real-time Industrial Monitoring...
+
+Opens the [Realtime Industrial Monitoring](realtime_industrial_monitoring.md) dialog.
+
+Use this when production sources are already configured and you want Metroliza to poll
+one or more enabled sources on a timer, record samples/events, and refresh a local
+operator dashboard. For normal monitoring, select a persistent database before opening
+the monitor so saved source configs and events remain available after the session.
+
 ### Tools > Parser profiles...
 
 Opens the [Parser Profiles](parser_profiles.md) handoff dialog.
@@ -184,7 +194,8 @@ For a new user, the simplest workflow is:
 2. If needed, use **Modify Database** to clean up stored values.
 3. If needed, use **Match Characteristic Names** so equivalent characteristics use a common name.
 4. If needed, open **Tools > Industrial data...**, test/sync industrial data, and refresh links.
-5. Open **Export Workbook** and create the final **Excel file**.
+5. If needed, open **Tools > Real-time Industrial Monitoring...** after production sources are configured.
+6. Open **Export Workbook** and create the final **Excel file**.
 
 A practical version is:
 
@@ -192,8 +203,9 @@ A practical version is:
 - **Optionally modify the database**.
 - **Optionally match characteristic names**.
 - **Optionally sync industrial data**.
+- **Optionally monitor enabled production sources**.
 - **Export**.
-- Use **Tools** for utility workflows such as **CSV Summary**, **Industrial data...**, or **Enrich existing database metadata...**.
+- Use **Tools** for utility workflows such as **CSV Summary**, **Industrial data...**, **Real-time Industrial Monitoring...**, or **Enrich existing database metadata...**.
 - Use **Tools > Parser profiles...** when a supplier sends a report layout that Metroliza does not recognize yet.
 - Use **Help** for manuals, **Release notes**, and **About**.
 

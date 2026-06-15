@@ -62,6 +62,16 @@ class RealtimeSourceRuntime:
                     )
                 )
                 continue
+            if not profile.is_enabled:
+                results.append(
+                    PollingCycleResult(
+                        source_profile_id=config.source_profile_id,
+                        stream_key=config.stream_key,
+                        status="failed",
+                        error="Source profile is disabled in the local Metroliza database.",
+                    )
+                )
+                continue
             results.append(
                 run_polling_cycle(
                     database=self.database,

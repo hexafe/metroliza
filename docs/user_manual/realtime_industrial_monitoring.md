@@ -74,7 +74,8 @@ for the session; for normal monitoring, select a persistent database first.
 The dialog has three operator areas:
 
 - **Sources** lists the configured industrial database profiles. Check one or
-  more sources to monitor them in parallel.
+  more enabled sources to monitor them in parallel. Disabled sources are shown
+  for context but cannot be checked or polled.
 - **Configuration** stores the stream key, cursor column, event-time column,
   record key column, signal columns, polling interval, timeout, row limits,
   display mode, aggregation settings, context fields, segment fields, detector
@@ -88,6 +89,12 @@ limits bounded. Signal columns use `signal_name=source_column` entries, one per
 line or separated by commas. Use **raw** dashboard mode to review recent samples
 directly, or **aggregated** mode when operators need CSV Summary-style sample
 aggregates between refreshes.
+
+Use **Save Current Source** when the visible form should be saved only for the
+selected source. Use **Apply Current to Checked** only when the same settings
+should intentionally be copied to every checked source. **Start Checked** and
+**Poll Once** use the currently checked enabled sources; they do not poll
+unchecked or disabled sources.
 
 Credentials are not stored in the monitor config. The monitor uses the same
 local credential store as the Industrial Data workflow. Do not paste passwords,

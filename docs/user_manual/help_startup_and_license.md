@@ -46,14 +46,10 @@ The **About** dialog is available from **Help > About** in the main window.
 It shows:
 
 - the Metroliza version,
-- license day-count information when that information is available,
 - author/project attribution,
-- support/build information, and
 - the project GitHub link.
 
 Use it when you need a quick version check or project reference.
-
-The **Support/build info** block is selectable. Copy it when reporting a problem. It includes the public version label, internal version, build number, manual location, and support URL.
 
 ## Release notes
 

@@ -5,7 +5,11 @@ from metroliza.industrial.realtime.stream_config import RealtimePollConfig
 
 
 class EmptyAdapter:
+    def __init__(self):
+        self.requests = []
+
     def fetch_rows(self, request):
+        self.requests.append(request)
         return SourceReadResult(rows=())
 
 
@@ -62,3 +66,29 @@ def test_realtime_source_runtime_skips_disabled_streams_and_reports_missing_prof
     assert results[0].status == "completed"
     assert results[1].status == "failed"
     assert "Source profile" in results[1].error
+
+
+def test_realtime_source_runtime_reports_disabled_source_profiles(tmp_path):
+    db_path = str(tmp_path / "runtime.db")
+    profile = IndustrialDataRepository(db_path).upsert_source_profile(
+        profile_key="disabled",
+        profile_name="Disabled",
+        source_db_alias="disabled_mes",
+        database_type="mssql",
+        source_object_name="events",
+        allowed_columns=("event_id", "process_timestamp", "record_id", "cycle_time_s"),
+        is_enabled=False,
+    )
+    adapter = EmptyAdapter()
+    runtime = RealtimeSourceRuntime(
+        database=db_path,
+        configs=(_config(profile.id),),
+        adapter=adapter,
+    )
+
+    results = runtime.poll_once()
+
+    assert len(results) == 1
+    assert results[0].status == "failed"
+    assert "disabled" in str(results[0].error).lower()
+    assert adapter.requests == []
