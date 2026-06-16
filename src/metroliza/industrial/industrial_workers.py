@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+import time
 from typing import Any
 
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -54,6 +55,8 @@ from metroliza.industrial.oznak_adapter import (
 from metroliza.industrial.realtime.db_poller import SourceDbAdapter
 from metroliza.industrial.realtime.monitor_config import RealtimeMonitorConfig
 from metroliza.industrial.realtime.oznak_source_adapter import OznakRealtimeSourceAdapter
+from metroliza.industrial.realtime.realtime_dashboard_html import write_realtime_dashboard_html
+from metroliza.industrial.realtime.realtime_dashboard_service import RealtimeDashboardService
 from metroliza.industrial.realtime.source_runtime import RealtimeSourceRuntime
 from metroliza.industrial.realtime.stream_config import RealtimePollConfig
 from metroliza.shared.progress_status import diagnostic_progress_message
@@ -166,6 +169,27 @@ class RealtimeMonitorPollThread(WorkerCancellationMixin, QThread):
                 self.cancelled.emit("Realtime industrial polling was cancelled.")
             else:
                 self.error_occurred.emit(redact_sensitive_text(exc))
+
+
+class RealtimeDashboardWriterThread(QThread):
+    """Build and write the realtime dashboard snapshot outside the Qt main thread."""
+
+    result_ready = pyqtSignal(object)
+    error_occurred = pyqtSignal(str)
+
+    def __init__(self, *, db_file: str, output_file: str):
+        super().__init__()
+        self.db_file = db_file
+        self.output_file = output_file
+
+    def run(self):
+        try:
+            output_path = Path(self.output_file)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            snapshot = RealtimeDashboardService(self.db_file).dashboard_snapshot()
+            self.result_ready.emit(write_realtime_dashboard_html(snapshot, output_path))
+        except Exception as exc:
+            self.error_occurred.emit(redact_sensitive_text(exc))
 
 
 class IndustrialExportThread(WorkerCancellationMixin, QThread):
@@ -592,7 +616,7 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                 for key in streamed_upsert_summary:
                     streamed_upsert_summary[key] += int(summary.get(key, 0) or 0)
 
-            def _upsert_sql_batch(records: tuple[dict[str, Any], ...]) -> None:
+            def _upsert_streamed_batch(records: tuple[dict[str, Any], ...]) -> None:
                 nonlocal streamed_upsert_used
                 if not records or sync_run_id is None:
                     return
@@ -662,7 +686,7 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                     mode="preview" if self.test_only else "fetch",
                     cancellation_token=self.cancellation_token,
                     progress_callback=self._emit_progress_from_diagnostic,
-                    record_batch_callback=_upsert_sql_batch if not self.test_only else None,
+                    record_batch_callback=_upsert_streamed_batch if not self.test_only else None,
                 )
             else:
                 result = fetch_oznak_records_for_source_profile(
@@ -677,6 +701,7 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                     allow_unbounded=bool(fetch_state.fetch_all_confirmed),
                     cancellation_token=self.cancellation_token,
                     progress_callback=self._emit_progress_from_diagnostic,
+                    record_batch_callback=_upsert_streamed_batch if not self.test_only else None,
                 )
 
             result_diagnostics = result.diagnostics
@@ -696,7 +721,7 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
             if self._cancel_requested:
                 final_status = "cancelled"
                 error = "Sync cancelled by user."
-            elif result.error and not result.records:
+            elif result.error and not result.records and int(result.row_count or 0) <= 0:
                 final_status = "failed"
                 error = redact_sensitive_text(result.error)
             elif warning_detail or result.error:
@@ -710,9 +735,13 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
             cache_summary = repository.summarize_counts(source_profile_id=self.profile.id).as_dict()
             link_summary = None
             if not self.test_only and final_status in {"succeeded", "completed_with_warnings"}:
+                finalize_started = time.perf_counter()
                 if streamed_upsert_used:
                     upsert_summary = dict(streamed_upsert_summary)
                 else:
+                    self.progress_message.emit(
+                        f"Saving {len(result.records)} fetched row(s) to the local industrial cache..."
+                    )
                     upsert_summary = repository.upsert_industrial_records_from_rows(
                         source_profile_id=self.profile.id,
                         source_db_alias=self.profile.source_db_alias,
@@ -720,8 +749,14 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                         sync_run_id=sync_run_id,
                     )
                 if self.report_db_file:
+                    self.progress_message.emit("Refreshing industrial report links...")
                     link_summary = materialize_industrial_report_links(self.report_db_file)
+                self.progress_message.emit("Updating industrial cache summary...")
                 cache_summary = repository.summarize_counts(source_profile_id=self.profile.id).as_dict()
+                elapsed_seconds = time.perf_counter() - finalize_started
+                self.progress_message.emit(
+                    f"Local industrial cache finalization finished in {elapsed_seconds:.1f}s."
+                )
 
             if sync_run_id is not None:
                 repository.finish_sync_run(

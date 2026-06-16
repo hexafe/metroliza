@@ -1,11 +1,18 @@
 # Changelog (for end users)
 
-## 2026.06 RC1 (build 260615) — current version
+## 2026.06 RC1 (build 260616) — current version
 - Realtime Industrial Monitoring now has a separate foundation for append-only samples, signal definitions, stream offsets, explainable anomaly events, replay, and dashboard review.
 - Deterministic anomaly detectors now cover specification limits, warning limits, IQR fences, MAD robust z-score, rolling z-score, and stale-source checks with operator-readable explanations.
 - Realtime polling now uses generated bounded queries, cursor offsets, chunk limits, safe diagnostics, and offset advancement only after local persistence succeeds.
+- Industrial Data fetches can now save rows into the local cache while large guided or SQL reads are still running, with clearer progress for saving rows, refreshing links, and updating summaries.
+- Industrial Data can now run the same guided filters or SQL query across checked production sources, then report one batch result for all successful and failed sources.
+- Industrial source setup now accepts copied CSV headers or an approved all-columns marker when a reviewed table or view is allowed to expose simple columns.
+- SQL query work now has a larger editor with a preview table for reviewed production queries before fetching rows.
 - Realtime Industrial Monitoring now opens a configurable monitor dialog with source checkboxes, polling interval and timeout settings, bounded row limits, raw or aggregated dashboard mode, status, diagnostics, and dashboard output controls.
 - Realtime source selection now keeps disabled production sources out of polling and separates saving one source from intentionally applying settings to all checked sources.
+- Realtime Industrial Monitoring can now import the shared production source YAML file, reload source changes, and open the shared source editor from the monitor.
+- Realtime dashboard snapshots now refresh in the background after polling, and Open Dashboard queues safely when a refresh is already running.
+- Interactive HTML dashboards can now find points by TraceCode, record key, series, axis value, or point details, then save browser-local point marks without changing source data.
 - Realtime dashboard review still works without selecting a Metroliza report database first; the app uses a temporary session SQLite store unless a persistent database is selected.
 - Synthetic realtime fixtures and replay validation are available for pre-live testing without a production database.
 - Optional advanced anomaly tooling stays separate from normal app startup, so standard users do not need extra ML packages.

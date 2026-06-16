@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -15,6 +17,8 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -45,7 +49,11 @@ from metroliza.industrial.industrial_source_config import (
     load_source_profiles_from_config,
 )
 from metroliza.industrial.industrial_workflow_state import IndustrialFetchState, IndustrialFilterState
-from metroliza.industrial.industrial_workers import IndustrialOznakAccessCheckThread, IndustrialOznakSyncThread
+from metroliza.industrial.industrial_workers import (
+    IndustrialLinkRefreshThread,
+    IndustrialOznakAccessCheckThread,
+    IndustrialOznakSyncThread,
+)
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
     configure_window_size,
@@ -57,6 +65,133 @@ from metroliza.ui.ui_foundation import (
 
 _REPORT_DB_FILE_UNSET = object()
 DEFAULT_SQL_RECIPE_DIR = Path.home() / ".metroliza" / "industrial_sql_recipes"
+
+
+@dataclass(frozen=True)
+class _OznakOperation:
+    profile: IndustrialSourceProfile
+    username: str
+    password: str
+    fetch_state: IndustrialFetchState | None
+    test_only: bool
+    access_only: bool
+    pending_credential_save: tuple[str, str, str] | None
+
+
+class IndustrialSqlQueryDialog(QDialog):
+    """Large SQL editor and preview surface for production data fetches."""
+
+    def __init__(self, parent: "IndustrialSyncDialog"):
+        super().__init__(parent)
+        self.parent_dialog = parent
+        self._syncing = False
+        self.setWindowTitle("Industrial SQL query")
+        configure_window_size(self, minimum=(760, 560), initial=(960, 720))
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(8)
+
+        layout.addWidget(section_label("SQL editor"))
+        self.query_edit = QPlainTextEdit()
+        self.query_edit.setMinimumHeight(220)
+        self.query_edit.setPlaceholderText(parent.sql_query_edit.placeholderText())
+        layout.addWidget(self.query_edit, 2)
+
+        actions = QHBoxLayout()
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.setSpacing(8)
+        self.open_button = QPushButton("Open recipe...")
+        self.save_button = QPushButton("Save recipe...")
+        self.preview_limit_spin = QSpinBox()
+        self.preview_limit_spin.setRange(1, 500)
+        self.preview_button = QPushButton("Preview SQL")
+        self.close_button = QPushButton("Close")
+        actions.addWidget(self.open_button)
+        actions.addWidget(self.save_button)
+        actions.addStretch(1)
+        actions.addWidget(section_label("Preview rows"))
+        actions.addWidget(self.preview_limit_spin)
+        actions.addWidget(self.preview_button)
+        actions.addWidget(self.close_button)
+        layout.addLayout(actions)
+
+        self.status_label = status_chip("SQL preview: not checked", "neutral")
+        layout.addWidget(self.status_label)
+        self.preview_table = QTableWidget(0, 0)
+        layout.addWidget(self.preview_table, 3)
+
+        self.query_edit.textChanged.connect(self._push_query_to_parent)
+        self.preview_limit_spin.valueChanged.connect(self._push_limit_to_parent)
+        self.open_button.clicked.connect(parent.open_sql_recipe)
+        self.save_button.clicked.connect(parent.save_sql_recipe)
+        self.preview_button.clicked.connect(self._preview_sql)
+        self.close_button.clicked.connect(self.close)
+
+        self.sync_from_parent()
+        apply_metroliza_theme(self)
+
+    def sync_from_parent(self) -> None:
+        self._syncing = True
+        try:
+            text = self.parent_dialog.sql_query_edit.toPlainText()
+            if self.query_edit.toPlainText() != text:
+                self.query_edit.setPlainText(text)
+            self.preview_limit_spin.setValue(self.parent_dialog.sql_preview_limit_spin.value())
+            self.status_label.setText(self.parent_dialog.sql_status_label.text())
+        finally:
+            self._syncing = False
+
+    def sync_status_from_parent(self) -> None:
+        self.status_label.setText(self.parent_dialog.sql_status_label.text())
+
+    def set_preview_records(self, records: Any) -> None:
+        _populate_preview_table(self.preview_table, records)
+
+    def _push_query_to_parent(self) -> None:
+        if self._syncing:
+            return
+        text = self.query_edit.toPlainText()
+        if self.parent_dialog.sql_query_edit.toPlainText() != text:
+            self.parent_dialog.sql_query_edit.setPlainText(text)
+
+    def _push_limit_to_parent(self, value: int) -> None:
+        if self._syncing:
+            return
+        self.parent_dialog.sql_preview_limit_spin.setValue(value)
+
+    def _preview_sql(self) -> None:
+        self._push_query_to_parent()
+        self._push_limit_to_parent(self.preview_limit_spin.value())
+        self.parent_dialog.preview_sql()
+
+
+def _populate_preview_table(table: QTableWidget, records: Any) -> None:
+    preview_rows: list[dict[str, Any]] = []
+    for record in tuple(records or ()):
+        if isinstance(record, dict) and isinstance(record.get("raw_record"), dict):
+            preview_rows.append({str(key): value for key, value in record["raw_record"].items()})
+        elif isinstance(record, dict):
+            preview_rows.append({str(key): value for key, value in record.items()})
+    columns: list[str] = []
+    for row in preview_rows:
+        for column in row:
+            if column not in columns:
+                columns.append(column)
+    columns = columns[:50]
+    table.clear()
+    table.setRowCount(len(preview_rows))
+    table.setColumnCount(len(columns))
+    table.setHorizontalHeaderLabels(columns)
+    for row_index, row in enumerate(preview_rows):
+        for column_index, column in enumerate(columns):
+            value = row.get(column)
+            table.setItem(
+                row_index,
+                column_index,
+                QTableWidgetItem("" if value is None else str(value)),
+            )
+    table.resizeColumnsToContents()
 
 
 class IndustrialSyncDialog(QDialog):
@@ -86,6 +221,12 @@ class IndustrialSyncDialog(QDialog):
         self._sql_recipe_path: Path | None = None
         self._pending_sql_preview = False
         self._open_csv_summary_after_fetch = False
+        self._batch_operations: list[_OznakOperation] = []
+        self._batch_results: list[dict[str, Any]] = []
+        self._active_operation: _OznakOperation | None = None
+        self._active_batch_total = 0
+        self.link_refresh_thread: IndustrialLinkRefreshThread | None = None
+        self.sql_editor_window: IndustrialSqlQueryDialog | None = None
         self.setWindowTitle("Fetch industrial data")
         configure_window_size(self, minimum=(620, 520), initial=(760, 840))
 
@@ -94,6 +235,18 @@ class IndustrialSyncDialog(QDialog):
             "neutral",
         )
         self.profile_combo = QComboBox()
+        self.source_check_list = QListWidget()
+        self.source_check_list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.source_check_list.setFixedHeight(52)
+        self.source_check_list.itemChanged.connect(lambda _item: self._sync_action_buttons())
+        self.select_all_sources_button = QPushButton("Select all")
+        self.current_source_only_button = QPushButton("Current only")
+        self.select_all_sources_button.clicked.connect(self.select_all_sources)
+        self.current_source_only_button.clicked.connect(self.select_current_source_only)
+        self.batch_use_current_credentials_checkbox = QCheckBox(
+            "Use entered credentials for all checked sources"
+        )
+        self.batch_use_current_credentials_checkbox.setChecked(True)
         self.filter_status_label = status_chip(self.filter_state.summary(), "neutral")
 
         self.username_edit = QLineEdit()
@@ -120,10 +273,10 @@ class IndustrialSyncDialog(QDialog):
         self.password_edit.setPlaceholderText("local credential store or session password")
 
         self.mode_tabs = QTabWidget()
-        self.mode_tabs.setFixedHeight(280)
+        self.mode_tabs.setFixedHeight(190)
         self.edit_filter_button = QPushButton("Edit filters...")
         self.sql_query_edit = QPlainTextEdit()
-        self.sql_query_edit.setFixedHeight(90)
+        self.sql_query_edit.setFixedHeight(64)
         self.sql_query_edit.setPlaceholderText(
             "SELECT reference, station, line, status, process_timestamp\n"
             "FROM production_view\n"
@@ -134,10 +287,11 @@ class IndustrialSyncDialog(QDialog):
         self.sql_preview_limit_spin.setValue(5)
         self.sql_status_label = status_chip("SQL preview: not checked", "neutral")
         self.sql_preview_table = QTableWidget(0, 0)
-        self.sql_preview_table.setFixedHeight(90)
+        self.sql_preview_table.setFixedHeight(64)
         self.open_sql_button = QPushButton("Open recipe...")
         self.save_sql_button = QPushButton("Save recipe...")
         self.preview_sql_button = QPushButton("Preview SQL")
+        self.open_sql_editor_button = QPushButton("Open SQL editor...")
         self.test_connection_button = QPushButton("Check access")
         self.sync_now_button = QPushButton("Fetch to cache")
         self.fetch_csv_summary_button = QPushButton("Fetch to CSV Summary")
@@ -156,6 +310,9 @@ class IndustrialSyncDialog(QDialog):
         self.preview_sql_button.setToolTip(
             "Run the SQL query with the preview row limit. Preview never writes to the local cache."
         )
+        self.open_sql_editor_button.setToolTip(
+            "Open a larger SQL editor and preview table in a separate dialog."
+        )
         self.fetch_csv_summary_button.setToolTip(
             "Fetch rows into the local cache, then open them in CSV Summary."
         )
@@ -164,6 +321,7 @@ class IndustrialSyncDialog(QDialog):
         self.open_sql_button.clicked.connect(self.open_sql_recipe)
         self.save_sql_button.clicked.connect(self.save_sql_recipe)
         self.preview_sql_button.clicked.connect(self.preview_sql)
+        self.open_sql_editor_button.clicked.connect(self.open_sql_editor)
         self.test_connection_button.clicked.connect(self.test_connection)
         self.sync_now_button.clicked.connect(self.sync_now)
         self.fetch_csv_summary_button.clicked.connect(self.fetch_to_csv_summary)
@@ -197,6 +355,23 @@ class IndustrialSyncDialog(QDialog):
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         form.setSpacing(8)
         form.addRow("Production source", self.profile_combo)
+        source_pick_row = QHBoxLayout()
+        source_pick_row.setContentsMargins(0, 0, 0, 0)
+        source_pick_row.setSpacing(8)
+        source_pick_row.addWidget(self.source_check_list, 1)
+        source_pick_actions = QVBoxLayout()
+        source_pick_actions.setContentsMargins(0, 0, 0, 0)
+        source_pick_actions.setSpacing(6)
+        source_pick_actions.addWidget(self.select_all_sources_button)
+        source_pick_actions.addWidget(self.current_source_only_button)
+        source_pick_actions.addStretch(1)
+        source_pick_row.addLayout(source_pick_actions)
+        form.addRow("Fetch sources", source_pick_row)
+        self.source_check_row_label = form.labelForField(source_pick_row)
+        form.addRow("", self.batch_use_current_credentials_checkbox)
+        self.batch_credentials_row_label = form.labelForField(
+            self.batch_use_current_credentials_checkbox
+        )
         form.addRow("Production DB username", self.username_edit)
         form.addRow("Production DB password", self.password_edit)
         form.addRow("", self.remember_credentials_checkbox)
@@ -237,6 +412,7 @@ class IndustrialSyncDialog(QDialog):
         sql_actions.setSpacing(8)
         sql_actions.addWidget(self.open_sql_button)
         sql_actions.addWidget(self.save_sql_button)
+        sql_actions.addWidget(self.open_sql_editor_button)
         sql_actions.addStretch(1)
         sql_actions.addWidget(section_label("Preview rows"))
         sql_actions.addWidget(self.sql_preview_limit_spin)
@@ -261,6 +437,10 @@ class IndustrialSyncDialog(QDialog):
     def _sync_access_only_visibility(self) -> None:
         show_cache_write_controls = not self.access_only
         for widget in (
+            self.source_check_list,
+            self.select_all_sources_button,
+            self.current_source_only_button,
+            self.batch_use_current_credentials_checkbox,
             self.limit_spin,
             self.fetch_all_checkbox,
             self.filter_status_label,
@@ -273,6 +453,8 @@ class IndustrialSyncDialog(QDialog):
         for label in (
             getattr(self, "limit_row_label", None),
             getattr(self, "fetch_all_row_label", None),
+            getattr(self, "source_check_row_label", None),
+            getattr(self, "batch_credentials_row_label", None),
         ):
             if label is not None:
                 label.setVisible(show_cache_write_controls)
@@ -307,6 +489,7 @@ class IndustrialSyncDialog(QDialog):
                 set_status_variant(self.status_label, "warning")
         for profile in profiles:
             self.profile_combo.addItem(profile.profile_name, profile)
+        self._populate_source_check_list(profiles)
         self._loading_profiles = False
         if profiles:
             if self.access_only:
@@ -330,6 +513,17 @@ class IndustrialSyncDialog(QDialog):
                 self._set_ready_state(False, "Create a production source before fetching rows.")
             self._update_credentials_location_label(None)
 
+    def _populate_source_check_list(self, profiles: list[IndustrialSourceProfile]) -> None:
+        self.source_check_list.blockSignals(True)
+        self.source_check_list.clear()
+        for index, profile in enumerate(profiles):
+            item = QListWidgetItem(f"{profile.profile_name} [{profile.source_db_alias}]")
+            item.setData(Qt.ItemDataRole.UserRole, profile.profile_key)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked if index == 0 else Qt.CheckState.Unchecked)
+            self.source_check_list.addItem(item)
+        self.source_check_list.blockSignals(False)
+
     def _set_ready_state(self, enabled: bool, message: str) -> None:
         self.status_label.setText(message)
         set_status_variant(self.status_label, "neutral" if enabled else "warning")
@@ -341,7 +535,56 @@ class IndustrialSyncDialog(QDialog):
 
     def _handle_profile_changed(self, _index: int) -> None:
         self._load_stored_credentials_for_current_profile()
+        self._ensure_checked_source_selection()
         self._sync_action_buttons()
+
+    def select_all_sources(self) -> None:
+        self.source_check_list.blockSignals(True)
+        try:
+            for index in range(self.source_check_list.count()):
+                self.source_check_list.item(index).setCheckState(Qt.CheckState.Checked)
+        finally:
+            self.source_check_list.blockSignals(False)
+        self._sync_action_buttons()
+
+    def select_current_source_only(self) -> None:
+        profile = self.current_profile()
+        if profile is None:
+            return
+        self.source_check_list.blockSignals(True)
+        try:
+            for index in range(self.source_check_list.count()):
+                item = self.source_check_list.item(index)
+                checked = item.data(Qt.ItemDataRole.UserRole) == profile.profile_key
+                item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+        finally:
+            self.source_check_list.blockSignals(False)
+        self._sync_action_buttons()
+
+    def checked_profiles(self) -> tuple[IndustrialSourceProfile, ...]:
+        profiles_by_key = {profile.profile_key: profile for profile in self._all_profiles()}
+        checked: list[IndustrialSourceProfile] = []
+        for index in range(self.source_check_list.count()):
+            item = self.source_check_list.item(index)
+            if item.checkState() != Qt.CheckState.Checked:
+                continue
+            profile = profiles_by_key.get(str(item.data(Qt.ItemDataRole.UserRole)))
+            if profile is not None:
+                checked.append(profile)
+        return tuple(checked)
+
+    def _ensure_checked_source_selection(self) -> None:
+        if self.access_only or self.checked_profiles():
+            return
+        self.select_current_source_only()
+
+    def _all_profiles(self) -> tuple[IndustrialSourceProfile, ...]:
+        profiles: list[IndustrialSourceProfile] = []
+        for index in range(self.profile_combo.count()):
+            profile = self.profile_combo.itemData(index)
+            if isinstance(profile, IndustrialSourceProfile):
+                profiles.append(profile)
+        return tuple(profiles)
 
     def _load_stored_credentials_for_current_profile(self) -> None:
         profile = self.current_profile()
@@ -403,8 +646,11 @@ class IndustrialSyncDialog(QDialog):
         self.status_label.setText(f"Saved credentials forgotten from {credential_path}")
         set_status_variant(self.status_label, "neutral")
 
-    def _profile_for_current_filter(self) -> IndustrialSourceProfile:
-        profile = self.current_profile()
+    def _profile_for_current_filter(
+        self,
+        profile: IndustrialSourceProfile | None = None,
+    ) -> IndustrialSourceProfile:
+        profile = profile or self.current_profile()
         if profile is None:
             raise ValueError("Create or select a production source before fetching rows.")
         if not profile.allowed_columns:
@@ -475,6 +721,27 @@ class IndustrialSyncDialog(QDialog):
         self._open_csv_summary_after_fetch = False
         self._start_oznak_operation(test_only=True)
 
+    def open_sql_editor(self) -> None:
+        if self.sql_editor_window is None:
+            self.sql_editor_window = IndustrialSqlQueryDialog(self)
+            self.sql_editor_window.finished.connect(lambda _result: self._clear_sql_editor_window())
+        else:
+            self.sql_editor_window.sync_from_parent()
+        self.sql_editor_window.show()
+        self.sql_editor_window.raise_()
+        self.sql_editor_window.activateWindow()
+
+    def _clear_sql_editor_window(self) -> None:
+        self.sql_editor_window = None
+
+    def _sync_sql_editor_from_parent(self) -> None:
+        if self.sql_editor_window is not None:
+            self.sql_editor_window.sync_from_parent()
+
+    def _sync_sql_editor_status(self) -> None:
+        if self.sql_editor_window is not None:
+            self.sql_editor_window.sync_status_from_parent()
+
     def open_sql_recipe(self) -> None:
         filename, _ = QFileDialog.getOpenFileName(
             self,
@@ -493,6 +760,7 @@ class IndustrialSyncDialog(QDialog):
         self.sql_query_edit.setPlainText(text)
         self.sql_status_label.setText(f"SQL recipe loaded: {self._sql_recipe_path.name}")
         set_status_variant(self.sql_status_label, "success")
+        self._sync_sql_editor_from_parent()
 
     def save_sql_recipe(self) -> None:
         filename, _ = QFileDialog.getSaveFileName(
@@ -515,11 +783,15 @@ class IndustrialSyncDialog(QDialog):
         self._sql_recipe_path = path
         self.sql_status_label.setText(f"SQL recipe saved: {path.name}")
         set_status_variant(self.sql_status_label, "success")
+        self._sync_sql_editor_status()
 
     def _current_fetch_mode(self) -> str:
         return "sql" if self.mode_tabs.currentIndex() == 1 else "guided"
 
     def cancel_sync(self) -> None:
+        self._batch_operations.clear()
+        if self._active_batch_total > 1:
+            self._active_batch_total = len(self._batch_results) + 1
         thread = self.oznak_sync_thread
         if thread is not None and thread.isRunning():
             thread.cancel()
@@ -528,7 +800,7 @@ class IndustrialSyncDialog(QDialog):
 
     def _is_oznak_operation_running(self) -> bool:
         thread = self.oznak_sync_thread
-        return bool(thread is not None and thread.isRunning())
+        return bool(thread is not None and thread.isRunning()) or bool(self._batch_operations)
 
     def _start_oznak_operation(self, *, test_only: bool) -> None:
         if self.oznak_sync_thread is not None and self.oznak_sync_thread.isRunning():
@@ -537,14 +809,9 @@ class IndustrialSyncDialog(QDialog):
             return
         try:
             fetch_mode = self._current_fetch_mode()
-            profile = (
-                self._profile_for_current_filter()
-                if fetch_mode == "guided" and (not test_only or self.filter_state.is_applied)
-                else self.current_profile()
-            )
-            if profile is None:
+            profiles = self._profiles_for_operation(fetch_mode=fetch_mode, test_only=test_only)
+            if not profiles:
                 raise ValueError("Create or select a production source before checking access.")
-            username, password = self._read_credentials()
             if self.access_only and not test_only:
                 raise ValueError(
                     "Access-only mode supports Check access only. Select or create a local industrial cache to fetch rows."
@@ -554,7 +821,7 @@ class IndustrialSyncDialog(QDialog):
                     scope_text = (
                         "the SQL query result"
                         if fetch_mode == "sql"
-                        else "the selected production source"
+                        else f"{len(profiles)} selected production source(s)"
                     )
                     confirmed = QMessageBox.question(
                         self,
@@ -566,53 +833,144 @@ class IndustrialSyncDialog(QDialog):
                     )
                     if confirmed != QMessageBox.StandardButton.Yes:
                         return
-                if fetch_mode == "sql":
-                    fetch_state = IndustrialFetchState.from_sql(
-                        self.sql_query_edit.toPlainText(),
-                        limit_rows=None if self.fetch_all_checkbox.isChecked() else self.limit_spin.value(),
-                        fetch_all_confirmed=self.fetch_all_checkbox.isChecked(),
-                        sql_preview_limit=self.sql_preview_limit_spin.value(),
-                        sql_recipe_path=str(self._sql_recipe_path) if self._sql_recipe_path else None,
-                    )
-                else:
-                    fetch_state = IndustrialFetchState.from_reference_state(
-                        self.filter_state,
-                        limit_rows=None if self.fetch_all_checkbox.isChecked() else self.limit_spin.value(),
-                        fetch_all_confirmed=self.fetch_all_checkbox.isChecked(),
-                    )
-            else:
-                if fetch_mode == "sql":
-                    fetch_state = IndustrialFetchState.from_sql(
-                        self.sql_query_edit.toPlainText(),
-                        limit_rows=self.sql_preview_limit_spin.value(),
-                        sql_preview_limit=self.sql_preview_limit_spin.value(),
-                        sql_recipe_path=str(self._sql_recipe_path) if self._sql_recipe_path else None,
-                    )
-                else:
-                    fetch_state = IndustrialFetchState.from_reference_state(
-                        self.filter_state,
-                        limit_rows=1,
-                    )
-            self._pending_sql_preview = bool(test_only and fetch_mode == "sql")
-            self._pending_credential_save = (
-                (profile.profile_key, username, password)
-                if self.remember_credentials_checkbox.isChecked()
-                else None
+            operations = self._build_oznak_operations(
+                profiles=profiles,
+                fetch_mode=fetch_mode,
+                test_only=test_only,
             )
+            self._pending_sql_preview = bool(test_only and fetch_mode == "sql")
         except (OSError, ValueError) as exc:
             QMessageBox.warning(self, "Industrial data fetch", str(exc))
             return
 
         action = "Checking production database access" if test_only else "Fetching production data"
-        self.status_label.setText(f"{action}...")
+        self.status_label.setText(
+            f"{action}..." if len(operations) == 1 else f"{action}: 0/{len(operations)} source(s)"
+        )
         set_status_variant(self.status_label, "neutral")
         self._set_action_buttons_enabled(False)
         self.cancel_sync_button.setEnabled(True)
-        if self.access_only:
+        self._batch_results = []
+        self._active_batch_total = len(operations)
+        self._batch_operations = list(operations)
+        self._start_next_oznak_operation()
+
+    def _profiles_for_operation(
+        self,
+        *,
+        fetch_mode: str,
+        test_only: bool,
+    ) -> tuple[IndustrialSourceProfile, ...]:
+        profile = self.current_profile()
+        if self.access_only or test_only or fetch_mode == "sql":
+            return (profile,) if profile is not None else ()
+        checked = self.checked_profiles()
+        if checked:
+            return checked
+        return (profile,) if profile is not None else ()
+
+    def _fetch_state_for_operation(self, *, fetch_mode: str, test_only: bool) -> IndustrialFetchState:
+        if not test_only:
+            if fetch_mode == "sql":
+                return IndustrialFetchState.from_sql(
+                    self.sql_query_edit.toPlainText(),
+                    limit_rows=None if self.fetch_all_checkbox.isChecked() else self.limit_spin.value(),
+                    fetch_all_confirmed=self.fetch_all_checkbox.isChecked(),
+                    sql_preview_limit=self.sql_preview_limit_spin.value(),
+                    sql_recipe_path=str(self._sql_recipe_path) if self._sql_recipe_path else None,
+                )
+            return IndustrialFetchState.from_reference_state(
+                self.filter_state,
+                limit_rows=None if self.fetch_all_checkbox.isChecked() else self.limit_spin.value(),
+                fetch_all_confirmed=self.fetch_all_checkbox.isChecked(),
+            )
+        if fetch_mode == "sql":
+            return IndustrialFetchState.from_sql(
+                self.sql_query_edit.toPlainText(),
+                limit_rows=self.sql_preview_limit_spin.value(),
+                sql_preview_limit=self.sql_preview_limit_spin.value(),
+                sql_recipe_path=str(self._sql_recipe_path) if self._sql_recipe_path else None,
+            )
+        return IndustrialFetchState.from_reference_state(
+            self.filter_state,
+            limit_rows=1,
+        )
+
+    def _build_oznak_operations(
+        self,
+        *,
+        profiles: tuple[IndustrialSourceProfile, ...],
+        fetch_mode: str,
+        test_only: bool,
+    ) -> tuple[_OznakOperation, ...]:
+        use_form_credentials = (
+            len(profiles) == 1
+            or self.batch_use_current_credentials_checkbox.isChecked()
+            or test_only
+            or fetch_mode == "sql"
+            or self.access_only
+        )
+        form_credentials: tuple[str, str] | None = None
+        if use_form_credentials:
+            form_credentials = self._read_credentials()
+        operations: list[_OznakOperation] = []
+        fetch_state = self._fetch_state_for_operation(fetch_mode=fetch_mode, test_only=test_only)
+        for profile in profiles:
+            runtime_profile = (
+                self._profile_for_current_filter(profile)
+                if fetch_mode == "guided" and (not test_only or self.filter_state.is_applied)
+                else profile
+            )
+            if form_credentials is not None:
+                username, password = form_credentials
+                pending_save = (
+                    (profile.profile_key, username, password)
+                    if self.remember_credentials_checkbox.isChecked()
+                    else None
+                )
+            else:
+                stored = load_industrial_credentials(profile.profile_key)
+                username, password = stored.username, stored.password
+                if not username or not password:
+                    raise ValueError(
+                        "Saved credentials are missing for "
+                        f"{profile.profile_name}. Enable 'Use entered credentials for all checked sources' "
+                        "or save credentials for each selected source first."
+                    )
+                pending_save = None
+            operations.append(
+                _OznakOperation(
+                    profile=runtime_profile,
+                    username=username,
+                    password=password,
+                    fetch_state=fetch_state,
+                    test_only=test_only,
+                    access_only=self.access_only,
+                    pending_credential_save=pending_save,
+                )
+            )
+        return tuple(operations)
+
+    def _start_next_oznak_operation(self) -> None:
+        if not self._batch_operations:
+            self._active_operation = None
+            return
+        operation = self._batch_operations.pop(0)
+        self._active_operation = operation
+        self._pending_credential_save = operation.pending_credential_save
+        completed = len(self._batch_results)
+        if self._active_batch_total > 1:
+            action = "Checking" if operation.test_only else "Fetching"
+            self.status_label.setText(
+                f"{action} {operation.profile.profile_name} "
+                f"({completed + 1}/{self._active_batch_total})..."
+            )
+            set_status_variant(self.status_label, "neutral")
+        if operation.access_only:
             self.oznak_sync_thread = IndustrialOznakAccessCheckThread(
-                profile=profile,
-                username=username,
-                password=password,
+                profile=operation.profile,
+                username=operation.username,
+                password=operation.password,
                 timeout_seconds=self.timeout_spin.value(),
                 reference_filter_column=self.filter_state.reference_column
                 if self.filter_state.references
@@ -622,18 +980,20 @@ class IndustrialSyncDialog(QDialog):
         else:
             self.oznak_sync_thread = IndustrialOznakSyncThread(
                 db_file=str(self.db_file),
-                profile=profile,
-                username=username,
-                password=password,
+                profile=operation.profile,
+                username=operation.username,
+                password=operation.password,
                 limit=self.limit_spin.value(),
                 timeout_seconds=self.timeout_spin.value(),
                 reference_filter_column=self.filter_state.reference_column
                 if self.filter_state.references
                 else None,
                 reference_values=self.filter_state.references,
-                test_only=test_only,
-                fetch_state=fetch_state,
-                report_db_file=self.report_db_file,
+                test_only=operation.test_only,
+                fetch_state=operation.fetch_state,
+                report_db_file=None
+                if self._active_batch_total > 1 and not operation.test_only
+                else self.report_db_file,
             )
         self.oznak_sync_thread.progress_message.connect(self.on_oznak_progress)
         self.oznak_sync_thread.result_ready.connect(self.on_oznak_result)
@@ -649,11 +1009,19 @@ class IndustrialSyncDialog(QDialog):
             self.username_edit.setEnabled(True)
             self.password_edit.setEnabled(True)
             self.remember_credentials_checkbox.setEnabled(True)
+            self.source_check_list.setEnabled(not self.access_only)
+            self.select_all_sources_button.setEnabled(not self.access_only)
+            self.current_source_only_button.setEnabled(not self.access_only)
+            self.batch_use_current_credentials_checkbox.setEnabled(not self.access_only)
             self.mode_tabs.setEnabled(not self.access_only)
             self.timeout_spin.setEnabled(True)
             return
         for button in (
             self.profile_combo,
+            self.source_check_list,
+            self.select_all_sources_button,
+            self.current_source_only_button,
+            self.batch_use_current_credentials_checkbox,
             self.username_edit,
             self.password_edit,
             self.remember_credentials_checkbox,
@@ -662,6 +1030,7 @@ class IndustrialSyncDialog(QDialog):
             self.edit_filter_button,
             self.open_sql_button,
             self.save_sql_button,
+            self.open_sql_editor_button,
             self.preview_sql_button,
             self.test_connection_button,
             self.sync_now_button,
@@ -679,6 +1048,24 @@ class IndustrialSyncDialog(QDialog):
 
     def on_oznak_result(self, result: dict[str, Any]) -> None:
         self._save_pending_credentials_after_success(result)
+        active_operation = self._active_operation
+        if active_operation is not None:
+            result = dict(result)
+            result.setdefault("profile_key", active_operation.profile.profile_key)
+            result.setdefault("profile_name", active_operation.profile.profile_name)
+        if self._active_batch_total > 1:
+            self._batch_results.append(result)
+            completed = len(self._batch_results)
+            if completed < self._active_batch_total:
+                self.status_label.setText(
+                    f"Completed {completed}/{self._active_batch_total} source(s); "
+                    "waiting for next source..."
+                )
+                set_status_variant(self.status_label, "neutral")
+                return
+            self._show_batch_result_status()
+            self._finish_batch_fetch_after_optional_link_refresh()
+            return
         parent = self.parent()
         if parent is not None and hasattr(parent, "refresh_status"):
             parent.refresh_status()
@@ -692,6 +1079,7 @@ class IndustrialSyncDialog(QDialog):
                         f"SQL preview returned {row_count} row(s) with warnings; nothing saved."
                     )
                     set_status_variant(self.sql_status_label, "warning")
+                    self._sync_sql_editor_status()
                     self.status_label.setText(
                         f"SQL preview completed with warnings: {detail}"
                         if detail
@@ -737,6 +1125,7 @@ class IndustrialSyncDialog(QDialog):
                     self.sql_status_label,
                     "success" if row_count > 0 else "warning",
                 )
+                self._sync_sql_editor_status()
                 self.status_label.setText(
                     f"SQL preview passed: {row_count} row(s) visible, nothing saved"
                 )
@@ -769,37 +1158,107 @@ class IndustrialSyncDialog(QDialog):
             if parent is not None and hasattr(parent, "open_analytics_dialog"):
                 parent.open_analytics_dialog()
 
+    def _show_batch_result_status(self) -> None:
+        results = tuple(self._batch_results)
+        failed = [
+            result
+            for result in results
+            if result.get("status") not in {"succeeded", "completed_with_warnings"}
+        ]
+        warnings = [result for result in results if result.get("status") == "completed_with_warnings"]
+        processed = 0
+        for result in results:
+            upsert_summary = result.get("upsert_summary") or {}
+            processed += int(upsert_summary.get("processed", result.get("row_count", 0)) or 0)
+        if failed:
+            failed_names = ", ".join(str(result.get("profile_name") or "unknown") for result in failed[:3])
+            suffix = "..." if len(failed) > 3 else ""
+            self.status_label.setText(
+                f"Batch fetch completed with {len(failed)} failed source(s): "
+                f"{failed_names}{suffix}. {processed} row(s) saved from successful sources."
+            )
+            set_status_variant(self.status_label, "warning")
+            return
+        if warnings:
+            self.status_label.setText(
+                f"Batch fetch completed with warnings: {processed} row(s) saved from "
+                f"{len(results)} source(s)."
+            )
+            set_status_variant(self.status_label, "warning")
+            return
+        self.status_label.setText(
+            f"Batch fetch complete: {processed} row(s) saved from {len(results)} source(s)."
+        )
+        set_status_variant(self.status_label, "success")
+
+    def _finish_batch_fetch_after_optional_link_refresh(self) -> None:
+        if self._should_refresh_links_after_batch():
+            self.status_label.setText(f"{self.status_label.text()} Refreshing report links...")
+            set_status_variant(self.status_label, "neutral")
+            self.link_refresh_thread = IndustrialLinkRefreshThread(str(self.report_db_file))
+            self.link_refresh_thread.summary_ready.connect(self._on_batch_link_refresh_ready)
+            self.link_refresh_thread.error_occurred.connect(self._on_batch_link_refresh_error)
+            self.link_refresh_thread.finished.connect(self._clear_batch_link_refresh_thread)
+            self.link_refresh_thread.start()
+            return
+        self._finish_batch_fetch_ui_actions()
+
+    def _should_refresh_links_after_batch(self) -> bool:
+        if self._active_batch_total <= 1 or not self.report_db_file:
+            return False
+        return any(
+            (not result.get("test_only"))
+            and result.get("status") in {"succeeded", "completed_with_warnings"}
+            for result in self._batch_results
+        )
+
+    def _on_batch_link_refresh_ready(self, summary: Any) -> None:
+        self.status_label.setText(
+            f"{self.status_label.text()} Links refreshed: "
+            f"{summary.accepted_links} links, {summary.ambiguous_reports} ambiguous."
+        )
+        set_status_variant(self.status_label, self._batch_final_status_variant())
+        self._finish_batch_fetch_ui_actions()
+
+    def _on_batch_link_refresh_error(self, message: str) -> None:
+        self.status_label.setText(
+            f"{self.status_label.text()} Link refresh failed: {redact_sensitive_text(message)}"
+        )
+        set_status_variant(self.status_label, "warning")
+        self._finish_batch_fetch_ui_actions()
+
+    def _clear_batch_link_refresh_thread(self) -> None:
+        self.link_refresh_thread = None
+
+    def _batch_final_status_variant(self) -> str:
+        return (
+            "success"
+            if all(result.get("status") == "succeeded" for result in self._batch_results)
+            else "warning"
+        )
+
+    def _finish_batch_fetch_ui_actions(self) -> None:
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "refresh_status"):
+            parent.refresh_status()
+        if self._open_csv_summary_after_fetch:
+            self._open_csv_summary_after_fetch = False
+            if parent is not None and hasattr(parent, "open_analytics_dialog"):
+                parent.open_analytics_dialog()
+
     def _populate_sql_preview_table(self, records: Any) -> None:
-        preview_rows: list[dict[str, Any]] = []
-        for record in tuple(records or ()):
-            if isinstance(record, dict) and isinstance(record.get("raw_record"), dict):
-                preview_rows.append({str(key): value for key, value in record["raw_record"].items()})
-            elif isinstance(record, dict):
-                preview_rows.append({str(key): value for key, value in record.items()})
-        columns: list[str] = []
-        for row in preview_rows:
-            for column in row:
-                if column not in columns:
-                    columns.append(column)
-        columns = columns[:50]
-        self.sql_preview_table.clear()
-        self.sql_preview_table.setRowCount(len(preview_rows))
-        self.sql_preview_table.setColumnCount(len(columns))
-        self.sql_preview_table.setHorizontalHeaderLabels(columns)
-        for row_index, row in enumerate(preview_rows):
-            for column_index, column in enumerate(columns):
-                value = row.get(column)
-                self.sql_preview_table.setItem(
-                    row_index,
-                    column_index,
-                    QTableWidgetItem("" if value is None else str(value)),
-                )
-        self.sql_preview_table.resizeColumnsToContents()
+        _populate_preview_table(self.sql_preview_table, records)
+        if self.sql_editor_window is not None:
+            self.sql_editor_window.set_preview_records(records)
 
     def on_oznak_error(self, message: str) -> None:
         self._pending_credential_save = None
         self._pending_sql_preview = False
         self._open_csv_summary_after_fetch = False
+        self._batch_operations.clear()
+        self._batch_results.clear()
+        self._active_batch_total = 0
+        self._active_operation = None
         QMessageBox.warning(
             self,
             "Industrial data fetch",
@@ -813,6 +1272,11 @@ class IndustrialSyncDialog(QDialog):
         self._pending_credential_save = None
         self._pending_sql_preview = False
         self.oznak_sync_thread = None
+        if self._batch_operations:
+            self._start_next_oznak_operation()
+            return
+        self._active_operation = None
+        self._active_batch_total = 0
         self._set_action_buttons_enabled(True)
         self.cancel_sync_button.setEnabled(False)
 
@@ -850,10 +1314,11 @@ class IndustrialSyncDialog(QDialog):
 
     def _sync_action_buttons(self) -> None:
         thread = self.oznak_sync_thread
-        if thread is not None and thread.isRunning():
+        if (thread is not None and thread.isRunning()) or self._batch_operations:
             self.edit_filter_button.setEnabled(False)
             self.open_sql_button.setEnabled(False)
             self.save_sql_button.setEnabled(False)
+            self.open_sql_editor_button.setEnabled(False)
             self.preview_sql_button.setEnabled(False)
             self.test_connection_button.setEnabled(False)
             self.sync_now_button.setEnabled(False)
@@ -866,12 +1331,14 @@ class IndustrialSyncDialog(QDialog):
         self.edit_filter_button.setEnabled(has_source and not self.access_only)
         self.open_sql_button.setEnabled(not self.access_only)
         self.save_sql_button.setEnabled(not self.access_only)
+        self.open_sql_editor_button.setEnabled(not self.access_only)
         self.preview_sql_button.setEnabled(has_source and not self.access_only)
         self.test_connection_button.setEnabled(has_source)
+        has_fetch_source = bool(self.checked_profiles() or has_source)
         self.sync_now_button.setEnabled(
-            has_source and (not self.access_only)
+            has_fetch_source and (not self.access_only)
         )
-        self.fetch_csv_summary_button.setEnabled(has_source and (not self.access_only))
+        self.fetch_csv_summary_button.setEnabled(has_fetch_source and (not self.access_only))
         self._sync_limit_controls()
 
     def _sync_limit_controls(self) -> None:

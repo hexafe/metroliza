@@ -71,11 +71,16 @@ Open the monitor from **Tools > Real-time Industrial Monitoring...**. If no
 Metroliza database is selected, the app creates a temporary local SQLite store
 for the session; for normal monitoring, select a persistent database first.
 
+The monitor uses the same production source YAML config and source editor as the manual
+Industrial Data fetch workflow. In **Sources**, confirm the **Production source config
+file**, use **Reload Config** after the file changes, or open **Production Sources...** to
+edit the shared source definitions.
+
 The dialog has three operator areas:
 
-- **Sources** lists the configured industrial database profiles. Check one or
-  more enabled sources to monitor them in parallel. Disabled sources are shown
-  for context but cannot be checked or polled.
+- **Sources** lists the configured industrial database profiles from the shared YAML
+  config and local cache. Check one or more enabled sources to monitor them in parallel.
+  Disabled sources are shown for context but cannot be checked or polled.
 - **Configuration** stores the stream key, cursor column, event-time column,
   record key column, signal columns, polling interval, timeout, row limits,
   display mode, aggregation settings, context fields, segment fields, detector
@@ -95,6 +100,11 @@ selected source. Use **Apply Current to Checked** only when the same settings
 should intentionally be copied to every checked source. **Start Checked** and
 **Poll Once** use the currently checked enabled sources; they do not poll
 unchecked or disabled sources.
+
+After a poll, the monitor refreshes the realtime dashboard snapshot in the background.
+If you click **Open Dashboard** while a refresh is already running, the open action waits
+for that refresh instead of starting another write. Source config browsing, reloading,
+and editing are disabled while live monitoring is running.
 
 Credentials are not stored in the monitor config. The monitor uses the same
 local credential store as the Industrial Data workflow. Do not paste passwords,

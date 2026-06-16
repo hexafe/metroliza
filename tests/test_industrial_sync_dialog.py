@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import types
+
 import pytest
 
 try:
@@ -70,6 +72,21 @@ class _CapturingSyncThread:
 
     def cancel(self):
         self.started = False
+
+
+class _CapturingLinkRefreshThread:
+    instances = []
+
+    def __init__(self, db_file):
+        self.db_file = db_file
+        self.summary_ready = _Signal()
+        self.error_occurred = _Signal()
+        self.finished = _Signal()
+        self.started = False
+        self.instances.append(self)
+
+    def start(self):
+        self.started = True
 
 
 def test_sync_dialog_requires_saved_source_and_masks_password(tmp_path):
@@ -726,6 +743,194 @@ def test_sync_dialog_sql_preview_and_fetch_to_csv_summary(monkeypatch, tmp_path)
     dialog.on_oznak_thread_stopped()
     dialog.close()
     parent.close()
+
+
+def test_sync_dialog_guided_batch_fetches_checked_sources_sequentially(monkeypatch, tmp_path):
+    _app()
+    db_path = str(tmp_path / "industrial.db")
+    repository = IndustrialDataRepository(db_path)
+    for key, name in (("line_a", "Line A"), ("line_b", "Line B")):
+        repository.upsert_source_profile(
+            profile_key=key,
+            profile_name=name,
+            source_db_alias=key,
+            database_type="mssql",
+            source_object_name="events",
+            host=f"{key}.example.invalid",
+            port=1433,
+            database_name="plantdb",
+            allowed_columns=("event_id", "reference"),
+            default_pagination_column="event_id",
+        )
+
+    _CapturingSyncThread.instances = []
+    monkeypatch.setattr(
+        industrial_sync_dialog,
+        "IndustrialOznakSyncThread",
+        _CapturingSyncThread,
+    )
+    dialog = IndustrialSyncDialog(db_file=db_path, report_db_file=None)
+    dialog.username_edit.setText("operator")
+    dialog.password_edit.setText("secret-password")
+    dialog.select_all_sources()
+
+    dialog.sync_now()
+
+    assert len(_CapturingSyncThread.instances) == 1
+    assert _CapturingSyncThread.instances[0].kwargs["profile"].profile_key == "line_a"
+    assert _CapturingSyncThread.instances[0].kwargs["username"] == "operator"
+
+    dialog.on_oznak_result(
+        {
+            "status": "succeeded",
+            "test_only": False,
+            "row_count": 2,
+            "upsert_summary": {"processed": 2},
+        }
+    )
+    assert "Completed 1/2 source(s)" in dialog.status_label.text()
+
+    _CapturingSyncThread.instances[0].started = False
+    dialog.on_oznak_thread_stopped()
+
+    assert len(_CapturingSyncThread.instances) == 2
+    assert _CapturingSyncThread.instances[1].kwargs["profile"].profile_key == "line_b"
+    assert _CapturingSyncThread.instances[1].kwargs["username"] == "operator"
+
+    dialog.on_oznak_result(
+        {
+            "status": "succeeded",
+            "test_only": False,
+            "row_count": 3,
+            "upsert_summary": {"processed": 3},
+        }
+    )
+
+    assert "Batch fetch complete: 5 row(s) saved from 2 source(s)." == dialog.status_label.text()
+    _CapturingSyncThread.instances[1].started = False
+    dialog.on_oznak_thread_stopped()
+    assert dialog.oznak_sync_thread is None
+    dialog.close()
+
+
+def test_sync_dialog_batch_fetch_refreshes_links_once_after_all_sources(monkeypatch, tmp_path):
+    _app()
+    db_path = str(tmp_path / "industrial.db")
+    repository = IndustrialDataRepository(db_path)
+    for key, name in (("line_a", "Line A"), ("line_b", "Line B")):
+        repository.upsert_source_profile(
+            profile_key=key,
+            profile_name=name,
+            source_db_alias=key,
+            database_type="mssql",
+            source_object_name="events",
+            host=f"{key}.example.invalid",
+            port=1433,
+            database_name="plantdb",
+            allowed_columns=("event_id", "reference"),
+            default_pagination_column="event_id",
+        )
+
+    _CapturingSyncThread.instances = []
+    _CapturingLinkRefreshThread.instances = []
+    monkeypatch.setattr(
+        industrial_sync_dialog,
+        "IndustrialOznakSyncThread",
+        _CapturingSyncThread,
+    )
+    monkeypatch.setattr(
+        industrial_sync_dialog,
+        "IndustrialLinkRefreshThread",
+        _CapturingLinkRefreshThread,
+    )
+    dialog = IndustrialSyncDialog(db_file=db_path, report_db_file=db_path)
+    dialog.username_edit.setText("operator")
+    dialog.password_edit.setText("secret-password")
+    dialog.select_all_sources()
+
+    dialog.sync_now()
+    assert _CapturingSyncThread.instances[0].kwargs["report_db_file"] is None
+
+    dialog.on_oznak_result(
+        {
+            "status": "succeeded",
+            "test_only": False,
+            "row_count": 2,
+            "upsert_summary": {"processed": 2},
+        }
+    )
+    _CapturingSyncThread.instances[0].started = False
+    dialog.on_oznak_thread_stopped()
+
+    assert _CapturingSyncThread.instances[1].kwargs["report_db_file"] is None
+    dialog.on_oznak_result(
+        {
+            "status": "succeeded",
+            "test_only": False,
+            "row_count": 3,
+            "upsert_summary": {"processed": 3},
+        }
+    )
+
+    assert len(_CapturingLinkRefreshThread.instances) == 1
+    assert _CapturingLinkRefreshThread.instances[0].db_file == db_path
+    assert _CapturingLinkRefreshThread.instances[0].started is True
+    assert "Refreshing report links" in dialog.status_label.text()
+    _CapturingSyncThread.instances[1].started = False
+    dialog.on_oznak_thread_stopped()
+
+    dialog._on_batch_link_refresh_ready(
+        types.SimpleNamespace(accepted_links=4, ambiguous_reports=1)
+    )
+    dialog._clear_batch_link_refresh_thread()
+
+    assert "Links refreshed: 4 links, 1 ambiguous" in dialog.status_label.text()
+    dialog.close()
+
+
+def test_sync_dialog_sql_editor_uses_large_dialog_and_shared_preview_table(tmp_path):
+    _app()
+    db_path = str(tmp_path / "industrial.db")
+    IndustrialDataRepository(db_path).upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="events",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+        allowed_columns=("event_id", "reference"),
+    )
+    dialog = IndustrialSyncDialog(db_file=db_path)
+    dialog.sql_query_edit.setPlainText("SELECT event_id FROM events")
+
+    dialog.open_sql_editor()
+    editor = dialog.sql_editor_window
+
+    assert editor is not None
+    assert editor.query_edit.toPlainText() == "SELECT event_id FROM events"
+
+    editor.query_edit.setPlainText("SELECT reference FROM events")
+
+    assert dialog.sql_query_edit.toPlainText() == "SELECT reference FROM events"
+
+    dialog._populate_sql_preview_table(
+        (
+            {
+                "raw_record": {
+                    "reference": "REF-1",
+                    "event_id": "ROW-1",
+                }
+            },
+        )
+    )
+
+    assert dialog.sql_preview_table.rowCount() == 1
+    assert editor.preview_table.rowCount() == 1
+    assert editor.preview_table.columnCount() == 2
+    editor.close()
+    dialog.close()
 
 
 def test_sync_dialog_guided_fetch_all_requires_confirmation_and_removes_limit(

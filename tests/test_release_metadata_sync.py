@@ -13,7 +13,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}(?:rc\d+)?$")
         self.assertRegex(metadata.build, r"^\d{6}$")
         self.assertEqual(metadata.version_label, f"{metadata.release_version}({metadata.build})")
-        self.assertEqual(metadata.public_version_label, "2026.06 RC1 (build 260615)")
+        self.assertEqual(metadata.public_version_label, "2026.06 RC1 (build 260616)")
         self.assertTrue(metadata.highlight)
 
     def test_in_app_current_release_notes_show_current_version_only(self):
@@ -53,8 +53,15 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
                 "- Realtime Industrial Monitoring now has a separate foundation for append-only samples, signal definitions, stream offsets, explainable anomaly events, replay, and dashboard review<br>",
                 "- Deterministic anomaly detectors now cover specification limits, warning limits, IQR fences, MAD robust z-score, rolling z-score, and stale-source checks with operator-readable explanations<br>",
                 "- Realtime polling now uses generated bounded queries, cursor offsets, chunk limits, safe diagnostics, and offset advancement only after local persistence succeeds<br>",
+                "- Industrial Data fetches can now save rows into the local cache while large guided or SQL reads are still running, with clearer progress for saving rows, refreshing links, and updating summaries<br>",
+                "- Industrial Data can now run the same guided filters or SQL query across checked production sources, then report one batch result for all successful and failed sources<br>",
+                "- Industrial source setup now accepts copied CSV headers or an approved all-columns marker when a reviewed table or view is allowed to expose simple columns<br>",
+                "- SQL query work now has a larger editor with a preview table for reviewed production queries before fetching rows<br>",
                 "- Realtime Industrial Monitoring now opens an operator dialog with checked-source selection, polling interval and timeout settings, row limits, status, diagnostics, and dashboard output controls<br>",
                 "- Realtime source selection now keeps disabled production sources out of polling and separates saving one source from intentionally applying settings to all checked sources<br>",
+                "- Realtime Industrial Monitoring can now import the shared production source YAML file, reload source changes, and open the shared source editor from the monitor<br>",
+                "- Realtime dashboard snapshots now refresh in the background after polling, and Open Dashboard queues safely when a refresh is already running<br>",
+                "- Interactive HTML dashboards can now find points by TraceCode, record key, series, axis value, or point details, then save browser-local point marks without changing source data<br>",
                 "- Realtime dashboard review can open without selecting a Metroliza report database first; the app uses a temporary session SQLite store unless a persistent database is selected<br>",
                 "- Synthetic realtime fixtures and replay validation are available for pre-live testing without a production database<br>",
                 "- Optional advanced anomaly tooling stays separate from normal app startup, so standard users do not need extra ML packages<br>",

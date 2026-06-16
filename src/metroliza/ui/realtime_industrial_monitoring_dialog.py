@@ -31,6 +31,10 @@ from PyQt6.QtWidgets import (
 )
 
 from metroliza.industrial.industrial_data_repository import IndustrialDataRepository, IndustrialSourceProfile
+from metroliza.industrial.industrial_source_config import (
+    default_industrial_source_config_path,
+    import_source_profiles_to_repository,
+)
 from metroliza.industrial.realtime.monitor_config import (
     DEFAULT_AGGREGATION_METHODS,
     RealtimeMonitorConfig,
@@ -43,7 +47,11 @@ from metroliza.industrial.realtime.stream_config import (
     DEFAULT_SEGMENT_FIELDS,
     RealtimeStreamConfigError,
 )
-from metroliza.industrial.industrial_workers import RealtimeMonitorPollThread
+from metroliza.industrial.industrial_workers import (
+    RealtimeDashboardWriterThread,
+    RealtimeMonitorPollThread,
+)
+from metroliza.ui.industrial_source_profiles_dialog import IndustrialSourceProfilesDialog
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
     configure_table,
@@ -60,14 +68,30 @@ from metroliza.ui.ui_foundation import (
 class RealtimeIndustrialMonitoringDialog(QDialog):
     """Configure and run live polling for one or more industrial source profiles."""
 
-    def __init__(self, parent=None, db_file: str | None = None):
+    def __init__(
+        self,
+        parent=None,
+        db_file: str | None = None,
+        config_path: str | Path | None = None,
+    ):
         super().__init__(parent)
         self.db_file = str(db_file or "")
+        self.config_path = Path(config_path or default_industrial_source_config_path()).expanduser()
         self.repository = RealtimeMonitorConfigRepository(self.db_file)
         self.source_repository = IndustrialDataRepository(self.db_file)
+        self.source_window: IndustrialSourceProfilesDialog | None = None
         self.poll_timer = QTimer(self)
         self.poll_timer.timeout.connect(self.poll_once)
         self.poll_thread: RealtimeMonitorPollThread | None = None
+        self.dashboard_write_debounce_timer = QTimer(self)
+        self.dashboard_write_debounce_timer.setSingleShot(True)
+        self.dashboard_write_debounce_timer.setInterval(250)
+        self.dashboard_write_debounce_timer.timeout.connect(self._start_dashboard_write)
+        self.dashboard_thread: RealtimeDashboardWriterThread | None = None
+        self._dashboard_write_pending = False
+        self._dashboard_open_pending = False
+        self._dashboard_open_after_current = False
+        self._closing = False
         self.profiles: list[IndustrialSourceProfile] = []
         self.configs_by_profile_id: dict[int, RealtimeMonitorConfig] = {}
         self.active_configs: tuple[RealtimeMonitorConfig, ...] = ()
@@ -105,6 +129,20 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
     def _build_source_panel(self) -> QWidget:
         panel = QGroupBox("Sources")
         layout = QVBoxLayout(panel)
+        config_row = QHBoxLayout()
+        self.source_config_path_field = path_field(str(self.config_path))
+        self.browse_config_button = QPushButton("Browse")
+        self.reload_config_button = QPushButton("Reload Config")
+        self.edit_sources_button = QPushButton("Production Sources...")
+        self.browse_config_button.clicked.connect(self.choose_source_config_path)
+        self.reload_config_button.clicked.connect(self.reload_from_database)
+        self.edit_sources_button.clicked.connect(self.open_source_profiles_dialog)
+        config_row.addWidget(self.source_config_path_field, 1)
+        config_row.addWidget(self.browse_config_button)
+        config_row.addWidget(self.reload_config_button)
+        layout.addWidget(QLabel("Production source config file"))
+        layout.addLayout(config_row)
+        layout.addWidget(self.edit_sources_button)
         self.source_list = QListWidget()
         self.source_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.source_list.currentItemChanged.connect(self._on_current_source_changed)
@@ -245,13 +283,54 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         try:
             self.source_repository.ensure_schema()
             self.repository.ensure_schema()
+            self.config_path = Path(self.source_config_path_field.text() or self.config_path).expanduser()
+            imported = import_source_profiles_to_repository(self.config_path, self.source_repository)
             self.profiles = self.source_repository.list_source_profiles(include_disabled=True)
             configs = self.repository.list_configs()
             self.configs_by_profile_id = {config.source_profile_id: config for config in configs}
             self._populate_sources()
-            self._set_status("Ready" if self.profiles else "No industrial sources configured", "info")
+            if self.profiles:
+                source_text = (
+                    f"Ready; imported {len(imported)} source(s) from YAML"
+                    if imported
+                    else "Ready"
+                )
+            else:
+                source_text = "No industrial sources configured"
+            self._set_status(source_text, "info")
         except Exception as exc:
             self._set_status(f"Load failed: {exc}", "danger")
+
+    def choose_source_config_path(self) -> None:
+        selected, _filter = QFileDialog.getOpenFileName(
+            self,
+            "Production source config",
+            str(self.config_path),
+            "YAML files (*.yaml *.yml);;All files (*)",
+        )
+        if not selected:
+            return
+        self.config_path = Path(selected).expanduser()
+        update_path_field(self.source_config_path_field, str(self.config_path))
+        self.reload_from_database()
+
+    def open_source_profiles_dialog(self) -> None:
+        self.source_window = IndustrialSourceProfilesDialog(
+            self,
+            db_file=self.db_file,
+            config_path=self.config_path,
+        )
+        self.source_window.finished.connect(self._handle_source_dialog_closed)
+        self.source_window.show()
+        self.source_window.raise_()
+        self.source_window.activateWindow()
+
+    def _handle_source_dialog_closed(self, _result: int) -> None:
+        if self.source_window is not None:
+            self.config_path = self.source_window.config_path
+            update_path_field(self.source_config_path_field, str(self.config_path))
+        self.source_window = None
+        self.reload_from_database()
 
     def _populate_sources(self) -> None:
         self.source_list.blockSignals(True)
@@ -528,7 +607,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             int(getattr(result, "detector_events_created", 0) or 0) for result in self.last_poll_results
         )
         self._append_diagnostic(_format_results_for_diagnostics(self.last_poll_results))
-        self.write_dashboard(open_after=False)
+        self._schedule_dashboard_write(open_after=False)
         if failed:
             self._set_status(f"Polling completed with {len(failed)} failed stream(s).", "warning")
         else:
@@ -576,9 +655,65 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             update_path_field(self.dashboard_path_field, selected, empty_text="Default temp dashboard")
 
     def open_dashboard(self) -> None:
-        path = self.write_dashboard(open_after=True)
-        if path is not None:
-            self._set_status(f"Dashboard opened: {path}", "success")
+        self._schedule_dashboard_write(open_after=True)
+
+    def _schedule_dashboard_write(self, *, open_after: bool) -> None:
+        if self._closing:
+            return
+        self._dashboard_write_pending = True
+        self._dashboard_open_pending = self._dashboard_open_pending or open_after
+        if self.dashboard_thread is not None and self.dashboard_thread.isRunning():
+            if open_after:
+                self._set_status("Dashboard refresh queued; current write is finishing.", "info")
+            return
+        if open_after:
+            self._start_dashboard_write()
+        else:
+            self.dashboard_write_debounce_timer.start()
+
+    def _start_dashboard_write(self) -> None:
+        if self._closing or not self._dashboard_write_pending:
+            return
+        if self.dashboard_thread is not None and self.dashboard_thread.isRunning():
+            return
+        self.dashboard_write_debounce_timer.stop()
+        output_path = Path(_field_path(self.dashboard_path_field.text()) or self._default_dashboard_path())
+        self._dashboard_write_pending = False
+        self._dashboard_open_after_current = self._dashboard_open_pending
+        self._dashboard_open_pending = False
+        self.dashboard_thread = RealtimeDashboardWriterThread(
+            db_file=self.db_file,
+            output_file=str(output_path),
+        )
+        self.dashboard_thread.result_ready.connect(self._on_dashboard_written)
+        self.dashboard_thread.error_occurred.connect(self._on_dashboard_write_error)
+        self.dashboard_thread.finished.connect(self._on_dashboard_writer_finished)
+        if self._dashboard_open_after_current:
+            self._set_status("Preparing realtime dashboard...", "info")
+        self.dashboard_thread.start()
+
+    def _on_dashboard_written(self, path: object) -> None:
+        self.last_dashboard_path = Path(path)
+        if self._dashboard_open_after_current:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.last_dashboard_path)))
+            self._set_status(f"Dashboard opened: {self.last_dashboard_path}", "success")
+        else:
+            self._set_status(f"Dashboard refreshed: {self.last_dashboard_path}", "success")
+
+    def _on_dashboard_write_error(self, message: str) -> None:
+        self._append_diagnostic(f"Dashboard write failed: {message}")
+        self._set_status(f"Dashboard write failed: {message}", "warning")
+
+    def _on_dashboard_writer_finished(self) -> None:
+        self.dashboard_thread = None
+        self._dashboard_open_after_current = False
+        if self._closing:
+            return
+        if self._dashboard_write_pending:
+            if self._dashboard_open_pending:
+                self._start_dashboard_write()
+            else:
+                self.dashboard_write_debounce_timer.start()
 
     def write_dashboard(self, *, open_after: bool = False) -> Path | None:
         try:
@@ -603,6 +738,9 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.stop_button.setEnabled(running)
         self.poll_once_button.setEnabled(not running)
         self.reload_button.setEnabled(not running)
+        self.reload_config_button.setEnabled(not running)
+        self.browse_config_button.setEnabled(not running)
+        self.edit_sources_button.setEnabled(not running)
         self.source_list.setEnabled(not running)
         self._sync_buttons()
 
@@ -628,15 +766,20 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
     def _append_diagnostic(self, text: str) -> None:
         if not str(text or "").strip():
             return
-        current = self.diagnostics_text.toPlainText()
-        separator_text = "\n\n" if current else ""
-        self.diagnostics_text.setPlainText(f"{current}{separator_text}{text}")
+        if not self.diagnostics_text.document().isEmpty():
+            self.diagnostics_text.appendPlainText("")
+        self.diagnostics_text.appendPlainText(str(text))
         cursor = self.diagnostics_text.textCursor()
         cursor.movePosition(cursor.MoveOperation.End)
         self.diagnostics_text.setTextCursor(cursor)
+        self.diagnostics_text.ensureCursorVisible()
 
     def closeEvent(self, event) -> None:
+        self._closing = True
+        self.dashboard_write_debounce_timer.stop()
         self.stop_monitoring(wait_for_thread=True)
+        if self.dashboard_thread is not None and self.dashboard_thread.isRunning():
+            self.dashboard_thread.wait(3_000)
         super().closeEvent(event)
 
 

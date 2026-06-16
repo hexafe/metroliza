@@ -15,6 +15,7 @@ from modules.export_html_dashboard import (
     _dashboard_visual_preview_labels_from_manifest,
     extract_dashboard_chart_details,
     _render_overview_cards,
+    _render_plotly_shell,
     resolve_html_dashboard_assets_dir,
     resolve_html_dashboard_path,
     write_export_html_dashboard,
@@ -61,6 +62,23 @@ def test_dashboard_visual_preview_labels_derive_from_export_plotly_specs() -> No
     )
 
     assert labels == ("POPULATION", "DUPA", "TEST123", "Group 3", "Group 4")
+
+
+def test_render_plotly_shell_exposes_chart_key_for_point_marks() -> None:
+    html_markup = _render_plotly_shell(
+        {
+            "chart_type": "trend",
+            "title": "Diameter trend",
+            "plotly_chart_key": "section-001:chart-02",
+            "plotly_spec": {
+                "data": [{"type": "scatter", "mode": "markers", "x": [1], "y": [2]}],
+                "layout": {},
+            },
+        }
+    )
+
+    assert 'data-dashboard-chart-key="section-001:chart-02"' in html_markup
+    assert 'data-plotly-spec-light=' in html_markup
 
 
 class TestExportHtmlDashboard(unittest.TestCase):
@@ -305,11 +323,18 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn('data-theme-choice="dark"', html_text)
             self.assertIn('metroliza-dashboard-theme', html_text)
             self.assertIn('metroliza-dashboard-visuals', html_text)
+            self.assertIn('metroliza-dashboard-point-marks', html_text)
             self.assertIn('prefers-color-scheme: dark', html_text)
             self.assertIn('window.Plotly.react', html_text)
             self.assertIn('delete lightboxPlotly.__metrolizaVisualSelectionHandlers;', html_text)
             self.assertIn('preservePlotlyTraceVisibility(container, data);', html_text)
             self.assertIn('applyDashboardVisualsToPlotlySpec(baseSpec)', html_text)
+            self.assertIn('data-dashboard-chart-key="section-001:chart-01"', html_text)
+            self.assertIn('applyDashboardPointMarksToPlotlySpec(visualSpec, chartKey)', html_text)
+            self.assertIn(
+                "'data-plotly-spec-light', 'data-plotly-spec-dark', 'data-plotly-spec', 'data-dashboard-chart-key'",
+                html_text,
+            )
             self.assertIn('"initialSettings":{', html_text)
             self.assertIn('"preset":"custom"', html_text)
             self.assertIn('"palette_preset":"custom"', html_text)
@@ -1177,6 +1202,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(spec['layout']['xaxis']['tickvals'], [0.0, 1.0])
         self.assertEqual(spec['layout']['xaxis']['ticktext'], ['S101', 'S105'])
         self.assertEqual(spec['layout']['yaxis']['tickformat'], '.4f')
+        self.assertEqual(spec['data'][0]['ids'], ['S101', 'S105'])
         self.assertIn('Sample number=%{customdata}', spec['data'][0]['hovertemplate'])
         self.assertNotIn('%{x', spec['data'][0]['hovertemplate'])
         self.assertIn('%{y:.4f}', spec['data'][0]['hovertemplate'])
@@ -1287,6 +1313,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertNotIn('line', measurement_trace)
         self.assertEqual(measurement_trace['x'], [0.0, 1.5, 3.0])
         self.assertEqual(measurement_trace['y'], [10.1234, 10.4325, 10.5555])
+        self.assertEqual(measurement_trace['ids'], ['S101', 'S105', 'S108'])
         self.assertEqual(measurement_trace['customdata'], ['S101', 'S105', 'S108'])
         self.assertIn('Sample number=%{customdata}', measurement_trace['hovertemplate'])
         self.assertIn('%{y:.4f}', measurement_trace['hovertemplate'])
@@ -1449,6 +1476,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
 
         self.assertEqual(spec['data'][0]['x'], [1.0, 2.0, 3.0])
         self.assertEqual(spec['data'][0]['y'], [10.625, 20.375, 30.125])
+        self.assertEqual(spec['data'][0]['ids'], ['first', 'second', 'third'])
         self.assertEqual(spec['data'][0]['customdata'], ['first', 'second', 'third'])
         self.assertEqual(spec['data'][0]['name'], 'Measurements')
         self.assertTrue(spec['data'][0].get('showlegend'))

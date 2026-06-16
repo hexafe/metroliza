@@ -42,8 +42,9 @@ If a supplier sends a report layout Metroliza does not recognize, use
 ## Current documentation focus
 
 The current 2026.06 RC1 tester documentation focus is realtime industrial
-monitoring, Industrial Data source safety, replay evidence, and false-positive
-handling. If you work with production-line data, read these pages first:
+monitoring, Industrial Data source safety, multi-source fetches, dashboard point
+marking, replay evidence, and false-positive handling. If you work with
+production-line data, read these pages first:
 
 - [Industrial Data](industrial_data.md) — fetch production rows into a local cache before filtering, grouping, dashboards, or optional workbooks.
 - [Realtime Industrial Monitoring](realtime_industrial_monitoring.md) — understand watched signals, anomaly events, source lag, and false-positive review.

@@ -384,6 +384,7 @@ def write_export_html_dashboard(
                     "payload_summary": payload_summary,
                     "payload_details": payload_details,
                     "plotly_spec": plotly_spec,
+                    "plotly_chart_key": f"section-{section_index:03d}:chart-{chart_index:02d}",
                 }
             )
             chart_count += 1
@@ -1698,6 +1699,7 @@ def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str, them
                     "name": "Measurements",
                     "x": x_values,
                     "y": y_values,
+                    "ids": [str(label) for label in point_labels],
                     "customdata": point_labels,
                     "marker": {"color": tokens["colorway"][0], "size": 8, "opacity": 0.82},
                     "hovertemplate": (
@@ -1912,6 +1914,7 @@ def _build_plotly_trend_spec(payload: dict[str, Any], *, title: str, theme: str 
             "name": "Measurements",
             "x": x_values,
             "y": y_values,
+            "ids": [str(label) for label in sample_labels],
             "customdata": sample_labels,
             "marker": {"size": 8, "color": tokens["trend_marker"]},
             "hovertemplate": (
@@ -2367,6 +2370,7 @@ def _normalize_group_analysis_manifest(
                     "payload_summary": {},
                     "payload_details": {},
                     "plotly_spec": plotly_spec,
+                    "plotly_chart_key": f"group-analysis:metric-{metric_index:03d}:{plot_key}",
                 }
             )
             plot_count += 1
@@ -3724,7 +3728,13 @@ def _render_dashboard_html(
         const visualSpec = typeof applyDashboardVisualsToPlotlySpec === 'function'
           ? applyDashboardVisualsToPlotlySpec(baseSpec)
           : baseSpec;
-        const spec = applyThemeToPlotlySpec(visualSpec);
+        const chartKey = typeof dashboardChartKeyForContainer === 'function'
+          ? dashboardChartKeyForContainer(container)
+          : '';
+        const markedSpec = typeof applyDashboardPointMarksToPlotlySpec === 'function'
+          ? applyDashboardPointMarksToPlotlySpec(visualSpec, chartKey)
+          : visualSpec;
+        const spec = applyThemeToPlotlySpec(markedSpec);
         const config = Object.assign({{ responsive: true }}, spec.config || {{}});
         try {{
           if (force && container.dataset.plotlyReady === '1') {{
@@ -3828,7 +3838,7 @@ def _render_dashboard_html(
         if (!source || !destination) {{
           return;
         }}
-        ['data-plotly-spec-light', 'data-plotly-spec-dark', 'data-plotly-spec'].forEach((attribute) => {{
+        ['data-plotly-spec-light', 'data-plotly-spec-dark', 'data-plotly-spec', 'data-dashboard-chart-key'].forEach((attribute) => {{
           const value = source.getAttribute(attribute);
           if (value) {{
             destination.setAttribute(attribute, value);
@@ -4109,6 +4119,11 @@ def _render_plotly_shell(chart: dict[str, Any]) -> str:
     spec_json_light = html.escape(json.dumps(light_spec, ensure_ascii=False, separators=(",", ":")))
     spec_json_dark = html.escape(json.dumps(dark_spec, ensure_ascii=False, separators=(",", ":")))
     title = str(chart.get("title") or chart.get("chart_type") or "chart")
+    chart_key = str(
+        chart.get("plotly_chart_key")
+        or chart.get("id")
+        or f"{chart.get('chart_type') or 'chart'}:{title}"
+    )
     return (
         '<div class="plotly-shell">'
         '<div class="plotly-shell-header">'
@@ -4121,6 +4136,7 @@ def _render_plotly_shell(chart: dict[str, Any]) -> str:
         '</div>'
         '</div>'
         f'<div class="plotly-chart" aria-label="Interactive chart: {html.escape(title)}" '
+        f'data-dashboard-chart-key="{html.escape(chart_key)}" '
         f'data-plotly-spec-light="{spec_json_light}" data-plotly-spec-dark="{spec_json_dark}"></div>'
         '</div>'
     )

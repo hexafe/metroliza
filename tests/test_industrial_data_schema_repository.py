@@ -558,6 +558,133 @@ def test_upsert_records_and_summarize_counts_from_synthetic_rows(tmp_path):
     assert row1_dynamic_fields == {"temperature_c"}
 
 
+def test_upsert_records_replaces_dynamic_values_on_second_upsert(tmp_path):
+    db_path = str(tmp_path / "industrial.db")
+    repository = IndustrialDataRepository(db_path)
+    profile = repository.upsert_source_profile(
+        profile_key="line-replace",
+        profile_name="Line Replace",
+        source_db_alias="plant_replace",
+        database_type="mysql",
+        source_object_name="factory.events",
+    )
+
+    first_pass = repository.upsert_industrial_records_from_rows(
+        source_profile_id=profile.id,
+        source_db_alias=profile.source_db_alias,
+        rows=[
+            {
+                "source_record_key": "ROW-REPLACE",
+                "reference": "REF-REPLACE",
+                "temperature_c": 20.5,
+                "measurements": {"force": 7.2},
+            }
+        ],
+    )
+    second_pass = repository.upsert_industrial_records_from_rows(
+        source_profile_id=profile.id,
+        source_db_alias=profile.source_db_alias,
+        rows=[
+            {
+                "source_record_key": "ROW-REPLACE",
+                "reference": "REF-REPLACE-2",
+                "pressure_bar": 8.8,
+            }
+        ],
+    )
+
+    with sqlite_connection_scope(db_path) as conn:
+        value_rows = conn.execute(
+            """
+            SELECT values_row.field_name, values_row.field_value_text, values_row.field_value_json
+            FROM industrial_record_values values_row
+            JOIN industrial_records records_row ON records_row.id = values_row.record_id
+            WHERE records_row.source_profile_id = ?
+              AND records_row.source_record_key = 'ROW-REPLACE'
+            ORDER BY values_row.field_name
+            """,
+            (profile.id,),
+        ).fetchall()
+        duplicate_value_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM industrial_record_values values_row
+            JOIN industrial_records records_row ON records_row.id = values_row.record_id
+            WHERE records_row.source_profile_id = ?
+              AND records_row.source_record_key = 'ROW-REPLACE'
+              AND values_row.field_name IN ('temperature_c', 'measurements')
+            """,
+            (profile.id,),
+        ).fetchone()[0]
+
+    assert first_pass == {"processed": 1, "inserted": 1, "updated": 0, "value_rows": 2}
+    assert second_pass == {"processed": 1, "inserted": 0, "updated": 1, "value_rows": 1}
+    assert value_rows == [("pressure_bar", "8.8", None)]
+    assert duplicate_value_count == 0
+
+
+def test_upsert_records_counts_same_batch_duplicate_keys_from_iterable(tmp_path):
+    db_path = str(tmp_path / "industrial.db")
+    repository = IndustrialDataRepository(db_path)
+    profile = repository.upsert_source_profile(
+        profile_key="line-duplicates",
+        profile_name="Line Duplicates",
+        source_db_alias="plant_duplicates",
+        database_type="mysql",
+        source_object_name="factory.events",
+    )
+
+    rows = (
+        row
+        for row in [
+            {
+                "record_key": "ROW-DUP",
+                "reference": "REF-DUP-1",
+                "station": "S1",
+                "temperature_c": 21.0,
+                "obsolete_metric": "stale",
+            },
+            {
+                "source_record_key": "ROW-DUP",
+                "reference": "REF-DUP-2",
+                "station": "S2",
+                "pressure_bar": 7.5,
+            },
+        ]
+    )
+
+    summary = repository.upsert_industrial_records_from_rows(
+        source_profile_id=profile.id,
+        source_db_alias=profile.source_db_alias,
+        rows=rows,
+    )
+
+    with sqlite_connection_scope(db_path) as conn:
+        record = conn.execute(
+            """
+            SELECT reference, station
+            FROM industrial_records
+            WHERE source_profile_id = ? AND source_record_key = 'ROW-DUP'
+            """,
+            (profile.id,),
+        ).fetchone()
+        value_rows = conn.execute(
+            """
+            SELECT values_row.field_name, values_row.field_value_text, values_row.field_value_json
+            FROM industrial_record_values values_row
+            JOIN industrial_records records_row ON records_row.id = values_row.record_id
+            WHERE records_row.source_profile_id = ?
+              AND records_row.source_record_key = 'ROW-DUP'
+            ORDER BY values_row.field_name
+            """,
+            (profile.id,),
+        ).fetchall()
+
+    assert summary == {"processed": 2, "inserted": 1, "updated": 1, "value_rows": 3}
+    assert record == ("REF-DUP-2", "S2")
+    assert value_rows == [("pressure_bar", "7.5", None)]
+
+
 def test_sync_and_record_payloads_normalize_datetime_like_scalars_for_storage(tmp_path):
     db_path = str(tmp_path / "industrial.db")
     repository = IndustrialDataRepository(db_path)

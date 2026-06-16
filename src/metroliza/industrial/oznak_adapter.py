@@ -364,6 +364,31 @@ def _combine_fetch_diagnostics(payloads: list[Any]) -> dict[str, Any]:
     }
 
 
+def _chunk_event_diagnostics_payload(
+    *,
+    source_results: list[Any],
+    warnings: list[str],
+    errors: list[str],
+    row_count: int,
+    streamed_to_callback: bool,
+) -> SimpleNamespace:
+    has_errors = bool(errors) or any(
+        str(_diagnostic_to_dict(diagnostic).get("status") or "").strip().lower()
+        in {"failed", "timeout", "cancelled"}
+        for diagnostic in source_results
+    )
+    return SimpleNamespace(
+        data=(),
+        source_results=tuple(source_results),
+        warnings=tuple(warnings),
+        errors=tuple(errors),
+        row_count=int(row_count),
+        has_errors=has_errors,
+        partial_success=bool(has_errors and row_count > 0),
+        streamed_to_callback=streamed_to_callback,
+    )
+
+
 def _scrub_raw_sql_literals_and_comments(sql: str) -> str:
     output: list[str] = []
     index = 0
@@ -949,6 +974,7 @@ def fetch_oznak_records_for_source_profile(
     allow_unbounded: bool = False,
     cancellation_token: Any = None,
     progress_callback: Any = None,
+    record_batch_callback: Any = None,
     max_workers: int | None = None,
     max_pending_events: int | None = None,
     import_module: Any = None,
@@ -993,6 +1019,7 @@ def fetch_oznak_records_for_source_profile(
         credential_provider_type = getattr(oznak_module, "MappingCredentialProvider")
         fetch_records = getattr(oznak_module, "fetch_records", None)
         fetch_records_chunked = getattr(oznak_module, "fetch_records_chunked", None)
+        iter_records_chunked = getattr(oznak_module, "iter_records_chunked", None)
         query_filter_type = getattr(oznak_module, "QueryFilter", None)
         if not callable(fetch_records):
             fetcher_module = importer(OZNAK_FETCHER_IMPORT_PATH)
@@ -1000,6 +1027,11 @@ def fetch_oznak_records_for_source_profile(
             fetch_records_chunked = fetch_records_chunked or getattr(
                 fetcher_module,
                 "fetch_records_chunked",
+                None,
+            )
+            iter_records_chunked = iter_records_chunked or getattr(
+                fetcher_module,
+                "iter_records_chunked",
                 None,
             )
         if not callable(fetch_records):
@@ -1075,6 +1107,11 @@ def fetch_oznak_records_for_source_profile(
         and bool(pagination_column)
         and order_by_enabled
     )
+    use_streaming_chunk_events = bool(
+        use_chunked_fetch and callable(iter_records_chunked) and record_batch_callback is not None
+    )
+    streamed_row_count = 0
+    streamed_to_callback = False
 
     try:
         for reference_batch in reference_batches:
@@ -1110,7 +1147,69 @@ def fetch_oznak_records_for_source_profile(
                     "timeout_seconds": timeout_seconds,
                 },
             )
-            if use_chunked_fetch:
+            if use_streaming_chunk_events:
+                chunk_source_results: list[Any] = []
+                chunk_warnings: list[str] = []
+                chunk_errors: list[str] = []
+                chunk_row_count = 0
+                for event in _call_with_supported_kwargs(
+                    iter_records_chunked,
+                    request,
+                    chunk_size=int(chunk_size),
+                    pagination_column=str(pagination_column),
+                    credential_provider=credential_provider,
+                    cancellation_token=cancellation_token,
+                    progress_callback=progress_callback,
+                    max_workers=max_workers,
+                    max_pending_events=max_pending_events,
+                ):
+                    event_frame = getattr(event, "frame", None)
+                    if event_frame is not None:
+                        batch_records = map_oznak_rows_to_industrial_records(
+                            SimpleNamespace(data=event_frame),
+                            profile=profile,
+                        )
+                        if remaining_limit is not None:
+                            batch_records = batch_records[:remaining_limit]
+                        if batch_records:
+                            record_batch_callback(batch_records)
+                            streamed_to_callback = True
+                            batch_count = len(batch_records)
+                            streamed_row_count += batch_count
+                            chunk_row_count += batch_count
+                            if remaining_limit is not None:
+                                remaining_limit -= batch_count
+                                if remaining_limit <= 0:
+                                    break
+                        continue
+
+                    event_diagnostic = getattr(event, "diagnostics", None)
+                    if event_diagnostic is None:
+                        continue
+                    chunk_source_results.append(event_diagnostic)
+                    diagnostic_dict = _diagnostic_to_dict(event_diagnostic)
+                    status_text = str(diagnostic_dict.get("status") or "").strip().lower()
+                    message_text = str(diagnostic_dict.get("message") or "").strip()
+                    if status_text in {"failed", "timeout", "cancelled"} and message_text:
+                        chunk_errors.append(_redact_error_text(message_text))
+                    elif status_text == "no_rows" and message_text:
+                        chunk_warnings.append(_redact_error_text(message_text))
+                    row_count_value = diagnostic_dict.get("row_count")
+                    if row_count_value is not None:
+                        try:
+                            chunk_row_count = max(chunk_row_count, int(row_count_value or 0))
+                        except (TypeError, ValueError):
+                            pass
+                payloads.append(
+                    _chunk_event_diagnostics_payload(
+                        source_results=chunk_source_results,
+                        warnings=chunk_warnings,
+                        errors=chunk_errors,
+                        row_count=chunk_row_count,
+                        streamed_to_callback=streamed_to_callback,
+                    )
+                )
+            elif use_chunked_fetch:
                 payload = _call_with_supported_kwargs(
                     fetch_records_chunked,
                     request,
@@ -1131,13 +1230,19 @@ def fetch_oznak_records_for_source_profile(
                     progress_callback=progress_callback,
                     max_workers=max_workers,
                 )
-            payloads.append(payload)
-            batch_records = map_oznak_rows_to_industrial_records(payload, profile=profile)
-            if remaining_limit is not None:
-                batch_records = batch_records[:remaining_limit]
-            records_list.extend(batch_records)
-            if remaining_limit is not None:
-                remaining_limit -= len(batch_records)
+            if not use_streaming_chunk_events:
+                payloads.append(payload)
+                batch_records = map_oznak_rows_to_industrial_records(payload, profile=profile)
+                if remaining_limit is not None:
+                    batch_records = batch_records[:remaining_limit]
+                if record_batch_callback is not None and batch_records:
+                    record_batch_callback(batch_records)
+                    streamed_to_callback = True
+                    streamed_row_count += len(batch_records)
+                else:
+                    records_list.extend(batch_records)
+                if remaining_limit is not None:
+                    remaining_limit -= len(batch_records)
     except Exception as exc:
         return OznakAdapterFetchResult(
             status=status,
@@ -1146,11 +1251,17 @@ def fetch_oznak_records_for_source_profile(
             error=_safe_exception_summary(exc),
         )
 
-    records = tuple(records_list)
+    records = () if streamed_to_callback else tuple(records_list)
     diagnostics = {
         "stage": "mapped",
         "raw_payload_type": type(payloads[-1]).__name__ if payloads else "None",
-        "fetch_strategy": "chunked" if use_chunked_fetch else "single_request",
+        "fetch_strategy": (
+            "streaming_chunked"
+            if use_streaming_chunk_events
+            else "chunked"
+            if use_chunked_fetch
+            else "single_request"
+        ),
         "chunk_size": chunk_size if use_chunked_fetch else None,
         "reference_batch_size": int(reference_batch_size),
         "reference_batches": len(reference_batches),
@@ -1169,6 +1280,7 @@ def fetch_oznak_records_for_source_profile(
         "order_by_enabled": order_by_enabled,
         "max_workers": max_workers,
         "max_pending_events": max_pending_events if use_chunked_fetch else None,
+        "streamed_to_callback": streamed_to_callback,
     }
     diagnostics.update(_combine_fetch_diagnostics(payloads))
     errors = diagnostics.get("errors") or ()
@@ -1176,11 +1288,12 @@ def fetch_oznak_records_for_source_profile(
     partial_success = bool(diagnostics.get("partial_success"))
     if partial_success or warnings:
         diagnostics["completed_with_warnings"] = True
-    error = "; ".join(str(item) for item in errors) if errors and not records else None
+    row_count = streamed_row_count if streamed_to_callback else len(records)
+    error = "; ".join(str(item) for item in errors) if errors and row_count <= 0 else None
     return OznakAdapterFetchResult(
         status=status,
         records=records,
-        row_count=len(records),
+        row_count=row_count,
         implemented=True,
         diagnostics=diagnostics,
         error=error,

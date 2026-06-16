@@ -106,8 +106,11 @@ source alias, such as `assembly_mes`, when you need a stable technical name for 
 source.
 
 The **Production columns** list should include only fields that users need for filtering,
-grouping, linking, or analysis. If the production table has hundreds of columns, ask the
-process owner for the small safe list instead of copying everything.
+grouping, linking, or analysis. You can paste a plain comma-separated list or a copied CSV
+header such as `"TimeStamp","OP100RetestNumber3"`. Leave the field empty, or enter only
+`*`, when the reviewed source is allowed to read all simple columns from the table or view.
+If the production table has hundreds of columns, ask the process owner for the small safe
+list instead of copying everything.
 
 The **Record key / paging column** should be a stable row ID. In the example, that is
 `id`. The timestamp column should be the process time. In the example, that is
@@ -124,7 +127,8 @@ Metroliza/Oznak-safe name or for a simple view prepared for this workflow.
 ## Check Access Safely
 
 Click **Fetch to cache...** and select a production source. Enter your production database
-username and password.
+username and password. For normal single-source checks, use the **Production source** field.
+For a guided batch fetch, check multiple entries in **Fetch sources**.
 
 Use **Check access** before fetching rows.
 
@@ -165,10 +169,16 @@ paths:
 Both paths copy the returned rows into the active local cache. Neither path writes to the
 production database.
 
+For large guided or SQL fetches, Metroliza can save rows into the local cache while the
+production read is still running. The progress text shows when rows are being saved, when
+report links are refreshed, and when the cache summary is updated.
+
 ### Guided Filters
 
 Use **Edit filters...** when you already know the assembly IDs, references, or simple
 source-column filters. Choose the production reference column and paste the values.
+Use **Fetch sources** to check more than one configured source when the same guided
+filters should be fetched sequentially into the local cache.
 
 Example:
 
@@ -209,10 +219,16 @@ Use **Fetch all rows** only when you really need the full visible production tab
 view. Metroliza warns first because a production source can contain many historical rows,
 the fetch can take a long time, and the local SQLite cache can become large.
 
+When more than one source is checked, Metroliza fetches them one by one and reports the
+batch result at the end. Leave **Use entered credentials for all checked sources** enabled
+when the same login works for every checked source. Turn it off only when each source
+already has saved credentials in the local credential store.
+
 ### SQL Query
 
 Use the **SQL query** tab when guided filters are not enough or when IT/MES support gives
-you a reviewed query. Paste the query into the SQL editor.
+you a reviewed query. Paste the query into the SQL editor, or click **Open SQL editor...**
+for a larger editor and preview table in a separate window.
 
 Before a full fetch, click **Preview SQL**. The preview reads only a small sample so you
 can check whether the query runs and whether the returned columns look right. The default
@@ -226,6 +242,8 @@ or "one station and date range".
 Keep SQL recipes simple and read-only. If a query returns too many rows, add a date,
 station, work-order, or serial/reference condition before fetching. If you choose to fetch
 all rows from a SQL query, Metroliza shows the same large-fetch warning as guided mode.
+When multiple sources are checked, the same reviewed SQL query runs once per checked
+source and the final status reports which sources succeeded, warned, or failed.
 
 ### Send The Fetch To CSV Summary
 

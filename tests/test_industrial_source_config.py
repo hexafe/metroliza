@@ -120,6 +120,104 @@ databases:
     assert profiles[0].order_by_enabled is False
 
 
+@pytest.mark.parametrize(
+    ("raw_columns", "expected_columns"),
+    [
+        ('"TimeStamp","OP100RetestNumber3"', ("TimeStamp", "OP100RetestNumber3")),
+        (" reference ", ("reference",)),
+    ],
+)
+def test_source_config_loads_scalar_csv_allowed_columns_from_manual_file(
+    tmp_path, raw_columns, expected_columns
+):
+    config_path = tmp_path / "industrial_sources.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "databases": {
+                    "line_a": {
+                        "type": "mysql",
+                        "host": "db.example.invalid",
+                        "port": 3306,
+                        "database": "processdb",
+                        "table": "events",
+                        "allowed_columns": raw_columns,
+                    }
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    profiles = load_source_profiles_from_config(config_path)
+
+    assert profiles[0].allowed_columns == expected_columns
+
+
+def test_build_source_profile_normalizes_copy_pasted_csv_header_columns():
+    profile = build_source_profile(
+        profile_key="line_a",
+        profile_name="Line A",
+        source_db_alias="line_a",
+        database_type="mysql",
+        host="db.example.invalid",
+        port=3306,
+        database_name="processdb",
+        source_object_name="events",
+        allowed_columns=' "TimeStamp", "OP100RetestNumber3" ',
+    )
+
+    assert profile.allowed_columns == ("TimeStamp", "OP100RetestNumber3")
+
+
+@pytest.mark.parametrize("raw_columns", ["", "   ", "*", " * "])
+def test_source_config_treats_empty_or_star_columns_as_unrestricted(tmp_path, raw_columns):
+    config_path = tmp_path / "industrial_sources.yaml"
+    profile = build_source_profile(
+        profile_key="line_a",
+        profile_name="Line A",
+        source_db_alias="line_a",
+        database_type="mysql",
+        host="db.example.invalid",
+        port=3306,
+        database_name="processdb",
+        source_object_name="events",
+        allowed_columns=raw_columns,
+        timestamp_column="TimeStamp",
+        default_pagination_column="OP100RetestNumber3",
+    )
+
+    assert profile.allowed_columns == ()
+
+    upsert_source_profile_in_config(config_path, profile)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+    assert "allowed_columns" not in payload["databases"]["line_a"]
+
+
+@pytest.mark.parametrize(
+    "raw_columns",
+    [
+        '"TimeStamp","dbo.OP100RetestNumber3"',
+        "TimeStamp, COUNT(*)",
+    ],
+)
+def test_build_source_profile_rejects_non_identifier_csv_header_columns(raw_columns):
+    with pytest.raises(IndustrialSourceConfigError, match="Invalid column"):
+        build_source_profile(
+            profile_key="line_a",
+            profile_name="Line A",
+            source_db_alias="line_a",
+            database_type="mysql",
+            host="db.example.invalid",
+            port=3306,
+            database_name="processdb",
+            source_object_name="events",
+            allowed_columns=raw_columns,
+        )
+
+
 def test_source_config_rejects_schema_qualified_guided_source_object(tmp_path):
     config_path = tmp_path / "industrial_sources.yaml"
     config_path.write_text(
@@ -151,27 +249,7 @@ databases:
         )
 
 
-def test_source_config_rejects_scalar_allowed_columns_from_manual_file(tmp_path):
-    config_path = tmp_path / "industrial_sources.yaml"
-    config_path.write_text(
-        """
-databases:
-  line_a:
-    type: mysql
-    host: db.example.invalid
-    port: 3306
-    database: processdb
-    table: events
-    allowed_columns: reference
-""".strip(),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(IndustrialSourceConfigError, match="allowed_columns.*sequence"):
-        load_source_profiles_from_config(config_path)
-
-
-@pytest.mark.parametrize("raw_columns", ["reference", 123])
+@pytest.mark.parametrize("raw_columns", [123])
 def test_build_source_profile_rejects_scalar_allowed_columns(raw_columns):
     with pytest.raises(IndustrialSourceConfigError, match="allowed_columns.*sequence"):
         build_source_profile(

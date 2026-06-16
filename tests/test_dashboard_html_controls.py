@@ -170,6 +170,49 @@ def test_dashboard_visual_runtime_scopes_storage_and_uses_initial_settings() -> 
     assert "#123456" in runtime_js
 
 
+def test_dashboard_visual_runtime_supports_persistent_point_marks() -> None:
+    dialog_html = render_dashboard_visual_dialog()
+    config = json.loads(dashboard_visual_runtime_config_json())
+    runtime_js = render_dashboard_visual_runtime_js()
+
+    assert config["pointMarkStorageKey"] == "metroliza-dashboard-point-marks"
+    assert "Point marks" in dialog_html
+    assert 'id="dashboard-visual-point-search"' in dialog_html
+    assert '<option value="record">TraceCode / record key</option>' in dialog_html
+    assert 'id="dashboard-visual-point-search-prev"' in dialog_html
+    assert 'id="dashboard-visual-point-search-next"' in dialog_html
+    assert 'id="dashboard-visual-point-search-results"' in dialog_html
+    assert 'id="dashboard-visual-point-summary"' in dialog_html
+    assert 'id="dashboard-visual-point-color"' in dialog_html
+    assert 'id="dashboard-visual-point-mark"' in dialog_html
+    assert 'id="dashboard-visual-point-clear"' in dialog_html
+    assert 'id="dashboard-visual-point-clear-all"' in dialog_html
+    assert "const pointMarkStorageKey = `${pointMarkStorageBaseKey}:${dashboardVisualScope()}`;" in runtime_js
+    assert "window.metrolizaDashboardPointMarkStorageKey = pointMarkStorageKey;" in runtime_js
+    assert "const readStoredPointMarks" in runtime_js
+    assert "const persistPointMarks" in runtime_js
+    assert "const selectedPointFromPlotlyClick" in runtime_js
+    assert "chartKey: dashboardChartKeyForContainer(container)" in runtime_js
+    assert "curveNumber: sanitizePointIndex(value.curveNumber ?? value.curve_number)" in runtime_js
+    assert "pointNumber: sanitizePointIndex(value.pointNumber ?? value.point_number)" in runtime_js
+    assert "x: [cloneJsonValue(mark.x)]" in runtime_js
+    assert "y: [cloneJsonValue(mark.y)]" in runtime_js
+    assert "trace.customdata = [cloneJsonValue(mark.customdata)];" in runtime_js
+    assert "metroliza_point_mark: true" in runtime_js
+    assert "metroliza_point_search: true" in runtime_js
+    assert "dashboard_visual_role: 'point_mark'" in runtime_js
+    assert "dashboard_visual_role: 'point_search'" in runtime_js
+    assert "const applyDashboardPointMarksToPlotlySpec" in runtime_js
+    assert "const buildPointSearchIndex" in runtime_js
+    assert "const syncPointSearchDefaultScope" in runtime_js
+    assert "const movePointSearch" in runtime_js
+    assert "fields.record" in runtime_js
+    assert "isMetrolizaPointOverlayTrace(trace)" in runtime_js
+    assert "dashboardPointSearchSelectedId === dashboardVisualSelectedPoint.id" in runtime_js
+    assert "if (isMetrolizaPointOverlayTrace(trace)) return null;" in runtime_js
+    assert "dashboardVisualSelectedPoint = selectedPointFromPlotlyClick(target, point);" in runtime_js
+
+
 def test_dashboard_visual_runtime_range_readouts_use_existing_update_path() -> None:
     runtime_js = render_dashboard_visual_runtime_js()
 

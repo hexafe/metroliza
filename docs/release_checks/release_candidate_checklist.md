@@ -123,7 +123,7 @@ python -m maturin build --manifest-path src/metroliza/native/distribution_fit_ad
 ### 2026.06 RC1 realtime industrial tester evidence
 
 Current validation branch: `feature/realtime-industrial-ml-anomaly`.
-Current RC metadata: `2026.06rc1(260615)`.
+Current RC metadata: `2026.06rc1(260616)`.
 
 - Local realtime/anomaly tester-build evidence is recorded in
   [`realtime_industrial_rollout_checklist.md`](./realtime_industrial_rollout_checklist.md).
@@ -157,6 +157,10 @@ Current RC metadata: `2026.06rc1(260615)`.
 - Pushed GitHub CI passed for build `260615` commit
   `3f26438d473bd6941606d3cf949f2e7782276763` in run
   [`27570794579`](https://github.com/hexafe/metroliza/actions/runs/27570794579).
+- 2026-06-16 Industrial Data fetch, realtime monitor, and dashboard
+  optimization release-note/manual closeout is recorded in
+  [`realtime_industrial_optimization_check_2026-06-16.md`](./realtime_industrial_optimization_check_2026-06-16.md).
+  Final integrated build `260616` push and GitHub Actions CI are pending.
 - Manual packaging smoke, Windows executable clean-machine launch/startup,
   Google conversion smoke, third-party notice artifact evidence, and security
   owner triage/waiver for report-only findings remain release-promotion

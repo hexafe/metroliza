@@ -25,6 +25,7 @@ from metroliza.charts.dashboard_visual_options import (
 DASHBOARD_THEME_STORAGE_KEY = "metroliza-dashboard-theme"
 DASHBOARD_VISUAL_STORAGE_KEY = "metroliza-dashboard-visuals"
 DASHBOARD_VISUAL_THEME_STORAGE_KEY = "metroliza-dashboard-visual-themes"
+DASHBOARD_POINT_MARK_STORAGE_KEY = "metroliza-dashboard-point-marks"
 
 
 def _render_visual_range_field(
@@ -305,6 +306,37 @@ def render_dashboard_visual_dialog(
         '<button type="button" id="dashboard-visual-element-reset">Clear selected style</button>'
         '</div>'
     )
+    point_mark_controls = (
+        '<label class="visual-field"><span>Find point</span>'
+        '<input type="search" id="dashboard-visual-point-search" '
+        'placeholder="TraceCode or point value"></label>'
+        '<label class="visual-field"><span>Search in</span>'
+        '<select id="dashboard-visual-point-search-scope">'
+        '<option value="record">TraceCode / record key</option>'
+        '<option value="any">Any field</option>'
+        '<option value="trace">Trace / series</option>'
+        '<option value="x">X axis</option>'
+        '<option value="y">Y axis</option>'
+        '<option value="metadata">Text / custom data</option>'
+        '</select></label>'
+        '<label class="visual-field"><span>Matches</span>'
+        '<output id="dashboard-visual-point-search-count">0 matches</output></label>'
+        '<div class="visual-actions visual-actions-inline visual-point-search-actions">'
+        '<button type="button" id="dashboard-visual-point-search-prev">Previous</button>'
+        '<button type="button" id="dashboard-visual-point-search-next">Next</button>'
+        '</div>'
+        '<ol id="dashboard-visual-point-search-results" class="visual-point-search-results" '
+        'aria-label="Point search results"></ol>'
+        '<label class="visual-field" data-visual-point-field="summary"><span>Selected point</span>'
+        '<output id="dashboard-visual-point-summary">None selected</output></label>'
+        '<label class="visual-field"><span>Point mark color</span>'
+        '<input type="color" id="dashboard-visual-point-color" value="#d66e2f"></label>'
+        '<div class="visual-actions visual-actions-inline visual-point-actions">'
+        '<button type="button" id="dashboard-visual-point-mark">Mark selected point</button>'
+        '<button type="button" id="dashboard-visual-point-clear">Clear selected mark</button>'
+        '<button type="button" id="dashboard-visual-point-clear-all">Clear all marks</button>'
+        '</div>'
+    )
     return (
         '<dialog id="dashboard-visual-dialog" class="visual-dialog" aria-label="Plot visual settings">'
         '<form method="dialog" class="visual-panel">'
@@ -362,6 +394,10 @@ def render_dashboard_visual_dialog(
         f'<div class="visual-grid">{fine_tuning_controls}</div>'
         '</section>'
         f'<section class="visual-section visual-grid">{selection_controls}</section>'
+        '<section class="visual-section">'
+        '<div class="visual-section-title">Point marks</div>'
+        f'<div class="visual-grid">{point_mark_controls}</div>'
+        '</section>'
         '</div>'
         '<section class="visual-section visual-actions">'
         '<button type="button" id="dashboard-visual-reset">Reset</button>'
@@ -536,6 +572,7 @@ def render_dashboard_controls_css() -> str:
     .visual-field select,
     .visual-field input[type="range"],
     .visual-field input[type="color"],
+    .visual-field input[type="search"],
     .visual-field input[type="text"],
     .visual-field input[type="number"] {
       min-height: 34px;
@@ -543,7 +580,9 @@ def render_dashboard_controls_css() -> str:
     }
     .visual-field select,
     .visual-field input[type="text"],
-    .visual-field input[type="number"] {
+    .visual-field input[type="search"],
+    .visual-field input[type="number"],
+    .visual-field output {
       border: 1px solid var(--line);
       border-radius: 8px;
       background: var(--panel, #ffffff);
@@ -552,6 +591,11 @@ def render_dashboard_controls_css() -> str:
       text-transform: none;
       letter-spacing: 0;
       font-weight: 600;
+    }
+    .visual-field output {
+      align-items: center;
+      display: flex;
+      min-height: 34px;
     }
     .visual-range-row {
       align-items: center;
@@ -647,6 +691,46 @@ def render_dashboard_controls_css() -> str:
       justify-content: flex-start;
       flex-wrap: wrap;
     }
+    .visual-point-search-results {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      grid-column: 1 / -1;
+      list-style: none;
+      margin: 0;
+      max-height: 150px;
+      overflow: auto;
+      padding: 4px;
+      background: var(--panel, #ffffff);
+    }
+    .visual-point-search-results:empty {
+      display: none;
+    }
+    .visual-point-search-results li {
+      margin: 0;
+      padding: 0;
+    }
+    .visual-point-search-results button {
+      appearance: none;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--ink, var(--text));
+      cursor: pointer;
+      display: block;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.35;
+      overflow: hidden;
+      padding: 7px 8px;
+      text-align: left;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      width: 100%;
+    }
+    .visual-point-search-results button:hover,
+    .visual-point-search-results button[data-active="1"] {
+      background: var(--accent-soft, rgba(23, 105, 170, 0.12));
+    }
     @media (max-width: 780px) {
       .dashboard-control-bar { width: 100%; justify-content: space-between; }
       .visual-dialog { width: min(100vw - 20px, 760px); }
@@ -674,6 +758,7 @@ def dashboard_visual_runtime_config_json(
         {
             "storageKey": DASHBOARD_VISUAL_STORAGE_KEY,
             "themeStorageKey": DASHBOARD_VISUAL_THEME_STORAGE_KEY,
+            "pointMarkStorageKey": DASHBOARD_POINT_MARK_STORAGE_KEY,
             "storageVersion": 1,
             "defaults": default_settings,
             "initialSettings": normalized_initial_settings,
@@ -715,9 +800,15 @@ def render_dashboard_visual_runtime_js(
       const {config_var} = {dashboard_visual_runtime_config_json(initial_settings, preview_labels=preview_labels)};
       const visualStorageBaseKey = {config_var}.storageKey;
       const visualThemeStorageKey = {config_var}.themeStorageKey;
+      const pointMarkStorageBaseKey = {config_var}.pointMarkStorageKey || 'metroliza-dashboard-point-marks';
       let dashboardVisualState = null;
       let dashboardVisualThemeLibrary = null;
       let dashboardVisualSelectedTarget = null;
+      let dashboardVisualSelectedPoint = null;
+      let dashboardPointMarkState = null;
+      let dashboardPointSearchMatches = [];
+      let dashboardPointSearchIndex = -1;
+      let dashboardPointSearchSelectedId = '';
       let visualRefreshTimer = 0;
 
       const dashboardVisualScope = () => {{
@@ -736,13 +827,24 @@ def render_dashboard_visual_runtime_js(
       }};
 
       const visualStorageKey = `${{visualStorageBaseKey}}:${{dashboardVisualScope()}}`;
+      const pointMarkStorageKey = `${{pointMarkStorageBaseKey}}:${{dashboardVisualScope()}}`;
       window.metrolizaDashboardVisualStorageKey = visualStorageKey;
+      window.metrolizaDashboardPointMarkStorageKey = pointMarkStorageKey;
 
       const visualChoice = (value, allowed, fallback) => (
         allowed.includes(value) ? value : fallback
       );
 
       const clonePlotlySpec = (spec) => JSON.parse(JSON.stringify(spec || {{}}));
+
+      const cloneJsonValue = (value) => {{
+        if (value === undefined) return undefined;
+        try {{
+          return JSON.parse(JSON.stringify(value));
+        }} catch (_error) {{
+          return String(value);
+        }}
+      }};
 
       const embeddedInitialVisualState = () => (
         sanitizeVisualState({config_var}.initialSettings || {config_var}.defaults)
@@ -972,6 +1074,104 @@ def render_dashboard_visual_runtime_js(
             initialSettingsSignature: {config_var}.initialSettingsSignature || '',
             state,
           }}));
+        }} catch (_error) {{
+          // Ignore storage failures in locked-down browser contexts.
+        }}
+      }};
+
+      const dashboardChartKeyForContainer = (container) => {{
+        const explicitKey = container && container.dataset
+          ? container.dataset.dashboardChartKey
+          : '';
+        const attributeKey = container && typeof container.getAttribute === 'function'
+          ? container.getAttribute('data-dashboard-chart-key')
+          : '';
+        const labelKey = container && typeof container.getAttribute === 'function'
+          ? container.getAttribute('aria-label')
+          : '';
+        return String(explicitKey || attributeKey || labelKey || dashboardVisualScope())
+          .trim() || 'dashboard';
+      }};
+      window.metrolizaDashboardChartKeyForContainer = dashboardChartKeyForContainer;
+
+      const stablePointValue = (value) => {{
+        if (value === undefined || value === null) return '';
+        if (typeof value === 'object') {{
+          try {{
+            return JSON.stringify(value).slice(0, 120);
+          }} catch (_error) {{
+            return String(value).slice(0, 120);
+          }}
+        }}
+        return String(value).slice(0, 120);
+      }};
+
+      const pointMarkId = (mark) => [
+        mark.chartKey,
+        Number.isInteger(mark.curveNumber) ? mark.curveNumber : -1,
+        Number.isInteger(mark.pointNumber) ? mark.pointNumber : -1,
+        stablePointValue(mark.x),
+        stablePointValue(mark.y),
+      ].join(':');
+
+      const sanitizePointIndex = (value) => {{
+        const number = Number(value);
+        return Number.isInteger(number) ? number : -1;
+      }};
+
+      const sanitizePointMark = (value) => {{
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+        const chartKey = String(value.chartKey || value.chart_key || '').trim();
+        const x = cloneJsonValue(value.x);
+        const y = cloneJsonValue(value.y);
+        if (!chartKey || x === undefined || y === undefined) return null;
+        const mark = {{
+          chartKey,
+          curveNumber: sanitizePointIndex(value.curveNumber ?? value.curve_number),
+          pointNumber: sanitizePointIndex(value.pointNumber ?? value.point_number),
+          x,
+          y,
+          color: normalizeColor(value.color, '#d66e2f'),
+          label: String(value.label || '').slice(0, 160),
+          target: String(value.target || '').slice(0, 160),
+        }};
+        if (Object.prototype.hasOwnProperty.call(value, 'customdata')) {{
+          mark.customdata = cloneJsonValue(value.customdata);
+        }}
+        if (typeof value.xaxis === 'string') mark.xaxis = value.xaxis;
+        if (typeof value.yaxis === 'string') mark.yaxis = value.yaxis;
+        mark.id = String(value.id || pointMarkId(mark)).slice(0, 320);
+        return mark;
+      }};
+
+      const sanitizePointMarkState = (value) => {{
+        const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {{}};
+        const state = {{
+          version: 1,
+          activeColor: normalizeColor(source.activeColor || source.color, '#d66e2f'),
+          marks: [],
+        }};
+        const marksById = new Map();
+        (Array.isArray(source.marks) ? source.marks : []).forEach((item) => {{
+          const mark = sanitizePointMark(item);
+          if (mark) marksById.set(mark.id, mark);
+        }});
+        state.marks = Array.from(marksById.values());
+        return state;
+      }};
+
+      const readStoredPointMarks = () => {{
+        try {{
+          const raw = window.localStorage.getItem(pointMarkStorageKey);
+          return sanitizePointMarkState(raw ? JSON.parse(raw) : null);
+        }} catch (_error) {{
+          return sanitizePointMarkState(null);
+        }}
+      }};
+
+      const persistPointMarks = (state) => {{
+        try {{
+          window.localStorage.setItem(pointMarkStorageKey, JSON.stringify(sanitizePointMarkState(state)));
         }} catch (_error) {{
           // Ignore storage failures in locked-down browser contexts.
         }}
@@ -1340,6 +1540,7 @@ def render_dashboard_visual_runtime_js(
         traces.forEach((trace) => {{
           if (!trace || typeof trace !== 'object') return;
           if (isStaticImageLayerProxyTrace(trace)) return;
+          if (isMetrolizaPointOverlayTrace(trace)) return;
           const name = String(trace.name || '').trim();
           if (!name || isReferenceName(name) || groupStatMatch(name)) return;
           const type = String(trace.type || '').toLowerCase();
@@ -1371,6 +1572,112 @@ def render_dashboard_visual_runtime_js(
         const luminance = (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255;
         return luminance >= 0.58 ? '#111827' : '#ffffff';
       }};
+
+      const pointMarkOverlayTrace = (mark) => {{
+        const color = normalizeColor(mark.color, '#d66e2f');
+        const trace = {{
+          type: 'scatter',
+          mode: 'markers',
+          name: 'Point mark',
+          x: [cloneJsonValue(mark.x)],
+          y: [cloneJsonValue(mark.y)],
+          marker: {{
+            color,
+            size: 15,
+            symbol: 'star',
+            line: {{
+              color: contrastOutlineColor(color),
+              width: 1.8,
+            }},
+          }},
+          hovertemplate: 'Marked point<br>x=%{{x}}<br>y=%{{y}}<extra></extra>',
+          showlegend: false,
+          meta: {{
+            dashboard_visual_role: 'point_mark',
+            dashboard_visual_preserve_color: true,
+            metroliza_trace_schema: 'metroliza.plotly_trace.v1',
+            metroliza_role: 'point_mark',
+            metroliza_point_mark: true,
+            metroliza_point_mark_id: mark.id,
+            metroliza_chart_key: mark.chartKey,
+            metroliza_curve_number: mark.curveNumber,
+            metroliza_point_number: mark.pointNumber,
+          }},
+        }};
+        if (mark.customdata !== undefined) {{
+          trace.customdata = [cloneJsonValue(mark.customdata)];
+        }}
+        if (mark.xaxis) trace.xaxis = mark.xaxis;
+        if (mark.yaxis) trace.yaxis = mark.yaxis;
+        return trace;
+      }};
+
+      const pointSearchOverlayTrace = (point) => {{
+        const color = '#1769aa';
+        const trace = {{
+          type: 'scatter',
+          mode: 'markers',
+          name: 'Search result',
+          x: [cloneJsonValue(point.x)],
+          y: [cloneJsonValue(point.y)],
+          marker: {{
+            color: 'rgba(0,0,0,0)',
+            size: 22,
+            symbol: 'circle-open',
+            line: {{
+              color,
+              width: 3,
+            }},
+          }},
+          hovertemplate: 'Search result<br>x=%{{x}}<br>y=%{{y}}<extra></extra>',
+          showlegend: false,
+          meta: {{
+            dashboard_visual_role: 'point_search',
+            dashboard_visual_preserve_color: true,
+            metroliza_trace_schema: 'metroliza.plotly_trace.v1',
+            metroliza_role: 'point_search',
+            metroliza_point_search: true,
+            metroliza_point_search_id: point.id,
+            metroliza_chart_key: point.chartKey,
+            metroliza_curve_number: point.curveNumber,
+            metroliza_point_number: point.pointNumber,
+          }},
+        }};
+        if (point.customdata !== undefined) {{
+          trace.customdata = [cloneJsonValue(point.customdata)];
+        }}
+        if (point.xaxis) trace.xaxis = point.xaxis;
+        if (point.yaxis) trace.yaxis = point.yaxis;
+        return trace;
+      }};
+
+      const applyDashboardPointMarksToPlotlySpec = (spec, chartKey = '') => {{
+        if (!spec || typeof spec !== 'object') return spec;
+        const normalizedChartKey = String(chartKey || '').trim() || 'dashboard';
+        const pointState = sanitizePointMarkState(dashboardPointMarkState || readStoredPointMarks());
+        dashboardPointMarkState = pointState;
+        const baseData = Array.isArray(spec.data)
+          ? spec.data.filter((trace) => !isMetrolizaPointOverlayTrace(trace))
+          : [];
+        const marks = pointState.marks.filter((mark) => mark.chartKey === normalizedChartKey);
+        const searchPoint = dashboardVisualSelectedPoint
+          && dashboardVisualSelectedPoint.chartKey === normalizedChartKey
+          && dashboardPointSearchMatches.length
+          && dashboardPointSearchSelectedId === dashboardVisualSelectedPoint.id
+          ? pointSearchOverlayTrace(dashboardVisualSelectedPoint)
+          : null;
+        spec.data = baseData
+          .concat(marks.map((mark) => pointMarkOverlayTrace(mark)))
+          .concat(searchPoint ? [searchPoint] : []);
+        if (marks.length || searchPoint) {{
+          spec.metadata = Object.assign({{}}, spec.metadata || {{}}, {{
+            dashboard_point_marks_applied: true,
+            dashboard_point_search_applied: Boolean(searchPoint),
+          }});
+        }}
+        return spec;
+      }};
+      window.metrolizaApplyDashboardPointMarksToPlotlySpec = applyDashboardPointMarksToPlotlySpec;
 
       const setTraceColor = (trace, color) => {{
         trace.marker = Object.assign({{}}, trace.marker || {{}}, {{ color }});
@@ -1434,6 +1741,22 @@ def render_dashboard_visual_runtime_js(
 
       const isStaticImageLayerProxyTrace = (trace) => (
         isRawLayerProxyTrace(trace) || isStaticPopulationLayerProxyTrace(trace)
+      );
+
+      const isMetrolizaPointMarkTrace = (trace) => {{
+        if (!trace || typeof trace !== 'object') return false;
+        const meta = trace.meta && typeof trace.meta === 'object' ? trace.meta : {{}};
+        return Boolean(meta.metroliza_point_mark || meta.dashboard_visual_role === 'point_mark');
+      }};
+
+      const isMetrolizaPointSearchTrace = (trace) => {{
+        if (!trace || typeof trace !== 'object') return false;
+        const meta = trace.meta && typeof trace.meta === 'object' ? trace.meta : {{}};
+        return Boolean(meta.metroliza_point_search || meta.dashboard_visual_role === 'point_search');
+      }};
+
+      const isMetrolizaPointOverlayTrace = (trace) => (
+        isMetrolizaPointMarkTrace(trace) || isMetrolizaPointSearchTrace(trace)
       );
 
       const preservePlotlyTraceVisibility = (container, nextData) => {{
@@ -1608,6 +1931,7 @@ def render_dashboard_visual_runtime_js(
         traces.forEach((trace, traceIndex) => {{
           if (!trace || typeof trace !== 'object') return;
           if (isStaticImageLayerProxyTrace(trace)) return;
+          if (isMetrolizaPointOverlayTrace(trace)) return;
           const name = String(trace.name || '');
           const stat = groupStatMatch(name);
           if (stat) {{
@@ -2074,6 +2398,7 @@ def render_dashboard_visual_runtime_js(
       const selectedTargetFromTrace = (trace, curveNumber = -1) => {{
         if (!trace || typeof trace !== 'object') return null;
         if (isStaticImageLayerProxyTrace(trace)) return null;
+        if (isMetrolizaPointOverlayTrace(trace)) return null;
         const meta = trace.meta && typeof trace.meta === 'object' ? trace.meta : {{}};
         const roleFromMeta = meta.metroliza_role || meta.dashboard_visual_role || 'series';
         if (meta.metroliza_target_id || meta.dashboard_visual_target) {{
@@ -2131,6 +2456,329 @@ def render_dashboard_visual_runtime_js(
           }};
         }}
         return null;
+      }};
+
+      const tracePointValue = (trace, field, pointNumber, fallback) => {{
+        if (fallback !== undefined) return cloneJsonValue(fallback);
+        const values = trace && trace[field];
+        if (Array.isArray(values) && pointNumber >= 0 && pointNumber < values.length) {{
+          return cloneJsonValue(values[pointNumber]);
+        }}
+        return undefined;
+      }};
+
+      const selectedPointFromPlotlyClick = (container, point) => {{
+        if (!container || !point || typeof point !== 'object') return null;
+        const curveNumber = sanitizePointIndex(point.curveNumber);
+        const pointNumber = sanitizePointIndex(point.pointNumber);
+        if (curveNumber < 0) return null;
+        const trace = Array.isArray(container.data) ? container.data[curveNumber] : null;
+        if (!trace || isMetrolizaPointOverlayTrace(trace)) return null;
+        const x = tracePointValue(trace, 'x', pointNumber, point.x);
+        const y = tracePointValue(trace, 'y', pointNumber, point.y);
+        if (x === undefined || y === undefined) return null;
+        const visualTarget = selectedTargetFromTrace(trace, curveNumber);
+        const customdata = point.customdata !== undefined
+          ? cloneJsonValue(point.customdata)
+          : tracePointValue(trace, 'customdata', pointNumber, undefined);
+        const mark = {{
+          chartKey: dashboardChartKeyForContainer(container),
+          curveNumber,
+          pointNumber,
+          x,
+          y,
+          color: dashboardPointMarkState && dashboardPointMarkState.activeColor
+            ? dashboardPointMarkState.activeColor
+            : '#d66e2f',
+          label: visualTarget ? (visualTarget.label || visualTarget.target || '') : String(trace.name || ''),
+          target: visualTarget ? (visualTarget.target || '') : String(trace.name || ''),
+          customdata,
+        }};
+        if (typeof trace.xaxis === 'string') mark.xaxis = trace.xaxis;
+        if (typeof trace.yaxis === 'string') mark.yaxis = trace.yaxis;
+        return sanitizePointMark(mark);
+      }};
+
+      const pointSearchValueStrings = (value, depth = 0) => {{
+        if (value === undefined || value === null || depth > 2) return [];
+        if (Array.isArray(value)) {{
+          return value.flatMap((item) => pointSearchValueStrings(item, depth + 1));
+        }}
+        if (typeof value === 'object') {{
+          const parts = [];
+          Object.entries(value).forEach(([key, nested]) => {{
+            parts.push(String(key));
+            parts.push(...pointSearchValueStrings(nested, depth + 1));
+          }});
+          return parts;
+        }}
+        const text = String(value).trim();
+        return text ? [text] : [];
+      }};
+
+      const pointSearchTraceLength = (trace) => {{
+        const lengths = ['x', 'y', 'ids', 'text', 'hovertext', 'customdata']
+          .map((field) => Array.isArray(trace && trace[field]) ? trace[field].length : 0);
+        return Math.max(...lengths, 0);
+      }};
+
+      const pointSearchValueAt = (trace, field, pointNumber) => {{
+        const values = trace && trace[field];
+        if (Array.isArray(values)) return values[pointNumber];
+        if (values !== undefined && field !== 'x' && field !== 'y') return values;
+        return undefined;
+      }};
+
+      const pointSearchEntryForTracePoint = (container, trace, curveNumber, pointNumber) => {{
+        const x = pointSearchValueAt(trace, 'x', pointNumber);
+        const y = pointSearchValueAt(trace, 'y', pointNumber);
+        if (x === undefined || y === undefined) return null;
+        const chartKey = dashboardChartKeyForContainer(container);
+        const chartLabel = String(container.getAttribute('aria-label') || chartKey || 'Chart');
+        const traceName = String(trace.name || `Trace ${{curveNumber + 1}}`);
+        const idValue = pointSearchValueAt(trace, 'ids', pointNumber);
+        const textValue = pointSearchValueAt(trace, 'text', pointNumber);
+        const hoverTextValue = pointSearchValueAt(trace, 'hovertext', pointNumber);
+        const customdata = pointSearchValueAt(trace, 'customdata', pointNumber);
+        const point = sanitizePointMark({{
+          chartKey,
+          curveNumber,
+          pointNumber,
+          x: cloneJsonValue(x),
+          y: cloneJsonValue(y),
+          color: dashboardPointMarkState && dashboardPointMarkState.activeColor
+            ? dashboardPointMarkState.activeColor
+            : '#d66e2f',
+          label: traceName,
+          target: traceName,
+          customdata: cloneJsonValue(customdata),
+          xaxis: typeof trace.xaxis === 'string' ? trace.xaxis : undefined,
+          yaxis: typeof trace.yaxis === 'string' ? trace.yaxis : undefined,
+        }});
+        if (!point) return null;
+        const recordFields = [
+          ...pointSearchValueStrings(idValue),
+          ...pointSearchValueStrings(customdata),
+          ...pointSearchValueStrings(textValue),
+          ...pointSearchValueStrings(hoverTextValue),
+        ];
+        const fields = {{
+          record: recordFields,
+          trace: [traceName, chartLabel, chartKey],
+          x: pointSearchValueStrings(x),
+          y: pointSearchValueStrings(y),
+          metadata: recordFields,
+        }};
+        fields.any = [
+          ...fields.record,
+          ...fields.trace,
+          ...fields.x,
+          ...fields.y,
+          String(pointNumber + 1),
+        ];
+        const primary = fields.record.find((item) => item) || `${{traceName}} point ${{pointNumber + 1}}`;
+        return {{
+          id: point.id,
+          chartKey,
+          container,
+          point,
+          fields,
+          label: `${{primary}} - ${{traceName}}`,
+        }};
+      }};
+
+      const buildPointSearchIndex = () => {{
+        const entries = [];
+        document.querySelectorAll('.plotly-chart').forEach((container) => {{
+          const traces = Array.isArray(container.data) ? container.data : [];
+          traces.forEach((trace, curveNumber) => {{
+            if (!trace || typeof trace !== 'object') return;
+            if (isStaticImageLayerProxyTrace(trace)) return;
+            if (isMetrolizaPointOverlayTrace(trace)) return;
+            const length = pointSearchTraceLength(trace);
+            for (let pointNumber = 0; pointNumber < length; pointNumber += 1) {{
+              const entry = pointSearchEntryForTracePoint(container, trace, curveNumber, pointNumber);
+              if (entry) entries.push(entry);
+            }}
+          }});
+        }});
+        return entries;
+      }};
+
+      const pointSearchControls = () => ({{
+        query: document.getElementById('dashboard-visual-point-search'),
+        scope: document.getElementById('dashboard-visual-point-search-scope'),
+        count: document.getElementById('dashboard-visual-point-search-count'),
+        previous: document.getElementById('dashboard-visual-point-search-prev'),
+        next: document.getElementById('dashboard-visual-point-search-next'),
+        results: document.getElementById('dashboard-visual-point-search-results'),
+      }});
+
+      const pointSearchTextMatches = (entry, query, scope) => {{
+        if (!query) return false;
+        const fields = entry.fields[scope] || entry.fields.any || [];
+        return fields.some((value) => String(value).toLowerCase().includes(query));
+      }};
+
+      const syncPointSearchDefaultScope = () => {{
+        const controls = pointSearchControls();
+        if (!controls.scope || controls.scope.dataset.userChosen === '1') return;
+        const hasRecordMetadata = buildPointSearchIndex().some((entry) => (
+          Array.isArray(entry.fields.record) && entry.fields.record.length > 0
+        ));
+        controls.scope.value = hasRecordMetadata ? 'record' : 'any';
+      }};
+
+      const renderPointSearchResults = () => {{
+        const controls = pointSearchControls();
+        const count = dashboardPointSearchMatches.length;
+        if (controls.count) {{
+          if (!count) controls.count.textContent = '0 matches';
+          else controls.count.textContent = `${{dashboardPointSearchIndex + 1}} of ${{count}}`;
+        }}
+        if (controls.previous) controls.previous.disabled = count === 0;
+        if (controls.next) controls.next.disabled = count === 0;
+        if (!controls.results) return;
+        controls.results.innerHTML = '';
+        dashboardPointSearchMatches.slice(0, 50).forEach((entry, index) => {{
+          const item = document.createElement('li');
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = entry.label;
+          button.title = entry.label;
+          button.dataset.searchResultIndex = String(index);
+          if (index === dashboardPointSearchIndex) button.dataset.active = '1';
+          button.addEventListener('click', () => selectPointSearchMatch(index, {{ scroll: true }}));
+          item.appendChild(button);
+          controls.results.appendChild(item);
+        }});
+      }};
+
+      const refreshPointSearch = ({{ selectFirst = true, scroll = false }} = {{}}) => {{
+        const controls = pointSearchControls();
+        const query = String((controls.query && controls.query.value) || '').trim().toLowerCase();
+        const scope = String((controls.scope && controls.scope.value) || 'record');
+        dashboardPointSearchMatches = query
+          ? buildPointSearchIndex().filter((entry) => pointSearchTextMatches(entry, query, scope))
+          : [];
+        dashboardPointSearchIndex = dashboardPointSearchMatches.length && selectFirst ? 0 : -1;
+        dashboardPointSearchSelectedId = '';
+        renderPointSearchResults();
+        if (dashboardPointSearchIndex >= 0) {{
+          selectPointSearchMatch(dashboardPointSearchIndex, {{ scroll }});
+        }} else if (typeof refreshPlotlyCharts === 'function') {{
+          scheduleVisualRefresh();
+        }}
+      }};
+
+      const selectPointSearchMatch = (index, {{ scroll = true }} = {{}}) => {{
+        const count = dashboardPointSearchMatches.length;
+        if (!count) {{
+          dashboardPointSearchIndex = -1;
+          renderPointSearchResults();
+          return;
+        }}
+        dashboardPointSearchIndex = ((index % count) + count) % count;
+        const entry = dashboardPointSearchMatches[dashboardPointSearchIndex];
+        dashboardVisualSelectedPoint = entry.point;
+        dashboardPointSearchSelectedId = entry.point.id;
+        syncPointMarkControls();
+        renderPointSearchResults();
+        if (scroll && entry.container && typeof entry.container.scrollIntoView === 'function') {{
+          entry.container.setAttribute('tabindex', '-1');
+          entry.container.scrollIntoView({{ block: 'center', behavior: 'smooth' }});
+          if (typeof entry.container.focus === 'function') {{
+            entry.container.focus({{ preventScroll: true }});
+          }}
+        }}
+        if (typeof refreshPlotlyCharts === 'function') scheduleVisualRefresh();
+      }};
+
+      const movePointSearch = (delta) => {{
+        if (!dashboardPointSearchMatches.length) {{
+          refreshPointSearch({{ selectFirst: true, scroll: true }});
+          return;
+        }}
+        selectPointSearchMatch(dashboardPointSearchIndex + delta, {{ scroll: true }});
+      }};
+
+      const selectedPointMarkIndex = (state = dashboardPointMarkState) => {{
+        const point = dashboardVisualSelectedPoint;
+        if (!point || !state || !Array.isArray(state.marks)) return -1;
+        return state.marks.findIndex((mark) => mark.id === point.id);
+      }};
+
+      const pointMarkSummaryText = (point) => {{
+        if (!point) return 'None selected';
+        const source = point.label || point.target || `Trace ${{point.curveNumber + 1}}`;
+        const pointLabel = point.pointNumber >= 0 ? `point ${{point.pointNumber + 1}}` : 'point';
+        return `${{source}} - ${{pointLabel}}`;
+      }};
+
+      const syncPointMarkControls = () => {{
+        dashboardPointMarkState = sanitizePointMarkState(dashboardPointMarkState || readStoredPointMarks());
+        const summary = document.getElementById('dashboard-visual-point-summary');
+        const color = document.getElementById('dashboard-visual-point-color');
+        const markButton = document.getElementById('dashboard-visual-point-mark');
+        const clearButton = document.getElementById('dashboard-visual-point-clear');
+        const clearAllButton = document.getElementById('dashboard-visual-point-clear-all');
+        const selected = Boolean(dashboardVisualSelectedPoint);
+        const selectedIndex = selectedPointMarkIndex(dashboardPointMarkState);
+        if (summary) summary.textContent = pointMarkSummaryText(dashboardVisualSelectedPoint);
+        if (color) color.value = normalizeColor(dashboardPointMarkState.activeColor, '#d66e2f');
+        if (markButton) markButton.disabled = !selected;
+        if (clearButton) clearButton.disabled = !selected || selectedIndex < 0;
+        if (clearAllButton) clearAllButton.disabled = dashboardPointMarkState.marks.length === 0;
+      }};
+
+      const setDashboardPointMarkState = (state, {{ persist = true, rerender = true }} = {{}}) => {{
+        dashboardPointMarkState = sanitizePointMarkState(state);
+        if (persist) persistPointMarks(dashboardPointMarkState);
+        syncPointMarkControls();
+        if (rerender && typeof refreshPlotlyCharts === 'function') {{
+          scheduleVisualRefresh();
+        }}
+      }};
+
+      const markSelectedPoint = () => {{
+        if (!dashboardVisualSelectedPoint) return;
+        const state = sanitizePointMarkState(dashboardPointMarkState || readStoredPointMarks());
+        const color = document.getElementById('dashboard-visual-point-color');
+        state.activeColor = normalizeColor(color ? color.value : state.activeColor, '#d66e2f');
+        const mark = sanitizePointMark(Object.assign({{}}, dashboardVisualSelectedPoint, {{
+          color: state.activeColor,
+        }}));
+        if (!mark) return;
+        const index = state.marks.findIndex((item) => item.id === mark.id);
+        if (index >= 0) state.marks[index] = mark;
+        else state.marks.push(mark);
+        dashboardVisualSelectedPoint = mark;
+        setDashboardPointMarkState(state);
+      }};
+
+      const clearSelectedPointMark = () => {{
+        if (!dashboardVisualSelectedPoint) return;
+        const state = sanitizePointMarkState(dashboardPointMarkState || readStoredPointMarks());
+        state.marks = state.marks.filter((mark) => mark.id !== dashboardVisualSelectedPoint.id);
+        setDashboardPointMarkState(state);
+      }};
+
+      const clearAllPointMarks = () => {{
+        const state = sanitizePointMarkState(dashboardPointMarkState || readStoredPointMarks());
+        state.marks = [];
+        setDashboardPointMarkState(state);
+      }};
+
+      const applyPointMarkColorFromControl = () => {{
+        const color = document.getElementById('dashboard-visual-point-color');
+        const state = sanitizePointMarkState(dashboardPointMarkState || readStoredPointMarks());
+        state.activeColor = normalizeColor(color ? color.value : state.activeColor, '#d66e2f');
+        const index = selectedPointMarkIndex(state);
+        if (index >= 0) {{
+          state.marks[index] = Object.assign({{}}, state.marks[index], {{ color: state.activeColor }});
+          dashboardVisualSelectedPoint = state.marks[index];
+        }}
+        setDashboardPointMarkState(state, {{ rerender: index >= 0 }});
       }};
 
       const collectVisualTargets = () => {{
@@ -2491,7 +3139,14 @@ def render_dashboard_visual_runtime_js(
         }};
         target.on('plotly_click', (eventData) => {{
           const point = eventData && eventData.points && eventData.points[0];
-          if (point && typeof point.curveNumber === 'number') handleCurve(point.curveNumber);
+          if (point && typeof point.curveNumber === 'number') {{
+            const trace = Array.isArray(target.data) ? target.data[point.curveNumber] : null;
+            if (isMetrolizaPointOverlayTrace(trace)) return;
+            dashboardVisualSelectedPoint = selectedPointFromPlotlyClick(target, point);
+            dashboardPointSearchSelectedId = '';
+            syncPointMarkControls();
+            handleCurve(point.curveNumber);
+          }}
         }});
         target.on('plotly_legendclick', (eventData) => {{
           if (eventData && typeof eventData.curveNumber === 'number') handleCurve(eventData.curveNumber);
@@ -2501,9 +3156,12 @@ def render_dashboard_visual_runtime_js(
       const initializeDashboardVisualControls = () => {{
         dashboardVisualThemeLibrary = readVisualThemeLibrary();
         dashboardVisualState = readStoredVisualState();
+        dashboardPointMarkState = readStoredPointMarks();
         refreshVisualThemeControls();
         initializeVisualRangeReadouts();
         applyVisualStateToControls(dashboardVisualState);
+        syncPointMarkControls();
+        renderPointSearchResults();
         const dialog = document.getElementById('dashboard-visual-dialog');
         const openButton = document.getElementById('dashboard-visuals-open');
         const closeButton = document.getElementById('dashboard-visuals-close');
@@ -2514,11 +3172,21 @@ def render_dashboard_visual_runtime_js(
         const deleteThemeButton = document.getElementById('dashboard-visual-theme-delete');
         const elementSelect = document.getElementById('dashboard-visual-element');
         const elementResetButton = document.getElementById('dashboard-visual-element-reset');
+        const pointColor = document.getElementById('dashboard-visual-point-color');
+        const pointMarkButton = document.getElementById('dashboard-visual-point-mark');
+        const pointClearButton = document.getElementById('dashboard-visual-point-clear');
+        const pointClearAllButton = document.getElementById('dashboard-visual-point-clear-all');
+        const pointSearchInput = document.getElementById('dashboard-visual-point-search');
+        const pointSearchScope = document.getElementById('dashboard-visual-point-search-scope');
+        const pointSearchPrevious = document.getElementById('dashboard-visual-point-search-prev');
+        const pointSearchNext = document.getElementById('dashboard-visual-point-search-next');
         const customizeButton = document.getElementById('dashboard-visual-customize-open');
         const customizePanel = document.getElementById('dashboard-visual-customize');
         if (openButton && dialog) {{
           openButton.addEventListener('click', () => {{
             refreshVisualElementControls();
+            syncPointSearchDefaultScope();
+            refreshPointSearch({{ selectFirst: true, scroll: false }});
             if (typeof dialog.showModal === 'function') dialog.showModal();
             else dialog.setAttribute('open', 'open');
           }});
@@ -2606,6 +3274,40 @@ def render_dashboard_visual_runtime_js(
         }});
         if (elementResetButton) {{
           elementResetButton.addEventListener('click', resetSelectedElementStyle);
+        }}
+        if (pointColor) {{
+          pointColor.addEventListener('input', applyPointMarkColorFromControl);
+          pointColor.addEventListener('change', applyPointMarkColorFromControl);
+        }}
+        if (pointMarkButton) {{
+          pointMarkButton.addEventListener('click', markSelectedPoint);
+        }}
+        if (pointClearButton) {{
+          pointClearButton.addEventListener('click', clearSelectedPointMark);
+        }}
+        if (pointClearAllButton) {{
+          pointClearAllButton.addEventListener('click', clearAllPointMarks);
+        }}
+        if (pointSearchInput) {{
+          pointSearchInput.addEventListener('input', () => refreshPointSearch({{ selectFirst: true, scroll: false }}));
+          pointSearchInput.addEventListener('keydown', (event) => {{
+            if (event.key === 'Enter') {{
+              event.preventDefault();
+              movePointSearch(1);
+            }}
+          }});
+        }}
+        if (pointSearchScope) {{
+          pointSearchScope.addEventListener('change', () => {{
+            pointSearchScope.dataset.userChosen = '1';
+            refreshPointSearch({{ selectFirst: true, scroll: false }});
+          }});
+        }}
+        if (pointSearchPrevious) {{
+          pointSearchPrevious.addEventListener('click', () => movePointSearch(-1));
+        }}
+        if (pointSearchNext) {{
+          pointSearchNext.addEventListener('click', () => movePointSearch(1));
         }}
         document.querySelectorAll('[data-visual-group-chip]').forEach((chip) => {{
           chip.addEventListener('click', () => {{
