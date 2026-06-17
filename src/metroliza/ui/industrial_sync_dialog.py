@@ -240,7 +240,7 @@ class IndustrialSyncDialog(QDialog):
         self.link_refresh_thread: IndustrialLinkRefreshThread | None = None
         self.sql_editor_window: IndustrialSqlQueryDialog | None = None
         self.setWindowTitle("Fetch industrial data")
-        configure_window_size(self, minimum=(860, 520), initial=(940, 840))
+        configure_window_size(self, minimum=(960, 520), initial=(1000, 840))
 
         self.status_label = status_chip(
             "Select a production source and enter production database credentials.",
