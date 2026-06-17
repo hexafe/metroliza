@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from PyQt6.QtWidgets import (
+    QComboBox,
     QDialog,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -15,7 +17,10 @@ from PyQt6.QtWidgets import (
 
 from metroliza.reports.db import sqlite_connection_scope
 from metroliza.industrial.industrial_workflow_state import (
+    INDUSTRIAL_FILTER_FIELDS,
+    INDUSTRIAL_QUERY_FILTER_OPERATOR_CHOICES,
     IndustrialFilterState,
+    IndustrialQueryFilter,
     format_industrial_query_filters,
     parse_industrial_query_filter_lines,
     parse_reference_values,
@@ -47,6 +52,15 @@ class IndustrialFilterDialog(QDialog):
         self.query_filters_edit.setPlaceholderText(
             "station = S1\nstatus IN OK, NOK\nprocess_timestamp >= 2026-01-01"
         )
+        self.filter_column_combo = QComboBox()
+        for column, label in INDUSTRIAL_FILTER_FIELDS:
+            self.filter_column_combo.addItem(f"{label} ({column})", column)
+        self.filter_operator_combo = QComboBox()
+        for operator in INDUSTRIAL_QUERY_FILTER_OPERATOR_CHOICES:
+            self.filter_operator_combo.addItem(operator, operator)
+        self.filter_value_edit = QLineEdit()
+        self.filter_value_edit.setPlaceholderText("Value, or comma-separated values for IN")
+        self.add_filter_button = QPushButton("Add filter")
 
         self.load_db_references_button = QPushButton("Use report DB values")
         self.load_db_references_button.setEnabled(bool(self.db_file))
@@ -59,6 +73,10 @@ class IndustrialFilterDialog(QDialog):
         self.cancel_button = QPushButton("Cancel")
 
         self.load_db_references_button.clicked.connect(self.load_database_references)
+        self.add_filter_button.clicked.connect(self.add_filter_from_builder)
+        self.filter_operator_combo.currentIndexChanged.connect(
+            lambda _index: self._sync_filter_builder_value_state()
+        )
         self.clear_button.clicked.connect(self.clear_filter)
         self.apply_button.clicked.connect(self.apply_filter)
         self.cancel_button.clicked.connect(self.reject)
@@ -72,6 +90,17 @@ class IndustrialFilterDialog(QDialog):
         layout.addWidget(self.reference_column_edit)
         layout.addWidget(QLabel("Reference/ID values to fetch"))
         layout.addWidget(self.references_edit, 1)
+        builder_form = QFormLayout()
+        builder_form.setContentsMargins(0, 0, 0, 0)
+        builder_row = QHBoxLayout()
+        builder_row.setContentsMargins(0, 0, 0, 0)
+        builder_row.setSpacing(8)
+        builder_row.addWidget(self.filter_column_combo, 2)
+        builder_row.addWidget(self.filter_operator_combo, 1)
+        builder_row.addWidget(self.filter_value_edit, 2)
+        builder_row.addWidget(self.add_filter_button)
+        builder_form.addRow("Build filter", builder_row)
+        layout.addLayout(builder_form)
         layout.addWidget(QLabel("Additional filters, one per line"))
         layout.addWidget(self.query_filters_edit, 1)
 
@@ -86,6 +115,7 @@ class IndustrialFilterDialog(QDialog):
         layout.addLayout(actions)
 
         apply_metroliza_theme(self)
+        self._sync_filter_builder_value_state()
 
     def current_state(self) -> IndustrialFilterState:
         return IndustrialFilterState(
@@ -127,6 +157,47 @@ class IndustrialFilterDialog(QDialog):
         self.references_edit.clear()
         self.query_filters_edit.clear()
         self.summary_label.setText("Filters cleared")
+
+    def _sync_filter_builder_value_state(self) -> None:
+        operator = str(self.filter_operator_combo.currentData() or "").upper()
+        value_required = operator not in {"IS NULL", "IS NOT NULL"}
+        self.filter_value_edit.setEnabled(value_required)
+        if value_required:
+            self.filter_value_edit.setPlaceholderText(
+                "Value, or comma-separated values for IN"
+                if operator in {"IN", "NOT IN"}
+                else "Value"
+            )
+        else:
+            self.filter_value_edit.clear()
+            self.filter_value_edit.setPlaceholderText("No value required")
+
+    def add_filter_from_builder(self) -> None:
+        column = str(self.filter_column_combo.currentData() or "").strip()
+        operator = str(self.filter_operator_combo.currentData() or "").strip().upper()
+        value_text = self.filter_value_edit.text().strip()
+        if operator in {"IS NULL", "IS NOT NULL"}:
+            values = ()
+        elif operator in {"IN", "NOT IN"}:
+            values = parse_reference_values(value_text)
+        else:
+            values = (value_text,) if value_text else ()
+        try:
+            filter_state = IndustrialQueryFilter(
+                column=column,
+                operator=operator,
+                values=values,
+            ).validated()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Industrial sync scope", str(exc))
+            return
+        current_text = self.query_filters_edit.toPlainText().strip()
+        filter_line = format_industrial_query_filters((filter_state,))
+        self.query_filters_edit.setPlainText(
+            f"{current_text}\n{filter_line}" if current_text else filter_line
+        )
+        self.filter_value_edit.clear()
+        self.summary_label.setText(self.current_state().summary())
 
     def apply_filter(self) -> None:
         try:

@@ -30,7 +30,12 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from metroliza.industrial.industrial_data_repository import IndustrialDataRepository, IndustrialSourceProfile
+from metroliza.industrial.industrial_data_repository import (
+    IndustrialDataRepository,
+    IndustrialSourceProfile,
+    looks_sensitive_key,
+    redact_sensitive_text,
+)
 from metroliza.industrial.industrial_source_config import (
     default_industrial_source_config_path,
     import_source_profiles_to_repository,
@@ -262,9 +267,21 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
     def _build_status_panel(self) -> QWidget:
         panel = QGroupBox("Status")
         layout = QVBoxLayout(panel)
-        self.status_table = QTableWidget(0, 8)
+        self.status_table = QTableWidget(0, 11)
         self.status_table.setHorizontalHeaderLabels(
-            ("Source", "Stream", "Status", "Rows", "Samples", "Events", "Lag", "Error")
+            (
+                "Source",
+                "Stream",
+                "Status",
+                "Stage",
+                "Rows",
+                "Samples",
+                "Events",
+                "Cursor",
+                "Query",
+                "Lag",
+                "Error",
+            )
         )
         configure_table(self.status_table, stretch_column=0, min_height=170)
         layout.addWidget(self.status_table)
@@ -609,7 +626,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self._append_diagnostic(_format_results_for_diagnostics(self.last_poll_results))
         self._schedule_dashboard_write(open_after=False)
         if failed:
-            self._set_status(f"Polling completed with {len(failed)} failed stream(s).", "warning")
+            self._set_status(_format_failed_status(failed), "warning")
         else:
             self._set_status(
                 f"Polling completed: {inserted} sample(s), {event_count} event(s).",
@@ -632,15 +649,18 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
                 profile_names.get(getattr(result, "source_profile_id", None), "Unknown source"),
                 getattr(result, "stream_key", ""),
                 getattr(result, "status", ""),
+                _result_stage(result),
                 str(getattr(result, "rows_fetched", 0)),
                 str(getattr(result, "samples_inserted", 0)),
                 str(getattr(result, "detector_events_created", 0)),
+                _result_cursor(result),
+                _result_query_reference(result),
                 _format_lag(getattr(result, "lag_seconds", None)),
-                str(getattr(result, "error", "") or ""),
+                _result_error(result),
             )
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
-                if column != 0:
+                if column not in {0, 10}:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.status_table.setItem(row, column, item)
 
@@ -876,21 +896,123 @@ def _format_lag(value: Any) -> str:
         return str(value)
 
 
+def _result_stage(result: Any) -> str:
+    diagnostics = _safe_result_diagnostics(result)
+    stage = diagnostics.get("stage") or diagnostics.get("failure_stage")
+    return redact_sensitive_text(stage, max_len=80) if stage else ""
+
+
+def _result_cursor(result: Any) -> str:
+    diagnostics = _safe_result_diagnostics(result)
+    cursor = getattr(result, "cursor_value", None) or diagnostics.get("cursor_value")
+    return redact_sensitive_text(cursor, max_len=120) if cursor not in (None, "") else ""
+
+
+def _result_query_reference(result: Any) -> str:
+    diagnostics = _safe_result_diagnostics(result)
+    query_summary = diagnostics.get("query_summary")
+    if query_summary:
+        return redact_sensitive_text(query_summary, max_len=120)
+    sql_hash = diagnostics.get("sql_hash")
+    if sql_hash:
+        return f"hash={str(sql_hash)[:12]}"
+    summary = diagnostics.get("summary")
+    if isinstance(summary, dict):
+        nested_hash = summary.get("sql_hash")
+        if nested_hash:
+            return f"hash={str(nested_hash)[:12]}"
+        stream_key = summary.get("stream_key")
+        limit = summary.get("limit")
+        if stream_key and limit is not None:
+            return redact_sensitive_text(f"stream={stream_key}, limit={limit}", max_len=120)
+    return ""
+
+
+def _result_error(result: Any) -> str:
+    diagnostics = _safe_result_diagnostics(result)
+    error = getattr(result, "error", None) or diagnostics.get("error")
+    return redact_sensitive_text(error, max_len=180) if error else ""
+
+
+def _format_failed_status(failed: list[Any]) -> str:
+    first = failed[0]
+    stream = redact_sensitive_text(getattr(first, "stream_key", "") or "stream", max_len=60)
+    stage = _result_stage(first) or "failed"
+    error = _result_error(first)
+    prefix = f"Polling completed with {len(failed)} failed stream(s): {stream} {stage}"
+    if error:
+        return f"{prefix} - {error}"
+    rows = getattr(first, "rows_fetched", None)
+    cursor = _result_cursor(first)
+    detail_parts = []
+    if rows is not None:
+        detail_parts.append(f"rows={rows}")
+    if cursor:
+        detail_parts.append(f"cursor={cursor}")
+    if detail_parts:
+        return f"{prefix} ({', '.join(detail_parts)})"
+    return prefix
+
+
+def _safe_result_diagnostics(result: Any) -> dict[str, Any]:
+    return _safe_diagnostics_mapping(getattr(result, "diagnostics", {}) or {})
+
+
+def _safe_diagnostics_mapping(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        try:
+            value = dict(value or {})
+        except (TypeError, ValueError):
+            return {}
+    safe: dict[str, Any] = {}
+    for key, nested in value.items():
+        key_text = str(key)
+        safe_value = _safe_diagnostic_value(key_text, nested)
+        if safe_value is _SKIP_DIAGNOSTIC:
+            continue
+        safe[key_text] = safe_value
+    return safe
+
+
+_SKIP_DIAGNOSTIC = object()
+
+
+def _safe_diagnostic_value(key: str, value: Any) -> Any:
+    key_text = str(key)
+    if _is_raw_sql_diagnostic_key(key_text):
+        return _SKIP_DIAGNOSTIC
+    if looks_sensitive_key(key_text) and key_text not in {"credentials_source"}:
+        return "<redacted>"
+    if isinstance(value, dict):
+        return _safe_diagnostics_mapping(value)
+    if isinstance(value, list):
+        return tuple(_safe_diagnostic_value("", item) for item in value)
+    if isinstance(value, tuple):
+        return tuple(_safe_diagnostic_value("", item) for item in value)
+    if isinstance(value, str):
+        return redact_sensitive_text(value, max_len=None)
+    return value
+
+
+def _is_raw_sql_diagnostic_key(key: str) -> bool:
+    normalized = str(key or "").strip().lower()
+    return normalized in {"sql", "sql_text", "raw_sql", "query", "query_sql", "sql_query", "parameters"}
+
+
 def _format_results_for_diagnostics(results: tuple[Any, ...]) -> str:
     lines: list[str] = []
     for result in results:
-        diagnostics = dict(getattr(result, "diagnostics", {}) or {})
-        safe_diagnostics = {
-            key: value
-            for key, value in diagnostics.items()
-            if key not in {"sql_text", "parameters", "password", "token", "credentials"}
-        }
+        safe_diagnostics = _safe_result_diagnostics(result)
         lines.append(
             " | ".join(
                 (
                     f"stream={getattr(result, 'stream_key', '')}",
                     f"status={getattr(result, 'status', '')}",
+                    f"stage={_result_stage(result)}",
                     f"rows={getattr(result, 'rows_fetched', 0)}",
+                    f"cursor={_result_cursor(result)}",
+                    f"query={_result_query_reference(result)}",
+                    f"error={_result_error(result)}",
                     f"samples={getattr(result, 'samples_inserted', 0)}",
                     f"events={getattr(result, 'detector_events_created', 0)}",
                     f"diagnostics={safe_diagnostics}",

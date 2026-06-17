@@ -157,6 +157,61 @@ def test_insert_samples_normalizes_datetime_like_raw_record_scalars(tmp_path):
     }
 
 
+def test_list_samples_by_ids_loads_targeted_rows_in_chunks(tmp_path):
+    db_path = str(tmp_path / "sample_ids.db")
+    profile = _source_profile(db_path)
+    repository = RealtimeSampleRepository(db_path)
+    cycle_signal = repository.upsert_signal_definition(
+        SignalDefinition(
+            source_profile_id=profile.id,
+            signal_key="cycle_time",
+            metric_name="cycle_time_s",
+        )
+    )
+    pressure_signal = repository.upsert_signal_definition(
+        SignalDefinition(
+            source_profile_id=profile.id,
+            signal_key="pressure",
+            metric_name="pressure_bar",
+        )
+    )
+    result = repository.insert_samples(
+        [
+            IndustrialSample(
+                source_profile_id=profile.id,
+                signal_id=cycle_signal.id,
+                source_record_key="ROW-1",
+                event_time="2026-06-13T10:00:00Z",
+                metric_name="cycle_time_s",
+                value=10.0,
+            ),
+            IndustrialSample(
+                source_profile_id=profile.id,
+                signal_id=pressure_signal.id,
+                source_record_key="ROW-2",
+                event_time="2026-06-13T10:01:00Z",
+                metric_name="pressure_bar",
+                value=2.4,
+            ),
+            IndustrialSample(
+                source_profile_id=profile.id,
+                signal_id=cycle_signal.id,
+                source_record_key="ROW-3",
+                event_time="2026-06-13T10:02:00Z",
+                metric_name="cycle_time_s",
+                value=11.0,
+            ),
+        ]
+    )
+
+    loaded = repository.list_samples_by_ids(
+        (result.sample_ids[2], result.sample_ids[0], result.sample_ids[2], 999_999),
+        chunk_size=1,
+    )
+
+    assert [sample.source_record_key for sample in loaded] == ["ROW-3", "ROW-1"]
+
+
 def test_stream_offset_upsert_replaces_cursor(tmp_path):
     db_path = str(tmp_path / "offsets.db")
     profile = _source_profile(db_path)

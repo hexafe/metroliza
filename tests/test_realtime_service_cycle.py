@@ -2,25 +2,37 @@ from modules.industrial_data_repository import IndustrialDataRepository
 from metroliza.industrial.anomaly.event_repository import AnomalyEventRepository
 from metroliza.industrial.realtime.db_poller import SourceReadResult
 from metroliza.industrial.realtime.offset_store import StreamOffsetStore
-from metroliza.industrial.realtime.realtime_service import run_polling_cycle
+from metroliza.industrial.realtime.realtime_service import _load_persisted_samples, run_polling_cycle
 from metroliza.industrial.realtime.sample_repository import RealtimeSampleRepository
 from metroliza.industrial.realtime.stream_config import RealtimePollConfig
-from metroliza.industrial.realtime.stream_contracts import StreamOffset
+from metroliza.industrial.realtime.stream_contracts import IndustrialSample, SignalDefinition, StreamOffset
 
 
 class FakeAdapter:
-    def __init__(self, rows=(), *, error=None):
+    def __init__(self, rows=(), *, error=None, diagnostics=None):
         self.rows = tuple(rows)
         self.error = error
+        self.diagnostics = dict(diagnostics or {})
         self.requests = []
 
     def fetch_rows(self, request):
         self.requests.append(request)
+        diagnostics = {"adapter": "fake", "sql_text": "SELECT password FROM secrets"}
+        diagnostics.update(self.diagnostics)
         return SourceReadResult(
             rows=self.rows,
-            diagnostics={"adapter": "fake", "sql_text": "SELECT password FROM secrets"},
+            diagnostics=diagnostics,
             error=self.error,
         )
+
+
+class RaisingAdapter:
+    def __init__(self):
+        self.requests = []
+
+    def fetch_rows(self, request):
+        self.requests.append(request)
+        raise RuntimeError("driver timeout password=source-secret")
 
 
 def _profile(db_path: str):
@@ -139,8 +151,50 @@ def test_realtime_poll_cycle_does_not_advance_offset_on_adapter_error(tmp_path):
 
     assert result.status == "failed"
     assert result.error == "failed password=<redacted>"
+    assert result.diagnostics["stage"] == "source_read"
+    assert result.diagnostics["rows_fetched"] == 0
+    assert result.diagnostics["cursor_value"] == "50"
+    assert result.diagnostics["error"] == "failed password=<redacted>"
+    assert "sql_hash" in result.diagnostics
+    assert "query_summary" in result.diagnostics
+    diagnostics_text = str(result.diagnostics)
+    assert "SELECT password FROM secrets" not in diagnostics_text
+    assert "secret123" not in diagnostics_text
     assert offset.cursor_value == "50"
     assert offset.last_error == "failed password=<redacted>"
+
+
+def test_realtime_poll_cycle_reports_source_fetch_exception_diagnostics(tmp_path):
+    db_path = str(tmp_path / "adapter-exception.db")
+    profile = _profile(db_path)
+    config = _config(profile.id)
+    StreamOffsetStore(db_path).upsert_offset(
+        StreamOffset(
+            source_profile_id=profile.id,
+            stream_key="cycle_time",
+            cursor_column="event_id",
+            cursor_value="75",
+            event_time_watermark="2026-06-13T10:00:00Z",
+        )
+    )
+
+    result = run_polling_cycle(
+        database=db_path,
+        profile=profile,
+        config=config,
+        adapter=RaisingAdapter(),
+    )
+
+    assert result.status == "failed"
+    assert result.error == "driver timeout password=<redacted>"
+    assert result.cursor_value == "75"
+    assert result.event_time_watermark == "2026-06-13T10:00:00Z"
+    assert result.diagnostics["stage"] == "source_fetch"
+    assert result.diagnostics["cursor_value"] == "75"
+    assert result.diagnostics["event_time_watermark"] == "2026-06-13T10:00:00Z"
+    assert result.diagnostics["error"] == "driver timeout password=<redacted>"
+    assert "sql_hash" in result.diagnostics
+    assert result.diagnostics["query_summary"].startswith("bounded mssql poll")
 
 
 def test_realtime_poll_cycle_is_idempotent_for_duplicate_rows(tmp_path):
@@ -200,6 +254,56 @@ def test_realtime_poll_cycle_isolates_detector_failures_and_advances_successful_
     assert result.detector_events_created == 0
     assert "token=<redacted>" in result.diagnostics["warnings"][0]
     assert offset.cursor_value == "100"
+
+
+def test_load_persisted_samples_uses_targeted_sample_ids():
+    samples = [
+        IndustrialSample(
+            id=10,
+            source_profile_id=1,
+            signal_id=1,
+            source_record_key="ROW-10",
+            event_time="2026-06-13T10:00:00Z",
+            metric_name="cycle_time_s",
+            value=10.0,
+        ),
+        IndustrialSample(
+            id=11,
+            source_profile_id=1,
+            signal_id=2,
+            source_record_key="ROW-11",
+            event_time="2026-06-13T10:01:00Z",
+            metric_name="pressure_bar",
+            value=2.4,
+        ),
+    ]
+
+    class TargetedRepository:
+        requested_ids = None
+
+        def list_samples_by_ids(self, sample_ids):
+            self.requested_ids = tuple(sample_ids)
+            return list(samples)
+
+        def list_samples(self, **kwargs):
+            raise AssertionError("historical signal scans should not be used")
+
+    repository = TargetedRepository()
+    loaded = _load_persisted_samples(
+        repository,
+        (
+            SignalDefinition(
+                id=1,
+                source_profile_id=1,
+                signal_key="cycle_time",
+                metric_name="cycle_time_s",
+            ),
+        ),
+        (10, 11),
+    )
+
+    assert repository.requested_ids == (10, 11)
+    assert [sample.id for sample in loaded] == [10]
 
 
 def test_realtime_poll_cycle_does_not_advance_offset_when_event_write_fails(

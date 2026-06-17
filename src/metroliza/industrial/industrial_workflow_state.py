@@ -24,21 +24,37 @@ INDUSTRIAL_GROUPING_FIELDS: tuple[tuple[str, str], ...] = (
 )
 INDUSTRIAL_GROUPING_FIELD_LABELS = dict(INDUSTRIAL_GROUPING_FIELDS)
 INDUSTRIAL_GROUPING_ALLOWED_FIELDS = set(INDUSTRIAL_GROUPING_FIELD_LABELS)
+INDUSTRIAL_FILTER_FIELDS: tuple[tuple[str, str], ...] = (
+    ("reference", "Reference"),
+    ("source_record_key", "Source record key"),
+    ("process_timestamp", "Process timestamp"),
+    ("part_number", "Part number"),
+    ("part_name", "Part name"),
+    ("revision", "Revision"),
+    ("serial", "Serial"),
+    ("batch_lot", "Batch / lot"),
+    ("work_order", "Work order"),
+    ("station", "Station"),
+    ("line", "Line"),
+    ("operator_name", "Operator"),
+    ("process_status", "Process status"),
+)
+INDUSTRIAL_QUERY_FILTER_OPERATOR_CHOICES: tuple[str, ...] = (
+    "=",
+    "!=",
+    "<",
+    "<=",
+    ">",
+    ">=",
+    "LIKE",
+    "NOT LIKE",
+    "IN",
+    "NOT IN",
+    "IS NULL",
+    "IS NOT NULL",
+)
 INDUSTRIAL_QUERY_FILTER_OPERATORS = frozenset(
-    {
-        "=",
-        "!=",
-        "<",
-        "<=",
-        ">",
-        ">=",
-        "LIKE",
-        "NOT LIKE",
-        "IN",
-        "NOT IN",
-        "IS NULL",
-        "IS NOT NULL",
-    }
+    INDUSTRIAL_QUERY_FILTER_OPERATOR_CHOICES
 )
 
 

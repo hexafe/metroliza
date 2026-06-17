@@ -411,6 +411,60 @@ def test_realtime_monitoring_dialog_diagnostics_append_does_not_rebuild_text(
         dialog.close()
 
 
+def test_realtime_monitoring_dialog_failed_result_shows_actionable_safe_diagnostics(
+    qapp,
+    tmp_path,
+    monkeypatch,
+):
+    db_path = str(tmp_path / "dialog.db")
+    repository = IndustrialDataRepository(db_path)
+    line_a = _profile(repository, "line_a", "Line A")
+    dialog = RealtimeIndustrialMonitoringDialog(None, db_path)
+    result = _poll_result(
+        source_profile_id=line_a.id,
+        stream_key="line_a",
+        status="failed",
+        rows_fetched=7,
+        samples_inserted=0,
+        detector_events_created=0,
+        cursor_value="105",
+        error="login failed password=rawsecret",
+        diagnostics={
+            "stage": "credentials",
+            "failure_stage": "source_read",
+            "sql_hash": "abcdef1234567890",
+            "query_summary": "bounded mssql poll, source=dbo.events, stream=line_a, limit=100",
+            "rows_fetched": 7,
+            "cursor_value": "105",
+            "sql_text": "SELECT password FROM dbo.events",
+            "warnings": ["token=diagnostic-secret"],
+        },
+    )
+
+    try:
+        monkeypatch.setattr(dialog, "_schedule_dashboard_write", lambda open_after: None)
+
+        dialog._on_poll_results((result,))
+
+        assert dialog.status_label.text() == (
+            "Polling completed with 1 failed stream(s): line_a credentials - "
+            "login failed password=<redacted>"
+        )
+        assert dialog.status_table.item(0, 2).text() == "failed"
+        assert dialog.status_table.item(0, 3).text() == "credentials"
+        assert dialog.status_table.item(0, 4).text() == "7"
+        assert dialog.status_table.item(0, 7).text() == "105"
+        assert dialog.status_table.item(0, 8).text().startswith("bounded mssql poll")
+        assert dialog.status_table.item(0, 10).text() == "login failed password=<redacted>"
+        diagnostics_text = dialog.diagnostics_text.toPlainText()
+        assert "SELECT password FROM dbo.events" not in diagnostics_text
+        assert "rawsecret" not in diagnostics_text
+        assert "diagnostic-secret" not in diagnostics_text
+        assert "token=<redacted>" in diagnostics_text
+    finally:
+        dialog.close()
+
+
 def test_realtime_monitoring_dialog_writes_empty_dashboard(qapp, tmp_path):
     db_path = str(tmp_path / "dialog.db")
     IndustrialDataRepository(db_path).ensure_schema()
@@ -438,6 +492,7 @@ def _poll_result(**overrides):
         "samples_inserted": 1,
         "detector_events_created": 0,
         "lag_seconds": 0.0,
+        "cursor_value": None,
         "error": "",
         "diagnostics": {},
     }

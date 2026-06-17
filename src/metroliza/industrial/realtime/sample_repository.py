@@ -305,32 +305,84 @@ class RealtimeSampleRepository:
                 params = (signal_id, int(limit))
             cursor.execute(sql, params)
             rows = cursor.fetchall()
-            return [
-                IndustrialSample(
-                    id=int(row[0]),
-                    source_profile_id=int(row[1]),
-                    signal_id=int(row[2]),
-                    source_record_key=str(row[3]),
-                    event_time=str(row[4]),
-                    ingest_time=str(row[5]),
-                    metric_name=str(row[6]),
-                    value=float(row[7]),
-                    reference=row[8],
-                    part_number=row[9],
-                    revision=row[10],
-                    station=row[11],
-                    line=row[12],
-                    work_order=row[13],
-                    batch_lot=row[14],
-                    segment_key=from_json(row[15], {}),
-                    quality_flags=tuple(from_json(row[16], [])),
-                    raw_record=from_json(row[17], {}) if row[17] else None,
+            return [_sample_from_row(row) for row in rows]
+
+        return run_transaction_with_retry(self.database, _list, connection=self.connection)
+
+    def list_samples_by_ids(
+        self,
+        sample_ids: Iterable[int],
+        *,
+        chunk_size: int = 500,
+    ) -> list[IndustrialSample]:
+        """Load specific sample rows without scanning every historical row for a signal."""
+
+        self.ensure_schema()
+        unique_ids = tuple(dict.fromkeys(int(sample_id) for sample_id in sample_ids))
+        if not unique_ids:
+            return []
+        chunk_size = max(1, int(chunk_size))
+
+        def _list(cursor) -> list[IndustrialSample]:
+            samples: list[IndustrialSample] = []
+            for offset in range(0, len(unique_ids), chunk_size):
+                chunk = unique_ids[offset : offset + chunk_size]
+                placeholders = ", ".join("?" for _ in chunk)
+                cursor.execute(
+                    f"""
+                    SELECT
+                        id,
+                        source_profile_id,
+                        signal_id,
+                        source_record_key,
+                        event_time,
+                        ingest_time,
+                        metric_name,
+                        value,
+                        reference,
+                        part_number,
+                        revision,
+                        station,
+                        line,
+                        work_order,
+                        batch_lot,
+                        segment_key_json,
+                        quality_flags_json,
+                        raw_record_json
+                    FROM industrial_samples
+                    WHERE id IN ({placeholders})
+                    ORDER BY event_time ASC, id ASC
+                    """,
+                    chunk,
                 )
-                for row in rows
-            ]
+                samples.extend(_sample_from_row(row) for row in cursor.fetchall())
+            return samples
 
         return run_transaction_with_retry(self.database, _list, connection=self.connection)
 
     @staticmethod
     def with_sample_id(sample: IndustrialSample, sample_id: int) -> IndustrialSample:
         return replace(sample, id=sample_id)
+
+
+def _sample_from_row(row: tuple[Any, ...]) -> IndustrialSample:
+    return IndustrialSample(
+        id=int(row[0]),
+        source_profile_id=int(row[1]),
+        signal_id=int(row[2]),
+        source_record_key=str(row[3]),
+        event_time=str(row[4]),
+        ingest_time=str(row[5]),
+        metric_name=str(row[6]),
+        value=float(row[7]),
+        reference=row[8],
+        part_number=row[9],
+        revision=row[10],
+        station=row[11],
+        line=row[12],
+        work_order=row[13],
+        batch_lot=row[14],
+        segment_key=from_json(row[15], {}),
+        quality_flags=tuple(from_json(row[16], [])),
+        raw_record=from_json(row[17], {}) if row[17] else None,
+    )

@@ -1,11 +1,19 @@
 RELEASE_VERSION = "2026.06rc1"
-VERSION_DATE = "260616"
+VERSION_DATE = "260617"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
-CURRENT_RELEASE_HIGHLIGHT = "Realtime and Industrial Data optimization release with streamed cache saves, multi-source fetches, shared source setup, background dashboard refresh, and dashboard point marking."
-PUBLIC_VERSION_LABEL = "2026.06 RC1 (build 260616)"
+CURRENT_RELEASE_HIGHLIGHT = "Industrial Data performance release with indexed cache filtering, faster CSV Summary handoff, raw workbook export, realtime diagnostics, and dashboard point marking."
+PUBLIC_VERSION_LABEL = "2026.06 RC1 (build 260617)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
+    - Industrial Data now opens cached rows in CSV Summary from indexed local metadata, so filter lists and simple grouping previews respond faster on large production caches<br>
+    - Industrial Data workbook export can now include raw cached data directly without first loading the full cache into the interactive table<br>
+    - Industrial export filters now apply consistently to cached and live exports, including additional production-field filters entered in the filter dialog<br>
+    - Industrial cache updates now refresh same-session filter lists more reliably, even when rows and production field values change within the same second<br>
+    - Industrial Data now clears abandoned temporary tabular views before preparing a new cache handoff, keeping long sessions lighter<br>
+    - Large SQL fetches now report saved rows clearly when rows were already streamed before a later read or save warning occurs<br>
+    - Realtime monitoring now reloads only newly inserted sample rows for anomaly review, keeping polling cycles quicker as monitoring history grows<br>
+    - Realtime diagnostics now keep source status messages more specific when a polling or dashboard refresh step fails<br>
     - Realtime Industrial Monitoring now has a separate foundation for append-only samples, signal definitions, stream offsets, explainable anomaly events, replay, and dashboard review<br>
     - Deterministic anomaly detectors now cover specification limits, warning limits, IQR fences, MAD robust z-score, rolling z-score, and stale-source checks with operator-readable explanations<br>
     - Realtime polling now uses generated bounded queries, cursor offsets, chunk limits, safe diagnostics, and offset advancement only after local persistence succeeds<br>

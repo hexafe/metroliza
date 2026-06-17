@@ -48,12 +48,24 @@ from metroliza.industrial.industrial_source_config import (
     default_industrial_source_config_path,
     load_source_profiles_from_config,
 )
-from metroliza.industrial.industrial_workflow_state import IndustrialFetchState, IndustrialFilterState
+from metroliza.industrial.industrial_workflow_state import (
+    INDUSTRIAL_FILTER_FIELDS,
+    INDUSTRIAL_QUERY_FILTER_OPERATOR_CHOICES,
+    IndustrialFetchState,
+    IndustrialFilterState,
+    IndustrialQueryFilter,
+    format_industrial_query_filters,
+    parse_industrial_query_filter_lines,
+    parse_reference_values,
+    require_identifier,
+)
 from metroliza.industrial.industrial_workers import (
     IndustrialLinkRefreshThread,
     IndustrialOznakAccessCheckThread,
     IndustrialOznakSyncThread,
 )
+from metroliza.reports.db import sqlite_connection_scope
+from metroliza.reports.report_schema import ensure_report_schema
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
     configure_window_size,
@@ -228,7 +240,7 @@ class IndustrialSyncDialog(QDialog):
         self.link_refresh_thread: IndustrialLinkRefreshThread | None = None
         self.sql_editor_window: IndustrialSqlQueryDialog | None = None
         self.setWindowTitle("Fetch industrial data")
-        configure_window_size(self, minimum=(620, 520), initial=(760, 840))
+        configure_window_size(self, minimum=(860, 520), initial=(940, 840))
 
         self.status_label = status_chip(
             "Select a production source and enter production database credentials.",
@@ -275,6 +287,28 @@ class IndustrialSyncDialog(QDialog):
         self.mode_tabs = QTabWidget()
         self.mode_tabs.setFixedHeight(190)
         self.edit_filter_button = QPushButton("Edit filters...")
+        self.reference_column_edit = QLineEdit(self.filter_state.reference_column or "reference")
+        self.reference_column_edit.setPlaceholderText("reference")
+        self.reference_values_edit = QPlainTextEdit()
+        self.reference_values_edit.setFixedHeight(34)
+        self.reference_values_edit.setPlaceholderText("Optional: REF1, REF2, REF3")
+        self.additional_filters_edit = QPlainTextEdit()
+        self.additional_filters_edit.setFixedHeight(40)
+        self.additional_filters_edit.setPlaceholderText(
+            "Optional: station = S1\nprocess_status IN OK, NOK"
+        )
+        self.filter_column_combo = QComboBox()
+        for column, label in INDUSTRIAL_FILTER_FIELDS:
+            self.filter_column_combo.addItem(f"{label} ({column})", column)
+        self.filter_operator_combo = QComboBox()
+        for operator in INDUSTRIAL_QUERY_FILTER_OPERATOR_CHOICES:
+            self.filter_operator_combo.addItem(operator, operator)
+        self.filter_value_edit = QLineEdit()
+        self.filter_value_edit.setPlaceholderText("Value, or comma-separated values for IN")
+        self.add_filter_button = QPushButton("Add filter")
+        self.load_filter_references_button = QPushButton("Use report DB values")
+        self.clear_inline_filters_button = QPushButton("Clear filters")
+        self.apply_inline_filters_button = QPushButton("Apply filters")
         self.sql_query_edit = QPlainTextEdit()
         self.sql_query_edit.setFixedHeight(64)
         self.sql_query_edit.setPlaceholderText(
@@ -305,8 +339,21 @@ class IndustrialSyncDialog(QDialog):
             "Fetches rows matching the selected filters or LIMIT and saves them in the local industrial cache."
         )
         self.edit_filter_button.setToolTip(
-            "Choose reference/ID values and simple server-side filters for guided fetches."
+            "Open the larger filter dialog. The visible guided fields are used for fetches."
         )
+        self.reference_column_edit.setToolTip(
+            "Production DB column used only when the Reference/ID values field is not empty."
+        )
+        self.reference_values_edit.setToolTip(
+            "Optional restriction: only rows whose Reference/ID column matches these pasted values are fetched."
+        )
+        self.additional_filters_edit.setToolTip(
+            "Optional simple server-side filters, one per line, combined with the Reference/ID restriction."
+        )
+        self.filter_column_combo.setToolTip("Select a production column for an additional filter.")
+        self.filter_operator_combo.setToolTip("Select how the column should match the value.")
+        self.filter_value_edit.setToolTip("Enter one value, or comma-separated values for IN filters.")
+        self.add_filter_button.setToolTip("Append the selected filter to Additional server-side filters.")
         self.preview_sql_button.setToolTip(
             "Run the SQL query with the preview row limit. Preview never writes to the local cache."
         )
@@ -316,8 +363,20 @@ class IndustrialSyncDialog(QDialog):
         self.fetch_csv_summary_button.setToolTip(
             "Fetch rows into the local cache, then open them in CSV Summary."
         )
+        self.load_filter_references_button.setToolTip(
+            "Paste distinct reference values from the open Metroliza report database."
+        )
+        self.clear_inline_filters_button.setToolTip("Clear guided fetch restrictions.")
+        self.apply_inline_filters_button.setToolTip("Validate and apply the visible guided filters.")
 
         self.edit_filter_button.clicked.connect(self.open_filter_dialog)
+        self.load_filter_references_button.clicked.connect(self.load_inline_database_references)
+        self.clear_inline_filters_button.clicked.connect(self.clear_inline_filters)
+        self.apply_inline_filters_button.clicked.connect(lambda: self._apply_inline_filter_state(show_errors=True))
+        self.add_filter_button.clicked.connect(self.add_inline_filter_from_builder)
+        self.filter_operator_combo.currentIndexChanged.connect(
+            lambda _index: self._sync_filter_builder_value_state()
+        )
         self.open_sql_button.clicked.connect(self.open_sql_recipe)
         self.save_sql_button.clicked.connect(self.save_sql_recipe)
         self.preview_sql_button.clicked.connect(self.preview_sql)
@@ -336,6 +395,7 @@ class IndustrialSyncDialog(QDialog):
         self._build_layout()
         self._sync_access_only_visibility()
         self.reload_profiles()
+        self._sync_filter_fields_from_state()
         self._sync_filter_status()
         if self.access_only:
             self.sync_now_button.setToolTip(
@@ -354,7 +414,7 @@ class IndustrialSyncDialog(QDialog):
         form = QFormLayout()
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         form.setSpacing(8)
-        form.addRow("Production source", self.profile_combo)
+        form.addRow("Current source / credentials", self.profile_combo)
         source_pick_row = QHBoxLayout()
         source_pick_row.setContentsMargins(0, 0, 0, 0)
         source_pick_row.setSpacing(8)
@@ -366,7 +426,7 @@ class IndustrialSyncDialog(QDialog):
         source_pick_actions.addWidget(self.current_source_only_button)
         source_pick_actions.addStretch(1)
         source_pick_row.addLayout(source_pick_actions)
-        form.addRow("Fetch sources", source_pick_row)
+        form.addRow("Production sources to fetch", source_pick_row)
         self.source_check_row_label = form.labelForField(source_pick_row)
         form.addRow("", self.batch_use_current_credentials_checkbox)
         self.batch_credentials_row_label = form.labelForField(
@@ -391,16 +451,35 @@ class IndustrialSyncDialog(QDialog):
         guided_tab = QVBoxLayout()
         guided_tab.setContentsMargins(8, 8, 8, 8)
         guided_tab.setSpacing(8)
+        guided_form = QFormLayout()
+        guided_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        guided_form.setSpacing(8)
+        guided_form.addRow("Reference/ID column", self.reference_column_edit)
+        guided_form.addRow("Only fetch these Reference/ID values", self.reference_values_edit)
+        filter_builder_row = QHBoxLayout()
+        filter_builder_row.setContentsMargins(0, 0, 0, 0)
+        filter_builder_row.setSpacing(8)
+        filter_builder_row.addWidget(self.filter_column_combo, 2)
+        filter_builder_row.addWidget(self.filter_operator_combo, 1)
+        filter_builder_row.addWidget(self.filter_value_edit, 2)
+        filter_builder_row.addWidget(self.add_filter_button)
+        guided_form.addRow("Build filter", filter_builder_row)
+        guided_form.addRow("Additional server-side filters", self.additional_filters_edit)
+        guided_tab.addLayout(guided_form)
         filter_row = QGridLayout()
         filter_row.setContentsMargins(0, 0, 0, 0)
         filter_row.setHorizontalSpacing(8)
         filter_row.addWidget(self.filter_status_label, 0, 0)
-        filter_row.addWidget(self.edit_filter_button, 0, 1)
+        filter_row.addWidget(self.load_filter_references_button, 0, 1)
+        filter_row.addWidget(self.clear_inline_filters_button, 0, 2)
+        filter_row.addWidget(self.apply_inline_filters_button, 0, 3)
+        filter_row.addWidget(self.edit_filter_button, 0, 4)
         filter_row.setColumnStretch(0, 1)
         guided_tab.addLayout(filter_row)
         guided_holder = QWidget(self)
         guided_holder.setLayout(guided_tab)
         self.mode_tabs.addTab(guided_holder, "Guided filters")
+        self._sync_filter_builder_value_state()
 
         sql_holder = QWidget(self)
         sql_tab = QVBoxLayout(sql_holder)
@@ -682,10 +761,127 @@ class IndustrialSyncDialog(QDialog):
 
     def set_industrial_filter_state(self, state: IndustrialFilterState) -> None:
         self.filter_state = state
+        self._sync_filter_fields_from_state()
         parent = self.parent()
         if parent is not None and hasattr(parent, "set_sync_filter_state"):
             parent.set_sync_filter_state(state)
         self._sync_filter_status()
+
+    def _sync_filter_fields_from_state(self) -> None:
+        if not hasattr(self, "reference_column_edit"):
+            return
+        self.reference_column_edit.setText(self.filter_state.reference_column or "reference")
+        self.reference_values_edit.setPlainText("\n".join(self.filter_state.references))
+        self.additional_filters_edit.setPlainText(
+            format_industrial_query_filters(self.filter_state.query_filters)
+        )
+
+    def _inline_filter_state(self) -> IndustrialFilterState:
+        state = IndustrialFilterState(
+            reference_column=self.reference_column_edit.text().strip() or "reference",
+            references=parse_reference_values(self.reference_values_edit.toPlainText()),
+            query_filters=parse_industrial_query_filter_lines(self.additional_filters_edit.toPlainText()),
+        )
+        require_identifier("Reference/ID column", state.reference_column)
+        return state
+
+    def _apply_inline_filter_state(self, *, show_errors: bool) -> bool:
+        try:
+            state = self._inline_filter_state()
+        except ValueError as exc:
+            if show_errors:
+                QMessageBox.warning(self, "Industrial guided filters", str(exc))
+            return False
+        self.filter_state = state
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "set_sync_filter_state"):
+            parent.set_sync_filter_state(state)
+        self._sync_filter_status()
+        return True
+
+    def load_inline_database_references(self) -> None:
+        if not self.report_db_file:
+            QMessageBox.warning(
+                self,
+                "Industrial guided filters",
+                "Select a Metroliza report database first.",
+            )
+            return
+        try:
+            with sqlite_connection_scope(self.report_db_file) as conn:
+                ensure_report_schema(self.report_db_file, connection=conn)
+                rows = conn.execute(
+                    """
+                    SELECT DISTINCT TRIM(reference)
+                    FROM report_metadata
+                    WHERE TRIM(COALESCE(reference, '')) <> ''
+                    ORDER BY TRIM(reference) COLLATE NOCASE
+                    """
+                ).fetchall()
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Industrial guided filters",
+                f"Could not read references from the selected Metroliza report database: {exc}",
+            )
+            return
+
+        references = [str(row[0]).strip() for row in rows if str(row[0]).strip()]
+        self.reference_values_edit.setPlainText("\n".join(references))
+        self._apply_inline_filter_state(show_errors=False)
+        self.filter_status_label.setText(
+            f"Only fetching {len(references)} Reference/ID value(s) from report DB."
+        )
+
+    def clear_inline_filters(self) -> None:
+        self.reference_values_edit.clear()
+        self.additional_filters_edit.clear()
+        self._apply_inline_filter_state(show_errors=False)
+
+    def _sync_filter_builder_value_state(self) -> None:
+        if not hasattr(self, "filter_operator_combo"):
+            return
+        operator = str(self.filter_operator_combo.currentData() or "").upper()
+        value_required = operator not in {"IS NULL", "IS NOT NULL"}
+        self.filter_value_edit.setEnabled(value_required)
+        if value_required:
+            self.filter_value_edit.setPlaceholderText(
+                "Value, or comma-separated values for IN"
+                if operator in {"IN", "NOT IN"}
+                else "Value"
+            )
+        else:
+            self.filter_value_edit.clear()
+            self.filter_value_edit.setPlaceholderText("No value required")
+
+    def add_inline_filter_from_builder(self) -> None:
+        column = str(self.filter_column_combo.currentData() or "").strip()
+        operator = str(self.filter_operator_combo.currentData() or "").strip().upper()
+        value_text = self.filter_value_edit.text().strip()
+        values: tuple[str, ...]
+        if operator in {"IS NULL", "IS NOT NULL"}:
+            values = ()
+        elif operator in {"IN", "NOT IN"}:
+            values = parse_reference_values(value_text)
+        else:
+            values = (value_text,) if value_text else ()
+        try:
+            filter_state = IndustrialQueryFilter(
+                column=column,
+                operator=operator,
+                values=values,
+            ).validated()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Industrial guided filters", str(exc))
+            return
+
+        current_text = self.additional_filters_edit.toPlainText().strip()
+        filter_line = format_industrial_query_filters((filter_state,))
+        self.additional_filters_edit.setPlainText(
+            f"{current_text}\n{filter_line}" if current_text else filter_line
+        )
+        self.filter_value_edit.clear()
+        self._apply_inline_filter_state(show_errors=False)
 
     def _sync_filter_status(self) -> None:
         self.filter_status_label.setText(self.filter_state.summary())
@@ -809,6 +1005,8 @@ class IndustrialSyncDialog(QDialog):
             return
         try:
             fetch_mode = self._current_fetch_mode()
+            if fetch_mode == "guided" and not self._apply_inline_filter_state(show_errors=True):
+                return
             profiles = self._profiles_for_operation(fetch_mode=fetch_mode, test_only=test_only)
             if not profiles:
                 raise ValueError("Create or select a production source before checking access.")

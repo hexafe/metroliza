@@ -1590,7 +1590,13 @@ class IndustrialAnalyticsDialog(QDialog):
         if self.tabular_load_result is None:
             self.show_tabular_load_screen()
             return
-        if self.tabular_load_result is None or self.tabular_load_result.dataframe.empty:
+        if (
+            self.tabular_load_result is None
+            or (
+                self.tabular_load_result.sqlite_store is None
+                and self.tabular_load_result.dataframe.empty
+            )
+        ):
             QMessageBox.warning(self, self.windowTitle(), "Load CSV/Excel metrics before filtering rows.")
             return
         dialog = TabularAnalyticsFilterDialog(
@@ -1681,7 +1687,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self._reset_group_options(
             tuple(
                 (column.replace("_", " ").title(), column)
-                for column in loaded.dataframe.columns
+                for column in _tabular_load_columns(loaded)
                 if column not in {metric.field_name for metric in self.metric_candidates}
             )
         )
@@ -1762,7 +1768,13 @@ class IndustrialAnalyticsDialog(QDialog):
             return
         if self.tabular_load_result is None:
             self.load_metrics()
-        if self.tabular_load_result is None or self.tabular_load_result.dataframe.empty:
+        if (
+            self.tabular_load_result is None
+            or (
+                self.tabular_load_result.sqlite_store is None
+                and self.tabular_load_result.dataframe.empty
+            )
+        ):
             QMessageBox.warning(self, self.windowTitle(), "Load CSV/Excel metrics before editing groups.")
             return
         if self.tabular_load_result.sqlite_store is not None:
@@ -2436,6 +2448,15 @@ class IndustrialAnalyticsDialog(QDialog):
             return
         self._set_tabular_load_result(None)
         super().closeEvent(event)
+
+
+def _tabular_load_columns(loaded) -> tuple[str, ...]:
+    sqlite_store = getattr(loaded, "sqlite_store", None)
+    if sqlite_store is not None:
+        return tuple(str(column) for column in getattr(sqlite_store, "source_columns", ()) or ())
+    dataframe = getattr(loaded, "dataframe", None)
+    columns = getattr(dataframe, "columns", ())
+    return tuple(str(column) for column in columns)
 
 
 __all__ = [

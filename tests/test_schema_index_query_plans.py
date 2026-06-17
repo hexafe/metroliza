@@ -38,6 +38,7 @@ sys.modules.pop('modules.cmm_report_parser', None)
 sys.modules.pop('metroliza.parsing.cmm_report_parser', None)
 import modules.cmm_report_parser as cmm_report_parser_module  # noqa: E402
 from modules.cmm_schema import ensure_cmm_report_schema  # noqa: E402
+from modules.industrial_data_schema import ensure_industrial_data_schema  # noqa: E402
 from modules.report_schema import ensure_report_schema  # noqa: E402
 
 CMMReportParser = cmm_report_parser_module.CMMReportParser
@@ -162,6 +163,82 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
             )
         conn.commit()
 
+    def _seed_industrial_schema_for_plan_checks(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            INSERT INTO industrial_source_profiles (
+                profile_key, profile_name, source_db_alias, database_type,
+                source_object_name, allowed_columns_json, created_at, updated_at
+            )
+            VALUES ('line-a', 'Line A', 'plant_a', 'sqlite', 'events', '[]', '2026-06-17T00:00:00Z', '2026-06-17T00:00:00Z')
+            """
+        )
+        profile_id = conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+        for signal_id in range(1, 4):
+            conn.execute(
+                """
+                INSERT INTO industrial_signal_definitions (
+                    source_profile_id, signal_key, metric_name, enabled, created_at, updated_at
+                )
+                VALUES (?, ?, ?, 1, '2026-06-17T00:00:00Z', '2026-06-17T00:00:00Z')
+                """,
+                (profile_id, f'signal-{signal_id}', f'Metric {signal_id}'),
+            )
+
+        for row_number in range(1, 121):
+            reference = 'REF_A' if row_number % 2 == 0 else 'REF_B'
+            signal_id = (row_number % 3) + 1
+            event_time = f'2026-06-{(row_number % 28) + 1:02d}T12:00:00Z'
+            conn.execute(
+                """
+                INSERT INTO industrial_records (
+                    source_profile_id, source_db_alias, source_record_key, process_timestamp,
+                    reference, part_number, revision, raw_record_json, created_at, updated_at
+                )
+                VALUES (?, 'plant_a', ?, ?, ?, 'PN-1', 'A', '{}', '2026-06-17T00:00:00Z', '2026-06-17T00:00:00Z')
+                """,
+                (profile_id, f'record-{row_number:04d}', event_time, reference),
+            )
+            record_id = conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+            conn.execute(
+                """
+                INSERT INTO industrial_record_values (
+                    record_id, field_name, field_value_text, created_at
+                )
+                VALUES (?, 'trace_code', ?, '2026-06-17T00:00:00Z')
+                """,
+                (record_id, f'TC-{row_number % 7:03d}'),
+            )
+            conn.execute(
+                """
+                INSERT INTO industrial_samples (
+                    source_profile_id, signal_id, source_record_key, event_time, ingest_time,
+                    metric_name, value, segment_key_json, quality_flags_json
+                )
+                VALUES (?, ?, ?, ?, '2026-06-17T00:00:00Z', 'diameter', ?, '{}', '[]')
+                """,
+                (profile_id, signal_id, f'sample-{row_number:04d}', event_time, row_number / 10),
+            )
+            sample_id = conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+            conn.execute(
+                """
+                INSERT INTO industrial_anomaly_events (
+                    sample_id, signal_id, event_time, detector_key, severity, score,
+                    observed_value, explanation, status, created_at
+                )
+                VALUES (?, ?, ?, 'spec_limits', ?, 1.0, ?, 'Synthetic plan check', ?, '2026-06-17T00:00:00Z')
+                """,
+                (
+                    sample_id,
+                    signal_id,
+                    event_time,
+                    'critical' if row_number % 2 == 0 else 'warning',
+                    row_number / 10,
+                    'open' if row_number % 3 else 'resolved',
+                ),
+            )
+        conn.commit()
+
     def _explain(self, conn: sqlite3.Connection, query: str) -> str:
         rows = conn.execute(f'EXPLAIN QUERY PLAN {query}').fetchall()
         return ' | '.join(str(row[-1]) for row in rows)
@@ -208,10 +285,12 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
                 'idx_industrial_sync_runs_status',
                 'idx_industrial_records_profile_timestamp',
                 'idx_industrial_records_reference',
+                'idx_industrial_records_reference_time_id',
                 'idx_industrial_records_part_revision',
                 'idx_industrial_records_serial',
                 'idx_industrial_records_batch_lot',
                 'idx_industrial_record_values_record_field',
+                'idx_industrial_record_values_field_text_record',
                 'idx_industrial_join_rules_enabled_priority',
                 'idx_industrial_link_candidates_record_status',
                 'idx_industrial_link_candidates_report_measurement',
@@ -219,6 +298,7 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
                 'idx_industrial_realtime_monitor_configs_enabled',
                 'idx_industrial_signal_definitions_profile_enabled',
                 'idx_industrial_samples_signal_time',
+                'idx_industrial_samples_signal_time_desc_value',
                 'idx_industrial_samples_profile_time',
                 'idx_industrial_samples_profile_signal_time',
                 'idx_industrial_detector_configs_enabled',
@@ -226,6 +306,8 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
                 'idx_industrial_anomaly_events_signal_time',
                 'idx_industrial_anomaly_events_severity_status_time',
                 'idx_industrial_anomaly_events_detector_time',
+                'idx_industrial_anomaly_events_status_time_desc',
+                'idx_industrial_anomaly_events_signal_status_time_desc',
                 'idx_industrial_anomaly_events_sample_detector_unique',
             }
             self.assertEqual(actual_index_names, expected_index_names)
@@ -369,6 +451,72 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
         self.assertIn('idx_source_file_locations_latest_active', plan)
         self.assertNotIn('USE TEMP B-TREE', plan)
         self.assertEqual(selected_file_name, 'new.pdf')
+
+    def test_industrial_large_cache_realtime_and_anomaly_queries_use_speed_indexes(self):
+        cache_order_query = """
+            SELECT id, reference, process_timestamp
+            FROM industrial_records
+            ORDER BY reference COLLATE NOCASE, process_timestamp, id
+            LIMIT 25
+        """
+        dynamic_lookup_query = """
+            SELECT records.id
+            FROM industrial_record_values values_row
+            JOIN industrial_records records ON records.id = values_row.record_id
+            WHERE values_row.field_name = 'trace_code'
+              AND values_row.field_value_text = 'TC-003'
+            LIMIT 25
+        """
+        recent_sample_query = """
+            SELECT id, event_time, value
+            FROM industrial_samples
+            WHERE signal_id = 1
+            ORDER BY event_time DESC, id DESC
+            LIMIT 50
+        """
+        open_anomaly_feed_query = """
+            SELECT id, event_time, severity
+            FROM industrial_anomaly_events
+            WHERE status = 'open'
+            ORDER BY event_time DESC, id DESC
+            LIMIT 100
+        """
+        signal_open_anomaly_query = """
+            SELECT id, event_time, severity
+            FROM industrial_anomaly_events
+            WHERE signal_id = 1
+              AND status = 'open'
+            ORDER BY event_time DESC, id DESC
+            LIMIT 50
+        """
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = str(Path(temp_dir) / 'industrial_plan_checks.db')
+            ensure_industrial_data_schema(db_path)
+            with sqlite3.connect(db_path) as conn:
+                self._seed_industrial_schema_for_plan_checks(conn)
+                cache_order_plan = self._explain(conn, cache_order_query)
+                dynamic_lookup_plan = self._explain(conn, dynamic_lookup_query)
+                recent_sample_plan = self._explain(conn, recent_sample_query)
+                open_anomaly_feed_plan = self._explain(conn, open_anomaly_feed_query)
+                signal_open_anomaly_plan = self._explain(conn, signal_open_anomaly_query)
+
+        self.assertIn('idx_industrial_records_reference_time_id', cache_order_plan)
+        self.assertNotIn('USE TEMP B-TREE', cache_order_plan)
+
+        self.assertIn('idx_industrial_record_values_field_text_record', dynamic_lookup_plan)
+
+        self.assertIn('idx_industrial_samples_signal_time_desc_value', recent_sample_plan)
+        self.assertNotIn('USE TEMP B-TREE', recent_sample_plan)
+
+        self.assertIn('idx_industrial_anomaly_events_status_time_desc', open_anomaly_feed_plan)
+        self.assertNotIn('USE TEMP B-TREE', open_anomaly_feed_plan)
+
+        self.assertIn(
+            'idx_industrial_anomaly_events_signal_status_time_desc',
+            signal_open_anomaly_plan,
+        )
+        self.assertNotIn('USE TEMP B-TREE', signal_open_anomaly_plan)
 
 
 if __name__ == '__main__':

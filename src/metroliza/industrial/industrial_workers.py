@@ -207,6 +207,7 @@ class IndustrialExportThread(WorkerCancellationMixin, QThread):
         filter_state: IndustrialFilterState,
         grouping_state: IndustrialGroupingState,
         include_charts: bool,
+        include_raw_data: bool = True,
     ):
         super().__init__()
         self.db_file = db_file
@@ -214,6 +215,7 @@ class IndustrialExportThread(WorkerCancellationMixin, QThread):
         self.filter_state = filter_state
         self.grouping_state = grouping_state
         self.include_charts = include_charts
+        self.include_raw_data = include_raw_data
         self._init_cancellation_state()
 
     def run(self):
@@ -225,6 +227,7 @@ class IndustrialExportThread(WorkerCancellationMixin, QThread):
                     filter_state=self.filter_state,
                     grouping_state=self.grouping_state,
                     include_charts=self.include_charts,
+                    include_raw_data=self.include_raw_data,
                     cancel_check=self._is_cancelled,
                 )
             )
@@ -254,6 +257,7 @@ class IndustrialLiveExportThread(WorkerCancellationMixin, QThread):
         filter_state: IndustrialFilterState,
         grouping_state: IndustrialGroupingState,
         include_charts: bool,
+        include_raw_data: bool = True,
     ):
         super().__init__()
         self.profile = profile
@@ -265,6 +269,7 @@ class IndustrialLiveExportThread(WorkerCancellationMixin, QThread):
         self.filter_state = filter_state
         self.grouping_state = grouping_state
         self.include_charts = include_charts
+        self.include_raw_data = include_raw_data
         self.cancellation_token = None
         self._init_cancellation_state()
 
@@ -290,6 +295,7 @@ class IndustrialLiveExportThread(WorkerCancellationMixin, QThread):
                     filter_state=self.filter_state,
                     grouping_state=self.grouping_state,
                     include_charts=self.include_charts,
+                    include_raw_data=self.include_raw_data,
                     cancellation_token=self.cancellation_token,
                     progress_callback=self._emit_progress_from_diagnostic,
                     cancel_check=self._is_cancelled,

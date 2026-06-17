@@ -4,6 +4,7 @@ import json
 
 from modules.dashboard_html_controls import (
     dashboard_visual_runtime_config_json,
+    render_dashboard_controls_css,
     render_dashboard_visual_dialog,
     render_dashboard_visual_runtime_js,
 )
@@ -211,6 +212,27 @@ def test_dashboard_visual_runtime_supports_persistent_point_marks() -> None:
     assert "dashboardPointSearchSelectedId === dashboardVisualSelectedPoint.id" in runtime_js
     assert "if (isMetrolizaPointOverlayTrace(trace)) return null;" in runtime_js
     assert "dashboardVisualSelectedPoint = selectedPointFromPlotlyClick(target, point);" in runtime_js
+
+
+def test_dashboard_visual_runtime_injects_inline_chart_point_controls() -> None:
+    css = render_dashboard_controls_css()
+    runtime_js = render_dashboard_visual_runtime_js()
+
+    assert ".plotly-point-controls" in css
+    assert "const ensureInlinePointControls" in runtime_js
+    assert "window.metrolizaEnsureInlinePointControls = ensureInlinePointControls;" in runtime_js
+    assert "controls.dataset.dashboardPointControls = '1';" in runtime_js
+    assert "data-dashboard-point-search-input" in runtime_js
+    assert "data-dashboard-point-search-prev" in runtime_js
+    assert "data-dashboard-point-search-next" in runtime_js
+    assert "data-dashboard-point-color" in runtime_js
+    assert "data-dashboard-point-mark" in runtime_js
+    assert "data-dashboard-point-clear" in runtime_js
+    assert "buildPointSearchIndex(chartKey)" in runtime_js
+    assert "root: controls" in runtime_js
+    assert "markSelectedPoint(color);" in runtime_js
+    assert "clearSelectedPointMark();" in runtime_js
+    assert "ensureInlinePointControls();" in runtime_js
 
 
 def test_dashboard_visual_runtime_range_readouts_use_existing_update_path() -> None:

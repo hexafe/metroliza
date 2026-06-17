@@ -139,10 +139,16 @@ docs, tickets, screenshots, or logs.
 - [x] 2026-06-15: Pushed GitHub CI passed for build `260615` commit
       `3f26438d473bd6941606d3cf949f2e7782276763` in run
       [`27570794579`](https://github.com/hexafe/metroliza/actions/runs/27570794579).
-- [ ] 2026-06-16: Build `260616` Industrial Data fetch, realtime monitor, and
+- [x] 2026-06-16: Build `260616` Industrial Data fetch, realtime monitor, and
       dashboard optimization docs/metadata closeout recorded in
       [`realtime_industrial_optimization_check_2026-06-16.md`](./realtime_industrial_optimization_check_2026-06-16.md);
-      final integrated push and green CI are still pending.
+      final integrated push was superseded by build `260617`.
+- [ ] 2026-06-17: Build `260617` Industrial Data SQLite handoff, cached raw
+      workbook export, realtime polling cost, and Oznak fallback diagnostics
+      closeout recorded in
+      [`realtime_industrial_performance_check_2026-06-17.md`](./realtime_industrial_performance_check_2026-06-17.md);
+      local QA/release gates passed, and final integrated push plus green CI
+      are still pending.
 
 ## Rollback Steps
 

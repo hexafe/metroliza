@@ -286,6 +286,104 @@ def test_sync_dialog_does_not_add_default_reference_column_without_filter_values
     dialog.close()
 
 
+def test_sync_dialog_guided_filters_are_visible_and_parse_inline_fields(tmp_path):
+    _app()
+    db_path = str(tmp_path / "industrial.db")
+    IndustrialDataRepository(db_path).upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="events",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+        allowed_columns=("event_id", "reference", "station"),
+        default_pagination_column="event_id",
+    )
+
+    dialog = IndustrialSyncDialog(db_file=db_path)
+    dialog.reference_column_edit.setText("reference")
+    dialog.reference_values_edit.setPlainText("REF-1\nREF-2")
+    dialog.additional_filters_edit.setPlainText("station = S1")
+
+    assert dialog.mode_tabs.tabText(0) == "Guided filters"
+    assert dialog.reference_values_edit.toolTip().startswith("Optional restriction")
+    assert dialog._apply_inline_filter_state(show_errors=False)
+    assert dialog.filter_state.reference_column == "reference"
+    assert dialog.filter_state.references == ("REF-1", "REF-2")
+    assert dialog.filter_state.query_filters == (IndustrialQueryFilter("station", "=", ("S1",)),)
+    assert "References: 2 value(s)" in dialog.filter_status_label.text()
+    assert "Filters: 1" in dialog.filter_status_label.text()
+    dialog.close()
+
+
+def test_sync_dialog_filter_builder_appends_validated_filter(tmp_path):
+    _app()
+    db_path = str(tmp_path / "industrial.db")
+    IndustrialDataRepository(db_path).upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="events",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+        allowed_columns=("event_id", "reference", "station", "process_status"),
+        default_pagination_column="event_id",
+    )
+
+    dialog = IndustrialSyncDialog(db_file=db_path)
+    dialog.additional_filters_edit.setPlainText("station = S1")
+    dialog.filter_column_combo.setCurrentIndex(dialog.filter_column_combo.findData("process_status"))
+    dialog.filter_operator_combo.setCurrentIndex(dialog.filter_operator_combo.findData("IN"))
+    dialog.filter_value_edit.setText("OK, NOK")
+
+    dialog.add_inline_filter_from_builder()
+
+    assert dialog.additional_filters_edit.toPlainText().splitlines() == [
+        "station = S1",
+        "process_status IN OK, NOK",
+    ]
+    assert dialog.filter_state.query_filters == (
+        IndustrialQueryFilter("station", "=", ("S1",)),
+        IndustrialQueryFilter("process_status", "IN", ("OK", "NOK")),
+    )
+    assert dialog.filter_value_edit.text() == ""
+    dialog.close()
+
+
+def test_sync_dialog_clear_inline_filters_removes_reference_restriction(tmp_path):
+    _app()
+    db_path = str(tmp_path / "industrial.db")
+    IndustrialDataRepository(db_path).upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="events",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+        allowed_columns=("event_id", "reference", "station"),
+        default_pagination_column="event_id",
+    )
+
+    dialog = IndustrialSyncDialog(
+        db_file=db_path,
+        filter_state=IndustrialFilterState(reference_column="reference", references=("REF-1",)),
+    )
+    assert dialog.reference_values_edit.toPlainText() == "REF-1"
+
+    dialog.clear_inline_filters()
+
+    assert dialog.filter_state.references == ()
+    assert dialog.filter_state.query_filters == ()
+    assert dialog.filter_status_label.text() == "No filters"
+    dialog.close()
+
+
 def test_sync_dialog_keeps_unrestricted_profile_unrestricted_with_filters(tmp_path):
     _app()
     db_path = str(tmp_path / "industrial.db")

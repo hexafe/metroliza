@@ -1,6 +1,14 @@
 # Changelog (for end users)
 
-## 2026.06 RC1 (build 260616) — current version
+## 2026.06 RC1 (build 260617) — current version
+- Industrial Data now opens cached rows in CSV Summary from indexed local metadata, so filter lists and simple grouping previews respond faster on large production caches.
+- Industrial Data workbook export can now include raw cached data directly without first loading the full cache into the interactive table.
+- Industrial export filters now apply consistently to cached and live exports, including additional production-field filters entered in the filter dialog.
+- Industrial cache updates now refresh same-session filter lists more reliably, even when rows and production field values change within the same second.
+- Industrial Data now clears abandoned temporary tabular views before preparing a new cache handoff, keeping long sessions lighter.
+- Large SQL fetches now report saved rows clearly when rows were already streamed before a later read or save warning occurs.
+- Realtime monitoring now reloads only newly inserted sample rows for anomaly review, keeping polling cycles quicker as monitoring history grows.
+- Realtime diagnostics now keep source status messages more specific when a polling or dashboard refresh step fails.
 - Realtime Industrial Monitoring now has a separate foundation for append-only samples, signal definitions, stream offsets, explainable anomaly events, replay, and dashboard review.
 - Deterministic anomaly detectors now cover specification limits, warning limits, IQR fences, MAD robust z-score, rolling z-score, and stale-source checks with operator-readable explanations.
 - Realtime polling now uses generated bounded queries, cursor offsets, chunk limits, safe diagnostics, and offset advancement only after local persistence succeeds.

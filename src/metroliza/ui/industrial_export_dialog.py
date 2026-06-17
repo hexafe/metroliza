@@ -97,12 +97,18 @@ class IndustrialExportDialog(QDialog):
         self.filter_status_label = status_chip(self.filter_state.summary(), "neutral")
         self.grouping_status_label = status_chip(self.grouping_state.summary(), "neutral")
         self.plot_status_label = status_chip("Plots included", "neutral")
+        self.raw_data_status_label = status_chip("Raw data included", "neutral")
         self.live_fetch_hint_label = status_chip(
             "Fetch row limit and timeout protect large live database exports.",
             "info",
         )
         self.include_plots_checkbox = QCheckBox("Include plots")
         self.include_plots_checkbox.setChecked(bool(include_plots))
+        self.include_raw_data_checkbox = QCheckBox("Include raw data sheet")
+        self.include_raw_data_checkbox.setChecked(True)
+        self.include_raw_data_checkbox.setToolTip(
+            "Adds a Raw Data sheet with source payload columns and keeps raw JSON in the workbook."
+        )
         self.output_path_field = path_field("", empty_text="No output workbook selected")
         self.readiness_label = status_chip("Select an output workbook to enable export.", "warning")
 
@@ -122,6 +128,7 @@ class IndustrialExportDialog(QDialog):
         self.close_button.clicked.connect(self.reject)
         self.start_button.clicked.connect(self.handle_start_button)
         self.include_plots_checkbox.stateChanged.connect(self._sync_ui_state)
+        self.include_raw_data_checkbox.stateChanged.connect(self._sync_ui_state)
         self.profile_combo.currentIndexChanged.connect(self._handle_profile_changed)
         self.username_edit.textChanged.connect(self._sync_ui_state)
         self.password_edit.textChanged.connect(self._sync_ui_state)
@@ -209,6 +216,11 @@ class IndustrialExportDialog(QDialog):
         grid.addWidget(self.include_plots_checkbox, row, 2)
 
         row += 1
+        grid.addWidget(section_label("Raw data"), row, 0)
+        grid.addWidget(self.raw_data_status_label, row, 1)
+        grid.addWidget(self.include_raw_data_checkbox, row, 2)
+
+        row += 1
         grid.addWidget(section_label("Output workbook"), row, 0)
         grid.addWidget(self.output_path_field, row, 1)
         grid.addWidget(self.output_button, row, 2)
@@ -270,6 +282,11 @@ class IndustrialExportDialog(QDialog):
         self.plot_status_label.setText(
             "Plots included" if self.include_plots_checkbox.isChecked() else "Plots disabled"
         )
+        self.raw_data_status_label.setText(
+            "Raw data sheet included"
+            if self.include_raw_data_checkbox.isChecked()
+            else "Raw data sheet disabled"
+        )
         self.clear_filter_button.setEnabled(self.filter_state.is_applied)
         self.clear_grouping_button.setEnabled(self.grouping_state.is_applied)
         parent = self.parent()
@@ -278,6 +295,7 @@ class IndustrialExportDialog(QDialog):
         set_status_variant(self.filter_status_label, "success" if self.filter_state.is_applied else "neutral")
         set_status_variant(self.grouping_status_label, "success" if self.grouping_state.is_applied else "neutral")
         set_status_variant(self.plot_status_label, "neutral")
+        set_status_variant(self.raw_data_status_label, "neutral")
 
         ready = bool(self.output_file)
         if self.live_mode:
@@ -422,6 +440,7 @@ class IndustrialExportDialog(QDialog):
                 filter_state=self.filter_state,
                 grouping_state=self.grouping_state,
                 include_charts=self.include_plots_checkbox.isChecked(),
+                include_raw_data=self.include_raw_data_checkbox.isChecked(),
             )
         return IndustrialExportThread(
             db_file=str(self.db_file),
@@ -429,6 +448,7 @@ class IndustrialExportDialog(QDialog):
             filter_state=self.filter_state,
             grouping_state=self.grouping_state,
             include_charts=self.include_plots_checkbox.isChecked(),
+            include_raw_data=self.include_raw_data_checkbox.isChecked(),
         )
 
     def show_loading_screen(self) -> None:

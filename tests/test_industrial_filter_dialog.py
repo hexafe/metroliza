@@ -90,6 +90,30 @@ def test_filter_dialog_apply_uses_parent_callback():
     )
 
 
+def test_filter_dialog_builder_appends_filter_without_overwriting_references():
+    _app()
+    dialog = IndustrialFilterDialog(
+        state=IndustrialFilterState(reference_column="reference", references=("REF1",))
+    )
+    dialog.query_filters_edit.setPlainText("station = S1")
+    dialog.filter_column_combo.setCurrentIndex(dialog.filter_column_combo.findData("process_status"))
+    dialog.filter_operator_combo.setCurrentIndex(dialog.filter_operator_combo.findData("IN"))
+    dialog.filter_value_edit.setText("OK, NOK")
+
+    dialog.add_filter_from_builder()
+
+    assert dialog.references_edit.toPlainText() == "REF1"
+    assert dialog.query_filters_edit.toPlainText().splitlines() == [
+        "station = S1",
+        "process_status IN OK, NOK",
+    ]
+    assert dialog.current_state().query_filters == (
+        IndustrialQueryFilter("station", "=", ("S1",)),
+        IndustrialQueryFilter("process_status", "IN", ("OK", "NOK")),
+    )
+    dialog.close()
+
+
 def test_filter_dialog_rejects_invalid_reference_column():
     _app()
     dialog = IndustrialFilterDialog(state=IndustrialFilterState())

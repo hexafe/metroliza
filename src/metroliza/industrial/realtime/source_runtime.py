@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable
 
-from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
+from metroliza.industrial.industrial_data_repository import (
+    IndustrialDataRepository,
+    redact_sensitive_text,
+)
 from metroliza.industrial.realtime.db_poller import SourceDbAdapter
 from metroliza.industrial.realtime.realtime_service import PollingCycleResult, run_polling_cycle
 from metroliza.industrial.realtime.stream_config import RealtimePollConfig
@@ -53,22 +56,32 @@ class RealtimeSourceRuntime:
                 continue
             profile = profiles.get(config.source_profile_id)
             if profile is None:
+                error = "Source profile is not available in the local Metroliza database."
                 results.append(
                     PollingCycleResult(
                         source_profile_id=config.source_profile_id,
                         stream_key=config.stream_key,
                         status="failed",
-                        error="Source profile is not available in the local Metroliza database.",
+                        error=error,
+                        diagnostics={
+                            "stage": "source_profile_lookup",
+                            "error": redact_sensitive_text(error, max_len=500),
+                        },
                     )
                 )
                 continue
             if not profile.is_enabled:
+                error = "Source profile is disabled in the local Metroliza database."
                 results.append(
                     PollingCycleResult(
                         source_profile_id=config.source_profile_id,
                         stream_key=config.stream_key,
                         status="failed",
-                        error="Source profile is disabled in the local Metroliza database.",
+                        error=error,
+                        diagnostics={
+                            "stage": "source_profile_disabled",
+                            "error": redact_sensitive_text(error, max_len=500),
+                        },
                     )
                 )
                 continue

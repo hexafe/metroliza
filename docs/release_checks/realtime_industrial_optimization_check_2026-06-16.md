@@ -81,8 +81,10 @@ User-facing behavior covered by this release note:
 ## Release Status
 
 - Local release/QA validation: passed.
-- Push and green GitHub Actions CI for build `260616`: pending final integrated
-  commit publication.
+- Push and green GitHub Actions CI for build `260616`: superseded by build
+  `260617` before final integrated commit publication. Current final-push
+  evidence is tracked in
+  [`realtime_industrial_performance_check_2026-06-17.md`](./realtime_industrial_performance_check_2026-06-17.md).
 - Promotion remains blocked on the standing manual release gates: packaging
   smoke, Windows clean-machine launch/startup evidence, Google conversion smoke,
   third-party notice artifact evidence, and security-owner triage/waiver for any

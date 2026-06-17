@@ -161,7 +161,7 @@ class IndustrialSyncRunSummary:
 def utc_timestamp() -> str:
     """Return an ISO-8601 UTC timestamp suitable for SQLite text columns."""
 
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _to_json(value: Any) -> str | None:

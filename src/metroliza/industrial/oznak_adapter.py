@@ -610,6 +610,8 @@ def _fetch_raw_sql_records_with_metroliza_fallback(
         return SimpleNamespace(**payload)
 
     engine = None
+    row_count = 0
+    streamed_to_callback = False
     try:
         _raise_if_cancelled(cancellation_token)
         engine_factory = _raw_sql_engine_factory(importer, oznak_module)
@@ -627,7 +629,6 @@ def _fetch_raw_sql_records_with_metroliza_fallback(
             cursor = _execute_raw_sql(connection, text, normalized_sql, query_parameters)
             mapping_cursor = cursor.mappings()
             data: list[dict[str, Any]] = []
-            row_count = 0
             fetch_size = min(row_limit, DEFAULT_OZNAK_FETCH_CHUNK_SIZE) if row_limit else DEFAULT_OZNAK_FETCH_CHUNK_SIZE
             while True:
                 _raise_if_cancelled(cancellation_token)
@@ -651,6 +652,7 @@ def _fetch_raw_sql_records_with_metroliza_fallback(
                     )
                     if batch_records:
                         record_batch_callback(batch_records)
+                        streamed_to_callback = True
                 else:
                     data.extend(rows)
                 if progress_callback is not None and row_limit is None:
@@ -670,7 +672,7 @@ def _fetch_raw_sql_records_with_metroliza_fallback(
         message = f"Source '{alias}' raw SQL fallback failed: {_safe_exception_summary(exc)}"
         diagnostic = _diagnostic_payload(
             status="failed",
-            row_count=0,
+            row_count=row_count,
             message=message,
             error_code="raw_sql_fallback_error",
         )
@@ -681,9 +683,10 @@ def _fetch_raw_sql_records_with_metroliza_fallback(
             source_results=(diagnostic,),
             warnings=(),
             errors=(message,),
-            row_count=0,
+            row_count=row_count,
             has_errors=True,
-            partial_success=False,
+            partial_success=bool(row_count > 0),
+            streamed_to_callback=streamed_to_callback or bool(record_batch_callback is not None and row_count > 0),
         )
     finally:
         dispose = getattr(engine, "dispose", None)
@@ -1440,6 +1443,8 @@ def fetch_oznak_records_for_source_sql(
                 mode=mode,
                 cancellation_token=cancellation_token,
                 progress_callback=progress_callback,
+                record_batch_callback=record_batch_callback,
+                metroliza_profile=profile,
             )
     except Exception as exc:
         return OznakAdapterFetchResult(

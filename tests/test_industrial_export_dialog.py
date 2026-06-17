@@ -54,7 +54,10 @@ def test_export_dialog_uses_csv_summary_style_readiness_and_plot_toggle(tmp_path
 
     assert not dialog.start_button.isEnabled()
     assert dialog.include_plots_checkbox.text() == "Include plots"
+    assert dialog.include_raw_data_checkbox.text() == "Include raw data sheet"
+    assert dialog.include_raw_data_checkbox.isChecked()
     assert dialog.plot_status_label.text() == "Plots disabled"
+    assert dialog.raw_data_status_label.text() == "Raw data sheet included"
     assert dialog.clear_filter_button.isEnabled()
     assert dialog.clear_grouping_button.isEnabled()
 
@@ -75,6 +78,21 @@ def test_export_dialog_uses_csv_summary_style_readiness_and_plot_toggle(tmp_path
     assert thread.filter_state.references == ()
     assert thread.grouping_state.fields == ()
     assert thread.include_charts is False
+    assert thread.include_raw_data is True
+    dialog.close()
+
+
+def test_export_dialog_raw_toggle_reaches_cached_thread(tmp_path):
+    _app()
+    dialog = IndustrialExportDialog(db_file=str(tmp_path / "industrial.db"))
+    dialog.output_file = str(tmp_path / "industrial.xlsx")
+    dialog.include_raw_data_checkbox.setChecked(False)
+    dialog._sync_ui_state()
+
+    thread = dialog.create_export_thread()
+
+    assert dialog.raw_data_status_label.text() == "Raw data sheet disabled"
+    assert thread.include_raw_data is False
     dialog.close()
 
 
@@ -122,6 +140,7 @@ def test_export_dialog_direct_mode_loads_source_and_creates_live_thread(tmp_path
     assert thread.profile.profile_key == "assembly_mes"
     assert thread.output_file == str(output_path)
     assert thread.limit == 5000
+    assert thread.include_raw_data is True
     dialog.close()
 
 

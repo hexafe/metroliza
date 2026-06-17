@@ -478,9 +478,12 @@ def render_dashboard_controls_css() -> str:
     .theme-option:focus-visible,
     .visual-dialog-close:focus-visible,
     .visual-actions button:focus-visible,
+    .plotly-point-controls button:focus-visible,
     .visual-segmented button:focus-visible,
     .visual-field input:focus-visible,
-    .visual-field select:focus-visible {
+    .visual-field select:focus-visible,
+    .plotly-point-controls input:focus-visible,
+    .plotly-point-controls select:focus-visible {
       outline: 3px solid var(--focus-ring, rgba(214, 110, 47, 0.45));
       outline-offset: 2px;
     }
@@ -731,10 +734,103 @@ def render_dashboard_controls_css() -> str:
     .visual-point-search-results button[data-active="1"] {
       background: var(--accent-soft, rgba(23, 105, 170, 0.12));
     }
+    .plotly-point-controls {
+      align-items: end;
+      background: var(--detail-panel-bg, rgba(22, 35, 48, 0.04));
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      display: grid;
+      gap: 8px;
+      grid-template-columns:
+        minmax(170px, 1.4fr) minmax(108px, 0.6fr) minmax(146px, auto)
+        minmax(72px, auto) minmax(174px, auto);
+      margin-top: 10px;
+      padding: 10px;
+    }
+    .plotly-point-controls label {
+      color: var(--muted);
+      display: grid;
+      font-size: 11px;
+      font-weight: 800;
+      gap: 4px;
+      letter-spacing: 0;
+      min-width: 0;
+      text-transform: uppercase;
+    }
+    .plotly-point-controls input[type="search"],
+    .plotly-point-controls input[type="color"],
+    .plotly-point-controls select,
+    .plotly-point-controls output {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel, #ffffff);
+      color: var(--ink, var(--text));
+      font-size: 12px;
+      font-weight: 700;
+      min-height: 32px;
+      min-width: 0;
+      padding: 5px 7px;
+      width: 100%;
+    }
+    .plotly-point-controls input[type="color"] {
+      padding: 2px;
+    }
+    .plotly-point-controls button {
+      appearance: none;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-strong, var(--panel));
+      color: var(--ink, var(--text));
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 800;
+      min-height: 32px;
+      padding: 6px 8px;
+    }
+    .plotly-point-controls button:hover:not(:disabled) {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .plotly-point-controls button:disabled {
+      cursor: not-allowed;
+      opacity: 0.48;
+    }
+    .plotly-point-nav,
+    .plotly-point-actions {
+      align-items: end;
+      display: flex;
+      gap: 6px;
+      min-width: 0;
+    }
+    .plotly-point-nav output {
+      align-items: center;
+      display: inline-flex;
+      justify-content: center;
+      min-width: 72px;
+      width: auto;
+    }
+    .plotly-point-selection {
+      align-items: center;
+      display: none;
+      grid-column: 1 / -1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .plotly-point-controls[data-has-selected="1"] .plotly-point-selection {
+      display: flex;
+    }
     @media (max-width: 780px) {
       .dashboard-control-bar { width: 100%; justify-content: space-between; }
       .visual-dialog { width: min(100vw - 20px, 760px); }
       .visual-swatches { grid-template-columns: repeat(3, minmax(42px, 1fr)); }
+      .plotly-point-controls {
+        grid-template-columns: 1fr 1fr;
+      }
+      .plotly-point-search-field,
+      .plotly-point-actions {
+        grid-column: 1 / -1;
+      }
     }
     """
 
@@ -2587,9 +2683,12 @@ def render_dashboard_visual_runtime_js(
         }};
       }};
 
-      const buildPointSearchIndex = () => {{
+      const buildPointSearchIndex = (chartKey = '') => {{
+        const requestedChartKey = String(chartKey || '').trim();
         const entries = [];
         document.querySelectorAll('.plotly-chart').forEach((container) => {{
+          const containerChartKey = dashboardChartKeyForContainer(container);
+          if (requestedChartKey && containerChartKey !== requestedChartKey) return;
           const traces = Array.isArray(container.data) ? container.data : [];
           traces.forEach((trace, curveNumber) => {{
             if (!trace || typeof trace !== 'object') return;
@@ -2605,14 +2704,26 @@ def render_dashboard_visual_runtime_js(
         return entries;
       }};
 
-      const pointSearchControls = () => ({{
-        query: document.getElementById('dashboard-visual-point-search'),
-        scope: document.getElementById('dashboard-visual-point-search-scope'),
-        count: document.getElementById('dashboard-visual-point-search-count'),
-        previous: document.getElementById('dashboard-visual-point-search-prev'),
-        next: document.getElementById('dashboard-visual-point-search-next'),
-        results: document.getElementById('dashboard-visual-point-search-results'),
-      }});
+      const pointSearchControls = (root = null) => {{
+        if (root && typeof root.querySelector === 'function') {{
+          return {{
+            query: root.querySelector('[data-dashboard-point-search-input]'),
+            scope: root.querySelector('[data-dashboard-point-search-scope]'),
+            count: root.querySelector('[data-dashboard-point-search-count]'),
+            previous: root.querySelector('[data-dashboard-point-search-prev]'),
+            next: root.querySelector('[data-dashboard-point-search-next]'),
+            results: root.querySelector('[data-dashboard-point-search-results]'),
+          }};
+        }}
+        return {{
+          query: document.getElementById('dashboard-visual-point-search'),
+          scope: document.getElementById('dashboard-visual-point-search-scope'),
+          count: document.getElementById('dashboard-visual-point-search-count'),
+          previous: document.getElementById('dashboard-visual-point-search-prev'),
+          next: document.getElementById('dashboard-visual-point-search-next'),
+          results: document.getElementById('dashboard-visual-point-search-results'),
+        }};
+      }};
 
       const pointSearchTextMatches = (entry, query, scope) => {{
         if (!query) return false;
@@ -2620,17 +2731,16 @@ def render_dashboard_visual_runtime_js(
         return fields.some((value) => String(value).toLowerCase().includes(query));
       }};
 
-      const syncPointSearchDefaultScope = () => {{
-        const controls = pointSearchControls();
+      const syncPointSearchDefaultScope = (root = null, chartKey = '') => {{
+        const controls = pointSearchControls(root);
         if (!controls.scope || controls.scope.dataset.userChosen === '1') return;
-        const hasRecordMetadata = buildPointSearchIndex().some((entry) => (
+        const hasRecordMetadata = buildPointSearchIndex(chartKey).some((entry) => (
           Array.isArray(entry.fields.record) && entry.fields.record.length > 0
         ));
         controls.scope.value = hasRecordMetadata ? 'record' : 'any';
       }};
 
-      const renderPointSearchResults = () => {{
-        const controls = pointSearchControls();
+      const renderPointSearchResults = (controls = pointSearchControls()) => {{
         const count = dashboardPointSearchMatches.length;
         if (controls.count) {{
           if (!count) controls.count.textContent = '0 matches';
@@ -2654,28 +2764,29 @@ def render_dashboard_visual_runtime_js(
         }});
       }};
 
-      const refreshPointSearch = ({{ selectFirst = true, scroll = false }} = {{}}) => {{
-        const controls = pointSearchControls();
+      const refreshPointSearch = ({{ selectFirst = true, scroll = false, root = null, chartKey = '' }} = {{}}) => {{
+        const controls = pointSearchControls(root);
         const query = String((controls.query && controls.query.value) || '').trim().toLowerCase();
         const scope = String((controls.scope && controls.scope.value) || 'record');
         dashboardPointSearchMatches = query
-          ? buildPointSearchIndex().filter((entry) => pointSearchTextMatches(entry, query, scope))
+          ? buildPointSearchIndex(chartKey).filter((entry) => pointSearchTextMatches(entry, query, scope))
           : [];
         dashboardPointSearchIndex = dashboardPointSearchMatches.length && selectFirst ? 0 : -1;
         dashboardPointSearchSelectedId = '';
-        renderPointSearchResults();
+        renderPointSearchResults(controls);
         if (dashboardPointSearchIndex >= 0) {{
-          selectPointSearchMatch(dashboardPointSearchIndex, {{ scroll }});
+          selectPointSearchMatch(dashboardPointSearchIndex, {{ scroll, root }});
         }} else if (typeof refreshPlotlyCharts === 'function') {{
           scheduleVisualRefresh();
         }}
+        syncInlinePointControls();
       }};
 
-      const selectPointSearchMatch = (index, {{ scroll = true }} = {{}}) => {{
+      const selectPointSearchMatch = (index, {{ scroll = true, root = null }} = {{}}) => {{
         const count = dashboardPointSearchMatches.length;
         if (!count) {{
           dashboardPointSearchIndex = -1;
-          renderPointSearchResults();
+          renderPointSearchResults(pointSearchControls(root));
           return;
         }}
         dashboardPointSearchIndex = ((index % count) + count) % count;
@@ -2683,7 +2794,8 @@ def render_dashboard_visual_runtime_js(
         dashboardVisualSelectedPoint = entry.point;
         dashboardPointSearchSelectedId = entry.point.id;
         syncPointMarkControls();
-        renderPointSearchResults();
+        renderPointSearchResults(pointSearchControls(root));
+        syncInlinePointControls();
         if (scroll && entry.container && typeof entry.container.scrollIntoView === 'function') {{
           entry.container.setAttribute('tabindex', '-1');
           entry.container.scrollIntoView({{ block: 'center', behavior: 'smooth' }});
@@ -2694,12 +2806,15 @@ def render_dashboard_visual_runtime_js(
         if (typeof refreshPlotlyCharts === 'function') scheduleVisualRefresh();
       }};
 
-      const movePointSearch = (delta) => {{
-        if (!dashboardPointSearchMatches.length) {{
-          refreshPointSearch({{ selectFirst: true, scroll: true }});
+      const movePointSearch = (delta, {{ root = null, chartKey = '', scroll = true }} = {{}}) => {{
+        const requestedChartKey = String(chartKey || '').trim();
+        const matchesCurrentChart = !requestedChartKey
+          || dashboardPointSearchMatches.every((entry) => entry.chartKey === requestedChartKey);
+        if (!dashboardPointSearchMatches.length || !matchesCurrentChart) {{
+          refreshPointSearch({{ selectFirst: true, scroll, root, chartKey: requestedChartKey }});
           return;
         }}
-        selectPointSearchMatch(dashboardPointSearchIndex + delta, {{ scroll: true }});
+        selectPointSearchMatch(dashboardPointSearchIndex + delta, {{ scroll, root }});
       }};
 
       const selectedPointMarkIndex = (state = dashboardPointMarkState) => {{
@@ -2713,6 +2828,37 @@ def render_dashboard_visual_runtime_js(
         const source = point.label || point.target || `Trace ${{point.curveNumber + 1}}`;
         const pointLabel = point.pointNumber >= 0 ? `point ${{point.pointNumber + 1}}` : 'point';
         return `${{source}} - ${{pointLabel}}`;
+      }};
+
+      const dashboardPointControlChartKey = (controls) => (
+        String(controls && controls.dataset ? controls.dataset.dashboardChartKey || '' : '').trim()
+      );
+
+      const selectedPointMatchesChart = (chartKey) => (
+        Boolean(
+          dashboardVisualSelectedPoint
+          && (!chartKey || dashboardVisualSelectedPoint.chartKey === chartKey)
+        )
+      );
+
+      const syncInlinePointControls = () => {{
+        dashboardPointMarkState = sanitizePointMarkState(dashboardPointMarkState || readStoredPointMarks());
+        document.querySelectorAll('[data-dashboard-point-controls]').forEach((controls) => {{
+          const chartKey = dashboardPointControlChartKey(controls);
+          const selectedInChart = selectedPointMatchesChart(chartKey);
+          const selectedIndex = selectedInChart ? selectedPointMarkIndex(dashboardPointMarkState) : -1;
+          const summary = controls.querySelector('[data-dashboard-point-summary]');
+          const color = controls.querySelector('[data-dashboard-point-color]');
+          const markButton = controls.querySelector('[data-dashboard-point-mark]');
+          const clearButton = controls.querySelector('[data-dashboard-point-clear]');
+          if (summary) summary.textContent = selectedInChart
+            ? pointMarkSummaryText(dashboardVisualSelectedPoint)
+            : 'None selected';
+          if (color) color.value = normalizeColor(dashboardPointMarkState.activeColor, '#d66e2f');
+          if (markButton) markButton.disabled = !selectedInChart;
+          if (clearButton) clearButton.disabled = !selectedInChart || selectedIndex < 0;
+          controls.dataset.hasSelected = selectedInChart ? '1' : '0';
+        }});
       }};
 
       const syncPointMarkControls = () => {{
@@ -2729,6 +2875,7 @@ def render_dashboard_visual_runtime_js(
         if (markButton) markButton.disabled = !selected;
         if (clearButton) clearButton.disabled = !selected || selectedIndex < 0;
         if (clearAllButton) clearAllButton.disabled = dashboardPointMarkState.marks.length === 0;
+        syncInlinePointControls();
       }};
 
       const setDashboardPointMarkState = (state, {{ persist = true, rerender = true }} = {{}}) => {{
@@ -2740,10 +2887,23 @@ def render_dashboard_visual_runtime_js(
         }}
       }};
 
-      const markSelectedPoint = () => {{
+      const pointMarkColorInput = (control = null) => {{
+        const candidate = control && control.target ? control.target : control;
+        if (
+          candidate
+          && typeof candidate.matches === 'function'
+          && candidate.matches('input[type="color"]')
+        ) {{
+          return candidate;
+        }}
+        return document.getElementById('dashboard-visual-point-color')
+          || document.querySelector('[data-dashboard-point-color]');
+      }};
+
+      const markSelectedPoint = (colorControl = null) => {{
         if (!dashboardVisualSelectedPoint) return;
         const state = sanitizePointMarkState(dashboardPointMarkState || readStoredPointMarks());
-        const color = document.getElementById('dashboard-visual-point-color');
+        const color = pointMarkColorInput(colorControl);
         state.activeColor = normalizeColor(color ? color.value : state.activeColor, '#d66e2f');
         const mark = sanitizePointMark(Object.assign({{}}, dashboardVisualSelectedPoint, {{
           color: state.activeColor,
@@ -2769,8 +2929,8 @@ def render_dashboard_visual_runtime_js(
         setDashboardPointMarkState(state);
       }};
 
-      const applyPointMarkColorFromControl = () => {{
-        const color = document.getElementById('dashboard-visual-point-color');
+      const applyPointMarkColorFromControl = (colorControl = null) => {{
+        const color = pointMarkColorInput(colorControl);
         const state = sanitizePointMarkState(dashboardPointMarkState || readStoredPointMarks());
         state.activeColor = normalizeColor(color ? color.value : state.activeColor, '#d66e2f');
         const index = selectedPointMarkIndex(state);
@@ -2780,6 +2940,121 @@ def render_dashboard_visual_runtime_js(
         }}
         setDashboardPointMarkState(state, {{ rerender: index >= 0 }});
       }};
+
+      const createInlinePointControls = (chartKey) => {{
+        const controls = document.createElement('div');
+        controls.className = 'plotly-point-controls';
+        controls.dataset.dashboardPointControls = '1';
+        controls.dataset.dashboardChartKey = String(chartKey || '');
+        controls.setAttribute('aria-label', 'Point marking controls');
+        controls.innerHTML = ''
+          + '<label class="plotly-point-search-field"><span>Find point</span>'
+          + '<input type="search" data-dashboard-point-search-input placeholder="TraceCode or value"></label>'
+          + '<label class="plotly-point-scope-field"><span>Scope</span>'
+          + '<select data-dashboard-point-search-scope>'
+          + '<option value="record">Record</option>'
+          + '<option value="any">Any field</option>'
+          + '<option value="trace">Trace</option>'
+          + '<option value="x">X</option>'
+          + '<option value="y">Y</option>'
+          + '<option value="metadata">Metadata</option>'
+          + '</select></label>'
+          + '<div class="plotly-point-nav" role="group" aria-label="Point search matches">'
+          + '<button type="button" data-dashboard-point-search-prev>Prev</button>'
+          + '<output data-dashboard-point-search-count>0 matches</output>'
+          + '<button type="button" data-dashboard-point-search-next>Next</button>'
+          + '</div>'
+          + '<label class="plotly-point-color-field"><span>Color</span>'
+          + '<input type="color" data-dashboard-point-color value="#d66e2f"></label>'
+          + '<div class="plotly-point-actions" role="group" aria-label="Point mark actions">'
+          + '<button type="button" data-dashboard-point-mark>Mark selected</button>'
+          + '<button type="button" data-dashboard-point-clear>Clear selected</button>'
+          + '</div>'
+          + '<output class="plotly-point-selection" data-dashboard-point-summary>None selected</output>';
+        return controls;
+      }};
+
+      const bindInlinePointControls = (controls) => {{
+        if (!controls || controls.dataset.dashboardPointControlsBound === '1') return;
+        controls.dataset.dashboardPointControlsBound = '1';
+        const chartKey = dashboardPointControlChartKey(controls);
+        const searchInput = controls.querySelector('[data-dashboard-point-search-input]');
+        const searchScope = controls.querySelector('[data-dashboard-point-search-scope]');
+        const previous = controls.querySelector('[data-dashboard-point-search-prev]');
+        const next = controls.querySelector('[data-dashboard-point-search-next]');
+        const color = controls.querySelector('[data-dashboard-point-color]');
+        const markButton = controls.querySelector('[data-dashboard-point-mark]');
+        const clearButton = controls.querySelector('[data-dashboard-point-clear]');
+        if (searchInput) {{
+          searchInput.addEventListener('input', () => refreshPointSearch({{
+            selectFirst: true,
+            scroll: false,
+            root: controls,
+            chartKey,
+          }}));
+          searchInput.addEventListener('keydown', (event) => {{
+            if (event.key === 'Enter') {{
+              event.preventDefault();
+              movePointSearch(1, {{ root: controls, chartKey, scroll: true }});
+            }}
+          }});
+        }}
+        if (searchScope) {{
+          searchScope.addEventListener('change', () => {{
+            searchScope.dataset.userChosen = '1';
+            refreshPointSearch({{ selectFirst: true, scroll: false, root: controls, chartKey }});
+          }});
+        }}
+        if (previous) {{
+          previous.addEventListener('click', () => movePointSearch(-1, {{
+            root: controls,
+            chartKey,
+            scroll: true,
+          }}));
+        }}
+        if (next) {{
+          next.addEventListener('click', () => movePointSearch(1, {{
+            root: controls,
+            chartKey,
+            scroll: true,
+          }}));
+        }}
+        if (color) {{
+          color.addEventListener('input', () => applyPointMarkColorFromControl(color));
+          color.addEventListener('change', () => applyPointMarkColorFromControl(color));
+        }}
+        if (markButton) {{
+          markButton.addEventListener('click', () => {{
+            if (!selectedPointMatchesChart(chartKey)) return;
+            markSelectedPoint(color);
+          }});
+        }}
+        if (clearButton) {{
+          clearButton.addEventListener('click', () => {{
+            if (!selectedPointMatchesChart(chartKey)) return;
+            clearSelectedPointMark();
+          }});
+        }}
+        syncPointSearchDefaultScope(controls, chartKey);
+        renderPointSearchResults(pointSearchControls(controls));
+      }};
+
+      const ensureInlinePointControls = () => {{
+        document.querySelectorAll('.plotly-chart').forEach((container) => {{
+          const parent = container.parentElement;
+          if (!parent) return;
+          const chartKey = dashboardChartKeyForContainer(container);
+          let controls = Array.from(parent.querySelectorAll('[data-dashboard-point-controls]'))
+            .find((candidate) => dashboardPointControlChartKey(candidate) === chartKey);
+          if (!controls) {{
+            controls = createInlinePointControls(chartKey);
+            container.insertAdjacentElement('afterend', controls);
+          }}
+          bindInlinePointControls(controls);
+        }});
+        syncInlinePointControls();
+      }};
+      window.metrolizaEnsureInlinePointControls = ensureInlinePointControls;
 
       const collectVisualTargets = () => {{
         const targets = new Map();
@@ -3160,6 +3435,7 @@ def render_dashboard_visual_runtime_js(
         refreshVisualThemeControls();
         initializeVisualRangeReadouts();
         applyVisualStateToControls(dashboardVisualState);
+        ensureInlinePointControls();
         syncPointMarkControls();
         renderPointSearchResults();
         const dialog = document.getElementById('dashboard-visual-dialog');
