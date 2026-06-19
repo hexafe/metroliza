@@ -67,15 +67,32 @@ def test_native_chart_renderer_smoke_covers_all_supported_summary_charts(monkeyp
             "render_mode": "violin",
             "positions": [0.0, 1.0],
             "layout": {
-                "rotation": 0,
+                "rotation": 45,
                 "display_positions": [0.0, 1.0],
-                "display_labels": ["Alpha", "Beta"],
-                "bottom_margin": 0.22,
+                "display_labels": [
+                    "Alpha station with a long measurement cohort label",
+                    "Beta station with a long measurement cohort label",
+                ],
+                "bottom_margin": 0.28,
             },
             "x_label": "Group",
             "y_label": "Measurement",
             "canvas": {"width_px": 960, "height_px": 540, "dpi": 150},
-            "legend": {"items": [{"label": "Mean marker", "kind": "marker", "marker": "circle", "color": "#0072B2"}]},
+            "legend": {
+                "items": [
+                    {
+                        "label": "Mean marker for a long legend label",
+                        "kind": "marker",
+                        "marker": "circle",
+                        "color": "#0072B2",
+                    },
+                    {
+                        "label": "Maximum marker for a long legend label",
+                        "kind": "line",
+                        "color": "#D55E00",
+                    },
+                ]
+            },
             "annotation_style": {"show_minmax": True, "show_sigma": True},
             "violin_annotations": [
                 {
@@ -94,18 +111,28 @@ def test_native_chart_renderer_smoke_covers_all_supported_summary_charts(monkeyp
 
     iqr_payload = {
         "type": "iqr",
-        "labels": ["Only"],
+        "labels": ["Single station with a long measurement cohort label"],
         "series": [[1.0, 1.1, 1.2, 1.3, 5.0]],
         "title": "Smoke IQR",
         "lsl": 0.8,
         "usl": 5.2,
         "nominal": 1.2,
         "one_sided": False,
-        "layout": {"rotation": 0, "display_positions": [1.0], "display_labels": ["Only"], "bottom_margin": 0.18},
+        "layout": {
+            "rotation": 45,
+            "display_positions": [1.0],
+            "display_labels": ["Single station with a long measurement cohort label"],
+            "bottom_margin": 0.28,
+        },
         "canvas": {"width_px": 960, "height_px": 540, "dpi": 150},
         "x_label": "Group",
         "y_label": "Measurement",
-        "legend": {"items": [{"label": "Median", "kind": "line", "color": "#E69F00"}]},
+        "legend": {
+            "items": [
+                {"label": "Median with a long legend label", "kind": "line", "color": "#E69F00"},
+                {"label": "Outliers with a long legend label", "kind": "marker", "marker": "circle", "color": "#D55E00"},
+            ]
+        },
     }
     iqr_payload["resolved_render_spec"] = build_resolved_iqr_spec(iqr_payload)
 
@@ -113,12 +140,27 @@ def test_native_chart_renderer_smoke_covers_all_supported_summary_charts(monkeyp
         "type": "trend",
         "x_values": [0.0, 1.0, 2.0, 3.0],
         "y_values": [1.0, 1.2, 1.1, 1.35],
-        "labels": ["S1", "S2", "S3", "S4"],
+        "labels": [
+            "Station-01-long-measurement-label",
+            "Station-02-long-measurement-label",
+            "Station-03-long-measurement-label",
+            "Station-04-long-measurement-label",
+        ],
         "title": "Smoke Trend",
         "x_label": "Sample #",
         "y_label": "Measurement",
         "horizontal_limits": [0.9, 1.4],
-        "layout": {"rotation": 0, "display_positions": [0.0, 1.0, 2.0, 3.0], "display_labels": ["S1", "S2", "S3", "S4"], "bottom_margin": 0.22},
+        "layout": {
+            "rotation": 45,
+            "display_positions": [0.0, 1.0, 2.0, 3.0],
+            "display_labels": [
+                "Station-01-long-measurement-label",
+                "Station-02-long-measurement-label",
+                "Station-03-long-measurement-label",
+                "Station-04-long-measurement-label",
+            ],
+            "bottom_margin": 0.30,
+        },
         "canvas": {"width_px": 960, "height_px": 540, "dpi": 150},
     }
     trend_payload["resolved_render_spec"] = build_resolved_trend_spec(trend_payload)

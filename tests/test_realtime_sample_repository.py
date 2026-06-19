@@ -1,4 +1,5 @@
 from decimal import Decimal
+import sqlite3
 
 import pandas as pd
 
@@ -114,6 +115,55 @@ def test_insert_samples_accepts_generator_batches(tmp_path):
     assert len(result.sample_ids) == 2
 
 
+def test_insert_samples_uses_batched_id_lookup(tmp_path):
+    db_path = str(tmp_path / "sample_batch_lookup.db")
+    profile = _source_profile(db_path)
+    connection = sqlite3.connect(db_path)
+    traced: list[str] = []
+    connection.set_trace_callback(traced.append)
+    repository = RealtimeSampleRepository(db_path, connection=connection)
+    signal = repository.upsert_signal_definition(
+        SignalDefinition(
+            source_profile_id=profile.id,
+            signal_key="cycle_time",
+            metric_name="cycle_time_s",
+        )
+    )
+
+    try:
+        result = repository.insert_samples(
+            [
+                IndustrialSample(
+                    source_profile_id=profile.id,
+                    signal_id=signal.id,
+                    source_record_key=f"ROW-{index}",
+                    event_time=f"2026-06-13T10:0{index}:00Z",
+                    metric_name="cycle_time_s",
+                    value=10.0 + index,
+                )
+                for index in range(3)
+            ]
+        )
+    finally:
+        connection.close()
+
+    legacy_lookup_count = sum(
+        1
+        for statement in traced
+        if "FROM industrial_samples" in statement
+        and "WHERE source_profile_id =" in statement
+        and "signal_id =" in statement
+        and "source_record_key =" in statement
+    )
+    batched_lookup_count = sum(
+        1 for statement in traced if "_metroliza_sample_key_lookup" in statement
+    )
+    assert result.inserted == 3
+    assert len(result.sample_ids) == 3
+    assert legacy_lookup_count == 0
+    assert batched_lookup_count >= 1
+
+
 def test_insert_samples_normalizes_datetime_like_raw_record_scalars(tmp_path):
     db_path = str(tmp_path / "sample_json_safe.db")
     profile = _source_profile(db_path)
@@ -223,6 +273,8 @@ def test_stream_offset_upsert_replaces_cursor(tmp_path):
             stream_key="cycle_time",
             cursor_column="event_id",
             cursor_value="100",
+            cursor_tie_breaker_column="record_id",
+            cursor_tie_breaker_value="ROW-100",
             event_time_watermark="2026-06-13T10:00:00Z",
             lag_seconds=4.0,
             status="running",
@@ -242,6 +294,7 @@ def test_stream_offset_upsert_replaces_cursor(tmp_path):
 
     assert first.id == second.id
     assert second.cursor_value == "101"
+    assert second.cursor_tie_breaker_value is None
     assert second.event_time_watermark == "2026-06-13T10:01:00Z"
     assert second.lag_seconds == 2.0
     assert second.status == "idle"

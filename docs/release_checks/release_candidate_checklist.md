@@ -168,6 +168,15 @@ Current RC metadata: `2026.06rc1(260617)`.
   (`2109 passed, 314 skipped, 6 warnings, 83 subtests passed`), security audit
   with no known vulnerabilities, and the CI-shaped combined coverage gate at
   `81%`. Final integrated build `260617` push and GitHub Actions CI are pending.
+- 2026-06-19 UI overlap/layout closeout is recorded in
+  [`ui_overlap_layout_audit_2026-06-19.md`](./ui_overlap_layout_audit_2026-06-19.md)
+  and keeps the existing `260617` build identity. Local QA/release gates passed,
+  including the focused UI/export gate (`338 passed, 6 warnings`), native chart
+  parity (`15 passed`), full offscreen pytest (`2135 passed, 320 skipped, 6
+  warnings, 83 subtests passed`), release metadata sync, release hygiene,
+  security audit with no known vulnerabilities, Ruff, compileall, whitespace
+  checks, and the CI-shaped combined coverage gate at `81%`. Final rc2 push and
+  green GitHub Actions CI are pending.
 - Manual packaging smoke, Windows executable clean-machine launch/startup,
   Google conversion smoke, third-party notice artifact evidence, and security
   owner triage/waiver for report-only findings remain release-promotion

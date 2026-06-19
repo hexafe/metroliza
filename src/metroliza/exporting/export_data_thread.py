@@ -3517,6 +3517,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         self._active_export_query = self.filter_query
         self._cached_export_filtered_df = None
         self._sql_measurement_summary_cache = {}
+        self._partition_header_counts_cache = None
         self._distribution_fit_memo = {}
         self._backend_diagnostic_summary = build_backend_diagnostic_summary()
         self.completion_metadata["backend_diagnostics"] = dict(self._backend_diagnostic_summary)
@@ -3765,6 +3766,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         if self._db_connection is None:
             self._active_export_query = self.filter_query
             self._cached_export_filtered_df = None
+            self._partition_header_counts_cache = None
+            self._sql_measurement_summary_cache.clear()
             return
 
         snapshot_table_name = f'_export_snapshot_{int(time.time() * 1000)}_{id(self)}'
@@ -3775,6 +3778,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         try:
             with self._db_connection:
                 self._db_connection.execute(create_snapshot_query)
+                self._index_export_snapshot(snapshot_table_name)
         except Exception:
             logger.warning(
                 'Export snapshot materialization failed; falling back to live query scope.',
@@ -3783,17 +3787,49 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             self._snapshot_table_name = None
             self._active_export_query = self.filter_query
             self._cached_export_filtered_df = None
+            self._partition_header_counts_cache = None
+            self._sql_measurement_summary_cache.clear()
             return
 
         self._snapshot_table_name = snapshot_table_name
         self._active_export_query = f'SELECT * FROM "{snapshot_table_name}"'
         self._cached_export_filtered_df = None
+        self._partition_header_counts_cache = None
+        self._sql_measurement_summary_cache.clear()
+
+    def _index_export_snapshot(self, snapshot_table_name):
+        if self._db_connection is None:
+            return
+        index_specs = (
+            (
+                f'{snapshot_table_name}_ref_idx',
+                '("REFERENCE")',
+            ),
+            (
+                f'{snapshot_table_name}_ref_header_ax_idx',
+                '("REFERENCE", "HEADER", "AX")',
+            ),
+        )
+        for index_name, column_spec in index_specs:
+            try:
+                self._db_connection.execute(
+                    f'CREATE INDEX "{index_name}" ON "{snapshot_table_name}" {column_spec}'
+                )
+            except Exception:
+                logger.debug(
+                    "Unable to create export snapshot index %s on %s.",
+                    index_name,
+                    snapshot_table_name,
+                    exc_info=True,
+                )
 
     def _cleanup_export_snapshot(self):
         if self._db_connection is None or not self._snapshot_table_name:
             self._active_export_query = self.filter_query
             self._snapshot_table_name = None
             self._cached_export_filtered_df = None
+            self._partition_header_counts_cache = None
+            self._sql_measurement_summary_cache.clear()
             return
 
         try:
@@ -3808,15 +3844,23 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             self._snapshot_table_name = None
             self._active_export_query = self.filter_query
             self._cached_export_filtered_df = None
+            self._partition_header_counts_cache = None
             self._sql_measurement_summary_cache.clear()
 
     def _iter_reference_partitions(self):
-        partition_values = fetch_partition_values(
-            self.db_file,
-            self._active_export_query,
-            partition_column='REFERENCE',
-            connection=self._db_connection,
-        )
+        try:
+            partition_values = list(self._partition_header_counts().keys())
+        except Exception:
+            logger.debug(
+                "Falling back to distinct partition-value discovery.",
+                exc_info=True,
+            )
+            partition_values = fetch_partition_values(
+                self.db_file,
+                self._active_export_query,
+                partition_column='REFERENCE',
+                connection=self._db_connection,
+            )
         for partition_value in partition_values:
             partition_df = load_measurement_export_partition_dataframe(
                 self.db_file,
@@ -3826,6 +3870,16 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 connection=self._db_connection,
             )
             yield partition_value, partition_df
+
+    def _partition_header_counts(self):
+        if self._partition_header_counts_cache is None:
+            self._partition_header_counts_cache = fetch_partition_header_counts(
+                self.db_file,
+                self._active_export_query,
+                partition_column='REFERENCE',
+                connection=self._db_connection,
+            )
+        return self._partition_header_counts_cache
 
     def _build_export_filtered_dataframe(self):
         if self._cached_export_filtered_df is None:
@@ -3899,11 +3953,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             'timings_s': {},
         }
         try:
-            header_counts = fetch_partition_header_counts(
-                self.db_file,
-                self._active_export_query,
-                connection=self._db_connection,
-            )
+            header_counts = self._partition_header_counts()
             max_headers = max((int(v) for v in header_counts.values()), default=0)
             high_header_cardinality = {
                 'threshold': int(high_header_threshold),
@@ -3982,6 +4032,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             cached_summary = reference_cache.get((reference, header, ax))
             if cached_summary is not None:
                 return cached_summary
+            return None
 
         return fetch_sql_measurement_summary(
             self.db_file,
@@ -4740,12 +4791,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         """
 
         try:
-            partition_header_counts = fetch_partition_header_counts(
-                self.db_file,
-                self._active_export_query,
-                partition_column='REFERENCE',
-                connection=self._db_connection,
-            )
+            partition_header_counts = self._partition_header_counts()
             total_references = len(partition_header_counts)
             total_header_units = sum(partition_header_counts.values())
             completed_header_units = 0

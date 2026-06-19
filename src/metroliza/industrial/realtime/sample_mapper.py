@@ -30,6 +30,7 @@ class SampleMappingResult:
     samples: tuple[IndustrialSample, ...]
     stats: SampleMappingStats
     cursor_value: str | None = None
+    cursor_tie_breaker_value: str | None = None
     event_time_watermark: str | None = None
     warnings: tuple[str, ...] = field(default_factory=tuple)
 
@@ -51,6 +52,7 @@ def map_rows_to_samples(
     skipped_non_numeric = 0
     skipped_non_finite = 0
     cursor_value: str | None = None
+    cursor_tie_breaker_value: str | None = None
     watermark: str | None = None
     warnings: list[str] = []
 
@@ -59,13 +61,14 @@ def map_rows_to_samples(
         record_key = _text_or_none(row.get(validated.record_key_column))
         event_time = _text_or_none(row.get(validated.event_time_column))
         row_cursor = _text_or_none(row.get(validated.cursor_column))
-        if row_cursor is not None:
-            cursor_value = row_cursor
-        if event_time is not None and (watermark is None or event_time > watermark):
-            watermark = event_time
         if not record_key or not event_time:
             skipped_missing += len(validated.signal_keys)
             continue
+        if row_cursor is not None:
+            cursor_value = row_cursor
+            cursor_tie_breaker_value = record_key
+        if watermark is None or event_time > watermark:
+            watermark = event_time
 
         for signal_key in validated.signal_keys:
             signal = signals.get(signal_key)
@@ -124,6 +127,7 @@ def map_rows_to_samples(
             skipped_non_finite=skipped_non_finite,
         ),
         cursor_value=cursor_value,
+        cursor_tie_breaker_value=cursor_tie_breaker_value,
         event_time_watermark=watermark,
         warnings=tuple(warnings),
     )

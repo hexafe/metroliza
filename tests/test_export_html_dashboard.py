@@ -38,6 +38,55 @@ def _trace_by_name(spec: dict, name: str) -> dict:
     raise AssertionError(f'Missing trace {name!r}; available traces: {available!r}')
 
 
+def _extract_style_block(html_text: str) -> str:
+    match = re.search(r"<style>(.*?)</style>", html_text, re.S)
+    if not match:
+        raise AssertionError("Missing style block in export HTML")
+    return match.group(1)
+
+
+def _write_minimal_export_dashboard(tmpdir: str | Path) -> str:
+    excel_file = Path(tmpdir) / "report.xlsx"
+    html_path = resolve_html_dashboard_path(excel_file)
+    assets_dir = resolve_html_dashboard_assets_dir(html_path)
+    result = write_export_html_dashboard(
+        excel_file=excel_file,
+        output_path=html_path,
+        assets_dir=assets_dir,
+        sections=[
+            {
+                "header": "Diameter / X",
+                "subtitle": "Regression smoke",
+                "reference": "R-100",
+                "axis": "X",
+                "grouping_applied": True,
+                "sample_size": 2,
+                "limits": {"nominal": 10.0, "lsl": 9.8, "usl": 10.2},
+                "charts": [
+                    {
+                        "chart_type": "distribution",
+                        "title": "Diameter / X",
+                        "backend": "native",
+                        "image_buffer": BytesIO(b"png-bytes"),
+                        "payload": {
+                            "type": "distribution",
+                            "render_mode": "violin",
+                            "labels": ["All"],
+                            "series": [[9.9, 10.0]],
+                            "x_label": "Measurement set",
+                            "y_label": "Measurement",
+                            "limits": {"nominal": 10.0, "lsl": 9.8, "usl": 10.2},
+                        },
+                        "note": "Violin distribution view",
+                    }
+                ],
+            }
+        ],
+        chart_observability_summary={"chart_backend_distribution": {"counts": {"native": 1, "matplotlib": 0}}},
+    )
+    return Path(result["html_dashboard_path"]).read_text(encoding="utf-8")
+
+
 def test_dashboard_visual_preview_labels_derive_from_export_plotly_specs() -> None:
     labels = _dashboard_visual_preview_labels_from_manifest(
         [
@@ -1511,6 +1560,57 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertEqual(trace['y'], [y_value, y_value])
             self.assertTrue(trace.get('showlegend'))
             self.assertNotEqual(trace.get('visible'), 'legendonly')
+
+    def test_export_dashboard_css_uses_viewport_safe_lightbox_overlay_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            html_text = _write_minimal_export_dashboard(tmpdir)
+
+        css = _extract_style_block(html_text)
+        self.assertIn(".lightbox {", css)
+        self.assertIn("position: fixed;", css)
+        self.assertIn("inset: 0;", css)
+        self.assertIn("max-width: 100vw;", css)
+        self.assertIn("max-height: 100vh;", css)
+        self.assertIn("width: 100vw;", css)
+        self.assertIn("height: 100vh;", css)
+        self.assertIn(".lightbox::backdrop", css)
+        self.assertIn("background: var(--overlay-bg);", css)
+        self.assertIn(".lightbox-shell {", css)
+        self.assertIn("width: min(1600px, calc(100vw - 24px));", css)
+        self.assertIn("height: min(96vh, calc(100vh - 24px));", css)
+
+    def test_export_dashboard_css_constrains_tables_and_text_overflow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            html_text = _write_minimal_export_dashboard(tmpdir)
+
+        css = _extract_style_block(html_text)
+        self.assertIn(".table-shell {", css)
+        self.assertIn("overflow-x: auto;", css)
+        self.assertIn("overflow-wrap: anywhere;", css)
+        self.assertIn("word-break: break-word;", css)
+        self.assertIn("text-overflow: ellipsis", css)
+        self.assertIn(".detail-table td,", css)
+
+    def test_export_dashboard_css_constrains_inline_plotly_point_controls(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            html_text = _write_minimal_export_dashboard(tmpdir)
+
+        css = _extract_style_block(html_text)
+        self.assertIn(".plotly-point-controls {", css)
+        plotly_point_controls_match = re.search(
+            r"\.plotly-point-controls\s*\{([\s\S]*?)\n\s*\}",
+            css,
+            re.S,
+        )
+        assert plotly_point_controls_match is not None
+        plotly_point_controls_rules = plotly_point_controls_match.group(1)
+        self.assertIn("display: grid;", css)
+        self.assertIn("padding: 10px;", css)
+        self.assertNotIn("position", plotly_point_controls_rules)
+        self.assertIn(".plotly-point-controls label", css)
+        self.assertIn(".plotly-point-controls input[type=\"search\"]", css)
+        self.assertIn("@media (max-width: 780px)", css)
+        self.assertIn("grid-template-columns: 1fr 1fr;", css)
 
 
 if __name__ == '__main__':

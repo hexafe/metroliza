@@ -65,20 +65,39 @@ def build_bounded_poll_query(
     table_name = _quote_dotted_identifier("source object", profile.source_object_name)
     selected_columns = _validated_selected_columns(profile, validated)
     cursor = _quote_identifier("cursor column", validated.cursor_column)
+    tie_breaker = _quote_identifier("record key column", validated.record_key_column)
     where = ""
     parameters: list[Any] = []
-    if offset is not None and offset.cursor_value not in (None, ""):
-        where = f" WHERE {cursor} > ?"
-        parameters.append(offset.cursor_value)
+    cursor_resume_mode = "none"
     limit = validated.cycle_limit
     dialect = _normalized_dialect(profile.database_type)
+    if offset is not None and offset.cursor_value not in (None, ""):
+        tie_breaker_value = _offset_tie_breaker_value(offset, validated.record_key_column)
+        if tie_breaker_value not in (None, ""):
+            if dialect in {"sqlite", "mysql"}:
+                where = f" WHERE ({cursor}, {tie_breaker}) > (?, ?)"
+                parameters.extend((offset.cursor_value, tie_breaker_value))
+            else:
+                where = f" WHERE ({cursor} > ? OR ({cursor} = ? AND {tie_breaker} > ?))"
+                parameters.extend((offset.cursor_value, offset.cursor_value, tie_breaker_value))
+            cursor_resume_mode = "composite"
+        else:
+            where = f" WHERE {cursor} >= ?"
+            parameters.append(offset.cursor_value)
+            cursor_resume_mode = "cursor_reseed"
     columns_sql = ", ".join(_quote_identifier("selected column", column) for column in selected_columns)
     if dialect == "mssql":
         parameters = [limit, *parameters]
-        sql_text = f"SELECT TOP (?) {columns_sql} FROM {table_name}{where} ORDER BY {cursor} ASC"
+        sql_text = (
+            f"SELECT TOP (?) {columns_sql} FROM {table_name}{where} "
+            f"ORDER BY {cursor} ASC, {tie_breaker} ASC"
+        )
     else:
         parameters.append(limit)
-        sql_text = f"SELECT {columns_sql} FROM {table_name}{where} ORDER BY {cursor} ASC LIMIT ?"
+        sql_text = (
+            f"SELECT {columns_sql} FROM {table_name}{where} "
+            f"ORDER BY {cursor} ASC, {tie_breaker} ASC LIMIT ?"
+        )
     sql_hash = hashlib.sha256(sql_text.encode("utf-8")).hexdigest()
     return PollQuery(
         sql_text=sql_text,
@@ -91,6 +110,8 @@ def build_bounded_poll_query(
             "source_object": profile.source_object_name,
             "stream_key": validated.stream_key,
             "cursor_column": validated.cursor_column,
+            "cursor_tie_breaker_column": validated.record_key_column,
+            "cursor_resume_mode": cursor_resume_mode,
             "limit": limit,
             "dialect": dialect,
             "has_cursor": bool(offset and offset.cursor_value not in (None, "")),
@@ -148,6 +169,20 @@ def _quote_dotted_identifier(field_name: str, value: str) -> str:
     except ValueError as exc:
         raise RealtimeStreamConfigError(str(exc)) from exc
     return ".".join(f'"{part}"' for part in str(value).split("."))
+
+
+def _offset_tie_breaker_value(offset: StreamOffset, record_key_column: str) -> str | None:
+    value = offset.cursor_tie_breaker_value
+    if value in (None, ""):
+        return None
+    offset_column = str(offset.cursor_tie_breaker_column or "").strip()
+    if offset_column != record_key_column:
+        raise RealtimeStreamConfigError(
+            "Stored realtime offset tie-breaker column "
+            f"'{offset_column or '<unset>'}' does not match configured record key column "
+            f"'{record_key_column}'. Reset or reseed the stream offset before resuming."
+        )
+    return value
 
 
 def _normalized_dialect(database_type: str | None) -> str:

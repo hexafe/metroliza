@@ -59,8 +59,9 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
 
             self.assertEqual(dialog.windowTitle(), 'Characteristic Name Matching')
             self.assertEqual(dialog.db_path_input.text(), db_path)
-            self.assertGreaterEqual(dialog.minimumWidth(), 980)
-            self.assertGreaterEqual(dialog.minimumHeight(), 620)
+            available = self.app.primaryScreen().availableGeometry()
+            self.assertGreaterEqual(dialog.minimumWidth(), min(980, available.width() - 40))
+            self.assertGreaterEqual(dialog.minimumHeight(), min(620, available.height() - 40))
             self.assertEqual(dialog.alias_table.rowCount(), 1)
             self.assertEqual(dialog.alias_table.item(0, 0).text(), 'DIA - X')
             self.assertEqual(dialog.alias_table.item(0, 1).text(), 'DIAMETER - X')

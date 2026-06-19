@@ -114,6 +114,7 @@ Canonical release operations docs (release gate/source-of-truth set):
 - `release_checks/realtime_monitor_ui_ux_audit_2026-06-15.md` — build `260615` realtime monitor UI/UX audit, implemented workflow guardrails, About cleanup, and deferred dashboard-mode follow-up.
 - `release_checks/realtime_industrial_optimization_check_2026-06-16.md` — build `260616` Industrial Data fetch, realtime dashboard, and interactive dashboard point-marking release-check note.
 - `release_checks/realtime_industrial_performance_check_2026-06-17.md` — build `260617` Industrial Data SQLite handoff, cached workbook export, realtime polling, and Oznak fallback release-check note.
+- `release_checks/ui_overlap_layout_audit_2026-06-19.md` — build `260619` UI overlap/layout audit covering PyQt geometry, dashboard CSS containment, chart legend geometry, and workbook image slots.
 
 Historical RC/rc2 evidence:
 

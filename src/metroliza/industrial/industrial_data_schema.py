@@ -127,6 +127,8 @@ SCHEMA_TABLE_STATEMENTS = (
         stream_key TEXT NOT NULL,
         cursor_column TEXT NOT NULL,
         cursor_value TEXT,
+        cursor_tie_breaker_column TEXT,
+        cursor_tie_breaker_value TEXT,
         event_time_watermark TEXT,
         last_success_at TEXT,
         last_error TEXT,
@@ -301,6 +303,7 @@ def ensure_industrial_data_schema(
         for statement in SCHEMA_TABLE_STATEMENTS:
             cursor.execute(statement)
         _ensure_source_profile_columns(cursor)
+        _ensure_stream_offset_columns(cursor)
         _ensure_sync_run_status_constraint(cursor)
         for statement in SCHEMA_INDEX_STATEMENTS:
             cursor.execute(statement)
@@ -332,6 +335,24 @@ def _ensure_source_profile_columns(cursor) -> None:
         "order_by_enabled": (
             "ALTER TABLE industrial_source_profiles "
             "ADD COLUMN order_by_enabled INTEGER NOT NULL DEFAULT 1 CHECK (order_by_enabled IN (0, 1))"
+        ),
+    }
+    for column_name, statement in migrations.items():
+        if column_name not in existing_columns:
+            cursor.execute(statement)
+
+
+def _ensure_stream_offset_columns(cursor) -> None:
+    """Apply additive migrations for composite realtime stream cursors."""
+
+    cursor.execute("PRAGMA table_info(industrial_stream_offsets)")
+    existing_columns = {str(row[1]) for row in cursor.fetchall()}
+    migrations = {
+        "cursor_tie_breaker_column": (
+            "ALTER TABLE industrial_stream_offsets ADD COLUMN cursor_tie_breaker_column TEXT"
+        ),
+        "cursor_tie_breaker_value": (
+            "ALTER TABLE industrial_stream_offsets ADD COLUMN cursor_tie_breaker_value TEXT"
         ),
     }
     for column_name, statement in migrations.items():

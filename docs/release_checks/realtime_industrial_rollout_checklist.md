@@ -149,6 +149,11 @@ docs, tickets, screenshots, or logs.
       [`realtime_industrial_performance_check_2026-06-17.md`](./realtime_industrial_performance_check_2026-06-17.md);
       local QA/release gates passed, and final integrated push plus green CI
       are still pending.
+- [ ] 2026-06-19: Build `260617` UI overlap/layout closeout recorded in
+      [`ui_overlap_layout_audit_2026-06-19.md`](./ui_overlap_layout_audit_2026-06-19.md);
+      local PyQt, dashboard, chart/export, full pytest, security audit, and
+      CI-shaped coverage gates passed, and final rc2 push plus green CI are
+      still pending.
 
 ## Rollback Steps
 

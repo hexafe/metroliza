@@ -59,6 +59,8 @@ class StreamOffset:
     cursor_column: str
     id: int | None = None
     cursor_value: str | None = None
+    cursor_tie_breaker_column: str | None = None
+    cursor_tie_breaker_value: str | None = None
     event_time_watermark: str | None = None
     last_success_at: str | None = None
     last_error: str | None = None

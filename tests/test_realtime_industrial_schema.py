@@ -3,6 +3,7 @@ import sqlite3
 from modules.db import sqlite_connection_scope
 from modules.industrial_data_repository import IndustrialDataRepository
 from modules.industrial_data_schema import SCHEMA_VERSION, ensure_industrial_data_schema
+from metroliza.industrial.realtime.offset_store import StreamOffsetStore
 
 
 def test_realtime_schema_creates_v5_tables_and_indexes_idempotently(tmp_path):
@@ -72,6 +73,59 @@ def test_realtime_schema_preserves_existing_industrial_cache_tables(tmp_path):
 
     assert insert_result["inserted"] == 1
     assert repository.summarize_counts().records == 1
+
+
+def test_realtime_schema_migrates_legacy_stream_offsets(tmp_path):
+    db_path = str(tmp_path / "legacy-offsets.db")
+    with sqlite_connection_scope(db_path) as conn:
+        with conn:
+            conn.execute(
+                """
+                CREATE TABLE industrial_stream_offsets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_profile_id INTEGER NOT NULL,
+                    stream_key TEXT NOT NULL,
+                    cursor_column TEXT NOT NULL,
+                    cursor_value TEXT,
+                    event_time_watermark TEXT,
+                    last_success_at TEXT,
+                    last_error TEXT,
+                    lag_seconds REAL,
+                    status TEXT NOT NULL DEFAULT 'idle',
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(source_profile_id, stream_key)
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO industrial_stream_offsets (
+                    source_profile_id,
+                    stream_key,
+                    cursor_column,
+                    cursor_value,
+                    event_time_watermark,
+                    last_success_at,
+                    status,
+                    updated_at
+                )
+                VALUES (1, 'cycle_time', 'event_id', '500', '2026-06-13T10:00:00Z',
+                        '2026-06-13T10:00:05Z', 'idle', '2026-06-13T10:00:05Z')
+                """
+            )
+
+    ensure_industrial_data_schema(db_path)
+    offset = StreamOffsetStore(db_path).get_offset(source_profile_id=1, stream_key="cycle_time")
+
+    with sqlite_connection_scope(db_path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(industrial_stream_offsets)")}
+
+    assert "cursor_tie_breaker_column" in columns
+    assert "cursor_tie_breaker_value" in columns
+    assert offset.cursor_value == "500"
+    assert offset.cursor_tie_breaker_column is None
+    assert offset.cursor_tie_breaker_value is None
+    assert offset.event_time_watermark == "2026-06-13T10:00:00Z"
 
 
 def test_realtime_anomaly_event_requires_sample_id(tmp_path):

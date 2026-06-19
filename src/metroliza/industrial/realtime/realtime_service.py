@@ -244,6 +244,9 @@ def run_polling_cycle(
             stream_key=validated.stream_key,
             cursor_column=validated.cursor_column,
             cursor_value=mapping.cursor_value or _offset_value(existing_offset),
+            cursor_tie_breaker_column=validated.record_key_column,
+            cursor_tie_breaker_value=mapping.cursor_tie_breaker_value
+            or _offset_tie_breaker(existing_offset),
             event_time_watermark=mapping.event_time_watermark or _watermark(existing_offset),
             last_success_at=utc_timestamp(),
             last_error=None,
@@ -366,6 +369,10 @@ def _record_failed_offset(
             stream_key=config.stream_key,
             cursor_column=config.cursor_column,
             cursor_value=_offset_value(existing_offset),
+            cursor_tie_breaker_column=existing_offset.cursor_tie_breaker_column
+            if existing_offset
+            else None,
+            cursor_tie_breaker_value=_offset_tie_breaker(existing_offset),
             event_time_watermark=_watermark(existing_offset),
             last_error=redact_sensitive_text(error, max_len=500),
             lag_seconds=existing_offset.lag_seconds if existing_offset else None,
@@ -462,6 +469,10 @@ def _result(
 
 def _offset_value(offset: StreamOffset | None) -> str | None:
     return offset.cursor_value if offset is not None else None
+
+
+def _offset_tie_breaker(offset: StreamOffset | None) -> str | None:
+    return offset.cursor_tie_breaker_value if offset is not None else None
 
 
 def _watermark(offset: StreamOffset | None) -> str | None:

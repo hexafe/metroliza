@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from modules.dashboard_html_controls import (
     dashboard_visual_runtime_config_json,
@@ -8,6 +9,16 @@ from modules.dashboard_html_controls import (
     render_dashboard_visual_dialog,
     render_dashboard_visual_runtime_js,
 )
+
+
+def _css_block(css: str, selector: str) -> str | None:
+    """Return a best-effort CSS rule block for a selector."""
+
+    pattern = rf"(?m)^\s*{re.escape(selector)}\s*\{{.*?^\s*\}}"
+    match = re.search(pattern, css, re.S)
+    if not match:
+        return None
+    return match.group(0)
 
 
 def test_dashboard_visual_runtime_detects_trend_before_scatter() -> None:
@@ -358,7 +369,65 @@ def test_dashboard_visual_runtime_carries_population_focus_contract() -> None:
     assert "resetSelectedSeriesPaletteEntry(state, embedded, target);" in runtime_js
     assert "nextPalette[paletteIndex] = resetPalette[paletteIndex] || '#245a5a';" in runtime_js
     assert (
-        "state.population_baseline = Object.assign("
-        "{}, state.population_baseline || {}, populationStyle);"
-    ) in runtime_js
+        "state.population_baseline = Object.assign({}, state.population_baseline || {}, populationStyle);"
+        in runtime_js
+    )
     assert "state.palette[paletteIndex] = style.color;" in runtime_js
+
+
+def test_dashboard_controls_css_bounds_fixed_overlays_and_inline_point_controls_layout() -> None:
+    css = render_dashboard_controls_css()
+
+    point_controls_block = _css_block(css, ".plotly-point-controls")
+    assert point_controls_block is not None
+    assert "display: grid;" in point_controls_block
+    assert "gap: 8px;" in point_controls_block
+    assert "padding: 10px;" in point_controls_block
+    assert "grid-template-columns:" in point_controls_block
+    assert "position:" not in point_controls_block
+
+    assert ".plotly-point-controls input[type=\"search\"]" in css
+    assert "min-width: 0;" in css
+
+
+def test_dashboard_controls_css_supports_short_viewport_control_rules() -> None:
+    css = render_dashboard_controls_css()
+
+    assert "@media (max-width: 780px)" in css
+    media_rules_match = re.search(
+        r"@media \(max-width: 780px\)\s*\{([\s\S]*?)\n\s*\}\s*$",
+        css,
+        re.S,
+    )
+    assert media_rules_match is not None
+    media_rules = media_rules_match.group(0)
+    assert ".dashboard-control-bar" in media_rules
+    assert "width: 100%;" in media_rules
+    assert "justify-content: space-between;" in media_rules
+    assert ".plotly-point-controls" in media_rules
+    assert "grid-template-columns: 1fr 1fr;" in media_rules
+    assert ".plotly-point-search-field" in media_rules
+    assert ".plotly-point-actions" in media_rules
+
+
+def test_dashboard_visual_runtime_injects_inline_point_controls_next_to_each_chart() -> None:
+    runtime_js = render_dashboard_visual_runtime_js()
+
+    assert "createInlinePointControls = (chartKey) => {" in runtime_js
+    assert "insertAdjacentElement('afterend', controls);" in runtime_js
+    assert "controls.dataset.dashboardPointControls = '1';" in runtime_js
+    assert "bindInlinePointControls(controls);" in runtime_js
+    assert ".find((candidate) => dashboardPointControlChartKey(candidate) === chartKey);" in runtime_js
+
+
+def test_dashboard_visual_dialog_and_runtime_guard_text_overflow_controls() -> None:
+    runtime_js = render_dashboard_visual_runtime_js()
+    css = render_dashboard_controls_css()
+
+    dialog = render_dashboard_visual_dialog()
+    assert "aria-label=\"Plot visual settings\"" in dialog
+    assert "style=\\\"display: none;\\\"" not in dialog
+    assert "Plot point" not in runtime_js
+
+    assert "text-overflow: ellipsis" in css
+    assert "white-space: nowrap" in css

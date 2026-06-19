@@ -82,8 +82,11 @@ Local validation passed before publication:
 ## Release Status
 
 - Local release/QA validation: passed.
-- Push and green GitHub Actions CI for build `260617`: pending final integrated
-  commit publication.
+- June 19 integrated closeout kept build identity `260617` and added UI
+  overlap/layout hardening evidence in
+  [`ui_overlap_layout_audit_2026-06-19.md`](./ui_overlap_layout_audit_2026-06-19.md).
+- Push and green GitHub Actions CI for build `260617`: pending final rc2
+  publication.
 - Promotion remains blocked on the standing manual release gates: packaging
   smoke, Windows clean-machine launch/startup evidence, Google conversion smoke,
   third-party notice artifact evidence, and security-owner triage/waiver for any

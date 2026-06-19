@@ -9,6 +9,7 @@ from metroliza.industrial.realtime.realtime_dashboard_html import (
     DashboardSignalSeries,
     DashboardSourceHealth,
     RealtimeDashboardSnapshot,
+    _stylesheet,
     render_realtime_dashboard_html,
 )
 from metroliza.industrial.realtime.replay import ReplayRequest, replay_industrial_stream
@@ -85,6 +86,18 @@ def test_static_dashboard_renders_required_sections_cards_tables_and_chart() -> 
     assert "observed-line" in html
     assert "anomaly-marker severity-critical" in html
     assert "<script" not in html.lower()
+
+
+def test_realtime_dashboard_tables_are_scrollable_on_small_viewports() -> None:
+    html = render_realtime_dashboard_html(_snapshot())
+    styles = _stylesheet()
+
+    assert "<div class=\"table-scroll\">" in html
+    assert ".table-scroll {" in styles
+    assert "overflow-x: auto;" in styles
+    assert "min-width: 760px;" in styles
+    assert "overflow-wrap: anywhere;" in styles
+    assert "word-break: break-word;" in styles
 
 
 def test_service_like_mapping_output_is_normalized_and_escaped() -> None:

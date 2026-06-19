@@ -345,6 +345,114 @@ def test_build_resolved_trend_spec_contains_points_ticks_and_limit_lines():
     assert len(spec["points"]) == 4
 
 
+@pytest.mark.parametrize(
+    ("builder", "payload"),
+    [
+        (
+            build_resolved_distribution_spec,
+            {
+                "type": "distribution",
+                "series": [[1.0, 1.1, 1.2], [1.3, 1.4, 1.5]],
+                "labels": [
+                    "Station ALPHA measurement cohort with a long label",
+                    "Station BETA measurement cohort with a long label",
+                ],
+                "title": "Distribution Legend Bounds",
+                "render_mode": "violin",
+                "positions": [0.0, 1.0],
+                "layout": {
+                    "rotation": 45,
+                    "display_positions": [0.0, 1.0],
+                    "display_labels": [
+                        "Station ALPHA measurement cohort with a long label",
+                        "Station BETA measurement cohort with a long label",
+                    ],
+                    "bottom_margin": 0.28,
+                },
+                "canvas": {"width_px": 960, "height_px": 540, "dpi": 150},
+                "x_label": "Group",
+                "y_label": "Measurement",
+                "legend": {
+                    "items": [
+                        {
+                            "label": "Mean marker for a very long legend label",
+                            "kind": "marker",
+                            "marker": "circle",
+                            "color": "#0072B2",
+                        },
+                        {
+                            "label": "Minimum reference threshold with a long explanation",
+                            "kind": "line",
+                            "color": "#009E73",
+                        },
+                        {
+                            "label": "Maximum reference threshold with a long explanation",
+                            "kind": "line",
+                            "color": "#D55E00",
+                        },
+                    ]
+                },
+            },
+        ),
+        (
+            build_resolved_iqr_spec,
+            {
+                "type": "iqr",
+                "labels": [
+                    "Station ALPHA measurement cohort with a long label",
+                    "Station BETA measurement cohort with a long label",
+                ],
+                "series": [[1.0, 1.1, 1.2, 1.3], [1.4, 1.5, 1.6, 1.7]],
+                "title": "IQR Legend Bounds",
+                "layout": {
+                    "rotation": 45,
+                    "display_positions": [1.0, 2.0],
+                    "display_labels": [
+                        "Station ALPHA measurement cohort with a long label",
+                        "Station BETA measurement cohort with a long label",
+                    ],
+                    "bottom_margin": 0.28,
+                },
+                "canvas": {"width_px": 960, "height_px": 540, "dpi": 150},
+                "x_label": "Group",
+                "y_label": "Measurement",
+                "legend": {
+                    "items": [
+                        {
+                            "label": "Median reference line with a very long legend label",
+                            "kind": "line",
+                            "color": "#E69F00",
+                        },
+                        {
+                            "label": "Interquartile body explanation with a long legend label",
+                            "kind": "band",
+                            "fill_color": "#8cb8d9",
+                        },
+                        {
+                            "label": "Outlier markers with a long legend label",
+                            "kind": "marker",
+                            "marker": "circle",
+                            "color": "#D55E00",
+                        },
+                    ]
+                },
+            },
+        ),
+    ],
+)
+def test_resolved_specs_keep_long_legends_inside_top_band_without_plot_overlap(builder, payload):
+    spec = builder(payload)
+
+    plot_rect = spec["plot_area"]
+    legend_rect = spec["legend"]["rect"]
+
+    assert legend_rect["x"] >= 0.0
+    assert legend_rect["y"] >= 0.0
+    assert legend_rect["x"] + legend_rect["width"] <= 1.0
+    assert legend_rect["y"] + legend_rect["height"] <= 1.0
+    assert legend_rect["y"] >= plot_rect["y"] + plot_rect["height"]
+
+
 def test_build_resolved_trend_spec_prefers_named_limit_lines():
     payload = {
         "type": "trend",
@@ -359,6 +467,30 @@ def test_build_resolved_trend_spec_prefers_named_limit_lines():
 
     assert [line["label"] for line in spec["reference_lines"]] == ["LSL", "USL", "Nominal", "Mean"]
     assert [line["value"] for line in spec["reference_lines"]] == pytest.approx([9.5, 10.5, 10.0, 10.2])
+
+
+def test_build_resolved_trend_spec_thins_dense_rotated_tick_metadata_and_truncates_labels():
+    payload = {
+        "type": "trend",
+        "x_values": [float(index) for index in range(24)],
+        "y_values": [10.0 + (index * 0.05) for index in range(24)],
+        "labels": [f"Station-{index:02d}-measurement-label-that-keeps-going" for index in range(24)],
+        "title": "Dense Trend",
+        "x_label": "Sample #",
+        "y_label": "Measurement",
+        "layout": {"rotation": 60, "bottom_margin": 0.30},
+        "canvas": {"width_px": 960, "height_px": 540, "dpi": 150},
+    }
+
+    spec = build_resolved_trend_spec(payload)
+
+    x_tick_labels = [tick["label"] for tick in spec["axes"]["x_ticks"]]
+
+    assert spec["axes"]["rotation"] == 60
+    assert len(x_tick_labels) == len(payload["labels"])
+    assert all(len(label) <= 18 for label in x_tick_labels)
+    assert spec["plot_area"]["y"] == pytest.approx(0.30)
+    assert spec["plot_area"]["height"] >= 0.50
 
 
 def test_build_resolved_distribution_scatter_spec_uses_sample_ticks_and_reference_labels():

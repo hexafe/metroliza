@@ -94,3 +94,6 @@ def test_sample_mapper_skips_invalid_values_without_crashing():
     assert result.stats.skipped_non_numeric == 1
     assert result.stats.skipped_non_finite == 1
     assert result.stats.skipped_missing == 2
+    assert result.cursor_value == "101"
+    assert result.cursor_tie_breaker_value == "row-101"
+    assert result.event_time_watermark == "2026-06-13T10:01:00Z"

@@ -16,7 +16,12 @@ from metroliza.charts.hexafe_plotstats_adapter import render_histogram_png as re
 from metroliza.industrial.industrial_analytics_state import ProductionChartSelection
 from metroliza.charts.matplotlib_runtime import configure_headless_matplotlib
 from metroliza.charts.summary_plot_palette import SUMMARY_PLOT_PALETTE
-from metroliza.charts.xlsx_chart_utils import apply_chart_options, create_workbook_chart, insert_chart
+from metroliza.charts.xlsx_chart_utils import (
+    apply_chart_options,
+    create_workbook_chart,
+    insert_chart,
+    insert_image_fit_to_slot,
+)
 
 configure_headless_matplotlib()
 
@@ -36,6 +41,9 @@ _PLOT_COLORWAY = (
     SUMMARY_PLOT_PALETTE["central_tendency"],
     SUMMARY_PLOT_PALETTE["distribution_base"],
 )
+_WORKBOOK_IMAGE_SLOT_COLS = 8
+_WORKBOOK_HISTOGRAM_SLOT_ROWS = 18
+_WORKBOOK_DISTRIBUTION_SLOT_ROWS = 20
 
 
 def add_analytics_workbook_charts(
@@ -256,11 +264,14 @@ def _insert_histogram_chart(
         rendered = render_chart_artifact_png(payload, target="workbook_image", backend="auto")
         if rendered is not None:
             worksheet.write(row, 8, f"Histogram rendered by {rendered.backend}")
-            worksheet.insert_image(
+            insert_image_fit_to_slot(
+                worksheet,
                 row,
                 0,
                 f"{metric.field_name}_histogram.png",
-                {"image_data": BytesIO(rendered.png_bytes)},
+                BytesIO(rendered.png_bytes),
+                available_cols=_WORKBOOK_IMAGE_SLOT_COLS,
+                available_rows=_WORKBOOK_HISTOGRAM_SLOT_ROWS,
             )
             return True
 
@@ -275,11 +286,14 @@ def _insert_histogram_chart(
         )
         if rendered is not None:
             worksheet.write(row, 8, f"Histogram rendered by {rendered.backend}")
-            worksheet.insert_image(
+            insert_image_fit_to_slot(
+                worksheet,
                 row,
                 0,
                 f"{metric.field_name}_histogram.png",
-                {"image_data": BytesIO(rendered.png_bytes)},
+                BytesIO(rendered.png_bytes),
+                available_cols=_WORKBOOK_IMAGE_SLOT_COLS,
+                available_rows=_WORKBOOK_HISTOGRAM_SLOT_ROWS,
             )
             return True
 
@@ -415,11 +429,14 @@ def _insert_matplotlib_distribution_image(
         rendered = render_chart_artifact_png(payload, target="workbook_image", backend="auto")
         if rendered is not None:
             worksheet.write(row, 8, f"{chart_type.title()} rendered by {rendered.backend}")
-            worksheet.insert_image(
+            insert_image_fit_to_slot(
+                worksheet,
                 row,
                 0,
                 f"{metric.field_name}_{chart_type}.png",
-                {"image_data": BytesIO(rendered.png_bytes)},
+                BytesIO(rendered.png_bytes),
+                available_cols=_WORKBOOK_IMAGE_SLOT_COLS,
+                available_rows=_WORKBOOK_DISTRIBUTION_SLOT_ROWS,
             )
             return True
 
@@ -484,7 +501,15 @@ def _insert_matplotlib_distribution_image(
     finally:
         plt.close(fig)
 
-    worksheet.insert_image(row, 0, f"{metric.field_name}_{chart_type}.png", {"image_data": image_data})
+    insert_image_fit_to_slot(
+        worksheet,
+        row,
+        0,
+        f"{metric.field_name}_{chart_type}.png",
+        image_data,
+        available_cols=_WORKBOOK_IMAGE_SLOT_COLS,
+        available_rows=_WORKBOOK_DISTRIBUTION_SLOT_ROWS,
+    )
     return True
 
 

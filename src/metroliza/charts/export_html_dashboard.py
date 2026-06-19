@@ -3422,6 +3422,8 @@ def _render_dashboard_html(
       border-top: 1px solid var(--line);
       vertical-align: top;
       text-align: left;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }}
     .detail-table td:first-child {{
       width: 42%;

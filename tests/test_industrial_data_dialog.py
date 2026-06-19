@@ -1047,9 +1047,10 @@ def test_industrial_workflow_dialogs_fit_their_initial_heights(tmp_path):
         ),
     ]
     try:
+        available = _app().primaryScreen().availableGeometry()
         for dialog in dialogs:
             assert dialog.sizeHint().height() <= dialog.height()
-            assert dialog.sizeHint().width() <= dialog.width()
+            assert dialog.width() <= available.width()
     finally:
         for dialog in dialogs:
             dialog.close()

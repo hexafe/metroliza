@@ -1162,6 +1162,8 @@ th, td {
   padding: 9px 10px;
   text-align: left;
   vertical-align: top;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 th {
   background: #edf1f5;

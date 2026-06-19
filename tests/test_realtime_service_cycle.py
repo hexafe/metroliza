@@ -220,6 +220,94 @@ def test_realtime_poll_cycle_is_idempotent_for_duplicate_rows(tmp_path):
     assert second.cursor_value == "100"
 
 
+def test_realtime_poll_cycle_rejects_stale_offset_tie_breaker_column(tmp_path):
+    db_path = str(tmp_path / "stale-offset-tie-breaker.db")
+    profile = _profile(db_path)
+    config = _config(profile.id)
+    StreamOffsetStore(db_path).upsert_offset(
+        StreamOffset(
+            source_profile_id=profile.id,
+            stream_key="cycle_time",
+            cursor_column="event_id",
+            cursor_value="100",
+            cursor_tie_breaker_column="legacy_record_id",
+            cursor_tie_breaker_value="row-100",
+        )
+    )
+    adapter = FakeAdapter(
+        [
+            {
+                "event_id": "101",
+                "record_id": "row-101",
+                "process_timestamp": "2026-06-13T10:01:00Z",
+                "cycle_time_s": "10",
+                "station": "S1",
+            }
+        ]
+    )
+
+    result = run_polling_cycle(database=db_path, profile=profile, config=config, adapter=adapter)
+    offset = StreamOffsetStore(db_path).get_offset(
+        source_profile_id=profile.id,
+        stream_key="cycle_time",
+    )
+
+    assert result.status == "failed"
+    assert result.diagnostics["stage"] == "query_build"
+    assert "legacy_record_id" in result.error
+    assert "Reset or reseed" in result.error
+    assert adapter.requests == []
+    assert offset.cursor_value == "100"
+    assert offset.cursor_tie_breaker_column == "legacy_record_id"
+    assert offset.cursor_tie_breaker_value == "row-100"
+    assert offset.last_error == result.error
+
+
+def test_realtime_poll_cycle_does_not_advance_offset_to_trailing_unkeyed_row(tmp_path):
+    db_path = str(tmp_path / "trailing-unkeyed-row.db")
+    profile = _profile(db_path)
+    config = _config(profile.id)
+
+    result = run_polling_cycle(
+        database=db_path,
+        profile=profile,
+        config=config,
+        adapter=FakeAdapter(
+            [
+                {
+                    "event_id": "100",
+                    "record_id": "row-100",
+                    "process_timestamp": "2026-06-13T10:00:00Z",
+                    "cycle_time_s": "10",
+                    "station": "S1",
+                },
+                {
+                    "event_id": "101",
+                    "record_id": None,
+                    "process_timestamp": "2026-06-13T10:01:00Z",
+                    "cycle_time_s": "11",
+                    "station": "S1",
+                },
+            ]
+        ),
+        detector_runner=lambda samples, signal, detectors: [],
+    )
+    offset = StreamOffsetStore(db_path).get_offset(
+        source_profile_id=profile.id,
+        stream_key="cycle_time",
+    )
+
+    assert result.status == "completed"
+    assert result.rows_fetched == 2
+    assert result.samples_inserted == 1
+    assert result.cursor_value == "100"
+    assert result.event_time_watermark == "2026-06-13T10:00:00Z"
+    assert offset.cursor_value == "100"
+    assert offset.cursor_tie_breaker_column == "record_id"
+    assert offset.cursor_tie_breaker_value == "row-100"
+    assert offset.event_time_watermark == "2026-06-13T10:00:00Z"
+
+
 def test_realtime_poll_cycle_isolates_detector_failures_and_advances_successful_fetch(tmp_path):
     db_path = str(tmp_path / "detector-error.db")
     profile = _profile(db_path)
