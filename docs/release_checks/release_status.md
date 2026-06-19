@@ -19,10 +19,57 @@ Release/window metadata is defined in `src/metroliza/app/version.py` and synchro
 | Freeze | In progress | Use the RC checklist and implementation triage to record current blockers, owner assignments, and sign-offs for the active build identity. | [`release_candidate_checklist.md`](./release_candidate_checklist.md), [`implementation_item_triage.md`](./implementation_item_triage.md) |
 | Open testing | Status tracked in linked evidence docs | Read the latest go/no-go state from the current smoke log and runbook evidence package, not from older branch snapshots. | [`google_conversion_smoke.md`](./google_conversion_smoke.md), [`open_testing_runbook.md`](./open_testing_runbook.md) |
 | Release candidate readiness | Status tracked in linked checklist and smoke evidence | The current RC decision must be based on the latest checklist state plus the current smoke evidence bundle. | [`release_candidate_checklist.md`](./release_candidate_checklist.md), [`google_conversion_smoke.md`](./google_conversion_smoke.md) |
-| Current rc2 hardening audit | Local gate passed / release blocked | The layout migration is complete on `rc2`. Local QA/release gates were refreshed through build `260612`, including dashboard UX/copy unification, static POPULATION/group rendering, Export/CSV Summary grouping cleanup, Industrial Data cache-to-CSV Summary workflows, parser handoff integrity, and the June 12 RC audit safety hardening. Current local evidence is tracked in [`full_module_audit_2026-06-08.md`](./full_module_audit_2026-06-08.md), [`rc5_dashboard_industrial_cache_check_2026-06-09.md`](./rc5_dashboard_industrial_cache_check_2026-06-09.md), [`rc5_industrial_data_csv_summary_followup_2026-06-10.md`](./rc5_industrial_data_csv_summary_followup_2026-06-10.md), [`rc5_parser_ux_release_closeout_2026-06-11.md`](./rc5_parser_ux_release_closeout_2026-06-11.md), and [`rc5_rc_audit_evidence_2026-06-12.md`](./rc5_rc_audit_evidence_2026-06-12.md). Build `260612` local gates passed, including the CI-shaped 80% coverage gate at `82%`; pushed GitHub Actions evidence is pending until this commit is published. Final Go remains blocked on manual release evidence and any explicit must-fix triage items. | [`release_candidate_checklist.md`](./release_candidate_checklist.md), [`implementation_item_triage.md`](./implementation_item_triage.md), [`full_module_audit_2026-06-08.md`](./full_module_audit_2026-06-08.md), [`rc5_dashboard_industrial_cache_check_2026-06-09.md`](./rc5_dashboard_industrial_cache_check_2026-06-09.md), [`rc5_industrial_data_csv_summary_followup_2026-06-10.md`](./rc5_industrial_data_csv_summary_followup_2026-06-10.md), [`rc5_parser_ux_release_closeout_2026-06-11.md`](./rc5_parser_ux_release_closeout_2026-06-11.md), [`rc5_rc_audit_evidence_2026-06-12.md`](./rc5_rc_audit_evidence_2026-06-12.md) |
+| 2026.06 RC1 realtime industrial tester build | Build `260617` local QA/release gates passed; final rc2 pushed CI pending | Build `260617` adds indexed Industrial Data cache handoff, faster CSV Summary filter/group previews, raw cached workbook export, additional export-filter enforcement, same-session cache refresh fixes, Oznak fallback partial-progress diagnostics, realtime polling cost reductions, and an Industrial Sync layout fix found by the CI-shaped UI shard. The June 19 closeout adds SQLite transfer follow-up gates plus UI overlap/layout hardening for PyQt dialogs, generated dashboards, native chart geometry, and workbook image slots without changing the build identity. Local evidence is recorded in [`realtime_industrial_performance_check_2026-06-17.md`](./realtime_industrial_performance_check_2026-06-17.md) and [`ui_overlap_layout_audit_2026-06-19.md`](./ui_overlap_layout_audit_2026-06-19.md). Earlier build `260615` default pushed CI passed in run [`27570794579`](https://github.com/hexafe/metroliza/actions/runs/27570794579) for commit `3f26438d473bd6941606d3cf949f2e7782276763`; the final integrated build `260617` rc2 publication and green CI are pending. Promotion remains blocked on manual packaging, Windows clean-machine launch, Google conversion smoke, third-party notice evidence, and security-owner triage/waiver for any remaining report-only findings. | [`realtime_industrial_rollout_checklist.md`](./realtime_industrial_rollout_checklist.md), [`realtime_monitor_ui_ux_audit_2026-06-15.md`](./realtime_monitor_ui_ux_audit_2026-06-15.md), [`realtime_industrial_optimization_check_2026-06-16.md`](./realtime_industrial_optimization_check_2026-06-16.md), [`realtime_industrial_performance_check_2026-06-17.md`](./realtime_industrial_performance_check_2026-06-17.md), [`ui_overlap_layout_audit_2026-06-19.md`](./ui_overlap_layout_audit_2026-06-19.md), [`implementation_item_triage.md`](./implementation_item_triage.md) |
+| Historical 2026.05 RC5 rc2 hardening audit | Historical local gate passed / release blocked | The layout migration is complete on `rc2`. Local QA/release gates were refreshed through build `260612`, including dashboard UX/copy unification, static POPULATION/group rendering, Export/CSV Summary grouping cleanup, Industrial Data cache-to-CSV Summary workflows, parser handoff integrity, and the June 12 RC audit safety hardening. Historical evidence is tracked in [`full_module_audit_2026-06-08.md`](./full_module_audit_2026-06-08.md), [`rc5_dashboard_industrial_cache_check_2026-06-09.md`](./rc5_dashboard_industrial_cache_check_2026-06-09.md), [`rc5_industrial_data_csv_summary_followup_2026-06-10.md`](./rc5_industrial_data_csv_summary_followup_2026-06-10.md), [`rc5_parser_ux_release_closeout_2026-06-11.md`](./rc5_parser_ux_release_closeout_2026-06-11.md), and [`rc5_rc_audit_evidence_2026-06-12.md`](./rc5_rc_audit_evidence_2026-06-12.md). Build `260612` local gates passed, including the CI-shaped 80% coverage gate at `82%`. Final Go remains blocked on manual release evidence and any explicit must-fix triage items. | [`release_candidate_checklist.md`](./release_candidate_checklist.md), [`implementation_item_triage.md`](./implementation_item_triage.md), [`full_module_audit_2026-06-08.md`](./full_module_audit_2026-06-08.md), [`rc5_dashboard_industrial_cache_check_2026-06-09.md`](./rc5_dashboard_industrial_cache_check_2026-06-09.md), [`rc5_industrial_data_csv_summary_followup_2026-06-10.md`](./rc5_industrial_data_csv_summary_followup_2026-06-10.md), [`rc5_parser_ux_release_closeout_2026-06-11.md`](./rc5_parser_ux_release_closeout_2026-06-11.md), [`rc5_rc_audit_evidence_2026-06-12.md`](./rc5_rc_audit_evidence_2026-06-12.md) |
 | Google conversion smoke gate | Status tracked in smoke log | The latest PASS/FAIL result, command, and build identity belong in the smoke log for the current release line. | [`google_conversion_smoke.md`](./google_conversion_smoke.md) |
 
-## Current rc2 CI evidence
+## Current 2026.06 RC1 CI evidence
+
+- Build `260617` records the June 17 performance/QA closeout for Industrial
+  Data SQLite cache handoff, cached raw workbook export, realtime polling cost,
+  Oznak fallback diagnostics, and the Industrial Sync layout fix found during
+  CI-shaped coverage. Local validation passed; final pushed CI is tracked in
+  [`realtime_industrial_performance_check_2026-06-17.md`](./realtime_industrial_performance_check_2026-06-17.md).
+- The June 19 local closeout adds the detailed UI overlap/layout audit and
+  final SQLite transfer/communication gate on the same build identity
+  `260617`. Local validation passed, including full offscreen pytest
+  (`2135 passed, 320 skipped, 6 warnings, 83 subtests passed`), focused
+  UI/export gate (`338 passed`), release metadata sync, release hygiene, Ruff,
+  compileall, security audit with no known vulnerabilities, whitespace checks,
+  and the CI-shaped combined coverage gate at `81%`. Final rc2 push and green
+  GitHub Actions CI are pending; evidence is tracked in
+  [`ui_overlap_layout_audit_2026-06-19.md`](./ui_overlap_layout_audit_2026-06-19.md).
+- Build `260615` local release gates passed on 2026-06-15: focused realtime
+  UI/runtime/About/metadata tests (`15 passed`), full offscreen pytest (`2079
+  passed, 296 skipped, 6 warnings, 83 subtests passed`), CI-shaped combined
+  coverage (`81%`, above the 80% threshold), release metadata sync, release
+  hygiene, Ruff, compileall, and security audit with no known dependency
+  vulnerabilities.
+- Commit `3f26438d473bd6941606d3cf949f2e7782276763` (`Harden realtime
+  monitor UX release`) passed default GitHub Actions CI in run
+  [`27570794579`](https://github.com/hexafe/metroliza/actions/runs/27570794579)
+  on 2026-06-15.
+- Green automatic jobs for run `27570794579`: Static checks, Unit tests with
+  combined coverage artifact upload, Native wheel build and smoke checks, CMM
+  parser perf guardrail, and the non-blocking Performance benchmark trend
+  check.
+- Skipped manual/opt-in jobs in run `27570794579`: Packaging smoke, Windows
+  startup benchmark, and Google conversion smoke. These skipped lanes do not
+  satisfy release-promotion evidence.
+- Commit `307acd16031c5622093ba52a9a64d2b2146d7f02` (`Prepare realtime
+  industrial tester RC`) passed default GitHub Actions CI in run
+  [`27506446912`](https://github.com/hexafe/metroliza/actions/runs/27506446912)
+  on 2026-06-14.
+- Green automatic jobs: Static checks, Unit tests with combined coverage artifact
+  upload, Native wheel build and smoke checks, CMM parser perf guardrail, and the
+  non-blocking Performance benchmark trend check.
+- Skipped manual/opt-in jobs in that run: Packaging smoke, Windows startup
+  benchmark, and Google conversion smoke. These skipped lanes do not satisfy
+  release-promotion evidence.
+- Local gate evidence is recorded in
+  [`realtime_industrial_rollout_checklist.md`](./realtime_industrial_rollout_checklist.md).
+
+## Historical rc2 CI evidence
 
 - Commit `05b5049558509060df43778d7b39424726e56ff1` (`Fix dashboard datetime axis scaling`) passed default GitHub Actions CI in run [`26875151720`](https://github.com/hexafe/metroliza/actions/runs/26875151720) on 2026-06-03.
 - Green automatic jobs: Static checks, Unit tests with combined coverage artifact upload, Native wheel build and smoke checks, CMM parser perf guardrail, and the non-blocking Performance benchmark trend check.

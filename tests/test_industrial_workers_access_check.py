@@ -315,7 +315,7 @@ def test_sync_thread_fetches_sql_rows_and_records_only_sql_metadata(monkeypatch,
         reference_values=(),
         test_only=False,
         fetch_state=IndustrialFetchState.from_sql(
-            "SELECT event_id, reference, station FROM events",
+            "SELECT event_id, reference, station FROM events WHERE token = 'raw-sql-secret'",
             limit_rows=50,
             sql_preview_limit=5,
             sql_recipe_path="/tmp/sql_recipes/line.sql",
@@ -328,11 +328,17 @@ def test_sync_thread_fetches_sql_rows_and_records_only_sql_metadata(monkeypatch,
 
     assert emitted[0]["status"] == "succeeded"
     assert emitted[0]["upsert_summary"]["processed"] == 1
-    assert fetch_kwargs["sql_text"] == "SELECT event_id, reference, station FROM events"
+    assert (
+        fetch_kwargs["sql_text"]
+        == "SELECT event_id, reference, station FROM events WHERE token = 'raw-sql-secret'"
+    )
     assert fetch_kwargs["limit"] == 50
     assert fetch_kwargs["mode"] == "fetch"
     with sqlite_connection_scope(db_path) as conn:
         filters_json = conn.execute("SELECT filters_json FROM industrial_sync_runs").fetchone()[0]
+        diagnostics_json = conn.execute(
+            "SELECT diagnostics_json FROM industrial_sync_runs"
+        ).fetchone()[0]
         station_value = conn.execute(
             """
             SELECT station
@@ -346,4 +352,10 @@ def test_sync_thread_fetches_sql_rows_and_records_only_sql_metadata(monkeypatch,
     assert filters_payload["sql_preview_limit"] == 5
     assert filters_payload["sql_hash"]
     assert "SELECT" not in filters_json
+    assert "raw-sql-secret" not in filters_json
+    diagnostics_payload = json.loads(diagnostics_json)
+    assert diagnostics_payload["sql_hash"] == "abc123"
+    assert diagnostics_payload["query_summary"] == "raw SQL fetch on assembly_mes (mssql, limit 50)"
+    assert "SELECT" not in diagnostics_json
+    assert "raw-sql-secret" not in diagnostics_json
     assert station_value == "S1"

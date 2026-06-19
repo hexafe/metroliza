@@ -106,12 +106,20 @@ Canonical release operations docs (release gate/source-of-truth set):
 
 - `release_checks/release_status.md` — current release operational status and entry-point links.
 - `release_checks/release_candidate_checklist.md` — primary RC gate checklist and required sign-offs.
-- `release_checks/rc2_release_audit_2026-05-17.md` — historical RC2 release audit evidence and blocker summary.
-- `release_checks/rc2_performance_optimization_check_2026-05-20.md` — CSV Summary/grouping/dashboard performance optimization evidence and remaining bottlenecks.
 - `release_checks/open_testing_runbook.md` — open-testing execution runbook and evidence expectations.
 - `release_checks/branching_strategy.md` — authoritative branch naming/rules used during release work.
 - `release_checks/google_conversion_smoke.md` — required release smoke evidence log for Google conversion checks.
 - `release_checks/cmm_parser_perf_guardrail.md` — CMM parser performance guardrail policy, variance expectations, and CI-failure triage steps.
+- `release_checks/realtime_industrial_rollout_checklist.md` — current 2026.06 RC1 realtime industrial tester rollout gate for replay, bounded reads, source lag, threshold review, and rollback.
+- `release_checks/realtime_monitor_ui_ux_audit_2026-06-15.md` — build `260615` realtime monitor UI/UX audit, implemented workflow guardrails, About cleanup, and deferred dashboard-mode follow-up.
+- `release_checks/realtime_industrial_optimization_check_2026-06-16.md` — build `260616` Industrial Data fetch, realtime dashboard, and interactive dashboard point-marking release-check note.
+- `release_checks/realtime_industrial_performance_check_2026-06-17.md` — build `260617` Industrial Data SQLite handoff, cached workbook export, realtime polling, and Oznak fallback release-check note.
+- `release_checks/ui_overlap_layout_audit_2026-06-19.md` — build `260619` UI overlap/layout audit covering PyQt geometry, dashboard CSS containment, chart legend geometry, and workbook image slots.
+
+Historical RC/rc2 evidence:
+
+- `release_checks/rc2_release_audit_2026-05-17.md` — historical RC2 release audit evidence and blocker summary.
+- `release_checks/rc2_performance_optimization_check_2026-05-20.md` — CSV Summary/grouping/dashboard performance optimization evidence and remaining bottlenecks.
 - `release_checks/full_module_audit_2026-06-08.md` — build `260609` full-module audit hardening release-check evidence.
 - `release_checks/rc5_dashboard_industrial_cache_check_2026-06-09.md` — build `260609` RC5 dashboard large-group, dashboard visuals, and Industrial Data cache release-check evidence.
 - `release_checks/rc5_industrial_data_csv_summary_followup_2026-06-10.md` — build `260609` Industrial Data fetch-to-cache and CSV Summary follow-up evidence.

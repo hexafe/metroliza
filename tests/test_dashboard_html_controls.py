@@ -1,12 +1,24 @@
 from __future__ import annotations
 
 import json
+import re
 
 from modules.dashboard_html_controls import (
     dashboard_visual_runtime_config_json,
+    render_dashboard_controls_css,
     render_dashboard_visual_dialog,
     render_dashboard_visual_runtime_js,
 )
+
+
+def _css_block(css: str, selector: str) -> str | None:
+    """Return a best-effort CSS rule block for a selector."""
+
+    pattern = rf"(?m)^\s*{re.escape(selector)}\s*\{{.*?^\s*\}}"
+    match = re.search(pattern, css, re.S)
+    if not match:
+        return None
+    return match.group(0)
 
 
 def test_dashboard_visual_runtime_detects_trend_before_scatter() -> None:
@@ -170,6 +182,70 @@ def test_dashboard_visual_runtime_scopes_storage_and_uses_initial_settings() -> 
     assert "#123456" in runtime_js
 
 
+def test_dashboard_visual_runtime_supports_persistent_point_marks() -> None:
+    dialog_html = render_dashboard_visual_dialog()
+    config = json.loads(dashboard_visual_runtime_config_json())
+    runtime_js = render_dashboard_visual_runtime_js()
+
+    assert config["pointMarkStorageKey"] == "metroliza-dashboard-point-marks"
+    assert "Point marks" in dialog_html
+    assert 'id="dashboard-visual-point-search"' in dialog_html
+    assert '<option value="record">TraceCode / record key</option>' in dialog_html
+    assert 'id="dashboard-visual-point-search-prev"' in dialog_html
+    assert 'id="dashboard-visual-point-search-next"' in dialog_html
+    assert 'id="dashboard-visual-point-search-results"' in dialog_html
+    assert 'id="dashboard-visual-point-summary"' in dialog_html
+    assert 'id="dashboard-visual-point-color"' in dialog_html
+    assert 'id="dashboard-visual-point-mark"' in dialog_html
+    assert 'id="dashboard-visual-point-clear"' in dialog_html
+    assert 'id="dashboard-visual-point-clear-all"' in dialog_html
+    assert "const pointMarkStorageKey = `${pointMarkStorageBaseKey}:${dashboardVisualScope()}`;" in runtime_js
+    assert "window.metrolizaDashboardPointMarkStorageKey = pointMarkStorageKey;" in runtime_js
+    assert "const readStoredPointMarks" in runtime_js
+    assert "const persistPointMarks" in runtime_js
+    assert "const selectedPointFromPlotlyClick" in runtime_js
+    assert "chartKey: dashboardChartKeyForContainer(container)" in runtime_js
+    assert "curveNumber: sanitizePointIndex(value.curveNumber ?? value.curve_number)" in runtime_js
+    assert "pointNumber: sanitizePointIndex(value.pointNumber ?? value.point_number)" in runtime_js
+    assert "x: [cloneJsonValue(mark.x)]" in runtime_js
+    assert "y: [cloneJsonValue(mark.y)]" in runtime_js
+    assert "trace.customdata = [cloneJsonValue(mark.customdata)];" in runtime_js
+    assert "metroliza_point_mark: true" in runtime_js
+    assert "metroliza_point_search: true" in runtime_js
+    assert "dashboard_visual_role: 'point_mark'" in runtime_js
+    assert "dashboard_visual_role: 'point_search'" in runtime_js
+    assert "const applyDashboardPointMarksToPlotlySpec" in runtime_js
+    assert "const buildPointSearchIndex" in runtime_js
+    assert "const syncPointSearchDefaultScope" in runtime_js
+    assert "const movePointSearch" in runtime_js
+    assert "fields.record" in runtime_js
+    assert "isMetrolizaPointOverlayTrace(trace)" in runtime_js
+    assert "dashboardPointSearchSelectedId === dashboardVisualSelectedPoint.id" in runtime_js
+    assert "if (isMetrolizaPointOverlayTrace(trace)) return null;" in runtime_js
+    assert "dashboardVisualSelectedPoint = selectedPointFromPlotlyClick(target, point);" in runtime_js
+
+
+def test_dashboard_visual_runtime_injects_inline_chart_point_controls() -> None:
+    css = render_dashboard_controls_css()
+    runtime_js = render_dashboard_visual_runtime_js()
+
+    assert ".plotly-point-controls" in css
+    assert "const ensureInlinePointControls" in runtime_js
+    assert "window.metrolizaEnsureInlinePointControls = ensureInlinePointControls;" in runtime_js
+    assert "controls.dataset.dashboardPointControls = '1';" in runtime_js
+    assert "data-dashboard-point-search-input" in runtime_js
+    assert "data-dashboard-point-search-prev" in runtime_js
+    assert "data-dashboard-point-search-next" in runtime_js
+    assert "data-dashboard-point-color" in runtime_js
+    assert "data-dashboard-point-mark" in runtime_js
+    assert "data-dashboard-point-clear" in runtime_js
+    assert "buildPointSearchIndex(chartKey)" in runtime_js
+    assert "root: controls" in runtime_js
+    assert "markSelectedPoint(color);" in runtime_js
+    assert "clearSelectedPointMark();" in runtime_js
+    assert "ensureInlinePointControls();" in runtime_js
+
+
 def test_dashboard_visual_runtime_range_readouts_use_existing_update_path() -> None:
     runtime_js = render_dashboard_visual_runtime_js()
 
@@ -293,7 +369,65 @@ def test_dashboard_visual_runtime_carries_population_focus_contract() -> None:
     assert "resetSelectedSeriesPaletteEntry(state, embedded, target);" in runtime_js
     assert "nextPalette[paletteIndex] = resetPalette[paletteIndex] || '#245a5a';" in runtime_js
     assert (
-        "state.population_baseline = Object.assign("
-        "{}, state.population_baseline || {}, populationStyle);"
-    ) in runtime_js
+        "state.population_baseline = Object.assign({}, state.population_baseline || {}, populationStyle);"
+        in runtime_js
+    )
     assert "state.palette[paletteIndex] = style.color;" in runtime_js
+
+
+def test_dashboard_controls_css_bounds_fixed_overlays_and_inline_point_controls_layout() -> None:
+    css = render_dashboard_controls_css()
+
+    point_controls_block = _css_block(css, ".plotly-point-controls")
+    assert point_controls_block is not None
+    assert "display: grid;" in point_controls_block
+    assert "gap: 8px;" in point_controls_block
+    assert "padding: 10px;" in point_controls_block
+    assert "grid-template-columns:" in point_controls_block
+    assert "position:" not in point_controls_block
+
+    assert ".plotly-point-controls input[type=\"search\"]" in css
+    assert "min-width: 0;" in css
+
+
+def test_dashboard_controls_css_supports_short_viewport_control_rules() -> None:
+    css = render_dashboard_controls_css()
+
+    assert "@media (max-width: 780px)" in css
+    media_rules_match = re.search(
+        r"@media \(max-width: 780px\)\s*\{([\s\S]*?)\n\s*\}\s*$",
+        css,
+        re.S,
+    )
+    assert media_rules_match is not None
+    media_rules = media_rules_match.group(0)
+    assert ".dashboard-control-bar" in media_rules
+    assert "width: 100%;" in media_rules
+    assert "justify-content: space-between;" in media_rules
+    assert ".plotly-point-controls" in media_rules
+    assert "grid-template-columns: 1fr 1fr;" in media_rules
+    assert ".plotly-point-search-field" in media_rules
+    assert ".plotly-point-actions" in media_rules
+
+
+def test_dashboard_visual_runtime_injects_inline_point_controls_next_to_each_chart() -> None:
+    runtime_js = render_dashboard_visual_runtime_js()
+
+    assert "createInlinePointControls = (chartKey) => {" in runtime_js
+    assert "insertAdjacentElement('afterend', controls);" in runtime_js
+    assert "controls.dataset.dashboardPointControls = '1';" in runtime_js
+    assert "bindInlinePointControls(controls);" in runtime_js
+    assert ".find((candidate) => dashboardPointControlChartKey(candidate) === chartKey);" in runtime_js
+
+
+def test_dashboard_visual_dialog_and_runtime_guard_text_overflow_controls() -> None:
+    runtime_js = render_dashboard_visual_runtime_js()
+    css = render_dashboard_controls_css()
+
+    dialog = render_dashboard_visual_dialog()
+    assert "aria-label=\"Plot visual settings\"" in dialog
+    assert "style=\\\"display: none;\\\"" not in dialog
+    assert "Plot point" not in runtime_js
+
+    assert "text-overflow: ellipsis" in css
+    assert "white-space: nowrap" in css

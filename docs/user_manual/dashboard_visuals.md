@@ -98,6 +98,29 @@ one chart element at a time. The available controls depend on what you selected:
 Per-element opacity is useful when one group hides another. It lets you make a single
 series lighter or stronger without changing the rest of the recipe.
 
+## Marking Individual Points
+
+In an exported interactive Plotly dashboard, click a point and open **Plot Visuals**. The
+**Point marks** section shows the selected point, lets you choose a mark color, and can
+add or clear a visible point marker. Point marks are saved in the browser for that HTML
+dashboard and do not change the exported data, the source database, or trace styling.
+
+Use **Find point** when you know a `TraceCode`, sample number, or another point value.
+The **Search in** dropdown controls which point fields are searched. It defaults to
+**TraceCode / record key** when point metadata is available, otherwise to **Any field**.
+**Next** and **Previous** move through matches in chart order, then trace order, then
+point order. The navigation wraps around at the end or beginning. Each selected match is
+temporarily highlighted; click **Mark selected point** to save it as a persistent point
+mark.
+
+Point search can use the visible series name, x-axis value, y-axis value, and point
+details carried by the dashboard. This is useful when a reviewer wants to call out one
+assembly, sample, or TraceCode without changing the chart recipe for the whole series.
+
+Point marks work on interactive Plotly charts. They do not repaint static image snapshots
+or older dashboard files that were exported before point-mark controls existed. Export the
+dashboard again when you need point marking in an older HTML file.
+
 ## Static and pre-rendered colors
 
 Some dashboard visuals are pre-rendered before the HTML file is opened. This can happen
@@ -119,4 +142,3 @@ change the dashboard visuals before export and export the dashboard again.
 - For a target-centered story, use **Nominal divergence**.
 - For one important group, use **Highlight story** or **Custom** and keep supporting
   groups quieter.
-

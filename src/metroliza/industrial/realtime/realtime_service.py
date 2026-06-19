@@ -4,295 +4,466 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
-from metroliza.industrial.anomaly.baseline_repository import BaselineRepository
 from metroliza.industrial.anomaly.event_repository import AnomalyEventRepository
 from metroliza.industrial.industrial_data_repository import (
     IndustrialSourceProfile,
+    looks_sensitive_key,
     redact_sensitive_text,
 )
 from metroliza.industrial.realtime.db_poller import (
-    SourceDbReader,
+    SourceDbAdapter,
     SourceReadRequest,
-    build_poll_query,
-    with_computed_watermarks,
+    build_bounded_poll_query,
+    safe_query_diagnostics,
 )
 from metroliza.industrial.realtime.offset_store import StreamOffsetStore
 from metroliza.industrial.realtime.replay import run_detectors_for_samples
-from metroliza.industrial.realtime.sample_mapper import (
-    SignalSampleMapping,
-    map_rows_to_samples,
-)
+from metroliza.industrial.realtime.sample_mapper import map_rows_to_samples
 from metroliza.industrial.realtime.sample_repository import RealtimeSampleRepository, utc_timestamp
-from metroliza.industrial.realtime.stream_config import (
-    RealtimeStreamConfig,
-    redact_stream_diagnostics,
-    signal_definition_from_stream,
-    validate_stream_config,
+from metroliza.industrial.realtime.stream_config import RealtimePollConfig
+from metroliza.industrial.realtime.stream_contracts import (
+    IndustrialSample,
+    SignalDefinition,
+    StreamOffset,
 )
-from metroliza.industrial.realtime.stream_contracts import IndustrialSample, StreamOffset
+
+DetectorRunner = Callable[
+    [Iterable[IndustrialSample], SignalDefinition, tuple[str, ...]],
+    list[Any],
+]
 
 
 @dataclass(frozen=True)
 class PollingCycleResult:
-    """Result of one bounded realtime polling cycle."""
+    """Operator-safe summary of one realtime polling cycle."""
 
+    source_profile_id: int
+    stream_key: str
     status: str
     rows_fetched: int = 0
     samples_processed: int = 0
     samples_inserted: int = 0
     samples_skipped: int = 0
-    events_created: int = 0
+    detector_events_created: int = 0
     cursor_value: str | None = None
     event_time_watermark: str | None = None
     lag_seconds: float | None = None
-    diagnostics: Mapping[str, Any] = field(default_factory=dict)
     error: str | None = None
+    diagnostics: Mapping[str, Any] = field(default_factory=dict)
 
 
-@dataclass(frozen=True)
-class RealtimeMonitorStatus:
-    """Compact aggregate status for a realtime monitor run."""
+def run_polling_cycle(
+    *,
+    database: str,
+    profile: IndustrialSourceProfile,
+    config: RealtimePollConfig,
+    adapter: SourceDbAdapter,
+    detector_runner: DetectorRunner | None = None,
+) -> PollingCycleResult:
+    """Poll one bounded source batch, persist samples/events, and update offset after success."""
 
-    cycles: int
-    succeeded: int
-    failed: int
-    partial: int
-    rows_fetched: int
-    events_created: int
-
-
-class RealtimeIndustrialService:
-    """Coordinate one safe realtime source polling cycle."""
-
-    def __init__(
-        self,
-        database: str,
-        *,
-        sample_repository: RealtimeSampleRepository | None = None,
-        offset_store: StreamOffsetStore | None = None,
-        event_repository: AnomalyEventRepository | None = None,
-        baseline_repository: BaselineRepository | None = None,
-    ):
-        self.database = database
-        self.sample_repository = sample_repository or RealtimeSampleRepository(database)
-        self.offset_store = offset_store or StreamOffsetStore(database)
-        self.event_repository = event_repository or AnomalyEventRepository(database)
-        self.baseline_repository = baseline_repository or BaselineRepository(database)
-
-    def poll_stream(
-        self,
-        *,
-        profile: IndustrialSourceProfile,
-        config: RealtimeStreamConfig,
-        reader: SourceDbReader,
-        now: str | None = None,
-    ) -> PollingCycleResult:
-        """Run one bounded poll and advance offset only after local writes succeed."""
-
-        now_text = now or utc_timestamp()
-        try:
-            config = validate_stream_config(config, profile)
-            signal = self.sample_repository.upsert_signal_definition(
-                signal_definition_from_stream(config)
-            )
-            assert signal.id is not None
-            offset = self.offset_store.get_offset(
-                source_profile_id=config.source_profile_id,
-                stream_key=config.stream_key,
-            )
-            query = build_poll_query(profile, config, offset)
-            read_result = with_computed_watermarks(
-                reader.fetch_rows(
-                    SourceReadRequest(
-                        profile=profile,
-                        config=config,
-                        offset=offset,
-                        query=query,
-                    )
-                ),
-                config,
-            )
-        except Exception as exc:
-            return PollingCycleResult(
-                status="error",
-                diagnostics={"stage": "request"},
-                error=redact_sensitive_text(exc),
-            )
-
-        if read_result.error:
-            self._record_error_offset(
-                config=config,
-                offset=offset,
-                error=read_result.error,
-                diagnostics=read_result.diagnostics,
-            )
-            return PollingCycleResult(
-                status="error",
-                rows_fetched=read_result.row_count,
-                diagnostics=redact_stream_diagnostics(read_result.diagnostics or {}),
-                error=redact_sensitive_text(read_result.error),
-            )
-
-        mapping_result = map_rows_to_samples(
-            read_result.rows,
-            SignalSampleMapping(config=config, signal=signal),
-            ingest_time=now_text,
-        )
-        diagnostics: dict[str, Any] = {
-            "source": redact_stream_diagnostics(read_result.diagnostics or {}),
-            "mapping": {
-                "rows_processed": mapping_result.stats.rows_processed,
-                "samples_mapped": mapping_result.stats.samples_mapped,
-                "samples_skipped": mapping_result.stats.samples_skipped,
-                "missing_required": mapping_result.stats.missing_required,
-                "non_numeric": mapping_result.stats.non_numeric,
-                "invalid_timestamp": mapping_result.stats.invalid_timestamp,
-            },
-        }
-        try:
-            batch_result = self.sample_repository.insert_samples(mapping_result.samples)
-            persisted_samples = self._load_current_samples(
-                signal_id=signal.id,
-                sample_ids=batch_result.sample_ids,
-            )
-            events_created, detector_diagnostics = self._detect_and_persist_events(
-                signal_id=signal.id,
-                signal=signal,
-                current_samples=persisted_samples,
-                config=config,
-                now=now_text,
-            )
-            diagnostics["detectors"] = detector_diagnostics
-            lag_seconds = _lag_seconds(read_result.event_time_watermark, now_text)
-            final_offset = self.offset_store.upsert_offset(
-                StreamOffset(
-                    source_profile_id=config.source_profile_id,
-                    stream_key=config.stream_key,
-                    cursor_column=config.record_key_column,
-                    cursor_value=read_result.cursor_value or _offset_value(offset),
-                    event_time_watermark=read_result.event_time_watermark
-                    or _offset_watermark(offset),
-                    last_success_at=now_text,
-                    last_error=None,
-                    lag_seconds=lag_seconds,
-                    status="idle",
-                )
-            )
-        except Exception as exc:
-            return PollingCycleResult(
-                status="error",
-                rows_fetched=read_result.row_count,
-                samples_processed=mapping_result.stats.samples_mapped,
-                diagnostics=diagnostics,
-                error=redact_sensitive_text(exc),
-            )
-
-        status = "idle" if read_result.row_count == 0 else "success"
-        if diagnostics.get("detectors", {}).get("errors"):
-            status = "partial"
-        return PollingCycleResult(
-            status=status,
-            rows_fetched=read_result.row_count,
-            samples_processed=batch_result.processed,
-            samples_inserted=batch_result.inserted,
-            samples_skipped=batch_result.skipped + mapping_result.stats.samples_skipped,
-            events_created=events_created,
-            cursor_value=final_offset.cursor_value,
-            event_time_watermark=final_offset.event_time_watermark,
-            lag_seconds=final_offset.lag_seconds,
+    validated = config.validated()
+    sample_repository = RealtimeSampleRepository(database)
+    offset_store = StreamOffsetStore(database)
+    event_repository = AnomalyEventRepository(database)
+    existing_offset = offset_store.get_offset(
+        source_profile_id=validated.source_profile_id,
+        stream_key=validated.stream_key,
+    )
+    try:
+        query = build_bounded_poll_query(profile=profile, config=validated, offset=existing_offset)
+    except Exception as exc:
+        error = redact_sensitive_text(exc)
+        diagnostics = _failure_diagnostics("query_build", error=error, offset=existing_offset)
+        _record_failed_offset(offset_store, validated, existing_offset, error)
+        return _result(
+            validated,
+            "failed",
+            cursor_value=_offset_value(existing_offset),
+            event_time_watermark=_watermark(existing_offset),
+            error=error,
             diagnostics=diagnostics,
         )
 
-    def _load_current_samples(
-        self,
-        *,
-        signal_id: int,
-        sample_ids: tuple[int, ...],
-    ) -> list[IndustrialSample]:
-        if not sample_ids:
-            return []
-        samples_by_id = {
-            sample.id: sample
-            for sample in self.sample_repository.list_samples(signal_id=signal_id)
-            if sample.id is not None
-        }
-        return [samples_by_id[sample_id] for sample_id in sample_ids if sample_id in samples_by_id]
-
-    def _detect_and_persist_events(
-        self,
-        *,
-        signal_id: int,
-        signal,
-        current_samples: list[IndustrialSample],
-        config: RealtimeStreamConfig,
-        now: str,
-    ) -> tuple[int, dict[str, Any]]:
-        if not current_samples:
-            return 0, {"events_created": 0}
-        current_ids = {sample.id for sample in current_samples if sample.id is not None}
-        history_limit = max(len(current_samples), int(config.policy.history_limit or 0))
-        history = self.sample_repository.list_recent_samples(
-            signal_id=signal_id,
-            limit=max(history_limit, len(current_samples)),
-        )
-        baseline = self.baseline_repository.latest_baseline(signal_id=signal_id) or {}
-        diagnostics: dict[str, Any] = {"events_created": 0, "errors": []}
-        try:
-            events = [
-                event
-                for event in run_detectors_for_samples(
-                    history,
-                    signal=signal,
-                    detectors=config.detectors,
-                    baseline=baseline,
-                    now=now,
-                )
-                if event.sample_id in current_ids
-            ]
-        except Exception as exc:
-            diagnostics["errors"].append(redact_sensitive_text(exc))
-            return 0, diagnostics
-        if not events:
-            return 0, diagnostics
-        event_result = self.event_repository.insert_events(events)
-        diagnostics["events_created"] = event_result.inserted
-        return event_result.inserted, diagnostics
-
-    def _record_error_offset(
-        self,
-        *,
-        config: RealtimeStreamConfig,
-        offset: StreamOffset | None,
-        error: str,
-        diagnostics: Mapping[str, Any] | None,
-    ) -> None:
-        self.offset_store.upsert_offset(
-            StreamOffset(
-                source_profile_id=config.source_profile_id,
-                stream_key=config.stream_key,
-                cursor_column=config.record_key_column,
-                cursor_value=_offset_value(offset),
-                event_time_watermark=_offset_watermark(offset),
-                last_success_at=offset.last_success_at if offset is not None else None,
-                last_error=redact_sensitive_text(error),
-                lag_seconds=offset.lag_seconds if offset is not None else None,
-                status="error",
+    diagnostics = safe_query_diagnostics(query)
+    try:
+        read_result = adapter.fetch_rows(
+            request=SourceReadRequest(
+                profile=profile,
+                config=validated,
+                query=query,
+                offset=existing_offset,
             )
         )
+    except Exception as exc:
+        error = redact_sensitive_text(exc)
+        diagnostics = _failure_diagnostics(
+            "source_fetch",
+            error=error,
+            diagnostics=diagnostics,
+            offset=existing_offset,
+        )
+        _record_failed_offset(offset_store, validated, existing_offset, error)
+        return _result(
+            validated,
+            "failed",
+            cursor_value=_offset_value(existing_offset),
+            event_time_watermark=_watermark(existing_offset),
+            error=error,
+            diagnostics=diagnostics,
+        )
+
+    diagnostics.update(_safe_mapping(read_result.diagnostics))
+    if read_result.error:
+        error = redact_sensitive_text(read_result.error)
+        rows_fetched = len(read_result.rows)
+        diagnostics = _failure_diagnostics(
+            "source_read",
+            error=error,
+            diagnostics=diagnostics,
+            rows_fetched=rows_fetched,
+            offset=existing_offset,
+        )
+        _record_failed_offset(offset_store, validated, existing_offset, error)
+        return _result(
+            validated,
+            "failed",
+            rows_fetched=rows_fetched,
+            cursor_value=_offset_value(existing_offset),
+            event_time_watermark=_watermark(existing_offset),
+            error=error,
+            diagnostics=diagnostics,
+        )
+
+    try:
+        signals = {
+            signal_key: _ensure_signal_for_config(sample_repository, validated, signal_key)
+            for signal_key in validated.signal_keys
+        }
+    except Exception as exc:
+        error = redact_sensitive_text(exc)
+        diagnostics = _failure_diagnostics(
+            "signal_setup",
+            error=error,
+            diagnostics=diagnostics,
+            rows_fetched=len(read_result.rows),
+            offset=existing_offset,
+        )
+        _record_failed_offset(offset_store, validated, existing_offset, error)
+        return _result(
+            validated,
+            "failed",
+            rows_fetched=len(read_result.rows),
+            error=error,
+            diagnostics=diagnostics,
+        )
+    try:
+        mapping = map_rows_to_samples(read_result.rows, config=validated, signals=signals)
+    except Exception as exc:
+        error = redact_sensitive_text(exc)
+        diagnostics = _failure_diagnostics(
+            "map_rows",
+            error=error,
+            diagnostics=diagnostics,
+            rows_fetched=len(read_result.rows),
+            offset=existing_offset,
+        )
+        _record_failed_offset(offset_store, validated, existing_offset, error)
+        return _result(
+            validated,
+            "failed",
+            rows_fetched=len(read_result.rows),
+            error=error,
+            diagnostics=diagnostics,
+        )
+    try:
+        batch_result = sample_repository.insert_samples(mapping.samples)
+    except Exception as exc:
+        error = redact_sensitive_text(exc)
+        diagnostics = _failure_diagnostics(
+            "persist_samples",
+            error=error,
+            diagnostics=diagnostics,
+            rows_fetched=len(read_result.rows),
+            samples_processed=mapping.stats.mapped,
+            cursor_value=mapping.cursor_value,
+            event_time_watermark=mapping.event_time_watermark,
+            offset=existing_offset,
+        )
+        _record_failed_offset(offset_store, validated, existing_offset, error)
+        return _result(
+            validated,
+            "failed",
+            rows_fetched=len(read_result.rows),
+            samples_processed=mapping.stats.mapped,
+            cursor_value=mapping.cursor_value or _offset_value(existing_offset),
+            event_time_watermark=mapping.event_time_watermark or _watermark(existing_offset),
+            error=error,
+            diagnostics=diagnostics,
+        )
+    try:
+        persisted_samples = _load_persisted_samples(sample_repository, signals.values(), batch_result.sample_ids)
+        detector_events = _score_detector_events(
+            persisted_samples,
+            signals=signals,
+            detectors=validated.detectors,
+            detector_runner=detector_runner,
+            diagnostics=diagnostics,
+        )
+        event_result = event_repository.insert_events(detector_events) if detector_events else None
+    except Exception as exc:
+        error = redact_sensitive_text(exc)
+        diagnostics = _failure_diagnostics(
+            "persist_events",
+            error=error,
+            diagnostics=diagnostics,
+            rows_fetched=len(read_result.rows),
+            samples_processed=mapping.stats.mapped,
+            cursor_value=mapping.cursor_value,
+            event_time_watermark=mapping.event_time_watermark,
+            offset=existing_offset,
+        )
+        _record_failed_offset(offset_store, validated, existing_offset, error)
+        return _result(
+            validated,
+            "failed",
+            rows_fetched=len(read_result.rows),
+            samples_processed=mapping.stats.mapped,
+            cursor_value=mapping.cursor_value or _offset_value(existing_offset),
+            event_time_watermark=mapping.event_time_watermark or _watermark(existing_offset),
+            error=error,
+            diagnostics=diagnostics,
+        )
+
+    lag_seconds = _lag_seconds(mapping.event_time_watermark)
+    offset_store.upsert_offset(
+        StreamOffset(
+            source_profile_id=validated.source_profile_id,
+            stream_key=validated.stream_key,
+            cursor_column=validated.cursor_column,
+            cursor_value=mapping.cursor_value or _offset_value(existing_offset),
+            cursor_tie_breaker_column=validated.record_key_column,
+            cursor_tie_breaker_value=mapping.cursor_tie_breaker_value
+            or _offset_tie_breaker(existing_offset),
+            event_time_watermark=mapping.event_time_watermark or _watermark(existing_offset),
+            last_success_at=utc_timestamp(),
+            last_error=None,
+            lag_seconds=lag_seconds,
+            status="idle",
+        )
+    )
+    return _result(
+        validated,
+        "completed",
+        rows_fetched=len(read_result.rows),
+        samples_processed=batch_result.processed,
+        samples_inserted=batch_result.inserted,
+        samples_skipped=batch_result.skipped,
+        detector_events_created=event_result.inserted if event_result is not None else 0,
+        cursor_value=mapping.cursor_value or _offset_value(existing_offset),
+        event_time_watermark=mapping.event_time_watermark or _watermark(existing_offset),
+        lag_seconds=lag_seconds,
+        diagnostics=diagnostics,
+    )
 
 
-def summarize_monitor_results(results: list[PollingCycleResult]) -> RealtimeMonitorStatus:
-    """Summarize multiple stream cycle results."""
+def _ensure_signal_for_config(
+    sample_repository: RealtimeSampleRepository,
+    config: RealtimePollConfig,
+    signal_key: str,
+) -> SignalDefinition:
+    existing = sample_repository.get_signal_definition(
+        source_profile_id=config.source_profile_id,
+        signal_key=signal_key,
+    )
+    return sample_repository.upsert_signal_definition(
+        _signal_definition_for_config(config, signal_key, existing=existing)
+    )
 
-    return RealtimeMonitorStatus(
-        cycles=len(results),
-        succeeded=sum(1 for result in results if result.status in {"success", "idle"}),
-        failed=sum(1 for result in results if result.status == "error"),
-        partial=sum(1 for result in results if result.status == "partial"),
-        rows_fetched=sum(result.rows_fetched for result in results),
-        events_created=sum(result.events_created for result in results),
+
+def _signal_definition_for_config(
+    config: RealtimePollConfig,
+    signal_key: str,
+    *,
+    existing: SignalDefinition | None = None,
+) -> SignalDefinition:
+    return SignalDefinition(
+        id=existing.id if existing is not None else None,
+        source_profile_id=config.source_profile_id,
+        signal_key=signal_key,
+        metric_name=config.signal_columns[signal_key],
+        unit=existing.unit if existing is not None else None,
+        nominal=existing.nominal if existing is not None else None,
+        lsl=existing.lsl if existing is not None else None,
+        usl=existing.usl if existing is not None else None,
+        lower_warning=existing.lower_warning if existing is not None else None,
+        upper_warning=existing.upper_warning if existing is not None else None,
+        segment_fields=config.segment_fields,
+    )
+
+
+def _load_persisted_samples(
+    sample_repository: RealtimeSampleRepository,
+    signals: Iterable[SignalDefinition],
+    sample_ids: tuple[int, ...],
+) -> list[IndustrialSample]:
+    signal_ids = {signal.id for signal in signals if signal.id is not None}
+    if not signal_ids or not sample_ids:
+        return []
+    return [
+        sample
+        for sample in sample_repository.list_samples_by_ids(sample_ids)
+        if sample.signal_id in signal_ids
+    ]
+
+
+def _score_detector_events(
+    samples: Iterable[IndustrialSample],
+    *,
+    signals: Mapping[str, SignalDefinition],
+    detectors: tuple[str, ...],
+    detector_runner: DetectorRunner | None,
+    diagnostics: dict[str, Any],
+) -> list[Any]:
+    by_signal: dict[int, list[IndustrialSample]] = {}
+    for sample in samples:
+        by_signal.setdefault(sample.signal_id, []).append(sample)
+    signal_by_id = {
+        int(signal.id): signal
+        for signal in signals.values()
+        if signal.id is not None
+    }
+    events: list[Any] = []
+    runner = detector_runner or _default_detector_runner
+    for signal_id, signal_samples in by_signal.items():
+        signal = signal_by_id.get(signal_id)
+        if signal is None:
+            continue
+        try:
+            events.extend(runner(signal_samples, signal, detectors))
+        except Exception as exc:
+            diagnostics.setdefault("warnings", [])
+            diagnostics["warnings"].append(f"detector failure: {redact_sensitive_text(exc)}")
+    return events
+
+
+def _default_detector_runner(
+    samples: Iterable[IndustrialSample],
+    signal: SignalDefinition,
+    detectors: tuple[str, ...],
+) -> list[Any]:
+    return run_detectors_for_samples(samples, signal=signal, detectors=detectors, baseline={})
+
+
+def _record_failed_offset(
+    offset_store: StreamOffsetStore,
+    config: RealtimePollConfig,
+    existing_offset: StreamOffset | None,
+    error: str,
+) -> None:
+    offset_store.upsert_offset(
+        StreamOffset(
+            source_profile_id=config.source_profile_id,
+            stream_key=config.stream_key,
+            cursor_column=config.cursor_column,
+            cursor_value=_offset_value(existing_offset),
+            cursor_tie_breaker_column=existing_offset.cursor_tie_breaker_column
+            if existing_offset
+            else None,
+            cursor_tie_breaker_value=_offset_tie_breaker(existing_offset),
+            event_time_watermark=_watermark(existing_offset),
+            last_error=redact_sensitive_text(error, max_len=500),
+            lag_seconds=existing_offset.lag_seconds if existing_offset else None,
+            status="failed",
+        )
+    )
+
+
+def _failure_diagnostics(
+    stage: str,
+    *,
+    error: str,
+    diagnostics: Mapping[str, Any] | None = None,
+    rows_fetched: int | None = None,
+    samples_processed: int | None = None,
+    cursor_value: str | None = None,
+    event_time_watermark: str | None = None,
+    offset: StreamOffset | None = None,
+) -> dict[str, Any]:
+    safe = _safe_mapping(diagnostics or {})
+    existing_stage = str(safe.get("stage") or "").strip()
+    if existing_stage:
+        safe["stage"] = existing_stage
+        if existing_stage != stage:
+            safe["failure_stage"] = stage
+    else:
+        safe["stage"] = stage
+    safe["error"] = redact_sensitive_text(error, max_len=500)
+    if rows_fetched is not None:
+        safe["rows_fetched"] = int(rows_fetched)
+    if samples_processed is not None:
+        safe["samples_processed"] = int(samples_processed)
+    cursor = cursor_value or _offset_value(offset)
+    if cursor not in (None, ""):
+        safe["cursor_value"] = redact_sensitive_text(cursor, max_len=160)
+    watermark = event_time_watermark or _watermark(offset)
+    if watermark not in (None, ""):
+        safe["event_time_watermark"] = redact_sensitive_text(watermark, max_len=160)
+    if "query_summary" not in safe:
+        query_summary = _query_summary_from_diagnostics(safe)
+        if query_summary:
+            safe["query_summary"] = query_summary
+    return safe
+
+
+def _query_summary_from_diagnostics(diagnostics: Mapping[str, Any]) -> str | None:
+    summary = diagnostics.get("summary")
+    if not isinstance(summary, Mapping):
+        return None
+    stream_key = summary.get("stream_key") or "stream"
+    dialect = summary.get("dialect") or "source"
+    limit = summary.get("limit")
+    cursor_column = summary.get("cursor_column") or "cursor"
+    source_object = summary.get("source_object") or "configured source"
+    parts = [f"bounded {dialect} poll", f"source={source_object}", f"stream={stream_key}"]
+    if limit is not None:
+        parts.append(f"limit={limit}")
+    if cursor_column:
+        parts.append(f"cursor={cursor_column}")
+    return ", ".join(str(part) for part in parts)
+
+
+def _result(
+    config: RealtimePollConfig,
+    status: str,
+    *,
+    rows_fetched: int = 0,
+    samples_processed: int = 0,
+    samples_inserted: int = 0,
+    samples_skipped: int = 0,
+    detector_events_created: int = 0,
+    cursor_value: str | None = None,
+    event_time_watermark: str | None = None,
+    lag_seconds: float | None = None,
+    error: str | None = None,
+    diagnostics: Mapping[str, Any] | None = None,
+) -> PollingCycleResult:
+    return PollingCycleResult(
+        source_profile_id=config.source_profile_id,
+        stream_key=config.stream_key,
+        status=status,
+        rows_fetched=rows_fetched,
+        samples_processed=samples_processed,
+        samples_inserted=samples_inserted,
+        samples_skipped=samples_skipped,
+        detector_events_created=detector_events_created,
+        cursor_value=cursor_value,
+        event_time_watermark=event_time_watermark,
+        lag_seconds=lag_seconds,
+        error=error,
+        diagnostics=dict(diagnostics or {}),
     )
 
 
@@ -300,26 +471,60 @@ def _offset_value(offset: StreamOffset | None) -> str | None:
     return offset.cursor_value if offset is not None else None
 
 
-def _offset_watermark(offset: StreamOffset | None) -> str | None:
+def _offset_tie_breaker(offset: StreamOffset | None) -> str | None:
+    return offset.cursor_tie_breaker_value if offset is not None else None
+
+
+def _watermark(offset: StreamOffset | None) -> str | None:
     return offset.event_time_watermark if offset is not None else None
 
 
-def _lag_seconds(event_time: str | None, now: str) -> float | None:
+def _safe_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
+    safe: dict[str, Any] = {}
+    for key, nested in dict(value or {}).items():
+        key_text = str(key)
+        safe_value = _safe_diagnostic_value(key_text, nested)
+        if safe_value is _SKIP_DIAGNOSTIC:
+            continue
+        safe[key_text] = safe_value
+    return safe
+
+
+_SKIP_DIAGNOSTIC = object()
+
+
+def _safe_diagnostic_value(key: str, value: Any) -> Any:
+    key_text = str(key)
+    if _is_raw_sql_diagnostic_key(key_text):
+        return _SKIP_DIAGNOSTIC
+    if looks_sensitive_key(key_text) and key_text not in {"credentials_source"}:
+        return "<redacted>"
+    if isinstance(value, Mapping):
+        return _safe_mapping(value)
+    if isinstance(value, list):
+        return tuple(_safe_diagnostic_value("", item) for item in value)
+    if isinstance(value, tuple):
+        return tuple(_safe_diagnostic_value("", item) for item in value)
+    if isinstance(value, str):
+        return redact_sensitive_text(value, max_len=None)
+    return value
+
+
+def _is_raw_sql_diagnostic_key(key: str) -> bool:
+    normalized = str(key or "").strip().lower()
+    return normalized in {"sql", "sql_text", "raw_sql", "query", "query_sql", "sql_query", "parameters"}
+
+
+def _lag_seconds(event_time: str | None) -> float | None:
     if not event_time:
         return None
     try:
-        event_dt = _parse_time(event_time)
-        now_dt = _parse_time(now)
+        text = str(event_time)
+        if text.endswith("Z"):
+            text = f"{text[:-1]}+00:00"
+        parsed = datetime.fromisoformat(text)
     except ValueError:
         return None
-    return max(0.0, (now_dt - event_dt).total_seconds())
-
-
-def _parse_time(value: str) -> datetime:
-    text = str(value).strip()
-    if text.endswith("Z"):
-        text = f"{text[:-1]}+00:00"
-    parsed = datetime.fromisoformat(text)
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+    return max(0.0, (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds())

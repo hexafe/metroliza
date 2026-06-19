@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from modules.industrial_data_repository import IndustrialDataRepository
+from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
 from metroliza.industrial.anomaly.contracts import DetectorContext
 from metroliza.industrial.anomaly.detectors import StaleSourceDetector
 from metroliza.industrial.anomaly.event_repository import AnomalyEventRepository

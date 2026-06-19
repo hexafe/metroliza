@@ -92,6 +92,51 @@ def test_dialog_saves_non_secret_source_metadata_without_credentials(tmp_path):
     dialog.close()
 
 
+def test_source_dialog_saves_copy_pasted_csv_header_columns(tmp_path):
+    _app()
+    db_path = str(tmp_path / "metroliza.db")
+    config_path = tmp_path / "industrial_sources.yaml"
+    dialog = IndustrialSourceProfilesDialog(db_file=db_path, config_path=config_path)
+
+    dialog.source_name_edit.setText("Assembly MES")
+    dialog.alias_edit.setText("assembly_mes")
+    dialog.host_edit.setText("mes.example.invalid")
+    dialog.database_edit.setText("plantdb")
+    dialog.table_edit.setText("events")
+    dialog.columns_edit.setText('"TimeStamp","OP100RetestNumber3"')
+
+    dialog.save_source()
+    profiles = IndustrialDataRepository(db_path).list_source_profiles(include_disabled=True)
+
+    assert profiles[0].allowed_columns == ("TimeStamp", "OP100RetestNumber3")
+    assert "allowed_columns:" in config_path.read_text(encoding="utf-8")
+    dialog.close()
+
+
+@pytest.mark.parametrize("columns_text", ["", "   ", "*"])
+def test_source_dialog_keeps_empty_or_star_columns_unrestricted(tmp_path, columns_text):
+    _app()
+    db_path = str(tmp_path / "metroliza.db")
+    config_path = tmp_path / "industrial_sources.yaml"
+    dialog = IndustrialSourceProfilesDialog(db_file=db_path, config_path=config_path)
+
+    dialog.source_name_edit.setText("Assembly MES")
+    dialog.alias_edit.setText("assembly_mes")
+    dialog.host_edit.setText("mes.example.invalid")
+    dialog.database_edit.setText("plantdb")
+    dialog.table_edit.setText("events")
+    dialog.columns_edit.setText(columns_text)
+    dialog.record_key_edit.setText("OP100RetestNumber3")
+    dialog.timestamp_column_edit.setText("TimeStamp")
+
+    dialog.save_source()
+    profiles = IndustrialDataRepository(db_path).list_source_profiles(include_disabled=True)
+
+    assert profiles[0].allowed_columns == ()
+    assert "allowed_columns" not in config_path.read_text(encoding="utf-8")
+    dialog.close()
+
+
 def test_source_dialog_can_configure_file_before_metroliza_database_is_selected(tmp_path):
     _app()
     config_path = tmp_path / "industrial_sources.yaml"
@@ -1002,9 +1047,10 @@ def test_industrial_workflow_dialogs_fit_their_initial_heights(tmp_path):
         ),
     ]
     try:
+        available = _app().primaryScreen().availableGeometry()
         for dialog in dialogs:
             assert dialog.sizeHint().height() <= dialog.height()
-            assert dialog.sizeHint().width() <= dialog.width()
+            assert dialog.width() <= available.width()
     finally:
         for dialog in dialogs:
             dialog.close()

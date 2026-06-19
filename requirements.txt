@@ -3,7 +3,7 @@ cryptography>=46.0.7
 google-auth-oauthlib>=1.2.0
 hexafe-groupstats[pandas] @ git+https://github.com/hexafe/hexafe-groupstats.git@14cc60e7412fa2647a8906f3f8833d0d789fc552
 hexafe-plotstats[pandas] @ git+https://github.com/hexafe/hexafe-plotstats.git@1e2c72107d342f44a37e5fb78d7d76992ea60315
-oznak @ git+https://github.com/hexafe/oznak.git@46eba3f63eab1d65e3117c238324eade9118d242
+oznak @ git+https://github.com/hexafe/oznak.git@ed51580dfdec9f91f6320c7937af6d65dd5a1290
 matplotlib>=3.8.1
 numpy>=1.24.3
 openpyxl>=3.1.2

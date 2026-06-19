@@ -40,6 +40,7 @@ def export_production_analytics_workbook(
     separate_parameter_sheets: bool = True,
     chart_selection: ProductionChartSelection | None = None,
     group_fields: tuple[str, ...] = (),
+    include_raw_data: bool = False,
 ) -> IndustrialAnalyticsWorkbookResult:
     """Write production analytics workbook output."""
 
@@ -50,7 +51,9 @@ def export_production_analytics_workbook(
 
     used_names: set[str] = set()
     sheet_names: list[str] = []
-    safe_dataframe = _excel_safe_dataframe(_public_dataframe(dataframe))
+    safe_dataframe = _excel_safe_dataframe(
+        _analytics_workbook_dataframe(dataframe, include_raw_data=include_raw_data)
+    )
     safe_aggregation_frame = (
         _excel_safe_dataframe(aggregation_result.dataframe)
         if aggregation_result is not None
@@ -128,7 +131,9 @@ def _excel_safe_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
     return safe_frame
 
 
-def _public_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
+def _analytics_workbook_dataframe(dataframe: pd.DataFrame, *, include_raw_data: bool) -> pd.DataFrame:
+    if include_raw_data:
+        return dataframe.copy()
     return dataframe.drop(columns=["raw_record_json"], errors="ignore").copy()
 
 

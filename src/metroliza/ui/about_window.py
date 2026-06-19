@@ -8,31 +8,7 @@ from metroliza.app import version as VersionDate
 import base64
 
 
-SUPPORT_URL = "https://www.github.com/hexafe/"
-
-
-def build_support_build_info() -> str:
-    """Return compact support metadata that users can copy from the About dialog."""
-    public_version = getattr(VersionDate, "PUBLIC_VERSION_LABEL", VersionDate.VERSION_LABEL)
-    return "\n".join(
-        [
-            "Support/build info",
-            f"Version: {public_version}",
-            f"Internal version: {VersionDate.VERSION_LABEL}",
-            f"Build: {VersionDate.VERSION_DATE}",
-            "Manual: Help > Startup, license, and support",
-            f"Support URL: {SUPPORT_URL}",
-        ]
-    )
-
-
-def _make_selectable(label):
-    if hasattr(label, "setTextInteractionFlags") and hasattr(Qt, "TextInteractionFlag"):
-        label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-            | Qt.TextInteractionFlag.TextSelectableByKeyboard
-        )
-    return label
+SUPPORT_URL = "https://github.com/hexafe/metroliza"
 
 
 class ClickableLabel(QLabel):
@@ -54,7 +30,7 @@ class ClickableLabel(QLabel):
 
 
 class AboutWindow(QDialog):
-    """Display version, license, and project attribution information.
+    """Display compact version and project attribution information.
 
     The dialog renders an embedded GIF from in-memory base64 content and keeps the
     backing buffer and movie instance alive for the dialog lifetime.
@@ -93,12 +69,6 @@ class AboutWindow(QDialog):
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.layout.addWidget(title_label)
 
-        if days_until_expiration is not None:
-            # Add the license expiration label
-            license_expiration_label = QLabel(f"License expiration in <b>{days_until_expiration+1}</b> day{'s' if days_until_expiration+1 > 1 else ''}")
-            license_expiration_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.layout.addWidget(license_expiration_label)
-
         # Add the clickable label with email
         # author_label = ClickableLabel(f"Grzegorz Ozimek (grzegorz.ozimek@valeo.com)", "mailto:grzegorz.ozimek@valeo.com")
         author_label = QLabel("Grzegorz Ozimek")
@@ -106,13 +76,8 @@ class AboutWindow(QDialog):
         author_label.setOpenExternalLinks(True)
         self.layout.addWidget(author_label)
 
-        support_info_label = _make_selectable(QLabel(build_support_build_info()))
-        support_info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.support_info_label = support_info_label
-        self.layout.addWidget(support_info_label)
-
         # Add the text with a link to www.github.com
-        link_label = ClickableLabel(f"Github: {SUPPORT_URL}", SUPPORT_URL)
+        link_label = ClickableLabel(f"GitHub: {SUPPORT_URL}", SUPPORT_URL)
         link_label.setOpenExternalLinks(True)
         link_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         self.layout.addWidget(link_label)

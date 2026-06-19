@@ -47,6 +47,18 @@ _BLOCKED_RAW_SQL_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bFOR\s+UPDATE\b", flags=re.IGNORECASE), "FOR UPDATE"),
     (re.compile(r"\bLOCK\s+IN\s+SHARE\s+MODE\b", flags=re.IGNORECASE), "LOCK IN SHARE MODE"),
 )
+_RAW_SQL_DIAGNOSTIC_SQL_KEYS = frozenset(
+    {
+        "sql",
+        "sqltext",
+        "rawsql",
+        "rawquery",
+        "query",
+        "querytext",
+        "statement",
+        "statementtext",
+    }
+)
 
 _ROW_KEY_ALIASES: dict[str, tuple[str, ...]] = {
     "source_primary_key": ("source_primary_key", "id", "pk", "row_id", "record_id", "external_id"),
@@ -423,6 +435,31 @@ def _combine_fetch_diagnostics(payloads: list[Any]) -> dict[str, Any]:
     }
 
 
+def _chunk_event_diagnostics_payload(
+    *,
+    source_results: list[Any],
+    warnings: list[str],
+    errors: list[str],
+    row_count: int,
+    streamed_to_callback: bool,
+) -> SimpleNamespace:
+    has_errors = bool(errors) or any(
+        str(_diagnostic_to_dict(diagnostic).get("status") or "").strip().lower()
+        in {"failed", "timeout", "cancelled"}
+        for diagnostic in source_results
+    )
+    return SimpleNamespace(
+        data=(),
+        source_results=tuple(source_results),
+        warnings=tuple(warnings),
+        errors=tuple(errors),
+        row_count=int(row_count),
+        has_errors=has_errors,
+        partial_success=bool(has_errors and row_count > 0),
+        streamed_to_callback=streamed_to_callback,
+    )
+
+
 def _scrub_raw_sql_literals_and_comments(sql: str) -> str:
     output: list[str] = []
     index = 0
@@ -524,6 +561,38 @@ def _validate_raw_select_sql(sql_text: str) -> str:
     return normalized
 
 
+def _raw_sql_query_summary(profile: Any, *, mode: str, limit: int | None) -> str:
+    alias = str(_profile_value(profile, "source_db_alias", "database_alias", "alias") or "").strip()
+    database_type = str(_profile_value(profile, "database_type", "dialect") or "unknown").strip()
+    normalized_mode = "preview" if str(mode or "").strip().lower() == "preview" else "fetch"
+    row_limit = int(limit) if limit is not None else None
+    limit_summary = "all rows" if row_limit is None else f"limit {row_limit}"
+    return f"raw SQL {normalized_mode} on {alias or 'source'} ({database_type or 'unknown'}, {limit_summary})"
+
+
+def _scrub_raw_sql_diagnostics(value: Any, *, query_summary: str) -> Any:
+    if isinstance(value, Mapping):
+        scrubbed: dict[str, Any] = {}
+        for key, nested in value.items():
+            key_text = str(key)
+            compact_key = re.sub(r"[^a-z0-9]+", "", key_text.lower())
+            if key_text == "query_summary":
+                scrubbed[key_text] = query_summary
+            elif compact_key in _RAW_SQL_DIAGNOSTIC_SQL_KEYS:
+                scrubbed[key_text] = "<redacted>"
+            else:
+                scrubbed[key_text] = _scrub_raw_sql_diagnostics(
+                    nested,
+                    query_summary=query_summary,
+                )
+        return scrubbed
+    if isinstance(value, list):
+        return [_scrub_raw_sql_diagnostics(item, query_summary=query_summary) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_scrub_raw_sql_diagnostics(item, query_summary=query_summary) for item in value)
+    return value
+
+
 def _raise_if_cancelled(cancellation_token: Any) -> None:
     if cancellation_token is None:
         return
@@ -565,6 +634,7 @@ def _fetch_raw_sql_records_with_metroliza_fallback(
     progress_callback: Any,
     record_batch_callback: Any = None,
     metroliza_profile: Any = None,
+    parameters: tuple[Any, ...] = (),
 ) -> Any:
     """Run read-only SQL through Oznak's existing engine contract.
 
@@ -602,6 +672,7 @@ def _fetch_raw_sql_records_with_metroliza_fallback(
             "metadata": {
                 "mode": normalized_mode,
                 "limit": row_limit,
+                "sql_parameter_count": len(tuple(parameters or ())),
                 "execution_contract": "metroliza_engine_fallback",
             },
         }
@@ -610,6 +681,8 @@ def _fetch_raw_sql_records_with_metroliza_fallback(
         return SimpleNamespace(**payload)
 
     engine = None
+    row_count = 0
+    streamed_to_callback = False
     try:
         _raise_if_cancelled(cancellation_token)
         engine_factory = _raw_sql_engine_factory(importer, oznak_module)
@@ -621,12 +694,12 @@ def _fetch_raw_sql_records_with_metroliza_fallback(
 
         sqlalchemy_module = importer("sqlalchemy")
         text = getattr(sqlalchemy_module, "text")
+        query_parameters = tuple(parameters or ())
 
         with engine.connect() as connection:
-            cursor = connection.execute(text(normalized_sql))
+            cursor = _execute_raw_sql(connection, text, normalized_sql, query_parameters)
             mapping_cursor = cursor.mappings()
             data: list[dict[str, Any]] = []
-            row_count = 0
             fetch_size = min(row_limit, DEFAULT_OZNAK_FETCH_CHUNK_SIZE) if row_limit else DEFAULT_OZNAK_FETCH_CHUNK_SIZE
             while True:
                 _raise_if_cancelled(cancellation_token)
@@ -650,6 +723,7 @@ def _fetch_raw_sql_records_with_metroliza_fallback(
                     )
                     if batch_records:
                         record_batch_callback(batch_records)
+                        streamed_to_callback = True
                 else:
                     data.extend(rows)
                 if progress_callback is not None and row_limit is None:
@@ -669,7 +743,7 @@ def _fetch_raw_sql_records_with_metroliza_fallback(
         message = f"Source '{alias}' raw SQL fallback failed: {_safe_exception_summary(exc)}"
         diagnostic = _diagnostic_payload(
             status="failed",
-            row_count=0,
+            row_count=row_count,
             message=message,
             error_code="raw_sql_fallback_error",
         )
@@ -680,9 +754,10 @@ def _fetch_raw_sql_records_with_metroliza_fallback(
             source_results=(diagnostic,),
             warnings=(),
             errors=(message,),
-            row_count=0,
+            row_count=row_count,
             has_errors=True,
-            partial_success=False,
+            partial_success=bool(row_count > 0),
+            streamed_to_callback=streamed_to_callback or bool(record_batch_callback is not None and row_count > 0),
         )
     finally:
         dispose = getattr(engine, "dispose", None)
@@ -746,6 +821,17 @@ def _batched(values: tuple[str, ...], batch_size: int) -> tuple[tuple[str, ...],
         return ((),)
     safe_batch_size = max(1, int(batch_size))
     return tuple(values[index : index + safe_batch_size] for index in range(0, len(values), safe_batch_size))
+
+
+def _execute_raw_sql(connection: Any, text_factory: Any, sql_text: str, parameters: tuple[Any, ...]) -> Any:
+    """Execute raw SQL with driver parameters when the SQL contains placeholders."""
+
+    if parameters:
+        exec_driver_sql = getattr(connection, "exec_driver_sql", None)
+        if callable(exec_driver_sql):
+            return exec_driver_sql(sql_text, parameters)
+        return connection.execute(text_factory(sql_text), parameters)
+    return connection.execute(text_factory(sql_text))
 
 
 def _construct_with_supported_kwargs(factory: Any, kwargs: dict[str, Any]) -> Any:
@@ -962,6 +1048,7 @@ def fetch_oznak_records_for_source_profile(
     allow_unbounded: bool = False,
     cancellation_token: Any = None,
     progress_callback: Any = None,
+    record_batch_callback: Any = None,
     max_workers: int | None = None,
     max_pending_events: int | None = None,
     import_module: Any = None,
@@ -998,7 +1085,6 @@ def fetch_oznak_records_for_source_profile(
                 "Refusing an unbounded production-table read."
             ),
         )
-    safe_progress_callback = _sanitize_progress_callback(progress_callback)
 
     try:
         oznak_module = importer(OZNAK_IMPORT_PATH)
@@ -1007,6 +1093,7 @@ def fetch_oznak_records_for_source_profile(
         credential_provider_type = getattr(oznak_module, "MappingCredentialProvider")
         fetch_records = getattr(oznak_module, "fetch_records", None)
         fetch_records_chunked = getattr(oznak_module, "fetch_records_chunked", None)
+        iter_records_chunked = getattr(oznak_module, "iter_records_chunked", None)
         query_filter_type = getattr(oznak_module, "QueryFilter", None)
         if not callable(fetch_records):
             fetcher_module = importer(OZNAK_FETCHER_IMPORT_PATH)
@@ -1014,6 +1101,11 @@ def fetch_oznak_records_for_source_profile(
             fetch_records_chunked = fetch_records_chunked or getattr(
                 fetcher_module,
                 "fetch_records_chunked",
+                None,
+            )
+            iter_records_chunked = iter_records_chunked or getattr(
+                fetcher_module,
+                "iter_records_chunked",
                 None,
             )
         if not callable(fetch_records):
@@ -1089,6 +1181,11 @@ def fetch_oznak_records_for_source_profile(
         and bool(pagination_column)
         and order_by_enabled
     )
+    use_streaming_chunk_events = bool(
+        use_chunked_fetch and callable(iter_records_chunked) and record_batch_callback is not None
+    )
+    streamed_row_count = 0
+    streamed_to_callback = False
 
     try:
         for reference_batch in reference_batches:
@@ -1124,7 +1221,69 @@ def fetch_oznak_records_for_source_profile(
                     "timeout_seconds": timeout_seconds,
                 },
             )
-            if use_chunked_fetch:
+            if use_streaming_chunk_events:
+                chunk_source_results: list[Any] = []
+                chunk_warnings: list[str] = []
+                chunk_errors: list[str] = []
+                chunk_row_count = 0
+                for event in _call_with_supported_kwargs(
+                    iter_records_chunked,
+                    request,
+                    chunk_size=int(chunk_size),
+                    pagination_column=str(pagination_column),
+                    credential_provider=credential_provider,
+                    cancellation_token=cancellation_token,
+                    progress_callback=progress_callback,
+                    max_workers=max_workers,
+                    max_pending_events=max_pending_events,
+                ):
+                    event_frame = getattr(event, "frame", None)
+                    if event_frame is not None:
+                        batch_records = map_oznak_rows_to_industrial_records(
+                            SimpleNamespace(data=event_frame),
+                            profile=profile,
+                        )
+                        if remaining_limit is not None:
+                            batch_records = batch_records[:remaining_limit]
+                        if batch_records:
+                            record_batch_callback(batch_records)
+                            streamed_to_callback = True
+                            batch_count = len(batch_records)
+                            streamed_row_count += batch_count
+                            chunk_row_count += batch_count
+                            if remaining_limit is not None:
+                                remaining_limit -= batch_count
+                                if remaining_limit <= 0:
+                                    break
+                        continue
+
+                    event_diagnostic = getattr(event, "diagnostics", None)
+                    if event_diagnostic is None:
+                        continue
+                    chunk_source_results.append(event_diagnostic)
+                    diagnostic_dict = _diagnostic_to_dict(event_diagnostic)
+                    status_text = str(diagnostic_dict.get("status") or "").strip().lower()
+                    message_text = str(diagnostic_dict.get("message") or "").strip()
+                    if status_text in {"failed", "timeout", "cancelled"} and message_text:
+                        chunk_errors.append(_redact_error_text(message_text))
+                    elif status_text == "no_rows" and message_text:
+                        chunk_warnings.append(_redact_error_text(message_text))
+                    row_count_value = diagnostic_dict.get("row_count")
+                    if row_count_value is not None:
+                        try:
+                            chunk_row_count = max(chunk_row_count, int(row_count_value or 0))
+                        except (TypeError, ValueError):
+                            pass
+                payloads.append(
+                    _chunk_event_diagnostics_payload(
+                        source_results=chunk_source_results,
+                        warnings=chunk_warnings,
+                        errors=chunk_errors,
+                        row_count=chunk_row_count,
+                        streamed_to_callback=streamed_to_callback,
+                    )
+                )
+            elif use_chunked_fetch:
                 payload = _call_with_supported_kwargs(
                     fetch_records_chunked,
                     request,
@@ -1132,7 +1291,7 @@ def fetch_oznak_records_for_source_profile(
                     pagination_column=str(pagination_column),
                     credential_provider=credential_provider,
                     cancellation_token=cancellation_token,
-                    progress_callback=safe_progress_callback,
+                    progress_callback=progress_callback,
                     max_workers=max_workers,
                     max_pending_events=max_pending_events,
                 )
@@ -1142,16 +1301,22 @@ def fetch_oznak_records_for_source_profile(
                     request,
                     credential_provider=credential_provider,
                     cancellation_token=cancellation_token,
-                    progress_callback=safe_progress_callback,
+                    progress_callback=progress_callback,
                     max_workers=max_workers,
                 )
-            payloads.append(payload)
-            batch_records = map_oznak_rows_to_industrial_records(payload, profile=profile)
-            if remaining_limit is not None:
-                batch_records = batch_records[:remaining_limit]
-            records_list.extend(batch_records)
-            if remaining_limit is not None:
-                remaining_limit -= len(batch_records)
+            if not use_streaming_chunk_events:
+                payloads.append(payload)
+                batch_records = map_oznak_rows_to_industrial_records(payload, profile=profile)
+                if remaining_limit is not None:
+                    batch_records = batch_records[:remaining_limit]
+                if record_batch_callback is not None and batch_records:
+                    record_batch_callback(batch_records)
+                    streamed_to_callback = True
+                    streamed_row_count += len(batch_records)
+                else:
+                    records_list.extend(batch_records)
+                if remaining_limit is not None:
+                    remaining_limit -= len(batch_records)
     except Exception as exc:
         return OznakAdapterFetchResult(
             status=status,
@@ -1160,11 +1325,17 @@ def fetch_oznak_records_for_source_profile(
             error=_safe_exception_summary(exc),
         )
 
-    records = tuple(records_list)
+    records = () if streamed_to_callback else tuple(records_list)
     diagnostics = {
         "stage": "mapped",
         "raw_payload_type": type(payloads[-1]).__name__ if payloads else "None",
-        "fetch_strategy": "chunked" if use_chunked_fetch else "single_request",
+        "fetch_strategy": (
+            "streaming_chunked"
+            if use_streaming_chunk_events
+            else "chunked"
+            if use_chunked_fetch
+            else "single_request"
+        ),
         "chunk_size": chunk_size if use_chunked_fetch else None,
         "reference_batch_size": int(reference_batch_size),
         "reference_batches": len(reference_batches),
@@ -1183,6 +1354,7 @@ def fetch_oznak_records_for_source_profile(
         "order_by_enabled": order_by_enabled,
         "max_workers": max_workers,
         "max_pending_events": max_pending_events if use_chunked_fetch else None,
+        "streamed_to_callback": streamed_to_callback,
     }
     diagnostics.update(_combine_fetch_diagnostics(payloads))
     errors = diagnostics.get("errors") or ()
@@ -1190,11 +1362,12 @@ def fetch_oznak_records_for_source_profile(
     partial_success = bool(diagnostics.get("partial_success"))
     if partial_success or warnings:
         diagnostics["completed_with_warnings"] = True
-    error = "; ".join(str(item) for item in errors) if errors and not records else None
+    row_count = streamed_row_count if streamed_to_callback else len(records)
+    error = "; ".join(str(item) for item in errors) if errors and row_count <= 0 else None
     return OznakAdapterFetchResult(
         status=status,
         records=records,
-        row_count=len(records),
+        row_count=row_count,
         implemented=True,
         diagnostics=diagnostics,
         error=error,
@@ -1207,6 +1380,7 @@ def fetch_oznak_records_for_source_sql(
     username: str,
     password: str,
     sql_text: str,
+    parameters: tuple[Any, ...] | None = None,
     limit: int | None = None,
     timeout_seconds: float | None = None,
     mode: str = "fetch",
@@ -1226,7 +1400,8 @@ def fetch_oznak_records_for_source_sql(
             diagnostics={"stage": "availability"},
             error=status.error,
         )
-    safe_progress_callback = _sanitize_progress_callback(progress_callback)
+
+    query_parameters = tuple(parameters or ())
 
     try:
         oznak_module = importer(OZNAK_IMPORT_PATH)
@@ -1298,6 +1473,8 @@ def fetch_oznak_records_for_source_sql(
                 {
                     "profile": oznak_profile,
                     "sql": sql_text,
+                    "parameters": query_parameters,
+                    "params": query_parameters,
                     "limit": limit,
                     "timeout_seconds": timeout_seconds,
                     "mode": mode,
@@ -1319,9 +1496,10 @@ def fetch_oznak_records_for_source_sql(
                 request,
                 credential_provider=credential_provider,
                 cancellation_token=cancellation_token,
-                progress_callback=safe_progress_callback,
+                progress_callback=progress_callback,
                 record_batch_callback=record_batch_callback,
                 metroliza_profile=profile,
+                parameters=query_parameters,
             )
         else:
             payload = _fetch_raw_sql_records_with_metroliza_fallback(
@@ -1330,11 +1508,14 @@ def fetch_oznak_records_for_source_sql(
                 oznak_profile=oznak_profile,
                 credential_provider=credential_provider,
                 sql_text=sql_text,
+                parameters=query_parameters,
                 limit=limit,
                 timeout_seconds=timeout_seconds,
                 mode=mode,
                 cancellation_token=cancellation_token,
-                progress_callback=safe_progress_callback,
+                progress_callback=progress_callback,
+                record_batch_callback=record_batch_callback,
+                metroliza_profile=profile,
             )
     except Exception as exc:
         return OznakAdapterFetchResult(
@@ -1350,17 +1531,22 @@ def fetch_oznak_records_for_source_sql(
         record_batch_callback(records)
         streamed_to_callback = True
         records = ()
+    query_summary = _raw_sql_query_summary(profile, mode=mode, limit=limit)
     diagnostics = {
         "stage": "mapped",
         "fetch_mode": "sql",
         "sql_hash": hashlib.sha256(str(sql_text or "").encode("utf-8")).hexdigest(),
+        "query_summary": query_summary,
         "sql_limit": limit,
         "sql_operation_mode": mode,
+        "sql_parameter_count": len(query_parameters),
         "raw_sql_contract": "oznak" if raw_contract_available else "metroliza_engine_fallback",
         "raw_payload_type": type(payload).__name__,
         "streamed_to_callback": streamed_to_callback,
     }
     diagnostics.update(_fetch_result_diagnostics(payload))
+    diagnostics["query_summary"] = query_summary
+    diagnostics = _scrub_raw_sql_diagnostics(diagnostics, query_summary=query_summary)
     errors = diagnostics.get("errors") or ()
     warnings = diagnostics.get("warnings") or ()
     error = "; ".join(str(item) for item in errors) if errors and not records else None

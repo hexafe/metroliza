@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from metroliza.industrial.industrial_data_repository import redact_sensitive_text
 from metroliza.industrial.industrial_data_schema import ensure_industrial_data_schema
 from metroliza.industrial.realtime.sample_repository import utc_timestamp
 from metroliza.industrial.realtime.stream_contracts import StreamOffset
@@ -30,16 +29,20 @@ class StreamOffsetStore:
                     stream_key,
                     cursor_column,
                     cursor_value,
+                    cursor_tie_breaker_column,
+                    cursor_tie_breaker_value,
                     event_time_watermark,
                     last_success_at,
                     last_error,
                     lag_seconds,
                     status
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(source_profile_id, stream_key) DO UPDATE SET
                     cursor_column = excluded.cursor_column,
                     cursor_value = excluded.cursor_value,
+                    cursor_tie_breaker_column = excluded.cursor_tie_breaker_column,
+                    cursor_tie_breaker_value = excluded.cursor_tie_breaker_value,
                     event_time_watermark = excluded.event_time_watermark,
                     last_success_at = excluded.last_success_at,
                     last_error = excluded.last_error,
@@ -51,9 +54,11 @@ class StreamOffsetStore:
                     offset.stream_key,
                     offset.cursor_column,
                     offset.cursor_value,
+                    offset.cursor_tie_breaker_column,
+                    offset.cursor_tie_breaker_value,
                     offset.event_time_watermark,
                     offset.last_success_at or utc_timestamp(),
-                    redact_sensitive_text(offset.last_error) if offset.last_error else None,
+                    offset.last_error,
                     offset.lag_seconds,
                     offset.status,
                 ),
@@ -66,6 +71,8 @@ class StreamOffsetStore:
                     stream_key,
                     cursor_column,
                     cursor_value,
+                    cursor_tie_breaker_column,
+                    cursor_tie_breaker_value,
                     event_time_watermark,
                     last_success_at,
                     last_error,
@@ -104,6 +111,8 @@ class StreamOffsetStore:
                     stream_key,
                     cursor_column,
                     cursor_value,
+                    cursor_tie_breaker_column,
+                    cursor_tie_breaker_value,
                     event_time_watermark,
                     last_success_at,
                     last_error,
@@ -129,9 +138,11 @@ def _row_to_offset(row) -> StreamOffset:
         stream_key=str(row[2]),
         cursor_column=str(row[3]),
         cursor_value=row[4],
-        event_time_watermark=row[5],
-        last_success_at=row[6],
-        last_error=row[7],
-        lag_seconds=float(row[8]) if row[8] is not None else None,
-        status=str(row[9]),
+        cursor_tie_breaker_column=row[5],
+        cursor_tie_breaker_value=row[6],
+        event_time_watermark=row[7],
+        last_success_at=row[8],
+        last_error=row[9],
+        lag_seconds=float(row[10]) if row[10] is not None else None,
+        status=str(row[11]),
     )

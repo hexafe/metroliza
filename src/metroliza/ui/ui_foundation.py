@@ -156,8 +156,6 @@ def configure_window_size(widget, *, minimum=(420, 260), initial=(640, 420), scr
     """Set elastic minimum/initial size bounded by the available screen."""
     min_width, min_height = minimum
     initial_width, initial_height = initial
-    if hasattr(widget, "setMinimumSize"):
-        widget.setMinimumSize(min_width, min_height)
 
     available = None
     screen = widget.screen() if hasattr(widget, "screen") else None
@@ -168,12 +166,19 @@ def configure_window_size(widget, *, minimum=(420, 260), initial=(640, 420), scr
         available = screen.availableGeometry()
 
     if available is not None:
-        max_width = max(min_width, available.width() - screen_margin)
-        max_height = max(min_height, available.height() - screen_margin)
+        screen_width = max(320, available.width() - screen_margin)
+        screen_height = max(240, available.height() - screen_margin)
+        min_width = min(min_width, screen_width)
+        min_height = min(min_height, screen_height)
+        max_width = max(min_width, screen_width)
+        max_height = max(min_height, screen_height)
         if hasattr(widget, "setMaximumSize"):
             widget.setMaximumSize(max_width, max_height)
         initial_width = min(initial_width, max_width)
         initial_height = min(initial_height, max_height)
+
+    if hasattr(widget, "setMinimumSize"):
+        widget.setMinimumSize(min_width, min_height)
 
     if hasattr(widget, "resize"):
         widget.resize(initial_width, initial_height)

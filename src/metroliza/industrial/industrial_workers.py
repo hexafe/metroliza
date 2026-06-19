@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+import time
 from typing import Any
 
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -51,6 +52,13 @@ from metroliza.industrial.oznak_adapter import (
     fetch_oznak_records_for_source_sql,
     get_oznak_adapter_status,
 )
+from metroliza.industrial.realtime.db_poller import SourceDbAdapter
+from metroliza.industrial.realtime.monitor_config import RealtimeMonitorConfig
+from metroliza.industrial.realtime.oznak_source_adapter import OznakRealtimeSourceAdapter
+from metroliza.industrial.realtime.realtime_dashboard_html import write_realtime_dashboard_html
+from metroliza.industrial.realtime.realtime_dashboard_service import RealtimeDashboardService
+from metroliza.industrial.realtime.source_runtime import RealtimeSourceRuntime
+from metroliza.industrial.realtime.stream_config import RealtimePollConfig
 from metroliza.shared.progress_status import diagnostic_progress_message
 from metroliza.shared.worker_cancellation import WorkerCancellationMixin
 
@@ -71,6 +79,18 @@ def _oznak_warning_detail(diagnostics: dict[str, Any]) -> str | None:
     return None
 
 
+def _raw_sql_sync_query_summary(
+    profile: IndustrialSourceProfile,
+    *,
+    mode: str,
+    limit: int | None,
+) -> str:
+    normalized_mode = "preview" if str(mode or "").strip().lower() == "preview" else "fetch"
+    limit_summary = "all rows" if limit is None else f"limit {int(limit)}"
+    database_type = profile.database_type or "unknown"
+    return f"raw SQL {normalized_mode} on {profile.source_db_alias or 'source'} ({database_type}, {limit_summary})"
+
+
 class IndustrialLinkRefreshThread(QThread):
     """Run local industrial link refresh outside the Qt main thread."""
 
@@ -84,6 +104,90 @@ class IndustrialLinkRefreshThread(QThread):
     def run(self):
         try:
             self.summary_ready.emit(materialize_industrial_report_links(self.db_file))
+        except Exception as exc:
+            self.error_occurred.emit(redact_sensitive_text(exc))
+
+
+class RealtimeMonitorPollThread(WorkerCancellationMixin, QThread):
+    """Run one realtime industrial polling cycle outside the Qt main thread."""
+
+    result_ready = pyqtSignal(object)
+    error_occurred = pyqtSignal(str)
+    cancelled = pyqtSignal(str)
+    update_label = pyqtSignal(str)
+
+    def __init__(
+        self,
+        *,
+        db_file: str,
+        configs: tuple[RealtimeMonitorConfig | RealtimePollConfig, ...],
+        adapter: SourceDbAdapter | None = None,
+    ):
+        super().__init__()
+        self.db_file = db_file
+        self.configs = tuple(configs or ())
+        self.adapter = adapter
+        self.cancellation_token = None
+        self._init_cancellation_state()
+
+    def _poll_configs(self) -> tuple[RealtimePollConfig, ...]:
+        poll_configs: list[RealtimePollConfig] = []
+        for config in self.configs:
+            if isinstance(config, RealtimeMonitorConfig):
+                poll_configs.append(config.to_poll_config().validated())
+            else:
+                poll_configs.append(config.validated())
+        return tuple(poll_configs)
+
+    def _default_adapter(self) -> SourceDbAdapter:
+        status = get_oznak_adapter_status()
+        if status.available:
+            try:
+                self.cancellation_token = create_oznak_cancellation_token()
+            except Exception:
+                self.cancellation_token = None
+        return OznakRealtimeSourceAdapter(cancellation_token=self.cancellation_token)
+
+    def run(self):
+        try:
+            if self._is_cancelled():
+                self.cancelled.emit("Realtime industrial polling was cancelled.")
+                return
+            runtime = RealtimeSourceRuntime(
+                database=self.db_file,
+                configs=self._poll_configs(),
+                adapter=self.adapter or self._default_adapter(),
+            )
+            self.update_label.emit("Polling realtime industrial sources...")
+            results = runtime.poll_once()
+            if self._is_cancelled():
+                self.cancelled.emit("Realtime industrial polling was cancelled.")
+                return
+            self.result_ready.emit(results)
+        except Exception as exc:
+            if self._is_cancelled():
+                self.cancelled.emit("Realtime industrial polling was cancelled.")
+            else:
+                self.error_occurred.emit(redact_sensitive_text(exc))
+
+
+class RealtimeDashboardWriterThread(QThread):
+    """Build and write the realtime dashboard snapshot outside the Qt main thread."""
+
+    result_ready = pyqtSignal(object)
+    error_occurred = pyqtSignal(str)
+
+    def __init__(self, *, db_file: str, output_file: str):
+        super().__init__()
+        self.db_file = db_file
+        self.output_file = output_file
+
+    def run(self):
+        try:
+            output_path = Path(self.output_file)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            snapshot = RealtimeDashboardService(self.db_file).dashboard_snapshot()
+            self.result_ready.emit(write_realtime_dashboard_html(snapshot, output_path))
         except Exception as exc:
             self.error_occurred.emit(redact_sensitive_text(exc))
 
@@ -103,6 +207,7 @@ class IndustrialExportThread(WorkerCancellationMixin, QThread):
         filter_state: IndustrialFilterState,
         grouping_state: IndustrialGroupingState,
         include_charts: bool,
+        include_raw_data: bool = True,
     ):
         super().__init__()
         self.db_file = db_file
@@ -110,6 +215,7 @@ class IndustrialExportThread(WorkerCancellationMixin, QThread):
         self.filter_state = filter_state
         self.grouping_state = grouping_state
         self.include_charts = include_charts
+        self.include_raw_data = include_raw_data
         self._init_cancellation_state()
 
     def run(self):
@@ -121,6 +227,7 @@ class IndustrialExportThread(WorkerCancellationMixin, QThread):
                     filter_state=self.filter_state,
                     grouping_state=self.grouping_state,
                     include_charts=self.include_charts,
+                    include_raw_data=self.include_raw_data,
                     cancel_check=self._is_cancelled,
                 )
             )
@@ -150,6 +257,7 @@ class IndustrialLiveExportThread(WorkerCancellationMixin, QThread):
         filter_state: IndustrialFilterState,
         grouping_state: IndustrialGroupingState,
         include_charts: bool,
+        include_raw_data: bool = True,
     ):
         super().__init__()
         self.profile = profile
@@ -161,6 +269,7 @@ class IndustrialLiveExportThread(WorkerCancellationMixin, QThread):
         self.filter_state = filter_state
         self.grouping_state = grouping_state
         self.include_charts = include_charts
+        self.include_raw_data = include_raw_data
         self.cancellation_token = None
         self._init_cancellation_state()
 
@@ -186,6 +295,7 @@ class IndustrialLiveExportThread(WorkerCancellationMixin, QThread):
                     filter_state=self.filter_state,
                     grouping_state=self.grouping_state,
                     include_charts=self.include_charts,
+                    include_raw_data=self.include_raw_data,
                     cancellation_token=self.cancellation_token,
                     progress_callback=self._emit_progress_from_diagnostic,
                     cancel_check=self._is_cancelled,
@@ -512,7 +622,7 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                 for key in streamed_upsert_summary:
                     streamed_upsert_summary[key] += int(summary.get(key, 0) or 0)
 
-            def _upsert_sql_batch(records: tuple[dict[str, Any], ...]) -> None:
+            def _upsert_streamed_batch(records: tuple[dict[str, Any], ...]) -> None:
                 nonlocal streamed_upsert_used
                 if not records or sync_run_id is None:
                     return
@@ -582,7 +692,7 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                     mode="preview" if self.test_only else "fetch",
                     cancellation_token=self.cancellation_token,
                     progress_callback=self._emit_progress_from_diagnostic,
-                    record_batch_callback=_upsert_sql_batch if not self.test_only else None,
+                    record_batch_callback=_upsert_streamed_batch if not self.test_only else None,
                 )
             else:
                 result = fetch_oznak_records_for_source_profile(
@@ -597,13 +707,27 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                     allow_unbounded=bool(fetch_state.fetch_all_confirmed),
                     cancellation_token=self.cancellation_token,
                     progress_callback=self._emit_progress_from_diagnostic,
+                    record_batch_callback=_upsert_streamed_batch if not self.test_only else None,
                 )
 
-            warning_detail = _oznak_warning_detail(result.diagnostics)
+            result_diagnostics = result.diagnostics
+            if is_sql_mode:
+                result_diagnostics = dict(result.diagnostics or {})
+                result_diagnostics.setdefault("sql_hash", sql_hash)
+                result_diagnostics.setdefault(
+                    "query_summary",
+                    _raw_sql_sync_query_summary(
+                        self.profile,
+                        mode="preview" if self.test_only else "fetch",
+                        limit=requested_limit,
+                    ),
+                )
+
+            warning_detail = _oznak_warning_detail(result_diagnostics)
             if self._cancel_requested:
                 final_status = "cancelled"
                 error = "Sync cancelled by user."
-            elif result.error and not result.records:
+            elif result.error and not result.records and int(result.row_count or 0) <= 0:
                 final_status = "failed"
                 error = redact_sensitive_text(result.error)
             elif warning_detail or result.error:
@@ -617,9 +741,13 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
             cache_summary = repository.summarize_counts(source_profile_id=self.profile.id).as_dict()
             link_summary = None
             if not self.test_only and final_status in {"succeeded", "completed_with_warnings"}:
+                finalize_started = time.perf_counter()
                 if streamed_upsert_used:
                     upsert_summary = dict(streamed_upsert_summary)
                 else:
+                    self.progress_message.emit(
+                        f"Saving {len(result.records)} fetched row(s) to the local industrial cache..."
+                    )
                     upsert_summary = repository.upsert_industrial_records_from_rows(
                         source_profile_id=self.profile.id,
                         source_db_alias=self.profile.source_db_alias,
@@ -627,8 +755,14 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                         sync_run_id=sync_run_id,
                     )
                 if self.report_db_file:
+                    self.progress_message.emit("Refreshing industrial report links...")
                     link_summary = materialize_industrial_report_links(self.report_db_file)
+                self.progress_message.emit("Updating industrial cache summary...")
                 cache_summary = repository.summarize_counts(source_profile_id=self.profile.id).as_dict()
+                elapsed_seconds = time.perf_counter() - finalize_started
+                self.progress_message.emit(
+                    f"Local industrial cache finalization finished in {elapsed_seconds:.1f}s."
+                )
 
             if sync_run_id is not None:
                 repository.finish_sync_run(
@@ -636,7 +770,7 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                     status=final_status,
                     row_count=result.row_count,
                     error_summary=error,
-                    diagnostics=result.diagnostics,
+                    diagnostics=result_diagnostics,
                 )
 
             self.result_ready.emit(
@@ -649,7 +783,7 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                     "upsert_summary": upsert_summary,
                     "link_summary": link_summary,
                     "cache_summary": cache_summary,
-                    "diagnostics": result.diagnostics,
+                    "diagnostics": result_diagnostics,
                     "preview_records": result.records if self.test_only else (),
                 }
             )

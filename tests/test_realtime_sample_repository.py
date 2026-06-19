@@ -1,4 +1,9 @@
-from modules.industrial_data_repository import IndustrialDataRepository
+from decimal import Decimal
+import sqlite3
+
+import pandas as pd
+
+from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
 from metroliza.industrial.realtime.offset_store import StreamOffsetStore
 from metroliza.industrial.realtime.sample_repository import RealtimeSampleRepository
 from metroliza.industrial.realtime.stream_contracts import (
@@ -80,46 +85,6 @@ def test_signal_definition_upsert_and_sample_idempotency(tmp_path):
     assert loaded[0].raw_record == {"event_id": "ROW-1", "cycle_time_s": 10.2}
 
 
-def test_sample_repository_redacts_raw_record_credentials(tmp_path):
-    db_path = str(tmp_path / "samples_redaction.db")
-    profile = _source_profile(db_path)
-    repository = RealtimeSampleRepository(db_path)
-    signal = repository.upsert_signal_definition(
-        SignalDefinition(
-            source_profile_id=profile.id,
-            signal_key="cycle_time",
-            metric_name="cycle_time_s",
-        )
-    )
-
-    repository.insert_samples(
-        [
-            IndustrialSample(
-                source_profile_id=profile.id,
-                signal_id=signal.id,
-                source_record_key="ROW-SECRET",
-                event_time="2026-06-13T10:00:00Z",
-                metric_name="cycle_time_s",
-                value=10.2,
-                raw_record={
-                    "event_id": "ROW-SECRET",
-                    "password": "secret123",
-                    "nested": {
-                        "apiToken": "token-secret",
-                        "message": "mysql://user:secret123@db.example.invalid/prod",
-                    },
-                },
-            )
-        ]
-    )
-    loaded = repository.list_samples(signal_id=signal.id)
-
-    assert loaded[0].raw_record["password"] == "<redacted>"
-    assert loaded[0].raw_record["nested"]["apiToken"] == "<redacted>"
-    assert "secret123" not in repr(loaded[0].raw_record)
-    assert "db.example.invalid" not in repr(loaded[0].raw_record)
-
-
 def test_insert_samples_accepts_generator_batches(tmp_path):
     db_path = str(tmp_path / "sample_generator.db")
     profile = _source_profile(db_path)
@@ -150,6 +115,153 @@ def test_insert_samples_accepts_generator_batches(tmp_path):
     assert len(result.sample_ids) == 2
 
 
+def test_insert_samples_uses_batched_id_lookup(tmp_path):
+    db_path = str(tmp_path / "sample_batch_lookup.db")
+    profile = _source_profile(db_path)
+    connection = sqlite3.connect(db_path)
+    traced: list[str] = []
+    connection.set_trace_callback(traced.append)
+    repository = RealtimeSampleRepository(db_path, connection=connection)
+    signal = repository.upsert_signal_definition(
+        SignalDefinition(
+            source_profile_id=profile.id,
+            signal_key="cycle_time",
+            metric_name="cycle_time_s",
+        )
+    )
+
+    try:
+        result = repository.insert_samples(
+            [
+                IndustrialSample(
+                    source_profile_id=profile.id,
+                    signal_id=signal.id,
+                    source_record_key=f"ROW-{index}",
+                    event_time=f"2026-06-13T10:0{index}:00Z",
+                    metric_name="cycle_time_s",
+                    value=10.0 + index,
+                )
+                for index in range(3)
+            ]
+        )
+    finally:
+        connection.close()
+
+    legacy_lookup_count = sum(
+        1
+        for statement in traced
+        if "FROM industrial_samples" in statement
+        and "WHERE source_profile_id =" in statement
+        and "signal_id =" in statement
+        and "source_record_key =" in statement
+    )
+    batched_lookup_count = sum(
+        1 for statement in traced if "_metroliza_sample_key_lookup" in statement
+    )
+    assert result.inserted == 3
+    assert len(result.sample_ids) == 3
+    assert legacy_lookup_count == 0
+    assert batched_lookup_count >= 1
+
+
+def test_insert_samples_normalizes_datetime_like_raw_record_scalars(tmp_path):
+    db_path = str(tmp_path / "sample_json_safe.db")
+    profile = _source_profile(db_path)
+    repository = RealtimeSampleRepository(db_path)
+    signal = repository.upsert_signal_definition(
+        SignalDefinition(
+            source_profile_id=profile.id,
+            signal_key="cycle_time",
+            metric_name="cycle_time_s",
+        )
+    )
+
+    result = repository.insert_samples(
+        [
+            IndustrialSample(
+                source_profile_id=profile.id,
+                signal_id=signal.id,
+                source_record_key="ROW-TS",
+                event_time="2026-06-13T10:00:00Z",
+                metric_name="cycle_time_s",
+                value=10.0,
+                segment_key={"observed_at": pd.Timestamp("2026-06-13T10:00:00")},
+                raw_record={
+                    "event_time": pd.Timestamp("2026-06-13T10:00:00"),
+                    "missing": pd.NaT,
+                    "amount": Decimal("10.25"),
+                    "not_a_number": float("nan"),
+                },
+            )
+        ]
+    )
+    loaded = repository.list_samples(signal_id=signal.id)
+
+    assert result.inserted == 1
+    assert loaded[0].segment_key == {"observed_at": "2026-06-13T10:00:00"}
+    assert loaded[0].raw_record == {
+        "amount": "10.25",
+        "event_time": "2026-06-13T10:00:00",
+        "missing": None,
+        "not_a_number": None,
+    }
+
+
+def test_list_samples_by_ids_loads_targeted_rows_in_chunks(tmp_path):
+    db_path = str(tmp_path / "sample_ids.db")
+    profile = _source_profile(db_path)
+    repository = RealtimeSampleRepository(db_path)
+    cycle_signal = repository.upsert_signal_definition(
+        SignalDefinition(
+            source_profile_id=profile.id,
+            signal_key="cycle_time",
+            metric_name="cycle_time_s",
+        )
+    )
+    pressure_signal = repository.upsert_signal_definition(
+        SignalDefinition(
+            source_profile_id=profile.id,
+            signal_key="pressure",
+            metric_name="pressure_bar",
+        )
+    )
+    result = repository.insert_samples(
+        [
+            IndustrialSample(
+                source_profile_id=profile.id,
+                signal_id=cycle_signal.id,
+                source_record_key="ROW-1",
+                event_time="2026-06-13T10:00:00Z",
+                metric_name="cycle_time_s",
+                value=10.0,
+            ),
+            IndustrialSample(
+                source_profile_id=profile.id,
+                signal_id=pressure_signal.id,
+                source_record_key="ROW-2",
+                event_time="2026-06-13T10:01:00Z",
+                metric_name="pressure_bar",
+                value=2.4,
+            ),
+            IndustrialSample(
+                source_profile_id=profile.id,
+                signal_id=cycle_signal.id,
+                source_record_key="ROW-3",
+                event_time="2026-06-13T10:02:00Z",
+                metric_name="cycle_time_s",
+                value=11.0,
+            ),
+        ]
+    )
+
+    loaded = repository.list_samples_by_ids(
+        (result.sample_ids[2], result.sample_ids[0], result.sample_ids[2], 999_999),
+        chunk_size=1,
+    )
+
+    assert [sample.source_record_key for sample in loaded] == ["ROW-3", "ROW-1"]
+
+
 def test_stream_offset_upsert_replaces_cursor(tmp_path):
     db_path = str(tmp_path / "offsets.db")
     profile = _source_profile(db_path)
@@ -161,6 +273,8 @@ def test_stream_offset_upsert_replaces_cursor(tmp_path):
             stream_key="cycle_time",
             cursor_column="event_id",
             cursor_value="100",
+            cursor_tie_breaker_column="record_id",
+            cursor_tie_breaker_value="ROW-100",
             event_time_watermark="2026-06-13T10:00:00Z",
             lag_seconds=4.0,
             status="running",
@@ -180,6 +294,7 @@ def test_stream_offset_upsert_replaces_cursor(tmp_path):
 
     assert first.id == second.id
     assert second.cursor_value == "101"
+    assert second.cursor_tie_breaker_value is None
     assert second.event_time_watermark == "2026-06-13T10:01:00Z"
     assert second.lag_seconds == 2.0
     assert second.status == "idle"
@@ -228,24 +343,3 @@ def test_stream_offset_watermark_is_scoped_by_profile_and_stream(tmp_path):
     assert loaded_pressure.id == pressure.id
     assert loaded_pressure.cursor_value == "77"
     assert loaded_pressure.event_time_watermark == "2026-06-13T09:59:00Z"
-
-
-def test_stream_offset_store_redacts_last_error(tmp_path):
-    db_path = str(tmp_path / "offset_error_redaction.db")
-    profile = _source_profile(db_path)
-    store = StreamOffsetStore(db_path)
-
-    saved = store.upsert_offset(
-        StreamOffset(
-            source_profile_id=profile.id,
-            stream_key="cycle_time",
-            cursor_column="event_id",
-            last_error="connection failed password=secret123 url=mysql://user:secret123@db.example.invalid/prod",
-            status="error",
-        )
-    )
-
-    assert saved.last_error is not None
-    assert "secret123" not in saved.last_error
-    assert "db.example.invalid" not in saved.last_error
-    assert "<redacted>" in saved.last_error

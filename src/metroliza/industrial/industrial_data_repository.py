@@ -8,13 +8,17 @@ import json
 import re
 from typing import Any, Iterable, Mapping
 
-from metroliza.reports.db import run_transaction_with_retry
+from metroliza.reports.db import chunked_values, run_transaction_with_retry
 from metroliza.industrial.industrial_data_schema import SYNC_RUN_STATUSES, ensure_industrial_data_schema
+from metroliza.industrial.json_safety import to_json_storage_text, to_sqlite_storage_text
 
 
 _FINISHED_SYNC_RUN_STATUSES = tuple(status for status in SYNC_RUN_STATUSES if status != "running")
 _REDACT_URI_CREDENTIALS = re.compile(
     r"([a-zA-Z][a-zA-Z0-9+.\-]*://)([^:/@\s]+):([^@/\s]+)@([^/\s?#]+)"
+)
+_REDACT_URI_PASSWORD_ONLY = re.compile(
+    r"([a-zA-Z][a-zA-Z0-9+.\-]*://[^:/@\s]+:)([^@/\s]+)(@[^/\s?#]+)"
 )
 _SENSITIVE_TEXT_KEY_PATTERN = (
     r"password|passwd|pwd|[a-z0-9_-]*token|[a-z0-9_-]*secret|credential|"
@@ -181,13 +185,11 @@ class IndustrialSyncRunSummary:
 def utc_timestamp() -> str:
     """Return an ISO-8601 UTC timestamp suitable for SQLite text columns."""
 
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _to_json(value: Any) -> str | None:
-    if value is None:
-        return None
-    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return to_json_storage_text(value)
 
 
 def _from_json(value: Any, default: Any) -> Any:
@@ -206,6 +208,19 @@ def redact_sensitive_text(value: Any, *, max_len: int | None = 320) -> str:
 
     text = str(value or "").strip()
     text = _REDACT_URI_CREDENTIALS.sub(r"\1<redacted>:<redacted>@<redacted>", text)
+    text = _REDACT_SQL_TEXT_VALUE.sub(r"\1\2<redacted>", text)
+    text = _REDACT_KEY_VALUE.sub(r"\1\2<redacted>", text)
+    text = _REDACT_QUOTED_KEY_VALUE.sub(r"\1<redacted>\3", text)
+    if max_len is not None and len(text) > max_len:
+        return f"{text[: max_len - 3]}..."
+    return text
+
+
+def redact_payload_text(value: Any, *, max_len: int | None = 320) -> str:
+    """Redact stored payload secrets while preserving useful non-secret URI context."""
+
+    text = str(value or "").strip()
+    text = _REDACT_URI_PASSWORD_ONLY.sub(r"\1<redacted>\3", text)
     text = _REDACT_SQL_TEXT_VALUE.sub(r"\1\2<redacted>", text)
     text = _REDACT_KEY_VALUE.sub(r"\1\2<redacted>", text)
     text = _REDACT_QUOTED_KEY_VALUE.sub(r"\1<redacted>\3", text)
@@ -247,9 +262,7 @@ def _redact_sensitive_payload(value: Any) -> Any:
     if isinstance(value, BaseException):
         return redact_sensitive_text(value)
     if isinstance(value, str):
-        redacted_text = redact_sensitive_text(value, max_len=None)
-        if redacted_text != value.strip():
-            return redacted_text
+        return redact_payload_text(value, max_len=None)
     return value
 
 
@@ -276,6 +289,22 @@ def _normalize_row(row: Mapping[str, Any]) -> dict[str, Any]:
         key_name = ROW_FIELD_ALIASES.get(key_name, key_name)
         normalized[key_name] = value
     return normalized
+
+
+@dataclass(frozen=True)
+class _PreparedIndustrialRecordRow:
+    record_key: str
+    record_params: tuple[Any, ...]
+    dynamic_values: tuple[tuple[str, str | None, str | None], ...]
+
+
+def _dynamic_value_storage(field_value: Any) -> tuple[str | None, str | None]:
+    redacted_value = _redact_sensitive_payload(field_value)
+    if isinstance(redacted_value, (dict, list, tuple)):
+        return None, _to_json(redacted_value)
+    if redacted_value is None:
+        return None, None
+    return to_sqlite_storage_text(redacted_value), None
 
 
 class IndustrialDataRepository:
@@ -525,7 +554,7 @@ class IndustrialDataRepository:
         finished = finished_at or utc_timestamp()
         diagnostics_payload = _redact_sensitive_payload(dict(diagnostics or {}))
         redacted_error_summary = (
-            redact_sensitive_text(error_summary, max_len=500) if error_summary else None
+            redact_payload_text(error_summary, max_len=500) if error_summary else None
         )
 
         def _finish(cursor) -> None:
@@ -624,146 +653,189 @@ class IndustrialDataRepository:
     ) -> dict[str, int]:
         self.ensure_schema()
         now = utc_timestamp()
+        prepared_rows: list[_PreparedIndustrialRecordRow] = []
+        value_rows = 0
 
-        def _upsert_rows(cursor) -> dict[str, int]:
-            inserted = 0
-            updated = 0
-            value_rows = 0
-            for row in rows:
-                normalized = _normalize_row(row)
-                record_key_raw = normalized.get("source_record_key")
-                record_key = str(record_key_raw).strip() if record_key_raw is not None else ""
-                if not record_key:
-                    raise ValueError("each row must include source_record_key (or record_key alias)")
+        for row in rows:
+            normalized = _normalize_row(row)
+            record_key_raw = normalized.get("source_record_key")
+            record_key = str(record_key_raw).strip() if record_key_raw is not None else ""
+            if not record_key:
+                raise ValueError("each row must include source_record_key (or record_key alias)")
 
-                cursor.execute(
-                    """
-                    SELECT id FROM industrial_records
-                    WHERE source_profile_id = ? AND source_db_alias = ? AND source_record_key = ?
-                    """,
-                    (source_profile_id, source_db_alias, record_key),
-                )
-                existing = cursor.fetchone()
-                is_insert = existing is None
-                if is_insert:
-                    inserted += 1
-                else:
-                    updated += 1
-
-                raw_record = normalized.get("raw_record", dict(row))
-                redacted_raw_record = _redact_sensitive_payload(raw_record)
-                cursor.execute(
-                    """
-                    INSERT INTO industrial_records (
-                        source_profile_id,
-                        sync_run_id,
-                        source_db_alias,
-                        source_record_key,
-                        process_timestamp,
-                        reference,
-                        part_number,
-                        part_name,
-                        revision,
-                        serial,
-                        batch_lot,
-                        work_order,
-                        station,
-                        line,
-                        operator_name,
-                        process_status,
-                        raw_record_json,
-                        created_at,
-                        updated_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(source_profile_id, source_db_alias, source_record_key) DO UPDATE SET
-                        sync_run_id = excluded.sync_run_id,
-                        process_timestamp = excluded.process_timestamp,
-                        reference = excluded.reference,
-                        part_number = excluded.part_number,
-                        part_name = excluded.part_name,
-                        revision = excluded.revision,
-                        serial = excluded.serial,
-                        batch_lot = excluded.batch_lot,
-                        work_order = excluded.work_order,
-                        station = excluded.station,
-                        line = excluded.line,
-                        operator_name = excluded.operator_name,
-                        process_status = excluded.process_status,
-                        raw_record_json = excluded.raw_record_json,
-                        updated_at = excluded.updated_at
-                    """,
-                    (
+            raw_record = normalized.get("raw_record", dict(row))
+            redacted_raw_record = _redact_sensitive_payload(raw_record)
+            dynamic_values = tuple(
+                (field_name, *_dynamic_value_storage(field_value))
+                for field_name, field_value in normalized.items()
+                if field_name not in KNOWN_RECORD_FIELDS and not _looks_sensitive_key(field_name)
+            )
+            value_rows += len(dynamic_values)
+            prepared_rows.append(
+                _PreparedIndustrialRecordRow(
+                    record_key=record_key,
+                    record_params=(
                         source_profile_id,
                         sync_run_id,
                         source_db_alias,
                         record_key,
-                        normalized.get("process_timestamp"),
-                        normalized.get("reference"),
-                        normalized.get("part_number"),
-                        normalized.get("part_name"),
-                        normalized.get("revision"),
-                        normalized.get("serial"),
-                        normalized.get("batch_lot"),
-                        normalized.get("work_order"),
-                        normalized.get("station"),
-                        normalized.get("line"),
-                        normalized.get("operator_name"),
-                        normalized.get("process_status"),
+                        to_sqlite_storage_text(normalized.get("process_timestamp")),
+                        to_sqlite_storage_text(normalized.get("reference")),
+                        to_sqlite_storage_text(normalized.get("part_number")),
+                        to_sqlite_storage_text(normalized.get("part_name")),
+                        to_sqlite_storage_text(normalized.get("revision")),
+                        to_sqlite_storage_text(normalized.get("serial")),
+                        to_sqlite_storage_text(normalized.get("batch_lot")),
+                        to_sqlite_storage_text(normalized.get("work_order")),
+                        to_sqlite_storage_text(normalized.get("station")),
+                        to_sqlite_storage_text(normalized.get("line")),
+                        to_sqlite_storage_text(normalized.get("operator_name")),
+                        to_sqlite_storage_text(normalized.get("process_status")),
                         _to_json(redacted_raw_record) or "{}",
                         now,
                         now,
                     ),
+                    dynamic_values=dynamic_values,
                 )
+            )
+
+        if not prepared_rows:
+            return {
+                "processed": 0,
+                "inserted": 0,
+                "updated": 0,
+                "value_rows": 0,
+            }
+
+        def _upsert_rows(cursor) -> dict[str, int]:
+            inserted = 0
+            updated = 0
+            existing_record_keys: set[str] = set()
+            unique_record_keys = tuple(dict.fromkeys(row.record_key for row in prepared_rows))
+            for key_chunk in chunked_values(unique_record_keys, chunk_size=800):
+                placeholders = ", ".join("?" for _ in key_chunk)
                 cursor.execute(
-                    """
-                    SELECT id FROM industrial_records
-                    WHERE source_profile_id = ? AND source_db_alias = ? AND source_record_key = ?
+                    f"""
+                    SELECT source_record_key
+                    FROM industrial_records
+                    WHERE source_profile_id = ?
+                      AND source_db_alias = ?
+                      AND source_record_key IN ({placeholders})
                     """,
-                    (source_profile_id, source_db_alias, record_key),
+                    (source_profile_id, source_db_alias, *key_chunk),
                 )
-                record_row = cursor.fetchone()
-                assert record_row is not None
-                record_id = int(record_row[0])
+                existing_record_keys.update(str(row[0]) for row in cursor.fetchall())
 
-                dynamic_items = [
-                    (field_name, field_value)
-                    for field_name, field_value in normalized.items()
-                    if field_name not in KNOWN_RECORD_FIELDS and not _looks_sensitive_key(field_name)
-                ]
+            inserted_record_keys: set[str] = set()
+            for prepared_row in prepared_rows:
+                if (
+                    prepared_row.record_key in existing_record_keys
+                    or prepared_row.record_key in inserted_record_keys
+                ):
+                    updated += 1
+                    continue
+                inserted += 1
+                inserted_record_keys.add(prepared_row.record_key)
+
+            cursor.executemany(
+                """
+                INSERT INTO industrial_records (
+                    source_profile_id,
+                    sync_run_id,
+                    source_db_alias,
+                    source_record_key,
+                    process_timestamp,
+                    reference,
+                    part_number,
+                    part_name,
+                    revision,
+                    serial,
+                    batch_lot,
+                    work_order,
+                    station,
+                    line,
+                    operator_name,
+                    process_status,
+                    raw_record_json,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source_profile_id, source_db_alias, source_record_key) DO UPDATE SET
+                    sync_run_id = excluded.sync_run_id,
+                    process_timestamp = excluded.process_timestamp,
+                    reference = excluded.reference,
+                    part_number = excluded.part_number,
+                    part_name = excluded.part_name,
+                    revision = excluded.revision,
+                    serial = excluded.serial,
+                    batch_lot = excluded.batch_lot,
+                    work_order = excluded.work_order,
+                    station = excluded.station,
+                    line = excluded.line,
+                    operator_name = excluded.operator_name,
+                    process_status = excluded.process_status,
+                    raw_record_json = excluded.raw_record_json,
+                    updated_at = excluded.updated_at
+                """,
+                [row.record_params for row in prepared_rows],
+            )
+
+            record_ids_by_key: dict[str, int] = {}
+            for key_chunk in chunked_values(unique_record_keys, chunk_size=800):
+                placeholders = ", ".join("?" for _ in key_chunk)
                 cursor.execute(
-                    "DELETE FROM industrial_record_values WHERE record_id = ?",
-                    (record_id,),
+                    f"""
+                    SELECT source_record_key, id
+                    FROM industrial_records
+                    WHERE source_profile_id = ?
+                      AND source_db_alias = ?
+                      AND source_record_key IN ({placeholders})
+                    """,
+                    (source_profile_id, source_db_alias, *key_chunk),
+                )
+                record_ids_by_key.update((str(row[0]), int(row[1])) for row in cursor.fetchall())
+
+            missing_keys = [key for key in unique_record_keys if key not in record_ids_by_key]
+            if missing_keys:
+                raise RuntimeError("industrial record upsert did not return all affected record ids")
+
+            record_ids = tuple(record_ids_by_key[key] for key in unique_record_keys)
+            for record_id_chunk in chunked_values(record_ids, chunk_size=900):
+                placeholders = ", ".join("?" for _ in record_id_chunk)
+                cursor.execute(
+                    f"DELETE FROM industrial_record_values WHERE record_id IN ({placeholders})",
+                    tuple(record_id_chunk),
                 )
 
-                for field_name, field_value in dynamic_items:
-                    redacted_field_value = _redact_sensitive_payload(field_value)
-                    if isinstance(redacted_field_value, (dict, list, tuple)):
-                        value_text = None
-                        value_json = _to_json(redacted_field_value)
-                    elif redacted_field_value is None:
-                        value_text = None
-                        value_json = None
-                    else:
-                        value_text = str(redacted_field_value)
-                        value_json = None
-                    cursor.execute(
-                        """
-                        INSERT INTO industrial_record_values (
-                            record_id,
-                            field_name,
-                            field_value_text,
-                            field_value_json,
-                            created_at
-                        )
-                        VALUES (?, ?, ?, ?, ?)
-                        ON CONFLICT(record_id, field_name) DO UPDATE SET
-                            field_value_text = excluded.field_value_text,
-                            field_value_json = excluded.field_value_json
-                        """,
-                        (record_id, field_name, value_text, value_json, now),
+            final_dynamic_values_by_key: dict[
+                str, tuple[tuple[str, str | None, str | None], ...]
+            ] = {}
+            for prepared_row in prepared_rows:
+                final_dynamic_values_by_key[prepared_row.record_key] = prepared_row.dynamic_values
+
+            dynamic_params = [
+                (record_ids_by_key[record_key], field_name, value_text, value_json, now)
+                for record_key, dynamic_values in final_dynamic_values_by_key.items()
+                for field_name, value_text, value_json in dynamic_values
+            ]
+            if dynamic_params:
+                cursor.executemany(
+                    """
+                    INSERT INTO industrial_record_values (
+                        record_id,
+                        field_name,
+                        field_value_text,
+                        field_value_json,
+                        created_at
                     )
-                    value_rows += 1
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(record_id, field_name) DO UPDATE SET
+                        field_value_text = excluded.field_value_text,
+                        field_value_json = excluded.field_value_json
+                    """,
+                    dynamic_params,
+                )
 
             return {
                 "processed": inserted + updated,

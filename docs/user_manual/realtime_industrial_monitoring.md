@@ -13,9 +13,9 @@ workflow for manual fetches and CSV Summary analysis.
 
 Realtime monitoring keeps samples and anomaly events in a local SQLite store.
 You do not need to select a Metroliza report database before opening the
-monitoring dashboard. Without a selected database, Metroliza uses a temporary
-session store. Choose an existing or newly created database only when the
-realtime history should be kept for later review.
+monitoring dialog. Without a selected database, Metroliza uses a temporary
+session store. Choose an existing or newly created database when the realtime
+history should be kept for later review.
 
 ## Important Words
 
@@ -70,6 +70,52 @@ reviewed.
    Before the first live run, confirm who can disable the realtime profile, who
    can stop scheduled polling, and how operators will return to manual
    Industrial Data and CSV Summary work if monitoring is paused.
+
+## Using The Monitor Dialog
+
+Open the monitor from **Tools > Real-time Industrial Monitoring...**. If no
+Metroliza database is selected, the app creates a temporary local SQLite store
+for the session; for normal monitoring, select a persistent database first.
+
+The monitor uses the same production source YAML config and source editor as the manual
+Industrial Data fetch workflow. In **Sources**, confirm the **Production source config
+file**, use **Reload Config** after the file changes, or open **Production Sources...** to
+edit the shared source definitions.
+
+The dialog has three operator areas:
+
+- **Sources** lists the configured industrial database profiles from the shared YAML
+  config and local cache. Check one or more enabled sources to monitor them in parallel.
+  Disabled sources are shown for context but cannot be checked or polled.
+- **Configuration** stores the stream key, cursor column, event-time column,
+  record key column, signal columns, polling interval, timeout, row limits,
+  display mode, aggregation settings, context fields, segment fields, detector
+  list, and dashboard file location.
+- **Status** and **Diagnostics** show the result of each poll cycle, including
+  fetched rows, inserted samples, detector events, source lag, and safe
+  diagnostics.
+
+Keep the query timeout less than or equal to the polling interval. Keep row
+limits bounded. Signal columns use `signal_name=source_column` entries, one per
+line or separated by commas. Use **raw** dashboard mode to review recent samples
+directly, or **aggregated** mode when operators need CSV Summary-style sample
+aggregates between refreshes.
+
+Use **Save Current Source** when the visible form should be saved only for the
+selected source. Use **Apply Current to Checked** only when the same settings
+should intentionally be copied to every checked source. **Start Checked** and
+**Poll Once** use the currently checked enabled sources; they do not poll
+unchecked or disabled sources.
+
+After a poll, the monitor refreshes the realtime dashboard snapshot in the background.
+If you click **Open Dashboard** while a refresh is already running, the open action waits
+for that refresh instead of starting another write. Source config browsing, reloading,
+and editing are disabled while live monitoring is running.
+
+Credentials are not stored in the monitor config. The monitor uses the same
+local credential store as the Industrial Data workflow. Do not paste passwords,
+tokens, or connection strings into signal, context, segment, dashboard, or
+diagnostic fields.
 
 ## Severity Meaning
 

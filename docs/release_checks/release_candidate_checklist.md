@@ -39,9 +39,9 @@ Complete before beginning open testing on an RC build.
 
 - [ ] Feature freeze timestamp is recorded in release tracker and announcement thread. *(Owner: Release manager)*
 - [ ] Late-scope exception register is empty, or every exception has rationale, owner, target RC, test evidence, rollback/deferral option, and explicit release-owner approval. *(Owner: Release owner)*
-- [ ] Active RC branch name is confirmed and documented (for example `release/2026.05-rc1`; validation branches are not final RC branches). *(Owner: Release engineer)*
+- [ ] Active RC branch name is confirmed and documented (for example `release/2026.06-rc1`; validation branches are not final RC branches). *(Owner: Release engineer)*
 - [ ] Build identifier for open testing is published (artifact/version/hash) and linked in tracker. *(Owner: Release engineer)*
-- [x] Mandatory CI baseline is completed and linked (build/lint/tests) before open testing starts for validation SHA `05b5049558509060df43778d7b39424726e56ff1`: GitHub Actions run [`26875151720`](https://github.com/hexafe/metroliza/actions/runs/26875151720). *(Owner: Release owner)*
+- [x] Mandatory CI baseline is completed and linked (build/lint/tests) before open testing starts for final `2026.06 RC1` tester-build commit `307acd16031c5622093ba52a9a64d2b2146d7f02`: GitHub Actions run [`27506446912`](https://github.com/hexafe/metroliza/actions/runs/27506446912). *(Owner: Release owner)*
 - [ ] Known-issues document link is prepared and shared with open testers. *(Owner: QA/Product)*
 - [ ] Bug reporting channel is announced (for example issue board + chat channel) and monitored. *(Owner: Release manager/QA)*
 
@@ -52,18 +52,18 @@ Create the RC branch from the approved base commit (currently `master` in this r
 ```bash
 git checkout master
 git pull --ff-only origin master
-git checkout -b release/2026.05-rc1
-git push -u origin release/2026.05-rc1
+git checkout -b release/2026.06-rc1
+git push -u origin release/2026.06-rc1
 ```
 
 Alternative (single command if local `master` is already up to date):
 
 ```bash
-git checkout -b release/2026.05-rc1 origin/master
-git push -u origin release/2026.05-rc1
+git checkout -b release/2026.06-rc1 origin/master
+git push -u origin release/2026.06-rc1
 ```
 
-- [ ] RC branch follows naming convention (for example `release/2026.05-rc1`).
+- [ ] RC branch follows naming convention (for example `release/2026.06-rc1`).
 - [ ] Branch creation commit SHA and timestamp are recorded in release notes/tracker.
 
 <a id="required-test-suites-and-sign-off-owners"></a>
@@ -114,16 +114,79 @@ python -m maturin build --manifest-path src/metroliza/native/distribution_fit_ad
 - [ ] Produced artifacts are named/versioned as expected for RC distribution. *(Owner: Release manager)*
 - [ ] Third-party notices/license attribution are bundled or attached to release artifacts, including RapidOCR, ONNX Runtime, OpenCV, NumPy, Excel reader packages, hexafe-plotstats, and Oznak. *(Owner: Release manager/QA)*
 
-- [x] GitHub CI checks for the final pushed rc2 hardening commit are green before tag/promotion: run [`26947482310`](https://github.com/hexafe/metroliza/actions/runs/26947482310) passed for commit `60e0278739d3d696715f94c3c2eefe155a7f11fd`. Previous rc2 merge evidence run [`26891179285`](https://github.com/hexafe/metroliza/actions/runs/26891179285) passed for commit `24a50ed069cd45c927f40d10ea0c989a7800915f`. *(Owner: Release owner)*
+- [x] GitHub CI checks for pushed `2026.06rc1(260614)` commit `307acd16031c5622093ba52a9a64d2b2146d7f02` are green: run [`27506446912`](https://github.com/hexafe/metroliza/actions/runs/27506446912). *(Owner: Release owner)*
+- [x] GitHub CI checks for pushed `2026.06rc1(260615)` commit `3f26438d473bd6941606d3cf949f2e7782276763` are green before tag/promotion: run [`27570794579`](https://github.com/hexafe/metroliza/actions/runs/27570794579). *(Owner: Release owner)*
 - [ ] CMM parser perf gate evidence (`cmm-parser-perf-gate` + `cmm-parser-perf-artifacts`) is reviewed when parser/backend changes are present; triage follows [`cmm_parser_perf_guardrail.md`](./cmm_parser_perf_guardrail.md). *(Owner: Release owner/QA)*
 - [ ] Coverage threshold from `unit-tests` passes, and `unit-test-coverage` artifact `coverage.xml` is reviewed as RC confidence evidence. *(Owner: Release owner/QA)*
 - [ ] Manual release smoke evidence is linked before open-testing promotion when applicable. Google conversion smoke is release-blocking for promoted RC artifacts; skipped default CI does not satisfy that gate. *(Owner: Release owner)*
 
+### 2026.06 RC1 realtime industrial tester evidence
+
+Current validation branch: `feature/realtime-industrial-ml-anomaly`.
+Current RC metadata: `2026.06rc1(260617)`.
+
+- Local realtime/anomaly tester-build evidence is recorded in
+  [`realtime_industrial_rollout_checklist.md`](./realtime_industrial_rollout_checklist.md).
+- Release notes and user-facing metadata were updated through
+  `src/metroliza/app/version.py`, `CHANGELOG.md`, and `README.md`.
+- Local focused changed-slice validation passed:
+  `111 passed` across CMM probe, parser plugin contracts, realtime dashboard
+  launch, industrial source/security, Oznak adapter, and realtime
+  poller/config/service tests.
+- Broader realtime/industrial/anomaly validation passed:
+  `416 passed, 2 skipped`.
+- Full local offscreen pytest passed:
+  `2065 passed, 289 skipped, 83 subtests passed`.
+- Realtime/anomaly source slice coverage measured `89%`.
+- Final CI-shaped combined coverage rerun passed at `82%`, above the `80%`
+  release gate, after the release metadata refresh.
+- Pushed GitHub CI passed for build `260614` commit
+  `307acd16031c5622093ba52a9a64d2b2146d7f02` in run
+  [`27506446912`](https://github.com/hexafe/metroliza/actions/runs/27506446912).
+- 2026-06-15 realtime monitor UI/UX follow-up local gates passed on
+  `feature/realtime-industrial-ml-anomaly`: checked-source selection feedback,
+  disabled-source polling prevention, current-source save semantics, monitor
+  manual updates, compact About dialog, and build `260615` release notes.
+  Focused realtime UI/runtime/About/metadata validation passed (`15 passed`);
+  full offscreen pytest passed (`2079 passed, 296 skipped, 6 warnings, 83
+  subtests passed`); exact CI-shaped combined coverage passed at `81%`, above
+  the 80% threshold; release metadata sync, release hygiene, Ruff, compileall,
+  and security audit passed. Security audit required temporary `pip-audit`
+  environment setup; `pip-audit` reported no known vulnerabilities and existing
+  Bandit findings remain report-only baseline warnings.
+- Pushed GitHub CI passed for build `260615` commit
+  `3f26438d473bd6941606d3cf949f2e7782276763` in run
+  [`27570794579`](https://github.com/hexafe/metroliza/actions/runs/27570794579).
+- 2026-06-16 Industrial Data fetch, realtime monitor, and dashboard
+  optimization release-note/manual closeout is recorded in
+  [`realtime_industrial_optimization_check_2026-06-16.md`](./realtime_industrial_optimization_check_2026-06-16.md).
+- 2026-06-17 Industrial Data SQLite handoff, cached raw workbook export,
+  additional export-filter enforcement, realtime polling cost, and Oznak
+  fallback diagnostics closeout is recorded in
+  [`realtime_industrial_performance_check_2026-06-17.md`](./realtime_industrial_performance_check_2026-06-17.md).
+  Local QA/release gates passed, including full offscreen pytest
+  (`2109 passed, 314 skipped, 6 warnings, 83 subtests passed`), security audit
+  with no known vulnerabilities, and the CI-shaped combined coverage gate at
+  `81%`. Final integrated build `260617` push and GitHub Actions CI are pending.
+- 2026-06-19 UI overlap/layout closeout is recorded in
+  [`ui_overlap_layout_audit_2026-06-19.md`](./ui_overlap_layout_audit_2026-06-19.md)
+  and keeps the existing `260617` build identity. Local QA/release gates passed,
+  including the focused UI/export gate (`338 passed, 6 warnings`), native chart
+  parity (`15 passed`), full offscreen pytest (`2135 passed, 320 skipped, 6
+  warnings, 83 subtests passed`), release metadata sync, release hygiene,
+  security audit with no known vulnerabilities, Ruff, compileall, whitespace
+  checks, and the CI-shaped combined coverage gate at `81%`. Final rc2 push and
+  green GitHub Actions CI are pending.
+- Manual packaging smoke, Windows executable clean-machine launch/startup,
+  Google conversion smoke, third-party notice artifact evidence, and security
+  owner triage/waiver for report-only findings remain release-promotion
+  blockers unless the release owner records an explicit waiver.
+
 ### 2026.05 RC5 rc2 hardening evidence
 
-Current validation branch: `rc2`.
-Current RC metadata: `2026.05rc5(260612)`.
-Current plotstats hotfix pin:
+Historical validation branch: `rc2`.
+Historical RC metadata: `2026.05rc5(260612)`.
+Historical plotstats hotfix pin:
 `1e2c72107d342f44a37e5fb78d7d76992ea60315`.
 
 - Static scatter annotation audit evidence lives in
@@ -131,8 +194,8 @@ Current plotstats hotfix pin:
 - June 12 RC audit implementation evidence, local validation results, pushed-CI
   follow-up, and remaining manual release blockers are tracked in
   [`rc5_rc_audit_evidence_2026-06-12.md`](./rc5_rc_audit_evidence_2026-06-12.md).
-  Local gate passed for build `260612`; pushed GitHub CI status is pending until
-  this commit is published.
+  Local gate passed for build `260612`; pushed GitHub CI was pending at the time
+  this historical evidence was recorded.
 - Previous RC2 audit evidence remains historical in
   [`rc2_release_audit_2026-05-17.md`](./rc2_release_audit_2026-05-17.md).
 - Local release gates passed for the current directory-reorganization audit
@@ -362,9 +425,9 @@ Current plotstats hotfix pin:
   `1e2c72107d342f44a37e5fb78d7d76992ea60315`.
 - Manual packaging smoke, Windows executable clean-machine launch/startup,
   Google conversion smoke, third-party notice artifact evidence, and any open
-  must-fix triage item are not recorded for the current RC5 promotion artifact
-  yet and remain release-promotion blockers unless the release owner records an
-  explicit waiver.
+  must-fix triage item were not recorded for the historical RC5 promotion
+  artifact and remain examples of release-promotion blockers unless the release
+  owner records an explicit waiver for the active candidate.
 
 Optional CI/manual smoke commands (non-blocking for regular PRs/pushes):
 
@@ -418,7 +481,7 @@ Only promote RC when all gates are green and approvals are complete.
 - [ ] No unresolved `must-fix` defects remain.
 - [ ] Release owner sign-off recorded.
 - [ ] RC branch merged to `master` with approved strategy.
-- [ ] Release tag created from the merge commit (example: `vYYYY.MM` (for example `v2026.05`)).
+- [ ] Release tag created from the merge commit (example: `vYYYY.MM-rcN` for an RC tester build, or `vYYYY.MM` for final release).
 - [ ] Tag is pushed and visible on remote.
 
 Suggested commands:
@@ -426,8 +489,8 @@ Suggested commands:
 ```bash
 git checkout master
 git pull --ff-only origin master
-git tag -a v2026.05 <merge-commit-sha> -m "Release v2026.05"
-git push origin v2026.05
+git tag -a v2026.06-rc1 <merge-commit-sha> -m "Release candidate v2026.06-rc1"
+git push origin v2026.06-rc1
 ```
 
 ## 9) Rollback plan and communication checklist

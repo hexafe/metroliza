@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import csv
 from collections import OrderedDict
 from collections.abc import Sequence
+from io import StringIO
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -181,7 +183,7 @@ def build_source_profile(
     port: int | None,
     database_name: str | None,
     source_object_name: str,
-    allowed_columns: Iterable[str] | None = None,
+    allowed_columns: Iterable[str] | str | None = None,
     timestamp_column: str | None = None,
     default_pagination_column: str | None = None,
     is_enabled: bool = True,
@@ -196,7 +198,7 @@ def build_source_profile(
     normalized_host = str(host or "").strip()
     normalized_database = str(database_name or "").strip()
     normalized_table = str(source_object_name or "").strip()
-    normalized_columns = _normalize_columns(allowed_columns)
+    normalized_columns = normalize_source_columns(allowed_columns)
     normalized_timestamp = str(timestamp_column or "").strip() or None
     normalized_pagination = str(default_pagination_column or "").strip() or None
 
@@ -353,12 +355,16 @@ def _bool_config_value(value: Any, *, profile_alias: str, key: str, path: Path) 
     )
 
 
-def _normalize_columns(columns: Iterable[str] | None) -> tuple[str, ...]:
+def normalize_source_columns(columns: Iterable[str] | str | None) -> tuple[str, ...]:
+    """Normalize source column input from config files or UI text fields."""
+
     if columns is None:
         return ()
-    if isinstance(columns, (str, bytes)) or not isinstance(columns, Sequence):
+    if isinstance(columns, str):
+        columns = _parse_column_header_string(columns)
+    elif isinstance(columns, bytes) or not isinstance(columns, Sequence):
         raise IndustrialSourceConfigError(
-            "allowed_columns must be a YAML list or sequence of column names."
+            "allowed_columns must be a CSV/header string or a YAML list/sequence of column names."
         )
     if not columns:
         return ()
@@ -370,7 +376,20 @@ def _normalize_columns(columns: Iterable[str] | None) -> tuple[str, ...]:
             continue
         seen.add(name)
         normalized.append(name)
+    if normalized == ["*"]:
+        return ()
     return tuple(normalized)
+
+
+def _parse_column_header_string(columns: str) -> tuple[str, ...]:
+    text = columns.strip()
+    if not text or text == "*":
+        return ()
+    try:
+        reader = csv.reader(StringIO(text), skipinitialspace=True, strict=True)
+        return tuple(column for row in reader for column in row)
+    except csv.Error as exc:
+        raise IndustrialSourceConfigError("allowed_columns contains invalid CSV/header text.") from exc
 
 
 def _default_port(database_type: str) -> int:

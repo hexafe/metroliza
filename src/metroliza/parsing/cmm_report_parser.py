@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 import tempfile
 from dataclasses import replace
 from pathlib import Path
@@ -12,10 +13,7 @@ from metroliza.shared.custom_logger import CustomLogger
 from metroliza.native_bridges.cmm_native_parser import (
     parse_blocks_with_backend_and_telemetry,
 )
-from metroliza.parsing.pdf_backend import (
-    require_pdf_backend,
-    resolve_pdf_backend_module_name,
-)
+from metroliza.parsing.pdf_backend import require_pdf_backend, resolve_pdf_backend_module_name
 from metroliza.parsing.cmm_parsing import add_tolerances_to_blocks
 from metroliza.parsing.base_report_parser import BaseReportParser
 from metroliza.parsing.header_ocr_backend import (
@@ -65,7 +63,20 @@ SUPPORTED_METADATA_PARSING_MODES = {
     METADATA_PARSING_MODE_LIGHT,
     METADATA_PARSING_MODE_COMPLETE,
 }
-_CMM_STRONG_MARKERS = (
+CMM_PROBE_SAMPLE_BYTES = 64 * 1024
+CMM_PROBE_MIN_CONFIDENCE = 80
+CMM_PROBE_HIGH_CONFIDENCE = 95
+CMM_PROBE_EXTENSION_CONFIDENCE = 20
+
+_CMM_PROBE_DIMENSION_PATTERN = re.compile(r"(?im)^\s*DIM(?:ENSION)?S?\s*$")
+_CMM_PROBE_HEADER_PATTERN = re.compile(r"(?m)^\s*#[A-Z0-9 _./:-]{2,}")
+_CMM_PROBE_AXIS_VALUE_PATTERN = re.compile(
+    r"(?i)\b(?:X|Y|Z|TP|D[1-3]?|M)\b(?:\s+[A-Z:+-]+)*\s+-?\d+(?:[.,]\d+)?"
+)
+_CMM_PROBE_METADATA_LABEL_PATTERN = re.compile(
+    r"(?im)^\s*(REFERENCE|DATE|PART\s+NAME|PART\s+NUMBER|SAMPLE|MEASUREMENT\s+MADE\s+BY)\s*:"
+)
+_CMM_PROBE_STRONG_MARKERS = (
     "CMM REPORT",
     "CMM INSPECTION",
     "CMM MEASUREMENT",
@@ -73,25 +84,15 @@ _CMM_STRONG_MARKERS = (
     "COORDINATE MEASUREMENT",
     "MEASUREMENT MADE BY",
     "MEASUREMENT MADEBY",
-    "MEASUREMENT ON CMM SYSTEM",
 )
-_CMM_PARTIAL_REPORT_MARKERS = (
-    "DIMENSIONAL REPORT",
-    "INSPECTION REPORT",
-    "MEASUREMENT REPORT",
+_CMM_PROBE_MEASUREMENT_MARKERS = (
+    ("nominal", re.compile(r"(?i)\bNOM(?:INAL)?\b")),
+    ("tolerance", re.compile(r"(?i)(?:\+TOL\b|-TOL\b|\bTOL\b)")),
+    ("measured", re.compile(r"(?i)\b(?:MEAS|MEASURED|ACT)\b")),
+    ("deviation", re.compile(r"(?i)\bDEV\b")),
+    ("out_of_tolerance", re.compile(r"(?i)\b(?:OUTTOL|OUT)\b")),
+    ("bonus", re.compile(r"(?i)\bBONUS\b")),
 )
-_CMM_TABLE_MARKERS = (
-    "NOMINAL",
-    "TOL",
-    "MEASURED",
-    "OUTTOL",
-    "OUT OF TOL",
-    "DEVIATION",
-    "FEATURE",
-    "CHARACTERISTIC",
-)
-_PROBE_SNIFF_BYTES = 64 * 1024
-
 
 def _resolve_pymupdf_backend_module() -> str | None:
     """Return the import name for a valid PyMuPDF backend, if available."""
@@ -118,19 +119,85 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         capabilities={"ocr_required": False, "table_extraction_mode": "mixed"},
     )
 
+    @staticmethod
+    def _read_probe_text_sample(input_ref: str | Path) -> tuple[str, str | None]:
+        try:
+            with Path(input_ref).open("rb") as handle:
+                sample = handle.read(CMM_PROBE_SAMPLE_BYTES)
+        except OSError:
+            return "", "probe_sample_unavailable"
+
+        if not sample:
+            return "", "probe_sample_empty"
+
+        return sample.decode("utf-8", errors="ignore"), None
+
+    @staticmethod
+    def _score_probe_text_sample(
+        sample_text: str,
+        *,
+        filename_stem: str = "",
+    ) -> tuple[int, tuple[str, ...]]:
+        reasons: list[str] = []
+        score = 0
+        upper_text = sample_text.upper()
+
+        if any(marker in upper_text for marker in _CMM_PROBE_STRONG_MARKERS):
+            score += 24
+            reasons.append("strong_cmm_marker")
+
+        if _CMM_PROBE_DIMENSION_PATTERN.search(sample_text):
+            score += 18
+            reasons.append("dimension_marker")
+
+        if _CMM_PROBE_HEADER_PATTERN.search(sample_text):
+            score += 6
+            reasons.append("measurement_header_marker")
+
+        metadata_labels = set(_CMM_PROBE_METADATA_LABEL_PATTERN.findall(sample_text))
+        if metadata_labels:
+            score += min(24, len(metadata_labels) * 8)
+            reasons.append("metadata_header_markers")
+
+        matched_measurement_markers = [
+            reason for reason, pattern in _CMM_PROBE_MEASUREMENT_MARKERS if pattern.search(sample_text)
+        ]
+        if matched_measurement_markers:
+            score += min(60, len(matched_measurement_markers) * 12)
+            reasons.extend(f"{reason}_marker" for reason in matched_measurement_markers)
+
+        if _CMM_PROBE_AXIS_VALUE_PATTERN.search(sample_text):
+            score += 16
+            reasons.append("axis_value_marker")
+
+        if score >= 36 and CMMReportParser._has_probe_identity_filename_pattern(filename_stem):
+            score += 20
+            reasons.append("cmm_identity_filename_pattern")
+
+        if score >= CMM_PROBE_MIN_CONFIDENCE:
+            return min(CMM_PROBE_HIGH_CONFIDENCE, score), tuple(reasons)
+
+        if reasons:
+            reasons.append("partial_cmm_markers")
+        else:
+            reasons.append("missing_cmm_markers")
+        return CMM_PROBE_EXTENSION_CONFIDENCE, tuple(reasons)
+
     @classmethod
     def probe(cls, input_ref: str | Path, context: ProbeContext) -> ProbeResult:
         """Return parser detection result for a candidate report file."""
 
         path_text = str(input_ref)
-        return cls.probe_pdf_candidate(path_text)
+        source_format = (context.source_format or "").strip().lower()
+        if source_format and source_format != "pdf":
+            return ProbeResult(
+                plugin_id=cls.manifest.plugin_id,
+                can_parse=False,
+                confidence=0,
+                reasons=("unsupported_source_format",),
+            )
 
-    @classmethod
-    def probe_pdf_candidate(cls, input_ref: str | Path) -> ProbeResult:
-        """Return a cheap marker-based CMM PDF probe result."""
-
-        path = Path(input_ref)
-        if path.suffix.lower() != ".pdf":
+        if not path_text.lower().endswith(".pdf"):
             return ProbeResult(
                 plugin_id=cls.manifest.plugin_id,
                 can_parse=False,
@@ -138,139 +205,40 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                 reasons=("unsupported_extension",),
             )
 
-        reasons: list[str] = ["pdf_extension"]
-        name_text = path.stem.upper()
-        sniff_text = cls._probe_text_snippet(path)
-        content_text = sniff_text.upper()
-        compact_content_text = compact_token(content_text)
-        strong_count = cls._matched_marker_count(
-            _CMM_STRONG_MARKERS,
-            content_text,
-            compact_content_text,
-        )
-        partial_report_count = cls._matched_marker_count(
-            _CMM_PARTIAL_REPORT_MARKERS,
-            content_text,
-            compact_content_text,
-        )
-        table_count = cls._matched_marker_count(
-            _CMM_TABLE_MARKERS,
-            content_text,
-            compact_content_text,
-        )
-        header_fields = cls._matched_probe_header_fields(content_text, compact_content_text)
-        filename_matches = cls._has_probe_filename_marker(name_text)
-        filename_identity_matches = cls._has_probe_identity_filename_pattern(name_text)
-        has_cmm_text_marker = (
-            "CMM" in compact_content_text or "COORDINATEMEASUR" in compact_content_text
-        )
+        sample_text, sample_issue = cls._read_probe_text_sample(input_ref)
+        if sample_issue:
+            return ProbeResult(
+                plugin_id=cls.manifest.plugin_id,
+                can_parse=False,
+                confidence=CMM_PROBE_EXTENSION_CONFIDENCE,
+                reasons=("pdf_extension", sample_issue),
+            )
 
-        if strong_count:
-            reasons.append("strong_cmm_markers")
-        if partial_report_count:
-            reasons.append("partial_report_markers")
-        if table_count >= 2:
-            reasons.append("measurement_table_markers")
-        if header_fields:
-            reasons.append("metadata_header_markers")
-        if filename_matches:
-            reasons.append("cmm_like_filename")
-        if filename_identity_matches:
-            reasons.append("cmm_identity_filename_pattern")
-
-        if (
-            (strong_count >= 1 and len(header_fields) >= 3)
-            or (strong_count >= 1 and table_count >= 3)
-            or (has_cmm_text_marker and len(header_fields) >= 4 and table_count >= 2)
-        ):
-            confidence = 100
-        elif (
-            (strong_count >= 1 and (len(header_fields) >= 1 or table_count >= 1))
-            or (has_cmm_text_marker and len(header_fields) >= 2 and table_count >= 1)
-            or (partial_report_count >= 1 and len(header_fields) >= 3 and table_count >= 1)
-        ):
-            confidence = 92
-        elif (
-            (partial_report_count >= 1 and (len(header_fields) >= 2 or table_count >= 2))
-            or (len(header_fields) >= 4 and table_count >= 2)
-        ):
-            confidence = 88
-        elif (filename_matches or filename_identity_matches) and (
-            len(header_fields) >= 1 or table_count >= 2
-        ):
-            confidence = 82
-        elif filename_identity_matches:
-            confidence = 55
-        elif filename_matches:
-            confidence = 55
-        else:
-            reasons.append("pdf_extension_only")
-            confidence = 20
-
+        confidence, evidence_reasons = cls._score_probe_text_sample(
+            sample_text,
+            filename_stem=Path(input_ref).stem,
+        )
+        can_parse = confidence >= CMM_PROBE_MIN_CONFIDENCE
         return ProbeResult(
             plugin_id=cls.manifest.plugin_id,
-            can_parse=confidence >= 80,
+            can_parse=can_parse,
             confidence=confidence,
-            matched_template_id="default" if confidence >= 80 else None,
-            reasons=tuple(dict.fromkeys(reasons)),
+            matched_template_id="default" if can_parse else None,
+            reasons=("pdf_extension", *evidence_reasons),
         )
 
-    @staticmethod
-    def _probe_text_snippet(path: Path) -> str:
-        """Read cheap marker text from a file prefix and, when available, PDF page 1."""
+    @classmethod
+    def probe_pdf_candidate(cls, input_ref: str | Path) -> ProbeResult:
+        """Compatibility wrapper for legacy detector registration paths."""
 
-        snippets = []
-        try:
-            with path.open("rb") as handle:
-                data = handle.read(_PROBE_SNIFF_BYTES)
-        except OSError:
-            data = b""
-        decoded = data.decode("utf-8", errors="ignore").strip()
-        if decoded:
-            snippets.append(decoded)
-
-        try:
-            backend = _load_pdf_backend()
-        except Exception:
-            return "\n".join(snippets)
-
-        document = None
-        try:
-            document = backend.open(str(path))
-            if len(document) > 0:
-                page_text = CMMReportParser._extract_probe_page_text(document[0])
-                if page_text:
-                    snippets.append(page_text)
-        except Exception:
-            pass
-        finally:
-            close = getattr(document, "close", None)
-            if callable(close):
-                close()
-
-        return "\n".join(snippets)
-
-    @staticmethod
-    def _extract_probe_page_text(page) -> str:
-        get_text = getattr(page, "get_text", None)
-        if not callable(get_text):
-            return ""
-        try:
-            return str(get_text("text", sort=True) or "").strip()
-        except TypeError:
-            return str(get_text("text") or "").strip()
-
-    @staticmethod
-    def _has_probe_filename_marker(name_text: str) -> bool:
-        compact_name = compact_token(name_text)
-        return any(
-            marker in compact_name
-            for marker in ("CMM", "CMMREPORT", "DIMENSIONALREPORT", "INSPECTIONREPORT")
+        return cls.probe(
+            input_ref,
+            ProbeContext(source_path=str(input_ref), source_format="pdf"),
         )
 
     @staticmethod
     def _has_probe_identity_filename_pattern(name_text: str) -> bool:
-        parts = name_text.rsplit("_", 2)
+        parts = str(name_text or "").upper().rsplit("_", 2)
         if len(parts) != 3:
             return False
         reference, date_text, sample = parts
@@ -288,21 +256,6 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             and month.isdigit()
             and day.isdigit()
         )
-
-    @staticmethod
-    def _matched_marker_count(markers: tuple[str, ...], text: str, compact_text: str) -> int:
-        return sum(1 for marker in markers if marker in text or compact_token(marker) in compact_text)
-
-    @staticmethod
-    def _matched_probe_header_fields(text: str, compact_text: str) -> set[str]:
-        fields = set()
-        for field_name, aliases in DEFAULT_CMM_PDF_HEADER_BOX_PROFILE.label_aliases.items():
-            for alias in aliases:
-                normalized_alias = alias.upper().rstrip(":")
-                if normalized_alias in text or compact_token(normalized_alias) in compact_text:
-                    fields.add(field_name)
-                    break
-        return fields
 
     def __init__(
         self,

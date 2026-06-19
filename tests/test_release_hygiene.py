@@ -32,3 +32,4 @@ def test_release_hygiene_allows_checked_in_synthetic_fixtures():
     assert _is_blocked("tests/fixtures/industrial_realtime/stable_normal_process.csv") is None
     assert _is_blocked("docs/user_manual/group_analysis/user_manual.pdf") is None
     assert _is_blocked("config/google/credentials.example.json") is None
+    assert _is_blocked("tests/fixtures/industrial_realtime/customer_export.csv")

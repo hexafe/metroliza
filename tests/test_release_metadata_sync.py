@@ -13,7 +13,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}(?:rc\d+)?$")
         self.assertRegex(metadata.build, r"^\d{6}$")
         self.assertEqual(metadata.version_label, f"{metadata.release_version}({metadata.build})")
-        self.assertEqual(metadata.public_version_label, "2026.05 RC5 (build 260612)")
+        self.assertEqual(metadata.public_version_label, "2026.06 RC1 (build 260617)")
         self.assertTrue(metadata.highlight)
 
     def test_in_app_current_release_notes_show_current_version_only(self):
@@ -50,37 +50,34 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertEqual(
             current_bullets,
             [
-                "- Saved report updates are safer if a database write fails partway through<br>",
-                "- HTML dashboard-only exports now report a failure instead of success when dashboard creation fails<br>",
-                "- CSV Summary filters and multi-file exports behave more consistently across regular and large-file paths<br>",
-                "- Packaging, startup timing, and performance checks now fail when required release evidence is missing<br>",
-                "- Parser profiles can now be prepared from Tools > Parser profiles... for new supplier report templates without writing Python code<br>",
-                "- Parser profile handoff folders now include self-contained LLM contracts, small step-by-step prompts, and a manifest for local or inexpensive model workflows<br>",
-                "- Parser profile workflows now include package integrity checks, validation evidence, diagnose output, repair prompts, and install actions in the app and CLI<br>",
-                "- Parser handoff instructions now require expected results for every parsed approval row and include a privacy-redaction checklist for external LLM use<br>",
-                "- CSV and Excel parser profiles are now discovered by normal report import, and parser persistence failures are isolated to the failed file instead of stopping the batch<br>",
-                "- Advanced generated parser plugins now persist ParseResultV2 output through Metroliza's existing SQLite repository path<br>",
-                "- Google Sheets export now checks converted workbook tabs and warns when a local Excel fallback should be used<br>",
-                "- Canceling long parsing, export, and metadata tasks is more reliable from progress windows<br>",
-                "- Dashboard plot visuals can now be customized<br>",
-                "- CSV Summary dashboards can turn very large group point layers into static images automatically, with thresholds still adjustable in Dashboard interactivity<br>",
-                "- CSV Summary and Export dashboard visual settings now focus on per-element styling instead of one shared opacity control<br>",
-                "- CSV Summary can auto-create one group per selected CSV file name without adding a POPULATION group<br>",
-                "- CSV Summary dashboards can render dense POPULATION background layers as static images while keeping smaller groups interactive<br>",
-                "- CSV Summary static POPULATION layers now remain visible when all selected rows belong to POPULATION and no random sampling is needed<br>",
-                "- Oznak Check access no longer requests a reference column unless reference filtering is configured<br>",
-                "- Industrial data sync can fetch by filters, row limits, or explicit fetch-all confirmation, then analyze cached rows through the CSV Summary tools<br>",
-                "- Industrial data now presents Oznak access as fetch-to-cache first, then opens cached source rows in CSV Summary for filtering, grouping, dashboards, and optional workbooks<br>",
-                "- Industrial data dashboards can group and filter by fetched columns plus source, so rows from multiple production databases stay traceable<br>",
-                "- Industrial SQL recipes now reject unsafe read-lock and write-output queries, and large SQL fetch-all operations save rows to the local cache in chunks<br>",
-                "- Industrial-only temporary caches no longer create report-link tables unless an opened Metroliza report database is the active target<br>",
-                "- Guided Industrial source setup now uses simple table/view names for Oznak compatibility; two-part database object names belong in SQL recipes or IT-provided views<br>",
-                "- Industrial Data and grouping release checks now include extra large-data performance probes for cache loading, CSV Summary handoff, static multi-group rendering, and high-cardinality grouping previews<br>",
-                "- Industrial data source switching now refreshes stored credentials for the selected source and rejects invalid column-list config values<br>",
-                "- Industrial data filters and cache refreshes now handle missing or removed production fields more predictably<br>",
-                "- CSV Summary and Export dashboards now use clearer run notes, image snapshot wording, and group comparison takeaways<br>",
-                "- CSV Summary now uses Edit groups for selected-reference comparisons and keeps dashboard rendering controls in Dashboard interactivity<br>",
-                "- Grouped Export runs now add standard group analysis to the HTML dashboard instead of adding extra workbook sheets<br>",
+                "- Industrial Data now opens cached rows in CSV Summary from indexed local metadata, so filter lists and simple grouping previews respond faster on large production caches<br>",
+                "- Industrial Data workbook export can now include raw cached data directly without first loading the full cache into the interactive table<br>",
+                "- Industrial export filters now apply consistently to cached and live exports, including additional production-field filters entered in the filter dialog<br>",
+                "- Industrial cache updates now refresh same-session filter lists more reliably, even when rows and production field values change within the same second<br>",
+                "- Industrial Data now clears abandoned temporary tabular views before preparing a new cache handoff, keeping long sessions lighter<br>",
+                "- Large SQL fetches now report saved rows clearly when rows were already streamed before a later read or save warning occurs<br>",
+                "- Realtime monitoring now reloads only newly inserted sample rows for anomaly review, keeping polling cycles quicker as monitoring history grows<br>",
+                "- Realtime diagnostics now keep source status messages more specific when a polling or dashboard refresh step fails<br>",
+                "- Realtime Industrial Monitoring now has a separate foundation for append-only samples, signal definitions, stream offsets, explainable anomaly events, replay, and dashboard review<br>",
+                "- Deterministic anomaly detectors now cover specification limits, warning limits, IQR fences, MAD robust z-score, rolling z-score, and stale-source checks with operator-readable explanations<br>",
+                "- Realtime polling now uses generated bounded queries, cursor offsets, chunk limits, safe diagnostics, and offset advancement only after local persistence succeeds<br>",
+                "- Industrial Data fetches can now save rows into the local cache while large guided or SQL reads are still running, with clearer progress for saving rows, refreshing links, and updating summaries<br>",
+                "- Industrial Data can now run the same guided filters or SQL query across checked production sources, then report one batch result for all successful and failed sources<br>",
+                "- Industrial source setup now accepts copied CSV headers or an approved all-columns marker when a reviewed table or view is allowed to expose simple columns<br>",
+                "- SQL query work now has a larger editor with a preview table for reviewed production queries before fetching rows<br>",
+                "- Realtime Industrial Monitoring now opens an operator dialog with checked-source selection, polling interval and timeout settings, row limits, status, diagnostics, and dashboard output controls<br>",
+                "- Realtime source selection now keeps disabled production sources out of polling and separates saving one source from intentionally applying settings to all checked sources<br>",
+                "- Realtime Industrial Monitoring can now import the shared production source YAML file, reload source changes, and open the shared source editor from the monitor<br>",
+                "- Realtime dashboard snapshots now refresh in the background after polling, and Open Dashboard queues safely when a refresh is already running<br>",
+                "- Interactive HTML dashboards can now find points by TraceCode, record key, series, axis value, or point details, then save browser-local point marks without changing source data<br>",
+                "- Realtime dashboard review can open without selecting a Metroliza report database first; the app uses a temporary session SQLite store unless a persistent database is selected<br>",
+                "- Synthetic realtime fixtures and replay validation are available for pre-live testing without a production database<br>",
+                "- Optional advanced anomaly tooling stays separate from normal app startup, so standard users do not need extra ML packages<br>",
+                "- Industrial diagnostics now redact nested credentials, URI passwords, token-like fields, and raw SQL text from operator-facing status and persisted diagnostics<br>",
+                "- CMM parser probing now uses marker-based confidence so generic PDFs no longer look like perfect CMM report matches<br>",
+                "- Parser plugin handoff packages now have stronger tests that require local API contract content and small step-by-step prompts for LLM-assisted plugin work<br>",
+                "- Realtime rollout docs now include operator concepts, production safety checks, synthetic replay evidence, source lag review, and rollback steps<br>",
+                "- The About dialog now stays focused on the duck animation, version, author, and GitHub project link<br>",
             ],
         )
         changelog_bullets = [
@@ -107,8 +104,8 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
             updated = temp_readme.read_text(encoding="utf-8")
             self.assertIn(f"Current release highlight (`{metadata.public_version_label}`):", updated)
             self.assertIn(f"### Changelog highlights (release `{metadata.public_version_label}`)", updated)
-            self.assertIn("RC5", updated)
-            self.assertNotIn("rc1", updated)
+            self.assertIn("RC1", updated)
+            self.assertNotIn("2000.01rc1", updated)
 
     def test_sync_changelog_writes_current_header(self):
         metadata = sync_release_metadata.load_metadata()

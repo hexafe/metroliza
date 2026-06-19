@@ -15,6 +15,7 @@ from modules.export_html_dashboard import (
     _dashboard_visual_preview_labels_from_manifest,
     extract_dashboard_chart_details,
     _render_overview_cards,
+    _render_plotly_shell,
     resolve_html_dashboard_assets_dir,
     resolve_html_dashboard_path,
     write_export_html_dashboard,
@@ -35,6 +36,55 @@ def _trace_by_name(spec: dict, name: str) -> dict:
             return trace
     available = [trace.get('name') for trace in spec.get('data', [])]
     raise AssertionError(f'Missing trace {name!r}; available traces: {available!r}')
+
+
+def _extract_style_block(html_text: str) -> str:
+    match = re.search(r"<style>(.*?)</style>", html_text, re.S)
+    if not match:
+        raise AssertionError("Missing style block in export HTML")
+    return match.group(1)
+
+
+def _write_minimal_export_dashboard(tmpdir: str | Path) -> str:
+    excel_file = Path(tmpdir) / "report.xlsx"
+    html_path = resolve_html_dashboard_path(excel_file)
+    assets_dir = resolve_html_dashboard_assets_dir(html_path)
+    result = write_export_html_dashboard(
+        excel_file=excel_file,
+        output_path=html_path,
+        assets_dir=assets_dir,
+        sections=[
+            {
+                "header": "Diameter / X",
+                "subtitle": "Regression smoke",
+                "reference": "R-100",
+                "axis": "X",
+                "grouping_applied": True,
+                "sample_size": 2,
+                "limits": {"nominal": 10.0, "lsl": 9.8, "usl": 10.2},
+                "charts": [
+                    {
+                        "chart_type": "distribution",
+                        "title": "Diameter / X",
+                        "backend": "native",
+                        "image_buffer": BytesIO(b"png-bytes"),
+                        "payload": {
+                            "type": "distribution",
+                            "render_mode": "violin",
+                            "labels": ["All"],
+                            "series": [[9.9, 10.0]],
+                            "x_label": "Measurement set",
+                            "y_label": "Measurement",
+                            "limits": {"nominal": 10.0, "lsl": 9.8, "usl": 10.2},
+                        },
+                        "note": "Violin distribution view",
+                    }
+                ],
+            }
+        ],
+        chart_observability_summary={"chart_backend_distribution": {"counts": {"native": 1, "matplotlib": 0}}},
+    )
+    return Path(result["html_dashboard_path"]).read_text(encoding="utf-8")
 
 
 def test_dashboard_visual_preview_labels_derive_from_export_plotly_specs() -> None:
@@ -61,6 +111,23 @@ def test_dashboard_visual_preview_labels_derive_from_export_plotly_specs() -> No
     )
 
     assert labels == ("POPULATION", "DUPA", "TEST123", "Group 3", "Group 4")
+
+
+def test_render_plotly_shell_exposes_chart_key_for_point_marks() -> None:
+    html_markup = _render_plotly_shell(
+        {
+            "chart_type": "trend",
+            "title": "Diameter trend",
+            "plotly_chart_key": "section-001:chart-02",
+            "plotly_spec": {
+                "data": [{"type": "scatter", "mode": "markers", "x": [1], "y": [2]}],
+                "layout": {},
+            },
+        }
+    )
+
+    assert 'data-dashboard-chart-key="section-001:chart-02"' in html_markup
+    assert 'data-plotly-spec-light=' in html_markup
 
 
 class TestExportHtmlDashboard(unittest.TestCase):
@@ -295,6 +362,11 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn('visual-settings-trigger', html_text)
             self.assertIn('dashboard-visual-dialog', html_text)
             self.assertIn('id="dashboard-visual-preset"', html_text)
+            self.assertIn('id="dashboard-visual-point-search"', html_text)
+            self.assertIn('id="dashboard-visual-point-mark"', html_text)
+            self.assertIn('plotly-point-controls', html_text)
+            self.assertIn('data-dashboard-point-controls', html_text)
+            self.assertIn('window.metrolizaEnsureInlinePointControls', html_text)
             self.assertIn('<option value="auto" selected>', html_text)
             self.assertIn('data-visual-palette-index="0"', html_text)
             self.assertNotIn('data-visual-opacity', html_text)
@@ -305,11 +377,18 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn('data-theme-choice="dark"', html_text)
             self.assertIn('metroliza-dashboard-theme', html_text)
             self.assertIn('metroliza-dashboard-visuals', html_text)
+            self.assertIn('metroliza-dashboard-point-marks', html_text)
             self.assertIn('prefers-color-scheme: dark', html_text)
             self.assertIn('window.Plotly.react', html_text)
             self.assertIn('delete lightboxPlotly.__metrolizaVisualSelectionHandlers;', html_text)
             self.assertIn('preservePlotlyTraceVisibility(container, data);', html_text)
             self.assertIn('applyDashboardVisualsToPlotlySpec(baseSpec)', html_text)
+            self.assertIn('data-dashboard-chart-key="section-001:chart-01"', html_text)
+            self.assertIn('applyDashboardPointMarksToPlotlySpec(visualSpec, chartKey)', html_text)
+            self.assertIn(
+                "'data-plotly-spec-light', 'data-plotly-spec-dark', 'data-plotly-spec', 'data-dashboard-chart-key'",
+                html_text,
+            )
             self.assertIn('"initialSettings":{', html_text)
             self.assertIn('"preset":"custom"', html_text)
             self.assertIn('"palette_preset":"custom"', html_text)
@@ -1177,6 +1256,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(spec['layout']['xaxis']['tickvals'], [0.0, 1.0])
         self.assertEqual(spec['layout']['xaxis']['ticktext'], ['S101', 'S105'])
         self.assertEqual(spec['layout']['yaxis']['tickformat'], '.4f')
+        self.assertEqual(spec['data'][0]['ids'], ['S101', 'S105'])
         self.assertIn('Sample number=%{customdata}', spec['data'][0]['hovertemplate'])
         self.assertNotIn('%{x', spec['data'][0]['hovertemplate'])
         self.assertIn('%{y:.4f}', spec['data'][0]['hovertemplate'])
@@ -1287,6 +1367,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertNotIn('line', measurement_trace)
         self.assertEqual(measurement_trace['x'], [0.0, 1.5, 3.0])
         self.assertEqual(measurement_trace['y'], [10.1234, 10.4325, 10.5555])
+        self.assertEqual(measurement_trace['ids'], ['S101', 'S105', 'S108'])
         self.assertEqual(measurement_trace['customdata'], ['S101', 'S105', 'S108'])
         self.assertIn('Sample number=%{customdata}', measurement_trace['hovertemplate'])
         self.assertIn('%{y:.4f}', measurement_trace['hovertemplate'])
@@ -1449,6 +1530,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
 
         self.assertEqual(spec['data'][0]['x'], [1.0, 2.0, 3.0])
         self.assertEqual(spec['data'][0]['y'], [10.625, 20.375, 30.125])
+        self.assertEqual(spec['data'][0]['ids'], ['first', 'second', 'third'])
         self.assertEqual(spec['data'][0]['customdata'], ['first', 'second', 'third'])
         self.assertEqual(spec['data'][0]['name'], 'Measurements')
         self.assertTrue(spec['data'][0].get('showlegend'))
@@ -1478,6 +1560,57 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertEqual(trace['y'], [y_value, y_value])
             self.assertTrue(trace.get('showlegend'))
             self.assertNotEqual(trace.get('visible'), 'legendonly')
+
+    def test_export_dashboard_css_uses_viewport_safe_lightbox_overlay_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            html_text = _write_minimal_export_dashboard(tmpdir)
+
+        css = _extract_style_block(html_text)
+        self.assertIn(".lightbox {", css)
+        self.assertIn("position: fixed;", css)
+        self.assertIn("inset: 0;", css)
+        self.assertIn("max-width: 100vw;", css)
+        self.assertIn("max-height: 100vh;", css)
+        self.assertIn("width: 100vw;", css)
+        self.assertIn("height: 100vh;", css)
+        self.assertIn(".lightbox::backdrop", css)
+        self.assertIn("background: var(--overlay-bg);", css)
+        self.assertIn(".lightbox-shell {", css)
+        self.assertIn("width: min(1600px, calc(100vw - 24px));", css)
+        self.assertIn("height: min(96vh, calc(100vh - 24px));", css)
+
+    def test_export_dashboard_css_constrains_tables_and_text_overflow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            html_text = _write_minimal_export_dashboard(tmpdir)
+
+        css = _extract_style_block(html_text)
+        self.assertIn(".table-shell {", css)
+        self.assertIn("overflow-x: auto;", css)
+        self.assertIn("overflow-wrap: anywhere;", css)
+        self.assertIn("word-break: break-word;", css)
+        self.assertIn("text-overflow: ellipsis", css)
+        self.assertIn(".detail-table td,", css)
+
+    def test_export_dashboard_css_constrains_inline_plotly_point_controls(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            html_text = _write_minimal_export_dashboard(tmpdir)
+
+        css = _extract_style_block(html_text)
+        self.assertIn(".plotly-point-controls {", css)
+        plotly_point_controls_match = re.search(
+            r"\.plotly-point-controls\s*\{([\s\S]*?)\n\s*\}",
+            css,
+            re.S,
+        )
+        assert plotly_point_controls_match is not None
+        plotly_point_controls_rules = plotly_point_controls_match.group(1)
+        self.assertIn("display: grid;", css)
+        self.assertIn("padding: 10px;", css)
+        self.assertNotIn("position", plotly_point_controls_rules)
+        self.assertIn(".plotly-point-controls label", css)
+        self.assertIn(".plotly-point-controls input[type=\"search\"]", css)
+        self.assertIn("@media (max-width: 780px)", css)
+        self.assertIn("grid-template-columns: 1fr 1fr;", css)
 
 
 if __name__ == '__main__':

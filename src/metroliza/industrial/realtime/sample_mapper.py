@@ -1,192 +1,176 @@
-"""Map realtime source rows into append-only industrial samples."""
+"""Map source database rows into realtime industrial samples."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, field
 import math
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping
 
-from metroliza.industrial.realtime.sample_repository import redact_sample_payload, utc_timestamp
-from metroliza.industrial.realtime.stream_config import RealtimeStreamConfig
+from metroliza.industrial.industrial_data_repository import looks_sensitive_key, redact_payload_text
+from metroliza.industrial.realtime.sample_repository import utc_timestamp
+from metroliza.industrial.realtime.stream_config import RealtimePollConfig
 from metroliza.industrial.realtime.stream_contracts import IndustrialSample, SignalDefinition
-
-
-_SAMPLE_CONTEXT_FIELDS = (
-    "reference",
-    "part_number",
-    "revision",
-    "station",
-    "line",
-    "work_order",
-    "batch_lot",
-)
-
-
-@dataclass(frozen=True)
-class SignalSampleMapping:
-    """Pair a validated stream config with its persisted signal definition."""
-
-    config: RealtimeStreamConfig
-    signal: SignalDefinition
 
 
 @dataclass(frozen=True)
 class SampleMappingStats:
-    """Counters for one source-row to sample mapping batch."""
+    """Counters for row-to-sample mapping."""
 
-    rows_processed: int = 0
-    samples_mapped: int = 0
-    samples_skipped: int = 0
-    missing_required: int = 0
-    non_numeric: int = 0
-    invalid_timestamp: int = 0
+    rows_seen: int = 0
+    mapped: int = 0
+    skipped_missing: int = 0
+    skipped_non_numeric: int = 0
+    skipped_non_finite: int = 0
 
 
 @dataclass(frozen=True)
 class SampleMappingResult:
-    """Mapped samples plus explicit skip counters."""
+    """Mapped samples and cursor metadata from one source batch."""
 
     samples: tuple[IndustrialSample, ...]
     stats: SampleMappingStats
-
-
-def map_row_to_sample(
-    row: Mapping[str, Any],
-    mapping: SignalSampleMapping,
-    *,
-    ingest_time: str | None = None,
-) -> tuple[IndustrialSample | None, str | None]:
-    """Map one source row to one sample, returning a skip reason instead of raising."""
-
-    config = mapping.config.validated()
-    signal = mapping.signal
-    if signal.id is None:
-        raise ValueError("SignalDefinition.id is required before mapping realtime samples.")
-    record_key = _text(row.get(config.record_key_column))
-    event_time = _text(row.get(config.event_time_column))
-    metric_raw = row.get(config.metric_column)
-    if not record_key or not event_time or metric_raw in (None, ""):
-        return None, "missing_required"
-    normalized_event_time = _normalize_event_time(event_time)
-    if normalized_event_time is None:
-        return None, "invalid_timestamp"
-    try:
-        value = float(metric_raw)
-    except (TypeError, ValueError):
-        return None, "non_numeric"
-    if not math.isfinite(value):
-        return None, "non_numeric"
-
-    segment_key = {
-        field: _text(row.get(field))
-        for field in config.segment_fields
-        if _text(row.get(field))
-    }
-    context = {
-        field: _text(row.get(field))
-        for field in _SAMPLE_CONTEXT_FIELDS
-        if _text(row.get(field))
-    }
-    raw_columns = {
-        config.record_key_column,
-        config.event_time_column,
-        config.metric_column,
-        *config.segment_fields,
-        *config.context_columns,
-        *_SAMPLE_CONTEXT_FIELDS,
-    }
-    raw_record = {
-        key: row[key]
-        for key in sorted(raw_columns)
-        if key in row
-    }
-    return (
-        IndustrialSample(
-            source_profile_id=config.source_profile_id,
-            signal_id=int(signal.id),
-            source_record_key=record_key,
-            event_time=normalized_event_time,
-            ingest_time=ingest_time or utc_timestamp(),
-            metric_name=signal.metric_name or config.metric_name or config.metric_column,
-            value=value,
-            reference=context.get("reference"),
-            part_number=context.get("part_number"),
-            revision=context.get("revision"),
-            station=context.get("station"),
-            line=context.get("line"),
-            work_order=context.get("work_order"),
-            batch_lot=context.get("batch_lot"),
-            segment_key=segment_key,
-            quality_flags=(),
-            raw_record=redact_sample_payload(raw_record),
-        ),
-        None,
-    )
+    cursor_value: str | None = None
+    cursor_tie_breaker_value: str | None = None
+    event_time_watermark: str | None = None
+    warnings: tuple[str, ...] = field(default_factory=tuple)
 
 
 def map_rows_to_samples(
     rows: Iterable[Mapping[str, Any]],
-    mappings: SignalSampleMapping | Sequence[SignalSampleMapping],
     *,
+    config: RealtimePollConfig,
+    signals: Mapping[str, SignalDefinition],
     ingest_time: str | None = None,
 ) -> SampleMappingResult:
-    """Map source rows to samples for one or more signal definitions."""
+    """Map source rows into zero or more samples per row."""
 
-    mapping_list = _normalize_mappings(mappings)
+    validated = config.validated()
+    ingest_timestamp = ingest_time or utc_timestamp()
     samples: list[IndustrialSample] = []
-    rows_processed = 0
-    missing_required = 0
-    non_numeric = 0
-    invalid_timestamp = 0
+    rows_seen = 0
+    skipped_missing = 0
+    skipped_non_numeric = 0
+    skipped_non_finite = 0
+    cursor_value: str | None = None
+    cursor_tie_breaker_value: str | None = None
+    watermark: str | None = None
+    warnings: list[str] = []
+
     for row in rows:
-        rows_processed += 1
-        for mapping in mapping_list:
-            sample, reason = map_row_to_sample(row, mapping, ingest_time=ingest_time)
-            if sample is not None:
-                samples.append(sample)
+        rows_seen += 1
+        record_key = _text_or_none(row.get(validated.record_key_column))
+        event_time = _text_or_none(row.get(validated.event_time_column))
+        row_cursor = _text_or_none(row.get(validated.cursor_column))
+        if not record_key or not event_time:
+            skipped_missing += len(validated.signal_keys)
+            continue
+        if row_cursor is not None:
+            cursor_value = row_cursor
+            cursor_tie_breaker_value = record_key
+        if watermark is None or event_time > watermark:
+            watermark = event_time
+
+        for signal_key in validated.signal_keys:
+            signal = signals.get(signal_key)
+            if signal is None or signal.id is None:
+                warnings.append(f"Signal '{signal_key}' is not persisted; skipped row {record_key}.")
+                skipped_missing += 1
                 continue
-            if reason == "missing_required":
-                missing_required += 1
-            elif reason == "invalid_timestamp":
-                invalid_timestamp += 1
-            elif reason == "non_numeric":
-                non_numeric += 1
-    skipped = missing_required + non_numeric + invalid_timestamp
+            metric_column = validated.signal_columns[signal_key]
+            raw_value = row.get(metric_column)
+            if raw_value in (None, ""):
+                skipped_missing += 1
+                continue
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError):
+                skipped_non_numeric += 1
+                continue
+            if not math.isfinite(value):
+                skipped_non_finite += 1
+                continue
+            samples.append(
+                IndustrialSample(
+                    source_profile_id=validated.source_profile_id,
+                    signal_id=int(signal.id),
+                    source_record_key=record_key,
+                    event_time=event_time,
+                    ingest_time=ingest_timestamp,
+                    metric_name=signal.metric_name,
+                    value=value,
+                    reference=_text_or_none(row.get("reference")),
+                    part_number=_text_or_none(row.get("part_number")),
+                    revision=_text_or_none(row.get("revision")),
+                    station=_text_or_none(row.get("station")),
+                    line=_text_or_none(row.get("line")),
+                    work_order=_text_or_none(row.get("work_order")),
+                    batch_lot=_text_or_none(row.get("batch_lot")),
+                    segment_key={
+                        field_name: str(row[field_name])
+                        for field_name in validated.segment_fields
+                        if row.get(field_name) not in (None, "")
+                    },
+                    raw_record=_redacted_raw_record(
+                        row,
+                        allowed_columns=_raw_record_columns(validated, metric_column),
+                    ),
+                )
+            )
+
     return SampleMappingResult(
         samples=tuple(samples),
         stats=SampleMappingStats(
-            rows_processed=rows_processed,
-            samples_mapped=len(samples),
-            samples_skipped=skipped,
-            missing_required=missing_required,
-            non_numeric=non_numeric,
-            invalid_timestamp=invalid_timestamp,
+            rows_seen=rows_seen,
+            mapped=len(samples),
+            skipped_missing=skipped_missing,
+            skipped_non_numeric=skipped_non_numeric,
+            skipped_non_finite=skipped_non_finite,
         ),
+        cursor_value=cursor_value,
+        cursor_tie_breaker_value=cursor_tie_breaker_value,
+        event_time_watermark=watermark,
+        warnings=tuple(warnings),
     )
 
 
-def _normalize_mappings(
-    mappings: SignalSampleMapping | Sequence[SignalSampleMapping],
-) -> tuple[SignalSampleMapping, ...]:
-    if isinstance(mappings, SignalSampleMapping):
-        return (mappings,)
-    return tuple(mappings)
+def _raw_record_columns(config: RealtimePollConfig, metric_column: str) -> tuple[str, ...]:
+    return (
+        config.record_key_column,
+        config.event_time_column,
+        config.cursor_column,
+        metric_column,
+        *config.context_fields,
+    )
 
 
-def _normalize_event_time(value: str) -> str | None:
-    text = _text(value)
-    if not text:
-        return None
-    try:
-        parse_text = f"{text[:-1]}+00:00" if text.endswith("Z") else text
-        parsed = datetime.fromisoformat(parse_text)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+def _redacted_raw_record(
+    row: Mapping[str, Any],
+    *,
+    allowed_columns: Iterable[str],
+) -> dict[str, Any]:
+    allowed = tuple(dict.fromkeys(str(column) for column in allowed_columns))
+    return {
+        column: _redacted_value(column, row[column])
+        for column in allowed
+        if column in row
+    }
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
+def _redacted_value(key: str, value: Any) -> Any:
+    if looks_sensitive_key(key):
+        return "<redacted>"
+    if isinstance(value, Mapping):
+        return {
+            str(nested_key): _redacted_value(str(nested_key), nested_value)
+            for nested_key, nested_value in value.items()
+        }
+    if isinstance(value, list):
+        return [_redacted_value(key, item) for item in value]
+    if isinstance(value, str):
+        return redact_payload_text(value, max_len=None)
+    return value
+
+
+def _text_or_none(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None

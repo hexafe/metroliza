@@ -1,4 +1,6 @@
-from modules.industrial_data_repository import IndustrialDataRepository
+import sqlite3
+
+from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
 from metroliza.industrial.anomaly.baseline_repository import BaselineRepository, IndustrialBaseline
 from metroliza.industrial.anomaly.contracts import DetectionResult
 from metroliza.industrial.anomaly.event_repository import AnomalyEventRepository
@@ -96,6 +98,53 @@ def test_anomaly_event_insert_accepts_generator_batches(tmp_path):
     assert result.processed == 1
     assert result.inserted == 1
     assert len(result.event_ids) == 1
+
+
+def test_anomaly_event_insert_uses_batched_id_lookup(tmp_path):
+    db_path = str(tmp_path / "event_batch_lookup.db")
+    signal, sample_id = _persist_sample(db_path)
+    connection = sqlite3.connect(db_path)
+    traced: list[str] = []
+    connection.set_trace_callback(traced.append)
+    repository = AnomalyEventRepository(db_path, connection=connection)
+
+    try:
+        result = repository.insert_events(
+            [
+                DetectionResult(
+                    detector_key=f"detector_{index}",
+                    sample_id=sample_id,
+                    signal_id=signal.id,
+                    signal_key=signal.signal_key,
+                    event_time="2026-06-13T10:00:00Z",
+                    severity="warning",
+                    score=float(index),
+                    observed_value=12.5,
+                    expected_value=10.0,
+                    threshold={"usl": 12.0},
+                    explanation=f"warning {index}",
+                )
+                for index in range(3)
+            ]
+        )
+    finally:
+        connection.close()
+
+    legacy_lookup_count = sum(
+        1
+        for statement in traced
+        if "FROM industrial_anomaly_events" in statement
+        and "WHERE sample_id =" in statement
+        and "detector_key =" in statement
+        and "LIMIT 1" in statement
+    )
+    batched_lookup_count = sum(
+        1 for statement in traced if "_metroliza_event_key_lookup" in statement
+    )
+    assert result.inserted == 3
+    assert len(result.event_ids) == 3
+    assert legacy_lookup_count == 0
+    assert batched_lookup_count >= 1
 
 
 def test_baseline_repository_returns_latest_by_created_at(tmp_path):

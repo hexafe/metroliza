@@ -167,9 +167,23 @@ class TabularSqliteStore:
     source_columns: tuple[str, ...]
     row_count: int
     date_filter_columns: dict[str, str] = field(default_factory=dict)
+    owns_file: bool = True
+    indexable: bool = True
+    cleanup_sql: tuple[str, ...] = ()
+    value_facet_table: str | None = None
+    value_facet_scope_key: str | None = None
     _grouping_index_columns: set[str] = field(default_factory=set, init=False, repr=False, compare=False)
 
     def cleanup(self) -> None:
+        if self.cleanup_sql:
+            try:
+                with sqlite_connection_scope(self.path) as connection:
+                    for statement in self.cleanup_sql:
+                        connection.execute(statement)
+            except OSError:
+                pass
+        if not self.owns_file:
+            return
         for candidate in (Path(self.path), Path(f"{self.path}-wal"), Path(f"{self.path}-shm")):
             try:
                 candidate.unlink(missing_ok=True)
@@ -333,6 +347,16 @@ class TabularSqliteStore:
     ) -> tuple[list[dict[str, Any]], int]:
         if column not in self.columns:
             return [], 0
+        cached = self._preview_value_rows_from_facets(
+            column,
+            search_text=search_text,
+            limit=limit,
+            grouping_filter=grouping_filter,
+            grouping_filter_expression=grouping_filter_expression,
+            grouping_filter_aliases=grouping_filter_aliases,
+        )
+        if cached is not None:
+            return cached
         self._ensure_grouping_column_indexes((column,))
         value_expr = _sqlite_normalized_value_expr(column)
         where_parts: list[str] = []
@@ -428,6 +452,22 @@ class TabularSqliteStore:
         normalized_columns = tuple(str(column) for column in columns if str(column) in self.columns)
         if not normalized_columns:
             return [], 0
+        cached = self._preview_group_rows_from_facets(
+            normalized_columns,
+            search_text=search_text,
+            offset=offset,
+            limit=limit,
+            filter_columns=filter_columns,
+            selected_filter_keys=selected_filter_keys,
+            base_column_filters=base_column_filters,
+            column_filters=column_filters,
+            column_filter_match_mode=column_filter_match_mode,
+            grouping_filter=grouping_filter,
+            grouping_filter_expression=grouping_filter_expression,
+            grouping_filter_aliases=grouping_filter_aliases,
+        )
+        if cached is not None:
+            return cached
         self._ensure_grouping_column_indexes(normalized_columns)
         aliases = tuple(f"key_{index}" for index, _column in enumerate(normalized_columns))
         select_exprs = [
@@ -1048,7 +1088,100 @@ class TabularSqliteStore:
             date_filter_columns=self.date_filter_columns,
         )
 
+    def _preview_value_rows_from_facets(
+        self,
+        column: str,
+        *,
+        search_text: str = "",
+        limit: int | None = None,
+        offset: int = 0,
+        grouping_filter: Any = None,
+        grouping_filter_expression: str | None = None,
+        grouping_filter_aliases: Mapping[str, str] | None = None,
+    ) -> tuple[list[dict[str, Any]], int] | None:
+        if (
+            not self.value_facet_table
+            or not self.value_facet_scope_key
+            or grouping_filter is not None
+            or grouping_filter_expression
+            or grouping_filter_aliases
+        ):
+            return None
+        where_parts = ["scope_key = ?", "column_name = ?"]
+        params: list[Any] = [self.value_facet_scope_key, column]
+        search = str(search_text or "").strip().casefold()
+        if search:
+            where_parts.append("normalized_value LIKE ? ESCAPE '\\'")
+            params.append(_sqlite_like_pattern(search))
+        where_sql = f"WHERE {' AND '.join(where_parts)}"
+        query = (
+            "SELECT display_value, row_count, COUNT(*) OVER () AS __total_rows "
+            f"FROM {_quote_identifier(self.value_facet_table)} {where_sql} "
+            "ORDER BY normalized_value COLLATE NOCASE, display_value COLLATE NOCASE"
+        )
+        offset = max(0, int(offset or 0))
+        if limit is not None and int(limit) >= 0:
+            query = f"{query} LIMIT {int(limit)} OFFSET {offset}"
+        elif offset:
+            query = f"{query} LIMIT -1 OFFSET {offset}"
+        with sqlite_connection_scope(self.path) as connection:
+            records = connection.execute(query, params).fetchall()
+        if not records:
+            count_query = (
+                f"SELECT COUNT(*) FROM {_quote_identifier(self.value_facet_table)} {where_sql}"
+            )
+            with sqlite_connection_scope(self.path) as connection:
+                total = int(connection.execute(count_query, params).fetchone()[0] or 0)
+            return [], total
+        total = int(records[0][2] or 0)
+        rows = [
+            {
+                "key": (str(label),),
+                "label": str(label),
+                "row_count": int(row_count or 0),
+            }
+            for label, row_count, _total_rows in records
+        ]
+        return rows, total
+
+    def _preview_group_rows_from_facets(
+        self,
+        columns: tuple[str, ...],
+        *,
+        search_text: str = "",
+        offset: int = 0,
+        limit: int | None = None,
+        filter_columns: tuple[str, ...] | list[str] | None = None,
+        selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+        base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filter_match_mode: str = "and",
+        grouping_filter: Any = None,
+        grouping_filter_expression: str | None = None,
+        grouping_filter_aliases: Mapping[str, str] | None = None,
+    ) -> tuple[list[dict[str, Any]], int] | None:
+        if (
+            len(columns) != 1
+            or filter_columns
+            or selected_filter_keys
+            or base_column_filters
+            or column_filters
+            or column_filter_match_mode != "and"
+        ):
+            return None
+        return self._preview_value_rows_from_facets(
+            columns[0],
+            search_text=search_text,
+            limit=limit,
+            offset=offset,
+            grouping_filter=grouping_filter,
+            grouping_filter_expression=grouping_filter_expression,
+            grouping_filter_aliases=grouping_filter_aliases,
+        )
+
     def _ensure_grouping_column_indexes(self, columns: tuple[str, ...] | list[str]) -> None:
+        if not self.indexable:
+            return
         normalized_columns = tuple(
             dict.fromkeys(str(column) for column in columns if str(column) in self.columns)
         )

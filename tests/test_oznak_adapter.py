@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import types
 
 import pytest
@@ -424,6 +425,7 @@ def test_fetch_source_profile_keeps_unrestricted_projection_for_empty_allowed_co
         raise AssertionError(f"Unexpected import: {module_name}")
 
     monkeypatch.setattr(oznak_adapter.importlib, "import_module", _fake_import)
+    monkeypatch.setattr(oznak_adapter, "DEFAULT_OZNAK_FETCH_CHUNK_SIZE", 1)
     profile = types.SimpleNamespace(
         id=12,
         profile_name="Assembly MES",
@@ -589,8 +591,11 @@ def test_fetch_source_sql_builds_raw_sql_contract(monkeypatch):
                 row_count=1,
                 elapsed_seconds=0.1,
                 message="Fetched 1 row",
-                query_summary="raw SQL preview",
-                metadata={"mode": "preview"},
+                query_summary="SELECT event_id FROM events WHERE token = 'raw-sql-secret'",
+                metadata={
+                    "mode": "preview",
+                    "sql_text": "SELECT event_id FROM events WHERE token = 'raw-sql-secret'",
+                },
             ),
         )
         warnings = ()
@@ -677,6 +682,14 @@ def test_fetch_source_sql_builds_raw_sql_contract(monkeypatch):
     assert result.diagnostics["fetch_mode"] == "sql"
     assert result.diagnostics["sql_limit"] == 5
     assert "sql_hash" in result.diagnostics
+    assert result.diagnostics["query_summary"] == "raw SQL preview on assembly_mes (mssql, limit 5)"
+    assert result.diagnostics["source_results"][0]["query_summary"] == (
+        "raw SQL preview on assembly_mes (mssql, limit 5)"
+    )
+    assert result.diagnostics["source_results"][0]["metadata"]["sql_text"] == "<redacted>"
+    diagnostics_text = json.dumps(result.diagnostics)
+    assert "SELECT event_id" not in diagnostics_text
+    assert "raw-sql-secret" not in diagnostics_text
 
 
 def test_fetch_source_sql_uses_engine_fallback_when_raw_contract_missing(monkeypatch):
@@ -803,6 +816,219 @@ def test_fetch_source_sql_uses_engine_fallback_when_raw_contract_missing(monkeyp
     assert captured["sql"] == "SELECT event_id, reference, station FROM events WHERE status = 'delete'"
     assert progress_messages[-1] == "Fetched 1 rows from source 'assembly_mes'"
     assert result.diagnostics["raw_sql_contract"] == "metroliza_engine_fallback"
+
+
+def test_fetch_source_sql_engine_fallback_streams_batches_to_callback(monkeypatch):
+    captured = {}
+    streamed_batches = []
+
+    class FakeDatabaseProfile:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeCredentialProvider:
+        def __init__(self, mapping):
+            self.mapping = mapping
+
+        def get_credentials(self, alias):
+            return self.mapping[alias]
+
+    class FakeMappings:
+        def __init__(self):
+            self.calls = 0
+
+        def fetchmany(self, limit):
+            self.calls += 1
+            captured.setdefault("fetch_limits", []).append(limit)
+            if self.calls == 1:
+                return [{"event_id": "ROW-1", "reference": "REF-1"}]
+            if self.calls == 2:
+                return [{"event_id": "ROW-2", "reference": "REF-2"}]
+            return []
+
+    class FakeCursor:
+        def __init__(self):
+            self._mappings = FakeMappings()
+
+        def mappings(self):
+            return self._mappings
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def execute(self, statement):
+            captured["sql"] = str(statement)
+            return FakeCursor()
+
+    class FakeEngine:
+        def connect(self):
+            return FakeConnection()
+
+        def dispose(self):
+            captured["disposed"] = True
+
+    oznak_module = types.ModuleType("oznak")
+    oznak_module.__version__ = "0.2.0rc1"
+    oznak_module.DatabaseProfile = FakeDatabaseProfile
+    oznak_module.FetchRequest = object
+    oznak_module.FetchResult = object
+    oznak_module.MappingCredentialProvider = FakeCredentialProvider
+    oznak_module.create_sqlalchemy_engine = lambda _profile, _credentials: FakeEngine()
+
+    fetcher_module = types.ModuleType("oznak.fetcher")
+
+    def _fake_import(module_name: str):
+        if module_name == "oznak":
+            return oznak_module
+        if module_name == "oznak.fetcher":
+            return fetcher_module
+        if module_name == "oznak.raw_sql":
+            raise ModuleNotFoundError("No module named 'oznak.raw_sql'")
+        if module_name == "sqlalchemy":
+            return types.SimpleNamespace(text=lambda sql: sql)
+        raise AssertionError(f"Unexpected import: {module_name}")
+
+    monkeypatch.setattr(oznak_adapter.importlib, "import_module", _fake_import)
+    monkeypatch.setattr(oznak_adapter, "DEFAULT_OZNAK_FETCH_CHUNK_SIZE", 1)
+    profile = types.SimpleNamespace(
+        id=12,
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+        source_object_name="events",
+        allowed_columns=("event_id", "reference"),
+        timestamp_column=None,
+        default_pagination_column="event_id",
+        order_by_enabled=True,
+    )
+
+    result = oznak_adapter.fetch_oznak_records_for_source_sql(
+        profile,
+        username="operator",
+        password="secret",
+        sql_text="SELECT event_id, reference FROM events",
+        limit=None,
+        mode="fetch",
+        record_batch_callback=lambda records: streamed_batches.append(records),
+    )
+
+    assert [[record["reference"] for record in batch] for batch in streamed_batches] == [
+        ["REF-1"],
+        ["REF-2"],
+    ]
+    assert result.records == ()
+    assert result.row_count == 2
+    assert result.diagnostics["streamed_to_callback"] is True
+    assert result.diagnostics["raw_sql_contract"] == "metroliza_engine_fallback"
+    assert captured["disposed"] is True
+
+
+def test_fetch_source_sql_engine_fallback_reports_partial_callback_failure(monkeypatch):
+    class FakeDatabaseProfile:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeCredentialProvider:
+        def __init__(self, mapping):
+            self.mapping = mapping
+
+        def get_credentials(self, alias):
+            return self.mapping[alias]
+
+    class FakeMappings:
+        def __init__(self):
+            self.calls = 0
+
+        def fetchmany(self, _limit):
+            self.calls += 1
+            if self.calls == 1:
+                return [{"event_id": "ROW-1", "reference": "REF-1"}]
+            return []
+
+    class FakeCursor:
+        def mappings(self):
+            return FakeMappings()
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def execute(self, _statement):
+            return FakeCursor()
+
+    class FakeEngine:
+        def connect(self):
+            return FakeConnection()
+
+        def dispose(self):
+            return None
+
+    oznak_module = types.ModuleType("oznak")
+    oznak_module.__version__ = "0.2.0rc1"
+    oznak_module.DatabaseProfile = FakeDatabaseProfile
+    oznak_module.FetchRequest = object
+    oznak_module.FetchResult = object
+    oznak_module.MappingCredentialProvider = FakeCredentialProvider
+    oznak_module.create_sqlalchemy_engine = lambda _profile, _credentials: FakeEngine()
+
+    fetcher_module = types.ModuleType("oznak.fetcher")
+
+    def _fake_import(module_name: str):
+        if module_name == "oznak":
+            return oznak_module
+        if module_name == "oznak.fetcher":
+            return fetcher_module
+        if module_name == "oznak.raw_sql":
+            raise ModuleNotFoundError("No module named 'oznak.raw_sql'")
+        if module_name == "sqlalchemy":
+            return types.SimpleNamespace(text=lambda sql: sql)
+        raise AssertionError(f"Unexpected import: {module_name}")
+
+    def failing_callback(_records):
+        raise RuntimeError("cache write failed")
+
+    monkeypatch.setattr(oznak_adapter.importlib, "import_module", _fake_import)
+    monkeypatch.setattr(oznak_adapter, "DEFAULT_OZNAK_FETCH_CHUNK_SIZE", 1)
+    profile = types.SimpleNamespace(
+        id=12,
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+        source_object_name="events",
+        allowed_columns=("event_id", "reference"),
+        timestamp_column=None,
+        default_pagination_column="event_id",
+        order_by_enabled=True,
+    )
+
+    result = oznak_adapter.fetch_oznak_records_for_source_sql(
+        profile,
+        username="operator",
+        password="secret",
+        sql_text="SELECT event_id, reference FROM events",
+        limit=None,
+        mode="fetch",
+        record_batch_callback=failing_callback,
+    )
+
+    assert result.records == ()
+    assert result.row_count == 1
+    assert result.error is not None
+    assert result.diagnostics["partial_success"] is True
+    assert result.diagnostics["streamed_to_callback"] is True
 
 
 @pytest.mark.parametrize(
@@ -1172,6 +1398,245 @@ def test_fetch_source_profile_uses_chunked_reference_batches_by_default(monkeypa
     assert result.diagnostics["max_workers"] == 4
     assert result.diagnostics["max_pending_events"] == 8
     assert {record["reference"] for record in result.records} == {"REF1", "REF2", "REF3"}
+
+
+def test_fetch_source_profile_streams_chunk_events_to_batch_callback(monkeypatch):
+    calls = {"chunked": 0, "streamed": []}
+    streamed_batches = []
+
+    class FakeDatabaseProfile:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeFetchRequest:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeCredentialProvider:
+        def __init__(self, mapping):
+            self.mapping = mapping
+
+    class FakeQueryFilter:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeStatus:
+        value = "success"
+
+    class FakeDiagnostic:
+        source_alias = "assembly_mes"
+        status = FakeStatus()
+        row_count = 3
+        elapsed_seconds = 1.25
+        message = "Fetched 3 rows from source 'assembly_mes'"
+        query_summary = "chunked"
+        metadata = {"chunk_count": 2}
+
+    class FakeEvent:
+        def __init__(self, *, frame=None, diagnostics=None):
+            self.frame = frame
+            self.diagnostics = diagnostics
+            self.source_alias = "assembly_mes"
+
+    def fake_fetch_records(*args, **kwargs):
+        raise AssertionError("single fetch should not run for streaming chunked profile fetch")
+
+    def fake_fetch_records_chunked(*args, **kwargs):
+        calls["chunked"] += 1
+        raise AssertionError("full chunked fetch should not run when streaming events are available")
+
+    def fake_iter_records_chunked(
+        request,
+        *,
+        chunk_size,
+        pagination_column,
+        credential_provider=None,
+        cancellation_token=None,
+        progress_callback=None,
+        max_workers=None,
+        max_pending_events=None,
+    ):
+        calls["streamed"].append(
+            {
+                "references": request.filters[0].value,
+                "chunk_size": chunk_size,
+                "pagination_column": pagination_column,
+                "max_workers": max_workers,
+                "max_pending_events": max_pending_events,
+            }
+        )
+        yield FakeEvent(
+            frame=[
+                {"event_id": "ROW-1", "reference": "REF1"},
+                {"event_id": "ROW-2", "reference": "REF2"},
+            ]
+        )
+        yield FakeEvent(frame=[{"event_id": "ROW-3", "reference": "REF3"}])
+        yield FakeEvent(diagnostics=FakeDiagnostic())
+
+    oznak_module = types.ModuleType("oznak")
+    oznak_module.__version__ = "0.2.0rc2"
+    oznak_module.DatabaseProfile = FakeDatabaseProfile
+    oznak_module.FetchRequest = FakeFetchRequest
+    oznak_module.FetchResult = object
+    oznak_module.MappingCredentialProvider = FakeCredentialProvider
+    oznak_module.QueryFilter = FakeQueryFilter
+    oznak_module.fetch_records = fake_fetch_records
+    oznak_module.fetch_records_chunked = fake_fetch_records_chunked
+    oznak_module.iter_records_chunked = fake_iter_records_chunked
+
+    fetcher_module = types.ModuleType("oznak.fetcher")
+    fetcher_module.fetch_records = fake_fetch_records
+
+    def _fake_import(module_name: str):
+        if module_name == "oznak":
+            return oznak_module
+        if module_name == "oznak.fetcher":
+            return fetcher_module
+        raise AssertionError(f"Unexpected import: {module_name}")
+
+    monkeypatch.setattr(oznak_adapter.importlib, "import_module", _fake_import)
+    profile = types.SimpleNamespace(
+        id=12,
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+        source_object_name="events",
+        allowed_columns=("event_id", "reference"),
+        timestamp_column=None,
+        default_pagination_column="event_id",
+    )
+
+    result = oznak_adapter.fetch_oznak_records_for_source_profile(
+        profile,
+        username="operator",
+        password="secret",
+        reference_filter_column="reference",
+        reference_values=("REF1", "REF2", "REF3"),
+        chunk_size=1000,
+        reference_batch_size=100,
+        max_workers=2,
+        max_pending_events=4,
+        record_batch_callback=lambda records: streamed_batches.append(records),
+    )
+
+    assert calls["chunked"] == 0
+    assert calls["streamed"] == [
+        {
+            "references": ("REF1", "REF2", "REF3"),
+            "chunk_size": 1000,
+            "pagination_column": "event_id",
+            "max_workers": 2,
+            "max_pending_events": 4,
+        }
+    ]
+    assert [[record["reference"] for record in batch] for batch in streamed_batches] == [
+        ["REF1", "REF2"],
+        ["REF3"],
+    ]
+    assert result.records == ()
+    assert result.row_count == 3
+    assert result.diagnostics["fetch_strategy"] == "streaming_chunked"
+    assert result.diagnostics["streamed_to_callback"] is True
+    assert result.diagnostics["source_results"][0]["metadata"] == {"chunk_count": 2}
+
+
+def test_fetch_source_profile_streamed_partial_error_keeps_saved_rows_as_warning(monkeypatch):
+    streamed_batches = []
+
+    class FakeDatabaseProfile:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeFetchRequest:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeCredentialProvider:
+        def __init__(self, mapping):
+            self.mapping = mapping
+
+    class FakeQueryFilter:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class FakeStatus:
+        value = "failed"
+
+    class FakeDiagnostic:
+        source_alias = "assembly_mes"
+        status = FakeStatus()
+        row_count = 1
+        elapsed_seconds = 1.25
+        message = "Timed out after first chunk"
+        query_summary = "chunked"
+        metadata = {"chunk_count": 1}
+
+    class FakeEvent:
+        def __init__(self, *, frame=None, diagnostics=None):
+            self.frame = frame
+            self.diagnostics = diagnostics
+            self.source_alias = "assembly_mes"
+
+    def fake_iter_records_chunked(*args, **kwargs):
+        yield FakeEvent(frame=[{"event_id": "ROW-1", "reference": "REF1"}])
+        yield FakeEvent(diagnostics=FakeDiagnostic())
+
+    oznak_module = types.ModuleType("oznak")
+    oznak_module.__version__ = "0.2.0rc2"
+    oznak_module.DatabaseProfile = FakeDatabaseProfile
+    oznak_module.FetchRequest = FakeFetchRequest
+    oznak_module.FetchResult = object
+    oznak_module.MappingCredentialProvider = FakeCredentialProvider
+    oznak_module.QueryFilter = FakeQueryFilter
+    oznak_module.fetch_records = lambda *args, **kwargs: None
+    oznak_module.fetch_records_chunked = lambda *args, **kwargs: None
+    oznak_module.iter_records_chunked = fake_iter_records_chunked
+
+    fetcher_module = types.ModuleType("oznak.fetcher")
+    fetcher_module.fetch_records = oznak_module.fetch_records
+
+    def _fake_import(module_name: str):
+        if module_name == "oznak":
+            return oznak_module
+        if module_name == "oznak.fetcher":
+            return fetcher_module
+        raise AssertionError(f"Unexpected import: {module_name}")
+
+    monkeypatch.setattr(oznak_adapter.importlib, "import_module", _fake_import)
+    profile = types.SimpleNamespace(
+        id=12,
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        host="mes.example.invalid",
+        port=1433,
+        database_name="plantdb",
+        source_object_name="events",
+        allowed_columns=("event_id", "reference"),
+        timestamp_column=None,
+        default_pagination_column="event_id",
+    )
+
+    result = oznak_adapter.fetch_oznak_records_for_source_profile(
+        profile,
+        username="operator",
+        password="secret",
+        reference_filter_column="reference",
+        reference_values=("REF1",),
+        chunk_size=1000,
+        record_batch_callback=lambda records: streamed_batches.append(records),
+    )
+
+    assert [[record["reference"] for record in batch] for batch in streamed_batches] == [["REF1"]]
+    assert result.records == ()
+    assert result.row_count == 1
+    assert result.error is None
+    assert result.diagnostics["completed_with_warnings"] is True
+    assert result.diagnostics["errors"] == ("Timed out after first chunk",)
 
 
 def test_fetch_source_profile_order_by_disabled_uses_single_fetch(monkeypatch):

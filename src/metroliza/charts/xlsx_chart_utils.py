@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from io import BytesIO
 from typing import Any
 
 
@@ -63,3 +64,66 @@ def insert_chart(
     if y_scale is not None:
         options["y_scale"] = y_scale
     worksheet.insert_chart(int(row), int(column), chart, options)
+
+
+def compute_image_scale_to_fit(
+    image_data: BytesIO,
+    *,
+    available_cols: int,
+    available_rows: int,
+    px_per_col: float = 64.0,
+    px_per_row: float = 20.0,
+    padding_ratio: float = 0.96,
+) -> float:
+    """Return a uniform image scale that keeps an inserted bitmap inside a slot."""
+
+    try:
+        from PIL import Image
+    except Exception:  # pragma: no cover - Pillow is expected in runtime builds
+        return 1.0
+
+    cursor = image_data.tell()
+    try:
+        image_data.seek(0)
+        with Image.open(image_data) as image:
+            width_px, height_px = image.size
+    finally:
+        image_data.seek(cursor)
+
+    if width_px <= 0 or height_px <= 0:
+        return 1.0
+
+    max_width_px = max(1.0, float(available_cols) * float(px_per_col) * float(padding_ratio))
+    max_height_px = max(1.0, float(available_rows) * float(px_per_row) * float(padding_ratio))
+    return min(1.0, max_width_px / float(width_px), max_height_px / float(height_px))
+
+
+def insert_image_fit_to_slot(
+    worksheet: Any,
+    row: int,
+    column: int,
+    image_name: str,
+    image_data: BytesIO,
+    *,
+    available_cols: int,
+    available_rows: int,
+    x_offset: int | None = None,
+    y_offset: int | None = None,
+) -> None:
+    """Insert an image scaled to stay within a reserved worksheet slot."""
+
+    scale = compute_image_scale_to_fit(
+        image_data,
+        available_cols=available_cols,
+        available_rows=available_rows,
+    )
+    options: dict[str, Any] = {
+        "image_data": image_data,
+        "x_scale": scale,
+        "y_scale": scale,
+    }
+    if x_offset is not None:
+        options["x_offset"] = x_offset
+    if y_offset is not None:
+        options["y_offset"] = y_offset
+    worksheet.insert_image(int(row), int(column), str(image_name), options)

@@ -47,10 +47,14 @@ class _FakeLabel(_FakeWidget):
 
 
 class _FakeVBoxLayout:
+    def __init__(self, *_args, **_kwargs):
+        self.widgets = []
+
     def setAlignment(self, *_args, **_kwargs):
         return None
 
-    def addWidget(self, *_args, **_kwargs):
+    def addWidget(self, widget, *_args, **_kwargs):
+        self.widgets.append(widget)
         return None
 
 
@@ -165,7 +169,7 @@ class TestAboutWindowGifLifetime(unittest.TestCase):
             self.assertTrue(gif_buffer.closed)
             self.assertIsNone(dialog._gif_label.movie)
 
-    def test_support_build_info_is_copyable(self):
+    def test_about_window_keeps_compact_metadata_only(self):
         qtcore, qtgui, qtwidgets = _install_qt_stubs()
         with patch.dict(
             sys.modules,
@@ -178,12 +182,18 @@ class TestAboutWindowGifLifetime(unittest.TestCase):
         ):
             sys.modules.pop("modules.about_window", None)
             about_module = importlib.import_module("modules.about_window")
-            dialog = about_module.AboutWindow()
+            dialog = about_module.AboutWindow(days_until_expiration=7)
 
-            self.assertIn("Support/build info", dialog.support_info_label.text)
-            self.assertIn(about_module.VersionDate.PUBLIC_VERSION_LABEL, dialog.support_info_label.text)
-            self.assertIn("Help > Startup, license, and support", dialog.support_info_label.text)
-            self.assertEqual(dialog.support_info_label.text_interaction_flags, 3)
+            text = "\n".join(getattr(widget, "text", "") for widget in dialog.layout.widgets)
+            self.assertIn(about_module.VersionDate.VERSION_LABEL, text)
+            self.assertIn("Grzegorz Ozimek", text)
+            self.assertIn(about_module.SUPPORT_URL, text)
+            self.assertIn("GitHub:", text)
+            self.assertNotIn("License expiration", text)
+            self.assertNotIn("Support/build info", text)
+            self.assertNotIn("Manual:", text)
+            self.assertNotIn("Internal version:", text)
+            self.assertFalse(hasattr(dialog, "support_info_label"))
 
 if __name__ == "__main__":
     unittest.main()

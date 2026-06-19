@@ -5,7 +5,7 @@ from __future__ import annotations
 from metroliza.reports.db import run_transaction_with_retry
 
 
-SCHEMA_VERSION = "industrial_data_v4"
+SCHEMA_VERSION = "industrial_data_v5"
 
 SYNC_RUN_STATUSES = ("running", "succeeded", "completed_with_warnings", "failed", "cancelled")
 JOIN_MATCH_MODES = ("exact", "time_window")
@@ -127,11 +127,41 @@ SCHEMA_TABLE_STATEMENTS = (
         stream_key TEXT NOT NULL,
         cursor_column TEXT NOT NULL,
         cursor_value TEXT,
+        cursor_tie_breaker_column TEXT,
+        cursor_tie_breaker_value TEXT,
         event_time_watermark TEXT,
         last_success_at TEXT,
         last_error TEXT,
         lag_seconds REAL,
         status TEXT NOT NULL DEFAULT 'idle',
+        FOREIGN KEY (source_profile_id) REFERENCES industrial_source_profiles(id) ON DELETE CASCADE,
+        UNIQUE(source_profile_id, stream_key)
+    )""",
+    """CREATE TABLE IF NOT EXISTS industrial_realtime_monitor_configs (
+        id INTEGER PRIMARY KEY,
+        source_profile_id INTEGER NOT NULL,
+        stream_key TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+        cursor_column TEXT NOT NULL,
+        event_time_column TEXT NOT NULL,
+        record_key_column TEXT NOT NULL,
+        signal_keys_json TEXT NOT NULL DEFAULT '[]',
+        signal_columns_json TEXT NOT NULL DEFAULT '{}',
+        polling_interval_seconds REAL NOT NULL DEFAULT 60,
+        timeout_seconds REAL NOT NULL DEFAULT 30,
+        chunk_size INTEGER NOT NULL DEFAULT 500,
+        max_catchup_rows_per_cycle INTEGER NOT NULL DEFAULT 5000,
+        allowed_lateness_seconds REAL NOT NULL DEFAULT 0,
+        segment_fields_json TEXT NOT NULL DEFAULT '[]',
+        context_fields_json TEXT NOT NULL DEFAULT '[]',
+        detectors_json TEXT NOT NULL DEFAULT '[]',
+        display_mode TEXT NOT NULL DEFAULT 'raw' CHECK (display_mode IN ('raw', 'aggregated')),
+        aggregation_time_bucket TEXT NOT NULL DEFAULT 'none',
+        aggregation_methods_json TEXT NOT NULL DEFAULT '[]',
+        aggregation_group_fields_json TEXT NOT NULL DEFAULT '[]',
+        dashboard_output_path TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
         FOREIGN KEY (source_profile_id) REFERENCES industrial_source_profiles(id) ON DELETE CASCADE,
         UNIQUE(source_profile_id, stream_key)
     )""",
@@ -237,16 +267,20 @@ SCHEMA_INDEX_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_industrial_sync_runs_status ON industrial_sync_runs(status)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_records_profile_timestamp ON industrial_records(source_profile_id, process_timestamp)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_records_reference ON industrial_records(reference)",
+    "CREATE INDEX IF NOT EXISTS idx_industrial_records_reference_time_id ON industrial_records(reference COLLATE NOCASE, process_timestamp, id)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_records_part_revision ON industrial_records(part_number, revision)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_records_serial ON industrial_records(serial)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_records_batch_lot ON industrial_records(batch_lot)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_record_values_record_field ON industrial_record_values(record_id, field_name)",
+    "CREATE INDEX IF NOT EXISTS idx_industrial_record_values_field_text_record ON industrial_record_values(field_name, field_value_text, record_id)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_join_rules_enabled_priority ON industrial_join_rules(is_enabled, priority)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_link_candidates_record_status ON industrial_link_candidates(industrial_record_id, status)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_link_candidates_report_measurement ON industrial_link_candidates(report_id, measurement_id)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_stream_offsets_profile_stream ON industrial_stream_offsets(source_profile_id, stream_key)",
+    "CREATE INDEX IF NOT EXISTS idx_industrial_realtime_monitor_configs_enabled ON industrial_realtime_monitor_configs(enabled, source_profile_id)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_signal_definitions_profile_enabled ON industrial_signal_definitions(source_profile_id, enabled)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_samples_signal_time ON industrial_samples(signal_id, event_time)",
+    "CREATE INDEX IF NOT EXISTS idx_industrial_samples_signal_time_desc_value ON industrial_samples(signal_id, event_time DESC, id DESC, value)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_samples_profile_time ON industrial_samples(source_profile_id, event_time)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_samples_profile_signal_time ON industrial_samples(source_profile_id, signal_id, event_time)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_detector_configs_enabled ON industrial_detector_configs(enabled)",
@@ -254,6 +288,8 @@ SCHEMA_INDEX_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_industrial_anomaly_events_signal_time ON industrial_anomaly_events(signal_id, event_time)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_anomaly_events_severity_status_time ON industrial_anomaly_events(severity, status, event_time)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_anomaly_events_detector_time ON industrial_anomaly_events(detector_key, event_time)",
+    "CREATE INDEX IF NOT EXISTS idx_industrial_anomaly_events_status_time_desc ON industrial_anomaly_events(status, event_time DESC, id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_industrial_anomaly_events_signal_status_time_desc ON industrial_anomaly_events(signal_id, status, event_time DESC, id DESC)",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_industrial_anomaly_events_sample_detector_unique ON industrial_anomaly_events(sample_id, detector_key)",
 )
 
@@ -267,6 +303,7 @@ def ensure_industrial_data_schema(
         for statement in SCHEMA_TABLE_STATEMENTS:
             cursor.execute(statement)
         _ensure_source_profile_columns(cursor)
+        _ensure_stream_offset_columns(cursor)
         _ensure_sync_run_status_constraint(cursor)
         for statement in SCHEMA_INDEX_STATEMENTS:
             cursor.execute(statement)
@@ -298,6 +335,24 @@ def _ensure_source_profile_columns(cursor) -> None:
         "order_by_enabled": (
             "ALTER TABLE industrial_source_profiles "
             "ADD COLUMN order_by_enabled INTEGER NOT NULL DEFAULT 1 CHECK (order_by_enabled IN (0, 1))"
+        ),
+    }
+    for column_name, statement in migrations.items():
+        if column_name not in existing_columns:
+            cursor.execute(statement)
+
+
+def _ensure_stream_offset_columns(cursor) -> None:
+    """Apply additive migrations for composite realtime stream cursors."""
+
+    cursor.execute("PRAGMA table_info(industrial_stream_offsets)")
+    existing_columns = {str(row[1]) for row in cursor.fetchall()}
+    migrations = {
+        "cursor_tie_breaker_column": (
+            "ALTER TABLE industrial_stream_offsets ADD COLUMN cursor_tie_breaker_column TEXT"
+        ),
+        "cursor_tie_breaker_value": (
+            "ALTER TABLE industrial_stream_offsets ADD COLUMN cursor_tie_breaker_value TEXT"
         ),
     }
     for column_name, statement in migrations.items():

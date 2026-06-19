@@ -1,5 +1,8 @@
 import json
+from datetime import date, datetime
+from decimal import Decimal
 
+import pandas as pd
 import pytest
 
 from modules.db import sqlite_connection_scope
@@ -150,6 +153,83 @@ def test_source_profile_upsert_list_and_sync_run_lifecycle(tmp_path):
     assert json.loads(filters_json)["nested"]["headers"][0]["apiKey"] == "<redacted>"
     assert json.loads(diagnostics_json)["refreshToken"] == "<redacted>"
     assert json.loads(diagnostics_json)["trace"][0]["accessToken"] == "<redacted>"
+
+
+def test_sync_payload_redacts_nested_text_values_and_uri_credentials(tmp_path):
+    db_path = str(tmp_path / "industrial.db")
+    repository = IndustrialDataRepository(db_path)
+    profile = repository.upsert_source_profile(
+        profile_key="line-redaction",
+        profile_name="Line Redaction",
+        source_db_alias="plant_redaction",
+        database_type="mysql",
+        source_object_name="events",
+    )
+
+    sync_run_id = repository.create_sync_run(
+        source_profile_id=profile.id,
+        filters={
+            "connection_uri": "mysql://operator:uri-secret@db.example.invalid/processdb",
+            "nested": [
+                {"message": "retry password=plain-secret"},
+                {"note": "token:token-secret api_key=key-secret"},
+            ],
+        },
+        diagnostics={"status": "mssql://reader:start-secret@db.example.invalid/processdb"},
+    )
+    repository.finish_sync_run(
+        sync_run_id=sync_run_id,
+        status="failed",
+        row_count=0,
+        error_summary="failed mysql://reader:error-secret@db.example.invalid/processdb",
+        diagnostics={
+            "events": [
+                {"detail": "passwd=passwd-secret {'clientSecret': 'json-secret'}"},
+                {"uri": "mysql://reader:diag-secret@db.example.invalid/processdb"},
+            ],
+        },
+    )
+
+    with sqlite_connection_scope(db_path) as conn:
+        filters_json, diagnostics_json, error_summary = conn.execute(
+            """
+            SELECT filters_json, diagnostics_json, error_summary
+            FROM industrial_sync_runs
+            WHERE id = ?
+            """,
+            (sync_run_id,),
+        ).fetchone()
+
+    persisted_text = "\n".join((filters_json or "", diagnostics_json or "", error_summary or ""))
+    for secret in (
+        "uri-secret",
+        "plain-secret",
+        "token-secret",
+        "key-secret",
+        "start-secret",
+        "passwd-secret",
+        "json-secret",
+        "diag-secret",
+        "error-secret",
+    ):
+        assert secret not in persisted_text
+
+    filters_payload = json.loads(filters_json)
+    diagnostics_payload = json.loads(diagnostics_json)
+    assert (
+        filters_payload["connection_uri"]
+        == "mysql://operator:<redacted>@db.example.invalid/processdb"
+    )
+    assert filters_payload["nested"][0]["message"] == "retry password=<redacted>"
+    assert filters_payload["nested"][1]["note"] == "token:<redacted> api_key=<redacted>"
+    assert (
+        diagnostics_payload["events"][1]["uri"]
+        == "mysql://reader:<redacted>@db.example.invalid/processdb"
+    )
+    assert diagnostics_payload["events"][0]["detail"] == (
+        "passwd=<redacted> {'clientSecret': '<redacted>'}"
+    )
+    assert error_summary == "failed mysql://reader:<redacted>@db.example.invalid/processdb"
 
 
 def test_finish_sync_run_rejects_non_terminal_running_status(tmp_path):
@@ -476,3 +556,246 @@ def test_upsert_records_and_summarize_counts_from_synthetic_rows(tmp_path):
     assert token_values == 0
     assert stale_measurements == 0
     assert row1_dynamic_fields == {"temperature_c"}
+
+
+def test_upsert_records_replaces_dynamic_values_on_second_upsert(tmp_path):
+    db_path = str(tmp_path / "industrial.db")
+    repository = IndustrialDataRepository(db_path)
+    profile = repository.upsert_source_profile(
+        profile_key="line-replace",
+        profile_name="Line Replace",
+        source_db_alias="plant_replace",
+        database_type="mysql",
+        source_object_name="factory.events",
+    )
+
+    first_pass = repository.upsert_industrial_records_from_rows(
+        source_profile_id=profile.id,
+        source_db_alias=profile.source_db_alias,
+        rows=[
+            {
+                "source_record_key": "ROW-REPLACE",
+                "reference": "REF-REPLACE",
+                "temperature_c": 20.5,
+                "measurements": {"force": 7.2},
+            }
+        ],
+    )
+    second_pass = repository.upsert_industrial_records_from_rows(
+        source_profile_id=profile.id,
+        source_db_alias=profile.source_db_alias,
+        rows=[
+            {
+                "source_record_key": "ROW-REPLACE",
+                "reference": "REF-REPLACE-2",
+                "pressure_bar": 8.8,
+            }
+        ],
+    )
+
+    with sqlite_connection_scope(db_path) as conn:
+        value_rows = conn.execute(
+            """
+            SELECT values_row.field_name, values_row.field_value_text, values_row.field_value_json
+            FROM industrial_record_values values_row
+            JOIN industrial_records records_row ON records_row.id = values_row.record_id
+            WHERE records_row.source_profile_id = ?
+              AND records_row.source_record_key = 'ROW-REPLACE'
+            ORDER BY values_row.field_name
+            """,
+            (profile.id,),
+        ).fetchall()
+        duplicate_value_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM industrial_record_values values_row
+            JOIN industrial_records records_row ON records_row.id = values_row.record_id
+            WHERE records_row.source_profile_id = ?
+              AND records_row.source_record_key = 'ROW-REPLACE'
+              AND values_row.field_name IN ('temperature_c', 'measurements')
+            """,
+            (profile.id,),
+        ).fetchone()[0]
+
+    assert first_pass == {"processed": 1, "inserted": 1, "updated": 0, "value_rows": 2}
+    assert second_pass == {"processed": 1, "inserted": 0, "updated": 1, "value_rows": 1}
+    assert value_rows == [("pressure_bar", "8.8", None)]
+    assert duplicate_value_count == 0
+
+
+def test_upsert_records_counts_same_batch_duplicate_keys_from_iterable(tmp_path):
+    db_path = str(tmp_path / "industrial.db")
+    repository = IndustrialDataRepository(db_path)
+    profile = repository.upsert_source_profile(
+        profile_key="line-duplicates",
+        profile_name="Line Duplicates",
+        source_db_alias="plant_duplicates",
+        database_type="mysql",
+        source_object_name="factory.events",
+    )
+
+    rows = (
+        row
+        for row in [
+            {
+                "record_key": "ROW-DUP",
+                "reference": "REF-DUP-1",
+                "station": "S1",
+                "temperature_c": 21.0,
+                "obsolete_metric": "stale",
+            },
+            {
+                "source_record_key": "ROW-DUP",
+                "reference": "REF-DUP-2",
+                "station": "S2",
+                "pressure_bar": 7.5,
+            },
+        ]
+    )
+
+    summary = repository.upsert_industrial_records_from_rows(
+        source_profile_id=profile.id,
+        source_db_alias=profile.source_db_alias,
+        rows=rows,
+    )
+
+    with sqlite_connection_scope(db_path) as conn:
+        record = conn.execute(
+            """
+            SELECT reference, station
+            FROM industrial_records
+            WHERE source_profile_id = ? AND source_record_key = 'ROW-DUP'
+            """,
+            (profile.id,),
+        ).fetchone()
+        value_rows = conn.execute(
+            """
+            SELECT values_row.field_name, values_row.field_value_text, values_row.field_value_json
+            FROM industrial_record_values values_row
+            JOIN industrial_records records_row ON records_row.id = values_row.record_id
+            WHERE records_row.source_profile_id = ?
+              AND records_row.source_record_key = 'ROW-DUP'
+            ORDER BY values_row.field_name
+            """,
+            (profile.id,),
+        ).fetchall()
+
+    assert summary == {"processed": 2, "inserted": 1, "updated": 1, "value_rows": 3}
+    assert record == ("REF-DUP-2", "S2")
+    assert value_rows == [("pressure_bar", "7.5", None)]
+
+
+def test_sync_and_record_payloads_normalize_datetime_like_scalars_for_storage(tmp_path):
+    db_path = str(tmp_path / "industrial.db")
+    repository = IndustrialDataRepository(db_path)
+    profile = repository.upsert_source_profile(
+        profile_key="line-timestamps",
+        profile_name="Line Timestamps",
+        source_db_alias="plant_ts",
+        database_type="mssql",
+        source_object_name="factory.events",
+        allowed_columns=["reference", "station"],
+    )
+
+    sync_run_id = repository.create_sync_run(
+        source_profile_id=profile.id,
+        filters={
+            "date": date(2026, 6, 15),
+            "started": pd.Timestamp("2026-06-15T08:30:00"),
+        },
+        diagnostics={
+            "checked_at": datetime(2026, 6, 15, 8, 31),
+            "threshold": Decimal("1.25"),
+        },
+    )
+    repository.upsert_industrial_records_from_rows(
+        source_profile_id=profile.id,
+        source_db_alias=profile.source_db_alias,
+        sync_run_id=sync_run_id,
+        rows=[
+            {
+                "source_record_key": "ROW-TS",
+                "process_timestamp": pd.Timestamp("2026-06-15T12:00:00"),
+                "reference": "REF-TS",
+                "station": "S1",
+                "cycle_time": Decimal("10.50"),
+                "measurements": {
+                    "observed_at": pd.Timestamp("2026-06-15T12:00:01"),
+                    "missing": pd.NaT,
+                    "not_a_number": float("nan"),
+                    "amount": Decimal("3.140"),
+                },
+                "raw_record": {
+                    "event_id": "ROW-TS",
+                    "event_time": pd.Timestamp("2026-06-15T12:00:00"),
+                    "missing": pd.NaT,
+                    "amount": Decimal("3.140"),
+                },
+            }
+        ],
+    )
+    repository.finish_sync_run(
+        sync_run_id=sync_run_id,
+        status="succeeded",
+        row_count=1,
+        diagnostics={"finished_at": pd.Timestamp("2026-06-15T12:01:00")},
+    )
+
+    with sqlite_connection_scope(db_path) as conn:
+        record = conn.execute(
+            """
+            SELECT process_timestamp, raw_record_json
+            FROM industrial_records
+            WHERE source_profile_id = ? AND source_record_key = 'ROW-TS'
+            """,
+            (profile.id,),
+        ).fetchone()
+        cycle_time_text = conn.execute(
+            """
+            SELECT values_row.field_value_text
+            FROM industrial_record_values values_row
+            JOIN industrial_records records_row ON records_row.id = values_row.record_id
+            WHERE records_row.source_profile_id = ?
+              AND records_row.source_record_key = 'ROW-TS'
+              AND values_row.field_name = 'cycle_time'
+            """,
+            (profile.id,),
+        ).fetchone()[0]
+        measurement_json = conn.execute(
+            """
+            SELECT values_row.field_value_json
+            FROM industrial_record_values values_row
+            JOIN industrial_records records_row ON records_row.id = values_row.record_id
+            WHERE records_row.source_profile_id = ?
+              AND records_row.source_record_key = 'ROW-TS'
+              AND values_row.field_name = 'measurements'
+            """,
+            (profile.id,),
+        ).fetchone()[0]
+        filters_json, diagnostics_json = conn.execute(
+            """
+            SELECT filters_json, diagnostics_json
+            FROM industrial_sync_runs
+            WHERE id = ?
+            """,
+            (sync_run_id,),
+        ).fetchone()
+
+    assert record is not None
+    process_timestamp, raw_record_json = record
+    raw_record = json.loads(raw_record_json)
+    measurements = json.loads(measurement_json)
+    filters = json.loads(filters_json)
+    diagnostics = json.loads(diagnostics_json)
+    assert process_timestamp == "2026-06-15T12:00:00"
+    assert raw_record["event_time"] == "2026-06-15T12:00:00"
+    assert raw_record["missing"] is None
+    assert raw_record["amount"] == "3.140"
+    assert cycle_time_text == "10.50"
+    assert measurements["observed_at"] == "2026-06-15T12:00:01"
+    assert measurements["missing"] is None
+    assert measurements["not_a_number"] is None
+    assert measurements["amount"] == "3.140"
+    assert filters["date"] == "2026-06-15"
+    assert filters["started"] == "2026-06-15T08:30:00"
+    assert diagnostics["finished_at"] == "2026-06-15T12:01:00"

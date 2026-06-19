@@ -10,6 +10,7 @@ from unittest import mock
 import pandas as pd
 
 from modules.db import (
+    chunked_values,
     execute_many_with_retry,
     execute_select_with_columns,
     execute_with_retry,
@@ -94,6 +95,25 @@ class TestDbUtils(unittest.TestCase):
 
     def test_quote_identifier_escapes_embedded_quotes(self):
         self.assertEqual(quote_identifier('source"name'), '"source""name"')
+
+    def test_chunked_values_streams_iterables_without_prefetching(self):
+        consumed = []
+
+        def values():
+            for value in range(5):
+                consumed.append(value)
+                yield value
+
+        chunks = chunked_values(values(), chunk_size=2)
+
+        self.assertEqual(next(chunks), (0, 1))
+        self.assertEqual(consumed, [0, 1])
+        self.assertEqual(next(chunks), (2, 3))
+        self.assertEqual(consumed, [0, 1, 2, 3])
+        self.assertEqual(next(chunks), (4,))
+        self.assertEqual(consumed, [0, 1, 2, 3, 4])
+        with self.assertRaises(StopIteration):
+            next(chunks)
 
     def test_read_sql_dataframe_retries_on_transient_lock(self):
         from modules import db as db_module

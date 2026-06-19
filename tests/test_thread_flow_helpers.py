@@ -94,6 +94,7 @@ from modules.export_data_thread import (  # noqa: E402
     execute_export_query,
     run_export_steps,
 )
+from metroliza.shared.contracts import AppPaths, ExportOptions, ExportRequest  # noqa: E402
 from modules.export_backends import ExcelExportBackend, HtmlDashboardExportBackend  # noqa: E402
 from modules.google_drive_export import GoogleDriveConversionResult  # noqa: E402
 from modules.export_google_result_utils import (  # noqa: E402
@@ -1313,6 +1314,143 @@ class TestExportHelpers(unittest.TestCase):
 
         with self.assertRaises(RuntimeError):
             execute_export_query(':memory:', 'SELECT 1', select_reader=failing_reader)
+
+    def test_export_thread_caches_partition_header_counts(self):
+        thread = ExportDataThread(
+            ExportRequest(
+                paths=AppPaths(db_file=':memory:', excel_file='dummy.xlsx'),
+                options=ExportOptions(),
+            )
+        )
+
+        calls = {'count': 0}
+
+        def fake_header_counts(*_args, **_kwargs):
+            calls['count'] += 1
+            return {'REF-A': 3, 'REF-B': 2}
+
+        with mock.patch(
+            'metroliza.exporting.export_data_thread.fetch_partition_header_counts',
+            fake_header_counts,
+        ):
+            first = thread._partition_header_counts()
+            second = thread._partition_header_counts()
+
+        self.assertEqual(first, {'REF-A': 3, 'REF-B': 2})
+        self.assertIs(first, second)
+        self.assertEqual(calls['count'], 1)
+
+    def test_sql_summary_cache_miss_does_not_fallback_to_scalar_query(self):
+        thread = ExportDataThread(
+            ExportRequest(
+                paths=AppPaths(db_file=':memory:', excel_file='dummy.xlsx'),
+                options=ExportOptions(),
+            )
+        )
+
+        def fail_scalar_query(*_args, **_kwargs):
+            raise AssertionError("scalar summary query should not run after cache warmup")
+
+        with mock.patch(
+            'metroliza.exporting.export_data_thread.fetch_sql_measurement_summaries',
+            return_value={},
+        ), mock.patch(
+            'metroliza.exporting.export_data_thread.fetch_sql_measurement_summary',
+            fail_scalar_query,
+        ):
+            summary = thread._lookup_sql_measurement_summary(
+                reference='REF-A',
+                header='missing',
+                ax='X',
+                usl=12.0,
+                lsl=8.0,
+            )
+
+        self.assertIsNone(summary)
+
+    def test_export_snapshot_failure_and_empty_cleanup_clear_sql_summary_cache(self):
+        thread = ExportDataThread(
+            ExportRequest(
+                paths=AppPaths(db_file=':memory:', excel_file='dummy.xlsx'),
+                options=ExportOptions(),
+            )
+        )
+        thread.filter_query = 'SELECT * FROM missing_export_rows'
+        thread._db_connection = sqlite3.connect(':memory:')
+        thread._sql_measurement_summary_cache = {
+            'REF-A': {('REF-A', 'H1', 'X'): {'sample_size': 1}}
+        }
+        thread._partition_header_counts_cache = {'REF-A': 1}
+
+        try:
+            thread._prepare_export_snapshot()
+            self.assertEqual(thread._sql_measurement_summary_cache, {})
+            self.assertIsNone(thread._partition_header_counts_cache)
+            self.assertEqual(thread._active_export_query, thread.filter_query)
+
+            thread._sql_measurement_summary_cache = {
+                'REF-A': {('REF-A', 'H1', 'X'): {'sample_size': 1}}
+            }
+            thread._partition_header_counts_cache = {'REF-A': 1}
+            thread._cleanup_export_snapshot()
+        finally:
+            thread._db_connection.close()
+
+        self.assertEqual(thread._sql_measurement_summary_cache, {})
+        self.assertIsNone(thread._partition_header_counts_cache)
+
+    def test_export_snapshot_adds_partition_indexes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, 'snapshot.db')
+            with sqlite3.connect(db_path) as connection:
+                connection.execute(
+                    '''
+                    CREATE TABLE export_rows (
+                        REFERENCE TEXT,
+                        HEADER TEXT,
+                        AX TEXT,
+                        MEAS REAL
+                    )
+                    '''
+                )
+                connection.executemany(
+                    'INSERT INTO export_rows (REFERENCE, HEADER, AX, MEAS) VALUES (?, ?, ?, ?)',
+                    [
+                        ('REF-A', 'H1', 'X', 1.0),
+                        ('REF-A', 'H2', 'Y', 2.0),
+                        ('REF-B', 'H1', 'X', 3.0),
+                    ],
+                )
+
+            thread = ExportDataThread(
+                ExportRequest(
+                    paths=AppPaths(db_file=db_path, excel_file='dummy.xlsx'),
+                    options=ExportOptions(),
+                )
+            )
+            thread.filter_query = 'SELECT * FROM export_rows'
+            thread._db_connection = sqlite3.connect(db_path)
+            try:
+                thread._prepare_export_snapshot()
+                self.assertIsNotNone(thread._snapshot_table_name)
+                indexes = thread._db_connection.execute(
+                    '''
+                    SELECT name
+                    FROM sqlite_temp_master
+                    WHERE type = 'index' AND tbl_name = ?
+                    ''',
+                    (thread._snapshot_table_name,),
+                ).fetchall()
+                query_plan = thread._db_connection.execute(
+                    f'EXPLAIN QUERY PLAN SELECT * FROM "{thread._snapshot_table_name}" WHERE "REFERENCE" = ?',
+                    ('REF-A',),
+                ).fetchall()
+            finally:
+                thread._cleanup_export_snapshot()
+                thread._db_connection.close()
+
+        self.assertTrue(any('ref_idx' in str(row[0]) for row in indexes))
+        self.assertTrue(any('SEARCH' in str(row).upper() for row in query_plan))
 
     def test_google_stage_message_builder_matches_existing_semantics(self):
         self.assertEqual(

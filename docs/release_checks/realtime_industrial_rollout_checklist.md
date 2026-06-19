@@ -79,6 +79,82 @@ docs, tickets, screenshots, or logs.
       decision.
 - [ ] Escalation owners are named for process issues and source access issues.
 
+## Implementation Checkpoints
+
+- [x] 2026-06-14: Added direct CMM parser probe regressions so generic PDFs do
+      not score as perfect CMM matches.
+- [x] 2026-06-14: Added realtime stream config validation, sample mapping,
+      bounded poll query, one-cycle service, source runtime, and offset-safety
+      tests.
+- [x] 2026-06-14: Added diagnostics/security regressions for nested secret
+      redaction, URI credential redaction, and safe SQL metadata.
+- [x] 2026-06-14: Added parser plugin handoff package completeness tests for
+      LLM-ready local contract content and small ordered implementation steps.
+- [x] 2026-06-14: Added no-selected-database realtime dashboard launch coverage
+      using a temporary session SQLite store.
+- [x] 2026-06-14: Focused validation passed:
+      `111 passed` across CMM probe, parser plugin contracts, realtime
+      dashboard launch, industrial source/security, Oznak adapter, and realtime
+      poller/config/service tests.
+- [x] 2026-06-14: Broader #1/#2 suite passed:
+      `416 passed, 2 skipped` across realtime, anomaly, industrial, Oznak,
+      CMM probe, and parser plugin contract tests.
+- [x] 2026-06-14: Full local pytest passed:
+      `2065 passed, 289 skipped, 83 subtests passed`.
+- [x] 2026-06-14: Realtime/anomaly source slice coverage measured at `89%`.
+- [x] 2026-06-14: Final CI-shaped combined coverage rerun passed at `82%`,
+      above the `80%` release gate. The earlier one-shot whole-scope coverage
+      probe was not the release gate because it omitted the UI/dialog coverage
+      shards used by CI.
+- [x] 2026-06-14: Local realtime detector benchmark completed through `100,000`
+      synthetic samples. Observed throughput was about `2,101 samples/sec` for
+      all deterministic detectors together; rolling z-score dominated runtime
+      and should stay visible in future optimization reviews.
+- [x] 2026-06-14: Final staged release hygiene passed after adding a narrow
+      allowlist for the named synthetic realtime CSV fixtures.
+- [x] 2026-06-14: Pushed GitHub CI passed for commit
+      `307acd16031c5622093ba52a9a64d2b2146d7f02` in run
+      [`27506446912`](https://github.com/hexafe/metroliza/actions/runs/27506446912).
+- [x] 2026-06-15: Replaced the static monitor launch with a modeless
+      realtime monitoring dialog that supports multi-source checkboxes,
+      persisted polling configuration, status, diagnostics, raw/aggregated
+      dashboard output, and live bounded polling through the existing Oznak
+      credential store.
+- [x] 2026-06-15: Monitor UI/UX follow-up implemented for build `260615`:
+      checked-source summary/actions, disabled-source polling prevention,
+      current-source save semantics, explicit bulk apply, compact About dialog,
+      and updated operator manuals.
+- [x] 2026-06-15: Focused realtime UI/runtime/About/metadata validation
+      passed: `15 passed` across monitor dialog, source runtime, About, and
+      release metadata tests.
+- [x] 2026-06-15: Local release gates passed:
+      `ruff check .`, `compileall`, release metadata sync, release hygiene,
+      full offscreen pytest (`2079 passed, 296 skipped, 6 warnings, 83
+      subtests passed`), and exact CI-shaped combined coverage (`81%`, above
+      the `80%` threshold).
+- [x] 2026-06-15: Security audit passed after allowing the temporary
+      `pip-audit` environment to upgrade. `pip-audit` reported no known
+      vulnerabilities; existing Bandit findings remain report-only baseline
+      warnings.
+- [x] 2026-06-15: Pushed GitHub CI passed for build `260615` commit
+      `3f26438d473bd6941606d3cf949f2e7782276763` in run
+      [`27570794579`](https://github.com/hexafe/metroliza/actions/runs/27570794579).
+- [x] 2026-06-16: Build `260616` Industrial Data fetch, realtime monitor, and
+      dashboard optimization docs/metadata closeout recorded in
+      [`realtime_industrial_optimization_check_2026-06-16.md`](./realtime_industrial_optimization_check_2026-06-16.md);
+      final integrated push was superseded by build `260617`.
+- [ ] 2026-06-17: Build `260617` Industrial Data SQLite handoff, cached raw
+      workbook export, realtime polling cost, and Oznak fallback diagnostics
+      closeout recorded in
+      [`realtime_industrial_performance_check_2026-06-17.md`](./realtime_industrial_performance_check_2026-06-17.md);
+      local QA/release gates passed, and final integrated push plus green CI
+      are still pending.
+- [ ] 2026-06-19: Build `260617` UI overlap/layout closeout recorded in
+      [`ui_overlap_layout_audit_2026-06-19.md`](./ui_overlap_layout_audit_2026-06-19.md);
+      local PyQt, dashboard, chart/export, full pytest, security audit, and
+      CI-shaped coverage gates passed, and final rc2 push plus green CI are
+      still pending.
+
 ## Rollback Steps
 
 Before rollout, confirm each step can be done by the named owner.

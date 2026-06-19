@@ -41,11 +41,14 @@ If a supplier sends a report layout Metroliza does not recognize, use
 
 ## Current documentation focus
 
-The current release focuses especially on grouped dashboard analysis and the user manuals around it. If you work with grouped exports, read these pages first after the export setup guides:
+The current 2026.06 RC1 tester documentation focus is realtime industrial
+monitoring, Industrial Data source safety, multi-source fetches, dashboard point
+marking, replay evidence, and false-positive handling. If you work with
+production-line data, read these pages first:
 
-- [Export grouping](export_grouping.md) — how to prepare the groups that feed the dashboard.
-- [Group Analysis guide](group_analysis/README.md) — how to read grouped statistical output in plain English.
-- [Group Analysis Markdown manual](group_analysis/user_manual.md) — the detailed reading guide.
+- [Industrial Data](industrial_data.md) — fetch production rows into a local cache before filtering, grouping, dashboards, or optional workbooks.
+- [Realtime Industrial Monitoring](realtime_industrial_monitoring.md) — understand watched signals, anomaly events, source lag, and false-positive review.
+- [Dashboard Visuals](dashboard_visuals.md) — tune dashboard appearance without changing the underlying results.
 
 ## Workflow manuals
 

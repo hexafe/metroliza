@@ -235,9 +235,14 @@ def quote_identifier(value: str) -> str:
 def chunked_values(values, chunk_size: int = 900):
     """Yield tuple chunks sized for SQLite parameter limits."""
     size = max(1, int(chunk_size))
-    items = tuple(values)
-    for index in range(0, len(items), size):
-        yield items[index : index + size]
+    chunk: list[Any] = []
+    for value in values:
+        chunk.append(value)
+        if len(chunk) >= size:
+            yield tuple(chunk)
+            chunk.clear()
+    if chunk:
+        yield tuple(chunk)
 
 
 def read_sql_dataframe(

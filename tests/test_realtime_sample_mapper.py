@@ -1,89 +1,99 @@
-from __future__ import annotations
-
-from metroliza.industrial.realtime.sample_mapper import (
-    SignalSampleMapping,
-    map_row_to_sample,
-    map_rows_to_samples,
-)
-from metroliza.industrial.realtime.stream_config import RealtimeStreamConfig
+from metroliza.industrial.realtime.sample_mapper import map_rows_to_samples
+from metroliza.industrial.realtime.stream_config import RealtimePollConfig
 from metroliza.industrial.realtime.stream_contracts import SignalDefinition
 
 
-def _mapping(metric_column: str = "metric_value", signal_id: int = 10):
-    config = RealtimeStreamConfig(
+def _config():
+    return RealtimePollConfig(
         source_profile_id=1,
-        stream_key=f"{metric_column}_stream",
-        signal_key=metric_column,
-        metric_column=metric_column,
+        stream_key="process_metrics",
+        cursor_column="event_id",
         event_time_column="process_timestamp",
         record_key_column="record_id",
-        segment_fields=("station",),
-        context_columns=("part_number",),
-    ).validated()
-    signal = SignalDefinition(
-        id=signal_id,
-        source_profile_id=1,
-        signal_key=metric_column,
-        metric_name=metric_column,
-    )
-    return SignalSampleMapping(config=config, signal=signal)
-
-
-def test_map_row_to_sample_keeps_operator_context_and_redacts_raw_record():
-    sample, reason = map_row_to_sample(
-        {
-            "record_id": "ROW-1",
-            "process_timestamp": "2026-06-13T10:00:00+00:00",
-            "metric_value": "10.25",
-            "station": "S1",
-            "part_number": "PN-1",
-            "password": "secret123",
+        signal_keys=("cycle_time", "temperature"),
+        signal_columns={
+            "cycle_time": "cycle_time_s",
+            "temperature": "temperature_c",
         },
-        _mapping(),
-        ingest_time="2026-06-13T10:00:01Z",
+        segment_fields=("station", "line"),
     )
 
-    assert reason is None
-    assert sample is not None
-    assert sample.event_time == "2026-06-13T10:00:00Z"
-    assert sample.value == 10.25
-    assert sample.station == "S1"
-    assert sample.part_number == "PN-1"
-    assert sample.segment_key == {"station": "S1"}
-    assert "secret123" not in repr(sample.raw_record)
+
+def _signals():
+    return {
+        "cycle_time": SignalDefinition(
+            id=10,
+            source_profile_id=1,
+            signal_key="cycle_time",
+            metric_name="cycle_time_s",
+        ),
+        "temperature": SignalDefinition(
+            id=11,
+            source_profile_id=1,
+            signal_key="temperature",
+            metric_name="temperature_c",
+        ),
+    }
 
 
-def test_map_rows_to_samples_supports_multiple_signal_mappings():
+def test_sample_mapper_maps_multiple_signals_and_redacts_raw_record():
     result = map_rows_to_samples(
         [
             {
-                "record_id": "ROW-1",
+                "event_id": "100",
+                "record_id": "row-100",
                 "process_timestamp": "2026-06-13T10:00:00Z",
-                "diameter": "10.2",
-                "pressure": "2.5",
+                "cycle_time_s": "10.5",
+                "temperature_c": "205",
+                "station": "S1",
+                "line": "L1",
+                "password": "secret",
+                "reference": "REF-1",
+                "work_order": "mysql://operator:secret@db/prod",
             }
         ],
-        [_mapping("diameter", signal_id=11), _mapping("pressure", signal_id=12)],
+        config=_config(),
+        signals=_signals(),
+        ingest_time="2026-06-13T10:00:05Z",
     )
 
-    assert result.stats.rows_processed == 1
-    assert result.stats.samples_mapped == 2
-    assert {sample.metric_name for sample in result.samples} == {"diameter", "pressure"}
+    assert result.stats.rows_seen == 1
+    assert result.stats.mapped == 2
+    assert result.cursor_value == "100"
+    assert result.event_time_watermark == "2026-06-13T10:00:00Z"
+    assert {sample.signal_id for sample in result.samples} == {10, 11}
+    first = result.samples[0]
+    assert first.segment_key == {"station": "S1", "line": "L1"}
+    assert "password" not in first.raw_record
+    assert first.raw_record["work_order"] == "mysql://operator:<redacted>@db/prod"
 
 
-def test_map_rows_to_samples_counts_invalid_rows_without_crashing():
+def test_sample_mapper_skips_invalid_values_without_crashing():
     result = map_rows_to_samples(
         [
-            {"record_id": "ROW-1", "process_timestamp": "2026-06-13T10:00:00Z", "metric_value": "10"},
-            {"record_id": "", "process_timestamp": "2026-06-13T10:00:00Z", "metric_value": "10"},
-            {"record_id": "ROW-2", "process_timestamp": "not-a-time", "metric_value": "10"},
-            {"record_id": "ROW-3", "process_timestamp": "2026-06-13T10:00:00Z", "metric_value": "nan"},
+            {
+                "event_id": "101",
+                "record_id": "row-101",
+                "process_timestamp": "2026-06-13T10:01:00Z",
+                "cycle_time_s": "not-number",
+                "temperature_c": "inf",
+            },
+            {
+                "event_id": "102",
+                "record_id": "",
+                "process_timestamp": "2026-06-13T10:02:00Z",
+                "cycle_time_s": "10",
+                "temperature_c": "200",
+            },
         ],
-        _mapping(),
+        config=_config(),
+        signals=_signals(),
     )
 
-    assert result.stats.rows_processed == 4
-    assert result.stats.samples_mapped == 1
-    assert result.stats.missing_required == 1
-    assert result.stats.invalid_timestamp == 1
-    assert result.stats.non_numeric == 1
+    assert result.samples == ()
+    assert result.stats.skipped_non_numeric == 1
+    assert result.stats.skipped_non_finite == 1
+    assert result.stats.skipped_missing == 2
+    assert result.cursor_value == "101"
+    assert result.cursor_tie_breaker_value == "row-101"
+    assert result.event_time_watermark == "2026-06-13T10:01:00Z"

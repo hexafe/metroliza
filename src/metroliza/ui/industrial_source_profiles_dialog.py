@@ -30,6 +30,7 @@ from metroliza.industrial.industrial_source_config import (
     default_industrial_source_config_path,
     import_source_profiles_to_repository,
     load_source_profiles_from_config,
+    normalize_source_columns,
     upsert_source_profile_in_config,
     upsert_source_profile_to_repository,
 )
@@ -370,7 +371,9 @@ class IndustrialSourceProfilesDialog(QDialog):
         )
 
     def _columns_from_form(self) -> tuple[str, ...]:
-        columns = [column.strip() for column in self.columns_edit.text().split(",") if column.strip()]
+        columns = list(normalize_source_columns(self.columns_edit.text()))
+        if not columns:
+            return ()
         for required_column in (
             self.record_key_edit.text().strip(),
             self.timestamp_column_edit.text().strip(),

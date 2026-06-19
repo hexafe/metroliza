@@ -1,229 +1,196 @@
-"""Bounded source database polling primitives for realtime industrial streams."""
+"""Bounded source database polling helpers for realtime industrial streams."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field
+import hashlib
 from typing import Any, Mapping, Protocol
 
-from metroliza.industrial.industrial_data_repository import (
-    IndustrialSourceProfile,
-    redact_sensitive_text,
-)
-from metroliza.industrial.industrial_workflow_state import require_identifier
-from metroliza.industrial.oznak_adapter import fetch_oznak_records_for_source_sql
+from metroliza.industrial.industrial_data_repository import IndustrialSourceProfile
+from metroliza.industrial.industrial_workflow_state import require_dotted_identifier, require_identifier
 from metroliza.industrial.realtime.stream_config import (
-    RealtimeStreamConfig,
+    RealtimePollConfig,
     RealtimeStreamConfigError,
-    hash_sql_text,
-    realtime_source_columns,
-    safe_query_diagnostics,
-    validate_stream_config,
 )
 from metroliza.industrial.realtime.stream_contracts import StreamOffset
 
 
 @dataclass(frozen=True)
 class PollQuery:
-    """Generated bounded SQL for one realtime polling read."""
+    """Generated bounded source query plus safe diagnostics."""
 
     sql_text: str
+    parameters: tuple[Any, ...]
     limit: int
     timeout_seconds: float
     sql_hash: str
-    summary: Mapping[str, Any]
+    summary: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class SourceReadRequest:
-    """Read request passed to source database reader implementations."""
+    """Request passed to a realtime source adapter."""
 
     profile: IndustrialSourceProfile
-    config: RealtimeStreamConfig
-    offset: StreamOffset | None
+    config: RealtimePollConfig
     query: PollQuery
+    offset: StreamOffset | None = None
 
 
 @dataclass(frozen=True)
 class SourceReadResult:
-    """Rows fetched from a source database plus redacted diagnostics."""
+    """Rows returned by a realtime source adapter."""
 
     rows: tuple[Mapping[str, Any], ...] = ()
-    row_count: int = 0
-    cursor_value: str | None = None
-    event_time_watermark: str | None = None
-    diagnostics: Mapping[str, Any] | None = None
+    diagnostics: Mapping[str, Any] = field(default_factory=dict)
     error: str | None = None
 
 
-class SourceDbReader(Protocol):
-    """Protocol for test fakes and production Oznak-backed readers."""
+class SourceDbAdapter(Protocol):
+    """Narrow adapter boundary for test fakes and future Oznak realtime readers."""
 
     def fetch_rows(self, request: SourceReadRequest) -> SourceReadResult:
-        """Fetch rows for one bounded realtime query."""
+        """Fetch rows for one bounded realtime source read."""
 
 
-def build_poll_query(
+def build_bounded_poll_query(
+    *,
     profile: IndustrialSourceProfile,
-    config: RealtimeStreamConfig,
-    offset: StreamOffset | None,
+    config: RealtimePollConfig,
+    offset: StreamOffset | None = None,
 ) -> PollQuery:
-    """Build safe generated SQL for one bounded realtime polling cycle."""
-
-    validated = validate_stream_config(config, profile)
-    if offset is None and not validated.policy.allow_initial_poll_without_cursor:
-        raise RealtimeStreamConfigError(
-            "Realtime stream requires a stored cursor before polling this source."
-        )
-    columns = realtime_source_columns(validated)
-    table_name = _quote_table_name(profile.source_object_name, profile.database_type)
-    column_list = ", ".join(_quote_identifier(column, profile.database_type) for column in columns)
-    cursor_column = _quote_identifier(validated.record_key_column, profile.database_type)
-    where_clause = ""
-    if offset is not None and offset.cursor_value not in (None, ""):
-        where_clause = f" WHERE {cursor_column} > {_sql_literal(offset.cursor_value)}"
-    limit = int(validated.policy.batch_limit)
-    if _dialect(profile) == "mssql":
-        sql_text = (
-            f"SELECT TOP {limit} {column_list} FROM {table_name}"
-            f"{where_clause} ORDER BY {cursor_column} ASC"
-        )
-    else:
-        sql_text = (
-            f"SELECT {column_list} FROM {table_name}"
-            f"{where_clause} ORDER BY {cursor_column} ASC LIMIT {limit}"
-        )
-    summary = {
-        "source_profile_id": profile.id,
-        "source_alias": profile.source_db_alias,
-        "stream_key": validated.stream_key,
-        "columns": columns,
-        "cursor_column": validated.record_key_column,
-        "has_cursor": bool(offset and offset.cursor_value not in (None, "")),
-        "limit": limit,
-        "timeout_seconds": validated.policy.timeout_seconds,
-    }
-    return PollQuery(
-        sql_text=sql_text,
-        limit=limit,
-        timeout_seconds=validated.policy.timeout_seconds,
-        sql_hash=hash_sql_text(sql_text),
-        summary=summary,
-    )
-
-
-def summarize_source_rows(
-    rows: tuple[Mapping[str, Any], ...],
-    config: RealtimeStreamConfig,
-) -> tuple[str | None, str | None]:
-    """Return cursor and event-time watermark from fetched rows."""
+    """Build a generated, bounded SELECT query for one realtime polling cycle."""
 
     validated = config.validated()
-    cursor_value: str | None = None
-    event_time_watermark: str | None = None
-    for row in rows:
-        raw_cursor = row.get(validated.record_key_column)
-        if raw_cursor not in (None, ""):
-            cursor_value = str(raw_cursor)
-        raw_event_time = row.get(validated.event_time_column)
-        if raw_event_time not in (None, ""):
-            event_time_watermark = str(raw_event_time)
-    return cursor_value, event_time_watermark
-
-
-def with_computed_watermarks(result: SourceReadResult, config: RealtimeStreamConfig) -> SourceReadResult:
-    """Fill missing cursor and event-time watermark values from fetched rows."""
-
-    cursor_value, event_time_watermark = summarize_source_rows(result.rows, config)
-    return replace(
-        result,
-        row_count=result.row_count or len(result.rows),
-        cursor_value=result.cursor_value if result.cursor_value not in (None, "") else cursor_value,
-        event_time_watermark=(
-            result.event_time_watermark
-            if result.event_time_watermark not in (None, "")
-            else event_time_watermark
-        ),
+    table_name = _quote_dotted_identifier("source object", profile.source_object_name)
+    selected_columns = _validated_selected_columns(profile, validated)
+    cursor = _quote_identifier("cursor column", validated.cursor_column)
+    tie_breaker = _quote_identifier("record key column", validated.record_key_column)
+    where = ""
+    parameters: list[Any] = []
+    cursor_resume_mode = "none"
+    limit = validated.cycle_limit
+    dialect = _normalized_dialect(profile.database_type)
+    if offset is not None and offset.cursor_value not in (None, ""):
+        tie_breaker_value = _offset_tie_breaker_value(offset, validated.record_key_column)
+        if tie_breaker_value not in (None, ""):
+            if dialect in {"sqlite", "mysql"}:
+                where = f" WHERE ({cursor}, {tie_breaker}) > (?, ?)"
+                parameters.extend((offset.cursor_value, tie_breaker_value))
+            else:
+                where = f" WHERE ({cursor} > ? OR ({cursor} = ? AND {tie_breaker} > ?))"
+                parameters.extend((offset.cursor_value, offset.cursor_value, tie_breaker_value))
+            cursor_resume_mode = "composite"
+        else:
+            where = f" WHERE {cursor} >= ?"
+            parameters.append(offset.cursor_value)
+            cursor_resume_mode = "cursor_reseed"
+    columns_sql = ", ".join(_quote_identifier("selected column", column) for column in selected_columns)
+    if dialect == "mssql":
+        parameters = [limit, *parameters]
+        sql_text = (
+            f"SELECT TOP (?) {columns_sql} FROM {table_name}{where} "
+            f"ORDER BY {cursor} ASC, {tie_breaker} ASC"
+        )
+    else:
+        parameters.append(limit)
+        sql_text = (
+            f"SELECT {columns_sql} FROM {table_name}{where} "
+            f"ORDER BY {cursor} ASC, {tie_breaker} ASC LIMIT ?"
+        )
+    sql_hash = hashlib.sha256(sql_text.encode("utf-8")).hexdigest()
+    return PollQuery(
+        sql_text=sql_text,
+        parameters=tuple(parameters),
+        limit=limit,
+        timeout_seconds=validated.timeout_seconds,
+        sql_hash=sql_hash,
+        summary={
+            "source_profile_id": validated.source_profile_id,
+            "source_object": profile.source_object_name,
+            "stream_key": validated.stream_key,
+            "cursor_column": validated.cursor_column,
+            "cursor_tie_breaker_column": validated.record_key_column,
+            "cursor_resume_mode": cursor_resume_mode,
+            "limit": limit,
+            "dialect": dialect,
+            "has_cursor": bool(offset and offset.cursor_value not in (None, "")),
+            "selected_columns": selected_columns,
+            "sql_hash": sql_hash,
+        },
     )
 
 
-class OznakSqlSourceDbReader:
-    """Source reader that delegates bounded generated SQL to the existing Oznak adapter."""
+def safe_query_diagnostics(query: PollQuery) -> dict[str, Any]:
+    """Return operator-safe diagnostics without raw SQL text."""
 
-    def __init__(
-        self,
-        *,
-        username: str,
-        password: str,
-        cancellation_token: Any = None,
-        progress_callback: Any = None,
-    ):
-        self.username = username
-        self.password = password
-        self.cancellation_token = cancellation_token
-        self.progress_callback = progress_callback
-
-    def fetch_rows(self, request: SourceReadRequest) -> SourceReadResult:
-        result = fetch_oznak_records_for_source_sql(
-            request.profile,
-            username=self.username,
-            password=self.password,
-            sql_text=request.query.sql_text,
-            limit=request.query.limit,
-            timeout_seconds=request.query.timeout_seconds,
-            mode="fetch",
-            cancellation_token=self.cancellation_token,
-            progress_callback=self.progress_callback,
-        )
-        rows = tuple(result.records or ())
-        cursor_value, event_time_watermark = summarize_source_rows(rows, request.config)
-        diagnostics = safe_query_diagnostics(
-            sql_text=request.query.sql_text,
-            query_summary={
-                **dict(request.query.summary),
-                "adapter_stage": (result.diagnostics or {}).get("stage"),
-                "adapter_error": result.error,
-                "implemented": result.implemented,
-            },
-        )
-        return SourceReadResult(
-            rows=rows,
-            row_count=result.row_count or len(rows),
-            cursor_value=cursor_value,
-            event_time_watermark=event_time_watermark,
-            diagnostics=diagnostics,
-            error=redact_sensitive_text(result.error) if result.error else None,
-        )
+    return {
+        "sql_hash": query.sql_hash,
+        "limit": query.limit,
+        "timeout_seconds": query.timeout_seconds,
+        "summary": dict(query.summary),
+    }
 
 
-def _quote_table_name(name: str, database_type: str) -> str:
-    parts = tuple(part.strip() for part in str(name or "").split(".") if part.strip())
-    if not parts:
-        raise RealtimeStreamConfigError("Realtime source table/view name must not be empty.")
-    for part in parts:
-        try:
-            require_identifier("source table/view name", part)
-        except ValueError as exc:
-            raise RealtimeStreamConfigError(str(exc)) from exc
-    return ".".join(_quote_identifier(part, database_type) for part in parts)
+def _validated_selected_columns(
+    profile: IndustrialSourceProfile,
+    config: RealtimePollConfig,
+) -> tuple[str, ...]:
+    columns = (
+        config.record_key_column,
+        config.event_time_column,
+        config.cursor_column,
+        *config.signal_columns.values(),
+        *config.context_fields,
+    )
+    selected = tuple(dict.fromkeys(column for column in columns if column))
+    allowed = set(profile.allowed_columns or ())
+    if allowed:
+        missing = sorted(column for column in selected if column not in allowed)
+        if missing:
+            raise RealtimeStreamConfigError(
+                "Realtime stream references columns outside the source allowlist: "
+                + ", ".join(missing)
+            )
+    return selected
 
 
-def _quote_identifier(name: str, database_type: str) -> str:
+def _quote_identifier(field_name: str, value: str) -> str:
     try:
-        require_identifier("source column", name)
+        require_identifier(field_name, value)
     except ValueError as exc:
         raise RealtimeStreamConfigError(str(exc)) from exc
-    if _dialect_name(database_type) == "mssql":
-        return f"[{name}]"
-    return f"`{name}`"
+    return f'"{value}"'
 
 
-def _sql_literal(value: Any) -> str:
-    return "'" + str(value).replace("'", "''") + "'"
+def _quote_dotted_identifier(field_name: str, value: str) -> str:
+    try:
+        require_dotted_identifier(field_name, value)
+    except ValueError as exc:
+        raise RealtimeStreamConfigError(str(exc)) from exc
+    return ".".join(f'"{part}"' for part in str(value).split("."))
 
 
-def _dialect(profile: IndustrialSourceProfile) -> str:
-    return _dialect_name(profile.database_type)
+def _offset_tie_breaker_value(offset: StreamOffset, record_key_column: str) -> str | None:
+    value = offset.cursor_tie_breaker_value
+    if value in (None, ""):
+        return None
+    offset_column = str(offset.cursor_tie_breaker_column or "").strip()
+    if offset_column != record_key_column:
+        raise RealtimeStreamConfigError(
+            "Stored realtime offset tie-breaker column "
+            f"'{offset_column or '<unset>'}' does not match configured record key column "
+            f"'{record_key_column}'. Reset or reseed the stream offset before resuming."
+        )
+    return value
 
 
-def _dialect_name(database_type: str) -> str:
-    return str(database_type or "").strip().lower()
+def _normalized_dialect(database_type: str | None) -> str:
+    dialect = str(database_type or "").strip().lower()
+    if dialect in {"sqlserver", "sql_server", "mssql", "ms_sql"}:
+        return "mssql"
+    if dialect in {"mysql", "mariadb"}:
+        return "mysql"
+    if dialect in {"sqlite", "sqlite3"}:
+        return "sqlite"
+    return dialect or "unknown"

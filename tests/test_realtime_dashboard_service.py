@@ -230,6 +230,88 @@ def test_signal_timeline_window_returns_samples_with_persisted_overlays(tmp_path
     assert "connection_string" not in payload_text
 
 
+def test_recent_signal_timeline_window_returns_latest_samples_in_chart_order(tmp_path):
+    db_path = str(tmp_path / "dashboard_recent_samples.db")
+    seeded = _seed_dashboard_data(db_path)
+    service = RealtimeDashboardService(db_path)
+
+    timeline = service.recent_signal_timeline_window(signal_id=seeded["cycle_signal"].id, limit=2)
+
+    assert [point.sample_id for point in timeline] == list(seeded["cycle_sample_ids"][1:])
+    assert [point.value for point in timeline] == [12.8, 13.5]
+    assert [point.event_time for point in timeline] == [
+        "2026-06-13T10:01:00Z",
+        "2026-06-13T10:02:00Z",
+    ]
+
+
+def test_sample_aggregate_rows_compute_csv_summary_style_counts(tmp_path):
+    db_path = str(tmp_path / "dashboard_aggregates.db")
+    _seed_dashboard_data(db_path)
+    service = RealtimeDashboardService(db_path)
+
+    aggregates = service.sample_aggregate_rows()
+    by_signal = {row.signal_key: row for row in aggregates}
+    cycle = by_signal["cycle_time"]
+    temperature = by_signal["oven_temperature"]
+
+    assert [row.signal_key for row in aggregates] == ["cycle_time", "oven_temperature"]
+    assert cycle.sample_count == 3
+    assert cycle.minimum == 10.1
+    assert cycle.maximum == 13.5
+    assert round(cycle.average, 3) == 12.133
+    assert cycle.latest_value == 13.5
+    assert cycle.nominal == 10.0
+    assert cycle.usl == 12.0
+    assert cycle.below_lsl_count == 0
+    assert cycle.above_usl_count == 2
+    assert cycle.nok_count == 2
+    assert round(cycle.nok_pct, 6) == round(2 / 3, 6)
+    assert temperature.sample_count == 1
+    assert temperature.nok_count == 0
+    assert temperature.nok_pct == 0.0
+
+
+def test_dashboard_snapshot_includes_recent_samples_when_no_open_anomalies(tmp_path):
+    db_path = str(tmp_path / "dashboard_snapshot_samples.db")
+    seeded = _seed_dashboard_data(db_path)
+    service = RealtimeDashboardService(db_path)
+
+    service.resolve_event(
+        event_id=seeded["event_ids"][0],
+        resolved_by="operator-a",
+        comment="reviewed",
+    )
+    service.resolve_event(
+        event_id=seeded["event_ids"][1],
+        resolved_by="operator-a",
+        comment="reviewed",
+    )
+    service.mark_event_false_positive(
+        event_id=seeded["event_ids"][2],
+        marked_by="operator-a",
+        comment="sensor maintenance",
+    )
+
+    snapshot = service.dashboard_snapshot(timeline_limit=2)
+    signals_by_key = {signal["signal_key"]: signal for signal in snapshot["signals"]}
+    aggregates_by_key = {row["signal_key"]: row for row in snapshot["aggregate_rows"]}
+    payload_text = str(snapshot)
+
+    assert snapshot["events"] == []
+    assert set(signals_by_key) == {"cycle_time", "oven_temperature"}
+    assert signals_by_key["cycle_time"]["source_name"] == "Assembly Line"
+    assert [point["sample_id"] for point in signals_by_key["cycle_time"]["samples"]] == list(
+        seeded["cycle_sample_ids"][1:]
+    )
+    assert [point["value"] for point in signals_by_key["cycle_time"]["samples"]] == [12.8, 13.5]
+    assert signals_by_key["oven_temperature"]["samples"][0]["value"] == 220.0
+    assert aggregates_by_key["cycle_time"]["sample_count"] == 3
+    assert aggregates_by_key["cycle_time"]["nok_count"] == 2
+    assert "super-secret" not in payload_text
+    assert "connection_string" not in payload_text
+
+
 def test_source_lag_health_omits_offset_errors_and_classifies_lag(tmp_path):
     db_path = str(tmp_path / "dashboard_health.db")
     _seed_dashboard_data(db_path)

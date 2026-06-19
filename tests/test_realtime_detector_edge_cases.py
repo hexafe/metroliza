@@ -1,7 +1,7 @@
 import math
 from pathlib import Path
 
-from modules.industrial_data_repository import IndustrialDataRepository
+from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
 from metroliza.industrial.anomaly.contracts import DetectorContext, DetectorState
 from metroliza.industrial.anomaly.detectors import (
     IQRDetector,

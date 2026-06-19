@@ -8,7 +8,7 @@ import json
 from typing import Any, Iterable
 
 from metroliza.industrial.industrial_data_schema import ensure_industrial_data_schema
-from metroliza.industrial.industrial_data_repository import looks_sensitive_key, redact_sensitive_text
+from metroliza.industrial.json_safety import to_json_storage_text
 from metroliza.industrial.realtime.stream_contracts import (
     IndustrialSample,
     SampleBatchResult,
@@ -24,7 +24,7 @@ def utc_timestamp() -> str:
 
 
 def to_json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return to_json_storage_text(value) or "null"
 
 
 def from_json(value: Any, default: Any) -> Any:
@@ -36,27 +36,6 @@ def from_json(value: Any, default: Any) -> Any:
         return json.loads(value)
     except (TypeError, ValueError, json.JSONDecodeError):
         return default
-
-
-def redact_sample_payload(value: Any) -> Any:
-    """Redact credential-like fields before persisting raw realtime source rows."""
-
-    if isinstance(value, dict):
-        redacted: dict[str, Any] = {}
-        for key, nested in value.items():
-            key_text = str(key)
-            if looks_sensitive_key(key_text):
-                redacted[key_text] = "<redacted>"
-            else:
-                redacted[key_text] = redact_sample_payload(nested)
-        return redacted
-    if isinstance(value, list):
-        return [redact_sample_payload(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(redact_sample_payload(item) for item in value)
-    if isinstance(value, str):
-        return redact_sensitive_text(value)
-    return value
 
 
 class RealtimeSampleRepository:
@@ -219,74 +198,41 @@ class RealtimeSampleRepository:
     def insert_samples(self, samples: Iterable[IndustrialSample]) -> SampleBatchResult:
         self.ensure_schema()
         sample_batch = tuple(samples)
+        if not sample_batch:
+            return SampleBatchResult(processed=0, inserted=0, skipped=0)
         now = utc_timestamp()
 
         def _insert(cursor) -> SampleBatchResult:
-            processed = 0
-            inserted = 0
-            sample_ids: list[int] = []
-            for sample in sample_batch:
-                processed += 1
-                ingest_time = sample.ingest_time or now
-                cursor.execute(
-                    """
-                    INSERT OR IGNORE INTO industrial_samples (
-                        source_profile_id,
-                        signal_id,
-                        source_record_key,
-                        event_time,
-                        ingest_time,
-                        metric_name,
-                        value,
-                        reference,
-                        part_number,
-                        revision,
-                        station,
-                        line,
-                        work_order,
-                        batch_lot,
-                        segment_key_json,
-                        quality_flags_json,
-                        raw_record_json
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        sample.source_profile_id,
-                        sample.signal_id,
-                        sample.source_record_key,
-                        sample.event_time,
-                        ingest_time,
-                        sample.metric_name,
-                        float(sample.value),
-                        sample.reference,
-                        sample.part_number,
-                        sample.revision,
-                        sample.station,
-                        sample.line,
-                        sample.work_order,
-                        sample.batch_lot,
-                        to_json(dict(sample.segment_key)),
-                        to_json(list(sample.quality_flags)),
-                        (
-                            to_json(redact_sample_payload(dict(sample.raw_record or {})))
-                            if sample.raw_record is not None
-                            else None
-                        ),
-                    ),
+            processed = len(sample_batch)
+            insert_rows = tuple(_sample_insert_row(sample, now) for sample in sample_batch)
+            before_changes = cursor.connection.total_changes
+            cursor.executemany(
+                """
+                INSERT OR IGNORE INTO industrial_samples (
+                    source_profile_id,
+                    signal_id,
+                    source_record_key,
+                    event_time,
+                    ingest_time,
+                    metric_name,
+                    value,
+                    reference,
+                    part_number,
+                    revision,
+                    station,
+                    line,
+                    work_order,
+                    batch_lot,
+                    segment_key_json,
+                    quality_flags_json,
+                    raw_record_json
                 )
-                if cursor.rowcount:
-                    inserted += 1
-                cursor.execute(
-                    """
-                    SELECT id FROM industrial_samples
-                    WHERE source_profile_id = ? AND signal_id = ? AND source_record_key = ?
-                    """,
-                    (sample.source_profile_id, sample.signal_id, sample.source_record_key),
-                )
-                row = cursor.fetchone()
-                if row is not None:
-                    sample_ids.append(int(row[0]))
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                insert_rows,
+            )
+            inserted = cursor.connection.total_changes - before_changes
+            sample_ids = _lookup_sample_ids(cursor, sample_batch)
             return SampleBatchResult(
                 processed=processed,
                 inserted=inserted,
@@ -330,91 +276,149 @@ class RealtimeSampleRepository:
                 params = (signal_id, int(limit))
             cursor.execute(sql, params)
             rows = cursor.fetchall()
-            return [
-                IndustrialSample(
-                    id=int(row[0]),
-                    source_profile_id=int(row[1]),
-                    signal_id=int(row[2]),
-                    source_record_key=str(row[3]),
-                    event_time=str(row[4]),
-                    ingest_time=str(row[5]),
-                    metric_name=str(row[6]),
-                    value=float(row[7]),
-                    reference=row[8],
-                    part_number=row[9],
-                    revision=row[10],
-                    station=row[11],
-                    line=row[12],
-                    work_order=row[13],
-                    batch_lot=row[14],
-                    segment_key=from_json(row[15], {}),
-                    quality_flags=tuple(from_json(row[16], [])),
-                    raw_record=from_json(row[17], {}) if row[17] else None,
-                )
-                for row in rows
-            ]
+            return [_sample_from_row(row) for row in rows]
 
         return run_transaction_with_retry(self.database, _list, connection=self.connection)
 
-    def list_recent_samples(self, *, signal_id: int, limit: int) -> list[IndustrialSample]:
+    def list_samples_by_ids(
+        self,
+        sample_ids: Iterable[int],
+        *,
+        chunk_size: int = 500,
+    ) -> list[IndustrialSample]:
+        """Load specific sample rows without scanning every historical row for a signal."""
+
         self.ensure_schema()
+        unique_ids = tuple(dict.fromkeys(int(sample_id) for sample_id in sample_ids))
+        if not unique_ids:
+            return []
+        chunk_size = max(1, int(chunk_size))
 
         def _list(cursor) -> list[IndustrialSample]:
-            cursor.execute(
-                """
-                SELECT
-                    id,
-                    source_profile_id,
-                    signal_id,
-                    source_record_key,
-                    event_time,
-                    ingest_time,
-                    metric_name,
-                    value,
-                    reference,
-                    part_number,
-                    revision,
-                    station,
-                    line,
-                    work_order,
-                    batch_lot,
-                    segment_key_json,
-                    quality_flags_json,
-                    raw_record_json
-                FROM industrial_samples
-                WHERE signal_id = ?
-                ORDER BY event_time DESC, id DESC
-                LIMIT ?
-                """,
-                (signal_id, max(1, int(limit))),
-            )
-            rows = list(reversed(cursor.fetchall()))
-            return [
-                IndustrialSample(
-                    id=int(row[0]),
-                    source_profile_id=int(row[1]),
-                    signal_id=int(row[2]),
-                    source_record_key=str(row[3]),
-                    event_time=str(row[4]),
-                    ingest_time=str(row[5]),
-                    metric_name=str(row[6]),
-                    value=float(row[7]),
-                    reference=row[8],
-                    part_number=row[9],
-                    revision=row[10],
-                    station=row[11],
-                    line=row[12],
-                    work_order=row[13],
-                    batch_lot=row[14],
-                    segment_key=from_json(row[15], {}),
-                    quality_flags=tuple(from_json(row[16], [])),
-                    raw_record=from_json(row[17], {}) if row[17] else None,
+            samples: list[IndustrialSample] = []
+            for offset in range(0, len(unique_ids), chunk_size):
+                chunk = unique_ids[offset : offset + chunk_size]
+                placeholders = ", ".join("?" for _ in chunk)
+                cursor.execute(
+                    f"""
+                    SELECT
+                        id,
+                        source_profile_id,
+                        signal_id,
+                        source_record_key,
+                        event_time,
+                        ingest_time,
+                        metric_name,
+                        value,
+                        reference,
+                        part_number,
+                        revision,
+                        station,
+                        line,
+                        work_order,
+                        batch_lot,
+                        segment_key_json,
+                        quality_flags_json,
+                        raw_record_json
+                    FROM industrial_samples
+                    WHERE id IN ({placeholders})
+                    ORDER BY event_time ASC, id ASC
+                    """,
+                    chunk,
                 )
-                for row in rows
-            ]
+                samples.extend(_sample_from_row(row) for row in cursor.fetchall())
+            return samples
 
         return run_transaction_with_retry(self.database, _list, connection=self.connection)
 
     @staticmethod
     def with_sample_id(sample: IndustrialSample, sample_id: int) -> IndustrialSample:
         return replace(sample, id=sample_id)
+
+
+def _sample_insert_row(sample: IndustrialSample, default_ingest_time: str) -> tuple[Any, ...]:
+    return (
+        sample.source_profile_id,
+        sample.signal_id,
+        sample.source_record_key,
+        sample.event_time,
+        sample.ingest_time or default_ingest_time,
+        sample.metric_name,
+        float(sample.value),
+        sample.reference,
+        sample.part_number,
+        sample.revision,
+        sample.station,
+        sample.line,
+        sample.work_order,
+        sample.batch_lot,
+        to_json(dict(sample.segment_key)),
+        to_json(list(sample.quality_flags)),
+        to_json(dict(sample.raw_record or {})) if sample.raw_record is not None else None,
+    )
+
+
+def _lookup_sample_ids(cursor, samples: tuple[IndustrialSample, ...]) -> list[int]:
+    cursor.execute("DROP TABLE IF EXISTS temp._metroliza_sample_key_lookup")
+    cursor.execute(
+        """
+        CREATE TEMP TABLE _metroliza_sample_key_lookup (
+            sample_order INTEGER PRIMARY KEY,
+            source_profile_id INTEGER NOT NULL,
+            signal_id INTEGER NOT NULL,
+            source_record_key TEXT NOT NULL
+        )
+        """
+    )
+    cursor.executemany(
+        """
+        INSERT INTO _metroliza_sample_key_lookup (
+            sample_order,
+            source_profile_id,
+            signal_id,
+            source_record_key
+        )
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            (index, sample.source_profile_id, sample.signal_id, sample.source_record_key)
+            for index, sample in enumerate(samples)
+        ),
+    )
+    cursor.execute(
+        """
+        SELECT lookup.sample_order, samples.id
+        FROM _metroliza_sample_key_lookup AS lookup
+        JOIN industrial_samples AS samples
+          ON samples.source_profile_id = lookup.source_profile_id
+         AND samples.signal_id = lookup.signal_id
+         AND samples.source_record_key = lookup.source_record_key
+        ORDER BY lookup.sample_order ASC
+        """
+    )
+    rows = cursor.fetchall()
+    cursor.execute("DROP TABLE IF EXISTS temp._metroliza_sample_key_lookup")
+    return [int(row[1]) for row in rows]
+
+
+def _sample_from_row(row: tuple[Any, ...]) -> IndustrialSample:
+    return IndustrialSample(
+        id=int(row[0]),
+        source_profile_id=int(row[1]),
+        signal_id=int(row[2]),
+        source_record_key=str(row[3]),
+        event_time=str(row[4]),
+        ingest_time=str(row[5]),
+        metric_name=str(row[6]),
+        value=float(row[7]),
+        reference=row[8],
+        part_number=row[9],
+        revision=row[10],
+        station=row[11],
+        line=row[12],
+        work_order=row[13],
+        batch_lot=row[14],
+        segment_key=from_json(row[15], {}),
+        quality_flags=tuple(from_json(row[16], [])),
+        raw_record=from_json(row[17], {}) if row[17] else None,
+    )

@@ -55,68 +55,41 @@ class AnomalyEventRepository:
     def insert_events(self, events: Iterable[DetectionResult]) -> EventBatchResult:
         self.ensure_schema()
         event_batch = tuple(events)
+        if not event_batch:
+            return EventBatchResult(processed=0, inserted=0, skipped=0)
         created_at = utc_timestamp()
 
         def _insert(cursor) -> EventBatchResult:
-            processed = 0
-            inserted = 0
-            event_ids: list[int] = []
             for event in event_batch:
-                processed += 1
                 if event.sample_id is None:
                     raise ValueError("DetectionResult.sample_id is required for persistence")
                 if event.signal_id is None:
                     raise ValueError("DetectionResult.signal_id is required for persistence")
-                cursor.execute(
-                    """
-                    SELECT id
-                    FROM industrial_anomaly_events
-                    WHERE sample_id = ? AND detector_key = ?
-                    ORDER BY id ASC
-                    LIMIT 1
-                    """,
-                    (event.sample_id, event.detector_key),
+            processed = len(event_batch)
+            before_changes = cursor.connection.total_changes
+            cursor.executemany(
+                """
+                INSERT OR IGNORE INTO industrial_anomaly_events (
+                    sample_id,
+                    signal_id,
+                    event_time,
+                    detector_key,
+                    severity,
+                    score,
+                    observed_value,
+                    expected_value,
+                    threshold_json,
+                    explanation,
+                    context_json,
+                    status,
+                    created_at
                 )
-                existing = cursor.fetchone()
-                if existing is not None:
-                    event_ids.append(int(existing[0]))
-                    continue
-                cursor.execute(
-                    """
-                    INSERT INTO industrial_anomaly_events (
-                        sample_id,
-                        signal_id,
-                        event_time,
-                        detector_key,
-                        severity,
-                        score,
-                        observed_value,
-                        expected_value,
-                        threshold_json,
-                        explanation,
-                        context_json,
-                        status,
-                        created_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)
-                    """,
-                    (
-                        event.sample_id,
-                        event.signal_id,
-                        event.event_time,
-                        event.detector_key,
-                        event.severity,
-                        float(event.score),
-                        float(event.observed_value),
-                        event.expected_value,
-                        to_json(dict(event.threshold)),
-                        event.explanation,
-                        to_json(dict(event.context)),
-                        created_at,
-                    ),
-                )
-                inserted += 1
-                event_ids.append(int(cursor.lastrowid))
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)
+                """,
+                tuple(_event_insert_row(event, created_at) for event in event_batch),
+            )
+            inserted = cursor.connection.total_changes - before_changes
+            event_ids = _lookup_event_ids(cursor, event_batch)
             return EventBatchResult(
                 processed=processed,
                 inserted=inserted,
@@ -385,6 +358,63 @@ def _positive_limit(limit: int) -> int:
 def _validate_status(status: str) -> None:
     if status not in ANOMALY_EVENT_STATUSES:
         raise ValueError(f"unsupported anomaly event status: {status}")
+
+
+def _event_insert_row(event: DetectionResult, created_at: str) -> tuple[Any, ...]:
+    return (
+        event.sample_id,
+        event.signal_id,
+        event.event_time,
+        event.detector_key,
+        event.severity,
+        float(event.score),
+        float(event.observed_value),
+        event.expected_value,
+        to_json(dict(event.threshold)),
+        event.explanation,
+        to_json(dict(event.context)),
+        created_at,
+    )
+
+
+def _lookup_event_ids(cursor, events: tuple[DetectionResult, ...]) -> list[int]:
+    cursor.execute("DROP TABLE IF EXISTS temp._metroliza_event_key_lookup")
+    cursor.execute(
+        """
+        CREATE TEMP TABLE _metroliza_event_key_lookup (
+            event_order INTEGER PRIMARY KEY,
+            sample_id INTEGER NOT NULL,
+            detector_key TEXT NOT NULL
+        )
+        """
+    )
+    cursor.executemany(
+        """
+        INSERT INTO _metroliza_event_key_lookup (
+            event_order,
+            sample_id,
+            detector_key
+        )
+        VALUES (?, ?, ?)
+        """,
+        (
+            (index, int(event.sample_id), event.detector_key)
+            for index, event in enumerate(events)
+        ),
+    )
+    cursor.execute(
+        """
+        SELECT lookup.event_order, events.id
+        FROM _metroliza_event_key_lookup AS lookup
+        JOIN industrial_anomaly_events AS events
+          ON events.sample_id = lookup.sample_id
+         AND events.detector_key = lookup.detector_key
+        ORDER BY lookup.event_order ASC
+        """
+    )
+    rows = cursor.fetchall()
+    cursor.execute("DROP TABLE IF EXISTS temp._metroliza_event_key_lookup")
+    return [int(row[1]) for row in rows]
 
 
 def _row_to_event(row) -> PersistedAnomalyEvent:

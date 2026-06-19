@@ -1,102 +1,199 @@
-from __future__ import annotations
-
 import pytest
 
-from metroliza.industrial.industrial_source_config import build_source_profile
+from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
 from metroliza.industrial.realtime.db_poller import (
-    SourceReadResult,
-    build_poll_query,
-    with_computed_watermarks,
+    build_bounded_poll_query,
+    safe_query_diagnostics,
 )
 from metroliza.industrial.realtime.stream_config import (
-    RealtimeStreamConfig,
+    RealtimePollConfig,
     RealtimeStreamConfigError,
-    StreamPollPolicy,
-    safe_query_diagnostics,
 )
 from metroliza.industrial.realtime.stream_contracts import StreamOffset
 
 
-def _profile(database_type: str = "mysql"):
-    return build_source_profile(
-        profile_key="line_a",
-        profile_name="Line A",
-        source_db_alias="line_a",
-        database_type=database_type,
-        host="db.example.invalid",
-        port=3306 if database_type == "mysql" else 1433,
-        database_name="process",
-        source_object_name="measurements",
-        allowed_columns=("record_id", "process_timestamp", "metric_value", "station"),
-        timestamp_column="process_timestamp",
-        default_pagination_column="record_id",
+def _profile(db_path: str, *, allowed_columns=None):
+    return IndustrialDataRepository(db_path).upsert_source_profile(
+        profile_key="assembly",
+        profile_name="Assembly",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="dbo.events",
+        allowed_columns=allowed_columns,
     )
 
 
-def _config(policy: StreamPollPolicy | None = None):
-    return RealtimeStreamConfig(
-        source_profile_id=1,
-        stream_key="diameter",
-        signal_key="diameter",
-        metric_column="metric_value",
+def _config(profile_id: int):
+    return RealtimePollConfig(
+        source_profile_id=profile_id,
+        stream_key="cycle_time",
+        cursor_column="event_id",
         event_time_column="process_timestamp",
         record_key_column="record_id",
-        segment_fields=("station",),
-        policy=policy or StreamPollPolicy(batch_limit=25, timeout_seconds=8),
+        signal_keys=("cycle_time",),
+        signal_columns={"cycle_time": "cycle_time_s"},
+        context_fields=("station",),
+        chunk_size=250,
+        max_catchup_rows_per_cycle=1_000,
     )
 
 
-def test_build_poll_query_generates_bounded_mysql_sql_without_raw_diagnostics():
-    query = build_poll_query(
-        _profile("mysql"),
-        _config(),
-        StreamOffset(
-            source_profile_id=1,
-            stream_key="diameter",
-            cursor_column="record_id",
-            cursor_value="100",
+def test_bounded_poll_query_uses_cursor_limit_order_and_safe_diagnostics(tmp_path):
+    db_path = str(tmp_path / "poller.db")
+    profile = _profile(
+        db_path,
+        allowed_columns=("event_id", "process_timestamp", "record_id", "cycle_time_s", "station"),
+    )
+    config = _config(profile.id)
+    offset = StreamOffset(
+        source_profile_id=profile.id,
+        stream_key="cycle_time",
+        cursor_column="event_id",
+        cursor_value="500",
+    )
+
+    query = build_bounded_poll_query(profile=profile, config=config, offset=offset)
+    diagnostics = safe_query_diagnostics(query)
+
+    assert query.sql_text.startswith("SELECT TOP (?)")
+    assert 'FROM "dbo"."events"' in query.sql_text
+    assert 'WHERE "event_id" >= ?' in query.sql_text
+    assert 'ORDER BY "event_id" ASC, "record_id" ASC' in query.sql_text
+    assert "LIMIT" not in query.sql_text
+    assert query.parameters == (250, "500")
+    assert query.limit == 250
+    assert diagnostics["summary"]["dialect"] == "mssql"
+    assert diagnostics["summary"]["cursor_resume_mode"] == "cursor_reseed"
+    assert diagnostics["sql_hash"] == query.sql_hash
+    assert "sql_text" not in diagnostics
+    assert "SELECT" not in str(diagnostics)
+
+
+def test_bounded_poll_query_uses_limit_placeholder_for_mysql_and_sqlite(tmp_path):
+    db_path = str(tmp_path / "poller.db")
+    repository = IndustrialDataRepository(db_path)
+    profile = repository.upsert_source_profile(
+        profile_key="assembly",
+        profile_name="Assembly",
+        source_db_alias="assembly_mes",
+        database_type="mysql",
+        source_object_name="events",
+        allowed_columns=("event_id", "process_timestamp", "record_id", "cycle_time_s", "station"),
+    )
+
+    query = build_bounded_poll_query(
+        profile=profile,
+        config=_config(profile.id),
+        offset=StreamOffset(
+            source_profile_id=profile.id,
+            stream_key="cycle_time",
+            cursor_column="event_id",
+            cursor_value="500",
         ),
     )
 
-    assert "SELECT `record_id`, `process_timestamp`, `metric_value`, `station`" in query.sql_text
-    assert "WHERE `record_id` > '100'" in query.sql_text
-    assert "ORDER BY `record_id` ASC LIMIT 25" in query.sql_text
-    assert query.limit == 25
-    assert query.timeout_seconds == 8
-    assert query.summary["limit"] == 25
-    diagnostics = safe_query_diagnostics(sql_text=query.sql_text, query_summary=query.summary)
-    assert "sql_hash" in diagnostics
-    assert "select" not in repr(diagnostics).lower()
+    assert 'WHERE "event_id" >= ?' in query.sql_text
+    assert 'ORDER BY "event_id" ASC, "record_id" ASC LIMIT ?' in query.sql_text
+    assert query.parameters == ("500", 250)
+    assert query.summary["dialect"] == "mysql"
+    assert query.summary["cursor_resume_mode"] == "cursor_reseed"
 
 
-def test_build_poll_query_generates_bounded_mssql_sql():
-    query = build_poll_query(_profile("mssql"), _config(), None)
+def test_bounded_poll_query_uses_record_key_tie_breaker_for_duplicate_cursors(tmp_path):
+    db_path = str(tmp_path / "poller.db")
+    profile = _profile(
+        db_path,
+        allowed_columns=("event_id", "process_timestamp", "record_id", "cycle_time_s", "station"),
+    )
 
-    assert query.sql_text.startswith("SELECT TOP 25 [record_id], [process_timestamp]")
-    assert "ORDER BY [record_id] ASC" in query.sql_text
-    assert "LIMIT" not in query.sql_text
+    query = build_bounded_poll_query(
+        profile=profile,
+        config=_config(profile.id),
+        offset=StreamOffset(
+            source_profile_id=profile.id,
+            stream_key="cycle_time",
+            cursor_column="event_id",
+            cursor_value="500",
+            cursor_tie_breaker_column="record_id",
+            cursor_tie_breaker_value="ROW-9",
+        ),
+    )
+
+    assert (
+        'WHERE ("event_id" > ? OR ("event_id" = ? AND "record_id" > ?))'
+        in query.sql_text
+    )
+    assert 'ORDER BY "event_id" ASC, "record_id" ASC' in query.sql_text
+    assert query.parameters == (250, "500", "500", "ROW-9")
+    assert query.summary["cursor_tie_breaker_column"] == "record_id"
+    assert query.summary["cursor_resume_mode"] == "composite"
 
 
-def test_build_poll_query_rejects_initial_poll_without_cursor_when_disabled():
-    with pytest.raises(RealtimeStreamConfigError, match="stored cursor"):
-        build_poll_query(
-            _profile("mysql"),
-            _config(StreamPollPolicy(allow_initial_poll_without_cursor=False)),
-            None,
+def test_bounded_poll_query_uses_tuple_comparison_for_sqlite_composite_cursor(tmp_path):
+    db_path = str(tmp_path / "poller.db")
+    repository = IndustrialDataRepository(db_path)
+    profile = repository.upsert_source_profile(
+        profile_key="assembly",
+        profile_name="Assembly",
+        source_db_alias="assembly_mes",
+        database_type="sqlite",
+        source_object_name="events",
+        allowed_columns=("event_id", "process_timestamp", "record_id", "cycle_time_s", "station"),
+    )
+
+    query = build_bounded_poll_query(
+        profile=profile,
+        config=_config(profile.id),
+        offset=StreamOffset(
+            source_profile_id=profile.id,
+            stream_key="cycle_time",
+            cursor_column="event_id",
+            cursor_value="500",
+            cursor_tie_breaker_column="record_id",
+            cursor_tie_breaker_value="ROW-9",
+        ),
+    )
+
+    assert 'WHERE ("event_id", "record_id") > (?, ?)' in query.sql_text
+    assert 'ORDER BY "event_id" ASC, "record_id" ASC LIMIT ?' in query.sql_text
+    assert query.parameters == ("500", "ROW-9", 250)
+    assert query.summary["dialect"] == "sqlite"
+    assert query.summary["cursor_resume_mode"] == "composite"
+
+
+def test_bounded_poll_query_rejects_stale_record_key_tie_breaker(tmp_path):
+    db_path = str(tmp_path / "poller.db")
+    profile = _profile(
+        db_path,
+        allowed_columns=("event_id", "process_timestamp", "record_id", "cycle_time_s", "station"),
+    )
+
+    with pytest.raises(RealtimeStreamConfigError) as exc:
+        build_bounded_poll_query(
+            profile=profile,
+            config=_config(profile.id),
+            offset=StreamOffset(
+                source_profile_id=profile.id,
+                stream_key="cycle_time",
+                cursor_column="event_id",
+                cursor_value="500",
+                cursor_tie_breaker_column="legacy_record_id",
+                cursor_tie_breaker_value="ROW-9",
+            ),
         )
 
+    assert "tie-breaker column 'legacy_record_id'" in str(exc.value)
+    assert "Reset or reseed" in str(exc.value)
 
-def test_source_read_result_watermarks_are_computed_from_rows():
-    result = with_computed_watermarks(
-        SourceReadResult(
-            rows=(
-                {"record_id": "100", "process_timestamp": "2026-06-13T10:00:00Z"},
-                {"record_id": "101", "process_timestamp": "2026-06-13T10:01:00Z"},
-            )
-        ),
-        _config(),
+
+def test_bounded_poll_query_rejects_columns_outside_source_allowlist(tmp_path):
+    db_path = str(tmp_path / "poller.db")
+    profile = _profile(
+        db_path,
+        allowed_columns=("event_id", "process_timestamp", "record_id"),
     )
 
-    assert result.row_count == 2
-    assert result.cursor_value == "101"
-    assert result.event_time_watermark == "2026-06-13T10:01:00Z"
+    with pytest.raises(RealtimeStreamConfigError) as exc:
+        build_bounded_poll_query(profile=profile, config=_config(profile.id))
+
+    assert "cycle_time_s" in str(exc.value)

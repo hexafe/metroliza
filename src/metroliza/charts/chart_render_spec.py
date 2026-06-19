@@ -1132,7 +1132,9 @@ def _truncate_tick_labels(labels: list[str], *, max_label_chars: int = 18) -> li
     for label in labels:
         plain_label = str(label).replace("\n", " ")
         if max_label_chars >= 2 and len(plain_label) > max_label_chars:
-            plain_label = f"{plain_label[:max_label_chars - 1]}..."
+            ellipsis = "..."
+            visible_chars = max(1, max_label_chars - len(ellipsis))
+            plain_label = f"{plain_label[:visible_chars]}{ellipsis}"
         normalized.append(plain_label)
     return normalized
 
@@ -1241,10 +1243,11 @@ def _coerce_finite_series_list(series_list: Iterable[Any]) -> list[list[float]]:
 def _estimate_upper_right_legend_rect(items: list[dict[str, Any]]) -> RectSpec:
     label_width = max((len(str(item.get("label") or "")) for item in items), default=0)
     width = min(0.24, max(0.12, 0.10 + (label_width * 0.009)))
-    height = min(0.18, max(0.07, 0.012 + (0.056 * max(1, len(items)))))
+    height = 0.072
+    top_band_floor = _EXTENDED_CHART_TOP + 0.012
     return RectSpec(
         x=max(_EXTENDED_CHART_LEFT, _EXTENDED_CHART_LEGEND_RIGHT - width),
-        y=max(0.78, _EXTENDED_CHART_LEGEND_TOP - height),
+        y=max(top_band_floor, _EXTENDED_CHART_LEGEND_TOP - height),
         width=width,
         height=height,
     )

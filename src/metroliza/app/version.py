@@ -1,11 +1,43 @@
-RELEASE_VERSION = "2026.05rc5"
-VERSION_DATE = "260612"
+RELEASE_VERSION = "2026.06rc1"
+VERSION_DATE = "260617"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
-CURRENT_RELEASE_HIGHLIGHT = "Large-group dashboard optimization, simplified dashboard visuals, Industrial Data cache-first CSV Summary analysis, parser profile self-service with hardened LLM handoff, SQL fetch safety, and release-gate audit hardening."
-PUBLIC_VERSION_LABEL = "2026.05 RC5 (build 260612)"
+CURRENT_RELEASE_HIGHLIGHT = "Industrial Data performance release with indexed cache filtering, faster CSV Summary handoff, raw workbook export, realtime diagnostics, and dashboard point marking."
+PUBLIC_VERSION_LABEL = "2026.06 RC1 (build 260617)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
+    - Industrial Data now opens cached rows in CSV Summary from indexed local metadata, so filter lists and simple grouping previews respond faster on large production caches<br>
+    - Industrial Data workbook export can now include raw cached data directly without first loading the full cache into the interactive table<br>
+    - Industrial export filters now apply consistently to cached and live exports, including additional production-field filters entered in the filter dialog<br>
+    - Industrial cache updates now refresh same-session filter lists more reliably, even when rows and production field values change within the same second<br>
+    - Industrial Data now clears abandoned temporary tabular views before preparing a new cache handoff, keeping long sessions lighter<br>
+    - Large SQL fetches now report saved rows clearly when rows were already streamed before a later read or save warning occurs<br>
+    - Realtime monitoring now reloads only newly inserted sample rows for anomaly review, keeping polling cycles quicker as monitoring history grows<br>
+    - Realtime diagnostics now keep source status messages more specific when a polling or dashboard refresh step fails<br>
+    - Realtime Industrial Monitoring now has a separate foundation for append-only samples, signal definitions, stream offsets, explainable anomaly events, replay, and dashboard review<br>
+    - Deterministic anomaly detectors now cover specification limits, warning limits, IQR fences, MAD robust z-score, rolling z-score, and stale-source checks with operator-readable explanations<br>
+    - Realtime polling now uses generated bounded queries, cursor offsets, chunk limits, safe diagnostics, and offset advancement only after local persistence succeeds<br>
+    - Industrial Data fetches can now save rows into the local cache while large guided or SQL reads are still running, with clearer progress for saving rows, refreshing links, and updating summaries<br>
+    - Industrial Data can now run the same guided filters or SQL query across checked production sources, then report one batch result for all successful and failed sources<br>
+    - Industrial source setup now accepts copied CSV headers or an approved all-columns marker when a reviewed table or view is allowed to expose simple columns<br>
+    - SQL query work now has a larger editor with a preview table for reviewed production queries before fetching rows<br>
+    - Realtime Industrial Monitoring now opens an operator dialog with checked-source selection, polling interval and timeout settings, row limits, status, diagnostics, and dashboard output controls<br>
+    - Realtime source selection now keeps disabled production sources out of polling and separates saving one source from intentionally applying settings to all checked sources<br>
+    - Realtime Industrial Monitoring can now import the shared production source YAML file, reload source changes, and open the shared source editor from the monitor<br>
+    - Realtime dashboard snapshots now refresh in the background after polling, and Open Dashboard queues safely when a refresh is already running<br>
+    - Interactive HTML dashboards can now find points by TraceCode, record key, series, axis value, or point details, then save browser-local point marks without changing source data<br>
+    - Realtime dashboard review can open without selecting a Metroliza report database first; the app uses a temporary session SQLite store unless a persistent database is selected<br>
+    - Synthetic realtime fixtures and replay validation are available for pre-live testing without a production database<br>
+    - Optional advanced anomaly tooling stays separate from normal app startup, so standard users do not need extra ML packages<br>
+    - Industrial diagnostics now redact nested credentials, URI passwords, token-like fields, and raw SQL text from operator-facing status and persisted diagnostics<br>
+    - CMM parser probing now uses marker-based confidence so generic PDFs no longer look like perfect CMM report matches<br>
+    - Parser plugin handoff packages now have stronger tests that require local API contract content and small step-by-step prompts for LLM-assisted plugin work<br>
+    - Realtime rollout docs now include operator concepts, production safety checks, synthetic replay evidence, source lag review, and rollback steps<br>
+    - The About dialog now stays focused on the duck animation, version, author, and GitHub project link<br>
+
+    <br><b>Archive:</b><br>
+
+    <br><b>Version 2026.05rc5 (build 260612):</b><br>
     - Saved report updates are safer if a database write fails partway through<br>
     - HTML dashboard-only exports now report a failure instead of success when dashboard creation fails<br>
     - CSV Summary filters and multi-file exports behave more consistently across regular and large-file paths<br>
@@ -37,8 +69,6 @@ release_notes = f"""
     - CSV Summary and Export dashboards now use clearer run notes, image snapshot wording, and group comparison takeaways<br>
     - CSV Summary now uses Edit groups for selected-reference comparisons and keeps dashboard rendering controls in Dashboard interactivity<br>
     - Grouped Export runs now add standard group analysis to the HTML dashboard instead of adding extra workbook sheets<br>
-
-    <br><b>Archive:</b><br>
 
     <br><b>Version 2026.05rc4 (build 260609):</b><br>
     - Parser profiles can now be prepared from Tools > Parser profiles... for new supplier report templates without writing Python code<br>
