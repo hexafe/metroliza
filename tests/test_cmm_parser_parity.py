@@ -468,6 +468,73 @@ def test_non_tp_m_parser_ignores_semantic_labels_without_shifting_values():
     assert parsed[0][1][0] == ["M", 5.0, 0.1, -0.1, 0.0, 5.02, 0.02, 0.0]
 
 
+def test_xyz_and_tp_status_token_rows_parse_without_numeric_outtol():
+    raw_lines = [
+        "#STATUS TOKENS",
+        "DIM",
+        "X 10 0.2 -0.2 10.1 0.1 OK",
+        "Y 20 0.2 -0.2 20.5 0.5 NOK",
+        "Z 30 0.2 -0.2 30.0 0.0 0 NOK",
+        "TP MMC +TOL 0.4 BONUS 0.1 MEAS 0.25 DEV 0.25 NOK",
+        "#END",
+    ]
+
+    parsed = parse_raw_lines_to_blocks(raw_lines)
+
+    assert parsed[0][1] == [
+        ["X", 10.0, 0.2, -0.2, "", 10.1, 0.1, "", "OK"],
+        ["Y", 20.0, 0.2, -0.2, "", 20.5, 0.5, "", "NOK"],
+        ["Z", 30.0, 0.2, -0.2, "", 30.0, 0.0, 0.0, "NOK"],
+        ["TP", 0.0, 0.4, 0, 0.1, 0.25, 0.25, "", "NOK"],
+    ]
+
+
+def test_status_token_rows_persist_status_with_null_outtol_and_raw_metadata(tmp_path):
+    from modules.db import execute_with_retry
+
+    db_path = str(tmp_path / "status_tokens.db")
+    ensure_cmm_report_schema(db_path)
+    parser = CMMReportParser("REF01_2024-01-02_123.pdf", db_path)
+    parser.pdf_reference = "REF01"
+    parser.pdf_file_path = str(tmp_path)
+    parser.pdf_file_name = "REF01_2024-01-02_123.pdf"
+    parser.pdf_date = "2024-01-02"
+    parser.pdf_sample_number = "123"
+    parser.pdf_blocks_text = parse_raw_lines_to_blocks(
+        [
+            "#STATUS TOKENS",
+            "DIM",
+            "X 10 0.2 -0.2 10.1 0.1 OK",
+            "Y 20 0.2 -0.2 20.5 0.5 NOK",
+            "Z 30 0.2 -0.2 30.0 0.0 0 NOK",
+            "TP MMC +TOL 0.4 BONUS 0.1 MEAS 0.25 DEV 0.25 NOK",
+            "#END",
+        ]
+    )
+
+    parser.to_sqlite()
+
+    rows = execute_with_retry(
+        db_path,
+        """
+        SELECT ax, outtol, is_nok, status_code, raw_measurement_json
+        FROM report_measurements
+        ORDER BY row_order
+        """,
+    )
+
+    assert [(row[0], row[1], row[2], row[3]) for row in rows] == [
+        ("X", None, 0, "ok"),
+        ("Y", None, 1, "nok"),
+        ("Z", 0.0, 0, "ok"),
+        ("TP", None, 1, "nok"),
+    ]
+    raw_payloads = [json.loads(row[4]) for row in rows]
+    assert [payload["status_token"] for payload in raw_payloads] == ["OK", "NOK", "NOK", "NOK"]
+    assert raw_payloads[0]["status_source"] == "row_status_token"
+    assert raw_payloads[2]["status_source"] == "outtol_numeric_authoritative"
+
+
 
 def test_dim_ax_subrows_d1_d2_d3_parse_with_eight_column_shape():
     raw_lines = [

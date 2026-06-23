@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import time
+import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from metroliza.reports import report_parser_factory
@@ -71,6 +72,70 @@ def build_source_file_fingerprint(report_path):
     return f"sha256:{compute_sha256(report_path)}"
 
 
+def _exception_traceback_text(exception):
+    return "".join(traceback.format_exception(type(exception), exception, exception.__traceback__)).rstrip()
+
+
+def _parser_resolution_diagnostic_summary(report) -> str:
+    try:
+        diagnostics = report_parser_factory.resolve_parser_with_diagnostics(report)
+    except Exception as exc:  # pragma: no cover - defensive logging path
+        return f"resolver_diagnostics_error={type(exc).__name__}: {exc}"
+
+    selected = diagnostics.selected.plugin_id if diagnostics.selected is not None else "none"
+    candidate_parts = []
+    for candidate in diagnostics.candidates_considered:
+        reasons = ",".join(candidate.reasons) if candidate.reasons else "-"
+        warnings = ",".join(candidate.warnings) if candidate.warnings else "-"
+        candidate_parts.append(
+            f"{candidate.plugin_id}:can_parse={candidate.can_parse}:confidence={candidate.confidence}:"
+            f"reasons={reasons}:warnings={warnings}"
+        )
+
+    return (
+        f"resolver_selected={selected} resolver_rejected_reason={diagnostics.rejected_reason or '-'} "
+        f"resolver_candidates=[{'; '.join(candidate_parts) if candidate_parts else '-'}]"
+    )
+
+
+def _log_parse_file_failure(report, stage, exception, processed_files, total_files, *, cancel_flag=False):
+    exception_class = type(exception).__name__
+    exception_message = str(exception)
+    traceback_text = _exception_traceback_text(exception)
+    resolver_summary = ""
+    if str(stage) == "parser" and exception_class == "ValueError" and "Unsupported report format" in exception_message:
+        resolver_summary = _parser_resolution_diagnostic_summary(report)
+    resolver_suffix = f" {resolver_summary}" if resolver_summary else ""
+    exc_info = (
+        (type(exception), exception, exception.__traceback__)
+        if exception.__traceback__ is not None
+        else None
+    )
+    logger.warning(
+        "Parse skipped report after parser failure: file=%s stage=%s exception=%s message=%s%s",
+        report,
+        stage,
+        exception_class,
+        exception_message,
+        resolver_suffix,
+        exc_info=exc_info,
+        extra=build_parse_log_extra(
+            source_path=report,
+            total_files=total_files,
+            parsed_count=processed_files,
+            cancel_flag=cancel_flag,
+        )
+        | {
+            "source_file": str(report),
+            "stage": str(stage),
+            "exception_class": exception_class,
+            "exception_message": exception_message,
+            "traceback": traceback_text,
+            "parser_resolution": resolver_summary,
+        },
+    )
+
+
 def parse_new_reports(
     report_paths,
     report_fingerprints,
@@ -82,6 +147,7 @@ def parse_new_reports(
     on_file_failed=None,
     enable_two_stage_pipeline=False,
     worker_count=None,
+    log_file_failures=True,
 ):
     parsed_files = 0
     failed_files = 0
@@ -91,25 +157,43 @@ def parse_new_reports(
         if on_progress:
             on_progress(parsed_files + failed_files, total_files)
 
-    def _record_file_failure(report, exception):
+    def _record_file_failure(report, stage, exception):
         nonlocal failed_files
         failed_files += 1
+        processed_files = parsed_files + failed_files
+        setattr(exception, "_metroliza_parse_failure_stage", str(stage))
+        if log_file_failures:
+            _log_parse_file_failure(
+                report,
+                stage,
+                exception,
+                processed_files,
+                total_files,
+            )
         if on_file_failed:
-            on_file_failed(report, exception, parsed_files + failed_files, total_files)
+            on_file_failed(report, exception, processed_files, total_files)
         _emit_processed_progress()
 
     if enable_two_stage_pipeline:
         max_workers = worker_count or max(1, min(8, os.cpu_count() or 1))
 
         def _stage1_worker(report, enqueued_at):
-            parser = parser_factory(report)
+            try:
+                parser = parser_factory(report)
+            except Exception as exc:
+                setattr(exc, "_metroliza_parse_failure_stage", "parser")
+                raise
             stage_timings = getattr(parser, "stage_timings_s", None)
             if isinstance(stage_timings, dict):
                 stage_timings["stage1_queue_wait_s"] = max(0.0, time.perf_counter() - enqueued_at)
 
             prepare_method = getattr(parser, "prepare_for_two_stage_pipeline", None)
             if callable(prepare_method):
-                prepare_method()
+                try:
+                    prepare_method()
+                except Exception as exc:
+                    setattr(exc, "_metroliza_parse_failure_stage", "prepare")
+                    raise
 
             return parser, time.perf_counter()
 
@@ -136,7 +220,11 @@ def parse_new_reports(
                 try:
                     parser, stage1_completed_at = future.result()
                 except Exception as exc:
-                    _record_file_failure(report, exc)
+                    _record_file_failure(
+                        report,
+                        getattr(exc, "_metroliza_parse_failure_stage", "parser"),
+                        exc,
+                    )
                     continue
 
                 stage_timings = getattr(parser, "stage_timings_s", None)
@@ -147,7 +235,7 @@ def parse_new_reports(
                     try:
                         persist_report(parser)
                     except Exception as exc:
-                        _record_file_failure(report, exc)
+                        _record_file_failure(report, "persistence", exc)
                         continue
                     report_fingerprints.add(fingerprint)
 
@@ -179,13 +267,13 @@ def parse_new_reports(
             try:
                 parser = parser_factory(report)
             except Exception as exc:
-                _record_file_failure(report, exc)
+                _record_file_failure(report, "parser", exc)
                 continue
 
             try:
                 persist_report(parser)
             except Exception as exc:
-                _record_file_failure(report, exc)
+                _record_file_failure(report, "persistence", exc)
                 continue
             report_fingerprints.add(fingerprint)
         else:
@@ -978,18 +1066,13 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                     telemetry_batch_stage_timing_totals = {}
 
                 def _record_file_failure(report, exception, processed_files, total_files):
-                    logger.warning(
-                        "Parse skipped report after parser failure",
-                        extra=build_parse_log_extra(
-                            source_path=report,
-                            total_files=total_files,
-                            parsed_count=processed_files,
-                            cancel_flag=self.parsing_canceled,
-                        )
-                        | {
-                            "exception_class": type(exception).__name__,
-                            "source_file": str(report),
-                        },
+                    _log_parse_file_failure(
+                        report,
+                        getattr(exception, "_metroliza_parse_failure_stage", "unknown"),
+                        exception,
+                        processed_files,
+                        total_files,
+                        cancel_flag=self.parsing_canceled,
                     )
 
                 two_stage_enabled = env_bool("METROLIZA_PARSE_TWO_STAGE_PIPELINE", default=False)
@@ -1040,6 +1123,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                     on_file_failed=_record_file_failure,
                     enable_two_stage_pipeline=two_stage_enabled,
                     worker_count=two_stage_workers,
+                    log_file_failures=False,
                 )
                 self.last_parse_result = result
 

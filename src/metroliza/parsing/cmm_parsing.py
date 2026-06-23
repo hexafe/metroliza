@@ -30,6 +30,14 @@ MEASUREMENT_LINE_MAP = {
     "A": 7,
 }
 
+MEASUREMENT_STATUS_TOKENS = {"OK", "NOK"}
+
+
+def _normalize_status_token(token: Any) -> str | None:
+    normalized = str(token or "").strip().upper().strip(".,;:()[]{}")
+    if normalized in MEASUREMENT_STATUS_TOKENS:
+        return normalized
+    return None
 
 
 def _strip_comment_prefix(text: str) -> str:
@@ -83,6 +91,20 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
         processed_line: list[Any] = []
         code = line[0] if line else ""
 
+        def split_status_token(tokens: list[Any]) -> tuple[list[Any], str | None]:
+            for reverse_index, token in enumerate(reversed(tokens)):
+                status_token = _normalize_status_token(token)
+                if status_token is None:
+                    continue
+                token_index = len(tokens) - reverse_index - 1
+                return tokens[:token_index] + tokens[token_index + 1 :], status_token
+            return tokens, None
+
+        def with_status(processed: list[Any], status_token: str | None) -> list[Any]:
+            if processed and status_token is not None:
+                return [*processed, status_token]
+            return processed
+
         def process_tp_line(tokens: list[Any]) -> list[Any]:
             tp_qualifiers = {
                 "RFS",
@@ -98,6 +120,7 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
             has_tp_qualifier = False
             has_explicit_nom_label = False
 
+            tokens, status_token = split_status_token(tokens)
             numeric_values: list[float] = []
             for token in tokens[1:]:
                 if isinstance(token, float):
@@ -113,7 +136,7 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
                         has_explicit_nom_label = True
                     continue
 
-            if len(numeric_values) < 5:
+            if len(numeric_values) < (4 if status_token is not None else 5):
                 return []
 
             nom = 0.0
@@ -122,19 +145,36 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
             # (OCR spill-over / inherited row noise) as NOM.
             if len(numeric_values) >= 6 and (has_explicit_nom_label or not has_tp_qualifier):
                 nom, tol_plus, bonus, meas, dev, outtol = numeric_values[:6]
+            elif status_token is not None and len(numeric_values) >= 5 and has_explicit_nom_label:
+                nom, tol_plus, bonus, meas, dev = numeric_values[:5]
+                outtol = ""
+            elif status_token is not None and len(numeric_values) == 4:
+                tol_plus, bonus, meas, dev = numeric_values[:4]
+                outtol = ""
             else:
                 tol_plus, bonus, meas, dev, outtol = numeric_values[:5]
 
-            return ["TP", nom, tol_plus, "", bonus, meas, dev, outtol]
+            return with_status(["TP", nom, tol_plus, "", bonus, meas, dev, outtol], status_token)
 
         if str(code).startswith("TP"):
             processed_line = process_tp_line(line)
             return processed_line
 
-        numeric_values = line[1:]
+        numeric_values, status_token = split_status_token(line[1:])
 
         if code in ["X", "Y", "Z"] and len(numeric_values) == 3:
             processed_line = [code, numeric_values[0], "", "", "", numeric_values[1], numeric_values[2], ""]
+        elif code in ["X", "Y", "Z"] and len(numeric_values) == 5 and status_token is not None:
+            processed_line = [
+                code,
+                numeric_values[0],
+                numeric_values[1],
+                numeric_values[2],
+                "",
+                numeric_values[3],
+                numeric_values[4],
+                "",
+            ]
         elif code in ["X", "Y", "Z"] and len(numeric_values) == 6:
             processed_line = [
                 code,
@@ -240,7 +280,7 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
                 numeric_values[4],
                 numeric_values[5],
             ]
-        return processed_line
+        return with_status(processed_line, status_token)
 
     def extract_measurement_tokens_and_raw_lines_consumed(
         start_index: int, preserve_non_numeric_tokens: bool = False
@@ -255,28 +295,35 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
         code, *first_line_tokens = code_tokens
         parsed_tokens: list[Any] = [code]
         numeric_token_count = 0
+        status_token_seen = False
         raw_lines_consumed = 1
         max_token_count = MEASUREMENT_LINE_MAP.get(code, 0)
         max_numeric_count = max(max_token_count - 1, 0) if max_token_count else 0
 
         def append_tokens(tokens: list[str]) -> None:
-            nonlocal numeric_token_count
+            nonlocal numeric_token_count, status_token_seen
             for token in tokens:
                 numeric_token = parse_numeric_token(token)
                 if numeric_token is not None:
+                    if max_numeric_count and numeric_token_count >= max_numeric_count:
+                        continue
                     parsed_tokens.append(numeric_token)
                     numeric_token_count += 1
-                    if max_numeric_count and numeric_token_count >= max_numeric_count:
-                        break
+                    continue
+
+                status_token = _normalize_status_token(token)
+                if status_token is not None:
+                    parsed_tokens.append(status_token)
+                    status_token_seen = True
+                    continue
+
                 elif preserve_non_numeric_tokens:
                     parsed_tokens.append(token)
-                    if max_numeric_count and numeric_token_count >= max_numeric_count:
-                        break
 
         append_tokens(first_line_tokens)
 
         for follow_index in range(start_index + 1, len(raw_lines)):
-            if max_numeric_count and numeric_token_count >= max_numeric_count:
+            if status_token_seen:
                 break
 
             raw_line = raw_lines[follow_index]
@@ -284,6 +331,10 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
             if not raw_line_tokens:
                 raw_lines_consumed += 1
                 continue
+
+            if max_numeric_count and numeric_token_count >= max_numeric_count:
+                if not any(_normalize_status_token(token) for token in raw_line_tokens):
+                    break
 
             if is_comment_or_header(raw_line) or is_dim_line(raw_line) or raw_line_tokens[0] in MEASUREMENT_LINE_MAP:
                 break

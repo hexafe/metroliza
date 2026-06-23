@@ -14,7 +14,11 @@ from metroliza.native_bridges.cmm_native_parser import (
     parse_blocks_with_backend_and_telemetry,
 )
 from metroliza.parsing.pdf_backend import require_pdf_backend, resolve_pdf_backend_module_name
-from metroliza.parsing.cmm_parsing import add_tolerances_to_blocks
+from metroliza.parsing.cmm_parsing import (
+    MEASUREMENT_STATUS_TOKENS,
+    add_tolerances_to_blocks,
+    parse_raw_lines_to_blocks,
+)
 from metroliza.parsing.base_report_parser import BaseReportParser
 from metroliza.parsing.header_ocr_backend import (
     DEFAULT_HEADER_OCR_BACKEND,
@@ -93,6 +97,14 @@ _CMM_PROBE_MEASUREMENT_MARKERS = (
     ("out_of_tolerance", re.compile(r"(?i)\b(?:OUTTOL|OUT)\b")),
     ("bonus", re.compile(r"(?i)\bBONUS\b")),
 )
+
+
+def _line_ends_with_measurement_status_token(line: str) -> bool:
+    tokens = str(line or "").split()
+    if not tokens:
+        return False
+    return tokens[-1].strip().upper().strip(".,;:()[]{}") in MEASUREMENT_STATUS_TOKENS
+
 
 def _resolve_pymupdf_backend_module() -> str | None:
     """Return the import name for a valid PyMuPDF backend, if available."""
@@ -827,9 +839,13 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         try:
             """Method to split raw text from pdf to blocks - split by measurements"""
             parse_start = perf_counter()
-            parse_result = parse_blocks_with_backend_and_telemetry(self.pdf_raw_text)
-            self.blocks_text = parse_result.blocks
-            self.parse_backend_used = parse_result.backend
+            if any(_line_ends_with_measurement_status_token(line) for line in self.pdf_raw_text):
+                self.blocks_text = parse_raw_lines_to_blocks(self.pdf_raw_text)
+                self.parse_backend_used = "python"
+            else:
+                parse_result = parse_blocks_with_backend_and_telemetry(self.pdf_raw_text)
+                self.blocks_text = parse_result.blocks
+                self.parse_backend_used = parse_result.backend
             self.stage_timings_s["parse_batch_runtime"] = perf_counter() - parse_start
         except Exception as e:
             self.log_and_exit(e)
@@ -1051,6 +1067,21 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         return False, "ok"
 
     @staticmethod
+    def _normalize_measurement_status_token(value) -> str | None:
+        status_token = str(value or "").strip().upper().strip(".,;:()[]{}")
+        if status_token in MEASUREMENT_STATUS_TOKENS:
+            return status_token
+        return None
+
+    @staticmethod
+    def _status_from_status_token(status_token: str | None) -> tuple[bool, str]:
+        if status_token == "NOK":
+            return True, "nok"
+        if status_token == "OK":
+            return False, "ok"
+        return False, "unknown"
+
+    @staticmethod
     def _characteristic_family(axis_code) -> str:
         normalized = str(axis_code or "").upper()
         if normalized in {"X", "Y", "Z", "TP"}:
@@ -1079,10 +1110,24 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             for row in block[1] if len(block) > 1 else ():
                 if not row:
                     continue
-                padded = list(row) + [""] * max(0, 8 - len(row))
+                padded = list(row) + [""] * max(0, 9 - len(row))
                 row_order += 1
-                is_nok, status_code = self._status_from_outtol(padded[7])
+                outtol = self._coerce_number(padded[7])
+                status_token = self._normalize_measurement_status_token(padded[8])
+                if outtol is not None:
+                    is_nok, status_code = self._status_from_outtol(outtol)
+                else:
+                    is_nok, status_code = self._status_from_status_token(status_token)
                 characteristic_family = self._characteristic_family(padded[0])
+                raw_measurement_json = {
+                    "tokens": [str(value) for value in row],
+                    "header": header,
+                }
+                if status_token is not None:
+                    raw_measurement_json["status_token"] = status_token
+                    raw_measurement_json["status_source"] = (
+                        "outtol_numeric_authoritative" if outtol is not None else "row_status_token"
+                    )
                 measurement_rows.append(
                     {
                         "page_number": None,
@@ -1100,13 +1145,10 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                         "bonus": self._coerce_number(padded[4]),
                         "meas": self._coerce_number(padded[5]),
                         "dev": self._coerce_number(padded[6]),
-                        "outtol": self._coerce_number(padded[7]),
+                        "outtol": outtol,
                         "is_nok": is_nok,
                         "status_code": status_code,
-                        "raw_measurement_json": {
-                            "tokens": [str(value) for value in row],
-                            "header": header,
-                        },
+                        "raw_measurement_json": raw_measurement_json,
                     }
                 )
         self._prepared_measurement_rows = measurement_rows
@@ -1256,3 +1298,4 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         """
 
         CustomLogger(exception, reraise=False)
+        raise exception

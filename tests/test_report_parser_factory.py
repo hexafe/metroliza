@@ -1292,6 +1292,9 @@ def test_load_external_plugins_registers_plugins_from_entry_points(monkeypatch):
     original_manifests = dict(PARSER_MANIFESTS)
     original_detectors = dict(PARSER_DETECTORS)
     original_cache = dict(PROBE_RESULT_CACHE)
+    original_loaded_flag = factory_module._EXTERNAL_PLUGINS_LOADED
+    original_signature = factory_module._EXTERNAL_PLUGIN_CONFIG_SIGNATURE
+    original_entry_points = factory_module._EXTERNAL_PLUGIN_ENTRY_POINTS
     try:
         monkeypatch.setattr(factory_module, "_iter_external_plugin_entry_points", lambda: (_DummyEntryPoint(),))
         result = load_external_plugins(paths=())
@@ -1299,6 +1302,9 @@ def test_load_external_plugins_registers_plugins_from_entry_points(monkeypatch):
         assert "demo_ep" in result.loaded_plugin_ids
         assert "demo_ep" in result.loaded_entry_points
     finally:
+        factory_module._EXTERNAL_PLUGINS_LOADED = original_loaded_flag
+        factory_module._EXTERNAL_PLUGIN_CONFIG_SIGNATURE = original_signature
+        factory_module._EXTERNAL_PLUGIN_ENTRY_POINTS = original_entry_points
         PARSER_MAP.clear()
         PARSER_MAP.update(original_map)
         PARSER_MANIFESTS.clear()

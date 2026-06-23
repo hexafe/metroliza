@@ -114,6 +114,7 @@ from modules.parse_reports_thread import (  # noqa: E402
     merge_enriched_metadata_for_persistence,
     parse_new_reports,
 )
+import modules.parse_reports_thread as parse_thread_module  # noqa: E402
 
 
 class TestParseHelpers(unittest.TestCase):
@@ -571,6 +572,67 @@ class TestParseHelpers(unittest.TestCase):
             self.assertEqual(persisted, ['ok-1.pdf', 'ok-2.pdf'])
             self.assertEqual(failed, [('broken.pdf', 'ValueError', 2, 3)])
             self.assertEqual(progress_updates, [(1, 3), (2, 3), (3, 3)])
+
+    def test_parse_new_reports_logs_parser_failure_stage_and_message(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report = os.path.join(tmpdir, 'broken.pdf')
+            with open(report, 'wb') as report_file:
+                report_file.write(b'broken')
+
+            def parser_factory(_report):
+                raise ValueError('parser failed for marker A')
+
+            with self.assertLogs(parse_thread_module.logger.logger.name, level='WARNING') as captured:
+                result = parse_new_reports(
+                    [report],
+                    set(),
+                    parser_factory=parser_factory,
+                    persist_report=lambda _parser: None,
+                )
+
+            self.assertEqual(result.failed_files, 1)
+            message = "\n".join(captured.output)
+            self.assertIn('stage=parser', message)
+            self.assertIn('parser failed for marker A', message)
+            self.assertIn(report, message)
+            self.assertTrue(any(getattr(record, 'stage', None) == 'parser' for record in captured.records))
+            self.assertTrue(
+                any(getattr(record, 'exception_message', None) == 'parser failed for marker A' for record in captured.records)
+            )
+
+    def test_parse_new_reports_logs_persistence_failure_stage_and_message(self):
+        class DummyParser:
+            def __init__(self, report):
+                self.FILE_PATH = str(report)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report = os.path.join(tmpdir, 'broken.pdf')
+            with open(report, 'wb') as report_file:
+                report_file.write(b'broken')
+
+            def persist_report(_parser):
+                raise RuntimeError('persist failed for report row 7')
+
+            with self.assertLogs(parse_thread_module.logger.logger.name, level='WARNING') as captured:
+                result = parse_new_reports(
+                    [report],
+                    set(),
+                    parser_factory=DummyParser,
+                    persist_report=persist_report,
+                )
+
+            self.assertEqual(result.failed_files, 1)
+            message = "\n".join(captured.output)
+            self.assertIn('stage=persistence', message)
+            self.assertIn('persist failed for report row 7', message)
+            self.assertIn(report, message)
+            self.assertTrue(any(getattr(record, 'stage', None) == 'persistence' for record in captured.records))
+            self.assertTrue(
+                any(
+                    getattr(record, 'exception_message', None) == 'persist failed for report row 7'
+                    for record in captured.records
+                )
+            )
 
     def test_parse_new_reports_two_stage_duplicate_detection(self):
         class DummyParser:
