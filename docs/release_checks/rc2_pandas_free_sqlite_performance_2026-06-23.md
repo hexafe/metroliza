@@ -69,8 +69,8 @@ Benchmark artifacts:
 | Release metadata sync | Passed | `PYTHONPATH=src:. python scripts/sync_release_metadata.py --check` reported release metadata already in sync. |
 | Release hygiene | Passed | `python scripts/check_release_hygiene.py` passed after `coverage.xml` was regenerated. |
 | Security audit | Passed | `python scripts/security_audit.py --ci --sibling-root /home/hexaf/Projects` passed; `pip-audit` reported no known vulnerabilities, with existing Bandit and dynamic-import warnings remaining report-only baseline findings. |
-| CI-shaped coverage gate | Passed | `python -m coverage report --fail-under=80` passed at 81% after the full suite and appended coverage shards; local Python 3.14 rerun of the `industrial_filter_dialog` append shard was interrupted after hanging, but that file passed in the full suite and GitHub CI runs the exact Python 3.11 coverage job. |
-| Pushed GitHub CI | Pending | Requires final commit push. |
+| CI-shaped coverage gate | Passed | `python -m coverage report --fail-under=80` passed at 81% after the full suite and appended coverage shards. The `industrial_filter_dialog` append-shard hang was reproduced locally, fixed by making the reference-loading fixture satisfy report-schema foreign keys, and rerun successfully (`79 passed`). |
+| Pushed GitHub CI | Passed | Commit `4a9f159a8c6a77a824a7170b61f0877f08978984` passed GitHub Actions CI run [`28035951993`](https://github.com/hexafe/metroliza/actions/runs/28035951993): Static checks, Unit tests with combined coverage, Native wheel build and smoke checks, CMM parser perf guardrail, and Performance benchmark trend check all passed. Manual/opt-in packaging, Windows startup benchmark, and Google conversion smoke jobs were skipped. |
 
 ## Release decision notes
 

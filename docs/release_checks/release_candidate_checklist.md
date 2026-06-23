@@ -167,7 +167,8 @@ Current RC metadata: `2026.06rc2(260623)`.
   Local QA/release gates passed, including full offscreen pytest
   (`2109 passed, 314 skipped, 6 warnings, 83 subtests passed`), security audit
   with no known vulnerabilities, and the CI-shaped combined coverage gate at
-  `81%`. Final integrated build `260617` push and GitHub Actions CI are pending.
+  `81%`. Final integrated RC2 pushed CI is recorded below for build `260623`
+  commit `4a9f159a8c6a77a824a7170b61f0877f08978984`.
 - 2026-06-19 UI overlap/layout closeout is recorded in
   [`ui_overlap_layout_audit_2026-06-19.md`](./ui_overlap_layout_audit_2026-06-19.md)
   and keeps the existing `260617` build identity. Local QA/release gates passed,
@@ -175,15 +176,17 @@ Current RC metadata: `2026.06rc2(260623)`.
   parity (`15 passed`), full offscreen pytest (`2135 passed, 320 skipped, 6
   warnings, 83 subtests passed`), release metadata sync, release hygiene,
   security audit with no known vulnerabilities, Ruff, compileall, whitespace
-  checks, and the CI-shaped combined coverage gate at `81%`. Final rc2 push and
-  green GitHub Actions CI are pending.
+  checks, and the CI-shaped combined coverage gate at `81%`. Final integrated
+  RC2 pushed CI is recorded below for build `260623` commit
+  `4a9f159a8c6a77a824a7170b61f0877f08978984`.
 - 2026-06-23 CMM parser resolver hotfix is included in build `260623`. Encoded
   CMM PDFs whose visible markers are hidden from raw-byte sniffing now get a
   first-page PDF text probe before strict parser selection rejects them. Local
   focused parser/package validation passed (`66 passed`), Ruff passed for the
   changed parser files, and the resolver diagnostics script selected `cmm` at
-  confidence `95` for a generated encoded CMM PDF. Final rc2 push and green
-  GitHub Actions CI are pending.
+  confidence `95` for a generated encoded CMM PDF. Final integrated RC2 GitHub
+  Actions CI passed in run [`28035951993`](https://github.com/hexafe/metroliza/actions/runs/28035951993)
+  for commit `4a9f159a8c6a77a824a7170b61f0877f08978984`.
 - 2026-06-23 RC2 pandas-free SQLite performance closeout is included in build
   `260623`. CSV Summary, export, parser/report, and industrial analytics table
   paths now share lighter SQLite row/query contracts, direct grouped SQLite
@@ -192,9 +195,18 @@ Current RC metadata: `2026.06rc2(260623)`.
   83 subtests passed`), Ruff, compileall, focused SQLite/tabular/benchmark
   tests (`87 passed`), release metadata sync, release hygiene, security audit
   with no known vulnerabilities, and the CI-shaped coverage threshold at 81%.
+  The `industrial_filter_dialog` append-shard hang was reproduced and fixed by
+  making the local reference-loading fixture satisfy report-schema foreign keys;
+  the full industrial append shard rerun passed (`79 passed`).
   The before/after benchmark set is recorded in
   [`rc2_pandas_free_sqlite_performance_2026-06-23.md`](./rc2_pandas_free_sqlite_performance_2026-06-23.md).
-  Final rc2 push and green GitHub Actions CI are pending until publication.
+- Pushed GitHub CI passed for build `260623` commit
+  `4a9f159a8c6a77a824a7170b61f0877f08978984` in run
+  [`28035951993`](https://github.com/hexafe/metroliza/actions/runs/28035951993):
+  Static checks, Unit tests with combined coverage, Native wheel build and
+  smoke checks, CMM parser perf guardrail, and Performance benchmark trend
+  check all passed. Manual/opt-in Packaging smoke, Windows startup benchmark,
+  and Google conversion smoke were skipped and remain release-promotion gates.
 - Manual packaging smoke, Windows executable clean-machine launch/startup,
   Google conversion smoke, third-party notice artifact evidence, and security
   owner triage/waiver for report-only findings remain release-promotion
