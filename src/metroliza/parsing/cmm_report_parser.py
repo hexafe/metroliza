@@ -221,9 +221,11 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
 
         if reasons:
             reasons.append("partial_cmm_markers")
+            confidence = max(CMM_PROBE_EXTENSION_CONFIDENCE, min(score, CMM_PROBE_MIN_CONFIDENCE - 1))
         else:
             reasons.append("missing_cmm_markers")
-        return CMM_PROBE_EXTENSION_CONFIDENCE, tuple(reasons)
+            confidence = CMM_PROBE_EXTENSION_CONFIDENCE
+        return confidence, tuple(reasons)
 
     @classmethod
     def probe(cls, input_ref: str | Path, context: ProbeContext) -> ProbeResult:
@@ -301,18 +303,15 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             return False
         reference, date_text, sample = parts
 
-        date_parts = date_text.split("-")
-        if len(date_parts) != 3:
+        date_match = re.fullmatch(r"(\d{4})[-.](\d{2})[-.](\d{2})", date_text)
+        if date_match is None:
             return False
-        year, month, day = date_parts
-        has_date = len(year) == 4 and len(month) == 2 and len(day) == 2
+        year, month, day = date_match.groups()
         return (
             bool(reference.strip())
             and bool(sample.strip())
-            and has_date
-            and year.isdigit()
-            and month.isdigit()
-            and day.isdigit()
+            and 1 <= int(month) <= 12
+            and 1 <= int(day) <= 31
         )
 
     def __init__(

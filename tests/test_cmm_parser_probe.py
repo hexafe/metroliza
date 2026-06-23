@@ -128,3 +128,42 @@ def test_cmm_probe_does_not_use_full_pdf_backend(tmp_path, monkeypatch):
 
     assert probe.can_parse is True
     assert probe.confidence >= 80
+
+
+def test_cmm_probe_accepts_dotted_report_date_filename_with_measurement_markers(tmp_path):
+    cmm_pdf = tmp_path / "VSPC015888_throttle_body_DV5R_2017.05.22_01.PDF"
+    cmm_pdf.write_text(
+        "%PDF-1.4\n"
+        "NOMINAL TOL MEASURED DEVIATION OUTTOL BONUS\n"
+        "X NOMINAL 10 +TOL 0.2 TOL -0.2 ACT 10.1 DEV 0.1 OUT 0 BONUS 0\n"
+        "%%EOF\n",
+        encoding="utf-8",
+    )
+
+    probe = CMMReportParser.probe(cmm_pdf, _pdf_context(cmm_pdf))
+
+    assert probe.can_parse is True
+    assert probe.confidence >= 80
+    assert "cmm_identity_filename_pattern" in probe.reasons
+    assert "partial_cmm_markers" not in probe.reasons
+    report_parser_factory.reset_probe_cache()
+    diagnostics = report_parser_factory.resolve_parser_with_diagnostics(cmm_pdf)
+    assert diagnostics.selected is not None
+    assert diagnostics.selected.plugin_id == "cmm"
+
+
+def test_cmm_probe_preserves_near_threshold_marker_score_for_diagnostics(tmp_path):
+    cmm_pdf = tmp_path / "generic_measurement_markers.PDF"
+    cmm_pdf.write_text(
+        "%PDF-1.4\n"
+        "NOMINAL TOL MEASURED DEVIATION OUTTOL BONUS\n"
+        "X NOMINAL 10 +TOL 0.2 TOL -0.2 ACT 10.1 DEV 0.1 OUT 0 BONUS 0\n"
+        "%%EOF\n",
+        encoding="utf-8",
+    )
+
+    probe = CMMReportParser.probe(cmm_pdf, _pdf_context(cmm_pdf))
+
+    assert probe.can_parse is False
+    assert probe.confidence == 76
+    assert "partial_cmm_markers" in probe.reasons
