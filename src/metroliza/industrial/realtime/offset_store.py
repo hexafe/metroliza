@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from metroliza.industrial.industrial_data_schema import ensure_industrial_data_schema
-from metroliza.industrial.realtime.sample_repository import utc_timestamp
 from metroliza.industrial.realtime.stream_contracts import StreamOffset
 from metroliza.reports.db import run_transaction_with_retry
 
@@ -57,7 +56,7 @@ class StreamOffsetStore:
                     offset.cursor_tie_breaker_column,
                     offset.cursor_tie_breaker_value,
                     offset.event_time_watermark,
-                    offset.last_success_at or utc_timestamp(),
+                    offset.last_success_at,
                     offset.last_error,
                     offset.lag_seconds,
                     offset.status,

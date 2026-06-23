@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 CI_WORKFLOW_PATH = Path('.github/workflows/ci.yml')
 CI_POLICY_PATH = Path('docs/ci-policy.md')
@@ -122,6 +123,24 @@ def test_ci_and_precommit_run_release_hygiene_scan() -> None:
     assert '.coverage' in gitignore
     assert 'coverage.xml' in gitignore
     assert 'htmlcov/' in gitignore
+
+
+def test_precommit_credential_pattern_avoids_identifier_false_positives() -> None:
+    precommit_config = Path('.pre-commit-config.yaml').read_text(encoding='utf-8')
+    entry_line = next(
+        line
+        for line in precommit_config.splitlines()
+        if 'client[_-]?secret' in line
+    )
+    pattern = entry_line.split('entry:', 1)[1].strip()
+    if pattern.startswith("'") and pattern.endswith("'"):
+        pattern = pattern[1:-1].replace("''", "'")
+    compiled = re.compile(pattern)
+
+    assert compiled.search('api_key = "abcdefghijklmnopqrstuvwxyz012345"')
+    assert not compiled.search("access_token = _ensure_access_token(credentials_path, token_path)")
+    assert not compiled.search("refresh_token = token_payload.get('refresh_token')")
+    assert not compiled.search("api_key: should-not-be-here")
 
 
 def test_ci_workflow_runs_declarative_parser_profile_self_service_smoke() -> None:

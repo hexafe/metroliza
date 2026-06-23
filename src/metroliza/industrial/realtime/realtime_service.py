@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Mapping
 
+from metroliza.industrial.anomaly.baseline_repository import BaselineRepository
 from metroliza.industrial.anomaly.event_repository import AnomalyEventRepository
 from metroliza.industrial.industrial_data_repository import (
     IndustrialSourceProfile,
@@ -33,6 +34,10 @@ DetectorRunner = Callable[
     [Iterable[IndustrialSample], SignalDefinition, tuple[str, ...]],
     list[Any],
 ]
+
+_BASELINE_DETECTORS = frozenset({"iqr", "mad_zscore"})
+_HISTORY_DETECTORS = frozenset({"rolling_zscore"})
+_DETECTOR_HISTORY_LIMIT = 500
 
 
 @dataclass(frozen=True)
@@ -68,6 +73,7 @@ def run_polling_cycle(
     sample_repository = RealtimeSampleRepository(database)
     offset_store = StreamOffsetStore(database)
     event_repository = AnomalyEventRepository(database)
+    baseline_repository = BaselineRepository(database)
     existing_offset = offset_store.get_offset(
         source_profile_id=validated.source_profile_id,
         stream_key=validated.stream_key,
@@ -204,12 +210,19 @@ def run_polling_cycle(
             diagnostics=diagnostics,
         )
     try:
-        persisted_samples = _load_persisted_samples(sample_repository, signals.values(), batch_result.sample_ids)
+        persisted_samples = _load_detection_samples(
+            sample_repository,
+            signals.values(),
+            batch_result.sample_ids,
+            detectors=validated.detectors,
+        )
         detector_events = _score_detector_events(
             persisted_samples,
             signals=signals,
             detectors=validated.detectors,
+            baseline_repository=baseline_repository,
             detector_runner=detector_runner,
+            score_sample_ids=batch_result.sample_ids,
             diagnostics=diagnostics,
         )
         event_result = event_repository.insert_events(detector_events) if detector_events else None
@@ -319,30 +332,82 @@ def _load_persisted_samples(
     ]
 
 
+def _load_detection_samples(
+    sample_repository: RealtimeSampleRepository,
+    signals: Iterable[SignalDefinition],
+    sample_ids: tuple[int, ...],
+    *,
+    detectors: tuple[str, ...],
+) -> list[IndustrialSample]:
+    new_samples = _load_persisted_samples(sample_repository, signals, sample_ids)
+    if not new_samples or not (_normalized_detector_set(detectors) & _HISTORY_DETECTORS):
+        return new_samples
+    grouped_keys = {
+        (sample.signal_id, _segment_key_tuple(sample.segment_key))
+        for sample in new_samples
+    }
+    combined: dict[int, IndustrialSample] = {}
+    for signal_id, segment_key_items in grouped_keys:
+        segment_key = dict(segment_key_items)
+        for sample in sample_repository.list_recent_samples(
+            signal_id=signal_id,
+            segment_key=segment_key,
+            limit=_DETECTOR_HISTORY_LIMIT,
+        ):
+            if sample.id is not None:
+                combined[int(sample.id)] = sample
+    for sample in new_samples:
+        if sample.id is not None:
+            combined[int(sample.id)] = sample
+    return sorted(combined.values(), key=lambda sample: (str(sample.event_time or ""), sample.id or -1))
+
+
 def _score_detector_events(
     samples: Iterable[IndustrialSample],
     *,
     signals: Mapping[str, SignalDefinition],
     detectors: tuple[str, ...],
-    detector_runner: DetectorRunner | None,
     diagnostics: dict[str, Any],
+    baseline_repository: BaselineRepository | None = None,
+    detector_runner: DetectorRunner | None = None,
+    score_sample_ids: tuple[int, ...] = (),
 ) -> list[Any]:
-    by_signal: dict[int, list[IndustrialSample]] = {}
+    by_signal_segment: dict[tuple[int, tuple[tuple[str, Any], ...]], list[IndustrialSample]] = {}
     for sample in samples:
-        by_signal.setdefault(sample.signal_id, []).append(sample)
+        by_signal_segment.setdefault(
+            (sample.signal_id, _segment_key_tuple(sample.segment_key)),
+            [],
+        ).append(sample)
     signal_by_id = {
         int(signal.id): signal
         for signal in signals.values()
         if signal.id is not None
     }
     events: list[Any] = []
-    runner = detector_runner or _default_detector_runner
-    for signal_id, signal_samples in by_signal.items():
+    baseline_detectors_enabled = bool(_normalized_detector_set(detectors) & _BASELINE_DETECTORS)
+    for (signal_id, segment_key_items), signal_samples in by_signal_segment.items():
         signal = signal_by_id.get(signal_id)
         if signal is None:
             continue
+        baseline = {}
+        if baseline_repository is not None and baseline_detectors_enabled:
+            baseline = baseline_repository.latest_baseline(
+                signal_id=signal_id,
+                segment_key=dict(segment_key_items),
+            ) or {}
         try:
-            events.extend(runner(signal_samples, signal, detectors))
+            if detector_runner is not None:
+                events.extend(detector_runner(signal_samples, signal, detectors))
+            else:
+                events.extend(
+                    _default_detector_runner(
+                        signal_samples,
+                        signal,
+                        detectors,
+                        baseline=baseline,
+                        score_sample_ids=score_sample_ids,
+                    )
+                )
         except Exception as exc:
             diagnostics.setdefault("warnings", [])
             diagnostics["warnings"].append(f"detector failure: {redact_sensitive_text(exc)}")
@@ -353,8 +418,17 @@ def _default_detector_runner(
     samples: Iterable[IndustrialSample],
     signal: SignalDefinition,
     detectors: tuple[str, ...],
+    *,
+    baseline: Mapping[str, Any] | None = None,
+    score_sample_ids: tuple[int, ...] = (),
 ) -> list[Any]:
-    return run_detectors_for_samples(samples, signal=signal, detectors=detectors, baseline={})
+    return run_detectors_for_samples(
+        samples,
+        signal=signal,
+        detectors=detectors,
+        baseline=baseline or {},
+        score_sample_ids=score_sample_ids or None,
+    )
 
 
 def _record_failed_offset(
@@ -374,6 +448,7 @@ def _record_failed_offset(
             else None,
             cursor_tie_breaker_value=_offset_tie_breaker(existing_offset),
             event_time_watermark=_watermark(existing_offset),
+            last_success_at=existing_offset.last_success_at if existing_offset else None,
             last_error=redact_sensitive_text(error, max_len=500),
             lag_seconds=existing_offset.lag_seconds if existing_offset else None,
             status="failed",
@@ -477,6 +552,14 @@ def _offset_tie_breaker(offset: StreamOffset | None) -> str | None:
 
 def _watermark(offset: StreamOffset | None) -> str | None:
     return offset.event_time_watermark if offset is not None else None
+
+
+def _normalized_detector_set(detectors: Iterable[str]) -> set[str]:
+    return {str(detector or "").strip().lower() for detector in detectors if str(detector or "").strip()}
+
+
+def _segment_key_tuple(segment_key: Mapping[str, Any]) -> tuple[tuple[str, Any], ...]:
+    return tuple(sorted((str(key), value) for key, value in dict(segment_key or {}).items()))
 
 
 def _safe_mapping(value: Mapping[str, Any]) -> dict[str, Any]:

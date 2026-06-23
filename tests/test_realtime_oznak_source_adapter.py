@@ -86,3 +86,13 @@ def test_oznak_realtime_source_adapter_reports_missing_credentials(tmp_path):
     assert result.rows == ()
     assert "No saved industrial database credentials" in result.error
     assert result.diagnostics["credentials_source"] == "missing"
+
+
+def test_legacy_oznak_realtime_adapter_shim_imports_existing_adapter():
+    from metroliza.industrial.realtime.oznak_realtime_adapter import (
+        OznakRealtimeSourceAdapter as ShimAdapter,
+        OznakSqlSourceDbReader,
+    )
+
+    assert ShimAdapter is OznakRealtimeSourceAdapter
+    assert OznakSqlSourceDbReader is OznakRealtimeSourceAdapter

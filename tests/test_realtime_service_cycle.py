@@ -1,3 +1,4 @@
+from metroliza.industrial.anomaly.baseline_repository import BaselineRepository, IndustrialBaseline
 from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
 from metroliza.industrial.anomaly.event_repository import AnomalyEventRepository
 from metroliza.industrial.realtime.db_poller import SourceReadResult
@@ -46,7 +47,7 @@ def _profile(db_path: str):
     )
 
 
-def _config(profile_id: int):
+def _config(profile_id: int, *, detectors=("spec_limits",)):
     return RealtimePollConfig(
         source_profile_id=profile_id,
         stream_key="cycle_time",
@@ -56,7 +57,7 @@ def _config(profile_id: int):
         signal_keys=("cycle_time",),
         signal_columns={"cycle_time": "cycle_time_s"},
         context_fields=("station",),
-        detectors=("spec_limits",),
+        detectors=detectors,
         chunk_size=100,
     )
 
@@ -125,6 +126,106 @@ def test_realtime_poll_cycle_creates_explainable_detector_events(tmp_path):
     assert "above USL" in events[0].explanation
 
 
+def test_realtime_poll_cycle_loads_segment_baseline_for_iqr_detector(tmp_path):
+    db_path = str(tmp_path / "baseline-detectors.db")
+    profile = _profile(db_path)
+    repository = RealtimeSampleRepository(db_path)
+    signal = repository.upsert_signal_definition(
+        SignalDefinition(
+            source_profile_id=profile.id,
+            signal_key="cycle_time",
+            metric_name="cycle_time_s",
+            segment_fields=("station",),
+        )
+    )
+    BaselineRepository(db_path).insert_baseline(
+        IndustrialBaseline(
+            signal_id=signal.id,
+            segment_key={"station": "S1"},
+            baseline_version="station-s1",
+            n=25,
+            q1=9.0,
+            q3=11.0,
+            iqr=2.0,
+        )
+    )
+
+    result = run_polling_cycle(
+        database=db_path,
+        profile=profile,
+        config=_config(profile.id, detectors=("iqr",)),
+        adapter=FakeAdapter(
+            [
+                {
+                    "event_id": "101",
+                    "record_id": "row-101",
+                    "process_timestamp": "2026-06-13T10:01:00Z",
+                    "cycle_time_s": "20.0",
+                    "station": "S1",
+                }
+            ]
+        ),
+    )
+    events = AnomalyEventRepository(db_path).list_events()
+
+    assert result.detector_events_created == 1
+    assert events[0].detector_key == "iqr"
+    assert events[0].threshold["n"] == 25
+    assert events[0].threshold["iqr"] == 2.0
+
+
+def test_realtime_poll_cycle_seeds_rolling_detector_from_persisted_history(tmp_path):
+    db_path = str(tmp_path / "rolling-history.db")
+    profile = _profile(db_path)
+    repository = RealtimeSampleRepository(db_path)
+    signal = repository.upsert_signal_definition(
+        SignalDefinition(
+            source_profile_id=profile.id,
+            signal_key="cycle_time",
+            metric_name="cycle_time_s",
+            segment_fields=("station",),
+        )
+    )
+    repository.insert_samples(
+        [
+            IndustrialSample(
+                source_profile_id=profile.id,
+                signal_id=signal.id,
+                source_record_key=f"history-{index}",
+                event_time=f"2026-06-13T10:{index:02d}:00Z",
+                metric_name="cycle_time_s",
+                value=9.0 if index % 2 else 11.0,
+                station="S1",
+                segment_key={"station": "S1"},
+            )
+            for index in range(30)
+        ]
+    )
+
+    result = run_polling_cycle(
+        database=db_path,
+        profile=profile,
+        config=_config(profile.id, detectors=("rolling_zscore",)),
+        adapter=FakeAdapter(
+            [
+                {
+                    "event_id": "200",
+                    "record_id": "row-200",
+                    "process_timestamp": "2026-06-13T10:30:00Z",
+                    "cycle_time_s": "20.0",
+                    "station": "S1",
+                }
+            ]
+        ),
+    )
+    events = AnomalyEventRepository(db_path).list_events()
+
+    assert result.detector_events_created == 1
+    assert events[0].detector_key == "rolling_zscore"
+    assert events[0].threshold["n"] == 30
+    assert events[0].sample_id not in {sample_id for sample_id in range(1, 31)}
+
+
 def test_realtime_poll_cycle_does_not_advance_offset_on_adapter_error(tmp_path):
     db_path = str(tmp_path / "adapter-error.db")
     profile = _profile(db_path)
@@ -162,6 +263,37 @@ def test_realtime_poll_cycle_does_not_advance_offset_on_adapter_error(tmp_path):
     assert "secret123" not in diagnostics_text
     assert offset.cursor_value == "50"
     assert offset.last_error == "failed password=<redacted>"
+    assert offset.last_success_at is None
+
+
+def test_realtime_poll_cycle_preserves_last_success_at_on_failure(tmp_path):
+    db_path = str(tmp_path / "adapter-error-last-success.db")
+    profile = _profile(db_path)
+    config = _config(profile.id)
+    StreamOffsetStore(db_path).upsert_offset(
+        StreamOffset(
+            source_profile_id=profile.id,
+            stream_key="cycle_time",
+            cursor_column="event_id",
+            cursor_value="50",
+            last_success_at="2026-06-13T10:00:00Z",
+            status="idle",
+        )
+    )
+
+    run_polling_cycle(
+        database=db_path,
+        profile=profile,
+        config=config,
+        adapter=FakeAdapter(error="failed password=secret123"),
+    )
+    offset = StreamOffsetStore(db_path).get_offset(
+        source_profile_id=profile.id,
+        stream_key="cycle_time",
+    )
+
+    assert offset.last_success_at == "2026-06-13T10:00:00Z"
+    assert offset.status == "failed"
 
 
 def test_realtime_poll_cycle_reports_source_fetch_exception_diagnostics(tmp_path):

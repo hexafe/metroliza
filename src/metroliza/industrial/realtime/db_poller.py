@@ -9,6 +9,7 @@ from typing import Any, Mapping, Protocol
 from metroliza.industrial.industrial_data_repository import IndustrialSourceProfile
 from metroliza.industrial.industrial_workflow_state import require_dotted_identifier, require_identifier
 from metroliza.industrial.realtime.stream_config import (
+    DEFAULT_SEGMENT_FIELDS,
     RealtimePollConfig,
     RealtimeStreamConfigError,
 )
@@ -62,15 +63,23 @@ def build_bounded_poll_query(
     """Build a generated, bounded SELECT query for one realtime polling cycle."""
 
     validated = config.validated()
-    table_name = _quote_dotted_identifier("source object", profile.source_object_name)
     selected_columns = _validated_selected_columns(profile, validated)
-    cursor = _quote_identifier("cursor column", validated.cursor_column)
-    tie_breaker = _quote_identifier("record key column", validated.record_key_column)
+    dialect = _normalized_dialect(profile.database_type)
+    table_name = _quote_dotted_identifier(
+        "source object",
+        profile.source_object_name,
+        dialect=dialect,
+    )
+    cursor = _quote_identifier("cursor column", validated.cursor_column, dialect=dialect)
+    tie_breaker = _quote_identifier(
+        "record key column",
+        validated.record_key_column,
+        dialect=dialect,
+    )
     where = ""
     parameters: list[Any] = []
     cursor_resume_mode = "none"
     limit = validated.cycle_limit
-    dialect = _normalized_dialect(profile.database_type)
     if offset is not None and offset.cursor_value not in (None, ""):
         tie_breaker_value = _offset_tie_breaker_value(offset, validated.record_key_column)
         if tie_breaker_value not in (None, ""):
@@ -85,7 +94,10 @@ def build_bounded_poll_query(
             where = f" WHERE {cursor} >= ?"
             parameters.append(offset.cursor_value)
             cursor_resume_mode = "cursor_reseed"
-    columns_sql = ", ".join(_quote_identifier("selected column", column) for column in selected_columns)
+    columns_sql = ", ".join(
+        _quote_identifier("selected column", column, dialect=dialect)
+        for column in selected_columns
+    )
     if dialect == "mssql":
         parameters = [limit, *parameters]
         sql_text = (
@@ -141,6 +153,7 @@ def _validated_selected_columns(
         config.event_time_column,
         config.cursor_column,
         *config.signal_columns.values(),
+        *_selected_segment_columns(profile, config),
         *config.context_fields,
     )
     selected = tuple(dict.fromkeys(column for column in columns if column))
@@ -155,20 +168,34 @@ def _validated_selected_columns(
     return selected
 
 
-def _quote_identifier(field_name: str, value: str) -> str:
+def _selected_segment_columns(
+    profile: IndustrialSourceProfile,
+    config: RealtimePollConfig,
+) -> tuple[str, ...]:
+    allowed = set(profile.allowed_columns or ())
+    if allowed:
+        return tuple(column for column in config.segment_fields if column in allowed)
+    if tuple(config.segment_fields) != tuple(DEFAULT_SEGMENT_FIELDS):
+        return tuple(config.segment_fields)
+    return ()
+
+
+def _quote_identifier(field_name: str, value: str, *, dialect: str = "unknown") -> str:
     try:
         require_identifier(field_name, value)
     except ValueError as exc:
         raise RealtimeStreamConfigError(str(exc)) from exc
-    return f'"{value}"'
+    quote = "`" if dialect == "mysql" else '"'
+    return f"{quote}{value}{quote}"
 
 
-def _quote_dotted_identifier(field_name: str, value: str) -> str:
+def _quote_dotted_identifier(field_name: str, value: str, *, dialect: str = "unknown") -> str:
     try:
         require_dotted_identifier(field_name, value)
     except ValueError as exc:
         raise RealtimeStreamConfigError(str(exc)) from exc
-    return ".".join(f'"{part}"' for part in str(value).split("."))
+    quote = "`" if dialect == "mysql" else '"'
+    return ".".join(f"{quote}{part}{quote}" for part in str(value).split("."))
 
 
 def _offset_tie_breaker_value(offset: StreamOffset, record_key_column: str) -> str | None:

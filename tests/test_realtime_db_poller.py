@@ -92,11 +92,68 @@ def test_bounded_poll_query_uses_limit_placeholder_for_mysql_and_sqlite(tmp_path
         ),
     )
 
-    assert 'WHERE "event_id" >= ?' in query.sql_text
-    assert 'ORDER BY "event_id" ASC, "record_id" ASC LIMIT ?' in query.sql_text
+    assert "WHERE `event_id` >= ?" in query.sql_text
+    assert "ORDER BY `event_id` ASC, `record_id` ASC LIMIT ?" in query.sql_text
     assert query.parameters == ("500", 250)
     assert query.summary["dialect"] == "mysql"
     assert query.summary["cursor_resume_mode"] == "cursor_reseed"
+
+
+def test_bounded_poll_query_quotes_mysql_identifiers_with_backticks(tmp_path):
+    db_path = str(tmp_path / "poller.db")
+    repository = IndustrialDataRepository(db_path)
+    profile = repository.upsert_source_profile(
+        profile_key="assembly",
+        profile_name="Assembly",
+        source_db_alias="assembly_mes",
+        database_type="mysql",
+        source_object_name="plant_events",
+        allowed_columns=("event_id", "process_timestamp", "record_id", "cycle_time_s", "station"),
+    )
+
+    query = build_bounded_poll_query(profile=profile, config=_config(profile.id))
+
+    assert query.sql_text.startswith("SELECT `record_id`, `process_timestamp`, `event_id`")
+    assert "FROM `plant_events`" in query.sql_text
+    assert "ORDER BY `event_id` ASC, `record_id` ASC LIMIT ?" in query.sql_text
+    assert '"event_id"' not in query.sql_text
+
+
+def test_bounded_poll_query_selects_segment_fields_even_without_context_fields(tmp_path):
+    db_path = str(tmp_path / "poller.db")
+    profile = _profile(
+        db_path,
+        allowed_columns=(
+            "event_id",
+            "process_timestamp",
+            "record_id",
+            "cycle_time_s",
+            "station",
+            "line",
+        ),
+    )
+    config = RealtimePollConfig(
+        source_profile_id=profile.id,
+        stream_key="cycle_time",
+        cursor_column="event_id",
+        event_time_column="process_timestamp",
+        record_key_column="record_id",
+        signal_keys=("cycle_time",),
+        signal_columns={"cycle_time": "cycle_time_s"},
+        segment_fields=("station", "line"),
+        context_fields=(),
+    )
+
+    query = build_bounded_poll_query(profile=profile, config=config)
+
+    assert query.summary["selected_columns"] == (
+        "record_id",
+        "process_timestamp",
+        "event_id",
+        "cycle_time_s",
+        "station",
+        "line",
+    )
 
 
 def test_bounded_poll_query_uses_record_key_tie_breaker_for_duplicate_cursors(tmp_path):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import tempfile
+from time import monotonic
 from typing import Any
 
 from PyQt6.QtCore import Qt, QTimer, QUrl
@@ -100,6 +101,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.profiles: list[IndustrialSourceProfile] = []
         self.configs_by_profile_id: dict[int, RealtimeMonitorConfig] = {}
         self.active_configs: tuple[RealtimeMonitorConfig, ...] = ()
+        self._next_poll_due_by_profile_id: dict[int, float] = {}
         self.last_poll_results: tuple[Any, ...] = ()
         self.last_dashboard_path: Path | None = None
 
@@ -582,6 +584,10 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         if not configs:
             return
         self.active_configs = configs
+        now = monotonic()
+        self._next_poll_due_by_profile_id = {
+            config.source_profile_id: now for config in configs
+        }
         interval_ms = max(1_000, int(min(config.polling_interval_seconds for config in configs) * 1_000))
         self.poll_timer.start(interval_ms)
         self._sync_running_state(True)
@@ -594,11 +600,15 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             if wait_for_thread:
                 self.poll_thread.wait(3_000)
         self.active_configs = ()
+        self._next_poll_due_by_profile_id = {}
         self._sync_running_state(False)
         self._set_status("Stopped", "neutral")
 
     def poll_once(self) -> None:
-        configs = self.active_configs if self.poll_timer.isActive() else ()
+        timer_active = self.poll_timer.isActive()
+        configs = self._due_active_configs() if timer_active else ()
+        if timer_active and not configs:
+            return
         if not configs:
             configs = self._configs_for_checked_sources(save_current=True)
             if not configs:
@@ -606,6 +616,8 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         if self.poll_thread is not None and self.poll_thread.isRunning():
             self._append_diagnostic("Poll skipped because a previous cycle is still running.")
             return
+        if timer_active:
+            self._advance_poll_due_times(configs)
         self.poll_thread = RealtimeMonitorPollThread(db_file=self.db_file, configs=configs)
         self.poll_thread.update_label.connect(lambda text: self._set_status(text, "info"))
         self.poll_thread.result_ready.connect(self._on_poll_results)
@@ -614,6 +626,20 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.poll_thread.finished.connect(self._clear_poll_thread)
         self._set_status("Polling realtime industrial sources...", "info")
         self.poll_thread.start()
+
+    def _due_active_configs(self) -> tuple[RealtimeMonitorConfig, ...]:
+        now = monotonic()
+        return tuple(
+            config
+            for config in self.active_configs
+            if self._next_poll_due_by_profile_id.get(config.source_profile_id, now) <= now
+        )
+
+    def _advance_poll_due_times(self, configs: tuple[RealtimeMonitorConfig, ...]) -> None:
+        now = monotonic()
+        for config in configs:
+            interval = max(1.0, float(config.polling_interval_seconds or 1.0))
+            self._next_poll_due_by_profile_id[config.source_profile_id] = now + interval
 
     def _on_poll_results(self, results: tuple[Any, ...]) -> None:
         self.last_poll_results = tuple(results or ())

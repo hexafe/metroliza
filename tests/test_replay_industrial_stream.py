@@ -166,6 +166,54 @@ def test_run_detectors_for_samples_carries_state_through_service_cycle():
     assert "rolling z-score" in event.explanation
 
 
+def test_run_detectors_for_samples_can_warm_state_without_emitting_history():
+    signal = SignalDefinition(
+        id=42,
+        source_profile_id=7,
+        signal_key="cycle_time",
+        metric_name="cycle_time_s",
+    )
+    history = [
+        IndustrialSample(
+            id=index + 1,
+            source_profile_id=7,
+            signal_id=signal.id,
+            source_record_key=f"ROW-{index + 1}",
+            event_time=f"2026-06-13T10:{index:02d}:00Z",
+            metric_name="cycle_time_s",
+            value=9.0 if index % 2 else 11.0,
+        )
+        for index in range(30)
+    ]
+    old_outlier = IndustrialSample(
+        id=31,
+        source_profile_id=7,
+        signal_id=signal.id,
+        source_record_key="ROW-31",
+        event_time="2026-06-13T10:30:00Z",
+        metric_name="cycle_time_s",
+        value=20.0,
+    )
+    new_outlier = IndustrialSample(
+        id=32,
+        source_profile_id=7,
+        signal_id=signal.id,
+        source_record_key="ROW-32",
+        event_time="2026-06-13T10:31:00Z",
+        metric_name="cycle_time_s",
+        value=21.0,
+    )
+
+    events = run_detectors_for_samples(
+        [*history, old_outlier, new_outlier],
+        signal=signal,
+        detectors=("rolling_zscore",),
+        score_sample_ids=(new_outlier.id,),
+    )
+
+    assert [event.sample_id for event in events] == [new_outlier.id]
+
+
 def test_replay_csv_inserts_samples_and_persists_spec_event(tmp_path):
     db_path = str(tmp_path / "replay.db")
     profile = _source_profile(db_path)

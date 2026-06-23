@@ -23,6 +23,7 @@ from metroliza.industrial.industrial_source_config import (
     upsert_source_profile_in_config,
 )
 from metroliza.industrial.realtime.monitor_config import RealtimeMonitorConfigRepository
+from metroliza.industrial.realtime.monitor_config import RealtimeMonitorConfig
 
 
 class _Signal:
@@ -213,6 +214,66 @@ def test_realtime_monitoring_dialog_poll_once_uses_current_checked_sources(
             line_a.id
         ]
     finally:
+        dialog.close()
+
+
+def test_realtime_monitoring_dialog_timer_polls_only_due_sources(qapp, tmp_path, monkeypatch):
+    db_path = str(tmp_path / "dialog.db")
+    repository = IndustrialDataRepository(db_path)
+    line_a = _profile(repository, "line_a", "Line A")
+    line_b = _profile(repository, "line_b", "Line B")
+    dialog = RealtimeIndustrialMonitoringDialog(None, db_path)
+
+    class _FakePollThread:
+        instances = []
+
+        def __init__(self, *, db_file, configs):
+            self.db_file = db_file
+            self.configs = tuple(configs)
+            self.update_label = _Signal()
+            self.result_ready = _Signal()
+            self.error_occurred = _Signal()
+            self.cancelled = _Signal()
+            self.finished = _Signal()
+            self.instances.append(self)
+
+        def isRunning(self):
+            return False
+
+        def start(self):
+            return None
+
+    def _monitor_config(profile, interval):
+        return RealtimeMonitorConfig(
+            source_profile_id=profile.id,
+            stream_key=profile.profile_key,
+            cursor_column="event_id",
+            event_time_column="process_timestamp",
+            record_key_column="record_id",
+            signal_keys=("cycle_time",),
+            signal_columns={"cycle_time": "cycle_time_s"},
+            polling_interval_seconds=interval,
+        )
+
+    try:
+        import metroliza.ui.realtime_industrial_monitoring_dialog as dialog_module
+
+        monkeypatch.setattr(dialog_module, "RealtimeMonitorPollThread", _FakePollThread)
+        monkeypatch.setattr(dialog_module, "monotonic", lambda: 5.0)
+        dialog.active_configs = (_monitor_config(line_a, 5), _monitor_config(line_b, 60))
+        dialog._next_poll_due_by_profile_id = {line_a.id: 5.0, line_b.id: 60.0}
+        dialog.poll_timer.start(1_000_000)
+
+        dialog.poll_once()
+
+        assert len(_FakePollThread.instances) == 1
+        assert [config.source_profile_id for config in _FakePollThread.instances[0].configs] == [
+            line_a.id
+        ]
+        assert dialog._next_poll_due_by_profile_id[line_a.id] == 10.0
+        assert dialog._next_poll_due_by_profile_id[line_b.id] == 60.0
+    finally:
+        dialog.poll_timer.stop()
         dialog.close()
 
 

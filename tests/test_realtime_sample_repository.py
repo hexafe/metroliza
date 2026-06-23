@@ -262,6 +262,53 @@ def test_list_samples_by_ids_loads_targeted_rows_in_chunks(tmp_path):
     assert [sample.source_record_key for sample in loaded] == ["ROW-3", "ROW-1"]
 
 
+def test_list_recent_samples_filters_segment_and_returns_chronological_rows(tmp_path):
+    db_path = str(tmp_path / "recent_samples.db")
+    profile = _source_profile(db_path)
+    repository = RealtimeSampleRepository(db_path)
+    signal = repository.upsert_signal_definition(
+        SignalDefinition(
+            source_profile_id=profile.id,
+            signal_key="cycle_time",
+            metric_name="cycle_time_s",
+            segment_fields=("station",),
+        )
+    )
+    repository.insert_samples(
+        [
+            IndustrialSample(
+                source_profile_id=profile.id,
+                signal_id=signal.id,
+                source_record_key=f"S1-{index}",
+                event_time=f"2026-06-13T10:0{index}:00Z",
+                metric_name="cycle_time_s",
+                value=10.0 + index,
+                segment_key={"station": "S1"},
+            )
+            for index in range(3)
+        ]
+        + [
+            IndustrialSample(
+                source_profile_id=profile.id,
+                signal_id=signal.id,
+                source_record_key="S2-1",
+                event_time="2026-06-13T10:03:00Z",
+                metric_name="cycle_time_s",
+                value=99.0,
+                segment_key={"station": "S2"},
+            )
+        ]
+    )
+
+    loaded = repository.list_recent_samples(
+        signal_id=signal.id,
+        segment_key={"station": "S1"},
+        limit=2,
+    )
+
+    assert [sample.source_record_key for sample in loaded] == ["S1-1", "S1-2"]
+
+
 def test_stream_offset_upsert_replaces_cursor(tmp_path):
     db_path = str(tmp_path / "offsets.db")
     profile = _source_profile(db_path)
@@ -298,6 +345,47 @@ def test_stream_offset_upsert_replaces_cursor(tmp_path):
     assert second.event_time_watermark == "2026-06-13T10:01:00Z"
     assert second.lag_seconds == 2.0
     assert second.status == "idle"
+
+
+def test_stream_offset_failed_update_can_preserve_or_leave_last_success_null(tmp_path):
+    db_path = str(tmp_path / "offset_last_success.db")
+    profile = _source_profile(db_path)
+    store = StreamOffsetStore(db_path)
+
+    failed_first = store.upsert_offset(
+        StreamOffset(
+            source_profile_id=profile.id,
+            stream_key="cycle_time",
+            cursor_column="event_id",
+            status="failed",
+            last_error="driver timeout",
+        )
+    )
+    assert failed_first.last_success_at is None
+
+    success = store.upsert_offset(
+        StreamOffset(
+            source_profile_id=profile.id,
+            stream_key="cycle_time",
+            cursor_column="event_id",
+            cursor_value="100",
+            last_success_at="2026-06-13T10:00:00Z",
+            status="idle",
+        )
+    )
+    failed_after_success = store.upsert_offset(
+        StreamOffset(
+            source_profile_id=profile.id,
+            stream_key="cycle_time",
+            cursor_column="event_id",
+            cursor_value="100",
+            last_success_at=success.last_success_at,
+            last_error="driver timeout",
+            status="failed",
+        )
+    )
+
+    assert failed_after_success.last_success_at == "2026-06-13T10:00:00Z"
 
 
 def test_stream_offset_watermark_is_scoped_by_profile_and_stream(tmp_path):

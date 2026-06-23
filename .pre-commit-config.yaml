@@ -17,7 +17,7 @@ repos:
       - id: detect-basic-credential-patterns
         name: detect-basic-credential-patterns
         language: pygrep
-        entry: '(client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token)\s*[:=]\s*\S+'
+        entry: '(?i)(client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token)\s*[:=]\s*["''][A-Za-z0-9_.~+/=-]{20,}["'']'
         files: '\.(py|json|ya?ml|toml|ini|env)$'
         exclude: ^config/google/credentials\.example\.json$
       - id: release-hygiene

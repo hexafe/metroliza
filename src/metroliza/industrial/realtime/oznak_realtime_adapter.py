@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
-from metroliza.industrial.realtime.db_poller import OznakSqlSourceDbReader
+from metroliza.industrial.realtime.oznak_source_adapter import OznakRealtimeSourceAdapter
 
-__all__ = ["OznakSqlSourceDbReader"]
+OznakSqlSourceDbReader = OznakRealtimeSourceAdapter
+
+__all__ = ["OznakRealtimeSourceAdapter", "OznakSqlSourceDbReader"]

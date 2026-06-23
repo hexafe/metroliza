@@ -181,10 +181,12 @@ def run_detectors_for_samples(
     detectors: Iterable[str],
     baseline: Mapping[str, Any] | None = None,
     now: str | None = None,
+    score_sample_ids: Iterable[int] | None = None,
 ) -> list[DetectionResult]:
     detector_objects = _detector_instances(detectors)
     states: dict[str, DetectorState] = {}
     events: list[DetectionResult] = []
+    scored_ids = None if score_sample_ids is None else {int(sample_id) for sample_id in score_sample_ids}
     for sample in sorted(_unique_samples_for_detection(samples), key=_sample_sort_key):
         for detector in detector_objects:
             state = states.get(detector.detector_key, DetectorState())
@@ -195,7 +197,8 @@ def run_detectors_for_samples(
                 now=now,
             )
             result = detector.score_one(sample, context)
-            if result is not None:
+            should_emit = scored_ids is None or (sample.id is not None and int(sample.id) in scored_ids)
+            if result is not None and should_emit:
                 events.append(result)
             states[detector.detector_key] = detector.update_one(sample, context)
     return events

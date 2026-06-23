@@ -1439,10 +1439,8 @@ def fetch_oznak_records_for_source_sql(
     pagination_column = _profile_value(profile, "default_pagination_column", "pagination_column")
     raw_order_by_enabled = _profile_value(profile, "order_by_enabled")
     order_by_enabled = True if raw_order_by_enabled is None else bool(raw_order_by_enabled)
-    allowed_columns = _normalize_runtime_columns(
+    configured_columns = _normalize_runtime_columns(
         tuple(_profile_value(profile, "allowed_columns") or ()),
-        timestamp_column,
-        pagination_column,
     )
 
     try:
@@ -1455,7 +1453,7 @@ def fetch_oznak_records_for_source_sql(
                 "port": int(port) if port is not None else 0,
                 "database": database_name,
                 "table": table_name,
-                "allowed_columns": allowed_columns,
+                "allowed_columns": configured_columns,
                 "timestamp_column": timestamp_column,
                 "pagination_column": pagination_column,
                 "display_name": _profile_value(profile, "profile_name"),
@@ -1527,7 +1525,9 @@ def fetch_oznak_records_for_source_sql(
 
     streamed_to_callback = bool(getattr(payload, "streamed_to_callback", False))
     records = () if streamed_to_callback else map_oznak_rows_to_industrial_records(payload, profile=profile)
+    mapped_row_count = 0 if streamed_to_callback else len(records)
     if record_batch_callback is not None and records:
+        mapped_row_count = len(records)
         record_batch_callback(records)
         streamed_to_callback = True
         records = ()
@@ -1552,10 +1552,21 @@ def fetch_oznak_records_for_source_sql(
     error = "; ".join(str(item) for item in errors) if errors and not records else None
     if warnings:
         diagnostics["completed_with_warnings"] = True
+    diagnostic_row_count = diagnostics.get("row_count")
+    try:
+        row_count = (
+            int(diagnostic_row_count)
+            if diagnostic_row_count is not None
+            else mapped_row_count
+            if streamed_to_callback
+            else len(records)
+        )
+    except (TypeError, ValueError):
+        row_count = mapped_row_count if streamed_to_callback else len(records)
     return OznakAdapterFetchResult(
         status=status,
         records=records,
-        row_count=int(diagnostics.get("row_count") or 0) if streamed_to_callback else len(records),
+        row_count=row_count,
         implemented=True,
         diagnostics=diagnostics,
         error=error,

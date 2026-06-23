@@ -280,6 +280,58 @@ class RealtimeSampleRepository:
 
         return run_transaction_with_retry(self.database, _list, connection=self.connection)
 
+    def list_recent_samples(
+        self,
+        *,
+        signal_id: int,
+        segment_key: dict[str, Any] | None = None,
+        limit: int = 500,
+    ) -> list[IndustrialSample]:
+        """Load recent samples for one signal/segment in chronological order."""
+
+        self.ensure_schema()
+        safe_limit = max(1, int(limit))
+        segment_json = to_json(dict(segment_key or {})) if segment_key is not None else None
+
+        def _list(cursor) -> list[IndustrialSample]:
+            where = "WHERE signal_id = ?"
+            params: list[Any] = [int(signal_id)]
+            if segment_json is not None:
+                where += " AND segment_key_json = ?"
+                params.append(segment_json)
+            params.append(safe_limit)
+            cursor.execute(
+                f"""
+                SELECT
+                    id,
+                    source_profile_id,
+                    signal_id,
+                    source_record_key,
+                    event_time,
+                    ingest_time,
+                    metric_name,
+                    value,
+                    reference,
+                    part_number,
+                    revision,
+                    station,
+                    line,
+                    work_order,
+                    batch_lot,
+                    segment_key_json,
+                    quality_flags_json,
+                    raw_record_json
+                FROM industrial_samples
+                {where}
+                ORDER BY event_time DESC, id DESC
+                LIMIT ?
+                """,
+                tuple(params),
+            )
+            return list(reversed([_sample_from_row(row) for row in cursor.fetchall()]))
+
+        return run_transaction_with_retry(self.database, _list, connection=self.connection)
+
     def list_samples_by_ids(
         self,
         sample_ids: Iterable[int],
