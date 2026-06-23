@@ -5,6 +5,8 @@ results into lightweight row contracts used by export flows, including
 partition-based value/header summaries and measurement-specific export shapes.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 import sqlite3
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
