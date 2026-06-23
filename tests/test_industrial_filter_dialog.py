@@ -131,6 +131,35 @@ def test_filter_dialog_loads_references_from_local_metroliza_metadata_only(tmp_p
     db_path = str(tmp_path / "metroliza.db")
     ensure_report_schema(db_path)
     with sqlite3.connect(db_path) as conn:
+        timestamp = "2026-06-23T00:00:00"
+        conn.executemany(
+            """
+            INSERT INTO source_files(id, sha256, source_format, discovered_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            [
+                (index, f"sha-{index}", "pdf", timestamp)
+                for index in range(1, 6)
+            ],
+        )
+        conn.executemany(
+            """
+            INSERT INTO parsed_reports(
+                id,
+                source_file_id,
+                parser_id,
+                template_family,
+                parse_status,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (index, index, "test", "test", "parsed", timestamp, timestamp)
+                for index in range(1, 6)
+            ],
+        )
         conn.executemany(
             "INSERT INTO report_metadata(report_id, reference, metadata_version) VALUES (?, ?, ?)",
             [
