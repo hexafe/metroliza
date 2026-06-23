@@ -1,3 +1,5 @@
+import pytest
+
 from metroliza.parsing import cmm_report_parser
 from metroliza.parsing.cmm_report_parser import CMMReportParser
 from metroliza.parsing.pdf_backend import require_pdf_backend
@@ -150,6 +152,33 @@ def test_cmm_probe_accepts_dotted_report_date_filename_with_measurement_markers(
     diagnostics = report_parser_factory.resolve_parser_with_diagnostics(cmm_pdf)
     assert diagnostics.selected is not None
     assert diagnostics.selected.plugin_id == "cmm"
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "V29120517_001_Body_EB_EP_2021.07.08_01_Sonafi.PDF",
+        "V29120517_003_Body_EB_EP-Sonafi_2022.05.18_cav.1.3_4.PDF",
+        "V29120517_003_Body_EB_EP_2023.03.16_AE-C11_1.PDF",
+        "V29120517_003_Body_EB_EP_2023.04.18_rework_1.PDF",
+    ],
+)
+def test_cmm_probe_accepts_real_supplier_suffix_filename_shapes(tmp_path, filename):
+    cmm_pdf = tmp_path / filename
+    cmm_pdf.write_text(
+        "%PDF-1.4\n"
+        "NOMINAL TOL MEASURED DEVIATION OUTTOL BONUS\n"
+        "X NOMINAL 10 +TOL 0.2 TOL -0.2 ACT 10.1 DEV 0.1 OUT 0 BONUS 0\n"
+        "%%EOF\n",
+        encoding="utf-8",
+    )
+
+    probe = CMMReportParser.probe(cmm_pdf, _pdf_context(cmm_pdf))
+
+    assert probe.can_parse is True
+    assert probe.confidence >= 80
+    assert "cmm_identity_filename_pattern" in probe.reasons
+    assert "partial_cmm_markers" not in probe.reasons
 
 
 def test_cmm_probe_preserves_near_threshold_marker_score_for_diagnostics(tmp_path):

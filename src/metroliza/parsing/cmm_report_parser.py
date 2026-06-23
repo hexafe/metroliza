@@ -298,19 +298,18 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
 
     @staticmethod
     def _has_probe_identity_filename_pattern(name_text: str) -> bool:
-        parts = str(name_text or "").upper().rsplit("_", 2)
-        if len(parts) != 3:
-            return False
-        reference, date_text, sample = parts
-
-        date_match = re.fullmatch(r"(\d{4})[-.](\d{2})[-.](\d{2})", date_text)
+        name = str(name_text or "").upper().strip()
+        date_match = re.search(r"(?<!\d)(\d{4})[-.](\d{2})[-.](\d{2})(?!\d)", name)
         if date_match is None:
             return False
-        year, month, day = date_match.groups()
+
+        reference = name[: date_match.start()].rstrip("_-. ")
+        sample = name[date_match.end() :].lstrip("_-. ")
+        if not reference or not sample:
+            return False
+        _year, month, day = date_match.groups()
         return (
-            bool(reference.strip())
-            and bool(sample.strip())
-            and 1 <= int(month) <= 12
+            1 <= int(month) <= 12
             and 1 <= int(day) <= 31
         )
 
