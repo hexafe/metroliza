@@ -100,6 +100,34 @@ def create_worker_progress_dialog(parent, *, window_title, initial_status_text, 
     return loading_dialog, loading_label, loading_bar, loading_gif
 
 
+def dismiss_worker_progress_dialog(dialog, *, rejected: bool = False) -> None:
+    """Close a worker progress dialog after the worker has reached a terminal state."""
+    if dialog is None:
+        return
+
+    if rejected:
+        reject_as_terminal = getattr(dialog, "reject_as_terminal", None)
+        if callable(reject_as_terminal):
+            reject_as_terminal()
+            return
+        request_terminal_close = getattr(dialog, "request_terminal_close", None)
+        if callable(request_terminal_close):
+            request_terminal_close()
+        reject = getattr(dialog, "reject", None)
+        if callable(reject):
+            reject()
+            return
+
+    accept = getattr(dialog, "accept", None)
+    if callable(accept):
+        accept()
+        return
+
+    close = getattr(dialog, "close", None)
+    if callable(close):
+        close()
+
+
 def _install_user_close_cancel(dialog, *, on_cancel) -> None:
     """Route user window-close attempts through the cooperative cancel callback."""
     original_close_event = dialog.closeEvent

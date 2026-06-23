@@ -56,9 +56,21 @@ from pathlib import Path
 try:
     from metroliza.ui.worker_progress_dialog import (
         create_delayed_worker_progress_dialog as create_worker_progress_dialog,
+        dismiss_worker_progress_dialog,
     )
 except ImportError:  # pragma: no cover - compatibility with lightweight test stubs.
     from metroliza.ui.worker_progress_dialog import create_worker_progress_dialog
+
+    def dismiss_worker_progress_dialog(dialog, *, rejected: bool = False) -> None:
+        if dialog is None:
+            return
+        close_method = getattr(dialog, "reject" if rejected else "accept", None)
+        if callable(close_method):
+            close_method()
+            return
+        close = getattr(dialog, "close", None)
+        if callable(close):
+            close()
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.reports.report_query_service import build_measurement_export_query
 from metroliza.shared.filter_state import NOT_APPLIED_LABEL, summarize_filter_state
@@ -89,14 +101,7 @@ def create_export_data_thread(export_request):
 
 def _reject_progress_dialog_as_terminal(dialog) -> None:
     """Dismiss a worker progress dialog after the worker has already stopped."""
-    reject_as_terminal = getattr(dialog, "reject_as_terminal", None)
-    if callable(reject_as_terminal):
-        reject_as_terminal()
-        return
-    request_terminal_close = getattr(dialog, "request_terminal_close", None)
-    if callable(request_terminal_close):
-        request_terminal_close()
-    dialog.reject()
+    dismiss_worker_progress_dialog(dialog, rejected=True)
 
 
 def format_message_with_clickable_links(message):
@@ -1272,8 +1277,8 @@ class ExportDialog(QDialog):
                 self.loading_label.setText(build_three_line_status("Cancel requested...", "Waiting for export thread to confirm cancellation", "ETA --"))
                 return
 
-            QMessageBox.information(self, "Export canceled", "Cancel confirmed. Data exporting has been canceled")
             _reject_progress_dialog_as_terminal(self.loading_dialog)
+            QMessageBox.information(self, "Export canceled", "Cancel confirmed. Data exporting has been canceled")
             self.export_button.setEnabled(True)
             self._cancel_requested = False
             self._set_loading_cancel_enabled(True)
@@ -1290,8 +1295,8 @@ class ExportDialog(QDialog):
         """Handle explicit worker cancelation and restore dialog state."""
         try:
             self._export_terminal_handled = True
-            QMessageBox.information(self, "Export canceled", "Cancel confirmed. Data exporting has been canceled")
             _reject_progress_dialog_as_terminal(self.loading_dialog)
+            QMessageBox.information(self, "Export canceled", "Cancel confirmed. Data exporting has been canceled")
             self.export_button.setEnabled(True)
             self._cancel_requested = False
             self._set_loading_cancel_enabled(True)
@@ -1302,6 +1307,7 @@ class ExportDialog(QDialog):
         """Finalize export flow with success/error messaging and UI reset."""
         try:
             self._export_terminal_handled = True
+            dismiss_worker_progress_dialog(getattr(self, "loading_dialog", None))
             if self.export_error_message:
                 QMessageBox.warning(self, "Export failed", self.export_error_message)
             else:
@@ -1329,8 +1335,6 @@ class ExportDialog(QDialog):
                         message,
                     )
 
-            # Close the loading dialog
-            self.loading_dialog.accept()
             self._cancel_requested = False
             self._set_loading_cancel_enabled(True)
         except Exception as e:

@@ -41,7 +41,10 @@ from metroliza.ui.ui_foundation import (
     status_chip,
     update_path_field,
 )
-from metroliza.ui.worker_progress_dialog import create_worker_progress_dialog
+from metroliza.ui.worker_progress_dialog import (
+    create_worker_progress_dialog,
+    dismiss_worker_progress_dialog,
+)
 
 
 _REPORT_DB_FILE_UNSET = object()
@@ -491,6 +494,7 @@ class IndustrialExportDialog(QDialog):
             self.loading_label.setText("Cancel requested. Waiting for workbook writer to stop.")
 
     def on_export_finished(self, result: dict[str, Any]) -> None:
+        dismiss_worker_progress_dialog(getattr(self, "loading_dialog", None))
         if hasattr(self, "loading_bar"):
             self.loading_bar.setValue(100)
         output_file = str(result.get("output_file") or self.output_file)
@@ -531,10 +535,12 @@ class IndustrialExportDialog(QDialog):
             )
 
     def on_export_error(self, message: str) -> None:
+        dismiss_worker_progress_dialog(getattr(self, "loading_dialog", None))
         self._pending_credentials_to_save = None
         QMessageBox.warning(self, "Industrial export", f"Could not export industrial data: {message}")
 
     def on_export_cancelled(self, message: str) -> None:
+        dismiss_worker_progress_dialog(getattr(self, "loading_dialog", None), rejected=True)
         self._pending_credentials_to_save = None
         QMessageBox.information(self, "Industrial export", message or "Industrial export was cancelled.")
 

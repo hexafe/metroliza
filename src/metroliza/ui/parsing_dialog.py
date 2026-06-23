@@ -18,9 +18,21 @@ from metroliza.shared.parse_contracts import ParseRequest, validate_parse_reques
 try:
     from metroliza.ui.worker_progress_dialog import (
         create_delayed_worker_progress_dialog as create_worker_progress_dialog,
+        dismiss_worker_progress_dialog,
     )
 except ImportError:  # pragma: no cover - compatibility with lightweight test stubs.
     from metroliza.ui.worker_progress_dialog import create_worker_progress_dialog
+
+    def dismiss_worker_progress_dialog(dialog, *, rejected: bool = False) -> None:
+        if dialog is None:
+            return
+        close_method = getattr(dialog, "reject" if rejected else "accept", None)
+        if callable(close_method):
+            close_method()
+            return
+        close = getattr(dialog, "close", None)
+        if callable(close):
+            close()
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
@@ -464,6 +476,8 @@ class ParsingDialog(QDialog):
                 and not self.parsing_canceled
                 and self._pending_modeless_metadata_enrichment
             )
+            dismiss_worker_progress_dialog(getattr(self, "loading_dialog", None))
+
             if self.parse_error_message:
                 QMessageBox.warning(self, "Parsing failed", self.parse_error_message)
             elif self.parsing_canceled:
@@ -476,9 +490,6 @@ class ParsingDialog(QDialog):
                     QMessageBox.warning(self, title, message)
                 else:
                     QMessageBox.information(self, title, message)
-
-            # Close the loading dialog
-            self.loading_dialog.accept()
 
             # Re-enable the parse button
             self.parse_button.setEnabled(True)

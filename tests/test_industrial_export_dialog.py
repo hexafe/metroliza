@@ -338,11 +338,12 @@ def test_export_dialog_reports_start_and_cancel_states(monkeypatch, tmp_path):
     _app()
     warnings = []
     infos = []
+    events = []
     monkeypatch.setattr(industrial_export_dialog.QMessageBox, "warning", lambda *args: warnings.append(args))
     monkeypatch.setattr(
         industrial_export_dialog.QMessageBox,
         "information",
-        lambda *args: infos.append(args),
+        lambda *args: (infos.append(args), events.append("message")),
     )
     dialog = IndustrialExportDialog(db_file=str(tmp_path / "industrial.db"))
     dialog.output_file = str(tmp_path / "industrial.xlsx")
@@ -366,14 +367,18 @@ def test_export_dialog_reports_start_and_cancel_states(monkeypatch, tmp_path):
     thread = RunningThread()
     dialog.export_thread = thread
     dialog.loading_label = QLabel()
+    dialog.loading_dialog = types.SimpleNamespace(
+        reject_as_terminal=lambda: events.append("progress_closed"),
+    )
     dialog.cancel_export()
     dialog.on_export_cancelled("")
-    dialog.loading_dialog = types.SimpleNamespace(close=lambda: infos.append(("closed",)))
+    dialog.loading_dialog = types.SimpleNamespace(close=lambda: events.append("thread_stopped_close"))
     dialog.on_export_thread_stopped()
 
     assert thread.cancelled is True
     assert "Cancel requested" in dialog.loading_label.text()
     assert infos[0][2] == "Industrial export was cancelled."
+    assert events[:2] == ["progress_closed", "message"]
     assert dialog.export_thread is None
     dialog.close()
 

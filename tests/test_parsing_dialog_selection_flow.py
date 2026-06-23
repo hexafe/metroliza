@@ -39,10 +39,15 @@ class _Signal:
 
 
 class _ProgressDialog:
+    def __init__(self, events=None):
+        self.events = events
+
     def show(self):
         return None
 
     def accept(self):
+        if self.events is not None:
+            self.events.append("progress_closed")
         return None
 
 
@@ -339,6 +344,20 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         self.assertEqual(emitted, [])
         self.assertEqual(parent.enrichment_launches, 0)
         self.assertFalse(dialog._pending_modeless_metadata_enrichment)
+
+    def test_failed_parse_closes_progress_dialog_before_warning(self):
+        events = []
+        dialog = ParsingDialog(parent=None, directory='/tmp/reports', db_file='/tmp/reports.db')
+        dialog.loading_dialog = _ProgressDialog(events)
+        dialog.parse_error_message = 'synthetic failure'
+
+        with patch(
+            'modules.parsing_dialog.QMessageBox.warning',
+            side_effect=lambda *_args: events.append("warning"),
+        ):
+            dialog.on_parse_finished()
+
+        self.assertEqual(events, ["progress_closed", "warning"])
 
 
 if __name__ == '__main__':

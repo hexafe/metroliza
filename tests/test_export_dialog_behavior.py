@@ -433,6 +433,8 @@ def test_export_lifecycle_success_cancel_and_terminal_paths(monkeypatch, tmp_pat
             def stop_exporting(self):
                 self.stopped = True
 
+        events = []
+
         class _FakeProgressDialog:
             def __init__(self):
                 self.shown = False
@@ -445,9 +447,11 @@ def test_export_lifecycle_success_cancel_and_terminal_paths(monkeypatch, tmp_pat
 
             def accept(self):
                 self.accepted = True
+                events.append("progress_accepted")
 
             def reject_as_terminal(self):
                 self.rejected_as_terminal = True
+                events.append("progress_rejected")
 
             def findChildren(self, *_args):
                 return [self.cancel_button]
@@ -483,11 +487,17 @@ def test_export_lifecycle_success_cancel_and_terminal_paths(monkeypatch, tmp_pat
         assert "Cancel requested" in loading_label.text()
 
         notices = []
-        monkeypatch.setattr(export_dialog.QMessageBox, "information", lambda *args: notices.append(args))
+
+        def _record_information(*args):
+            notices.append(args)
+            events.append("message")
+
+        monkeypatch.setattr(export_dialog.QMessageBox, "information", _record_information)
         dialog.on_export_canceled()
 
         assert notices[-1][1] == "Export canceled"
         assert progress_dialog.rejected_as_terminal
+        assert events[-2:] == ["progress_rejected", "message"]
         assert dialog.export_button.isEnabled()
         assert dialog._cancel_requested is False
         assert progress_dialog.cancel_button.isEnabled()
@@ -501,23 +511,34 @@ def test_export_lifecycle_success_cancel_and_terminal_paths(monkeypatch, tmp_pat
         monkeypatch.setattr(
             export_dialog,
             "show_export_result_message",
-            lambda *args, **kwargs: result_messages.append((args, kwargs)),
+            lambda *args, **kwargs: (
+                result_messages.append((args, kwargs)),
+                events.append("rich_message"),
+            ),
         )
 
         dialog.export_thread = fake_thread
         dialog.loading_dialog = progress_dialog
+        events.clear()
         dialog.on_export_finished()
 
         assert progress_dialog.accepted
         assert result_messages
+        assert events[:2] == ["progress_accepted", "rich_message"]
         assert dialog.export_error_message is None
 
         warnings = []
-        monkeypatch.setattr(export_dialog.QMessageBox, "warning", lambda *args: warnings.append(args))
+        monkeypatch.setattr(
+            export_dialog.QMessageBox,
+            "warning",
+            lambda *args: (warnings.append(args), events.append("warning")),
+        )
         dialog.export_error_message = "disk full"
+        events.clear()
         dialog.on_export_finished()
 
         assert warnings[-1][1:] == ("Export failed", "disk full")
+        assert events[:2] == ["progress_accepted", "warning"]
 
         progress_dialog.accepted = False
         fake_thread.running = False
