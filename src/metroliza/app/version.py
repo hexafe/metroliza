@@ -1,11 +1,16 @@
-RELEASE_VERSION = "2026.06rc1"
+RELEASE_VERSION = "2026.06rc2"
 VERSION_DATE = "260623"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
-CURRENT_RELEASE_HIGHLIGHT = "Industrial Data performance release with indexed cache filtering, faster CSV Summary handoff, raw workbook export, realtime diagnostics, and dashboard point marking."
-PUBLIC_VERSION_LABEL = "2026.06 RC1 (build 260623)"
+CURRENT_RELEASE_HIGHLIGHT = "CSV Summary and export performance release with lighter local row handling, faster grouped summaries, and lower memory use on large tables."
+PUBLIC_VERSION_LABEL = "2026.06 RC2 (build 260623)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
+    - CSV Summary and Excel inputs now use one consistent local row store, keeping large files responsive while avoiding extra data copies<br>
+    - CSV Summary filters, grouping, and dashboard preparation can stream selected rows in smaller batches, reducing memory pressure on large tables<br>
+    - Grouped metric summaries now calculate directly from stored rows, so large CSV Summary analysis spends less time preparing intermediate tables<br>
+    - Export and industrial analytics paths now share lighter table helpers, improving stability when optional spreadsheet packages are unavailable<br>
+    - Parser and report data paths now use clearer reusable row-query contracts for filtering, counting, and streaming report-backed results<br>
     - Industrial Data now opens cached rows in CSV Summary from indexed local metadata, so filter lists and simple grouping previews respond faster on large production caches<br>
     - Industrial Data workbook export can now include raw cached data directly without first loading the full cache into the interactive table<br>
     - Industrial export filters now apply consistently to cached and live exports, including additional production-field filters entered in the filter dialog<br>

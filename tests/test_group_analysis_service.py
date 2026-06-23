@@ -9,6 +9,7 @@ from modules.characteristic_alias_service import (
     resolve_characteristic_alias,
     upsert_characteristic_alias,
 )
+from metroliza.exporting.export_query_service import RowTable
 from modules.group_analysis_service import (
     LARGE_EXPORT_DISTRIBUTION_FIT_POLICY,
     _resolve_canonical_metric_aliases,
@@ -123,6 +124,27 @@ class TestGroupAnalysisService(unittest.TestCase):
             )
 
         self.assertEqual(payload['metric_rows'][0]['metric'], 'DIAMETER - X')
+
+    def test_build_payload_accepts_row_table_input(self):
+        grouped_rows = RowTable(
+            rows=(
+                ('REF-1', 'DIA - X', 'A', 10.0, 9.0, 10.0, 11.0),
+                ('REF-1', 'DIA - X', 'A', 10.2, 9.0, 10.0, 11.0),
+                ('REF-1', 'DIA - X', 'B', 9.8, 9.0, 10.0, 11.0),
+                ('REF-1', 'DIA - X', 'B', 9.9, 9.0, 10.0, 11.0),
+            ),
+            columns=('REFERENCE', 'HEADER - AX', 'GROUP', 'MEAS', 'LSL', 'NOMINAL', 'USL'),
+        )
+
+        payload = build_group_analysis_payload(
+            grouped_rows,
+            requested_scope='single_reference',
+            analysis_level='light',
+        )
+
+        self.assertEqual(payload['status'], 'ready')
+        self.assertEqual(payload['metric_rows'][0]['metric'], 'DIA - X')
+        self.assertEqual(payload['metric_rows'][0]['group_count'], 2)
 
     def test_build_payload_prefers_reference_alias_over_global_alias(self):
         grouped_df = pd.DataFrame(

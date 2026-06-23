@@ -373,30 +373,67 @@ def _read_source_text(path: str | Path) -> str:
 
 
 def _read_excel_source_text(path: Path) -> str:
+    suffix = path.suffix.lower()
     try:
-        import pandas as pd
-    except ImportError as exc:  # pragma: no cover - dependency hygiene gate covers runtime install.
-        raise ValueError("Excel parser profiles require pandas and an Excel reader engine") from exc
-
-    try:
-        sheets = pd.read_excel(path, sheet_name=None, header=None, dtype=object)
+        if suffix == ".xlsx":
+            return _read_xlsx_source_text(path)
+        if suffix == ".xls":
+            return _read_xls_source_text(path)
     except Exception as exc:
         raise ValueError(f"failed to read Excel workbook {path}: {exc}") from exc
+    raise ValueError(f"unsupported Excel workbook extension for {path}")
 
+
+def _read_xlsx_source_text(path: Path) -> str:
+    try:
+        from openpyxl import load_workbook
+    except ImportError as exc:  # pragma: no cover - dependency hygiene gate covers runtime install.
+        raise ValueError("Excel parser profiles require openpyxl for .xlsx files") from exc
+
+    workbook = load_workbook(path, read_only=True, data_only=True)
     lines: list[str] = []
-    for sheet_name, frame in sheets.items():
-        lines.append(f"SHEET {sheet_name}")
-        for row in frame.itertuples(index=False, name=None):
-            cells: list[str] = []
-            for value in row:
-                if pd.isna(value):
-                    continue
-                text = str(value).strip()
-                if text:
-                    cells.append(text)
-            if cells:
-                lines.append(" ".join(cells))
+    try:
+        for worksheet in workbook.worksheets:
+            lines.append(f"SHEET {worksheet.title}")
+            for row in worksheet.iter_rows(values_only=True):
+                cells = _source_text_cells(row)
+                if cells:
+                    lines.append(" ".join(cells))
+    finally:
+        workbook.close()
     return "\n".join(lines)
+
+
+def _read_xls_source_text(path: Path) -> str:
+    try:
+        import xlrd
+    except ImportError as exc:  # pragma: no cover - dependency hygiene gate covers runtime install.
+        raise ValueError("Excel parser profiles require xlrd for .xls files") from exc
+
+    workbook = xlrd.open_workbook(str(path), on_demand=True)
+    lines: list[str] = []
+    try:
+        for sheet_name in workbook.sheet_names():
+            sheet = workbook.sheet_by_name(sheet_name)
+            lines.append(f"SHEET {sheet_name}")
+            for row_index in range(sheet.nrows):
+                cells = _source_text_cells(sheet.row_values(row_index))
+                if cells:
+                    lines.append(" ".join(cells))
+    finally:
+        workbook.release_resources()
+    return "\n".join(lines)
+
+
+def _source_text_cells(values: Iterable[Any]) -> list[str]:
+    cells: list[str] = []
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            cells.append(text)
+    return cells
 
 
 def _ensure_text_within_profile_limits(text: str, source_path: Path) -> None:

@@ -15,8 +15,6 @@ from time import perf_counter
 from typing import Any
 
 import numpy as np
-import pandas as pd
-
 from metroliza.charts.dashboard_navigation import (
     render_back_to_dashboard_start,
     render_section_navigation_css,
@@ -75,6 +73,16 @@ from metroliza.shared.dashboard_interactivity import (
     dashboard_size_limit_bytes,
     normalize_dashboard_interactivity_mapping,
 )
+
+
+class _LazyPandas:
+    def __getattr__(self, name):
+        import importlib
+
+        return getattr(importlib.import_module("pandas"), name)
+
+
+pd = _LazyPandas()
 
 
 DASHBOARD_SCHEMA = "metroliza.production_analytics_dashboard.v1"

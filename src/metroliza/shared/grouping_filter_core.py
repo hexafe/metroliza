@@ -11,14 +11,22 @@ from dataclasses import dataclass
 import re
 from typing import Any, Iterable, Literal, Mapping, Protocol
 
-import pandas as pd
-
 
 FilterMatchMode = Literal["and", "or"]
 
 _BLANK_GROUP_VALUE = "(blank)"
 
 FilterAliases = Mapping[str, str] | Iterable[tuple[str, str]]
+
+
+class _LazyPandas:
+    def __getattr__(self, name):
+        import importlib
+
+        return getattr(importlib.import_module("pandas"), name)
+
+
+pd = _LazyPandas()
 
 
 @dataclass(frozen=True)

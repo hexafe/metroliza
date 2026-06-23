@@ -1,14 +1,67 @@
 import csv
 from pathlib import Path
 
-import pandas as pd
-
 from metroliza.shared.grouping_filter_core import DataFrameGroupingIndex, normalize_grouping_key
 
 
 _SAMPLE_ROWS = 200
 _TOP_FULL_READ_CANDIDATES = 2
 _BLANK_GROUP_VALUE = "(blank)"
+
+
+class _LazyPandas:
+    def __getattr__(self, name):
+        import importlib
+
+        return getattr(importlib.import_module("pandas"), name)
+
+
+pd = _LazyPandas()
+
+
+def _parse_numeric_text(value, *, decimal=".") -> float | None:
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return None
+    if decimal == ",":
+        text = text.replace(".", "").replace(",", ".")
+    else:
+        text = text.replace(",", "")
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _read_csv_sample_rows(path: Path, *, delimiter: str, nrows: int) -> tuple[list[str], list[list[str]]]:
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.reader(handle, delimiter=delimiter)
+        try:
+            header = [str(column) for column in next(reader)]
+        except StopIteration:
+            return [], []
+        rows: list[list[str]] = []
+        for _index, row in zip(range(nrows), reader, strict=False):
+            rows.append([str(value) for value in row])
+    return header, rows
+
+
+def _score_csv_sample(header: list[str], rows: list[list[str]], *, decimal: str) -> tuple[int, list[str]]:
+    if not header:
+        return 0, []
+    base_score = len(header) * 10
+    numeric_cells = 0
+    numeric_columns: list[str] = []
+    for index, column in enumerate(header):
+        count = 0
+        for row in rows:
+            value = row[index] if index < len(row) else ""
+            if _parse_numeric_text(value, decimal=decimal) is not None:
+                count += 1
+        if count:
+            numeric_columns.append(column)
+            numeric_cells += count
+    return base_score + numeric_cells, numeric_columns
 
 
 def _score_dataframe(df, numeric_columns_hint=None):
@@ -59,7 +112,13 @@ def load_csv_with_fallbacks(file_path, preferred_config=None):
         sample_numeric_columns = candidate['sample_numeric_columns']
 
         try:
-            df = pd.read_csv(path, delimiter=delimiter, decimal=decimal, low_memory=False)
+            header, rows = _read_csv_sample_rows(path, delimiter=delimiter, nrows=10**12)
+            df = pd.DataFrame(rows, columns=header)
+            for column in sample_numeric_columns:
+                if column in df.columns:
+                    df[column] = df[column].map(
+                        lambda value, decimal=decimal: _parse_numeric_text(value, decimal=decimal)
+                    )
         except Exception:
             continue
 
@@ -101,17 +160,11 @@ def detect_csv_read_configs(file_path, preferred_config=None):
     sampled_results = []
     for delimiter, decimal in ordered_candidates:
         try:
-            sample_df = pd.read_csv(
-                path,
-                delimiter=delimiter,
-                decimal=decimal,
-                low_memory=False,
-                nrows=_SAMPLE_ROWS,
-            )
+            header, rows = _read_csv_sample_rows(path, delimiter=delimiter, nrows=_SAMPLE_ROWS)
         except Exception:
             continue
 
-        sample_score, sample_numeric_columns = _score_dataframe(sample_df)
+        sample_score, sample_numeric_columns = _score_csv_sample(header, rows, decimal=decimal)
         sampled_results.append(
             {
                 'delimiter': delimiter,
@@ -124,7 +177,16 @@ def detect_csv_read_configs(file_path, preferred_config=None):
     if not sampled_results:
         raise ValueError(f"Unable to read CSV file: {file_path}")
 
-    sampled_results.sort(key=lambda item: item['sample_score'], reverse=True)
+    def _candidate_sort_key(item):
+        delimiter = item["delimiter"]
+        decimal = item["decimal"]
+        decimal_preference = 1 if (
+            (delimiter == "," and decimal == ".")
+            or (delimiter == ";" and decimal == ",")
+        ) else 0
+        return item["sample_score"], decimal_preference
+
+    sampled_results.sort(key=_candidate_sort_key, reverse=True)
     return sampled_results
 
 

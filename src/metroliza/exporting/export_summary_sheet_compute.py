@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import pandas as pd
+import numpy as np
 
 from metroliza.charts.chart_render_service import (
     ChartSamplingPolicy,
@@ -27,8 +27,81 @@ from metroliza.charts.export_chart_payload_helpers import build_histogram_table_
 from metroliza.shared.stats_utils import is_one_sided_geometric_tolerance, safe_process_capability
 
 
+def _is_missing_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str) and value.strip() == "":
+        return True
+    try:
+        missing = value != value
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, bool):
+        return missing
+    module_name = type(value).__module__
+    type_name = type(value).__name__
+    return module_name.startswith(("pandas", "numpy")) and type_name in {"NAType", "NaTType"}
+
+
+def _coerce_float(value: Any) -> float:
+    if _is_missing_value(value):
+        return np.nan
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return np.nan
+
+
+def _column_values(table: Any, column_name: str) -> list[Any]:
+    getter = getattr(table, "get", None)
+    if callable(getter):
+        values = getter(column_name)
+    elif _has_column(table, column_name):
+        values = table[column_name]
+    else:
+        values = None
+
+    if values is None:
+        return []
+    tolist = getattr(values, "tolist", None)
+    if callable(tolist):
+        return list(tolist())
+    return list(values)
+
+
+def _has_column(table: Any, column_name: str) -> bool:
+    return column_name in getattr(table, "columns", ())
+
+
+def _numeric_array(values: Any, *, dropna: bool) -> np.ndarray:
+    if values is None:
+        return np.asarray([], dtype=float)
+    try:
+        raw_values = values.to_numpy(copy=False)
+    except AttributeError:
+        raw_values = values
+    except TypeError:
+        raw_values = values.to_numpy()
+
+    try:
+        numeric = np.asarray(raw_values, dtype=float)
+    except (TypeError, ValueError):
+        numeric = np.fromiter((_coerce_float(value) for value in raw_values), dtype=float)
+    if numeric.ndim != 1:
+        numeric = numeric.reshape(-1)
+    if dropna:
+        numeric = numeric[np.isfinite(numeric)]
+    return numeric.astype(float, copy=False)
+
+
+def _normalize_grouping_value(value: Any) -> str:
+    if _is_missing_value(value):
+        return ""
+    return str(value).strip()
+
+
 def retrieve_summary_statistics(
-    header_group: pd.DataFrame,
+    header_group: Any,
     *,
     sql_summary: dict[str, Any] | None,
     nom: float | None,
@@ -41,11 +114,11 @@ def retrieve_summary_statistics(
     in-memory summary helper.
     """
 
-    meas_series = pd.to_numeric(header_group.get('MEAS'), errors='coerce')
+    meas_values = _numeric_array(_column_values(header_group, 'MEAS'), dropna=True)
     summary_stats = None
     one_sided_mode = bool(is_one_sided_geometric_tolerance(nom, lsl))
-    below_lsl_count = 0 if one_sided_mode or lsl is None else int((meas_series < lsl).sum())
-    above_usl_count = 0 if usl is None else int((meas_series > usl).sum())
+    below_lsl_count = 0 if one_sided_mode or lsl is None else int(np.sum(meas_values < lsl))
+    above_usl_count = 0 if usl is None else int(np.sum(meas_values > usl))
     observed_nok_count = below_lsl_count + above_usl_count
     if sql_summary is not None:
         sample_size = int(sql_summary.get('sample_size') or 0)
@@ -64,7 +137,7 @@ def retrieve_summary_statistics(
             sigma = float(sigma_raw or 0.0)
             cp, cpk = safe_process_capability(nom, usl, lsl, sigma, average)
             normality = compute_normality_status(
-                meas_series,
+                meas_values,
                 one_sided=one_sided_mode,
                 location_bound=lsl,
             )
@@ -73,7 +146,7 @@ def retrieve_summary_statistics(
                 'maximum': float(maximum_raw),
                 'sigma': sigma,
                 'average': average,
-                'median': float(meas_series.median()),
+                'median': float(np.median(meas_values)) if meas_values.size else np.nan,
                 'cp': cp,
                 'cpk': cpk,
                 'sample_size': sample_size,
@@ -118,20 +191,21 @@ def retrieve_summary_statistics(
     return summary_stats
 
 
-def normalize_summary_group_frame(header_group: pd.DataFrame, *, grouping_key: str | None = None) -> pd.DataFrame:
+def normalize_summary_group_frame(header_group: Any, *, grouping_key: str | None = None) -> Any:
     """Return a copy with numeric measurement values normalized once."""
 
     normalized = header_group.copy()
-    normalized['MEAS'] = pd.to_numeric(normalized.get('MEAS'), errors='coerce')
-    if grouping_key and grouping_key in normalized.columns:
-        grouping_series = normalized[grouping_key]
-        if pd.api.types.is_string_dtype(grouping_series) or pd.api.types.is_object_dtype(grouping_series):
-            normalized[grouping_key] = grouping_series.astype(str).str.strip()
+    normalized['MEAS'] = _numeric_array(_column_values(normalized, 'MEAS'), dropna=False)
+    if grouping_key and _has_column(normalized, grouping_key):
+        normalized[grouping_key] = [
+            _normalize_grouping_value(value)
+            for value in _column_values(normalized, grouping_key)
+        ]
     return normalized
 
 
 def resolve_sampling_context(
-    header_group: pd.DataFrame,
+    header_group: Any,
     *,
     grouping_applied: bool,
     sampling_policy: ChartSamplingPolicy,
@@ -180,7 +254,7 @@ def resolve_sampling_context(
             'values': iqr_values,
         },
         'histogram_payload': {
-            'measurements': sampled_frames['histogram']['MEAS'].dropna().to_numpy(dtype=float, copy=False),
+            'measurements': _numeric_array(_column_values(sampled_frames['histogram'], 'MEAS'), dropna=True),
             'sampled_group': sampled_frames['histogram'],
         },
         'trend_payload': {
@@ -325,19 +399,22 @@ def build_summary_panel_metadata_subtitle(
     return base_text or metadata_text
 
 
-def compute_group_sample_counts(sampled_group: pd.DataFrame, grouping_key: str) -> dict[str, int]:
+def compute_group_sample_counts(sampled_group: Any, grouping_key: str) -> dict[str, int]:
     if sampled_group is None or sampled_group.empty:
         return {}
-    if grouping_key not in sampled_group.columns or 'MEAS' not in sampled_group.columns:
+    if not _has_column(sampled_group, grouping_key) or not _has_column(sampled_group, 'MEAS'):
         return {}
 
-    count_frame = sampled_group[[grouping_key, 'MEAS']].dropna(subset=[grouping_key, 'MEAS']).copy()
-    if count_frame.empty:
-        return {}
-
-    count_frame[grouping_key] = count_frame[grouping_key].astype(str)
-    grouped_counts = count_frame.groupby(grouping_key, sort=False)['MEAS'].size()
-    return {str(label): int(count) for label, count in grouped_counts.items()}
+    grouped_counts: dict[str, int] = {}
+    for group_value, measurement in zip(
+        _column_values(sampled_group, grouping_key),
+        _column_values(sampled_group, 'MEAS'),
+    ):
+        if _is_missing_value(group_value) or not np.isfinite(_coerce_float(measurement)):
+            continue
+        label = str(group_value)
+        grouped_counts[label] = grouped_counts.get(label, 0) + 1
+    return grouped_counts
 
 
 def append_group_sample_counts(labels: list[str], sample_counts: dict[str, int]) -> list[str]:
@@ -347,7 +424,7 @@ def append_group_sample_counts(labels: list[str], sample_counts: dict[str, int])
 
 
 def resolve_summary_stages(
-    header_group: pd.DataFrame,
+    header_group: Any,
     *,
     sql_summary: dict[str, Any] | None,
     grouping_applied: bool,

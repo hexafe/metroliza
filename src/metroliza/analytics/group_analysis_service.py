@@ -16,13 +16,15 @@ These fields are additive and optional so existing consumers can ignore them.
 
 from __future__ import annotations
 
-import numpy as np
-import pandas as pd
+import math
 
-from metroliza.reports.characteristic_alias_service import resolve_characteristic_aliases_bulk
-from metroliza.exporting.export_grouping_utils import normalize_default_group_label, normalize_group_labels
+import numpy as np
+
 from metroliza.analytics.distribution_shape_analysis import compute_distribution_difference, resolve_distribution_fit_policy
 from metroliza.analytics.hexafe_groupstats_adapter import analyze_group_metric
+from metroliza.exporting.export_grouping_utils import normalize_default_group_label, normalize_group_labels
+from metroliza.exporting.export_query_service import RowTable, _coerce_to_row_table
+from metroliza.reports.characteristic_alias_service import resolve_characteristic_aliases_bulk
 
 _SKIP_REASON_MESSAGES = {
     'forced_single_reference_scope_mismatch': (
@@ -66,6 +68,152 @@ _FLAG_SPEC_QUESTION = 'SPEC?'
 
 class GroupAnalysisCancelled(RuntimeError):
     """Raised when cooperative Group Analysis cancellation is requested."""
+
+
+class _ColumnList(list):
+    """List with the pandas-compatible ``tolist`` spelling used by transition tests."""
+
+    def tolist(self):
+        return list(self)
+
+
+def _is_missing_value(value):
+    if value is None:
+        return True
+    try:
+        missing = value != value
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)):
+        return bool(missing)
+
+    module_name = type(value).__module__
+    type_name = type(value).__name__
+    return module_name.startswith(('pandas', 'numpy')) and type_name in {'NAType', 'NaTType'}
+
+
+def _hashable_marker(value):
+    if _is_missing_value(value):
+        return ('__missing__',)
+    try:
+        hash(value)
+    except TypeError:
+        return repr(value)
+    return value
+
+
+def _sort_marker(value):
+    return _is_missing_value(value), str(value)
+
+
+def _as_row_table(table) -> RowTable:
+    if isinstance(table, RowTable):
+        return table.copy()
+    try:
+        return _coerce_to_row_table(table)
+    except (TypeError, ValueError):
+        return RowTable(rows=(), columns=())
+
+
+def _table_empty(table) -> bool:
+    return table is None or len(_as_row_table(table)) == 0
+
+
+def _column_values(table, column_name, *, default=None):
+    row_table = _as_row_table(table)
+    if column_name not in row_table.columns:
+        return [default for _ in range(len(row_table))]
+    return row_table[column_name].tolist()
+
+
+def _iter_row_mappings(table):
+    return _as_row_table(table).iter_rows(as_dict=True)
+
+
+def _filter_table(table, predicate) -> RowTable:
+    row_table = _as_row_table(table)
+    kept_rows = []
+    for row_index, row in enumerate(row_table.iter_rows(as_dict=True)):
+        if predicate(row):
+            kept_rows.append(row_table.rows[row_index])
+    return RowTable(rows=tuple(kept_rows), columns=tuple(row_table.columns))
+
+
+def _group_table(table, columns, *, sort=True):
+    row_table = _as_row_table(table)
+    grouping_columns = (columns,) if isinstance(columns, str) else tuple(columns)
+    grouped_rows = {}
+    keys_by_marker = {}
+    for row in row_table.rows:
+        row_map = dict(zip(row_table.columns, row))
+        key = tuple(row_map.get(column) for column in grouping_columns)
+        marker = tuple(_hashable_marker(value) for value in key)
+        keys_by_marker.setdefault(marker, key)
+        grouped_rows.setdefault(marker, []).append(row)
+
+    markers = list(grouped_rows)
+    if sort:
+        markers.sort(key=lambda marker: tuple(_sort_marker(value) for value in keys_by_marker[marker]))
+
+    for marker in markers:
+        key = keys_by_marker[marker]
+        yield key[0] if len(key) == 1 else key, RowTable(
+            rows=tuple(grouped_rows[marker]),
+            columns=tuple(row_table.columns),
+        )
+
+
+def _unique_values(values, *, dropna=True):
+    seen = set()
+    output = []
+    for value in values:
+        if dropna and _is_missing_value(value):
+            continue
+        marker = _hashable_marker(value)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        output.append(value)
+    return output
+
+
+def _nunique(values, *, dropna=True):
+    return len(_unique_values(values, dropna=dropna))
+
+
+def _normalize_text(value, *, missing=''):
+    if _is_missing_value(value):
+        return missing
+    return str(value).strip()
+
+
+def _coerce_numeric_scalar(value):
+    """Convert a scalar-like value to float, returning None when coercion fails."""
+    if _is_missing_value(value):
+        return None
+    if isinstance(value, str) and value.strip() == '':
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if math.isnan(parsed):
+        return None
+    return parsed
+
+
+def _coerce_numeric_values(values, *, precision=None):
+    output = []
+    for value in values:
+        parsed = _coerce_numeric_scalar(value)
+        if parsed is not None and precision is not None:
+            parsed = round(parsed, precision)
+        output.append(parsed)
+    return output
+
+
+def _first_value(values):
+    return values[0] if values else None
 
 
 def _emit_progress(progress_callback, message):
@@ -190,16 +338,6 @@ def _build_metric_plot_eligibility(*, grouped_values, analysis_level, include_me
     }
 
 
-def _coerce_numeric_scalar(value):
-    """Convert a scalar-like value to float, returning None when coercion fails."""
-    if value is None:
-        return None
-    parsed = pd.to_numeric(value, errors='coerce')
-    if pd.isna(parsed):
-        return None
-    return float(parsed)
-
-
 def _round_display_value(value, *, precision=3):
     """Round numeric values for display payloads while preserving nulls."""
     parsed = _coerce_numeric_scalar(value)
@@ -265,65 +403,39 @@ def normalize_metric_identity(metric_name, reference=None, *, scope='single_refe
 
 def _build_canonical_metric_series(frame):
     """Build canonical metric identities preferring HEADER-AX over HEADER-only labels."""
-    index = getattr(frame, 'index', None)
-
-    header_ax = pd.Series('', index=index, dtype=object)
-    if 'HEADER - AX' in frame.columns:
-        header_ax = frame['HEADER - AX'].fillna('').astype(str).str.strip()
-
-    header = pd.Series('', index=index, dtype=object)
-    if 'HEADER' in frame.columns:
-        header = frame['HEADER'].fillna('').astype(str).str.strip()
-
-    axis = pd.Series('', index=index, dtype=object)
-    if 'AX' in frame.columns:
-        axis = frame['AX'].fillna('').astype(str).str.strip()
-
-    composed = pd.Series('', index=index, dtype=object)
-    has_header_and_axis = (header != '') & (axis != '')
-    composed.loc[has_header_and_axis] = header.loc[has_header_and_axis] + ' - ' + axis.loc[has_header_and_axis]
-    composed.loc[(composed == '') & (header != '')] = header.loc[(composed == '') & (header != '')]
-
-    canonical = header_ax.copy()
-    canonical.loc[canonical == ''] = composed.loc[canonical == '']
-    return canonical
+    table = _as_row_table(frame)
+    canonical = []
+    for row in table.iter_rows(as_dict=True):
+        header_ax = _normalize_text(row.get('HEADER - AX'))
+        header = _normalize_text(row.get('HEADER'))
+        axis = _normalize_text(row.get('AX'))
+        composed = f'{header} - {axis}' if header and axis else header
+        canonical.append(header_ax or composed)
+    return _ColumnList(canonical)
 
 
 def _resolve_canonical_metric_aliases(frame, canonical_metric_series, *, alias_db_path=None):
     """Resolve canonical metric identities with reference-aware alias mappings."""
+    table = _as_row_table(frame)
+    resolved_metric_values = _ColumnList(_normalize_text(value) for value in canonical_metric_series)
     if alias_db_path is None:
-        return canonical_metric_series
+        return resolved_metric_values
 
-    resolved_metric_series = canonical_metric_series.fillna('').astype(str).str.strip().copy()
-    non_empty_metric_mask = resolved_metric_series != ''
-    if not non_empty_metric_mask.any():
-        return resolved_metric_series
+    if not any(resolved_metric_values):
+        return resolved_metric_values
 
-    def _normalize_reference_key(value):
-        if pd.isna(value):
-            return None
-        normalized = str(value).strip()
-        return normalized or None
-
-    if 'REFERENCE' in frame.columns:
-        reference_values = [_normalize_reference_key(value) for value in frame['REFERENCE'].tolist()]
-    else:
-        reference_values = [None] * len(resolved_metric_series)
-
-    lookup_key_series = pd.Series(
-        list(zip(resolved_metric_series.tolist(), reference_values)),
-        index=resolved_metric_series.index,
-        dtype=object,
-    )
-    unique_lookup_keys = list(dict.fromkeys(lookup_key_series.loc[non_empty_metric_mask].tolist()))
+    reference_values = [
+        _normalize_text(value) or None
+        for value in _column_values(table, 'REFERENCE', default=None)
+    ]
+    lookup_keys = list(zip(resolved_metric_values, reference_values))
+    unique_lookup_keys = list(dict.fromkeys(key for key in lookup_keys if key[0]))
     resolved_lookup = resolve_characteristic_aliases_bulk(unique_lookup_keys, alias_db_path)
 
-    mapped = lookup_key_series.loc[non_empty_metric_mask].map(resolved_lookup)
-    resolved_metric_series.loc[non_empty_metric_mask] = mapped.fillna(
-        resolved_metric_series.loc[non_empty_metric_mask]
+    return _ColumnList(
+        resolved_lookup.get(key) or metric_name
+        for metric_name, key in zip(resolved_metric_values, lookup_keys)
     )
-
-    return resolved_metric_series
 
 
 def normalize_spec_limits(lsl, nominal, usl, *, precision=3):
@@ -359,38 +471,40 @@ def classify_spec_status(spec_payload):
 
 def classify_metric_spec_status(metric_rows_df, spec_columns):
     """Classify a metric's cross-row spec comparability status."""
-    if metric_rows_df.empty:
+    metric_rows = _as_row_table(metric_rows_df)
+    if metric_rows.empty:
         return 'INVALID_SPEC', {'lsl': None, 'nominal': None, 'usl': None}
 
-    def _coerced_spec_series(column_name):
+    def _coerced_spec_values(column_name):
         if not column_name:
-            return pd.Series(np.nan, index=metric_rows_df.index, dtype=float)
-        return pd.to_numeric(metric_rows_df[column_name], errors='coerce').round(3)
+            return [None for _ in range(len(metric_rows))]
+        return _coerce_numeric_values(_column_values(metric_rows, column_name), precision=3)
 
-    lsl_series = _coerced_spec_series(spec_columns.get('lsl'))
-    nominal_series = _coerced_spec_series(spec_columns.get('nominal'))
-    usl_series = _coerced_spec_series(spec_columns.get('usl'))
+    lsl_values = _coerced_spec_values(spec_columns.get('lsl'))
+    nominal_values = _coerced_spec_values(spec_columns.get('nominal'))
+    usl_values = _coerced_spec_values(spec_columns.get('usl'))
 
     canonical_spec = {
-        'lsl': None if pd.isna(lsl_series.iloc[0]) else float(lsl_series.iloc[0]),
-        'nominal': None if pd.isna(nominal_series.iloc[0]) else float(nominal_series.iloc[0]),
-        'usl': None if pd.isna(usl_series.iloc[0]) else float(usl_series.iloc[0]),
+        'lsl': _first_value(lsl_values),
+        'nominal': _first_value(nominal_values),
+        'usl': _first_value(usl_values),
     }
 
-    invalid_spec_mask = (
-        lsl_series.isna()
-        | nominal_series.isna()
-        | usl_series.isna()
-        | (lsl_series > usl_series)
-        | (nominal_series < lsl_series)
-        | (nominal_series > usl_series)
+    invalid_spec = any(
+        lsl is None
+        or nominal is None
+        or usl is None
+        or lsl > usl
+        or nominal < lsl
+        or nominal > usl
+        for lsl, nominal, usl in zip(lsl_values, nominal_values, usl_values)
     )
-    if invalid_spec_mask.any():
+    if invalid_spec:
         return 'INVALID_SPEC', canonical_spec
 
-    if nominal_series.nunique(dropna=False) > 1:
+    if _nunique(nominal_values, dropna=False) > 1:
         return 'NOM_MISMATCH', canonical_spec
-    if pd.DataFrame({'lsl': lsl_series, 'usl': usl_series}).drop_duplicates().shape[0] > 1:
+    if _nunique(list(zip(lsl_values, usl_values)), dropna=False) > 1:
         return 'LIMIT_MISMATCH', canonical_spec
     return 'EXACT_MATCH', canonical_spec
 
@@ -398,12 +512,12 @@ def classify_metric_spec_status(metric_rows_df, spec_columns):
 def _build_metric_spec_records(metric_rows_df, spec_columns):
     """Build explicit per-row spec records for package-backed analysis."""
     spec_records = []
-    for _, row in metric_rows_df.iterrows():
+    for row in _iter_row_mappings(metric_rows_df):
         spec_records.append(
             normalize_spec_limits(
-                row[spec_columns['lsl']] if spec_columns.get('lsl') else None,
-                row[spec_columns['nominal']] if spec_columns.get('nominal') else None,
-                row[spec_columns['usl']] if spec_columns.get('usl') else None,
+                row.get(spec_columns['lsl']) if spec_columns.get('lsl') else None,
+                row.get(spec_columns['nominal']) if spec_columns.get('nominal') else None,
+                row.get(spec_columns['usl']) if spec_columns.get('usl') else None,
             )
         )
     return spec_records
@@ -1345,26 +1459,27 @@ def _build_histogram_skip_summary(*, analysis_level, metric_rows, skipped_metric
 
 
 def _build_unmatched_metrics_summary(metric_frame, *, metric_column, reference_column):
-    if reference_column is None or reference_column not in metric_frame.columns:
+    metric_table = _as_row_table(metric_frame)
+    if reference_column is None or reference_column not in metric_table.columns:
         return {'count': 0, 'metrics': []}
 
     expected_references = sorted(
         {
             str(reference).strip()
-            for reference in metric_frame[reference_column].dropna().astype(str)
-            if str(reference).strip()
+            for reference in _column_values(metric_table, reference_column)
+            if not _is_missing_value(reference) and str(reference).strip()
         }
     )
     if not expected_references:
         return {'count': 0, 'metrics': []}
 
     unmatched_metrics = []
-    for metric_name, metric_subset in metric_frame.groupby(metric_column, sort=True):
+    for metric_name, metric_subset in _group_table(metric_table, metric_column, sort=True):
         present_references = sorted(
             {
                 str(reference).strip()
-                for reference in metric_subset[reference_column].dropna().astype(str)
-                if str(reference).strip()
+                for reference in _column_values(metric_subset, reference_column)
+                if not _is_missing_value(reference) and str(reference).strip()
             }
         )
         missing_references = [reference for reference in expected_references if reference not in present_references]
@@ -1382,15 +1497,15 @@ def _build_unmatched_metrics_summary(metric_frame, *, metric_column, reference_c
 
 def _normalize_grouped_working_df(grouped_df, *, alias_db_path=None, default_group_label='POPULATION'):
     default_group_label = normalize_default_group_label(default_group_label)
-    working = grouped_df.copy()
+    working = _as_row_table(grouped_df)
     if 'GROUP' not in working.columns:
-        working['GROUP'] = default_group_label
+        working['GROUP'] = [default_group_label for _ in range(len(working))]
     working['GROUP'] = normalize_group_labels(
         working['GROUP'],
         missing_label=default_group_label,
         normalize_blank=True,
     )
-    working['MEAS'] = pd.to_numeric(working.get('MEAS'), errors='coerce')
+    working['MEAS'] = _coerce_numeric_values(_column_values(working, 'MEAS'))
 
     canonical_metric_series = _build_canonical_metric_series(working)
     working['__canonical_metric__'] = _resolve_canonical_metric_aliases(
@@ -1400,29 +1515,40 @@ def _normalize_grouped_working_df(grouped_df, *, alias_db_path=None, default_gro
     )
 
     if 'NOMINAL' not in working.columns and 'NOM' in working.columns:
-        working['NOMINAL'] = pd.to_numeric(working.get('NOM'), errors='coerce')
+        working['NOMINAL'] = _coerce_numeric_values(_column_values(working, 'NOM'))
     elif 'NOMINAL' in working.columns:
-        working['NOMINAL'] = pd.to_numeric(working.get('NOMINAL'), errors='coerce')
+        working['NOMINAL'] = _coerce_numeric_values(_column_values(working, 'NOMINAL'))
 
     if 'USL' not in working.columns and {'NOM', '+TOL'}.issubset(set(working.columns)):
-        working['USL'] = pd.to_numeric(working.get('NOM'), errors='coerce') + pd.to_numeric(working.get('+TOL'), errors='coerce')
+        working['USL'] = [
+            (nom + tol) if nom is not None and tol is not None else None
+            for nom, tol in zip(
+                _coerce_numeric_values(_column_values(working, 'NOM')),
+                _coerce_numeric_values(_column_values(working, '+TOL')),
+            )
+        ]
     elif 'USL' in working.columns:
-        working['USL'] = pd.to_numeric(working.get('USL'), errors='coerce')
+        working['USL'] = _coerce_numeric_values(_column_values(working, 'USL'))
 
     if 'LSL' not in working.columns and {'NOM', '-TOL'}.issubset(set(working.columns)):
-        working['LSL'] = pd.to_numeric(working.get('NOM'), errors='coerce') + pd.to_numeric(working.get('-TOL'), errors='coerce')
+        working['LSL'] = [
+            (nom + tol) if nom is not None and tol is not None else None
+            for nom, tol in zip(
+                _coerce_numeric_values(_column_values(working, 'NOM')),
+                _coerce_numeric_values(_column_values(working, '-TOL')),
+            )
+        ]
     elif 'LSL' in working.columns:
-        working['LSL'] = pd.to_numeric(working.get('LSL'), errors='coerce')
+        working['LSL'] = _coerce_numeric_values(_column_values(working, 'LSL'))
 
-    return working.dropna(subset=['MEAS'])
+    return _filter_table(working, lambda row: row.get('MEAS') is not None)
 
 
 def evaluate_group_analysis_readiness(grouped_df, *, requested_scope='auto', eligible_metrics=None, alias_db_path=None):
     """Check minimum runnable conditions and return skip metadata when unmet."""
-    if not isinstance(grouped_df, pd.DataFrame):
-        grouped_df = pd.DataFrame()
+    grouped_table = _as_row_table(grouped_df)
 
-    reference_count = int(grouped_df.get('REFERENCE', pd.Series(dtype=object)).dropna().nunique())
+    reference_count = int(_nunique(_column_values(grouped_table, 'REFERENCE'), dropna=True))
     effective_scope = resolve_group_analysis_scope(requested_scope, reference_count)
     forced_scope = str(requested_scope or 'auto').strip().lower()
 
@@ -1459,7 +1585,7 @@ def evaluate_group_analysis_readiness(grouped_df, *, requested_scope='auto', eli
             'skip_reason': build_group_analysis_skip_reason('missing_numeric_meas'),
         }
 
-    group_count = int(working['GROUP'].nunique())
+    group_count = int(_nunique(_column_values(working, 'GROUP'), dropna=True))
     if group_count < 2:
         return {
             'runnable': False,
@@ -1469,11 +1595,11 @@ def evaluate_group_analysis_readiness(grouped_df, *, requested_scope='auto', eli
 
     metric_column = '__canonical_metric__'
     if metric_column in working.columns:
-        metric_series = working[metric_column].fillna('').astype(str).str.strip()
+        metric_values = [_normalize_text(value) for value in _column_values(working, metric_column)]
         if eligible_metrics is not None:
             allowed = {str(value).strip() for value in eligible_metrics if str(value).strip()}
-            metric_series = metric_series[metric_series.isin(allowed)]
-        eligible_metric_count = int((metric_series != '').sum())
+            metric_values = [value for value in metric_values if value in allowed]
+        eligible_metric_count = int(sum(1 for value in metric_values if value))
     else:
         eligible_metric_count = 0
 
@@ -1514,12 +1640,16 @@ def _partition_metric_analysis_inputs(
 ):
     reference_value = None
     if effective_scope == 'multi_reference' and reference_column is not None and reference_column in metric_rows_df.columns:
-        reference_candidates = metric_rows_df[reference_column].dropna().astype(str).str.strip()
-        reference_value = reference_candidates.iloc[0] if not reference_candidates.empty else None
+        reference_candidates = [
+            _normalize_text(value)
+            for value in _column_values(metric_rows_df, reference_column)
+            if _normalize_text(value)
+        ]
+        reference_value = reference_candidates[0] if reference_candidates else None
 
     grouped_values = {
-        group_name: group_df['MEAS'].to_numpy(dtype=float)
-        for group_name, group_df in metric_rows_df.groupby('GROUP', sort=True)
+        group_name: np.asarray(_column_values(group_df, 'MEAS'), dtype=float)
+        for group_name, group_df in _group_table(metric_rows_df, 'GROUP', sort=True)
     }
     populated_groups = [name for name, values in grouped_values.items() if np.isfinite(values).sum() > 0]
     package_analysis = analyze_group_metric(
@@ -1750,8 +1880,7 @@ def build_group_analysis_payload(
 ):
     """Assemble metric-level Group Analysis payload for writer modules."""
     default_group_label = normalize_default_group_label(default_group_label)
-    if not isinstance(grouped_df, pd.DataFrame):
-        grouped_df = pd.DataFrame()
+    grouped_table = _as_row_table(grouped_df)
 
     _check_cancelled(should_cancel=should_cancel, cancel_check=cancel_check)
     _emit_progress(progress_callback, 'Preparing Group Analysis...')
@@ -1763,17 +1892,17 @@ def build_group_analysis_payload(
         alias_db_path=alias_db_path,
     )
     _check_cancelled(should_cancel=should_cancel, cancel_check=cancel_check)
-    reference_count = int(grouped_df.get('REFERENCE', pd.Series(dtype=object)).dropna().nunique())
+    reference_count = int(_nunique(_column_values(grouped_table, 'REFERENCE'), dropna=True))
     effective_scope = readiness['effective_scope']
     normalized_level = str(analysis_level or 'light').strip().lower()
 
-    if isinstance(grouped_df, pd.DataFrame) and 'GROUP' in grouped_df.columns:
+    if 'GROUP' in grouped_table.columns:
         grouped_series = normalize_group_labels(
-            grouped_df['GROUP'],
+            _column_values(grouped_table, 'GROUP'),
             missing_label=default_group_label,
             normalize_blank=True,
         )
-        group_count = int(grouped_series.dropna().nunique())
+        group_count = int(_nunique(grouped_series, dropna=True))
     else:
         group_count = 0
 
@@ -1804,7 +1933,7 @@ def build_group_analysis_payload(
         }
 
     working = _normalize_grouped_working_df(
-        grouped_df,
+        grouped_table,
         alias_db_path=alias_db_path,
         default_group_label=default_group_label,
     )
@@ -1819,14 +1948,17 @@ def build_group_analysis_payload(
     metrics = []
     skipped_metrics = []
     metric_frame = working.copy()
-    metric_frame[metric_column] = metric_frame[metric_column].fillna('').astype(str).str.strip()
-    metric_frame = metric_frame[metric_frame[metric_column] != '']
+    metric_frame[metric_column] = [
+        _normalize_text(value)
+        for value in _column_values(metric_frame, metric_column)
+    ]
+    metric_frame = _filter_table(metric_frame, lambda row: bool(row.get(metric_column)))
 
     if eligible_metrics is not None:
         allowed = {str(value).strip() for value in eligible_metrics if str(value).strip()}
-        metric_frame = metric_frame[metric_frame[metric_column].isin(allowed)]
+        metric_frame = _filter_table(metric_frame, lambda row: row.get(metric_column) in allowed)
 
-    group_count = int(metric_frame.get('GROUP', pd.Series(dtype=object)).dropna().nunique())
+    group_count = int(_nunique(_column_values(metric_frame, 'GROUP'), dropna=True))
     unmatched_metrics_summary = _build_unmatched_metrics_summary(
         metric_frame,
         metric_column=metric_column,
@@ -1839,8 +1971,8 @@ def build_group_analysis_payload(
 
     distribution_fit_policy = resolve_distribution_fit_policy(distribution_fit_policy)
     distribution_fit_cache = {}
-    metric_groups = metric_frame.groupby(grouping_columns, dropna=False, sort=True)
-    total_metrics = int(metric_groups.ngroups)
+    metric_groups = list(_group_table(metric_frame, grouping_columns, sort=True))
+    total_metrics = len(metric_groups)
 
     for metric_index, (key_tuple, metric_rows_df) in enumerate(metric_groups, start=1):
         _check_cancelled(should_cancel=should_cancel, cancel_check=cancel_check)

@@ -3,38 +3,35 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
+import csv
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 import re
 import sqlite3
 import tempfile
 import time
-from typing import Any
-
-import pandas as pd
+from typing import TYPE_CHECKING, Any
 
 from metroliza.tabular.csv_summary_utils import (
     filter_csv_summary_by_group_keys,
-    load_csv_with_fallbacks,
     detect_csv_read_configs,
 )
 from metroliza.reports.db import (
+    QueryResult,
+    QueryScope,
+    RowBatch,
+    iter_query_scope_batches,
     quote_identifier as _quote_identifier,
+    read_query_scope_result,
     read_sql_dataframe,
     sqlite_connection_scope,
 )
 from metroliza.shared.excel_sheet_utils import unique_sheet_name
-from metroliza.industrial.industrial_analytics_helpers import diagnostics_dataframe
-from metroliza.industrial.industrial_analytics_service import (
-    ProductionAggregationResult,
-    ProductionAnalyticsDiagnostic,
-    ProductionGroupstatsResult,
-    ProductionMetricCandidate,
+from metroliza.industrial.industrial_analytics_state import (
+    ProductionChartSelection,
+    ProductionMetricSelection,
 )
-from metroliza.industrial.industrial_analytics_state import ProductionChartSelection
-from metroliza.industrial.industrial_analytics_workbook import groupstats_result_dataframe
-from metroliza.industrial.industrial_analytics_workbook_charts import add_analytics_workbook_charts
 
 try:
     from metroliza.shared.grouping_filter_core import (
@@ -42,6 +39,12 @@ try:
     )
 except ImportError:  # pragma: no cover - compatibility for older forks without the shared core.
     _parse_grouping_filter_expression = None
+
+if TYPE_CHECKING:
+    from metroliza.industrial.industrial_analytics_service import (
+        ProductionAggregationResult,
+        ProductionGroupstatsResult,
+    )
 
 
 _SAFE_COLUMN_RE = re.compile(r"[^A-Za-z0-9_]+")
@@ -126,8 +129,50 @@ TabularProgressCallback = Callable[[dict[str, Any]], None]
 TabularCancelCheck = Callable[[], bool]
 
 
+class _LazyPandas:
+    def __getattr__(self, name):
+        import importlib
+
+        return getattr(importlib.import_module("pandas"), name)
+
+
+pd = _LazyPandas()
+
+
 class TabularLoadCancelled(Exception):
     """Raised when a cancellable CSV/Excel analytics load is stopped by the caller."""
+
+
+@dataclass(frozen=True)
+class ProductionAnalyticsDiagnostic:
+    """Structured diagnostic message for tabular production analytics calls."""
+
+    severity: str
+    code: str
+    message: str
+    context: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ProductionMetricCandidate:
+    """Numeric-looking tabular field available for analysis."""
+
+    field_name: str
+    display_label: str
+    source_kind: str
+    non_null_count: int
+    numeric_count: int
+    numeric_ratio: float
+    sample_values: tuple[str, ...] = ()
+    source_profile_ids: tuple[int, ...] = ()
+    warning_flags: tuple[str, ...] = ()
+
+    def to_selection(self) -> ProductionMetricSelection:
+        return ProductionMetricSelection(
+            field_name=self.field_name,
+            display_label=self.display_label,
+            source_kind=self.source_kind,  # type: ignore[arg-type]
+        )
 
 
 @dataclass(frozen=True)
@@ -204,6 +249,37 @@ class TabularSqliteStore:
         grouping_filter_expression: str | None = None,
         grouping_filter_aliases: Mapping[str, str] | None = None,
     ) -> pd.DataFrame:
+        scope = self.query_scope(
+            filter_columns=filter_columns,
+            selected_filter_keys=selected_filter_keys,
+            base_column_filters=base_column_filters,
+            column_filters=column_filters,
+            column_filter_match_mode=column_filter_match_mode,
+            columns=columns,
+            limit=limit,
+            grouping_filter=grouping_filter,
+            grouping_filter_expression=grouping_filter_expression,
+            grouping_filter_aliases=grouping_filter_aliases,
+        )
+        dataframe = read_sql_dataframe(self.path, scope.sql, params=scope.params)
+        return _restore_sqlite_dataframe(dataframe)
+
+    def query_scope(
+        self,
+        *,
+        filter_columns: tuple[str, ...] | list[str] | None = None,
+        selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+        base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filter_match_mode: str = "and",
+        columns: tuple[str, ...] | list[str] | None = None,
+        limit: int | None = None,
+        grouping_filter: Any = None,
+        grouping_filter_expression: str | None = None,
+        grouping_filter_aliases: Mapping[str, str] | None = None,
+    ) -> QueryScope:
+        """Return a reusable SQLite query scope for selected tabular rows."""
+
         select_columns = _normalized_tabular_required_columns(self.columns, columns)
         where_sql, params = self._where_clause(
             filter_columns=filter_columns,
@@ -221,8 +297,139 @@ class TabularSqliteStore:
         )
         if limit is not None and int(limit) >= 0:
             query = f"{query} LIMIT {int(limit)}"
-        dataframe = read_sql_dataframe(self.path, query, params=params)
-        return _restore_sqlite_dataframe(dataframe)
+            row_count_sql = f"SELECT COUNT(*) FROM ({query}) AS limited_scope"
+        else:
+            row_count_sql = f"SELECT COUNT(*) FROM {_quote_identifier(self.table_name)}{where_sql}"
+        return QueryScope(
+            sql=query,
+            params=tuple(params),
+            columns=tuple(select_columns),
+            row_count_sql=row_count_sql,
+        )
+
+    def read_query_result(
+        self,
+        **scope_kwargs: Any,
+    ) -> QueryResult:
+        """Read selected rows into the pandas-free ``QueryResult`` contract."""
+
+        scope = self.query_scope(**scope_kwargs)
+        return read_query_scope_result(self.path, scope)
+
+    def iter_row_batches(
+        self,
+        *,
+        batch_size: int = TABULAR_SQLITE_CHUNK_ROWS,
+        **scope_kwargs: Any,
+    ) -> Iterable[RowBatch]:
+        """Stream selected rows in bounded batches without DataFrame materialization."""
+
+        scope = self.query_scope(**scope_kwargs)
+        yield from iter_query_scope_batches(self.path, scope, batch_size=batch_size)
+
+    def aggregate_numeric_columns(
+        self,
+        metric_columns: tuple[str, ...] | list[str],
+        *,
+        group_columns: tuple[str, ...] | list[str] | None = None,
+        filter_columns: tuple[str, ...] | list[str] | None = None,
+        selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+        base_column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filters: tuple["TabularColumnFilter", ...] | list["TabularColumnFilter"] | None = None,
+        column_filter_match_mode: str = "and",
+        grouping_filter: Any = None,
+        grouping_filter_expression: str | None = None,
+        grouping_filter_aliases: Mapping[str, str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Aggregate numeric metrics in SQLite and return compact summary rows."""
+
+        metrics = tuple(dict.fromkeys(str(column) for column in metric_columns if str(column) in self.columns))
+        groups = tuple(dict.fromkeys(str(column) for column in (group_columns or ()) if str(column) in self.columns))
+        if not metrics:
+            return []
+
+        where_sql, where_params = self._where_clause(
+            filter_columns=filter_columns,
+            selected_filter_keys=selected_filter_keys,
+            base_column_filters=base_column_filters,
+            column_filters=column_filters,
+            column_filter_match_mode=column_filter_match_mode,
+            grouping_filter=grouping_filter,
+            grouping_filter_expression=grouping_filter_expression,
+            grouping_filter_aliases=grouping_filter_aliases,
+        )
+        group_aliases = tuple(f"group_{index}" for index, _column in enumerate(groups))
+        group_select = [
+            f"{_sqlite_normalized_value_expr(column)} AS {_quote_identifier(alias)}"
+            for column, alias in zip(groups, group_aliases, strict=False)
+        ]
+        group_select_sql = f"{', '.join(group_select)}, " if group_select else ""
+        group_by_sql = (
+            f" GROUP BY {', '.join(_quote_identifier(alias) for alias in group_aliases)}"
+            if group_aliases
+            else ""
+        )
+        order_by_sql = (
+            f" ORDER BY {', '.join(_quote_identifier(alias) for alias in group_aliases)}"
+            if group_aliases
+            else ""
+        )
+
+        aggregate_selects: list[str] = []
+        metric_layout: list[tuple[str, int]] = []
+        field_index = len(group_aliases)
+        for metric_index, metric in enumerate(metrics):
+            numeric_expr, numeric_guard = _sqlite_stored_numeric_expr_and_guard(metric)
+            prefix = f"m{metric_index}"
+            metric_layout.append((metric, field_index))
+            aggregate_selects.extend(
+                (
+                    f"COUNT(CASE WHEN {numeric_guard} THEN 1 END) AS {_quote_identifier(f'{prefix}_n')}",
+                    f"AVG(CASE WHEN {numeric_guard} THEN {numeric_expr} END) AS {_quote_identifier(f'{prefix}_mean')}",
+                    f"MIN(CASE WHEN {numeric_guard} THEN {numeric_expr} END) AS {_quote_identifier(f'{prefix}_min')}",
+                    f"MAX(CASE WHEN {numeric_guard} THEN {numeric_expr} END) AS {_quote_identifier(f'{prefix}_max')}",
+                    f"SUM(CASE WHEN {numeric_guard} THEN {numeric_expr} ELSE 0 END) AS {_quote_identifier(f'{prefix}_sum')}",
+                    f"SUM(CASE WHEN {numeric_guard} THEN {numeric_expr} * {numeric_expr} ELSE 0 END) AS {_quote_identifier(f'{prefix}_sum_squares')}",
+                )
+            )
+            field_index += 6
+
+        query = (
+            f"SELECT {group_select_sql}{', '.join(aggregate_selects)} "
+            f"FROM {_quote_identifier(self.table_name)}{where_sql}{group_by_sql}{order_by_sql}"
+        )
+        summaries: list[dict[str, Any]] = []
+        if groups:
+            self._ensure_grouping_column_indexes(groups)
+        with sqlite_connection_scope(self.path) as connection:
+            records = connection.execute(query, where_params).fetchall()
+            for record in records:
+                group_values = {
+                    column: record[index]
+                    for index, column in enumerate(groups)
+                }
+                for metric, offset in metric_layout:
+                    n = int(record[offset] or 0)
+                    sum_value = float(record[offset + 4] or 0.0)
+                    sum_squares = float(record[offset + 5] or 0.0)
+                    variance = (
+                        max(0.0, (sum_squares - (sum_value * sum_value / n)) / (n - 1))
+                        if n > 1
+                        else None
+                    )
+                    row = dict(group_values)
+                    row.update(
+                        {
+                            "metric": metric,
+                            "n": n,
+                            "mean": record[offset + 1],
+                            "min": record[offset + 2],
+                            "max": record[offset + 3],
+                            "stddev": (variance ** 0.5) if variance is not None else None,
+                        }
+                    )
+                    summaries.append(row)
+        return summaries
 
     def count_rows(
         self,
@@ -1301,10 +1508,26 @@ def list_tabular_excel_sheets(input_file: str | Path) -> tuple[str, ...]:
     """Return workbook sheet names for a CSV/Excel analytics input file."""
 
     path = Path(input_file)
-    if path.suffix.lower() not in {".xlsx", ".xls"}:
+    suffix = path.suffix.lower()
+    if suffix == ".xlsx":
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(path, read_only=True, data_only=True)
+        try:
+            return tuple(str(sheet) for sheet in workbook.sheetnames)
+        finally:
+            workbook.close()
+    if suffix == ".xls":
+        import xlrd
+
+        workbook = xlrd.open_workbook(path, on_demand=True)
+        try:
+            return tuple(str(sheet) for sheet in workbook.sheet_names())
+        finally:
+            workbook.release_resources()
+    if suffix not in {".xlsx", ".xls"}:
         return ()
-    with pd.ExcelFile(path) as workbook:
-        return tuple(str(sheet) for sheet in workbook.sheet_names)
+    return ()
 
 
 def selectable_tabular_source_columns(
@@ -1358,24 +1581,12 @@ def load_tabular_analytics_files(
         if not path.exists():
             raise FileNotFoundError(str(path))
 
-    if len(paths) == 1 and not _should_use_sqlite_for_paths(paths, force_sqlite=force_sqlite):
-        return load_tabular_analytics_file(
-            paths[0],
-            sheet_name=sheet_name,
-            timestamp_column=timestamp_column,
-            reference_column=reference_column,
-            numeric_threshold=numeric_threshold,
-            min_numeric_count=min_numeric_count,
-            force_sqlite=False,
-            progress_callback=progress_callback,
-            cancel_check=cancel_check,
-        )
+    if len(paths) > 1 and any(path.suffix.lower() != ".csv" for path in paths):
+        raise ValueError("Multiple-file loading supports CSV files only.")
 
-    if any(path.suffix.lower() != ".csv" for path in paths):
-        raise ValueError("Multiple-file and optimized large-file loading supports CSV files only.")
-
-    return _load_csv_files_into_sqlite(
+    return _load_tabular_files_into_sqlite(
         paths,
+        sheet_name=sheet_name,
         timestamp_column=timestamp_column,
         reference_column=reference_column,
         numeric_threshold=numeric_threshold,
@@ -1403,123 +1614,18 @@ def load_tabular_analytics_file(
     _raise_if_tabular_load_cancelled(cancel_check)
     if not path.exists():
         raise FileNotFoundError(str(path))
-    source_stat = path.stat()
-
-    diagnostics: list[ProductionAnalyticsDiagnostic] = []
-    csv_config: dict[str, Any] = {}
     suffix = path.suffix.lower()
-    if suffix == ".csv":
-        if _should_use_sqlite_for_paths((path,), force_sqlite=force_sqlite):
-            return _load_csv_files_into_sqlite(
-                (path,),
-                timestamp_column=timestamp_column,
-                reference_column=reference_column,
-                numeric_threshold=numeric_threshold,
-                min_numeric_count=min_numeric_count,
-                progress_callback=progress_callback,
-                cancel_check=cancel_check,
-            )
-        raw_frame, csv_config = load_csv_with_fallbacks(path)
-        resolved_sheet_name = None
-    elif suffix in {".xlsx", ".xls"}:
-        resolved_sheet_name = 0 if sheet_name is None else sheet_name
-        raw_frame = pd.read_excel(path, sheet_name=resolved_sheet_name)
-    else:
+    if suffix not in {".csv", ".xlsx", ".xls"}:
         raise ValueError("Unsupported analytics file type. Use CSV or Excel.")
-
-    frame, mapping = _normalize_columns(raw_frame)
-    frame, mapping = _reserve_internal_columns(frame, mapping)
-    frame.insert(0, "source_row_number", range(1, len(frame.index) + 1))
-    frame["source_file"] = path.name
-    if resolved_sheet_name is not None:
-        frame["source_sheet"] = str(resolved_sheet_name)
-
-    timestamp_field = _resolve_requested_column(timestamp_column, mapping, frame.columns)
-    if timestamp_field is None:
-        timestamp_field = _infer_timestamp_column(frame, hints=_TIMESTAMP_HINTS)
-    if timestamp_field is not None:
-        frame["process_datetime"] = pd.to_datetime(frame[timestamp_field], errors="coerce", utc=True)
-        bad_count = int(frame["process_datetime"].isna().sum())
-        if bad_count:
-            diagnostics.append(
-                ProductionAnalyticsDiagnostic(
-                    severity="warning",
-                    code="tabular_bad_timestamps",
-                    message=f"{bad_count} table row(s) have invalid timestamps.",
-                    context={"timestamp_column": timestamp_field, "bad_timestamp_count": bad_count},
-                )
-            )
-    else:
-        frame["process_datetime"] = pd.NaT
-        diagnostics.append(
-            ProductionAnalyticsDiagnostic(
-                severity="info",
-                code="tabular_timestamp_not_selected",
-                message="No timestamp column was selected or inferred for this file.",
-            )
-        )
-
-    reference_field = _resolve_requested_or_inferred_column(
-        reference_column,
-        mapping,
-        frame.columns,
-        hints=_REFERENCE_HINTS,
-    )
-    if reference_field is not None:
-        frame["reference"] = frame[reference_field].fillna("").astype(str)
-    else:
-        frame["reference"] = ""
-        diagnostics.append(
-            ProductionAnalyticsDiagnostic(
-                severity="info",
-                code="tabular_reference_not_selected",
-                message="No reference/id column was selected or inferred for this file.",
-            )
-        )
-
-    metric_candidates = discover_tabular_metric_candidates(
-        frame,
-        reserved_columns=tuple(
-            column for column in (timestamp_field, reference_field) if column is not None
-        ),
+    return _load_tabular_files_into_sqlite(
+        (path,),
+        sheet_name=sheet_name,
+        timestamp_column=timestamp_column,
+        reference_column=reference_column,
         numeric_threshold=numeric_threshold,
         min_numeric_count=min_numeric_count,
-    )
-    if not metric_candidates:
-        diagnostics.append(
-            ProductionAnalyticsDiagnostic(
-                severity="warning",
-                code="tabular_no_numeric_metrics",
-                message="No numeric columns were detected in the selected file.",
-            )
-        )
-
-    return TabularAnalyticsLoadResult(
-        dataframe=frame,
-        metric_candidates=metric_candidates,
-        diagnostics=tuple(diagnostics),
-        column_mapping=mapping,
-        source_file=str(path),
-        sheet_name=None if resolved_sheet_name is None else str(resolved_sheet_name),
-        timestamp_column=timestamp_field,
-        reference_column=reference_field,
-        csv_config=csv_config,
-        source_size=int(source_stat.st_size),
-        source_mtime_ns=int(source_stat.st_mtime_ns),
-        source_files=(str(path),),
-        source_snapshots=(
-            TabularSourceSnapshot(
-                path=str(path),
-                name=path.name,
-                size=int(source_stat.st_size),
-                mtime_ns=int(source_stat.st_mtime_ns),
-                row_count=int(len(frame.index)),
-                csv_config=csv_config,
-            ),
-        ),
-        storage_mode="dataframe",
-        sqlite_store=None,
-        row_count=int(len(frame.index)),
+        progress_callback=progress_callback,
+        cancel_check=cancel_check,
     )
 
 
@@ -1556,9 +1662,10 @@ def _estimate_csv_data_rows(path: Path) -> int:
         return 0
 
 
-def _load_csv_files_into_sqlite(
+def _load_tabular_files_into_sqlite(
     paths: tuple[Path, ...],
     *,
+    sheet_name: str | int | None,
     timestamp_column: str | None,
     reference_column: str | None,
     numeric_threshold: float,
@@ -1577,10 +1684,10 @@ def _load_csv_files_into_sqlite(
     file_specs: list[dict[str, Any]] = []
     global_original_columns: list[str] = []
     seen_original_columns: set[str] = set()
-    source_columns: list[str] = []
     date_filter_source_columns: set[str] = set()
     timestamp_field: str | None = None
     reference_field: str | None = None
+    resolved_sheet_name: str | None = None
 
     for path in paths:
         sampling_started_at = time.perf_counter()
@@ -1592,49 +1699,35 @@ def _load_csv_files_into_sqlite(
             file_name=path.name,
             rows_loaded=0,
         )
-        csv_config = _detect_csv_config(path)
-        sample_frame = pd.read_csv(
-            path,
-            delimiter=csv_config["delimiter"],
-            decimal=csv_config["decimal"],
-            low_memory=False,
-            nrows=200,
-        )
-        for column in sample_frame.columns:
+        sampled = _sample_tabular_source(path, sheet_name=sheet_name)
+        if sampled["sheet_name"] is not None:
+            resolved_sheet_name = str(sampled["sheet_name"])
+        for column in sampled["header"]:
             original = str(column)
             if original in seen_original_columns:
                 continue
             seen_original_columns.add(original)
             global_original_columns.append(original)
-        sampled_specs.append(
-            {
-                "path": path,
-                "csv_config": csv_config,
-                "sample_frame": sample_frame,
-            }
-        )
+        sampled_specs.append({"path": path, **sampled})
         _record_load_timing("sampling", sampling_started_at)
 
-    global_sample = pd.DataFrame(columns=global_original_columns)
-    normalized_global_sample, global_mapping = _normalize_columns(global_sample)
-    _, global_mapping = _reserve_internal_columns(normalized_global_sample, global_mapping)
+    global_mapping = _reserve_internal_column_names(_normalize_column_names(global_original_columns))
     source_columns = list(dict.fromkeys(global_mapping.values()))
 
     for sampled_spec in sampled_specs:
-        path = sampled_spec["path"]
-        sample_frame = sampled_spec["sample_frame"]
-        csv_config = sampled_spec["csv_config"]
-        mapping = {
-            str(column): global_mapping[str(column)]
-            for column in sample_frame.columns
-            if str(column) in global_mapping
-        }
-        normalized_sample = sample_frame.rename(columns=mapping).copy()
-        normalized_columns = tuple(str(column) for column in normalized_sample.columns)
-
+        header = tuple(str(column) for column in sampled_spec["header"])
+        mapping = {column: global_mapping[column] for column in header if column in global_mapping}
+        normalized_columns = tuple(mapping[column] for column in header if column in mapping)
+        normalized_sample_rows = [
+            _normalize_raw_row(header, row, mapping) for row in sampled_spec["sample_rows"]
+        ]
         file_timestamp_field = _resolve_requested_column(timestamp_column, mapping, normalized_columns)
         if file_timestamp_field is None:
-            file_timestamp_field = _infer_timestamp_column(normalized_sample, hints=_TIMESTAMP_HINTS)
+            file_timestamp_field = _infer_timestamp_column_from_rows(
+                normalized_sample_rows,
+                normalized_columns,
+                hints=_TIMESTAMP_HINTS,
+            )
         file_reference_field = _resolve_requested_or_inferred_column(
             reference_column,
             mapping,
@@ -1646,20 +1739,21 @@ def _load_csv_files_into_sqlite(
         if reference_field is None and file_reference_field is not None:
             reference_field = file_reference_field
         date_filter_source_columns.update(
-            _sqlite_date_filter_source_columns(
-                normalized_sample,
+            _sqlite_date_filter_source_columns_from_rows(
+                normalized_sample_rows,
                 normalized_columns,
                 timestamp_field=file_timestamp_field,
             )
         )
         file_specs.append(
             {
-                "path": path,
-                "csv_config": csv_config,
+                "path": sampled_spec["path"],
+                "csv_config": sampled_spec["csv_config"],
+                "header": header,
                 "mapping": mapping,
-                "source_columns": normalized_columns,
                 "timestamp_field": file_timestamp_field,
                 "reference_field": file_reference_field,
+                "sheet_name": sampled_spec["sheet_name"],
             }
         )
 
@@ -1669,7 +1763,7 @@ def _load_csv_files_into_sqlite(
             ProductionAnalyticsDiagnostic(
                 severity="info",
                 code="tabular_timestamp_not_selected",
-                message="No timestamp column was selected or inferred for these CSV file(s).",
+                message="No timestamp column was selected or inferred for these source file(s).",
             )
         )
     if reference_field is None:
@@ -1677,7 +1771,7 @@ def _load_csv_files_into_sqlite(
             ProductionAnalyticsDiagnostic(
                 severity="info",
                 code="tabular_reference_not_selected",
-                message="No reference/id column was selected or inferred for these CSV file(s).",
+                message="No reference/id column was selected or inferred for these source file(s).",
             )
         )
 
@@ -1688,7 +1782,15 @@ def _load_csv_files_into_sqlite(
     )
     db_path = Path(temp_file.name)
     temp_file.close()
-    table_columns = ("source_row_number", "source_file", "process_datetime", "reference", *source_columns)
+    include_source_sheet = any(spec["sheet_name"] is not None for spec in file_specs)
+    table_columns = (
+        "source_row_number",
+        "source_file",
+        *(("source_sheet",) if include_source_sheet else ()),
+        "process_datetime",
+        "reference",
+        *source_columns,
+    )
     date_filter_columns = _sqlite_date_filter_storage_columns(
         tuple(source_columns),
         date_filter_source_columns,
@@ -1703,12 +1805,16 @@ def _load_csv_files_into_sqlite(
     try:
         with sqlite_connection_scope(str(db_path)) as connection:
             _create_sqlite_table(connection, _TABULAR_SQLITE_TABLE, storage_columns)
+            insert_sql = (
+                f"INSERT INTO {_quote_identifier(_TABULAR_SQLITE_TABLE)} "
+                f"({', '.join(_quote_identifier(column) for column in storage_columns)}) "
+                f"VALUES ({', '.join('?' for _column in storage_columns)})"
+            )
             _record_load_timing("sqlite_setup", sqlite_setup_started_at)
             for file_index, spec in enumerate(file_specs, start=1):
                 _raise_if_tabular_load_cancelled(cancel_check)
                 path = spec["path"]
                 csv_config = spec["csv_config"]
-                mapping = spec["mapping"]
                 file_row_count = 0
                 _emit_tabular_load_progress(
                     progress_callback,
@@ -1719,84 +1825,94 @@ def _load_csv_files_into_sqlite(
                     file_count=len(file_specs),
                     rows_loaded=row_number,
                 )
-                chunk_read_started_at = time.perf_counter()
-                chunk_iter = pd.read_csv(
+                batch: list[tuple[Any, ...]] = []
+                chunk_started_at = time.perf_counter()
+                for raw_row in _iter_tabular_source_rows(
                     path,
-                    delimiter=csv_config["delimiter"],
-                    decimal=csv_config["decimal"],
-                    low_memory=False,
-                    chunksize=TABULAR_SQLITE_CHUNK_ROWS,
-                )
-                for raw_chunk in chunk_iter:
-                    _record_load_timing("chunk_read", chunk_read_started_at)
+                    csv_config=csv_config,
+                    sheet_name=spec["sheet_name"],
+                ):
+                    _record_load_timing("chunk_read", chunk_started_at)
                     _raise_if_tabular_load_cancelled(cancel_check)
-                    chunk_normalize_started_at = time.perf_counter()
-                    normalized_chunk = raw_chunk.rename(columns=mapping)
-                    _record_load_timing("chunk_normalize", chunk_normalize_started_at)
-                    chunk_build_started_at = time.perf_counter()
-                    output_chunk = pd.DataFrame(index=normalized_chunk.index)
-                    chunk_row_count = int(len(normalized_chunk.index))
-                    output_chunk["source_row_number"] = range(
-                        row_number + 1,
-                        row_number + chunk_row_count + 1,
+                    normalize_started_at = time.perf_counter()
+                    normalized_row = _normalize_raw_row(spec["header"], raw_row, spec["mapping"])
+                    _record_load_timing("chunk_normalize", normalize_started_at)
+                    row_started_at = time.perf_counter()
+                    row_number += 1
+                    file_row_count += 1
+                    timestamp_value = (
+                        normalized_row.get(spec["timestamp_field"])
+                        if spec["timestamp_field"] is not None
+                        else None
                     )
-                    output_chunk["source_file"] = path.name
-
-                    chunk_timestamp_field = spec["timestamp_field"]
-                    if chunk_timestamp_field is not None and chunk_timestamp_field in normalized_chunk.columns:
-                        parsed_timestamps = pd.to_datetime(
-                            normalized_chunk[chunk_timestamp_field],
-                            errors="coerce",
-                            utc=True,
-                        )
-                        bad_timestamp_count += int(parsed_timestamps.isna().sum())
-                        output_chunk["process_datetime"] = _sqlite_datetime_text(parsed_timestamps)
-                    else:
-                        output_chunk["process_datetime"] = None
-
-                    chunk_reference_field = spec["reference_field"]
-                    if chunk_reference_field is not None and chunk_reference_field in normalized_chunk.columns:
-                        output_chunk["reference"] = (
-                            normalized_chunk[chunk_reference_field].fillna("").astype(str)
-                        )
-                    else:
-                        output_chunk["reference"] = ""
-
+                    parsed_timestamp = _parse_tabular_datetime(timestamp_value)
+                    if spec["timestamp_field"] is not None and parsed_timestamp is None:
+                        bad_timestamp_count += 1
+                    row_data: dict[str, Any] = {
+                        "source_row_number": row_number,
+                        "source_file": path.name,
+                        "process_datetime": _sqlite_datetime_text_value(parsed_timestamp),
+                        "reference": _display_cell_text(
+                            normalized_row.get(spec["reference_field"])
+                            if spec["reference_field"] is not None
+                            else ""
+                        ),
+                    }
+                    if include_source_sheet:
+                        row_data["source_sheet"] = str(spec["sheet_name"] or "")
+                    decimal = str(csv_config.get("decimal") or ".")
+                    parsed_numeric_values: dict[str, float | None] = {}
                     for column in source_columns:
-                        output_chunk[column] = normalized_chunk[column] if column in normalized_chunk else None
+                        raw_text = _display_cell_text(normalized_row.get(column))
+                        parsed_number = (
+                            _parse_tabular_number(raw_text, decimal=decimal) if raw_text else None
+                        )
+                        parsed_numeric_values[column] = parsed_number
+                        row_data[column] = _coerce_tabular_storage_text_value(
+                            raw_text,
+                            parsed_number,
+                        )
                     for column, storage_column in date_filter_columns.items():
-                        if column in normalized_chunk:
-                            parsed_dates = pd.to_datetime(
-                                normalized_chunk[column],
-                                errors="coerce",
-                                utc=True,
-                            )
-                            output_chunk[storage_column] = _sqlite_datetime_text(parsed_dates)
-                        else:
-                            output_chunk[storage_column] = None
-                    _record_load_timing("chunk_build_rows", chunk_build_started_at)
+                        row_data[storage_column] = _sqlite_datetime_text_value(
+                            _parse_tabular_datetime(normalized_row.get(column))
+                        )
                     metric_stats_started_at = time.perf_counter()
-                    _update_metric_stats(
+                    _update_metric_stats_from_row(
                         metric_stats,
-                        output_chunk,
+                        row_data,
                         source_columns=tuple(source_columns),
                         reserved_columns=tuple(
                             column
-                            for column in (chunk_timestamp_field, chunk_reference_field)
+                            for column in (spec["timestamp_field"], spec["reference_field"])
                             if column is not None
                         ),
+                        decimal=decimal,
+                        numeric_values=parsed_numeric_values,
                     )
                     _record_load_timing("metric_stats", metric_stats_started_at)
-                    sqlite_write_started_at = time.perf_counter()
-                    output_chunk.loc[:, list(storage_columns)].to_sql(
-                        _TABULAR_SQLITE_TABLE,
-                        connection,
-                        if_exists="append",
-                        index=False,
-                    )
-                    _record_load_timing("sqlite_write", sqlite_write_started_at)
-                    row_number += chunk_row_count
-                    file_row_count += chunk_row_count
+                    batch.append(tuple(row_data.get(column) for column in storage_columns))
+                    _record_load_timing("chunk_build_rows", row_started_at)
+                    if len(batch) >= TABULAR_SQLITE_CHUNK_ROWS:
+                        write_started_at = time.perf_counter()
+                        connection.executemany(insert_sql, batch)
+                        _record_load_timing("sqlite_write", write_started_at)
+                        _emit_tabular_load_progress(
+                            progress_callback,
+                            stage="chunk_loaded",
+                            file=str(path),
+                            file_name=path.name,
+                            file_index=file_index,
+                            file_count=len(file_specs),
+                            chunk_rows=len(batch),
+                            file_rows_loaded=file_row_count,
+                            rows_loaded=row_number,
+                        )
+                        batch = []
+                    chunk_started_at = time.perf_counter()
+                if batch:
+                    write_started_at = time.perf_counter()
+                    connection.executemany(insert_sql, batch)
+                    _record_load_timing("sqlite_write", write_started_at)
                     _emit_tabular_load_progress(
                         progress_callback,
                         stage="chunk_loaded",
@@ -1804,12 +1920,10 @@ def _load_csv_files_into_sqlite(
                         file_name=path.name,
                         file_index=file_index,
                         file_count=len(file_specs),
-                        chunk_rows=chunk_row_count,
+                        chunk_rows=len(batch),
                         file_rows_loaded=file_row_count,
                         rows_loaded=row_number,
                     )
-                    _raise_if_tabular_load_cancelled(cancel_check)
-                    chunk_read_started_at = time.perf_counter()
 
                 source_stat = path.stat()
                 snapshots.append(
@@ -1839,6 +1953,7 @@ def _load_csv_files_into_sqlite(
                         for column in (
                             "source_row_number",
                             "source_file",
+                            *(("source_sheet",) if include_source_sheet else ()),
                             "process_datetime",
                             "reference",
                             *date_filter_columns.values(),
@@ -1850,6 +1965,7 @@ def _load_csv_files_into_sqlite(
                 ),
             )
             _record_load_timing("indexing", indexing_started_at)
+            connection.commit()
 
         _raise_if_tabular_load_cancelled(cancel_check)
         if timestamp_field is not None and bad_timestamp_count:
@@ -1869,7 +1985,7 @@ def _load_csv_files_into_sqlite(
                 severity="info",
                 code="tabular_sqlite_store_created",
                 message=(
-                    f"CSV Summary loaded {row_number} row(s) from {len(paths)} CSV file(s) "
+                    f"CSV Summary loaded {row_number} row(s) from {len(paths)} source file(s) "
                     "through a temporary SQLite store."
                 ),
                 context={
@@ -1891,7 +2007,7 @@ def _load_csv_files_into_sqlite(
                 ProductionAnalyticsDiagnostic(
                     severity="warning",
                     code="tabular_no_numeric_metrics",
-                    message="No numeric columns were detected in the selected CSV file(s).",
+                    message="No numeric columns were detected in the selected source file(s).",
                 )
             )
         store = TabularSqliteStore(
@@ -1935,7 +2051,7 @@ def _load_csv_files_into_sqlite(
             diagnostics=tuple(diagnostics),
             column_mapping=global_mapping,
             source_file=str(paths[0]),
-            sheet_name=None,
+            sheet_name=resolved_sheet_name,
             timestamp_column=timestamp_field,
             reference_column=reference_field,
             csv_config=csv_config,
@@ -1955,6 +2071,365 @@ def _load_csv_files_into_sqlite(
             except OSError:
                 pass
         raise
+
+
+def _sample_tabular_source(path: Path, *, sheet_name: str | int | None) -> dict[str, Any]:
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        csv_config = _detect_csv_config(path)
+        header, sample_rows = _read_csv_header_and_sample(
+            path,
+            delimiter=csv_config["delimiter"],
+            sample_size=200,
+        )
+        return {
+            "csv_config": csv_config,
+            "header": header,
+            "sample_rows": sample_rows,
+            "sheet_name": None,
+        }
+    if suffix in {".xlsx", ".xls"}:
+        resolved_sheet = _resolve_excel_sheet_name(path, sheet_name)
+        header, sample_rows = _read_excel_header_and_sample(
+            path,
+            sheet_name=resolved_sheet,
+            sample_size=200,
+        )
+        return {
+            "csv_config": {"storage": "sqlite", "format": suffix.removeprefix(".")},
+            "header": header,
+            "sample_rows": sample_rows,
+            "sheet_name": resolved_sheet,
+        }
+    raise ValueError("Unsupported analytics file type. Use CSV or Excel.")
+
+
+def _read_csv_header_and_sample(
+    path: Path,
+    *,
+    delimiter: str,
+    sample_size: int,
+) -> tuple[tuple[str, ...], list[tuple[Any, ...]]]:
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.reader(handle, delimiter=delimiter)
+        try:
+            header = tuple(str(column) for column in next(reader))
+        except StopIteration:
+            return (), []
+        rows = [tuple(row) for _index, row in zip(range(sample_size), reader, strict=False)]
+    return header, rows
+
+
+def _iter_tabular_source_rows(
+    path: Path,
+    *,
+    csv_config: Mapping[str, Any],
+    sheet_name: str | int | None,
+) -> Iterable[tuple[Any, ...]]:
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        delimiter = str(csv_config.get("delimiter") or ",")
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.reader(handle, delimiter=delimiter)
+            next(reader, None)
+            for row in reader:
+                yield tuple(row)
+        return
+    yield from _iter_excel_rows(path, sheet_name=sheet_name)
+
+
+def _resolve_excel_sheet_name(path: Path, sheet_name: str | int | None) -> str:
+    names = list_tabular_excel_sheets(path)
+    if not names:
+        raise ValueError(f"Workbook has no readable sheets: {path}")
+    if sheet_name is None:
+        return names[0]
+    if isinstance(sheet_name, int):
+        try:
+            return names[int(sheet_name)]
+        except IndexError as exc:
+            raise ValueError(f"Excel sheet index is out of range: {sheet_name}") from exc
+    requested = str(sheet_name)
+    if requested in names:
+        return requested
+    raise ValueError(f"Excel sheet not found: {requested}")
+
+
+def _read_excel_header_and_sample(
+    path: Path,
+    *,
+    sheet_name: str,
+    sample_size: int,
+) -> tuple[tuple[str, ...], list[tuple[Any, ...]]]:
+    iterator = _iter_excel_rows(path, sheet_name=sheet_name, include_header=True)
+    try:
+        header = tuple(str(column) for column in next(iterator))
+    except StopIteration:
+        return (), []
+    rows = [tuple(row) for _index, row in zip(range(sample_size), iterator, strict=False)]
+    return header, rows
+
+
+def _iter_excel_rows(
+    path: Path,
+    *,
+    sheet_name: str | int | None,
+    include_header: bool = False,
+) -> Iterable[tuple[Any, ...]]:
+    suffix = path.suffix.lower()
+    if suffix == ".xlsx":
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(path, read_only=True, data_only=True)
+        try:
+            worksheet = workbook[str(sheet_name)]
+            rows = worksheet.iter_rows(values_only=True)
+            if not include_header:
+                next(rows, None)
+            for row in rows:
+                yield tuple(_display_cell_text(value) for value in row)
+        finally:
+            workbook.close()
+        return
+    if suffix == ".xls":
+        import xlrd
+
+        workbook = xlrd.open_workbook(path, on_demand=True)
+        try:
+            worksheet = workbook.sheet_by_name(str(sheet_name))
+            start = 0 if include_header else 1
+            for row_index in range(start, worksheet.nrows):
+                yield tuple(
+                    _display_cell_text(worksheet.cell_value(row_index, column_index))
+                    for column_index in range(worksheet.ncols)
+                )
+        finally:
+            workbook.release_resources()
+        return
+    raise ValueError("Unsupported analytics file type. Use CSV or Excel.")
+
+
+def _normalize_column_names(columns: Iterable[Any]) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    used: set[str] = set()
+    for index, column in enumerate(columns, start=1):
+        original = str(column)
+        candidate = _safe_column_name(original, fallback=f"column_{index}")
+        base = candidate
+        suffix = 1
+        while candidate.casefold() in used:
+            suffix += 1
+            candidate = f"{base}_{suffix}"
+        used.add(candidate.casefold())
+        mapping[original] = candidate
+    return mapping
+
+
+def _reserve_internal_column_names(mapping: dict[str, str]) -> dict[str, str]:
+    used = {value.casefold() for value in mapping.values()}
+    internal_names = {name.casefold() for name in _INTERNAL_COLUMNS}
+    renamed: dict[str, str] = {}
+    for original, normalized in mapping.items():
+        if normalized.casefold() not in internal_names:
+            renamed[original] = normalized
+            continue
+        base = f"input_{normalized}"
+        candidate = base
+        suffix = 1
+        while candidate.casefold() in used:
+            suffix += 1
+            candidate = f"{base}_{suffix}"
+        used.add(candidate.casefold())
+        renamed[original] = candidate
+    return renamed
+
+
+def _normalize_raw_row(
+    header: Iterable[Any],
+    row: Iterable[Any],
+    mapping: Mapping[str, str],
+) -> dict[str, str | None]:
+    values = tuple(row)
+    normalized: dict[str, str | None] = {}
+    for index, original in enumerate(header):
+        column = mapping.get(str(original))
+        if column is None:
+            continue
+        value = values[index] if index < len(values) else None
+        normalized[column] = _display_cell_text(value) if value is not None else None
+    return normalized
+
+
+def _display_cell_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
+
+def _infer_timestamp_column_from_rows(
+    rows: Iterable[Mapping[str, Any]],
+    columns: Iterable[str],
+    *,
+    hints: tuple[str, ...],
+) -> str | None:
+    for column in columns:
+        column_key = column.casefold()
+        if not any(_column_name_matches_hint(column_key, hint) for hint in hints):
+            continue
+        if _row_values_look_like_timestamp(rows, column):
+            return column
+    return None
+
+
+def _sqlite_date_filter_source_columns_from_rows(
+    rows: Iterable[Mapping[str, Any]],
+    columns: tuple[str, ...],
+    *,
+    timestamp_field: str | None,
+) -> set[str]:
+    candidates: set[str] = set()
+    row_tuple = tuple(rows)
+    for column in columns:
+        column_key = column.casefold()
+        if column == timestamp_field:
+            candidates.add(column)
+            continue
+        if not any(token in column_key for token in ("date", "time", "timestamp", "created", "updated")):
+            continue
+        if _row_values_look_like_timestamp(row_tuple, column):
+            candidates.add(column)
+    return candidates
+
+
+def _row_values_look_like_timestamp(rows: Iterable[Mapping[str, Any]], column: str) -> bool:
+    values = [
+        row.get(column)
+        for row in rows
+        if _display_cell_text(row.get(column)).strip()
+    ][:200]
+    if not values:
+        return False
+    parsed_count = sum(1 for value in values if _parse_tabular_datetime(value) is not None)
+    return (parsed_count / len(values)) >= 0.6
+
+
+def _parse_tabular_datetime(value: Any) -> datetime | None:
+    text = _display_cell_text(value)
+    if not text:
+        return None
+    normalized = text.strip().replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized).replace(tzinfo=None)
+    except ValueError:
+        pass
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d",
+        "%m/%d/%Y %H:%M:%S",
+        "%m/%d/%Y %H:%M",
+        "%m/%d/%Y",
+        "%d/%m/%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M",
+        "%d/%m/%Y",
+    ):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _sqlite_datetime_text_value(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _parse_tabular_number(value: Any, *, decimal: str = ".") -> float | None:
+    text = _display_cell_text(value)
+    if not text:
+        return None
+    if decimal == ",":
+        text = text.replace(".", "").replace(",", ".")
+    else:
+        text = text.replace(",", "")
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _coerce_tabular_storage_value(value: Any, *, decimal: str = ".") -> Any:
+    text = _display_cell_text(value)
+    if not text:
+        return None
+    number = _parse_tabular_number(text, decimal=decimal)
+    return _coerce_tabular_storage_text_value(text, number)
+
+
+def _coerce_tabular_storage_text_value(text: str, number: float | None) -> Any:
+    if not text:
+        return None
+    if number is None:
+        return text
+    if number.is_integer() and re.fullmatch(r"[+-]?\d+", text.strip()):
+        return int(number)
+    return float(number)
+
+
+def _update_metric_stats_from_row(
+    metric_stats: dict[str, dict[str, Any]],
+    row: Mapping[str, Any],
+    *,
+    source_columns: tuple[str, ...],
+    reserved_columns: tuple[str, ...],
+    decimal: str,
+    numeric_values: Mapping[str, float | None] | None = None,
+) -> None:
+    reserved = {
+        "source_row_number",
+        "source_file",
+        "source_sheet",
+        "process_datetime",
+        "reference",
+        *reserved_columns,
+    }
+    for column in source_columns:
+        if column in reserved:
+            continue
+        text = _display_cell_text(row.get(column))
+        if not text:
+            continue
+        stats = metric_stats.setdefault(
+            column,
+            {"non_null_count": 0, "numeric_count": 0, "sample_values": [], "sample_value_set": set()},
+        )
+        stats["non_null_count"] += 1
+        parsed_number = (
+            numeric_values.get(column)
+            if numeric_values is not None and column in numeric_values
+            else _parse_tabular_number(text, decimal=decimal)
+        )
+        if parsed_number is not None:
+            stats["numeric_count"] += 1
+        _append_metric_sample_text(stats, text)
+
+
+def _append_metric_sample_text(stats: dict[str, Any], text: str) -> None:
+    sample_values = stats["sample_values"]
+    if len(sample_values) >= 5:
+        return
+    sample_value_set = stats.setdefault("sample_value_set", set(sample_values))
+    if text not in sample_value_set:
+        sample_values.append(text)
+        sample_value_set.add(text)
 
 
 def _detect_csv_config(path: Path) -> dict[str, Any]:
@@ -2031,7 +2506,10 @@ def _create_sqlite_table(
     column_defs = []
     for column in columns:
         column_type = "INTEGER" if column == "source_row_number" else "TEXT"
-        column_defs.append(f"{_quote_identifier(column)} {column_type}")
+        if column == "source_row_number":
+            column_defs.append(f"{_quote_identifier(column)} {column_type}")
+        else:
+            column_defs.append(_quote_identifier(column))
     connection.execute(
         f"CREATE TABLE {_quote_identifier(table_name)} ({', '.join(column_defs)})"
     )
@@ -2619,6 +3097,8 @@ def _project_tabular_dataframe(
 
 
 def _restore_sqlite_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
+    if hasattr(dataframe, "columns") and hasattr(dataframe, "rows") and not hasattr(dataframe, "index"):
+        dataframe = pd.DataFrame(list(dataframe.rows), columns=list(dataframe.columns))
     if "process_datetime" in dataframe.columns:
         dataframe["process_datetime"] = pd.to_datetime(
             dataframe["process_datetime"],
@@ -3339,6 +3819,11 @@ def _sqlite_numeric_text_and_guard(column: str) -> tuple[str, str]:
     return text_expr, numeric_guard
 
 
+def _sqlite_stored_numeric_expr_and_guard(column: str) -> tuple[str, str]:
+    identifier = _quote_identifier(column)
+    return f"CAST({identifier} AS REAL)", f"typeof({identifier}) IN ('integer', 'real')"
+
+
 def _sqlite_date_filter_expr_for_column(
     column: str,
     date_filter_columns: Mapping[str, str] | None,
@@ -3504,7 +3989,7 @@ def _tabular_numeric_filter_mask(series: pd.Series, column_filter: TabularColumn
 
 def apply_tabular_grouping(
     dataframe: pd.DataFrame,
-    grouping_df: pd.DataFrame | None,
+    grouping_df: Any | None,
     *,
     group_column: str = TABULAR_GROUP_COLUMN,
     default_group: str = TABULAR_DEFAULT_GROUP,
@@ -3513,7 +3998,8 @@ def apply_tabular_grouping(
 
     frame = dataframe.copy()
     diagnostics: list[ProductionAnalyticsDiagnostic] = []
-    if not isinstance(grouping_df, pd.DataFrame) or grouping_df.empty or "GROUP" not in grouping_df.columns:
+    grouping_records = _tabular_grouping_records(grouping_df)
+    if not grouping_records:
         return TabularGroupingResult(dataframe=frame)
 
     if "source_row_number" not in frame.columns:
@@ -3526,12 +4012,10 @@ def apply_tabular_grouping(
         )
         return TabularGroupingResult(dataframe=frame, diagnostics=tuple(diagnostics))
 
-    grouping = grouping_df.copy()
-    if "REPORT_ID" in grouping.columns:
-        grouping_key = pd.to_numeric(grouping["REPORT_ID"], errors="coerce")
-    elif "SAMPLE_NUMBER" in grouping.columns:
-        grouping_key = pd.to_numeric(grouping["SAMPLE_NUMBER"], errors="coerce")
-    else:
+    if not any(
+        _first_present(row, ("REPORT_ID", "report_id", "SAMPLE_NUMBER", "sample_number")) is not None
+        for row in grouping_records
+    ):
         diagnostics.append(
             ProductionAnalyticsDiagnostic(
                 severity="warning",
@@ -3541,9 +4025,17 @@ def apply_tabular_grouping(
         )
         return TabularGroupingResult(dataframe=frame, diagnostics=tuple(diagnostics))
 
-    grouping = grouping.assign(__source_row_number=grouping_key)
-    grouping = grouping[grouping["__source_row_number"].notna()].copy()
-    if grouping.empty:
+    assignment: dict[int, str] = {}
+    for row in grouping_records:
+        source_row = _coerce_optional_int(
+            _first_present(row, ("REPORT_ID", "report_id", "SAMPLE_NUMBER", "sample_number"))
+        )
+        if source_row is None:
+            continue
+        group_label = str(_first_present(row, ("GROUP", "group")) or default_group).strip()
+        assignment[source_row] = group_label or default_group
+
+    if not assignment:
         diagnostics.append(
             ProductionAnalyticsDiagnostic(
                 severity="warning",
@@ -3553,12 +4045,6 @@ def apply_tabular_grouping(
         )
         return TabularGroupingResult(dataframe=frame, diagnostics=tuple(diagnostics))
 
-    grouping[group_column] = _normalize_group_labels(grouping["GROUP"], default_group=default_group)
-    assignment = (
-        grouping.drop_duplicates(subset=["__source_row_number"], keep="last")
-        .set_index("__source_row_number")[group_column]
-        .to_dict()
-    )
     row_numbers = pd.to_numeric(frame["source_row_number"], errors="coerce")
     frame[group_column] = row_numbers.map(assignment).fillna(default_group).astype(str)
     group_labels = sorted(label for label in frame[group_column].dropna().astype(str).unique() if label)
@@ -3655,6 +4141,12 @@ def export_tabular_analytics_workbook(
     group_fields: tuple[str, ...] = (),
 ) -> TabularAnalyticsWorkbookResult:
     """Write workbook output for CSV/Excel analytics, optionally one sheet per metric."""
+
+    from metroliza.industrial.industrial_analytics_helpers import diagnostics_dataframe
+    from metroliza.industrial.industrial_analytics_workbook import groupstats_result_dataframe
+    from metroliza.industrial.industrial_analytics_workbook_charts import (
+        add_analytics_workbook_charts,
+    )
 
     output_path = Path(output_file)
     if output_path.suffix.lower() != ".xlsx":
@@ -3819,6 +4311,60 @@ def _date_display_series(series: pd.Series | None, row_count: int) -> list[str]:
 def _normalize_group_labels(series: pd.Series, *, default_group: str) -> pd.Series:
     labels = series.fillna(default_group).astype(str).str.strip()
     return labels.mask(labels == "", default_group)
+
+
+def _first_present(row: Mapping[str, Any], names: tuple[str, ...]) -> Any:
+    for name in names:
+        if name in row:
+            return row[name]
+    return None
+
+
+def _coerce_optional_int(value: Any) -> int | None:
+    try:
+        if value is None or value != value:
+            return None
+    except (TypeError, ValueError):
+        pass
+    try:
+        return int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def _tabular_grouping_records(grouping_df: Any | None) -> list[Mapping[str, Any]]:
+    if grouping_df is None:
+        return []
+    columns = getattr(grouping_df, "columns", ())
+    empty = getattr(grouping_df, "empty", False)
+    if len(columns) > 0 and "GROUP" not in columns:
+        return []
+    if bool(empty):
+        return []
+    to_dict = getattr(grouping_df, "to_dict", None)
+    if callable(to_dict):
+        try:
+            records = to_dict("records")
+        except TypeError:
+            records = to_dict()
+        if isinstance(records, Mapping):
+            records = [records]
+        return [record for record in records if isinstance(record, Mapping)]
+    if isinstance(grouping_df, Iterable) and not isinstance(grouping_df, (str, bytes)):
+        records: list[Mapping[str, Any]] = []
+        for row in grouping_df:
+            if hasattr(row, "__dataclass_fields__"):
+                records.append(
+                    {
+                        "GROUP": getattr(row, "group", None),
+                        "REPORT_ID": getattr(row, "report_id", None),
+                        "SAMPLE_NUMBER": getattr(row, "sample_number", None),
+                    }
+                )
+            elif isinstance(row, Mapping):
+                records.append(row)
+        return records
+    return []
 
 
 def _safe_column_name(value: str, *, fallback: str) -> str:

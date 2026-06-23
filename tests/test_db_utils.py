@@ -7,15 +7,21 @@ import time
 import unittest
 from unittest import mock
 
-import pandas as pd
-
 from modules.db import (
+    QueryResult,
+    QueryScope,
+    RowBatch,
     chunked_values,
+    count_query_scope_rows,
     execute_many_with_retry,
     execute_select_with_columns,
     execute_with_retry,
+    iter_query_scope_batches,
+    iter_sql_query_batches,
     quote_identifier,
+    read_query_scope_result,
     read_sql_dataframe,
+    read_sql_query_result,
     run_transaction_with_retry,
 )
 from modules.characteristic_alias_service import ensure_characteristic_alias_schema
@@ -79,19 +85,59 @@ class TestDbUtils(unittest.TestCase):
         self.assertEqual(rows, [('alpha',), ('beta',), ('delta',)])
 
 
-    def test_read_sql_dataframe_returns_dataframe(self):
-        df = read_sql_dataframe(self.db_path, 'SELECT id, name FROM sample ORDER BY id')
-        self.assertIsInstance(df, pd.DataFrame)
-        self.assertListEqual(df['name'].tolist(), ['alpha', 'beta'])
+    def test_read_sql_query_result_returns_rows_and_columns(self):
+        result = read_sql_query_result(self.db_path, 'SELECT id, name FROM sample ORDER BY id')
+        self.assertIsInstance(result, QueryResult)
+        self.assertEqual(result.columns, ('id', 'name'))
+        self.assertEqual(result.rows, ((1, 'alpha'), (2, 'beta')))
+        self.assertEqual(result.column('name'), ('alpha', 'beta'))
+        self.assertEqual(result.as_dicts(), [{'id': 1, 'name': 'alpha'}, {'id': 2, 'name': 'beta'}])
 
-    def test_read_sql_dataframe_accepts_query_params(self):
-        df = read_sql_dataframe(
+    def test_read_sql_query_result_accepts_query_params(self):
+        result = read_sql_query_result(
             self.db_path,
             'SELECT id, name FROM sample WHERE name = ?',
             params=('beta',),
         )
 
-        self.assertListEqual(df['name'].tolist(), ['beta'])
+        self.assertEqual(result.column('name'), ('beta',))
+
+    def test_query_scope_can_be_counted_materialized_and_streamed(self):
+        scope = QueryScope(
+            sql='SELECT id, name FROM sample WHERE id >= ? ORDER BY id',
+            params=[1],
+            columns=('id', 'name'),
+            row_count_sql='SELECT COUNT(*) FROM sample WHERE id >= ?',
+        )
+
+        result = read_query_scope_result(self.db_path, scope)
+        batches = list(iter_query_scope_batches(self.db_path, scope, batch_size=1))
+
+        self.assertEqual(count_query_scope_rows(self.db_path, scope), 2)
+        self.assertEqual(result.rows, ((1, 'alpha'), (2, 'beta')))
+        self.assertEqual([batch.rows for batch in batches], [((1, 'alpha'),), ((2, 'beta'),)])
+        self.assertTrue(all(isinstance(batch, RowBatch) for batch in batches))
+        self.assertEqual([batch.offset for batch in batches], [0, 1])
+        self.assertEqual(batches[0].as_dicts(), [{'id': 1, 'name': 'alpha'}])
+
+    def test_iter_sql_query_batches_uses_stable_columns_and_offsets(self):
+        batches = list(
+            iter_sql_query_batches(
+                self.db_path,
+                'SELECT id, name FROM sample ORDER BY id',
+                batch_size=2,
+            )
+        )
+
+        self.assertEqual(len(batches), 1)
+        self.assertEqual(batches[0].columns, ('id', 'name'))
+        self.assertEqual(batches[0].row_count, 2)
+        self.assertEqual(batches[0].offset, 0)
+
+    def test_read_sql_dataframe_compatibility_wrapper_returns_dataframe(self):
+        result = read_sql_dataframe(self.db_path, 'SELECT id, name FROM sample ORDER BY id')
+
+        self.assertEqual(result['name'].tolist(), ['alpha', 'beta'])
 
     def test_quote_identifier_escapes_embedded_quotes(self):
         self.assertEqual(quote_identifier('source"name'), '"source""name"')
@@ -128,7 +174,7 @@ class TestDbUtils(unittest.TestCase):
             return original_connect(path, timeout_s)
 
         with mock.patch('modules.db.connect_sqlite', side_effect=flaky_connect), mock.patch('modules.db.time.sleep') as sleep_mock:
-            df = read_sql_dataframe(
+            result = read_sql_query_result(
                 self.db_path,
                 'SELECT id, name FROM sample ORDER BY id',
                 retries=2,
@@ -137,7 +183,7 @@ class TestDbUtils(unittest.TestCase):
 
         self.assertEqual(attempts['count'], 2)
         sleep_mock.assert_called_once_with(0.001)
-        self.assertListEqual(df['name'].tolist(), ['alpha', 'beta'])
+        self.assertEqual(result.column('name'), ('alpha', 'beta'))
 
     def test_execute_select_with_columns_returns_rows_and_columns(self):
         rows, column_names = execute_select_with_columns(

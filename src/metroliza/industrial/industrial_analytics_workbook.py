@@ -6,8 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
-
 from metroliza.shared.excel_sheet_utils import unique_sheet_name
 from metroliza.industrial.industrial_analytics_service import (
     ProductionAggregationResult,
@@ -18,6 +16,16 @@ from metroliza.industrial.industrial_analytics_helpers import diagnostics_datafr
 from metroliza.industrial.industrial_analytics_state import ProductionMetricSelection
 from metroliza.industrial.industrial_analytics_state import ProductionChartSelection
 from metroliza.industrial.industrial_analytics_workbook_charts import add_analytics_workbook_charts
+
+
+class _LazyPandas:
+    def __getattr__(self, name: str) -> Any:
+        import importlib
+
+        return getattr(importlib.import_module("pandas"), name)
+
+
+pd = _LazyPandas()
 
 
 @dataclass(frozen=True)

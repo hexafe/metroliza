@@ -5,6 +5,7 @@ import xml.etree.ElementTree as ET
 
 import pandas as pd
 
+from metroliza.exporting.export_query_service import RowTable
 from modules.characteristic_alias_service import ensure_characteristic_alias_schema, upsert_characteristic_alias
 from modules.export_group_comparison_writer import (
     _build_insights,
@@ -120,6 +121,23 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
             payload = prepare_group_comparison_payload(grouped_df, alias_db_path=db_path)
 
         self.assertEqual(payload['pairwise_rows'][0]['Metric'], 'DIAMETER - X')
+
+    def test_prepare_payload_accepts_row_table_input(self):
+        grouped_rows = RowTable(
+            rows=(
+                ('DIA - X', 10.0, 'A'),
+                ('DIA - X', 10.1, 'A'),
+                ('DIA - X', 9.8, 'B'),
+                ('DIA - X', 9.9, 'B'),
+            ),
+            columns=('HEADER - AX', 'MEAS', 'GROUP'),
+        )
+
+        payload = prepare_group_comparison_payload(grouped_rows)
+
+        self.assertIn(('Rows', 4), payload['metadata'])
+        self.assertIn(('Groups', 2), payload['metadata'])
+        self.assertEqual(payload['pairwise_rows'][0]['Metric'], 'DIA - X')
 
     def test_prepare_payload_prefers_reference_alias_over_global_alias(self):
         grouped_df = pd.DataFrame(
@@ -389,6 +407,26 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertEqual(effect.loc['A', 'B'], 0.6)
         self.assertEqual(effect.loc['B', 'A'], 0.6)
         self.assertTrue(pd.isna(effect.loc['A', 'A']))
+        self.assertTrue(pd.isna(effect.loc['B', 'B']))
+
+    def test_pairwise_matrix_construction_accepts_plain_rows(self):
+        pairwise_rows = [
+            {
+                'Metric': 'DIA - X',
+                'Group A': 'A',
+                'Group B': 'B',
+                'adjusted p-value': 0.012,
+                'effect size': -0.6,
+            }
+        ]
+
+        significance_matrices, effect_matrices = _build_pairwise_group_matrices(pairwise_rows)
+
+        sig = significance_matrices['DIA - X']
+        effect = effect_matrices['DIA - X']
+        self.assertEqual(sig.loc['A', 'B'], 0.012)
+        self.assertTrue(pd.isna(sig.loc['A', 'A']))
+        self.assertEqual(effect.loc['B', 'A'], 0.6)
         self.assertTrue(pd.isna(effect.loc['B', 'B']))
 
 

@@ -13,7 +13,7 @@ from typing import Any, Iterable
 from metroliza.reports.db import run_transaction_with_retry
 from metroliza.reports.report_identity import build_report_identity_hash
 from metroliza.reports.report_metadata_models import CanonicalReportMetadata
-from metroliza.reports.report_schema import ensure_report_schema
+from metroliza.reports.report_schema import ensure_report_schema, upsert_report_parse_state
 
 
 SEMANTIC_DUPLICATE_WARNING_CODE = "semantic_duplicate_identity_hash_detected"
@@ -513,6 +513,7 @@ class ReportRepository:
                 _to_json(metadata_json),
             ),
         )
+        upsert_report_parse_state(cursor, int(report_id), metadata_json)
 
     def replace_report_metadata(
         self,
@@ -902,6 +903,7 @@ class ReportRepository:
                 """,
                 tuple(params),
             )
+            upsert_report_parse_state(cursor, int(report_id), metadata_json)
 
             new_identity_hash = report["identity_hash"]
             if identity_changed:

@@ -1,11 +1,11 @@
 import unittest
 
 import matplotlib.pyplot as plt
-import pandas as pd
 import numpy as np
 
 from modules.distribution_fit_service import fit_measurement_distribution
 
+from modules.export_query_service import RowTable
 from modules.export_summary_utils import (
     apply_shared_x_axis_label_strategy,
     build_trend_plot_payload,
@@ -19,7 +19,7 @@ from modules.export_summary_utils import (
 
 class TestExportSummaryUtils(unittest.TestCase):
     def test_resolve_nominal_and_limits_applies_nominal_offsets(self):
-        header_group = pd.DataFrame({'NOM': [10.0], '+TOL': [0.2], '-TOL': [-0.1]})
+        header_group = RowTable(rows=((10.0, 0.2, -0.1),), columns=('NOM', '+TOL', '-TOL'))
 
         limits = resolve_nominal_and_limits(header_group)
 
@@ -28,11 +28,7 @@ class TestExportSummaryUtils(unittest.TestCase):
         self.assertEqual(limits['lsl'], 9.9)
 
     def test_compute_measurement_summary_handles_out_of_tolerance_and_ratios(self):
-        header_group = pd.DataFrame(
-            {
-                'MEAS': [9.8, 10.0, 10.25],
-            }
-        )
+        header_group = RowTable(rows=((9.8,), (10.0,), (10.25,)), columns=('MEAS',))
 
         summary = compute_measurement_summary(header_group, usl=10.2, lsl=9.9, nom=10.0)
 
@@ -44,11 +40,7 @@ class TestExportSummaryUtils(unittest.TestCase):
 
 
     def test_compute_measurement_summary_ignores_inactive_lower_side_for_gdt_zero_bound(self):
-        header_group = pd.DataFrame(
-            {
-                'MEAS': [-0.01, 0.02, 0.12],
-            }
-        )
+        header_group = RowTable(rows=((-0.01,), (0.02,), (0.12,)), columns=('MEAS',))
 
         summary = compute_measurement_summary(header_group, usl=0.1, lsl=0.0, nom=0.0)
 
@@ -106,11 +98,9 @@ class TestExportSummaryUtils(unittest.TestCase):
         np.testing.assert_allclose(payload['y'], fit_result['kde_reference_pdf']['y'])
 
     def test_build_trend_plot_payload_keeps_repeated_sample_labels_dense(self):
-        header_group = pd.DataFrame(
-            {
-                'MEAS': ['1.0', '1.1', '1.2', '1.3'],
-                'SAMPLE_NUMBER': ['1', '1', '2', '2'],
-            }
+        header_group = RowTable(
+            rows=(('1.0', '1'), ('1.1', '1'), ('1.2', '2'), ('1.3', '2')),
+            columns=('MEAS', 'SAMPLE_NUMBER'),
         )
 
         payload = build_trend_plot_payload(header_group)

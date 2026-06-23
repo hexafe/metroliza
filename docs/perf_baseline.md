@@ -45,6 +45,17 @@ This document defines canonical benchmark scenarios and pass/fail policy for CI 
   - `parse_python_backend_rate`, `parse_native_backend_rate`
   - `persistence_python_backend_rate`, `persistence_native_backend_rate`
 
+### CMM existing-fingerprint SQLite state probe
+
+- Scenario key: `cmm_fingerprint_sqlite_state_probe`
+- Purpose: measure existing-report fingerprint loading against indexed
+  `report_parse_state` columns instead of scanning `report_metadata.metadata_json`
+  with `LIKE` predicates.
+- Expected telemetry in output:
+  - `complete_fingerprints`, `complete_expected_fingerprints`
+  - `light_fingerprints`, `light_expected_fingerprints`
+  - `complete_fingerprint_query_plan_*`, `light_fingerprint_query_plan_*`
+
 ### CMM native parser guardrail baselines
 
 For CI quality-gate enforcement on `cmm_parser_backend_compare`:
@@ -63,6 +74,7 @@ real report-derived names, or customer-derived CSV values to these scenarios.
 
 Canonical export scenario keys:
 - `excel_export_path`
+- `export_sqlite_materialization_probe`
 - `excel_export_write_vs_shape_path`
 - `excel_export_high_header_cardinality_compare`
 - `csv_summary_export_path`
@@ -71,6 +83,9 @@ Expected stage-level timings include:
 - Excel workbook path: `transform_grouping`, `worksheet_write_planning`,
   `worksheet_writes`, `chart_payload_preparation`, `chart_rendering`,
   and `workbook_close`.
+- SQLite materialization probe: `dataframe_materialize`, `dataframe_groupby`,
+  `sqlite_aggregate`, `query_plan_probe`, dataframe cell counts, SQLite group
+  counts, and `*_query_plan_*` metrics for the export view and aggregate query.
 - Excel write-vs-shape path: `data_load`, `dataframe_grouping`,
   `data_sorting`, `write_bundle_planning`, `write_measurement_blocks`,
   `write_only_worksheet_ops`, and `workbook_close`.
@@ -105,6 +120,23 @@ PYTHONPATH=src:. python scripts/benchmark_paths.py \
   --large-csv-columns 20 \
   --large-csv-materialize-columns 5
 ```
+
+Manual SQLite-first analytics probe:
+
+```bash
+PYTHONPATH=src:. python scripts/benchmark_paths.py \
+  --scenarios tabular_sqlite_aggregate_probe \
+  --grouping-high-cardinality-rows 1000000 \
+  --grouping-high-cardinality-groups 20000 \
+  --grouping-high-cardinality-materialize-columns 5
+```
+
+The tabular SQLite aggregate probe compares grouped SQLite aggregation, bounded
+row-batch streaming, and compatibility materialization on the same synthetic
+SQLite-backed CSV Summary store. Expected telemetry includes
+`sqlite_grouped_aggregate`, `sqlite_row_batch_stream`,
+`materialize_required_columns`, `materialize_to_sqlite_aggregate_ratio`,
+streamed/materialized cell counts, and materialization RSS delta.
 
 The 10M-point static POPULATION probe is opt-in and is not part of default CI.
 It records full-density render time, sampled-marker comparison time, PNG size,

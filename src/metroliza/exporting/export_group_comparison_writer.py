@@ -13,8 +13,9 @@ Fallback behavior:
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
-import pandas as pd
 
 from hexafe_groupstats import AnalysisConfig, analyze_metric
 
@@ -35,6 +36,7 @@ except ImportError:
 from metroliza.reports.characteristic_alias_service import resolve_characteristic_alias
 from metroliza.analytics.distribution_shape_analysis import compute_distribution_difference
 from metroliza.charts.xlsx_chart_utils import apply_chart_options, create_workbook_chart, insert_chart
+from metroliza.exporting.export_query_service import RowTable, _coerce_to_row_table
 
 
 SECTION_GAP = 2
@@ -47,6 +49,221 @@ BASE_INTERPRETATION_NOTES = [
     'Shape differences can matter even when averages look similar, because one group may still be less consistent, more skewed, or split into multiple patterns.',
     'Use the results as a prioritization aid: monitor small or uncertain gaps, and investigate large or repeatable gaps before changing the process.',
 ]
+
+
+class _ColumnList(list):
+    def tolist(self):
+        return list(self)
+
+
+class _MatrixRow(list):
+    def tolist(self):
+        return list(self)
+
+
+class _MatrixLoc:
+    def __init__(self, matrix):
+        self._matrix = matrix
+
+    def __getitem__(self, key):
+        row_name, column_name = key
+        return self._matrix.value_at(row_name, column_name)
+
+
+class MatrixTable:
+    """Small square matrix table used by the legacy writer without pandas."""
+
+    def __init__(self, *, index, columns, rows):
+        self.index = tuple(index)
+        self.columns = tuple(columns)
+        self._rows = tuple(tuple(row) for row in rows)
+
+    @property
+    def empty(self):
+        return not self.index or not self.columns
+
+    @property
+    def loc(self):
+        return _MatrixLoc(self)
+
+    def value_at(self, row_name, column_name):
+        row_index = self.index.index(row_name)
+        column_index = self.columns.index(column_name)
+        return self._rows[row_index][column_index]
+
+    def iterrows(self):
+        for row_name, values in zip(self.index, self._rows):
+            yield row_name, _MatrixRow(values)
+
+    def to_numpy(self):
+        return np.asarray(self._rows, dtype=object)
+
+
+def _is_missing_value(value):
+    if value is None:
+        return True
+    try:
+        missing = value != value
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)):
+        return bool(missing)
+
+    module_name = type(value).__module__
+    type_name = type(value).__name__
+    return module_name.startswith(('pandas', 'numpy')) and type_name in {'NAType', 'NaTType'}
+
+
+def _hashable_marker(value):
+    if _is_missing_value(value):
+        return ('__missing__',)
+    try:
+        hash(value)
+    except TypeError:
+        return repr(value)
+    return value
+
+
+def _sort_marker(value):
+    return _is_missing_value(value), str(value)
+
+
+def _as_row_table(table) -> RowTable:
+    if isinstance(table, RowTable):
+        return table.copy()
+    try:
+        return _coerce_to_row_table(table)
+    except (TypeError, ValueError):
+        return RowTable(rows=(), columns=())
+
+
+def _table_empty(table) -> bool:
+    return table is None or len(_as_row_table(table)) == 0
+
+
+def _column_values(table, column_name, *, default=None):
+    row_table = _as_row_table(table)
+    if column_name not in row_table.columns:
+        return [default for _ in range(len(row_table))]
+    return row_table[column_name].tolist()
+
+
+def _iter_row_mappings(table):
+    return _as_row_table(table).iter_rows(as_dict=True)
+
+
+def _filter_table(table, predicate) -> RowTable:
+    row_table = _as_row_table(table)
+    rows = []
+    for row_index, row in enumerate(row_table.iter_rows(as_dict=True)):
+        if predicate(row):
+            rows.append(row_table.rows[row_index])
+    return RowTable(rows=tuple(rows), columns=tuple(row_table.columns))
+
+
+def _group_table(table, column_name, *, sort=True):
+    row_table = _as_row_table(table)
+    grouped_rows = {}
+    keys_by_marker = {}
+    for row in row_table.rows:
+        row_map = dict(zip(row_table.columns, row))
+        key = row_map.get(column_name)
+        marker = _hashable_marker(key)
+        keys_by_marker.setdefault(marker, key)
+        grouped_rows.setdefault(marker, []).append(row)
+
+    markers = list(grouped_rows)
+    if sort:
+        markers.sort(key=lambda marker: _sort_marker(keys_by_marker[marker]))
+
+    for marker in markers:
+        yield keys_by_marker[marker], RowTable(
+            rows=tuple(grouped_rows[marker]),
+            columns=tuple(row_table.columns),
+        )
+
+
+def _unique_preserving_order(values, *, dropna=True):
+    seen = set()
+    output = []
+    for value in values:
+        if dropna and _is_missing_value(value):
+            continue
+        marker = _hashable_marker(value)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        output.append(value)
+    return output
+
+
+def _nunique(values, *, dropna=True):
+    return len(_unique_preserving_order(values, dropna=dropna))
+
+
+def _normalize_text(value, *, missing=''):
+    if _is_missing_value(value):
+        return missing
+    return str(value).strip()
+
+
+def _safe_numeric(value):
+    if _is_missing_value(value):
+        return None
+    if isinstance(value, str) and value.strip() == '':
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if math.isnan(numeric):
+        return None
+    return numeric
+
+
+def _safe_mean(values):
+    numeric_values = [_safe_numeric(value) for value in values]
+    numeric_values = [value for value in numeric_values if value is not None]
+    if not numeric_values:
+        return None
+    return float(np.mean(np.asarray(numeric_values, dtype=float)))
+
+
+def _safe_median(values):
+    numeric_values = [_safe_numeric(value) for value in values]
+    numeric_values = [value for value in numeric_values if value is not None]
+    if not numeric_values:
+        return None
+    return float(np.median(np.asarray(numeric_values, dtype=float)))
+
+
+def _matrix_empty(matrix):
+    empty = getattr(matrix, 'empty', None)
+    if empty is not None:
+        return bool(empty)
+    return len(_matrix_columns(matrix)) == 0
+
+
+def _matrix_columns(matrix):
+    return list(getattr(matrix, 'columns', ()))
+
+
+def _matrix_iterrows(matrix):
+    iterrows = getattr(matrix, 'iterrows', None)
+    if callable(iterrows):
+        return iterrows()
+    return iter(())
+
+
+def _matrix_values(matrix):
+    to_numpy = getattr(matrix, 'to_numpy', None)
+    if callable(to_numpy):
+        return np.asarray(to_numpy(), dtype=object)
+    rows = []
+    for _, values in _matrix_iterrows(matrix):
+        tolist = getattr(values, 'tolist', None)
+        rows.append(list(tolist() if callable(tolist) else values))
+    return np.asarray(rows, dtype=object)
 
 
 EFFECT_TYPE_METADATA = {
@@ -172,11 +389,6 @@ def _build_interpretation_notes(payload):
     return notes
 
 
-def _safe_numeric(value):
-    numeric = pd.to_numeric(pd.Series([value]), errors='coerce').iloc[0]
-    return None if pd.isna(numeric) else float(numeric)
-
-
 def _sample_size_caution(row):
     n_a = row.get('n(A)')
     n_b = row.get('n(B)')
@@ -264,28 +476,46 @@ def _pairwise_action(row):
 
 
 def _relative_position(values, target_value):
-    ordered = pd.Series(values).sort_values(kind='mergesort')
-    if ordered.empty:
+    ordered = sorted(value for value in (_safe_numeric(value) for value in values) if value is not None)
+    target = _safe_numeric(target_value)
+    if not ordered or target is None:
         return 'unknown'
-    if target_value <= ordered.iloc[0]:
+    if target <= ordered[0]:
         return 'lowest'
-    if target_value >= ordered.iloc[-1]:
+    if target >= ordered[-1]:
         return 'highest'
-    midpoint = ordered.median()
-    if target_value == midpoint:
+    midpoint = float(np.median(np.asarray(ordered, dtype=float)))
+    if target == midpoint:
         return 'near center'
-    return 'above center' if target_value > midpoint else 'below center'
+    return 'above center' if target > midpoint else 'below center'
 
 
-def _build_group_profile_rows(working: pd.DataFrame):
-    if working.empty:
+def _build_group_profile_rows(working):
+    working_table = _as_row_table(working)
+    if working_table.empty:
         return []
 
     rows = []
-    for metric_key, metric_frame in working.groupby('metric_key', sort=False):
-        group_stats = metric_frame.groupby('GROUP', sort=True)['MEAS'].agg(['mean', 'median', 'count'])
-        means = group_stats['mean'].tolist()
-        for group_name, stats in group_stats.iterrows():
+    for metric_key, metric_frame in _group_table(working_table, 'metric_key', sort=False):
+        group_stats = []
+        for group_name, group_frame in _group_table(metric_frame, 'GROUP', sort=True):
+            values = _column_values(group_frame, 'MEAS')
+            numeric_values = [_safe_numeric(value) for value in values]
+            numeric_values = [value for value in numeric_values if value is not None]
+            if not numeric_values:
+                continue
+            group_stats.append(
+                {
+                    'group': group_name,
+                    'mean': float(np.mean(np.asarray(numeric_values, dtype=float))),
+                    'median': float(np.median(np.asarray(numeric_values, dtype=float))),
+                    'count': len(numeric_values),
+                }
+            )
+
+        means = [stats['mean'] for stats in group_stats]
+        for stats in group_stats:
+            group_name = stats['group']
             position = _relative_position(means, stats['mean'])
             if position == 'highest':
                 summary = 'This group is currently the highest on this metric.'
@@ -316,54 +546,69 @@ def _build_group_profile_rows(working: pd.DataFrame):
 
 def _build_pairwise_group_matrices(pairwise_df):
     """Build per-metric square matrices for adjusted p-values and location-effect magnitudes."""
-    if pairwise_df.empty:
+    pairwise_rows = list(_iter_row_mappings(pairwise_df))
+    if not pairwise_rows:
         return {}, {}
 
     significance_matrices = {}
     effect_matrices = {}
 
-    for metric, metric_rows in pairwise_df.groupby('Metric', sort=True):
-        groups = pd.unique(metric_rows[['Group A', 'Group B']].values.ravel('K')).tolist()
-        sig_df = pd.DataFrame(index=groups, columns=groups, dtype=float)
-        effect_df = pd.DataFrame(index=groups, columns=groups, dtype=float)
+    metrics = sorted(_unique_preserving_order(row.get('Metric') for row in pairwise_rows))
+    for metric in metrics:
+        metric_rows = [row for row in pairwise_rows if row.get('Metric') == metric]
+        groups = _unique_preserving_order(
+            group
+            for row in metric_rows
+            for group in (row.get('Group A'), row.get('Group B'))
+        )
+        sig_values = [[np.nan for _ in groups] for _ in groups]
+        effect_values = [[np.nan for _ in groups] for _ in groups]
+        group_indexes = {group: index for index, group in enumerate(groups)}
 
-        for group in groups:
-            sig_df.loc[group, group] = np.nan
-            effect_df.loc[group, group] = np.nan
+        for comparison in metric_rows:
+            group_a = comparison.get('Group A')
+            group_b = comparison.get('Group B')
+            if group_a not in group_indexes or group_b not in group_indexes:
+                continue
+            row_a = group_indexes[group_a]
+            row_b = group_indexes[group_b]
+            adjusted_p = _safe_numeric(comparison.get('adjusted p-value'))
+            effect = _safe_numeric(comparison.get('effect size'))
+            absolute_effect = abs(effect) if effect is not None else np.nan
+            sig_values[row_a][row_b] = adjusted_p if adjusted_p is not None else np.nan
+            sig_values[row_b][row_a] = adjusted_p if adjusted_p is not None else np.nan
+            effect_values[row_a][row_b] = absolute_effect
+            effect_values[row_b][row_a] = absolute_effect
 
-        for _, comparison in metric_rows.iterrows():
-            group_a = comparison['Group A']
-            group_b = comparison['Group B']
-            adjusted_p = comparison.get('adjusted p-value')
-            effect = comparison.get('effect size')
-            sig_df.loc[group_a, group_b] = adjusted_p
-            sig_df.loc[group_b, group_a] = adjusted_p
-            absolute_effect = abs(effect) if pd.notna(effect) else effect
-            effect_df.loc[group_a, group_b] = absolute_effect
-            effect_df.loc[group_b, group_a] = absolute_effect
-
-        significance_matrices[metric] = sig_df
-        effect_matrices[metric] = effect_df
+        significance_matrices[metric] = MatrixTable(index=groups, columns=groups, rows=sig_values)
+        effect_matrices[metric] = MatrixTable(index=groups, columns=groups, rows=effect_values)
 
     return significance_matrices, effect_matrices
 
 
 def _build_insights(working, pairwise_df, overall_test_rows, distribution_summary_rows=None):
     """Create deterministic insight bullets for the worksheet."""
-    if working.empty:
+    working_table = _as_row_table(working)
+    pairwise_rows = list(_iter_row_mappings(pairwise_df))
+    if working_table.empty:
         return ['No grouped measurement rows available for comparison.']
 
     insights = []
-    group_means = working.groupby('GROUP')['MEAS'].mean().sort_values(ascending=False)
-    if not group_means.empty:
-        highest_group = group_means.index[0]
-        lowest_group = group_means.index[-1]
+    group_means = []
+    for group_name, group_frame in _group_table(working_table, 'GROUP', sort=True):
+        mean_value = _safe_mean(_column_values(group_frame, 'MEAS'))
+        if mean_value is not None:
+            group_means.append((group_name, mean_value))
+    group_means.sort(key=lambda item: item[1], reverse=True)
+    if group_means:
+        highest_group, highest_mean = group_means[0]
+        lowest_group, lowest_mean = group_means[-1]
         insights.append(
-            f'Central tendency: highest mean={highest_group} ({group_means.iloc[0]:.3f}), '
-            f'lowest mean={lowest_group} ({group_means.iloc[-1]:.3f}). Use this as a quick ranking, not as proof that every pair is meaningfully different.'
+            f'Central tendency: highest mean={highest_group} ({highest_mean:.3f}), '
+            f'lowest mean={lowest_group} ({lowest_mean:.3f}). Use this as a quick ranking, not as proof that every pair is meaningfully different.'
         )
 
-    if pairwise_df.empty:
+    if not pairwise_rows:
         insights.extend(
             [
                 'Significant pairwise findings: none (no pairwise location comparisons available).',
@@ -372,35 +617,69 @@ def _build_insights(working, pairwise_df, overall_test_rows, distribution_summar
             ]
         )
     else:
-        adj_p = pd.to_numeric(pairwise_df['adjusted p-value'], errors='coerce')
-
-        significant = pairwise_df[adj_p < 0.05]
-        if significant.empty:
+        enriched_rows = [
+            {**row, '__adjusted_p_value__': _safe_numeric(row.get('adjusted p-value'))}
+            for row in pairwise_rows
+        ]
+        significant = [
+            row for row in enriched_rows
+            if row['__adjusted_p_value__'] is not None and row['__adjusted_p_value__'] < 0.05
+        ]
+        if not significant:
             insights.append('Significant pairwise findings: none at adjusted p < 0.05, so there is not enough corrected evidence for a clear location difference.')
         else:
             significant_labels = [
-                f"{row['Metric']} ({row['Group A']} vs {row['Group B']}, adj p={row['adjusted p-value']:.4f})"
-                for _, row in significant.sort_values(['Metric', 'adjusted p-value', 'Group A', 'Group B']).iterrows()
+                f"{row['Metric']} ({row['Group A']} vs {row['Group B']}, adj p={row['__adjusted_p_value__']:.4f})"
+                for row in sorted(
+                    significant,
+                    key=lambda row: (
+                        str(row.get('Metric') or ''),
+                        row['__adjusted_p_value__'],
+                        str(row.get('Group A') or ''),
+                        str(row.get('Group B') or ''),
+                    ),
+                )
             ]
             insights.append('Significant pairwise findings: ' + '; '.join(significant_labels) + '.')
 
-        no_difference = pairwise_df[adj_p >= 0.05]
-        if no_difference.empty:
+        no_difference = [
+            row for row in enriched_rows
+            if row['__adjusted_p_value__'] is not None and row['__adjusted_p_value__'] >= 0.05
+        ]
+        if not no_difference:
             insights.append('difference: all tested pairs were significant after adjustment, but use effect size to judge whether the gaps are operationally important.')
         else:
             no_diff_labels = [
-                f"{row['Metric']} ({row['Group A']} vs {row['Group B']}, adj p={row['adjusted p-value']:.4f})"
-                for _, row in no_difference.sort_values(['Metric', 'adjusted p-value', 'Group A', 'Group B']).iterrows()
+                f"{row['Metric']} ({row['Group A']} vs {row['Group B']}, adj p={row['__adjusted_p_value__']:.4f})"
+                for row in sorted(
+                    no_difference,
+                    key=lambda row: (
+                        str(row.get('Metric') or ''),
+                        row['__adjusted_p_value__'],
+                        str(row.get('Group A') or ''),
+                        str(row.get('Group B') or ''),
+                    ),
+                )
             ]
             insights.append('difference: ' + '; '.join(no_diff_labels) + '.')
 
-        small_sample_pairs = pairwise_df[(pairwise_df['n(A)'] < 5) | (pairwise_df['n(B)'] < 5)]
-        if small_sample_pairs.empty:
+        small_sample_pairs = [
+            row for row in enriched_rows
+            if (_safe_numeric(row.get('n(A)')) or 0) < 5 or (_safe_numeric(row.get('n(B)')) or 0) < 5
+        ]
+        if not small_sample_pairs:
             insights.append('caution: all compared groups had n >= 5, so sample-size risk is lower.')
         else:
             warning_labels = [
                 f"{row['Metric']} ({row['Group A']} n={row['n(A)']}, {row['Group B']} n={row['n(B)']})"
-                for _, row in small_sample_pairs.sort_values(['Metric', 'Group A', 'Group B']).iterrows()
+                for row in sorted(
+                    small_sample_pairs,
+                    key=lambda row: (
+                        str(row.get('Metric') or ''),
+                        str(row.get('Group A') or ''),
+                        str(row.get('Group B') or ''),
+                    ),
+                )
             ]
             insights.append('caution (n < 5): ' + '; '.join(warning_labels) + '.')
 
@@ -426,7 +705,7 @@ def _build_insights(working, pairwise_df, overall_test_rows, distribution_summar
                 for row in shape_significant
                 if row.get('raw p-value') is not None
             ]
-            if pairwise_df.empty:
+            if not pairwise_rows:
                 insights.append('Distribution-shape findings: significant differences detected for ' + '; '.join(labels) + '.')
             else:
                 insights.append('distribution shape: difference detected for ' + '; '.join(labels) + '.')
@@ -436,38 +715,52 @@ def _build_insights(working, pairwise_df, overall_test_rows, distribution_summar
     return insights
 
 
-def _summarize_group_sample_sizes(working: pd.DataFrame) -> str:
-    if working.empty:
+def _summarize_group_sample_sizes(working) -> str:
+    working_table = _as_row_table(working)
+    if working_table.empty:
         return 'No groups'
-    counts = working.groupby('GROUP', sort=True)['MEAS'].size()
-    return ', '.join(f"{group}:{int(size)}" for group, size in counts.items())
+    counts = []
+    for group, group_frame in _group_table(working_table, 'GROUP', sort=True):
+        counts.append((group, len(group_frame)))
+    return ', '.join(f"{group}:{int(size)}" for group, size in counts)
 
 
-def _resolve_metric_aliases_for_comparison(working: pd.DataFrame, *, alias_db_path=None) -> pd.Series:
+def _resolve_metric_aliases_for_comparison(working, *, alias_db_path=None):
     """Resolve comparison metric keys with reference-scoped alias precedence."""
-    base_metric = working.get('HEADER - AX', working.get('HEADER', 'UNKNOWN')).fillna('UNKNOWN').astype(str)
+    working_table = _as_row_table(working)
+    if 'HEADER - AX' in working_table.columns:
+        base_metric = [
+            _normalize_text(value, missing='UNKNOWN')
+            for value in _column_values(working_table, 'HEADER - AX')
+        ]
+    elif 'HEADER' in working_table.columns:
+        base_metric = [
+            _normalize_text(value, missing='UNKNOWN')
+            for value in _column_values(working_table, 'HEADER')
+        ]
+    else:
+        base_metric = ['UNKNOWN' for _ in range(len(working_table))]
     if alias_db_path is None:
-        return base_metric
+        return _ColumnList(base_metric)
 
-    resolved_metric = base_metric.copy()
-    reference_series = None
-    if 'REFERENCE' in working.columns:
-        reference_series = working['REFERENCE'].fillna('').astype(str).str.strip()
+    resolved_metric = list(base_metric)
+    reference_values = (
+        [_normalize_text(value) or None for value in _column_values(working_table, 'REFERENCE')]
+        if 'REFERENCE' in working_table.columns
+        else [None for _ in range(len(working_table))]
+    )
 
-    for row_index, metric_name in resolved_metric.items():
+    for row_index, metric_name in enumerate(resolved_metric):
         normalized_metric_name = str(metric_name or '').strip()
         if not normalized_metric_name:
             continue
-        reference_value = None
-        if reference_series is not None:
-            reference_value = reference_series.get(row_index) or None
-        resolved_metric.at[row_index] = resolve_characteristic_alias(
+        resolved_metric[row_index] = resolve_characteristic_alias(
             normalized_metric_name,
-            reference_value,
+            reference_values[row_index],
             alias_db_path,
         )
 
-    return resolved_metric
+    return _ColumnList(resolved_metric)
 
 
 def _normalize_correction_method(correction_method: str) -> str:
@@ -527,7 +820,8 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None, correcti
         Returns deterministic empty payload sections when the filtered dataframe
         has no usable numeric measurements.
     """
-    if not isinstance(grouped_df, pd.DataFrame) or grouped_df.empty:
+    grouped_table = _as_row_table(grouped_df)
+    if grouped_table.empty:
         correction_method = _format_correction_method(correction_method)
         correction_policy = _describe_correction_policy(correction_method)
         return {
@@ -546,15 +840,17 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None, correcti
             'insights': ['No grouped measurement rows available for comparison.'],
         }
 
-    working = grouped_df.copy()
+    working = grouped_table.copy()
     if 'GROUP' not in working.columns:
-        working['GROUP'] = 'UNGROUPED'
-    working['GROUP'] = working['GROUP'].fillna('UNGROUPED').astype(str)
+        working['GROUP'] = ['UNGROUPED' for _ in range(len(working))]
+    working['GROUP'] = [
+        _normalize_text(value, missing='UNGROUPED')
+        for value in _column_values(working, 'GROUP')
+    ]
     working['metric_key'] = _resolve_metric_aliases_for_comparison(working, alias_db_path=alias_db_path)
 
-    numeric_meas = pd.to_numeric(working.get('MEAS'), errors='coerce')
-    working = working.assign(MEAS=numeric_meas)
-    working = working.dropna(subset=['MEAS'])
+    working['MEAS'] = [_safe_numeric(value) for value in _column_values(working, 'MEAS')]
+    working = _filter_table(working, lambda row: row.get('MEAS') is not None)
 
     correction_method = _format_correction_method(correction_method)
     correction_policy = _describe_correction_policy(correction_method)
@@ -564,10 +860,10 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None, correcti
     distribution_difference_rows = []
     distribution_pairwise_rows = []
 
-    for metric_key, metric_frame in working.groupby('metric_key', sort=False):
+    for metric_key, metric_frame in _group_table(working, 'metric_key', sort=False):
         group_series = {
-            group_name: group_values['MEAS'].tolist()
-            for group_name, group_values in metric_frame.groupby('GROUP', sort=False)
+            group_name: _column_values(group_values, 'MEAS')
+            for group_name, group_values in _group_table(metric_frame, 'GROUP', sort=False)
         }
         result = _build_metric_analysis_result(metric_key, group_series, correction_method)
         assumptions, assumption_outcomes = _build_legacy_assumption_payload(result)
@@ -597,7 +893,7 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None, correcti
             group_b = item.group_b
             sample_left = group_series[group_a]
             sample_right = group_series[group_b]
-            mean_delta = float(pd.Series(sample_left).mean() - pd.Series(sample_right).mean())
+            mean_delta = float(np.mean(np.asarray(sample_left, dtype=float)) - np.mean(np.asarray(sample_right, dtype=float)))
             pairwise_rows.append(
                 {
                     'Metric': metric_key,
@@ -645,9 +941,8 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None, correcti
         distribution_difference_rows.append(distribution_result.get('omnibus_row', {}))
         distribution_pairwise_rows.extend(distribution_result.get('pairwise_rows', []))
 
-    pairwise_df = pd.DataFrame(pairwise_rows)
-    significance_matrices, effect_matrices = _build_pairwise_group_matrices(pairwise_df)
-    significant_count = int(pairwise_df['significant'].sum()) if not pairwise_df.empty else 0
+    significance_matrices, effect_matrices = _build_pairwise_group_matrices(pairwise_rows)
+    significant_count = int(sum(1 for row in pairwise_rows if row.get('significant')))
     effect_reporting = _build_effect_reporting_metadata(pairwise_rows)
 
     overall_summary = [
@@ -656,15 +951,19 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None, correcti
     ]
     summary_threshold = effect_reporting.get('pairwise_summary_threshold')
     summary_label = effect_reporting.get('pairwise_summary_label')
-    if summary_threshold is not None and summary_label and not pairwise_df.empty:
-        effect_series = pd.to_numeric(pairwise_df['effect size'], errors='coerce')
-        overall_summary.append((summary_label, int((effect_series.abs() >= summary_threshold).sum())))
+    if summary_threshold is not None and summary_label and pairwise_rows:
+        large_effect_count = sum(
+            1
+            for row in pairwise_rows
+            if (effect := _safe_numeric(row.get('effect size'))) is not None and abs(effect) >= summary_threshold
+        )
+        overall_summary.append((summary_label, int(large_effect_count)))
 
     return {
         'metadata': [
             ('Rows', len(working)),
-            ('Groups', working['GROUP'].nunique()),
-            ('Headers', working['metric_key'].nunique()),
+            ('Groups', _nunique(_column_values(working, 'GROUP'))),
+            ('Headers', _nunique(_column_values(working, 'metric_key'))),
             ('Alpha', 0.05),
             ('Correction method', correction_method),
             ('Correction policy', correction_policy),
@@ -683,7 +982,7 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None, correcti
         'effect_matrices': effect_matrices,
         'effect_reporting': effect_reporting,
         'correction_policy': correction_policy,
-        'insights': _build_insights(working, pairwise_df, overall_test_rows, distribution_difference_rows),
+        'insights': _build_insights(working, pairwise_rows, overall_test_rows, distribution_difference_rows),
     }
 
 
@@ -695,8 +994,8 @@ def _normalize_comment(value):
 
 
 def _effect_magnitude_label(effect_value, effect_type):
-    numeric_effect = pd.to_numeric(pd.Series([effect_value]), errors='coerce').iloc[0]
-    if pd.isna(numeric_effect):
+    numeric_effect = _safe_numeric(effect_value)
+    if numeric_effect is None:
         return 'Not reported'
 
     absolute_effect = abs(float(numeric_effect))
@@ -812,7 +1111,9 @@ def _build_summary_block(payload):
     if pairwise_rows:
         strongest_row = max(
             pairwise_rows,
-            key=lambda item: abs(pd.to_numeric(pd.Series([item.get('effect size')]), errors='coerce').iloc[0]) if pd.notna(pd.to_numeric(pd.Series([item.get('effect size')]), errors='coerce').iloc[0]) else -1,
+            key=lambda item: abs(_safe_numeric(item.get('effect size')) or 0.0)
+            if _safe_numeric(item.get('effect size')) is not None
+            else -1,
         )
         strongest_effect = (
             f"{strongest_row.get('Metric')} ({strongest_row.get('Group A')} vs {strongest_row.get('Group B')}): "
@@ -833,7 +1134,7 @@ def _build_summary_block(payload):
             warnings.append(f"{row.get('Metric')}: {warning_text}")
     shape_flags = [
         row for row in distribution_rows
-        if isinstance(row, dict) and pd.to_numeric(pd.Series([row.get('adjusted p-value')]), errors='coerce').notna().iloc[0]
+        if isinstance(row, dict) and _safe_numeric(row.get('adjusted p-value')) is not None
     ]
     if shape_flags:
         warnings.append(f'Shape differences reviewed separately ({len(shape_flags)} metrics).')
@@ -976,33 +1277,54 @@ def _build_group_comparison_chart_payload(payload):
     if not pairwise_rows:
         return {}
 
-    pairwise_df = pd.DataFrame(pairwise_rows).copy()
-    if pairwise_df.empty:
-        return {}
+    enriched_rows = []
+    for row in pairwise_rows:
+        adjusted_p = _safe_numeric(row.get('adjusted p-value'))
+        effect_size = _safe_numeric(row.get('effect size'))
+        pair_label = f"{row.get('Group A')} vs {row.get('Group B')}"
+        enriched = dict(row)
+        enriched['adjusted p-value'] = adjusted_p
+        enriched['effect size'] = effect_size
+        enriched['abs_effect_size'] = abs(effect_size) if effect_size is not None else None
+        enriched['pair_label'] = pair_label
+        enriched['label'] = f"{row.get('Metric')} | {pair_label}"
+        enriched_rows.append(enriched)
 
-    pairwise_df['adjusted p-value'] = pd.to_numeric(pairwise_df.get('adjusted p-value'), errors='coerce')
-    pairwise_df['effect size'] = pd.to_numeric(pairwise_df.get('effect size'), errors='coerce')
-    pairwise_df['abs_effect_size'] = pairwise_df['effect size'].abs()
-    pairwise_df['pair_label'] = pairwise_df['Group A'].astype(str) + ' vs ' + pairwise_df['Group B'].astype(str)
-    pairwise_df['label'] = pairwise_df['Metric'].astype(str) + ' | ' + pairwise_df['pair_label']
+    ranked_rows = [
+        row for row in enriched_rows
+        if row.get('abs_effect_size') is not None
+    ]
+    ranked_rows = sorted(
+        ranked_rows,
+        key=lambda row: (
+            -row['abs_effect_size'],
+            row.get('adjusted p-value') is None,
+            row.get('adjusted p-value') if row.get('adjusted p-value') is not None else float('inf'),
+            str(row.get('Metric') or ''),
+            str(row.get('Group A') or ''),
+            str(row.get('Group B') or ''),
+        ),
+    )[:8]
 
-    ranked_df = pairwise_df.dropna(subset=['abs_effect_size']).sort_values(
-        ['abs_effect_size', 'adjusted p-value', 'Metric', 'Group A', 'Group B'],
-        ascending=[False, True, True, True, True],
-        kind='mergesort',
-    ).head(8).copy()
-
-    scatter_df = pairwise_df.dropna(subset=['abs_effect_size', 'adjusted p-value']).sort_values(
-        ['Metric', 'adjusted p-value', 'Group A', 'Group B'],
-        kind='mergesort',
-    ).copy()
-    if not scatter_df.empty:
-        clipped = scatter_df['adjusted p-value'].clip(lower=1e-12)
-        scatter_df['neg_log10_adj_p'] = -np.log10(clipped)
+    scatter_rows = [
+        row for row in enriched_rows
+        if row.get('abs_effect_size') is not None and row.get('adjusted p-value') is not None
+    ]
+    scatter_rows = sorted(
+        scatter_rows,
+        key=lambda row: (
+            str(row.get('Metric') or ''),
+            row.get('adjusted p-value'),
+            str(row.get('Group A') or ''),
+            str(row.get('Group B') or ''),
+        ),
+    )
+    for row in scatter_rows:
+        row['neg_log10_adj_p'] = -np.log10(max(row['adjusted p-value'], 1e-12))
 
     return {
-        'ranked_effects': ranked_df.to_dict('records'),
-        'effect_vs_p': scatter_df.to_dict('records'),
+        'ranked_effects': ranked_rows,
+        'effect_vs_p': scatter_rows,
     }
 
 
@@ -1154,10 +1476,10 @@ def _write_note_line(worksheet, row, text, note_format):
 
 
 def _sanitize_matrix_value(value):
-    if pd.isna(value):
+    if _is_missing_value(value):
         return None
 
-    if pd.api.types.is_number(value) and not isinstance(value, bool):
+    if isinstance(value, (int, float, complex, np.number)) and not isinstance(value, bool):
         if not np.isfinite(value):
             return None
 
@@ -1165,7 +1487,13 @@ def _sanitize_matrix_value(value):
 
 
 def _finite_matrix_max(matrix_df, default):
-    numeric_values = pd.to_numeric(matrix_df.to_numpy().ravel(), errors='coerce')
+    numeric_values = np.asarray(
+        [
+            _safe_numeric(value)
+            for value in _matrix_values(matrix_df).ravel()
+        ],
+        dtype=float,
+    )
     finite_values = numeric_values[np.isfinite(numeric_values)]
     if finite_values.size == 0:
         return default
@@ -1217,25 +1545,28 @@ def _write_matrix(worksheet, row, title, matrix_df, *, matrix_type, effect_bands
     for legend_line in _matrix_legend_lines(matrix_type, effect_bands=effect_bands, effect_type=effect_type):
         worksheet.write(row, 0, legend_line, formats['legend'])
         row += 1
-    if matrix_df.empty:
+    if _matrix_empty(matrix_df):
         worksheet.write(row, 0, 'No heatmap data', formats['note'])
         return row + SECTION_GAP + 1
 
     worksheet.write(row, 0, 'Group', formats['matrix_header'])
-    for col, column_name in enumerate(matrix_df.columns, start=1):
+    columns = _matrix_columns(matrix_df)
+    for col, column_name in enumerate(columns, start=1):
         worksheet.write(row, col, column_name, formats['matrix_header'])
         worksheet.set_column(col, col, 12, formats['matrix_value'])
     row += 1
 
     first_data_row = row
-    for group, values in matrix_df.iterrows():
+    for group, values in _matrix_iterrows(matrix_df):
         worksheet.write(row, 0, group, formats['matrix_label'])
-        for col, value in enumerate(values.tolist(), start=1):
+        tolist = getattr(values, 'tolist', None)
+        row_values = list(tolist() if callable(tolist) else values)
+        for col, value in enumerate(row_values, start=1):
             worksheet.write(row, col, _sanitize_matrix_value(value), formats['matrix_value'])
         row += 1
 
     first_col = 1
-    last_col = max(1, len(matrix_df.columns))
+    last_col = max(1, len(columns))
     _apply_matrix_conditional_formats(
         worksheet,
         first_data_row,

@@ -331,6 +331,44 @@ def test_load_tabular_analytics_file_can_use_sqlite_for_single_csv_filters(tmp_p
         cleanup_tabular_load_result(result)
 
 
+def test_tabular_sqlite_store_streams_batches_and_aggregates_without_materialization(tmp_path) -> None:
+    input_file = tmp_path / "aggregate.csv"
+    pd.DataFrame(
+        {
+            "Line": ["A", "A", "B", "B"],
+            "Length mm": [10.0, 12.0, 20.0, 24.0],
+            "Width mm": [1.0, 3.0, 5.0, "bad"],
+        }
+    ).to_csv(input_file, index=False)
+
+    result = load_tabular_analytics_file(input_file, reference_column="Line", force_sqlite=True)
+    try:
+        assert result.sqlite_store is not None
+        store = result.sqlite_store
+
+        query_result = store.read_query_result(columns=("source_row_number", "line"))
+        batches = list(store.iter_row_batches(columns=("source_row_number", "line"), batch_size=2))
+        aggregates = store.aggregate_numeric_columns(("length_mm", "width_mm"), group_columns=("line",))
+
+        assert query_result.columns == ("source_row_number", "line")
+        assert query_result.rows == ((1, "A"), (2, "A"), (3, "B"), (4, "B"))
+        assert [batch.row_count for batch in batches] == [2, 2]
+        assert batches[0].as_dicts() == [
+            {"source_row_number": 1, "line": "A"},
+            {"source_row_number": 2, "line": "A"},
+        ]
+
+        by_key = {(row["line"], row["metric"]): row for row in aggregates}
+        assert by_key[("A", "length_mm")]["n"] == 2
+        assert by_key[("A", "length_mm")]["mean"] == 11.0
+        assert by_key[("B", "length_mm")]["max"] == 24.0
+        assert by_key[("A", "width_mm")]["stddev"] == pytest.approx(2**0.5)
+        assert by_key[("B", "width_mm")]["n"] == 1
+        assert by_key[("B", "width_mm")]["stddev"] is None
+    finally:
+        cleanup_tabular_load_result(result)
+
+
 def test_sqlite_csv_loading_reports_progress(tmp_path) -> None:
     input_file = tmp_path / "progress.csv"
     pd.DataFrame(

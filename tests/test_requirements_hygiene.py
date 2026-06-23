@@ -80,10 +80,10 @@ class RequirementsHygieneTests(unittest.TestCase):
 
     def test_runtime_requirements_pin_hexafe_groupstats_to_public_git_source(self):
         runtime_entries = self._runtime_requirements()
-        matches = [entry for entry in runtime_entries if entry.lower().startswith('hexafe-groupstats[pandas] @ ')]
+        matches = [entry for entry in runtime_entries if entry.lower().startswith('hexafe-groupstats @ ')]
 
         self.assertEqual(matches, [
-            'hexafe-groupstats[pandas] @ git+https://github.com/hexafe/hexafe-groupstats.git@14cc60e7412fa2647a8906f3f8833d0d789fc552'
+            'hexafe-groupstats @ git+https://github.com/hexafe/hexafe-groupstats.git@14cc60e7412fa2647a8906f3f8833d0d789fc552'
         ])
 
     def test_runtime_requirements_pin_hexafe_plotstats_to_public_git_source(self):
@@ -91,12 +91,37 @@ class RequirementsHygieneTests(unittest.TestCase):
         matches = [
             entry
             for entry in runtime_entries
-            if entry.lower().startswith('hexafe-plotstats[pandas] @ ')
+            if entry.lower().startswith('hexafe-plotstats @ ')
         ]
 
         self.assertEqual(matches, [
-            'hexafe-plotstats[pandas] @ git+https://github.com/hexafe/hexafe-plotstats.git@1e2c72107d342f44a37e5fb78d7d76992ea60315'
+            'hexafe-plotstats @ git+https://github.com/hexafe/hexafe-plotstats.git@1e2c72107d342f44a37e5fb78d7d76992ea60315'
         ])
+
+    def test_runtime_requirements_do_not_install_pandas(self):
+        runtime_entries = self._runtime_requirements()
+        self.assertFalse(
+            any(
+                entry.lower().startswith('pandas')
+                or entry.lower().startswith('hexafe-groupstats[pandas]')
+                or entry.lower().startswith('hexafe-plotstats[pandas]')
+                for entry in runtime_entries
+            ),
+            'pandas must not be a runtime dependency or package extra',
+        )
+
+    def test_runtime_source_has_no_top_level_pandas_imports(self):
+        runtime_paths = [
+            *pathlib.Path('src/metroliza').rglob('*.py'),
+            *pathlib.Path('scripts').glob('*.py'),
+        ]
+        offenders: list[str] = []
+        import_pattern = re.compile(r'^(?:import\s+pandas\b|from\s+pandas\b)', re.MULTILINE)
+        for path in runtime_paths:
+            if import_pattern.search(path.read_text(encoding='utf-8')):
+                offenders.append(str(path))
+
+        self.assertEqual(offenders, [])
 
     def test_runtime_requirements_pin_oznak_to_public_git_source(self):
         runtime_entries = self._runtime_requirements()

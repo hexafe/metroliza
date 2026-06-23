@@ -7,7 +7,6 @@ import sqlite3
 from typing import Any, Callable
 
 import numpy as np
-import pandas as pd
 
 from metroliza.reports.db import (
     chunked_values,
@@ -28,6 +27,16 @@ from metroliza.industrial.industrial_analytics_state import (
     require_identifier,
 )
 from metroliza.shared.numeric_coercion import coerce_finite_float as _coerce_float
+
+
+class _LazyPandas:
+    def __getattr__(self, name: str) -> Any:
+        import importlib
+
+        return getattr(importlib.import_module("pandas"), name)
+
+
+pd = _LazyPandas()
 
 
 PRODUCTION_RECORD_COLUMNS: tuple[str, ...] = (

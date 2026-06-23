@@ -3,14 +3,19 @@
 import warnings
 
 import numpy as np
-import pandas as pd
 from scipy.stats import ttest_ind
 
 
 def all_measurements_within_limits(measurements, lower_limit, upper_limit):
     """Check whether every measurement value falls between inclusive limits."""
-    series = pd.Series(measurements)
-    return series.between(lower_limit, upper_limit, inclusive='both').all()
+    for measurement in measurements:
+        try:
+            value = float(measurement)
+        except (TypeError, ValueError):
+            return False
+        if value < lower_limit or value > upper_limit:
+            return False
+    return True
 
 
 def build_violin_group_stats_rows(labels, values):

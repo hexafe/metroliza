@@ -115,6 +115,7 @@ Canonical release operations docs (release gate/source-of-truth set):
 - `release_checks/realtime_industrial_optimization_check_2026-06-16.md` — build `260616` Industrial Data fetch, realtime dashboard, and interactive dashboard point-marking release-check note.
 - `release_checks/realtime_industrial_performance_check_2026-06-17.md` — build `260617` Industrial Data SQLite handoff, cached workbook export, realtime polling, and Oznak fallback release-check note.
 - `release_checks/ui_overlap_layout_audit_2026-06-19.md` — build `260619` UI overlap/layout audit covering PyQt geometry, dashboard CSS containment, chart legend geometry, and workbook image slots.
+- `release_checks/rc2_pandas_free_sqlite_performance_2026-06-23.md` — build `260623` RC2 pandas-free SQLite performance evidence for CSV Summary, export, parser/report, and industrial analytics table paths.
 
 Historical RC/rc2 evidence:
 

@@ -7,13 +7,14 @@ images without depending directly on a specific spreadsheet engine.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 import os
 from pathlib import Path
 import time
 import tempfile
 from typing import Any, Protocol
 
-import pandas as pd
+import xlsxwriter
 
 
 class ChartContract(Protocol):
@@ -137,8 +138,8 @@ class ExportBackendContract(Protocol):
     def close_writer(self, writer: Any) -> None:
         """Flush and close a writer/session object."""
 
-    def write_dataframe(self, writer: Any, df: pd.DataFrame, sheet_name: str) -> None:
-        """Write a DataFrame to the target writer and sheet name."""
+    def write_dataframe(self, writer: Any, table: Any, sheet_name: str) -> None:
+        """Write a tabular object to the target writer and sheet name."""
 
     def list_sheet_names(self, writer: Any) -> set[str]:
         """Return currently known worksheet names in the writer."""
@@ -321,6 +322,15 @@ class XlsxWorkbookAdapter:
         return XlsxChartAdapter(self._workbook.add_chart(chart_spec))
 
 
+@dataclass
+class XlsxWorkbookWriter:
+    """Direct xlsxwriter session used by the Excel export backend."""
+
+    path: str
+    book: Any
+    sheets: dict[str, Any]
+
+
 class _NullChartAdapter:
     """No-op chart adapter used when producing a dashboard without a workbook."""
 
@@ -494,7 +504,7 @@ class HtmlDashboardExportBackend:
         """Close a dashboard-only writer; no filesystem handle is opened."""
         return None
 
-    def write_dataframe(self, writer: _HtmlDashboardWriter, df: pd.DataFrame, sheet_name: str) -> None:
+    def write_dataframe(self, writer: _HtmlDashboardWriter, table: Any, sheet_name: str) -> None:
         """Record a logical sheet name without writing tabular workbook data."""
         writer.sheets[str(sheet_name)] = _NullWorksheetAdapter(str(sheet_name))
 
@@ -522,36 +532,77 @@ class HtmlDashboardExportBackend:
             self.close_writer(writer)
 
 
+def _is_blank_cell(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, float) and math.isnan(value):
+        return True
+    return False
+
+
+def _extract_table_columns_and_rows(table: Any) -> tuple[list[str], list[tuple[Any, ...]]]:
+    columns = [str(column) for column in getattr(table, "columns", ())]
+    if hasattr(table, "iter_rows"):
+        return columns, [tuple(row) for row in table.iter_rows()]
+
+    if columns and hasattr(table, "itertuples"):
+        return columns, [tuple(row) for row in table.itertuples(index=False, name=None)]
+
+    if columns and hasattr(table, "rows"):
+        return columns, [tuple(row) for row in table.rows]
+
+    if isinstance(table, list) and table and isinstance(table[0], dict):
+        columns = [str(column) for column in table[0].keys()]
+        rows = [tuple(row.get(column) for column in columns) for row in table]
+        return columns, rows
+
+    if isinstance(table, tuple) and len(table) == 2:
+        rows, raw_columns = table
+        columns = [str(column) for column in raw_columns]
+        return columns, [tuple(row) for row in rows]
+
+    return columns, []
+
+
 class ExcelExportBackend:
-    """Excel backend that persists exports through pandas + xlsxwriter."""
+    """Excel backend that persists exports directly through xlsxwriter."""
 
     export_target = "excel_xlsx"
 
-    def create_writer(self, excel_file: str) -> Any:
-        """Create an xlsxwriter-backed pandas writer for `excel_file`."""
-        return pd.ExcelWriter(
-            excel_file,
-            engine="xlsxwriter",
-            engine_kwargs={"options": {"nan_inf_to_errors": True}},
+    def create_writer(self, excel_file: str) -> XlsxWorkbookWriter:
+        """Create a direct xlsxwriter workbook session for `excel_file`."""
+        return XlsxWorkbookWriter(
+            path=excel_file,
+            book=xlsxwriter.Workbook(excel_file, {"nan_inf_to_errors": True}),
+            sheets={},
         )
 
-    def close_writer(self, writer: Any) -> None:
+    def close_writer(self, writer: XlsxWorkbookWriter) -> None:
         """Close the active writer and flush workbook contents to disk."""
-        writer.close()
+        writer.book.close()
 
-    def write_dataframe(self, writer: Any, df: pd.DataFrame, sheet_name: str) -> None:
-        """Write `df` to `sheet_name` without index columns."""
-        df.to_excel(writer, sheet_name=sheet_name, index=False)
+    def write_dataframe(self, writer: XlsxWorkbookWriter, table: Any, sheet_name: str) -> None:
+        """Write `table` to `sheet_name` without index columns."""
+        columns, rows = _extract_table_columns_and_rows(table)
+        worksheet = writer.book.add_worksheet(str(sheet_name))
+        writer.sheets[str(sheet_name)] = worksheet
 
-    def list_sheet_names(self, writer: Any) -> set[str]:
+        for column_index, column_name in enumerate(columns):
+            worksheet.write(0, column_index, column_name)
+
+        for row_index, row in enumerate(rows, start=1):
+            for column_index, value in enumerate(row):
+                worksheet.write(row_index, column_index, None if _is_blank_cell(value) else value)
+
+    def list_sheet_names(self, writer: XlsxWorkbookWriter) -> set[str]:
         """Return names of worksheets currently attached to `writer`."""
         return set(writer.sheets.keys())
 
-    def get_worksheet(self, writer: Any, sheet_name: str) -> XlsxWorksheetAdapter:
+    def get_worksheet(self, writer: XlsxWorkbookWriter, sheet_name: str) -> XlsxWorksheetAdapter:
         """Return an adapter over `sheet_name` in the active writer."""
         return XlsxWorksheetAdapter(writer.sheets[sheet_name])
 
-    def get_workbook(self, writer: Any) -> XlsxWorkbookAdapter:
+    def get_workbook(self, writer: XlsxWorkbookWriter) -> XlsxWorkbookAdapter:
         """Return a workbook adapter for format and chart creation."""
         return XlsxWorkbookAdapter(writer.book)
 

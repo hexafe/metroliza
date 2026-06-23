@@ -9,7 +9,6 @@ from hashlib import blake2b
 from typing import Callable
 
 import numpy as np
-import pandas as pd
 from metroliza.native_bridges.distribution_fit_native import (
     compute_ad_ks_statistics_native,
     estimate_ad_pvalue_monte_carlo_native,
@@ -151,6 +150,33 @@ def _as_float64_1d_contiguous(values) -> np.ndarray:
     return np.ascontiguousarray(array, dtype=np.float64)
 
 
+def _coerce_float(value) -> float:
+    if value is None:
+        return np.nan
+    try:
+        if value != value:
+            return np.nan
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return np.nan
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return np.nan
+
+
+def _iter_measurement_values(measurements):
+    if isinstance(measurements, str | bytes | bytearray):
+        return (measurements,)
+    try:
+        return iter(measurements)
+    except TypeError:
+        return (measurements,)
+
+
 def _coerce_measurements_array(measurements) -> np.ndarray:
     if isinstance(measurements, np.ndarray):
         values = _as_float64_1d_contiguous(measurements)
@@ -160,21 +186,31 @@ def _coerce_measurements_array(measurements) -> np.ndarray:
         if finite_values.flags['C_CONTIGUOUS']:
             return finite_values
         return np.ascontiguousarray(finite_values, dtype=np.float64)
-    if isinstance(measurements, pd.Series):
-        if pd.api.types.is_numeric_dtype(measurements):
-            values = measurements.to_numpy(dtype=np.float64, copy=False)
-        else:
-            values = pd.to_numeric(measurements, errors='coerce').dropna().to_numpy(dtype=float)
-        values = _as_float64_1d_contiguous(values)
-        if np.all(np.isfinite(values)):
-            return values
-        finite_values = values[np.isfinite(values)]
-        if finite_values.flags['C_CONTIGUOUS']:
-            return finite_values
-        return np.ascontiguousarray(finite_values, dtype=np.float64)
 
-    values = pd.to_numeric(pd.Series(list(measurements)), errors='coerce').dropna().to_numpy(dtype=float)
-    return _as_float64_1d_contiguous(values)
+    to_numpy = getattr(measurements, "to_numpy", None)
+    if callable(to_numpy):
+        try:
+            raw_values = to_numpy(dtype=np.float64, copy=False)
+        except (TypeError, ValueError):
+            try:
+                raw_values = to_numpy(copy=False)
+            except TypeError:
+                raw_values = to_numpy()
+    else:
+        raw_values = measurements
+
+    try:
+        values = _as_float64_1d_contiguous(raw_values)
+    except (TypeError, ValueError):
+        values = np.fromiter(
+            (_coerce_float(value) for value in _iter_measurement_values(raw_values)),
+            dtype=np.float64,
+        )
+        values = _as_float64_1d_contiguous(values)
+    finite_values = values[np.isfinite(values)]
+    if finite_values.flags['C_CONTIGUOUS']:
+        return finite_values
+    return np.ascontiguousarray(finite_values, dtype=np.float64)
 
 
 def measurement_fingerprint(values: np.ndarray):

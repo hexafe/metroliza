@@ -271,7 +271,7 @@ class TestParseHelpers(unittest.TestCase):
     def test_get_report_fingerprints_excludes_stale_cmm_metadata_versions(self):
         from modules.parse_reports_thread import ParseReportsThread
         from modules.contracts import ParseRequest
-        from modules.report_schema import ensure_report_schema
+        from modules.report_schema import ensure_report_schema, upsert_report_parse_state
 
         def _insert_report(conn, *, sha256, parser_id, parser_version, metadata_json):
             conn.execute(
@@ -301,6 +301,7 @@ class TestParseHelpers(unittest.TestCase):
                 """,
                 (report_id, metadata_json),
             )
+            upsert_report_parse_state(conn, report_id, metadata_json)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, 'reports.sqlite')
@@ -352,7 +353,7 @@ class TestParseHelpers(unittest.TestCase):
     def test_get_report_fingerprints_light_mode_accepts_current_light_metadata(self):
         from modules.parse_reports_thread import ParseReportsThread
         from modules.contracts import ParseRequest
-        from modules.report_schema import ensure_report_schema
+        from modules.report_schema import ensure_report_schema, upsert_report_parse_state
 
         def _insert_report(conn, *, sha256, parser_id, parser_version, metadata_json):
             conn.execute(
@@ -382,6 +383,7 @@ class TestParseHelpers(unittest.TestCase):
                 """,
                 (report_id, metadata_json),
             )
+            upsert_report_parse_state(conn, report_id, metadata_json)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, 'reports.sqlite')

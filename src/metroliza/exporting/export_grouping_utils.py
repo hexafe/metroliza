@@ -1,7 +1,8 @@
 import hashlib
 from decimal import Decimal, InvalidOperation
+from typing import Any, Iterable, Mapping
 
-import pandas as pd
+from metroliza.exporting.export_query_service import RowTable
 
 
 _GROUP_KEY_COMPONENTS = ['REPORT_ID']
@@ -45,7 +46,124 @@ def _normalize_grouping_columns(df):
             rename_map[resolved_name] = canonical_name
     if not rename_map:
         return df
-    return df.rename(columns=rename_map)
+    rename = getattr(df, "rename", None)
+    if callable(rename):
+        return rename(columns=rename_map)
+    return RowTable(
+        rows=tuple(tuple(row) for row in getattr(df, "rows", ())),
+        columns=tuple(rename_map.get(column, column) for column in getattr(df, "columns", ())),
+    )
+
+
+def _is_missing_value(value: Any) -> bool:
+    if value is None:
+        return True
+    try:
+        missing = value != value
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, bool):
+        return missing
+    module_name = type(value).__module__
+    type_name = type(value).__name__
+    return module_name.startswith(("pandas", "numpy")) and type_name in {"NAType", "NaTType"}
+
+
+def _column_values(table: Any, column_name: str) -> list[Any]:
+    getter = getattr(table, "get", None)
+    if callable(getter):
+        values = getter(column_name)
+    elif column_name in getattr(table, "columns", ()):
+        values = table[column_name]
+    else:
+        values = None
+    if values is None:
+        return []
+    tolist = getattr(values, "tolist", None)
+    if callable(tolist):
+        return list(tolist())
+    return list(values)
+
+
+def _table_empty(table: Any) -> bool:
+    if table is None:
+        return True
+    empty = getattr(table, "empty", None)
+    if empty is not None:
+        return bool(empty)
+    try:
+        return len(table) == 0
+    except TypeError:
+        return True
+
+
+def _copy_table(table: Any) -> Any:
+    copy = getattr(table, "copy", None)
+    if callable(copy):
+        return copy()
+    columns = tuple(str(column) for column in getattr(table, "columns", ()))
+    rows = tuple(tuple(row) for row in getattr(table, "rows", ()))
+    return RowTable(rows=rows, columns=columns)
+
+
+def _select_columns(table: Any, columns: Iterable[str]) -> Any:
+    selected_columns = [str(column) for column in columns]
+    if isinstance(table, RowTable):
+        return table[selected_columns].copy()
+    return table[selected_columns].copy()
+
+
+def _set_column(table: Any, column_name: str, values: Iterable[Any]) -> Any:
+    table[column_name] = list(values)
+    return table
+
+
+def _iter_row_mappings(table: Any) -> Iterable[Mapping[str, Any]]:
+    if table is None:
+        return ()
+    iter_rows = getattr(table, "iter_rows", None)
+    if callable(iter_rows):
+        return iter_rows(as_dict=True)
+    to_dict = getattr(table, "to_dict", None)
+    if callable(to_dict):
+        try:
+            return to_dict("records")
+        except TypeError:
+            pass
+    if isinstance(table, Iterable) and not isinstance(table, (str, bytes)):
+        records: list[Mapping[str, Any]] = []
+        for row in table:
+            if hasattr(row, "__dataclass_fields__"):
+                records.append(
+                    {
+                        "GROUP": getattr(row, "group", None),
+                        "REPORT_ID": getattr(row, "report_id", None),
+                        "REFERENCE": getattr(row, "reference", None),
+                        "DATE": getattr(row, "date", None),
+                        "SAMPLE_NUMBER": getattr(row, "sample_number", None),
+                        "GROUP_COLOR": getattr(row, "group_color", None),
+                    }
+                )
+            elif isinstance(row, Mapping):
+                records.append(row)
+        if records:
+            return records
+    columns = tuple(str(column) for column in getattr(table, "columns", ()))
+    rows = getattr(table, "rows", ())
+    return (dict(zip(columns, row)) for row in rows)
+
+
+def _records_to_row_table(records: list[Mapping[str, Any]]) -> RowTable:
+    columns: list[str] = []
+    for row in records:
+        for column in row:
+            column_name = str(column)
+            if column_name not in columns:
+                columns.append(column_name)
+    return RowTable(
+        rows=tuple(tuple(row.get(column) for column in columns) for row in records),
+        columns=tuple(columns),
+    )
 
 
 def normalize_group_labels(series, *, missing_label='UNGROUPED', normalize_blank=False):
@@ -57,12 +175,12 @@ def normalize_group_labels(series, *, missing_label='UNGROUPED', normalize_blank
         normalize_blank: When True, blank/whitespace labels are treated as
             missing and replaced with ``missing_label``.
     """
-    normalized = series.fillna(missing_label).astype(str)
+    values = [] if series is None else list(series)
+    normalized = [str(missing_label if _is_missing_value(value) else value) for value in values]
     if not normalize_blank:
         return normalized
 
-    cleaned = normalized.str.strip()
-    return cleaned.mask(cleaned == '', missing_label)
+    return [label if label.strip() else str(missing_label) for label in normalized]
 
 
 def add_group_key(df):
@@ -73,20 +191,21 @@ def add_group_key(df):
         return df
 
     keyed_df = normalized_df.copy()
-    raw_key = keyed_df[report_id_column].map(_normalize_grouping_identity_component)
-    keyed_df['GROUP_KEY'] = raw_key.apply(
-        lambda value: hashlib.sha1(value.encode('utf-8'), usedforsecurity=False).hexdigest()
-    )
+    raw_key = [
+        _normalize_grouping_identity_component(value)
+        for value in _column_values(keyed_df, report_id_column)
+    ]
+    keyed_df['GROUP_KEY'] = [
+        hashlib.sha1(value.encode('utf-8'), usedforsecurity=False).hexdigest()
+        for value in raw_key
+    ]
     return keyed_df
 
 
 def _normalize_grouping_identity_component(value):
     """Normalize report identity values before hashing them into grouping keys."""
-    try:
-        if pd.isna(value):
-            return ''
-    except (TypeError, ValueError):
-        pass
+    if _is_missing_value(value):
+        return ''
     text = str(value).strip()
     if not text:
         return ''
@@ -107,22 +226,29 @@ def _normalize_grouping_identity_component(value):
 
 def prepare_grouping_dataframe(grouping_df):
     """Build the canonical grouping assignment dataframe used by export merge logic."""
-    if not isinstance(grouping_df, pd.DataFrame) or grouping_df.empty:
+    if _table_empty(grouping_df):
         return None
+
+    if not hasattr(grouping_df, "columns"):
+        records = list(_iter_row_mappings(grouping_df))
+        if not records:
+            return None
+        grouping_df = _records_to_row_table(records)
 
     normalized_df = _normalize_grouping_columns(grouping_df)
     if 'GROUP' not in normalized_df.columns:
         return None
 
     available_cols = [column for column in _GROUPING_OPTIONAL_COLUMNS if column in normalized_df.columns]
-    prepared = normalized_df[available_cols + ['GROUP']].copy()
-    prepared.attrs.update(getattr(grouping_df, 'attrs', {}))
+    prepared = _select_columns(normalized_df, available_cols + ['GROUP'])
+    if hasattr(prepared, 'attrs'):
+        prepared.attrs.update(getattr(grouping_df, 'attrs', {}))
     return add_group_key(prepared)
 
 
 def keys_have_usable_values(df, keys):
     """Return True when each requested key column exists and at least one row has non-empty values."""
-    if df.empty:
+    if _table_empty(df):
         return False
 
     required = []
@@ -135,11 +261,18 @@ def keys_have_usable_values(df, keys):
     if len(required) != len(keys):
         return False
 
-    normalized = df[required].copy()
-    for key in required:
-        normalized[key] = normalized[key].apply(lambda value: str(value).strip() if pd.notna(value) else '')
-
-    return (normalized != '').all(axis=1).any()
+    row_count = len(_column_values(df, required[0])) if required else 0
+    columns_by_key = {key: _column_values(df, key) for key in required}
+    for row_index in range(row_count):
+        usable = True
+        for key in required:
+            value = columns_by_key[key][row_index]
+            if _is_missing_value(value) or not str(value).strip():
+                usable = False
+                break
+        if usable:
+            return True
+    return False
 
 
 def resolve_group_merge_keys(header_group, grouping_df):
@@ -173,25 +306,52 @@ def apply_group_assignments(header_group, grouping_df, *, group_analysis_mode=Fa
     if merge_keys is None:
         return keyed_header, False, None, 0
 
-    duplicated_mask = grouping_df.duplicated(subset=merge_keys, keep=False)
-    duplicate_count = int(duplicated_mask.sum())
-    deduped_grouping_df = grouping_df.drop_duplicates(subset=merge_keys, keep='last')
-    match_marker_column = '__METROLIZA_GROUP_ASSIGNMENT_MATCHED'
-    projected_columns = merge_keys + ['GROUP']
-    if 'GROUP_COLOR' in deduped_grouping_df.columns:
-        projected_columns.append('GROUP_COLOR')
-    merge_projection = deduped_grouping_df[projected_columns].copy()
-    merge_projection[match_marker_column] = True
-    merged_group = pd.merge(keyed_header, merge_projection, on=merge_keys, how='left')
-    matched_assignments = merged_group[match_marker_column].eq(True)
-    grouping_applied = bool(matched_assignments.any())
-    merged_group = merged_group.drop(columns=[match_marker_column])
+    grouping_rows = list(_iter_row_mappings(grouping_df))
+    key_counts: dict[tuple[str, ...], int] = {}
+    assignment_by_key: dict[tuple[str, ...], Mapping[str, Any]] = {}
+    for row in grouping_rows:
+        marker = _merge_marker(row, merge_keys)
+        key_counts[marker] = key_counts.get(marker, 0) + 1
+        assignment_by_key[marker] = row
+    duplicate_count = sum(count for count in key_counts.values() if count > 1)
+
+    group_values: list[Any] = []
+    group_color_values: list[Any] = []
+    grouping_applied = False
+    has_group_color = 'GROUP_COLOR' in getattr(grouping_df, "columns", ())
     missing_group_label = fallback_group_label
     if missing_group_label is None:
         missing_group_label = get_default_group_label(grouping_df) if group_analysis_mode else 'UNGROUPED'
-    merged_group['GROUP'] = normalize_group_labels(
-        merged_group['GROUP'],
-        missing_label=missing_group_label,
-        normalize_blank=group_analysis_mode,
+
+    for row in _iter_row_mappings(keyed_header):
+        assignment = assignment_by_key.get(_merge_marker(row, merge_keys))
+        if assignment is not None:
+            grouping_applied = True
+            group_values.append(assignment.get('GROUP'))
+            if has_group_color:
+                group_color_values.append(assignment.get('GROUP_COLOR'))
+        else:
+            group_values.append(None)
+            if has_group_color:
+                group_color_values.append(None)
+
+    merged_group = _copy_table(keyed_header)
+    _set_column(
+        merged_group,
+        'GROUP',
+        normalize_group_labels(
+            group_values,
+            missing_label=missing_group_label,
+            normalize_blank=group_analysis_mode,
+        ),
     )
+    if has_group_color:
+        _set_column(merged_group, 'GROUP_COLOR', group_color_values)
     return merged_group, grouping_applied, merge_keys, duplicate_count
+
+
+def _merge_marker(row: Mapping[str, Any], merge_keys: Iterable[str]) -> tuple[str, ...]:
+    return tuple(
+        _normalize_grouping_identity_component(row.get(key))
+        for key in merge_keys
+    )

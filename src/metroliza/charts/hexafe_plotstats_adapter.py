@@ -10,7 +10,6 @@ import re
 from typing import Any
 
 import numpy as np
-import pandas as pd
 
 from metroliza.shared.env_utils import FALSE_VALUES, TRUE_VALUES, env_bool
 from metroliza.charts.dashboard_plotly_visuals import apply_dashboard_visual_settings
@@ -23,7 +22,6 @@ from metroliza.charts.plotly_stat_helpers import (
     stat_legend_prefix as _stat_legend_prefix,
     strip_group_count_suffix as _strip_group_count_suffix,
 )
-from metroliza.exporting.export_summary_utils import resolve_histogram_bin_count
 from metroliza.charts.matplotlib_runtime import configure_headless_matplotlib
 from metroliza.charts.summary_plot_palette import SUMMARY_PLOT_PALETTE
 from metroliza.charts.value_formatting import format_metrology_legend_value as _shared_format_metrology_legend_value
@@ -899,11 +897,76 @@ def _close_plotstats_figure(render_result) -> None:
 
 
 def _finite_values(values: Iterable[Any]) -> np.ndarray:
-    series = pd.to_numeric(pd.Series(list(values)), errors="coerce").dropna()
-    if series.empty:
+    array = np.fromiter((_coerce_float(value) for value in values), dtype=float)
+    if array.size == 0:
         return np.asarray([], dtype=float)
-    array = series.to_numpy(dtype=float)
     return array[np.isfinite(array)]
+
+
+def _coerce_float(value: Any) -> float:
+    if value is None:
+        return np.nan
+    try:
+        if value != value:
+            return np.nan
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return np.nan
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return np.nan
+
+
+def _resolve_histogram_bin_count(values: Iterable[Any], *, min_bins: int = 3, max_bins: int = 48) -> dict[str, int | str]:
+    numeric_values = _finite_values(values)
+    n = int(numeric_values.size)
+    if n == 0:
+        return {"bin_count": int(min_bins), "method": "minimum", "sample_size": 0}
+
+    data_min = float(np.min(numeric_values))
+    data_max = float(np.max(numeric_values))
+    data_range = max(0.0, data_max - data_min)
+
+    chosen_bins = None
+    chosen_method = "fallback_sqrt"
+
+    if n >= 2 and data_range > 0:
+        q1, q3 = np.percentile(numeric_values, [25, 75])
+        iqr = float(q3 - q1)
+        std = float(np.std(numeric_values, ddof=1)) if n > 1 else 0.0
+
+        if iqr > 0:
+            fd_width = 2.0 * iqr * (n ** (-1.0 / 3.0))
+            if np.isfinite(fd_width) and fd_width > 0:
+                fd_bins = int(np.ceil(data_range / fd_width))
+                if fd_bins > 0:
+                    chosen_bins = fd_bins
+                    chosen_method = "freedman_diaconis"
+
+        if chosen_bins is None and std > 0:
+            scott_width = 3.5 * std * (n ** (-1.0 / 3.0))
+            if np.isfinite(scott_width) and scott_width > 0:
+                scott_bins = int(np.ceil(data_range / scott_width))
+                if scott_bins > 0:
+                    chosen_bins = scott_bins
+                    chosen_method = "scott"
+
+    if chosen_bins is None:
+        chosen_bins = int(np.ceil(np.sqrt(n)))
+
+    low_n_upper_bound = 8 if n <= 10 else 12 if n <= 20 else max_bins
+    bounded_upper = min(int(max_bins), int(low_n_upper_bound))
+    bounded_bins = int(np.clip(chosen_bins, int(min_bins), max(int(min_bins), bounded_upper)))
+
+    return {
+        "bin_count": bounded_bins,
+        "method": chosen_method,
+        "sample_size": n,
+    }
 
 
 def _summary_stats(
@@ -955,7 +1018,7 @@ def _summary_stats(
 def _resolved_bin_count(values: np.ndarray, *, bin_count: int | None = None) -> int:
     if bin_count is not None and int(bin_count) > 0:
         return int(bin_count)
-    return max(1, int(resolve_histogram_bin_count(values).get("bin_count") or 1))
+    return max(1, int(_resolve_histogram_bin_count(values).get("bin_count") or 1))
 
 
 def _valid_plotly_spec(spec: Any) -> bool:
@@ -1294,7 +1357,7 @@ def _payload_with_resolved_histogram_bin_count(payload: Mapping[str, Any]) -> Ma
     all_values = all_values[np.isfinite(all_values)]
     if all_values.size == 0:
         return payload
-    resolved = max(1, int(resolve_histogram_bin_count(all_values).get("bin_count") or 1))
+    resolved = max(1, int(_resolve_histogram_bin_count(all_values).get("bin_count") or 1))
     next_payload = dict(payload)
     next_payload["bin_count"] = resolved
     return next_payload

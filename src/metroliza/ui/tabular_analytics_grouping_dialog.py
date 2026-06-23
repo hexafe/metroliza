@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import pandas as pd
 from PyQt6.QtCore import QThread, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QIntValidator
 from PyQt6.QtWidgets import (
@@ -99,6 +98,26 @@ _DATE_FILTER_OPERATOR_SYMBOLS = {
 }
 _ASYNC_SQLITE_SELECTOR_PREVIEW_ROWS = 250_000
 _DETACHED_SELECTOR_PREVIEW_THREADS: list[QThread] = []
+_SQLITE_SOURCE_EXCLUDED_COLUMNS = {
+    "source_row_number",
+    "source_file",
+    "source_sheet",
+    "process_datetime",
+    "reference",
+    "GROUP",
+    "GROUP_KEY",
+    "GROUP_COLOR",
+}
+
+
+class _LazyPandas:
+    def __getattr__(self, name):
+        import importlib
+
+        return getattr(importlib.import_module("pandas"), name)
+
+
+pd = _LazyPandas()
 
 
 def _quote_sqlite_identifier(identifier: str) -> str:
@@ -652,10 +671,12 @@ class TabularAnalyticsGroupingDialog(QDialog):
 
     def _source_columns(self) -> list[str]:
         if self._is_sqlite_backed():
-            return selectable_tabular_source_columns(
-                pd.DataFrame(columns=list(self.sqlite_store.source_columns)),
-                normalized_source_columns=self.sqlite_store.source_columns,
-            )
+            excluded = {column.casefold() for column in _SQLITE_SOURCE_EXCLUDED_COLUMNS}
+            return [
+                str(column)
+                for column in self.sqlite_store.source_columns
+                if str(column).casefold() not in excluded and not str(column).startswith("__")
+            ]
         return selectable_tabular_source_columns(
             self.source_dataframe,
             normalized_source_columns=set(self.column_labels),

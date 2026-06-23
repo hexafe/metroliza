@@ -15,7 +15,6 @@ from threading import Thread
 from typing import Any, Callable
 
 import numpy as np
-import pandas as pd
 
 
 @dataclass(frozen=True)
@@ -50,7 +49,63 @@ def resolve_chart_sampling_policy(*, density_mode: str) -> ChartSamplingPolicy:
     return ChartSamplingPolicy(distribution_limit=1500, iqr_limit=1200, histogram_limit=1500, trend_limit=1500)
 
 
-def deterministic_downsample_frame(df: pd.DataFrame, sample_limit: int, *, preserve_extrema: bool = False, value_column: str = 'MEAS') -> pd.DataFrame:
+def _coerce_float(value: Any) -> float:
+    if value is None:
+        return np.nan
+    try:
+        if value != value:
+            return np.nan
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return np.nan
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return np.nan
+
+
+def _numeric_array(values: Any) -> np.ndarray:
+    to_numpy = getattr(values, "to_numpy", None)
+    if callable(to_numpy):
+        try:
+            raw_values = to_numpy(copy=False)
+        except TypeError:
+            raw_values = to_numpy()
+    else:
+        raw_values = values
+    try:
+        array = np.asarray(raw_values, dtype=float)
+    except (TypeError, ValueError):
+        array = np.fromiter((_coerce_float(value) for value in raw_values), dtype=float)
+    if array.ndim != 1:
+        array = array.reshape(-1)
+    return array
+
+
+def _finite_numeric_list(values: Any) -> list[float]:
+    numeric_values = _numeric_array(values)
+    finite_values = numeric_values[np.isfinite(numeric_values)]
+    return finite_values.astype(float, copy=False).tolist()
+
+
+def _is_missing_value(value: Any) -> bool:
+    if value is None:
+        return True
+    try:
+        missing = value != value
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, bool):
+        return missing
+    module_name = type(value).__module__
+    type_name = type(value).__name__
+    return module_name.startswith(("pandas", "numpy")) and type_name in {"NAType", "NaTType"}
+
+
+def deterministic_downsample_frame(df: Any, sample_limit: int, *, preserve_extrema: bool = False, value_column: str = 'MEAS') -> Any:
     """Deterministically downsample a frame with optional local-extrema preservation.
 
     Args:
@@ -72,7 +127,7 @@ def deterministic_downsample_frame(df: pd.DataFrame, sample_limit: int, *, prese
         indexes = np.linspace(0, len(df) - 1, sample_limit, dtype=int)
         return df.iloc[indexes].copy()
 
-    numeric_values = pd.to_numeric(df[value_column], errors='coerce').to_numpy(dtype=float, copy=False)
+    numeric_values = _numeric_array(df[value_column])
     if numeric_values.size <= 2 or not np.isfinite(numeric_values).any():
         indexes = np.linspace(0, len(df) - 1, sample_limit, dtype=int)
         return df.iloc[indexes].copy()
@@ -146,12 +201,12 @@ def deterministic_downsample_frame(df: pd.DataFrame, sample_limit: int, *, prese
 
 
 def deterministic_grouped_downsample_frame(
-    df: pd.DataFrame,
+    df: Any,
     sample_limit: int,
     *,
     grouping_key: str,
     value_column: str | None = 'MEAS',
-) -> pd.DataFrame:
+) -> Any:
     """Deterministically downsample while preserving visible groups when possible."""
 
     if sample_limit <= 0 or len(df) <= sample_limit:
@@ -162,11 +217,11 @@ def deterministic_grouped_downsample_frame(
     group_positions: OrderedDict[str, list[int]] = OrderedDict()
     numeric_values = None
     if value_column and value_column in df.columns:
-        numeric_values = pd.to_numeric(df[value_column], errors='coerce').to_numpy(dtype=float, copy=False)
+        numeric_values = _numeric_array(df[value_column])
 
     group_values = df[grouping_key].to_numpy(dtype=object, copy=False)
     for position, group_value in enumerate(group_values):
-        if pd.isna(group_value):
+        if _is_missing_value(group_value):
             continue
         label = str(group_value).strip()
         if not label:
@@ -236,12 +291,12 @@ def _grouped_sample_allocations(group_counts: list[int], sample_limit: int) -> l
 
 
 def sample_frame_for_chart(
-    df: pd.DataFrame,
+    df: Any,
     chart_type: str,
     policy: ChartSamplingPolicy,
     *,
     grouping_key: str | None = None,
-) -> pd.DataFrame:
+) -> Any:
     """Sample a frame using the limit associated with a chart type.
 
     Args:
@@ -270,7 +325,7 @@ def sample_frame_for_chart(
     return deterministic_downsample_frame(df, sample_limit, preserve_extrema=chart_type == 'trend')
 
 
-def build_violin_payload_vectorized(sampled_group: pd.DataFrame, grouping_key: str, min_samplesize: int) -> tuple[list[str], list[list[float]], bool]:
+def build_violin_payload_vectorized(sampled_group: Any, grouping_key: str, min_samplesize: int) -> tuple[list[str], list[list[float]], bool]:
     """Build vectorized violin payload data grouped by a column.
 
     Args:
@@ -287,15 +342,14 @@ def build_violin_payload_vectorized(sampled_group: pd.DataFrame, grouping_key: s
     """
 
     if sampled_group.empty or grouping_key not in sampled_group.columns:
-        cleaned_values = pd.to_numeric(sampled_group.get('MEAS', pd.Series(dtype=float)), errors='coerce').dropna()
-        values = cleaned_values.tolist()
-        return ['All'], [values], len(cleaned_values) >= min_samplesize
+        values = _finite_numeric_list(sampled_group.get('MEAS', ()))
+        return ['All'], [values], len(values) >= min_samplesize
 
-    numeric_values = pd.to_numeric(sampled_group['MEAS'], errors='coerce').to_numpy(dtype=float, copy=False)
+    numeric_values = _numeric_array(sampled_group['MEAS'])
     group_values = sampled_group[grouping_key].to_numpy(dtype=object, copy=False)
     grouped_values: OrderedDict[str, list[float]] = OrderedDict()
     for group_value, measurement in zip(group_values, numeric_values, strict=False):
-        if not np.isfinite(measurement) or pd.isna(group_value):
+        if not np.isfinite(measurement) or _is_missing_value(group_value):
             continue
         label = str(group_value).strip()
         if not label:

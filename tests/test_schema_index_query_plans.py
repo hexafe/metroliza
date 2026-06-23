@@ -269,6 +269,8 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
                 'idx_report_metadata_part_name',
                 'idx_report_metadata_revision',
                 'idx_report_metadata_stats_count_int',
+                'idx_report_parse_state_reparse',
+                'idx_report_parse_state_header_extraction',
                 'idx_report_metadata_candidates_report_field',
                 'idx_report_metadata_candidates_rule',
                 'idx_report_metadata_warnings_report',

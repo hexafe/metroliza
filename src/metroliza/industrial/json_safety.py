@@ -77,20 +77,29 @@ def to_sqlite_storage_text(value: Any) -> str | None:
 
 def _is_missing_scalar(value: Any) -> bool:
     try:
-        if value != value:
+        missing = value != value
+        if isinstance(missing, bool) and missing:
             return True
     except (TypeError, ValueError):
         pass
 
     module_name = type(value).__module__
-    if not module_name.startswith(("numpy", "pandas")):
+    type_name = type(value).__name__
+    if module_name.startswith("pandas") and type_name in {"NAType", "NaTType"}:
+        return True
+    if not module_name.startswith("numpy"):
         return False
     try:
-        import pandas as pd
+        import numpy as np
     except Exception:
         return False
     try:
-        missing = pd.isna(value)
+        if np.issubdtype(type(value), np.datetime64):
+            return bool(np.isnat(value))
+    except TypeError:
+        pass
+    try:
+        missing = np.isnan(value)
     except (TypeError, ValueError):
         return False
     if isinstance(missing, bool):

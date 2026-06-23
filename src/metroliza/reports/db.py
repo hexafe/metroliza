@@ -4,8 +4,6 @@ from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from typing import Any, Callable, Iterator, TypeVar
 
-import pandas as pd
-
 
 TRANSIENT_SQLITE_ERRORS = (
     'database is locked',
@@ -28,10 +26,84 @@ class SQLitePragmaConfig:
 DEFAULT_PRAGMA_CONFIG = SQLitePragmaConfig(synchronous='NORMAL')
 
 
+@dataclass(frozen=True)
+class QueryResult:
+    """Pandas-free result contract for SQLite SELECT queries."""
+
+    columns: tuple[str, ...]
+    rows: tuple[tuple[Any, ...], ...]
+
+    @property
+    def empty(self) -> bool:
+        return not self.rows
+
+    def __len__(self) -> int:
+        return len(self.rows)
+
+    def __iter__(self):
+        return iter(self.rows)
+
+    def column(self, name: str) -> tuple[Any, ...]:
+        try:
+            index = self.columns.index(name)
+        except ValueError as exc:
+            raise KeyError(name) from exc
+        return tuple(row[index] for row in self.rows)
+
+    def as_dicts(self) -> list[dict[str, Any]]:
+        return [dict(zip(self.columns, row, strict=False)) for row in self.rows]
+
+
+@dataclass(frozen=True)
+class QueryScope:
+    """Reusable SQL scope that can be counted, materialized, or streamed."""
+
+    sql: str
+    params: tuple[Any, ...] | list[Any] | None = ()
+    columns: tuple[str, ...] = ()
+    row_count_sql: str | None = None
+    row_count_params: tuple[Any, ...] | list[Any] | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "params", _normalize_sql_params(self.params))
+        if self.row_count_params is None:
+            object.__setattr__(self, "row_count_params", self.params)
+        else:
+            object.__setattr__(self, "row_count_params", _normalize_sql_params(self.row_count_params))
+        object.__setattr__(self, "columns", tuple(str(column) for column in self.columns))
+
+
+@dataclass(frozen=True)
+class RowBatch:
+    """One streamed SQL result batch with stable columns and source offset."""
+
+    columns: tuple[str, ...]
+    rows: tuple[tuple[Any, ...], ...]
+    batch_index: int
+    offset: int
+
+    @property
+    def row_count(self) -> int:
+        return len(self.rows)
+
+    def as_dicts(self) -> list[dict[str, Any]]:
+        return [dict(zip(self.columns, row, strict=False)) for row in self.rows]
+
+
 def _is_transient_sqlite_error(exc: sqlite3.OperationalError) -> bool:
     """Return True when the sqlite OperationalError message indicates a retryable lock/open issue."""
     message = str(exc).lower()
     return any(token in message for token in TRANSIENT_SQLITE_ERRORS)
+
+
+def _normalize_sql_params(params: tuple[Any, ...] | list[Any] | None) -> tuple[Any, ...]:
+    if params is None:
+        return ()
+    if isinstance(params, tuple):
+        return params
+    if isinstance(params, list):
+        return tuple(params)
+    raise ValueError('params must be a tuple or list when provided')
 
 
 def _apply_sqlite_pragmas(conn: sqlite3.Connection, pragma_config: SQLitePragmaConfig) -> None:
@@ -253,28 +325,180 @@ def read_sql_dataframe(
     connection: sqlite3.Connection | None = None,
     retries: int = 2,
     retry_delay_s: float = 0.05,
-) -> pd.DataFrame:
-    """Read a SQL query into a DataFrame using managed SQLite connection(s) with transient retry handling."""
+) -> Any:
+    """Read a SQL query into a legacy DataFrame while callers migrate to rows."""
+    try:
+        import importlib
+
+        pd = importlib.import_module("pandas")
+    except ImportError as exc:  # pragma: no cover - clean runtime should use read_sql_query_result.
+        raise RuntimeError(
+            "read_sql_dataframe is a legacy migration shim and requires pandas; "
+            "runtime code should use read_sql_query_result instead."
+        ) from exc
+
+    result = read_sql_query_result(
+        db_path,
+        query,
+        params=params,
+        connection=connection,
+        retries=retries,
+        retry_delay_s=retry_delay_s,
+    )
+    return pd.DataFrame(result.rows, columns=result.columns)
+
+
+def read_sql_query_result(
+    db_path: str,
+    query: str,
+    params: tuple[Any, ...] | list[Any] | None = None,
+    *,
+    connection: sqlite3.Connection | None = None,
+    retries: int = 2,
+    retry_delay_s: float = 0.05,
+) -> QueryResult:
+    """Read a SQL query into a row/column result with transient retry handling."""
     attempts = retries + 1
-    normalized_params: tuple[Any, ...]
-    if params is None:
-        normalized_params = ()
-    elif isinstance(params, tuple):
-        normalized_params = params
-    elif isinstance(params, list):
-        normalized_params = tuple(params)
-    else:
-        raise ValueError('params must be a tuple or list when provided')
+    normalized_params = _normalize_sql_params(params)
 
     for attempt in range(attempts):
         try:
             if connection is None:
                 with sqlite_connection_scope(db_path) as conn:
-                    return pd.read_sql_query(query, conn, params=normalized_params)
-            return pd.read_sql_query(query, connection, params=normalized_params)
+                    return _fetch_query_result(conn, query, normalized_params)
+            return _fetch_query_result(connection, query, normalized_params)
         except sqlite3.OperationalError as exc:
             if not _is_transient_sqlite_error(exc) or attempt >= attempts - 1:
                 raise
             time.sleep(retry_delay_s)
 
-    return pd.DataFrame()
+    return QueryResult(columns=(), rows=())
+
+
+def _fetch_query_result(
+    connection: sqlite3.Connection,
+    query: str,
+    params: tuple[Any, ...],
+) -> QueryResult:
+    with closing(connection.cursor()) as cursor:
+        cursor.execute(query, params)
+        rows = tuple(cursor.fetchall())
+        columns = tuple(description[0] for description in (cursor.description or ()))
+    return QueryResult(columns=columns, rows=rows)
+
+
+def read_query_scope_result(
+    db_path: str,
+    scope: QueryScope,
+    *,
+    connection: sqlite3.Connection | None = None,
+    retries: int = 2,
+    retry_delay_s: float = 0.05,
+) -> QueryResult:
+    """Read a reusable ``QueryScope`` into a row/column result."""
+
+    return read_sql_query_result(
+        db_path,
+        scope.sql,
+        params=scope.params,
+        connection=connection,
+        retries=retries,
+        retry_delay_s=retry_delay_s,
+    )
+
+
+def count_query_scope_rows(
+    db_path: str,
+    scope: QueryScope,
+    *,
+    connection: sqlite3.Connection | None = None,
+    retries: int = 2,
+    retry_delay_s: float = 0.05,
+) -> int:
+    """Return the row count for a scope without materializing scope rows."""
+
+    count_sql = scope.row_count_sql or f"SELECT COUNT(*) FROM ({scope.sql}) AS scoped_rows"
+    count_params = scope.row_count_params if scope.row_count_sql else scope.params
+    rows = execute_with_retry(
+        db_path,
+        count_sql,
+        params=count_params,
+        connection=connection,
+        retries=retries,
+        retry_delay_s=retry_delay_s,
+    )
+    return int(rows[0][0] or 0) if rows else 0
+
+
+def iter_sql_query_batches(
+    db_path: str,
+    query: str,
+    params: tuple[Any, ...] | list[Any] | None = None,
+    *,
+    batch_size: int = 1000,
+    connection: sqlite3.Connection | None = None,
+    retries: int = 2,
+    retry_delay_s: float = 0.05,
+) -> Iterator[RowBatch]:
+    """Stream SELECT rows in bounded batches without building a full result list."""
+
+    normalized_params = _normalize_sql_params(params)
+    safe_batch_size = max(1, int(batch_size))
+    attempts = retries + 1
+    yielded = False
+
+    def _batches(conn: sqlite3.Connection) -> Iterator[RowBatch]:
+        nonlocal yielded
+        with closing(conn.cursor()) as cursor:
+            cursor.execute(query, normalized_params)
+            columns = tuple(description[0] for description in (cursor.description or ()))
+            offset = 0
+            batch_index = 0
+            while True:
+                rows = tuple(cursor.fetchmany(safe_batch_size))
+                if not rows:
+                    return
+                yielded = True
+                yield RowBatch(
+                    columns=columns,
+                    rows=rows,
+                    batch_index=batch_index,
+                    offset=offset,
+                )
+                offset += len(rows)
+                batch_index += 1
+
+    for attempt in range(attempts):
+        try:
+            if connection is None:
+                with sqlite_connection_scope(db_path) as conn:
+                    yield from _batches(conn)
+            else:
+                yield from _batches(connection)
+            return
+        except sqlite3.OperationalError as exc:
+            if yielded or not _is_transient_sqlite_error(exc) or attempt >= attempts - 1:
+                raise
+            time.sleep(retry_delay_s)
+
+
+def iter_query_scope_batches(
+    db_path: str,
+    scope: QueryScope,
+    *,
+    batch_size: int = 1000,
+    connection: sqlite3.Connection | None = None,
+    retries: int = 2,
+    retry_delay_s: float = 0.05,
+) -> Iterator[RowBatch]:
+    """Stream a ``QueryScope`` in bounded row batches."""
+
+    yield from iter_sql_query_batches(
+        db_path,
+        scope.sql,
+        params=scope.params,
+        batch_size=batch_size,
+        connection=connection,
+        retries=retries,
+        retry_delay_s=retry_delay_s,
+    )

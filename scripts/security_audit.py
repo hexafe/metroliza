@@ -70,6 +70,7 @@ IMPORT_TO_PACKAGE = {
     "scipy": "scipy",
     "seaborn": "seaborn",
     "xlsxwriter": "XlsxWriter",
+    "xlrd": "xlrd",
     "yaml": "PyYAML",
 }
 STD_LIB_IMPORTS = set(getattr(sys, "stdlib_module_names", set())) | {

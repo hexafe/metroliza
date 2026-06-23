@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pandas as pd
 from PyQt6.QtCore import QDate, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
@@ -51,6 +50,26 @@ except ImportError:  # pragma: no cover - compatibility with lightweight test st
 
 _MAX_VISIBLE_MATCHES = 1000
 _DETACHED_PREVIEW_THREADS: list[QThread] = []
+_SQLITE_SOURCE_EXCLUDED_COLUMNS = {
+    "source_row_number",
+    "source_file",
+    "source_sheet",
+    "process_datetime",
+    "reference",
+    "GROUP",
+    "GROUP_KEY",
+    "GROUP_COLOR",
+}
+
+
+class _LazyPandas:
+    def __getattr__(self, name):
+        import importlib
+
+        return getattr(importlib.import_module("pandas"), name)
+
+
+pd = _LazyPandas()
 
 
 def _release_detached_preview_thread(thread: QThread) -> None:
@@ -275,10 +294,12 @@ class TabularAnalyticsFilterDialog(QDialog):
 
     def _source_columns(self) -> list[str]:
         if self.sqlite_store is not None:
-            return selectable_tabular_source_columns(
-                pd.DataFrame(columns=list(self.sqlite_store.source_columns)),
-                normalized_source_columns=self.sqlite_store.source_columns,
-            )
+            excluded = {column.casefold() for column in _SQLITE_SOURCE_EXCLUDED_COLUMNS}
+            return [
+                str(column)
+                for column in self.sqlite_store.source_columns
+                if str(column).casefold() not in excluded and not str(column).startswith("__")
+            ]
         return selectable_tabular_source_columns(
             self.source_dataframe,
             normalized_source_columns=set(self.column_labels),

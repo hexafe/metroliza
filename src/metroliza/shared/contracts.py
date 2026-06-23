@@ -9,9 +9,10 @@ contract.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-import pandas as pd
+from typing import Any
 
 from metroliza.charts.dashboard_visual_options import normalize_dashboard_visual_settings
 from metroliza.shared.dashboard_interactivity import (
@@ -135,6 +136,10 @@ class GroupingAssignment:
     filename: str | None = None
     date: str | None = None
     sample_number: str | None = None
+    group_color: str | None = None
+
+
+GroupingAssignments = tuple[GroupingAssignment, ...]
 
 
 @dataclass(frozen=True)
@@ -145,18 +150,17 @@ class ExportRequest:
         paths: Required filesystem path bundle.
         options: Export behavior settings to validate and normalize.
         filter_query: Optional query expression used to filter records.
-        grouping_df: Optional grouping overrides DataFrame keyed by ``REPORT_ID``
-            or by full composite alternate-key columns.
+        grouping_df: Optional grouping overrides keyed by ``REPORT_ID``.
 
     Usage notes:
         Validate with ``validate_export_request`` to receive nested normalized
-        options and a copied validated grouping frame when non-empty.
+        options and normalized grouping assignment rows when non-empty.
     """
 
     paths: AppPaths
     options: ExportOptions
     filter_query: str | None = None
-    grouping_df: pd.DataFrame | None = None
+    grouping_df: GroupingAssignments | None = None
 
 
 @dataclass(frozen=True)
@@ -182,7 +186,7 @@ class IndustrialAnalyticsRequest:
     tabular_filter_columns: tuple[str, ...] = ()
     tabular_filter_keys: tuple[tuple[str, ...], ...] = ()
     tabular_column_filters: tuple[TabularColumnFilter, ...] = ()
-    grouping_df: pd.DataFrame | None = None
+    grouping_df: GroupingAssignments | None = None
     dashboard_visual_settings: dict | None = None
     dashboard_interactivity_options: DashboardInteractivityOptions | dict | None = None
 
@@ -488,43 +492,135 @@ def validate_export_options(options: ExportOptions) -> ExportOptions:
     )
 
 
-def validate_grouping_df(df: pd.DataFrame | None) -> pd.DataFrame | None:
-    """Validate optional grouping assignments DataFrame.
+def validate_grouping_df(df: object | None) -> GroupingAssignments | None:
+    """Backward-compatible alias for ``validate_grouping_assignments``."""
+
+    return validate_grouping_assignments(df)
+
+
+def validate_grouping_assignments(value: object | None) -> GroupingAssignments | None:
+    """Validate optional grouping assignments without pandas runtime coupling.
 
     Args:
-        df: Optional DataFrame of grouping assignments. Non-empty frames must
-            include ``GROUP`` plus ``REPORT_ID``.
+        value: Optional iterable of grouping assignment rows. Non-empty inputs
+            must include ``REPORT_ID``. Blank ``GROUP`` values normalize to
+            ``POPULATION`` for compatibility with manual tabular grouping.
 
     Returns:
-        pd.DataFrame | None: ``None`` when input is ``None``; the original empty
-        DataFrame when input is empty; otherwise a copy of the validated
-        non-empty frame.
+        tuple[GroupingAssignment, ...] | None: ``None`` when input is ``None``;
+        otherwise immutable normalized grouping assignment rows.
 
     Raises:
-        ValueError: If ``df`` is not a DataFrame or if required grouping columns
-        are missing.
+        ValueError: If rows are malformed or required grouping columns are
+        missing.
 
     Invariants:
-        Non-empty valid inputs are returned as a copy to avoid downstream
-        side-effects from caller-owned DataFrame mutation.
+        Valid inputs are converted to frozen dataclasses so downstream code
+        cannot observe caller-owned mutations.
     """
 
-    if df is None:
+    if value is None:
         return None
 
-    if not isinstance(df, pd.DataFrame):
-        raise ValueError("Grouping assignments must be provided as a pandas DataFrame.")
+    records = _grouping_records(value)
+    assignments: list[GroupingAssignment] = []
+    for record in records:
+        group = _optional_text(_record_value(record, "GROUP", "group")) or "POPULATION"
+        report_id = _optional_int(_record_value(record, "REPORT_ID", "report_id"))
+        if report_id is None:
+            raise ValueError("Grouping assignments must include REPORT_ID.")
+        assignments.append(
+            GroupingAssignment(
+                group=group,
+                report_id=report_id,
+                reference=_optional_text(_record_value(record, "REFERENCE", "reference")),
+                fileloc=_optional_text(_record_value(record, "FILELOC", "fileloc")),
+                filename=_optional_text(_record_value(record, "FILENAME", "filename")),
+                date=_optional_text(_record_value(record, "DATE", "date")),
+                sample_number=_optional_text(_record_value(record, "SAMPLE_NUMBER", "sample_number")),
+                group_color=_optional_text(_record_value(record, "GROUP_COLOR", "group_color")),
+            )
+        )
+    return tuple(assignments)
 
-    if df.empty:
-        return df
 
-    if "GROUP" not in df.columns:
-        raise ValueError("Grouping DataFrame must include a GROUP column.")
+def _grouping_records(value: object) -> tuple[Mapping[str, Any], ...]:
+    if isinstance(value, GroupingAssignment):
+        return (_assignment_record(value),)
+    if isinstance(value, Mapping):
+        return (value,)
+    if isinstance(value, tuple) and all(isinstance(item, GroupingAssignment) for item in value):
+        return tuple(_assignment_record(item) for item in value)
+    if hasattr(value, "to_dict"):
+        try:
+            records = value.to_dict("records")  # type: ignore[attr-defined]
+        except TypeError:
+            records = value.to_dict()  # type: ignore[attr-defined]
+        if isinstance(records, Mapping):
+            records = [records]
+        return _mapping_tuple(records)
+    if isinstance(value, Iterable) and not isinstance(value, (str, bytes)):
+        return _mapping_tuple(value)
+    raise ValueError("Grouping assignments must be mapping rows or GroupingAssignment records.")
 
-    if "REPORT_ID" not in df.columns:
-        raise ValueError("Grouping DataFrame must include REPORT_ID.")
 
-    return df.copy()
+def _assignment_record(assignment: GroupingAssignment) -> Mapping[str, Any]:
+    return {
+        "GROUP": assignment.group,
+        "REPORT_ID": assignment.report_id,
+        "REFERENCE": assignment.reference,
+        "FILELOC": assignment.fileloc,
+        "FILENAME": assignment.filename,
+        "DATE": assignment.date,
+        "SAMPLE_NUMBER": assignment.sample_number,
+        "GROUP_COLOR": assignment.group_color,
+    }
+
+
+def _mapping_tuple(records: object) -> tuple[Mapping[str, Any], ...]:
+    if not isinstance(records, Iterable) or isinstance(records, (str, bytes)):
+        raise ValueError("Grouping assignments must be an iterable of mapping rows.")
+    normalized: list[Mapping[str, Any]] = []
+    for row in records:
+        if isinstance(row, GroupingAssignment):
+            normalized.append(_assignment_record(row))
+        elif isinstance(row, Mapping):
+            normalized.append(row)
+        else:
+            raise ValueError("Grouping assignment rows must be mappings.")
+    return tuple(normalized)
+
+
+def _record_value(record: Mapping[str, Any], *keys: str) -> Any:
+    lowered = {str(key).lower(): value for key, value in record.items()}
+    for key in keys:
+        if key in record:
+            return record[key]
+        lowered_value = lowered.get(key.lower())
+        if lowered_value is not None:
+            return lowered_value
+    return None
+
+
+def _optional_text(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "nat", "none", "<na>"}:
+        return None
+    return text
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        text = str(value).strip()
+        if not text or text.lower() in {"nan", "nat", "none", "<na>"}:
+            return None
+        return int(float(text))
+    except (TypeError, ValueError):
+        return None
 
 
 def _normalize_analytics_source_kind(value: object) -> str:

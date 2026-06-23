@@ -168,21 +168,23 @@ def test_declarative_profile_matches_duplicate_axis_rows_by_occurrence(tmp_path)
 
 
 def test_declarative_profile_reads_excel_reports(tmp_path):
-    pd = pytest.importorskip("pandas")
+    openpyxl = pytest.importorskip("openpyxl")
 
     profile_path, _sample_path, expected_path = _write_fixture(tmp_path)
     text = profile_path.read_text(encoding="utf-8").replace("source_format: pdf", "source_format: excel")
     profile_path.write_text(text, encoding="utf-8")
     sample_path = tmp_path / "sample_report_01.xlsx"
-    pd.DataFrame(
-        [
-            ["SYNTHETIC SUPPLIER ALPHA"],
-            ["Reference:", "REF123"],
-            ["Date:", "2026-01-05"],
-            ["Sample:", "0001"],
-            ["DIM", "X", "10.0", "0.1", "-0.1", "-", "10.02", "0.02", "0"],
-        ]
-    ).to_excel(sample_path, index=False, header=False)
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    for row in (
+        ["SYNTHETIC SUPPLIER ALPHA"],
+        ["Reference:", "REF123"],
+        ["Date:", "2026-01-05"],
+        ["Sample:", "0001"],
+        ["DIM", "X", "10.0", "0.1", "-0.1", "-", "10.02", "0.02", "0"],
+    ):
+        worksheet.append(row)
+    workbook.save(sample_path)
     expected_path.write_text(_expected_results().replace(".pdf", ".xlsx"), encoding="utf-8")
 
     report = validate_profile_file(

@@ -12,8 +12,6 @@ import tempfile
 from typing import Any
 from uuid import uuid4
 
-import pandas as pd
-
 from metroliza.industrial.industrial_analytics_service import ProductionMetricCandidate
 from metroliza.industrial.industrial_analytics_state import production_field_label
 from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
@@ -25,6 +23,16 @@ from metroliza.tabular.tabular_analytics_service import (
     TabularSqliteStore,
     discover_tabular_metric_candidates,
 )
+
+
+class _LazyPandas:
+    def __getattr__(self, name: str) -> Any:
+        import importlib
+
+        return getattr(importlib.import_module("pandas"), name)
+
+
+pd = _LazyPandas()
 
 
 _INDUSTRIAL_TABULAR_TABLE = "industrial_tabular_rows"
@@ -71,6 +79,17 @@ _INDUSTRIAL_PREVIEW_BASE_COLUMNS = (
     "line",
     "operator_name",
     "process_status",
+)
+_EMPTY_INDUSTRIAL_TABULAR_COLUMNS = (
+    "source_row_number",
+    "source",
+    "source_db_alias",
+    "source_profile_id",
+    "sync_run_id",
+    "source_record_key",
+    "process_timestamp",
+    "process_datetime",
+    "reference",
 )
 
 
@@ -188,7 +207,7 @@ def _write_tabular_sqlite_from_industrial_cache(
             or 0
         )
         if row_count <= 0:
-            columns = tuple(str(column) for column in _empty_industrial_tabular_frame().columns)
+            columns = _EMPTY_INDUSTRIAL_TABULAR_COLUMNS
             _create_tabular_table(connection, columns)
             connection.commit()
             connection.execute("DETACH DATABASE source_db")
@@ -229,7 +248,7 @@ def _prepare_tabular_view_from_industrial_cache(
         metadata = _load_or_refresh_tabular_metadata(connection, where_sql=where_sql, params=params)
         row_count = metadata.row_count
         if row_count <= 0:
-            columns = tuple(str(column) for column in _empty_industrial_tabular_frame().columns)
+            columns = _EMPTY_INDUSTRIAL_TABULAR_COLUMNS
             _create_industrial_tabular_view(
                 connection,
                 view_name=view_name,
@@ -951,19 +970,7 @@ def _normalized_value_sql(expression: str) -> str:
 
 
 def _empty_industrial_tabular_frame() -> pd.DataFrame:
-    return pd.DataFrame(
-        columns=[
-            "source_row_number",
-            "source",
-            "source_db_alias",
-            "source_profile_id",
-            "sync_run_id",
-            "source_record_key",
-            "process_timestamp",
-            "process_datetime",
-            "reference",
-        ]
-    )
+    return pd.DataFrame(columns=list(_EMPTY_INDUSTRIAL_TABULAR_COLUMNS))
 
 
 def _deduplicate_columns(dataframe: pd.DataFrame) -> pd.DataFrame:

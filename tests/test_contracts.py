@@ -1,7 +1,5 @@
 import unittest
 
-import pandas as pd
-
 from modules.contracts import (
     AppPaths,
     DashboardInteractivityOptions,
@@ -9,6 +7,7 @@ from modules.contracts import (
     IndustrialAnalyticsRequest,
     ParseRequest,
     ExportRequest,
+    GroupingAssignment,
     validate_export_options,
     validate_export_request,
     validate_grouping_df,
@@ -214,14 +213,15 @@ class TestValidatePaths(unittest.TestCase):
 
 class TestValidateGroupingDf(unittest.TestCase):
     def test_accepts_report_id_identity(self):
-        df = pd.DataFrame({'REPORT_ID': [1], 'GROUP': ['A']})
-        validated = validate_grouping_df(df)
-        self.assertEqual(validated['GROUP'].iloc[0], 'A')
+        rows = [{'REPORT_ID': 1, 'GROUP': 'A'}]
+        validated = validate_grouping_df(rows)
+        self.assertEqual(validated[0].group, 'A')
+        self.assertEqual(validated[0].report_id, 1)
 
     def test_rejects_missing_identity_columns(self):
-        df = pd.DataFrame({'GROUP': ['A'], 'REFERENCE': ['R1']})
+        rows = [{'GROUP': 'A', 'REFERENCE': 'R1'}]
         with self.assertRaises(ValueError):
-            validate_grouping_df(df)
+            validate_grouping_df(rows)
 
 
 class TestValidateExportRequest(unittest.TestCase):
@@ -229,7 +229,7 @@ class TestValidateExportRequest(unittest.TestCase):
         request = ExportRequest(
             paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
             options=ExportOptions(export_type='Scatter', sorting_parameter='Part #', violin_plot_min_samplesize=1),
-            grouping_df=pd.DataFrame({'REPORT_ID': [1], 'GROUP': ['NOK']}),
+            grouping_df=(GroupingAssignment(report_id=1, group='NOK'),),
         )
 
         validated = validate_export_request(request)
@@ -445,7 +445,7 @@ class TestValidateIndustrialAnalyticsRequest(unittest.TestCase):
             )
 
     def test_normalizes_tabular_request_paths_filters_and_grouping(self):
-        grouping_df = pd.DataFrame({'REPORT_ID': [1], 'GROUP': ['POPULATION']})
+        grouping_assignments = (GroupingAssignment(report_id=1, group='POPULATION'),)
         request = IndustrialAnalyticsRequest(
             source_kind='Tabular_File',
             input_file=' table.csv ',
@@ -455,7 +455,7 @@ class TestValidateIndustrialAnalyticsRequest(unittest.TestCase):
             tabular_filter_columns=['tracecode'],
             tabular_filter_keys=[['TC-001']],
             tabular_column_filters=[TabularColumnFilter('line', selected_values=('L1',))],
-            grouping_df=grouping_df,
+            grouping_df=grouping_assignments,
         )
 
         validated = validate_industrial_analytics_request(request, require_runnable=True)
@@ -467,8 +467,7 @@ class TestValidateIndustrialAnalyticsRequest(unittest.TestCase):
         self.assertEqual(validated.tabular_filter_columns, ('tracecode',))
         self.assertEqual(validated.tabular_filter_keys, (('TC-001',),))
         self.assertEqual(validated.tabular_column_filters, (TabularColumnFilter('line', selected_values=('L1',)),))
-        self.assertIsNot(validated.grouping_df, grouping_df)
-        self.assertTrue(validated.grouping_df.equals(grouping_df))
+        self.assertEqual(validated.grouping_df, grouping_assignments)
 
     def test_rejects_runnable_tabular_request_without_input(self):
         with self.assertRaisesRegex(ValueError, 'Select a CSV or Excel file'):

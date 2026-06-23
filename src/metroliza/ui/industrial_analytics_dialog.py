@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from dataclasses import replace
+import inspect
 
-import pandas as pd
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -99,6 +99,18 @@ except ImportError:  # pragma: no cover - compatibility with lightweight test st
 SOURCE_PRODUCTION_CACHE = "production_cache"
 SOURCE_TABULAR_FILE = "tabular_file"
 PRESENTATION_INDUSTRIAL_CACHE = "industrial_cache"
+
+
+def _coerce_int_or_none(value):
+    try:
+        if value is None or value != value:
+            return None
+    except (TypeError, ValueError):
+        pass
+    try:
+        return int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return None
 
 
 def dashboard_interactivity_options_summary(options: DashboardInteractivityOptions) -> str:
@@ -1778,7 +1790,7 @@ class IndustrialAnalyticsDialog(QDialog):
             QMessageBox.warning(self, self.windowTitle(), "Load CSV/Excel metrics before editing groups.")
             return
         if self.tabular_load_result.sqlite_store is not None:
-            dialog = TabularAnalyticsGroupingDialog(
+            dialog = self._create_tabular_grouping_dialog(
                 self,
                 dataframe=self.tabular_load_result.dataframe,
                 column_mapping=self.tabular_load_result.column_mapping,
@@ -1791,7 +1803,7 @@ class IndustrialAnalyticsDialog(QDialog):
             dialog.exec()
             self._sync_ui_state()
             return
-        dialog = TabularAnalyticsGroupingDialog(
+        dialog = self._create_tabular_grouping_dialog(
             self,
             dataframe=self._filtered_tabular_dataframe(),
             column_mapping=self.tabular_load_result.column_mapping,
@@ -1799,6 +1811,32 @@ class IndustrialAnalyticsDialog(QDialog):
         )
         dialog.exec()
         self._sync_ui_state()
+
+    @staticmethod
+    def _create_tabular_grouping_dialog(parent, **kwargs):
+        try:
+            signature = inspect.signature(TabularAnalyticsGroupingDialog)
+            parameters = signature.parameters
+            accepts_var_kwargs = any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters.values()
+            )
+            accepts_sqlite_scope = accepts_var_kwargs or "sqlite_store" in parameters
+            if not accepts_var_kwargs:
+                if (
+                    not accepts_sqlite_scope
+                    and "sqlite_store" in kwargs
+                    and hasattr(parent, "_filtered_tabular_dataframe")
+                ):
+                    kwargs["dataframe"] = parent._filtered_tabular_dataframe()
+                kwargs = {
+                    key: value
+                    for key, value in kwargs.items()
+                    if key in parameters
+                }
+        except (TypeError, ValueError):
+            pass
+        return TabularAnalyticsGroupingDialog(parent, **kwargs)
 
     def set_df_for_grouping(self, df) -> None:
         self.df_for_grouping = df
@@ -1877,16 +1915,21 @@ class IndustrialAnalyticsDialog(QDialog):
             selected_filter_keys=self.tabular_filter_keys,
             column_filters=self.tabular_column_filters,
         )
-        assigned = self.df_for_grouping.loc[:, ["REPORT_ID", "GROUP"]].copy()
-        assigned["REPORT_ID"] = pd.to_numeric(assigned["REPORT_ID"], errors="coerce")
-        assigned = assigned.dropna(subset=["REPORT_ID"])
-        if assigned.empty:
+        assigned_rows = self.df_for_grouping.loc[:, ["REPORT_ID", "GROUP"]].to_dict("records")
+        valid_assigned_rows = []
+        for row in assigned_rows:
+            report_id = _coerce_int_or_none(row.get("REPORT_ID"))
+            if report_id is None:
+                continue
+            group_label = str(row.get("GROUP") or TABULAR_DEFAULT_GROUP).strip() or TABULAR_DEFAULT_GROUP
+            valid_assigned_rows.append((report_id, group_label))
+        if not valid_assigned_rows:
             return total_rows > 0
-        labels = assigned["GROUP"].fillna(TABULAR_DEFAULT_GROUP).astype(str).str.strip()
-        assigned["GROUP"] = labels.mask(labels == "", TABULAR_DEFAULT_GROUP)
-        custom_assigned_ids = (
-            assigned[assigned["GROUP"] != TABULAR_DEFAULT_GROUP]["REPORT_ID"].astype(int).tolist()
-        )
+        custom_assigned_ids = [
+            report_id
+            for report_id, group_label in valid_assigned_rows
+            if group_label != TABULAR_DEFAULT_GROUP
+        ]
         assigned_count = self.tabular_load_result.sqlite_store.count_source_row_numbers(
             custom_assigned_ids,
             filter_columns=self.tabular_filter_columns,
@@ -2349,7 +2392,7 @@ class IndustrialAnalyticsDialog(QDialog):
             tabular_filter_keys=request.tabular_filter_keys,
             tabular_column_filters=request.tabular_column_filters,
             dashboard_detail_mode=request.dashboard_detail_mode,
-            grouping_df=request.grouping_df,
+            grouping_df=self.df_for_grouping if self.grouping_applied else None,
             dashboard_visual_settings=request.dashboard_visual_settings,
             dashboard_interactivity_options=request.dashboard_interactivity_options,
         )

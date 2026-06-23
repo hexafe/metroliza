@@ -273,8 +273,6 @@ _REPORT_EXTENSIONS_BY_SOURCE_FORMAT = {
 }
 _CURRENT_CMM_METADATA_PARSER_ID = DEFAULT_CMM_PDF_HEADER_BOX_PROFILE.parser_id
 _CURRENT_CMM_PARSER_VERSION = getattr(getattr(CMMReportParser, "manifest", None), "version", "1.1.0")
-_HEADER_EXTRACTION_DIAGNOSTIC_MARKER = '%"header_extraction_mode"%'
-_HEADER_EXTRACTION_NONE_MARKER = '%"header_extraction_mode": "none"%'
 
 
 def supported_report_file_extensions() -> set[str]:
@@ -290,10 +288,8 @@ def supported_report_file_extensions() -> set[str]:
         for source_format in getattr(manifest, "supported_formats", ()) or ():
             extensions.update(_REPORT_EXTENSIONS_BY_SOURCE_FORMAT.get(str(source_format).lower(), ()))
     return extensions
-_HEADER_OCR_ERROR_MARKER = '%"header_ocr_error"%'
-_REFERENCE_FILENAME_MARKER = '%"reference": "filename_candidate"%'
-_REPORT_DATE_FILENAME_MARKER = '%"report_date": "filename_candidate"%'
-_STATS_COUNT_FILENAME_MARKER = '%"stats_count_raw": "filename_candidate"%'
+
+
 _METADATA_VALUE_FIELDS = (
     "reference",
     "reference_raw",
@@ -727,30 +723,24 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                     SELECT sf.sha256
                     FROM source_files sf
                     JOIN parsed_reports pr ON pr.source_file_id = sf.id
-                    LEFT JOIN report_metadata rm ON rm.report_id = pr.id
+                    LEFT JOIN report_parse_state rps ON rps.report_id = pr.id
                     WHERE sf.is_active = 1
                       AND (
                         pr.parser_id <> ?
                         OR (
                           pr.parser_version = ?
-                          AND COALESCE(rm.metadata_json, '') LIKE ?
-                          AND COALESCE(rm.metadata_json, '') NOT LIKE ?
-                          AND COALESCE(rm.metadata_json, '') NOT LIKE ?
-                          AND COALESCE(rm.metadata_json, '') NOT LIKE ?
-                          AND COALESCE(rm.metadata_json, '') NOT LIKE ?
-                          AND COALESCE(rm.metadata_json, '') NOT LIKE ?
+                          AND rps.header_extraction_mode IS NOT NULL
+                          AND rps.header_extraction_mode <> 'none'
+                          AND rps.header_ocr_error_code IS NULL
+                          AND COALESCE(rps.reference_source, '') <> 'filename_candidate'
+                          AND COALESCE(rps.report_date_source, '') <> 'filename_candidate'
+                          AND COALESCE(rps.stats_count_source, '') <> 'filename_candidate'
                         )
                       )
                     """,
                     params=(
                         _CURRENT_CMM_METADATA_PARSER_ID,
                         _CURRENT_CMM_PARSER_VERSION,
-                        _HEADER_EXTRACTION_DIAGNOSTIC_MARKER,
-                        _HEADER_EXTRACTION_NONE_MARKER,
-                        _HEADER_OCR_ERROR_MARKER,
-                        _REFERENCE_FILENAME_MARKER,
-                        _REPORT_DATE_FILENAME_MARKER,
-                        _STATS_COUNT_FILENAME_MARKER,
                     ),
                     connection=connection,
                     retries=5,

@@ -1,9 +1,10 @@
-import pandas as pd
 import numpy as np
 from scipy.stats import shapiro
+from datetime import datetime
 import math
 import re
 import textwrap
+from typing import Any
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
@@ -20,6 +21,46 @@ from metroliza.shared.stats_utils import compute_capability_confidence_intervals
 _INTEGER_PATTERN = re.compile(r'^[+-]?\d+$')
 
 
+def _is_missing_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str) and value.strip() == '':
+        return True
+    try:
+        return bool(np.isnan(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _to_numeric_array(values) -> np.ndarray:
+    numeric_values = []
+    for value in values:
+        if _is_missing_value(value):
+            continue
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(numeric):
+            numeric_values.append(numeric)
+    return np.asarray(numeric_values, dtype=float)
+
+
+def _column_values(table, column_name: str) -> list[Any]:
+    return list(table[column_name])
+
+
+def _has_column(table, column_name: str) -> bool:
+    return column_name in getattr(table, 'columns', ())
+
+
+def _first_column_value(table, column_name: str) -> Any:
+    values = _column_values(table, column_name)
+    if not values:
+        raise IndexError(f"{column_name} column is empty")
+    return values[0]
+
+
 def resolve_density_curve_sampling(sample_size, *, requested_point_count=100):
     """Backward-compatible export of canonical density sampling policy."""
     return _resolve_density_curve_sampling(
@@ -30,7 +71,7 @@ def resolve_density_curve_sampling(sample_size, *, requested_point_count=100):
 
 def resolve_histogram_bin_count(values, *, min_bins=3, max_bins=48):
     """Resolve a stable histogram bin count using FD/Scott with low-n safeguards."""
-    numeric_values = pd.to_numeric(pd.Series(list(values)), errors='coerce').dropna().to_numpy(dtype=float)
+    numeric_values = _to_numeric_array(values)
     n = int(numeric_values.size)
     if n == 0:
         return {'bin_count': int(min_bins), 'method': 'minimum', 'sample_size': 0}
@@ -104,8 +145,7 @@ def normalize_plot_axis_values(values):
             pass
 
         try:
-            parsed_datetime = pd.to_datetime(text, errors='raise')
-            normalized.append(parsed_datetime.to_pydatetime())
+            normalized.append(datetime.fromisoformat(text.replace('Z', '+00:00')))
             continue
         except (TypeError, ValueError):
             normalized.append(value)
@@ -113,10 +153,11 @@ def normalize_plot_axis_values(values):
     return normalized
 
 
-def resolve_nominal_and_limits(header_group: pd.DataFrame):
-    nom = round(header_group['NOM'].iloc[0], 3)
-    upper_tolerance = round(header_group['+TOL'].iloc[0], 3)
-    lower_tolerance = round(header_group['-TOL'].iloc[0], 3) if header_group['-TOL'].iloc[0] else 0
+def resolve_nominal_and_limits(header_group):
+    nom = round(float(_first_column_value(header_group, 'NOM')), 3)
+    upper_tolerance = round(float(_first_column_value(header_group, '+TOL')), 3)
+    lower_raw = _first_column_value(header_group, '-TOL')
+    lower_tolerance = round(float(lower_raw), 3) if lower_raw else 0
 
     return {
         'nom': nom,
@@ -125,14 +166,14 @@ def resolve_nominal_and_limits(header_group: pd.DataFrame):
     }
 
 
-def compute_measurement_summary(header_group: pd.DataFrame, usl: float, lsl: float, nom: float):
-    meas = header_group['MEAS']
-    sigma = meas.std()
-    average = meas.mean()
-    sample_size = meas.count()
+def compute_measurement_summary(header_group, usl: float, lsl: float, nom: float):
+    meas = _to_numeric_array(_column_values(header_group, 'MEAS'))
+    sample_size = int(meas.size)
+    sigma = float(np.std(meas, ddof=1)) if sample_size > 1 else 0.0
+    average = float(np.mean(meas)) if sample_size else np.nan
     one_sided_mode = bool(is_one_sided_geometric_tolerance(nom, lsl))
-    above_usl_count = int((meas > usl).sum()) if usl is not None else 0
-    below_lsl_count = 0 if one_sided_mode else int((meas < lsl).sum()) if lsl is not None else 0
+    above_usl_count = int(np.sum(meas > usl)) if usl is not None else 0
+    below_lsl_count = 0 if one_sided_mode else int(np.sum(meas < lsl)) if lsl is not None else 0
     nok_count = above_usl_count + below_lsl_count
 
     cp, cpk = safe_process_capability(nom, usl, lsl, sigma, average)
@@ -144,11 +185,11 @@ def compute_measurement_summary(header_group: pd.DataFrame, usl: float, lsl: flo
     normality = compute_normality_status(meas, one_sided=one_sided_mode, location_bound=lsl)
 
     return {
-        'minimum': meas.min(),
-        'maximum': meas.max(),
+        'minimum': float(np.min(meas)) if sample_size else np.nan,
+        'maximum': float(np.max(meas)) if sample_size else np.nan,
         'sigma': sigma,
         'average': average,
-        'median': meas.median(),
+        'median': float(np.median(meas)) if sample_size else np.nan,
         'cp': cp,
         'cpk': cpk,
         'capability_ci': capability_ci,
@@ -180,7 +221,7 @@ def compute_estimated_tail_metrics(distribution_fit_result, *, lsl=None, usl=Non
 
 def compute_normality_status(measurements, *, one_sided=False, location_bound=None):
     """Classify measurement normality using Shapiro-Wilk when applicable."""
-    numeric_measurements = pd.to_numeric(pd.Series(measurements), errors='coerce').dropna().to_numpy(dtype=float)
+    numeric_measurements = _to_numeric_array(measurements)
     sample_size = int(numeric_measurements.size)
 
     if one_sided:
@@ -239,15 +280,15 @@ def build_summary_panel_labels(labels, *, grouping_active=False):
     return build_sparse_unique_labels(normalized_labels)
 
 
-def build_trend_plot_payload(header_group: pd.DataFrame, *, grouping_active=False, label_column=None):
+def build_trend_plot_payload(header_group, *, grouping_active=False, label_column=None):
     """Return x/y points and dense labels for the summary trend plot."""
-    measurements = normalize_plot_axis_values(list(header_group['MEAS']))
+    measurements = normalize_plot_axis_values(_column_values(header_group, 'MEAS'))
     resolved_label_column = label_column
     if resolved_label_column is None:
-        resolved_label_column = 'GROUP' if grouping_active and 'GROUP' in header_group.columns else 'SAMPLE_NUMBER'
+        resolved_label_column = 'GROUP' if grouping_active and _has_column(header_group, 'GROUP') else 'SAMPLE_NUMBER'
 
-    if resolved_label_column in header_group.columns:
-        raw_labels = list(header_group[resolved_label_column])
+    if _has_column(header_group, resolved_label_column):
+        raw_labels = _column_values(header_group, resolved_label_column)
     else:
         raw_labels = list(range(1, len(measurements) + 1))
 

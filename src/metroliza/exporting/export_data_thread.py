@@ -14,6 +14,8 @@ import sqlite3
 import textwrap
 import statistics
 import math
+from collections import OrderedDict
+from datetime import date, datetime
 from io import BytesIO
 import os
 from pathlib import Path
@@ -23,7 +25,6 @@ from metroliza.charts.matplotlib_runtime import configure_headless_matplotlib
 
 configure_headless_matplotlib()
 
-import pandas as pd
 import numpy as np
 
 import importlib.util
@@ -37,7 +38,7 @@ from PyQt6.QtCore import QCoreApplication, QThread, pyqtSignal
 
 from metroliza.shared.contracts import ExportRequest, validate_export_request
 import metroliza.shared.custom_logger as custom_logger
-from metroliza.reports.db import execute_select_with_columns, read_sql_dataframe, sqlite_connection_scope
+from metroliza.reports.db import execute_select_with_columns, read_sql_query_result, sqlite_connection_scope
 from metroliza.shared.env_utils import env_bool
 from metroliza.shared.excel_sheet_utils import unique_sheet_name
 from metroliza.exporting.export_backends import ExcelExportBackend, HtmlDashboardExportBackend
@@ -105,6 +106,7 @@ from metroliza.exporting.export_query_service import (
     fetch_sql_measurement_summary,
     fetch_sql_measurement_summaries,
     load_measurement_export_partition_dataframe,
+    RowTable,
 )
 from metroliza.reports.report_query_service import (
     INDUSTRIAL_EXPORT_COLUMNS,
@@ -179,6 +181,10 @@ from metroliza.exporting.export_summary_sheet_compute import (
     finalize_histogram_summary_payload as _finalize_histogram_summary_payload_compute,
     resolve_summary_stages as _resolve_summary_stages_compute,
 )
+
+# Compatibility hook for older tests/callers that monkey-patch this module
+# symbol. The implementation now resolves to row/column query results.
+read_sql_dataframe = read_sql_query_result
 from metroliza.exporting.export_group_analysis_annotation_service import (
     build_violin_group_annotation_payload as _build_violin_group_annotation_payload,
 )
@@ -393,12 +399,104 @@ def build_measurement_export_dataframe(df):
 def _is_blank_metadata_value(value):
     if value is None:
         return True
-    try:
-        if pd.isna(value):
-            return True
-    except (TypeError, ValueError):
-        pass
+    if _is_missing_scalar(value):
+        return True
     return str(value).strip() == ''
+
+
+def _is_missing_scalar(value):
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return False
+    try:
+        missing = value != value
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, bool) and missing:
+        return True
+    module_name = type(value).__module__
+    type_name = type(value).__name__
+    if module_name.startswith("pandas") and type_name in {"NAType", "NaTType"}:
+        return True
+    if module_name.startswith("numpy"):
+        try:
+            if np.issubdtype(type(value), np.datetime64):
+                return bool(np.isnat(value))
+        except TypeError:
+            pass
+    return False
+
+
+def _coerce_float_or_nan(value):
+    if _is_missing_scalar(value):
+        return np.nan
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return np.nan
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return np.nan
+
+
+def _numeric_array(values, *, dropna=False):
+    array = np.asarray([_coerce_float_or_nan(value) for value in values], dtype=float)
+    if dropna:
+        return array[np.isfinite(array)]
+    return array
+
+
+def _numeric_list(values):
+    return _numeric_array(values, dropna=True).astype(float, copy=False).tolist()
+
+
+def _coerce_datetime_or_none(value):
+    if _is_missing_scalar(value):
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return datetime.combine(value, datetime.min.time())
+    if isinstance(value, np.datetime64):
+        if np.isnat(value):
+            return None
+        try:
+            return value.astype('datetime64[us]').astype(datetime)
+        except (TypeError, ValueError, OverflowError):
+            return None
+    to_pydatetime = getattr(value, 'to_pydatetime', None)
+    if callable(to_pydatetime):
+        try:
+            return to_pydatetime()
+        except (TypeError, ValueError):
+            return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith('Z'):
+        text = f"{text[:-1]}+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _table_records(table):
+    if table is None:
+        return []
+    if hasattr(table, 'iter_rows'):
+        return [dict(row) for row in table.iter_rows(as_dict=True)]
+    to_dict = getattr(table, 'to_dict', None)
+    if callable(to_dict):
+        try:
+            records = to_dict('records')
+        except TypeError:
+            records = to_dict()
+        if isinstance(records, list):
+            return [dict(row) for row in records if isinstance(row, dict)]
+    return []
 
 
 def _unique_metadata_values(frame, column_name):
@@ -431,10 +529,14 @@ def _format_date_metadata_range(frame):
     if frame is None or 'DATE' not in getattr(frame, 'columns', ()):
         return ''
 
-    date_values = pd.to_datetime(frame['DATE'], errors='coerce').dropna()
-    if not date_values.empty:
-        first_date = date_values.min().date().isoformat()
-        last_date = date_values.max().date().isoformat()
+    date_values = [
+        parsed
+        for parsed in (_coerce_datetime_or_none(value) for value in frame['DATE'])
+        if parsed is not None
+    ]
+    if date_values:
+        first_date = min(date_values).date().isoformat()
+        last_date = max(date_values).date().isoformat()
         return first_date if first_date == last_date else f'{first_date} to {last_date}'
 
     return _format_unique_metadata_values(frame, 'DATE')
@@ -2523,7 +2625,7 @@ def render_histogram(ax, header_group, *, lsl=None, usl=None, group_column=None)
     """Render a histogram and density overlays for one measurement group."""
 
     normalized_meas = _normalize_plot_axis_values(list(header_group['MEAS']))
-    histogram_values = pd.to_numeric(pd.Series(normalized_meas), errors='coerce').dropna().to_numpy(dtype=float)
+    histogram_values = _numeric_array(normalized_meas, dropna=True)
     if histogram_values.size == 0:
         return {'is_grouped': False, 'group_labels': []}
 
@@ -2532,18 +2634,21 @@ def render_histogram(ax, header_group, *, lsl=None, usl=None, group_column=None)
 
     group_labels = []
     is_grouped = False
-    grouped_hist_frame = None
+    grouped_hist_values: OrderedDict[str, list[float]] = OrderedDict()
     if group_column and group_column in header_group.columns:
-        grouped_hist_frame = header_group[[group_column, 'MEAS']].copy()
-        grouped_hist_frame['MEAS'] = pd.to_numeric(grouped_hist_frame['MEAS'], errors='coerce')
-        grouped_hist_frame = grouped_hist_frame.dropna(subset=['MEAS'])
-        grouped_hist_frame[group_column] = grouped_hist_frame[group_column].astype(str).str.strip()
-        grouped_hist_frame = grouped_hist_frame[grouped_hist_frame[group_column] != '']
-        if not grouped_hist_frame.empty:
-            group_labels = grouped_hist_frame[group_column].drop_duplicates().tolist()
+        for group_value, measurement in zip(header_group[group_column], header_group['MEAS'], strict=False):
+            numeric = _coerce_float_or_nan(measurement)
+            if not np.isfinite(numeric) or _is_missing_scalar(group_value):
+                continue
+            label = str(group_value).strip()
+            if not label:
+                continue
+            grouped_hist_values.setdefault(label, []).append(float(numeric))
+        if grouped_hist_values:
+            group_labels = list(grouped_hist_values)
             is_grouped = len(group_labels) > 1
 
-    if is_grouped and grouped_hist_frame is not None:
+    if is_grouped and grouped_hist_values:
         histogram_palette = [
             SUMMARY_PLOT_PALETTE['distribution_base'],
             SUMMARY_PLOT_PALETTE['distribution_foreground'],
@@ -2553,7 +2658,7 @@ def render_histogram(ax, header_group, *, lsl=None, usl=None, group_column=None)
         ]
         bin_edges = np.histogram_bin_edges(histogram_values, bins=bin_count)
         for index, label in enumerate(group_labels):
-            values = grouped_hist_frame.loc[grouped_hist_frame[group_column] == label, 'MEAS'].to_numpy(dtype=float)
+            values = np.asarray(grouped_hist_values.get(label, ()), dtype=float)
             if values.size == 0:
                 continue
             color = histogram_palette[index % len(histogram_palette)]
@@ -2674,9 +2779,9 @@ def render_iqr_boxplot(ax, values, labels):
 
     normalized_values = []
     for group_values in safe_values:
-        if isinstance(group_values, (list, tuple, np.ndarray, pd.Series)):
+        if isinstance(group_values, (list, tuple, np.ndarray)) or not isinstance(group_values, (str, bytes)):
             group_list = _normalize_plot_axis_values(list(group_values))
-            numeric_group = pd.to_numeric(pd.Series(group_list), errors='coerce').dropna().to_list()
+            numeric_group = _numeric_list(group_list)
             if numeric_group:
                 normalized_values.append(numeric_group)
 
@@ -3883,7 +3988,18 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
 
     def _build_export_filtered_dataframe(self):
         if self._cached_export_filtered_df is None:
-            self._cached_export_filtered_df = read_sql_dataframe(self.db_file, self._active_export_query, connection=self._db_connection)
+            query_result = read_sql_dataframe(
+                self.db_file,
+                self._active_export_query,
+                connection=self._db_connection,
+            )
+            if hasattr(query_result, 'rows') and hasattr(query_result, 'columns'):
+                self._cached_export_filtered_df = build_export_dataframe(
+                    query_result.rows,
+                    query_result.columns,
+                )
+            else:
+                self._cached_export_filtered_df = query_result
         return self._cached_export_filtered_df
 
     def _record_stage_timing(self, stage_name, elapsed):
@@ -4196,7 +4312,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             # A single ungrouped population should render as one boxplot. Building
             # one box per sample creates thousands of degenerate single-point
             # boxes, which is both slow and statistically misleading.
-            numeric_values = pd.to_numeric(sampled_group['MEAS'], errors='coerce').dropna().tolist()
+            numeric_values = _numeric_list(sampled_group['MEAS'])
             if numeric_values:
                 return ['All'], [numeric_values]
 
@@ -4338,18 +4454,21 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         strategy_labels = build_summary_panel_labels(raw_labels, grouping_active=grouping_active)
 
         normalized_y = _normalize_plot_axis_values(list(scatter_frame['MEAS']))
-        y_numeric = pd.to_numeric(pd.Series(normalized_y), errors='coerce').to_numpy(dtype=float)
+        y_numeric = _numeric_array(normalized_y)
 
         normalized_x = _normalize_plot_axis_values(raw_labels)
-        has_datetime_values = any(isinstance(value, (pd.Timestamp, np.datetime64)) or hasattr(value, 'year') for value in normalized_x)
+        has_datetime_values = any(
+            isinstance(value, (datetime, date, np.datetime64)) or hasattr(value, 'year')
+            for value in normalized_x
+        )
         if has_datetime_values and all(not isinstance(value, str) for value in normalized_x):
-            datetime_series = pd.to_datetime(pd.Series(normalized_x), errors='coerce')
-            if datetime_series.notna().all():
-                x_values = datetime_series.dt.to_pydatetime()
+            datetime_values = [_coerce_datetime_or_none(value) for value in normalized_x]
+            if all(value is not None for value in datetime_values):
+                x_values = np.asarray(datetime_values, dtype=object)
             else:
                 x_values = np.arange(len(scatter_frame), dtype=float)
         else:
-            x_numeric = pd.to_numeric(pd.Series(normalized_x), errors='coerce').to_numpy(dtype=float)
+            x_numeric = _numeric_array(normalized_x)
             if np.isnan(x_numeric).any():
                 x_values = np.arange(len(scatter_frame), dtype=float)
             else:
@@ -4374,18 +4493,27 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         if scatter_frame.empty:
             return np.array([]), np.array([]), []
 
-        grouped_measurements = scatter_frame.groupby(x_column, sort=False)['MEAS'].mean()
-        if grouped_measurements.empty:
+        grouped_totals: OrderedDict[str, tuple[float, int, object]] = OrderedDict()
+        for label, measurement in zip(scatter_frame[x_column], scatter_frame['MEAS'], strict=False):
+            numeric = _coerce_float_or_nan(measurement)
+            if not np.isfinite(numeric):
+                continue
+            marker = str(label)
+            total, count, original_label = grouped_totals.get(marker, (0.0, 0, label))
+            grouped_totals[marker] = (total + float(numeric), count + 1, original_label)
+        if not grouped_totals:
             return np.array([]), np.array([]), []
 
-        raw_labels = list(grouped_measurements.index)
+        raw_labels = [original_label for _total, _count, original_label in grouped_totals.values()]
         if grouping_active:
-            group_sizes = scatter_frame.groupby(x_column, sort=False)['MEAS'].size()
-            raw_labels = [f"{label} (n={int(group_sizes.loc[label])})" for label in raw_labels]
+            raw_labels = [
+                f"{label} (n={int(count)})"
+                for label, (_total, count, _original_label) in zip(raw_labels, grouped_totals.values())
+            ]
         strategy_labels = build_summary_panel_labels(raw_labels, grouping_active=grouping_active)
-        normalized_y = _normalize_plot_axis_values(list(grouped_measurements.values))
-        y_numeric = pd.to_numeric(pd.Series(normalized_y), errors='coerce').to_numpy(dtype=float)
-        x_values = np.arange(len(grouped_measurements), dtype=float)
+        normalized_y = [total / count for total, count, _label in grouped_totals.values() if count]
+        y_numeric = _numeric_array(_normalize_plot_axis_values(normalized_y))
+        x_values = np.arange(len(grouped_totals), dtype=float)
         return x_values, y_numeric, strategy_labels
 
     def _sort_header_group(self, header_group):
@@ -4393,16 +4521,16 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         sorted_group = header_group.copy()
 
         if self._is_sample_sort_mode(sort_mode):
-            sample_numeric = pd.to_numeric(sorted_group['SAMPLE_NUMBER'], errors='coerce')
-            if sample_numeric.notna().any():
+            sample_numeric = _numeric_array(sorted_group['SAMPLE_NUMBER'])
+            if np.isfinite(sample_numeric).any():
                 sorted_group = sorted_group.assign(_sample_numeric=sample_numeric)
                 sorted_group = sorted_group.sort_values(by=['_sample_numeric', 'SAMPLE_NUMBER'], kind='mergesort')
                 sorted_group = sorted_group.drop(columns=['_sample_numeric'])
             else:
                 sorted_group = sorted_group.sort_values(by='SAMPLE_NUMBER', kind='mergesort')
         else:
-            date_series = pd.to_datetime(sorted_group['DATE'], errors='coerce')
-            if date_series.notna().any():
+            date_series = [_coerce_datetime_or_none(value) for value in sorted_group['DATE']]
+            if any(value is not None for value in date_series):
                 sorted_group = sorted_group.assign(_date_sort=date_series)
                 sorted_group = sorted_group.sort_values(by=['_date_sort', 'SAMPLE_NUMBER'], kind='mergesort')
                 sorted_group = sorted_group.drop(columns=['_date_sort'])
@@ -5190,7 +5318,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         grouped_entries = []
         for entry in groups:
             label = str(entry.get('group') or '')
-            values = pd.to_numeric(pd.Series(entry.get('values') or []), errors='coerce').to_numpy(dtype=float)
+            values = _numeric_array(entry.get('values') or [])
             finite_values = values[np.isfinite(values)]
             grouped_entries.append((label, finite_values))
 
@@ -5605,8 +5733,9 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         """Write cached industrial context and link diagnostics when enabled."""
 
         if export_df is None or export_df.empty:
-            diagnostics_df = pd.DataFrame(
-                [{"metric": "export_rows", "value": 0}, {"metric": "linked_reports", "value": 0}]
+            diagnostics_df = RowTable(
+                rows=(("export_rows", 0), ("linked_reports", 0)),
+                columns=("metric", "value"),
             )
             self.write_data_to_excel(diagnostics_df, "INDUSTRIAL_DIAGNOSTICS", excel_writer)
             return
@@ -5644,14 +5773,15 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             if "INDUSTRIAL_RECORD_ID" in linked_df.columns and not linked_df.empty
             else 0
         )
-        diagnostics_df = pd.DataFrame(
-            [
-                {"metric": "export_rows", "value": int(len(export_df))},
-                {"metric": "reports_in_export", "value": report_count},
-                {"metric": "linked_reports", "value": linked_report_count},
-                {"metric": "unmatched_reports", "value": max(report_count - linked_report_count, 0)},
-                {"metric": "linked_industrial_records", "value": linked_record_count},
-            ]
+        diagnostics_df = RowTable(
+            rows=(
+                ("export_rows", int(len(export_df))),
+                ("reports_in_export", report_count),
+                ("linked_reports", linked_report_count),
+                ("unmatched_reports", max(report_count - linked_report_count, 0)),
+                ("linked_industrial_records", linked_record_count),
+            ),
+            columns=("metric", "value"),
         )
         self.write_data_to_excel(diagnostics_df, "INDUSTRIAL_DIAGNOSTICS", excel_writer)
 
@@ -5692,14 +5822,15 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
 
     @staticmethod
     def _sample_column_for_width(data, *, sample_limit=_COLUMN_WIDTH_SAMPLE_LIMIT):
-        row_count = len(data)
+        values = list(data)
+        row_count = len(values)
         sample_limit = max(1, int(sample_limit or 1))
         if row_count <= sample_limit:
-            return data
+            return values
 
         head_count = sample_limit // 2
         tail_count = sample_limit - head_count
-        return pd.concat([data.iloc[:head_count], data.iloc[-tail_count:]])
+        return values[:head_count] + values[-tail_count:]
 
     def calculate_column_width(self, data):
         """Handle `calculate_column_width` for `ExportDataThread`.
@@ -5715,11 +5846,11 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         """
 
         try:
-            if data.empty:
+            if len(data) == 0:
                 return 12  # Return a default width 12 if the data is empty
 
             width_sample = self._sample_column_for_width(data)
-            column_width = width_sample.astype(str).str.len().max()
+            column_width = max((len(str(value)) for value in width_sample), default=0)
             column_width = min(column_width, 40)
             column_width = max(column_width, 12)
             return column_width

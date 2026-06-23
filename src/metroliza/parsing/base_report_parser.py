@@ -6,8 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 import re
-
-import pandas
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -20,6 +19,32 @@ class SourceDescriptor:
     file_name: str
     file_extension: str
     source_format: str
+
+
+@dataclass(frozen=True)
+class ReportRows:
+    """Pandas-free tabular parser output."""
+
+    columns: tuple[str, ...] = ()
+    rows: tuple[dict[str, Any], ...] = ()
+
+    @property
+    def empty(self) -> bool:
+        return not self.rows
+
+    def __len__(self) -> int:
+        return len(self.rows)
+
+    def __iter__(self):
+        return iter(self.rows)
+
+    def as_dicts(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.rows]
+
+    def column(self, name: str) -> tuple[Any, ...]:
+        if name not in self.columns:
+            raise KeyError(name)
+        return tuple(row.get(name) for row in self.rows)
 
 
 class BaseReportParser(ABC):
@@ -37,7 +62,8 @@ class BaseReportParser(ABC):
         self._canonical_metadata = None
         self._raw_text = []
         self._blocks_text = []
-        self.df = pandas.DataFrame()
+        self.rows: list[dict[str, Any]] = []
+        self.df = ReportRows()
         self.database = database
         self.connection = connection
 
@@ -254,8 +280,23 @@ class BaseReportParser(ABC):
             )
         return report_dict
 
-    def to_df(self):
-        df_list = []
+    def to_rows(self) -> ReportRows:
+        rows: list[dict[str, Any]] = []
+        columns = (
+            'AX',
+            'NOM',
+            '+TOL',
+            '-TOL',
+            'BONUS',
+            'MEAS',
+            'DEV',
+            'OUTTOL',
+            'Header',
+            'Reference',
+            'File location',
+            'File name',
+            'Date',
+        )
         for block in self.blocks_text:
             header = ""
             for sublist in block[0]:
@@ -266,17 +307,23 @@ class BaseReportParser(ABC):
                         if isinstance(item, str):
                             header += f"{item}, "
 
-            columns = ['AX', 'NOM', '+TOL', '-TOL', 'BONUS', 'MEAS', 'DEV', 'OUTTOL']
-            df = pandas.DataFrame(block[1], columns=columns)
-            df['Header'] = header[:-2]
-            df['Reference'] = self.reference
-            df['File location'] = self.file_path
-            df['File name'] = self.file_name
-            df['Date'] = self.date
-            df_list.append(df)
+            for measurement in block[1]:
+                row = dict(zip(columns[:8], measurement, strict=False))
+                row['Header'] = header[:-2]
+                row['Reference'] = self.reference
+                row['File location'] = self.file_path
+                row['File name'] = self.file_name
+                row['Date'] = self.date
+                rows.append(row)
 
-        if df_list:
-            self.df = pandas.concat(df_list)
+        self.rows = rows
+        self.df = ReportRows(columns=columns, rows=tuple(rows))
+        return self.df
+
+    def to_df(self):
+        """Compatibility wrapper that now produces pandas-free row state."""
+
+        return self.to_rows()
 
     def _parse_result_v2_for_persistence(self):
         """Build or reuse ``ParseResultV2`` for generic plugin persistence."""

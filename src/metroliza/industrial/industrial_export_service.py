@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Callable, Mapping
-
-import pandas as pd
+from typing import Any, Callable, Mapping, Sequence
 
 from metroliza.industrial.industrial_data_repository import redact_sensitive_text
 from metroliza.reports.db import read_sql_dataframe, sqlite_connection_scope
@@ -18,6 +16,17 @@ from metroliza.industrial.industrial_workflow_state import (
 )
 from metroliza.industrial.oznak_adapter import fetch_oznak_records_for_source_profile
 from metroliza.charts.xlsx_chart_utils import apply_chart_options, create_workbook_chart, insert_chart
+
+
+class _LazyPandas:
+    def __getattr__(self, name: str) -> Any:
+        import importlib
+
+        return getattr(importlib.import_module("pandas"), name)
+
+
+pd = _LazyPandas()
+
 
 CancelCheck = Callable[[], bool]
 
@@ -309,7 +318,7 @@ def _export_cached_industrial_workbook_streaming(
             )
             _raise_if_cancelled(cancel_check)
 
-            with pd.ExcelWriter(temp_output_path, engine="xlsxwriter") as writer:
+            with _XlsxwriterWorkbookWriter(temp_output_path) as writer:
                 data_sheet = writer.book.add_worksheet("Industrial Data")
                 writer.sheets["Industrial Data"] = data_sheet
                 _write_excel_row(data_sheet, 0, export_columns)
@@ -343,28 +352,33 @@ def _export_cached_industrial_workbook_streaming(
                         summary_counts[group] = summary_counts.get(group, 0) + 1
 
                 _raise_if_cancelled(cancel_check)
-                summary = _cached_summary_dataframe(summary_counts, row_count=row_count)
-                diagnostics = pd.DataFrame(
-                    [
-                        {
-                            "row_count": int(row_count),
-                            "filter_references": len(tuple(filter_state.references)),
-                            "grouping": grouping_state.summary(),
-                            "charts": bool(include_charts),
-                            "raw_data": bool(include_raw_data),
-                            "raw_sheet_rows": int(raw_sheet_rows),
-                            "source_kind": "cached",
-                            "storage": "sqlite_streaming",
-                            "scope_rows": int(row_total),
-                        }
-                    ]
+                summary_rows = _cached_summary_rows(summary_counts, row_count=row_count)
+                diagnostics_row = {
+                    "row_count": int(row_count),
+                    "filter_references": len(tuple(filter_state.references)),
+                    "grouping": grouping_state.summary(),
+                    "charts": bool(include_charts),
+                    "raw_data": bool(include_raw_data),
+                    "raw_sheet_rows": int(raw_sheet_rows),
+                    "source_kind": "cached",
+                    "storage": "sqlite_streaming",
+                    "scope_rows": int(row_total),
+                }
+                _write_mapping_sheet(
+                    writer,
+                    "Industrial Summary",
+                    summary_rows,
+                    columns=("group", "record_count"),
                 )
-                summary.to_excel(writer, sheet_name="Industrial Summary", index=False)
                 _raise_if_cancelled(cancel_check)
-                diagnostics.to_excel(writer, sheet_name="Diagnostics", index=False)
+                _write_mapping_sheet(writer, "Diagnostics", (diagnostics_row,))
                 _raise_if_cancelled(cancel_check)
                 if include_charts:
-                    _write_industrial_charts(writer, summary)
+                    _write_industrial_charts(
+                        writer,
+                        summary_row_count=len(summary_rows),
+                        record_count_column_index=1,
+                    )
                     _raise_if_cancelled(cancel_check)
             _raise_if_cancelled(cancel_check)
         temp_output_path.replace(output_path)
@@ -645,16 +659,64 @@ def _cached_summary_group_label(row: Mapping[str, Any], *, group_fields: list[st
     return " | ".join(values) or "All records"
 
 
-def _cached_summary_dataframe(summary_counts: Mapping[str, int], *, row_count: int) -> pd.DataFrame:
+def _cached_summary_rows(
+    summary_counts: Mapping[str, int],
+    *,
+    row_count: int,
+) -> list[dict[str, Any]]:
     if row_count <= 0:
-        return pd.DataFrame(columns=["group", "record_count"])
+        return []
     if not summary_counts:
-        return pd.DataFrame({"group": ["All records"], "record_count": [int(row_count)]})
+        return [{"group": "All records", "record_count": int(row_count)}]
     rows = sorted(summary_counts.items(), key=lambda item: (-int(item[1]), str(item[0]).casefold()))
+    return [{"group": group, "record_count": int(count)} for group, count in rows]
+
+
+def _cached_summary_dataframe(summary_counts: Mapping[str, int], *, row_count: int) -> pd.DataFrame:
     return pd.DataFrame(
-        [{"group": group, "record_count": int(count)} for group, count in rows],
+        _cached_summary_rows(summary_counts, row_count=row_count),
         columns=["group", "record_count"],
     )
+
+
+class _XlsxwriterWorkbookWriter:
+    def __init__(self, output_path: Path) -> None:
+        import xlsxwriter
+
+        self.book = xlsxwriter.Workbook(str(output_path), {"nan_inf_to_errors": True})
+        self.sheets: dict[str, Any] = {}
+
+    def __enter__(self) -> "_XlsxwriterWorkbookWriter":
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        self.book.close()
+
+
+def _write_mapping_sheet(
+    writer: Any,
+    sheet_name: str,
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    columns: Sequence[str] | None = None,
+) -> None:
+    worksheet = writer.book.add_worksheet(sheet_name)
+    writer.sheets[sheet_name] = worksheet
+    normalized_rows = tuple(rows)
+    headers = tuple(columns) if columns is not None else _mapping_headers(normalized_rows)
+    _write_excel_row(worksheet, 0, headers)
+    for row_index, row in enumerate(normalized_rows, start=1):
+        _write_excel_row(worksheet, row_index, [row.get(header) for header in headers])
+
+
+def _mapping_headers(rows: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
+    headers: list[str] = []
+    for row in rows:
+        for key in row:
+            header = str(key)
+            if header not in headers:
+                headers.append(header)
+    return tuple(headers)
 
 
 def _write_excel_row(worksheet, row_index: int, values: list[Any] | tuple[Any, ...]) -> None:
@@ -789,7 +851,6 @@ def export_industrial_dataframe_workbook(
     }
     if diagnostics_extra:
         diagnostics_row.update(dict(diagnostics_extra))
-    diagnostics = pd.DataFrame([diagnostics_row])
 
     try:
         with pd.ExcelWriter(temp_output_path, engine="xlsxwriter") as writer:
@@ -800,10 +861,14 @@ def export_industrial_dataframe_workbook(
             _raise_if_cancelled(cancel_check)
             summary.to_excel(writer, sheet_name="Industrial Summary", index=False)
             _raise_if_cancelled(cancel_check)
-            diagnostics.to_excel(writer, sheet_name="Diagnostics", index=False)
+            _write_mapping_sheet(writer, "Diagnostics", (diagnostics_row,))
             _raise_if_cancelled(cancel_check)
             if include_charts:
-                _write_industrial_charts(writer, summary)
+                _write_industrial_charts(
+                    writer,
+                    summary_row_count=int(len(summary.index)),
+                    record_count_column_index=int(summary.columns.get_loc("record_count")),
+                )
                 _raise_if_cancelled(cancel_check)
         _raise_if_cancelled(cancel_check)
         temp_output_path.replace(output_path)
@@ -888,22 +953,32 @@ def _live_fetch_warning_detail(diagnostics: Mapping[str, Any], error: str | None
     return None
 
 
-def _write_industrial_charts(writer: pd.ExcelWriter, summary: pd.DataFrame) -> None:
+def _write_industrial_charts(
+    writer: Any,
+    *,
+    summary_row_count: int,
+    record_count_column_index: int,
+) -> None:
     workbook = writer.book
     chart_sheet = workbook.add_worksheet("Industrial Charts")
     chart_sheet.write(0, 0, "Industrial production-line records")
-    if summary.empty:
+    if summary_row_count <= 0:
         chart_sheet.write(2, 0, "No cached industrial rows matched the selected filter.")
         return
 
-    count_col = int(summary.columns.get_loc("record_count"))
     chart = create_workbook_chart(workbook, "column")
-    last_row = len(summary.index)
+    last_row = int(summary_row_count)
     chart.add_series(
         {
             "name": "Record count",
             "categories": ["Industrial Summary", 1, 0, last_row, 0],
-            "values": ["Industrial Summary", 1, count_col, last_row, count_col],
+            "values": [
+                "Industrial Summary",
+                1,
+                int(record_count_column_index),
+                last_row,
+                int(record_count_column_index),
+            ],
         }
     )
     apply_chart_options(

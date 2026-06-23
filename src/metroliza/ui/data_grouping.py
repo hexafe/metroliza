@@ -58,7 +58,16 @@ from PyQt6.QtWidgets import(
     QInputDialog,
     QMessageBox,
 )
-import pandas as pd
+
+
+class _LazyPandas:
+    def __getattr__(self, name):
+        import importlib
+
+        return getattr(importlib.import_module("pandas"), name)
+
+
+pd = _LazyPandas()
 
 
 _GROUPING_LIST_PREVIEW_LIMIT = 1000

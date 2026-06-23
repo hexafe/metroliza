@@ -101,6 +101,18 @@ SCHEMA_TABLE_STATEMENTS = (
         metadata_json TEXT,
         FOREIGN KEY (report_id) REFERENCES parsed_reports(id) ON DELETE CASCADE
     )""",
+    """CREATE TABLE IF NOT EXISTS report_parse_state (
+        report_id INTEGER PRIMARY KEY,
+        metadata_parsing_mode TEXT,
+        header_extraction_mode TEXT,
+        header_ocr_error_code TEXT,
+        reference_source TEXT,
+        report_date_source TEXT,
+        stats_count_source TEXT,
+        metadata_enrichment_mode TEXT,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (report_id) REFERENCES parsed_reports(id) ON DELETE CASCADE
+    )""",
     """CREATE TABLE IF NOT EXISTS report_metadata_candidates (
         id INTEGER PRIMARY KEY,
         report_id INTEGER NOT NULL,
@@ -171,6 +183,8 @@ SCHEMA_INDEX_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_report_metadata_part_name ON report_metadata(part_name)",
     "CREATE INDEX IF NOT EXISTS idx_report_metadata_revision ON report_metadata(revision)",
     "CREATE INDEX IF NOT EXISTS idx_report_metadata_stats_count_int ON report_metadata(stats_count_int)",
+    "CREATE INDEX IF NOT EXISTS idx_report_parse_state_reparse ON report_parse_state(metadata_parsing_mode, header_extraction_mode, header_ocr_error_code, reference_source, report_date_source, stats_count_source, report_id)",
+    "CREATE INDEX IF NOT EXISTS idx_report_parse_state_header_extraction ON report_parse_state(header_extraction_mode)",
     "CREATE INDEX IF NOT EXISTS idx_report_metadata_candidates_report_field ON report_metadata_candidates(report_id, field_name, is_selected)",
     "CREATE INDEX IF NOT EXISTS idx_report_metadata_candidates_rule ON report_metadata_candidates(rule_id)",
     "CREATE INDEX IF NOT EXISTS idx_report_metadata_warnings_report ON report_metadata_warnings(report_id)",
@@ -319,6 +333,106 @@ def _text_value(value) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _json_mapping(value) -> dict:
+    if isinstance(value, dict):
+        return dict(value)
+    if value in (None, ""):
+        return {}
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return {}
+    return dict(parsed) if isinstance(parsed, dict) else {}
+
+
+def _nested_mapping(value, key: str) -> dict:
+    nested = value.get(key) if isinstance(value, dict) else None
+    return dict(nested) if isinstance(nested, dict) else {}
+
+
+def _header_ocr_error_code(value) -> str | None:
+    if value in (None, "", False):
+        return None
+    if isinstance(value, dict):
+        for key in ("code", "type", "message", "error"):
+            text = _text_value(value.get(key))
+            if text:
+                return text
+        return "unknown"
+    return _text_value(value)
+
+
+def report_parse_state_values_from_metadata_json(metadata_json) -> dict[str, str | None]:
+    """Extract indexed parser-state fields from the canonical metadata JSON blob."""
+
+    metadata = _json_mapping(metadata_json)
+    field_sources = _nested_mapping(metadata, "field_sources")
+    metadata_enrichment = _nested_mapping(metadata, "metadata_enrichment")
+    return {
+        "metadata_parsing_mode": _text_value(metadata.get("metadata_parsing_mode")),
+        "header_extraction_mode": _text_value(metadata.get("header_extraction_mode")),
+        "header_ocr_error_code": _header_ocr_error_code(metadata.get("header_ocr_error")),
+        "reference_source": _text_value(field_sources.get("reference")),
+        "report_date_source": _text_value(field_sources.get("report_date")),
+        "stats_count_source": _text_value(field_sources.get("stats_count_raw")),
+        "metadata_enrichment_mode": _text_value(metadata_enrichment.get("mode")),
+    }
+
+
+def upsert_report_parse_state(cursor, report_id: int, metadata_json) -> None:
+    """Persist indexed parser-state fields derived from report metadata JSON."""
+
+    state = report_parse_state_values_from_metadata_json(metadata_json)
+    cursor.execute(
+        """
+        INSERT INTO report_parse_state (
+            report_id,
+            metadata_parsing_mode,
+            header_extraction_mode,
+            header_ocr_error_code,
+            reference_source,
+            report_date_source,
+            stats_count_source,
+            metadata_enrichment_mode,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(report_id) DO UPDATE SET
+            metadata_parsing_mode = excluded.metadata_parsing_mode,
+            header_extraction_mode = excluded.header_extraction_mode,
+            header_ocr_error_code = excluded.header_ocr_error_code,
+            reference_source = excluded.reference_source,
+            report_date_source = excluded.report_date_source,
+            stats_count_source = excluded.stats_count_source,
+            metadata_enrichment_mode = excluded.metadata_enrichment_mode,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (
+            int(report_id),
+            state["metadata_parsing_mode"],
+            state["header_extraction_mode"],
+            state["header_ocr_error_code"],
+            state["reference_source"],
+            state["report_date_source"],
+            state["stats_count_source"],
+            state["metadata_enrichment_mode"],
+        ),
+    )
+
+
+def _backfill_report_parse_state(cursor) -> None:
+    cursor.execute(
+        """
+        SELECT rm.report_id, rm.metadata_json
+        FROM report_metadata rm
+        LEFT JOIN report_parse_state rps ON rps.report_id = rm.report_id
+        WHERE rps.report_id IS NULL
+        """
+    )
+    for report_id, metadata_json in cursor.fetchall():
+        upsert_report_parse_state(cursor, int(report_id), metadata_json)
 
 
 def _float_value(value) -> float | None:
@@ -592,6 +706,7 @@ def ensure_report_schema(database: str, *, connection=None, retries: int = 4, re
         for statement in SCHEMA_TABLE_STATEMENTS:
             cursor.execute(statement)
         _migrate_legacy_report_tables(cursor)
+        _backfill_report_parse_state(cursor)
         ensure_characteristic_alias_table(cursor)
         for statement in SCHEMA_INDEX_STATEMENTS:
             cursor.execute(statement)

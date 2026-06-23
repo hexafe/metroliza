@@ -123,7 +123,7 @@ python -m maturin build --manifest-path src/metroliza/native/distribution_fit_ad
 ### 2026.06 RC1 realtime industrial tester evidence
 
 Current validation branch: `feature/realtime-industrial-ml-anomaly`.
-Current RC metadata: `2026.06rc1(260623)`.
+Current RC metadata: `2026.06rc2(260623)`.
 
 - Local realtime/anomaly tester-build evidence is recorded in
   [`realtime_industrial_rollout_checklist.md`](./realtime_industrial_rollout_checklist.md).
@@ -184,6 +184,17 @@ Current RC metadata: `2026.06rc1(260623)`.
   changed parser files, and the resolver diagnostics script selected `cmm` at
   confidence `95` for a generated encoded CMM PDF. Final rc2 push and green
   GitHub Actions CI are pending.
+- 2026-06-23 RC2 pandas-free SQLite performance closeout is included in build
+  `260623`. CSV Summary, export, parser/report, and industrial analytics table
+  paths now share lighter SQLite row/query contracts, direct grouped SQLite
+  summaries, and bounded row streaming coverage. Local validation passed for
+  full offscreen pytest with coverage (`2186 passed, 320 skipped, 112 warnings,
+  83 subtests passed`), Ruff, compileall, focused SQLite/tabular/benchmark
+  tests (`87 passed`), release metadata sync, release hygiene, security audit
+  with no known vulnerabilities, and the CI-shaped coverage threshold at 81%.
+  The before/after benchmark set is recorded in
+  [`rc2_pandas_free_sqlite_performance_2026-06-23.md`](./rc2_pandas_free_sqlite_performance_2026-06-23.md).
+  Final rc2 push and green GitHub Actions CI are pending until publication.
 - Manual packaging smoke, Windows executable clean-machine launch/startup,
   Google conversion smoke, third-party notice artifact evidence, and security
   owner triage/waiver for report-only findings remain release-promotion

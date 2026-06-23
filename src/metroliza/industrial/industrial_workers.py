@@ -391,7 +391,8 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
         self.tabular_filter_keys = validated_request.tabular_filter_keys
         self.tabular_column_filters = validated_request.tabular_column_filters
         self.dashboard_detail_mode = validated_request.dashboard_detail_mode
-        self.grouping_df = validated_request.grouping_df
+        grouping_copy = getattr(grouping_df, "copy", None)
+        self.grouping_df = grouping_copy() if callable(grouping_copy) else validated_request.grouping_df
         self.dashboard_visual_settings = validated_request.dashboard_visual_settings
         self.dashboard_interactivity_options = validated_request.dashboard_interactivity_options
         self._init_cancellation_state()

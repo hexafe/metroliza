@@ -14,12 +14,15 @@ from scripts.benchmark_paths import (
     benchmark_dashboard_static_multi_group_probe,
     benchmark_csv_summary_large_data_probe,
     benchmark_csv_summary_path,
+    benchmark_cmm_fingerprint_sqlite_state_probe,
     benchmark_distribution_fit_gof_policy_compare,
+    benchmark_export_sqlite_materialization_probe,
     benchmark_industrial_cache_ingest_probe,
     benchmark_industrial_cache_to_csv_summary_bridge_probe,
     benchmark_population_static_render_probe,
     benchmark_production_dashboard_workbook_path,
     benchmark_sqlite_grouping_high_cardinality_probe,
+    benchmark_tabular_sqlite_aggregate_probe,
     build_benchmark_run_summary,
 )
 
@@ -123,6 +126,44 @@ def test_production_dashboard_workbook_benchmark_captures_output_timings(tmp_pat
     assert result.input_metrics['dashboard_plotly_budget_over'] == 0
     assert result.input_metrics['workbook_sheet_write_count'] >= 4
     assert result.input_metrics['workbook_bytes'] > 0
+
+
+def test_cmm_fingerprint_sqlite_state_probe_smoke(tmp_path):
+    result = benchmark_cmm_fingerprint_sqlite_state_probe(tmp_path, report_count=18)
+
+    assert result.scenario == 'cmm_fingerprint_sqlite_state_probe'
+    assert result.stage_timings_s['complete_fingerprint_load'] >= 0.0
+    assert result.stage_timings_s['light_fingerprint_load'] >= 0.0
+    assert result.stage_timings_s['query_plan_probe'] >= 0.0
+    assert result.input_metrics['rows'] == 18
+    assert result.input_metrics['complete_fingerprints'] == result.input_metrics[
+        'complete_expected_fingerprints'
+    ]
+    assert result.input_metrics['light_fingerprints'] == result.input_metrics[
+        'light_expected_fingerprints'
+    ]
+    assert result.input_metrics['complete_fingerprint_query_plan_steps'] > 0
+    assert result.input_metrics['complete_fingerprint_query_plan_index_steps'] > 0
+
+
+def test_export_sqlite_materialization_probe_smoke(tmp_path):
+    result = benchmark_export_sqlite_materialization_probe(
+        tmp_path,
+        report_count=8,
+        headers_per_report=3,
+    )
+
+    assert result.scenario == 'export_sqlite_materialization_probe'
+    assert result.stage_timings_s['dataframe_materialize'] >= 0.0
+    assert result.stage_timings_s['dataframe_groupby'] >= 0.0
+    assert result.stage_timings_s['sqlite_aggregate'] >= 0.0
+    assert result.stage_timings_s['query_plan_probe'] >= 0.0
+    assert result.input_metrics['rows'] == 24
+    assert result.input_metrics['headers'] == 3
+    assert result.input_metrics['dataframe_rows'] == 24
+    assert result.input_metrics['dataframe_cells'] >= 24
+    assert result.input_metrics['dataframe_groups'] == result.input_metrics['sqlite_groups']
+    assert result.input_metrics['sqlite_aggregate_query_plan_steps'] > 0
 
 
 def test_csv_summary_large_data_probe_smoke(tmp_path):
@@ -284,6 +325,32 @@ def test_sqlite_grouping_high_cardinality_probe_smoke(tmp_path):
     assert result.input_metrics['multi_group_preview_total'] >= 1
     assert result.input_metrics['row_ids_for_search'] >= 1
     assert result.input_metrics['assign_filtered_scope_rows'] >= 1
+    assert result.input_metrics['materialized_rows'] == 24
+    assert result.input_metrics['materialized_columns'] >= 5
+
+
+def test_tabular_sqlite_aggregate_probe_smoke(tmp_path):
+    result = benchmark_tabular_sqlite_aggregate_probe(
+        tmp_path,
+        row_count=24,
+        group_count=6,
+        materialize_columns=2,
+    )
+
+    assert result.scenario == 'tabular_sqlite_aggregate_probe'
+    assert result.stage_timings_s['csv_sqlite_load'] >= 0.0
+    assert result.stage_timings_s['sqlite_grouped_aggregate'] >= 0.0
+    assert result.stage_timings_s['sqlite_row_batch_stream'] >= 0.0
+    assert result.stage_timings_s['materialize_required_columns'] >= 0.0
+    assert result.stage_timings_s['materialize_to_sqlite_aggregate_ratio'] >= 0.0
+    assert result.input_metrics['rows'] == 24
+    assert result.input_metrics['headers'] == 5
+    assert result.input_metrics['configured_group_count'] == 6
+    assert result.input_metrics['storage_mode_sqlite'] == 1
+    assert result.input_metrics['sqlite_row_count'] == 24
+    assert result.input_metrics['aggregate_metrics'] == 2
+    assert result.input_metrics['aggregate_rows'] == 12
+    assert result.input_metrics['streamed_rows'] == 24
     assert result.input_metrics['materialized_rows'] == 24
     assert result.input_metrics['materialized_columns'] >= 5
 
@@ -591,7 +658,17 @@ def test_benchmark_main_default_selection_skips_manual_large_csv_probe(
         return _run
 
     monkeypatch.setattr(benchmark_paths, 'benchmark_parse_path', runner('pdf_parse_path'))
+    monkeypatch.setattr(
+        benchmark_paths,
+        'benchmark_cmm_fingerprint_sqlite_state_probe',
+        runner('cmm_fingerprint_sqlite_state_probe'),
+    )
     monkeypatch.setattr(benchmark_paths, 'benchmark_excel_export_path', runner('excel_export_path'))
+    monkeypatch.setattr(
+        benchmark_paths,
+        'benchmark_export_sqlite_materialization_probe',
+        runner('export_sqlite_materialization_probe'),
+    )
     monkeypatch.setattr(
         benchmark_paths,
         'benchmark_export_write_vs_shape_path',
@@ -687,7 +764,9 @@ def test_benchmark_main_default_selection_skips_manual_large_csv_probe(
     assert 'sqlite_grouping_high_cardinality_probe' not in called
     assert called == [
         'pdf_parse_path',
+        'cmm_fingerprint_sqlite_state_probe',
         'excel_export_path',
+        'export_sqlite_materialization_probe',
         'excel_export_write_vs_shape_path',
         'excel_export_high_header_cardinality_compare',
         'csv_summary_export_path',

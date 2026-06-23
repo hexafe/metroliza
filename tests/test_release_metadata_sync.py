@@ -13,7 +13,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}(?:rc\d+)?$")
         self.assertRegex(metadata.build, r"^\d{6}$")
         self.assertEqual(metadata.version_label, f"{metadata.release_version}({metadata.build})")
-        self.assertEqual(metadata.public_version_label, "2026.06 RC1 (build 260623)")
+        self.assertEqual(metadata.public_version_label, "2026.06 RC2 (build 260623)")
         self.assertTrue(metadata.highlight)
 
     def test_in_app_current_release_notes_show_current_version_only(self):
@@ -50,6 +50,11 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertEqual(
             current_bullets,
             [
+                "- CSV Summary and Excel inputs now use one consistent local row store, keeping large files responsive while avoiding extra data copies<br>",
+                "- CSV Summary filters, grouping, and dashboard preparation can stream selected rows in smaller batches, reducing memory pressure on large tables<br>",
+                "- Grouped metric summaries now calculate directly from stored rows, so large CSV Summary analysis spends less time preparing intermediate tables<br>",
+                "- Export and industrial analytics paths now share lighter table helpers, improving stability when optional spreadsheet packages are unavailable<br>",
+                "- Parser and report data paths now use clearer reusable row-query contracts for filtering, counting, and streaming report-backed results<br>",
                 "- Industrial Data now opens cached rows in CSV Summary from indexed local metadata, so filter lists and simple grouping previews respond faster on large production caches<br>",
                 "- Industrial Data workbook export can now include raw cached data directly without first loading the full cache into the interactive table<br>",
                 "- Industrial export filters now apply consistently to cached and live exports, including additional production-field filters entered in the filter dialog<br>",
@@ -105,7 +110,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
             updated = temp_readme.read_text(encoding="utf-8")
             self.assertIn(f"Current release highlight (`{metadata.public_version_label}`):", updated)
             self.assertIn(f"### Changelog highlights (release `{metadata.public_version_label}`)", updated)
-            self.assertIn("RC1", updated)
+            self.assertIn("RC2", updated)
             self.assertNotIn("2000.01rc1", updated)
 
     def test_sync_changelog_writes_current_header(self):

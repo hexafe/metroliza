@@ -6,6 +6,7 @@ import csv
 import json
 import importlib.machinery
 import os
+import sqlite3
 import sys
 import tempfile
 import time
@@ -16,7 +17,6 @@ from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
-import pandas as pd
 import statistics
 
 try:
@@ -39,6 +39,16 @@ _DASHBOARD_WRITER_TIMING_KEYS = (
     'html_rendering',
     'html_write',
 )
+
+
+class _LazyPandas:
+    def __getattr__(self, name):
+        import importlib
+
+        return getattr(importlib.import_module("pandas"), name)
+
+
+pd = _LazyPandas()
 
 
 def _dashboard_writer_stage_timings(result: dict[str, Any] | None) -> dict[str, float]:
@@ -152,6 +162,24 @@ def _collect_median(values: list[float]) -> float:
     if not values:
         return 0.0
     return float(statistics.median(float(v) for v in values))
+
+
+def _sqlite_query_plan_metrics(
+    connection: sqlite3.Connection,
+    query: str,
+    params: tuple[Any, ...] = (),
+    *,
+    prefix: str,
+) -> dict[str, int]:
+    plan_rows = connection.execute(f'EXPLAIN QUERY PLAN {query}', params).fetchall()
+    details = [str(row[-1]).upper() for row in plan_rows]
+    return {
+        f'{prefix}_query_plan_steps': len(details),
+        f'{prefix}_query_plan_search_steps': sum(1 for detail in details if 'SEARCH ' in detail),
+        f'{prefix}_query_plan_scan_steps': sum(1 for detail in details if 'SCAN ' in detail),
+        f'{prefix}_query_plan_index_steps': sum(1 for detail in details if 'USING INDEX' in detail or 'USING COVERING INDEX' in detail),
+        f'{prefix}_query_plan_temp_btree_steps': sum(1 for detail in details if 'USE TEMP B-TREE' in detail),
+    }
 
 
 def _create_pdf_fixture_dir(base_dir: Path, count: int) -> Path:
@@ -687,6 +715,207 @@ def benchmark_cmm_parser_backend_compare(
     )
 
 
+def _create_cmm_fingerprint_db_fixture(db_path: Path, *, report_count: int) -> dict[str, int]:
+    from metroliza.parsing import parse_reports_thread as parse_thread_module
+    from metroliza.reports.report_schema import ensure_report_schema, upsert_report_parse_state
+
+    ensure_report_schema(str(db_path))
+    current_parser_id = parse_thread_module._CURRENT_CMM_METADATA_PARSER_ID
+    current_parser_version = parse_thread_module._CURRENT_CMM_PARSER_VERSION
+    complete_expected = 0
+    light_expected = 0
+
+    with sqlite3.connect(db_path) as conn:
+        for report_index in range(1, max(1, int(report_count)) + 1):
+            sha256 = f'fingerprint-{report_index:08d}'
+            conn.execute(
+                """
+                INSERT INTO source_files (sha256, source_format, discovered_at, is_active)
+                VALUES (?, 'pdf', '2026-06-23T00:00:00Z', 1)
+                """,
+                (sha256,),
+            )
+            source_file_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+            parser_id = current_parser_id
+            parser_version = current_parser_version
+            metadata_json: dict[str, Any]
+            include_complete = False
+            include_light = True
+            if report_index % 11 == 0:
+                parser_id = 'legacy_cmm_parser'
+                parser_version = '1.0.0'
+                metadata_json = {'field_sources': {'reference': 'legacy'}}
+                include_complete = True
+            elif report_index % 7 == 0:
+                metadata_json = {
+                    'metadata_parsing_mode': 'complete',
+                    'header_extraction_mode': 'ocr',
+                    'field_sources': {'reference': 'filename_candidate'},
+                }
+            elif report_index % 5 == 0:
+                metadata_json = {
+                    'metadata_parsing_mode': 'complete',
+                    'header_extraction_mode': 'none',
+                    'header_ocr_error': 'missing_header',
+                }
+            else:
+                metadata_json = {
+                    'metadata_parsing_mode': 'complete',
+                    'header_extraction_mode': 'ocr',
+                    'field_sources': {
+                        'reference': 'header_exact',
+                        'report_date': 'header_exact',
+                        'stats_count_raw': 'stats_count',
+                    },
+                }
+                include_complete = True
+
+            if include_complete:
+                complete_expected += 1
+            if include_light:
+                light_expected += 1
+
+            conn.execute(
+                """
+                INSERT INTO parsed_reports (
+                    source_file_id,
+                    parser_id,
+                    parser_version,
+                    template_family,
+                    parse_status,
+                    measurement_count,
+                    has_nok,
+                    nok_count,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, 'cmm_pdf_header_box', 'parsed', 0, 0, 0,
+                        '2026-06-23T00:00:00Z', '2026-06-23T00:00:00Z')
+                """,
+                (source_file_id, parser_id, parser_version),
+            )
+            report_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            metadata_payload = json.dumps(metadata_json, sort_keys=True)
+            conn.execute(
+                """
+                INSERT INTO report_metadata (report_id, metadata_version, metadata_json)
+                VALUES (?, 'report_metadata_v1', ?)
+                """,
+                (report_id, metadata_payload),
+            )
+            upsert_report_parse_state(conn, int(report_id), metadata_payload)
+
+    return {
+        'reports': max(1, int(report_count)),
+        'complete_expected': complete_expected,
+        'light_expected': light_expected,
+    }
+
+
+def benchmark_cmm_fingerprint_sqlite_state_probe(temp_dir: Path, *, report_count: int) -> ScenarioResult:
+    _install_headless_stubs()
+    from metroliza.parsing import parse_reports_thread as parse_thread_module
+    from metroliza.parsing.parse_reports_thread import ParseReportsThread
+    from metroliza.shared.contracts import ParseRequest
+
+    db_path = temp_dir / 'cmm_fingerprint_state_probe.sqlite'
+    fixture_metrics = _create_cmm_fingerprint_db_fixture(db_path, report_count=report_count)
+
+    complete_request = ParseRequest(
+        source_directory=str(temp_dir),
+        db_file=str(db_path),
+        metadata_parsing_mode='complete',
+    )
+    complete_thread = ParseReportsThread(complete_request)
+    complete_start = time.perf_counter()
+    complete_fingerprints = complete_thread.get_report_fingerprints_in_database()
+    complete_s = time.perf_counter() - complete_start
+
+    light_request = ParseRequest(
+        source_directory=str(temp_dir),
+        db_file=str(db_path),
+        metadata_parsing_mode='light',
+    )
+    light_thread = ParseReportsThread(light_request)
+    light_start = time.perf_counter()
+    light_fingerprints = light_thread.get_report_fingerprints_in_database()
+    light_s = time.perf_counter() - light_start
+
+    complete_query = """
+        SELECT sf.sha256
+        FROM source_files sf
+        JOIN parsed_reports pr ON pr.source_file_id = sf.id
+        LEFT JOIN report_parse_state rps ON rps.report_id = pr.id
+        WHERE sf.is_active = 1
+          AND (
+            pr.parser_id <> ?
+            OR (
+              pr.parser_version = ?
+              AND rps.header_extraction_mode IS NOT NULL
+              AND rps.header_extraction_mode <> 'none'
+              AND rps.header_ocr_error_code IS NULL
+              AND COALESCE(rps.reference_source, '') <> 'filename_candidate'
+              AND COALESCE(rps.report_date_source, '') <> 'filename_candidate'
+              AND COALESCE(rps.stats_count_source, '') <> 'filename_candidate'
+            )
+          )
+    """
+    light_query = """
+        SELECT sf.sha256
+        FROM source_files sf
+        JOIN parsed_reports pr ON pr.source_file_id = sf.id
+        WHERE sf.is_active = 1
+          AND (
+            pr.parser_id <> ?
+            OR pr.parser_version = ?
+          )
+    """
+    plan_start = time.perf_counter()
+    with sqlite3.connect(db_path) as conn:
+        plan_metrics = {
+            **_sqlite_query_plan_metrics(
+                conn,
+                complete_query,
+                (
+                    parse_thread_module._CURRENT_CMM_METADATA_PARSER_ID,
+                    parse_thread_module._CURRENT_CMM_PARSER_VERSION,
+                ),
+                prefix='complete_fingerprint',
+            ),
+            **_sqlite_query_plan_metrics(
+                conn,
+                light_query,
+                (
+                    parse_thread_module._CURRENT_CMM_METADATA_PARSER_ID,
+                    parse_thread_module._CURRENT_CMM_PARSER_VERSION,
+                ),
+                prefix='light_fingerprint',
+            ),
+        }
+    plan_s = time.perf_counter() - plan_start
+
+    return ScenarioResult(
+        scenario='cmm_fingerprint_sqlite_state_probe',
+        wall_time_s=complete_s + light_s + plan_s,
+        stage_timings_s={
+            'complete_fingerprint_load': complete_s,
+            'light_fingerprint_load': light_s,
+            'query_plan_probe': plan_s,
+        },
+        input_metrics={
+            'rows': fixture_metrics['reports'],
+            'headers': 0,
+            'chart_count': 0,
+            'complete_fingerprints': len(complete_fingerprints),
+            'complete_expected_fingerprints': fixture_metrics['complete_expected'],
+            'light_fingerprints': len(light_fingerprints),
+            'light_expected_fingerprints': fixture_metrics['light_expected'],
+            **plan_metrics,
+        },
+    )
+
+
 def benchmark_excel_export_path(temp_dir: Path, report_count: int, headers_per_report: int) -> ScenarioResult:
     from metroliza.exporting.export_data_thread import ExportDataThread
     from metroliza.shared.contracts import AppPaths, ExportOptions, ExportRequest
@@ -759,6 +988,108 @@ def benchmark_excel_export_path(temp_dir: Path, report_count: int, headers_per_r
             'chart_type_median_trend_s': float(per_chart_medians.get('trend', 0.0)),
             'high_header_cardinality_detected': int(bool(high_header.get('detected'))),
             'high_header_cardinality_max_headers': int(high_header.get('max_headers_per_partition', 0)),
+        },
+    )
+
+
+def benchmark_export_sqlite_materialization_probe(
+    temp_dir: Path,
+    report_count: int,
+    headers_per_report: int,
+) -> ScenarioResult:
+    from metroliza.exporting.export_query_service import build_measurement_export_dataframe
+    from metroliza.reports.db import read_sql_dataframe
+    from metroliza.reports.report_query_service import build_measurement_export_query
+
+    db_path = temp_dir / 'export_sqlite_materialization_probe.sqlite'
+    fixture_metrics = _create_export_db_fixture(
+        db_path,
+        report_count=report_count,
+        headers_per_report=headers_per_report,
+    )
+    export_query = build_measurement_export_query()
+
+    dataframe_start = time.perf_counter()
+    loaded_df = build_measurement_export_dataframe(read_sql_dataframe(str(db_path), export_query))
+    dataframe_s = time.perf_counter() - dataframe_start
+
+    dataframe_group_start = time.perf_counter()
+    grouped: dict[tuple[str, str], dict[str, float | int]] = {}
+    for row in loaded_df.iter_rows(as_dict=True):
+        key = (str(row.get('REFERENCE') or ''), str(row.get('HEADER - AX') or ''))
+        try:
+            value = float(row.get('MEAS'))
+        except (TypeError, ValueError):
+            continue
+        stats = grouped.setdefault(
+            key,
+            {'count': 0, 'sum': 0.0, 'min': value, 'max': value},
+        )
+        stats['count'] = int(stats['count']) + 1
+        stats['sum'] = float(stats['sum']) + value
+        stats['min'] = min(float(stats['min']), value)
+        stats['max'] = max(float(stats['max']), value)
+    dataframe_grouped = {
+        key: {
+            'count': int(stats['count']),
+            'mean': float(stats['sum']) / int(stats['count']),
+            'min': float(stats['min']),
+            'max': float(stats['max']),
+        }
+        for key, stats in grouped.items()
+        if int(stats['count']) > 0
+    }
+    dataframe_group_s = time.perf_counter() - dataframe_group_start
+
+    sqlite_aggregate_query = """
+        SELECT
+            reference,
+            header,
+            ax,
+            COUNT(*) AS measurement_count,
+            AVG(meas) AS mean_meas,
+            MIN(meas) AS min_meas,
+            MAX(meas) AS max_meas
+        FROM vw_measurement_export
+        GROUP BY reference, header, ax
+    """
+    sqlite_start = time.perf_counter()
+    with sqlite3.connect(db_path) as conn:
+        sqlite_grouped = conn.execute(sqlite_aggregate_query).fetchall()
+    sqlite_s = time.perf_counter() - sqlite_start
+
+    plan_start = time.perf_counter()
+    with sqlite3.connect(db_path) as conn:
+        plan_metrics = {
+            **_sqlite_query_plan_metrics(conn, export_query, prefix='export_view'),
+            **_sqlite_query_plan_metrics(conn, sqlite_aggregate_query, prefix='sqlite_aggregate'),
+        }
+    plan_s = time.perf_counter() - plan_start
+
+    dataframe_rows = int(len(loaded_df))
+    dataframe_columns = int(len(loaded_df.columns))
+    return ScenarioResult(
+        scenario='export_sqlite_materialization_probe',
+        wall_time_s=dataframe_s + dataframe_group_s + sqlite_s + plan_s,
+        stage_timings_s={
+            'dataframe_materialize': dataframe_s,
+            'dataframe_groupby': dataframe_group_s,
+            'sqlite_aggregate': sqlite_s,
+            'query_plan_probe': plan_s,
+            'sqlite_to_dataframe_groupby_ratio': (
+                sqlite_s / dataframe_group_s if dataframe_group_s > 0 else 0.0
+            ),
+        },
+        input_metrics={
+            'rows': fixture_metrics['measurement_rows'],
+            'headers': fixture_metrics['headers'],
+            'chart_count': 0,
+            'dataframe_rows': dataframe_rows,
+            'dataframe_columns': dataframe_columns,
+            'dataframe_cells': dataframe_rows * dataframe_columns,
+            'dataframe_groups': int(len(dataframe_grouped)),
+            'sqlite_groups': int(len(sqlite_grouped)),
+            **plan_metrics,
         },
     )
 
@@ -2265,6 +2596,102 @@ def benchmark_sqlite_grouping_high_cardinality_probe(
     )
 
 
+def benchmark_tabular_sqlite_aggregate_probe(
+    temp_dir: Path,
+    *,
+    row_count: int,
+    group_count: int,
+    materialize_columns: int,
+) -> ScenarioResult:
+    """Compare SQLite aggregate/streaming paths against DataFrame materialization."""
+
+    from metroliza.tabular.tabular_analytics_service import (
+        load_tabular_analytics_files,
+        materialize_tabular_dataframe,
+    )
+
+    csv_path = temp_dir / 'tabular_sqlite_aggregate_probe.csv'
+    fixture_metrics = _create_high_cardinality_grouping_csv_fixture(
+        csv_path,
+        row_count=row_count,
+        group_count=group_count,
+    )
+
+    load_start = time.perf_counter()
+    loaded = load_tabular_analytics_files((str(csv_path),), reference_column='PART', force_sqlite=True)
+    load_s = time.perf_counter() - load_start
+    store = loaded.sqlite_store
+    if store is None:
+        raise RuntimeError('tabular SQLite aggregate probe did not create a SQLite store')
+
+    try:
+        metric_columns = tuple(
+            candidate.field_name
+            for candidate in loaded.metric_candidates[: max(1, int(materialize_columns))]
+        )
+        required_columns = ('source_row_number', 'reference', 'group_key', 'subgroup', *metric_columns)
+
+        aggregate_start = time.perf_counter()
+        aggregate_rows = store.aggregate_numeric_columns(metric_columns, group_columns=('group_key',))
+        aggregate_s = time.perf_counter() - aggregate_start
+
+        stream_start = time.perf_counter()
+        streamed_rows = 0
+        streamed_cells = 0
+        batch_count = 0
+        for batch in store.iter_row_batches(columns=required_columns, batch_size=2048):
+            batch_count += 1
+            streamed_rows += batch.row_count
+            streamed_cells += batch.row_count * len(batch.columns)
+        stream_s = time.perf_counter() - stream_start
+
+        rss_before_materialize = _max_rss_kb()
+        materialize_start = time.perf_counter()
+        materialized = materialize_tabular_dataframe(loaded, required_columns=required_columns)
+        materialize_s = time.perf_counter() - materialize_start
+        rss_after_materialize = _max_rss_kb()
+    finally:
+        store.cleanup()
+
+    materialized_rows = int(len(materialized.dataframe.index))
+    materialized_columns = int(len(materialized.dataframe.columns))
+    return ScenarioResult(
+        scenario='tabular_sqlite_aggregate_probe',
+        wall_time_s=load_s + aggregate_s + stream_s + materialize_s,
+        stage_timings_s={
+            'csv_sqlite_load': load_s,
+            'sqlite_grouped_aggregate': aggregate_s,
+            'sqlite_row_batch_stream': stream_s,
+            'materialize_required_columns': materialize_s,
+            'materialize_to_sqlite_aggregate_ratio': (
+                materialize_s / aggregate_s if aggregate_s > 0 else 0.0
+            ),
+            'materialize_to_stream_ratio': materialize_s / stream_s if stream_s > 0 else 0.0,
+        },
+        input_metrics={
+            'rows': int(fixture_metrics['rows']),
+            'headers': int(fixture_metrics['headers']),
+            'configured_group_count': int(fixture_metrics['groups']),
+            'storage_mode_sqlite': 1 if loaded.storage_mode == 'sqlite' else 0,
+            'sqlite_row_count': int(store.row_count),
+            'metric_candidates': int(len(loaded.metric_candidates)),
+            'aggregate_metrics': int(len(metric_columns)),
+            'aggregate_rows': int(len(aggregate_rows)),
+            'streamed_rows': int(streamed_rows),
+            'streamed_cells': int(streamed_cells),
+            'stream_batch_count': int(batch_count),
+            'materialized_rows': materialized_rows,
+            'materialized_columns': materialized_columns,
+            'materialized_cells': materialized_rows * materialized_columns,
+            'max_rss_before_materialize_kb': int(rss_before_materialize),
+            'max_rss_after_materialize_kb': int(rss_after_materialize),
+            'max_rss_delta_materialize_kb': int(
+                max(0, rss_after_materialize - rss_before_materialize)
+            ),
+        },
+    )
+
+
 def _max_rss_kb() -> int:
     if resource is None:
         return 0
@@ -2615,7 +3042,9 @@ def main() -> int:
         nargs='+',
         choices=(
             'pdf_parse_path',
+            'cmm_fingerprint_sqlite_state_probe',
             'excel_export_path',
+            'export_sqlite_materialization_probe',
             'excel_export_write_vs_shape_path',
             'excel_export_high_header_cardinality_compare',
             'csv_summary_export_path',
@@ -2626,6 +3055,7 @@ def main() -> int:
             'industrial_cache_to_csv_summary_bridge_probe',
             'dashboard_static_multi_group_probe',
             'sqlite_grouping_high_cardinality_probe',
+            'tabular_sqlite_aggregate_probe',
             'distribution_fit_monte_carlo_path',
             'distribution_fit_gof_policy_compare',
             'group_preprocess_mixed_types_compare',
@@ -2639,7 +3069,14 @@ def main() -> int:
 
     scenario_runners = {
         'pdf_parse_path': lambda temp_path: benchmark_parse_path(temp_path, pdf_count=args.pdf_count),
+        'cmm_fingerprint_sqlite_state_probe': lambda temp_path: benchmark_cmm_fingerprint_sqlite_state_probe(
+            temp_path,
+            report_count=max(1, args.cmm_bench_report_count),
+        ),
         'excel_export_path': lambda temp_path: benchmark_excel_export_path(
+            temp_path, report_count=args.report_count, headers_per_report=args.headers_per_report
+        ),
+        'export_sqlite_materialization_probe': lambda temp_path: benchmark_export_sqlite_materialization_probe(
             temp_path, report_count=args.report_count, headers_per_report=args.headers_per_report
         ),
         'excel_export_write_vs_shape_path': lambda temp_path: benchmark_export_write_vs_shape_path(
@@ -2694,6 +3131,12 @@ def main() -> int:
             search_text=args.grouping_high_cardinality_search,
             materialize_columns=max(1, args.grouping_high_cardinality_materialize_columns),
         ),
+        'tabular_sqlite_aggregate_probe': lambda temp_path: benchmark_tabular_sqlite_aggregate_probe(
+            temp_path,
+            row_count=max(1, args.grouping_high_cardinality_rows),
+            group_count=max(1, args.grouping_high_cardinality_groups),
+            materialize_columns=max(1, args.grouping_high_cardinality_materialize_columns),
+        ),
         'distribution_fit_monte_carlo_path': lambda temp_path: benchmark_distribution_fit_monte_carlo_path(
             temp_path,
             group_count=args.fit_group_count,
@@ -2736,6 +3179,7 @@ def main() -> int:
         'industrial_cache_to_csv_summary_bridge_probe',
         'dashboard_static_multi_group_probe',
         'sqlite_grouping_high_cardinality_probe',
+        'tabular_sqlite_aggregate_probe',
     }
     selected_scenarios = args.scenarios or [
         scenario for scenario in scenario_runners if scenario not in manual_scenarios

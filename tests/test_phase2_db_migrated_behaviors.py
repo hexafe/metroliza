@@ -193,7 +193,8 @@ class TestPhase2DbMigratedBehaviors(unittest.TestCase):
         parser.to_df()
 
         self.assertFalse(parser.df.empty)
-        self.assertTrue((parser.df['Reference'] == 'REF_CUSTOM').all())
+        self.assertEqual(parser.df.column('Reference'), ('REF_CUSTOM',))
+        self.assertEqual(parser.rows[0]['Reference'], 'REF_CUSTOM')
 
     def test_modifydb_update_batch_rolls_back_on_failure(self):
         with tempfile.TemporaryDirectory() as temp_dir:

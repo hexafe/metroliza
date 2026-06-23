@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from io import BytesIO
-from typing import Protocol
+from typing import Any, Protocol
 
 import numpy as np
-import pandas as pd
 
 from metroliza.shared.excel_sheet_utils import unique_sheet_name
 from metroliza.exporting.export_summary_utils import resolve_histogram_bin_count
@@ -26,6 +25,16 @@ from metroliza.charts.xlsx_chart_utils import (
 configure_headless_matplotlib()
 
 import matplotlib.pyplot as plt  # noqa: E402
+
+
+class _LazyPandas:
+    def __getattr__(self, name: str) -> Any:
+        import importlib
+
+        return getattr(importlib.import_module("pandas"), name)
+
+
+pd = _LazyPandas()
 
 
 class AnalyticsMetric(Protocol):

@@ -159,6 +159,7 @@ def test_report_schema_creates_storage_layers_and_views(tmp_path):
         "source_file_locations",
         "parsed_reports",
         "report_metadata",
+        "report_parse_state",
         "report_metadata_candidates",
         "report_metadata_warnings",
         "report_measurements",
@@ -172,12 +173,101 @@ def test_report_schema_creates_storage_layers_and_views(tmp_path):
     assert {
         "idx_source_files_sha256",
         "idx_report_metadata_reference",
+        "idx_report_parse_state_reparse",
         "idx_report_measurements_report",
         "idx_report_measurements_report_header_ax",
         "idx_industrial_records_reference",
     }.issubset(indexes)
     assert schema_version == SCHEMA_VERSION
     assert industrial_schema_version is not None
+
+
+def test_report_schema_backfills_parse_state_from_metadata_json(tmp_path):
+    db_path = str(tmp_path / "reports.db")
+    ensure_report_schema(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO source_files (sha256, source_format, discovered_at, is_active)
+            VALUES ('sha-backfill', 'pdf', '2026-06-23T00:00:00Z', 1)
+            """
+        )
+        source_file_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.execute(
+            """
+            INSERT INTO parsed_reports (
+                source_file_id,
+                parser_id,
+                parser_version,
+                template_family,
+                parse_status,
+                measurement_count,
+                has_nok,
+                nok_count,
+                created_at,
+                updated_at
+            )
+            VALUES (?, 'cmm_pdf_header_box', '1.1.0', 'cmm_pdf_header_box', 'parsed',
+                    0, 0, 0, '2026-06-23T00:00:00Z', '2026-06-23T00:00:00Z')
+            """,
+            (source_file_id,),
+        )
+        report_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.execute(
+            """
+            INSERT INTO report_metadata (report_id, metadata_version, metadata_json)
+            VALUES (?, ?, ?)
+            """,
+            (
+                report_id,
+                SCHEMA_VERSION,
+                json.dumps(
+                    {
+                        "metadata_parsing_mode": "complete",
+                        "header_extraction_mode": "ocr",
+                        "header_ocr_error": {"code": "ocr_timeout"},
+                        "field_sources": {
+                            "reference": "header_exact",
+                            "report_date": "filename_candidate",
+                            "stats_count_raw": "stats_count",
+                        },
+                        "metadata_enrichment": {"mode": "complete"},
+                    },
+                    sort_keys=True,
+                ),
+            ),
+        )
+        assert conn.execute("SELECT COUNT(*) FROM report_parse_state").fetchone()[0] == 0
+
+    ensure_report_schema(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        parse_state = conn.execute(
+            """
+            SELECT
+                metadata_parsing_mode,
+                header_extraction_mode,
+                header_ocr_error_code,
+                reference_source,
+                report_date_source,
+                stats_count_source,
+                metadata_enrichment_mode
+            FROM report_parse_state
+            WHERE report_id = ?
+            """,
+            (report_id,),
+        ).fetchone()
+
+    assert parse_state == (
+        "complete",
+        "ocr",
+        "ocr_timeout",
+        "header_exact",
+        "filename_candidate",
+        "stats_count",
+        "complete",
+    )
 
 
 def test_report_schema_exposes_expected_view_columns(tmp_path):
@@ -391,6 +481,16 @@ def test_repository_persists_report_payload_and_views(tmp_path):
             "stats_count_int": 3,
             "operator_name": "Operator",
             "comment": None,
+            "metadata_json": {
+                "metadata_parsing_mode": "complete",
+                "header_extraction_mode": "ocr",
+                "field_sources": {
+                    "reference": "header_exact",
+                    "report_date": "header_exact",
+                    "stats_count_raw": "stats_count",
+                },
+                "metadata_enrichment": {"mode": "complete"},
+            },
         },
         candidates=[
             {
@@ -455,6 +555,21 @@ def test_repository_persists_report_payload_and_views(tmp_path):
         export_columns = [description[0] for description in conn.execute("SELECT * FROM vw_measurement_export").description]
         warning_count = conn.execute("SELECT COUNT(*) FROM report_metadata_warnings").fetchone()[0]
         candidate_count = conn.execute("SELECT COUNT(*) FROM report_metadata_candidates").fetchone()[0]
+        parse_state = conn.execute(
+            """
+            SELECT
+                metadata_parsing_mode,
+                header_extraction_mode,
+                header_ocr_error_code,
+                reference_source,
+                report_date_source,
+                stats_count_source,
+                metadata_enrichment_mode
+            FROM report_parse_state
+            WHERE report_id = ?
+            """,
+            (report_id,),
+        ).fetchone()
 
     overview_map = dict(zip(overview_columns, overview))
     export_map = dict(zip(export_columns, export))
@@ -466,6 +581,15 @@ def test_repository_persists_report_payload_and_views(tmp_path):
     assert export_map["measurement_id"] is not None
     assert warning_count == 1
     assert candidate_count == 1
+    assert parse_state == (
+        "complete",
+        "ocr",
+        None,
+        "header_exact",
+        "header_exact",
+        "stats_count",
+        "complete",
+    )
 
 
 def test_update_report_metadata_identity_field_recomputes_hash_and_removes_stale_duplicate_warning(tmp_path):
@@ -517,12 +641,17 @@ def test_update_report_metadata_identity_field_recomputes_hash_and_removes_stale
                 (first_report_id,),
             ).fetchone()[0]
         )
+        reference_source = conn.execute(
+            "SELECT reference_source FROM report_parse_state WHERE report_id = ?",
+            (first_report_id,),
+        ).fetchone()[0]
 
     assert identity_hash == expected_hash
     assert warning_count == 0
     assert metadata_json["reference"] == "REF-2"
     assert metadata_json["field_sources"]["reference"] == "manual"
     assert metadata_json["manual_overrides"]["reference"]["reason"] == "operator correction"
+    assert reference_source == "manual"
 
 
 def test_update_report_metadata_non_identity_field_keeps_hash(tmp_path):
@@ -642,6 +771,10 @@ def test_replace_report_metadata_enrichment_preserves_measurement_rows(tmp_path)
             "SELECT COUNT(*) FROM report_metadata_warnings WHERE report_id = ?",
             (report_id,),
         ).fetchone()[0]
+        parse_state = conn.execute(
+            "SELECT header_extraction_mode, reference_source FROM report_parse_state WHERE report_id = ?",
+            (report_id,),
+        ).fetchone()
 
     assert len(measurement_rows) == 1
     assert measurement_rows[0][1:6] == (report_id, 1, "Feature 1", "X", 10.0)
@@ -652,6 +785,7 @@ def test_replace_report_metadata_enrichment_preserves_measurement_rows(tmp_path)
     assert json.loads(metadata_row[2])["field_sources"]["reference"] == "position_cell"
     assert candidate_count == 1
     assert warning_count == 1
+    assert parse_state == ("ocr", "position_cell")
 
 
 def test_replace_report_metadata_enrichment_rolls_back_as_one_transaction(tmp_path):
