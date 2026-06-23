@@ -1,10 +1,33 @@
 from metroliza.parsing import cmm_report_parser
 from metroliza.parsing.cmm_report_parser import CMMReportParser
+from metroliza.parsing.pdf_backend import require_pdf_backend
 from metroliza.parsing.parser_plugin_contracts import ProbeContext, ProbeResult
+from metroliza.reports import report_parser_factory
 
 
 def _pdf_context(path):
     return ProbeContext(source_path=str(path), source_format="pdf")
+
+
+def _write_encoded_cmm_pdf(path):
+    backend = require_pdf_backend()
+    document = backend.open()
+    try:
+        page = document.new_page()
+        page.insert_text(
+            (72, 72),
+            "CMM REPORT\n"
+            "REFERENCE: REF01\n"
+            "DATE: 2026-06-23\n"
+            "PART NAME: BRACKET\n"
+            "MEASUREMENT MADE BY: CMM OPERATOR A\n"
+            "NOMINAL TOL MEASURED DEVIATION OUTTOL\n"
+            "X NOMINAL 10 +TOL 0.1 ACT 10.02 DEV 0.02 OUTTOL 0",
+        )
+        document.save(str(path), garbage=4, deflate=True)
+    finally:
+        document.close()
+    return path
 
 
 def test_cmm_probe_does_not_give_generic_pdf_full_confidence(tmp_path):
@@ -44,6 +67,35 @@ def test_cmm_probe_detects_cmm_like_synthetic_pdf_text(tmp_path):
     assert probe.confidence >= 80
     assert probe.matched_template_id == "default"
     assert "axis_value_marker" in probe.reasons
+
+
+def test_cmm_probe_uses_pdf_text_when_raw_pdf_bytes_hide_markers(tmp_path):
+    cmm_pdf = _write_encoded_cmm_pdf(tmp_path / "encoded_cmm.pdf")
+
+    raw_probe_sample = cmm_pdf.read_bytes()[:65536].upper()
+    assert b"CMM REPORT" not in raw_probe_sample
+
+    probe = CMMReportParser.probe(cmm_pdf, _pdf_context(cmm_pdf))
+
+    assert probe.can_parse is True
+    assert probe.confidence >= 80
+    assert probe.matched_template_id == "default"
+    assert "pdf_backend_text_probe" in probe.reasons
+    assert "strong_cmm_marker" in probe.reasons
+
+
+def test_cmm_resolver_selects_encoded_cmm_pdf(tmp_path):
+    cmm_pdf = _write_encoded_cmm_pdf(tmp_path / "encoded_cmm.pdf")
+    report_parser_factory.reset_probe_cache()
+
+    diagnostics = report_parser_factory.resolve_parser_with_diagnostics(cmm_pdf)
+
+    assert diagnostics.selected is not None
+    assert diagnostics.selected.plugin_id == "cmm"
+    assert diagnostics.selected.confidence >= 80
+    assert "pdf_backend_text_probe" in diagnostics.selected.reasons
+    assert report_parser_factory.detect_format(cmm_pdf) == "cmm"
+    assert report_parser_factory.get_parser(cmm_pdf, database=":memory:").__class__.__name__ == "CMMReportParser"
 
 
 def test_cmm_probe_treats_extension_only_pdf_as_low_confidence_or_unsupported(tmp_path):

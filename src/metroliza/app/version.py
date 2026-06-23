@@ -1,8 +1,8 @@
 RELEASE_VERSION = "2026.06rc1"
-VERSION_DATE = "260617"
+VERSION_DATE = "260623"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = "Industrial Data performance release with indexed cache filtering, faster CSV Summary handoff, raw workbook export, realtime diagnostics, and dashboard point marking."
-PUBLIC_VERSION_LABEL = "2026.06 RC1 (build 260617)"
+PUBLIC_VERSION_LABEL = "2026.06 RC1 (build 260623)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
@@ -31,6 +31,7 @@ release_notes = f"""
     - Optional advanced anomaly tooling stays separate from normal app startup, so standard users do not need extra ML packages<br>
     - Industrial diagnostics now redact nested credentials, URI passwords, token-like fields, and raw SQL text from operator-facing status and persisted diagnostics<br>
     - CMM parser probing now uses marker-based confidence so generic PDFs no longer look like perfect CMM report matches<br>
+    - CMM report import now rechecks encoded PDF page text before rejecting valid reports whose markers are hidden in compressed PDF bytes<br>
     - Parser plugin handoff packages now have stronger tests that require local API contract content and small step-by-step prompts for LLM-assisted plugin work<br>
     - Realtime rollout docs now include operator concepts, production safety checks, synthetic replay evidence, source lag review, and rollback steps<br>
     - The About dialog now stays focused on the duck animation, version, author, and GitHub project link<br>

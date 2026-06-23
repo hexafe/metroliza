@@ -258,12 +258,12 @@ Examples of metric availability by spec type:
 
 ## Release metadata
 
-Current release highlight (`2026.06 RC1 (build 260617)`): Industrial Data performance release with indexed cache filtering, faster CSV Summary handoff, raw workbook export, realtime diagnostics, and dashboard point marking.
+Current release highlight (`2026.06 RC1 (build 260623)`): Industrial Data performance release with indexed cache filtering, faster CSV Summary handoff, raw workbook export, realtime diagnostics, and dashboard point marking.
 
 Canonical release metadata is in `src/metroliza/app/version.py`. The root `VersionDate.py`
 module remains as a compatibility import for existing scripts.
 
-### Changelog highlights (release `2026.06 RC1 (build 260617)`)
+### Changelog highlights (release `2026.06 RC1 (build 260623)`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 

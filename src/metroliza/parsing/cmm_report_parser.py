@@ -133,6 +133,36 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         return sample.decode("utf-8", errors="ignore"), None
 
     @staticmethod
+    def _extract_probe_page_text(page) -> str:
+        get_text = getattr(page, "get_text", None)
+        if not callable(get_text):
+            return ""
+        try:
+            return str(get_text("text", sort=True) or "").strip()
+        except TypeError:
+            return str(get_text("text") or "").strip()
+
+    @classmethod
+    def _read_pdf_backend_probe_text(cls, input_ref: str | Path) -> tuple[str, str | None]:
+        document = None
+        try:
+            backend = _load_pdf_backend()
+            document = backend.open(str(input_ref))
+            if len(document) <= 0:
+                return "", "pdf_backend_text_probe_empty"
+            page_text = cls._extract_probe_page_text(document[0])
+        except Exception as exc:
+            return "", f"pdf_backend_text_probe_failed:{type(exc).__name__}"
+        finally:
+            close = getattr(document, "close", None)
+            if callable(close):
+                close()
+
+        if not page_text:
+            return "", "pdf_backend_text_probe_empty"
+        return page_text, None
+
+    @staticmethod
     def _score_probe_text_sample(
         sample_text: str,
         *,
@@ -206,18 +236,33 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             )
 
         sample_text, sample_issue = cls._read_probe_text_sample(input_ref)
+        filename_stem = Path(input_ref).stem
         if sample_issue:
-            return ProbeResult(
-                plugin_id=cls.manifest.plugin_id,
-                can_parse=False,
-                confidence=CMM_PROBE_EXTENSION_CONFIDENCE,
-                reasons=("pdf_extension", sample_issue),
+            confidence = CMM_PROBE_EXTENSION_CONFIDENCE
+            evidence_reasons = (sample_issue,)
+        else:
+            confidence, evidence_reasons = cls._score_probe_text_sample(
+                sample_text,
+                filename_stem=filename_stem,
             )
 
-        confidence, evidence_reasons = cls._score_probe_text_sample(
-            sample_text,
-            filename_stem=Path(input_ref).stem,
-        )
+        warnings: tuple[str, ...] = ()
+        if confidence < CMM_PROBE_MIN_CONFIDENCE:
+            pdf_text, pdf_probe_issue = cls._read_pdf_backend_probe_text(input_ref)
+            if pdf_text:
+                combined_text = "\n".join(part for part in (sample_text, pdf_text) if part)
+                confidence, scored_reasons = cls._score_probe_text_sample(
+                    combined_text,
+                    filename_stem=filename_stem,
+                )
+                leading_reasons = (sample_issue,) if sample_issue else ()
+                evidence_reasons = tuple(
+                    dict.fromkeys((*leading_reasons, "pdf_backend_text_probe", *scored_reasons))
+                )
+            elif pdf_probe_issue:
+                warnings = (pdf_probe_issue,)
+                evidence_reasons = tuple(dict.fromkeys((*evidence_reasons, pdf_probe_issue)))
+
         can_parse = confidence >= CMM_PROBE_MIN_CONFIDENCE
         return ProbeResult(
             plugin_id=cls.manifest.plugin_id,
@@ -225,6 +270,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             confidence=confidence,
             matched_template_id="default" if can_parse else None,
             reasons=("pdf_extension", *evidence_reasons),
+            warnings=warnings,
         )
 
     @classmethod

@@ -1,6 +1,6 @@
 # Changelog (for end users)
 
-## 2026.06 RC1 (build 260617) — current version
+## 2026.06 RC1 (build 260623) — current version
 - Industrial Data now opens cached rows in CSV Summary from indexed local metadata, so filter lists and simple grouping previews respond faster on large production caches.
 - Industrial Data workbook export can now include raw cached data directly without first loading the full cache into the interactive table.
 - Industrial export filters now apply consistently to cached and live exports, including additional production-field filters entered in the filter dialog.
@@ -26,6 +26,7 @@
 - Optional advanced anomaly tooling stays separate from normal app startup, so standard users do not need extra ML packages.
 - Industrial diagnostics now redact nested credentials, URI passwords, token-like fields, and raw SQL text from operator-facing status and persisted diagnostics.
 - CMM parser probing now uses marker-based confidence so generic PDFs no longer look like perfect CMM report matches.
+- CMM report import now rechecks encoded PDF page text before rejecting valid reports whose markers are hidden in compressed PDF bytes.
 - Parser plugin handoff packages now have stronger tests that require local API contract content and small step-by-step prompts for LLM-assisted plugin work.
 - Realtime rollout docs now include operator concepts, production safety checks, synthetic replay evidence, source lag review, and rollback steps.
 - The About dialog now stays focused on the duck animation, version, author, and GitHub project link.

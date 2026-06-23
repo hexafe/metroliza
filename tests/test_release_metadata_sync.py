@@ -13,7 +13,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}(?:rc\d+)?$")
         self.assertRegex(metadata.build, r"^\d{6}$")
         self.assertEqual(metadata.version_label, f"{metadata.release_version}({metadata.build})")
-        self.assertEqual(metadata.public_version_label, "2026.06 RC1 (build 260617)")
+        self.assertEqual(metadata.public_version_label, "2026.06 RC1 (build 260623)")
         self.assertTrue(metadata.highlight)
 
     def test_in_app_current_release_notes_show_current_version_only(self):
@@ -75,6 +75,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
                 "- Optional advanced anomaly tooling stays separate from normal app startup, so standard users do not need extra ML packages<br>",
                 "- Industrial diagnostics now redact nested credentials, URI passwords, token-like fields, and raw SQL text from operator-facing status and persisted diagnostics<br>",
                 "- CMM parser probing now uses marker-based confidence so generic PDFs no longer look like perfect CMM report matches<br>",
+                "- CMM report import now rechecks encoded PDF page text before rejecting valid reports whose markers are hidden in compressed PDF bytes<br>",
                 "- Parser plugin handoff packages now have stronger tests that require local API contract content and small step-by-step prompts for LLM-assisted plugin work<br>",
                 "- Realtime rollout docs now include operator concepts, production safety checks, synthetic replay evidence, source lag review, and rollback steps<br>",
                 "- The About dialog now stays focused on the duck animation, version, author, and GitHub project link<br>",
