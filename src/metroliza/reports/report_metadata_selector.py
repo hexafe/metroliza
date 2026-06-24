@@ -18,10 +18,13 @@ from metroliza.reports.report_metadata_models import (
     MetadataSelectionResult,
     MetadataWarning,
 )
+from metroliza.reports.report_filename_parser import (
+    find_filename_date,
+    parse_report_filename,
+)
 from metroliza.reports.report_metadata_normalizers import (
     normalize_part_name,
     normalize_reference,
-    normalize_report_date,
     normalize_sample_number,
     normalize_stats_count,
 )
@@ -40,7 +43,6 @@ class HeaderTextItem:
 
 
 _SPACE_RE = re.compile(r"\s+")
-_REFERENCE_RE = re.compile(r"^(?P<reference>([A-Z][A-Za-z0-9]{4,}\d{1,5}(?:_\d{3})?)|(\d{2}[A-Za-z][._-]?\d{3}[._-]?\d{3})|(216\d{5}))")
 _DATE_RE = re.compile(r"(\d{4}[.\-/_]\d{1,2}[.\-/_]\d{1,2})")
 _TIME_IN_TEXT_RE = re.compile(r"\b(?P<time>\d{1,2}[.:/\-\s]\d{2}(?:[.:/\-\s]\d{2})?)\b")
 
@@ -111,45 +113,12 @@ def _header_text(items: Sequence[HeaderTextItem], page_height: float | None, hea
 
 
 def _find_filename_date(tokens: Sequence[str]) -> tuple[int | None, int, str | None]:
-    for index in range(len(tokens)):
-        for token_count in (1, 2, 3):
-            raw_tokens = tokens[index : index + token_count]
-            if len(raw_tokens) != token_count:
-                continue
-            raw_date = ".".join(raw_tokens)
-            if re.search(r"[A-Za-z]", raw_date):
-                continue
-            normalized_date = normalize_report_date(raw_date)
-            if normalized_date:
-                return index, token_count, normalized_date
-    return None, 0, None
+    return find_filename_date(tokens)
 
 
 def _filename_parts(file_name: str) -> tuple[str | None, str | None, str | None, str | None]:
-    stem = Path(file_name).stem
-    tokens = [token for token in stem.split("_") if token]
-
-    date_index, date_token_count, date_value = _find_filename_date(tokens)
-    sample_value = None
-
-    prefix_tokens = tokens[:date_index] if date_index is not None else tokens
-    prefix_text = "_".join(prefix_tokens)
-    reference_match = _REFERENCE_RE.match(prefix_text)
-    reference = reference_match.group("reference") if reference_match else None
-
-    remainder = prefix_text[len(reference):].lstrip("_") if reference else prefix_text
-    part_tokens = [token for token in remainder.split("_") if token]
-
-    if date_index is not None:
-        tail_tokens = tokens[date_index + date_token_count :]
-        if tail_tokens:
-            sample_value = tail_tokens[-1]
-    elif len(tokens) > 1:
-        sample_value = tokens[-1]
-        part_tokens = tokens[:-1]
-
-    part_name = normalize_part_name("_".join(part_tokens), from_filename=True) if part_tokens else None
-    return reference, date_value, part_name, sample_value
+    parsed = parse_report_filename(file_name)
+    return parsed.reference, parsed.report_date, parsed.part_name, parsed.sample_tail
 
 
 def _label_lookup(profile: MetadataProfile, field_name: str) -> dict[str, str]:

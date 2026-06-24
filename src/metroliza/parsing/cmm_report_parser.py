@@ -35,6 +35,7 @@ from metroliza.parsing.header_ocr_corrections import (
 )
 from metroliza.parsing.header_ocr_geometry import convert_ocr_records_to_header_items, select_header_crop
 from metroliza.reports.report_identity import build_report_identity_hash
+from metroliza.reports.report_filename_parser import parse_report_filename
 from metroliza.reports.report_metadata_extractor import extract_report_metadata
 from metroliza.reports.report_metadata_models import MetadataExtractionContext
 from metroliza.reports.report_metadata_normalizers import (
@@ -298,20 +299,12 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
 
     @staticmethod
     def _has_probe_identity_filename_pattern(name_text: str) -> bool:
-        name = str(name_text or "").upper().strip()
-        date_match = re.search(r"(?<!\d)(\d{4})[-.](\d{2})[-.](\d{2})(?!\d)", name)
-        if date_match is None:
+        parsed = parse_report_filename(str(name_text or ""))
+        if not parsed.report_date:
             return False
-
-        reference = name[: date_match.start()].rstrip("_-. ")
-        sample = name[date_match.end() :].lstrip("_-. ")
-        if not reference or not sample:
-            return False
-        _year, month, day = date_match.groups()
-        return (
-            1 <= int(month) <= 12
-            and 1 <= int(day) <= 31
-        )
+        if parsed.sample_tail:
+            return True
+        return parsed.reference is not None
 
     def __init__(
         self,
