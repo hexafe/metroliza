@@ -300,11 +300,13 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
     @staticmethod
     def _has_probe_identity_filename_pattern(name_text: str) -> bool:
         parsed = parse_report_filename(str(name_text or ""))
-        if not parsed.report_date:
-            return False
-        if parsed.sample_tail:
+        if parsed.report_date and parsed.sample_tail:
             return True
-        return parsed.reference is not None
+        if parsed.report_date and parsed.reference:
+            return True
+        if parsed.raw_date_candidate and parsed.reference and parsed.sample_tail:
+            return True
+        return False
 
     def __init__(
         self,

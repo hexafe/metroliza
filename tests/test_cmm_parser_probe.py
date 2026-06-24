@@ -193,6 +193,8 @@ def test_cmm_probe_accepts_supplier_reference_date_filename_without_sample_suffi
         "04L_128_637_outlet gas_duct_2018.01.15_01.PDF",
         "Compression_limiter_assy_2022.08.31_7.PDF",
         "V29112255_T6_Throttle_body_2019.07.09_1_1.pdf",
+        "V29121544_Throttle_body_DV5R_Sonafi_2020.28.26_01.PDF",
+        "V29121544_Throttle_body_DV5R_Sonafi_2020.28.26_02.PDF",
         "VSPC012693_R4_Throttle_body_2018.02.20_01.1.PDF",
         "VTST5001_Widget_AB123_1.0L_2024.06_20_01.1.PDF",
     ],
@@ -256,6 +258,9 @@ def test_cmm_probe_preserves_near_threshold_marker_score_for_diagnostics(tmp_pat
     "filename",
     [
         "generic_measurement_markers_2018.01.11.PDF",
+        "generic_measurement_markers_2020.28.26_01.PDF",
+        "V29121544_Throttle_body_DV5R_Sonafi_01.PDF",
+        "V29121544_Throttle_body_DV5R_Sonafi_2020.28.26.PDF",
         "Report_2024.06.PDF",
         "Fixture_2024_06_20.PDF",
     ],

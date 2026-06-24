@@ -25,12 +25,17 @@ class ParsedReportFilename:
     report_date: str | None
     part_name: str | None
     sample_tail: str | None
+    raw_date_candidate: str | None = None
 
 
 def split_filename_tokens(file_name: str) -> tuple[str, ...]:
     name = Path(str(file_name or "")).name
     stem = re.sub(r"\.(?:pdf|csv|xlsx?|xls)$", "", name, flags=re.IGNORECASE)
     return tuple(token for token in stem.split("_") if token)
+
+
+def _is_filename_date_candidate(value: str) -> bool:
+    return re.fullmatch(r"\d{4}[._-]\d{1,2}[._-]\d{1,2}", value) is not None
 
 
 def find_filename_date(tokens: Sequence[str]) -> tuple[int | None, int, str | None]:
@@ -48,9 +53,25 @@ def find_filename_date(tokens: Sequence[str]) -> tuple[int | None, int, str | No
     return None, 0, None
 
 
+def find_filename_date_candidate(tokens: Sequence[str]) -> tuple[int | None, int, str | None]:
+    for index in range(len(tokens)):
+        for token_count in (1, 2, 3):
+            raw_tokens = tokens[index : index + token_count]
+            if len(raw_tokens) != token_count:
+                continue
+            raw_date = ".".join(raw_tokens)
+            if _is_filename_date_candidate(raw_date):
+                return index, token_count, raw_date
+    return None, 0, None
+
+
 def parse_report_filename(file_name: str) -> ParsedReportFilename:
     tokens = split_filename_tokens(file_name)
     date_index, date_token_count, date_value = find_filename_date(tokens)
+    candidate_index, candidate_token_count, raw_date_candidate = find_filename_date_candidate(tokens)
+    if date_index is None:
+        date_index = candidate_index
+        date_token_count = candidate_token_count
     sample_value = None
 
     prefix_tokens = tokens[:date_index] if date_index is not None else tokens
@@ -73,6 +94,7 @@ def parse_report_filename(file_name: str) -> ParsedReportFilename:
     return ParsedReportFilename(
         reference=reference,
         report_date=date_value,
+        raw_date_candidate=raw_date_candidate,
         part_name=part_name,
         sample_tail=sample_value,
     )
