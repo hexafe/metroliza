@@ -50,8 +50,14 @@ Double-clicking a part is a shortcut into group creation.
 
 Use **Filter rows** to narrow the rows shown in the dialog before assigning groups.
 
+If you already applied Export filters, the grouping dialog starts from that same export scope.
+Reference and part filters limit the report list directly. Dimension, header, AX, status,
+date, NOK-only, and combined filter-expression filters limit grouping to reports that have
+matching measurement rows.
+
 The filter accepts clear field names when those fields are available:
 
+- `Reference`
 - `Sample`
 - `Date`
 - `Part`
@@ -117,6 +123,10 @@ To group the visible parts for one reference:
 This uses the selected reference's visible **PART #** rows as the target set. If you used
 **Filter rows** or a **PART #** search, review the visible rows first so you do not group
 less than you intended.
+
+If the Export filter scope contains exactly one reference and one header/dimension, the
+group name is prefilled as `REFERENCE-DIMENSION`. For example, after filtering Export with
+`Reference=REF1 AND Dimension=VAL1`, double-clicking `REF1` suggests `REF1-VAL1`.
 
 You can also select visible rows in **PART #** directly and press **Enter** or click
 **Create or add**. That is better when one reference contains rows that belong to
@@ -198,6 +208,11 @@ This is especially important for the Export HTML dashboard, where standard group
 added automatically when grouping is applied.
 
 The grouping dialog still keys rows by `report_id`; the richer labels are only for display.
+
+When grouping is applied, the existing Group Analysis output uses those group assignments
+for separated statistics and plots in the dashboard. To compare `REF1-VAL1` against another
+reference/dimension slice, create one group for each scoped slice, click **Use grouping**,
+and run the export with grouping applied.
 
 ## Keyboard and double-click shortcuts
 

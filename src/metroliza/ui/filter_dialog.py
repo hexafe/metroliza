@@ -26,6 +26,7 @@ from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.shared.filter_state import FilterState
 from metroliza.reports.report_query_service import (
     build_distinct_value_query as _build_distinct_value_query,
+    build_measurement_expression_clause as _build_measurement_expression_clause,
     build_measurement_filter_query as _build_measurement_filter_query,
 )
 from PyQt6.QtCore import QDate, Qt
@@ -49,6 +50,10 @@ def build_measurement_filter_query(**kwargs):
 
 def build_distinct_value_query(column_name, *, source_view="vw_measurement_export", filter_query=None):
     return _build_distinct_value_query(column_name, source_view=source_view, filter_query=filter_query)
+
+
+def build_measurement_expression_clause(expression_text):
+    return _build_measurement_expression_clause(expression_text)
 
 
 def ensure_report_schema(database):
@@ -238,6 +243,16 @@ class FilterDialog(QDialog):
             self.date_to_calendar.setDate(QDate.currentDate())
             self.date_to_calendar.setMinimumWidth(100)
 
+            self.expression_label = QLabel("Filter expression:")
+            self.expression_input = QLineEdit()
+            self.expression_input.setPlaceholderText("Reference=REF1 AND Dimension=VAL1")
+            expression_tooltip = (
+                "Optional combined filter. Examples: Reference=REF1 AND Dimension=VAL1, "
+                "Header IN (VAL1, VAL2) AND Status=NOK."
+            )
+            self.expression_label.setToolTip(expression_tooltip)
+            self.expression_input.setToolTip(expression_tooltip)
+
             # Set the default selection for list widgets as "SELECT ALL"
             self.ax_list.addItem("SELECT ALL")
             self.reference_list.addItem("SELECT ALL")
@@ -366,20 +381,22 @@ class FilterDialog(QDialog):
         footer_layout.setHorizontalSpacing(8)
         footer_layout.setVerticalSpacing(6)
 
-        footer_layout.addWidget(self.date_from_label, 0, 0)
-        footer_layout.addWidget(self.date_from_calendar, 0, 1)
-        footer_layout.addWidget(self.select_beginning_button, 0, 2)
-        footer_layout.addWidget(self.has_nok_button, 0, 3)
-        footer_layout.addWidget(self.date_to_label, 1, 0)
-        footer_layout.addWidget(self.date_to_calendar, 1, 1)
-        footer_layout.addWidget(self.select_today_button, 1, 2)
-        footer_layout.addWidget(self.filter_summary_label, 2, 0, 1, 3)
+        footer_layout.addWidget(self.expression_label, 0, 0)
+        footer_layout.addWidget(self.expression_input, 0, 1, 1, 3)
+        footer_layout.addWidget(self.date_from_label, 1, 0)
+        footer_layout.addWidget(self.date_from_calendar, 1, 1)
+        footer_layout.addWidget(self.select_beginning_button, 1, 2)
+        footer_layout.addWidget(self.has_nok_button, 1, 3)
+        footer_layout.addWidget(self.date_to_label, 2, 0)
+        footer_layout.addWidget(self.date_to_calendar, 2, 1)
+        footer_layout.addWidget(self.select_today_button, 2, 2)
+        footer_layout.addWidget(self.filter_summary_label, 3, 0, 1, 3)
 
         action_layout = QtWidgets.QHBoxLayout()
         action_layout.setContentsMargins(0, 0, 0, 0)
         action_layout.addStretch(1)
         action_layout.addWidget(self.apply_button)
-        footer_layout.addLayout(action_layout, 1, 3, 2, 1)
+        footer_layout.addLayout(action_layout, 2, 3, 2, 1)
         footer_layout.setColumnStretch(1, 1)
         footer_layout.setColumnStretch(3, 1)
         parent_layout.addWidget(footer_widget)
@@ -469,6 +486,8 @@ class FilterDialog(QDialog):
                 self.date_to_calendar.dateChanged.connect(self._refresh_filter_summary)
             if hasattr(self.has_nok_button, "toggled"):
                 self.has_nok_button.toggled.connect(self._refresh_filter_summary)
+            if hasattr(self.expression_input, "textChanged"):
+                self.expression_input.textChanged.connect(self._refresh_filter_summary)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -527,6 +546,18 @@ class FilterDialog(QDialog):
             return 0
         return len(values)
 
+    def _filter_expression_text(self):
+        expression_input = getattr(self, "expression_input", None)
+        if expression_input is None or not hasattr(expression_input, "text"):
+            return ""
+        return str(expression_input.text() or "").strip()
+
+    def _validate_filter_expression(self):
+        expression_text = self._filter_expression_text()
+        if expression_text:
+            build_measurement_expression_clause(expression_text)
+        return expression_text
+
     def _refresh_filter_summary(self):
         summary_label = getattr(self, "filter_summary_label", None)
         if summary_label is None or not hasattr(summary_label, "setText"):
@@ -560,6 +591,15 @@ class FilterDialog(QDialog):
         if not (date_from == "1970-01-01" and date_to == default_date_to):
             active_fields += 1
 
+        expression_text = self._filter_expression_text()
+        if expression_text:
+            active_fields += 1
+            try:
+                build_measurement_expression_clause(expression_text)
+            except (KeyError, TypeError, ValueError) as exc:
+                summary_label.setText(f"Invalid expression: {exc}")
+                return
+
         if active_fields == 0:
             summary_label.setText("No active filters")
             return
@@ -567,6 +607,8 @@ class FilterDialog(QDialog):
         summary_text = f"Active filters: {active_fields} | Selected values: {selected_values}"
         if has_nok_only:
             summary_text += " | NOK only"
+        if expression_text:
+            summary_text += " | Expression"
         summary_label.setText(summary_text)
 
     def _delete_selected_headers(self):
@@ -711,6 +753,12 @@ class FilterDialog(QDialog):
             has_nok_only = bool(getattr(self.has_nok_button, "isChecked", lambda: False)())
             date_from = self.date_from_calendar.date().toString("yyyy-MM-dd")
             date_to = self.date_to_calendar.date().toString("yyyy-MM-dd")
+            try:
+                expression_text = self._validate_filter_expression()
+            except (KeyError, TypeError, ValueError) as exc:
+                if self.filter_summary_label is not None and hasattr(self.filter_summary_label, "setText"):
+                    self.filter_summary_label.setText(f"Invalid expression: {exc}")
+                return
 
             ax_values = [] if "SELECT ALL" in ax_selected_items else ax_selected_items
             header_values = [] if "SELECT ALL" in header_selected_items else header_selected_items
@@ -743,6 +791,7 @@ class FilterDialog(QDialog):
                 has_nok_only=has_nok_only,
                 date_from=date_from,
                 date_to=date_to,
+                expression_text=expression_text,
             )
 
             self.filter_query = query
@@ -763,6 +812,7 @@ class FilterDialog(QDialog):
                 has_nok_only=has_nok_only,
                 date_from=date_from,
                 date_to=date_to,
+                expression_text=expression_text,
             )
 
             parent = self.parent()

@@ -90,12 +90,13 @@ class TestDataGroupingFilterQuery(unittest.TestCase):
         self.assertIn(filter_query, query)
         self.assertIn('"REPORT_ID" AS REPORT_ID', query)
 
-    def test_initial_grouping_scope_uses_filter_state_reference_and_part_only(self):
+    def test_initial_grouping_scope_uses_full_measurement_filter_state_when_needed(self):
         from modules.filter_state import FilterState
 
         class _Parent:
             filter_state = FilterState(
                 ax_values=('AX1',),
+                header_values=('VAL1',),
                 reference_values=('REF-1',),
                 part_name_values=('Part A',),
                 has_nok_only=True,
@@ -111,8 +112,9 @@ class TestDataGroupingFilterQuery(unittest.TestCase):
 
         self.assertIn("reference IN ('REF-1')", query)
         self.assertIn("part_name IN ('Part A')", query)
-        self.assertNotIn('ax', query.lower())
-        self.assertNotIn('has_nok =', query.lower())
+        self.assertIn("ax IN ('AX1')", query)
+        self.assertIn("header IN ('VAL1')", query)
+        self.assertIn('has_nok = 1', query.lower())
 
 
 class TestDataGroupingPartDisplayLabel(unittest.TestCase):
@@ -190,7 +192,7 @@ class TestDataGroupingScopeFilterAliases(unittest.TestCase):
 
     def test_scope_filter_aliases_include_present_columns(self):
         aliases = DataGrouping._scope_filter_field_aliases(
-            ['SAMPLE_NUMBER', 'DATE', 'PART_NAME', 'STATUS_CODE', 'Supplier', 'REVISION']
+            ['REFERENCE', 'SAMPLE_NUMBER', 'DATE', 'PART_NAME', 'STATUS_CODE', 'Supplier', 'REVISION']
         )
 
         self.assertEqual(aliases['Sample'], 'SAMPLE_NUMBER')
@@ -200,6 +202,7 @@ class TestDataGroupingScopeFilterAliases(unittest.TestCase):
         self.assertEqual(aliases['Supplier'], 'Supplier')
         self.assertEqual(aliases['Rev'], 'REVISION')
         self.assertEqual(aliases['Revision'], 'REVISION')
+        self.assertEqual(aliases['Reference'], 'REFERENCE')
 
     def test_scope_filter_aliases_prefer_display_columns_when_available(self):
         display_columns = DataGrouping._scope_filter_field_aliases.__globals__[
@@ -259,6 +262,28 @@ class TestDataGroupingScopeFilterAliases(unittest.TestCase):
         filtered = apply_filter_specs(frame, parsed.specs, match_mode=parsed.match_mode)
 
         self.assertEqual(filtered.index.tolist(), [0, 1])
+
+    def test_suggested_scope_group_name_uses_single_reference_and_header(self):
+        from modules.filter_state import FilterState
+
+        class _Parent:
+            filter_state = FilterState(reference_values=('REF1',), header_values=('VAL1',))
+
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.parent = lambda: _Parent()
+
+        self.assertEqual(dialog._suggested_scope_group_name('REF1'), 'REF1-VAL1')
+
+    def test_suggested_scope_group_name_falls_back_to_reference_for_multiple_headers(self):
+        from modules.filter_state import FilterState
+
+        class _Parent:
+            filter_state = FilterState(reference_values=('REF1',), header_values=('VAL1', 'VAL2'))
+
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.parent = lambda: _Parent()
+
+        self.assertEqual(dialog._suggested_scope_group_name('REF1'), 'REF1')
 
     def test_scope_filter_supports_quoted_commas_in_membership_values(self):
         from modules.grouping_filter_core import apply_filter_specs

@@ -28,3 +28,11 @@ def test_summarize_filter_state_shows_one_value_and_counts_many_values():
     assert label == "Reference: REF1; Header: 2 selected"
     assert "Reference: REF1" in tooltip
     assert "Header: H1, H2" in tooltip
+
+
+def test_summarize_filter_state_shows_expression_filter():
+    state = FilterState(expression_text="Reference=REF1 AND Dimension=VAL1")
+    label, tooltip = summarize_filter_state(state)
+
+    assert label == "Expression: Reference=REF1 AND Dimension=VAL1"
+    assert tooltip == "Expression: Reference=REF1 AND Dimension=VAL1"

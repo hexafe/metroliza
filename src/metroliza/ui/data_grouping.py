@@ -73,6 +73,8 @@ pd = _LazyPandas()
 _GROUPING_LIST_PREVIEW_LIMIT = 1000
 _SCOPE_FILTER_PLACEHOLDER = "Filter rows (Enter), e.g. Status=NOK AND Part=Body*"
 _SCOPE_FILTER_DISPLAY_COLUMNS = {
+    "Reference": "__metroliza_grouping_filter_reference",
+    "Ref": "__metroliza_grouping_filter_reference",
     "Sample": "__metroliza_grouping_filter_sample",
     "Date": "__metroliza_grouping_filter_date",
     "Part": "__metroliza_grouping_filter_part",
@@ -87,6 +89,8 @@ _SCOPE_FILTER_DISPLAY_COLUMNS = {
     "Rows": "__metroliza_grouping_filter_rows",
 }
 _SCOPE_FILTER_ALIAS_CANDIDATES = (
+    ("Reference", ("REFERENCE", "reference")),
+    ("Ref", ("REFERENCE", "reference")),
     ("Sample", ("SAMPLE_NUMBER", "sample_number")),
     ("Date", ("DATE", "date", "report_date")),
     ("Part", ("PART_NAME", "part_name")),
@@ -101,6 +105,7 @@ _SCOPE_FILTER_ALIAS_CANDIDATES = (
     ("Rows", ("ROW_COUNT", "row_count")),
 )
 _SCOPE_FILTER_DISPLAY_FIELD_SPECS = {
+    _SCOPE_FILTER_DISPLAY_COLUMNS["Reference"]: ("REFERENCE", "reference"),
     _SCOPE_FILTER_DISPLAY_COLUMNS["Sample"]: ("SAMPLE_NUMBER", "sample_number"),
     _SCOPE_FILTER_DISPLAY_COLUMNS["Date"]: ("DATE", "date", "report_date"),
     _SCOPE_FILTER_DISPLAY_COLUMNS["Part"]: ("PART_NAME", "part_name"),
@@ -1604,7 +1609,20 @@ class DataGrouping(QDialog):
     def _create_group_from_selected_reference(self):
         reference_name = self._selected_reference_name()
         self._select_visible_parts_for_grouping()
-        self.create_group(initial_group_name=reference_name or "")
+        self.create_group(initial_group_name=self._suggested_scope_group_name(reference_name))
+
+    def _suggested_scope_group_name(self, reference_name=None):
+        parent_method = getattr(self, "parent", None)
+        parent = parent_method() if callable(parent_method) else None
+        filter_state = getattr(parent, "filter_state", None) if parent is not None else None
+        headers = tuple(getattr(filter_state, "header_values", ()) or ()) if filter_state is not None else ()
+        references = tuple(getattr(filter_state, "reference_values", ()) or ()) if filter_state is not None else ()
+        selected_reference = str(reference_name or "").strip()
+        if not selected_reference and len(references) == 1:
+            selected_reference = str(references[0]).strip()
+        if selected_reference and len(headers) == 1:
+            return f"{selected_reference}-{str(headers[0]).strip()}"
+        return selected_reference
 
     def _select_visible_parts_for_grouping(self):
         part_list = self._safe_attr(self, "part_list")

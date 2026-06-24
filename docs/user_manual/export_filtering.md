@@ -20,7 +20,7 @@ The dialog uses tabs so the available choices stay readable on smaller screens:
 - **Measurement** tab: AX, REFERENCE, HEADER, SELECTED HEADERS, and STATUS CODE.
 - **Report metadata** tab: PART NAME, REVISION, TEMPLATE VARIANT, SAMPLE NUMBER, OPERATOR NAME, and SAMPLE NUMBER KIND.
 - **Source** tab: FILENAME, PARSER ID, and TEMPLATE FAMILY.
-- The date range and **HAS NOK ONLY** controls stay at the bottom with the apply action.
+- The combined filter expression, date range, and **HAS NOK ONLY** controls stay at the bottom with the apply action.
 
 It filters across the main report and measurement metadata dimensions:
 
@@ -40,6 +40,46 @@ It filters across the main report and measurement metadata dimensions:
 - measurement date range.
 
 Filtering changes the scope of the export. It does not permanently edit the database.
+
+## Combined filter expression
+
+Use **Filter expression** when one list is not enough to describe the exact rows you want.
+
+Example:
+
+`Reference=REF1 AND Dimension=VAL1`
+
+This keeps only rows where the same measurement row belongs to `REF1` and has header/dimension `VAL1`.
+It is useful when the same dimension name appears under several references and you need just one reference/dimension combination.
+
+The expression can be combined with the list selections. Metroliza applies both:
+
+- selected list values, and
+- the expression text.
+
+Common expression fields:
+
+- `Reference` or `Ref`
+- `Dimension` or `Header`
+- `Characteristic`
+- `Axis` or `AX`
+- `Status`
+- `Part`
+- `Revision`
+- `Sample`
+- `Operator`
+- `File`
+
+The expression supports `=`, `!=`, `<`, `<=`, `>`, `>=`, `IN`, `NOT IN`, `AND`, `OR`, parentheses, and `*` wildcards.
+
+Examples:
+
+- `Reference=REF1 AND Dimension=VAL1`
+- `Reference IN (REF1, REF2) AND Dimension=VAL1`
+- `Header IN (VAL1, VAL2) AND Status=NOK`
+- `Reference=REF1 AND Axis=X*`
+
+If the expression is invalid, the dialog keeps the filter open and shows the error in the summary line.
 
 ## Each list and search box
 
@@ -180,13 +220,21 @@ If you want to revise filters instead, reopen the dialog, change the selections,
 4. Check **SELECTED HEADERS** to confirm the list.
 5. Click **Apply filters**.
 
-### Example 3: Export only recent measurements
+### Example 3: Export one repeated dimension from one reference
+
+1. In **Filter expression**, type `Reference=REF1 AND Dimension=VAL1`.
+2. Leave the list filters on **SELECT ALL**, unless you want extra restrictions.
+3. Click **Apply filters**.
+
+Use this when `VAL1` exists in multiple references but only the `REF1` measurement rows should be exported.
+
+### Example 4: Export only recent measurements
 
 1. Set **MEASUREMENT DATE FROM** to your starting date.
 2. Use **Select today** for the end date if needed.
 3. Click **Apply filters**.
 
-### Example 4: Review NOK rows from one operator and source file
+### Example 5: Review NOK rows from one operator and source file
 
 1. In Export, click **Edit...** next to **Filters**.
 2. In **STATUS CODE**, choose `nok`, or use **HAS NOK ONLY** if you simply want rows with

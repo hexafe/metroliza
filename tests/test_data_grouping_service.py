@@ -51,7 +51,7 @@ def test_build_grouping_query_strips_trailing_semicolons_from_filter_query():
     assert 'FROM vw_grouping_reports;' not in query
 
 
-def test_build_grouping_scope_query_uses_only_reference_and_part_filters():
+def test_build_grouping_scope_query_uses_report_scope_for_reference_and_part_filters():
     query = build_grouping_scope_query_from_filter_state(
         FilterState(
             ax_values=("AX1",),
@@ -63,16 +63,48 @@ def test_build_grouping_scope_query_uses_only_reference_and_part_filters():
     )
 
     assert query is not None
-    assert "FROM vw_grouping_reports" in query
+    assert "FROM vw_measurement_export" in query
     assert "reference IN ('REF-1')" in query
+    assert "ax IN ('AX1')" in query
     assert "part_name IN ('Part A')" in query
-    assert "ax" not in query.lower()
-    assert "has_nok =" not in query.lower()
-    assert "report_date >=" not in query.lower()
+    assert "has_nok = 1" in query
+    assert "report_date >= '2026-05-01'" in query
 
 
 def test_build_grouping_scope_query_returns_none_without_reference_or_part_filters():
-    assert build_grouping_scope_query_from_filter_state(FilterState(ax_values=("AX1",))) is None
+    assert build_grouping_scope_query_from_filter_state(FilterState()) is None
+
+
+def test_build_grouping_scope_query_keeps_light_report_scope_for_reference_only():
+    query = build_grouping_scope_query_from_filter_state(
+        FilterState(reference_values=("REF-1",), part_name_values=("Part A",))
+    )
+
+    assert query is not None
+    assert "FROM vw_grouping_reports" in query
+    assert "reference IN ('REF-1')" in query
+    assert "part_name IN ('Part A')" in query
+    assert "vw_measurement_export" not in query
+
+
+def test_build_grouping_scope_query_uses_measurement_scope_for_header_expression():
+    query = build_grouping_scope_query_from_filter_state(
+        FilterState(header_values=("VAL1",), expression_text="Reference=REF1")
+    )
+
+    assert query is not None
+    assert "FROM (" in query
+    assert "vw_measurement_export" in query
+    assert "header IN ('VAL1')" in query
+    assert 'LOWER(CAST("reference" AS TEXT)) = LOWER(' in query
+
+
+def test_build_grouping_scope_query_does_not_ignore_revision_filters():
+    query = build_grouping_scope_query_from_filter_state(FilterState(revision_values=("B",)))
+
+    assert query is not None
+    assert "vw_measurement_export" in query
+    assert "revision IN ('B')" in query
 
 
 

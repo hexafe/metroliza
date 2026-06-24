@@ -27,6 +27,7 @@ class FilterState:
     has_nok_only: bool = False
     date_from: str | None = None
     date_to: str | None = None
+    expression_text: str = ""
 
 
 def _label_count(label: str, values: tuple[str, ...]) -> str | None:
@@ -81,6 +82,14 @@ def summarize_filter_state(filter_state: FilterState | None) -> tuple[str, str]:
     if filter_state.has_nok_only:
         summary_parts.append("NOK only")
         detail_parts.append("NOK only: enabled")
+
+    expression_text = str(filter_state.expression_text or "").strip()
+    if expression_text:
+        if len(expression_text) <= 48:
+            summary_parts.append(f"Expression: {expression_text}")
+        else:
+            summary_parts.append("Expression: custom")
+        detail_parts.append(f"Expression: {expression_text}")
 
     date_range = _effective_date_range(filter_state)
     if date_range is not None:
