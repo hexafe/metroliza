@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from PyQt6.QtCore import QThread, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QIntValidator
@@ -148,9 +148,9 @@ class _PendingSqliteScope:
     filter_columns: tuple[str, ...]
     selected_filter_keys: tuple[tuple[str, ...], ...]
     base_column_filters: tuple[TabularColumnFilter, ...]
-    base_filter_expression: str
-    filter_aliases: dict[str, str]
-    grouping_filter: object | None
+    base_filter_expression: str = ""
+    filter_aliases: dict[str, str] = field(default_factory=dict)
+    grouping_filter: object | None = None
     selected_group_keys: tuple[tuple[str, ...], ...] = ()
 
 
