@@ -186,6 +186,7 @@ class IndustrialAnalyticsRequest:
     tabular_filter_columns: tuple[str, ...] = ()
     tabular_filter_keys: tuple[tuple[str, ...], ...] = ()
     tabular_column_filters: tuple[TabularColumnFilter, ...] = ()
+    tabular_filter_expression: str = ""
     grouping_df: GroupingAssignments | None = None
     dashboard_visual_settings: dict | None = None
     dashboard_interactivity_options: DashboardInteractivityOptions | dict | None = None
@@ -288,6 +289,10 @@ def validate_industrial_analytics_request(
         tabular_filter_columns=_normalize_filter_columns(request.tabular_filter_columns),
         tabular_filter_keys=_normalize_filter_keys(request.tabular_filter_keys),
         tabular_column_filters=_normalize_column_filters(request.tabular_column_filters),
+        tabular_filter_expression=_normalize_optional_text(
+            request.tabular_filter_expression,
+            field_name="tabular filter expression",
+        ),
         grouping_df=validate_grouping_df(request.grouping_df),
         dashboard_visual_settings=normalize_dashboard_visual_settings(
             request.dashboard_visual_settings

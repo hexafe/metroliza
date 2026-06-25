@@ -1121,6 +1121,9 @@ def test_tabular_filter_dialog_accept_uses_column_filters_without_legacy_keys(
         def get_column_filters(self):
             return (TabularColumnFilter("tracecode", selected_values=("TC-001",)),)
 
+        def get_filter_expression(self):
+            return "length_mm > 10"
+
         def get_filter(self):
             raise AssertionError("legacy filter keys should not be built on accept")
 
@@ -1139,6 +1142,7 @@ def test_tabular_filter_dialog_accept_uses_column_filters_without_legacy_keys(
         assert dialog.tabular_column_filters == (
             TabularColumnFilter("tracecode", selected_values=("TC-001",)),
         )
+        assert dialog.tabular_filter_expression == "length_mm > 10"
         assert dialog.tabular_filter_columns == ()
         assert dialog.tabular_filter_keys == ()
     finally:

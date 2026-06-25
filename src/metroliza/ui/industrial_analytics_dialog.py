@@ -568,6 +568,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.tabular_filter_columns: tuple[str, ...] = ()
         self.tabular_filter_keys: tuple[tuple[str, ...], ...] = ()
         self.tabular_column_filters: tuple[TabularColumnFilter, ...] = ()
+        self.tabular_filter_expression = ""
         self.df_for_grouping = None
         self.grouping_applied = False
         self._auto_group_selected_files = False
@@ -1382,6 +1383,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.tabular_filter_columns = ()
         self.tabular_filter_keys = ()
         self.tabular_column_filters = ()
+        self.tabular_filter_expression = ""
 
     def _set_tabular_load_result(self, loaded) -> None:
         current = self.tabular_load_result
@@ -1414,6 +1416,7 @@ class IndustrialAnalyticsDialog(QDialog):
             filter_columns=self.tabular_filter_columns,
             selected_filter_keys=self.tabular_filter_keys,
             column_filters=self.tabular_column_filters,
+            row_filter_expression=self.tabular_filter_expression,
         )
 
     def clear_tabular_filter_and_groups(self) -> None:
@@ -1618,11 +1621,13 @@ class IndustrialAnalyticsDialog(QDialog):
             filter_columns=self.tabular_filter_columns,
             selected_filter_keys=self.tabular_filter_keys,
             column_filters=self.tabular_column_filters,
+            filter_expression=self.tabular_filter_expression,
             sqlite_store=self.tabular_load_result.sqlite_store,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         self.tabular_column_filters = dialog.get_column_filters()
+        self.tabular_filter_expression = dialog.get_filter_expression()
         self.tabular_filter_columns = ()
         self.tabular_filter_keys = ()
         self._clear_tabular_grouping()
@@ -1799,6 +1804,7 @@ class IndustrialAnalyticsDialog(QDialog):
                 filter_columns=self.tabular_filter_columns,
                 selected_filter_keys=self.tabular_filter_keys,
                 column_filters=self.tabular_column_filters,
+                filter_expression=self.tabular_filter_expression,
             )
             dialog.exec()
             self._sync_ui_state()
@@ -1914,6 +1920,7 @@ class IndustrialAnalyticsDialog(QDialog):
             filter_columns=self.tabular_filter_columns,
             selected_filter_keys=self.tabular_filter_keys,
             column_filters=self.tabular_column_filters,
+            row_filter_expression=self.tabular_filter_expression,
         )
         assigned_rows = self.df_for_grouping.loc[:, ["REPORT_ID", "GROUP"]].to_dict("records")
         valid_assigned_rows = []
@@ -1935,6 +1942,8 @@ class IndustrialAnalyticsDialog(QDialog):
             filter_columns=self.tabular_filter_columns,
             selected_filter_keys=self.tabular_filter_keys,
             column_filters=self.tabular_column_filters,
+            grouping_filter_expression=self.tabular_filter_expression,
+            grouping_filter_aliases=self.tabular_load_result.column_mapping,
         )
         return assigned_count < total_rows
 
@@ -1946,14 +1955,17 @@ class IndustrialAnalyticsDialog(QDialog):
             filter_columns=self.tabular_filter_columns,
             selected_filter_keys=self.tabular_filter_keys,
             column_filters=self.tabular_column_filters,
+            row_filter_expression=self.tabular_filter_expression,
         ).dataframe
 
     def _tabular_filter_summary(self) -> tuple[str, str]:
         if self.tabular_load_result is None:
             return "No row filter", "neutral"
         row_count = self._tabular_filtered_row_count()
-        if not self.tabular_column_filters and (
-            not self.tabular_filter_columns or not self.tabular_filter_keys
+        if (
+            not self.tabular_column_filters
+            and not self.tabular_filter_expression
+            and (not self.tabular_filter_columns or not self.tabular_filter_keys)
         ):
             return f"All rows ({tabular_load_result_row_count(self.tabular_load_result)})", "neutral"
         label_lookup = {
@@ -1965,6 +1977,8 @@ class IndustrialAnalyticsDialog(QDialog):
                 self._tabular_column_filter_label(item, label_lookup)
                 for item in self.tabular_column_filters
             )
+        elif self.tabular_filter_expression:
+            columns_text = "Magic filter"
         else:
             columns_text = " | ".join(
                 str(label_lookup.get(column, column)) for column in self.tabular_filter_columns
@@ -1972,7 +1986,7 @@ class IndustrialAnalyticsDialog(QDialog):
         selection_count = (
             len(self.tabular_column_filters)
             if self.tabular_column_filters
-            else len(self.tabular_filter_keys)
+            else 1 if self.tabular_filter_expression else len(self.tabular_filter_keys)
         )
         return (
             f"{columns_text}: {selection_count} filter(s), {row_count} rows",
@@ -2174,6 +2188,7 @@ class IndustrialAnalyticsDialog(QDialog):
                 not self.is_production_source
                 and (
                     self.tabular_column_filters
+                    or self.tabular_filter_expression
                     or (self.tabular_filter_columns and self.tabular_filter_keys)
                 )
             )
@@ -2363,6 +2378,7 @@ class IndustrialAnalyticsDialog(QDialog):
                 tabular_filter_columns=self.tabular_filter_columns,
                 tabular_filter_keys=self.tabular_filter_keys,
                 tabular_column_filters=self.tabular_column_filters,
+                tabular_filter_expression=self.tabular_filter_expression,
                 grouping_df=self.df_for_grouping if self.grouping_applied else None,
                 dashboard_visual_settings=self.dashboard_visual_settings,
                 dashboard_interactivity_options=self.dashboard_interactivity_options,
@@ -2391,6 +2407,7 @@ class IndustrialAnalyticsDialog(QDialog):
             tabular_filter_columns=request.tabular_filter_columns,
             tabular_filter_keys=request.tabular_filter_keys,
             tabular_column_filters=request.tabular_column_filters,
+            tabular_filter_expression=request.tabular_filter_expression,
             dashboard_detail_mode=request.dashboard_detail_mode,
             grouping_df=self.df_for_grouping if self.grouping_applied else None,
             dashboard_visual_settings=request.dashboard_visual_settings,

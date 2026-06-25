@@ -212,6 +212,28 @@ def test_parse_filter_expression_supports_text_number_date_and_or() -> None:
     assert filtered_or.index.tolist() == [1, 2]
 
 
+def test_parse_filter_expression_treats_integer_literals_as_numbers_and_supports_and_shorthand() -> None:
+    frame = pd.DataFrame(
+        {
+            "Param1": [3999, 4000, 4000.0, 4500, 5000, 5001, "text"],
+            "TraceCode": ["A", "B", "C", "D", "E", "F", "G"],
+        }
+    )
+
+    integer_literal = parse_filter_expression("Param1 > 4000", frame.columns)
+    decimal_literal = parse_filter_expression("Param1 > 4000.0", frame.columns)
+    shorthand_range = parse_filter_expression("Param1 > 4000 and < 5000", frame.columns)
+    explicit_range = parse_filter_expression("Param1 > 4000 and Param1 < 5000", frame.columns)
+
+    assert isinstance(integer_literal.specs[0], NumberFilterSpec)
+    assert integer_literal.mask(frame).tolist() == decimal_literal.mask(frame).tolist()
+    assert shorthand_range.mask(frame).tolist() == explicit_range.mask(frame).tolist()
+    assert shorthand_range.mask(frame).tolist() == [False, False, False, True, False, False, False]
+
+    with pytest.raises(ValueError, match="Missing field name"):
+        parse_filter_expression("(Param1 > 4000 or Param1 < 0) and < 5000", frame.columns)
+
+
 def test_parse_filter_expression_supports_nested_mixed_and_or() -> None:
     frame = pd.DataFrame(
         {

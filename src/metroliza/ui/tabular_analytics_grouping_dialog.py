@@ -148,6 +148,8 @@ class _PendingSqliteScope:
     filter_columns: tuple[str, ...]
     selected_filter_keys: tuple[tuple[str, ...], ...]
     base_column_filters: tuple[TabularColumnFilter, ...]
+    base_filter_expression: str
+    filter_aliases: dict[str, str]
     grouping_filter: object | None
     selected_group_keys: tuple[tuple[str, ...], ...] = ()
 
@@ -221,6 +223,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         filter_columns: tuple[str, ...] | list[str] | None = None,
         selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
         column_filters: tuple[TabularColumnFilter, ...] | list[TabularColumnFilter] | None = None,
+        filter_expression: str | None = None,
     ):
         super().__init__(parent)
         self.setWindowTitle("CSV / Excel groups")
@@ -236,6 +239,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.sqlite_column_filters = tuple(
             item for item in (column_filters or ()) if isinstance(item, TabularColumnFilter)
         )
+        self.sqlite_filter_expression = str(filter_expression or "").strip()
         self.column_labels = {
             normalized: original
             for original, normalized in (column_mapping or {}).items()
@@ -817,6 +821,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
             "base_column_filters": self.sqlite_column_filters,
             "column_filters": (),
             "column_filter_match_mode": "and",
+            "grouping_filter_expression": self.sqlite_filter_expression,
             "grouping_filter": state.parsed_filter if state.mode == "expression" else None,
             "grouping_filter_aliases": self._selector_filter_aliases(),
         }
@@ -829,6 +834,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
             filter_columns=self.sqlite_filter_columns,
             selected_filter_keys=self.sqlite_selected_filter_keys,
             base_column_filters=self.sqlite_column_filters,
+            base_filter_expression=self.sqlite_filter_expression,
+            filter_aliases=self._selector_filter_aliases(),
             grouping_filter=current_state.parsed_filter if current_state.mode == "expression" else None,
         )
 
@@ -843,6 +850,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
             filter_columns=self.sqlite_filter_columns,
             selected_filter_keys=self.sqlite_selected_filter_keys,
             base_column_filters=self.sqlite_column_filters,
+            base_filter_expression=self.sqlite_filter_expression,
+            filter_aliases=self._selector_filter_aliases(),
             grouping_filter=current_state.parsed_filter if current_state.mode == "expression" else None,
             selected_group_keys=tuple(sorted(self.selected_selector_keys)),
         )
@@ -857,12 +866,16 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 filter_columns=scope.filter_columns,
                 selected_filter_keys=scope.selected_filter_keys,
                 base_column_filters=scope.base_column_filters,
+                grouping_filter_expression=scope.base_filter_expression,
+                grouping_filter_aliases=scope.filter_aliases,
                 grouping_filter=scope.grouping_filter,
             )
         return self.sqlite_store.source_row_number_query(
             filter_columns=scope.filter_columns,
             selected_filter_keys=scope.selected_filter_keys,
             base_column_filters=scope.base_column_filters,
+            grouping_filter_expression=scope.base_filter_expression,
+            grouping_filter_aliases=scope.filter_aliases,
             grouping_filter=scope.grouping_filter,
         )
 
@@ -881,6 +894,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
             filter_columns=scope.filter_columns,
             selected_filter_keys=scope.selected_filter_keys,
             base_column_filters=scope.base_column_filters,
+            grouping_filter_expression=scope.base_filter_expression,
+            grouping_filter_aliases=scope.filter_aliases,
             grouping_filter=scope.grouping_filter,
         )
         if not where_sql:

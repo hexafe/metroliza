@@ -275,6 +275,7 @@ def run_tabular_file_analytics(
     tabular_filter_columns: tuple[str, ...] | list[str] | None = None,
     tabular_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
     tabular_column_filters: tuple[TabularColumnFilter, ...] | list[TabularColumnFilter] | None = None,
+    tabular_filter_expression: str | None = None,
     dashboard_detail_mode: str = "full",
     grouping_df=None,
     aggregation_state: ProductionAggregationState | None = None,
@@ -307,6 +308,7 @@ def run_tabular_file_analytics(
             tabular_filter_columns=tabular_filter_columns or (),
             tabular_filter_keys=tabular_filter_keys or (),
             tabular_column_filters=tabular_column_filters or (),
+            tabular_filter_expression=tabular_filter_expression or "",
             dashboard_detail_mode=dashboard_detail_mode,
             dashboard_interactivity_options=dashboard_interactivity_options,
             grouping_df=grouping_df,
@@ -363,6 +365,7 @@ def run_tabular_file_analytics(
         filter_columns=request.tabular_filter_columns,
         selected_filter_keys=request.tabular_filter_keys,
         column_filters=request.tabular_column_filters,
+        row_filter_expression=request.tabular_filter_expression,
         required_columns=required_columns,
     )
     projection_diagnostic = _tabular_projection_diagnostic(

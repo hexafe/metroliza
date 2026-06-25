@@ -114,6 +114,7 @@ class TabularAnalyticsFilterDialog(QDialog):
         filter_columns: tuple[str, ...] | list[str] | None = None,
         selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
         column_filters: tuple[TabularColumnFilter, ...] | list[TabularColumnFilter] | None = None,
+        filter_expression: str | None = None,
         sqlite_store=None,
     ):
         super().__init__(parent)
@@ -144,6 +145,7 @@ class TabularAnalyticsFilterDialog(QDialog):
         self._preview_loading_label = None
         self._preview_loading_bar = None
         self._preview_loading_gif = None
+        self._initial_filter_expression = str(filter_expression or "").strip()
         self._status_timer = QTimer(self)
         self._status_timer.setSingleShot(True)
         self._status_timer.setInterval(80)
@@ -161,6 +163,13 @@ class TabularAnalyticsFilterDialog(QDialog):
         self.status_label = status_chip("No row filter selected", "neutral")
         layout.addWidget(section_label("Column filters"))
         layout.addWidget(self.status_label)
+
+        layout.addWidget(QLabel("Magic filter"))
+        self.expression_input = QLineEdit()
+        self.expression_input.setPlaceholderText("Param1 > 4000 and < 5000")
+        self.expression_input.setText(self._initial_filter_expression)
+        configure_accessibility(self.expression_input, name="CSV row-filter expression")
+        layout.addWidget(self.expression_input)
 
         columns_grid = QGridLayout()
         columns_grid.setContentsMargins(0, 0, 0, 0)
@@ -281,6 +290,7 @@ class TabularAnalyticsFilterDialog(QDialog):
         self.clear_filter_button.clicked.connect(self.clear_filter)
         self.cancel_button.clicked.connect(self.reject)
         self.apply_button.clicked.connect(self._accept_filter)
+        self.expression_input.textChanged.connect(lambda _text: self._schedule_status_sync())
         self.matching_search.textChanged.connect(self._handle_matching_search_text_changed)
         self.matching_search.returnPressed.connect(self._apply_matching_search)
         self.matching_list.itemSelectionChanged.connect(self._store_current_selection)
@@ -449,6 +459,7 @@ class TabularAnalyticsFilterDialog(QDialog):
         self._value_index_by_column = {}
         self._filter_value_series_by_column = {}
         self._filter_date_series_by_column = {}
+        self.expression_input.clear()
         self._refresh_all()
 
     def _store_current_selection(self) -> None:
@@ -479,6 +490,22 @@ class TabularAnalyticsFilterDialog(QDialog):
         if self.sqlite_store is not None:
             return str(self._applied_matching_search_text or "")
         return str(self.matching_search.text() or "")
+
+    def _filter_expression_text(self) -> str:
+        return str(self.expression_input.text() or "").strip()
+
+    def _filter_expression_aliases(self) -> dict[str, str]:
+        aliases: dict[str, str] = {}
+        source_columns = set(self._source_columns())
+        for normalized, original in self.column_labels.items():
+            if normalized not in source_columns:
+                continue
+            aliases[str(original)] = str(normalized)
+            aliases[str(normalized)] = str(normalized)
+        for column in source_columns:
+            aliases.setdefault(str(column), str(column))
+            aliases.setdefault(str(column).replace("_", " "), str(column))
+        return aliases
 
     def _handle_matching_search_text_changed(self) -> None:
         if self.sqlite_store is not None:
@@ -814,6 +841,13 @@ class TabularAnalyticsFilterDialog(QDialog):
 
     def _accept_filter(self) -> None:
         self._commit_current_filter_controls()
+        try:
+            self._filtered_row_count(self._active_column_filters())
+        except (KeyError, RuntimeError, ValueError) as exc:
+            self.status_label.setText(f"Invalid magic filter: {exc}")
+            set_status_variant(self.status_label, "danger")
+            self._sync_status_controls(self._active_column_filters(), expression_valid=False)
+            return
         self.accept()
 
     def _sync_status(self) -> None:
@@ -830,11 +864,27 @@ class TabularAnalyticsFilterDialog(QDialog):
 
     def _sync_status_now(self) -> None:
         active_filters = self._active_column_filters()
-        if not self.filter_columns:
+        expression_text = self._filter_expression_text()
+        try:
+            row_count = self._filtered_row_count(active_filters)
+        except (KeyError, RuntimeError, ValueError) as exc:
+            self.status_label.setText(f"Invalid magic filter: {exc}")
+            set_status_variant(self.status_label, "danger")
+            self._sync_status_controls(active_filters, expression_valid=False)
+            return
+
+        if not self.filter_columns and not expression_text:
             self.status_label.setText("No row filter selected")
             set_status_variant(self.status_label, "neutral")
+        elif expression_text and active_filters:
+            self.status_label.setText(
+                f"{len(active_filters)} column filter(s) + magic filter, {row_count} rows"
+            )
+            set_status_variant(self.status_label, "success" if row_count else "danger")
+        elif expression_text:
+            self.status_label.setText(f"Magic filter, {row_count} rows")
+            set_status_variant(self.status_label, "success" if row_count else "danger")
         elif active_filters:
-            row_count = self._filtered_row_count(active_filters)
             self.status_label.setText(f"{len(active_filters)} column filter(s), {row_count} rows")
             set_status_variant(self.status_label, "success" if row_count else "danger")
         else:
@@ -842,30 +892,56 @@ class TabularAnalyticsFilterDialog(QDialog):
             set_status_variant(self.status_label, "info")
         self._sync_status_controls(active_filters)
 
-    def _sync_status_controls(self, active_filters: tuple[TabularColumnFilter, ...]) -> None:
+    def _sync_status_controls(
+        self,
+        active_filters: tuple[TabularColumnFilter, ...],
+        *,
+        expression_valid: bool = True,
+    ) -> None:
         self.remove_column_button.setEnabled(bool(self.filter_columns))
         self.clear_columns_button.setEnabled(bool(self.filter_columns))
         current_column = self._current_filter_column()
         self.clear_selection_button.setEnabled(
             bool(current_column and self._filter_for_column(current_column).is_active)
         )
-        self.clear_filter_button.setEnabled(bool(self.filter_columns or active_filters))
+        self.clear_filter_button.setEnabled(
+            bool(self.filter_columns or active_filters or self._filter_expression_text())
+        )
+        self.apply_button.setEnabled(expression_valid)
 
     def _filtered_row_count(self, active_filters: tuple[TabularColumnFilter, ...]) -> int:
+        expression_text = self._filter_expression_text()
         if self.sqlite_store is not None:
-            return int(self.sqlite_store.count_rows(column_filters=active_filters))
-        if not active_filters:
+            return int(
+                self.sqlite_store.count_rows(
+                    column_filters=active_filters,
+                    grouping_filter_expression=expression_text,
+                    grouping_filter_aliases=self._filter_expression_aliases(),
+                )
+            )
+        if not active_filters and not expression_text:
             return int(len(self.source_dataframe.index))
-        mask = pd.Series(True, index=self.source_dataframe.index)
-        for column_filter in active_filters:
-            column_mask = pd.Series(True, index=self.source_dataframe.index)
-            if column_filter.selected_values:
-                selected_values = set(column_filter.selected_values)
-                column_mask &= self._normalized_filter_series(column_filter.column).isin(selected_values)
-            if column_filter.has_date_filter:
-                column_mask &= self._date_filter_mask(column_filter)
-            mask &= column_mask.fillna(False)
-        return int(mask.fillna(False).sum())
+        if not expression_text:
+            mask = pd.Series(True, index=self.source_dataframe.index)
+            for column_filter in active_filters:
+                column_mask = pd.Series(True, index=self.source_dataframe.index)
+                if column_filter.selected_values:
+                    selected_values = set(column_filter.selected_values)
+                    column_mask &= self._normalized_filter_series(column_filter.column).isin(selected_values)
+                if column_filter.has_date_filter:
+                    column_mask &= self._date_filter_mask(column_filter)
+                mask &= column_mask.fillna(False)
+            return int(mask.fillna(False).sum())
+        return int(
+            len(
+                apply_tabular_row_filter(
+                    self.source_dataframe,
+                    column_filters=active_filters,
+                    row_filter_expression=expression_text,
+                    row_filter_aliases=self._filter_expression_aliases(),
+                ).dataframe.index
+            )
+        )
 
     def _date_filter_mask(self, column_filter: TabularColumnFilter) -> pd.Series:
         dates = self._date_filter_series(column_filter.column)
@@ -888,6 +964,10 @@ class TabularAnalyticsFilterDialog(QDialog):
     def get_column_filters(self) -> tuple[TabularColumnFilter, ...]:
         self._commit_current_filter_controls()
         return self._active_column_filters()
+
+    def get_filter_expression(self) -> str:
+        self._commit_current_filter_controls()
+        return self._filter_expression_text()
 
     def get_filter(self) -> tuple[tuple[str, ...], tuple[tuple[str, ...], ...]]:
         self._commit_current_filter_controls()

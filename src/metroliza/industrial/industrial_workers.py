@@ -339,6 +339,7 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
         tabular_filter_columns: tuple[str, ...] | list[str] | None = None,
         tabular_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
         tabular_column_filters: tuple[TabularColumnFilter, ...] | list[TabularColumnFilter] | None = None,
+        tabular_filter_expression: str | None = None,
         dashboard_detail_mode: str = "full",
         grouping_df=None,
         dashboard_visual_settings: dict | None = None,
@@ -365,6 +366,7 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
                 tabular_filter_columns=tabular_filter_columns or (),
                 tabular_filter_keys=tabular_filter_keys or (),
                 tabular_column_filters=tabular_column_filters or (),
+                tabular_filter_expression=tabular_filter_expression or "",
                 dashboard_detail_mode=dashboard_detail_mode,
                 grouping_df=grouping_df,
                 dashboard_visual_settings=dashboard_visual_settings,
@@ -390,6 +392,7 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
         self.tabular_filter_columns = validated_request.tabular_filter_columns
         self.tabular_filter_keys = validated_request.tabular_filter_keys
         self.tabular_column_filters = validated_request.tabular_column_filters
+        self.tabular_filter_expression = validated_request.tabular_filter_expression
         self.dashboard_detail_mode = validated_request.dashboard_detail_mode
         grouping_copy = getattr(grouping_df, "copy", None)
         self.grouping_df = grouping_copy() if callable(grouping_copy) else validated_request.grouping_df
@@ -415,6 +418,7 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
                     tabular_filter_columns=self.tabular_filter_columns,
                     tabular_filter_keys=self.tabular_filter_keys,
                     tabular_column_filters=self.tabular_column_filters,
+                    tabular_filter_expression=self.tabular_filter_expression,
                     dashboard_detail_mode=self.dashboard_detail_mode,
                     grouping_df=self.grouping_df,
                     aggregation_state=self.aggregation_state,

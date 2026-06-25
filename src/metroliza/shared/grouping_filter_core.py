@@ -683,20 +683,20 @@ class _FilterExpressionParser:
         node = self._parse_primary()
         children = [node]
         while self._match("AND") is not None:
-            children.append(self._parse_primary())
+            children.append(self._parse_primary(default_field=self._condition_column(children[-1])))
         if len(children) == 1:
             return node
         return FilterExpressionGroup("and", tuple(children))
 
-    def _parse_primary(self) -> DataFrameFilterSpec:
+    def _parse_primary(self, *, default_field: str | None = None) -> DataFrameFilterSpec:
         if self._match("LPAREN") is not None:
             expression = self._parse_or()
             if self._match("RPAREN") is None:
                 raise ValueError("Missing closing ')' in grouping filter expression.")
             return expression
-        return self._parse_condition()
+        return self._parse_condition(default_field=default_field)
 
-    def _parse_condition(self) -> DataFrameFilterSpec:
+    def _parse_condition(self, *, default_field: str | None = None) -> DataFrameFilterSpec:
         field_tokens: list[_FilterToken] = []
         while (
             (token := self._peek()) is not None
@@ -706,12 +706,12 @@ class _FilterExpressionParser:
             if token.kind in {"AND", "OR", "RPAREN", "LPAREN", "COMMA"}:
                 raise ValueError(f"Invalid grouping filter term near: {token.value}")
             field_tokens.append(self._advance())
-        if not field_tokens:
+        if not field_tokens and not default_field:
             raise ValueError("Missing field name in grouping filter expression.")
         operator_token = self._match("OP")
         if operator_token is None:
             membership_operator = self._match_membership_operator()
-            field = _tokens_to_filter_text(field_tokens)
+            field = _tokens_to_filter_text(field_tokens) if field_tokens else str(default_field or "")
             if membership_operator is None:
                 raise ValueError(f"Missing operator for grouping filter field: {field}")
             return _parse_membership_condition(
@@ -729,11 +729,11 @@ class _FilterExpressionParser:
                 raise ValueError(f"Invalid grouping filter value near: {token.value}")
             value_tokens.append(self._advance())
         if not value_tokens:
-            field = _tokens_to_filter_text(field_tokens)
+            field = _tokens_to_filter_text(field_tokens) if field_tokens else str(default_field or "")
             raise ValueError(f"Missing value for grouping filter field: {field}")
 
         return _parse_filter_condition(
-            _tokens_to_filter_text(field_tokens),
+            _tokens_to_filter_text(field_tokens) if field_tokens else str(default_field or ""),
             operator_token.value,
             _tokens_to_filter_text(value_tokens),
             self._columns,
@@ -819,6 +819,11 @@ class _FilterExpressionParser:
             return None
         return self._advance()
 
+    @staticmethod
+    def _condition_column(node: DataFrameFilterSpec) -> str | None:
+        column = str(getattr(node, "column", "") or "").strip()
+        return column or None
+
 
 def _parse_filter_condition(
     column_text: str,
@@ -839,6 +844,8 @@ def _parse_filter_condition(
         format="mixed",
     ).iloc[0]
     number_value = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if not pd.isna(number_value) and not any(marker in str(value) for marker in ("-", "/", ":")):
+        return NumberFilterSpec(column, _symbol_to_number_operator(operator), value)
     if looks_date_like and not pd.isna(date_value):
         return DateFilterSpec(
             column,

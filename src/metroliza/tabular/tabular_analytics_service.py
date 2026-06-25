@@ -2805,6 +2805,8 @@ def apply_tabular_row_filter(
     filter_columns: tuple[str, ...] | list[str] | None = None,
     selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
     column_filters: tuple[TabularColumnFilter, ...] | list[TabularColumnFilter] | None = None,
+    row_filter_expression: str | None = None,
+    row_filter_aliases: Mapping[str, str] | None = None,
     required_columns: tuple[str, ...] | list[str] | None = None,
 ) -> TabularFilterResult:
     """Filter normalized CSV/Excel analytics rows by selected column-value keys."""
@@ -2814,7 +2816,14 @@ def apply_tabular_row_filter(
 
     input_count = int(len(dataframe.index))
     normalized_column_filters = _normalized_tabular_column_filters(dataframe, column_filters)
-    if normalized_column_filters:
+    raw_expression = str(row_filter_expression or "").strip()
+    columns = tuple(column for column in (filter_columns or ()) if column in dataframe.columns)
+    selected_keys = tuple(
+        tuple(str(part) for part in key)
+        for key in (selected_filter_keys or ())
+        if isinstance(key, (list, tuple)) and len(key) == len(columns)
+    )
+    if normalized_column_filters or raw_expression:
         mask = pd.Series(True, index=dataframe.index)
         for column_filter in normalized_column_filters:
             column_mask = pd.Series(True, index=dataframe.index)
@@ -2827,30 +2836,52 @@ def apply_tabular_row_filter(
             if column_filter.has_numeric_filter:
                 column_mask &= _tabular_numeric_filter_mask(dataframe[column_filter.column], column_filter)
             mask &= column_mask.fillna(False)
+        if raw_expression:
+            if _parse_grouping_filter_expression is None:
+                raise RuntimeError(
+                    "CSV/Excel row filter expressions require "
+                    "metroliza.shared.grouping_filter_core.parse_filter_expression."
+                )
+            parsed_expression = _parse_grouping_filter_expression(
+                raw_expression,
+                dataframe.columns,
+                aliases=row_filter_aliases,
+            )
+            mask &= parsed_expression.mask(dataframe).fillna(False)
+        if columns and selected_keys:
+            grouped = filter_csv_summary_by_group_keys(dataframe, columns, selected_keys)
+            mask &= dataframe.index.isin(grouped.index)
         filtered = dataframe.loc[mask].copy()
         output_count = int(len(filtered.index))
+        context: dict[str, Any] = {
+            "input_row_count": input_count,
+            "output_row_count": output_count,
+        }
+        if normalized_column_filters:
+            context["column_filters"] = [
+                {
+                    "column": item.column,
+                    "selected_value_count": len(item.selected_values),
+                    "date_mode": item.date_mode,
+                    "date_from": item.date_from,
+                    "date_to": item.date_to,
+                    "date_operator": item.date_operator,
+                    "date_value": item.date_value,
+                    "numeric_operator": item.numeric_operator,
+                    "numeric_value": _parse_tabular_filter_number(item.numeric_value),
+                }
+                for item in normalized_column_filters
+            ]
+        if raw_expression:
+            context["row_filter_expression"] = raw_expression
+        if columns and selected_keys:
+            context["filter_columns"] = list(columns)
+            context["selected_filter_count"] = len(selected_keys)
         diagnostic = ProductionAnalyticsDiagnostic(
             severity="info",
             code="tabular_filters_applied",
             message=f"CSV/Excel row filter reduced rows from {input_count} to {output_count}.",
-            context={
-                "column_filters": [
-                    {
-                        "column": item.column,
-                        "selected_value_count": len(item.selected_values),
-                        "date_mode": item.date_mode,
-                        "date_from": item.date_from,
-                        "date_to": item.date_to,
-                        "date_operator": item.date_operator,
-                        "date_value": item.date_value,
-                        "numeric_operator": item.numeric_operator,
-                        "numeric_value": _parse_tabular_filter_number(item.numeric_value),
-                    }
-                    for item in normalized_column_filters
-                ],
-                "input_row_count": input_count,
-                "output_row_count": output_count,
-            },
+            context=context,
         )
         return TabularFilterResult(
             dataframe=_project_tabular_dataframe(filtered, required_columns).reset_index(drop=True),
@@ -2860,12 +2891,6 @@ def apply_tabular_row_filter(
             output_row_count=output_count,
         )
 
-    columns = tuple(column for column in (filter_columns or ()) if column in dataframe.columns)
-    selected_keys = tuple(
-        tuple(str(part) for part in key)
-        for key in (selected_filter_keys or ())
-        if isinstance(key, (list, tuple)) and len(key) == len(columns)
-    )
     if not columns or not selected_keys:
         return TabularFilterResult(
             dataframe=_project_tabular_dataframe(dataframe, required_columns),
@@ -2902,6 +2927,8 @@ def materialize_tabular_dataframe(
     filter_columns: tuple[str, ...] | list[str] | None = None,
     selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
     column_filters: tuple[TabularColumnFilter, ...] | list[TabularColumnFilter] | None = None,
+    row_filter_expression: str | None = None,
+    row_filter_aliases: Mapping[str, str] | None = None,
     required_columns: tuple[str, ...] | list[str] | None = None,
 ) -> TabularFilterResult:
     """Return rows for analytics, using SQLite pushdown when the load result has a store."""
@@ -2912,6 +2939,8 @@ def materialize_tabular_dataframe(
             filter_columns=filter_columns,
             selected_filter_keys=selected_filter_keys,
             column_filters=column_filters,
+            row_filter_expression=row_filter_expression,
+            row_filter_aliases=row_filter_aliases or loaded.column_mapping,
             required_columns=required_columns,
         )
 
@@ -2919,6 +2948,7 @@ def materialize_tabular_dataframe(
         loaded.sqlite_store.columns,
         column_filters,
     )
+    raw_expression = str(row_filter_expression or "").strip()
     legacy_columns = tuple(
         column for column in (filter_columns or ()) if column in loaded.sqlite_store.columns
     )
@@ -2927,11 +2957,13 @@ def materialize_tabular_dataframe(
         for key in (selected_filter_keys or ())
         if isinstance(key, (list, tuple)) and len(key) == len(legacy_columns)
     )
-    is_applied = bool(normalized_filters or (legacy_columns and legacy_keys))
+    is_applied = bool(normalized_filters or raw_expression or (legacy_columns and legacy_keys))
     dataframe = loaded.sqlite_store.read_dataframe(
         filter_columns=legacy_columns,
         selected_filter_keys=legacy_keys,
         column_filters=normalized_filters,
+        grouping_filter_expression=raw_expression,
+        grouping_filter_aliases=row_filter_aliases or loaded.column_mapping,
         columns=required_columns,
     )
     input_count = int(loaded.sqlite_store.row_count)
@@ -2957,7 +2989,9 @@ def materialize_tabular_dataframe(
                 }
                 for item in normalized_filters
             ]
-        else:
+        if raw_expression:
+            context["row_filter_expression"] = raw_expression
+        if not normalized_filters and legacy_columns and legacy_keys:
             context["filter_columns"] = list(legacy_columns)
             context["selected_filter_count"] = len(legacy_keys)
         diagnostics = (
@@ -2983,6 +3017,8 @@ def count_tabular_materialized_rows(
     filter_columns: tuple[str, ...] | list[str] | None = None,
     selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
     column_filters: tuple[TabularColumnFilter, ...] | list[TabularColumnFilter] | None = None,
+    row_filter_expression: str | None = None,
+    row_filter_aliases: Mapping[str, str] | None = None,
 ) -> int:
     """Count rows matching CSV Summary filters without loading every row when possible."""
 
@@ -2991,6 +3027,8 @@ def count_tabular_materialized_rows(
             filter_columns=filter_columns,
             selected_filter_keys=selected_filter_keys,
             column_filters=column_filters,
+            grouping_filter_expression=str(row_filter_expression or "").strip(),
+            grouping_filter_aliases=row_filter_aliases or loaded.column_mapping,
         )
     return int(
         len(
@@ -2999,6 +3037,8 @@ def count_tabular_materialized_rows(
                 filter_columns=filter_columns,
                 selected_filter_keys=selected_filter_keys,
                 column_filters=column_filters,
+                row_filter_expression=row_filter_expression,
+                row_filter_aliases=row_filter_aliases or loaded.column_mapping,
             ).dataframe.index
         )
     )

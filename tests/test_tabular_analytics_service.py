@@ -1088,6 +1088,37 @@ def test_apply_tabular_row_filter_supports_numeric_comparisons_and_ignores_non_n
     assert filtered.diagnostics[0].context["column_filters"][1]["numeric_operator"] == ">"
 
 
+def test_apply_tabular_row_filter_supports_magic_expression_integer_and_range_shorthand(
+    tmp_path,
+) -> None:
+    input_file = tmp_path / "expression_filters.csv"
+    pd.DataFrame(
+        {
+            "Param1": [3999, 4000, 4000.0, 4500, 5000, 5001, "text"],
+            "TraceCode": ["TC-001", "TC-002", "TC-003", "TC-004", "TC-005", "TC-006", "TC-007"],
+        }
+    ).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file)
+
+    integer_result = apply_tabular_row_filter(
+        loaded.dataframe,
+        row_filter_expression="Param1 > 4000",
+    )
+    decimal_result = apply_tabular_row_filter(
+        loaded.dataframe,
+        row_filter_expression="Param1 > 4000.0",
+    )
+    range_result = apply_tabular_row_filter(
+        loaded.dataframe,
+        row_filter_expression="Param1 > 4000 and < 5000",
+    )
+
+    assert integer_result.dataframe["tracecode"].tolist() == decimal_result.dataframe["tracecode"].tolist()
+    assert integer_result.dataframe["tracecode"].tolist() == ["TC-004", "TC-005", "TC-006"]
+    assert range_result.dataframe["tracecode"].tolist() == ["TC-004"]
+    assert range_result.diagnostics[0].context["row_filter_expression"] == "Param1 > 4000 and < 5000"
+
+
 def test_sqlite_tabular_numeric_filters_match_expected_rows(tmp_path) -> None:
     input_file = tmp_path / "numeric_filters_sqlite.csv"
     pd.DataFrame(
@@ -1119,6 +1150,43 @@ def test_sqlite_tabular_numeric_filters_match_expected_rows(tmp_path) -> None:
             loaded,
             column_filters=(TabularColumnFilter("value2", numeric_operator=">", numeric_value="1"),),
         ) == 3
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+
+def test_sqlite_tabular_row_filter_expression_matches_integer_decimal_and_shorthand(
+    tmp_path,
+) -> None:
+    input_file = tmp_path / "numeric_expression_sqlite.csv"
+    pd.DataFrame(
+        {
+            "Param1": [3999, 4000, 4000.0, 4500, 5000, 5001, "text"],
+            "TraceCode": ["TC-001", "TC-002", "TC-003", "TC-004", "TC-005", "TC-006", "TC-007"],
+        }
+    ).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file, force_sqlite=True)
+    try:
+        integer_result = materialize_tabular_dataframe(
+            loaded,
+            row_filter_expression="Param1 > 4000",
+        )
+        decimal_result = materialize_tabular_dataframe(
+            loaded,
+            row_filter_expression="Param1 > 4000.0",
+        )
+        range_result = materialize_tabular_dataframe(
+            loaded,
+            row_filter_expression="Param1 > 4000 and < 5000",
+        )
+
+        assert integer_result.dataframe["tracecode"].tolist() == decimal_result.dataframe["tracecode"].tolist()
+        assert integer_result.dataframe["tracecode"].tolist() == ["TC-004", "TC-005", "TC-006"]
+        assert range_result.dataframe["tracecode"].tolist() == ["TC-004"]
+        assert count_tabular_materialized_rows(
+            loaded,
+            row_filter_expression="Param1 > 4000 and < 5000",
+        ) == 1
+        assert range_result.diagnostics[0].context["row_filter_expression"] == "Param1 > 4000 and < 5000"
     finally:
         cleanup_tabular_load_result(loaded)
 

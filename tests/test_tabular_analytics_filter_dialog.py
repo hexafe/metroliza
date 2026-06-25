@@ -181,6 +181,30 @@ def test_filter_dialog_returns_selected_tracecode_keys(tmp_path) -> None:
         dialog.close()
 
 
+def test_filter_dialog_magic_expression_counts_and_clears(tmp_path) -> None:
+    _app()
+    loaded = _sample_loaded_table(tmp_path)
+
+    dialog = TabularAnalyticsFilterDialog(
+        dataframe=loaded.dataframe,
+        column_mapping=loaded.column_mapping,
+        filter_expression="Length mm > 10.1 and < 10.5",
+    )
+    try:
+        dialog._sync_status_now()
+
+        assert dialog.get_filter_expression() == "Length mm > 10.1 and < 10.5"
+        assert dialog.get_column_filters() == ()
+        assert dialog.status_label.text() == "Magic filter, 2 rows"
+
+        dialog.clear_filter()
+
+        assert dialog.get_filter_expression() == ""
+        assert dialog.status_label.text() == "No row filter selected"
+    finally:
+        dialog.close()
+
+
 def test_filter_dialog_keeps_independent_value_choices_per_selected_column(tmp_path) -> None:
     _app()
     loaded = _sample_loaded_table(tmp_path)
