@@ -224,14 +224,32 @@ def test_parse_filter_expression_treats_integer_literals_as_numbers_and_supports
     decimal_literal = parse_filter_expression("Param1 > 4000.0", frame.columns)
     shorthand_range = parse_filter_expression("Param1 > 4000 and < 5000", frame.columns)
     explicit_range = parse_filter_expression("Param1 > 4000 and Param1 < 5000", frame.columns)
+    contradictory_range = parse_filter_expression("param1 > 200 and < 150.2", frame.columns)
 
     assert isinstance(integer_literal.specs[0], NumberFilterSpec)
     assert integer_literal.mask(frame).tolist() == decimal_literal.mask(frame).tolist()
     assert shorthand_range.mask(frame).tolist() == explicit_range.mask(frame).tolist()
     assert shorthand_range.mask(frame).tolist() == [False, False, False, True, False, False, False]
+    assert contradictory_range.mask(frame).tolist() == [False, False, False, False, False, False, False]
 
     with pytest.raises(ValueError, match="Missing field name"):
         parse_filter_expression("(Param1 > 4000 or Param1 < 0) and < 5000", frame.columns)
+
+
+def test_parse_filter_expression_operators_and_in_are_case_insensitive() -> None:
+    frame = pd.DataFrame(
+        {
+            "Param1": [100, 250, 300, 450],
+            "Part": ["body-pre", "CAP", "nut", "gear"],
+            "TraceCode": ["TC-001", "TC-002", "TC-003", "TC-004"],
+        }
+    )
+
+    mixed_case = parse_filter_expression("part in (BODY*, cap) oR PARAM1 < 200", frame.columns)
+    not_in = parse_filter_expression("Part NoT In (body*, CAP) aNd Param1 >= 300", frame.columns)
+
+    assert mixed_case.mask(frame).tolist() == [True, True, False, False]
+    assert not_in.mask(frame).tolist() == [False, False, True, True]
 
 
 def test_parse_filter_expression_supports_nested_mixed_and_or() -> None:

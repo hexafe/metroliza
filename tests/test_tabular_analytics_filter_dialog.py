@@ -188,12 +188,12 @@ def test_filter_dialog_magic_expression_counts_and_clears(tmp_path) -> None:
     dialog = TabularAnalyticsFilterDialog(
         dataframe=loaded.dataframe,
         column_mapping=loaded.column_mapping,
-        filter_expression="Length mm > 10.1 and < 10.5",
+        filter_expression="length mm > 10.1 AND < 10.5",
     )
     try:
         dialog._sync_status_now()
 
-        assert dialog.get_filter_expression() == "Length mm > 10.1 and < 10.5"
+        assert dialog.get_filter_expression() == "length mm > 10.1 AND < 10.5"
         assert dialog.get_column_filters() == ()
         assert dialog.status_label.text() == "Magic filter, 2 rows"
 

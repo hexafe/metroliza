@@ -244,6 +244,61 @@ def test_measurement_expression_filters_duplicate_dimension_by_reference(tmp_pat
     assert rows[0][18] == "VAL1"
 
 
+def test_measurement_expression_supports_case_insensitive_fields_operators_and_shorthand(
+    tmp_path,
+):
+    db_path = tmp_path / "measurements.db"
+    with sqlite3.connect(db_path) as conn:
+        _create_measurement_export_table(conn)
+        placeholders = ", ".join("?" for _column in _MEASUREMENT_EXPORT_TEST_COLUMNS)
+        conn.executemany(
+            f"INSERT INTO vw_measurement_export VALUES ({placeholders})",
+            [
+                _measurement_row(
+                    report_id="1",
+                    measurement_id="1",
+                    reference="REF1",
+                    header="VAL1",
+                    meas="100",
+                ),
+                _measurement_row(
+                    report_id="2",
+                    measurement_id="2",
+                    reference="REF2",
+                    header="VAL2",
+                    meas="250",
+                ),
+                _measurement_row(
+                    report_id="3",
+                    measurement_id="3",
+                    reference="REF3",
+                    header="VAL3",
+                    meas="300",
+                ),
+            ],
+        )
+        contradiction = conn.execute(
+            build_measurement_filter_query(expression_text="meas > 200 and < 150.2")
+        ).fetchall()
+        mixed_case = conn.execute(
+            build_measurement_filter_query(
+                expression_text="MEAS in (250, 300) oR reference=ref1"
+            )
+        ).fetchall()
+
+    assert contradiction == []
+    assert [row[0] for row in mixed_case] == ["1", "2", "3"]
+
+
+def test_measurement_expression_rejects_unknown_source_columns():
+    try:
+        build_measurement_expression_clause("Param1 > 200 and < 150.2")
+    except KeyError as exc:
+        assert "Param1" in str(exc)
+    else:
+        raise AssertionError("Export filter expressions must reject unknown CMM fields")
+
+
 def test_build_measurement_expression_clause_supports_boolean_wildcards_and_aliases():
     clause = build_measurement_expression_clause(
         "Reference=REF1 AND (Dimension=VAL1 OR Axis IN (X*, Y))"

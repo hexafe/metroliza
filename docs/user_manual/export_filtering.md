@@ -71,6 +71,9 @@ Common expression fields:
 - `File`
 
 The expression supports `=`, `!=`, `<`, `<=`, `>`, `>=`, `IN`, `NOT IN`, `AND`, `OR`, parentheses, and `*` wildcards.
+Field names and operators are not case-sensitive, so `Meas`, `meas`, `AND`, `and`, `IN`, and `in` are interpreted the same way. Text values are also matched without case sensitivity by default.
+
+When you repeat a comparison after `AND`, Metroliza reuses the previous field name. For example, `Meas > 200 and < 150.2` is accepted as `Meas > 200 AND Meas < 150.2`. Because those two limits conflict, the filter is valid but matches zero rows.
 
 Examples:
 
@@ -78,6 +81,7 @@ Examples:
 - `Reference IN (REF1, REF2) AND Dimension=VAL1`
 - `Header IN (VAL1, VAL2) AND Status=NOK`
 - `Reference=REF1 AND Axis=X*`
+- `meas > 200 and < 150.2`
 
 If the expression is invalid, the dialog keeps the filter open and shows the error in the summary line.
 

@@ -1112,10 +1112,20 @@ def test_apply_tabular_row_filter_supports_magic_expression_integer_and_range_sh
         loaded.dataframe,
         row_filter_expression="Param1 > 4000 and < 5000",
     )
+    lower_field_contradiction = apply_tabular_row_filter(
+        loaded.dataframe,
+        row_filter_expression="param1 > 200 and < 150.2",
+    )
+    mixed_case_operators = apply_tabular_row_filter(
+        loaded.dataframe,
+        row_filter_expression="tracecode in (tc-004, TC-006) oR PARAM1 < 4000",
+    )
 
     assert integer_result.dataframe["tracecode"].tolist() == decimal_result.dataframe["tracecode"].tolist()
     assert integer_result.dataframe["tracecode"].tolist() == ["TC-004", "TC-005", "TC-006"]
     assert range_result.dataframe["tracecode"].tolist() == ["TC-004"]
+    assert lower_field_contradiction.dataframe["tracecode"].tolist() == []
+    assert mixed_case_operators.dataframe["tracecode"].tolist() == ["TC-001", "TC-004", "TC-006"]
     assert range_result.diagnostics[0].context["row_filter_expression"] == "Param1 > 4000 and < 5000"
 
 
@@ -1178,14 +1188,28 @@ def test_sqlite_tabular_row_filter_expression_matches_integer_decimal_and_shorth
             loaded,
             row_filter_expression="Param1 > 4000 and < 5000",
         )
+        lower_field_contradiction = materialize_tabular_dataframe(
+            loaded,
+            row_filter_expression="param1 > 200 and < 150.2",
+        )
+        mixed_case_operators = materialize_tabular_dataframe(
+            loaded,
+            row_filter_expression="tracecode in (tc-004, TC-006) oR PARAM1 < 4000",
+        )
 
         assert integer_result.dataframe["tracecode"].tolist() == decimal_result.dataframe["tracecode"].tolist()
         assert integer_result.dataframe["tracecode"].tolist() == ["TC-004", "TC-005", "TC-006"]
         assert range_result.dataframe["tracecode"].tolist() == ["TC-004"]
+        assert lower_field_contradiction.dataframe["tracecode"].tolist() == []
+        assert mixed_case_operators.dataframe["tracecode"].tolist() == ["TC-001", "TC-004", "TC-006"]
         assert count_tabular_materialized_rows(
             loaded,
             row_filter_expression="Param1 > 4000 and < 5000",
         ) == 1
+        assert count_tabular_materialized_rows(
+            loaded,
+            row_filter_expression="param1 > 200 and < 150.2",
+        ) == 0
         assert range_result.diagnostics[0].context["row_filter_expression"] == "Param1 > 4000 and < 5000"
     finally:
         cleanup_tabular_load_result(loaded)

@@ -109,6 +109,15 @@ The filter dialog lets you add source columns, search column names, and select m
 value combinations such as `TraceCode | Batch`. Filtering is applied before grouping,
 aggregation, charts, groupstats, dashboard output, and workbook output.
 
+Use **Magic filter** in the same dialog when you need a typed expression instead of value
+selection. The expression syntax supports `=`, `!=`, `<`, `<=`, `>`, `>=`, `IN`, `NOT IN`,
+`AND`, `OR`, parentheses, and `*` wildcards. Field names and operators are not
+case-sensitive, so `Param1`, `param1`, `AND`, `and`, `IN`, and `in` are interpreted the
+same way. Text values are matched without case sensitivity by default. Repeated
+comparisons after `AND` reuse the previous field name: `Param1 > 200 and < 150.2` is
+accepted as `Param1 > 200 AND Param1 < 150.2`, which is valid syntax and returns zero rows
+because the two limits conflict.
+
 ### 3. Review And Choose Metrics
 
 Metroliza detects numeric-looking columns automatically after you choose the input file.
@@ -136,6 +145,7 @@ Use the matching-row search field either as a normal value search or as a row fi
 text searches visible value labels. Expressions such as `Supplier=SUPPLIER AND Value > 1`
 filter the source rows. Text filters support `*` wildcards, and `IN` lists can match
 several values at once, such as `Part IN (body*, cap)` or `Sample IN (1, 2, 3)`.
+Field names and operators in these expressions are not case-sensitive.
 **Assign all filtered rows** applies that current search or filter across all matching pages.
 
 The selected groups are written as the `GROUP` column and are used by aggregation, charts,

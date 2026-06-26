@@ -122,8 +122,8 @@ python -m maturin build --manifest-path src/metroliza/native/distribution_fit_ad
 
 ### 2026.06 RC1 realtime industrial tester evidence
 
-Current validation branch: `feature/realtime-industrial-ml-anomaly`.
-Current RC metadata: `2026.06rc2(260623)`.
+Current validation branch: `rc2`.
+Current RC metadata: `2026.06rc2(260626)`.
 
 - Local realtime/anomaly tester-build evidence is recorded in
   [`realtime_industrial_rollout_checklist.md`](./realtime_industrial_rollout_checklist.md).
@@ -200,6 +200,20 @@ Current RC metadata: `2026.06rc2(260623)`.
   the full industrial append shard rerun passed (`79 passed`).
   The before/after benchmark set is recorded in
   [`rc2_pandas_free_sqlite_performance_2026-06-23.md`](./rc2_pandas_free_sqlite_performance_2026-06-23.md).
+- 2026-06-26 magic-filter syntax closeout is included in build `260626`.
+  CSV/Excel Magic filter, SQLite-backed tabular filtering, the shared parser,
+  and Export CMM SQL filters now have explicit regression coverage for
+  case-insensitive field names, case-insensitive `AND`/`OR`/`IN`/`NOT IN`
+  operators, and repeated-field shorthand ranges such as
+  `Param1 > 200 and < 150.2`. Export documentation uses the CMM field `Meas`
+  for the equivalent filter because source-file columns such as `Param1` only
+  exist in CSV/Excel workflows. Local validation passed for focused
+  filter/metadata tests (`107 passed, 1 warning`), docs/CI policy tests
+  (`18 passed`), Ruff, compileall, release metadata sync, release hygiene,
+  security audit with no known vulnerabilities, and full offscreen pytest with
+  coverage (`2243 passed, 323 skipped, 114 warnings, 83 subtests passed`).
+  Final GitHub Actions CI for build `260626` is pending until the rc2 push
+  completes.
 - Pushed GitHub CI passed for build `260623` commit
   `4a9f159a8c6a77a824a7170b61f0877f08978984` in run
   [`28035951993`](https://github.com/hexafe/metroliza/actions/runs/28035951993):
