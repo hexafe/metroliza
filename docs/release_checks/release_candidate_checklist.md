@@ -212,8 +212,13 @@ Current RC metadata: `2026.06rc2(260626)`.
   (`18 passed`), Ruff, compileall, release metadata sync, release hygiene,
   security audit with no known vulnerabilities, and full offscreen pytest with
   coverage (`2243 passed, 323 skipped, 114 warnings, 83 subtests passed`).
-  Final GitHub Actions CI for build `260626` is pending until the rc2 push
-  completes.
+  Pushed GitHub Actions CI passed for commit
+  `a7e1ab0b2bf7612e2d44a907b88d00db87ae3e02` in run
+  [`28220479719`](https://github.com/hexafe/metroliza/actions/runs/28220479719):
+  Static checks, Unit tests with combined coverage, Native wheel build and
+  smoke checks, CMM parser perf guardrail, and Performance benchmark trend
+  check all passed. Manual/opt-in Packaging smoke, Windows startup benchmark,
+  and Google conversion smoke were skipped and remain release-promotion gates.
 - Pushed GitHub CI passed for build `260623` commit
   `4a9f159a8c6a77a824a7170b61f0877f08978984` in run
   [`28035951993`](https://github.com/hexafe/metroliza/actions/runs/28035951993):
