@@ -6,7 +6,7 @@ from metroliza.industrial.industrial_data_schema import SCHEMA_VERSION, ensure_i
 from metroliza.industrial.realtime.offset_store import StreamOffsetStore
 
 
-def test_realtime_schema_creates_v5_tables_and_indexes_idempotently(tmp_path):
+def test_realtime_schema_creates_v6_tables_and_indexes_idempotently(tmp_path):
     db_path = str(tmp_path / "realtime.db")
     ensure_industrial_data_schema(db_path)
     ensure_industrial_data_schema(db_path)
@@ -27,7 +27,7 @@ def test_realtime_schema_creates_v5_tables_and_indexes_idempotently(tmp_path):
         ).fetchall()
 
     assert len(schema_version_rows) == 1
-    assert schema_version_rows[0][0] == SCHEMA_VERSION == "industrial_data_v5"
+    assert schema_version_rows[0][0] == SCHEMA_VERSION == "industrial_data_v6"
     assert {
         "industrial_realtime_monitor_configs",
         "industrial_stream_offsets",
@@ -36,6 +36,8 @@ def test_realtime_schema_creates_v5_tables_and_indexes_idempotently(tmp_path):
         "industrial_detector_configs",
         "industrial_baselines",
         "industrial_anomaly_events",
+        "industrial_realtime_stream_events",
+        "industrial_realtime_consumer_offsets",
     }.issubset(tables)
     assert {
         "idx_industrial_realtime_monitor_configs_enabled",
@@ -46,7 +48,12 @@ def test_realtime_schema_creates_v5_tables_and_indexes_idempotently(tmp_path):
         "idx_industrial_anomaly_events_signal_time",
         "idx_industrial_anomaly_events_severity_status_time",
         "idx_industrial_anomaly_events_detector_time",
+        "idx_industrial_realtime_stream_events_source_stream_idempotency_key",
+        "idx_industrial_realtime_stream_events_source_stream_id",
+        "idx_industrial_realtime_consumer_offsets_unique",
+        "idx_industrial_realtime_consumer_offsets_stream",
     }.issubset(indexes)
+    assert "idx_industrial_realtime_stream_events_idempotency_key" not in indexes
 
 
 def test_realtime_schema_preserves_existing_industrial_cache_tables(tmp_path):

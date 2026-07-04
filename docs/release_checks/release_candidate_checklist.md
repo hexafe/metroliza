@@ -116,6 +116,13 @@ python -m maturin build --manifest-path src/metroliza/native/distribution_fit_ad
 
 - [x] GitHub CI checks for pushed `2026.06rc1(260614)` commit `307acd16031c5622093ba52a9a64d2b2146d7f02` are green: run [`27506446912`](https://github.com/hexafe/metroliza/actions/runs/27506446912). *(Owner: Release owner)*
 - [x] GitHub CI checks for pushed `2026.06rc1(260615)` commit `3f26438d473bd6941606d3cf949f2e7782276763` are green before tag/promotion: run [`27570794579`](https://github.com/hexafe/metroliza/actions/runs/27570794579). *(Owner: Release owner)*
+- [x] 2026-07-04 SQLite realtime event-stream local gates passed: focused
+      realtime/UI/schema tests (`40 passed`), full Ruff, compileall, release
+      metadata sync, release hygiene, security audit with no known
+      vulnerabilities, and full offscreen pytest with coverage (`2253 passed,
+      324 skipped, 114 warnings, 83 subtests passed`). Pushed CI for this
+      event-stream closeout is pending on the current branch commit. *(Owner:
+      Dev/QA)*
 - [ ] CMM parser perf gate evidence (`cmm-parser-perf-gate` + `cmm-parser-perf-artifacts`) is reviewed when parser/backend changes are present; triage follows [`cmm_parser_perf_guardrail.md`](./cmm_parser_perf_guardrail.md). *(Owner: Release owner/QA)*
 - [ ] Coverage threshold from `unit-tests` passes, and `unit-test-coverage` artifact `coverage.xml` is reviewed as RC confidence evidence. *(Owner: Release owner/QA)*
 - [ ] Manual release smoke evidence is linked before open-testing promotion when applicable. Google conversion smoke is release-blocking for promoted RC artifacts; skipped default CI does not satisfy that gate. *(Owner: Release owner)*

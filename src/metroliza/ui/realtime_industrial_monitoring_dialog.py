@@ -644,7 +644,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
     def _on_poll_results(self, results: tuple[Any, ...]) -> None:
         self.last_poll_results = tuple(results or ())
         self._populate_result_table(self.last_poll_results)
-        failed = [result for result in self.last_poll_results if getattr(result, "status", "") == "failed"]
+        failed = [result for result in self.last_poll_results if _result_has_actionable_failure(result)]
         inserted = sum(int(getattr(result, "samples_inserted", 0) or 0) for result in self.last_poll_results)
         event_count = sum(
             int(getattr(result, "detector_events_created", 0) or 0) for result in self.last_poll_results
@@ -674,7 +674,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             values = (
                 profile_names.get(getattr(result, "source_profile_id", None), "Unknown source"),
                 getattr(result, "stream_key", ""),
-                getattr(result, "status", ""),
+                _result_status(result),
                 _result_stage(result),
                 str(getattr(result, "rows_fetched", 0)),
                 str(getattr(result, "samples_inserted", 0)),
@@ -925,7 +925,24 @@ def _format_lag(value: Any) -> str:
 def _result_stage(result: Any) -> str:
     diagnostics = _safe_result_diagnostics(result)
     stage = diagnostics.get("stage") or diagnostics.get("failure_stage")
+    if not stage and _detector_consumer_failed(result):
+        stage = "detector_consumer"
     return redact_sensitive_text(stage, max_len=80) if stage else ""
+
+
+def _result_status(result: Any) -> str:
+    status = getattr(result, "status", "") or ""
+    if status != "failed" and _detector_consumer_failed(result):
+        return "completed_with_warnings"
+    return str(status)
+
+
+def _detector_consumer_failed(result: Any) -> bool:
+    return str(getattr(result, "detector_consumer_status", "") or "").lower() == "failed"
+
+
+def _result_has_actionable_failure(result: Any) -> bool:
+    return str(getattr(result, "status", "") or "").lower() == "failed" or _detector_consumer_failed(result)
 
 
 def _result_cursor(result: Any) -> str:
@@ -956,7 +973,11 @@ def _result_query_reference(result: Any) -> str:
 
 def _result_error(result: Any) -> str:
     diagnostics = _safe_result_diagnostics(result)
-    error = getattr(result, "error", None) or diagnostics.get("error")
+    error = (
+        getattr(result, "error", None)
+        or diagnostics.get("error")
+        or getattr(result, "detector_consumer_error", None)
+    )
     return redact_sensitive_text(error, max_len=180) if error else ""
 
 
@@ -1033,7 +1054,7 @@ def _format_results_for_diagnostics(results: tuple[Any, ...]) -> str:
             " | ".join(
                 (
                     f"stream={getattr(result, 'stream_key', '')}",
-                    f"status={getattr(result, 'status', '')}",
+                    f"status={_result_status(result)}",
                     f"stage={_result_stage(result)}",
                     f"rows={getattr(result, 'rows_fetched', 0)}",
                     f"cursor={_result_cursor(result)}",

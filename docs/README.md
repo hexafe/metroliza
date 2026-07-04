@@ -34,6 +34,7 @@ This directory contains active operational, maintenance, and end-user documentat
 - `roadmaps/OCR_BENCHMARKING_MASTER.md` — canonical OCR benchmarking, acceleration, privacy, and next-session handoff.
 - `roadmaps/OZNAK_PRODUCTION_ANALYTICS_IMPLEMENTATION_PLAN.md` — active production-analytics roadmap using canonical `src/metroliza/*` implementation paths.
 - `roadmaps/realtime_industrial_monitoring_plan.md` — active rollout plan for realtime industrial monitoring source safety, replay, operator workflow, and rollback.
+- `roadmaps/sqlite_realtime_event_stream.md` — local SQLite event-log design for realtime industrial sample, detector, replay, and consumer orchestration.
 - `roadmaps/PLOTSTATS_CENTRALIZATION_IMPLEMENTATION_PLAN.md` — future implementation plan for moving reusable Metroliza plot definitions into `hexafe-plotstats`.
 - `roadmaps/static_population_layer_dashboard_plan.md` — completed implementation record for static large-group layer optimization in large HTML dashboards.
 - `roadmaps/directory_reorganization_long_term.md` — completed directory reorganization record for the canonical `src/metroliza/` layout, legacy shims, packaging guardrails, and validation evidence.
@@ -55,6 +56,7 @@ pre-reorganization context and must be refreshed against canonical
 | `roadmaps/full_module_audit_2026_06.md` | Active | Full-module audit matrix for parser/report persistence, export/charting, CSV Summary, UI/UX, CI, packaging, and release gates. |
 | `roadmaps/OZNAK_PRODUCTION_ANALYTICS_IMPLEMENTATION_PLAN.md` | Active | Production and tabular analytics roadmap; paths are canonicalized to `src/metroliza/*`. |
 | `roadmaps/realtime_industrial_monitoring_plan.md` | Active | Realtime industrial monitoring rollout plan for source safety, replay, operator workflow, and rollback. |
+| `roadmaps/sqlite_realtime_event_stream.md` | Active | SQLite-backed local event stream and consumer-offset design for realtime industrial monitoring. |
 | `roadmaps/OCR_BENCHMARKING_MASTER.md` | Active | OCR benchmarking and acceleration handoff; new work follows the post-reorganization path policy. |
 | `roadmaps/static_population_layer_dashboard_plan.md` | Completed record | Static large-group layer optimization closeout for large CSV Summary dashboards and shared dashboard renderer parity. |
 | `roadmaps/PLOTSTATS_CENTRALIZATION_IMPLEMENTATION_PLAN.md` | Future active | Plotstats boundary migration plan. |
@@ -104,7 +106,7 @@ The legacy `docs/group_analysis/user_manual.md` path is retained only as a redir
 
 Canonical release operations docs (release gate/source-of-truth set):
 
-- `release_checks/release_status.md` — current release operational status and entry-point links, including build `260626` magic-filter syntax evidence.
+- `release_checks/release_status.md` — current release operational status and entry-point links, including build `260626` magic-filter syntax and SQLite realtime event-stream evidence.
 - `release_checks/release_candidate_checklist.md` — primary RC gate checklist and required sign-offs.
 - `release_checks/open_testing_runbook.md` — open-testing execution runbook and evidence expectations.
 - `release_checks/branching_strategy.md` — authoritative branch naming/rules used during release work.

@@ -311,6 +311,14 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
                 'idx_industrial_anomaly_events_status_time_desc',
                 'idx_industrial_anomaly_events_signal_status_time_desc',
                 'idx_industrial_anomaly_events_sample_detector_unique',
+                'idx_industrial_realtime_stream_events_source_stream_idempotency_key',
+                'idx_industrial_realtime_stream_events_source_stream_id',
+                'idx_industrial_realtime_stream_events_type_time',
+                'idx_industrial_realtime_stream_events_sample',
+                'idx_industrial_realtime_stream_events_anomaly',
+                'idx_industrial_realtime_consumer_offsets_unique',
+                'idx_industrial_realtime_consumer_offsets_stream',
+                'idx_industrial_realtime_consumer_offsets_status',
             }
             self.assertEqual(actual_index_names, expected_index_names)
 

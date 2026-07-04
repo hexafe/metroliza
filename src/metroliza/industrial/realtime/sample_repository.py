@@ -195,6 +195,53 @@ class RealtimeSampleRepository:
 
         return run_transaction_with_retry(self.database, _get, connection=self.connection)
 
+    def list_signal_definitions_by_ids(
+        self,
+        signal_ids: Iterable[int],
+        *,
+        chunk_size: int = 500,
+    ) -> list[SignalDefinition]:
+        """Load specific signal definitions without scanning every source profile."""
+
+        self.ensure_schema()
+        unique_ids = tuple(dict.fromkeys(int(signal_id) for signal_id in signal_ids))
+        if not unique_ids:
+            return []
+        chunk_size = max(1, int(chunk_size))
+
+        def _list(cursor) -> list[SignalDefinition]:
+            signals: list[SignalDefinition] = []
+            for offset in range(0, len(unique_ids), chunk_size):
+                chunk = unique_ids[offset : offset + chunk_size]
+                placeholders = ", ".join("?" for _ in chunk)
+                cursor.execute(
+                    f"""
+                    SELECT
+                        id,
+                        source_profile_id,
+                        signal_key,
+                        metric_name,
+                        unit,
+                        nominal,
+                        lsl,
+                        usl,
+                        lower_warning,
+                        upper_warning,
+                        segment_fields_json,
+                        enabled,
+                        created_at,
+                        updated_at
+                    FROM industrial_signal_definitions
+                    WHERE id IN ({placeholders})
+                    ORDER BY id ASC
+                    """,
+                    chunk,
+                )
+                signals.extend(_signal_definition_from_row(row) for row in cursor.fetchall())
+            return signals
+
+        return run_transaction_with_retry(self.database, _list, connection=self.connection)
+
     def insert_samples(self, samples: Iterable[IndustrialSample]) -> SampleBatchResult:
         self.ensure_schema()
         sample_batch = tuple(samples)
@@ -451,6 +498,25 @@ def _lookup_sample_ids(cursor, samples: tuple[IndustrialSample, ...]) -> list[in
     rows = cursor.fetchall()
     cursor.execute("DROP TABLE IF EXISTS temp._metroliza_sample_key_lookup")
     return [int(row[1]) for row in rows]
+
+
+def _signal_definition_from_row(row: tuple[Any, ...]) -> SignalDefinition:
+    return SignalDefinition(
+        id=int(row[0]),
+        source_profile_id=int(row[1]),
+        signal_key=str(row[2]),
+        metric_name=str(row[3]),
+        unit=row[4],
+        nominal=float(row[5]) if row[5] is not None else None,
+        lsl=float(row[6]) if row[6] is not None else None,
+        usl=float(row[7]) if row[7] is not None else None,
+        lower_warning=float(row[8]) if row[8] is not None else None,
+        upper_warning=float(row[9]) if row[9] is not None else None,
+        segment_fields=tuple(from_json(row[10], [])),
+        enabled=bool(row[11]),
+        created_at=str(row[12]),
+        updated_at=str(row[13]),
+    )
 
 
 def _sample_from_row(row: tuple[Any, ...]) -> IndustrialSample:

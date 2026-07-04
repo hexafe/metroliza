@@ -5,7 +5,7 @@ from __future__ import annotations
 from metroliza.reports.db import run_transaction_with_retry
 
 
-SCHEMA_VERSION = "industrial_data_v5"
+SCHEMA_VERSION = "industrial_data_v6"
 
 SYNC_RUN_STATUSES = ("running", "succeeded", "completed_with_warnings", "failed", "cancelled")
 JOIN_MATCH_MODES = ("exact", "time_window")
@@ -258,6 +258,34 @@ SCHEMA_TABLE_STATEMENTS = (
         FOREIGN KEY (sample_id) REFERENCES industrial_samples(id) ON DELETE CASCADE,
         FOREIGN KEY (signal_id) REFERENCES industrial_signal_definitions(id) ON DELETE CASCADE
     )""",
+    """CREATE TABLE IF NOT EXISTS industrial_realtime_stream_events (
+        event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_profile_id INTEGER NOT NULL,
+        stream_key TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        aggregate_type TEXT NOT NULL,
+        aggregate_id INTEGER,
+        sample_id INTEGER,
+        anomaly_event_id INTEGER,
+        idempotency_key TEXT NOT NULL,
+        event_time TEXT NOT NULL,
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (source_profile_id) REFERENCES industrial_source_profiles(id) ON DELETE CASCADE
+    )""",
+    """CREATE TABLE IF NOT EXISTS industrial_realtime_consumer_offsets (
+        id INTEGER PRIMARY KEY,
+        consumer_key TEXT NOT NULL,
+        source_profile_id INTEGER NOT NULL,
+        stream_key TEXT NOT NULL,
+        last_event_id INTEGER NOT NULL DEFAULT 0 CHECK (last_event_id >= 0),
+        last_success_at TEXT,
+        last_error TEXT,
+        failure_count INTEGER NOT NULL DEFAULT 0 CHECK (failure_count >= 0),
+        status TEXT NOT NULL DEFAULT 'idle' CHECK (status IN ('idle', 'failed')),
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (source_profile_id) REFERENCES industrial_source_profiles(id) ON DELETE CASCADE
+    )""",
 )
 
 SCHEMA_INDEX_STATEMENTS = (
@@ -291,6 +319,14 @@ SCHEMA_INDEX_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_industrial_anomaly_events_status_time_desc ON industrial_anomaly_events(status, event_time DESC, id DESC)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_anomaly_events_signal_status_time_desc ON industrial_anomaly_events(signal_id, status, event_time DESC, id DESC)",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_industrial_anomaly_events_sample_detector_unique ON industrial_anomaly_events(sample_id, detector_key)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_industrial_realtime_stream_events_source_stream_idempotency_key ON industrial_realtime_stream_events(source_profile_id, stream_key, idempotency_key)",
+    "CREATE INDEX IF NOT EXISTS idx_industrial_realtime_stream_events_source_stream_id ON industrial_realtime_stream_events(source_profile_id, stream_key, event_id)",
+    "CREATE INDEX IF NOT EXISTS idx_industrial_realtime_stream_events_type_time ON industrial_realtime_stream_events(event_type, event_time, event_id)",
+    "CREATE INDEX IF NOT EXISTS idx_industrial_realtime_stream_events_sample ON industrial_realtime_stream_events(sample_id)",
+    "CREATE INDEX IF NOT EXISTS idx_industrial_realtime_stream_events_anomaly ON industrial_realtime_stream_events(anomaly_event_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_industrial_realtime_consumer_offsets_unique ON industrial_realtime_consumer_offsets(consumer_key, source_profile_id, stream_key)",
+    "CREATE INDEX IF NOT EXISTS idx_industrial_realtime_consumer_offsets_stream ON industrial_realtime_consumer_offsets(source_profile_id, stream_key, last_event_id)",
+    "CREATE INDEX IF NOT EXISTS idx_industrial_realtime_consumer_offsets_status ON industrial_realtime_consumer_offsets(status, updated_at)",
 )
 
 
@@ -305,6 +341,7 @@ def ensure_industrial_data_schema(
         _ensure_source_profile_columns(cursor)
         _ensure_stream_offset_columns(cursor)
         _ensure_sync_run_status_constraint(cursor)
+        _ensure_realtime_stream_event_idempotency_scope(cursor)
         for statement in SCHEMA_INDEX_STATEMENTS:
             cursor.execute(statement)
         cursor.execute(
@@ -321,6 +358,12 @@ def ensure_industrial_data_schema(
     )
     if connection is not None:
         connection.execute("PRAGMA foreign_keys=ON")
+
+
+def _ensure_realtime_stream_event_idempotency_scope(cursor) -> None:
+    """Migrate the stream idempotency key from global uniqueness to per-stream uniqueness."""
+
+    cursor.execute("DROP INDEX IF EXISTS idx_industrial_realtime_stream_events_idempotency_key")
 
 
 def _ensure_source_profile_columns(cursor) -> None:

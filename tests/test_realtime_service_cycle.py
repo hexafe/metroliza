@@ -1,6 +1,7 @@
 from metroliza.industrial.anomaly.baseline_repository import BaselineRepository, IndustrialBaseline
 from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
 from metroliza.industrial.anomaly.event_repository import AnomalyEventRepository
+from metroliza.industrial.realtime.event_stream_repository import RealtimeEventStreamRepository
 from metroliza.industrial.realtime.db_poller import SourceReadResult
 from metroliza.industrial.realtime.offset_store import StreamOffsetStore
 from metroliza.industrial.realtime.realtime_service import _load_persisted_samples, run_polling_cycle
@@ -526,7 +527,7 @@ def test_load_persisted_samples_uses_targeted_sample_ids():
     assert [sample.id for sample in loaded] == [10]
 
 
-def test_realtime_poll_cycle_does_not_advance_offset_when_event_write_fails(
+def test_realtime_poll_cycle_records_detector_consumer_failure_after_advancing_source_offset(
     tmp_path,
     monkeypatch,
 ):
@@ -569,8 +570,60 @@ def test_realtime_poll_cycle_does_not_advance_offset_when_event_write_fails(
         stream_key="cycle_time",
     )
 
+    assert result.status == "completed"
+    assert result.error is None
+    assert result.detector_consumer_status == "failed"
+    assert result.detector_consumer_error == "sqlite busy password=<redacted>"
+    assert offset.cursor_value == "100"
+    assert offset.last_error is None
+
+
+def test_realtime_poll_cycle_does_not_advance_offset_when_stream_append_fails(
+    tmp_path,
+    monkeypatch,
+):
+    db_path = str(tmp_path / "stream-write-error.db")
+    profile = _profile(db_path)
+    config = _config(profile.id)
+    StreamOffsetStore(db_path).upsert_offset(
+        StreamOffset(
+            source_profile_id=profile.id,
+            stream_key="cycle_time",
+            cursor_column="event_id",
+            cursor_value="50",
+        )
+    )
+
+    def fail_append(self, **kwargs):
+        raise RuntimeError("sqlite busy password=secret123")
+
+    monkeypatch.setattr(RealtimeEventStreamRepository, "append_sample_batch_committed", fail_append)
+
+    result = run_polling_cycle(
+        database=db_path,
+        profile=profile,
+        config=config,
+        adapter=FakeAdapter(
+            [
+                {
+                    "event_id": "100",
+                    "record_id": "row-100",
+                    "process_timestamp": "2026-06-13T10:00:00Z",
+                    "cycle_time_s": "10",
+                    "station": "S1",
+                }
+            ]
+        ),
+        detector_runner=lambda samples, signal, detectors: [],
+    )
+    offset = StreamOffsetStore(db_path).get_offset(
+        source_profile_id=profile.id,
+        stream_key="cycle_time",
+    )
+
     assert result.status == "failed"
     assert result.error == "sqlite busy password=<redacted>"
+    assert result.diagnostics["stage"] == "append_stream_event"
     assert offset.cursor_value == "50"
     assert offset.last_error == "sqlite busy password=<redacted>"
 

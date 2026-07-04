@@ -529,6 +529,42 @@ def test_realtime_monitoring_dialog_failed_result_shows_actionable_safe_diagnost
         dialog.close()
 
 
+def test_realtime_monitoring_dialog_detector_consumer_failure_is_warning(
+    qapp,
+    tmp_path,
+    monkeypatch,
+):
+    db_path = str(tmp_path / "dialog.db")
+    repository = IndustrialDataRepository(db_path)
+    line_a = _profile(repository, "line_a", "Line A")
+    dialog = RealtimeIndustrialMonitoringDialog(None, db_path)
+    result = _poll_result(
+        source_profile_id=line_a.id,
+        stream_key="line_a",
+        status="completed",
+        rows_fetched=3,
+        samples_inserted=3,
+        detector_events_created=0,
+        detector_consumer_status="failed",
+        detector_consumer_error="detector crashed password=rawsecret",
+    )
+
+    try:
+        monkeypatch.setattr(dialog, "_schedule_dashboard_write", lambda open_after: None)
+
+        dialog._on_poll_results((result,))
+
+        assert dialog.status_label.text() == (
+            "Polling completed with 1 failed stream(s): line_a detector_consumer - "
+            "detector crashed password=<redacted>"
+        )
+        assert dialog.status_table.item(0, 2).text() == "completed_with_warnings"
+        assert dialog.status_table.item(0, 3).text() == "detector_consumer"
+        assert dialog.status_table.item(0, 10).text() == "detector crashed password=<redacted>"
+    finally:
+        dialog.close()
+
+
 def test_realtime_monitoring_dialog_writes_empty_dashboard(qapp, tmp_path):
     db_path = str(tmp_path / "dialog.db")
     IndustrialDataRepository(db_path).ensure_schema()

@@ -13,6 +13,8 @@ docs, tickets, screenshots, or logs.
   [Realtime Industrial Monitoring](../user_manual/realtime_industrial_monitoring.md)
 - Rollout plan:
   [Realtime Industrial Monitoring Plan](../roadmaps/realtime_industrial_monitoring_plan.md)
+- Local event-stream design:
+  [SQLite-backed Realtime Event Stream](../roadmaps/sqlite_realtime_event_stream.md)
 - Detector fixture matrix:
   [Realtime Industrial Validation Fixtures](../realtime_industrial_validation.md)
 - Local detector benchmark:
@@ -154,6 +156,21 @@ docs, tickets, screenshots, or logs.
       local PyQt, dashboard, chart/export, full pytest, security audit, and
       CI-shaped coverage gates passed, and final rc2 push plus green CI are
       still pending.
+- [x] 2026-07-04: SQLite-backed local event-stream implementation added for
+      realtime sample batch events, detector consumer offsets, anomaly-event
+      commit events, replayable repository access, and detector-consumer retry
+      safety. Source polling remains the production ingress path, source
+      offsets advance only after local sample persistence plus stream append
+      succeeds, and dashboard reads still use persisted sample/anomaly tables.
+- [x] 2026-07-04: Root-cause fixes from subagent review landed for strict
+      detector-consumer failure handling, per-source/per-stream idempotency,
+      offset-read failure reporting, and UI warning status when detector
+      consumption fails after source persistence succeeds.
+- [x] 2026-07-04: Local validation passed for the event-stream slice: focused
+      realtime/UI/schema tests (`40 passed`), full Ruff, compileall, release
+      metadata sync, release hygiene, security audit with no known
+      vulnerabilities, and full offscreen pytest with coverage (`2253 passed,
+      324 skipped, 114 warnings, 83 subtests passed`).
 
 ## Rollback Steps
 
