@@ -144,16 +144,25 @@ def build_export_completion_message(*, excel_file, export_target, completion_met
     metadata = completion_metadata or {}
     warnings = [str(w) for w in metadata.get('conversion_warnings', []) if str(w).strip()]
     dashboard_warnings = [str(w) for w in metadata.get('html_dashboard_warnings', []) if str(w).strip()]
+    summary_warnings = [str(w) for w in metadata.get('summary_sheet_warnings', []) if str(w).strip()]
     fallback_message = str(metadata.get('fallback_message', '')).strip()
     converted_url = str(metadata.get('converted_url', '')).strip()
     export_directory_line = build_export_directory_link_line(excel_file)
     dashboard_file_line = build_export_artifact_link_line('HTML dashboard', metadata.get('html_dashboard_path'))
+
+    def _append_warning_sections(message_lines):
+        if dashboard_warnings:
+            message_lines.extend(["", "HTML dashboard warnings:", *[f"- {warning}" for warning in dashboard_warnings]])
+        if summary_warnings:
+            message_lines.extend(["", "Summary sheet warnings:", *[f"- {warning}" for warning in summary_warnings]])
+
     if export_target == 'html_dashboard':
         message_lines = ["HTML dashboard exported successfully!"]
         if dashboard_file_line:
             message_lines.extend(["", dashboard_file_line])
-        if dashboard_warnings:
-            message_lines.extend(["", "HTML dashboard warnings:", *[f"- {warning}" for warning in dashboard_warnings]])
+        _append_warning_sections(message_lines)
+        if summary_warnings:
+            return 'warning', 'Export completed with warnings', "\n".join(message_lines)
         return 'info', 'Export successful', "\n".join(message_lines)
 
     base_success_lines = ["Data exported successfully!"]
@@ -179,19 +188,20 @@ def build_export_completion_message(*, excel_file, export_target, completion_met
             if warnings:
                 message_lines.append("Warnings/Errors:")
                 message_lines.extend(f"- {warning}" for warning in warnings)
-            if dashboard_warnings:
-                message_lines.extend(["", "HTML dashboard warnings:", *[f"- {warning}" for warning in dashboard_warnings]])
+            _append_warning_sections(message_lines)
             return 'warning', 'Export completed with Google fallback', "\n".join(message_lines)
 
         if converted_url:
             message_lines = list(base_success_lines)
             message_lines.extend(["", f"Google Sheet: {converted_url}"])
-            if dashboard_warnings:
-                message_lines.extend(["", "HTML dashboard warnings:", *[f"- {warning}" for warning in dashboard_warnings]])
+            _append_warning_sections(message_lines)
+            if summary_warnings:
+                return 'warning', 'Export completed with warnings', "\n".join(message_lines)
             return 'info', 'Export successful', "\n".join(message_lines)
 
-    if dashboard_warnings:
-        base_success_lines.extend(["", "HTML dashboard warnings:", *[f"- {warning}" for warning in dashboard_warnings]])
+    _append_warning_sections(base_success_lines)
+    if summary_warnings:
+        return 'warning', 'Export completed with warnings', "\n".join(base_success_lines)
     return 'info', 'Export successful', "\n".join(base_success_lines)
 
 

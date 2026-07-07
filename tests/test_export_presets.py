@@ -533,6 +533,26 @@ class TestExportCompletionMessaging(unittest.TestCase):
             f'Export file: {expected_file_uri}'
         )
 
+    def test_excel_target_summary_sheet_warning_promotes_warning_dialog(self):
+        from metroliza.exporting.export_dialog_service import build_export_completion_message
+
+        metadata = {
+            'summary_sheet_warnings': [
+                "Summary sheet charts skipped after error in H1: 'int' object is not iterable",
+            ],
+        }
+        level, title, message = build_export_completion_message(
+            excel_file='out.xlsx',
+            export_target='excel_xlsx',
+            completion_metadata=metadata,
+        )
+
+        self.assertEqual(level, 'warning')
+        self.assertEqual(title, 'Export completed with warnings')
+        self.assertIn('Data exported successfully!', message)
+        self.assertIn('Summary sheet warnings:', message)
+        self.assertIn("'int' object is not iterable", message)
+
     def test_completion_message_ignores_backend_diagnostics_when_present(self):
         from modules.export_dialog import build_export_completion_message
 

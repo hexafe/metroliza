@@ -2911,6 +2911,27 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertEqual(iqr_labels, ['G1', 'G1', 'G2', 'G2'])
         self.assertEqual(iqr_values, values)
 
+    def test_build_iqr_plot_payload_normalizes_grouped_scalar_series(self):
+        import pandas as pd
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+
+        sampled_group = pd.DataFrame({'MEAS': [1.0, 2.0, 3.5]})
+
+        iqr_labels, iqr_values = thread._build_iqr_plot_payload(
+            ['G1', 'G2', 'G3'],
+            [1.0, '2.0', 3.5],
+            sampled_group,
+            grouping_active=True,
+        )
+
+        self.assertEqual(iqr_labels, ['G1', 'G2', 'G3'])
+        self.assertEqual(iqr_values, [[1.0], [2.0], [3.5]])
+
     def test_render_iqr_boxplot_normalizes_mismatched_inputs_without_raising(self):
         import matplotlib.pyplot as plt
 
@@ -2918,6 +2939,17 @@ class TestExportBackendSmoke(unittest.TestCase):
         fig, ax = plt.subplots(figsize=(4, 3))
         try:
             module.render_iqr_boxplot(ax, values=[[1, 2, 3], [4, 5, 6]], labels=['One'])
+        finally:
+            plt.close(fig)
+
+    def test_render_iqr_boxplot_normalizes_scalar_inputs_without_raising(self):
+        import matplotlib.pyplot as plt
+
+        from metroliza.exporting.export_data_thread import render_iqr_boxplot
+
+        fig, ax = plt.subplots(figsize=(4, 3))
+        try:
+            render_iqr_boxplot(ax, values=[1, 2, 3], labels=['A', 'B', 'C'])
         finally:
             plt.close(fig)
 
@@ -2961,6 +2993,97 @@ class TestExportBackendSmoke(unittest.TestCase):
         inserted_positions = set(worksheet.inserted_images)
         self.assertIn(panel_slots['distribution'], inserted_positions)
         self.assertIn(panel_slots['iqr'], inserted_positions)
+
+    def test_summary_sheet_fill_normalizes_scalar_iqr_payload_without_warning(self):
+        import pandas as pd
+
+        class _FakeSummaryWorksheet:
+            def __init__(self):
+                self.inserted_images = []
+
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, row, col, *_args, **_kwargs):
+                self.inserted_images.append((row, col))
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'iqr'}
+        thread._build_iqr_plot_payload = lambda *_args, **_kwargs: (
+            ['A', 'B', 'C'],
+            [1, 2, 3],
+        )
+
+        worksheet = _FakeSummaryWorksheet()
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [9.9, 10.0, 10.2, 10.1, 10.05, 9.95],
+                'NOM': [10.0] * 6,
+                '+TOL': [0.2] * 6,
+                '-TOL': [-0.2] * 6,
+                'SAMPLE_NUMBER': ['1', '2', '3', '4', '5', '6'],
+                'DATE': ['2024-01-01'] * 6,
+            }
+        )
+
+        with mock.patch(
+            'metroliza.exporting.export_data_thread.resolve_iqr_renderer_backend',
+            return_value='matplotlib',
+        ):
+            thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
+
+        panel_slots = build_summary_image_anchor_plan(5)
+        self.assertIn(panel_slots['iqr'], set(worksheet.inserted_images))
+        self.assertFalse(thread._summary_sheet_failed)
+        self.assertNotIn('summary_sheet_warnings', thread.completion_metadata)
+
+    def test_summary_sheet_fill_records_recoverable_warning_without_error_signal(self):
+        import pandas as pd
+
+        class _FakeSummaryWorksheet:
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, *_args, **_kwargs):
+                return None
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'iqr'}
+        errors = []
+        labels = []
+        thread.error_occurred.emit = lambda message: errors.append(message)
+        thread.update_label.emit = lambda message: labels.append(message)
+
+        def _raise_iqr_payload(*_args, **_kwargs):
+            raise TypeError("'int' object is not iterable")
+
+        thread._build_iqr_plot_payload = _raise_iqr_payload
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [9.9, 10.0, 10.2, 10.1, 10.05, 9.95],
+                'NOM': [10.0] * 6,
+                '+TOL': [0.2] * 6,
+                '-TOL': [-0.2] * 6,
+                'SAMPLE_NUMBER': ['1', '2', '3', '4', '5', '6'],
+                'DATE': ['2024-01-01'] * 6,
+            }
+        )
+
+        thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
+
+        self.assertEqual(errors, [])
+        self.assertTrue(thread._summary_sheet_failed)
+        self.assertTrue(any('summary charts skipped' in label.lower() for label in labels))
+        self.assertIn('summary_sheet_warnings', thread.completion_metadata)
+        self.assertIn("'int' object is not iterable", thread.completion_metadata['summary_sheet_warnings'][0])
 
     def test_summary_sheet_distribution_scatter_fallback_uses_sample_numbers_when_grouped(self):
         import pandas as pd

@@ -2772,18 +2772,40 @@ def enforce_minimum_histogram_bar_width(ax, *, min_width_fraction=0.015):
         patch.set_x(bar_center - (minimum_width / 2.0))
 
 
-def render_iqr_boxplot(ax, values, labels):
-    """Render a standard 1.5*IQR box plot used for outlier detection."""
-    safe_values = values if isinstance(values, list) else []
-    safe_labels = labels if isinstance(labels, list) else []
+def _normalize_iqr_boxplot_series(values):
+    """Return IQR groups as ``list[list[float]]`` for chart backends."""
+
+    if values is None:
+        return []
+
+    if isinstance(values, (str, bytes)):
+        raw_groups = [values]
+    else:
+        try:
+            raw_groups = list(values)
+        except TypeError:
+            raw_groups = [values]
 
     normalized_values = []
-    for group_values in safe_values:
-        if isinstance(group_values, (list, tuple, np.ndarray)) or not isinstance(group_values, (str, bytes)):
-            group_list = _normalize_plot_axis_values(list(group_values))
-            numeric_group = _numeric_list(group_list)
-            if numeric_group:
-                normalized_values.append(numeric_group)
+    for group_values in raw_groups:
+        if isinstance(group_values, (str, bytes)):
+            group_list = [group_values]
+        else:
+            try:
+                group_list = list(group_values)
+            except TypeError:
+                group_list = [group_values]
+        group_list = _normalize_plot_axis_values(group_list)
+        numeric_group = _numeric_list(group_list)
+        if numeric_group:
+            normalized_values.append(numeric_group)
+    return normalized_values
+
+
+def render_iqr_boxplot(ax, values, labels):
+    """Render a standard 1.5*IQR box plot used for outlier detection."""
+    safe_labels = labels if isinstance(labels, list) else []
+    normalized_values = _normalize_iqr_boxplot_series(values)
 
     if not normalized_values:
         return
@@ -4318,7 +4340,9 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
 
         strategy_labels = build_summary_panel_labels(labels or ['All'], grouping_active=grouping_active)
         boxplot_labels = strategy_labels
-        boxplot_values = values if values else [list(sampled_group['MEAS'])]
+        boxplot_values = _normalize_iqr_boxplot_series(values)
+        if not boxplot_values and sampled_group is not None and 'MEAS' in sampled_group:
+            boxplot_values = [_numeric_list(sampled_group['MEAS'])]
 
         if len(boxplot_labels) != len(boxplot_values):
             if sampled_group is not None and 'MEAS' in sampled_group:
@@ -4327,7 +4351,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                     extra={'label_count': len(boxplot_labels), 'value_count': len(boxplot_values)},
                 )
                 boxplot_labels = ['All']
-                boxplot_values = [list(sampled_group['MEAS'])]
+                boxplot_values = [_numeric_list(sampled_group['MEAS'])]
             else:
                 min_length = min(len(boxplot_labels), len(boxplot_values))
                 logger.warning(
@@ -6269,6 +6293,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                         sampled_iqr_group,
                         grouping_active=grouping_applied,
                     )
+                    boxplot_values = _normalize_iqr_boxplot_series(boxplot_values)
                     iqr_strategy = prepare_categorical_x_axis(boxplot_labels)
                     iqr_native_payload = {
                         'type': 'iqr',
@@ -6914,7 +6939,24 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                     pass
 
         except Exception as e:
-            self.log_and_exit(e)
+            warning_message = f"Summary sheet charts skipped after error in {header}: {e}"
+            logger.warning(warning_message, exc_info=True)
+            self.completion_metadata.setdefault('summary_sheet_warnings', []).append(warning_message)
+            self._log_export_stage(
+                "Summary sheet chart generation skipped after error",
+                stage="summary_sheet_warning",
+                level="warning",
+                exception_class=type(e).__name__,
+                summary_sheet_header=str(header),
+                summary_sheet_warning=warning_message,
+            )
+            self.update_label.emit(
+                build_three_line_status(
+                    "Warning: summary charts skipped after earlier error.",
+                    "Continuing export without summary panel rendering",
+                    "ETA --",
+                )
+            )
             self._summary_sheet_failed = True
 
     def log_and_exit(self, exception):
