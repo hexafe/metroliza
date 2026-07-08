@@ -5,7 +5,7 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 import pytest
 
-from modules.matplotlib_iqr_trend_geometry import extract_iqr_geometry, extract_trend_geometry
+from metroliza.charts.matplotlib_iqr_trend_geometry import extract_iqr_geometry, extract_trend_geometry
 
 
 def test_extract_iqr_geometry_captures_finalized_layout_and_box_stats():
@@ -142,3 +142,30 @@ def test_extract_trend_geometry_applies_payload_fallbacks_when_axis_text_is_miss
     assert resolved["title"]["text"] == "Payload Fallback Title"
     assert resolved["axes"]["x_label"] == "Payload X"
     assert resolved["axes"]["y_label"] == "Payload Y"
+
+
+def test_extract_trend_geometry_payload_fallback_preserves_zero_scalar_points():
+    fig, ax = plt.subplots(figsize=(5.0, 3.0), dpi=100)
+    try:
+        resolved = extract_trend_geometry(
+            fig,
+            ax,
+            payload={
+                "x_values": 0.0,
+                "y_values": 0.0,
+                "title": "Zero Payload",
+            },
+        )
+    finally:
+        plt.close(fig)
+
+    assert resolved["points"] == [
+        {
+            "x": 0.0,
+            "y": 0.0,
+            "marker": "circle",
+            "size": 5.0,
+            "color": "#0072B2",
+            "alpha": 1.0,
+        }
+    ]

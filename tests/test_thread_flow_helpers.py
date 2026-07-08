@@ -3083,6 +3083,7 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertTrue(thread._summary_sheet_failed)
         self.assertTrue(any('summary charts skipped' in label.lower() for label in labels))
         self.assertIn('summary_sheet_warnings', thread.completion_metadata)
+        self.assertIn('(iqr)', thread.completion_metadata['summary_sheet_warnings'][0])
         self.assertIn("'int' object is not iterable", thread.completion_metadata['summary_sheet_warnings'][0])
 
     def test_summary_sheet_distribution_scatter_fallback_uses_sample_numbers_when_grouped(self):

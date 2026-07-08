@@ -341,6 +341,54 @@ def test_build_histogram_native_payload_includes_bin_count_when_provided():
     assert payload["visual_metadata"]["summary_stats_table"]["columns"] == ["Parameter", "Value"]
 
 
+def test_native_payload_builders_normalize_scalar_series_inputs():
+    histogram_payload = build_histogram_native_payload(
+        values=1.5,
+        lsl=None,
+        usl=None,
+        title="Scalar Histogram",
+    )
+    distribution_payload = build_distribution_native_payload(
+        values=[1, "2.0", np.float64(3.5)],
+        labels=["A", "B", "C"],
+        title="Scalar Distribution",
+    )
+
+    assert histogram_payload["values"] == [1.5]
+    assert distribution_payload["labels"] == ["A", "B", "C"]
+    assert distribution_payload["series"] == [[1.0], [2.0], [3.5]]
+
+
+def test_resolved_distribution_and_iqr_specs_accept_scalar_series_inputs():
+    distribution_payload = {
+        "type": "distribution",
+        "render_mode": "violin",
+        "series": [1, "2.0", np.float64(3.5)],
+        "labels": ["A", "B", "C"],
+        "title": "Scalar Distribution",
+        "canvas": {"width_px": 960, "height_px": 540, "dpi": 150},
+    }
+    iqr_payload = {
+        "type": "iqr",
+        "series": [1, "2.0", np.float64(3.5)],
+        "labels": ["A", "B", "C"],
+        "title": "Scalar IQR",
+        "canvas": {"width_px": 960, "height_px": 540, "dpi": 150},
+    }
+
+    distribution_spec = build_resolved_distribution_spec(distribution_payload)
+    iqr_spec = build_resolved_iqr_spec(iqr_payload)
+
+    assert len(distribution_spec["violin_groups"]) == 3
+    assert [group["values"] for group in distribution_spec["violin_groups"]] == [
+        [1.0],
+        [2.0],
+        [3.5],
+    ]
+    assert len(iqr_spec["boxplots"]) == 3
+    assert [box["median"] for box in iqr_spec["boxplots"]] == [1.0, 2.0, 3.5]
+
+
 def test_compact_histogram_renderer_uses_fast_png_encoding(monkeypatch):
     payload = build_histogram_native_payload(
         values=[1.0, 1.5, 2.0, 2.5],

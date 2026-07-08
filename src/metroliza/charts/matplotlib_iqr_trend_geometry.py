@@ -17,6 +17,11 @@ from matplotlib.collections import PathCollection
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
+from metroliza.charts.chart_numeric_helpers import (
+    coerce_string_list as _coerce_string_list,
+    finite_float_list as _finite_float_list,
+)
+
 
 _NONE_MARKERS = {"", " ", "none", "None", None}
 _NONE_LINESTYLES = {"", " ", "none", "None", None}
@@ -675,7 +680,7 @@ def extract_iqr_geometry(fig: Any, ax: Any, *, payload: dict[str, Any]) -> dict[
     if not str((resolved.get("axes") or {}).get("y_label") or "").strip() and str(source_payload.get("y_label") or "").strip():
         resolved["axes"]["y_label"] = str(source_payload.get("y_label"))
 
-    labels = [str(item) for item in source_payload.get("labels") or []]
+    labels = _coerce_string_list(source_payload.get("labels"))
     boxplots = list(resolved.get("boxplots") or [])
     for index, box in enumerate(boxplots):
         if str(box.get("label") or "").strip():
@@ -701,8 +706,8 @@ def extract_trend_geometry(fig: Any, ax: Any, *, payload: dict[str, Any]) -> dic
         resolved["axes"]["y_label"] = str(source_payload.get("y_label"))
 
     if not list(resolved.get("points") or []):
-        x_values = [item for item in source_payload.get("x_values") or [] if _to_float(item) is not None]
-        y_values = [item for item in source_payload.get("y_values") or [] if _to_float(item) is not None]
+        x_values = _finite_float_list(source_payload.get("x_values"))
+        y_values = _finite_float_list(source_payload.get("y_values"))
         resolved["points"] = [
             {
                 "x": float(x_value),

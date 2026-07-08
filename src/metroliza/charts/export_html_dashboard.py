@@ -38,6 +38,11 @@ from metroliza.charts.dashboard_html_controls import (
 from metroliza.charts.distribution_iqr_plotly_specs import build_distribution_iqr_plotly_spec
 from metroliza.charts.dashboard_plotly_visuals import apply_dashboard_visual_settings
 from metroliza.charts.dashboard_visual_options import dashboard_visual_preview_labels
+from metroliza.charts.chart_numeric_helpers import (
+    coerce_string_list as _coerce_string_list,
+    finite_float_list as _finite_float_list,
+    finite_series_list as _finite_series_list,
+)
 from metroliza.exporting.export_summary_utils import resolve_histogram_bin_count
 from metroliza.charts.hexafe_plotstats_adapter import (
     build_plotstats_dashboard_spec,
@@ -198,7 +203,7 @@ def summarize_dashboard_chart_payload(payload: dict[str, Any] | None) -> dict[st
         modeled_overlays = visual_metadata.get("modeled_overlays") if isinstance(visual_metadata, dict) else {}
         summary.update(
             {
-                "sample_count": len(payload.get("values") or []),
+                "sample_count": len(_finite_float_list(payload.get("values"))),
                 "bin_count": payload.get("bin_count"),
                 "limits": {
                     "lsl": payload.get("lsl"),
@@ -213,27 +218,34 @@ def summarize_dashboard_chart_payload(payload: dict[str, Any] | None) -> dict[st
         return summary
 
     if chart_type == "distribution":
-        series = payload.get("series") or []
+        labels = _coerce_string_list(payload.get("labels"))
+        raw_series = payload.get("series") if "series" in payload else payload.get("values")
+        series = _finite_series_list(raw_series, label_count=len(labels) or None)
         summary.update(
             {
                 "render_mode": payload.get("render_mode") or "violin",
-                "group_count": len(payload.get("labels") or []),
-                "series_sizes": [len(values or []) for values in series[:6]],
-                "label_preview": [str(label) for label in (payload.get("labels") or [])[:6]],
+                "group_count": len(labels),
+                "series_sizes": [len(values) for values in series[:6]],
+                "label_preview": labels[:6],
                 "legend_items": len(((payload.get("legend") or {}).get("items") or [])),
             }
         )
         if payload.get("render_mode") == "scatter":
-            summary["point_count"] = len(payload.get("x_values") or [])
+            summary["point_count"] = min(
+                len(_finite_float_list(payload.get("x_values"))),
+                len(_finite_float_list(payload.get("y_values"))),
+            )
         return summary
 
     if chart_type == "iqr":
-        series = payload.get("series") or []
+        labels = _coerce_string_list(payload.get("labels"))
+        raw_series = payload.get("series") if "series" in payload else payload.get("values")
+        series = _finite_series_list(raw_series, label_count=len(labels) or None)
         summary.update(
             {
-                "group_count": len(payload.get("labels") or []),
-                "series_sizes": [len(values or []) for values in series[:6]],
-                "label_preview": [str(label) for label in (payload.get("labels") or [])[:6]],
+                "group_count": len(labels),
+                "series_sizes": [len(values) for values in series[:6]],
+                "label_preview": labels[:6],
                 "legend_items": len(((payload.get("legend") or {}).get("items") or [])),
             }
         )
@@ -242,8 +254,11 @@ def summarize_dashboard_chart_payload(payload: dict[str, Any] | None) -> dict[st
     if chart_type == "trend":
         summary.update(
             {
-                "point_count": len(payload.get("x_values") or []),
-                "label_preview": [str(label) for label in (payload.get("labels") or [])[:8]],
+                "point_count": min(
+                    len(_finite_float_list(payload.get("x_values"))),
+                    len(_finite_float_list(payload.get("y_values"))),
+                ),
+                "label_preview": _coerce_string_list(payload.get("labels"))[:8],
                 "horizontal_limits": [value for value in (payload.get("horizontal_limits") or []) if value is not None],
             }
         )
@@ -287,7 +302,7 @@ def extract_dashboard_chart_details(payload: dict[str, Any] | None) -> dict[str,
             overlay_labels.append(normalized_label)
 
     return {
-        "sample_count": len(payload.get("values") or []),
+        "sample_count": len(_finite_float_list(payload.get("values"))),
         "bin_count": payload.get("bin_count"),
         "axis_labels": {
             "x": str(style.get("axis_label_x") or "Measurement"),
@@ -664,12 +679,7 @@ def _coerce_finite_float(value: Any) -> float | None:
 
 
 def _coerce_finite_float_list(values: Any) -> list[float]:
-    output: list[float] = []
-    for value in values or []:
-        number = _coerce_finite_float(value)
-        if number is not None:
-            output.append(number)
-    return output
+    return _finite_float_list(values)
 
 
 def _infer_decimal_places(values: list[float], *, max_decimals: int = 6) -> int:
@@ -721,12 +731,10 @@ def _resolve_limit_values(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _coerce_xy_points(x_values: Any, y_values: Any, *, labels: Any = None) -> list[tuple[float, float, str]]:
     points: list[tuple[float, float, str]] = []
-    raw_labels = labels or []
-    for index, (raw_x, raw_y) in enumerate(zip(x_values or [], y_values or [])):
-        x_value = _coerce_finite_float(raw_x)
-        y_value = _coerce_finite_float(raw_y)
-        if x_value is None or y_value is None:
-            continue
+    raw_labels = _coerce_string_list(labels)
+    for index, (x_value, y_value) in enumerate(
+        zip(_coerce_finite_float_list(x_values), _coerce_finite_float_list(y_values))
+    ):
         label = ""
         if index < len(raw_labels) and raw_labels[index] is not None:
             label = str(raw_labels[index])

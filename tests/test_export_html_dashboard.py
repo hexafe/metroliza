@@ -18,6 +18,7 @@ from modules.export_html_dashboard import (
     _render_plotly_shell,
     resolve_html_dashboard_assets_dir,
     resolve_html_dashboard_path,
+    summarize_dashboard_chart_payload,
     write_export_html_dashboard,
 )
 from modules.export_summary_utils import resolve_histogram_bin_count
@@ -1236,6 +1237,36 @@ class TestExportHtmlDashboard(unittest.TestCase):
         )
         self.assertEqual(details['axis_labels']['y'], 'Frequency (%)')
 
+    def test_dashboard_chart_payload_summary_preserves_scalar_zero_values(self):
+        histogram = summarize_dashboard_chart_payload({'type': 'histogram', 'values': 0.0})
+        self.assertEqual(histogram['sample_count'], 1)
+
+        distribution = summarize_dashboard_chart_payload(
+            {'type': 'distribution', 'labels': 'A', 'series': 0.0}
+        )
+        self.assertEqual(distribution['group_count'], 1)
+        self.assertEqual(distribution['series_sizes'], [1])
+
+        iqr = summarize_dashboard_chart_payload({'type': 'iqr', 'labels': ['A'], 'values': 0.0})
+        self.assertEqual(iqr['group_count'], 1)
+        self.assertEqual(iqr['series_sizes'], [1])
+
+        scatter = summarize_dashboard_chart_payload(
+            {
+                'type': 'distribution',
+                'render_mode': 'scatter',
+                'x_values': 0.0,
+                'y_values': 0.0,
+            }
+        )
+        self.assertEqual(scatter['point_count'], 1)
+
+        trend = summarize_dashboard_chart_payload(
+            {'type': 'trend', 'x_values': 0.0, 'y_values': 0.0, 'labels': 'Zero'}
+        )
+        self.assertEqual(trend['point_count'], 1)
+        self.assertEqual(trend['label_preview'], ['Zero'])
+
     def test_distribution_scatter_plotly_spec_preserves_precision_in_hover_and_ticks(self):
         with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
             spec = _build_plotly_chart_spec(
@@ -1336,6 +1367,39 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertIn('Mean=6.5380', visible_legend_names)
         self.assertIn('Max=6.687', visible_legend_names)
         self.assertTrue({'Minimum', 'Mean', 'Maximum'}.isdisjoint(visible_legend_names))
+
+    def test_iqr_plotly_spec_accepts_scalar_series_values(self):
+        with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
+            spec = _build_plotly_chart_spec(
+                {
+                    'type': 'iqr',
+                    'labels': ['A', 'B', 'C'],
+                    'series': [1, '2.0', 3.5],
+                },
+                title='Scalar IQR values',
+            )
+
+        trace_names = {trace.get('name') for trace in spec['data']}
+        self.assertIn('A (n=1)', trace_names)
+        self.assertIn('B (n=1)', trace_names)
+        self.assertIn('C (n=1)', trace_names)
+
+    def test_trend_plotly_spec_preserves_zero_scalar_points(self):
+        with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
+            spec = _build_plotly_chart_spec(
+                {
+                    'type': 'trend',
+                    'x_values': 0.0,
+                    'y_values': 0.0,
+                    'labels': 'Zero',
+                },
+                title='Zero trend',
+            )
+
+        point_trace = spec['data'][0]
+        self.assertEqual(point_trace['x'], [0.0])
+        self.assertEqual(point_trace['y'], [0.0])
+        self.assertEqual(point_trace['ids'], ['Zero'])
 
     def test_distribution_scatter_plotly_spec_uses_trace_controlled_reference_lines(self):
         with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):

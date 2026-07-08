@@ -20,6 +20,11 @@ configure_headless_matplotlib()
 import matplotlib.pyplot as plt
 import numpy as np
 
+from metroliza.charts.chart_numeric_helpers import (
+    align_labels_to_series,
+    finite_float_list,
+    finite_series_list,
+)
 from metroliza.shared.env_utils import env_choice, env_value, parse_bool
 
 BackendChoice = Literal["auto", "native", "matplotlib"]
@@ -604,11 +609,10 @@ def build_histogram_native_payload(
     - `compact_render`: explicit stripped-render fast path. Rich workbook
       exports should leave this disabled.
     """
-    numeric = np.asarray(values, dtype=float)
-    finite = numeric[np.isfinite(numeric)]
+    finite = finite_float_list(values)
     payload: dict[str, Any] = {
         "type": "histogram",
-        "values": finite.tolist(),
+        "values": finite,
         "title": title,
         "lsl": None if lsl is None else float(lsl),
         "usl": None if usl is None else float(usl),
@@ -638,14 +642,13 @@ def build_distribution_native_payload(
     usl: float | None = None,
 ) -> dict[str, Any]:
     """Build base native payload contract for distribution charts."""
-    normalized_values: list[list[float]] = []
-    for series in values:
-        numeric = np.asarray(series, dtype=float)
-        normalized_values.append(numeric[np.isfinite(numeric)].tolist())
+    raw_labels = [str(label) for label in labels]
+    normalized_values = finite_series_list(values, label_count=len(raw_labels) or None)
+    normalized_labels = align_labels_to_series(raw_labels, len(normalized_values))
     return {
         "type": "distribution",
         "series": normalized_values,
-        "labels": [str(label) for label in labels],
+        "labels": normalized_labels,
         "title": str(title),
         "lsl": None if lsl is None else float(lsl),
         "usl": None if usl is None else float(usl),

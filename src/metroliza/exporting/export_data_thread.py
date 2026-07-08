@@ -5897,6 +5897,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             May update UI state, database rows, or in-memory export context.
         """
 
+        active_summary_chart = None
         try:
             if self._check_canceled():
                 return
@@ -6080,6 +6081,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
 
             if self._summary_chart_required('distribution'):
                 try:
+                    active_summary_chart = 'distribution'
                     chart_start = time.perf_counter()
                     one_sided_distribution = bool(is_one_sided_geometric_tolerance(nom, LSL))
                     categorical_strategy = prepare_categorical_x_axis(distribution_labels)
@@ -6286,6 +6288,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
 
             if self._summary_chart_required('iqr'):
                 try:
+                    active_summary_chart = 'iqr'
                     chart_start = time.perf_counter()
                     boxplot_labels, boxplot_values = self._build_iqr_plot_payload(
                         iqr_labels,
@@ -6407,6 +6410,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
 
             if self._summary_chart_required('histogram'):
                 try:
+                    active_summary_chart = 'histogram'
                     base_histogram_figsize = (8.8, 4.0)
                     chart_start = time.perf_counter()
                     histogram_values = sampling_context['histogram_payload']['measurements']
@@ -6794,6 +6798,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
 
             if self._summary_chart_required('trend'):
                 try:
+                    active_summary_chart = 'trend'
                     chart_start = time.perf_counter()
                     data_x = trend_payload['x']
                     data_y = trend_payload['y']
@@ -6939,7 +6944,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                     pass
 
         except Exception as e:
-            warning_message = f"Summary sheet charts skipped after error in {header}: {e}"
+            chart_context = f" ({active_summary_chart})" if active_summary_chart else ""
+            warning_message = f"Summary sheet charts skipped after error in {header}{chart_context}: {e}"
             logger.warning(warning_message, exc_info=True)
             self.completion_metadata.setdefault('summary_sheet_warnings', []).append(warning_message)
             self._log_export_stage(
@@ -6948,6 +6954,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 level="warning",
                 exception_class=type(e).__name__,
                 summary_sheet_header=str(header),
+                summary_sheet_chart=active_summary_chart or "unknown",
                 summary_sheet_warning=warning_message,
             )
             self.update_label.emit(

@@ -478,6 +478,21 @@ def test_dashboard_plotly_fallback_builds_percent_histogram_with_reference_value
     assert "shapes" not in spec["layout"]
 
 
+def test_dashboard_plotly_fallback_accepts_scalar_histogram_values() -> None:
+    for payload in (
+        {"type": "histogram", "values": 1.0},
+        {"type": "histogram", "values": 0.0},
+        {"type": "histogram", "groups": [{"group": "A", "values": 1.0}]},
+    ):
+        spec = _fallback_dashboard_plotly_spec(payload, title="Scalar histogram", static=False)
+
+        assert spec is not None
+        assert spec["metadata"]["histogram_y_mode"] == "percent"
+        assert spec["data"][0]["type"] == "bar"
+        assert sum(spec["data"][0]["y"]) == 1.0
+        assert spec["data"][0]["y"].count(1.0) == 1
+
+
 def test_dashboard_plotly_fallback_marks_multi_group_histograms() -> None:
     spec = _fallback_dashboard_plotly_spec(
         {

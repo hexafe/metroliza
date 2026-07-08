@@ -6,6 +6,11 @@ from collections.abc import Mapping, Sequence
 import math
 from typing import Any
 
+from metroliza.charts.chart_numeric_helpers import (
+    align_labels_to_series as _align_labels_to_series,
+    finite_float_list as _finite_float_list,
+    finite_series_list as _finite_series_list,
+)
 from metroliza.charts.plotly_stat_helpers import (
     format_group_statistics_trace_name as _format_group_statistics_trace_name,
     payload_distribution_series as _payload_distribution_series,
@@ -85,14 +90,15 @@ def build_distribution_iqr_plotly_spec(
     if resolved_type == "distribution" and render_mode != "violin":
         return None
 
-    series_items = _payload_distribution_series(payload)
     raw_labels = [str(item) for item in (payload.get("labels") or [])]
+    series_items = _payload_distribution_series(payload)
+    series_list = _finite_series_list(series_items, label_count=len(raw_labels) or None)
+    labels = _align_labels_to_series(raw_labels, len(series_list))
     groups: list[tuple[str, list[float]]] = []
-    for index, series in enumerate(series_items, start=1):
-        values = _coerce_finite_float_list(series)
+    for index, values in enumerate(series_list, start=1):
         if not values:
             continue
-        label = raw_labels[index - 1] if index <= len(raw_labels) and raw_labels[index - 1] else f"Group {index}"
+        label = labels[index - 1] if index <= len(labels) and labels[index - 1] else f"Group {index}"
         groups.append((label, values))
     if not groups:
         return None
@@ -176,7 +182,7 @@ def _coerce_finite_float(value: Any) -> float | None:
 
 
 def _coerce_finite_float_list(values: Any) -> list[float]:
-    return [number for value in values or [] if (number := _coerce_finite_float(value)) is not None]
+    return _finite_float_list(values)
 
 
 def _stat_line_traces(

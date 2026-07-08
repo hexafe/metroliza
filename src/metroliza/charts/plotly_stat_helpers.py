@@ -55,13 +55,24 @@ def format_group_statistics_trace_name(label: str, values: Sequence[float]) -> s
 def payload_distribution_series(payload: Mapping[str, Any]) -> list[Any]:
     """Return distribution series from either current or legacy payload keys."""
 
+    def _as_series_list(value: Any) -> list[Any]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        if isinstance(value, (str, bytes, Mapping)):
+            return [value]
+        try:
+            return list(value)
+        except TypeError:
+            return [value]
+
     series = payload.get("series")
-    if isinstance(series, list):
-        return series
+    series_items = _as_series_list(series)
+    if series_items:
+        return series_items
     values = payload.get("values")
-    if isinstance(values, list):
-        return values
-    return []
+    return _as_series_list(values)
 
 
 def legend_only_reference_trace(

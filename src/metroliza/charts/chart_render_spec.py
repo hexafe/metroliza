@@ -16,8 +16,11 @@ from typing import Any, Iterable, Mapping
 import numpy as np
 
 from metroliza.charts.chart_numeric_helpers import (
+    align_labels_to_series as _align_labels_to_series,
     as_finite_float as _as_float,
+    coerce_string_list as _coerce_string_list,
     finite_array as _finite_array,
+    finite_series_list as _finite_series_list,
     format_histogram_stat_value as _format_histogram_stat_value,
     format_tick as _format_tick,
     line_ticks as _line_ticks,
@@ -502,7 +505,7 @@ def _normalize_dash(raw_dash: Any) -> tuple[int, int] | None:
 
 
 def build_resolved_histogram_spec(payload: Mapping[str, Any]) -> ResolvedHistogramSpec:
-    values = _finite_array(payload.get("values") or [])
+    values = _finite_array(payload.get("values"))
     if values.size == 0:
         raise RuntimeError("histogram payload requires finite values")
 
@@ -1232,12 +1235,8 @@ def _resolve_payload_mean_value(payload: Mapping[str, Any]) -> float | None:
     return _as_float(payload.get("mean"))
 
 
-def _coerce_finite_series_list(series_list: Iterable[Any]) -> list[list[float]]:
-    normalized: list[list[float]] = []
-    for series in series_list:
-        numeric = _finite_array([] if series is None else series)
-        normalized.append([float(item) for item in numeric.tolist()])
-    return normalized
+def _coerce_finite_series_list(series_list: Any, *, label_count: int | None = None) -> list[list[float]]:
+    return _finite_series_list(series_list, label_count=label_count)
 
 
 def _estimate_upper_right_legend_rect(items: list[dict[str, Any]]) -> RectSpec:
@@ -1432,7 +1431,7 @@ def _build_resolved_distribution_annotations(
 
 def build_resolved_distribution_spec(payload: Mapping[str, Any]) -> dict[str, Any]:
     width_px, height_px, dpi = _canvas_size(payload)
-    labels = [str(item) for item in payload.get("labels") or []]
+    raw_labels = _coerce_string_list(payload.get("labels"))
     render_mode = str(payload.get("render_mode") or "violin")
     layout = payload.get("layout") if isinstance(payload.get("layout"), Mapping) else {}
     legend_items = list(((payload.get("legend") or {}) if isinstance(payload.get("legend"), Mapping) else {}).get("items") or [])
@@ -1441,10 +1440,16 @@ def build_resolved_distribution_spec(payload: Mapping[str, Any]) -> dict[str, An
         has_legend=bool(legend_items),
     )
 
-    series_list = _coerce_finite_series_list(payload.get("series") or [])
+    raw_series = payload.get("series") if "series" in payload else payload.get("values")
+    series_list = _coerce_finite_series_list(raw_series, label_count=len(raw_labels) or None)
+    labels = (
+        raw_labels
+        if render_mode == "scatter"
+        else _align_labels_to_series(raw_labels, len(series_list))
+    )
     all_values = _finite_array([value for series in series_list for value in series])
     if all_values.size == 0 and render_mode == "scatter":
-        all_values = _finite_array(payload.get("y_values") or [])
+        all_values = _finite_array(payload.get("y_values"))
     if all_values.size == 0:
         raise RuntimeError("distribution payload requires finite values")
 
@@ -1465,7 +1470,7 @@ def build_resolved_distribution_spec(payload: Mapping[str, Any]) -> dict[str, An
 
     x_domain = payload.get("x_domain") if isinstance(payload.get("x_domain"), Mapping) else {}
     if render_mode == "scatter":
-        x_values = _finite_array(payload.get("x_values") or [])
+        x_values = _finite_array(payload.get("x_values"))
         if x_values.size == 0:
             raise RuntimeError("distribution scatter payload requires finite x values")
         x_min = _as_float(x_domain.get("min"))
@@ -1486,7 +1491,7 @@ def build_resolved_distribution_spec(payload: Mapping[str, Any]) -> dict[str, An
                 "color": _PARITY_FOREGROUND,
                 "alpha": 1.0,
             }
-            for x_value, y_value in zip(x_values.tolist(), _finite_array(payload.get("y_values") or []).tolist())
+            for x_value, y_value in zip(x_values.tolist(), _finite_array(payload.get("y_values")).tolist())
         ]
         violin_groups: list[dict[str, Any]] = []
         annotations: dict[str, Any] = {"markers": [], "segments": [], "texts": []}
@@ -1614,8 +1619,10 @@ def build_resolved_distribution_spec(payload: Mapping[str, Any]) -> dict[str, An
 
 def build_resolved_iqr_spec(payload: Mapping[str, Any]) -> dict[str, Any]:
     width_px, height_px, dpi = _canvas_size(payload)
-    labels = [str(item) for item in payload.get("labels") or []]
-    series_list = _coerce_finite_series_list(payload.get("series") or [])
+    raw_labels = _coerce_string_list(payload.get("labels"))
+    raw_series = payload.get("series") if "series" in payload else payload.get("values")
+    series_list = _coerce_finite_series_list(raw_series, label_count=len(raw_labels) or None)
+    labels = _align_labels_to_series(raw_labels, len(series_list))
     flat_values = _finite_array([item for series in series_list for item in series])
     if flat_values.size == 0:
         raise RuntimeError("iqr payload requires finite values")
@@ -1741,8 +1748,8 @@ def build_resolved_iqr_spec(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 def build_resolved_trend_spec(payload: Mapping[str, Any]) -> dict[str, Any]:
     width_px, height_px, dpi = _canvas_size(payload)
-    x_values = _finite_array(payload.get("x_values") or [])
-    y_values = _finite_array(payload.get("y_values") or [])
+    x_values = _finite_array(payload.get("x_values"))
+    y_values = _finite_array(payload.get("y_values"))
     if x_values.size == 0 or y_values.size == 0:
         raise RuntimeError("trend payload requires finite x/y values")
 

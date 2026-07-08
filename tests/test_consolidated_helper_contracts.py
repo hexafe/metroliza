@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from metroliza.charts.chart_numeric_helpers import finite_float_list, finite_series_list
 from metroliza.charts.plotly_stat_helpers import (
     format_group_statistics_trace_name,
     normalize_group_label_key,
@@ -32,6 +33,15 @@ def test_plotly_stat_helpers_extract_payload_distribution_series() -> None:
 
     assert [series["label"] for series in payload_distribution_series(payload)] == ["A"]
     assert payload_distribution_series({"values": [{"label": "B", "values": [3]}]})[0]["label"] == "B"
+
+
+def test_chart_numeric_helpers_normalize_scalar_and_flat_series() -> None:
+    assert finite_float_list(1.0) == [1.0]
+    assert finite_float_list(0.0) == [0.0]
+    assert finite_float_list(np.array(1.0)) == [1.0]
+    assert finite_float_list([1, "2", None]) == [1.0, 2.0]
+    assert finite_series_list([1, 2, 3], label_count=1) == [[1.0, 2.0, 3.0]]
+    assert finite_series_list([1, 2, 3], label_count=3) == [[1.0], [2.0], [3.0]]
 
 
 def test_dashboard_interactivity_shared_contracts() -> None:

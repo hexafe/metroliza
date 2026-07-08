@@ -21,8 +21,11 @@ from metroliza.exporting.export_summary_sheet_planner import (
     compute_histogram_annotation_rows as _compute_histogram_annotation_rows,
 )
 from metroliza.charts.chart_numeric_helpers import (
+    align_labels_to_series as _align_labels_to_series,
     as_finite_float as _as_float,
+    coerce_string_list as _coerce_string_list,
     finite_array as _finite_array,
+    finite_series_list as _finite_series_list,
     format_histogram_stat_value as _format_histogram_stat_value,
     format_tick as _format_tick,
     line_ticks as _line_ticks,
@@ -998,7 +1001,7 @@ def _map_horizontal_box_coordinate(
 
 
 def render_histogram_png(payload: dict[str, Any]) -> bytes:
-    values = _finite_array(payload.get("values") or [])
+    values = _finite_array(payload.get("values"))
     if values.size == 0:
         raise RuntimeError("histogram payload requires finite values")
 
@@ -1400,14 +1403,17 @@ def render_distribution_png(payload: dict[str, Any]) -> bytes:
         fallback_rect=(82, 88, width - 32, height - 92),
     )
     layout = payload.get("layout") if isinstance(payload.get("layout"), dict) else {}
-    labels = [str(item) for item in payload.get("labels") or []]
+    render_mode = str(resolved_render_spec.get("render_mode") or payload.get("render_mode") or "violin")
+    raw_labels = _coerce_string_list(payload.get("labels"))
+    raw_series = payload.get("series") if "series" in payload else payload.get("values")
+    series_list = _finite_series_list(raw_series, label_count=len(raw_labels) or None)
+    labels = raw_labels if render_mode == "scatter" else _align_labels_to_series(raw_labels, len(series_list))
     display_positions = list(layout.get("display_positions") or list(range(len(labels))))
     display_labels = list(layout.get("display_labels") or labels)
-    render_mode = str(resolved_render_spec.get("render_mode") or payload.get("render_mode") or "violin")
 
-    all_values = _finite_array([value for series in payload.get("series") or [] for value in series])
+    all_values = _finite_array([value for series in series_list for value in series])
     if all_values.size == 0 and render_mode == "scatter":
-        all_values = _finite_array(payload.get("y_values") or [])
+        all_values = _finite_array(payload.get("y_values"))
     if all_values.size == 0:
         raise RuntimeError("distribution payload requires finite values")
     y_limits = payload.get("y_limits") if isinstance(payload.get("y_limits"), dict) else {}
@@ -1444,7 +1450,7 @@ def render_distribution_png(payload: dict[str, Any]) -> bytes:
         x_max = _as_float(x_domain.get("max"))
     if x_min is None or x_max is None:
         if render_mode == "scatter":
-            x_values = _finite_array(payload.get("x_values") or [])
+            x_values = _finite_array(payload.get("x_values"))
             x_min = float(np.min(x_values)) if x_values.size else 0.0
             x_max = float(np.max(x_values)) if x_values.size else 1.0
         else:
@@ -1538,8 +1544,8 @@ def render_distribution_png(payload: dict[str, Any]) -> bytes:
     if render_mode == "scatter":
         scatter_points = resolved_render_spec.get("scatter_points") if isinstance(resolved_render_spec.get("scatter_points"), list) else None
         if scatter_points is None:
-            x_values = _finite_array(payload.get("x_values") or [])
-            y_values = _finite_array(payload.get("y_values") or [])
+            x_values = _finite_array(payload.get("x_values"))
+            y_values = _finite_array(payload.get("y_values"))
             scatter_points = [
                 {
                     "x": float(x_value),
@@ -1601,14 +1607,14 @@ def render_distribution_png(payload: dict[str, Any]) -> bytes:
 
     violin_groups = resolved_render_spec.get("violin_groups") if isinstance(resolved_render_spec.get("violin_groups"), list) else None
     if violin_groups is None:
-        positions = list(payload.get("positions") or list(range(len(payload.get("series") or []))))
-        series_list = [_finite_array(series) for series in payload.get("series") or []]
+        positions = list(payload.get("positions") or list(range(len(series_list))))
+        numeric_series_list = [_finite_array(series) for series in series_list]
         violin_groups = [
             {
                 "position": float(position),
                 "values": [float(item) for item in series.tolist()],
             }
-            for position, series in zip(positions, series_list)
+            for position, series in zip(positions, numeric_series_list)
         ]
     else:
         series_list = [_finite_array(group.get("values") or []) for group in violin_groups if isinstance(group, dict)]
@@ -1712,8 +1718,11 @@ def render_iqr_png(payload: dict[str, Any]) -> bytes:
     axis_spec = resolved_render_spec.get("axes") if isinstance(resolved_render_spec.get("axes"), dict) else {}
     title_spec = resolved_render_spec.get("title") if isinstance(resolved_render_spec.get("title"), dict) else {}
     legend_spec = resolved_render_spec.get("legend") if isinstance(resolved_render_spec.get("legend"), dict) else {}
-    labels = [str(item) for item in payload.get("labels") or []]
-    series_list = [_finite_array(series) for series in payload.get("series") or []]
+    raw_labels = _coerce_string_list(payload.get("labels"))
+    raw_series = payload.get("series") if "series" in payload else payload.get("values")
+    numeric_series = _finite_series_list(raw_series, label_count=len(raw_labels) or None)
+    labels = _align_labels_to_series(raw_labels, len(numeric_series))
+    series_list = [_finite_array(series) for series in numeric_series]
     flat_values = _finite_array([item for series in series_list for item in series])
     if flat_values.size == 0:
         raise RuntimeError("iqr payload requires finite values")
@@ -1976,8 +1985,8 @@ def render_trend_png(payload: dict[str, Any]) -> bytes:
     resolved_render_spec = payload.get("resolved_render_spec") if isinstance(payload.get("resolved_render_spec"), dict) else {}
     axis_spec = resolved_render_spec.get("axes") if isinstance(resolved_render_spec.get("axes"), dict) else {}
     title_spec = resolved_render_spec.get("title") if isinstance(resolved_render_spec.get("title"), dict) else {}
-    x_values = _finite_array(payload.get("x_values") or [])
-    y_values = _finite_array(payload.get("y_values") or [])
+    x_values = _finite_array(payload.get("x_values"))
+    y_values = _finite_array(payload.get("y_values"))
     if x_values.size == 0 or y_values.size == 0:
         raise RuntimeError("trend payload requires finite x/y values")
 

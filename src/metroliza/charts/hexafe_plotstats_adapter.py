@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 
 from metroliza.shared.env_utils import FALSE_VALUES, TRUE_VALUES, env_bool
+from metroliza.charts.chart_numeric_helpers import finite_float_list as _finite_float_list
 from metroliza.charts.dashboard_plotly_visuals import apply_dashboard_visual_settings
 from metroliza.charts.distribution_iqr_plotly_specs import build_distribution_iqr_plotly_spec
 from metroliza.charts.export_chart_payload_helpers import build_histogram_table_data
@@ -304,11 +305,11 @@ def _histogram_payload_groups(payload: Mapping[str, Any]) -> list[tuple[str, np.
         for index, item in enumerate(raw_groups, start=1):
             if not isinstance(item, Mapping):
                 continue
-            values = _finite_values(item.get("values") or ())
+            values = _finite_values(item.get("values"))
             if values.size:
                 groups.append((str(item.get("group") or f"Group {index}"), values))
         return groups
-    values = _finite_values(payload.get("values") or ())
+    values = _finite_values(payload.get("values"))
     return [("Frequency", values)] if values.size else []
 
 
@@ -896,11 +897,8 @@ def _close_plotstats_figure(render_result) -> None:
         return
 
 
-def _finite_values(values: Iterable[Any]) -> np.ndarray:
-    array = np.fromiter((_coerce_float(value) for value in values), dtype=float)
-    if array.size == 0:
-        return np.asarray([], dtype=float)
-    return array[np.isfinite(array)]
+def _finite_values(values: Iterable[Any] | Any) -> np.ndarray:
+    return np.asarray(_finite_float_list(values), dtype=float)
 
 
 def _coerce_float(value: Any) -> float:
@@ -2645,21 +2643,7 @@ def _constant_line_axis_and_value(trace: Mapping[str, Any]) -> tuple[str, float 
 
 
 def _finite_trace_values(values: Any) -> list[float]:
-    if isinstance(values, np.ndarray):
-        iterable = values.tolist()
-    elif isinstance(values, (list, tuple)):
-        iterable = values
-    else:
-        return []
-    output: list[float] = []
-    for value in iterable:
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            continue
-        if math.isfinite(number):
-            output.append(number)
-    return output
+    return _finite_float_list(values)
 
 
 def _reference_annotation(*, axis: str, value: float, text: str, color: str) -> dict[str, Any] | None:
