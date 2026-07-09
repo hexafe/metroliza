@@ -2,91 +2,13 @@ import logging
 import json
 import os
 import sqlite3
-import sys
 import tempfile
 import types
 import unittest
 from pathlib import Path
 from unittest import mock
 
-
-_STUBBED_MODULE_NAMES = (
-    'PyQt6',
-    'PyQt6.QtCore',
-    'PyQt6.QtGui',
-    'PyQt6.QtWidgets',
-    'modules.custom_logger',
-    'modules.cmm_report_parser',
-)
-_MISSING_MODULE = object()
-_ORIGINAL_MODULES = {
-    module_name: sys.modules.get(module_name, _MISSING_MODULE)
-    for module_name in _STUBBED_MODULE_NAMES
-}
-
-qtcore_stub = types.ModuleType('PyQt6.QtCore')
-
-
-class _DummyThread:
-    def __init__(self, *args, **kwargs):
-        pass
-
-
-class _DummyCoreApp:
-    @staticmethod
-    def processEvents():
-        return None
-
-
-def _dummy_signal(*args, **kwargs):
-    class _Signal:
-        def emit(self, *a, **k):
-            return None
-
-    return _Signal()
-
-
-pyqt_stub = types.ModuleType('PyQt6')
-qtcore_stub.QCoreApplication = _DummyCoreApp
-qtcore_stub.QThread = _DummyThread
-qtcore_stub.pyqtSignal = _dummy_signal
-pyqt_stub.QtCore = qtcore_stub
-sys.modules['PyQt6'] = pyqt_stub
-sys.modules['PyQt6.QtCore'] = qtcore_stub
-
-custom_logger_stub = types.ModuleType('modules.custom_logger')
-
-
-class _DummyLogger:
-    def __init__(self, *args, **kwargs):
-        pass
-
-
-custom_logger_stub.CustomLogger = _DummyLogger
-sys.modules['modules.custom_logger'] = custom_logger_stub
-
-
-cmm_parser_stub = types.ModuleType('modules.cmm_report_parser')
-
-
-class _DummyCmmReportParser:
-    manifest = types.SimpleNamespace(version='1.1.0')
-
-    def __init__(self, *args, **kwargs):
-        pass
-
-
-cmm_parser_stub.CMMReportParser = _DummyCmmReportParser
-sys.modules['modules.cmm_report_parser'] = cmm_parser_stub
-
-
-def teardown_module(_module):
-    for module_name, original_module in _ORIGINAL_MODULES.items():
-        if original_module is _MISSING_MODULE:
-            sys.modules.pop(module_name, None)
-        else:
-            sys.modules[module_name] = original_module
-from modules.export_data_thread import (  # noqa: E402
+from metroliza.exporting.export_data_thread import (
     ExportDataThread,
     classify_normality_status,
     build_summary_image_anchor_plan,
@@ -94,27 +16,27 @@ from modules.export_data_thread import (  # noqa: E402
     execute_export_query,
     run_export_steps,
 )
-from metroliza.shared.contracts import AppPaths, ExportOptions, ExportRequest  # noqa: E402
-from modules.export_backends import ExcelExportBackend, HtmlDashboardExportBackend  # noqa: E402
-from modules.google_drive_export import GoogleDriveConversionResult  # noqa: E402
-from modules.export_google_result_utils import (  # noqa: E402
+from metroliza.exporting.export_backends import ExcelExportBackend, HtmlDashboardExportBackend
+from metroliza.exporting.export_google_result_utils import (
     build_google_conversion_metadata,
     build_google_fallback_metadata,
     build_google_stage_message,
 )
-from modules.export_logging_service import (  # noqa: E402
+from metroliza.exporting.export_logging_service import (
     build_export_context,
     log_export_stage,
     log_google_issue,
 )
-from modules.parse_reports_thread import (  # noqa: E402
+from metroliza.exporting.google_drive_export import GoogleDriveConversionResult
+from metroliza.parsing.parse_reports_thread import (
     build_report_fingerprints_from_rows,
     build_source_file_fingerprint,
     enrich_report_metadata,
     merge_enriched_metadata_for_persistence,
     parse_new_reports,
 )
-import modules.parse_reports_thread as parse_thread_module  # noqa: E402
+from metroliza.shared.contracts import AppPaths, ExportOptions, ExportRequest
+import metroliza.parsing.parse_reports_thread as parse_thread_module
 
 
 class TestParseHelpers(unittest.TestCase):
@@ -1790,9 +1712,9 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.get_export_backend = lambda: _BackendRunner()
             thread.add_measurements_horizontal_sheet = lambda *_args, **_kwargs: None
             thread.export_filtered_data = lambda *_: None
-            thread.update_progress.emit = lambda value: progress_values.append(value)
-            thread.update_label.emit = lambda *_: None
-            thread.completed.emit = lambda: None
+            thread.update_progress.connect(lambda value: progress_values.append(value))
+            thread.update_label.connect(lambda *_: None)
+            thread.completed.connect(lambda: None)
             thread._active_backend = fake_backend
 
             measurement_df = self._build_multi_header_measurement_dataframe()
@@ -1859,8 +1781,8 @@ class TestExportBackendSmoke(unittest.TestCase):
                 return False
 
             thread._check_canceled = _check_canceled
-            thread.update_progress.emit = lambda value: progress_values.append(value)
-            thread.update_label.emit = lambda *_: None
+            thread.update_progress.connect(lambda value: progress_values.append(value))
+            thread.update_label.connect(lambda *_: None)
 
             measurement_df = self._build_multi_header_measurement_dataframe()
             module.fetch_partition_values = lambda *_args, **_kwargs: ['REF_A', 'REF_B']
@@ -1922,8 +1844,8 @@ class TestExportBackendSmoke(unittest.TestCase):
                 counter['value'] += 0.6
                 return counter['value']
 
-            thread.update_label.emit = lambda text: labels.append(text)
-            thread.update_progress.emit = lambda *_: None
+            thread.update_label.connect(lambda text: labels.append(text))
+            thread.update_progress.connect(lambda *_: None)
 
             measurement_df = self._build_multi_header_measurement_dataframe()
             module.fetch_partition_values = lambda *_args, **_kwargs: ['REF_A', 'REF_B']
@@ -2006,8 +1928,8 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread._export_df_column_order = ()
             workbook = _RecordingWorkbook()
             thread._active_backend = _Backend(workbook)
-            thread.update_progress.emit = lambda *_: None
-            thread.update_label.emit = lambda *_: None
+            thread.update_progress.connect(lambda *_: None)
+            thread.update_label.connect(lambda *_: None)
 
             measurement_df = self._build_multi_header_measurement_dataframe()
             module.fetch_partition_values = lambda *_args, **_kwargs: ['REF_A', 'REF_B']
@@ -2091,8 +2013,8 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread._export_df_column_order = ()
             workbook = _RecordingWorkbook()
             thread._active_backend = _Backend(workbook)
-            thread.update_progress.emit = lambda *_: None
-            thread.update_label.emit = lambda *_: None
+            thread.update_progress.connect(lambda *_: None)
+            thread.update_label.connect(lambda *_: None)
 
             header_count = 16
             headers = [f'H{idx:02d}' for idx in range(1, header_count + 1)]
@@ -2449,8 +2371,8 @@ class TestExportBackendSmoke(unittest.TestCase):
             ):
                 progress_values = []
                 emitted_labels = []
-                thread.update_progress.emit = lambda value: progress_values.append(value)
-                thread.update_label.emit = lambda text: emitted_labels.append(text)
+                thread.update_progress.connect(lambda value: progress_values.append(value))
+                thread.update_label.connect(lambda text: emitted_labels.append(text))
                 thread._write_html_dashboard_if_requested()
 
             self.assertEqual(thread._stage_timings['html_dashboard_plotly_spec_generation'], 1.5)
@@ -2487,10 +2409,10 @@ class TestExportBackendSmoke(unittest.TestCase):
             emitted = []
             errors = []
             finished = []
-            thread.update_label.emit = lambda text: emitted.append(text)
-            thread.update_progress.emit = lambda *_: None
-            thread.error_occurred.emit = lambda message: errors.append(message)
-            thread.completed.emit = lambda: finished.append('finished')
+            thread.update_label.connect(lambda text: emitted.append(text))
+            thread.update_progress.connect(lambda *_: None)
+            thread.error_occurred.connect(lambda message: errors.append(message))
+            thread.completed.connect(lambda: finished.append('finished'))
 
             with mock.patch(
                 'modules.export_data_thread._write_export_html_dashboard',
@@ -2531,8 +2453,8 @@ class TestExportBackendSmoke(unittest.TestCase):
 
         labels = []
         progress_values = []
-        thread.update_label.emit = lambda text: labels.append(text)
-        thread.update_progress.emit = lambda value: progress_values.append(value)
+        thread.update_label.connect(lambda text: labels.append(text))
+        thread.update_progress.connect(lambda value: progress_values.append(value))
 
         self.assertTrue(_Backend().run(thread))
 
@@ -2628,9 +2550,9 @@ class TestExportBackendSmoke(unittest.TestCase):
                 return True
 
         thread.get_export_backend = lambda: _Backend()
-        thread.update_label.emit = lambda *_: None
-        thread.update_progress.emit = lambda *_: None
-        thread.completed.emit = lambda: None
+        thread.update_label.connect(lambda *_: None)
+        thread.update_progress.connect(lambda *_: None)
+        thread.completed.connect(lambda: None)
 
         module = __import__('modules.export_data_thread', fromlist=['ProcessPoolExecutor'])
         previous_executor = module.ProcessPoolExecutor
@@ -3059,8 +2981,8 @@ class TestExportBackendSmoke(unittest.TestCase):
         thread._optimization_toggles['summary_sheet_minimum_charts'] = {'iqr'}
         errors = []
         labels = []
-        thread.error_occurred.emit = lambda message: errors.append(message)
-        thread.update_label.emit = lambda message: labels.append(message)
+        thread.error_occurred.connect(lambda message: errors.append(message))
+        thread.update_label.connect(lambda message: labels.append(message))
 
         def _raise_iqr_payload(*_args, **_kwargs):
             raise TypeError("'int' object is not iterable")
@@ -3675,10 +3597,10 @@ class TestExportBackendSmoke(unittest.TestCase):
 
             emitted = []
             errors = []
-            thread.update_label.emit = lambda text: emitted.append(text)
-            thread.update_progress.emit = lambda *_: None
-            thread.completed.emit = lambda: calls.append('finished')
-            thread.error_occurred.emit = lambda message: errors.append(message)
+            thread.update_label.connect(lambda text: emitted.append(text))
+            thread.update_progress.connect(lambda *_: None)
+            thread.completed.connect(lambda: calls.append('finished'))
+            thread.error_occurred.connect(lambda message: errors.append(message))
 
             module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
@@ -3721,9 +3643,9 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.get_export_backend = lambda: _Backend()
 
             emitted = []
-            thread.update_label.emit = lambda text: emitted.append(text)
-            thread.update_progress.emit = lambda *_: None
-            thread.completed.emit = lambda: None
+            thread.update_label.connect(lambda text: emitted.append(text))
+            thread.update_progress.connect(lambda *_: None)
+            thread.completed.connect(lambda: None)
 
             module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
@@ -3781,9 +3703,9 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.get_export_backend = lambda: _Backend()
 
             captured = {}
-            thread.update_label.emit = lambda *_: None
-            thread.update_progress.emit = lambda *_: None
-            thread.completed.emit = lambda: None
+            thread.update_label.connect(lambda *_: None)
+            thread.update_progress.connect(lambda *_: None)
+            thread.completed.connect(lambda: None)
 
             module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
@@ -3827,9 +3749,9 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.get_export_backend = lambda: _Backend()
 
             emitted = []
-            thread.update_label.emit = lambda text: emitted.append(text)
-            thread.update_progress.emit = lambda *_: None
-            thread.completed.emit = lambda: None
+            thread.update_label.connect(lambda text: emitted.append(text))
+            thread.update_progress.connect(lambda *_: None)
+            thread.completed.connect(lambda: None)
 
             module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
@@ -3879,10 +3801,10 @@ class TestExportBackendSmoke(unittest.TestCase):
 
             canceled_calls = []
             finished_calls = []
-            thread.update_label.emit = lambda *_: None
-            thread.update_progress.emit = lambda *_: None
-            thread.canceled.emit = lambda: canceled_calls.append('canceled')
-            thread.completed.emit = lambda: finished_calls.append('finished')
+            thread.update_label.connect(lambda *_: None)
+            thread.update_progress.connect(lambda *_: None)
+            thread.canceled.connect(lambda: canceled_calls.append('canceled'))
+            thread.completed.connect(lambda: finished_calls.append('finished'))
 
             module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
@@ -3920,9 +3842,9 @@ class TestExportBackendSmoke(unittest.TestCase):
             emitted = []
             finished_calls = []
             logger_calls = []
-            thread.update_label.emit = lambda text: emitted.append(text)
-            thread.update_progress.emit = lambda *_: None
-            thread.completed.emit = lambda: finished_calls.append('finished')
+            thread.update_label.connect(lambda text: emitted.append(text))
+            thread.update_progress.connect(lambda *_: None)
+            thread.completed.connect(lambda: finished_calls.append('finished'))
             thread.log_and_exit = lambda exc: logger_calls.append(str(exc))
 
             module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
@@ -3965,9 +3887,9 @@ class TestExportBackendSmoke(unittest.TestCase):
             emitted = []
             finished_calls = []
             logger_calls = []
-            thread.update_label.emit = lambda text: emitted.append(text)
-            thread.update_progress.emit = lambda *_: None
-            thread.completed.emit = lambda: finished_calls.append('finished')
+            thread.update_label.connect(lambda text: emitted.append(text))
+            thread.update_progress.connect(lambda *_: None)
+            thread.completed.connect(lambda: finished_calls.append('finished'))
             thread.log_and_exit = lambda exc: logger_calls.append(str(exc))
 
             module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
@@ -4009,9 +3931,9 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.get_export_backend = lambda: _Backend()
 
             emitted = []
-            thread.update_label.emit = lambda text: emitted.append(text)
-            thread.update_progress.emit = lambda *_: None
-            thread.completed.emit = lambda: None
+            thread.update_label.connect(lambda text: emitted.append(text))
+            thread.update_progress.connect(lambda *_: None)
+            thread.completed.connect(lambda: None)
 
             module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
@@ -4054,9 +3976,9 @@ class TestExportBackendSmoke(unittest.TestCase):
                     return True
 
             thread.get_export_backend = lambda: _Backend()
-            thread.update_label.emit = lambda *_: None
-            thread.update_progress.emit = lambda *_: None
-            thread.completed.emit = lambda: None
+            thread.update_label.connect(lambda *_: None)
+            thread.update_progress.connect(lambda *_: None)
+            thread.completed.connect(lambda: None)
 
             module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
@@ -4123,9 +4045,9 @@ class TestExportBackendSmoke(unittest.TestCase):
                     return True
 
             thread.get_export_backend = lambda: _Backend()
-            thread.update_label.emit = lambda *_: None
-            thread.update_progress.emit = lambda *_: None
-            thread.completed.emit = lambda: None
+            thread.update_label.connect(lambda *_: None)
+            thread.update_progress.connect(lambda *_: None)
+            thread.completed.connect(lambda: None)
 
             module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
@@ -4202,9 +4124,9 @@ class TestExportBackendSmoke(unittest.TestCase):
                     return True
 
             thread.get_export_backend = lambda: _Backend()
-            thread.update_label.emit = lambda *_: None
-            thread.update_progress.emit = lambda *_: None
-            thread.completed.emit = lambda: None
+            thread.update_label.connect(lambda *_: None)
+            thread.update_progress.connect(lambda *_: None)
+            thread.completed.connect(lambda: None)
 
             module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
@@ -4256,9 +4178,9 @@ class TestExportBackendSmoke(unittest.TestCase):
                     return True
 
             thread.get_export_backend = lambda: _Backend()
-            thread.update_label.emit = lambda *_: None
-            thread.update_progress.emit = lambda *_: None
-            thread.completed.emit = lambda: None
+            thread.update_label.connect(lambda *_: None)
+            thread.update_progress.connect(lambda *_: None)
+            thread.completed.connect(lambda: None)
 
             module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
@@ -4295,9 +4217,9 @@ class TestExportBackendSmoke(unittest.TestCase):
                     return True
 
             thread.get_export_backend = lambda: _Backend()
-            thread.update_label.emit = lambda *_: None
-            thread.update_progress.emit = lambda *_: None
-            thread.completed.emit = lambda: None
+            thread.update_label.connect(lambda *_: None)
+            thread.update_progress.connect(lambda *_: None)
+            thread.completed.connect(lambda: None)
             thread.log_and_exit = lambda *_: None
 
             module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
@@ -4705,9 +4627,9 @@ class TestExportBackendSmoke(unittest.TestCase):
                     return True
 
             thread.get_export_backend = lambda: _Backend()
-            thread.update_label.emit = lambda *_: None
-            thread.update_progress.emit = lambda *_: None
-            thread.completed.emit = lambda: None
+            thread.update_label.connect(lambda *_: None)
+            thread.update_progress.connect(lambda *_: None)
+            thread.completed.connect(lambda: None)
 
             stage_logs = []
             original_log_export_stage = thread._log_export_stage

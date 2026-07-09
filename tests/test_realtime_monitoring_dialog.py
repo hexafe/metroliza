@@ -3,19 +3,12 @@ from types import SimpleNamespace
 
 import pytest
 
-try:
-    from PyQt6.QtCore import Qt
-    from PyQt6.QtWidgets import QApplication
-    from metroliza.ui.realtime_industrial_monitoring_dialog import (
-        RealtimeIndustrialMonitoringDialog,
-    )
-except ImportError as exc:  # pragma: no cover - environment-dependent import
-    Qt = None
-    QApplication = None
-    RealtimeIndustrialMonitoringDialog = None
-    PYQT_IMPORT_ERROR = exc
-else:
-    PYQT_IMPORT_ERROR = None
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QApplication
+
+from metroliza.ui.realtime_industrial_monitoring_dialog import (
+    RealtimeIndustrialMonitoringDialog,
+)
 
 from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
 from metroliza.industrial.industrial_source_config import (
@@ -40,8 +33,6 @@ class _Signal:
 
 @pytest.fixture
 def qapp():
-    if PYQT_IMPORT_ERROR is not None:
-        pytest.skip(f"PyQt6 is unavailable in this environment: {PYQT_IMPORT_ERROR}")
     return QApplication.instance() or QApplication([])
 
 
