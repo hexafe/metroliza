@@ -7,10 +7,13 @@ import copy
 import html
 import json
 import math
+import os
 from pathlib import Path
 import re
+import shutil
 from time import perf_counter
 from typing import Any
+from uuid import uuid4
 
 from metroliza.charts.dashboard_navigation import (
     render_back_to_section,
@@ -348,7 +351,67 @@ def write_export_html_dashboard(
     plotly_visual_settings: dict[str, Any] | None = None,
     dashboard_visual_settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Persist an HTML dashboard plus a sibling asset directory."""
+    """Publish one complete dashboard generation without mixing old and new assets."""
+
+    dashboard_path = Path(str(output_path))
+    asset_base = Path(str(assets_dir))
+    generation_id = uuid4().hex
+    generation_directory = asset_base.with_name(
+        f"{asset_base.name}.generation-{generation_id}"
+    )
+    temporary_dashboard_path = dashboard_path.with_name(
+        f".{dashboard_path.name}.{generation_id}.tmp"
+    )
+    dashboard_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        result = _write_export_html_dashboard_generation(
+            excel_file=excel_file,
+            output_path=temporary_dashboard_path,
+            assets_dir=generation_directory,
+            sections=sections,
+            chart_observability_summary=chart_observability_summary,
+            backend_diagnostics_lines=backend_diagnostics_lines,
+            group_analysis_payload=group_analysis_payload,
+            group_analysis_plot_assets=group_analysis_plot_assets,
+            source_label=source_label or dashboard_path.name,
+            dashboard_mode=dashboard_mode,
+            plotly_spec_count_budget=plotly_spec_count_budget,
+            plotly_serialized_json_bytes_budget=plotly_serialized_json_bytes_budget,
+            plotly_visual_settings=plotly_visual_settings,
+            dashboard_visual_settings=dashboard_visual_settings,
+        )
+        os.replace(temporary_dashboard_path, dashboard_path)
+    except BaseException:
+        temporary_dashboard_path.unlink(missing_ok=True)
+        shutil.rmtree(generation_directory, ignore_errors=True)
+        raise
+
+    _remove_obsolete_dashboard_generations(asset_base, keep=generation_directory)
+    result["html_dashboard_path"] = str(dashboard_path)
+    result["html_dashboard_assets_path"] = str(generation_directory)
+    result["html_dashboard_generation"] = generation_id
+    return result
+
+
+def _write_export_html_dashboard_generation(
+    *,
+    excel_file: str | Path | None = None,
+    output_path: str | Path,
+    assets_dir: str | Path,
+    sections: list[dict[str, Any]],
+    chart_observability_summary: dict[str, Any] | None = None,
+    backend_diagnostics_lines: list[str] | None = None,
+    group_analysis_payload: dict[str, Any] | None = None,
+    group_analysis_plot_assets: dict[str, Any] | None = None,
+    source_label: str | None = None,
+    dashboard_mode: str = "workbook_sidecar",
+    plotly_spec_count_budget: int | None = _DEFAULT_PLOTLY_SPEC_COUNT_BUDGET,
+    plotly_serialized_json_bytes_budget: int | None = _DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET,
+    plotly_visual_settings: dict[str, Any] | None = None,
+    dashboard_visual_settings: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build one isolated HTML dashboard generation."""
 
     total_start = perf_counter()
     timings_s = _new_dashboard_timing_summary()
@@ -547,6 +610,26 @@ def write_export_html_dashboard(
         },
         "html_dashboard_timings_s": {key: float(value) for key, value in timings_s.items()},
     }
+
+
+def _remove_obsolete_dashboard_generations(asset_base: Path, *, keep: Path) -> None:
+    """Best-effort cleanup after the new HTML generation is committed."""
+
+    candidates = list(asset_base.parent.glob(f"{asset_base.name}.generation-*"))
+    if asset_base.exists():
+        candidates.append(asset_base)
+    for candidate in candidates:
+        if candidate == keep:
+            continue
+        try:
+            if candidate.is_dir():
+                shutil.rmtree(candidate)
+            else:
+                candidate.unlink(missing_ok=True)
+        except OSError:
+            # Windows viewers may temporarily retain an asset handle. The old
+            # generation is no longer referenced and can be removed next run.
+            continue
 
 
 def _coerce_image_bytes(image_buffer: Any) -> bytes:

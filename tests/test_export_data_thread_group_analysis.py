@@ -1,6 +1,5 @@
 import os
 import re
-import sys
 import tempfile
 import sqlite3
 import types
@@ -15,51 +14,19 @@ import pandas as pd
 
 from pathlib import Path
 
-from modules.chart_render_spec import build_resolved_distribution_spec, build_resolved_iqr_spec, build_resolved_trend_spec  # noqa: E402
-from modules.report_repository import ReportRepository  # noqa: E402
-
-
-qtcore_stub = sys.modules.get('PyQt6.QtCore') or types.ModuleType('PyQt6.QtCore')
-
-
-class _DummyThread:
-    def __init__(self, *args, **kwargs):
-        pass
-
-
-class _DummyCoreApp:
-    @staticmethod
-    def processEvents():
-        return None
-
-
-def _dummy_signal(*args, **kwargs):
-    class _Signal:
-        def emit(self, *a, **k):
-            return None
-
-    return _Signal()
-
-
-qtcore_stub.QCoreApplication = getattr(qtcore_stub, 'QCoreApplication', _DummyCoreApp)
-qtcore_stub.QThread = getattr(qtcore_stub, 'QThread', _DummyThread)
-qtcore_stub.pyqtSignal = getattr(qtcore_stub, 'pyqtSignal', _dummy_signal)
-sys.modules['PyQt6.QtCore'] = qtcore_stub
-
-custom_logger_stub = types.ModuleType('modules.custom_logger')
-
-
-class _DummyLogger:
-    def __init__(self, *args, **kwargs):
-        pass
-
-
-custom_logger_stub.CustomLogger = _DummyLogger
-sys.modules.setdefault('modules.custom_logger', custom_logger_stub)
-from modules.export_data_thread import ExportDataThread  # noqa: E402
-import modules.export_data_thread as export_data_thread_module  # noqa: E402
-from modules.export_html_dashboard import resolve_html_dashboard_assets_dir, resolve_html_dashboard_path  # noqa: E402
-from modules.contracts import AppPaths, ExportOptions, ExportRequest  # noqa: E402
+from metroliza.charts.chart_render_spec import (
+    build_resolved_distribution_spec,
+    build_resolved_iqr_spec,
+    build_resolved_trend_spec,
+)
+from metroliza.charts.export_html_dashboard import (
+    resolve_html_dashboard_assets_dir,
+    resolve_html_dashboard_path,
+)
+from metroliza.exporting.export_data_thread import ExportDataThread
+import metroliza.exporting.export_data_thread as export_data_thread_module
+from metroliza.reports.report_repository import ReportRepository
+from metroliza.shared.contracts import AppPaths, ExportOptions, ExportRequest
 
 
 def _xlsx_sheet_names(xlsx_path):
@@ -1053,7 +1020,11 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             html_path = resolve_html_dashboard_path(out_path)
             assets_path = resolve_html_dashboard_assets_dir(html_path)
             self.assertTrue(Path(html_path).exists())
-            self.assertTrue(Path(assets_path, 'plotly-2.27.0.min.js').exists())
+            generations = list(
+                assets_path.parent.glob(f'{assets_path.name}.generation-*')
+            )
+            self.assertEqual(1, len(generations))
+            self.assertTrue(Path(generations[0], 'plotly-2.27.0.min.js').exists())
             html_text = Path(html_path).read_text(encoding='utf-8')
 
             self.assertIn('Group Analysis', html_text)
@@ -1062,7 +1033,7 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             self.assertIn('Pairwise comparisons', html_text)
             self.assertIn('plotly-chart', html_text)
             self.assertIn('data-plotly-spec-dark=', html_text)
-            self.assertIn(f'{Path(assets_path).name}/plotly-2.27.0.min.js', html_text)
+            self.assertIn(f'{generations[0].name}/plotly-2.27.0.min.js', html_text)
             self.assertIn('data-theme-choice="auto"', html_text)
             self.assertIn('data-theme-choice="light"', html_text)
             self.assertIn('data-theme-choice="dark"', html_text)

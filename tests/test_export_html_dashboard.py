@@ -340,7 +340,11 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn('plotly-chart', html_text)
             self.assertIn('Image snapshot.', html_text)
             self.assertNotIn('Workbook-matching PNG snapshot.', html_text)
-            self.assertIn('report_dashboard_assets/section_001_diameter-x_histogram_01.png', html_text)
+            generation_name = Path(result['html_dashboard_assets_path']).name
+            self.assertIn(
+                f'{generation_name}/section_001_diameter-x_histogram_01.png',
+                html_text,
+            )
             self.assertIn('data-plotly-spec-light=', html_text)
             embedded_specs = _embedded_plotly_specs(html_text)
             self.assertEqual(len(embedded_specs), 3)
@@ -371,7 +375,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn('<option value="auto" selected>', html_text)
             self.assertIn('data-visual-palette-index="0"', html_text)
             self.assertNotIn('data-visual-opacity', html_text)
-            self.assertIn('report_dashboard_assets/plotly-2.27.0.min.js', html_text)
+            self.assertIn(f'{generation_name}/plotly-2.27.0.min.js', html_text)
             self.assertNotIn('cdn.plot.ly/plotly-2.27.0.min.js', html_text)
             self.assertIn('data-theme-choice="auto"', html_text)
             self.assertIn('data-theme-choice="light"', html_text)
@@ -475,6 +479,97 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn('html_write', timings)
             self.assertGreaterEqual(timings['total'], timings['plotly_spec_generation'])
             self.assertEqual(result['html_dashboard_plotly_spec_count'], 3)
+
+    def test_failed_regeneration_preserves_previous_html_and_asset_generation(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            html_path = Path(tmpdir) / 'report_dashboard.html'
+            assets_dir = resolve_html_dashboard_assets_dir(html_path)
+            old_result = write_export_html_dashboard(
+                output_path=html_path,
+                assets_dir=assets_dir,
+                sections=[
+                    {
+                        'header': 'Old',
+                        'charts': [
+                            {
+                                'chart_type': 'histogram',
+                                'title': 'Old chart',
+                                'image_buffer': BytesIO(b'old-image'),
+                            }
+                        ],
+                    }
+                ],
+            )
+            old_html = html_path.read_bytes()
+            old_generation = Path(old_result['html_dashboard_assets_path'])
+            old_image = next(old_generation.glob('*.png'))
+
+            with patch(
+                'modules.export_html_dashboard._coerce_image_bytes',
+                side_effect=[b'new-image', RuntimeError('render failed')],
+            ):
+                with self.assertRaisesRegex(RuntimeError, 'render failed'):
+                    write_export_html_dashboard(
+                        output_path=html_path,
+                        assets_dir=assets_dir,
+                        sections=[
+                            {
+                                'header': 'New',
+                                'charts': [
+                                    {'chart_type': 'histogram', 'image_buffer': b'first'},
+                                    {'chart_type': 'histogram', 'image_buffer': b'second'},
+                                ],
+                            }
+                        ],
+                    )
+
+            self.assertEqual(old_html, html_path.read_bytes())
+            self.assertEqual(b'old-image', old_image.read_bytes())
+            self.assertEqual(
+                [old_generation],
+                list(assets_dir.parent.glob(f'{assets_dir.name}.generation-*')),
+            )
+
+    def test_successful_regeneration_removes_obsolete_asset_generation(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            html_path = Path(tmpdir) / 'report_dashboard.html'
+            assets_dir = resolve_html_dashboard_assets_dir(html_path)
+            old_result = write_export_html_dashboard(
+                output_path=html_path,
+                assets_dir=assets_dir,
+                sections=[
+                    {
+                        'header': 'Old',
+                        'charts': [
+                            {'chart_type': 'histogram', 'image_buffer': b'old-1'},
+                            {'chart_type': 'histogram', 'image_buffer': b'old-2'},
+                        ],
+                    }
+                ],
+            )
+            old_generation = Path(old_result['html_dashboard_assets_path'])
+
+            new_result = write_export_html_dashboard(
+                output_path=html_path,
+                assets_dir=assets_dir,
+                sections=[
+                    {
+                        'header': 'New',
+                        'charts': [
+                            {'chart_type': 'histogram', 'image_buffer': b'new-only'},
+                        ],
+                    }
+                ],
+            )
+            new_generation = Path(new_result['html_dashboard_assets_path'])
+
+            self.assertFalse(old_generation.exists())
+            self.assertTrue(new_generation.exists())
+            self.assertEqual(
+                [b'new-only'],
+                [path.read_bytes() for path in new_generation.glob('*.png')],
+            )
+            self.assertIn(new_generation.name, html_path.read_text(encoding='utf-8'))
 
     def test_write_export_html_dashboard_section_sample_size_is_independent_from_plot_count(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -668,7 +763,9 @@ class TestExportHtmlDashboard(unittest.TestCase):
                 result['html_dashboard_plotly_budget']['serialized_json_bytes_budget']
             )
             self.assertIn('<div class="plotly-shell">', html_text)
-            self.assertTrue((assets_dir / 'plotly-2.27.0.min.js').exists())
+            self.assertTrue(
+                (Path(result['html_dashboard_assets_path']) / 'plotly-2.27.0.min.js').exists()
+            )
 
     def test_write_export_html_dashboard_keeps_plotly_subset_when_budget_exceeded(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -724,7 +821,9 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn('spec_count>1', result['html_dashboard_plotly_budget']['reason'])
             self.assertIn('<div class="plotly-shell">', html_text)
             self.assertIn('1 interactive chart was replaced with image snapshots', html_text)
-            self.assertTrue((assets_dir / 'plotly-2.27.0.min.js').exists())
+            self.assertTrue(
+                (Path(result['html_dashboard_assets_path']) / 'plotly-2.27.0.min.js').exists()
+            )
 
     def test_plotly_chart_spec_bundle_exposes_light_and_dark_variants(self):
         with patch('modules.export_html_dashboard.plotstats_export_charts_enabled', return_value=False):
