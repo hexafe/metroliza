@@ -373,12 +373,6 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
         if is_comment_or_header(line):
             line, raw_lines_to_skip = extract_header_comment(raw_lines[index : index + 10])
 
-        if index == len(raw_lines) - 1:
-            if text_block:
-                text_block = [header_comment] + [dim_block]
-                pdf_blocks_text.append(text_block)
-                text_block, header_comment, dim_block = [], [], []
-
         line_tokens = split_lines[index]
         if not is_comment_or_header(line) and len(line_tokens) == 3:
             continue

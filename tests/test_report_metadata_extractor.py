@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 from modules.report_identity import build_report_identity_hash
 from modules.report_metadata_extractor import extract_report_metadata
 from modules.report_metadata_models import MetadataExtractionContext
@@ -313,6 +315,53 @@ def test_rapidocr_style_position_cells_extract_embedded_time_and_strip_operator_
     corrections = metadata.metadata_json["field_corrections"]
     assert corrections["report_time"]["source_cell"] == "row0_date_cell:embedded_time"
     assert corrections["operator_name"]["correction_rule"] == "operator_alias:cmm_operator_a"
+
+
+@pytest.mark.parametrize(
+    ("date_cell_items", "expected_date", "expected_time"),
+    [
+        (("2024.07.09", "13:41"), "2024-07-09", "13:41"),
+        (("2024.07.09",), "2024-07-09", None),
+        (("2024.07.09", "25:61"), "2024-07-09", None),
+        (("stycznia 28, 2024", "13", ":", "41"), "2024-01-28", "13:41"),
+    ],
+)
+def test_positional_date_cell_extracts_only_valid_colon_delimited_time(
+    date_cell_items,
+    expected_date,
+    expected_time,
+):
+    header_items = [
+        _item("PART NAME", 167.2, 15.7, 207.9, 20.9),
+        _item("WidgetAB123 1.0L", 232.6, 15.7, 281.3, 21.4),
+    ]
+    header_items.extend(
+        [
+            _item(text, 445.0 + index * 18.0, 15.4, 461.0 + index * 18.0, 21.7)
+            for index, text in enumerate(date_cell_items)
+        ]
+    )
+    header_items.extend(
+        [
+            _item("DRAWING REV", 167.4, 44.8, 213.0, 50.6),
+            _item("D.01", 231.8, 44.8, 245.0, 51.1),
+            _item("DRAWING No", 296.5, 44.8, 337.2, 50.6),
+            _item("VTST5001_001", 358.4, 45.1, 405.8, 50.6),
+            _item("STATS COUNT", 423.5, 45.1, 469.4, 50.0),
+            _item("1", 491.3, 45.6, 494.4, 49.5),
+        ]
+    )
+
+    result = _extract(
+        "VTST5001_Widget_AB123_1.0L_2024.07.09_1.pdf",
+        header_items,
+        width=595.273,
+        height=841.886,
+    )
+
+    assert result.metadata.report_date == expected_date
+    assert result.metadata.report_time == expected_time
+    assert result.metadata.metadata_json["field_sources"]["report_date"] == "position_cell"
 
 
 def test_filename_split_date_fallback_does_not_pollute_part_name():

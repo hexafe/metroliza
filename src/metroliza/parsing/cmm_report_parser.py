@@ -117,6 +117,16 @@ def _load_pdf_backend():
     return require_pdf_backend()
 
 
+class EmptyCMMReportError(RuntimeError):
+    """Raised when a CMM report produces no persistable measurement rows."""
+
+    parser_id = "cmm"
+    measurement_count = 0
+
+    def __init__(self, source_path: str | Path):
+        self.source_path = str(source_path)
+        super().__init__(f"CMM report contains no parsed measurements: {self.source_path}")
+
 
 class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
     """Class to parse and convert PDF CMM report."""
@@ -1170,10 +1180,10 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         try:
             if not any(lst[1] for lst in self.blocks_text):
                 logger.warning(
-                    "Report '%s' has no measurements data; skipping database insertion.",
+                    "Report '%s' has no measurements data; failing database insertion.",
                     self.file_name,
                 )
-                return
+                raise EmptyCMMReportError(self.source_path)
 
             if self._metadata_selection_result is None:
                 self.extract_metadata()

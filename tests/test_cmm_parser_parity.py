@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from metroliza.parsing.cmm_report_parser import EmptyCMMReportError
 from modules.cmm_report_parser import CMMReportParser
 from modules.cmm_native_parser import (
     native_backend_available,
@@ -76,6 +77,22 @@ def test_cmm_to_sqlite_reraises_repository_failures(tmp_path, monkeypatch):
         parser.to_sqlite()
 
     assert [str(error) for error in logged_errors] == ["persist failed"]
+
+
+def test_cmm_to_sqlite_raises_structured_failure_for_empty_measurements(tmp_path):
+    report_file = tmp_path / "empty.pdf"
+    parser = CMMReportParser(str(report_file), str(tmp_path / "reports.db"))
+    parser.blocks_text = [[["EMPTY"], []]]
+    logged_errors = []
+    parser.log_and_exit = lambda exc: logged_errors.append(exc)
+
+    with pytest.raises(EmptyCMMReportError) as exc_info:
+        parser.to_sqlite()
+
+    assert exc_info.value.parser_id == "cmm"
+    assert exc_info.value.measurement_count == 0
+    assert exc_info.value.source_path == str(report_file.absolute())
+    assert logged_errors == [exc_info.value]
 
 
 @pytest.mark.parametrize("fixture", _load_fixtures(), ids=lambda f: f["name"])
@@ -265,7 +282,24 @@ def test_interrupted_block_starts_new_header_after_measurement_gap():
 
     assert [block[0] for block in parsed] == [[["BLOCK ONE"]], [["BLOCK TWO"]]]
     assert parsed[0][1] == [["X", 1.0, 0.1, -0.1, 0.0, 1.0, 0.0, 0.0]]
-    assert parsed[1][1] == []
+    assert parsed[1][1] == [["Y", 2.0, 0.2, -0.2, 0.0, 2.0, 0.0, 0.0]]
+
+
+def test_terminal_measurement_row_is_parsed_before_final_block_flush():
+    parsed = parse_raw_lines_to_blocks(
+        [
+            "#TERMINAL ROW",
+            "DIM",
+            "X 10 0.2 -0.2 10.1 0.1 0",
+        ]
+    )
+
+    assert parsed == [
+        [
+            [["TERMINAL ROW"]],
+            [["X", 10.0, 0.2, -0.2, 0.0, 10.1, 0.1, 0.0]],
+        ]
+    ]
 
 
 def test_malformed_numeric_tokens_are_dropped_without_breaking_following_rows():
@@ -278,7 +312,12 @@ def test_malformed_numeric_tokens_are_dropped_without_breaking_following_rows():
 
     parsed = parse_raw_lines_to_blocks(raw_lines)
 
-    assert parsed == [[[ ["MALFORMED"] ], []]]
+    assert parsed == [
+        [
+            [["MALFORMED"]],
+            [["Y", 5.0, 0.1, -0.1, 0.0, 5.05, 0.05, 0.0]],
+        ]
+    ]
 
 
 def test_add_tolerances_keeps_explicit_zero_values_for_tp_blocks():

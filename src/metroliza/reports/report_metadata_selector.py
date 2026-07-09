@@ -44,7 +44,9 @@ class HeaderTextItem:
 
 _SPACE_RE = re.compile(r"\s+")
 _DATE_RE = re.compile(r"(\d{4}[.\-/_]\d{1,2}[.\-/_]\d{1,2})")
-_TIME_IN_TEXT_RE = re.compile(r"\b(?P<time>\d{1,2}[.:/\-\s]\d{2}(?:[.:/\-\s]\d{2})?)\b")
+_TIME_IN_TEXT_RE = re.compile(
+    r"(?<!\d)(?P<time>\d{1,2}\s*:\s*\d{2}(?:\s*:\s*\d{2})?)(?!\d)"
+)
 
 
 def _collapse_spaces(value: str) -> str:

@@ -3,23 +3,25 @@
 from __future__ import annotations
 
 import importlib
-import sys
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 
-def _load_cmm_report_parser_class():
-    module_name = "metroliza.parsing.cmm_report_parser"
-    module = sys.modules.get(module_name)
-    parser_cls = getattr(module, "CMMReportParser", None) if module is not None else None
-    if parser_cls is not None and getattr(parser_cls, "__module__", "") == module_name:
-        return parser_cls
-
-    if module is not None:
-        sys.modules.pop(module_name, None)
-
-    module = importlib.import_module(module_name)
-    return module.CMMReportParser
+def _resolve_cmm_report_parser_class(fixture: Path):
+    parser_factory = importlib.import_module("metroliza.reports.report_parser_factory")
+    diagnostics = parser_factory.resolve_parser_with_diagnostics(fixture)
+    selected = diagnostics.selected
+    if selected is None:
+        raise RuntimeError(
+            "Packaged PDF parser smoke failed during parser resolution: "
+            f"{diagnostics.rejected_reason or 'no parser selected'}"
+        )
+    if selected.plugin_id != "cmm":
+        raise RuntimeError(
+            "Packaged PDF parser smoke selected an unexpected parser: "
+            f"{selected.plugin_id}"
+        )
+    return parser_factory.PARSER_MAP[selected.plugin_id]
 
 
 def run_pdf_parser_smoke(fixture_path: str | Path, expected_text: str) -> None:
@@ -32,7 +34,7 @@ def run_pdf_parser_smoke(fixture_path: str | Path, expected_text: str) -> None:
     if not expected_token:
         raise ValueError("Expected PDF parser smoke text must be non-empty")
 
-    CMMReportParser = _load_cmm_report_parser_class()
+    CMMReportParser = _resolve_cmm_report_parser_class(fixture)
 
     with NamedTemporaryFile(suffix='.sqlite3') as temp_db:
         parser = CMMReportParser(str(fixture), temp_db.name)

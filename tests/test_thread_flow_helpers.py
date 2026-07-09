@@ -28,6 +28,7 @@ from metroliza.exporting.export_logging_service import (
     log_google_issue,
 )
 from metroliza.exporting.google_drive_export import GoogleDriveConversionResult
+from metroliza.parsing.cmm_report_parser import EmptyCMMReportError
 from metroliza.parsing.parse_reports_thread import (
     build_report_fingerprints_from_rows,
     build_source_file_fingerprint,
@@ -722,6 +723,44 @@ class TestParseHelpers(unittest.TestCase):
             self.assertEqual(len(failed), 1)
             self.assertEqual(failed[0][0], 'broken.pdf')
             self.assertEqual(failed[0][1], 'RuntimeError')
+
+    def test_parse_new_reports_counts_empty_cmm_as_failed_without_fingerprinting(self):
+        class DummyParser:
+            def __init__(self, report):
+                self.FILE_PATH = str(report)
+                self.stage_timings_s = {}
+
+            def prepare_for_two_stage_pipeline(self):
+                return None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report = os.path.join(tmpdir, "empty.pdf")
+            with open(report, "wb") as report_file:
+                report_file.write(b"%PDF-1.4")
+
+            for enable_two_stage_pipeline in (False, True):
+                with self.subTest(enable_two_stage_pipeline=enable_two_stage_pipeline):
+                    fingerprints = set()
+                    failures = []
+
+                    def persist_report(_parser):
+                        raise EmptyCMMReportError(report)
+
+                    result = parse_new_reports(
+                        [report],
+                        fingerprints,
+                        parser_factory=DummyParser,
+                        persist_report=persist_report,
+                        on_file_failed=lambda _report, exc, _processed, _total: failures.append(exc),
+                        enable_two_stage_pipeline=enable_two_stage_pipeline,
+                        worker_count=1,
+                    )
+
+                    self.assertEqual(result.parsed_files, 0)
+                    self.assertEqual(result.failed_files, 1)
+                    self.assertEqual(fingerprints, set())
+                    self.assertEqual(len(failures), 1)
+                    self.assertIsInstance(failures[0], EmptyCMMReportError)
 
     def test_parse_new_reports_two_stage_deterministic_end_state_matches_sequential(self):
         class DummyParser:
