@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import mimetypes
+import os
 import sys
 import time
 import urllib.error
@@ -48,6 +49,17 @@ GOOGLE_OAUTH_SCOPES = (GOOGLE_DRIVE_SCOPE,)
 GOOGLE_DRIVE_REPORTS_FOLDER_NAME = "metroliza_reports"
 GOOGLE_OAUTH_TOKEN_HOSTS = {"oauth2.googleapis.com", "accounts.google.com"}
 logger = get_operation_logger(logging.getLogger(__name__), "google_conversion")
+
+_PERSISTED_TOKEN_FIELDS = frozenset(
+    {
+        "access_token",
+        "refresh_token",
+        "scopes",
+        "scope",
+        "token_type",
+        "expires_at",
+    }
+)
 
 
 class GoogleDriveExportError(RuntimeError):
@@ -77,6 +89,112 @@ class GoogleDriveCanceledError(GoogleDriveExportError):
 
 class GoogleDriveTimeoutError(GoogleDriveTransientError):
     """Google export exceeded configured timeout budget."""
+
+
+def default_google_token_path() -> Path:
+    """Return the private per-user OAuth token path."""
+
+    return Path.home() / ".metroliza" / "google" / "token.json"
+
+
+@dataclass(frozen=True)
+class TokenStore:
+    """Persist OAuth tokens through private, atomic local files."""
+
+    path: Path
+
+    def load(self) -> dict[str, Any]:
+        if not self.path.exists():
+            raise GoogleDriveAuthError(
+                "Missing token.json for Google Drive export. "
+                "Please complete OAuth authorization first."
+            )
+        _reject_token_symlink(self.path)
+        _harden_private_file(self.path)
+        return _read_json_file(self.path)
+
+    def save(self, token_payload: dict[str, Any]) -> None:
+        _reject_token_symlink(self.path)
+        parent = self.path.parent
+        parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        _harden_private_directory(parent)
+        payload = _persistable_token_payload(token_payload)
+        temporary_path = parent / f".{self.path.name}.{os.getpid()}.{time.time_ns()}.tmp"
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        descriptor = os.open(temporary_path, flags, 0o600)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, indent=2)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            _harden_private_file(temporary_path)
+            os.replace(temporary_path, self.path)
+            _harden_private_file(self.path)
+            _fsync_directory(parent)
+        except BaseException:
+            temporary_path.unlink(missing_ok=True)
+            raise
+
+
+def _persistable_token_payload(token_payload: dict[str, Any]) -> dict[str, Any]:
+    """Drop OAuth client metadata that already lives in credentials.json."""
+
+    return {
+        key: value
+        for key, value in token_payload.items()
+        if key in _PERSISTED_TOKEN_FIELDS and value is not None
+    }
+
+
+def _reject_token_symlink(path: Path) -> None:
+    if path.is_symlink():
+        raise GoogleDriveAuthError(f"Refusing OAuth token symlink: {path}")
+
+
+def _harden_private_directory(path: Path) -> None:
+    if os.name == "posix":
+        path.chmod(0o700)
+
+
+def _harden_private_file(path: Path) -> None:
+    if os.name == "posix":
+        path.chmod(0o600)
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name != "posix":
+        return
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _resolve_token_path(token_path: str | Path | None) -> Path:
+    return Path(token_path).expanduser() if token_path is not None else default_google_token_path()
+
+
+def _migrate_legacy_token_if_present(token_store: TokenStore) -> None:
+    """Move the old cwd token cache after a successful private write."""
+
+    if token_store.path.exists():
+        return
+    legacy_path = Path("token.json")
+    try:
+        if legacy_path.resolve(strict=False) == token_store.path.resolve(strict=False):
+            return
+    except OSError:
+        return
+    if not legacy_path.exists():
+        return
+    _reject_token_symlink(legacy_path)
+    if not legacy_path.is_file():
+        raise GoogleDriveAuthError(f"Legacy OAuth token path is not a regular file: {legacy_path}")
+    payload = _read_json_file(legacy_path)
+    token_store.save(payload)
+    legacy_path.unlink()
 
 def _build_google_log_extra(*, file_ref="", error=None, outcome="") -> dict[str, str]:
     return build_google_conversion_log_extra(
@@ -274,9 +392,6 @@ def _interactive_oauth_authorization(credentials_path: Path, token_path: Path) -
     token_payload: dict[str, Any] = {
         "access_token": credentials.token,
         "refresh_token": credentials.refresh_token,
-        "token_uri": credentials.token_uri,
-        "client_id": credentials.client_id,
-        "client_secret": credentials.client_secret,
         "scopes": credential_scopes,
         "scope": scope_value,
         "token_type": "Bearer",
@@ -302,11 +417,7 @@ def _load_token_payload(token_path: Path) -> dict[str, Any]:
         GoogleDriveAuthError: If the token file is missing or unreadable JSON.
     """
 
-    if not token_path.exists():
-        raise GoogleDriveAuthError(
-            "Missing token.json for Google Drive export. Please complete OAuth authorization first."
-        )
-    return _read_json_file(token_path)
+    return TokenStore(token_path).load()
 
 
 def _token_is_valid(token_payload: dict[str, Any]) -> bool:
@@ -409,7 +520,7 @@ def _save_token_payload(token_path: Path, token_payload: dict[str, Any]) -> None
         Writes JSON to the filesystem.
     """
 
-    token_path.write_text(json.dumps(token_payload, indent=2), encoding="utf-8")
+    TokenStore(token_path).save(token_payload)
 
 
 def _ensure_access_token(credentials_path: Path, token_path: Path) -> str:
@@ -437,6 +548,10 @@ def _ensure_access_token(credentials_path: Path, token_path: Path) -> str:
     credentials = _read_credentials(credentials_path)
     if token_path.exists():
         token_payload = _load_token_payload(token_path)
+        persistable_payload = _persistable_token_payload(token_payload)
+        if persistable_payload != token_payload:
+            _save_token_payload(token_path, persistable_payload)
+            token_payload = persistable_payload
     else:
         token_payload = _interactive_oauth_authorization(credentials_path, token_path)
 
@@ -726,7 +841,7 @@ def _ensure_reports_folder(access_token: str) -> str:
 def upload_and_convert_workbook(
     excel_path: str,
     credentials_path: str = "credentials.json",
-    token_path: str = "token.json",
+    token_path: str | Path | None = None,
     expected_sheet_names: list[str] | None = None,
     max_retries: int = 3,
     retry_delay_seconds: float = 1.0,
@@ -740,7 +855,8 @@ def upload_and_convert_workbook(
     Args:
         excel_path: Path to the local `.xlsx` file.
         credentials_path: OAuth client credentials JSON path.
-        token_path: OAuth token JSON path.
+        token_path: Optional OAuth token JSON path. Defaults to the private
+            per-user Metroliza application directory.
         expected_sheet_names: Optional sheet names for post-conversion validation.
         max_retries: Maximum upload attempts for retryable failures.
         retry_delay_seconds: Fixed delay between retry attempts.
@@ -805,7 +921,13 @@ def upload_and_convert_workbook(
     _raise_if_canceled()
     _raise_if_timed_out("auth")
     stage_started_at["auth"] = time.monotonic()
-    access_token = _ensure_access_token(_resolve_credentials_path(credentials_path), Path(token_path))
+    resolved_token_path = _resolve_token_path(token_path)
+    if token_path is None:
+        _migrate_legacy_token_if_present(TokenStore(resolved_token_path))
+    access_token = _ensure_access_token(
+        _resolve_credentials_path(credentials_path),
+        resolved_token_path,
+    )
     _raise_if_canceled()
     _raise_if_timed_out("auth")
     stage_started_at["folder"] = time.monotonic()

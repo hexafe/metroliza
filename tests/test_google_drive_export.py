@@ -1,5 +1,6 @@
 import json
 import os
+import stat
 import tempfile
 import unittest
 import urllib.error
@@ -19,9 +20,11 @@ from modules.google_drive_export import (
     GoogleDriveResponseError,
     GoogleDriveTimeoutError,
     GoogleDriveTransientError,
+    TokenStore,
     _build_upload_request_body,
     _resolve_credentials_path,
     _load_token_payload,
+    _migrate_legacy_token_if_present,
     _refresh_access_token,
     map_google_http_error,
     map_google_network_error,
@@ -533,6 +536,84 @@ class TestGoogleDriveExport(unittest.TestCase):
 
         self.assertIn("Missing token.json", str(exc.exception))
 
+    @unittest.skipUnless(os.name == "posix", "POSIX permission contract")
+    def test_token_store_writes_atomically_with_private_permissions_and_drops_client_secrets(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            token_path = Path(tmpdir) / "private" / "token.json"
+            TokenStore(token_path).save(
+                {
+                    "access_token": "access",
+                    "refresh_token": "refresh",
+                    "client_id": "client-id",
+                    "client_secret": "client-secret",
+                    "expires_at": 123,
+                }
+            )
+
+            payload = json.loads(token_path.read_text(encoding="utf-8"))
+
+            self.assertEqual("access", payload["access_token"])
+            self.assertEqual("refresh", payload["refresh_token"])
+            self.assertNotIn("client_id", payload)
+            self.assertNotIn("client_secret", payload)
+            self.assertEqual(0o600, stat.S_IMODE(token_path.stat().st_mode))
+            self.assertEqual(0o700, stat.S_IMODE(token_path.parent.stat().st_mode))
+
+    def test_token_store_failed_replace_preserves_previous_token(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            token_path = Path(tmpdir) / "token.json"
+            store = TokenStore(token_path)
+            store.save({"access_token": "old", "expires_at": 123})
+
+            with patch("modules.google_drive_export.os.replace", side_effect=OSError("boom")):
+                with self.assertRaisesRegex(OSError, "boom"):
+                    store.save({"access_token": "new", "expires_at": 456})
+
+            self.assertEqual("old", json.loads(token_path.read_text())["access_token"])
+            self.assertEqual([], list(token_path.parent.glob(".*.tmp")))
+
+    def test_token_store_rejects_symlink_targets(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target_path = Path(tmpdir) / "target.json"
+            target_path.write_text("{}", encoding="utf-8")
+            token_path = Path(tmpdir) / "token.json"
+            try:
+                token_path.symlink_to(target_path)
+            except (OSError, NotImplementedError):
+                self.skipTest("symlinks are unavailable")
+
+            with self.assertRaisesRegex(GoogleDriveAuthError, "symlink"):
+                TokenStore(token_path).load()
+
+    def test_legacy_token_migration_removes_source_only_after_private_write(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            working_dir = Path(tmpdir) / "working"
+            working_dir.mkdir()
+            private_path = Path(tmpdir) / "private" / "token.json"
+            legacy_path = working_dir / "token.json"
+            legacy_path.write_text(
+                json.dumps(
+                    {
+                        "access_token": "legacy",
+                        "refresh_token": "refresh",
+                        "client_secret": "remove-me",
+                        "expires_at": 123,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            previous_cwd = Path.cwd()
+            os.chdir(working_dir)
+            try:
+                _migrate_legacy_token_if_present(TokenStore(private_path))
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertFalse(legacy_path.exists())
+            self.assertEqual("legacy", json.loads(private_path.read_text())["access_token"])
+            self.assertNotIn("client_secret", private_path.read_text())
+
 
     def test_refresh_access_token_sets_drive_scope_when_missing(self):
         token_payload = {"refresh_token": "refresh-token"}
@@ -593,6 +674,11 @@ class TestGoogleDriveExport(unittest.TestCase):
 
             self.assertEqual([GOOGLE_DRIVE_SCOPE], payload["scopes"])
             self.assertEqual(GOOGLE_DRIVE_SCOPE, payload["scope"])
+            self.assertNotIn("client_id", payload)
+            self.assertNotIn("client_secret", payload)
+            persisted = json.loads(token_path.read_text(encoding="utf-8"))
+            self.assertNotIn("client_id", persisted)
+            self.assertNotIn("client_secret", persisted)
 
     def test_refresh_access_token_without_refresh_token_requires_reauthentication(self):
         with self.assertRaises(GoogleDriveAuthError) as exc:
