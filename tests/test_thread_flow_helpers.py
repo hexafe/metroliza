@@ -5,6 +5,7 @@ import sqlite3
 import tempfile
 import types
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest import mock
 
@@ -230,7 +231,7 @@ class TestParseHelpers(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, 'reports.sqlite')
             ensure_report_schema(db_path)
-            with sqlite3.connect(db_path) as conn:
+            with closing(sqlite3.connect(db_path)) as conn, conn:
                 _insert_report(
                     conn,
                     sha256='sha-current',
@@ -312,7 +313,7 @@ class TestParseHelpers(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, 'reports.sqlite')
             ensure_report_schema(db_path)
-            with sqlite3.connect(db_path) as conn:
+            with closing(sqlite3.connect(db_path)) as conn, conn:
                 _insert_report(
                     conn,
                     sha256='sha-current-light',
@@ -1104,13 +1105,13 @@ class TestParseHelpers(unittest.TestCase):
             thread.update_label = label_signal
 
             with mock.patch.object(parse_module, "get_parser", return_value=fake_parser):
-                with sqlite3.connect(db_path) as connection:
+                with closing(sqlite3.connect(db_path)) as connection, connection:
                     result = thread._run_background_metadata_enrichment([report_path], connection)
 
             self.assertEqual(result.enriched_files, 1)
             self.assertEqual(fake_parser.open_modes, ["complete"])
             self.assertEqual(progress_signal.values, [75, 100])
-            with sqlite3.connect(db_path) as connection:
+            with closing(sqlite3.connect(db_path)) as connection, connection:
                 metadata_row = connection.execute(
                     """
                     SELECT reference, report_date, report_time, revision, operator_name, metadata_json
@@ -1282,7 +1283,7 @@ class TestParseHelpers(unittest.TestCase):
                 return fake_parser
 
             with mock.patch.object(parse_module, "get_parser", side_effect=_get_parser):
-                with sqlite3.connect(db_path) as connection:
+                with closing(sqlite3.connect(db_path)) as connection, connection:
                     result = thread._run_background_metadata_enrichment(
                         [bad_report_path, good_report_path],
                         connection,
@@ -1294,7 +1295,7 @@ class TestParseHelpers(unittest.TestCase):
             self.assertEqual(fake_parser.open_modes, ["complete"])
             self.assertEqual(progress_signal.values[-1], 100)
             self.assertGreaterEqual(len(progress_signal.values), 2)
-            with sqlite3.connect(db_path) as connection:
+            with closing(sqlite3.connect(db_path)) as connection, connection:
                 good_revision = connection.execute(
                     "SELECT revision FROM report_metadata WHERE report_id = ?",
                     (good_report_id,),
@@ -1427,7 +1428,7 @@ class TestExportHelpers(unittest.TestCase):
     def test_export_snapshot_adds_partition_indexes(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, 'snapshot.db')
-            with sqlite3.connect(db_path) as connection:
+            with closing(sqlite3.connect(db_path)) as connection, connection:
                 connection.execute(
                     '''
                     CREATE TABLE export_rows (
