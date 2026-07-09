@@ -2,12 +2,13 @@ import unittest
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
+import zipfile
 
 from modules.export_backends import ExcelExportBackend, HtmlDashboardExportBackend
 
 
 class TestExcelExportBackend(unittest.TestCase):
-    def test_create_writer_enables_nan_inf_guard(self):
+    def test_create_writer_enables_safe_imported_string_policy(self):
         backend = ExcelExportBackend()
 
         with patch('modules.export_backends.xlsxwriter.Workbook') as mock_writer:
@@ -15,8 +16,31 @@ class TestExcelExportBackend(unittest.TestCase):
 
         mock_writer.assert_called_once_with(
             'out.xlsx',
-            {'nan_inf_to_errors': True},
+            {
+                'nan_inf_to_errors': True,
+                'strings_to_formulas': False,
+                'strings_to_urls': False,
+            },
         )
+
+    def test_untrusted_headers_and_values_are_literal_strings(self):
+        backend = ExcelExportBackend()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / 'literal-values.xlsx'
+            writer = backend.create_writer(str(output_path))
+            backend.write_dataframe(
+                writer,
+                ([('=1+1', '+2', '-3', '@cmd', 'https://example.invalid')], ['=HEADER']),
+                'Data',
+            )
+            backend.close_writer(writer)
+
+            with zipfile.ZipFile(output_path) as workbook_zip:
+                worksheet_xml = workbook_zip.read('xl/worksheets/sheet1.xml').decode('utf-8')
+
+        self.assertNotIn('<f>', worksheet_xml)
+        self.assertNotIn('<hyperlink', worksheet_xml)
 
     def test_run_replaces_target_only_after_successful_close(self):
         class _Backend(ExcelExportBackend):

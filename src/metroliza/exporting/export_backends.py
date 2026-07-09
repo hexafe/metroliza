@@ -16,6 +16,11 @@ from typing import Any, Protocol
 
 import xlsxwriter
 
+from metroliza.exporting.xlsx_writer_policy import (
+    write_untrusted_xlsx_cell,
+    xlsxwriter_workbook_options,
+)
+
 
 class ChartContract(Protocol):
     """Protocol for chart operations used by export chart-writing helpers."""
@@ -573,7 +578,7 @@ class ExcelExportBackend:
         """Create a direct xlsxwriter workbook session for `excel_file`."""
         return XlsxWorkbookWriter(
             path=excel_file,
-            book=xlsxwriter.Workbook(excel_file, {"nan_inf_to_errors": True}),
+            book=xlsxwriter.Workbook(excel_file, xlsxwriter_workbook_options()),
             sheets={},
         )
 
@@ -588,11 +593,16 @@ class ExcelExportBackend:
         writer.sheets[str(sheet_name)] = worksheet
 
         for column_index, column_name in enumerate(columns):
-            worksheet.write(0, column_index, column_name)
+            write_untrusted_xlsx_cell(worksheet, 0, column_index, column_name)
 
         for row_index, row in enumerate(rows, start=1):
             for column_index, value in enumerate(row):
-                worksheet.write(row_index, column_index, None if _is_blank_cell(value) else value)
+                write_untrusted_xlsx_cell(
+                    worksheet,
+                    row_index,
+                    column_index,
+                    None if _is_blank_cell(value) else value,
+                )
 
     def list_sheet_names(self, writer: XlsxWorkbookWriter) -> set[str]:
         """Return names of worksheets currently attached to `writer`."""
