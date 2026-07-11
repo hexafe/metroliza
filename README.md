@@ -9,7 +9,7 @@ dashboard-first grouped analysis, and CSV/production dashboards.
 ## Quickstart
 
 ```bash
-python -m venv .venv
+python3.11 -m venv .venv  # Windows: py -3.11 -m venv .venv
 source .venv/bin/activate  # Windows PowerShell: .venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -r requirements-dev.txt
@@ -177,9 +177,9 @@ Parity between native and Python backends is enforced through fixture-based test
 ### Local native chart extension build (optional)
 
 ```bash
-python -m maturin develop --manifest-path src/metroliza/native/chart_renderer/Cargo.toml
+python -m maturin develop --locked --manifest-path src/metroliza/native/chart_renderer/Cargo.toml
 # or build wheel artifacts
-python -m maturin build --manifest-path src/metroliza/native/chart_renderer/Cargo.toml --release
+python -m maturin build --locked --manifest-path src/metroliza/native/chart_renderer/Cargo.toml --release
 ```
 
 ## Parser plugin resolver controls
@@ -258,12 +258,12 @@ Examples of metric availability by spec type:
 
 ## Release metadata
 
-Current release highlight (`2026.06 RC2 (build 260709)`): Release hardening for safer exports and credentials, atomic industrial synchronization, stricter parser and report integrity, deterministic shutdown, and enforceable packaging and security gates.
+Current release highlight (`2026.06 RC2 (build 260711)`): Release hardening for safer exports and credentials, atomic industrial synchronization, stricter parser and report integrity, deterministic shutdown, and enforceable packaging and security gates.
 
 Canonical release metadata is in `src/metroliza/app/version.py`. The root `VersionDate.py`
 module remains as a compatibility import for existing scripts.
 
-### Changelog highlights (release `2026.06 RC2 (build 260709)`)
+### Changelog highlights (release `2026.06 RC2 (build 260711)`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 

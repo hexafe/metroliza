@@ -2,7 +2,7 @@ import unittest
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QHeaderView
-from modules.modify_db import ModifyDB  # noqa: E402
+from metroliza.ui.modify_db import ModifyDB
 
 
 class _FakeItem:
@@ -127,8 +127,8 @@ class TestModifyDbUpdateStatements(unittest.TestCase):
         self.assertEqual(
             statements,
             [
-                ('UPDATE report_metadata SET reference = ? WHERE reference = ?', ('B2', 'B')),
-                ('UPDATE report_metadata SET reference = ? WHERE reference = ?', ('C2', 'C')),
+                ('UPDATE "report_metadata" SET "reference" = ? WHERE "reference" = ?', ('B2', 'B')),
+                ('UPDATE "report_metadata" SET "reference" = ? WHERE "reference" = ?', ('C2', 'C')),
             ],
         )
 
@@ -149,7 +149,29 @@ class TestModifyDbUpdateStatements(unittest.TestCase):
 
         self.assertEqual(
             statements,
-            [('UPDATE report_metadata SET reference = ? WHERE reference = ?', ('B2', 'B'))],
+            [('UPDATE "report_metadata" SET "reference" = ? WHERE "reference" = ?', ('B2', 'B'))],
+        )
+
+    def test_build_update_statements_quotes_injection_shaped_identifiers(self):
+        table = _FakeTable([_FakeItem("A", "A2")])
+
+        statements = ModifyDB.build_update_statements(
+            None,
+            table,
+            'REPORTS"; DROP TABLE REPORTS; --',
+            'REFERENCE" = NULL; --',
+        )
+
+        self.assertEqual(
+            statements,
+            [
+                (
+                    'UPDATE "REPORTS""; DROP TABLE REPORTS; --" '
+                    'SET "REFERENCE"" = NULL; --" = ? '
+                    'WHERE "REFERENCE"" = NULL; --" = ?',
+                    ("A2", "A"),
+                )
+            ],
         )
 
     def test_configure_normalize_table_sets_stretch_and_occurrence_resize(self):

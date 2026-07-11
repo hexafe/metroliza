@@ -19,7 +19,11 @@ from metroliza.shared.custom_logger import CustomLogger
 from metroliza.reports.db import (
     execute_select_with_columns,
     quote_identifier,
-    run_transaction_with_retry,
+)
+from metroliza.reports.report_edit_service import (
+    LEGACY_MEASUREMENT_FIELD_COLUMNS as EDIT_SERVICE_LEGACY_MEASUREMENT_FIELDS,
+    LEGACY_REPORT_FIELD_COLUMNS as EDIT_SERVICE_LEGACY_REPORT_FIELDS,
+    ReportEditService,
 )
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.reports.report_repository import ReportRepository
@@ -107,22 +111,8 @@ class ModifyDB(QDialog):
         {"label": "OUTTOL", "field": "outtol", "source": "OUTTOL", "editable": True, "value_type": "float"},
     )
 
-    LEGACY_REPORT_FIELD_COLUMNS = {
-        "reference": "REFERENCE",
-        "report_date": "DATE",
-        "sample_number": "SAMPLE_NUMBER",
-    }
-    LEGACY_MEASUREMENT_FIELD_COLUMNS = {
-        "header": "HEADER",
-        "ax": "AX",
-        "nominal": "NOM",
-        "tol_plus": "+TOL",
-        "tol_minus": "-TOL",
-        "bonus": "BONUS",
-        "meas": "MEAS",
-        "dev": "DEV",
-        "outtol": "OUTTOL",
-    }
+    LEGACY_REPORT_FIELD_COLUMNS = EDIT_SERVICE_LEGACY_REPORT_FIELDS
+    LEGACY_MEASUREMENT_FIELD_COLUMNS = EDIT_SERVICE_LEGACY_MEASUREMENT_FIELDS
 
     def __init__(self, parent=None, db_file=""):
         super().__init__(parent)
@@ -572,9 +562,10 @@ class ModifyDB(QDialog):
             return
 
         select_exprs = self._select_exprs_for_specs(specs)
+        quoted_source = self._quote_identifier(source_name)
         rows, columns = execute_select_with_columns(
             self.db_file,
-            f"SELECT {', '.join(select_exprs)} FROM {source_name}{order_by};",
+            f"SELECT {', '.join(select_exprs)} FROM {quoted_source}{order_by};",
         )
         self._populate_record_table(self.measurement_records_table, specs, rows, columns)
 
@@ -611,7 +602,11 @@ class ModifyDB(QDialog):
 
     def _source_columns(self, source_name):
         try:
-            _rows, columns = execute_select_with_columns(self.db_file, f"SELECT * FROM {source_name} LIMIT 0;")
+            quoted_source = self._quote_identifier(source_name)
+            _rows, columns = execute_select_with_columns(
+                self.db_file,
+                f"SELECT * FROM {quoted_source} LIMIT 0;",
+            )
             return {column.lower() for column in columns}
         except sqlite3.Error:
             return set()
@@ -834,39 +829,26 @@ class ModifyDB(QDialog):
         return None
 
     def apply_changes(self):
-        """Apply collected UPDATE statements in a single retried transaction."""
+        """Collect table edits and delegate persistence to the report edit service."""
         try:
-            statements = []
-            if self._uses_legacy_schema():
-                statements.extend(self.build_update_statements(self.reference_table, "REPORTS", "REFERENCE"))
-                statements.extend(self.build_update_statements(self.part_number_table, "REPORTS", "SAMPLE_NUMBER"))
-                statements.extend(self.build_update_statements(self.header_table, "MEASUREMENTS", "HEADER"))
-            else:
-                statements.extend(self.build_update_statements(self.reference_table, "report_metadata", "reference"))
-                statements.extend(self.build_update_statements(self.part_number_table, "report_metadata", "sample_number"))
-                statements.extend(self.build_update_statements(self.header_table, "report_measurements", "header"))
+            normalization_changes = {
+                "reference": self.collect_normalization_value_changes(self.reference_table),
+                "sample_number": self.collect_normalization_value_changes(self.part_number_table),
+                "header": self.collect_normalization_value_changes(self.header_table),
+            }
             report_updates = self.collect_report_record_updates()
             measurement_updates = self.collect_measurement_record_updates()
 
-            if not statements and not report_updates and not measurement_updates:
+            if not any(normalization_changes.values()) and not report_updates and not measurement_updates:
                 QMessageBox.information(self, "No changes", "No changes were detected.")
                 return
 
-            repository = None
-            if self._uses_legacy_schema():
-                statements.extend(self._build_legacy_record_update_statements(report_updates, measurement_updates))
-            elif report_updates or measurement_updates:
-                repository = self._create_report_repository()
-                self._validate_record_update_methods(repository, report_updates, measurement_updates)
-
-            if statements:
-                run_transaction_with_retry(
-                    self.db_file,
-                    lambda cursor: self._apply_update_statements(cursor, statements),
-                )
-
-            if repository is not None:
-                self.apply_record_updates(repository, report_updates, measurement_updates)
+            self._create_report_edit_service().apply_changes(
+                storage_flavor=self._storage_flavor,
+                normalization_changes=normalization_changes,
+                report_updates=report_updates,
+                measurement_updates=measurement_updates,
+            )
 
             # Display a message box with confirmation
             QMessageBox.information(self, "Changes applied", "Changes have been applied successfully.")
@@ -876,14 +858,21 @@ class ModifyDB(QDialog):
         except Exception as e:
             self.log_and_exit(e)
 
-
     def _apply_update_statements(self, cursor, statements):
-        for query, params in statements:
-            cursor.execute(query, params)
+        ReportEditService.apply_update_statements(cursor, statements)
 
     def build_update_statements(self, table_widget, table_name, column_name):
-        """Build SQL UPDATE statements for rows modified in the given table."""
-        statements = []
+        """Compatibility wrapper for normalization statement tests and callers."""
+        return ReportEditService.build_value_update_statements(
+            table_name,
+            column_name,
+            ModifyDB.collect_normalization_value_changes(table_widget),
+        )
+
+    @staticmethod
+    def collect_normalization_value_changes(table_widget):
+        """Collect changed normalized values without owning persistence SQL."""
+        changes = []
         edit_column = ModifyDB._normalize_table_edit_column(table_widget)
         for row in range(table_widget.rowCount()):
             item = table_widget.item(row, edit_column)
@@ -893,54 +882,23 @@ class ModifyDB(QDialog):
             old_value = str(item.data(Qt.ItemDataRole.UserRole))
 
             if new_value != old_value:
-                query = f"UPDATE {table_name} SET {column_name} = ? WHERE {column_name} = ?"
-                statements.append((query, (new_value, old_value)))
+                changes.append((new_value, old_value))
 
-        return statements
+        return changes
 
     def _build_legacy_record_update_statements(self, report_updates, measurement_updates):
-        statements = []
-        statements.extend(
-            self._build_legacy_update_statements(
-                "REPORTS",
-                "ID",
-                self.LEGACY_REPORT_FIELD_COLUMNS,
-                report_updates,
-            )
+        return ReportEditService.build_legacy_record_update_statements(
+            report_updates,
+            measurement_updates,
         )
-        statements.extend(
-            self._build_legacy_update_statements(
-                "MEASUREMENTS",
-                "ID",
-                self.LEGACY_MEASUREMENT_FIELD_COLUMNS,
-                measurement_updates,
-            )
-        )
-        return statements
 
     def _build_legacy_update_statements(self, table_name, key_column, field_columns, updates):
-        statements = []
-        quoted_table = self._quote_identifier(table_name)
-        quoted_key = self._quote_identifier(key_column)
-        for record_id, fields in updates:
-            assignments = []
-            params = []
-            for field_name, value in fields.items():
-                column_name = field_columns.get(field_name)
-                if column_name is None:
-                    continue
-                assignments.append(f"{self._quote_identifier(column_name)} = ?")
-                params.append(value)
-            if not assignments:
-                continue
-            params.append(record_id)
-            statements.append(
-                (
-                    f"UPDATE {quoted_table} SET {', '.join(assignments)} WHERE {quoted_key} = ?",
-                    tuple(params),
-                )
-            )
-        return statements
+        return ReportEditService._build_legacy_update_statements(
+            table_name,
+            key_column,
+            field_columns,
+            updates,
+        )
 
     @staticmethod
     def _normalize_table_edit_column(table_widget):
@@ -1017,24 +975,25 @@ class ModifyDB(QDialog):
     def _create_report_repository(self):
         return ReportRepository(self.db_file)
 
+    def _create_report_edit_service(self):
+        return ReportEditService(
+            self.db_file,
+            repository_factory=lambda _database: self._create_report_repository(),
+        )
+
     def _validate_record_update_methods(self, repository, report_updates, measurement_updates):
-        missing_methods = []
-        if report_updates and not hasattr(repository, "update_report_metadata_fields"):
-            missing_methods.append("update_report_metadata_fields")
-        if measurement_updates and not hasattr(repository, "update_measurement_fields"):
-            missing_methods.append("update_measurement_fields")
-        if missing_methods:
-            raise RuntimeError(
-                "ReportRepository does not provide required targeted update API(s): "
-                + ", ".join(missing_methods)
-            )
+        ReportEditService.validate_record_update_methods(
+            repository,
+            report_updates,
+            measurement_updates,
+        )
 
     def apply_record_updates(self, repository, report_updates, measurement_updates):
-        self._validate_record_update_methods(repository, report_updates, measurement_updates)
-        for report_id, fields in report_updates:
-            repository.update_report_metadata_fields(report_id, fields)
-        for measurement_id, fields in measurement_updates:
-            repository.update_measurement_fields(measurement_id, fields)
+        ReportEditService.apply_record_updates(
+            repository,
+            report_updates,
+            measurement_updates,
+        )
 
     def undo_last_change(self):
         try:

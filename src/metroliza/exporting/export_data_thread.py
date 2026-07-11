@@ -36,12 +36,13 @@ from matplotlib.patches import Patch
 from matplotlib.ticker import PercentFormatter
 from PyQt6.QtCore import QCoreApplication, QThread, pyqtSignal
 
-from metroliza.shared.contracts import ExportRequest, validate_export_request
+from metroliza.exporting.contracts import ExportRequest, validate_export_request
 import metroliza.shared.custom_logger as custom_logger
 from metroliza.reports.db import execute_select_with_columns, read_sql_query_result, sqlite_connection_scope
 from metroliza.shared.env_utils import env_bool
 from metroliza.shared.excel_sheet_utils import unique_sheet_name
 from metroliza.exporting.export_backends import ExcelExportBackend, HtmlDashboardExportBackend
+from metroliza.exporting.execution import ExportStageOutcome, normalize_export_outcome
 from metroliza.exporting.google_drive_export import (
     GoogleDriveAuthError,
     GoogleDriveCanceledError,
@@ -239,7 +240,7 @@ from metroliza.charts.chart_render_spec import (
     histogram_spec_to_mapping,
     resolve_histogram_x_view as _resolve_histogram_x_view_contract,
 )
-from metroliza.app.backend_diagnostics import (
+from metroliza.exporting.backend_diagnostics import (
     build_backend_diagnostic_summary,
     format_backend_diagnostic_lines,
 )
@@ -3852,6 +3853,11 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         self._emit_stage_progress('finalize', 0.15)
         self._log_export_stage("Workbook close started", stage="workbook_close")
 
+    def begin_workbook_close(self) -> None:
+        """Expose workbook-close notification through the backend contract."""
+
+        self._begin_workbook_close()
+
     def _complete_workbook_close(self, elapsed):
         self._record_stage_timing('workbook_close', elapsed)
         self.completion_metadata['workbook_close_s'] = float(
@@ -3863,6 +3869,11 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             stage="workbook_close",
             workbook_close_s=self.completion_metadata['workbook_close_s'],
         )
+
+    def complete_workbook_close(self, elapsed: float) -> None:
+        """Expose workbook-close completion through the backend contract."""
+
+        self._complete_workbook_close(elapsed)
 
     def _ensure_chart_executor(self):
         if not self._optimization_toggles.get('enable_chart_multiprocessing'):
@@ -4648,7 +4659,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
 
         # Stage order is deliberate: measurement sheets create workbook context
         # consumed by filtered export and progress reporting.
-        return run_export_steps(
+        completed = run_export_steps(
             [
                 lambda: (
                     self.update_label.emit(build_three_line_status("Building measurement sheets...", "Preparing measurement worksheets", "ETA --")),
@@ -4670,11 +4681,12 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             ],
             should_cancel=self._check_canceled,
         )
+        return ExportStageOutcome.completed() if completed else ExportStageOutcome.canceled()
 
     def run_html_dashboard_pipeline(self, dashboard_writer):
         """Build dashboard sections and group analysis without writing an XLSX file."""
 
-        return run_export_steps(
+        completed = run_export_steps(
             [
                 lambda: (
                     self.update_label.emit(build_three_line_status("Building dashboard...", "Preparing chart sections", "ETA --")),
@@ -4689,6 +4701,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             ],
             should_cancel=self._check_canceled,
         )
+        return ExportStageOutcome.completed() if completed else ExportStageOutcome.canceled()
 
     def get_export_backend(self):
         """Handle `get_export_backend` for `ExportDataThread`.
@@ -4781,8 +4794,9 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
 
                 backend = self.get_export_backend()
                 self._active_backend = backend
-                completed = backend.run(self)
-                if not completed:
+                local_outcome = normalize_export_outcome(backend.run(self))
+                self.completion_metadata["local_export_outcome"] = local_outcome.kind.value
+                if not local_outcome:
                     return
 
             if self.export_target == "google_sheets_drive_convert":

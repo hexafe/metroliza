@@ -365,7 +365,7 @@ try {
     Write-Host '[3/6] Building native extensions in release mode'
     foreach ($target in $selectedTargets) {
         Write-Host "      Building $($target.Name) -> $($target.ModuleName)"
-        Invoke-CheckedPythonCommand -Arguments @('-m', 'maturin', 'develop', '--release', '--manifest-path', $target.ManifestPath) -FailureMessage "Failed to build/install $($target.ModuleName)."
+        Invoke-CheckedPythonCommand -Arguments @('-m', 'maturin', 'develop', '--locked', '--release', '--manifest-path', $target.ManifestPath) -FailureMessage "Failed to build/install $($target.ModuleName)."
     }
 
     if ($SkipBackendVerification) {
@@ -380,7 +380,7 @@ try {
 
         Invoke-CheckedPythonCommand -Arguments @(
             '-c',
-            'import json; from metroliza.app.backend_diagnostics import build_backend_diagnostic_summary; print(json.dumps(build_backend_diagnostic_summary(), indent=2, sort_keys=True))'
+            'import json; from metroliza.exporting.backend_diagnostics import build_backend_diagnostic_summary; print(json.dumps(build_backend_diagnostic_summary(), indent=2, sort_keys=True))'
         ) -FailureMessage 'Backend diagnostics summary failed.'
         Invoke-CheckedPythonCommand -Arguments @('scripts/validate_packaged_pdf_parser.py', '--require-header-ocr') -FailureMessage 'Packaged PDF parser header OCR dependency validation failed.'
     }
@@ -446,6 +446,11 @@ try {
                     $specPath
                 ) -FailureMessage "PyInstaller packaging failed for spec: $specPath"
             }
+            Invoke-CheckedPythonCommand -Arguments @(
+                'scripts/stage_release_notices.py',
+                '--dist-dir',
+                'dist'
+            ) -FailureMessage 'Failed to stage third-party notice sidecars.'
         }
     }
 

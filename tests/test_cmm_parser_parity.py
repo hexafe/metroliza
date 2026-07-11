@@ -7,11 +7,16 @@ from pathlib import Path
 import pytest
 
 from metroliza.parsing.cmm_report_parser import EmptyCMMReportError
+from metroliza.parsing.source_inspection import (
+    SourceChangedAfterInspectionError,
+    SourceInspectionContext,
+)
 from modules.cmm_report_parser import CMMReportParser
 from modules.cmm_native_parser import (
     native_backend_available,
     native_persistence_backend_available,
     normalize_measurement_rows,
+    normalize_measurement_rows_python,
     parse_blocks_with_backend,
     persist_measurement_rows_python,
     persist_measurement_rows_with_backend_and_telemetry,
@@ -20,6 +25,25 @@ from modules.cmm_schema import ensure_cmm_report_schema
 from modules.cmm_parsing import add_tolerances_to_blocks, parse_raw_lines_to_blocks
 
 FIXTURE_DIR = Path("tests/fixtures/cmm_parser")
+
+
+@pytest.mark.parametrize("value_count", range(10))
+def test_python_row_normalizer_projects_every_row_length_to_stable_schema(value_count):
+    values = list(range(value_count))
+
+    rows = normalize_measurement_rows_python(
+        [[["Header"], [values]]],
+        reference="REF",
+        fileloc="/reports",
+        filename="report.pdf",
+        date="2026-07-11",
+        sample_number="1",
+    )
+
+    expected_values = tuple(values[:8]) + (("",) * max(0, 8 - value_count))
+    assert rows == [
+        (*expected_values, "Header", "REF", "/reports", "report.pdf", "2026-07-11", "1")
+    ]
 
 
 def _load_fixtures():
@@ -94,6 +118,50 @@ def test_cmm_to_sqlite_raises_structured_failure_for_empty_measurements(tmp_path
     assert exc_info.value.measurement_count == 0
     assert exc_info.value.source_path == str(report_file.absolute())
     assert logged_errors == [exc_info.value]
+
+
+def test_cmm_to_sqlite_rejects_source_mutation_before_repository_write(tmp_path, monkeypatch):
+    report_file = tmp_path / "mutating.pdf"
+    report_file.write_bytes(b"%PDF-1.7\noriginal")
+    parser = CMMReportParser(str(report_file), str(tmp_path / "reports.db"))
+    parser.blocks_text = [("Feature", ["measurement"])]
+    parser._metadata_selection_result = types.SimpleNamespace(
+        metadata=types.SimpleNamespace(
+            parser_id="cmm",
+            template_family="cmm_pdf_header_box",
+            template_variant="default",
+            warnings=(),
+            page_count=1,
+            metadata_confidence=1.0,
+        ),
+        candidates=(),
+    )
+    parser._normalized_rows_for_persistence = lambda: [{"is_nok": False}]
+    parser.build_report_identity_hash = lambda: "identity"
+    parser.source_inspection_context = SourceInspectionContext.from_path(
+        report_file,
+        source_format="pdf",
+    )
+    assert parser.source_inspection_context.sha256 is not None
+    report_file.write_bytes(b"%PDF-1.7\nchanged")
+
+    class UnexpectedRepository:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("repository must not open for mutated source")
+
+    logged_errors = []
+    parser.log_and_exit = lambda exc: logged_errors.append(exc)
+    monkeypatch.setitem(
+        CMMReportParser.to_sqlite.__globals__,
+        "ReportRepository",
+        UnexpectedRepository,
+    )
+
+    with pytest.raises(SourceChangedAfterInspectionError):
+        parser.to_sqlite()
+
+    assert len(logged_errors) == 1
+    assert isinstance(logged_errors[0], SourceChangedAfterInspectionError)
 
 
 @pytest.mark.parametrize("fixture", _load_fixtures(), ids=lambda f: f["name"])

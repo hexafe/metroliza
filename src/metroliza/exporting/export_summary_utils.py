@@ -5,8 +5,6 @@ import math
 import re
 import textwrap
 from typing import Any
-from matplotlib.lines import Line2D
-from matplotlib.patches import Patch
 
 from metroliza.charts.summary_plot_palette import SUMMARY_PLOT_PALETTE
 from metroliza.analytics.distribution_fit_service import (
@@ -569,6 +567,12 @@ def render_spec_reference_lines(ax, nom, lsl, usl, orientation='horizontal', inc
 
 def build_tolerance_reference_legend_handles(*, include_nominal=True):
     """Return legend handles for tolerance bands and spec-reference lines."""
+    from metroliza.charts.matplotlib_runtime import configure_headless_matplotlib
+
+    configure_headless_matplotlib()
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+
     handles = [
         Patch(
             facecolor=SUMMARY_PLOT_PALETTE['sigma_band'],

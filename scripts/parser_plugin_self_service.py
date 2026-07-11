@@ -40,6 +40,7 @@ from metroliza.parsing.parser_profile_handoff import (  # noqa: E402
     render_profile_repair_prompt,
     validate_handoff_workspace,
 )
+from metroliza.parsing.parser_plugin_paths import parser_profile_store_lock  # noqa: E402
 
 
 def _path(value: str | None) -> Path | None:
@@ -193,7 +194,7 @@ def _cmd_install(args: argparse.Namespace) -> int:
             home=_path(args.home),
             dry_run=args.dry_run,
         )
-    except ValueError as exc:
+    except (OSError, ValueError) as exc:
         print(str(exc))
         if args.expected_results and samples:
             report = validate_profile_file(
@@ -303,14 +304,19 @@ def _approval_evidence(profile) -> dict[str, object]:
 
 
 def _cmd_evidence(args: argparse.Namespace) -> int:
-    profiles = list_profiles(home=_path(args.home))
-    if args.plugin_id:
-        profiles = tuple(profile for profile in profiles if profile.plugin_id == args.plugin_id)
-    if not profiles:
+    home = _path(args.home)
+    if not profile_store_root(home=home).exists():
         print(f"No profile evidence found for {args.plugin_id or 'installed profiles'}.")
         return 1
+    with parser_profile_store_lock(home=home):
+        profiles = list_profiles(home=home)
+        if args.plugin_id:
+            profiles = tuple(profile for profile in profiles if profile.plugin_id == args.plugin_id)
+        if not profiles:
+            print(f"No profile evidence found for {args.plugin_id or 'installed profiles'}.")
+            return 1
 
-    evidence = [_approval_evidence(profile) for profile in profiles]
+        evidence = [_approval_evidence(profile) for profile in profiles]
     print(json.dumps(evidence[0] if args.plugin_id else evidence, indent=2, sort_keys=True))
     return 0
 

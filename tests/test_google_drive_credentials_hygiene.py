@@ -1,32 +1,10 @@
-import json
 import unittest
 from pathlib import Path
 
-
-EXAMPLE_GOOGLE_CREDENTIALS_PATH = Path('config/google/credentials.example.json')
-
-
-def validate_example_credentials_template_hygiene() -> None:
-    payload_text = EXAMPLE_GOOGLE_CREDENTIALS_PATH.read_text(encoding='utf-8')
-    payload = json.loads(payload_text)
-    installed = payload.get('installed')
-    if not isinstance(installed, dict):
-        raise AssertionError("Missing 'installed' OAuth section in credentials example template.")
-
-    for key in ('client_id', 'client_secret', 'auth_uri', 'token_uri'):
-        if key not in installed:
-            raise AssertionError(f"Missing required OAuth field in credentials template: {key}")
-
-    if 'YOUR_CLIENT_ID' not in installed['client_id']:
-        raise AssertionError("credentials.example.json must keep redacted client_id placeholder.")
-    if 'YOUR_CLIENT_SECRET' not in installed['client_secret']:
-        raise AssertionError("credentials.example.json must keep redacted client_secret placeholder.")
-    if 'AIza' in payload_text:
-        raise AssertionError('credentials.example.json contains a real-looking API key prefix.')
-
-    for disallowed_key in ('access_token', 'refresh_token', 'expires_at'):
-        if disallowed_key in payload_text:
-            raise AssertionError(f"credentials.example.json must not include runtime token key: {disallowed_key}")
+from metroliza.integrations.google_credentials_hygiene import (
+    EXAMPLE_GOOGLE_CREDENTIALS_PATH,
+    validate_example_credentials_template_hygiene,
+)
 
 
 class TestGoogleDriveCredentialsHygiene(unittest.TestCase):

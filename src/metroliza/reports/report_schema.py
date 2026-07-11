@@ -9,8 +9,10 @@ from collections import defaultdict
 from pathlib import PurePath
 
 from metroliza.reports.characteristic_alias_service import ensure_characteristic_alias_table
-from metroliza.reports.db import run_transaction_with_retry
-from metroliza.industrial.industrial_data_schema import ensure_industrial_data_schema
+from metroliza.reports.db import run_transaction_with_retry, sqlite_connection_scope
+from metroliza.storage.industrial_schema import (
+    ensure_industrial_data_schema as ensure_industrial_storage_schema,
+)
 
 
 SCHEMA_VERSION = "report_metadata_v1"
@@ -26,6 +28,10 @@ SAMPLE_NUMBER_KINDS = (
 )
 WARNING_SEVERITIES = ("info", "warning", "error")
 MEASUREMENT_STATUS_CODES = ("ok", "nok", "unknown")
+_LEGACY_TABLE_SELECTS = {
+    "REPORTS": 'SELECT * FROM "REPORTS"',
+    "MEASUREMENTS": 'SELECT * FROM "MEASUREMENTS"',
+}
 
 
 def _quoted_values(values: tuple[str, ...]) -> str:
@@ -496,8 +502,11 @@ def _legacy_measurement_status(outtol) -> tuple[int, str]:
 
 
 def _fetch_table_rows(cursor, table_name: str) -> tuple[list[tuple], dict[str, int]]:
+    query = _LEGACY_TABLE_SELECTS.get(table_name)
+    if query is None:
+        return [], {}
     try:
-        cursor.execute(f'SELECT * FROM "{table_name}"')
+        cursor.execute(query)
     except sqlite3.Error:
         return [], {}
     rows = cursor.fetchall()
@@ -546,10 +555,8 @@ def _migrate_legacy_report_tables(cursor) -> None:
             report_columns,
         )
         sha256 = _legacy_source_sha(legacy_report_id)
-        now_sql = "CURRENT_TIMESTAMP"
-
         cursor.execute(
-            f"""
+            """
             INSERT OR IGNORE INTO source_files (
                 sha256,
                 file_size_bytes,
@@ -558,14 +565,14 @@ def _migrate_legacy_report_tables(cursor) -> None:
                 ingested_at,
                 is_active
             )
-            VALUES (?, NULL, 'legacy_sqlite', {now_sql}, {now_sql}, 1)
+            VALUES (?, NULL, 'legacy_sqlite', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 1)
             """,
             (sha256,),
         )
         cursor.execute("SELECT id FROM source_files WHERE sha256 = ?", (sha256,))
         source_file_id = int(cursor.fetchone()[0])
         cursor.execute(
-            f"""
+            """
             INSERT OR IGNORE INTO source_file_locations (
                 source_file_id,
                 absolute_path,
@@ -576,7 +583,7 @@ def _migrate_legacy_report_tables(cursor) -> None:
                 discovered_at,
                 is_active
             )
-            VALUES (?, ?, ?, ?, ?, NULL, {now_sql}, 1)
+            VALUES (?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, 1)
             """,
             (source_file_id, absolute_path, directory_path, file_name, file_extension),
         )
@@ -585,7 +592,7 @@ def _migrate_legacy_report_tables(cursor) -> None:
         parsed_report_row = cursor.fetchone()
         if parsed_report_row is None:
             cursor.execute(
-                f"""
+                """
                 INSERT INTO parsed_reports (
                     source_file_id,
                     parser_id,
@@ -601,7 +608,7 @@ def _migrate_legacy_report_tables(cursor) -> None:
                     created_at,
                     updated_at
                 )
-                VALUES (?, 'legacy_sqlite', NULL, 'legacy_sqlite', NULL, 'parsed', ?, ?, ?, ?, ?, {now_sql}, {now_sql})
+                VALUES (?, 'legacy_sqlite', NULL, 'legacy_sqlite', NULL, 'parsed', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
                 (
                     source_file_id,
@@ -758,8 +765,10 @@ def ensure_report_schema(database: str, *, connection=None, retries: int = 4, re
         retries=retries,
         retry_delay_s=retry_delay_s,
     )
-    ensure_industrial_data_schema(
+    ensure_industrial_storage_schema(
         database,
+        transaction_runner=run_transaction_with_retry,
+        connection_scope=sqlite_connection_scope,
         connection=connection,
         retries=retries,
         retry_delay_s=retry_delay_s,

@@ -46,6 +46,7 @@ def test_validate_nuitka_report_has_pdf_backend_accepts_report(tmp_path):
             '''
             <nuitka-report>
               <module name="metroliza.parsing.cmm_report_parser" />
+              <module name="metroliza.parsing.report_parser_factory" />
               <module name="metroliza.reports.report_parser_factory" />
               <module name="metroliza.parsing.pdf_backend" />
               <module name="pymupdf" />
@@ -154,6 +155,7 @@ def test_validate_nuitka_report_has_header_ocr_accepts_report(tmp_path):
             <nuitka-report>
               <module name="metroliza.parsing.header_ocr_backend" />
               <module name="metroliza.parsing.header_ocr_geometry" />
+              <module name="metroliza.reports.header_ocr_corrections" />
               <module name="metroliza.parsing.header_ocr_corrections" />
               <module name="rapidocr" />
               <module name="onnxruntime" />
@@ -181,6 +183,7 @@ def test_validate_nuitka_report_has_header_ocr_rejects_missing_model_data(tmp_pa
             <nuitka-report>
               <module name="metroliza.parsing.header_ocr_backend" />
               <module name="metroliza.parsing.header_ocr_geometry" />
+              <module name="metroliza.reports.header_ocr_corrections" />
               <module name="metroliza.parsing.header_ocr_corrections" />
               <module name="rapidocr" />
               <module name="onnxruntime" />
@@ -205,6 +208,7 @@ def test_validate_nuitka_report_has_header_ocr_rejects_missing_third_party_notic
             <nuitka-report>
               <module name="metroliza.parsing.header_ocr_backend" />
               <module name="metroliza.parsing.header_ocr_geometry" />
+              <module name="metroliza.reports.header_ocr_corrections" />
               <module name="metroliza.parsing.header_ocr_corrections" />
               <module name="rapidocr" />
               <module name="onnxruntime" />
@@ -282,9 +286,11 @@ def test_build_nuitka_script_defaults_to_release_onefile_and_includes_runtime_pa
     assert "'--include-package=modules'" in script
     assert "'--include-package=metroliza'" in script
     assert "'--include-module=metroliza.parsing.cmm_report_parser'" in script
+    assert "'--include-module=metroliza.parsing.report_parser_factory'" in script
     assert "'--include-module=metroliza.parsing.header_ocr_backend'" in script
     assert "'--include-module=metroliza.parsing.header_ocr_geometry'" in script
     assert "'--include-module=metroliza.parsing.header_ocr_corrections'" in script
+    assert "'--include-module=metroliza.reports.header_ocr_corrections'" in script
     assert "'--include-module=metroliza.reports.report_parser_factory'" in script
     assert "'--include-module=metroliza.parsing.pdf_backend'" in script
     assert "'--include-package=hexafe_groupstats'" in script

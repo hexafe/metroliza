@@ -31,11 +31,11 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from metroliza.shared.contracts import (
-    DashboardInteractivityOptions,
+from metroliza.industrial.contracts import (
     IndustrialAnalyticsRequest,
     validate_industrial_analytics_request,
 )
+from metroliza.shared.dashboard_interactivity import DashboardInteractivityOptions
 from metroliza.shared.dashboard_interactivity import (
     DASHBOARD_LARGE_GROUP_STATIC_THRESHOLD,
     DASHBOARD_LARGE_GROUP_TOTAL_STATIC_THRESHOLD,

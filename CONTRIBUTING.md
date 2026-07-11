@@ -53,7 +53,10 @@ Metroliza's core flow is:
 
 ## Contracts usage
 
-Request/option contracts live in `src/metroliza/shared/contracts.py`.
+Request/option contracts live with their owning packages:
+`src/metroliza/shared/parse_contracts.py`, `src/metroliza/exporting/contracts.py`,
+`src/metroliza/industrial/contracts.py`, and `src/metroliza/tabular/contracts.py`.
+`src/metroliza/shared/contracts.py` is compatibility-only.
 
 - Parse flows should build and validate `ParseRequest`.
 - Export flows should build and validate `ExportRequest` and nested dataclasses (`AppPaths`, `ExportOptions`, `GroupingAssignment`).
@@ -111,4 +114,4 @@ When touching Google conversion/auth flows, validate and document:
 3. **Fallback behavior:** conversion degradation/failure messaging still reports the preserved `.xlsx` output path.
 4. **Testing strategy:** baseline automated tests remain passing; optional live smoke check stays release-gated/non-default.
 5. **Troubleshooting notes:** conversion warning guidance stays current in `README.md`.
-6. **PR evidence for Google export surface changes:** any PR touching `src/metroliza/exporting/google_drive_export.py`, `src/metroliza/exporting/export_backends.py`, `src/metroliza/exporting/export_data_thread.py`, or Google export UI/contract paths (for example `src/metroliza/ui/export_dialog.py`, `src/metroliza/shared/contracts.py`) must include Google conversion smoke-check evidence in the PR description using the standard evidence format; if evidence is omitted, include explicit justification.
+6. **PR evidence for Google export surface changes:** any PR touching `src/metroliza/exporting/google_drive_export.py`, `src/metroliza/exporting/export_backends.py`, `src/metroliza/exporting/export_data_thread.py`, or Google export UI/contract paths (for example `src/metroliza/ui/export_dialog.py`, `src/metroliza/exporting/contracts.py`) must include Google conversion smoke-check evidence in the PR description using the standard evidence format; if evidence is omitted, include explicit justification.

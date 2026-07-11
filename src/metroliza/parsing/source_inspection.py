@@ -13,6 +13,25 @@ SOURCE_HASH_CHUNK_BYTES = 1024 * 1024
 _UNSET = object()
 
 
+class SourceChangedAfterInspectionError(ValueError):
+    """Raised when source content no longer matches its inspected digest."""
+
+    def __init__(
+        self,
+        source_path: str,
+        *,
+        inspected_sha256: str | None,
+        current_sha256: str | None,
+    ) -> None:
+        self.source_path = str(source_path)
+        self.inspected_sha256 = inspected_sha256
+        self.current_sha256 = current_sha256
+        super().__init__(
+            "Source changed after parser resolution; refusing to persist stale parse output: "
+            f"{self.source_path}"
+        )
+
+
 @dataclass
 class _SourceInspectionCache:
     lock: Lock = field(default_factory=Lock)
@@ -85,9 +104,10 @@ class SourceInspectionContext:
         inspected_sha256 = self.sha256
         current_sha256 = self._compute_sha256()
         if inspected_sha256 != current_sha256:
-            raise ValueError(
-                "Source changed after parser resolution; refusing to persist stale parse output: "
-                f"{self.source_path}"
+            raise SourceChangedAfterInspectionError(
+                self.source_path,
+                inspected_sha256=inspected_sha256,
+                current_sha256=current_sha256,
             )
         return current_sha256
 

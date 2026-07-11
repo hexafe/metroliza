@@ -5,10 +5,17 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Callable, Literal
+from typing import TYPE_CHECKING, Callable, Literal
 from uuid import uuid4
 
-from metroliza.shared.contracts import IndustrialAnalyticsRequest, validate_industrial_analytics_request
+from metroliza.industrial.contracts import (
+    IndustrialAnalyticsRequest,
+    validate_industrial_analytics_request,
+)
+from metroliza.industrial.dashboard_manifest import (
+    ProductionDashboardManifest,
+    ProductionDashboardWriteResult,
+)
 from metroliza.charts.chart_render_service import deterministic_grouped_downsample_frame
 from metroliza.charts.dashboard_visual_options import dashboard_visual_settings_to_plotly_settings
 from metroliza.industrial.industrial_analytics_dashboard import (
@@ -33,10 +40,6 @@ from metroliza.industrial.industrial_analytics_state import (
     ProductionMetricSelection,
     ReferenceCohortState,
 )
-from metroliza.industrial.industrial_analytics_workbook import (
-    IndustrialAnalyticsWorkbookResult,
-    export_production_analytics_workbook,
-)
 from metroliza.shared.progress_status import build_three_line_status, format_progress_duration
 from metroliza.shared.dashboard_interactivity import (
     normalize_dashboard_interactivity_mapping,
@@ -50,10 +53,16 @@ from metroliza.tabular.tabular_analytics_service import (
     TabularAnalyticsWorkbookResult,
     TabularColumnFilter,
     apply_tabular_grouping,
+    cleanup_tabular_load_result,
     export_tabular_analytics_workbook,
     load_tabular_analytics_file,
     materialize_tabular_dataframe,
 )
+
+if TYPE_CHECKING:
+    from metroliza.industrial.industrial_analytics_workbook import (
+        IndustrialAnalyticsWorkbookResult,
+    )
 
 AnalyticsSourceKind = Literal["production_cache", "tabular_file"]
 CancelCheck = Callable[[], bool]
@@ -287,6 +296,8 @@ def run_tabular_file_analytics(
     progress_callback: ProgressCallback | None = None,
     dashboard_visual_settings: dict | None = None,
     dashboard_interactivity_options: object | None = None,
+    _progress_started_at: float | None = None,
+    _loading_progress_emitted: bool = False,
 ) -> IndustrialAnalyticsRunResult:
     """Run analytics from a CSV or Excel file."""
 
@@ -317,18 +328,23 @@ def run_tabular_file_analytics(
         require_runnable=True,
     )
 
-    start_time = time.perf_counter()
-    total_steps = 6 if output_workbook_file else 5
-    _emit_progress(
-        progress_callback,
-        "Loading CSV/Excel data...",
-        "Checking loaded rows and metric columns"
-        if tabular_load_result is not None
-        else "Reading rows and detecting metric columns",
-        step=1,
-        total_steps=total_steps,
-        start_time=start_time,
+    start_time = (
+        float(_progress_started_at)
+        if _progress_started_at is not None
+        else time.perf_counter()
     )
+    total_steps = 6 if output_workbook_file else 5
+    if not _loading_progress_emitted:
+        _emit_progress(
+            progress_callback,
+            "Loading CSV/Excel data...",
+            "Checking loaded rows and metric columns"
+            if tabular_load_result is not None
+            else "Reading rows and detecting metric columns",
+            step=1,
+            total_steps=total_steps,
+            start_time=start_time,
+        )
     _raise_if_cancelled(cancel_check)
     if request.tabular_load_result is not None:
         _validate_tabular_load_snapshot(
@@ -346,6 +362,39 @@ def run_tabular_file_analytics(
             timestamp_column=request.timestamp_column,
             reference_column=request.reference_column,
         )
+        try:
+            return run_tabular_file_analytics(
+                input_file=request.input_file,
+                output_dashboard_file=request.output_dashboard_file,
+                tabular_load_result=loaded,
+                metric_selection=request.metric_selection,
+                sheet_name=request.sheet_name,
+                timestamp_column=request.timestamp_column,
+                reference_column=request.reference_column,
+                tabular_filter_columns=request.tabular_filter_columns,
+                tabular_filter_keys=request.tabular_filter_keys,
+                tabular_column_filters=request.tabular_column_filters,
+                tabular_filter_expression=request.tabular_filter_expression,
+                dashboard_detail_mode=request.dashboard_detail_mode,
+                grouping_df=request.grouping_df,
+                aggregation_state=request.aggregation_state,
+                cohort_state=request.cohort_state,
+                chart_selection=request.chart_selection,
+                output_workbook_file=request.output_workbook_file or None,
+                separate_parameter_sheets=request.separate_parameter_sheets,
+                cancel_check=cancel_check,
+                progress_callback=progress_callback,
+                dashboard_visual_settings=request.dashboard_visual_settings,
+                # Preserve whether the caller explicitly supplied interactivity
+                # settings. Contract validation materializes an ``auto`` default,
+                # which would otherwise override the legacy full/fast detail-mode
+                # defaults on this internal second pass.
+                dashboard_interactivity_options=dashboard_interactivity_options,
+                _progress_started_at=start_time,
+                _loading_progress_emitted=True,
+            )
+        finally:
+            cleanup_tabular_load_result(loaded)
     metrics = request.metric_selection or tuple(
         candidate.to_selection() for candidate in loaded.metric_candidates[:5]
     )
@@ -793,6 +842,14 @@ def _validate_tabular_load_snapshot(
     timestamp_column: str | None,
     reference_column: str | None,
 ) -> None:
+    expected_timestamp_column = _resolve_snapshot_column_name(
+        loaded,
+        timestamp_column,
+    )
+    expected_reference_column = _resolve_snapshot_column_name(
+        loaded,
+        reference_column,
+    )
     if loaded.source_snapshots:
         _validate_tabular_source_snapshots(loaded.source_snapshots)
         if len(loaded.source_snapshots) == 1:
@@ -802,9 +859,9 @@ def _validate_tabular_load_snapshot(
                 raise ValueError("Reload CSV/Excel data before export: selected source file changed.")
         if sheet_name is not None and loaded.sheet_name is not None and str(sheet_name) != loaded.sheet_name:
             raise ValueError("Reload CSV/Excel data before export: selected Excel sheet changed.")
-        if timestamp_column is not None and loaded.timestamp_column != str(timestamp_column):
+        if timestamp_column is not None and loaded.timestamp_column != expected_timestamp_column:
             raise ValueError("Reload CSV/Excel data before export: selected time column changed.")
-        if reference_column is not None and loaded.reference_column != str(reference_column):
+        if reference_column is not None and loaded.reference_column != expected_reference_column:
             raise ValueError("Reload CSV/Excel data before export: selected part/id column changed.")
         return
 
@@ -822,10 +879,31 @@ def _validate_tabular_load_snapshot(
         raise ValueError("Reload CSV/Excel data before export: source file timestamp changed.")
     if sheet_name is not None and loaded.sheet_name is not None and str(sheet_name) != loaded.sheet_name:
         raise ValueError("Reload CSV/Excel data before export: selected Excel sheet changed.")
-    if timestamp_column is not None and loaded.timestamp_column != str(timestamp_column):
+    if timestamp_column is not None and loaded.timestamp_column != expected_timestamp_column:
         raise ValueError("Reload CSV/Excel data before export: selected time column changed.")
-    if reference_column is not None and loaded.reference_column != str(reference_column):
+    if reference_column is not None and loaded.reference_column != expected_reference_column:
         raise ValueError("Reload CSV/Excel data before export: selected part/id column changed.")
+
+
+def _resolve_snapshot_column_name(
+    loaded: TabularAnalyticsLoadResult,
+    requested: str | None,
+) -> str | None:
+    """Map a user-facing source column to the snapshot's canonical field name."""
+
+    if requested is None:
+        return None
+    requested_text = str(requested).strip()
+    if not requested_text:
+        return requested_text
+    direct = loaded.column_mapping.get(requested_text)
+    if direct is not None:
+        return str(direct)
+    requested_key = requested_text.casefold()
+    for source_name, canonical_name in loaded.column_mapping.items():
+        if str(source_name).casefold() == requested_key:
+            return str(canonical_name)
+    return requested_text
 
 
 def _validate_tabular_source_snapshots(snapshots) -> None:
@@ -902,9 +980,9 @@ def _write_dashboard(
     dashboard_visual_settings: dict[str, object] | None = None,
     dashboard_interactivity_options: dict[str, object] | None = None,
     dashboard_context: dict[str, object] | None = None,
-) -> dict[str, object]:
+) -> ProductionDashboardWriteResult:
     interactivity_mode = str((dashboard_interactivity_options or {}).get("mode") or "auto")
-    manifest = build_production_dashboard_manifest(
+    manifest: ProductionDashboardManifest = build_production_dashboard_manifest(
         frame=frame,
         metric_selection=metrics,
         aggregation_state=aggregation,
@@ -956,6 +1034,10 @@ def _export_production_workbook_with_temp(
     group_fields: tuple[str, ...],
     cancel_check: CancelCheck | None,
 ) -> IndustrialAnalyticsWorkbookResult:
+    from metroliza.industrial.industrial_analytics_workbook import (
+        export_production_analytics_workbook,
+    )
+
     target_path = _workbook_output_path(output_workbook_file)
     temp_path = _temporary_output_path(target_path)
     try:
@@ -1043,7 +1125,7 @@ def _dashboard_assets_dir(target_path: Path) -> Path:
 def _run_result(
     *,
     source_kind: AnalyticsSourceKind,
-    dashboard: dict[str, object],
+    dashboard: ProductionDashboardWriteResult,
     workbook: IndustrialAnalyticsWorkbookResult | TabularAnalyticsWorkbookResult | None,
     row_count: int,
     aggregate_row_count: int,

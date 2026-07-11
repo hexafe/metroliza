@@ -86,6 +86,14 @@ class TestExportQueryService(unittest.TestCase):
         self.assertEqual(counts, {'REF_A': 2})
         self.assertIn("HEADER || ' - ' || AX", captured['query'])
 
+    def test_fetch_partition_header_counts_rejects_unreviewed_sql_expression(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported partition header expression"):
+            fetch_partition_header_counts(
+                'db.sqlite',
+                'SELECT * FROM vw_measurement_export',
+                header_expr="HEADER); DROP TABLE REPORTS; --",
+            )
+
     def test_fetch_sql_measurement_summaries_groups_rows_by_reference_header_and_axis(self):
         captured = {}
 

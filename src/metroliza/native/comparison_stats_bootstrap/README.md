@@ -36,10 +36,10 @@ There is no silent fallback from a forced `native` mode.
 
 ```bash
 # Install extension into the current interpreter (dev/editable workflow)
-python -m maturin develop --manifest-path src/metroliza/native/comparison_stats_bootstrap/Cargo.toml
+python -m maturin develop --locked --manifest-path src/metroliza/native/comparison_stats_bootstrap/Cargo.toml
 
 # Build wheel artifact(s)
-python -m maturin build --manifest-path src/metroliza/native/comparison_stats_bootstrap/Cargo.toml --release
+python -m maturin build --locked --manifest-path src/metroliza/native/comparison_stats_bootstrap/Cargo.toml --release
 ```
 
 For cross-crate packaging and CI parity expectations, see `docs/native_build_distribution.md`.

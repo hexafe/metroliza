@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-from metroliza.parsing.header_ocr_corrections import canonicalize_header_text_for_variant, compact_token
+from metroliza.reports.header_ocr_corrections import canonicalize_header_text_for_variant, compact_token
 from metroliza.reports.report_metadata_models import MetadataWarning
 from metroliza.reports.report_metadata_normalizers import (
     normalize_comment,

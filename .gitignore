@@ -41,7 +41,7 @@ _metroliza_*_native.so
 modules/native/**/target/
 modules/native/**/Cargo.lock
 src/metroliza/native/**/target/
-src/metroliza/native/**/Cargo.lock
+# Canonical native lockfiles are versioned for reproducible release wheels and notices.
 
 # Google API local secrets
 credentials.json

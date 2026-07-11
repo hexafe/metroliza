@@ -82,16 +82,14 @@ def test_active_docs_use_canonical_test_pythonpath() -> None:
         assert 'PYTHONPATH=src:. python -m pytest tests -q' in text
 
 
-def test_ci_workflow_keeps_manual_smoke_gates_non_blocking() -> None:
+def test_ci_workflow_keeps_packaging_manual_and_google_local_only() -> None:
     workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
 
     assert "name: Packaging smoke (manual/opt-in)" in workflow
     assert "if: github.event_name == 'workflow_dispatch' && inputs.run_packaging_smoke == '1'" in workflow
-    assert "name: Google conversion smoke (manual/opt-in)" in workflow
-    assert (
-        "if: github.event_name == 'workflow_dispatch' && inputs.run_google_conversion_smoke == '1'"
-        in workflow
-    )
+    assert "name: Google conversion smoke (manual/opt-in)" not in workflow
+    assert 'run_google_conversion_smoke' not in workflow
+    assert 'name: Windows core smoke' in workflow
     assert 'METROLIZA_PDF_PARSER_SMOKE_FIXTURE: tests/fixtures/pdf/cmm_smoke_fixture.pdf' in workflow
     assert 'METROLIZA_PDF_PARSER_SMOKE_EXPECTED_TEXT: METROLIZA PDF PARSER SMOKE' in workflow
     assert 'requirements-ocr.txt' in workflow
@@ -99,6 +97,10 @@ def test_ci_workflow_keeps_manual_smoke_gates_non_blocking() -> None:
     assert "find dist -maxdepth 1 -type f -name 'metroliza_P_*'" in workflow
     assert 'timeout 60s "${{ steps.packaged-artifact.outputs.path }}"' in workflow
     assert 'name: packaging-smoke-artifacts' in workflow
+    assert 'name: packaging-smoke-release-artifact' in workflow
+    assert 'python scripts/stage_release_notices.py' in workflow
+    assert 'third_party_inventory_260711.json' in workflow
+    assert 'NOTICE_MANIFEST.json' in workflow
 
 
 def test_ci_and_precommit_run_release_hygiene_scan() -> None:
@@ -119,28 +121,26 @@ def test_ci_and_precommit_run_release_hygiene_scan() -> None:
     assert 'smoke-artifacts/' in gitignore
     assert 'nuitka-build-report.xml' in gitignore
     assert 'src/metroliza/native/**/target/' in gitignore
-    assert 'src/metroliza/native/**/Cargo.lock' in gitignore
+    assert 'src/metroliza/native/**/Cargo.lock' not in gitignore
     assert '.coverage' in gitignore
     assert 'coverage.xml' in gitignore
     assert 'htmlcov/' in gitignore
 
 
-def test_precommit_credential_pattern_avoids_identifier_false_positives() -> None:
+def test_precommit_security_tools_match_ci_and_development_policy() -> None:
     precommit_config = Path('.pre-commit-config.yaml').read_text(encoding='utf-8')
-    entry_line = next(
-        line
-        for line in precommit_config.splitlines()
-        if 'client[_-]?secret' in line
+    requirements_dev = Path('requirements-dev.txt').read_text(encoding='utf-8')
+    ruff_pin = next(
+        line.split('==', 1)[1].strip()
+        for line in requirements_dev.splitlines()
+        if line.startswith('ruff==')
     )
-    pattern = entry_line.split('entry:', 1)[1].strip()
-    if pattern.startswith("'") and pattern.endswith("'"):
-        pattern = pattern[1:-1].replace("''", "'")
-    compiled = re.compile(pattern)
 
-    assert compiled.search('api_key = "abcdefghijklmnopqrstuvwxyz012345"')
-    assert not compiled.search("access_token = _ensure_access_token(credentials_path, token_path)")
-    assert not compiled.search("refresh_token = token_payload.get('refresh_token')")
-    assert not compiled.search("api_key: should-not-be-here")
+    assert f'rev: v{ruff_pin}' in precommit_config
+    assert 'id: security-secret-scan' in precommit_config
+    assert 'entry: python scripts/security_audit.py --secret-scan-only' in precommit_config
+    assert 'pass_filenames: false' in precommit_config
+    assert 'id: detect-basic-credential-patterns' not in precommit_config
 
 
 def test_ci_workflow_runs_declarative_parser_profile_self_service_smoke() -> None:
@@ -160,6 +160,17 @@ def test_ci_workflow_runs_declarative_parser_profile_self_service_smoke() -> Non
     assert 'Parser profile self-service smoke' in ci_policy
     assert 'synthetic CSV sample' in ci_policy
     assert 'data-only' in ci_policy
+
+
+def test_ci_workflow_keeps_static_typing_narrow_and_blocking() -> None:
+    workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+    requirements_dev = Path('requirements-dev.txt').read_text(encoding='utf-8')
+
+    assert 'mypy==2.2.0' in requirements_dev
+    assert 'name: Narrow static type boundary' in workflow
+    assert 'src/metroliza/integrations/google_credentials_hygiene.py' in workflow
+    assert 'src/metroliza/industrial/anomaly/contracts.py' in workflow
+    assert 'src/metroliza/industrial/realtime/stream_contracts.py' in workflow
 
 
 def test_ci_workflow_keeps_native_chart_planner_parity_smoke_step() -> None:
@@ -184,9 +195,40 @@ def test_ci_workflow_keeps_manual_smoke_inputs_opt_in_by_default() -> None:
 
     assert 'run_packaging_smoke:' in workflow
     assert 'description: "Set to 1 to run manual packaging smoke build"' in workflow
-    assert 'run_google_conversion_smoke:' in workflow
-    assert 'description: "Set to 1 to run release-only Google conversion smoke check"' in workflow
+    assert 'run_google_conversion_smoke:' not in workflow
+    assert 'run_windows_startup_benchmark:' in workflow
     assert workflow.count('default: "0"') >= 2
+
+
+def test_ci_workflow_pins_actions_and_uses_least_privilege_defaults() -> None:
+    workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+    action_refs = re.findall(r'^\s*uses:\s+([^\s#]+)', workflow, flags=re.MULTILINE)
+
+    assert action_refs
+    assert all(re.fullmatch(r'[^@]+@[0-9a-f]{40}', ref) for ref in action_refs)
+    assert 'permissions:\n  contents: read' in workflow
+    assert 'concurrency:' in workflow
+    assert 'cancel-in-progress: true' in workflow
+    assert workflow.count('uses: actions/checkout@') == workflow.count(
+        'persist-credentials: false'
+    )
+    assert workflow.count('runs-on:') == workflow.count('timeout-minutes:')
+    assert 'toolchain: 1.95.0' in workflow
+    maturin_builds = [line for line in workflow.splitlines() if 'maturin build' in line]
+    assert maturin_builds
+    assert all('--locked' in line for line in maturin_builds)
+
+
+def test_ci_workflow_runs_blocking_windows_core_smoke() -> None:
+    workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+    ci_policy = CI_POLICY_PATH.read_text(encoding='utf-8')
+
+    assert 'windows-core-smoke:' in workflow
+    assert 'name: Windows core smoke' in workflow
+    assert 'runs-on: windows-latest' in workflow
+    assert 'tests/test_db_utils.py' in workflow
+    assert 'tests/test_packaging_spec_hiddenimports.py' in workflow
+    assert '| Windows core smoke | `windows-core-smoke` |' in ci_policy
 
 
 def test_perf_benchmark_trend_filters_to_baseline_backed_scenarios() -> None:
@@ -216,7 +258,8 @@ def test_ci_policy_keeps_manual_smoke_lane_semantics_explicit() -> None:
 
     assert 'Optional/manual checks (non-blocking)' in ci_policy
     assert '| Packaging smoke build + packaged PDF parser check (release-only) | `packaging-smoke` |' in ci_policy
-    assert '| Google conversion smoke (release-only) | `google-conversion-smoke` |' in ci_policy
+    assert '| Google conversion smoke (release-only) | Local secure workstation command' in ci_policy
+    assert 'Not a hosted CI job; **release-blocking** evidence' in ci_policy
     assert '**Non-blocking** for regular PRs and pushes' in ci_policy
     assert 'Packaging smoke parser semantics' in ci_policy
 
@@ -233,17 +276,11 @@ def test_release_status_and_runbook_keep_gate_semantics_aligned() -> None:
         '**Release-blocking manual evidence gates** are defined in '
         '[`release_candidate_checklist.md`](./release_candidate_checklist.md)'
     ) in release_status
-    assert (
-        'Optional/manual workflow-dispatch lanes (`packaging-smoke`, `google-conversion-smoke`) are non-blocking '
-        'for normal PR CI'
-    ) in release_status
+    assert 'Google conversion smoke is intentionally local-only' in release_status
 
-    assert (
-        'optional manual smoke evidence collection (`packaging-smoke`, `google-conversion-smoke`)'
-        in open_testing_runbook
-    )
+    assert 'local secure-workstation Google conversion smoke' in open_testing_runbook
     assert 'Google conversion smoke is release-blocking for promoted RC artifacts' in release_checklist
-    assert 'skipped default CI does not satisfy that gate' in release_checklist
+    assert 'green CI does not satisfy that gate' in release_checklist
     assert 'does **not** count as smoke evidence' in google_runbook
     assert 'not executed / promotion blocked' in google_runbook
     assert 'green CI run does not satisfy this gate' in google_log

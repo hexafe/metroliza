@@ -7,5 +7,6 @@ zstandard>=0.22.0
 maturin>=1.13.3
 cibuildwheel>=2.19
 build>=1.2
+packaging>=24.0
 pytest>=8.0
 defusedxml>=0.7.1

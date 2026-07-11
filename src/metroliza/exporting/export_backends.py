@@ -20,6 +20,11 @@ from metroliza.exporting.xlsx_writer_policy import (
     write_untrusted_xlsx_cell,
     xlsxwriter_workbook_options,
 )
+from metroliza.exporting.execution import (
+    ExportExecutionContext,
+    ExportStageOutcome,
+    normalize_export_outcome,
+)
 
 
 class ChartContract(Protocol):
@@ -155,7 +160,7 @@ class ExportBackendContract(Protocol):
     def get_workbook(self, writer: Any) -> WorkbookContract:
         """Return a workbook adapter for low-level format/chart operations."""
 
-    def run(self, thread: Any) -> bool:
+    def run(self, thread: ExportExecutionContext) -> ExportStageOutcome:
         """Execute backend lifecycle around `thread.run_export_pipeline`."""
 
 
@@ -528,11 +533,11 @@ class HtmlDashboardExportBackend:
         """Return a no-op workbook adapter for chart and format calls."""
         return writer.workbook
 
-    def run(self, thread: Any) -> bool:
+    def run(self, thread: ExportExecutionContext) -> ExportStageOutcome:
         """Run the dashboard-producing export stages without touching an XLSX file."""
-        writer = self.create_writer(getattr(thread, "html_dashboard_file", ""))
+        writer = self.create_writer(thread.html_dashboard_file or "")
         try:
-            return bool(thread.run_html_dashboard_pipeline(writer))
+            return normalize_export_outcome(thread.run_html_dashboard_pipeline(writer))
         finally:
             self.close_writer(writer)
 
@@ -640,7 +645,7 @@ class ExcelExportBackend:
         except FileNotFoundError:
             return
 
-    def run(self, thread: Any) -> bool:
+    def run(self, thread: ExportExecutionContext) -> ExportStageOutcome:
         """Run export pipeline with writer lifecycle management.
 
         Args:
@@ -648,34 +653,30 @@ class ExcelExportBackend:
                 and `run_export_pipeline`.
 
         Returns:
-            bool: `True` when pipeline completes successfully, otherwise `False`.
+            ExportStageOutcome: Structured success or cancellation result.
         """
         target_path = Path(thread.excel_file)
         temp_path = self.create_temporary_workbook_path(str(target_path))
         excel_writer = None
-        completed = False
+        outcome = ExportStageOutcome.canceled()
         try:
             excel_writer = self.create_writer(str(temp_path))
             try:
-                completed = thread.run_export_pipeline(excel_writer)
+                outcome = normalize_export_outcome(thread.run_export_pipeline(excel_writer))
             finally:
-                begin_close = getattr(thread, "_begin_workbook_close", None)
-                if callable(begin_close):
-                    begin_close()
+                thread.begin_workbook_close()
                 close_start = time.perf_counter()
                 try:
                     self.close_writer(excel_writer)
                 finally:
-                    complete_close = getattr(thread, "_complete_workbook_close", None)
-                    if callable(complete_close):
-                        complete_close(time.perf_counter() - close_start)
+                    thread.complete_workbook_close(time.perf_counter() - close_start)
         except BaseException:
             self.remove_temporary_workbook(temp_path)
             raise
 
-        if not completed:
+        if not outcome:
             self.remove_temporary_workbook(temp_path)
-            return False
+            return outcome
 
         try:
             self.replace_workbook(temp_path, target_path)
@@ -683,4 +684,4 @@ class ExcelExportBackend:
             self.remove_temporary_workbook(temp_path)
             raise
 
-        return True
+        return outcome

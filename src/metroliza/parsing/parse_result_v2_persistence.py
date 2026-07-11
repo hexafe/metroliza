@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from metroliza.parsing.parser_plugin_contracts import ParseResultV2
+from metroliza.parsing.source_inspection import SourceInspectionContext
 from metroliza.reports.report_identity import build_report_identity_hash
 from metroliza.reports.report_metadata_models import CanonicalReportMetadata, MetadataWarning
 from metroliza.reports.report_repository import ReportRepository
@@ -281,6 +282,7 @@ def persist_parse_result_v2(
     connection=None,
     manifest: Any = None,
     source_sha256: str | None = None,
+    source_inspection: SourceInspectionContext | None = None,
 ) -> int:
     """Persist a generic plugin parse result through ``ReportRepository``."""
 
@@ -296,6 +298,7 @@ def persist_parse_result_v2(
         database=database,
         connection=connection,
         source_sha256=source_sha256,
+        source_inspection=source_inspection,
     )
 
 
@@ -307,13 +310,30 @@ def persist_parse_result_v2_payload(
     database: str,
     connection=None,
     source_sha256: str | None = None,
+    source_inspection: SourceInspectionContext | None = None,
 ) -> int:
     """Persist a prebuilt V2 payload through ``ReportRepository``."""
+
+    verified_source_sha256 = source_sha256
+    if source_inspection is not None:
+        current_sha256 = source_inspection.verified_sha256()
+        if (
+            source_sha256 is not None
+            and (
+                current_sha256 is None
+                or source_sha256.casefold() != current_sha256.casefold()
+            )
+        ):
+            raise ValueError(
+                "Explicit source digest does not match the inspected source digest: "
+                f"{source_path}"
+            )
+        verified_source_sha256 = current_sha256
 
     repository = ReportRepository(database, connection=connection)
     return repository.persist_parsed_report(
         source_path=source_path,
-        source_sha256=source_sha256,
+        source_sha256=verified_source_sha256,
         parser_id=payload.metadata.parser_id,
         parser_version=parse_result.meta.plugin_version,
         template_family=payload.metadata.template_family,

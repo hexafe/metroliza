@@ -14,7 +14,7 @@ Use this checklist/log when running the release-gated smoke command from:
 - [x] Running against sandbox/non-production Google project/account.
 - [x] `credentials.json` and `token.json` are local-only + gitignored.
 - [x] `METROLIZA_RUN_GOOGLE_CONVERSION_SMOKE=1` set for this run.
-- [x] Command output will be retained (CI link or local terminal capture).
+- [ ] Command output will be retained as a local log or approved evidence attachment.
 
 ## Evidence to record (required for each smoke execution)
 
@@ -23,11 +23,11 @@ Use this checklist/log when running the release-gated smoke command from:
 
 - Command run (exact command text, including env vars).
 - Date/time (with timezone).
-- Environment/sandbox account (local/CI context + sandbox Google account/project identifier).
+- Environment/sandbox account (local workstation + sandbox Google account/project identifier).
 - Pass/fail outcome.
 - Build identity under test (branch + commit SHA and artifact/build identifier).
 - Fallback `.xlsx` behavior observed (path/link and whether fallback remained accessible as expected).
-- Link/log location (CI job URL, artifact URI, or local log file path).
+- Link/log location (local log file path or approved evidence URI).
 
 ### Pass/fail escalation path
 
@@ -41,7 +41,7 @@ Superseded 2026-03 smoke attempts are archived at [`../archive/2026/google_conve
 
 ## Current RC status
 
-- `2026.05 RC4 (build 260602)`: no Google conversion smoke evidence is recorded yet
-  for the current promotion artifact. Default push/PR CI skips this manual job,
-  so a green CI run does not satisfy this gate. Record a live smoke run for the
-  exact promoted commit/artifact before open-testing promotion.
+- `2026.06 RC2 (build 260711)`: not executed / promotion blocked. This check is
+  intentionally local-only because hosted runners do not receive OAuth client or
+  token files. A green CI run does not satisfy this gate. Record a live sandbox
+  conversion for the exact promoted commit/artifact before open-testing promotion.

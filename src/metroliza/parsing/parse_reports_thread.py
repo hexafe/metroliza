@@ -8,7 +8,7 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from metroliza.reports import report_parser_factory
+from metroliza.parsing import report_parser_factory
 import metroliza.shared.custom_logger as custom_logger
 from PyQt6.QtCore import QThread, pyqtSignal
 from dataclasses import dataclass
@@ -30,6 +30,8 @@ from metroliza.reports.report_metadata_models import CanonicalReportMetadata
 from metroliza.reports.report_repository import ReportRepository, compute_sha256
 from metroliza.parsing.base_report_parser import BaseReportParser
 from metroliza.parsing.cmm_report_parser import CMMReportParser
+from metroliza.parsing.parser_plugin_contracts import infer_source_format
+from metroliza.parsing.source_inspection import SourceInspectionContext
 from metroliza.reports.report_metadata_profiles import DEFAULT_CMM_PDF_HEADER_BOX_PROFILE
 
 
@@ -68,8 +70,18 @@ def build_report_fingerprints_from_rows(rows, should_cancel=lambda: False):
     return report_fingerprints
 
 
-def build_source_file_fingerprint(report_path):
-    return f"sha256:{compute_sha256(report_path)}"
+def build_source_file_fingerprint(
+    report_path,
+    source_inspection: SourceInspectionContext | None = None,
+):
+    inspection = source_inspection or SourceInspectionContext.from_path(
+        report_path,
+        source_format=infer_source_format(report_path),
+    )
+    sha256_value = inspection.sha256
+    if sha256_value is None:
+        sha256_value = compute_sha256(report_path)
+    return f"sha256:{sha256_value}"
 
 
 def _exception_traceback_text(exception):
@@ -177,9 +189,13 @@ def parse_new_reports(
     if enable_two_stage_pipeline:
         max_workers = worker_count or max(1, min(8, os.cpu_count() or 1))
 
-        def _stage1_worker(report, enqueued_at):
+        def _stage1_worker(report, enqueued_at, source_inspection):
             try:
-                parser = parser_factory(report)
+                parser = report_parser_factory.invoke_parser_factory(
+                    parser_factory,
+                    report,
+                    source_inspection=source_inspection,
+                )
             except Exception as exc:
                 setattr(exc, "_metroliza_parse_failure_stage", "parser")
                 raise
@@ -202,13 +218,28 @@ def parse_new_reports(
             for report in report_paths:
                 if should_cancel():
                     break
-                fingerprint = build_source_file_fingerprint(report)
+                source_inspection = SourceInspectionContext.from_path(
+                    report,
+                    source_format=infer_source_format(report),
+                )
+                fingerprint = build_source_file_fingerprint(report, source_inspection)
                 if fingerprint in report_fingerprints:
                     parsed_files += 1
                     _emit_processed_progress()
                     continue
                 enqueued_at = time.perf_counter()
-                futures.append((report, fingerprint, executor.submit(_stage1_worker, report, enqueued_at)))
+                futures.append(
+                    (
+                        report,
+                        fingerprint,
+                        executor.submit(
+                            _stage1_worker,
+                            report,
+                            enqueued_at,
+                            source_inspection,
+                        ),
+                    )
+                )
 
             future_context = {future: (report, fingerprint) for report, fingerprint, future in futures}
             for future in as_completed(future_context):
@@ -262,10 +293,18 @@ def parse_new_reports(
             break
 
         report_parse_start = time.perf_counter()
-        fingerprint = build_source_file_fingerprint(report)
+        source_inspection = SourceInspectionContext.from_path(
+            report,
+            source_format=infer_source_format(report),
+        )
+        fingerprint = build_source_file_fingerprint(report, source_inspection)
         if fingerprint not in report_fingerprints:
             try:
-                parser = parser_factory(report)
+                parser = report_parser_factory.invoke_parser_factory(
+                    parser_factory,
+                    report,
+                    source_inspection=source_inspection,
+                )
             except Exception as exc:
                 _record_file_failure(report, "parser", exc)
                 continue
@@ -315,7 +354,20 @@ def enrich_report_metadata(
         enrichment_start = time.perf_counter()
         parser = None
         try:
-            parser = parser_factory(report)
+            source_inspection = SourceInspectionContext.from_path(
+                report,
+                source_format=infer_source_format(report),
+            )
+            parser = report_parser_factory.invoke_parser_factory(
+                parser_factory,
+                report,
+                source_inspection=source_inspection,
+            )
+            verified_source_sha256 = source_inspection.verified_sha256()
+            try:
+                parser._verified_source_sha256 = verified_source_sha256
+            except (AttributeError, TypeError):
+                pass
             enriched = parser is not None and persist_enrichment(report, parser)
         except Exception as exc:
             failed_files += 1
@@ -372,7 +424,7 @@ def supported_report_file_extensions() -> set[str]:
         logger.warning("Could not load external parser plugins during discovery", exc_info=True)
 
     extensions = set(_REPORT_EXTENSIONS_BY_SOURCE_FORMAT["pdf"])
-    for manifest in report_parser_factory.PARSER_MANIFESTS.values():
+    for manifest in report_parser_factory.list_plugins():
         for source_format in getattr(manifest, "supported_formats", ()) or ():
             extensions.update(_REPORT_EXTENSIONS_BY_SOURCE_FORMAT.get(str(source_format).lower(), ()))
     return extensions
@@ -857,8 +909,14 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         except Exception as e:
             self.log_and_exit(e)
 
-    def _report_id_for_source_path(self, report_path, connection=None):
-        sha256_value = compute_sha256(report_path)
+    def _report_id_for_source_path(
+        self,
+        report_path,
+        connection=None,
+        *,
+        source_sha256=None,
+    ):
+        sha256_value = source_sha256 or compute_sha256(report_path)
         rows = execute_with_retry(
             self.db_file,
             """
@@ -901,15 +959,24 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
 
         start_time = time.perf_counter()
 
-        def _parser_factory(report):
-            parser = get_parser(report, self.db_file, connection=connection)
+        def _parser_factory(report, *, source_inspection=None):
+            parser = get_parser(
+                report,
+                self.db_file,
+                connection=connection,
+                source_inspection=source_inspection,
+            )
             selection_result = selection_result_for_complete_metadata_parser(parser)
             if selection_result is not None:
                 parser._metadata_selection_result = selection_result
             return parser
 
         def _persist_enrichment(report, parser):
-            report_id = self._report_id_for_source_path(report, connection=connection)
+            report_id = self._report_id_for_source_path(
+                report,
+                connection=connection,
+                source_sha256=getattr(parser, "_verified_source_sha256", None),
+            )
             if report_id is None:
                 return False
 
@@ -1086,12 +1153,13 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                         return parser.persist_prepared_report()
                     return parser.open_database_and_check_filename()
 
-                def _parser_factory(report):
+                def _parser_factory(report, *, source_inspection=None):
                     return get_parser(
                         report,
                         self.db_file,
                         connection=connection,
                         metadata_parsing_mode=self.metadata_parsing_mode,
+                        source_inspection=source_inspection,
                     )
 
                 result = parse_new_reports(

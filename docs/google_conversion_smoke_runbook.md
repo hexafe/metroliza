@@ -5,8 +5,8 @@ This runbook defines how maintainers run and interpret the release-gated live Go
 ## Scope and intent
 
 - Script: `scripts/release_only_google_conversion_smoke.py`.
-- Purpose: verify that Metroliza can upload a generated `.xlsx` workbook to Google Drive, convert it to a Google Sheet, and confirm release-gated conversion metadata/warning expectations without extra Sheets API post-validation calls.
-- Execution model: manual or explicitly gated CI job only (not part of default unit-test discovery). A skipped default CI job is expected and does **not** count as smoke evidence.
+- Purpose: verify that Metroliza can upload a generated `.xlsx` workbook to Google Drive, convert it to a Google Sheet, and confirm the exact converted tab names plus release-gated metadata/warning expectations.
+- Execution model: local secure workstation only (not hosted CI and not part of default unit-test discovery). Hosted runners intentionally receive no OAuth client or token material; green CI does **not** count as smoke evidence.
 
 ## When smoke execution is mandatory
 
@@ -34,6 +34,7 @@ Before running smoke:
    - Both files must remain local-only and gitignored.
 4. **Google APIs are enabled for the sandbox project**
    - Google Drive API.
+   - Google Sheets API, used to verify converted tab names.
 5. **OAuth consent grants Drive upload scope**
    - Interactive consent should include only `https://www.googleapis.com/auth/drive.file`.
 6. **Network path to Google APIs is available**
@@ -78,6 +79,7 @@ And implies all of the following passed:
 - Returned `file_id` is non-empty.
 - Returned `web_url` is a valid HTTPS Sheets link.
 - Spreadsheet ID parsed from URL matches `file_id`.
+- Converted tabs exactly match `MEASUREMENTS` and `REF_A` in order.
 - No post-conversion warnings were emitted (`warnings=()`).
 
 ### Warning handling policy
@@ -112,7 +114,7 @@ The smoke check is designed to fail with actionable messages when prerequisites 
 2. Delete stale `token.json` and re-run interactive auth flow to mint a fresh token.
 3. Verify OAuth consent screen and client type match desktop/local app usage.
 4. Confirm the account running smoke still has Drive access and has not revoked consent.
-5. Confirm the granted token scope includes `https://www.googleapis.com/auth/drive.file` (no Sheets scope required).
+5. Confirm the granted token scope includes `https://www.googleapis.com/auth/drive.file`; this scope permits access to files created by the app, including the tab-title verification request.
 6. Re-run smoke after token refresh/regeneration.
 
 ### Quota/rate-limit failures (HTTP 429 / quotaExceeded / rateLimitExceeded)
@@ -127,7 +129,7 @@ The smoke check is designed to fail with actionable messages when prerequisites 
 1. Validate outbound HTTPS connectivity from runner/workstation.
 2. Check proxy/firewall rules for Google OAuth and Drive endpoints.
 3. Re-run from a known-good network to isolate local environment issues.
-4. If CI-only, inspect runner egress restrictions and update allowlists.
+4. If the workstation is behind a managed proxy, inspect its egress restrictions and update allowlists.
 
 ### Conversion warning failures
 
@@ -146,11 +148,11 @@ For release-candidate validations and PRs that modify Google auth/conversion beh
 - Minimum evidence set per run:
   - Command run (exact command text, including env vars).
   - Date/time (with timezone).
-  - Environment/sandbox account (local/CI context + sandbox Google account/project identifier).
+- Environment/sandbox account (local workstation + sandbox Google account/project identifier).
 - Build identity under test (branch + commit SHA + artifact/build identifier).
 - Pass/fail outcome.
 - Fallback `.xlsx` behavior observed (path/link and whether fallback remained accessible as expected).
-- Link/log location (CI job URL, artifact URI, or local log file path).
+- Link/log location (local log file path or approved evidence URI).
 - Do **not** require or record chart-patching/batchUpdate evidence; conversion validation is Drive upload+convert metadata plus fallback behavior only.
 
 ### Pass/fail escalation path
@@ -168,7 +170,7 @@ Use this template:
 ```md
 ## YYYY-MM-DD
 - Date/time: <!-- YYYY-MM-DD HH:MM TZ -->
-- Environment/sandbox account: <!-- local workstation or CI job + branch/commit + sandbox account/project -->
+- Environment/sandbox account: <!-- local workstation + branch/commit + sandbox account/project -->
 - Evidence recorder owner role: <!-- QA owner or delegated Release manager -->
 - Build identity under test: <!-- branch + commit SHA + build/artifact identifier -->
 - Command:
@@ -180,7 +182,7 @@ Use this template:
   ```
 - Pass/fail: <!-- PASS / FAIL -->
 - Fallback `.xlsx` behavior observed: <!-- preserved output path/link + observed behavior -->
-- Link/log location: <!-- CI URL, artifact URI, or local log capture path -->
+- Link/log location: <!-- local log capture path or approved evidence URI -->
 - Notes/remediation: <!-- optional -->
 ```
 
@@ -189,4 +191,4 @@ Use this template:
 - Release-gated smoke runs currently require `warnings=()` to pass.
 - If warnings appear, do not waive by default: record the exact warning text, impacted release candidate, and fallback implications before deciding next action.
 - Keep the converted Google Sheet as convenience output and treat the generated `.xlsx` as the fidelity-baseline fallback artifact while warning root cause is investigated.
-- The smoke script intentionally avoids any Sheets API tab-title verification; success criteria are limited to Drive conversion metadata and warning policy to keep the release gate lightweight and dependency-minimal.
+- The smoke script verifies the exact converted tab-title sequence through the Sheets API before accepting `warnings=()` as a pass.

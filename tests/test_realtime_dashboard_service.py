@@ -1,5 +1,6 @@
 from dataclasses import asdict
 
+from metroliza.industrial.realtime import realtime_dashboard_service as dashboard_service_module
 from metroliza.industrial.anomaly.contracts import DetectionResult
 from metroliza.industrial.anomaly.event_repository import AnomalyEventRepository
 from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
@@ -11,6 +12,8 @@ from metroliza.industrial.realtime.stream_contracts import (
     SignalDefinition,
     StreamOffset,
 )
+from metroliza.reports import db as reports_db
+from metroliza.reports.db import sqlite_connection_scope
 
 
 def _seed_dashboard_data(db_path):
@@ -245,6 +248,33 @@ def test_recent_signal_timeline_window_returns_latest_samples_in_chart_order(tmp
     ]
 
 
+def test_recent_signal_timeline_limits_sample_ids_before_anomaly_join(tmp_path):
+    db_path = str(tmp_path / "dashboard_recent_plan.db")
+    seeded = _seed_dashboard_data(db_path)
+    statements: list[str] = []
+
+    with sqlite_connection_scope(db_path) as connection:
+        connection.set_trace_callback(statements.append)
+        timeline = RealtimeDashboardService(
+            db_path,
+            connection=connection,
+        ).recent_signal_timeline_window(signal_id=seeded["cycle_signal"].id, limit=2)
+        timeline_sql = next(
+            statement for statement in statements if "WITH recent_samples AS" in statement
+        )
+        query_plan = connection.execute(f"EXPLAIN QUERY PLAN {timeline_sql}").fetchall()
+
+    normalized_sql = " ".join(timeline_sql.split())
+    plan_details = [str(row[3]) for row in query_plan]
+
+    assert [point.sample_id for point in timeline] == list(seeded["cycle_sample_ids"][1:])
+    assert normalized_sql.index("LIMIT 2") < normalized_sql.index(
+        "LEFT JOIN industrial_anomaly_events"
+    )
+    assert any("recent_samples" in detail for detail in plan_details)
+    assert any("SEARCH samples USING" in detail for detail in plan_details)
+
+
 def test_sample_aggregate_rows_compute_csv_summary_style_counts(tmp_path):
     db_path = str(tmp_path / "dashboard_aggregates.db")
     _seed_dashboard_data(db_path)
@@ -310,6 +340,100 @@ def test_dashboard_snapshot_includes_recent_samples_when_no_open_anomalies(tmp_p
     assert aggregates_by_key["cycle_time"]["nok_count"] == 2
     assert "super-secret" not in payload_text
     assert "connection_string" not in payload_text
+
+
+def test_dashboard_snapshot_uses_one_connection_and_six_bounded_reads(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "dashboard_snapshot_queries.db")
+    _seed_dashboard_data(db_path)
+    original_connect = reports_db.connect_sqlite
+    connection_count = 0
+    snapshot_read_counts: list[int] = []
+
+    def _counted_connect(*args, **kwargs):
+        nonlocal connection_count
+        connection_count += 1
+        connection = original_connect(*args, **kwargs)
+        snapshot_active = False
+        read_count = 0
+
+        def _trace(statement: str) -> None:
+            nonlocal snapshot_active, read_count
+            normalized = statement.strip().upper()
+            if normalized == "BEGIN DEFERRED":
+                snapshot_active = True
+                read_count = 0
+            elif snapshot_active and normalized in {"COMMIT", "ROLLBACK"}:
+                snapshot_read_counts.append(read_count)
+                snapshot_active = False
+            elif snapshot_active and normalized.startswith(("SELECT", "WITH")):
+                read_count += 1
+
+        connection.set_trace_callback(_trace)
+        return connection
+
+    monkeypatch.setattr(reports_db, "connect_sqlite", _counted_connect)
+
+    snapshot = RealtimeDashboardService(db_path).dashboard_snapshot(timeline_limit=2)
+
+    assert connection_count == 1
+    assert snapshot_read_counts == [6]
+    assert len(snapshot["signals"]) == 2
+
+
+def test_dashboard_snapshot_reads_one_consistent_sqlite_generation(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "dashboard_snapshot_generation.db")
+    seeded = _seed_dashboard_data(db_path)
+    late_signal = RealtimeSampleRepository(db_path).upsert_signal_definition(
+        SignalDefinition(
+            source_profile_id=seeded["profile"].id,
+            signal_key="late_pressure",
+            metric_name="pressure_bar",
+            unit="bar",
+        )
+    )
+    original_converter = dashboard_service_module._dashboard_event_from_row
+    inserted = False
+
+    with sqlite_connection_scope(db_path) as writer:
+
+        def _convert_after_concurrent_write(row):
+            nonlocal inserted
+            if not inserted:
+                writer.execute(
+                    """
+                    INSERT INTO industrial_samples (
+                        source_profile_id, signal_id, source_record_key, event_time,
+                        ingest_time, metric_name, value
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        seeded["profile"].id,
+                        late_signal.id,
+                        "PRESSURE-LATE",
+                        "2026-06-13T10:03:00.000000Z",
+                        "2026-06-13T10:03:01.000000Z",
+                        "pressure_bar",
+                        4.2,
+                    ),
+                )
+                writer.commit()
+                inserted = True
+            return original_converter(row)
+
+        monkeypatch.setattr(
+            dashboard_service_module,
+            "_dashboard_event_from_row",
+            _convert_after_concurrent_write,
+        )
+        snapshot = RealtimeDashboardService(db_path).dashboard_snapshot()
+
+    snapshot_signal_ids = {int(signal["signal_id"]) for signal in snapshot["signals"]}
+    persisted_signal_ids = set(RealtimeDashboardService(db_path).recent_sample_signal_ids())
+
+    assert inserted is True
+    assert late_signal.id not in snapshot_signal_ids
+    assert late_signal.id in persisted_signal_ids
 
 
 def test_source_lag_health_omits_offset_errors_and_classifies_lag(tmp_path):

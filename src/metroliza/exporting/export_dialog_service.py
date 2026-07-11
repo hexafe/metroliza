@@ -1,6 +1,6 @@
 """UI-independent orchestration helpers for export dialog workflows."""
 
-from metroliza.shared.contracts import (
+from metroliza.exporting.contracts import (
     AppPaths,
     ExportOptions,
     ExportRequest,

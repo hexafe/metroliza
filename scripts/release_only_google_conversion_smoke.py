@@ -1,4 +1,4 @@
-"""Release-only manual/CI-gated smoke check for live Google Drive -> Sheets conversion.
+"""Release-only local smoke check for live Google Drive -> Sheets conversion.
 
 Usage contract:
 - Inputs:
@@ -31,7 +31,9 @@ from pathlib import Path
 import xlsxwriter
 
 from metroliza.exporting.google_drive_export import GoogleDriveExportError, upload_and_convert_workbook
-from tests.test_google_drive_credentials_hygiene import validate_example_credentials_template_hygiene
+from metroliza.integrations.google_credentials_hygiene import (
+    validate_example_credentials_template_hygiene,
+)
 
 SMOKE_OPT_IN_ENV = "METROLIZA_RUN_GOOGLE_CONVERSION_SMOKE"
 SMOKE_CREDENTIALS_PATH_ENV = "METROLIZA_GOOGLE_SMOKE_CREDENTIALS_PATH"
@@ -101,14 +103,14 @@ def run_google_conversion_smoke_check() -> None:
 
     with tempfile.TemporaryDirectory(prefix="metroliza-google-smoke-") as tmpdir:
         export_path = Path(tmpdir) / "metroliza_smoke_export.xlsx"
-        _create_minimal_workbook(export_path)
+        expected_sheet_names = _create_minimal_workbook(export_path)
 
         try:
             result = upload_and_convert_workbook(
                 str(export_path),
                 credentials_path=str(credentials_path),
                 token_path=str(token_path),
-                expected_sheet_names=None,
+                expected_sheet_names=expected_sheet_names,
                 max_retries=2,
                 retry_delay_seconds=1.5,
             )

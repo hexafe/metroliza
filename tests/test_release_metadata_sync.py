@@ -13,7 +13,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}(?:rc\d+)?$")
         self.assertRegex(metadata.build, r"^\d{6}$")
         self.assertEqual(metadata.version_label, f"{metadata.release_version}({metadata.build})")
-        self.assertEqual(metadata.public_version_label, "2026.06 RC2 (build 260709)")
+        self.assertEqual(metadata.public_version_label, "2026.06 RC2 (build 260711)")
         self.assertTrue(metadata.highlight)
 
     def test_in_app_current_release_notes_show_current_version_only(self):
@@ -50,6 +50,12 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertEqual(
             current_bullets,
             [
+                "- Large Google Sheets conversions now use bounded resumable chunks, retry transient failures, and clean up created Drive files when cancellation or validation prevents a usable result<br>",
+                "- Parser profile installs and reloads now publish one locked generation at a time, so concurrent imports never observe half-written profile or approval state<br>",
+                "- Realtime dashboard refreshes now read one consistent SQLite snapshot, batch related lookups, bound timeline rows before joins, and reject stale source-health updates<br>",
+                "- CSV Summary group edits now use an isolated session-local assignment store, avoiding source-table pollution and database-lock failures when multiple dialogs or previews are active<br>",
+                "- Packaged release artifacts now carry a generated Python/Rust dependency inventory, visible third-party notice sidecars, and a hash manifest for release review<br>",
+                "- Legacy Group Comparison worksheet and BOM Manager entry points now emit deprecation notices while remaining compatible for this release window<br>",
                 "- Excel and industrial workbook exports now keep imported formula-like and URL-like text literal, preventing source data from becoming active workbook formulas or links<br>",
                 "- Google OAuth tokens now use an atomic private application file, exclude client secrets, reject symlink targets, and migrate legacy local tokens only after a secure write succeeds<br>",
                 "- HTML and realtime dashboards now publish atomically, use private session output where appropriate, and preserve the last complete generation when publication fails<br>",

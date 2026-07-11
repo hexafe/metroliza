@@ -9,6 +9,8 @@ def test_onefile_spec_includes_builtin_cmm_parser_hiddenimport():
     assert 'metroliza_package_entry.py' in spec_text
     assert 'pathex=[str(ROOT_DIR / "src"), str(ROOT_DIR)]' in spec_text
     assert "metroliza.parsing.cmm_report_parser" in common_text
+    assert "metroliza.parsing.report_parser_factory" in common_text
+    assert "metroliza.reports.header_ocr_corrections" in common_text
     assert "metroliza.charts.native_chart_compositor" in common_text
     assert "modules.cmm_report_parser" in common_text
     assert "modules.native_chart_compositor" in common_text

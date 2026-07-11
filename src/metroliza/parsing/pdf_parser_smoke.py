@@ -8,8 +8,8 @@ from tempfile import NamedTemporaryFile
 
 
 def _resolve_cmm_report_parser_class(fixture: Path):
-    parser_factory = importlib.import_module("metroliza.reports.report_parser_factory")
-    diagnostics = parser_factory.resolve_parser_with_diagnostics(fixture)
+    parser_factory = importlib.import_module("metroliza.parsing.report_parser_factory")
+    diagnostics, registration = parser_factory._resolve_parser_with_registration(fixture)
     selected = diagnostics.selected
     if selected is None:
         raise RuntimeError(
@@ -21,7 +21,9 @@ def _resolve_cmm_report_parser_class(fixture: Path):
             "Packaged PDF parser smoke selected an unexpected parser: "
             f"{selected.plugin_id}"
         )
-    return parser_factory.PARSER_MAP[selected.plugin_id]
+    if registration is None:
+        raise RuntimeError("Packaged PDF parser smoke lost its selected registration")
+    return registration.parser_cls
 
 
 def run_pdf_parser_smoke(fixture_path: str | Path, expected_text: str) -> None:

@@ -50,8 +50,8 @@ outside the runtime gate.
 
 ```bash
 # Install extension into the current interpreter (dev/editable workflow)
-PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 python -m maturin develop --manifest-path src/metroliza/native/chart_renderer/Cargo.toml
+PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 python -m maturin develop --locked --manifest-path src/metroliza/native/chart_renderer/Cargo.toml
 
 # Build wheel artifact(s)
-PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 python -m maturin build --manifest-path src/metroliza/native/chart_renderer/Cargo.toml --release
+PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 python -m maturin build --locked --manifest-path src/metroliza/native/chart_renderer/Cargo.toml --release
 ```

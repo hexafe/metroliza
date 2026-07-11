@@ -15,9 +15,10 @@ The following checks must pass on every PR and branch push.
 
 | Requirement | Workflow job name (`ci.yml`) | What it validates |
 |---|---|---|
-| Lint and static validation | `static-checks` | Python compile check, declarative parser profile self-service smoke, Ruff lint, release metadata consistency, tracked Python/YAML/TOML/INI/JSON/env secret scanning, and Bandit enforcement against the reviewed expiring baseline. |
+| Lint and static validation | `static-checks` | Python compile check, declarative parser profile self-service smoke, Ruff lint, strict mypy checking for new typed boundary modules, release metadata consistency, tracked-file secret scanning, and Bandit enforcement against the reviewed expiring baseline. |
 | Metadata checks | `static-checks` | `scripts/sync_release_metadata.py --check` is enforced in this job. |
 | Full pytest suite + coverage gate | `unit-tests` | Runs the full Python test suite with coverage, then re-runs selected real-Qt UI shards in isolated pytest processes with `--cov-append` before enforcing `coverage report --fail-under=80` and writing `coverage.xml`. Qt runtime libraries are installed and `QT_QPA_PLATFORM=offscreen` is set for the lane. |
+| Windows core smoke | `windows-core-smoke` | Runs cross-platform SQLite, build-helper, packaging-contract, release-metadata, and OAuth-template tests on Python 3.11 under `windows-latest`. |
 | Native artifact build + smoke/parity checks | `native-artifacts` | Builds all native wheels, installs them, runs import/smoke checks for each native module plus explicit fallback checks, executes native chart planner/parity smoke checks, runs an export-runtime fast-path contract smoke for extended summary charts, and runs native parser parity tests. |
 | CMM parser perf guardrail + trend gate | `cmm-parser-perf-gate` | Runs `scripts/benchmark_paths.py` for `cmm_parser_backend_compare` with fixed synthetic workload, enforces native speed/usage guardrails, and compares measured medians to checked-in baseline via `scripts/benchmark_trend_compare.py`. |
 
@@ -56,7 +57,7 @@ These checks are explicitly non-blocking for normal PR CI:
 |---|---|---|---|
 | Performance benchmark trend check | `perf-benchmarks` | Automatic on PRs and branch pushes after static checks and unit tests pass | **Non-blocking** advisory signal; compares medians with a 12% threshold and 0.100s absolute slowdown floor, reports export stage medians for review, and keeps the PR check green while artifacts preserve the advisory failure details |
 | Packaging smoke build + packaged PDF parser check (release-only) | `packaging-smoke` | Manual `workflow_dispatch` with `run_packaging_smoke=1` | **Non-blocking** for regular PRs and pushes |
-| Google conversion smoke (release-only) | `google-conversion-smoke` | Manual `workflow_dispatch` with `run_google_conversion_smoke=1` | **Non-blocking** for regular PRs and pushes |
+| Google conversion smoke (release-only) | Local secure workstation command documented in `docs/google_conversion_smoke_runbook.md` | Explicit local opt-in with sandbox `credentials.json` and `token.json` | Not a hosted CI job; **release-blocking** evidence for promoted RC artifacts |
 | Windows startup benchmark (release-only) | `windows-startup-benchmark` | Manual `workflow_dispatch` with `run_windows_startup_benchmark=1` | **Non-blocking** for regular PRs and pushes |
 
 ### Packaging smoke parser semantics
@@ -67,6 +68,7 @@ These checks are explicitly non-blocking for normal PR CI:
   - `QT_QPA_PLATFORM=offscreen` (headless runner compatibility if Qt is touched during startup/imports).
 - The smoke command is bounded with a timeout to prevent hanging CI runners.
 - Startup logs (`stdout`, `stderr`, and discovered `metroliza.log` paths) are gathered into `smoke-artifacts/`.
+- A successful run stages a visible notice sidecar beside the executable and uploads the binary, `THIRD_PARTY_NOTICES.md`, the generated dependency inventory, and `NOTICE_MANIFEST.json` together as `packaging-smoke-release-artifact`.
 - On failure, those artifacts are uploaded as `packaging-smoke-artifacts` for troubleshooting.
 
 ### Parser profile self-service smoke
@@ -113,7 +115,7 @@ These checks are explicitly non-blocking for normal PR CI:
 
 - CI no longer uses a standalone `python-setup` dependency warm-up job. That job did not share an environment with downstream jobs (each job runs on a fresh runner), so it added serial waiting time without reducing downstream install work.
 - Each job now performs only the setup it actually needs:
-  - `static-checks`, `unit-tests`, `google-conversion-smoke` use `requirements-dev.txt`.
+  - `static-checks`, `unit-tests`, and `windows-core-smoke` use `requirements-dev.txt`.
   - `native-artifacts` uses `requirements-build.txt`.
   - `packaging-smoke` uses both `requirements-build.txt` and `requirements-ocr.txt`.
 - `actions/setup-python@v5` pip caching is enabled per job with deterministic dependency keys via `cache-dependency-path` pinned to the exact requirements file used by that job.
@@ -152,7 +154,8 @@ Use this quick checklist when opening or reviewing PRs:
 - [ ] Full pytest suite passes (`unit-tests`)
 - [ ] Native artifact smoke/parity checks pass (`native-artifacts`)
 - [ ] CMM parser perf guardrail and trend comparison pass (`cmm-parser-perf-gate`)
-- [ ] Optional/manual non-blocking checks reviewed as needed (`packaging-smoke`, `windows-startup-benchmark`, `google-conversion-smoke`)
+- [ ] Optional/manual non-blocking checks reviewed as needed (`packaging-smoke`, `windows-startup-benchmark`)
+- [ ] Local Google conversion smoke evidence is recorded for the exact promoted RC artifact
 
 ### Additional checklist for parser plugin changes
 

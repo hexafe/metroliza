@@ -4,8 +4,8 @@ This module owns the full Drive export lifecycle used by reporting workflows:
 
 * OAuth credential and token handling (`credentials.json` / `token.json`), including
   interactive authorization and refresh-token based renewal.
-* Drive folder discovery/creation and multipart upload that converts local `.xlsx`
-  files into Google Sheets.
+* Drive folder discovery/creation and size-routed multipart/resumable upload that
+  converts local `.xlsx` files into Google Sheets.
 * Error mapping and retry boundaries that classify failures into auth,
   quota/rate-limit, transient/network/server, and non-retryable response errors.
 
@@ -42,12 +42,18 @@ GOOGLE_DRIVE_UPLOAD_URL = (
     "https://www.googleapis.com/upload/drive/v3/files"
     "?uploadType=multipart&fields=id,webViewLink,webContentLink"
 )
+GOOGLE_DRIVE_RESUMABLE_UPLOAD_URL = (
+    "https://www.googleapis.com/upload/drive/v3/files"
+    "?uploadType=resumable&fields=id,webViewLink,webContentLink"
+)
 GOOGLE_DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files"
 GOOGLE_SHEETS_SPREADSHEET_URL = "https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}"
 GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
 GOOGLE_OAUTH_SCOPES = (GOOGLE_DRIVE_SCOPE,)
 GOOGLE_DRIVE_REPORTS_FOLDER_NAME = "metroliza_reports"
 GOOGLE_OAUTH_TOKEN_HOSTS = {"oauth2.googleapis.com", "accounts.google.com"}
+GOOGLE_DRIVE_RESUMABLE_CHUNK_BYTES = 8 * 1024 * 1024
+GOOGLE_DRIVE_RESUMABLE_THRESHOLD_BYTES = GOOGLE_DRIVE_RESUMABLE_CHUNK_BYTES
 logger = get_operation_logger(logging.getLogger(__name__), "google_conversion")
 
 _PERSISTED_TOKEN_FIELDS = frozenset(
@@ -80,6 +86,36 @@ class GoogleDriveTransientError(GoogleDriveExportError):
 
 class GoogleDriveResponseError(GoogleDriveExportError):
     """Unexpected response payload shape or non-retryable API failure."""
+
+
+def _is_google_api_host(host: str) -> bool:
+    """Return whether *host* is an approved Google API transport host."""
+
+    return (
+        host in GOOGLE_OAUTH_TOKEN_HOSTS
+        or host == "googleapis.com"
+        or host.endswith(".googleapis.com")
+    )
+
+
+def _urlopen_google_https(request: urllib.request.Request, *, timeout: float) -> Any:
+    """Open a request only after enforcing the Google HTTPS transport boundary."""
+
+    parsed = urllib.parse.urlparse(request.full_url)
+    host = (parsed.hostname or "").lower()
+    if (
+        parsed.scheme.lower() != "https"
+        or not _is_google_api_host(host)
+        or parsed.username
+        or parsed.password
+        or parsed.fragment
+    ):
+        raise GoogleDriveResponseError(
+            "Refusing Google API request outside the approved HTTPS transport boundary."
+        )
+
+    # B310 is guarded here: the URL was just restricted to HTTPS and approved Google API hosts.
+    return urllib.request.urlopen(request, timeout=timeout)  # nosec B310
 
 
 
@@ -488,7 +524,7 @@ def _refresh_access_token(token_payload: dict[str, Any], credentials: dict[str, 
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with _urlopen_google_https(request, timeout=30) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
@@ -622,7 +658,7 @@ def _fetch_converted_tab_titles(access_token: str, spreadsheet_id: str) -> tuple
         method="GET",
     )
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with _urlopen_google_https(request, timeout=30) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body_text = exc.read().decode("utf-8", errors="replace")
@@ -762,7 +798,7 @@ def _request_json(request: urllib.request.Request, *, context: str) -> dict[str,
     """
 
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
+        with _urlopen_google_https(request, timeout=60) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body_text = exc.read().decode("utf-8", errors="replace")
@@ -838,6 +874,276 @@ def _ensure_reports_folder(access_token: str) -> str:
     return str(folder_id)
 
 
+def _decode_upload_response(body: bytes, *, context: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise GoogleDriveResponseError(f"{context} returned invalid JSON.") from exc
+    if not isinstance(payload, dict):
+        raise GoogleDriveResponseError(f"{context} returned a non-object JSON payload.")
+    return payload
+
+
+def _upload_response_status(response: Any) -> int:
+    status = getattr(response, "status", None)
+    if status is None:
+        getcode = getattr(response, "getcode", None)
+        status = getcode() if callable(getcode) else 200
+    return int(status or 200)
+
+
+def _upload_response_headers(response: Any) -> dict[str, str]:
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return {}
+    return {
+        name: str(value)
+        for name in ("Location", "Range")
+        if (value := headers.get(name)) is not None
+    }
+
+
+def _notify_resumable_retry(
+    *,
+    attempt: int,
+    max_retries: int,
+    upload_started_at: float,
+    error: GoogleDriveExportError,
+    status_callback: Any,
+) -> None:
+    if not callable(status_callback):
+        return
+    elapsed_seconds = int(time.monotonic() - upload_started_at)
+    mm, ss = divmod(elapsed_seconds, 60)
+    status_callback(
+        f"uploading retry {attempt + 1}/{max_retries}, "
+        f"elapsed {mm:02d}:{ss:02d}: {error}"
+    )
+
+
+def _send_resumable_request_with_retries(
+    request: urllib.request.Request,
+    *,
+    context: str,
+    allow_incomplete: bool,
+    max_retries: int,
+    retry_delay_seconds: float,
+    status_callback: Any,
+    upload_started_at: float,
+    file_ref: str,
+    lifecycle_check: Any,
+) -> tuple[int, bytes, dict[str, str]]:
+    """Send one resumable protocol request with the bounded upload retry policy."""
+
+    for attempt in range(1, max_retries + 1):
+        lifecycle_check()
+        mapped: GoogleDriveExportError | None = None
+        cause: BaseException | None = None
+        try:
+            with _urlopen_google_https(request, timeout=60) as response:
+                status = _upload_response_status(response)
+                body = response.read()
+                headers = _upload_response_headers(response)
+            if status in (200, 201) or (allow_incomplete and status == 308):
+                return status, body, headers
+            mapped = map_google_http_error(status, body.decode("utf-8", errors="replace"))
+        except urllib.error.HTTPError as exc:
+            if allow_incomplete and exc.code == 308:
+                return exc.code, exc.read(), _upload_response_headers(exc)
+            mapped = map_google_http_error(
+                exc.code,
+                exc.read().decode("utf-8", errors="replace"),
+            )
+            cause = exc
+        except urllib.error.URLError as exc:
+            mapped = map_google_network_error(context, exc)
+            cause = exc
+
+        if (
+            isinstance(mapped, (GoogleDriveTransientError, GoogleDriveQuotaError))
+            and attempt < max_retries
+        ):
+            _notify_resumable_retry(
+                attempt=attempt,
+                max_retries=max_retries,
+                upload_started_at=upload_started_at,
+                error=mapped,
+                status_callback=status_callback,
+            )
+            logger.warning(
+                "Google resumable upload retry",
+                extra=_build_google_log_extra(file_ref=file_ref, error=mapped, outcome="retry"),
+            )
+            lifecycle_check()
+            time.sleep(retry_delay_seconds)
+            continue
+
+        if mapped is None:
+            mapped = GoogleDriveTransientError(
+                f"{context} exhausted retries without a response."
+            )
+        logger.error(
+            "Google resumable upload failed",
+            extra=_build_google_log_extra(file_ref=file_ref, error=mapped, outcome="failed"),
+        )
+        if cause is not None:
+            raise mapped from cause
+        raise mapped
+
+    raise GoogleDriveTransientError(f"{context} exhausted retries without a response.")
+
+
+def _validate_resumable_session_url(session_url: str) -> str:
+    parsed = urllib.parse.urlparse(session_url)
+    host = (parsed.hostname or "").lower()
+    if (
+        parsed.scheme != "https"
+        or not (host == "googleapis.com" or host.endswith(".googleapis.com"))
+        or parsed.username
+        or parsed.password
+        or parsed.fragment
+    ):
+        raise GoogleDriveResponseError(
+            "Google Drive resumable upload returned an invalid session URL."
+        )
+    return session_url
+
+
+def _next_resumable_offset(range_header: str) -> int:
+    try:
+        unit, byte_range = range_header.split("=", 1)
+        start_text, end_text = byte_range.split("-", 1)
+        start = int(start_text)
+        end = int(end_text)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise GoogleDriveResponseError(
+            "Google Drive resumable upload returned an invalid Range header."
+        ) from exc
+    if unit.strip().lower() != "bytes" or start != 0 or end < start:
+        raise GoogleDriveResponseError(
+            "Google Drive resumable upload returned an invalid Range header."
+        )
+    return end + 1
+
+
+def _upload_workbook_resumable(
+    *,
+    excel_file: Path,
+    excel_mime: str,
+    metadata: dict[str, Any],
+    access_token: str,
+    max_retries: int,
+    retry_delay_seconds: float,
+    status_callback: Any,
+    upload_started_at: float,
+    lifecycle_check: Any,
+) -> dict[str, Any]:
+    total_bytes = excel_file.stat().st_size
+    session_request = urllib.request.Request(
+        GOOGLE_DRIVE_RESUMABLE_UPLOAD_URL,
+        data=json.dumps(metadata).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json; charset=UTF-8",
+            "X-Upload-Content-Type": excel_mime,
+            "X-Upload-Content-Length": str(total_bytes),
+        },
+        method="POST",
+    )
+    _, _, session_headers = _send_resumable_request_with_retries(
+        session_request,
+        context="Google Drive resumable upload session creation failed",
+        allow_incomplete=False,
+        max_retries=max_retries,
+        retry_delay_seconds=retry_delay_seconds,
+        status_callback=status_callback,
+        upload_started_at=upload_started_at,
+        file_ref=str(excel_file),
+        lifecycle_check=lifecycle_check,
+    )
+    session_url = _validate_resumable_session_url(session_headers.get("Location", ""))
+
+    next_offset = 0
+    with excel_file.open("rb") as handle:
+        while next_offset < total_bytes:
+            handle.seek(next_offset)
+            chunk = handle.read(
+                min(GOOGLE_DRIVE_RESUMABLE_CHUNK_BYTES, total_bytes - next_offset)
+            )
+            if not chunk:
+                raise GoogleDriveResponseError(
+                    "Local workbook ended before resumable upload completed."
+                )
+            chunk_end = next_offset + len(chunk) - 1
+            chunk_request = urllib.request.Request(
+                session_url,
+                data=chunk,
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": excel_mime,
+                    "Content-Length": str(len(chunk)),
+                    "Content-Range": f"bytes {next_offset}-{chunk_end}/{total_bytes}",
+                },
+                method="PUT",
+            )
+            status, body, response_headers = _send_resumable_request_with_retries(
+                chunk_request,
+                context="Google Drive resumable chunk upload failed",
+                allow_incomplete=True,
+                max_retries=max_retries,
+                retry_delay_seconds=retry_delay_seconds,
+                status_callback=status_callback,
+                upload_started_at=upload_started_at,
+                file_ref=str(excel_file),
+                lifecycle_check=lifecycle_check,
+            )
+            if status in (200, 201):
+                return _decode_upload_response(
+                    body,
+                    context="Google Drive resumable upload",
+                )
+
+            acknowledged_offset = _next_resumable_offset(response_headers.get("Range", ""))
+            if acknowledged_offset <= next_offset or acknowledged_offset > chunk_end + 1:
+                raise GoogleDriveResponseError(
+                    "Google Drive resumable upload acknowledged an invalid byte offset."
+                )
+            if acknowledged_offset >= total_bytes:
+                raise GoogleDriveResponseError(
+                    "Google Drive resumable upload completed without file metadata."
+                )
+            next_offset = acknowledged_offset
+
+    raise GoogleDriveTransientError(
+        "Google Drive resumable upload ended without a conversion response."
+    )
+
+
+def _delete_drive_file_best_effort(access_token: str, file_id: str) -> None:
+    """Delete a post-upload orphan without replacing the triggering exception."""
+
+    try:
+        request = urllib.request.Request(
+            f"{GOOGLE_DRIVE_FILES_URL}/{urllib.parse.quote(file_id, safe='')}",
+            headers={"Authorization": f"Bearer {access_token}"},
+            method="DELETE",
+        )
+        with _urlopen_google_https(request, timeout=30) as response:
+            response.read()
+    except Exception as exc:
+        try:
+            logger.warning(
+                "Google Drive orphan cleanup failed",
+                extra=_build_google_log_extra(
+                    file_ref=file_id,
+                    error=exc,
+                    outcome="cleanup_failed",
+                ),
+            )
+        except Exception:
+            pass
+
+
 def upload_and_convert_workbook(
     excel_path: str,
     credentials_path: str = "credentials.json",
@@ -876,9 +1182,9 @@ def upload_and_convert_workbook(
         network calls, may create a Drive folder, and emits structured logs.
 
     Retry/Failure Boundaries:
-        Upload retries are attempted only for `GoogleDriveTransientError`,
-        `GoogleDriveQuotaError`, and network errors mapped to transient errors.
-        Auth and response-shape failures fail fast without retry.
+        Multipart attempts and each resumable session/chunk request retry only for
+        `GoogleDriveTransientError`, `GoogleDriveQuotaError`, and network errors
+        mapped to transient errors. Auth and response-shape failures fail fast.
 
     Raises:
         GoogleDriveAuthError: For OAuth or Drive permission/authentication failures.
@@ -935,134 +1241,200 @@ def upload_and_convert_workbook(
     _raise_if_canceled()
     _raise_if_timed_out("folder")
 
-    excel_mime = mimetypes.guess_type(excel_file.name)[0] or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    excel_mime = mimetypes.guess_type(excel_file.name)[0] or (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
     metadata = {
         "name": excel_file.stem,
         "mimeType": "application/vnd.google-apps.spreadsheet",
         "parents": [reports_folder_id],
     }
 
-    boundary = f"metroliza-{int(time.time() * 1000)}"
-    file_bytes = excel_file.read_bytes()
-    body = _build_upload_request_body(
-        boundary=boundary,
-        metadata=metadata,
-        file_mime_type=excel_mime,
-        file_bytes=file_bytes,
-    )
-
-    request = urllib.request.Request(
-        GOOGLE_DRIVE_UPLOAD_URL,
-        data=body,
-        headers={
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": f"multipart/related; boundary={boundary}",
-        },
-        method="POST",
-    )
-
     payload: dict[str, Any] | None = None
+    created_file_id = ""
     if callable(status_callback):
         status_callback("uploading")
     stage_started_at["upload"] = time.monotonic()
 
-    for attempt in range(1, max_retries + 1):
+    def _check_upload_lifecycle() -> None:
         _raise_if_canceled()
         _raise_if_timed_out("upload")
-        try:
-            with urllib.request.urlopen(request, timeout=60) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-            _raise_if_canceled()
-            _raise_if_timed_out("upload")
-            break
-        except urllib.error.HTTPError as exc:
-            body_text = exc.read().decode("utf-8", errors="replace")
-            mapped = map_google_http_error(exc.code, body_text)
-            if isinstance(mapped, (GoogleDriveTransientError, GoogleDriveQuotaError)) and attempt < max_retries:
-                if callable(status_callback):
-                    elapsed_seconds = int(time.monotonic() - stage_started_at["upload"])
-                    mm, ss = divmod(elapsed_seconds, 60)
-                    status_callback(f"uploading retry {attempt + 1}/{max_retries}, elapsed {mm:02d}:{ss:02d}: {mapped}")
-                logger.warning(
-                    "Google upload retry after HTTP error",
-                    extra=_build_google_log_extra(file_ref=str(excel_file), error=mapped, outcome="retry"),
-                )
-                _raise_if_canceled()
-                _raise_if_timed_out("upload")
-                time.sleep(retry_delay_seconds)
-                continue
-            logger.error(
-                "Google upload failed with HTTP error",
-                extra=_build_google_log_extra(file_ref=str(excel_file), error=mapped, outcome="failed"),
+
+    try:
+        if excel_file.stat().st_size < GOOGLE_DRIVE_RESUMABLE_THRESHOLD_BYTES:
+            boundary = f"metroliza-{int(time.time() * 1000)}"
+            body = _build_upload_request_body(
+                boundary=boundary,
+                metadata=metadata,
+                file_mime_type=excel_mime,
+                file_bytes=excel_file.read_bytes(),
             )
-            raise mapped from exc
-        except urllib.error.URLError as exc:
-            mapped = map_google_network_error("Google Drive upload failed", exc)
-            if attempt < max_retries:
-                if callable(status_callback):
-                    elapsed_seconds = int(time.monotonic() - stage_started_at["upload"])
-                    mm, ss = divmod(elapsed_seconds, 60)
-                    status_callback(f"uploading retry {attempt + 1}/{max_retries}, elapsed {mm:02d}:{ss:02d}: {mapped}")
-                logger.warning(
-                    "Google upload retry after network error",
-                    extra=_build_google_log_extra(file_ref=str(excel_file), error=mapped, outcome="retry"),
-                )
-                _raise_if_canceled()
-                _raise_if_timed_out("upload")
-                time.sleep(retry_delay_seconds)
-                continue
-            logger.error(
-                "Google upload failed with network error",
-                extra=_build_google_log_extra(file_ref=str(excel_file), error=mapped, outcome="failed"),
+            request = urllib.request.Request(
+                GOOGLE_DRIVE_UPLOAD_URL,
+                data=body,
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": f"multipart/related; boundary={boundary}",
+                },
+                method="POST",
             )
-            raise mapped from exc
 
-    if payload is None:
-        exhausted_error = GoogleDriveTransientError("Google Drive upload exhausted retries without response payload.")
-        logger.error(
-            "Google upload exhausted retries",
-            extra=_build_google_log_extra(file_ref=str(excel_file), error=exhausted_error, outcome="failed"),
-        )
-        raise exhausted_error
+            for attempt in range(1, max_retries + 1):
+                _check_upload_lifecycle()
+                try:
+                    with _urlopen_google_https(request, timeout=60) as response:
+                        payload = _decode_upload_response(
+                            response.read(),
+                            context="Google Drive multipart upload",
+                        )
+                    break
+                except urllib.error.HTTPError as exc:
+                    body_text = exc.read().decode("utf-8", errors="replace")
+                    mapped = map_google_http_error(exc.code, body_text)
+                    if (
+                        isinstance(mapped, (GoogleDriveTransientError, GoogleDriveQuotaError))
+                        and attempt < max_retries
+                    ):
+                        if callable(status_callback):
+                            elapsed_seconds = int(
+                                time.monotonic() - stage_started_at["upload"]
+                            )
+                            mm, ss = divmod(elapsed_seconds, 60)
+                            status_callback(
+                                f"uploading retry {attempt + 1}/{max_retries}, "
+                                f"elapsed {mm:02d}:{ss:02d}: {mapped}"
+                            )
+                        logger.warning(
+                            "Google upload retry after HTTP error",
+                            extra=_build_google_log_extra(
+                                file_ref=str(excel_file),
+                                error=mapped,
+                                outcome="retry",
+                            ),
+                        )
+                        _check_upload_lifecycle()
+                        time.sleep(retry_delay_seconds)
+                        continue
+                    logger.error(
+                        "Google upload failed with HTTP error",
+                        extra=_build_google_log_extra(
+                            file_ref=str(excel_file),
+                            error=mapped,
+                            outcome="failed",
+                        ),
+                    )
+                    raise mapped from exc
+                except urllib.error.URLError as exc:
+                    mapped = map_google_network_error("Google Drive upload failed", exc)
+                    if attempt < max_retries:
+                        if callable(status_callback):
+                            elapsed_seconds = int(
+                                time.monotonic() - stage_started_at["upload"]
+                            )
+                            mm, ss = divmod(elapsed_seconds, 60)
+                            status_callback(
+                                f"uploading retry {attempt + 1}/{max_retries}, "
+                                f"elapsed {mm:02d}:{ss:02d}: {mapped}"
+                            )
+                        logger.warning(
+                            "Google upload retry after network error",
+                            extra=_build_google_log_extra(
+                                file_ref=str(excel_file),
+                                error=mapped,
+                                outcome="retry",
+                            ),
+                        )
+                        _check_upload_lifecycle()
+                        time.sleep(retry_delay_seconds)
+                        continue
+                    logger.error(
+                        "Google upload failed with network error",
+                        extra=_build_google_log_extra(
+                            file_ref=str(excel_file),
+                            error=mapped,
+                            outcome="failed",
+                        ),
+                    )
+                    raise mapped from exc
+        else:
+            payload = _upload_workbook_resumable(
+                excel_file=excel_file,
+                excel_mime=excel_mime,
+                metadata=metadata,
+                access_token=access_token,
+                max_retries=max_retries,
+                retry_delay_seconds=retry_delay_seconds,
+                status_callback=status_callback,
+                upload_started_at=stage_started_at["upload"],
+                lifecycle_check=_check_upload_lifecycle,
+            )
 
-    parsed = parse_drive_conversion_response(payload)
-    if callable(status_callback):
-        status_callback("converting")
+        if payload is None:
+            exhausted_error = GoogleDriveTransientError(
+                "Google Drive upload exhausted retries without response payload."
+            )
+            logger.error(
+                "Google upload exhausted retries",
+                extra=_build_google_log_extra(
+                    file_ref=str(excel_file),
+                    error=exhausted_error,
+                    outcome="failed",
+                ),
+            )
+            raise exhausted_error
 
-    converted_tab_titles: tuple[str, ...] = ()
-    warnings: tuple[str, ...] = ()
-    warning_details: tuple[dict[str, str], ...] = ()
+        payload_file_id = payload.get("id")
+        if isinstance(payload_file_id, str) and payload_file_id:
+            created_file_id = payload_file_id
+        _check_upload_lifecycle()
 
-    if expected_sheet_names:
-        _raise_if_canceled()
-        stage_started_at["validation"] = time.monotonic()
+        parsed = parse_drive_conversion_response(payload)
         if callable(status_callback):
-            status_callback("validating")
-        _raise_if_timed_out("validation")
-        converted_tab_titles = _fetch_converted_tab_titles(access_token, parsed.file_id)
-        _raise_if_canceled()
-        _raise_if_timed_out("validation")
-        warnings, warning_details = _build_sheet_validation_warnings(
-            expected_sheet_names=expected_sheet_names,
+            status_callback("converting")
+
+        converted_tab_titles: tuple[str, ...] = ()
+        warnings: tuple[str, ...] = ()
+        warning_details: tuple[dict[str, str], ...] = ()
+
+        if expected_sheet_names:
+            _raise_if_canceled()
+            stage_started_at["validation"] = time.monotonic()
+            if callable(status_callback):
+                status_callback("validating")
+            _raise_if_timed_out("validation")
+            converted_tab_titles = _fetch_converted_tab_titles(access_token, parsed.file_id)
+            _raise_if_canceled()
+            _raise_if_timed_out("validation")
+            warnings, warning_details = _build_sheet_validation_warnings(
+                expected_sheet_names=expected_sheet_names,
+                converted_tab_titles=converted_tab_titles,
+            )
+
+        fallback_message = ""
+        if warnings:
+            fallback_message = (
+                "Conversion completed with warnings. "
+                f"Use local .xlsx fallback if needed: {excel_file}"
+            )
+
+        result = GoogleDriveConversionResult(
+            file_id=parsed.file_id,
+            web_url=parsed.web_url,
+            local_xlsx_path=str(excel_file),
+            fallback_message=fallback_message,
+            warnings=warnings,
+            warning_details=warning_details,
             converted_tab_titles=converted_tab_titles,
         )
-
-
-    fallback_message = ""
-    if warnings:
-        fallback_message = f"Conversion completed with warnings. Use local .xlsx fallback if needed: {excel_file}"
-
-    result = GoogleDriveConversionResult(
-        file_id=parsed.file_id,
-        web_url=parsed.web_url,
-        local_xlsx_path=str(excel_file),
-        fallback_message=fallback_message,
-        warnings=warnings,
-        warning_details=warning_details,
-        converted_tab_titles=converted_tab_titles,
-    )
-    logger.info(
-        "Google Sheets conversion completed",
-        extra=_build_google_log_extra(file_ref=result.web_url or result.file_id, outcome="success"),
-    )
-    return result
+        logger.info(
+            "Google Sheets conversion completed",
+            extra=_build_google_log_extra(
+                file_ref=result.web_url or result.file_id,
+                outcome="success",
+            ),
+        )
+        return result
+    except Exception:
+        if created_file_id:
+            _delete_drive_file_best_effort(access_token, created_file_id)
+        raise

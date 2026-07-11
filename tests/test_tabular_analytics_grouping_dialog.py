@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 import time
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -937,10 +939,25 @@ def test_sqlite_create_group_defers_selected_key_row_id_expansion_until_material
             for index in range(dialog.group_members_list.count())
         ] == [1, 2, 4]
 
+        service_assignments = dialog._sqlite_grouping_assignment_store().assignments(
+            tuple(dialog._sqlite_assignment_operations),
+            default_group=dialog.default_group,
+        )
         materialized = dialog._materialize_grouping_dataframe()
         assert materialized["REPORT_ID"].tolist() == [1, 2, 4]
         assert materialized["GROUP"].tolist() == ["Line A", "Line A", "Line A"]
         assert materialized["GROUP_COLOR"].tolist() == [operation.color] * 3
+        assert list(
+            zip(
+                materialized["REPORT_ID"],
+                materialized["GROUP"],
+                materialized["GROUP_COLOR"],
+                strict=True,
+            )
+        ) == [
+            (assignment.row_id, assignment.group_name, assignment.color)
+            for assignment in service_assignments
+        ]
     finally:
         dialog.close()
         cleanup_tabular_load_result(loaded)
@@ -971,14 +988,15 @@ def test_sqlite_group_refresh_reuses_effective_assignment_table(
     )
     try:
         replay_count = 0
-        original_apply_scope = dialog._apply_sqlite_scope_assignment_operation
+        assignment_store = dialog._sqlite_grouping_assignment_store()
+        original_apply_scope = assignment_store._apply_scope_command
 
-        def apply_scope_spy(connection, table_name, operation):
+        def apply_scope_spy(*args, **kwargs):
             nonlocal replay_count
             replay_count += 1
-            return original_apply_scope(connection, table_name, operation)
+            return original_apply_scope(*args, **kwargs)
 
-        monkeypatch.setattr(dialog, "_apply_sqlite_scope_assignment_operation", apply_scope_spy)
+        monkeypatch.setattr(assignment_store, "_apply_scope_command", apply_scope_spy)
 
         dialog.selector_columns = ["line"]
         dialog._selector_index = None
@@ -2357,6 +2375,8 @@ def test_sqlite_grouping_preview_and_assignment_lifecycle_branches(tmp_path) -> 
 
         dialog._sqlite_assignment_operations.clear()
         dialog._temp_group_assignments = {2: ("Rows", "#123456")}
+        dialog._invalidate_sqlite_assignment_cache()
+        dialog._append_sqlite_row_assignment_operation([2], "Rows", "#123456")
         materialized = dialog._materialize_grouping_dataframe()
         assert materialized["REPORT_ID"].tolist() == [2]
         assert materialized["GROUP"].tolist() == ["Rows"]
@@ -2393,42 +2413,40 @@ def test_sqlite_grouping_preview_and_assignment_lifecycle_branches(tmp_path) -> 
         cleanup_tabular_load_result(loaded)
 
 
-def test_sqlite_grouping_selected_key_query_handles_missing_builders(tmp_path) -> None:
-    _app()
-    input_file = tmp_path / "sqlite_grouping_query.csv"
-    pd.DataFrame({"Line": ["A"], "TraceCode": ["TC-001"]}).to_csv(input_file, index=False)
-    loaded = load_tabular_analytics_file(input_file, force_sqlite=True)
-    dialog = TabularAnalyticsGroupingDialog(
-        dataframe=loaded.dataframe,
-        column_mapping=loaded.column_mapping,
-        sqlite_store=loaded.sqlite_store,
+def test_grouping_dialog_keeps_sqlite_assignment_persistence_behind_store_boundary() -> None:
+    source_path = (
+        Path(__file__).parents[1]
+        / "src"
+        / "metroliza"
+        / "ui"
+        / "tabular_analytics_grouping_dialog.py"
     )
-    try:
-        empty_scope = grouping_dialog_module._PendingSqliteScope(
-            selector_columns=(),
-            search_text="",
-            filter_columns=(),
-            selected_filter_keys=(),
-            base_column_filters=(),
-            grouping_filter=None,
-            selected_group_keys=(("A",),),
-        )
-        assert dialog._sqlite_selected_group_keys_query(empty_scope) == ("", [])
+    source = source_path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
 
-        class _StoreWithoutBuilder:
-            table_name = "tabular_rows"
+    imported_modules = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module
+    }
+    forbidden_fragments = (
+        "_where_clause_for_group_keys",
+        "sqlite_connection_scope",
+        "CREATE TABLE",
+        "CREATE TEMP TABLE",
+        "DROP TABLE",
+        "DELETE FROM",
+        "INSERT INTO",
+        ".commit(",
+    )
 
-        dialog.sqlite_store = _StoreWithoutBuilder()
-        scoped = grouping_dialog_module._PendingSqliteScope(
-            selector_columns=("line",),
-            search_text="",
-            filter_columns=(),
-            selected_filter_keys=(),
-            base_column_filters=(),
-            grouping_filter=None,
-            selected_group_keys=(("A",),),
-        )
-        assert dialog._sqlite_selected_group_keys_query(scoped) == ("", [])
-    finally:
-        dialog.close()
-        cleanup_tabular_load_result(loaded)
+    persistence_calls = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        if node.func.attr in {"execute", "executemany", "commit"}
+    }
+
+    assert "metroliza.reports.db" not in imported_modules
+    assert persistence_calls == set()
+    assert not [fragment for fragment in forbidden_fragments if fragment in source]

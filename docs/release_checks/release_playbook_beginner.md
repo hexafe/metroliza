@@ -26,11 +26,23 @@ Example target release: `v2026.05`.
    - Branch name: `release/2026.05-rc1`.
    - This branch now holds only stabilization work (bug fixes, release blockers, docs/tests updates tied to release readiness).
 
-3. **Open testing entry criteria (before broad RC testing)**
-   - Confirm open testing entry checklist items in [`release_candidate_checklist.md`](./release_candidate_checklist.md#open-testing-entry-criteria): freeze timestamp, RC branch, build identifier, smoke baseline, known-issues link, and bug reporting channel.
+3. **Open testing readiness (before broad RC testing)**
+   - Complete the checklist's
+     [scope, ownership, and freeze](./release_candidate_checklist.md#1-scope-ownership-and-freeze)
+     gate: name owners, freeze scope, classify every open defect, and record the branch, exact
+     commit, build identity, and artifact IDs in a dated evidence file.
+   - Run the exact-build
+     [clean Python 3.11 local gate](./release_candidate_checklist.md#2-clean-python-311-local-gate)
+     and
+     [automatic GitHub CI gate](./release_candidate_checklist.md#3-automatic-github-ci-gate)
+     before distributing the candidate broadly.
 
 4. **Stabilize and test RC1**
-   - QA executes release checklist, open testing, regression, and smoke testing.
+   - QA executes open testing and the checklist's
+     [packaging](./release_candidate_checklist.md#4-packaging-and-clean-machine-gate),
+     [Google conversion](./release_candidate_checklist.md#5-google-conversion-gate),
+     [product/data-integrity](./release_candidate_checklist.md#6-product-and-data-integrity-smoke),
+     and [security](./release_candidate_checklist.md#7-security-and-privacy-gate) gates.
    - Bugs found during RC testing are fixed **on the RC branch** first.
    - Product/Release Manager tracks blocker status and go/no-go criteria.
 
@@ -38,8 +50,11 @@ Example target release: `v2026.05`.
    - Minor/isolated fixes: keep patching `release/2026.05-rc1`.
    - Significant churn or reset of test confidence: cut `release/2026.05-rc2` from the current stabilized RC tip and retest.
 
-6. **Open testing exit criteria + Go decision**
-   - Confirm open testing exit checklist items in [`release_candidate_checklist.md`](./release_candidate_checklist.md#open-testing-exit-criteria): blocker count `0`, deferred list approved, smoke re-run pass, and sign-off owners complete.
+6. **Promotion decision and rollback readiness**
+   - Complete the checklist's
+     [promotion decision and rollback](./release_candidate_checklist.md#8-promotion-decision-and-rollback)
+     gate: resolve all release blockers, record required sign-offs, verify the previous stable
+     artifact, and name the rollback owner and procedure.
 
    - QA signs off that required tests/checklists passed.
    - Engineering confirms no open release blockers.

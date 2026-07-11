@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 from typing import Mapping, Sequence
 
-from metroliza.parsing.header_ocr_corrections import (
+from metroliza.reports.header_ocr_corrections import (
     canonicalize_header_label,
     is_logo_noise_text,
     repair_field_value,

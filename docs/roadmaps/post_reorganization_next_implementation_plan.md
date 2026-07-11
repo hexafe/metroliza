@@ -284,7 +284,7 @@ Keep write ownership disjoint, and integrate through the main agent.
 | Release evidence | Explorer or worker | `docs/release_checks/`, CI/manual evidence notes only | Current SHA/CI/manual gate status and release-doc patch |
 | Docs/reference cleanup | Explorer then worker | `docs/README.md`, active `docs/roadmaps/*.md`, archive disclaimer | Active-doc inventory, canonical path updates, docs guard tests |
 | Architecture guardrails | Worker | `tests/test_directory_reorganization_architecture.py`, optional focused docs guard test | Import-budget guard, packaging allowlist, stale docstring cleanup |
-| Parser plugins | Explorer then worker | `src/metroliza/parsing/`, `src/metroliza/reports/report_parser_factory.py`, parser-plugin docs/tests | Plugin-first parser path, fixture validation, resolver diagnostics |
+| Parser plugins | Explorer then worker | `src/metroliza/parsing/`, `src/metroliza/parsing/report_parser_factory.py`, parser-plugin docs/tests | Plugin-first parser path, fixture validation, resolver diagnostics |
 | Exporter Phase-B | Worker | One exporter seam at a time under `src/metroliza/exporting/` plus focused tests | Behavior-preserving extraction with parity validation |
 | Industrial/tabular analytics | Explorer then worker | `src/metroliza/industrial/`, `src/metroliza/tabular/`, related UI tests | Shared service/UI follow-up plan or narrow implementation patch |
 | Dependency hygiene | Explorer | `requirements.txt`, `.github/workflows/ci.yml`, dependency-hygiene tests | Tag availability and exact pin/update recommendation |

@@ -1,11 +1,17 @@
 RELEASE_VERSION = "2026.06rc2"
-VERSION_DATE = "260709"
+VERSION_DATE = "260711"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = "Release hardening for safer exports and credentials, atomic industrial synchronization, stricter parser and report integrity, deterministic shutdown, and enforceable packaging and security gates."
-PUBLIC_VERSION_LABEL = "2026.06 RC2 (build 260709)"
+PUBLIC_VERSION_LABEL = "2026.06 RC2 (build 260711)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
+    - Large Google Sheets conversions now use bounded resumable chunks, retry transient failures, and clean up created Drive files when cancellation or validation prevents a usable result<br>
+    - Parser profile installs and reloads now publish one locked generation at a time, so concurrent imports never observe half-written profile or approval state<br>
+    - Realtime dashboard refreshes now read one consistent SQLite snapshot, batch related lookups, bound timeline rows before joins, and reject stale source-health updates<br>
+    - CSV Summary group edits now use an isolated session-local assignment store, avoiding source-table pollution and database-lock failures when multiple dialogs or previews are active<br>
+    - Packaged release artifacts now carry a generated Python/Rust dependency inventory, visible third-party notice sidecars, and a hash manifest for release review<br>
+    - Legacy Group Comparison worksheet and BOM Manager entry points now emit deprecation notices while remaining compatible for this release window<br>
     - Excel and industrial workbook exports now keep imported formula-like and URL-like text literal, preventing source data from becoming active workbook formulas or links<br>
     - Google OAuth tokens now use an atomic private application file, exclude client secrets, reject symlink targets, and migrate legacy local tokens only after a secure write succeeds<br>
     - HTML and realtime dashboards now publish atomically, use private session output where appropriate, and preserve the last complete generation when publication fails<br>

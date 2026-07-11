@@ -57,6 +57,14 @@ from metroliza.charts.plotly_stat_helpers import (
     series_labels_from_plotly_spec as _shared_series_labels_from_plotly_spec,
     strip_group_count_suffix as _strip_group_count_suffix,
 )
+from metroliza.industrial.dashboard_manifest import (
+    DASHBOARD_SCHEMA,
+    ProductionDashboardManifest,
+    ProductionDashboardWriteResult,
+    build_dashboard_write_result,
+    copy_dashboard_manifest_for_render,
+    validate_dashboard_manifest,
+)
 from metroliza.industrial.industrial_analytics_service import (
     ProductionAggregationResult,
     ProductionAnalyticsDiagnostic,
@@ -85,7 +93,6 @@ class _LazyPandas:
 pd = _LazyPandas()
 
 
-DASHBOARD_SCHEMA = "metroliza.production_analytics_dashboard.v1"
 PLOTLY_ASSET_NAME = "plotly-2.27.0.min.js"
 PLOTLY_ASSET_SOURCE = (
     Path(__file__).resolve().parents[1] / "resources" / "html_dashboard_assets" / PLOTLY_ASSET_NAME
@@ -153,7 +160,7 @@ def build_production_dashboard_manifest(
     source_row_count: int | None = None,
     dashboard_row_count: int | None = None,
     static_population_source_frame: pd.DataFrame | None = None,
-) -> dict[str, Any]:
+) -> ProductionDashboardManifest:
     """Build a renderer-neutral manifest for the production analytics dashboard."""
 
     aggregation = aggregation_state or ProductionAggregationState()
@@ -281,7 +288,7 @@ def build_production_dashboard_manifest(
 
 
 def write_production_dashboard(
-    manifest: dict[str, Any],
+    manifest: ProductionDashboardManifest,
     output_path: str | Path,
     *,
     assets_dir: str | Path | None = None,
@@ -289,9 +296,10 @@ def write_production_dashboard(
     plotly_serialized_json_bytes_budget: int | None = DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET,
     dashboard_visual_settings: dict[str, Any] | None = None,
     dashboard_interactivity_options: Any = None,
-) -> dict[str, Any]:
+) -> ProductionDashboardWriteResult:
     """Write an offline production analytics dashboard and local Plotly asset."""
 
+    validated_manifest = validate_dashboard_manifest(manifest)
     total_start = perf_counter()
     timings_s = {
         "manifest_clone": 0.0,
@@ -331,7 +339,10 @@ def write_production_dashboard(
     plotly_budget_status = "within_budget"
     plotly_budget_reason = ""
     manifest_clone_start = perf_counter()
-    base_dashboard_manifest = _copy_manifest_for_render(manifest)
+    base_dashboard_manifest = copy_dashboard_manifest_for_render(
+        validated_manifest,
+        private_optimization_keys=(_STATIC_POPULATION_SOURCE_XY_KEY,),
+    )
     timings_s["manifest_clone"] += perf_counter() - manifest_clone_start
     static_population_start = perf_counter()
     population_layer_summary = _apply_static_population_layer_options(
@@ -448,82 +459,29 @@ def write_production_dashboard(
     destination.write_text(html_text, encoding="utf-8")
     timings_s["html_write"] += perf_counter() - write_start
     timings_s["total"] = perf_counter() - total_start
-    return {
-        "html_dashboard_path": str(destination),
-        "html_dashboard_assets_path": str(asset_directory),
-        "html_dashboard_chart_count": len(dashboard_manifest.get("charts") or []),
-        "html_dashboard_interactive_chart_count": int(embedded_plotly_spec_count),
-        "html_dashboard_plotly_spec_count": int(plotly_spec_count),
-        "html_dashboard_embedded_plotly_spec_count": int(embedded_plotly_spec_count),
-        "html_dashboard_plotly_serialized_json_bytes": int(plotly_serialized_json_bytes),
-        "html_dashboard_embedded_plotly_serialized_json_bytes": int(
-            embedded_plotly_serialized_json_bytes
-        ),
-        "html_dashboard_html_bytes": int(html_bytes),
-        "html_dashboard_plotly_budget": {
-            "status": plotly_budget_status,
-            "reason": plotly_budget_reason,
-            "spec_count_budget": _budget_summary_value(count_budget),
-            "serialized_json_bytes_budget": _budget_summary_value(json_bytes_budget),
-        },
-        "html_dashboard_plotly_runtime_status": plotly_runtime_status,
-        "html_dashboard_static_population_layer": population_layer_summary,
-        "html_dashboard_timings_s": {key: float(value) for key, value in timings_s.items()},
-    }
+    return build_dashboard_write_result(
+        html_dashboard_path=str(destination),
+        html_dashboard_assets_path=str(asset_directory),
+        chart_count=len(dashboard_manifest.get("charts") or []),
+        interactive_chart_count=embedded_plotly_spec_count,
+        plotly_spec_count=plotly_spec_count,
+        embedded_plotly_spec_count=embedded_plotly_spec_count,
+        plotly_serialized_json_bytes=plotly_serialized_json_bytes,
+        embedded_plotly_serialized_json_bytes=embedded_plotly_serialized_json_bytes,
+        html_bytes=html_bytes,
+        plotly_budget_status=plotly_budget_status,
+        plotly_budget_reason=plotly_budget_reason,
+        plotly_spec_count_budget=_budget_summary_value(count_budget),
+        plotly_serialized_json_bytes_budget=_budget_summary_value(json_bytes_budget),
+        plotly_runtime_status=plotly_runtime_status,
+        static_population_layer=population_layer_summary,
+        timings_s=timings_s,
+    )
 
 
 def _manifest_requires_plotly(manifest: dict[str, Any]) -> bool:
     charts = manifest.get("charts") if isinstance(manifest.get("charts"), list) else []
     return any(isinstance(chart, dict) and isinstance(chart.get("plotly_spec"), dict) for chart in charts)
-
-
-def _copy_manifest_for_render(manifest: dict[str, Any]) -> dict[str, Any]:
-    manifest_copy = dict(manifest)
-    summary = manifest.get("summary")
-    if isinstance(summary, dict):
-        manifest_copy["summary"] = dict(summary)
-    charts = manifest.get("charts")
-    if isinstance(charts, list):
-        copied_charts: list[Any] = []
-        for chart in charts:
-            if not isinstance(chart, dict):
-                copied_charts.append(chart)
-                continue
-            chart_copy = dict(chart)
-            plotly_spec = chart.get("plotly_spec")
-            if isinstance(plotly_spec, dict):
-                chart_copy["plotly_spec"] = _clone_jsonable(plotly_spec)
-            optimization_options = chart.get("optimization_options")
-            if isinstance(optimization_options, list):
-                chart_copy["optimization_options"] = _clone_optimization_options(
-                    optimization_options
-                )
-            copied_charts.append(chart_copy)
-        manifest_copy["charts"] = copied_charts
-    return manifest_copy
-
-
-def _clone_jsonable(value: Any) -> Any:
-    return json.loads(json.dumps(value, ensure_ascii=False, default=str))
-
-
-def _clone_optimization_options(options: list[Any]) -> list[Any]:
-    cloned: list[Any] = []
-    for option in options:
-        if not isinstance(option, dict):
-            cloned.append(_clone_jsonable(option))
-            continue
-        private_source = option.get(_STATIC_POPULATION_SOURCE_XY_KEY)
-        public_option = {
-            key: value
-            for key, value in option.items()
-            if key != _STATIC_POPULATION_SOURCE_XY_KEY
-        }
-        cloned_option = _clone_jsonable(public_option)
-        if private_source is not None:
-            cloned_option[_STATIC_POPULATION_SOURCE_XY_KEY] = private_source
-        cloned.append(cloned_option)
-    return cloned
 
 
 def _strip_static_population_private_payloads(manifest: dict[str, Any]) -> None:
@@ -1461,7 +1419,10 @@ def _copy_manifest_with_plotly_budget(
     count_budget: int | None,
     json_bytes_budget: int | None,
 ) -> tuple[dict[str, Any], str, str]:
-    rendered_manifest = _copy_manifest_for_render(manifest)
+    rendered_manifest = copy_dashboard_manifest_for_render(
+        manifest,
+        private_optimization_keys=(_STATIC_POPULATION_SOURCE_XY_KEY,),
+    )
     if not _is_over_plotly_count_budget(
         _count_plotly_specs(rendered_manifest),
         count_budget,

@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import os
 from pathlib import Path
+import sys
+from threading import local, RLock
+from typing import Iterator
 
 
 PARSER_EXTERNAL_PLUGIN_PATHS_ENV = "PARSER_EXTERNAL_PLUGIN_PATHS"
 PARSER_DISABLED_PLUGIN_IDS_ENV = "PARSER_DISABLED_PLUGIN_IDS"
 DEFAULT_PARSER_PLUGIN_HOME_SUBDIR = Path(".metroliza") / "parser_plugins"
+PARSER_PROFILE_STORE_LOCK_FILE = ".profile-store.lock"
+_PROFILE_STORE_THREAD_LOCK = RLock()
+_PROFILE_STORE_LOCK_STATE = local()
 
 
 def default_external_plugin_dir(*, home: Path | None = None) -> Path:
@@ -74,3 +81,76 @@ def disabled_plugin_ids(raw_ids: str | None = None) -> frozenset[str]:
         if item.strip()
     }
     return frozenset(ids)
+
+
+def _lock_profile_store_file(handle) -> None:
+    if os.name == "nt":  # pragma: no cover - exercised by Windows release smoke.
+        import msvcrt
+
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+
+
+def _unlock_profile_store_file(handle) -> None:
+    if os.name == "nt":  # pragma: no cover - exercised by Windows release smoke.
+        import msvcrt
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def parser_profile_store_lock(*, home: Path | None = None) -> Iterator[None]:
+    """Serialize profile generation reads and promotions across threads and processes."""
+
+    lock_root = default_external_plugin_dir(home=home)
+    lock_root.mkdir(parents=True, exist_ok=True)
+    lock_path = lock_root / PARSER_PROFILE_STORE_LOCK_FILE
+    with _PROFILE_STORE_THREAD_LOCK:
+        held_paths = getattr(_PROFILE_STORE_LOCK_STATE, "held_paths", [])
+        if lock_path in held_paths:
+            held_paths.append(lock_path)
+            try:
+                yield
+            finally:
+                held_paths.pop()
+            return
+
+        with lock_path.open("a+b") as handle:
+            _lock_profile_store_file(handle)
+            held_paths.append(lock_path)
+            _PROFILE_STORE_LOCK_STATE.held_paths = held_paths
+            try:
+                yield
+            finally:
+                held_paths.pop()
+                _unlock_profile_store_file(handle)
+
+
+def invalidate_parser_plugin_runtime() -> None:
+    """Invalidate already-imported parser registry state after a profile lifecycle change."""
+
+    factory = sys.modules.get("metroliza.parsing.report_parser_factory")
+    if factory is None:
+        return
+
+    reset_loader = getattr(factory, "reset_external_plugin_loader_state", None)
+    if callable(reset_loader):
+        reset_loader()
+    reset_probe_cache = getattr(factory, "reset_probe_cache", None)
+    if callable(reset_probe_cache):
+        reset_probe_cache()

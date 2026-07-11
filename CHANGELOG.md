@@ -1,6 +1,12 @@
 # Changelog (for end users)
 
-## 2026.06 RC2 (build 260709) — current version
+## 2026.06 RC2 (build 260711) — current version
+- Large Google Sheets conversions now use bounded resumable chunks, retry transient failures, and clean up created Drive files when cancellation or validation prevents a usable result.
+- Parser profile installs and reloads now publish one locked generation at a time, so concurrent imports never observe half-written profile or approval state.
+- Realtime dashboard refreshes now read one consistent SQLite snapshot, batch related lookups, bound timeline rows before joins, and reject stale source-health updates.
+- CSV Summary group edits now use an isolated session-local assignment store, avoiding source-table pollution and database-lock failures when multiple dialogs or previews are active.
+- Packaged release artifacts now carry a generated Python/Rust dependency inventory, visible third-party notice sidecars, and a hash manifest for release review.
+- Legacy Group Comparison worksheet and BOM Manager entry points now emit deprecation notices while remaining compatible for this release window.
 - Excel and industrial workbook exports now keep imported formula-like and URL-like text literal, preventing source data from becoming active workbook formulas or links.
 - Google OAuth tokens now use an atomic private application file, exclude client secrets, reject symlink targets, and migrate legacy local tokens only after a secure write succeeds.
 - HTML and realtime dashboards now publish atomically, use private session output where appropriate, and preserve the last complete generation when publication fails.

@@ -8,6 +8,14 @@ MARKDOWN_LINK_PATTERN = re.compile(r"!?\[[^\]]+\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)
 IGNORED_PREFIXES = ("http://", "https://", "mailto:", "#")
 DOCS_INDEX_PATH = Path("docs/README.md")
 ROADMAPS_ROOT = Path("docs/roadmaps")
+RELEASE_CHECKLIST_PATH = Path("docs/release_checks/release_candidate_checklist.md")
+RELEASE_GUIDE_PATHS = (
+    Path("docs/release_checks/open_testing_runbook.md"),
+    Path("docs/release_checks/release_playbook_beginner.md"),
+)
+RELEASE_CHECKLIST_FRAGMENT_PATTERN = re.compile(
+    r"\]\(\./release_candidate_checklist\.md#([^)]+)\)"
+)
 
 
 def iter_markdown_files(root: Path) -> list[Path]:
@@ -22,6 +30,17 @@ def iter_local_link_targets(markdown_text: str) -> list[str]:
             continue
         targets.append(target.split("#", 1)[0])
     return targets
+
+
+def markdown_heading_anchors(markdown_text: str) -> set[str]:
+    anchors: set[str] = set()
+    for line in markdown_text.splitlines():
+        heading = line.lstrip("#").strip() if line.startswith("#") else ""
+        if not heading:
+            continue
+        anchor = re.sub(r"[^\w -]", "", heading.lower()).replace(" ", "-")
+        anchors.add(anchor)
+    return anchors
 
 
 def test_docs_markdown_local_links_resolve() -> None:
@@ -49,3 +68,20 @@ def test_docs_index_inventories_every_roadmap() -> None:
     ]
 
     assert not missing, "Roadmaps missing from docs/README.md inventory:\n" + "\n".join(missing)
+
+
+def test_release_guides_reference_existing_checklist_sections() -> None:
+    checklist_anchors = markdown_heading_anchors(
+        RELEASE_CHECKLIST_PATH.read_text(encoding="utf-8")
+    )
+    missing: list[str] = []
+
+    for guide_path in RELEASE_GUIDE_PATHS:
+        guide = guide_path.read_text(encoding="utf-8")
+        for fragment in RELEASE_CHECKLIST_FRAGMENT_PATTERN.findall(guide):
+            if fragment not in checklist_anchors:
+                missing.append(f"{guide_path}: #{fragment}")
+
+    assert not missing, "Release guides reference missing checklist sections:\n" + "\n".join(
+        missing
+    )

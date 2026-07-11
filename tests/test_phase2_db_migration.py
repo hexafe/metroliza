@@ -12,20 +12,24 @@ class TestPhase2DbMigrationGuardrails(unittest.TestCase):
     def test_parse_and_modify_use_shared_db_helpers(self):
         parse_thread = self._read('src/metroliza/parsing/parse_reports_thread.py')
         modify_db = self._read('src/metroliza/ui/modify_db.py')
+        report_edit_service = self._read('src/metroliza/reports/report_edit_service.py')
 
         self.assertNotIn('sqlite3.connect(', parse_thread)
         self.assertNotIn('sqlite3.connect(', modify_db)
+        self.assertNotIn('sqlite3.connect(', report_edit_service)
 
         self.assertIn('from metroliza.reports.db import execute_with_retry', parse_thread)
-        self.assertIn('run_transaction_with_retry(', modify_db)
+        self.assertNotIn('run_transaction_with_retry', modify_db)
+        self.assertNotIn('UPDATE ', modify_db)
+        self.assertIn('ReportEditService', modify_db)
         self.assertIn('from metroliza.reports.db import (', modify_db)
         self.assertIn('execute_select_with_columns', modify_db)
         self.assertIn('quote_identifier', modify_db)
-        self.assertIn('run_transaction_with_retry', modify_db)
+        self.assertIn('run_transaction_with_retry(', report_edit_service)
 
     def test_cmm_and_bom_manager_no_longer_use_direct_sqlite_connect(self):
         cmm_parser = self._read('src/metroliza/parsing/cmm_report_parser.py')
-        bom_manager = self._read('src/metroliza/shared/bom_manager.py')
+        bom_manager = self._read('src/metroliza/ui/bom_manager.py')
 
         self.assertNotIn('sqlite3.connect(', cmm_parser)
         self.assertNotIn('sqlite3.connect(', bom_manager)
@@ -47,7 +51,7 @@ class TestPhase2DbMigrationGuardrails(unittest.TestCase):
         self.assertIn('repository.persist_parsed_report(', cmm_parser)
 
     def test_bom_manager_write_paths_use_centralized_helpers(self):
-        bom_manager = self._read('src/metroliza/shared/bom_manager.py')
+        bom_manager = self._read('src/metroliza/ui/bom_manager.py')
 
         self.assertIn('execute_many_with_retry(self.database_path, [(query, params)])', bom_manager)
         self.assertIn('execute_many_with_retry(self.database_path, delete_statements)', bom_manager)
@@ -57,7 +61,7 @@ class TestPhase2DbMigrationGuardrails(unittest.TestCase):
 
     def test_migrated_result_shape_usage_is_repository_based(self):
         cmm_parser = self._read('src/metroliza/parsing/cmm_report_parser.py')
-        bom_manager = self._read('src/metroliza/shared/bom_manager.py')
+        bom_manager = self._read('src/metroliza/ui/bom_manager.py')
 
         self.assertIn('ReportRepository(', cmm_parser)
         self.assertNotIn('SELECT COUNT(*) FROM REPORTS', cmm_parser)

@@ -21,9 +21,9 @@ import math
 import numpy as np
 
 from metroliza.analytics.distribution_shape_analysis import compute_distribution_difference, resolve_distribution_fit_policy
+from metroliza.analytics.grouping_labels import normalize_default_group_label, normalize_group_labels
 from metroliza.analytics.hexafe_groupstats_adapter import analyze_group_metric
-from metroliza.exporting.export_grouping_utils import normalize_default_group_label, normalize_group_labels
-from metroliza.exporting.export_query_service import RowTable, _coerce_to_row_table
+from metroliza.analytics.row_table import RowTable, coerce_to_row_table
 from metroliza.reports.characteristic_alias_service import resolve_characteristic_aliases_bulk
 
 _SKIP_REASON_MESSAGES = {
@@ -110,7 +110,7 @@ def _as_row_table(table) -> RowTable:
     if isinstance(table, RowTable):
         return table.copy()
     try:
-        return _coerce_to_row_table(table)
+        return coerce_to_row_table(table)
     except (TypeError, ValueError):
         return RowTable(rows=(), columns=())
 

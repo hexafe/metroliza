@@ -416,7 +416,7 @@ when the LLM has no repository access.
 
 - Parser contracts: {_github_source_url("src/metroliza/parsing/parser_plugin_contracts.py")}
 - Base parser bridge: {_github_source_url("src/metroliza/parsing/base_report_parser.py")}
-- Parser factory selection: {_github_source_url("src/metroliza/reports/report_parser_factory.py")}
+- Parser factory selection: {_github_source_url("src/metroliza/parsing/report_parser_factory.py")}
 - Validation helper: {_github_source_url("src/metroliza/parsing/parser_plugin_validation.py")}
 - Declarative profiles: {_github_source_url("src/metroliza/parsing/declarative_parser_profiles.py")}
 - Parser plugin docs: {_github_source_url("docs/parser_plugins/parser_plugin_specification.md")}

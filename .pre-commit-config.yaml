@@ -8,18 +8,17 @@ repos:
       - id: detect-aws-credentials
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.9.10
+    rev: v0.15.10
     hooks:
       - id: ruff
 
   - repo: local
     hooks:
-      - id: detect-basic-credential-patterns
-        name: detect-basic-credential-patterns
-        language: pygrep
-        entry: '(?i)(client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token)\s*[:=]\s*["''][A-Za-z0-9_.~+/=-]{20,}["'']'
-        files: '\.(py|json|ya?ml|toml|ini|env)$'
-        exclude: ^config/google/credentials\.example\.json$
+      - id: security-secret-scan
+        name: security-secret-scan
+        language: system
+        entry: python scripts/security_audit.py --secret-scan-only
+        pass_filenames: false
       - id: release-hygiene
         name: release-hygiene
         language: system

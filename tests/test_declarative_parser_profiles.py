@@ -1,4 +1,8 @@
+from concurrent.futures import ThreadPoolExecutor
+import json
 from pathlib import Path
+import shutil
+from threading import Event
 
 import pytest
 
@@ -513,6 +517,151 @@ def test_declarative_profile_install_refuses_failed_validation(tmp_path):
         )
 
 
+def test_profile_update_replace_failure_restores_existing_approved_generation(
+    monkeypatch,
+    tmp_path,
+):
+    from metroliza.parsing import declarative_parser_profiles as profiles
+
+    profile_path, sample_path, expected_path = _write_fixture(tmp_path)
+    install_profile(
+        profile_path,
+        sample_paths=(sample_path,),
+        expected_results_ref=expected_path,
+        home=tmp_path,
+    )
+    target_dir = approved_profiles_dir(home=tmp_path) / "supplier_alpha"
+    old_profile = (target_dir / PROFILE_FILE_NAME).read_bytes()
+    old_approval = (target_dir / APPROVAL_FILE_NAME).read_bytes()
+    profile_path.write_text(
+        _profile_text().replace("version: 0.1.0", "version: 0.2.0"),
+        encoding="utf-8",
+    )
+    original_replace = Path.replace
+
+    def _fail_staged_promotion(path, target):
+        if path.parent.name == ".staging":
+            raise OSError("injected staged generation replace failure")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", _fail_staged_promotion)
+
+    with pytest.raises(OSError, match="injected staged generation replace failure"):
+        install_profile(
+            profile_path,
+            sample_paths=(sample_path,),
+            expected_results_ref=expected_path,
+            home=tmp_path,
+        )
+
+    parsers, errors = load_approved_profile_parsers(home=tmp_path)
+    assert (target_dir / PROFILE_FILE_NAME).read_bytes() == old_profile
+    assert (target_dir / APPROVAL_FILE_NAME).read_bytes() == old_approval
+    assert errors == ()
+    assert parsers[0][1].manifest.version == "0.1.0"
+    assert not any((target_dir.parent / ".staging").iterdir())
+    assert profiles.profile_store_signature(home=tmp_path)
+
+
+def test_profile_update_sidecar_write_failure_leaves_existing_generation_intact(
+    monkeypatch,
+    tmp_path,
+):
+    profile_path, sample_path, expected_path = _write_fixture(tmp_path)
+    install_profile(
+        profile_path,
+        sample_paths=(sample_path,),
+        expected_results_ref=expected_path,
+        home=tmp_path,
+    )
+    target_dir = approved_profiles_dir(home=tmp_path) / "supplier_alpha"
+    old_profile = (target_dir / PROFILE_FILE_NAME).read_bytes()
+    old_approval = (target_dir / APPROVAL_FILE_NAME).read_bytes()
+    profile_path.write_text(
+        _profile_text().replace("version: 0.1.0", "version: 0.2.0"),
+        encoding="utf-8",
+    )
+    original_write_text = Path.write_text
+
+    def _fail_staged_approval(path, *args, **kwargs):
+        if path.name == APPROVAL_FILE_NAME and ".staging" in path.parts:
+            raise OSError("injected approval sidecar write failure")
+        return original_write_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", _fail_staged_approval)
+
+    with pytest.raises(OSError, match="injected approval sidecar write failure"):
+        install_profile(
+            profile_path,
+            sample_paths=(sample_path,),
+            expected_results_ref=expected_path,
+            home=tmp_path,
+        )
+
+    assert (target_dir / PROFILE_FILE_NAME).read_bytes() == old_profile
+    assert (target_dir / APPROVAL_FILE_NAME).read_bytes() == old_approval
+    assert load_approved_profile_parsers(home=tmp_path)[1] == ()
+
+
+def test_profile_promotion_blocks_reader_until_complete_generation_is_visible(
+    monkeypatch,
+    tmp_path,
+):
+    profile_path, sample_path, expected_path = _write_fixture(tmp_path)
+    install_profile(
+        profile_path,
+        sample_paths=(sample_path,),
+        expected_results_ref=expected_path,
+        home=tmp_path,
+    )
+    old_parsers, old_errors = load_approved_profile_parsers(home=tmp_path)
+    assert old_errors == ()
+    assert old_parsers[0][1].manifest.version == "0.1.0"
+
+    profile_path.write_text(
+        _profile_text().replace("version: 0.1.0", "version: 0.2.0"),
+        encoding="utf-8",
+    )
+    target_dir = approved_profiles_dir(home=tmp_path) / "supplier_alpha"
+    generation_gap_open = Event()
+    release_promotion = Event()
+    reader_started = Event()
+    original_replace = Path.replace
+
+    def _pause_after_old_generation_moves(path, target):
+        result = original_replace(path, target)
+        if path == target_dir:
+            generation_gap_open.set()
+            assert release_promotion.wait(timeout=5)
+        return result
+
+    def _read_profiles():
+        reader_started.set()
+        return load_approved_profile_parsers(home=tmp_path)
+
+    monkeypatch.setattr(Path, "replace", _pause_after_old_generation_moves)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        writer = executor.submit(
+            install_profile,
+            profile_path,
+            sample_paths=(sample_path,),
+            expected_results_ref=expected_path,
+            home=tmp_path,
+        )
+        assert generation_gap_open.wait(timeout=5)
+        reader = executor.submit(_read_profiles)
+        assert reader_started.wait(timeout=5)
+        try:
+            assert reader.done() is False
+        finally:
+            release_promotion.set()
+        writer.result(timeout=5)
+        new_parsers, new_errors = reader.result(timeout=5)
+
+    assert new_errors == ()
+    assert new_parsers[0][1].manifest.version == "0.2.0"
+
+
 def test_report_factory_registers_approved_declarative_profiles(monkeypatch, tmp_path):
     from metroliza.parsing import declarative_parser_profiles as profiles
     from metroliza.reports import report_parser_factory
@@ -600,6 +749,119 @@ def test_report_factory_reload_removes_disabled_declarative_profiles(monkeypatch
         report_parser_factory._ensure_external_plugins_loaded_once()
 
         assert "supplier_alpha" not in report_parser_factory.PARSER_MAP
+    finally:
+        report_parser_factory.PARSER_MAP.clear()
+        report_parser_factory.PARSER_MAP.update(original_map)
+        report_parser_factory.PARSER_MANIFESTS.clear()
+        report_parser_factory.PARSER_MANIFESTS.update(original_manifests)
+        report_parser_factory.PARSER_DETECTORS.clear()
+        report_parser_factory.PARSER_DETECTORS.update(original_detectors)
+        report_parser_factory.PROBE_RESULT_CACHE.clear()
+        report_parser_factory.PROBE_RESULT_CACHE.update(original_cache)
+        report_parser_factory._EXTERNAL_PLUGINS_LOADED = original_loaded
+        report_parser_factory._EXTERNAL_PLUGIN_CONFIG_SIGNATURE = original_signature
+        report_parser_factory._EXTERNAL_PLUGIN_ENTRY_POINTS = original_entry_points
+
+
+def test_report_factory_invalidates_changed_sidecar_and_removed_profile_generations(
+    monkeypatch,
+    tmp_path,
+):
+    from metroliza.reports import report_parser_factory
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    profile_path, sample_path, expected_path = _write_fixture(tmp_path)
+    old_report = tmp_path / "old_supplier_report.pdf"
+    old_report.write_text(_sample_text(), encoding="utf-8")
+    original_map = dict(report_parser_factory.PARSER_MAP)
+    original_manifests = dict(report_parser_factory.PARSER_MANIFESTS)
+    original_detectors = dict(report_parser_factory.PARSER_DETECTORS)
+    original_cache = dict(report_parser_factory.PROBE_RESULT_CACHE)
+    original_loaded = report_parser_factory._EXTERNAL_PLUGINS_LOADED
+    original_signature = report_parser_factory._EXTERNAL_PLUGIN_CONFIG_SIGNATURE
+    original_entry_points = report_parser_factory._EXTERNAL_PLUGIN_ENTRY_POINTS
+
+    monkeypatch.setattr(
+        report_parser_factory,
+        "_discover_external_plugin_entry_points",
+        lambda force_refresh=False: (),
+    )
+    monkeypatch.setattr(
+        report_parser_factory.parser_plugin_paths,
+        "configured_external_plugin_path_entries",
+        lambda raw_paths=None, include_default_dir=True, home=None: (),
+    )
+    try:
+        install_profile(
+            profile_path,
+            sample_paths=(sample_path,),
+            expected_results_ref=expected_path,
+            home=tmp_path,
+        )
+        report_parser_factory.reset_external_plugin_loader_state()
+        old_diagnostics = report_parser_factory.resolve_parser_with_diagnostics(old_report)
+        old_parser_class = report_parser_factory.PARSER_MAP["supplier_alpha"]
+        assert old_diagnostics.selected is not None
+        assert old_diagnostics.selected.plugin_id == "supplier_alpha"
+        assert report_parser_factory.PROBE_RESULT_CACHE
+
+        profile_path.write_text(
+            _profile_text()
+            .replace("version: 0.1.0", "version: 0.2.0")
+            .replace("SYNTHETIC SUPPLIER ALPHA", "SYNTHETIC SUPPLIER BETA"),
+            encoding="utf-8",
+        )
+        sample_path.write_text(
+            _sample_text().replace(
+                "SYNTHETIC SUPPLIER ALPHA",
+                "SYNTHETIC SUPPLIER BETA",
+            ),
+            encoding="utf-8",
+        )
+        install_profile(
+            profile_path,
+            sample_paths=(sample_path,),
+            expected_results_ref=expected_path,
+            home=tmp_path,
+        )
+        assert report_parser_factory._EXTERNAL_PLUGINS_LOADED is False
+        assert not report_parser_factory.PROBE_RESULT_CACHE
+
+        changed_diagnostics = report_parser_factory.resolve_parser_with_diagnostics(sample_path)
+        changed_parser_class = report_parser_factory.PARSER_MAP["supplier_alpha"]
+        assert changed_diagnostics.selected is not None
+        assert changed_diagnostics.selected.plugin_id == "supplier_alpha"
+        assert changed_parser_class is not old_parser_class
+        stale_diagnostics = report_parser_factory.resolve_parser_with_diagnostics(old_report)
+        assert stale_diagnostics.selected is None
+
+        approved_dir = approved_profiles_dir(home=tmp_path) / "supplier_alpha"
+        approval_path = approved_dir / APPROVAL_FILE_NAME
+        approval_payload = json.loads(approval_path.read_text(encoding="utf-8"))
+        approval_payload["approved_by"] = "changed-sidecar"
+        approval_path.write_text(
+            json.dumps(approval_payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        report_parser_factory.resolve_parser_with_diagnostics(sample_path)
+        sidecar_parser_class = report_parser_factory.PARSER_MAP["supplier_alpha"]
+        assert sidecar_parser_class is not changed_parser_class
+
+        approval_bytes = approval_path.read_bytes()
+        approval_path.unlink()
+        no_approval = report_parser_factory.resolve_parser_with_diagnostics(sample_path)
+        assert "supplier_alpha" not in report_parser_factory.PARSER_MAP
+        assert no_approval.selected is None
+
+        approval_path.write_bytes(approval_bytes)
+        restored = report_parser_factory.resolve_parser_with_diagnostics(sample_path)
+        assert restored.selected is not None
+        assert restored.selected.plugin_id == "supplier_alpha"
+
+        shutil.rmtree(approved_dir)
+        removed = report_parser_factory.resolve_parser_with_diagnostics(sample_path)
+        assert "supplier_alpha" not in report_parser_factory.PARSER_MAP
+        assert removed.selected is None
     finally:
         report_parser_factory.PARSER_MAP.clear()
         report_parser_factory.PARSER_MAP.update(original_map)

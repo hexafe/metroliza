@@ -57,16 +57,16 @@ Native fit batch coverage currently includes:
 
 ```bash
 # Install extension into the current interpreter (dev/editable workflow)
-python -m maturin develop --manifest-path src/metroliza/native/distribution_fit_ad/Cargo.toml
+python -m maturin develop --locked --manifest-path src/metroliza/native/distribution_fit_ad/Cargo.toml
 
 # Build wheel artifact(s)
-python -m maturin build --manifest-path src/metroliza/native/distribution_fit_ad/Cargo.toml --release
+python -m maturin build --locked --manifest-path src/metroliza/native/distribution_fit_ad/Cargo.toml --release
 ```
 
 On Python `3.14`, local builds currently use:
 
 ```bash
-PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 python -m maturin build --manifest-path src/metroliza/native/distribution_fit_ad/Cargo.toml --release
+PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 python -m maturin build --locked --manifest-path src/metroliza/native/distribution_fit_ad/Cargo.toml --release
 ```
 
 For cross-crate packaging and CI parity expectations, see `docs/native_build_distribution.md`.

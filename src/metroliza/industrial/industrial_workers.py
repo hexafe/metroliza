@@ -9,7 +9,10 @@ from typing import Any
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from metroliza.shared.contracts import IndustrialAnalyticsRequest, validate_industrial_analytics_request
+from metroliza.industrial.contracts import (
+    IndustrialAnalyticsRequest,
+    validate_industrial_analytics_request,
+)
 from metroliza.industrial.industrial_data_repository import (
     IndustrialDataRepository,
     IndustrialSourceProfile,

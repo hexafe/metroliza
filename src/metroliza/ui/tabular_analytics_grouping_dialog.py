@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import logging
+from dataclasses import dataclass
 
 from PyQt6.QtCore import QThread, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QIntValidator
@@ -25,7 +26,6 @@ from PyQt6.QtWidgets import (
 
 from metroliza.ui import ui_theme_tokens
 from metroliza.tabular.csv_summary_utils import CsvGroupingIndex
-from metroliza.reports.db import sqlite_connection_scope
 from metroliza.shared.grouping_filter_core import (
     DateFilterSpec,
     NumberFilterSpec,
@@ -47,6 +47,16 @@ from metroliza.tabular.tabular_analytics_service import (
     TabularColumnFilter,
     build_tabular_grouping_dataframe,
     selectable_tabular_source_columns,
+)
+from metroliza.tabular.grouping_assignment_store import (
+    AssignGroupingRows,
+    AssignGroupingScope,
+    DeleteGroupingGroup,
+    RenameGroupingGroup,
+    TabularGroupingAssignmentCleanupError,
+    TabularGroupingAssignmentStore,
+    TabularGroupingCommand,
+    TabularGroupingScope,
 )
 from metroliza.ui.ui_foundation import (
     apply_list_selection_style,
@@ -108,6 +118,7 @@ _SQLITE_SOURCE_EXCLUDED_COLUMNS = {
     "GROUP_KEY",
     "GROUP_COLOR",
 }
+logger = logging.getLogger(__name__)
 
 
 class _LazyPandas:
@@ -118,11 +129,6 @@ class _LazyPandas:
 
 
 pd = _LazyPandas()
-
-
-def _quote_sqlite_identifier(identifier: str) -> str:
-    escaped = str(identifier).replace('"', '""')
-    return f'"{escaped}"'
 
 
 def _release_detached_selector_preview_thread(thread: QThread) -> None:
@@ -139,30 +145,6 @@ class _SelectorFilterState:
     match_mode: str = "and"
     parsed_filter: object | None = None
     error: str = ""
-
-
-@dataclass(frozen=True)
-class _PendingSqliteScope:
-    selector_columns: tuple[str, ...]
-    search_text: str
-    filter_columns: tuple[str, ...]
-    selected_filter_keys: tuple[tuple[str, ...], ...]
-    base_column_filters: tuple[TabularColumnFilter, ...]
-    base_filter_expression: str = ""
-    filter_aliases: dict[str, str] = field(default_factory=dict)
-    grouping_filter: object | None = None
-    selected_group_keys: tuple[tuple[str, ...], ...] = ()
-
-
-@dataclass(frozen=True)
-class _SqliteAssignmentOperation:
-    kind: str
-    group_name: str = ""
-    color: str = ""
-    row_ids: tuple[int, ...] = ()
-    scope: _PendingSqliteScope | None = None
-    replacement_group_name: str = ""
-    replacement_color: str = ""
 
 
 class _SqliteSelectorPreviewThread(QThread):
@@ -230,6 +212,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
         configure_window_size(self, minimum=(760, 560), initial=(980, 700))
         self.source_dataframe = dataframe.copy() if isinstance(dataframe, pd.DataFrame) else pd.DataFrame()
         self.sqlite_store = sqlite_store
+        self._sqlite_assignment_store = (
+            TabularGroupingAssignmentStore(sqlite_store) if sqlite_store is not None else None
+        )
         self.sqlite_filter_columns = tuple(str(column) for column in (filter_columns or ()))
         self.sqlite_selected_filter_keys = tuple(
             tuple(str(part) for part in key)
@@ -274,10 +259,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         )
         self._initial_group_assignments = self._group_assignments(grouping_dataframe)
         self._temp_group_assignments: dict[int, tuple[str, str]] = {}
-        self._sqlite_assignment_operations: list[_SqliteAssignmentOperation] = []
-        self._sqlite_assignment_table_name = f"__metroliza_grouping_assignments_{id(self):x}"
-        self._sqlite_assignment_operations_applied = 0
-        self._sqlite_assignment_operations_applied_snapshot: tuple[_SqliteAssignmentOperation, ...] = ()
+        self._sqlite_assignment_operations: list[TabularGroupingCommand] = []
         self._base_grouping_dataframe_cache: pd.DataFrame | None = None
         self.df = self._empty_grouping_dataframe()
         self._apply_group_assignments(self._initial_group_assignments)
@@ -826,9 +808,22 @@ class TabularAnalyticsGroupingDialog(QDialog):
             "grouping_filter_aliases": self._selector_filter_aliases(),
         }
 
-    def _pending_sqlite_scope(self, state: _SelectorFilterState | None = None) -> _PendingSqliteScope:
+    def _sqlite_grouping_assignment_store(self) -> TabularGroupingAssignmentStore:
+        assignment_store = vars(self).get("_sqlite_assignment_store")
+        if assignment_store is None:
+            sqlite_store = vars(self).get("sqlite_store")
+            if sqlite_store is None:
+                raise RuntimeError("SQLite grouping assignment store is unavailable.")
+            assignment_store = TabularGroupingAssignmentStore(sqlite_store)
+            self._sqlite_assignment_store = assignment_store
+        return assignment_store
+
+    def _pending_sqlite_scope(
+        self,
+        state: _SelectorFilterState | None = None,
+    ) -> TabularGroupingScope:
         current_state = state or self._selector_filter_state()
-        return _PendingSqliteScope(
+        return TabularGroupingScope(
             selector_columns=tuple(self.selector_columns),
             search_text=self._selector_label_search_text(current_state),
             filter_columns=self.sqlite_filter_columns,
@@ -842,9 +837,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
     def _pending_sqlite_selected_keys_scope(
         self,
         state: _SelectorFilterState | None = None,
-    ) -> _PendingSqliteScope:
+    ) -> TabularGroupingScope:
         current_state = state or self._selector_filter_state()
-        return _PendingSqliteScope(
+        return TabularGroupingScope(
             selector_columns=tuple(self.selector_columns),
             search_text="",
             filter_columns=self.sqlite_filter_columns,
@@ -856,60 +851,6 @@ class TabularAnalyticsGroupingDialog(QDialog):
             selected_group_keys=tuple(sorted(self.selected_selector_keys)),
         )
 
-    def _sqlite_scope_query(self, scope: _PendingSqliteScope) -> tuple[str, list[object]]:
-        if scope.selected_group_keys:
-            return self._sqlite_selected_group_keys_query(scope)
-        if scope.search_text:
-            return self.sqlite_store.source_row_number_query_for_group_search(
-                scope.selector_columns,
-                search_text=scope.search_text,
-                filter_columns=scope.filter_columns,
-                selected_filter_keys=scope.selected_filter_keys,
-                base_column_filters=scope.base_column_filters,
-                grouping_filter_expression=scope.base_filter_expression,
-                grouping_filter_aliases=scope.filter_aliases,
-                grouping_filter=scope.grouping_filter,
-            )
-        return self.sqlite_store.source_row_number_query(
-            filter_columns=scope.filter_columns,
-            selected_filter_keys=scope.selected_filter_keys,
-            base_column_filters=scope.base_column_filters,
-            grouping_filter_expression=scope.base_filter_expression,
-            grouping_filter_aliases=scope.filter_aliases,
-            grouping_filter=scope.grouping_filter,
-        )
-
-    def _sqlite_selected_group_keys_query(
-        self,
-        scope: _PendingSqliteScope,
-    ) -> tuple[str, list[object]]:
-        if not scope.selector_columns or not scope.selected_group_keys:
-            return "", []
-        where_builder = getattr(self.sqlite_store, "_where_clause_for_group_keys", None)
-        if where_builder is None:
-            return "", []
-        where_sql, params = where_builder(
-            scope.selector_columns,
-            scope.selected_group_keys,
-            filter_columns=scope.filter_columns,
-            selected_filter_keys=scope.selected_filter_keys,
-            base_column_filters=scope.base_column_filters,
-            grouping_filter_expression=scope.base_filter_expression,
-            grouping_filter_aliases=scope.filter_aliases,
-            grouping_filter=scope.grouping_filter,
-        )
-        if not where_sql:
-            return "", []
-        row_column = _quote_sqlite_identifier("source_row_number")
-        table_name = _quote_sqlite_identifier(self.sqlite_store.table_name)
-        return f"SELECT {row_column} FROM {table_name}{where_sql}", params
-
-    def _sqlite_effective_assignment_required(self) -> bool:
-        return any(
-            operation.kind in {"scope", "delete_group", "rename_group"}
-            for operation in vars(self).get("_sqlite_assignment_operations", ())
-        )
-
     def _append_sqlite_row_assignment_operation(
         self,
         row_ids: list[int] | tuple[int, ...],
@@ -919,8 +860,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         if not self._is_sqlite_backed() or not row_ids:
             return
         self._sqlite_assignment_operations.append(
-            _SqliteAssignmentOperation(
-                kind="rows",
+            AssignGroupingRows(
                 group_name=str(group_name),
                 color=self._normalized_group_color(color),
                 row_ids=tuple(dict.fromkeys(int(row_id) for row_id in row_ids)),
@@ -938,132 +878,19 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 colors.append(operation.replacement_color)
         return colors
 
-    def _populate_sqlite_effective_assignment_table(self, connection) -> str:
-        table_name = str(
-            vars(self).get("_sqlite_assignment_table_name")
-            or f"__metroliza_grouping_assignments_{id(self):x}"
-        )
-        operations = tuple(vars(self).get("_sqlite_assignment_operations", ()))
-        applied_count = int(vars(self).get("_sqlite_assignment_operations_applied", 0) or 0)
-        applied_snapshot = tuple(
-            vars(self).get("_sqlite_assignment_operations_applied_snapshot", ())
-        )
-        connection.execute(
-            f"CREATE TABLE IF NOT EXISTS {table_name} ("
-            "row_id INTEGER PRIMARY KEY, "
-            "group_name TEXT NOT NULL, "
-            "color TEXT NOT NULL)"
-        )
-        if applied_count > len(operations) or operations[:applied_count] != applied_snapshot:
-            connection.execute(f"DELETE FROM {table_name}")
-            applied_count = 0
-        if applied_count == len(operations):
-            return table_name
-        if applied_count <= 0:
-            connection.execute(f"DELETE FROM {table_name}")
-            applied_count = 0
-        for operation in operations[applied_count:]:
-            if operation.kind == "rows":
-                self._apply_sqlite_row_assignment_operation(connection, table_name, operation)
-            elif operation.kind == "scope":
-                self._apply_sqlite_scope_assignment_operation(connection, table_name, operation)
-            elif operation.kind == "delete_group":
-                connection.execute(
-                    f"DELETE FROM {table_name} WHERE group_name = ?",
-                    (operation.group_name,),
-                )
-            elif operation.kind == "rename_group":
-                connection.execute(
-                    f"UPDATE {table_name} SET group_name = ?, color = ? WHERE group_name = ?",
-                    (
-                        operation.replacement_group_name,
-                        operation.replacement_color,
-                        operation.group_name,
-                    ),
-                )
-        connection.commit()
-        self._sqlite_assignment_operations_applied = len(operations)
-        self._sqlite_assignment_operations_applied_snapshot = operations
-        return table_name
-
     def _invalidate_sqlite_assignment_cache(self) -> None:
-        self._sqlite_assignment_operations_applied = 0
-        self._sqlite_assignment_operations_applied_snapshot = ()
+        assignment_store = vars(self).get("_sqlite_assignment_store")
+        if assignment_store is not None:
+            assignment_store.invalidate()
 
-    def _drop_sqlite_assignment_cache_table(self) -> None:
-        if not self._is_sqlite_backed():
-            return
-        table_name = str(vars(self).get("_sqlite_assignment_table_name") or "").strip()
-        if not table_name:
+    def _cleanup_sqlite_assignment_store(self) -> None:
+        assignment_store = vars(self).get("_sqlite_assignment_store")
+        if assignment_store is None:
             return
         try:
-            with sqlite_connection_scope(self.sqlite_store.path) as connection:
-                connection.execute(f"DROP TABLE IF EXISTS {table_name}")
-                connection.commit()
-        except Exception:
-            pass
-        self._invalidate_sqlite_assignment_cache()
-
-    def _apply_sqlite_row_assignment_operation(
-        self,
-        connection,
-        table_name: str,
-        operation: _SqliteAssignmentOperation,
-    ) -> None:
-        row_ids = tuple(int(row_id) for row_id in operation.row_ids)
-        if not row_ids:
-            return
-        if operation.group_name == self.default_group:
-            for start in range(0, len(row_ids), 900):
-                chunk = row_ids[start : start + 900]
-                placeholders = ", ".join("?" for _row_id in chunk)
-                connection.execute(
-                    f"DELETE FROM {table_name} WHERE row_id IN ({placeholders})",
-                    chunk,
-                )
-            return
-        connection.executemany(
-            f"INSERT INTO {table_name} (row_id, group_name, color) VALUES (?, ?, ?) "
-            "ON CONFLICT(row_id) DO UPDATE SET "
-            "group_name = excluded.group_name, color = excluded.color",
-            ((row_id, operation.group_name, operation.color) for row_id in row_ids),
-        )
-
-    def _apply_sqlite_scope_assignment_operation(
-        self,
-        connection,
-        table_name: str,
-        operation: _SqliteAssignmentOperation,
-    ) -> None:
-        if operation.scope is None:
-            return
-        query, params = self._sqlite_scope_query(operation.scope)
-        if not query:
-            return
-        scope_table = "temp_grouping_assignment_scope"
-        connection.execute(
-            f"CREATE TEMP TABLE IF NOT EXISTS {scope_table} (row_id INTEGER PRIMARY KEY)"
-        )
-        connection.execute(f"DELETE FROM {scope_table}")
-        connection.execute(
-            f"INSERT OR IGNORE INTO {scope_table} (row_id) SELECT source_row_number FROM ({query})",
-            params,
-        )
-        if operation.group_name == self.default_group:
-            connection.execute(
-                f"DELETE FROM {table_name} WHERE row_id IN (SELECT row_id FROM {scope_table})"
-            )
-            return
-        connection.execute(
-            f"UPDATE {table_name} SET group_name = ?, color = ? "
-            f"WHERE row_id IN (SELECT row_id FROM {scope_table})",
-            (operation.group_name, operation.color),
-        )
-        connection.execute(
-            f"INSERT OR IGNORE INTO {table_name} (row_id, group_name, color) "
-            f"SELECT row_id, ?, ? FROM {scope_table}",
-            (operation.group_name, operation.color),
-        )
+            assignment_store.cleanup()
+        except TabularGroupingAssignmentCleanupError as exc:
+            logger.warning("Could not clean up tabular grouping assignments: %s", exc)
 
     def _scoped_source_dataframe(self) -> pd.DataFrame:
         if self._is_sqlite_backed():
@@ -1330,28 +1157,14 @@ class TabularAnalyticsGroupingDialog(QDialog):
     def _materialize_grouping_dataframe(self) -> pd.DataFrame:
         assignments = self._temp_assignments()
         if self._is_sqlite_backed():
-            if self._sqlite_effective_assignment_required():
-                with sqlite_connection_scope(self.sqlite_store.path) as connection:
-                    table_name = self._populate_sqlite_effective_assignment_table(connection)
-                    records = connection.execute(
-                        f"SELECT row_id, group_name, color FROM {table_name} ORDER BY row_id"
-                    ).fetchall()
-                return self._sqlite_assignment_dataframe(
-                    [int(row_id) for row_id, _group_name, _color in records],
-                    group_names=[str(group_name) for _row_id, group_name, _color in records],
-                    colors=[self._normalized_group_color(color) for _row_id, _group_name, color in records],
-                )
-            row_ids: list[int] = []
-            group_names: list[str] = []
-            colors: list[str] = []
-            for report_id, (group_name, color) in sorted(assignments.items()):
-                row_ids.append(int(report_id))
-                group_names.append(group_name)
-                colors.append(self._normalized_group_color(color))
+            records = self._sqlite_grouping_assignment_store().assignments(
+                tuple(self._sqlite_assignment_operations),
+                default_group=self.default_group,
+            )
             return self._sqlite_assignment_dataframe(
-                row_ids,
-                group_names=group_names,
-                colors=colors,
+                [record.row_id for record in records],
+                group_names=[record.group_name for record in records],
+                colors=[self._normalized_group_color(record.color) for record in records],
             )
 
         frame = self._base_grouping_dataframe().copy()
@@ -1583,57 +1396,20 @@ class TabularAnalyticsGroupingDialog(QDialog):
         )
 
     def _sqlite_group_counts(self) -> dict[str, int]:
-        total = int(self.sqlite_store.count_rows())
-        if self._sqlite_effective_assignment_required():
-            with sqlite_connection_scope(self.sqlite_store.path) as connection:
-                table_name = self._populate_sqlite_effective_assignment_table(connection)
-                records = connection.execute(
-                    f"SELECT group_name, COUNT(*) FROM {table_name} GROUP BY group_name"
-                ).fetchall()
-                assigned_custom_count = int(
-                    connection.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0] or 0
-                )
-            group_counts = {
-                str(group_name): int(row_count or 0)
-                for group_name, row_count in records
-                if str(group_name) != self.default_group
-            }
-            default_count = max(0, total - assigned_custom_count)
-            if default_count or not group_counts:
-                group_counts[self.default_group] = default_count
-            return group_counts
-        group_counts: dict[str, int] = {}
-        for row_id, (group_name, _color) in self._temp_assignments().items():
-            if group_name == self.default_group:
-                continue
-            group_counts[str(group_name)] = group_counts.get(str(group_name), 0) + 1
-        assigned_custom_count = int(sum(group_counts.values()))
-        default_count = max(0, total - assigned_custom_count)
-        if default_count or not group_counts:
-            group_counts[self.default_group] = default_count
-        return {str(group): int(count) for group, count in group_counts.items()}
+        result = self._sqlite_grouping_assignment_store().group_counts(
+            tuple(self._sqlite_assignment_operations),
+            default_group=self.default_group,
+        )
+        return result.as_dict()
 
     def _sqlite_group_member_row_ids(self, group_name: str) -> tuple[list[int], int]:
-        if not self._sqlite_effective_assignment_required():
-            row_ids = [
-                row_id
-                for row_id, (assigned_group, _color) in sorted(self._temp_assignments().items())
-                if assigned_group == group_name
-            ]
-            return row_ids[:_GROUP_MEMBER_PREVIEW_LIMIT], len(row_ids)
-        with sqlite_connection_scope(self.sqlite_store.path) as connection:
-            table_name = self._populate_sqlite_effective_assignment_table(connection)
-            records = connection.execute(
-                f"SELECT row_id FROM {table_name} WHERE group_name = ? ORDER BY row_id LIMIT ?",
-                (group_name, _GROUP_MEMBER_PREVIEW_LIMIT),
-            ).fetchall()
-            total = int(
-                connection.execute(
-                    f"SELECT COUNT(*) FROM {table_name} WHERE group_name = ?",
-                    (group_name,),
-                ).fetchone()[0] or 0
-            )
-        return [int(row[0]) for row in records], total
+        result = self._sqlite_grouping_assignment_store().group_members(
+            tuple(self._sqlite_assignment_operations),
+            default_group=self.default_group,
+            group_name=group_name,
+            limit=_GROUP_MEMBER_PREVIEW_LIMIT,
+        )
+        return list(result.row_ids), result.total
 
     def remove_last_selector_column(self) -> None:
         if not self.selector_columns:
@@ -1847,8 +1623,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
             return
         assigned_color = self._assignment_color_for_group(group_name)
         self._sqlite_assignment_operations.append(
-            _SqliteAssignmentOperation(
-                kind="scope",
+            AssignGroupingScope(
                 group_name=group_name,
                 color=assigned_color,
                 scope=self._pending_sqlite_selected_keys_scope(),
@@ -1926,8 +1701,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         if self._is_sqlite_backed():
             assigned_color = self._assignment_color_for_group(group_name)
             self._sqlite_assignment_operations.append(
-                _SqliteAssignmentOperation(
-                    kind="scope",
+                AssignGroupingScope(
                     group_name=group_name,
                     color=assigned_color,
                     scope=self._pending_sqlite_scope(),
@@ -2015,8 +1789,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 assignments[row_id] = (new_name, assigned_color)
         if self._is_sqlite_backed():
             self._sqlite_assignment_operations.append(
-                _SqliteAssignmentOperation(
-                    kind="rename_group",
+                RenameGroupingGroup(
                     group_name=selected_group,
                     replacement_group_name=new_name,
                     replacement_color=assigned_color,
@@ -2046,7 +1819,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 assignments.pop(row_id, None)
         if self._is_sqlite_backed():
             self._sqlite_assignment_operations.append(
-                _SqliteAssignmentOperation(kind="delete_group", group_name=selected_group)
+                DeleteGroupingGroup(group_name=selected_group)
             )
         self._ensure_group_color_integrity()
         self._refresh_all(preferred_group=self.default_group)
@@ -2412,17 +2185,17 @@ class TabularAnalyticsGroupingDialog(QDialog):
 
     def accept(self) -> None:
         self._detach_sqlite_selector_preview_threads()
-        self._drop_sqlite_assignment_cache_table()
+        self._cleanup_sqlite_assignment_store()
         super().accept()
 
     def reject(self) -> None:
         self._detach_sqlite_selector_preview_threads()
-        self._drop_sqlite_assignment_cache_table()
+        self._cleanup_sqlite_assignment_store()
         super().reject()
 
     def closeEvent(self, event) -> None:
         self._detach_sqlite_selector_preview_threads()
-        self._drop_sqlite_assignment_cache_table()
+        self._cleanup_sqlite_assignment_store()
         super().closeEvent(event)
 
 

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated_on": "2026-07-09",
+  "generated_on": "2026-07-11",
   "entries": [
     {
       "repository": "hexafe-plotstats",
@@ -67,110 +67,74 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "8fd785da825eb1a5fd12729697c222a4ad8327a39fc44afb4cb6c50c1a4c23c6",
+      "fingerprint": "5846227773c611bc5d1e97dd101f9bd96396c721cb7f8646504ca3309de71920",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_data_thread.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
+      "rationale": "Export snapshots use process-generated quoted temp identifiers and embed only the read-only export SELECT scope; data values stay parameterized.",
       "expires_on": "2026-10-31"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "a90ee17ee09ff566fdacdc749d4a0a9c848cfa1d0cc4b078bab4facda6180305",
+      "fingerprint": "9729b5cc13110daf2acaf231a93dfc584abf538cb043fdea32ef9685d39bb946",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_data_thread.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
+      "rationale": "Export snapshots use process-generated quoted temp identifiers and embed only the read-only export SELECT scope; data values stay parameterized.",
       "expires_on": "2026-10-31"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "0199d09e56d860086e7cb8ef4151d80d0633ce547ca2e45f0d8de4581e50cf34",
+      "fingerprint": "06318a5d9409fde97a6c14197e7adff3c9689e5fc21a976ba1803f952d10b37e",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
+      "rationale": "Export query composition wraps a read-only SELECT scope, quotes partition identifiers, allowlists the header expression, and parameterizes all values.",
       "expires_on": "2026-10-31"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "151c7d17af039436eef542a3a7f4fe645fa58463def670fd21d1942f37bd1a82",
+      "fingerprint": "1273ba4a294f6064c02bb1d7fdda9cc700ebf89dfe90c96bdc3bd9a90f7fea4d",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
+      "rationale": "Export query composition wraps a read-only SELECT scope, quotes partition identifiers, allowlists the header expression, and parameterizes all values.",
       "expires_on": "2026-10-31"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "1f29cdb89cd3fbfd84a1ded065fdaf50054033f101bf663d1845f6d0d14c0370",
+      "fingerprint": "75856f87cc7c3c4b93bdea550a2fe471897959f8aae7c1980ce1d6097fe1b201",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
+      "rationale": "Export query composition wraps a read-only SELECT scope, quotes partition identifiers, allowlists the header expression, and parameterizes all values.",
       "expires_on": "2026-10-31"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "2936210364312aa5dffbe8e41bc4bd844e61cf084112f0c88c17aada80a88d3b",
+      "fingerprint": "f3ff928f5f51c11df99a1c965bcc4f330ebd35a25ff837e0123d480524982be9",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
+      "rationale": "Export query composition wraps a read-only SELECT scope, quotes partition identifiers, allowlists the header expression, and parameterizes all values.",
       "expires_on": "2026-10-31"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "8a691ea2fd7c9096484c1625cb6ee16c3d58249e51be22dcab27ac8ad973fab6",
+      "fingerprint": "eb9b713cdccb6c60f456c3b1d279cd37d6346b17144f388cff7f29f6775ff9dd",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
+      "rationale": "Export query composition wraps a read-only SELECT scope, quotes partition identifiers, allowlists the header expression, and parameterizes all values.",
       "expires_on": "2026-10-31"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "8a9e5e5724000e284ceb67340484bdab325616816ada7d1511ddf4e83881bd54",
+      "fingerprint": "cdf1296886be8c7fe80f9d8f486dfcf97d802ecfaa1f0ed0012b430138040cc8",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "6b90971190b27e7d14904f1783e6b94f63241a82a122243ad0a6878d0c02f133",
-      "test_id": "B310",
-      "path": "src/metroliza/exporting/google_drive_export.py",
-      "owner": "Security review",
-      "rationale": "Existing URL open call is constrained to an application-owned HTTPS endpoint or validated scheme; expiry requires renewed transport review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "7bfc70e380e439aa6f9f223e5ef62adc140fad5f0b6e85267b229508424be075",
-      "test_id": "B310",
-      "path": "src/metroliza/exporting/google_drive_export.py",
-      "owner": "Security review",
-      "rationale": "Existing URL open call is constrained to an application-owned HTTPS endpoint or validated scheme; expiry requires renewed transport review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "b383f90da7acfb25f235e6c8e53357dd9699acc848eadbc3e09ea43d3ef46efa",
-      "test_id": "B310",
-      "path": "src/metroliza/exporting/google_drive_export.py",
-      "owner": "Security review",
-      "rationale": "Existing URL open call is constrained to an application-owned HTTPS endpoint or validated scheme; expiry requires renewed transport review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "fb1cb38569cfe3f14359cc475c93b445863adb44539a24dd671fd8dfe62e2943",
-      "test_id": "B310",
-      "path": "src/metroliza/exporting/google_drive_export.py",
-      "owner": "Security review",
-      "rationale": "Existing URL open call is constrained to an application-owned HTTPS endpoint or validated scheme; expiry requires renewed transport review.",
+      "rationale": "Export query composition wraps a read-only SELECT scope, quotes partition identifiers, allowlists the header expression, and parameterizes all values.",
       "expires_on": "2026-10-31"
     },
     {
@@ -322,33 +286,6 @@
       "fingerprint": "9fd7db006d849f53aa60ef308ddb7dd67f12f2cf10d50d3e33741f223186433a",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_data_repository.py",
-      "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "7703550bed9e2fd76c9bb081dcafbe3b61b7859f4cc08f938055516ebfdf0487",
-      "test_id": "B608",
-      "path": "src/metroliza/industrial/industrial_data_schema.py",
-      "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "c392f8e50c4e6ce5e29df6a3ea9948c2557b1fed2b411cb78f5294c0bf335600",
-      "test_id": "B608",
-      "path": "src/metroliza/industrial/industrial_data_schema.py",
-      "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "4a1e98a42a157e8ccc5af8252f51a7cfedc6c4d3377f4dfc7b3ce4fbc24246bc",
-      "test_id": "B608",
-      "path": "src/metroliza/industrial/industrial_data_schema.py",
       "owner": "Security review",
       "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
       "expires_on": "2026-10-31"
@@ -643,20 +580,11 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "12ae15a57ed8838c0abc708e996801fab3312901fe8b96ac374c206f247c24dc",
+      "fingerprint": "c4b0149b05f524e9b83ee114b2f6f7c6b0eac2b8e477c8e15b3a0ddd83682403",
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "7e29266a5ed87ceb79cb305c607c21782c30ebff9292d51b463b00c28696b318",
-      "test_id": "B608",
-      "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
-      "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
+      "rationale": "Dashboard queries interpolate only fixed SQL fragments or placeholder sequences derived from integer signal IDs; all values remain bound parameters.",
       "expires_on": "2026-10-31"
     },
     {
@@ -665,16 +593,43 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
+      "rationale": "Dashboard queries interpolate only fixed SQL fragments or placeholder sequences derived from integer signal IDs; all values remain bound parameters.",
       "expires_on": "2026-10-31"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "c4b0149b05f524e9b83ee114b2f6f7c6b0eac2b8e477c8e15b3a0ddd83682403",
+      "fingerprint": "7e29266a5ed87ceb79cb305c607c21782c30ebff9292d51b463b00c28696b318",
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
+      "rationale": "Dashboard queries interpolate only fixed SQL fragments or placeholder sequences derived from integer signal IDs; all values remain bound parameters.",
+      "expires_on": "2026-10-31"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "67d96443f091e58cbe7dedb7a4cb57ce02819d0b472860a84dfa26fe1182349f",
+      "test_id": "B608",
+      "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
+      "owner": "Security review",
+      "rationale": "Dashboard queries interpolate only fixed SQL fragments or placeholder sequences derived from integer signal IDs; all values remain bound parameters.",
+      "expires_on": "2026-10-31"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "e6c0ac15c8ea5ac96655001e98eb4e59239257dc8a67b6cead1f2cc81e27a9e6",
+      "test_id": "B608",
+      "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
+      "owner": "Security review",
+      "rationale": "Dashboard queries interpolate only fixed SQL fragments or placeholder sequences derived from integer signal IDs; all values remain bound parameters.",
+      "expires_on": "2026-10-31"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "3186d9c99c4d213339bb0eb285183a20221961976b13c6fb706681e9ce887301",
+      "test_id": "B608",
+      "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
+      "owner": "Security review",
+      "rationale": "Dashboard queries interpolate only fixed SQL fragments or placeholder sequences derived from integer signal IDs; all values remain bound parameters.",
       "expires_on": "2026-10-31"
     },
     {
@@ -787,6 +742,24 @@
     },
     {
       "repository": "metroliza",
+      "fingerprint": "ec408df3d8d1281ab9a578ab5938828db73fe0b0eeb5e36204539ff260a9271c",
+      "test_id": "B608",
+      "path": "src/metroliza/reports/report_edit_service.py",
+      "owner": "Security review",
+      "rationale": "Report-edit identifiers are selected from fixed mappings or escaped with quote_identifier, and edited values and record IDs are bound parameters.",
+      "expires_on": "2026-10-31"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "6c8521186667f3f4e471ba15e65cfeba8405cacb63ec8ab90cd7f94123e2fa93",
+      "test_id": "B608",
+      "path": "src/metroliza/reports/report_edit_service.py",
+      "owner": "Security review",
+      "rationale": "Report-edit identifiers are selected from fixed mappings or escaped with quote_identifier, and edited values and record IDs are bound parameters.",
+      "expires_on": "2026-10-31"
+    },
+    {
+      "repository": "metroliza",
       "fingerprint": "02ba488282120429f5735fe097f957b8fbdb0457b0de661b508b998577205767",
       "test_id": "B608",
       "path": "src/metroliza/reports/report_query_service.py",
@@ -895,20 +868,29 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "2efa51484e0c7dd3198984dd17f838e5fb1b30625ecd12ff49c8044e93144ab2",
+      "fingerprint": "5b95bab1955edb2172f5ee8d67586a9c3092a9aea453a36d0a87a8d7239a2653",
       "test_id": "B608",
-      "path": "src/metroliza/reports/report_schema.py",
+      "path": "src/metroliza/storage/industrial_schema.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
+      "rationale": "Timestamp and schema migrations iterate module-owned table and column constants, quote identifiers, and bind migrated values; sync-run columns are fixed.",
       "expires_on": "2026-10-31"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "c43bea87626dff1e5bdf542ffaa7a2986949a09df5a3c85d201a7458aed1193e",
+      "fingerprint": "b6ae1ef83b116b658bd24f7b4a139e4796ec9d791bbc597012984c155f26c973",
       "test_id": "B608",
-      "path": "src/metroliza/reports/report_schema.py",
+      "path": "src/metroliza/storage/industrial_schema.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
+      "rationale": "Timestamp and schema migrations iterate module-owned table and column constants, quote identifiers, and bind migrated values; sync-run columns are fixed.",
+      "expires_on": "2026-10-31"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "7506693aebd73532503ab5e9bc535e71d26d54ffdef317693b3f84c163e81bf3",
+      "test_id": "B608",
+      "path": "src/metroliza/storage/industrial_schema.py",
+      "owner": "Security review",
+      "rationale": "Timestamp and schema migrations iterate module-owned table and column constants, quote identifiers, and bind migrated values; sync-run columns are fixed.",
       "expires_on": "2026-10-31"
     },
     {
@@ -927,6 +909,150 @@
       "path": "src/metroliza/tabular/data_grouping_service.py",
       "owner": "Security review",
       "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
+      "expires_on": "2026-10-31"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "41b4109cdec978bf928dd2fc2da295917305604aba1d1227d32e6817b43ce842",
+      "test_id": "B608",
+      "path": "src/metroliza/tabular/grouping_assignment_store.py",
+      "owner": "Security review",
+      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
+      "expires_on": "2026-10-31"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "e3d5b65345824d7775196e42521d6977cb841308de6c9076595d807e0a6cb5d0",
+      "test_id": "B608",
+      "path": "src/metroliza/tabular/grouping_assignment_store.py",
+      "owner": "Security review",
+      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
+      "expires_on": "2026-10-31"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "7c2be517f43b1d9de3b073ea8832e8bc136d0862fdb683256dd7e6c9c2be700b",
+      "test_id": "B608",
+      "path": "src/metroliza/tabular/grouping_assignment_store.py",
+      "owner": "Security review",
+      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
+      "expires_on": "2026-10-31"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "778268c9f0daae7fd018abdea65ba37b4b8e144e78336929f42f20a2e1f54a03",
+      "test_id": "B608",
+      "path": "src/metroliza/tabular/grouping_assignment_store.py",
+      "owner": "Security review",
+      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
+      "expires_on": "2026-10-31"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "11ab197ffda3203b908e1ec9a49e8fae2da4cb8a18acc927b160244d6e446dd1",
+      "test_id": "B608",
+      "path": "src/metroliza/tabular/grouping_assignment_store.py",
+      "owner": "Security review",
+      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
+      "expires_on": "2026-10-31"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "08da8280f1dc5b69d7959d2163bb046e4b47d187ffc67d83651c5127b3e67715",
+      "test_id": "B608",
+      "path": "src/metroliza/tabular/grouping_assignment_store.py",
+      "owner": "Security review",
+      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
+      "expires_on": "2026-10-31"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "5b187990fc902a6071cb1d509559f225d171d636de8c93f8561f918c87f2248b",
+      "test_id": "B608",
+      "path": "src/metroliza/tabular/grouping_assignment_store.py",
+      "owner": "Security review",
+      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
+      "expires_on": "2026-10-31"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "9ba845517ea26ec70370df44bb8426ebb3a08d5e4822cb0bbdec67e3f9a26918",
+      "test_id": "B608",
+      "path": "src/metroliza/tabular/grouping_assignment_store.py",
+      "owner": "Security review",
+      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
+      "expires_on": "2026-10-31"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "9639d279eba1df2bd9868013b04a0a0d724452bf49cd70558c7bee8d6df5ac52",
+      "test_id": "B608",
+      "path": "src/metroliza/tabular/grouping_assignment_store.py",
+      "owner": "Security review",
+      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
+      "expires_on": "2026-10-31"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "c3cd19e6cd31f385361cc784d3c2b9c81127c06e445d7512f04e472e87d8c1c7",
+      "test_id": "B608",
+      "path": "src/metroliza/tabular/grouping_assignment_store.py",
+      "owner": "Security review",
+      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
+      "expires_on": "2026-10-31"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "ab6f1ee0e02d94d1f4ce917de4401105a0ede32f248558fb19bd8370c26125d2",
+      "test_id": "B608",
+      "path": "src/metroliza/tabular/grouping_assignment_store.py",
+      "owner": "Security review",
+      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
+      "expires_on": "2026-10-31"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "98b678cb7a7b7c8691a3b8928f202ac5c71c0d5e1f66baacca9b03f148063a54",
+      "test_id": "B608",
+      "path": "src/metroliza/tabular/grouping_assignment_store.py",
+      "owner": "Security review",
+      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
+      "expires_on": "2026-10-31"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "b217c3d35446a48b9dec2e7402de30fabda98cc078a77a49ac8402d2d85a8d92",
+      "test_id": "B608",
+      "path": "src/metroliza/tabular/grouping_assignment_store.py",
+      "owner": "Security review",
+      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
+      "expires_on": "2026-10-31"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "f82d97e9489c6a75ae9af947b7f65aa15fc4216454af56205f770c339ac78605",
+      "test_id": "B608",
+      "path": "src/metroliza/tabular/grouping_assignment_store.py",
+      "owner": "Security review",
+      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
+      "expires_on": "2026-10-31"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "4658e23deacd04dd956cf4f31ecb10bd4517c2cae67f9ede138bf82da2395655",
+      "test_id": "B608",
+      "path": "src/metroliza/tabular/grouping_assignment_store.py",
+      "owner": "Security review",
+      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
+      "expires_on": "2026-10-31"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "95680e0f960c1732eab7f1fd74bc76076ade1eaf02876491867729a1aa70e557",
+      "test_id": "B608",
+      "path": "src/metroliza/tabular/grouping_assignment_store.py",
+      "owner": "Security review",
+      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
       "expires_on": "2026-10-31"
     },
     {
@@ -1210,227 +1336,56 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "0bda8af81caba6828a2fa01257b58a376d33632b8f194871aba16be56d7fda5e",
+      "fingerprint": "3432d532d92dcae2a5f18b8325d2af8bdd0b629efe6749ce93e10ed99fb4d64d",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
+      "rationale": "Modify Database queries compose only fixed source names or safely quoted identifiers from class-owned column specifications; values are not interpolated.",
       "expires_on": "2026-10-31"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "47b8f316fcf8ed96f3c85054dede7bdfe55dd025798d33186e859c71fbf5dbd3",
+      "fingerprint": "7e6a8c2d840bff0f6989f59cce99fbdfbecf5c399a3f0b4686e06486ccf2f7be",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
+      "rationale": "Modify Database queries compose only fixed source names or safely quoted identifiers from class-owned column specifications; values are not interpolated.",
       "expires_on": "2026-10-31"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "586a812737f0783a8e8e51ec16cd559862ecb042539cda01cdd8951c1a878afc",
+      "fingerprint": "f9dbeb0b65636dd924797112e53f2cf325d816e97b338bb48b9e98c1d74d3bfd",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
+      "rationale": "Modify Database queries compose only fixed source names or safely quoted identifiers from class-owned column specifications; values are not interpolated.",
       "expires_on": "2026-10-31"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "6f0d568c1048748b06bcda95b519933bfc8a75ee0e62404f4366c4365b4c77eb",
+      "fingerprint": "98f5a0720fa298e8dac90c5a377e1995058abf65e0bc2df9d6071ee8e6fad0ec",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
+      "rationale": "Modify Database queries compose only fixed source names or safely quoted identifiers from class-owned column specifications; values are not interpolated.",
       "expires_on": "2026-10-31"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "8efa601d36cd2f859db990b0e26263ad65eebdea65b63e0c31cea19f484cd734",
+      "fingerprint": "71f05305750c785576472f604d0bb518f05e09fc8386ea4d6b595f6032fa958c",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
+      "rationale": "Modify Database queries compose only fixed source names or safely quoted identifiers from class-owned column specifications; values are not interpolated.",
       "expires_on": "2026-10-31"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "9cb91eec7cf4694a55994724475387dba69d3021481806638a5e23245e94cba8",
+      "fingerprint": "7d9607c1b31f1a006e55fd795d0d67808d2b16d1884fe0f22cd73fa3d7308e5e",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "be782fbd12cf958a6ef9e1d2aa91ecfba652eaea251461f8cf01c82f3c3bf55b",
-      "test_id": "B608",
-      "path": "src/metroliza/ui/modify_db.py",
-      "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "de153ee78b95fd384e07b0db9b8e08ebf185d467248a9c6f0a4a438b86147516",
-      "test_id": "B608",
-      "path": "src/metroliza/ui/modify_db.py",
-      "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "0a136fc7fece7188ad952db0a7c0d92327be397544a105c6abaff8c397a2043f",
-      "test_id": "B608",
-      "path": "src/metroliza/ui/tabular_analytics_grouping_dialog.py",
-      "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "0e924501b3427bf84ba551239ac67d3e90d6589c9a14fa34b2704b558bb6ea0c",
-      "test_id": "B608",
-      "path": "src/metroliza/ui/tabular_analytics_grouping_dialog.py",
-      "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "28bde8da9f409f115e8d5a965150a4d244b5b5575be3f050b662de56d97e9b8b",
-      "test_id": "B608",
-      "path": "src/metroliza/ui/tabular_analytics_grouping_dialog.py",
-      "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "312a8a5c3047c729b1aa1dc5d5274291066fe0e2751abb47c22b11b24d65df31",
-      "test_id": "B608",
-      "path": "src/metroliza/ui/tabular_analytics_grouping_dialog.py",
-      "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "3769eeefd8ca73601e5e2dd6572fb529d33303846a3bc7c890be281cae9caa55",
-      "test_id": "B608",
-      "path": "src/metroliza/ui/tabular_analytics_grouping_dialog.py",
-      "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "3800ed18294c9d1b756153852f99c241f8b16349110925bbd5793a565cdebf18",
-      "test_id": "B608",
-      "path": "src/metroliza/ui/tabular_analytics_grouping_dialog.py",
-      "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "4930eb2a59596e2e57fc7f9c2238457149c24e7ff67c6e5d5a323e47e27085a0",
-      "test_id": "B608",
-      "path": "src/metroliza/ui/tabular_analytics_grouping_dialog.py",
-      "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "4942af1ba555f75469db6cd6ded96df0534b233718c5e944793463d2582c8c48",
-      "test_id": "B608",
-      "path": "src/metroliza/ui/tabular_analytics_grouping_dialog.py",
-      "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "5966cdf28b95ec8a686c71624dc6ab765263daf7fa2734b7414e96d1b727775d",
-      "test_id": "B608",
-      "path": "src/metroliza/ui/tabular_analytics_grouping_dialog.py",
-      "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "7262c52ee857809fee71afe1be7bde6efe21e097d9eb1cf0aa8d83b4cf877697",
-      "test_id": "B608",
-      "path": "src/metroliza/ui/tabular_analytics_grouping_dialog.py",
-      "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "76456fdf1c52b568e084b305cd1c5b4f32506877f13402d7f8ebe5bf4ece3b18",
-      "test_id": "B608",
-      "path": "src/metroliza/ui/tabular_analytics_grouping_dialog.py",
-      "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "877a16125070463aa0229e3ef4fd104d0cd4ced29c8d4f43ada4d1c22abe2fcf",
-      "test_id": "B608",
-      "path": "src/metroliza/ui/tabular_analytics_grouping_dialog.py",
-      "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "bc2cb445e937dba51f5b8c23236973321b36966c66619682d136a44f6802005c",
-      "test_id": "B608",
-      "path": "src/metroliza/ui/tabular_analytics_grouping_dialog.py",
-      "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "c2a87cd9bf417a9a00973cdd6cb68723558403de42b89c0d14306d759fb0c57f",
-      "test_id": "B608",
-      "path": "src/metroliza/ui/tabular_analytics_grouping_dialog.py",
-      "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "d4e9213197beae9ee89025cf3e0ed2b8784191b6bb343b6042cf1dafe16c1a67",
-      "test_id": "B608",
-      "path": "src/metroliza/ui/tabular_analytics_grouping_dialog.py",
-      "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "e66385b451a7635b17dbcb6e62bf6f5f155df7418f469afaf34d6d0595d60f62",
-      "test_id": "B608",
-      "path": "src/metroliza/ui/tabular_analytics_grouping_dialog.py",
-      "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "ecdfa01fad2cb74c9f5f49ef5a109e22a913bd94ba5eb94eef9cc217718160cc",
-      "test_id": "B608",
-      "path": "src/metroliza/ui/tabular_analytics_grouping_dialog.py",
-      "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
+      "rationale": "Modify Database queries compose only fixed source names or safely quoted identifiers from class-owned column specifications; values are not interpolated.",
       "expires_on": "2026-10-31"
     }
   ]

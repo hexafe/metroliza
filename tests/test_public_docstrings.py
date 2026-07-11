@@ -10,7 +10,7 @@ DOCSTRING_GUARD_FILES = [
     "src/metroliza/exporting/export_backends.py",
     "src/metroliza/parsing/cmm_report_parser.py",
     "src/metroliza/ui/data_grouping.py",
-    "src/metroliza/shared/bom_manager.py",
+    "src/metroliza/ui/bom_manager.py",
 ]
 
 

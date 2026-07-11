@@ -66,6 +66,7 @@ class BaseReportParser(ABC):
         self.df = ReportRows()
         self.database = database
         self.connection = connection
+        self.source_inspection_context = None
 
     @property
     def source_path(self):
@@ -382,11 +383,7 @@ class BaseReportParser(ABC):
             source_path=self.source_path,
             database=self.database,
             connection=self.connection,
-            source_sha256=(
-                self.source_inspection_context.verified_sha256()
-                if getattr(self, "source_inspection_context", None) is not None
-                else None
-            ),
+            source_inspection=self.source_inspection_context,
         )
 
     def open_database_and_check_filename(self):

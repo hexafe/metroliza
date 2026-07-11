@@ -7,8 +7,8 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Literal, NamedTuple
 
+from metroliza.cmm.block_parser import parse_raw_lines_to_blocks
 from metroliza.reports.cmm_schema import ensure_cmm_report_schema
-from metroliza.parsing.cmm_parsing import parse_raw_lines_to_blocks
 from metroliza.reports.db import run_transaction_with_retry
 from metroliza.reports.report_repository import ReportRepository, compute_sha256
 from metroliza.shared.env_utils import env_choice
@@ -157,6 +157,7 @@ MEASUREMENT_ROW_SCHEMA = (
     "date",
     "sample_number",
 )
+MEASUREMENT_VALUE_FIELD_COUNT = 8
 
 
 class ParseBackendResult(NamedTuple):
@@ -271,6 +272,14 @@ def _normalize_header(block_header: Any) -> str:
     return ", ".join(value for value in parts if value).replace('"', '')
 
 
+def _normalize_measurement_values(row: Any) -> tuple[Any, ...]:
+    """Project one parser row onto the fixed eight-value persistence schema."""
+
+    values = tuple(row or ())[:MEASUREMENT_VALUE_FIELD_COUNT]
+    missing = MEASUREMENT_VALUE_FIELD_COUNT - len(values)
+    return values + (("",) * missing)
+
+
 def normalize_measurement_rows_python(
     blocks: list[list[Any]],
     *,
@@ -286,26 +295,7 @@ def normalize_measurement_rows_python(
     for block in blocks:
         header = _normalize_header(block[0]) if len(block) > 0 else ""
         for row in block[1] if len(block) > 1 else ():
-            if not row:
-                normalized = ("", "", "", "", "", "", "", "")
-            else:
-                row_len = len(row)
-                if row_len >= 8:
-                    normalized = (row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7])
-                elif row_len == 7:
-                    normalized = (row[0], row[1], row[2], row[3], row[4], row[5], row[6], "")
-                elif row_len == 6:
-                    normalized = (row[0], row[1], row[2], row[3], row[4], row[5], "", "")
-                elif row_len == 5:
-                    normalized = (row[0], row[1], row[2], row[3], row[4], "", "", "")
-                elif row_len == 4:
-                    normalized = (row[0], row[1], row[2], row[3], "", "", "", "")
-                elif row_len == 3:
-                    normalized = (row[0], row[1], row[2], "", "", "", "", "")
-                elif row_len == 2:
-                    normalized = (row[0], row[1], "", "", "", "", "", "")
-                else:
-                    normalized = (row[0], "", "", "", "", "", "", "")
+            normalized = _normalize_measurement_values(row)
             rows.append(
                 (
                     *normalized,

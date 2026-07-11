@@ -1,20 +1,25 @@
 from __future__ import annotations
 
+import importlib.util
+
 import pytest
 
-try:
-    from PyQt6.QtWidgets import QApplication
-except Exception as exc:  # pragma: no cover - depends on optional Qt runtime.
+if importlib.util.find_spec("PyQt6") is None:  # pragma: no cover - optional local test runtime.
     QApplication = None
-    PYQT_IMPORT_ERROR = exc
+    QBuffer = None
+    QColor = None
+    QImage = None
+    QIODevice = None
+    _DIALOG_MODULE = None
+    PYQT_IMPORT_ERROR = ModuleNotFoundError("PyQt6 is not installed")
+    DIALOG_IMPORT_ERROR = None
 else:
-    PYQT_IMPORT_ERROR = None
+    from PyQt6.QtCore import QBuffer, QIODevice
+    from PyQt6.QtGui import QColor, QImage
+    from PyQt6.QtWidgets import QApplication
 
-try:
     import metroliza.ui.dashboard_visual_options_dialog as _DIALOG_MODULE  # noqa: F401
-except Exception as exc:  # pragma: no cover - depends on optional Qt runtime.
-    DIALOG_IMPORT_ERROR = exc
-else:
+    PYQT_IMPORT_ERROR = None
     DIALOG_IMPORT_ERROR = None
 
 
@@ -53,10 +58,6 @@ def _stub_preview_builders(monkeypatch, dialog_module, captured_settings: list[d
 
 def test_dashboard_visual_dialog_preview_uses_current_palette_color(monkeypatch) -> None:
     _qapp()
-    try:
-        from PyQt6.QtCore import Qt  # noqa: F401
-    except Exception as exc:
-        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
     import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     captured_palette: list[str] = []
@@ -91,10 +92,6 @@ def test_dashboard_visual_dialog_preview_uses_current_palette_color(monkeypatch)
 
 def test_dashboard_visual_dialog_preserves_per_reference_widths_when_unchanged(monkeypatch) -> None:
     _qapp()
-    try:
-        from PyQt6.QtCore import Qt  # noqa: F401
-    except Exception as exc:
-        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
     import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
@@ -128,10 +125,6 @@ def test_dashboard_visual_dialog_preserves_per_reference_widths_when_unchanged(m
 
 def test_dashboard_visual_dialog_uses_real_preview_group_names(monkeypatch) -> None:
     _qapp()
-    try:
-        from PyQt6.QtCore import Qt  # noqa: F401
-    except Exception as exc:
-        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
     import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
@@ -157,10 +150,6 @@ def test_dashboard_visual_dialog_uses_real_preview_group_names(monkeypatch) -> N
 
 def test_dashboard_visual_dialog_recipe_updates_controls_and_preview_swatches(monkeypatch) -> None:
     _qapp()
-    try:
-        from PyQt6.QtCore import Qt  # noqa: F401
-    except Exception as exc:
-        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
     import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
@@ -214,10 +203,6 @@ def test_dashboard_visual_dialog_recipe_updates_controls_and_preview_swatches(mo
 
 def test_dashboard_visual_dialog_recipe_refreshes_selected_element_controls(monkeypatch) -> None:
     _qapp()
-    try:
-        from PyQt6.QtCore import Qt  # noqa: F401
-    except Exception as exc:
-        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
     import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
@@ -263,10 +248,6 @@ def test_dashboard_visual_dialog_recipe_refreshes_selected_element_controls(monk
 
 def test_dashboard_visual_dialog_manual_edit_switches_recipe_to_custom(monkeypatch) -> None:
     _qapp()
-    try:
-        from PyQt6.QtCore import Qt  # noqa: F401
-    except Exception as exc:
-        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
     import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
@@ -293,10 +274,6 @@ def test_dashboard_visual_dialog_manual_edit_switches_recipe_to_custom(monkeypat
 
 def test_dashboard_visual_dialog_group_color_edit_updates_palette_and_chips(monkeypatch) -> None:
     _qapp()
-    try:
-        from PyQt6.QtCore import Qt  # noqa: F401
-    except Exception as exc:
-        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
     import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
@@ -345,10 +322,6 @@ def test_dashboard_visual_dialog_population_color_edit_updates_baseline_not_pale
     monkeypatch,
 ) -> None:
     _qapp()
-    try:
-        from PyQt6.QtCore import Qt  # noqa: F401
-    except Exception as exc:
-        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
     import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
@@ -390,10 +363,6 @@ def test_dashboard_visual_dialog_group_edit_keeps_population_first_in_histogram(
     monkeypatch,
 ) -> None:
     _qapp()
-    try:
-        from PyQt6.QtCore import Qt  # noqa: F401
-    except Exception as exc:
-        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
     from metroliza.charts import dashboard_visual_options as visual_options
     import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
@@ -439,10 +408,6 @@ def test_dashboard_visual_dialog_generic_opacity_controls_are_removed(
     monkeypatch,
 ) -> None:
     _qapp()
-    try:
-        from PyQt6.QtCore import Qt  # noqa: F401
-    except Exception as exc:
-        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
     import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
@@ -467,10 +432,6 @@ def test_dashboard_visual_dialog_selection_inspector_sits_below_preview_and_star
     monkeypatch,
 ) -> None:
     _qapp()
-    try:
-        from PyQt6.QtCore import Qt  # noqa: F401
-    except Exception as exc:
-        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
     import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
@@ -506,10 +467,6 @@ def test_dashboard_visual_dialog_selection_opacity_numeric_syncs_and_writes_over
     monkeypatch,
 ) -> None:
     _qapp()
-    try:
-        from PyQt6.QtCore import Qt  # noqa: F401
-    except Exception as exc:
-        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
     import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
@@ -545,10 +502,6 @@ def test_dashboard_visual_dialog_selection_opacity_numeric_syncs_and_writes_over
 
 def test_dashboard_visual_dialog_selection_accessibility_and_tab_order(monkeypatch) -> None:
     _qapp()
-    try:
-        from PyQt6.QtCore import Qt  # noqa: F401
-    except Exception as exc:
-        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
     import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
@@ -567,11 +520,6 @@ def test_dashboard_visual_dialog_selection_accessibility_and_tab_order(monkeypat
 
 def test_dashboard_visual_dialog_static_preview_rescales_existing_pixmap(monkeypatch) -> None:
     _qapp()
-    try:
-        from PyQt6.QtCore import QBuffer, QIODevice
-        from PyQt6.QtGui import QImage
-    except Exception as exc:
-        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
     import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     image = QImage(320, 160, QImage.Format.Format_RGB32)
@@ -609,10 +557,6 @@ def test_dashboard_visual_dialog_static_preview_rescales_existing_pixmap(monkeyp
 
 def test_dashboard_visual_dialog_selected_controls_are_role_aware(monkeypatch) -> None:
     _qapp()
-    try:
-        from PyQt6.QtCore import Qt  # noqa: F401
-    except Exception as exc:
-        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
     import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
@@ -682,10 +626,6 @@ def test_dashboard_visual_dialog_selected_series_override_only_writes_supported_
     monkeypatch,
 ) -> None:
     _qapp()
-    try:
-        from PyQt6.QtCore import Qt  # noqa: F401
-    except Exception as exc:
-        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
     import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
@@ -727,10 +667,6 @@ def test_dashboard_visual_dialog_selected_marker_controls_write_series_outline(
     monkeypatch,
 ) -> None:
     _qapp()
-    try:
-        from PyQt6.QtCore import Qt  # noqa: F401
-    except Exception as exc:
-        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
     import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
@@ -808,10 +744,6 @@ def test_dashboard_visual_dialog_bridge_emits_normalized_payload() -> None:
 
 def test_dashboard_visual_dialog_accept_persists_when_enabled(monkeypatch) -> None:
     _qapp()
-    try:
-        from PyQt6.QtCore import Qt  # noqa: F401
-    except Exception as exc:
-        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
     import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     saved_settings: list[dict] = []
@@ -837,10 +769,6 @@ def test_dashboard_visual_dialog_accept_persists_when_enabled(monkeypatch) -> No
 
 def test_dashboard_visual_dialog_theme_select_save_update_and_delete(monkeypatch) -> None:
     _qapp()
-    try:
-        from PyQt6.QtCore import Qt  # noqa: F401
-    except Exception as exc:
-        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
     import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     library = {
@@ -907,10 +835,6 @@ def test_dashboard_visual_dialog_target_extraction_handles_meta_fallbacks_and_du
     monkeypatch,
 ) -> None:
     _qapp()
-    try:
-        from PyQt6.QtCore import Qt  # noqa: F401
-    except Exception as exc:
-        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
     import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
@@ -970,10 +894,6 @@ def test_dashboard_visual_dialog_target_extraction_handles_meta_fallbacks_and_du
 
 def test_dashboard_visual_dialog_preview_payload_and_chip_selection_paths(monkeypatch) -> None:
     _qapp()
-    try:
-        from PyQt6.QtCore import Qt  # noqa: F401
-    except Exception as exc:
-        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
     import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
@@ -1042,10 +962,6 @@ def test_dashboard_visual_dialog_preview_payload_and_chip_selection_paths(monkey
 
 def test_dashboard_visual_dialog_reference_and_stat_apply_reset_flows(monkeypatch) -> None:
     _qapp()
-    try:
-        from PyQt6.QtCore import Qt  # noqa: F401
-    except Exception as exc:
-        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
     import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)
@@ -1123,10 +1039,6 @@ def test_dashboard_visual_dialog_reference_and_stat_apply_reset_flows(monkeypatc
 
 def test_dashboard_visual_dialog_choose_color_and_reset_defaults(monkeypatch) -> None:
     _qapp()
-    try:
-        from PyQt6.QtGui import QColor
-    except Exception as exc:
-        pytest.skip(f"Full PyQt6 widgets are unavailable in this test order: {exc}")
     import metroliza.ui.dashboard_visual_options_dialog as dialog_module
 
     _stub_preview_builders(monkeypatch, dialog_module)

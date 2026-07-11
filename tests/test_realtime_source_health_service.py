@@ -25,7 +25,7 @@ def _config(profile_id: int) -> RealtimePollConfig:
     )
 
 
-def test_scheduled_source_health_advances_without_new_samples_and_drives_dashboard(tmp_path):
+def test_scheduled_source_health_advances_and_rejects_stale_re_evaluation(tmp_path):
     db_path = str(tmp_path / "source-health.db")
     profile = IndustrialDataRepository(db_path).upsert_source_profile(
         profile_key="line-a",
@@ -68,6 +68,7 @@ def test_scheduled_source_health_advances_without_new_samples_and_drives_dashboa
 
     first = service.evaluate(_config(profile.id), now="2026-07-09T10:20:00Z")
     second = service.evaluate(_config(profile.id), now="2026-07-09T10:30:00Z")
+    stale = service.evaluate(_config(profile.id), now="2026-07-09T10:25:00Z")
     persisted = service.get_snapshot(
         source_profile_id=profile.id,
         stream_key="cycle_time",
@@ -79,6 +80,7 @@ def test_scheduled_source_health_advances_without_new_samples_and_drives_dashboa
 
     assert first.lag_seconds == 1_200.0
     assert second.lag_seconds == 1_800.0
+    assert stale.lag_seconds == 1_500.0
     assert persisted == second
     assert len(anomaly_events) == 1
     assert dashboard_health.lag_seconds == 1_800.0

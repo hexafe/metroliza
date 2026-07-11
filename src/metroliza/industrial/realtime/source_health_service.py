@@ -263,6 +263,7 @@ class RealtimeSourceHealthService:
                     lag_seconds = excluded.lag_seconds,
                     status = excluded.status,
                     details_json = excluded.details_json
+                WHERE excluded.evaluated_at >= industrial_realtime_source_health.evaluated_at
                 """,
                 (
                     snapshot.source_profile_id,

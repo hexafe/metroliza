@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -727,6 +728,47 @@ def test_google_conversion_smoke_creates_minimal_workbook(tmp_path: Path) -> Non
 
     assert sheet_names == ["MEASUREMENTS", "REF_A"]
     assert workbook_path.stat().st_size > 0
+
+
+def test_google_conversion_smoke_validates_expected_sheet_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    credentials = tmp_path / "credentials.json"
+    token = tmp_path / "token.json"
+    credentials.write_text("{}", encoding="utf-8")
+    token.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv(release_only_google_conversion_smoke.SMOKE_OPT_IN_ENV, "1")
+    monkeypatch.setenv(
+        release_only_google_conversion_smoke.SMOKE_CREDENTIALS_PATH_ENV,
+        str(credentials),
+    )
+    monkeypatch.setenv(release_only_google_conversion_smoke.SMOKE_TOKEN_PATH_ENV, str(token))
+    monkeypatch.setattr(
+        release_only_google_conversion_smoke,
+        "validate_example_credentials_template_hygiene",
+        lambda: None,
+    )
+    captured = {}
+
+    def fake_upload(workbook_path, **kwargs):
+        captured["workbook_path"] = workbook_path
+        captured.update(kwargs)
+        return SimpleNamespace(
+            file_id="sheet_123-ABC",
+            web_url="https://docs.google.com/spreadsheets/d/sheet_123-ABC/edit",
+            warnings=(),
+        )
+
+    monkeypatch.setattr(
+        release_only_google_conversion_smoke,
+        "upload_and_convert_workbook",
+        fake_upload,
+    )
+
+    release_only_google_conversion_smoke.run_google_conversion_smoke_check()
+
+    assert captured["expected_sheet_names"] == ["MEASUREMENTS", "REF_A"]
+    assert not Path(captured["workbook_path"]).exists()
 
 
 def test_windows_ocr_runtime_diagnostics_main_writes_payload(

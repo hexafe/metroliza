@@ -21,13 +21,13 @@ This policy keeps performance wins by default while preserving a safe rollback p
 ## Build locally (Rust + maturin)
 
 ```bash
-python -m maturin develop --manifest-path src/metroliza/native/cmm_parser/Cargo.toml
+python -m maturin develop --locked --manifest-path src/metroliza/native/cmm_parser/Cargo.toml
 ```
 
 ## Build wheels
 
 ```bash
-python -m maturin build --manifest-path src/metroliza/native/cmm_parser/Cargo.toml --release
+python -m maturin build --locked --manifest-path src/metroliza/native/cmm_parser/Cargo.toml --release
 ```
 
 ## Parity strategy

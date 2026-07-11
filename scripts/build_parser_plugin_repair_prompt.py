@@ -23,7 +23,7 @@ def _load_runtime_modules():
     """Load runtime modules with headless fallback for optional GUI deps."""
 
     try:  # pragma: no cover - runtime environment dependent
-        from metroliza.reports import report_parser_factory
+        from metroliza.parsing import report_parser_factory
     except Exception:
         custom_logger_stub = types.ModuleType("metroliza.shared.custom_logger")
         fitz_stub = types.ModuleType("fitz")
@@ -37,7 +37,7 @@ def _load_runtime_modules():
         fitz_stub.open = lambda *_args, **_kwargs: None
         sys.modules.setdefault("metroliza.shared.custom_logger", custom_logger_stub)
         sys.modules.setdefault("fitz", fitz_stub)
-        from metroliza.reports import report_parser_factory
+        from metroliza.parsing import report_parser_factory
 
     from metroliza.parsing.parser_plugin_repair_loop import build_repair_context, write_repair_prompt
     from metroliza.parsing.parser_plugin_validation import validate_plugin_contract

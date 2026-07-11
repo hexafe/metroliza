@@ -179,7 +179,13 @@ def build_pyinstaller_collection(root_dir: Path) -> dict[str, list]:
             "metroliza/resources/html_dashboard_assets",
         )
     ]
-    third_party_notice_datas = [(str(root_dir / "THIRD_PARTY_NOTICES.md"), ".")]
+    third_party_notice_datas = [
+        (str(root_dir / "THIRD_PARTY_NOTICES.md"), "."),
+        (
+            str(root_dir / "docs" / "release_checks" / "third_party_inventory_260711.json"),
+            ".",
+        ),
+    ]
 
     return {
         "binaries": (
@@ -214,7 +220,22 @@ def build_pyinstaller_collection(root_dir: Path) -> dict[str, list]:
             + collect_optional_distribution_metadata("opencv-python")
             + collect_optional_distribution_metadata("numpy")
             + collect_optional_distribution_metadata("hexafe-plotstats")
+            + collect_optional_distribution_metadata("hexafe-groupstats")
             + collect_optional_distribution_metadata("oznak")
+            + collect_optional_distribution_metadata("PyQt6")
+            + collect_optional_distribution_metadata("PyQt6-Qt6")
+            + collect_optional_distribution_metadata("PyMuPDF")
+            + collect_optional_distribution_metadata("cryptography")
+            + collect_optional_distribution_metadata("google-auth")
+            + collect_optional_distribution_metadata("google-auth-oauthlib")
+            + collect_optional_distribution_metadata("matplotlib")
+            + collect_optional_distribution_metadata("Pillow")
+            + collect_optional_distribution_metadata("scipy")
+            + collect_optional_distribution_metadata("seaborn")
+            + collect_optional_distribution_metadata("PyYAML")
+            + collect_optional_distribution_metadata("XlsxWriter")
+            + collect_optional_distribution_metadata("pandas")
+            + collect_optional_distribution_metadata("SQLAlchemy")
             + collect_optional_vendored_model_data(root_dir)
         ),
         "hiddenimports": [
@@ -235,9 +256,11 @@ def build_pyinstaller_collection(root_dir: Path) -> dict[str, list]:
             "numpy",
             "metroliza",
             "metroliza.parsing.cmm_report_parser",
+            "metroliza.parsing.report_parser_factory",
             "metroliza.parsing.header_ocr_backend",
             "metroliza.parsing.header_ocr_geometry",
             "metroliza.parsing.header_ocr_corrections",
+            "metroliza.reports.header_ocr_corrections",
             "metroliza.charts.native_chart_compositor",
             "modules.cmm_report_parser",
             "modules.header_ocr_backend",

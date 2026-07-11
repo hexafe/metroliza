@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import shutil
 from typing import Any, Iterable
+from uuid import uuid4
 
 import yaml
 
@@ -35,6 +36,8 @@ from metroliza.parsing.source_inspection import SourceInspectionContext
 from metroliza.parsing.parser_plugin_paths import (
     default_external_plugin_dir,
     disabled_plugin_ids,
+    invalidate_parser_plugin_runtime,
+    parser_profile_store_lock,
 )
 from metroliza.parsing.parser_plugin_validation import (
     ValidationReport,
@@ -1060,6 +1063,68 @@ def _approval_payload(
     }
 
 
+def _new_profile_backup_dir(
+    plugin_id: str,
+    *,
+    home: Path | None,
+    label: str = "",
+) -> Path:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    label_segment = f"-{label}" if label else ""
+    return profile_backups_dir(home=home) / (
+        f"{plugin_id}{label_segment}-{stamp}-{uuid4().hex[:8]}"
+    )
+
+
+def _staged_profile_dir(plugin_id: str, *, home: Path | None) -> Path:
+    staging_root = approved_profiles_dir(home=home) / ".staging"
+    staging_root.mkdir(parents=True, exist_ok=True)
+    return staging_root / f"{plugin_id}-{uuid4().hex}"
+
+
+def _write_staged_profile_generation(
+    staging_dir: Path,
+    *,
+    source_profile_path: Path,
+    approval_payload: dict[str, Any],
+) -> None:
+    staging_dir.mkdir(parents=False, exist_ok=False)
+    staged_profile = staging_dir / PROFILE_FILE_NAME
+    staged_approval = staging_dir / APPROVAL_FILE_NAME
+    shutil.copy2(source_profile_path, staged_profile)
+    staged_approval.write_text(
+        json.dumps(approval_payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    approved, detail = _approval_matches(staged_profile, staged_approval)
+    if not approved:
+        raise ValueError(f"staged profile generation is not approved: {detail}")
+
+
+def _replace_profile_generation(
+    incoming_dir: Path,
+    target_dir: Path,
+    *,
+    current_backup_dir: Path | None,
+) -> None:
+    target_existed = target_dir.exists()
+    try:
+        if target_existed:
+            if current_backup_dir is None:
+                raise ValueError("current_backup_dir is required when replacing an approved profile")
+            current_backup_dir.parent.mkdir(parents=True, exist_ok=True)
+            target_dir.replace(current_backup_dir)
+        incoming_dir.replace(target_dir)
+    except BaseException:
+        if current_backup_dir is not None and current_backup_dir.exists():
+            if target_dir.exists() and not incoming_dir.exists():
+                target_dir.replace(incoming_dir)
+            current_backup_dir.replace(target_dir)
+        elif not target_existed and target_dir.exists() and not incoming_dir.exists():
+            target_dir.replace(incoming_dir)
+        raise
+
+
 def install_profile(
     profile_path: str | Path,
     *,
@@ -1090,16 +1155,11 @@ def install_profile(
     if not validation_report.passed:
         raise ValueError(f"profile validation failed for {validation_report.plugin_id}")
 
-    ensure_profile_store_dirs(home=home)
     plugin_id = validation_report.plugin_id
     target_dir = approved_profiles_dir(home=home) / plugin_id
     target_profile = target_dir / PROFILE_FILE_NAME
     target_approval = target_dir / APPROVAL_FILE_NAME
-    backup_dir: Path | None = None
-
-    if target_dir.exists():
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        backup_dir = profile_backups_dir(home=home) / f"{plugin_id}-{stamp}"
+    backup_dir = _new_profile_backup_dir(plugin_id, home=home) if target_dir.exists() else None
 
     approval_payload = _approval_payload(
         profile_path=source_profile_path,
@@ -1113,13 +1173,25 @@ def install_profile(
     if dry_run:
         return ProfileInstallResult(plugin_id, target_dir, target_profile, target_approval, backup_dir, profile_hash)
 
-    if backup_dir is not None:
-        backup_dir.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(target_dir), str(backup_dir))
-
-    target_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source_profile_path, target_profile)
-    target_approval.write_text(json.dumps(approval_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    with parser_profile_store_lock(home=home):
+        ensure_profile_store_dirs(home=home)
+        backup_dir = _new_profile_backup_dir(plugin_id, home=home) if target_dir.exists() else None
+        staging_dir = _staged_profile_dir(plugin_id, home=home)
+        try:
+            _write_staged_profile_generation(
+                staging_dir,
+                source_profile_path=source_profile_path,
+                approval_payload=approval_payload,
+            )
+            _replace_profile_generation(
+                staging_dir,
+                target_dir,
+                current_backup_dir=backup_dir,
+            )
+        finally:
+            if staging_dir.exists():
+                shutil.rmtree(staging_dir)
+        invalidate_parser_plugin_runtime()
     return ProfileInstallResult(plugin_id, target_dir, target_profile, target_approval, backup_dir, profile_hash)
 
 
@@ -1147,7 +1219,7 @@ def _approval_matches(profile_path: Path, approval_path: Path) -> tuple[bool, st
     return True, "approved"
 
 
-def approved_profile_paths(*, home: Path | None = None) -> tuple[Path, ...]:
+def _approved_profile_paths_unlocked(*, home: Path | None = None) -> tuple[Path, ...]:
     root = approved_profiles_dir(home=home)
     if not root.exists():
         return ()
@@ -1160,10 +1232,17 @@ def approved_profile_paths(*, home: Path | None = None) -> tuple[Path, ...]:
     return tuple(paths)
 
 
-def list_profiles(*, home: Path | None = None) -> tuple[InstalledProfile, ...]:
+def approved_profile_paths(*, home: Path | None = None) -> tuple[Path, ...]:
+    if not profile_store_root(home=home).exists():
+        return ()
+    with parser_profile_store_lock(home=home):
+        return _approved_profile_paths_unlocked(home=home)
+
+
+def _list_profiles_unlocked(*, home: Path | None = None) -> tuple[InstalledProfile, ...]:
     installed: list[InstalledProfile] = []
     disabled_ids = disabled_plugin_ids()
-    for profile_path in approved_profile_paths(home=home):
+    for profile_path in _approved_profile_paths_unlocked(home=home):
         approval_path = profile_path.parent / APPROVAL_FILE_NAME
         try:
             payload = load_profile_payload(profile_path)
@@ -1216,71 +1295,100 @@ def list_profiles(*, home: Path | None = None) -> tuple[InstalledProfile, ...]:
     return tuple(installed)
 
 
+def list_profiles(*, home: Path | None = None) -> tuple[InstalledProfile, ...]:
+    if not profile_store_root(home=home).exists():
+        return ()
+    with parser_profile_store_lock(home=home):
+        return _list_profiles_unlocked(home=home)
+
+
 def disable_profile(plugin_id: str, *, home: Path | None = None) -> Path:
     plugin_id = _validate_plugin_id_for_store(plugin_id)
-    ensure_profile_store_dirs(home=home)
-    source_dir = approved_profiles_dir(home=home) / plugin_id
-    target_dir = disabled_profiles_dir(home=home) / plugin_id
-    if not source_dir.exists():
-        raise FileNotFoundError(f"approved profile not found: {plugin_id}")
-    if target_dir.exists():
-        shutil.rmtree(target_dir)
-    shutil.move(str(source_dir), str(target_dir))
+    with parser_profile_store_lock(home=home):
+        ensure_profile_store_dirs(home=home)
+        source_dir = approved_profiles_dir(home=home) / plugin_id
+        target_dir = disabled_profiles_dir(home=home) / plugin_id
+        if not source_dir.exists():
+            raise FileNotFoundError(f"approved profile not found: {plugin_id}")
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
+        source_dir.replace(target_dir)
+        invalidate_parser_plugin_runtime()
     return target_dir
 
 
 def enable_profile(plugin_id: str, *, home: Path | None = None) -> Path:
     plugin_id = _validate_plugin_id_for_store(plugin_id)
-    ensure_profile_store_dirs(home=home)
-    source_dir = disabled_profiles_dir(home=home) / plugin_id
-    target_dir = approved_profiles_dir(home=home) / plugin_id
-    if not source_dir.exists():
-        raise FileNotFoundError(f"disabled profile not found: {plugin_id}")
-    if target_dir.exists():
-        raise FileExistsError(f"approved profile already exists: {plugin_id}")
-    shutil.move(str(source_dir), str(target_dir))
+    with parser_profile_store_lock(home=home):
+        ensure_profile_store_dirs(home=home)
+        source_dir = disabled_profiles_dir(home=home) / plugin_id
+        target_dir = approved_profiles_dir(home=home) / plugin_id
+        if not source_dir.exists():
+            raise FileNotFoundError(f"disabled profile not found: {plugin_id}")
+        if target_dir.exists():
+            raise FileExistsError(f"approved profile already exists: {plugin_id}")
+        source_dir.replace(target_dir)
+        invalidate_parser_plugin_runtime()
     return target_dir
 
 
 def rollback_profile(plugin_id: str, *, backup_name: str | None = None, home: Path | None = None) -> Path:
     plugin_id = _validate_plugin_id_for_store(plugin_id)
-    ensure_profile_store_dirs(home=home)
-    backup_root = profile_backups_dir(home=home)
-    if backup_name:
-        backup_ref = Path(backup_name)
-        if backup_ref.is_absolute() or ".." in backup_ref.parts or not backup_name.startswith(f"{plugin_id}-"):
-            raise ValueError("backup_name must name a backup for the selected plugin")
-        backup_dir = backup_root / backup_name
-    else:
-        candidates = sorted(
-            path
-            for path in backup_root.glob(f"{plugin_id}-*")
-            if "-rollback-current-" not in path.name
+    with parser_profile_store_lock(home=home):
+        ensure_profile_store_dirs(home=home)
+        backup_root = profile_backups_dir(home=home)
+        if backup_name:
+            backup_ref = Path(backup_name)
+            if (
+                backup_ref.is_absolute()
+                or ".." in backup_ref.parts
+                or not backup_name.startswith(f"{plugin_id}-")
+            ):
+                raise ValueError("backup_name must name a backup for the selected plugin")
+            backup_dir = backup_root / backup_name
+        else:
+            candidates = sorted(
+                path
+                for path in backup_root.glob(f"{plugin_id}-*")
+                if "-rollback-current-" not in path.name
+            )
+            if not candidates:
+                raise FileNotFoundError(f"no backup found for {plugin_id}")
+            backup_dir = candidates[-1]
+        backup_profile = backup_dir / PROFILE_FILE_NAME
+        backup_approval = backup_dir / APPROVAL_FILE_NAME
+        approved, detail = _approval_matches(backup_profile, backup_approval)
+        if not approved:
+            raise ValueError(f"backup profile is not approved: {detail}")
+        target_dir = approved_profiles_dir(home=home) / plugin_id
+        current_backup_dir = (
+            _new_profile_backup_dir(plugin_id, home=home, label="rollback-current")
+            if target_dir.exists()
+            else None
         )
-        if not candidates:
-            raise FileNotFoundError(f"no backup found for {plugin_id}")
-        backup_dir = candidates[-1]
-    backup_profile = backup_dir / PROFILE_FILE_NAME
-    backup_approval = backup_dir / APPROVAL_FILE_NAME
-    approved, detail = _approval_matches(backup_profile, backup_approval)
-    if not approved:
-        raise ValueError(f"backup profile is not approved: {detail}")
-    target_dir = approved_profiles_dir(home=home) / plugin_id
-    if target_dir.exists():
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        shutil.move(str(target_dir), str(profile_backups_dir(home=home) / f"{plugin_id}-rollback-current-{stamp}"))
-    shutil.move(str(backup_dir), str(target_dir))
-    restored, restored_detail = _approval_matches(target_dir / PROFILE_FILE_NAME, target_dir / APPROVAL_FILE_NAME)
-    if not restored:
-        raise ValueError(f"restored profile is not approved: {restored_detail}")
+        _replace_profile_generation(
+            backup_dir,
+            target_dir,
+            current_backup_dir=current_backup_dir,
+        )
+        restored, restored_detail = _approval_matches(
+            target_dir / PROFILE_FILE_NAME,
+            target_dir / APPROVAL_FILE_NAME,
+        )
+        if not restored:
+            raise ValueError(f"restored profile is not approved: {restored_detail}")
+        invalidate_parser_plugin_runtime()
     return target_dir
 
 
-def load_approved_profile_parsers(*, home: Path | None = None) -> tuple[tuple[str, type], tuple[str, ...]]:
+def _load_approved_profile_parsers_unlocked(
+    *,
+    home: Path | None = None,
+) -> tuple[tuple[str, type], tuple[str, ...]]:
     disabled_ids = disabled_plugin_ids()
     loaded: list[tuple[str, type]] = []
     errors: list[str] = []
-    for profile_path in approved_profile_paths(home=home):
+    for profile_path in _approved_profile_paths_unlocked(home=home):
         approval_path = profile_path.parent / APPROVAL_FILE_NAME
         approved, detail = _approval_matches(profile_path, approval_path)
         if not approved:
@@ -1302,11 +1410,24 @@ def load_approved_profile_parsers(*, home: Path | None = None) -> tuple[tuple[st
     return tuple(loaded), tuple(errors)
 
 
-def profile_store_signature(*, home: Path | None = None) -> tuple[tuple[str, str, str], ...]:
+def load_approved_profile_parsers(
+    *,
+    home: Path | None = None,
+) -> tuple[tuple[str, type], tuple[str, ...]]:
+    if not profile_store_root(home=home).exists():
+        return (), ()
+    with parser_profile_store_lock(home=home):
+        return _load_approved_profile_parsers_unlocked(home=home)
+
+
+def _profile_store_signature_unlocked(
+    *,
+    home: Path | None = None,
+) -> tuple[tuple[str, str, str], ...]:
     """Return checksum metadata for approved declarative profiles."""
 
     signature: list[tuple[str, str, str]] = []
-    for profile_path in approved_profile_paths(home=home):
+    for profile_path in _approved_profile_paths_unlocked(home=home):
         approval_path = profile_path.parent / APPROVAL_FILE_NAME
         try:
             payload = load_profile_payload(profile_path)
@@ -1321,6 +1442,15 @@ def profile_store_signature(*, home: Path | None = None) -> tuple[tuple[str, str
             continue
         signature.append((plugin_id, profile_hash, approval_hash))
     return tuple(sorted(signature))
+
+
+def profile_store_signature(*, home: Path | None = None) -> tuple[tuple[str, str, str], ...]:
+    """Return checksum metadata for one complete approved profile generation."""
+
+    if not profile_store_root(home=home).exists():
+        return ()
+    with parser_profile_store_lock(home=home):
+        return _profile_store_signature_unlocked(home=home)
 
 
 def render_profile_template(*, plugin_id: str, display_name: str, source_format: str = "pdf") -> str:

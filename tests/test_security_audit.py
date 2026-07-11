@@ -51,7 +51,21 @@ def test_secret_scan_covers_supported_text_formats_without_echoing_values(tmp_pa
     secret_value = "AbCdEfGhIjKlMnOpQrStUvWxYz123456"
     paths = []
     for index, suffix in enumerate(
-        (".py", ".yaml", ".toml", ".ini", ".json", ".env", ".env.production")
+        (
+            ".py",
+            ".yaml",
+            ".toml",
+            ".ini",
+            ".json",
+            ".env",
+            ".env.production",
+            ".cfg",
+            ".conf",
+            ".ps1",
+            ".sh",
+            ".txt",
+            "",
+        )
     ):
         name = suffix if suffix.startswith(".env") else f"config_{index}{suffix}"
         path = tmp_path / name
@@ -62,6 +76,77 @@ def test_secret_scan_covers_supported_text_formats_without_echoing_values(tmp_pa
 
     assert len(result.errors) == len(paths)
     assert all(secret_value not in error for error in result.errors)
+
+
+def test_secret_scan_checks_concrete_patterns_in_any_small_utf8_file(tmp_path):
+    private_key_marker = "-----BEGIN " + "PRIVATE KEY-----"
+    github_token = "ghp_" + ("A" * 30)
+    paths_and_content = {
+        "release-signing.pem": private_key_marker,
+        "release-signing.key": private_key_marker,
+        "Containerfile": github_token,
+        "opaque.custom-extension": github_token,
+    }
+    for name, content in paths_and_content.items():
+        (tmp_path / name).write_text(content, encoding="utf-8")
+
+    result = security_audit.scan_secret_paths(
+        tmp_path,
+        paths_and_content,
+        waivers={},
+    )
+
+    assert len(result.errors) == len(paths_and_content)
+    assert all(
+        content not in error
+        for error in result.errors
+        for content in paths_and_content.values()
+    )
+
+
+def test_secret_scan_fails_closed_for_invalid_text_candidate_in_ci_mode(tmp_path):
+    candidate = tmp_path / "secrets.env"
+    candidate.write_bytes(b"\xff\xfe\x00")
+
+    local_result = security_audit.scan_secret_paths(
+        tmp_path,
+        (candidate.name,),
+        waivers={},
+    )
+    ci_result = security_audit.scan_secret_paths(
+        tmp_path,
+        (candidate.name,),
+        waivers={},
+        fail_on_unreadable=True,
+    )
+
+    assert local_result.errors == []
+    assert any("not valid UTF-8" in warning for warning in local_result.warnings)
+    assert any("not valid UTF-8" in error for error in ci_result.errors)
+
+
+def test_secret_scan_fails_closed_for_oversized_text_candidate_in_ci_mode(tmp_path):
+    candidate = tmp_path / "secrets.env"
+    candidate.write_bytes(b"x" * (security_audit.MAX_SECRET_SCAN_BYTES + 1))
+
+    result = security_audit.scan_secret_paths(
+        tmp_path,
+        (candidate.name,),
+        waivers={},
+        fail_on_unreadable=True,
+    )
+
+    assert result.errors == [
+        f"secrets.env: secret-scan text candidate exceeds "
+        f"{security_audit.MAX_SECRET_SCAN_BYTES} byte limit"
+    ]
+
+
+def test_github_actions_environment_enables_strict_secret_scan(monkeypatch):
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+
+    assert security_audit._running_in_ci() is True
 
 
 def test_secret_scan_rejects_short_hex_and_marker_substring_credentials(tmp_path):

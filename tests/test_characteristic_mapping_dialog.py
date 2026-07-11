@@ -1,5 +1,5 @@
+import importlib.util
 import tempfile
-import sys
 import unittest
 from unittest.mock import patch
 
@@ -10,15 +10,12 @@ from modules.characteristic_alias_service import (
     upsert_characteristic_alias,
 )
 
-for _module_name in ("PyQt6", "PyQt6.QtCore", "PyQt6.QtGui", "PyQt6.QtWidgets"):
-    _module = sys.modules.get(_module_name)
-    if _module is not None and getattr(_module, "__file__", None) is None:
-        sys.modules.pop(_module_name, None)
-sys.modules.pop("modules.ui_foundation", None)
-sys.modules.pop("modules.help_menu", None)
-sys.modules.pop("modules.characteristic_mapping_dialog", None)
-
-try:
+if importlib.util.find_spec("PyQt6") is None:  # pragma: no cover - optional local test runtime.
+    QApplication = None
+    QMessageBox = None
+    CharacteristicMappingDialog = None
+    PYQT_IMPORT_ERROR = ModuleNotFoundError("PyQt6 is not installed")
+else:
     from PyQt6.QtWidgets import QApplication, QMessageBox
     from modules.characteristic_mapping_dialog import (
         ALL_REFERENCES_LABEL,
@@ -27,12 +24,6 @@ try:
         ONE_REFERENCE_LABEL,
         build_remediation_report_rows,
     )
-except ImportError as exc:  # pragma: no cover - environment-dependent import
-    QApplication = None
-    QMessageBox = None
-    CharacteristicMappingDialog = None
-    PYQT_IMPORT_ERROR = exc
-else:
     PYQT_IMPORT_ERROR = None
 
 

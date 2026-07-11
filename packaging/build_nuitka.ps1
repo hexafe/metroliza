@@ -536,7 +536,7 @@ if ($LASTEXITCODE -eq 0) {
 }
 
 if ($RequireNative -and -not $nativeModuleAvailable) {
-    throw "Native module '_metroliza_cmm_native' is required but unavailable. Build/install it first: python -m maturin develop --manifest-path src/metroliza/native/cmm_parser/Cargo.toml"
+    throw "Native module '_metroliza_cmm_native' is required but unavailable. Build/install it first: python -m maturin develop --locked --manifest-path src/metroliza/native/cmm_parser/Cargo.toml"
 }
 
 if (-not $pdfBackendPackageAvailable -and -not $AllowBrokenPdfParserBuild) {
@@ -633,9 +633,11 @@ $commonArgs = @(
     '--include-package=hexafe_plotstats',
     '--include-distribution-metadata=hexafe-plotstats',
     '--include-module=metroliza.parsing.cmm_report_parser',
+    '--include-module=metroliza.parsing.report_parser_factory',
     '--include-module=metroliza.parsing.header_ocr_backend',
     '--include-module=metroliza.parsing.header_ocr_geometry',
     '--include-module=metroliza.parsing.header_ocr_corrections',
+    '--include-module=metroliza.reports.header_ocr_corrections',
     '--include-module=metroliza.reports.report_parser_factory',
     '--include-module=metroliza.parsing.pdf_backend',
     '--include-module=modules.cmm_report_parser',
@@ -800,6 +802,15 @@ if ($AllowMissingHeaderOcrBuild) {
     $validationArgs += '--require-header-ocr'
 }
 Invoke-CheckedPythonCommand -Arguments $validationArgs -FailureMessage "Packaged PDF parser dependency validation failed. See 'nuitka-build-report.xml' details above."
+
+$noticeStageArgs = @(
+    'scripts/stage_release_notices.py',
+    '--dist-dir',
+    'dist',
+    '--artifact',
+    $OutputName
+)
+Invoke-CheckedPythonCommand -Arguments $noticeStageArgs -FailureMessage 'Failed to stage third-party notice sidecars.'
 
 Write-Host 'Done'
 Write-Host "Build output name: $OutputName"

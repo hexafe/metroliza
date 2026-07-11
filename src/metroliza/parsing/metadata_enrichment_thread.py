@@ -19,10 +19,14 @@ from metroliza.parsing.parse_reports_thread import (
     persist_complete_metadata_enrichment,
     selection_result_for_complete_metadata_parser,
 )
+from metroliza.parsing.parser_plugin_contracts import infer_source_format
+from metroliza.parsing.source_inspection import (
+    SourceChangedAfterInspectionError,
+    SourceInspectionContext,
+)
 from metroliza.shared.progress_status import build_three_line_status, format_progress_duration
 from metroliza.reports.report_metadata_profiles import DEFAULT_CMM_PDF_HEADER_BOX_PROFILE
-from metroliza.reports.report_parser_factory import get_parser
-from metroliza.reports.report_repository import compute_sha256
+from metroliza.parsing.report_parser_factory import get_parser, invoke_parser_factory
 
 
 logger = logging.getLogger(__name__)
@@ -148,10 +152,14 @@ def enrich_existing_report_metadata(db_file, work_item, *, connection=None, pars
     if not source_path.is_file():
         return False
     expected_sha256 = str(work_item.sha256 or "").strip().casefold()
-    try:
-        actual_sha256 = compute_sha256(source_path).casefold()
-    except OSError:
+    source_inspection = SourceInspectionContext.from_path(
+        source_path,
+        source_format=infer_source_format(source_path),
+    )
+    actual_sha256 = source_inspection.sha256
+    if actual_sha256 is None:
         return False
+    actual_sha256 = actual_sha256.casefold()
     if not expected_sha256 or actual_sha256 != expected_sha256:
         logger.warning(
             "Metadata enrichment skipped source whose content changed",
@@ -165,22 +173,28 @@ def enrich_existing_report_metadata(db_file, work_item, *, connection=None, pars
         return False
 
     parser_factory = parser_factory or get_parser
-    parser = parser_factory(str(source_path), db_file, connection=connection)
+    parser = invoke_parser_factory(
+        parser_factory,
+        str(source_path),
+        db_file,
+        connection=connection,
+        source_inspection=source_inspection,
+    )
     selection_result = selection_result_for_complete_metadata_parser(parser)
     try:
-        current_sha256 = compute_sha256(source_path).casefold()
-    except OSError:
-        return False
-    if current_sha256 != expected_sha256:
+        current_sha256 = source_inspection.verified_sha256()
+    except SourceChangedAfterInspectionError as exc:
         logger.warning(
             "Metadata enrichment skipped source changed during extraction",
             extra={
                 "report_id": int(work_item.report_id),
                 "source_path": str(source_path),
                 "expected_sha256": expected_sha256,
-                "actual_sha256": current_sha256,
+                "actual_sha256": exc.current_sha256,
             },
         )
+        return False
+    if current_sha256 is None or current_sha256.casefold() != expected_sha256:
         return False
     persist_complete_metadata_enrichment(
         db_file,

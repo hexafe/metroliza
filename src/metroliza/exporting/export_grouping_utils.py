@@ -2,19 +2,17 @@ import hashlib
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable, Mapping
 
+from metroliza.analytics.grouping_labels import (
+    DEFAULT_GROUP_LABEL,
+    normalize_default_group_label,
+    normalize_group_labels,
+)
 from metroliza.exporting.export_query_service import RowTable
 
 
 _GROUP_KEY_COMPONENTS = ['REPORT_ID']
 _GROUPING_OPTIONAL_COLUMNS = ['REPORT_ID', 'GROUP_COLOR']
-DEFAULT_GROUP_LABEL = 'POPULATION'
 DEFAULT_GROUP_LABEL_ATTR = 'default_group_label'
-
-
-def normalize_default_group_label(value, *, fallback=DEFAULT_GROUP_LABEL):
-    """Return a non-empty default group label for grouped analysis fallbacks."""
-    label = str(value or '').strip()
-    return label or str(fallback or DEFAULT_GROUP_LABEL)
 
 
 def get_default_group_label(df, *, fallback=DEFAULT_GROUP_LABEL):
@@ -164,23 +162,6 @@ def _records_to_row_table(records: list[Mapping[str, Any]]) -> RowTable:
         rows=tuple(tuple(row.get(column) for column in columns) for row in records),
         columns=tuple(columns),
     )
-
-
-def normalize_group_labels(series, *, missing_label='UNGROUPED', normalize_blank=False):
-    """Return normalized group labels for export workflows.
-
-    Args:
-        series: Input group label series.
-        missing_label: Label used to fill missing/invalid entries.
-        normalize_blank: When True, blank/whitespace labels are treated as
-            missing and replaced with ``missing_label``.
-    """
-    values = [] if series is None else list(series)
-    normalized = [str(missing_label if _is_missing_value(value) else value) for value in values]
-    if not normalize_blank:
-        return normalized
-
-    return [label if label.strip() else str(missing_label) for label in normalized]
 
 
 def add_group_key(df):

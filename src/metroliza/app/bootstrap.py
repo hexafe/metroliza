@@ -15,6 +15,7 @@ from metroliza.app.startup_splash import (
     update_bootloader_splash,
 )
 from metroliza.app.startup_profile import record_event, ui_smoke_enabled
+from metroliza.app.ui_entrypoint import MainWindowFactory, load_main_window_factory
 from metroliza.shared.logging_utils import ensure_application_logging
 
 VERSION_DATE = VersionDate.VERSION_DATE
@@ -146,7 +147,11 @@ def run_pdf_parser_smoke_mode(logger: logging.Logger, fixture_path: str, expecte
     return 0
 
 
-def launch_ui(config: StartupConfig) -> int:
+def launch_ui(
+    config: StartupConfig,
+    *,
+    main_window_factory: MainWindowFactory | None = None,
+) -> int:
     """Launch UI after optional license checks and return process exit code."""
     # Some packaged/Windows import paths touch UI modules eagerly, so make sure
     # QApplication exists before importing the main window dependency graph.
@@ -180,12 +185,15 @@ def launch_ui(config: StartupConfig) -> int:
 
     splash.show_message("Loading main window...", phase="main_window")
     record_event("main_window_import_start")
-    from metroliza.ui.main_window import MainWindow
-
+    if main_window_factory is None:
+        main_window_factory = load_main_window_factory()
     record_event("main_window_import_done")
 
     record_event("main_window_construct_start")
-    main_window = MainWindow(VersionDate.VERSION_LABEL, license_result.days_until_expiration)
+    main_window = main_window_factory(
+        VersionDate.VERSION_LABEL,
+        license_result.days_until_expiration,
+    )
     record_event("main_window_construct_done")
     splash.show_message("Opening dashboard...", phase="show")
     main_window.show()

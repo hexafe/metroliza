@@ -1,4 +1,5 @@
 import importlib
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 import json
 import logging
@@ -6,6 +7,8 @@ import os
 from pathlib import Path
 import sqlite3
 import sys
+from threading import Barrier, Lock
+import time
 
 import pytest
 
@@ -565,8 +568,301 @@ def test_resolver_uses_probe_cache_for_same_plugin_and_path(tmp_path):
         PROBE_RESULT_CACHE.update(original_cache)
 
 
+def test_probe_cache_is_bounded_lru(monkeypatch, tmp_path):
+    from metroliza.parsing.source_inspection import SourceInspectionContext
+
+    class _CachedParser:
+        probe_calls = 0
+
+        @classmethod
+        def probe(cls, _path, _context):
+            cls.probe_calls += 1
+            return ProbeResult(plugin_id="bounded_cache", can_parse=True, confidence=90)
+
+    assert factory_module.PROBE_RESULT_CACHE_MAX_ENTRIES == 2048
+    monkeypatch.setattr(factory_module, "PROBE_RESULT_CACHE_MAX_ENTRIES", 2)
+    reset_probe_cache()
+    try:
+        contexts = []
+        for name in ("one.pdf", "two.pdf", "three.pdf"):
+            source_path = tmp_path / name
+            source_path.write_bytes(name.encode("utf-8"))
+            contexts.append(
+                SourceInspectionContext.from_path(source_path, source_format="pdf")
+            )
+
+        for context in contexts[:2]:
+            factory_module._probe_with_cache(
+                "bounded_cache",
+                _CachedParser,
+                context.source_path,
+                ProbeContext(
+                    source_path=context.source_path,
+                    source_format="pdf",
+                    source_inspection=context,
+                ),
+            )
+
+        first_context = contexts[0]
+        factory_module._probe_with_cache(
+            "bounded_cache",
+            _CachedParser,
+            first_context.source_path,
+            ProbeContext(
+                source_path=first_context.source_path,
+                source_format="pdf",
+                source_inspection=first_context,
+            ),
+        )
+        third_context = contexts[2]
+        factory_module._probe_with_cache(
+            "bounded_cache",
+            _CachedParser,
+            third_context.source_path,
+            ProbeContext(
+                source_path=third_context.source_path,
+                source_format="pdf",
+                source_inspection=third_context,
+            ),
+        )
+
+        cached_paths = [cache_key[1] for cache_key in PROBE_RESULT_CACHE]
+        assert cached_paths == [first_context.source_path, third_context.source_path]
+        assert len(PROBE_RESULT_CACHE) == 2
+        assert _CachedParser.probe_calls == 3
+    finally:
+        reset_probe_cache()
+
+
+def test_probe_cache_single_flights_concurrent_same_key(tmp_path):
+    from metroliza.parsing.source_inspection import SourceInspectionContext
+
+    call_lock = Lock()
+
+    class _ConcurrentParser:
+        probe_calls = 0
+
+        @classmethod
+        def probe(cls, _path, _context):
+            with call_lock:
+                cls.probe_calls += 1
+            time.sleep(0.05)
+            return ProbeResult(plugin_id="concurrent_cache", can_parse=True, confidence=90)
+
+    source_path = tmp_path / "shared.pdf"
+    source_path.write_bytes(b"shared-cache-key")
+    source_inspection = SourceInspectionContext.from_path(source_path, source_format="pdf")
+    probe_context = ProbeContext(
+        source_path=str(source_path),
+        source_format="pdf",
+        source_inspection=source_inspection,
+    )
+
+    reset_probe_cache()
+    try:
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            results = tuple(
+                executor.map(
+                    lambda _index: factory_module._probe_with_cache(
+                        "concurrent_cache",
+                        _ConcurrentParser,
+                        str(source_path),
+                        probe_context,
+                    ),
+                    range(8),
+                )
+            )
+
+        assert _ConcurrentParser.probe_calls == 1
+        assert len(results) == 8
+        assert all(result == results[0] for result in results)
+    finally:
+        reset_probe_cache()
+
+
+def test_resolver_uses_immutable_registry_snapshot_during_registration(
+    monkeypatch,
+    tmp_path,
+):
+    probe_started = Barrier(2)
+    allow_probe_to_finish = Barrier(2)
+
+    class SnapshotParser(BaseReportParser, BaseReportParserPlugin):
+        manifest = PluginManifest(
+            plugin_id="snapshot_parser",
+            display_name="Snapshot parser",
+            version="1.0.0",
+            supported_formats=("pdf",),
+        )
+
+        @classmethod
+        def probe(cls, _path, _context):
+            probe_started.wait(timeout=2)
+            allow_probe_to_finish.wait(timeout=2)
+            return ProbeResult(
+                plugin_id=cls.manifest.plugin_id,
+                can_parse=True,
+                confidence=100,
+            )
+
+    class LateParser(BaseReportParser, BaseReportParserPlugin):
+        manifest = PluginManifest(
+            plugin_id="late_parser",
+            display_name="Late parser",
+            version="1.0.0",
+            supported_formats=("pdf",),
+        )
+
+        @classmethod
+        def probe(cls, _path, _context):
+            return ProbeResult(
+                plugin_id=cls.manifest.plugin_id,
+                can_parse=True,
+                confidence=100,
+            )
+
+    source_path = tmp_path / "snapshot.pdf"
+    source_path.write_bytes(b"snapshot")
+    original_map = dict(PARSER_MAP)
+    original_manifests = dict(PARSER_MANIFESTS)
+    original_detectors = dict(PARSER_DETECTORS)
+    monkeypatch.setattr(factory_module, "_ensure_external_plugins_loaded_once", lambda: None)
+    try:
+        PARSER_MAP.clear()
+        PARSER_MANIFESTS.clear()
+        PARSER_DETECTORS.clear()
+        register_parser(SnapshotParser)
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(resolve_parser_with_diagnostics, source_path)
+            probe_started.wait(timeout=2)
+            register_parser(LateParser)
+            allow_probe_to_finish.wait(timeout=2)
+            diagnostics = future.result(timeout=2)
+
+        assert diagnostics.selected is not None
+        assert diagnostics.selected.plugin_id == "snapshot_parser"
+        assert tuple(
+            candidate.plugin_id for candidate in diagnostics.candidates_considered
+        ) == ("snapshot_parser",)
+    finally:
+        PARSER_MAP.clear()
+        PARSER_MAP.update(original_map)
+        PARSER_MANIFESTS.clear()
+        PARSER_MANIFESTS.update(original_manifests)
+        PARSER_DETECTORS.clear()
+        PARSER_DETECTORS.update(original_detectors)
+        reset_probe_cache()
+
+
+def test_get_parser_constructs_class_selected_from_same_registry_snapshot(
+    monkeypatch,
+    tmp_path,
+):
+    probe_started = Barrier(2)
+    allow_probe_to_finish = Barrier(2)
+
+    class SelectedParser(BaseReportParser, BaseReportParserPlugin):
+        manifest = PluginManifest(
+            plugin_id="swappable_parser",
+            display_name="Selected parser",
+            version="1.0.0",
+            supported_formats=("pdf",),
+        )
+
+        @classmethod
+        def probe(cls, _path, _context):
+            probe_started.wait(timeout=2)
+            allow_probe_to_finish.wait(timeout=2)
+            return ProbeResult(
+                plugin_id=cls.manifest.plugin_id,
+                can_parse=True,
+                confidence=100,
+            )
+
+        def open_report(self):
+            return None
+
+        def split_text_to_blocks(self):
+            return None
+
+        def parse_to_v2(self):
+            raise NotImplementedError
+
+        @staticmethod
+        def to_legacy_blocks(_parse_result_v2):
+            raise NotImplementedError
+
+    class ReplacementParser(BaseReportParser, BaseReportParserPlugin):
+        manifest = PluginManifest(
+            plugin_id="swappable_parser",
+            display_name="Replacement parser",
+            version="2.0.0",
+            supported_formats=("pdf",),
+        )
+
+        @classmethod
+        def probe(cls, _path, _context):
+            return ProbeResult(
+                plugin_id=cls.manifest.plugin_id,
+                can_parse=False,
+                confidence=0,
+            )
+
+        def open_report(self):
+            return None
+
+        def split_text_to_blocks(self):
+            return None
+
+        def parse_to_v2(self):
+            raise NotImplementedError
+
+        @staticmethod
+        def to_legacy_blocks(_parse_result_v2):
+            raise NotImplementedError
+
+    source_path = tmp_path / "swap.pdf"
+    source_path.write_bytes(b"swap")
+    original_map = dict(PARSER_MAP)
+    original_manifests = dict(PARSER_MANIFESTS)
+    original_detectors = dict(PARSER_DETECTORS)
+    monkeypatch.setattr(factory_module, "_ensure_external_plugins_loaded_once", lambda: None)
+    try:
+        PARSER_MAP.clear()
+        PARSER_MANIFESTS.clear()
+        PARSER_DETECTORS.clear()
+        register_parser(SelectedParser)
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                get_parser,
+                source_path,
+                database=str(tmp_path / "swap.sqlite3"),
+            )
+            probe_started.wait(timeout=2)
+            register_parser(ReplacementParser)
+            allow_probe_to_finish.wait(timeout=2)
+            parser = future.result(timeout=2)
+
+        assert type(parser) is SelectedParser
+        assert PARSER_MAP["swappable_parser"] is ReplacementParser
+        replacement_diagnostics = resolve_parser_with_diagnostics(source_path)
+        assert replacement_diagnostics.selected is None
+        assert replacement_diagnostics.rejected_reason == "no_plugin_can_parse"
+    finally:
+        PARSER_MAP.clear()
+        PARSER_MAP.update(original_map)
+        PARSER_MANIFESTS.clear()
+        PARSER_MANIFESTS.update(original_manifests)
+        PARSER_DETECTORS.clear()
+        PARSER_DETECTORS.update(original_detectors)
+        reset_probe_cache()
+
+
 def test_resolver_rehashes_before_persistence_and_shares_extraction(monkeypatch, tmp_path):
     from metroliza.parsing.source_inspection import SourceInspectionContext
+    from metroliza.parsing.parse_reports_thread import parse_new_reports
     from metroliza.reports import report_repository
 
     source_reads = 0
@@ -668,11 +964,28 @@ def test_resolver_rehashes_before_persistence_and_shares_extraction(monkeypatch,
         source_path = tmp_path / "shared.csv"
         source_path.write_text("SHARED INSPECTION\n", encoding="utf-8")
 
-        parser = get_parser(source_path, database=str(tmp_path / "shared.db"))
-        report_id = parser.open_database_and_check_filename()
+        parsed = []
+
+        def _parser_factory(path, *, source_inspection=None):
+            parser = get_parser(
+                path,
+                database=str(tmp_path / "shared.db"),
+                source_inspection=source_inspection,
+            )
+            parsed.append(parser)
+            return parser
+
+        result = parse_new_reports(
+            [source_path],
+            set(),
+            parser_factory=_parser_factory,
+            persist_report=lambda parser: parser.open_database_and_check_filename(),
+        )
+        parser = parsed[0]
 
         assert isinstance(parser, HighInspectionParser)
-        assert report_id > 0
+        assert result.parsed_files == 1
+        assert result.failed_files == 0
         assert hash_reads == 2
         assert source_reads == 1
         assert repository_hash_reads == 0

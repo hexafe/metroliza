@@ -1,24 +1,24 @@
 from __future__ import annotations
 
+import importlib.util
 import types
 from pathlib import Path
 
 import pytest
 
-try:
-    from PyQt6.QtCore import QUrl
-    from PyQt6.QtWidgets import QApplication, QDialog
-
-    import metroliza.ui.export_dialog as export_dialog
-    from metroliza.shared.filter_state import FilterState, NOT_APPLIED_LABEL
-except Exception as exc:  # pragma: no cover - depends on local Qt runtime availability.
+if importlib.util.find_spec("PyQt6") is None:  # pragma: no cover - optional local test runtime.
     QApplication = None
     QDialog = None
     export_dialog = None
     FilterState = None
     NOT_APPLIED_LABEL = "Not applied"
-    PYQT_IMPORT_ERROR = exc
+    PYQT_IMPORT_ERROR = ModuleNotFoundError("PyQt6 is not installed")
 else:
+    from PyQt6.QtCore import QUrl
+    from PyQt6.QtWidgets import QApplication, QDialog
+
+    import metroliza.ui.export_dialog as export_dialog
+    from metroliza.shared.filter_state import FilterState, NOT_APPLIED_LABEL
     PYQT_IMPORT_ERROR = None
 
 

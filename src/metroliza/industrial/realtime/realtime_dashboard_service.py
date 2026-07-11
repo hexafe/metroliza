@@ -13,7 +13,7 @@ from metroliza.industrial.anomaly.event_repository import (
 from metroliza.industrial.industrial_data_schema import ensure_industrial_data_schema
 from metroliza.industrial.realtime.sample_repository import from_json, utc_timestamp
 from metroliza.industrial.realtime.timestamps import canonical_utc_timestamp
-from metroliza.reports.db import run_transaction_with_retry
+from metroliza.reports.db import run_transaction_with_retry, sqlite_connection_scope
 
 _SEVERITY_RANKS = {"info": 1, "warning": 2, "major": 3, "critical": 4}
 _SEVERITY_BY_RANK = {rank: severity for severity, rank in _SEVERITY_RANKS.items()}
@@ -355,65 +355,7 @@ class RealtimeDashboardService:
 
         def _list(cursor) -> list[SignalTimelinePoint]:
             cursor.execute(
-                """
-                SELECT *
-                FROM (
-                    SELECT
-                        samples.id,
-                        samples.signal_id,
-                        samples.source_profile_id,
-                        signals.signal_key,
-                        samples.metric_name,
-                        signals.unit,
-                        samples.event_time,
-                        samples.ingest_time,
-                        samples.value,
-                        samples.reference,
-                        samples.part_number,
-                        samples.revision,
-                        samples.station,
-                        samples.line,
-                        samples.work_order,
-                        samples.batch_lot,
-                        samples.quality_flags_json,
-                        COUNT(events.id),
-                        COALESCE(SUM(CASE WHEN events.status = 'open' THEN 1 ELSE 0 END), 0),
-                        MAX(
-                            CASE events.severity
-                                WHEN 'info' THEN 1
-                                WHEN 'warning' THEN 2
-                                WHEN 'major' THEN 3
-                                WHEN 'critical' THEN 4
-                                ELSE NULL
-                            END
-                        )
-                    FROM industrial_samples AS samples
-                    JOIN industrial_signal_definitions AS signals ON signals.id = samples.signal_id
-                    LEFT JOIN industrial_anomaly_events AS events ON events.sample_id = samples.id
-                    WHERE samples.signal_id = ?
-                    GROUP BY
-                        samples.id,
-                        samples.signal_id,
-                        samples.source_profile_id,
-                        signals.signal_key,
-                        samples.metric_name,
-                        signals.unit,
-                        samples.event_time,
-                        samples.ingest_time,
-                        samples.value,
-                        samples.reference,
-                        samples.part_number,
-                        samples.revision,
-                        samples.station,
-                        samples.line,
-                        samples.work_order,
-                        samples.batch_lot,
-                        samples.quality_flags_json
-                    ORDER BY samples.event_time DESC, samples.id DESC
-                    LIMIT ?
-                ) AS recent_samples
-                ORDER BY recent_samples.event_time ASC, recent_samples.id ASC
-                """,
+                _RECENT_SIGNAL_TIMELINE_SQL,
                 (int(signal_id), _positive_limit(limit)),
             )
             return [_timeline_point_from_row(row) for row in cursor.fetchall()]
@@ -426,25 +368,10 @@ class RealtimeDashboardService:
         self.ensure_schema()
 
         def _list(cursor) -> tuple[int, ...]:
-            cursor.execute(
-                """
-                SELECT signal_id
-                FROM (
-                    SELECT
-                        samples.signal_id AS signal_id,
-                        MAX(samples.event_time) AS latest_event_time,
-                        MAX(samples.id) AS latest_sample_id
-                    FROM industrial_samples AS samples
-                    JOIN industrial_signal_definitions AS signals ON signals.id = samples.signal_id
-                    WHERE signals.enabled = 1
-                    GROUP BY samples.signal_id
-                    ORDER BY latest_event_time DESC, latest_sample_id DESC
-                    LIMIT ?
-                ) AS recent_signals
-                """,
-                (_positive_limit(limit),),
+            return _recent_sample_signal_ids_from_cursor(
+                cursor,
+                limit=_positive_limit(limit),
             )
-            return tuple(int(row[0]) for row in cursor.fetchall())
 
         return run_transaction_with_retry(self.database, _list, connection=self.connection)
 
@@ -462,90 +389,11 @@ class RealtimeDashboardService:
             return []
 
         def _list(cursor) -> list[SignalAggregateRow]:
-            where: list[str] = []
-            params: list[Any] = []
-            if requested_signal_ids is not None:
-                placeholders = ", ".join("?" for _ in requested_signal_ids)
-                where.append(f"samples.signal_id IN ({placeholders})")
-                params.extend(requested_signal_ids)
-            where_clause = f"WHERE {' AND '.join(where)}" if where else ""
-            limit_clause = ""
-            if limit is not None:
-                limit_clause = "LIMIT ?"
-                params.append(_positive_limit(limit))
-            cursor.execute(
-                f"""
-                SELECT
-                    samples.source_profile_id,
-                    profiles.profile_key,
-                    profiles.profile_name,
-                    samples.signal_id,
-                    signals.signal_key,
-                    signals.metric_name,
-                    signals.unit,
-                    COUNT(samples.id) AS sample_count,
-                    MIN(samples.event_time) AS first_event_time,
-                    MAX(samples.event_time) AS last_event_time,
-                    MIN(samples.value) AS minimum,
-                    MAX(samples.value) AS maximum,
-                    AVG(samples.value) AS average,
-                    (
-                        SELECT latest.value
-                        FROM industrial_samples AS latest
-                        WHERE latest.signal_id = samples.signal_id
-                        ORDER BY latest.event_time DESC, latest.id DESC
-                        LIMIT 1
-                    ) AS latest_value,
-                    signals.nominal,
-                    signals.lsl,
-                    signals.usl,
-                    COALESCE(
-                        SUM(
-                            CASE
-                                WHEN signals.lsl IS NOT NULL
-                                    AND NOT (
-                                        signals.nominal IS NOT NULL
-                                        AND ABS(signals.nominal) <= 0.000000000001
-                                        AND ABS(signals.lsl) <= 0.000000000001
-                                    )
-                                    AND samples.value < signals.lsl
-                                THEN 1
-                                ELSE 0
-                            END
-                        ),
-                        0
-                    ) AS below_lsl_count,
-                    COALESCE(
-                        SUM(
-                            CASE
-                                WHEN signals.usl IS NOT NULL AND samples.value > signals.usl
-                                THEN 1
-                                ELSE 0
-                            END
-                        ),
-                        0
-                    ) AS above_usl_count
-                FROM industrial_samples AS samples
-                JOIN industrial_signal_definitions AS signals ON signals.id = samples.signal_id
-                JOIN industrial_source_profiles AS profiles ON profiles.id = samples.source_profile_id
-                {where_clause}
-                GROUP BY
-                    samples.source_profile_id,
-                    profiles.profile_key,
-                    profiles.profile_name,
-                    samples.signal_id,
-                    signals.signal_key,
-                    signals.metric_name,
-                    signals.unit,
-                    signals.nominal,
-                    signals.lsl,
-                    signals.usl
-                ORDER BY last_event_time DESC, samples.signal_id ASC
-                {limit_clause}
-                """,
-                tuple(params),
+            return _aggregate_rows_from_cursor(
+                cursor,
+                signal_ids=requested_signal_ids,
+                limit=limit,
             )
-            return [_aggregate_row_from_row(row) for row in cursor.fetchall()]
 
         return run_transaction_with_retry(self.database, _list, connection=self.connection)
 
@@ -558,39 +406,7 @@ class RealtimeDashboardService:
         max_lag = _positive_lag_limit(max_lag_seconds)
 
         def _list(cursor) -> list[SourceLagHealth]:
-            cursor.execute(
-                """
-                WITH source_streams AS (
-                    SELECT source_profile_id, stream_key
-                    FROM industrial_realtime_source_health
-                    UNION
-                    SELECT source_profile_id, stream_key
-                    FROM industrial_stream_offsets
-                )
-                SELECT
-                    source_streams.source_profile_id,
-                    profiles.profile_key,
-                    profiles.profile_name,
-                    source_streams.stream_key,
-                    COALESCE(health.latest_event_time, offsets.event_time_watermark),
-                    offsets.last_success_at,
-                    COALESCE(health.lag_seconds, offsets.lag_seconds),
-                    COALESCE(offsets.status, health.status, 'idle'),
-                    profiles.is_enabled,
-                    health.status
-                FROM source_streams
-                JOIN industrial_source_profiles AS profiles
-                  ON profiles.id = source_streams.source_profile_id
-                LEFT JOIN industrial_stream_offsets AS offsets
-                  ON offsets.source_profile_id = source_streams.source_profile_id
-                 AND offsets.stream_key = source_streams.stream_key
-                LEFT JOIN industrial_realtime_source_health AS health
-                  ON health.source_profile_id = source_streams.source_profile_id
-                 AND health.stream_key = source_streams.stream_key
-                ORDER BY source_streams.source_profile_id ASC, source_streams.stream_key ASC
-                """
-            )
-            return [_source_health_from_row(row, max_lag) for row in cursor.fetchall()]
+            return _source_lag_health_from_cursor(cursor, max_lag_seconds=max_lag)
 
         return run_transaction_with_retry(self.database, _list, connection=self.connection)
 
@@ -649,56 +465,115 @@ class RealtimeDashboardService:
     ) -> dict[str, Any]:
         """Build a static-renderer snapshot from persisted rows only."""
 
-        open_events = self.list_open_anomaly_events(limit=open_event_limit)
-        source_health = self.source_lag_health(max_lag_seconds=max_lag_seconds)
-        signal_ids = tuple(
-            dict.fromkeys(
-                (
-                    *(event.signal_id for event in open_events),
-                    *self.recent_sample_signal_ids(limit=signal_limit),
-                )
+        validated_open_event_limit = _positive_limit(open_event_limit)
+        validated_timeline_limit = _positive_limit(timeline_limit)
+        validated_signal_limit = _positive_limit(signal_limit)
+        validated_max_lag = _positive_lag_limit(max_lag_seconds)
+
+        def _read(cursor) -> dict[str, Any]:
+            # SELECT-only sqlite3 workflows need an explicit transaction for one read snapshot.
+            if not cursor.connection.in_transaction:
+                cursor.execute("BEGIN DEFERRED")
+            return _dashboard_snapshot_from_cursor(
+                cursor,
+                open_event_limit=validated_open_event_limit,
+                timeline_limit=validated_timeline_limit,
+                signal_limit=validated_signal_limit,
+                max_lag_seconds=validated_max_lag,
             )
+
+        if self.connection is not None:
+            self.ensure_schema()
+            return run_transaction_with_retry(
+                self.database,
+                _read,
+                connection=self.connection,
+            )
+
+        with sqlite_connection_scope(self.database) as connection:
+            ensure_industrial_data_schema(self.database, connection=connection)
+            return run_transaction_with_retry(
+                self.database,
+                _read,
+                connection=connection,
+            )
+
+
+_RECENT_SIGNAL_TIMELINE_SQL = """
+    WITH recent_samples AS (
+        SELECT
+            samples.id,
+            samples.signal_id,
+            samples.source_profile_id,
+            samples.metric_name,
+            samples.event_time,
+            samples.ingest_time,
+            samples.value,
+            samples.reference,
+            samples.part_number,
+            samples.revision,
+            samples.station,
+            samples.line,
+            samples.work_order,
+            samples.batch_lot,
+            samples.quality_flags_json
+        FROM industrial_samples AS samples
+        WHERE samples.signal_id = ?
+        ORDER BY samples.event_time DESC, samples.id DESC
+        LIMIT ?
+    )
+    SELECT
+        samples.id,
+        samples.signal_id,
+        samples.source_profile_id,
+        signals.signal_key,
+        samples.metric_name,
+        signals.unit,
+        samples.event_time,
+        samples.ingest_time,
+        samples.value,
+        samples.reference,
+        samples.part_number,
+        samples.revision,
+        samples.station,
+        samples.line,
+        samples.work_order,
+        samples.batch_lot,
+        samples.quality_flags_json,
+        COUNT(events.id),
+        COALESCE(SUM(CASE WHEN events.status = 'open' THEN 1 ELSE 0 END), 0),
+        MAX(
+            CASE events.severity
+                WHEN 'info' THEN 1
+                WHEN 'warning' THEN 2
+                WHEN 'major' THEN 3
+                WHEN 'critical' THEN 4
+                ELSE NULL
+            END
         )
-        aggregate_rows = self.sample_aggregate_rows(signal_ids=signal_ids, limit=None)
-        aggregate_by_signal_id = {row.signal_id: row for row in aggregate_rows}
-        signals: list[dict[str, Any]] = []
-        for signal_id in signal_ids:
-            timeline = self.recent_signal_timeline_window(signal_id=signal_id, limit=timeline_limit)
-            recent_events = self.recent_events_by_signal(signal_id=signal_id, limit=open_event_limit)
-            event = next((item for item in open_events if item.signal_id == signal_id), None)
-            aggregate = aggregate_by_signal_id.get(signal_id)
-            first_point = timeline[0] if timeline else None
-            signal_key = (
-                first_point.signal_key
-                if first_point
-                else (aggregate.signal_key if aggregate else (event.signal_key if event else str(signal_id)))
-            )
-            metric_name = (
-                first_point.metric_name
-                if first_point
-                else (aggregate.metric_name if aggregate else (event.metric_name if event else str(signal_id)))
-            )
-            unit = first_point.unit if first_point else (aggregate.unit if aggregate else (event.unit if event else None))
-            source_name = _profile_label(event) or _aggregate_profile_label(aggregate)
-            signals.append(
-                {
-                    "signal_id": signal_id,
-                    "signal_key": signal_key,
-                    "metric_name": metric_name,
-                    "unit": unit,
-                    "source_name": source_name,
-                    "samples": [asdict(point) for point in timeline],
-                    "events": [asdict(item) for item in recent_events],
-                }
-            )
-        return {
-            "generated_at": utc_timestamp(),
-            "title": "Real-time Industrial Monitoring",
-            "source_health": [asdict(row) for row in source_health],
-            "events": [asdict(event) for event in open_events],
-            "aggregate_rows": [asdict(row) for row in aggregate_rows],
-            "signals": signals,
-        }
+    FROM recent_samples AS samples
+    JOIN industrial_signal_definitions AS signals ON signals.id = samples.signal_id
+    LEFT JOIN industrial_anomaly_events AS events ON events.sample_id = samples.id
+    GROUP BY
+        samples.id,
+        samples.signal_id,
+        samples.source_profile_id,
+        signals.signal_key,
+        samples.metric_name,
+        signals.unit,
+        samples.event_time,
+        samples.ingest_time,
+        samples.value,
+        samples.reference,
+        samples.part_number,
+        samples.revision,
+        samples.station,
+        samples.line,
+        samples.work_order,
+        samples.batch_lot,
+        samples.quality_flags_json
+    ORDER BY samples.event_time ASC, samples.id ASC
+"""
 
 
 _DASHBOARD_EVENT_SELECT = """
@@ -734,6 +609,396 @@ _DASHBOARD_EVENT_SELECT = """
     JOIN industrial_signal_definitions AS signals ON signals.id = events.signal_id
     JOIN industrial_source_profiles AS profiles ON profiles.id = samples.source_profile_id
 """
+
+
+def _dashboard_snapshot_from_cursor(
+    cursor,
+    *,
+    open_event_limit: int,
+    timeline_limit: int,
+    signal_limit: int,
+    max_lag_seconds: float,
+) -> dict[str, Any]:
+    cursor.execute(
+        f"""
+        {_DASHBOARD_EVENT_SELECT}
+        WHERE events.status = 'open'
+        ORDER BY events.event_time DESC, events.id DESC
+        LIMIT ?
+        """,
+        (open_event_limit,),
+    )
+    open_events = [_dashboard_event_from_row(row) for row in cursor.fetchall()]
+
+    source_health = _source_lag_health_from_cursor(
+        cursor,
+        max_lag_seconds=max_lag_seconds,
+    )
+    recent_signal_ids = _recent_sample_signal_ids_from_cursor(
+        cursor,
+        limit=signal_limit,
+    )
+    signal_ids = tuple(
+        dict.fromkeys(
+            (
+                *(event.signal_id for event in open_events),
+                *recent_signal_ids,
+            )
+        )
+    )
+
+    aggregate_rows = _aggregate_rows_from_cursor(
+        cursor,
+        signal_ids=signal_ids,
+        limit=None,
+    )
+    timeline_by_signal_id = _snapshot_timelines(
+        cursor,
+        signal_ids,
+        limit=timeline_limit,
+    )
+    events_by_signal_id = _snapshot_recent_events(
+        cursor,
+        signal_ids,
+        limit=open_event_limit,
+    )
+
+    aggregate_by_signal_id = {row.signal_id: row for row in aggregate_rows}
+    signals: list[dict[str, Any]] = []
+    for signal_id in signal_ids:
+        timeline = timeline_by_signal_id.get(signal_id, [])
+        recent_events = events_by_signal_id.get(signal_id, [])
+        event = next((item for item in open_events if item.signal_id == signal_id), None)
+        aggregate = aggregate_by_signal_id.get(signal_id)
+        first_point = timeline[0] if timeline else None
+        signal_key = (
+            first_point.signal_key
+            if first_point
+            else (
+                aggregate.signal_key
+                if aggregate
+                else (event.signal_key if event else str(signal_id))
+            )
+        )
+        metric_name = (
+            first_point.metric_name
+            if first_point
+            else (
+                aggregate.metric_name
+                if aggregate
+                else (event.metric_name if event else str(signal_id))
+            )
+        )
+        unit = (
+            first_point.unit
+            if first_point
+            else (aggregate.unit if aggregate else (event.unit if event else None))
+        )
+        source_name = _profile_label(event) or _aggregate_profile_label(aggregate)
+        signals.append(
+            {
+                "signal_id": signal_id,
+                "signal_key": signal_key,
+                "metric_name": metric_name,
+                "unit": unit,
+                "source_name": source_name,
+                "samples": [asdict(point) for point in timeline],
+                "events": [asdict(item) for item in recent_events],
+            }
+        )
+
+    return {
+        "generated_at": utc_timestamp(),
+        "title": "Real-time Industrial Monitoring",
+        "source_health": [asdict(row) for row in source_health],
+        "events": [asdict(event) for event in open_events],
+        "aggregate_rows": [asdict(row) for row in aggregate_rows],
+        "signals": signals,
+    }
+
+
+def _source_lag_health_from_cursor(
+    cursor,
+    *,
+    max_lag_seconds: float,
+) -> list[SourceLagHealth]:
+    cursor.execute(
+        """
+        WITH source_streams AS (
+            SELECT source_profile_id, stream_key
+            FROM industrial_realtime_source_health
+            UNION
+            SELECT source_profile_id, stream_key
+            FROM industrial_stream_offsets
+        )
+        SELECT
+            source_streams.source_profile_id,
+            profiles.profile_key,
+            profiles.profile_name,
+            source_streams.stream_key,
+            COALESCE(health.latest_event_time, offsets.event_time_watermark),
+            offsets.last_success_at,
+            COALESCE(health.lag_seconds, offsets.lag_seconds),
+            COALESCE(offsets.status, health.status, 'idle'),
+            profiles.is_enabled,
+            health.status
+        FROM source_streams
+        JOIN industrial_source_profiles AS profiles
+          ON profiles.id = source_streams.source_profile_id
+        LEFT JOIN industrial_stream_offsets AS offsets
+          ON offsets.source_profile_id = source_streams.source_profile_id
+         AND offsets.stream_key = source_streams.stream_key
+        LEFT JOIN industrial_realtime_source_health AS health
+          ON health.source_profile_id = source_streams.source_profile_id
+         AND health.stream_key = source_streams.stream_key
+        ORDER BY source_streams.source_profile_id ASC, source_streams.stream_key ASC
+        """
+    )
+    return [
+        _source_health_from_row(row, max_lag_seconds) for row in cursor.fetchall()
+    ]
+
+
+def _recent_sample_signal_ids_from_cursor(cursor, *, limit: int) -> tuple[int, ...]:
+    cursor.execute(
+        """
+        SELECT signal_id
+        FROM (
+            SELECT
+                samples.signal_id AS signal_id,
+                MAX(samples.event_time) AS latest_event_time,
+                MAX(samples.id) AS latest_sample_id
+            FROM industrial_samples AS samples
+            JOIN industrial_signal_definitions AS signals ON signals.id = samples.signal_id
+            WHERE signals.enabled = 1
+            GROUP BY samples.signal_id
+            ORDER BY latest_event_time DESC, latest_sample_id DESC
+            LIMIT ?
+        ) AS recent_signals
+        """,
+        (limit,),
+    )
+    return tuple(int(row[0]) for row in cursor.fetchall())
+
+
+def _aggregate_rows_from_cursor(
+    cursor,
+    *,
+    signal_ids: tuple[int, ...] | None,
+    limit: int | None,
+) -> list[SignalAggregateRow]:
+    if signal_ids == ():
+        return []
+    params: list[Any] = []
+    where_clause = ""
+    if signal_ids is not None:
+        placeholders = ", ".join("?" for _ in signal_ids)
+        where_clause = f"WHERE samples.signal_id IN ({placeholders})"
+        params.extend(signal_ids)
+    limit_clause = ""
+    if limit is not None:
+        limit_clause = "LIMIT ?"
+        params.append(_positive_limit(limit))
+    cursor.execute(
+        f"""
+        SELECT
+            samples.source_profile_id,
+            profiles.profile_key,
+            profiles.profile_name,
+            samples.signal_id,
+            signals.signal_key,
+            signals.metric_name,
+            signals.unit,
+            COUNT(samples.id) AS sample_count,
+            MIN(samples.event_time) AS first_event_time,
+            MAX(samples.event_time) AS last_event_time,
+            MIN(samples.value) AS minimum,
+            MAX(samples.value) AS maximum,
+            AVG(samples.value) AS average,
+            (
+                SELECT latest.value
+                FROM industrial_samples AS latest
+                WHERE latest.signal_id = samples.signal_id
+                ORDER BY latest.event_time DESC, latest.id DESC
+                LIMIT 1
+            ) AS latest_value,
+            signals.nominal,
+            signals.lsl,
+            signals.usl,
+            COALESCE(
+                SUM(
+                    CASE
+                        WHEN signals.lsl IS NOT NULL
+                            AND NOT (
+                                signals.nominal IS NOT NULL
+                                AND ABS(signals.nominal) <= 0.000000000001
+                                AND ABS(signals.lsl) <= 0.000000000001
+                            )
+                            AND samples.value < signals.lsl
+                        THEN 1
+                        ELSE 0
+                    END
+                ),
+                0
+            ) AS below_lsl_count,
+            COALESCE(
+                SUM(
+                    CASE
+                        WHEN signals.usl IS NOT NULL AND samples.value > signals.usl
+                        THEN 1
+                        ELSE 0
+                    END
+                ),
+                0
+            ) AS above_usl_count
+        FROM industrial_samples AS samples
+        JOIN industrial_signal_definitions AS signals ON signals.id = samples.signal_id
+        JOIN industrial_source_profiles AS profiles ON profiles.id = samples.source_profile_id
+        {where_clause}
+        GROUP BY
+            samples.source_profile_id,
+            profiles.profile_key,
+            profiles.profile_name,
+            samples.signal_id,
+            signals.signal_key,
+            signals.metric_name,
+            signals.unit,
+            signals.nominal,
+            signals.lsl,
+            signals.usl
+        ORDER BY last_event_time DESC, samples.signal_id ASC
+        {limit_clause}
+        """,
+        tuple(params),
+    )
+    return [_aggregate_row_from_row(row) for row in cursor.fetchall()]
+
+
+def _snapshot_timelines(
+    cursor,
+    signal_ids: tuple[int, ...],
+    *,
+    limit: int,
+) -> dict[int, list[SignalTimelinePoint]]:
+    timelines = {signal_id: [] for signal_id in signal_ids}
+    if not signal_ids:
+        return timelines
+    selected_values = ", ".join("(?)" for _ in signal_ids)
+    cursor.execute(
+        f"""
+        WITH selected_signals(signal_id) AS (
+            VALUES {selected_values}
+        ),
+        recent_sample_ids AS (
+            SELECT selected.signal_id, samples.id AS sample_id
+            FROM selected_signals AS selected
+            JOIN industrial_samples AS samples
+              ON samples.id IN (
+                    SELECT recent.id
+                    FROM industrial_samples AS recent
+                    WHERE recent.signal_id = selected.signal_id
+                    ORDER BY recent.event_time DESC, recent.id DESC
+                    LIMIT ?
+                )
+        )
+        SELECT
+            samples.id,
+            samples.signal_id,
+            samples.source_profile_id,
+            signals.signal_key,
+            samples.metric_name,
+            signals.unit,
+            samples.event_time,
+            samples.ingest_time,
+            samples.value,
+            samples.reference,
+            samples.part_number,
+            samples.revision,
+            samples.station,
+            samples.line,
+            samples.work_order,
+            samples.batch_lot,
+            samples.quality_flags_json,
+            COUNT(events.id),
+            COALESCE(SUM(CASE WHEN events.status = 'open' THEN 1 ELSE 0 END), 0),
+            MAX(
+                CASE events.severity
+                    WHEN 'info' THEN 1
+                    WHEN 'warning' THEN 2
+                    WHEN 'major' THEN 3
+                    WHEN 'critical' THEN 4
+                    ELSE NULL
+                END
+            )
+        FROM recent_sample_ids
+        JOIN industrial_samples AS samples ON samples.id = recent_sample_ids.sample_id
+        JOIN industrial_signal_definitions AS signals ON signals.id = samples.signal_id
+        LEFT JOIN industrial_anomaly_events AS events ON events.sample_id = samples.id
+        GROUP BY
+            samples.id,
+            samples.signal_id,
+            samples.source_profile_id,
+            signals.signal_key,
+            samples.metric_name,
+            signals.unit,
+            samples.event_time,
+            samples.ingest_time,
+            samples.value,
+            samples.reference,
+            samples.part_number,
+            samples.revision,
+            samples.station,
+            samples.line,
+            samples.work_order,
+            samples.batch_lot,
+            samples.quality_flags_json
+        ORDER BY samples.signal_id ASC, samples.event_time ASC, samples.id ASC
+        """,
+        (*signal_ids, limit),
+    )
+    for row in cursor.fetchall():
+        point = _timeline_point_from_row(row)
+        timelines[point.signal_id].append(point)
+    return timelines
+
+
+def _snapshot_recent_events(
+    cursor,
+    signal_ids: tuple[int, ...],
+    *,
+    limit: int,
+) -> dict[int, list[DashboardAnomalyEvent]]:
+    events_by_signal = {signal_id: [] for signal_id in signal_ids}
+    if not signal_ids:
+        return events_by_signal
+    selected_values = ", ".join("(?)" for _ in signal_ids)
+    cursor.execute(
+        f"""
+        WITH selected_signals(signal_id) AS (
+            VALUES {selected_values}
+        ),
+        recent_event_ids AS (
+            SELECT selected.signal_id, events.id AS event_id
+            FROM selected_signals AS selected
+            JOIN industrial_anomaly_events AS events
+              ON events.id IN (
+                    SELECT recent.id
+                    FROM industrial_anomaly_events AS recent
+                    WHERE recent.signal_id = selected.signal_id
+                    ORDER BY recent.event_time DESC, recent.id DESC
+                    LIMIT ?
+                )
+        )
+        {_DASHBOARD_EVENT_SELECT}
+        JOIN recent_event_ids ON recent_event_ids.event_id = events.id
+        ORDER BY events.signal_id ASC, events.event_time DESC, events.id DESC
+        """,
+        (*signal_ids, limit),
+    )
+    for row in cursor.fetchall():
+        event = _dashboard_event_from_row(row)
+        events_by_signal[event.signal_id].append(event)
+    return events_by_signal
 
 
 def _append_event_filters(

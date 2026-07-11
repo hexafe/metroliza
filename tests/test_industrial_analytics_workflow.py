@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
@@ -97,6 +100,99 @@ def test_default_analytics_paths_add_collision_suffixes(tmp_path) -> None:
 
     assert default_dashboard_path(source_file) == str(tmp_path / "table_analytics_2.html")
     assert default_workbook_path(source_file) == str(tmp_path / "table_analytics_1.xlsx")
+
+
+def test_workflow_import_defers_workbook_and_matplotlib_modules() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = "src:."
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; "
+                "import metroliza.industrial.industrial_analytics_workflow; "
+                "assert 'matplotlib' not in sys.modules; "
+                "assert 'metroliza.industrial.industrial_analytics_workbook' not in sys.modules; "
+                "assert 'metroliza.industrial.industrial_analytics_workbook_charts' "
+                "not in sys.modules"
+            ),
+        ],
+        cwd=project_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_internal_sqlite_tabular_load_is_cleaned_after_success(tmp_path, monkeypatch) -> None:
+    input_file = tmp_path / "owned.csv"
+    dashboard_file = tmp_path / "owned.html"
+    pd.DataFrame(
+        {
+            "Time Stamp": pd.date_range("2026-07-11 08:00", periods=4, freq="h"),
+            "Reference ID": ["R1", "R2", "R3", "R4"],
+            "Length mm": [10.0, 10.1, 10.2, 10.3],
+        }
+    ).to_csv(input_file, index=False)
+    owned_results = []
+    original_loader = workflow_module.load_tabular_analytics_file
+
+    def force_sqlite_loader(*args, **kwargs):
+        loaded = original_loader(*args, **kwargs, force_sqlite=True)
+        owned_results.append(loaded)
+        return loaded
+
+    monkeypatch.setattr(workflow_module, "load_tabular_analytics_file", force_sqlite_loader)
+
+    result = run_tabular_file_analytics(
+        input_file=str(input_file),
+        output_dashboard_file=str(dashboard_file),
+        metric_selection=(ProductionMetricSelection("length_mm", display_label="Length mm"),),
+        chart_selection=ProductionChartSelection(histogram=False),
+    )
+
+    sqlite_path = Path(owned_results[0].sqlite_store.path)
+    assert result.row_count == 4
+    assert dashboard_file.exists()
+    assert not sqlite_path.exists()
+
+
+def test_internal_sqlite_tabular_load_is_cleaned_after_failure(tmp_path, monkeypatch) -> None:
+    input_file = tmp_path / "owned_failure.csv"
+    pd.DataFrame(
+        {
+            "Reference ID": ["R1", "R2"],
+            "Length mm": [10.0, 10.1],
+        }
+    ).to_csv(input_file, index=False)
+    owned_results = []
+    original_loader = workflow_module.load_tabular_analytics_file
+
+    def force_sqlite_loader(*args, **kwargs):
+        loaded = original_loader(*args, **kwargs, force_sqlite=True)
+        owned_results.append(loaded)
+        return loaded
+
+    def fail_materialization(*_args, **_kwargs):
+        raise RuntimeError("materialization failed")
+
+    monkeypatch.setattr(workflow_module, "load_tabular_analytics_file", force_sqlite_loader)
+    monkeypatch.setattr(workflow_module, "materialize_tabular_dataframe", fail_materialization)
+
+    with pytest.raises(RuntimeError, match="materialization failed"):
+        run_tabular_file_analytics(
+            input_file=str(input_file),
+            output_dashboard_file=str(tmp_path / "failure.html"),
+            metric_selection=(ProductionMetricSelection("length_mm", display_label="Length mm"),),
+            chart_selection=ProductionChartSelection(histogram=False),
+        )
+
+    assert not Path(owned_results[0].sqlite_store.path).exists()
 
 
 def test_groupstats_workflow_boundary_forwards_progress_and_cancel(monkeypatch) -> None:

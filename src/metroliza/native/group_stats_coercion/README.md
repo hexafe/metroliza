@@ -10,5 +10,5 @@ Behavior:
 Build locally:
 
 ```bash
-python -m maturin develop --manifest-path src/metroliza/native/group_stats_coercion/Cargo.toml
+python -m maturin develop --locked --manifest-path src/metroliza/native/group_stats_coercion/Cargo.toml
 ```

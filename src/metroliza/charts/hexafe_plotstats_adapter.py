@@ -23,11 +23,8 @@ from metroliza.charts.plotly_stat_helpers import (
     stat_legend_prefix as _stat_legend_prefix,
     strip_group_count_suffix as _strip_group_count_suffix,
 )
-from metroliza.charts.matplotlib_runtime import configure_headless_matplotlib
 from metroliza.charts.summary_plot_palette import SUMMARY_PLOT_PALETTE
 from metroliza.charts.value_formatting import format_metrology_legend_value as _shared_format_metrology_legend_value
-
-configure_headless_matplotlib()
 
 PLOTSTATS_EXPORT_CHARTS_ENV_VAR = "METROLIZA_PLOTSTATS_EXPORT_CHARTS"
 _PLOTSTATS_DISABLED_VALUES = {"0", "false", "no", "off", "disabled", "metroliza", "legacy"}
@@ -672,6 +669,9 @@ def _render_with_hexafe_plotstats(
     lsl: float | None = None,
     usl: float | None = None,
 ) -> HistogramRenderResult | None:
+    from metroliza.charts.matplotlib_runtime import configure_headless_matplotlib
+
+    configure_headless_matplotlib()
     try:
         from hexafe_plotstats import HistogramConfig, build_histogram_payload, render_histogram
         from hexafe_plotstats.models.common import SpecLimits
@@ -718,6 +718,9 @@ def _render_with_metroliza_fallback(
     bin_count: int,
     stats_table: HistogramStatsTable,
 ) -> HistogramRenderResult:
+    from metroliza.charts.matplotlib_runtime import configure_headless_matplotlib
+
+    configure_headless_matplotlib()
     import matplotlib.pyplot as plt
 
     fig = plt.figure(figsize=(7.4, 3.7))
@@ -763,6 +766,9 @@ def _histogram_table_rows_from_plotstats(
     lsl: float | None = None,
     usl: float | None = None,
 ) -> tuple[tuple[str, str], ...]:
+    from metroliza.charts.matplotlib_runtime import configure_headless_matplotlib
+
+    configure_headless_matplotlib()
     try:
         from hexafe_plotstats import HistogramConfig, build_histogram_payload
         from hexafe_plotstats.models.common import SpecLimits

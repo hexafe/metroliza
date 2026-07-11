@@ -33,22 +33,26 @@ Native crate manifests:
 - `src/metroliza/native/distribution_fit_ad/Cargo.toml`
 - `src/metroliza/native/chart_renderer/Cargo.toml`
 
+Each manifest has a versioned sibling `Cargo.lock`. Release and CI builds use
+`--locked`; dependency updates must refresh the affected lockfiles and the
+build's third-party inventory together.
+
 Local developer commands:
 
 ```bash
 # build binary wheel(s) for local interpreter
-python -m maturin build --manifest-path src/metroliza/native/cmm_parser/Cargo.toml --release
-python -m maturin build --manifest-path src/metroliza/native/group_stats_coercion/Cargo.toml --release
-python -m maturin build --manifest-path src/metroliza/native/comparison_stats_bootstrap/Cargo.toml --release
-python -m maturin build --manifest-path src/metroliza/native/distribution_fit_ad/Cargo.toml --release
-python -m maturin build --manifest-path src/metroliza/native/chart_renderer/Cargo.toml --release
+python -m maturin build --locked --manifest-path src/metroliza/native/cmm_parser/Cargo.toml --release
+python -m maturin build --locked --manifest-path src/metroliza/native/group_stats_coercion/Cargo.toml --release
+python -m maturin build --locked --manifest-path src/metroliza/native/comparison_stats_bootstrap/Cargo.toml --release
+python -m maturin build --locked --manifest-path src/metroliza/native/distribution_fit_ad/Cargo.toml --release
+python -m maturin build --locked --manifest-path src/metroliza/native/chart_renderer/Cargo.toml --release
 
 # install extension in editable/dev mode
-python -m maturin develop --manifest-path src/metroliza/native/cmm_parser/Cargo.toml
-python -m maturin develop --manifest-path src/metroliza/native/group_stats_coercion/Cargo.toml
-python -m maturin develop --manifest-path src/metroliza/native/comparison_stats_bootstrap/Cargo.toml
-python -m maturin develop --manifest-path src/metroliza/native/distribution_fit_ad/Cargo.toml
-python -m maturin develop --manifest-path src/metroliza/native/chart_renderer/Cargo.toml
+python -m maturin develop --locked --manifest-path src/metroliza/native/cmm_parser/Cargo.toml
+python -m maturin develop --locked --manifest-path src/metroliza/native/group_stats_coercion/Cargo.toml
+python -m maturin develop --locked --manifest-path src/metroliza/native/comparison_stats_bootstrap/Cargo.toml
+python -m maturin develop --locked --manifest-path src/metroliza/native/distribution_fit_ad/Cargo.toml
+python -m maturin develop --locked --manifest-path src/metroliza/native/chart_renderer/Cargo.toml
 ```
 
 Windows/PowerShell helper for the full native-first packaging flow:
@@ -70,7 +74,7 @@ Windows/PowerShell helper for the full native-first packaging flow:
 The helper script:
 
 - installs `requirements-build.txt` into the active Python environment,
-- builds the requested native modules with `python -m maturin develop --release`,
+- builds the requested native modules with `python -m maturin develop --locked --release`,
 - verifies backend availability in that same environment,
 - then optionally hands off to `packaging/build_nuitka.ps1` or `python -m PyInstaller`.
 
@@ -269,7 +273,7 @@ disabled for offscreen UI smoke unless forced.
 - auto-adds `--include-module=_metroliza_distribution_fit_native` only when `_metroliza_distribution_fit_native` is importable
 - always includes the full `modules` package (`--include-package=modules`) so dynamic/compat imports are present in the executable
 - explicitly includes `metroliza.parsing.cmm_report_parser`, the header OCR adapter modules,
-  `metroliza.reports.report_parser_factory`, and `metroliza.parsing.pdf_backend` because the parser/plugin
+  `metroliza.parsing.report_parser_factory`, and `metroliza.parsing.pdf_backend` because the parser/plugin
   refactor introduced dynamic paths that packagers may otherwise under-detect
 - requires RapidOCR/ONNX/OpenCV/NumPy and the three vendored RapidOCR ONNX files by
   default; `-AllowMissingHeaderOcrBuild` exists only for unsafe local diagnostics and is

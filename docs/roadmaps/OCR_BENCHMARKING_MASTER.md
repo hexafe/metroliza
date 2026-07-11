@@ -1532,7 +1532,7 @@ Focused validation used after the OpenVINO full-parser update:
 python -m ruff check \
   src/metroliza/parsing/header_ocr_backend.py \
   src/metroliza/parsing/cmm_report_parser.py \
-  src/metroliza/shared/contracts.py \
+  src/metroliza/shared/parse_contracts.py \
   src/metroliza/parsing/parse_reports_thread.py \
   src/metroliza/ui/parsing_dialog.py \
   scripts/benchmark_header_ocr_modes.py \
@@ -1550,7 +1550,7 @@ python -m ruff check \
 python -m py_compile \
   src/metroliza/parsing/header_ocr_backend.py \
   src/metroliza/parsing/cmm_report_parser.py \
-  src/metroliza/shared/contracts.py \
+  src/metroliza/shared/parse_contracts.py \
   src/metroliza/parsing/parse_reports_thread.py \
   src/metroliza/ui/parsing_dialog.py \
   scripts/benchmark_header_ocr_modes.py \

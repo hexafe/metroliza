@@ -247,6 +247,33 @@ def test_install_requires_expected_results_and_samples(tmp_path, capsys):
     assert "[PASS]" not in output
 
 
+def test_install_reports_atomic_store_failure_without_traceback(monkeypatch, tmp_path, capsys):
+    module = _load_cli_module()
+    workspace, profile, _sample, expected = _write_fixture_workspace(tmp_path)
+
+    def _fail_install(*args, **kwargs):
+        raise OSError("injected profile promotion failure")
+
+    monkeypatch.setattr(module, "install_profile", _fail_install)
+
+    result = module.main(
+        [
+            "--home",
+            str(tmp_path / "home"),
+            "install",
+            str(profile),
+            "--expected-results",
+            str(expected),
+            "--workspace",
+            str(workspace),
+        ]
+    )
+    output = capsys.readouterr().out
+
+    assert result == 1
+    assert "injected profile promotion failure" in output
+
+
 def test_store_commands_reject_path_like_plugin_ids(tmp_path, capsys):
     module = _load_cli_module()
     result = module.main(["--home", str(tmp_path / "home"), "disable", "../supplier_alpha"])

@@ -97,7 +97,7 @@ The legacy `docs/group_analysis/user_manual.md` path is retained only as a redir
   - `src/metroliza/charts/export_chart_payload_helpers.py` for chart payload/table shaping.
   - `src/metroliza/exporting/export_workbook_planning_helpers.py` for workbook/table layout sizing heuristics.
   - `src/metroliza/exporting/export_row_aggregation_utils.py` for row/group aggregation computations.
-- CSV/Excel Summary is routed through `src/metroliza/ui/industrial_analytics_dialog.py` and the shared tabular analytics workflow; large-dashboard chart interactivity and large-group layer thresholds are controlled by the CSV Summary dashboard interactivity contract in `src/metroliza/shared/contracts.py`.
+- CSV/Excel Summary is routed through `src/metroliza/ui/industrial_analytics_dialog.py` and the shared tabular analytics workflow; its request contract lives in `src/metroliza/industrial/contracts.py`, while large-dashboard interactivity normalization lives in `src/metroliza/shared/dashboard_interactivity.py`.
 - `src/metroliza/ui/data_grouping.py` keeps widget/event orchestration and delegates data/query mutations to `src/metroliza/tabular/data_grouping_service.py`.
 - Grouping dialog colors use shared semantic tokens from `src/metroliza/ui/ui_theme_tokens.py` so dialogs stay visually consistent across light/dark themes.
 - Group Analysis statistical computation is bridged through `src/metroliza/analytics/hexafe_groupstats_adapter.py`; workbook, dashboard, export orchestration, and UI remain Metroliza-owned.
@@ -106,8 +106,9 @@ The legacy `docs/group_analysis/user_manual.md` path is retained only as a redir
 
 Canonical release operations docs (release gate/source-of-truth set):
 
-- `release_checks/release_status.md` — current release operational status and entry-point links, including build `260709` full-repository hardening evidence.
-- `release_checks/rc2_full_repo_hardening_2026-07-09.md` — build `260709` audit-plan implementation, exact local validation, and remaining packaging, push, and manual release blockers.
+- `release_checks/release_status.md` — current release operational status and entry-point links, including build `260711` detailed audit pass-two evidence.
+- `release_checks/rc2_audit_pass2_release_check_2026-07-11.md` — build `260711` detailed repository audit implementation, exact local CI-parity validation, and remaining packaging, push, Google, legal, and clean-machine blockers.
+- `release_checks/rc2_full_repo_hardening_2026-07-09.md` — historical build `260709` first-pass audit implementation and local validation.
 - `release_checks/release_candidate_checklist.md` — primary RC gate checklist and required sign-offs.
 - `release_checks/open_testing_runbook.md` — open-testing execution runbook and evidence expectations.
 - `release_checks/branching_strategy.md` — authoritative branch naming/rules used during release work.

@@ -538,7 +538,7 @@ start here, then check:
    `src/metroliza/parsing/base_report_parser.py` for the generic V2-to-SQLite
    bridge.
 8. `src/metroliza/parsing/parse_reports_thread.py` and
-   `src/metroliza/reports/report_parser_factory.py` for runtime discovery,
+   `src/metroliza/parsing/report_parser_factory.py` for runtime discovery,
    source-format filtering, and batch failure isolation.
 9. `tests/test_parser_plugin_contracts.py`, `tests/test_parser_plugin_wizard.py`,
    `tests/test_parser_plugin_repair_loop.py`, `tests/test_parser_plugin_scripts.py`,

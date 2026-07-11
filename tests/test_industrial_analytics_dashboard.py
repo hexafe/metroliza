@@ -1311,6 +1311,13 @@ def _static_population_layer_manifest(point_count: int = 8) -> dict[str, object]
             "metric_count": 1,
             "chart_count": 1,
         },
+        "metrics": [
+            {
+                "field_name": "length_mm",
+                "display_label": "Length Mm",
+                "source_kind": "measurement",
+            }
+        ],
         "charts": [
             {
                 "id": "time-series-length_mm",

@@ -197,6 +197,14 @@ try {
             Write-Host "    $($exe.FullName)"
         }
     }
+
+    Invoke-Step 'Staging third-party notice sidecars' {
+        Invoke-Checked -Executable $venvPython -Arguments @(
+            'scripts/stage_release_notices.py',
+            '--dist-dir',
+            $distDir
+        )
+    }
 }
 finally {
     Pop-Location

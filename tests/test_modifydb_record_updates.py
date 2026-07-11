@@ -1,7 +1,8 @@
 import unittest
+from unittest.mock import patch
 
 from PyQt6.QtCore import Qt
-from modules.modify_db import ModifyDB  # noqa: E402
+from metroliza.ui.modify_db import ModifyDB
 
 
 class _FakeItem:
@@ -39,6 +40,17 @@ class _FakeRepository:
 
     def update_measurement_fields(self, measurement_id, fields):
         self.measurement_updates.append((measurement_id, fields))
+
+
+class _FakeEditService:
+    def __init__(self, error=None):
+        self.calls = []
+        self.error = error
+
+    def apply_changes(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
 
 
 class TestModifyDbRecordUpdates(unittest.TestCase):
@@ -148,6 +160,64 @@ class TestModifyDbRecordUpdates(unittest.TestCase):
         self.assertEqual(ModifyDB._coerce_record_value("10.5", "float"), 10.5)
         self.assertEqual(ModifyDB._coerce_record_value("not-a-number", "float"), "not-a-number")
         self.assertEqual(ModifyDB._coerce_record_id("bad-id"), None)
+
+    def test_apply_changes_delegates_collected_payload_to_report_edit_service(self):
+        dialog = ModifyDB.__new__(ModifyDB)
+        reference_table = object()
+        sample_table = object()
+        header_table = object()
+        service = _FakeEditService()
+        changes_by_table = {
+            reference_table: [("REF-B", "REF-A")],
+            sample_table: [],
+            header_table: [("WIDTH", "OLD WIDTH")],
+        }
+        dialog.reference_table = reference_table
+        dialog.part_number_table = sample_table
+        dialog.header_table = header_table
+        dialog._storage_flavor = "current"
+        dialog.collect_normalization_value_changes = lambda table: changes_by_table[table]
+        dialog.collect_report_record_updates = lambda: [(42, {"comment": "reviewed"})]
+        dialog.collect_measurement_record_updates = lambda: [(7, {"header": "WIDTH"})]
+        dialog._create_report_edit_service = lambda: service
+        dialog.close = lambda: None
+
+        with patch("metroliza.ui.modify_db.QMessageBox.information"):
+            dialog.apply_changes()
+
+        self.assertEqual(
+            service.calls,
+            [
+                {
+                    "storage_flavor": "current",
+                    "normalization_changes": {
+                        "reference": [("REF-B", "REF-A")],
+                        "sample_number": [],
+                        "header": [("WIDTH", "OLD WIDTH")],
+                    },
+                    "report_updates": [(42, {"comment": "reviewed"})],
+                    "measurement_updates": [(7, {"header": "WIDTH"})],
+                }
+            ],
+        )
+
+    def test_apply_changes_forwards_service_error_to_dialog_error_handler(self):
+        dialog = ModifyDB.__new__(ModifyDB)
+        dialog.reference_table = object()
+        dialog.part_number_table = object()
+        dialog.header_table = object()
+        dialog._storage_flavor = "current"
+        dialog.collect_normalization_value_changes = lambda _table: [("new", "old")]
+        dialog.collect_report_record_updates = lambda: []
+        dialog.collect_measurement_record_updates = lambda: []
+        failure = ValueError("unsupported report edit")
+        dialog._create_report_edit_service = lambda: _FakeEditService(failure)
+        captured = []
+        dialog.log_and_exit = captured.append
+
+        dialog.apply_changes()
+
+        self.assertEqual(captured, [failure])
 
 
 if __name__ == "__main__":

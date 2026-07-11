@@ -1,3 +1,8 @@
+import importlib
+import json
+import os
+import subprocess
+import sys
 import unittest
 
 from modules.contracts import (
@@ -17,6 +22,68 @@ from modules.contracts import (
 )
 from modules.industrial_analytics_state import ProductionMetricSelection
 from modules.tabular_analytics_service import TabularColumnFilter
+
+
+class TestContractOwnership(unittest.TestCase):
+    def test_compatibility_aliases_preserve_owner_object_identity(self):
+        legacy = importlib.import_module("modules.contracts")
+        shared = importlib.import_module("metroliza.shared.contracts")
+        exporting = importlib.import_module("metroliza.exporting.contracts")
+        industrial = importlib.import_module("metroliza.industrial.contracts")
+        tabular = importlib.import_module("metroliza.tabular.contracts")
+
+        self.assertIs(legacy, shared)
+        self.assertIs(shared.AppPaths, exporting.AppPaths)
+        self.assertIs(shared.ExportOptions, exporting.ExportOptions)
+        self.assertIs(shared.ExportRequest, exporting.ExportRequest)
+        self.assertIs(shared.validate_export_request, exporting.validate_export_request)
+        self.assertIs(shared.IndustrialAnalyticsRequest, industrial.IndustrialAnalyticsRequest)
+        self.assertIs(
+            shared.validate_industrial_analytics_request,
+            industrial.validate_industrial_analytics_request,
+        )
+        self.assertIs(shared.GroupingAssignment, tabular.GroupingAssignment)
+        self.assertIs(shared.validate_grouping_df, tabular.validate_grouping_df)
+
+    def test_cold_shared_contract_import_does_not_load_feature_packages(self):
+        script = """
+import importlib
+import json
+import sys
+
+contracts = importlib.import_module("metroliza.shared.contracts")
+print(json.dumps({
+    "feature_packages": {
+        name: name in sys.modules
+        for name in (
+            "metroliza.charts",
+            "metroliza.exporting",
+            "metroliza.industrial",
+            "metroliza.tabular",
+        )
+    },
+    "parse_request_available": hasattr(contracts, "ParseRequest"),
+}))
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            check=True,
+            env={**os.environ, "PYTHONPATH": "src:."},
+            text=True,
+            capture_output=True,
+        )
+        evidence = json.loads(result.stdout)
+
+        self.assertEqual(
+            evidence["feature_packages"],
+            {
+                "metroliza.charts": False,
+                "metroliza.exporting": False,
+                "metroliza.industrial": False,
+                "metroliza.tabular": False,
+            },
+        )
+        self.assertTrue(evidence["parse_request_available"])
 
 
 class TestValidateParseRequest(unittest.TestCase):

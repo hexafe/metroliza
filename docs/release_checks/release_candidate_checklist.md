@@ -1,567 +1,128 @@
 # Release candidate checklist
 
-Use this checklist as the **primary release gate** for RC readiness, sign-off, promotion, and rollback preparedness.
+This is the timeless, authoritative release-promotion gate. It intentionally does
+not carry checked boxes from older builds. Exact commands, counts, commit SHAs,
+workflow runs, artifacts, waivers, and sign-offs belong in a dated file under
+`docs/release_checks/` and must identify the build being promoted.
 
-Authoritative source for branch naming rules: `docs/release_checks/branching_strategy.md`.
+Canonical release identity comes from `src/metroliza/app/version.py`. Run
+`python scripts/sync_release_metadata.py --check` before recording evidence; do
+not copy an older build identifier into this checklist.
 
-## 1) Pre-freeze checks
+## 1. Scope, ownership, and freeze
 
-Complete before announcing code freeze or cutting an RC branch.
+- [ ] Release owner, QA owner, release engineer, and backups are named.
+- [ ] Scope is frozen; every late change has rationale, owner, test evidence, and rollback plan.
+- [ ] Every open defect is classified as release-blocking or explicitly deferred with owner approval.
+- [ ] The dated evidence file records branch, exact commit SHA, public version label, build ID, and artifact IDs.
+- [ ] `README.md`, `CHANGELOG.md`, `docs/README.md`, and relevant runbooks describe the current behavior.
+- [ ] Dependency pins and sibling checkout SHAs agree across requirements, CI, and hygiene tests.
 
-- [ ] Scope is locked for the target release; all non-release-critical work is moved out of milestone.
-- [ ] Release owner and backup owner are assigned.
-- [x] `src/metroliza/app/version.py` version/build/date values are updated for this RC.
-- [x] `CHANGELOG.md` includes user-facing notes for this RC/release.
-- [x] `README.md` **Release highlights** reflects the current RC/release line.
-- [x] `python scripts/sync_release_metadata.py --check` passes (release metadata, README, and CHANGELOG are aligned).
-- [x] Open blockers are triaged against the defect criteria in section 6.
-- [x] Open implementation-item gate triage is completed in [`implementation_item_triage.md`](./implementation_item_triage.md) (Gate/Owner/Target RC/Rationale filled) before freeze proceeds.
-- [ ] Feature freeze is active for the RC line; any late-scope exception is recorded with release-owner approval before merge.
+## 2. Clean Python 3.11 local gate
 
-## 2) Documentation readiness
+Use a fresh environment resolved from `requirements-dev.txt`. Record Python,
+Ruff, Qt, PyMuPDF, cryptography, and pinned sibling-package versions plus
+`python -m pip check` output in the dated evidence file.
 
-Complete before beginning open testing on an RC build.
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements-dev.txt
+python -m pip check
+PYTHONPATH=src:. python -m ruff check .
+PYTHONPATH=src:. python -m compileall -q -x '^\./\.git/' .
+python scripts/sync_release_metadata.py --check
+python scripts/check_release_hygiene.py
+python scripts/security_audit.py --ci --sibling-root /home/hexaf/Projects
+QT_QPA_PLATFORM=offscreen PYTHONPATH=src:. python -m pytest tests -q \
+  --cov=src/metroliza --cov=modules --cov=scripts --cov-report= --cov-fail-under=0
+```
 
-- [ ] Public API changes have corresponding docstrings updated. *(Owner: Dev)*
-- [ ] Complex logic changes include explanatory inline comments where needed. *(Owner: Dev)*
-- [ ] `README.md` install/usage/config sections are validated against current behavior. *(Owner: QA)*
-- [ ] `docs/README.md` index is updated for any new or renamed active docs. *(Owner: Release manager)*
-- [x] Runbooks/checklists touched by behavior changes are updated in the same PR. *(Owner: Dev/QA)*
-- [ ] Stale or outdated comments are removed. *(Owner: Dev)*
-- [x] Documentation updates follow source-of-truth and archival requirements in [`docs/documentation_policy.md`](../documentation_policy.md). *(Owner: Release manager)*
-- [ ] Final documentation sign-off includes links to evidence (PRs/commits) for all relevant documentation updates. *(Owner: Release manager)*
+- [ ] Full tests pass without unexpected skips or first-party import failures.
+- [ ] Coverage threshold from `unit-tests` passes.
+- [ ] The `unit-test-coverage` artifact `coverage.xml` is reviewed for the exact commit.
+- [ ] Ruff, compileall, metadata sync, release hygiene, and CI-mode security audit pass.
+- [ ] Dependency audit reports no unapproved known vulnerabilities.
+- [ ] Focused performance/query-plan guards pass for every changed hot path.
 
-<a id="open-testing-entry-criteria"></a>
+## 3. Automatic GitHub CI gate
 
-## 3) Open testing entry criteria
+All automatic jobs must reach terminal success for the exact pushed commit:
 
-Complete before beginning open testing on an RC build.
+- [ ] `static-checks`
+- [ ] `unit-tests`
+- [ ] `windows-core-smoke`
+- [ ] `native-artifacts`
+- [ ] `cmm-parser-perf-gate`
+- [ ] `perf-benchmarks` completes and any advisory regression is reviewed
 
-- [ ] Feature freeze timestamp is recorded in release tracker and announcement thread. *(Owner: Release manager)*
-- [ ] Late-scope exception register is empty, or every exception has rationale, owner, target RC, test evidence, rollback/deferral option, and explicit release-owner approval. *(Owner: Release owner)*
-- [ ] Active RC branch name is confirmed and documented (for example `release/2026.06-rc1`; validation branches are not final RC branches). *(Owner: Release engineer)*
-- [ ] Build identifier for open testing is published (artifact/version/hash) and linked in tracker. *(Owner: Release engineer)*
-- [x] Mandatory CI baseline is completed and linked (build/lint/tests) before open testing starts for final `2026.06 RC1` tester-build commit `307acd16031c5622093ba52a9a64d2b2146d7f02`: GitHub Actions run [`27506446912`](https://github.com/hexafe/metroliza/actions/runs/27506446912). *(Owner: Release owner)*
-- [ ] Known-issues document link is prepared and shared with open testers. *(Owner: QA/Product)*
-- [ ] Bug reporting channel is announced (for example issue board + chat channel) and monitored. *(Owner: Release manager/QA)*
+Record the workflow run URL/ID and exact SHA. A green run for an older commit is
+not evidence for the promoted build.
 
-## 4) RC branch creation
+## 4. Packaging and clean-machine gate
 
-Create the RC branch from the approved base commit (currently `master` in this repository):
+- [ ] PyInstaller onefile artifact builds, is versioned correctly, and launches on clean Windows.
+- [ ] PyInstaller onedir artifact builds and launches on clean Windows.
+- [ ] Nuitka artifact builds and launches, or a dated release-owner waiver explains why it is excluded.
+- [ ] Native wheels build for release targets and native plus pure-Python fallback smoke tests pass.
+- [ ] Every native wheel resolves with the versioned `Cargo.lock`; lockfiles and the recorded Rust notice inventory match.
+- [ ] Representative report parse, SQLite load, dashboard export, and optional workbook export pass from packaged artifacts.
+- [ ] Startup evidence covers onefile extraction, Qt splash handoff, first event-loop tick, and feature warmup.
+- [ ] `THIRD_PARTY_NOTICES.md` and a visible notices/licenses sidecar ship beside every executable/archive.
+- [ ] The resolved Python and Rust dependency/license inventory is attached to the build evidence.
+- [ ] Release-owner/legal confirmation is recorded for PyQt/Qt and PyMuPDF distribution obligations.
+
+The hosted `packaging-smoke` and `windows-startup-benchmark` lanes may support
+this evidence, but manual clean-machine launch and core-flow checks remain
+release-blocking unless the release owner records a specific waiver.
+
+## 5. Google conversion gate
+
+Google conversion smoke is release-blocking for promoted RC artifacts; green CI does not satisfy that gate.
+It runs only on a secure local workstation with
+a sandbox account because OAuth client and token files are never materialized
+on hosted runners.
+
+- [ ] The command in `docs/google_conversion_smoke_runbook.md` runs against the exact build commit.
+- [ ] Upload/conversion returns a matching file ID and HTTPS spreadsheet URL.
+- [ ] Converted tab titles exactly match the generated workbook (`MEASUREMENTS`, `REF_A` for the smoke fixture).
+- [ ] Warnings are empty and the local `.xlsx` fallback remains available.
+- [ ] Evidence is recorded in `docs/release_checks/google_conversion_smoke.md` without secrets.
+
+## 6. Product and data-integrity smoke
+
+- [ ] CMM parser native/Python parity and mutation detection pass on representative fixtures.
+- [ ] CSV Summary remains dashboard-first; workbook output is explicit opt-in.
+- [ ] No eager/direct pandas startup coupling is introduced. Packaging may still include pandas through pinned runtime dependencies.
+- [ ] Report edits, grouping assignments, exports, and industrial sync preserve SQLite transaction and rollback behavior.
+- [ ] Realtime polling, anomaly events, dashboard snapshots, stale-writer protection, replay, cancellation, and shutdown pass.
+- [ ] Google cancel/timeout/fatal-validation paths leave no orphaned converted file.
+- [ ] Legacy `modules.*` compatibility imports and documented public paths still resolve.
+- [ ] Deprecated Group Comparison and BOM entry points remain compatible for their announced window and emit the expected notice.
+
+## 7. Security and privacy gate
+
+- [ ] Secret scanning covers all tracked text/decodable files, private keys, extensionless files, shell, and PowerShell content.
+- [ ] No real reports, databases, logs, exported workbooks, `credentials.json`, or `token.json` are tracked or bundled unintentionally.
+- [ ] OAuth/token storage permissions, redaction, migration, and symlink protections pass.
+- [ ] CI Actions use immutable reviewed SHAs, least-privilege permissions, disabled checkout credential persistence, bounded timeouts, and concurrency cancellation.
+- [ ] Industrial credentials, connection strings, raw SQL, and source payloads remain redacted from diagnostics and logs.
+
+## 8. Promotion decision and rollback
+
+- [ ] No unresolved release-blocking defect remains.
+- [ ] QA, release engineering, release owner, and required legal/compliance owners sign the dated evidence.
+- [ ] Known issues and tester communication are ready.
+- [ ] Previous stable tag/artifact is identified and verified runnable.
+- [ ] Rollback owner and procedure are recorded.
+- [ ] The RC is merged only after evidence review:
 
 ```bash
 git checkout master
 git pull --ff-only origin master
-git checkout -b release/2026.06-rc1
-git push -u origin release/2026.06-rc1
+git merge --no-ff rc2
 ```
 
-Alternative (single command if local `master` is already up to date):
-
-```bash
-git checkout -b release/2026.06-rc1 origin/master
-git push -u origin release/2026.06-rc1
-```
-
-- [ ] RC branch follows naming convention (for example `release/2026.06-rc1`).
-- [ ] Branch creation commit SHA and timestamp are recorded in release notes/tracker.
-
-<a id="required-test-suites-and-sign-off-owners"></a>
-
-## 5) Required test suites and sign-off owners
-
-Run and record all required checks from the RC branch:
-
-```bash
-python -m compileall .
-ruff check .
-PYTHONPATH=src:. python -m pytest tests -q
-```
-
-- [x] Compile check passed locally for the current audit worktree. *(Owner: Dev)*
-- [x] Lint check passed locally for the current audit worktree. *(Owner: Dev)*
-- [x] Unit test suite passed locally for the current audit worktree. *(Owner: QA/Dev)*
-
-### Required packaging validation (release-blocking)
-
-Build commands:
-
-```bash
-pyinstaller packaging/metroliza_onefile.spec
-pyinstaller packaging/metroliza_onedir.spec
-python -m maturin build --manifest-path src/metroliza/native/cmm_parser/Cargo.toml --release
-python -m maturin build --manifest-path src/metroliza/native/chart_renderer/Cargo.toml --release
-python -m maturin build --manifest-path src/metroliza/native/group_stats_coercion/Cargo.toml --release
-python -m maturin build --manifest-path src/metroliza/native/comparison_stats_bootstrap/Cargo.toml --release
-python -m maturin build --manifest-path src/metroliza/native/distribution_fit_ad/Cargo.toml --release
-```
-
-```powershell
-./build_windows_exe.ps1 -Mode both
-./packaging/build_nuitka.ps1 -Mode standalone
-./scripts/measure_windows_startup.ps1 -ArtifactPath <onefile.exe>,<onedir\metroliza.exe>
-```
-
-- [ ] PyInstaller onefile output exists under `dist/` and launches. *(Owner: Release engineer/QA)*
-- [ ] PyInstaller onedir output exists under `dist/` and launches faster than onefile on the clean Windows test machine. *(Owner: Release engineer/QA)*
-- [ ] Nuitka output executable exists and launches on a clean/sandbox target environment. *(Owner: Release engineer/QA)*
-- [ ] Startup profile JSONL evidence is attached for onefile and onedir launch tests. *(Owner: QA)*
-- [ ] Native wheel build succeeds for release target(s), and `_metroliza_cmm_native` import smoke check passes. *(Owner: Release engineer/QA)*
-- [ ] Native chart wheel build succeeds for release target(s), and `_metroliza_chart_native` histogram render smoke check passes. *(Owner: Release engineer/QA)*
-- [ ] Native group statistics, comparison statistics, and distribution-fit wheels build and their import smoke checks pass. *(Owner: Release engineer/QA)*
-- [ ] Pure-Python parser fallback works when native module is intentionally unavailable (`METROLIZA_CMM_PARSER_BACKEND=python`). *(Owner: QA)*
-- [ ] Basic startup flow works (open app, load a representative input, generate an export). *(Owner: QA)*
-- [ ] Produced artifacts are named/versioned as expected for RC distribution. *(Owner: Release manager)*
-- [ ] Third-party notices/license attribution are bundled or attached to release artifacts, including RapidOCR, ONNX Runtime, OpenCV, NumPy, Excel reader packages, hexafe-plotstats, and Oznak. *(Owner: Release manager/QA)*
-
-- [x] GitHub CI checks for pushed `2026.06rc1(260614)` commit `307acd16031c5622093ba52a9a64d2b2146d7f02` are green: run [`27506446912`](https://github.com/hexafe/metroliza/actions/runs/27506446912). *(Owner: Release owner)*
-- [x] GitHub CI checks for pushed `2026.06rc1(260615)` commit `3f26438d473bd6941606d3cf949f2e7782276763` are green before tag/promotion: run [`27570794579`](https://github.com/hexafe/metroliza/actions/runs/27570794579). *(Owner: Release owner)*
-- [x] 2026-07-04 SQLite realtime event-stream local gates passed: focused
-      realtime/UI/schema tests (`40 passed`), full Ruff, compileall, release
-      metadata sync, release hygiene, security audit with no known
-      vulnerabilities, and full offscreen pytest with coverage (`2253 passed,
-      324 skipped, 114 warnings, 83 subtests passed`). Pushed CI for this
-      event-stream closeout is pending on the current branch commit. *(Owner:
-      Dev/QA)*
-- [ ] CMM parser perf gate evidence (`cmm-parser-perf-gate` + `cmm-parser-perf-artifacts`) is reviewed when parser/backend changes are present; triage follows [`cmm_parser_perf_guardrail.md`](./cmm_parser_perf_guardrail.md). *(Owner: Release owner/QA)*
-- [ ] Coverage threshold from `unit-tests` passes, and `unit-test-coverage` artifact `coverage.xml` is reviewed as RC confidence evidence. *(Owner: Release owner/QA)*
-- [ ] Manual release smoke evidence is linked before open-testing promotion when applicable. Google conversion smoke is release-blocking for promoted RC artifacts; skipped default CI does not satisfy that gate. *(Owner: Release owner)*
-
-### 2026.06 RC1 realtime industrial tester evidence
-
-Current validation branch: `rc2`.
-Current RC metadata: `2026.06rc2(260626)`.
-
-- Local realtime/anomaly tester-build evidence is recorded in
-  [`realtime_industrial_rollout_checklist.md`](./realtime_industrial_rollout_checklist.md).
-- Release notes and user-facing metadata were updated through
-  `src/metroliza/app/version.py`, `CHANGELOG.md`, and `README.md`.
-- Local focused changed-slice validation passed:
-  `111 passed` across CMM probe, parser plugin contracts, realtime dashboard
-  launch, industrial source/security, Oznak adapter, and realtime
-  poller/config/service tests.
-- Broader realtime/industrial/anomaly validation passed:
-  `416 passed, 2 skipped`.
-- Full local offscreen pytest passed:
-  `2065 passed, 289 skipped, 83 subtests passed`.
-- Realtime/anomaly source slice coverage measured `89%`.
-- Final CI-shaped combined coverage rerun passed at `82%`, above the `80%`
-  release gate, after the release metadata refresh.
-- Pushed GitHub CI passed for build `260614` commit
-  `307acd16031c5622093ba52a9a64d2b2146d7f02` in run
-  [`27506446912`](https://github.com/hexafe/metroliza/actions/runs/27506446912).
-- 2026-06-15 realtime monitor UI/UX follow-up local gates passed on
-  `feature/realtime-industrial-ml-anomaly`: checked-source selection feedback,
-  disabled-source polling prevention, current-source save semantics, monitor
-  manual updates, compact About dialog, and build `260615` release notes.
-  Focused realtime UI/runtime/About/metadata validation passed (`15 passed`);
-  full offscreen pytest passed (`2079 passed, 296 skipped, 6 warnings, 83
-  subtests passed`); exact CI-shaped combined coverage passed at `81%`, above
-  the 80% threshold; release metadata sync, release hygiene, Ruff, compileall,
-  and security audit passed. Security audit required temporary `pip-audit`
-  environment setup; `pip-audit` reported no known vulnerabilities and existing
-  Bandit findings remain report-only baseline warnings.
-- Pushed GitHub CI passed for build `260615` commit
-  `3f26438d473bd6941606d3cf949f2e7782276763` in run
-  [`27570794579`](https://github.com/hexafe/metroliza/actions/runs/27570794579).
-- 2026-06-16 Industrial Data fetch, realtime monitor, and dashboard
-  optimization release-note/manual closeout is recorded in
-  [`realtime_industrial_optimization_check_2026-06-16.md`](./realtime_industrial_optimization_check_2026-06-16.md).
-- 2026-06-17 Industrial Data SQLite handoff, cached raw workbook export,
-  additional export-filter enforcement, realtime polling cost, and Oznak
-  fallback diagnostics closeout is recorded in
-  [`realtime_industrial_performance_check_2026-06-17.md`](./realtime_industrial_performance_check_2026-06-17.md).
-  Local QA/release gates passed, including full offscreen pytest
-  (`2109 passed, 314 skipped, 6 warnings, 83 subtests passed`), security audit
-  with no known vulnerabilities, and the CI-shaped combined coverage gate at
-  `81%`. Final integrated RC2 pushed CI is recorded below for build `260623`
-  commit `4a9f159a8c6a77a824a7170b61f0877f08978984`.
-- 2026-06-19 UI overlap/layout closeout is recorded in
-  [`ui_overlap_layout_audit_2026-06-19.md`](./ui_overlap_layout_audit_2026-06-19.md)
-  and keeps the existing `260617` build identity. Local QA/release gates passed,
-  including the focused UI/export gate (`338 passed, 6 warnings`), native chart
-  parity (`15 passed`), full offscreen pytest (`2135 passed, 320 skipped, 6
-  warnings, 83 subtests passed`), release metadata sync, release hygiene,
-  security audit with no known vulnerabilities, Ruff, compileall, whitespace
-  checks, and the CI-shaped combined coverage gate at `81%`. Final integrated
-  RC2 pushed CI is recorded below for build `260623` commit
-  `4a9f159a8c6a77a824a7170b61f0877f08978984`.
-- 2026-06-23 CMM parser resolver hotfix is included in build `260623`. Encoded
-  CMM PDFs whose visible markers are hidden from raw-byte sniffing now get a
-  first-page PDF text probe before strict parser selection rejects them. Local
-  focused parser/package validation passed (`66 passed`), Ruff passed for the
-  changed parser files, and the resolver diagnostics script selected `cmm` at
-  confidence `95` for a generated encoded CMM PDF. Final integrated RC2 GitHub
-  Actions CI passed in run [`28035951993`](https://github.com/hexafe/metroliza/actions/runs/28035951993)
-  for commit `4a9f159a8c6a77a824a7170b61f0877f08978984`.
-- 2026-06-23 RC2 pandas-free SQLite performance closeout is included in build
-  `260623`. CSV Summary, export, parser/report, and industrial analytics table
-  paths now share lighter SQLite row/query contracts, direct grouped SQLite
-  summaries, and bounded row streaming coverage. Local validation passed for
-  full offscreen pytest with coverage (`2186 passed, 320 skipped, 112 warnings,
-  83 subtests passed`), Ruff, compileall, focused SQLite/tabular/benchmark
-  tests (`87 passed`), release metadata sync, release hygiene, security audit
-  with no known vulnerabilities, and the CI-shaped coverage threshold at 81%.
-  The `industrial_filter_dialog` append-shard hang was reproduced and fixed by
-  making the local reference-loading fixture satisfy report-schema foreign keys;
-  the full industrial append shard rerun passed (`79 passed`).
-  The before/after benchmark set is recorded in
-  [`rc2_pandas_free_sqlite_performance_2026-06-23.md`](./rc2_pandas_free_sqlite_performance_2026-06-23.md).
-- 2026-06-26 magic-filter syntax closeout is included in build `260626`.
-  CSV/Excel Magic filter, SQLite-backed tabular filtering, the shared parser,
-  and Export CMM SQL filters now have explicit regression coverage for
-  case-insensitive field names, case-insensitive `AND`/`OR`/`IN`/`NOT IN`
-  operators, and repeated-field shorthand ranges such as
-  `Param1 > 200 and < 150.2`. Export documentation uses the CMM field `Meas`
-  for the equivalent filter because source-file columns such as `Param1` only
-  exist in CSV/Excel workflows. Local validation passed for focused
-  filter/metadata tests (`107 passed, 1 warning`), docs/CI policy tests
-  (`18 passed`), Ruff, compileall, release metadata sync, release hygiene,
-  security audit with no known vulnerabilities, and full offscreen pytest with
-  coverage (`2243 passed, 323 skipped, 114 warnings, 83 subtests passed`).
-  Pushed GitHub Actions CI passed for commit
-  `a7e1ab0b2bf7612e2d44a907b88d00db87ae3e02` in run
-  [`28220479719`](https://github.com/hexafe/metroliza/actions/runs/28220479719):
-  Static checks, Unit tests with combined coverage, Native wheel build and
-  smoke checks, CMM parser perf guardrail, and Performance benchmark trend
-  check all passed. Manual/opt-in Packaging smoke, Windows startup benchmark,
-  and Google conversion smoke were skipped and remain release-promotion gates.
-- Pushed GitHub CI passed for build `260623` commit
-  `4a9f159a8c6a77a824a7170b61f0877f08978984` in run
-  [`28035951993`](https://github.com/hexafe/metroliza/actions/runs/28035951993):
-  Static checks, Unit tests with combined coverage, Native wheel build and
-  smoke checks, CMM parser perf guardrail, and Performance benchmark trend
-  check all passed. Manual/opt-in Packaging smoke, Windows startup benchmark,
-  and Google conversion smoke were skipped and remain release-promotion gates.
-- Manual packaging smoke, Windows executable clean-machine launch/startup,
-  Google conversion smoke, third-party notice artifact evidence, and security
-  owner triage/waiver for report-only findings remain release-promotion
-  blockers unless the release owner records an explicit waiver.
-
-### 2026.05 RC5 rc2 hardening evidence
-
-Historical validation branch: `rc2`.
-Historical RC metadata: `2026.05rc5(260612)`.
-Historical plotstats hotfix pin:
-`1e2c72107d342f44a37e5fb78d7d76992ea60315`.
-
-- Static scatter annotation audit evidence lives in
-  [`rc4_static_scatter_annotation_backgrounds_2026-05-23.md`](./rc4_static_scatter_annotation_backgrounds_2026-05-23.md).
-- June 12 RC audit implementation evidence, local validation results, pushed-CI
-  follow-up, and remaining manual release blockers are tracked in
-  [`rc5_rc_audit_evidence_2026-06-12.md`](./rc5_rc_audit_evidence_2026-06-12.md).
-  Local gate passed for build `260612`; pushed GitHub CI was pending at the time
-  this historical evidence was recorded.
-- Previous RC2 audit evidence remains historical in
-  [`rc2_release_audit_2026-05-17.md`](./rc2_release_audit_2026-05-17.md).
-- Local release gates passed for the current directory-reorganization audit
-  worktree after the chart reference-label dedupe and `260602` build-date
-  refresh: `ruff`, `compileall`, release metadata sync, release hygiene,
-  security audit, full pytest with coverage, and packaged PDF parser input
-  validation.
-- Full pytest with coverage passed:
-  `1773 passed, 207 skipped, 95 warnings, 60 subtests passed`; combined
-  CI-scope coverage `67.20%` against the `65%` threshold.
-- Security audit passed after allowing `pip-audit` to create/upgrade its temporary
-  dependency environment; `pip-audit` reported no known vulnerabilities.
-- Dashboard UX/copy unification QA passed on 2026-06-01 after the CSV Summary and
-  Export dashboard updates: focused dashboard tests passed
-  (`114 passed`), full headless pytest passed
-  (`1773 passed, 207 skipped, 6 warnings, 60 subtests passed`), and the CI-style
-  coverage gate passed (`1773 passed, 207 skipped, 95 warnings, 60 subtests
-  passed`; coverage `67.26%` against the `65%` threshold). Local gates also
-  passed for `ruff`, `compileall`, packaged PDF parser validation, release
-  metadata sync, release hygiene, and the security audit. The first sandboxed
-  security-audit attempt failed only because `pip-audit` could not refresh its
-  temporary dependency environment; the escalated rerun reported no known
-  vulnerabilities.
-- Static POPULATION layer QA passed locally on 2026-06-01. The full headless
-  suite passed (`1825 passed, 259 skipped, 95 warnings, 60 subtests passed`),
-  focused dashboard/contract tests passed, and the combined coverage gate passed
-  with isolated real-Qt UI shards at `81%` against the raised `80%` threshold.
-  The current pushed-SHA CI baseline below covers this slice before merge/tag.
-- Oznak access-check and CSV Summary static POPULATION regression QA passed
-  locally on 2026-06-02. `Check access` no longer requests a reference column
-  unless reference filtering is configured, and 5,000-row all-POPULATION CSV
-  Summary time-series dashboards render a visible static POPULATION layer with
-  all rows when the sample cap is 50,000. Local gates passed: release metadata
-  sync, release hygiene, packaged PDF parser validation, security audit, focused
-  Oznak/dashboard tests (`17 passed` and `57 passed`), full headless suite
-  (`1828 passed, 261 skipped, 95 warnings, 60 subtests passed`), and the
-  CI-shaped combined coverage gate at `81%` against the `80%` threshold.
-  The current pushed-SHA CI baseline below covers this slice before merge/tag.
-- Export/CSV Summary cleanup QA passed locally on 2026-06-02. Export grouping
-  now infers standard group analysis from applied grouping, creates the HTML
-  dashboard automatically for grouped exports, and keeps Group Analysis out of
-  the workbook when the dashboard is generated. CSV Summary now removes the
-  former detail selector, uses full dashboard rendering by default, and keeps
-  pasted-reference controls out of the CSV/Excel workflow. Focused Export and
-  release metadata tests passed (`78 passed`), local release gates passed
-  (`ruff`, `compileall`, release metadata sync, release hygiene, and security
-  audit with no known vulnerabilities), the full headless suite passed
-  (`1828 passed, 259 skipped, 95 warnings, 60 subtests passed`), and the
-  CI-shaped combined coverage gate passed at `81%` against the `80%` threshold.
-  The final docs/freeze merge commit passed pushed rc2 CI in run
-  [`26891179285`](https://github.com/hexafe/metroliza/actions/runs/26891179285).
-- Pre-merge validation branch CI passed: GitHub Actions run [`26875151720`](https://github.com/hexafe/metroliza/actions/runs/26875151720)
-  for commit `05b5049558509060df43778d7b39424726e56ff1` (`Fix dashboard
-  datetime axis scaling`) on 2026-06-03. Green automatic jobs were Static checks,
-  Unit tests with combined coverage artifact upload, Native wheel build and
-  smoke checks, CMM parser perf guardrail, and the non-blocking Performance
-  benchmark trend check. Manual/opt-in jobs were skipped: Packaging smoke,
-  Windows startup benchmark, and Google conversion smoke.
-- The pre-merge CI run is kept as history for the dashboard/freeze work before
-  merge. The rc2 run below is the current pushed-branch CI evidence. Neither run
-  closes release-promotion evidence for packaging smoke, Windows executable
-  clean-machine launch/startup, Google conversion, or third-party notice
-  artifact review.
-- rc2 docs/freeze merge CI passed: GitHub Actions run [`26891179285`](https://github.com/hexafe/metroliza/actions/runs/26891179285)
-  for commit `24a50ed069cd45c927f40d10ea0c989a7800915f` (`Update dashboard
-  training docs`) on 2026-06-03. Green automatic jobs were Static checks, Unit
-  tests with combined coverage artifact upload, Native wheel build and smoke
-  checks, CMM parser perf guardrail, and the non-blocking Performance benchmark
-  trend check. Manual/opt-in jobs were skipped: Packaging smoke, Windows startup
-  benchmark, and Google conversion smoke.
-- rc2 startup/dashboard hardening CI passed: GitHub Actions run [`26947482310`](https://github.com/hexafe/metroliza/actions/runs/26947482310)
-  for commit `60e0278739d3d696715f94c3c2eefe155a7f11fd` (`Fix dashboard
-  selected style reset`) on 2026-06-04. Green automatic jobs were Static checks,
-  Unit tests with combined coverage artifact upload, Native wheel build and
-  smoke checks, CMM parser perf guardrail, and the non-blocking Performance
-  benchmark trend check. Manual/opt-in jobs were skipped: Packaging smoke,
-  Windows startup benchmark, and Google conversion smoke.
-- Local rc2 hardening release gate passed before the `60e0278` push: `git diff
-  --check`, `ruff`, `compileall`, release metadata sync, release hygiene,
-  packaged PDF parser validation, security audit with no known vulnerabilities,
-  focused selected-style reset regression (`1 passed`), and the CI-shaped
-  combined coverage gate (`1857 passed`, `261 skipped`, `95 warnings`,
-  `71 subtests passed`, plus isolated UI coverage shards; total coverage `81%`
-  against the `80%` threshold).
-- Local rc2 analytics/export/grouping hardening audit passed on 2026-06-04 before
-  push. This slice restored one-sided zero-bound GD&T handling in modeled tail
-  risk, capability/statistics payloads, workbook formulas, observed NOK counts,
-  and plotstats payload adaptation; removed the histogram KDE reference overlay;
-  reduced inserted workbook image display size without lowering rendered image
-  quality; and made Export grouping search/filter behavior match the visible
-  list fields. Local gates passed: `git diff --check`, `ruff`, `compileall`,
-  release metadata sync, release hygiene, packaged PDF parser validation,
-  security audit with no known vulnerabilities, full headless pytest with
-  coverage (`1869 passed`, `261 skipped`, `95 warnings`, `71 subtests passed`),
-  and the CI-shaped combined coverage gate with isolated UI shards at `81%`
-  against the `80%` threshold. Pushed-SHA CI evidence for this slice must be
-  recorded below before merge/tag.
-- rc2 analytics/export/grouping hardening CI passed: GitHub Actions run
-  [`26951307852`](https://github.com/hexafe/metroliza/actions/runs/26951307852)
-  for commit `ad186fa0a748b65ba941e11916d322771a6771fe` (`Harden export
-  analytics and grouping`) on 2026-06-04. Green automatic jobs were Static
-  checks, Unit tests with combined coverage artifact upload, Native wheel build
-  and smoke checks, CMM parser perf guardrail, and the non-blocking Performance
-  benchmark trend check. Manual/opt-in jobs were skipped: Packaging smoke,
-  Windows startup benchmark, and Google conversion smoke.
-- Codex review follow-up local gate passed on 2026-06-04 after the pushed
-  analytics CI evidence: stale industrial dynamic values are deleted when a
-  source record is replaced with a row that no longer carries that dynamic
-  field, dashboard visual runtime and Qt preview JSON escape `</script>` before
-  embedding labels/settings/specs in inline scripts, and legacy industrial
-  sync-run table rebuilds preserve `industrial_records.sync_run_id` links under
-  caller-owned active transactions. Focused regression tests passed (`19 passed`
-  for the first review follow-up, `5 passed` for the strengthened schema
-  migration regression, and `40 passed` for
-  `tests/test_dashboard_visual_options.py` after adding the preview escaping
-  regression), and follow-up gates passed for `git diff --check`, full `ruff`,
-  `compileall`, release metadata sync, release hygiene, security audit with no
-  known vulnerabilities, full headless pytest with CI coverage tracking
-  (`1871 passed`, `261 skipped`, `95 warnings`, `71 subtests passed`), and the
-  CI-shaped combined coverage gate with isolated UI shards at `81%` against the
-  `80%` threshold.
-- Histogram overlay UI/UX and logic audit passed on 2026-06-04 after fixing the
-  HTML dashboard Plotly path where package-generated histogram overlay traces
-  could keep stale `x` coordinates while Metroliza supplied the resolved
-  selected-model and tail-shading `plotly_y` values. Package-backed histogram
-  overlays now replace both `x` and `y` from the resolved Metroliza overlay rows,
-  filled/tail traces are recognized as modeled overlays before reference-line
-  filtering, and fallback HTML dashboard coverage asserts selected model, KDE,
-  and tail-shading coordinate parity. Focused export/chart regressions passed
-  (`67 passed`), full `ruff`, `compileall`, release metadata sync, release
-  hygiene, security audit with no known vulnerabilities, full headless pytest
-  with CI coverage tracking (`1871 passed`, `261 skipped`, `95 warnings`,
-  `71 subtests passed`), and the CI-shaped combined coverage gate with isolated
-  UI shards passed at `81%` against the `80%` threshold.
-- PyInstaller onefile bootloader splash support passed local Linux packaging and
-  startup smoke on 2026-06-05. The slice adds a Windows onefile bootloader splash
-  asset/spec hook, updates it through `pyi_splash` during Python startup, and
-  closes it when Qt startup gating hands off to the app splash/main window. Local
-  focused gates passed for app bootstrap/splash tests, packaging hidden-import
-  tests, CI-policy sync, `ruff`, and Linux onefile packaging/startup smoke. The
-  final pushed rc2 head passed GitHub Actions CI in run
-  [`27006471511`](https://github.com/hexafe/metroliza/actions/runs/27006471511)
-  for commit `80a1802fce2ff58c7c70e6dfa86ff5e1c5656c8c` (`Classify PyInstaller
-  splash import`) on 2026-06-05. Green automatic jobs were Static checks, Unit
-  tests with combined coverage artifact upload, Native wheel build and smoke
-  checks, CMM parser perf guardrail, and the non-blocking Performance benchmark
-  trend check. Manual/opt-in jobs were skipped: Packaging smoke, Windows startup
-  benchmark, and Google conversion smoke.
-- Post-plan summary-sheet planning extraction and release-evidence refresh passed
-  local gates and GitHub Actions CI on 2026-06-05. Commit
-  `aaa0ebdc32d31b9c05005da8408bca4a240f8373` (`Refresh release evidence and
-  summary planning`) passed default CI in run
-  [`27021152454`](https://github.com/hexafe/metroliza/actions/runs/27021152454).
-  Green automatic jobs were Static checks, Unit tests with combined coverage
-  artifact upload, Native wheel build and smoke checks, CMM parser perf
-  guardrail, and the non-blocking Performance benchmark trend check. Manual and
-  opt-in jobs were skipped: Packaging smoke, Windows startup benchmark, and
-  Google conversion smoke.
-- CSV Summary file-name grouping QA passed locally on 2026-06-08 for build
-  `260608`. Multi-CSV loads can now offer one custom group per source file name
-  without creating a `POPULATION` group, and the export path now uses the
-  in-window dashboard optimization settings without a second export-time prompt.
-  Local gates passed: `git diff --check`, `ruff`, `compileall`, release metadata
-  sync, release hygiene, packaged PDF parser validation, security audit with no
-  known vulnerabilities, focused CSV Summary dialog/service tests (`81 passed`),
-  focused workflow/dashboard/release tests (`71 passed`), full headless pytest
-  with coverage tracking (`1878 passed`, `263 skipped`, `95 warnings`,
-  `71 subtests passed`), and the CI-shaped combined coverage gate with isolated
-  UI shards at `81%` against the `80%` threshold. Pushed rc2 CI passed in
-  GitHub Actions run
-  [`27155205470`](https://github.com/hexafe/metroliza/actions/runs/27155205470)
-  for commit `e0af5d8ec4075aa266a76610b4b6f608fffb2bd7` (`Add CSV Summary file
-  groups`) on 2026-06-08. Green automatic jobs were Static checks, Unit tests
-  with combined coverage artifact upload, Native wheel build and smoke checks,
-  CMM parser perf guardrail, and the non-blocking Performance benchmark trend
-  check. Manual and opt-in jobs were skipped: Packaging smoke, Windows startup
-  benchmark, and Google conversion smoke.
-- Full-module audit hardening QA passed locally on 2026-06-08 for build
-  `260609`. The branch `codex/full-module-audit-20260608` hardens parsed-report
-  persistence atomicity, CMM persistence error propagation, HTML-only dashboard
-  failure handling, CSV Summary SQLite/header/filter parity, native chart
-  fallback behavior, packaging OCR smoke gates, Windows startup evidence checks,
-  and CMM performance trend baseline/observed-run requirements. Local gates
-  passed: `git diff --check`, `ruff`, `compileall`, release metadata sync,
-  release hygiene, security audit with no known vulnerabilities, and full
-  headless pytest (`1889 passed`, `263 skipped`, `6 warnings`,
-  `71 subtests passed`). Evidence is recorded in
-  [`full_module_audit_2026-06-08.md`](./full_module_audit_2026-06-08.md).
-- RC5 parser and UX release closeout QA passed locally on 2026-06-11 for build
-  `260611`. The slice fixes parser handoff manifest prompt ordering and
-  integrity validation, blocks routine live Industrial Data workbook export
-  without a local cache target, adds direct `ParseResultV2` persistence and
-  Industrial sync-run repository coverage, and refreshes release metadata. Local
-  gates passed: `git diff --check`, `ruff`, `compileall`, release metadata sync,
-  release hygiene, packaged PDF parser validation, security audit with no known
-  vulnerabilities, focused parser tests (`36 passed`), focused Industrial Data
-  tests (`45 passed`), release metadata tests (`5 passed`), full headless pytest
-  with CI coverage tracking (`1922 passed`, `273 skipped`, `97 warnings`,
-  `74 subtests passed`), and the CI-shaped combined coverage gate with isolated
-  UI shards at `82%` against the `80%` threshold. Evidence is recorded in
-  [`rc5_parser_ux_release_closeout_2026-06-11.md`](./rc5_parser_ux_release_closeout_2026-06-11.md).
-  Pushed rc2 CI passed in GitHub Actions run
-  [`27327220468`](https://github.com/hexafe/metroliza/actions/runs/27327220468)
-  for commit `9a9310604604077b26fc5b2a4523459a4e14c5de` (`Finalize RC5 parser
-  and UX release`) on 2026-06-11. Green automatic jobs were Static checks, Unit
-  tests with combined coverage artifact upload, Native wheel build and smoke
-  checks, CMM parser perf guardrail, and the non-blocking Performance benchmark
-  trend check. Manual and opt-in jobs were skipped: Packaging smoke, Windows
-  startup benchmark, and Google conversion smoke.
-- Post-reorganization follow-up local audit passed after docs/reference cleanup,
-  parser-plugin productionization coverage, architecture guardrail hardening, and
-  release-status refresh.
-- Parser profile self-service QA audit passed after fixing Excel workbook
-  extraction, expected-results cardinality checks, duplicate-row matching,
-  date/missing-token normalization, handoff folder open/copy actions, third-party
-  notice coverage for Excel reader packages, and docs split between declarative
-  profiles and advanced generated plugins.
-- Latest published branch CI for the parser profile self-service follow-up slice
-  passed: GitHub Actions run `26719879455` for commit
-  `8d7717e4755d8bdba5593a6e05342f6f4a90143b`. Static checks, parser profile
-  self-service smoke, security audit, unit tests with coverage, native smoke/parity
-  checks, CMM parser perf guardrail, and the non-blocking benchmark trend check
-  passed. Optional manual packaging/Google/Windows lanes remained skipped as
-  expected for default push CI.
-- GitHub Actions CI passed for hexafe-plotstats run `26337409366` on the
-  package `main` commit
-  `1e2c72107d342f44a37e5fb78d7d76992ea60315`.
-- Manual packaging smoke, Windows executable clean-machine launch/startup,
-  Google conversion smoke, third-party notice artifact evidence, and any open
-  must-fix triage item were not recorded for the historical RC5 promotion
-  artifact and remain examples of release-promotion blockers unless the release
-  owner records an explicit waiver for the active candidate.
-
-Optional CI/manual smoke commands (non-blocking for regular PRs/pushes):
-
-```bash
-# Packaging smoke build
-# Trigger CI workflow_dispatch with input: run_packaging_smoke=1
-
-# Google conversion smoke
-# Trigger CI workflow_dispatch with input: run_google_conversion_smoke=1
-```
-
-> For solo-maintainer flow, treat GitHub CI status as the primary release gate before merge/tag.
-
-<a id="defect-triage-criteria"></a>
-
-## 6) Defect triage criteria (must-fix vs defer)
-
-Use the following policy for RC exit triage:
-
-### Must-fix before release (Go blocked)
-
-- Data loss/corruption, crash on core user flow, or export integrity failure.
-- Security/privacy issue with no acceptable mitigation.
-- Regression in release-gated workflows without acceptable workaround.
-- Build/package defect that prevents launch, install, or expected startup on supported targets.
-
-### Can defer (Go may proceed with explicit approval)
-
-- Cosmetic/UI issues with low user impact.
-- Non-default/edge-case defects with documented workaround.
-- Low-severity defects not affecting release-gated workflows.
-
-- [x] Every open RC defect is labeled `must-fix` or `defer` with rationale and owner.
-- [x] Deferred defects are captured in the next-release backlog/milestone.
-
-<a id="open-testing-exit-criteria"></a>
-
-## 7) Open testing exit criteria
-
-Complete before declaring open testing closed and moving to final Go/No-Go decision.
-
-- [ ] Blocker count is `0` for current RC candidate. *(Owner: Release manager/QA)*
-- [ ] Deferred defect list is approved and captured with owner + milestone. *(Owner: Product/Release manager)*
-- [ ] Required sign-off owners have all recorded completion in the release tracker. *(Owner: Release manager)*
-
-## 8) Merge-to-master and tagging criteria
-
-Only promote RC when all gates are green and approvals are complete.
-
-- [ ] All required checks in the [Required test suites and sign-off owners](#required-test-suites-and-sign-off-owners) section are complete and linked.
-- [ ] No unresolved `must-fix` defects remain.
-- [ ] Release owner sign-off recorded.
-- [ ] RC branch merged to `master` with approved strategy.
-- [ ] Release tag created from the merge commit (example: `vYYYY.MM-rcN` for an RC tester build, or `vYYYY.MM` for final release).
-- [ ] Tag is pushed and visible on remote.
-
-Suggested commands:
-
-```bash
-git checkout master
-git pull --ff-only origin master
-git tag -a v2026.06-rc1 <merge-commit-sha> -m "Release candidate v2026.06-rc1"
-git push origin v2026.06-rc1
-```
-
-## 9) Rollback plan and communication checklist
-
-Prepare before release announcement; execute if post-release issues require rollback.
-
-### Rollback readiness
-
-- [ ] Previous stable tag/version is identified and verified runnable.
-- [ ] Owner for rollback execution is assigned.
-- [ ] Rollback method is selected (revert commit(s), re-cut artifact from prior tag, or re-point distribution channel).
-
-### Communication checklist
-
-- [ ] Internal stakeholders notified of release decision (Go/No-Go).
-- [ ] Support/operations channel receives known issues + workarounds.
-- [ ] If rollback occurs, incident message includes impact, affected versions, mitigation, and ETA for follow-up RC.
-- [ ] Post-release summary posted with final outcome and links to evidence.
+- [ ] The release tag is created from the reviewed merge commit and pushed.
+- [ ] Final artifact hashes, publication location, announcement, and post-release monitoring owner are recorded.

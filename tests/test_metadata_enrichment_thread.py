@@ -173,7 +173,9 @@ def test_discover_metadata_enrichment_work_finds_light_reports_and_skips_enriche
     ]
 
 
-def test_enrich_existing_report_metadata_preserves_measurement_rows(tmp_path):
+def test_enrich_existing_report_metadata_preserves_measurement_rows(monkeypatch, tmp_path):
+    from metroliza.parsing.source_inspection import SourceInspectionContext
+
     db_path = str(tmp_path / "reports.db")
     repository = ReportRepository(db_path)
     report_id, report_path = _persist_report(
@@ -202,9 +204,26 @@ def test_enrich_existing_report_metadata_preserves_measurement_rows(tmp_path):
             return self._metadata_selection_result
 
     fake_parser = _FakeParser()
+    hash_reads = 0
+    source_inspections = []
+    original_context_hash = SourceInspectionContext._compute_sha256
 
-    def _parser_factory(_path, _db_file, connection=None):
+    def _count_context_hash(self):
+        nonlocal hash_reads
+        hash_reads += 1
+        return original_context_hash(self)
+
+    monkeypatch.setattr(SourceInspectionContext, "_compute_sha256", _count_context_hash)
+
+    def _parser_factory(
+        _path,
+        _db_file,
+        connection=None,
+        *,
+        source_inspection=None,
+    ):
         assert connection is not None
+        source_inspections.append(source_inspection)
         return fake_parser
 
     with closing(sqlite3.connect(db_path)) as connection, connection:
@@ -221,6 +240,8 @@ def test_enrich_existing_report_metadata_preserves_measurement_rows(tmp_path):
 
     assert enriched is True
     assert fake_parser.open_modes == ["complete"]
+    assert hash_reads == 2
+    assert fake_parser.source_inspection_context is source_inspections[0]
     with closing(sqlite3.connect(db_path)) as connection, connection:
         metadata_row = connection.execute(
             """
@@ -279,6 +300,43 @@ def test_enrich_existing_report_metadata_skips_changed_source_content(tmp_path):
             (report_id,),
         ).fetchone()[0]
     assert reference == "LIGHT-REF"
+
+
+def test_enrich_existing_report_metadata_rejects_mutation_during_extraction(tmp_path):
+    db_path = str(tmp_path / "reports.db")
+    repository = ReportRepository(db_path)
+    report_id, report_path = _persist_report(
+        tmp_path,
+        repository,
+        name="mutating.pdf",
+        metadata_json={"metadata_parsing_mode": "light"},
+    )
+    original_sha256 = compute_sha256(report_path)
+
+    class _MutatingParser:
+        metadata_parsing_mode = "light"
+        _metadata_selection_result = _selection_result()
+
+        def open_report(self):
+            report_path.write_bytes(b"changed-during-enrichment")
+
+    enriched = enrich_existing_report_metadata(
+        db_path,
+        MetadataEnrichmentWorkItem(
+            report_id=report_id,
+            source_path=str(report_path),
+            sha256=original_sha256,
+        ),
+        parser_factory=lambda *_args, **_kwargs: _MutatingParser(),
+    )
+
+    assert enriched is False
+    with closing(sqlite3.connect(db_path)) as connection, connection:
+        metadata_row = connection.execute(
+            "SELECT reference, revision, operator_name FROM report_metadata WHERE report_id = ?",
+            (report_id,),
+        ).fetchone()
+    assert metadata_row == ("LIGHT-REF", None, None)
 
 
 def test_metadata_enrichment_batch_continues_after_per_report_failure(tmp_path):

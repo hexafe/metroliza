@@ -10,25 +10,31 @@ on:
         description: "Set to 1 to run manual packaging smoke build"
         required: false
         default: "0"
-      run_google_conversion_smoke:
-        description: "Set to 1 to run release-only Google conversion smoke check"
-        required: false
-        default: "0"
       run_windows_startup_benchmark:
         description: "Set to 1 to build Windows artifacts and measure packaged startup"
         required: false
         default: "0"
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   static-checks:
     name: Static checks
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -85,6 +91,13 @@ jobs:
       - name: Ruff lint (full repository)
         run: python -m ruff check .
 
+      - name: Narrow static type boundary
+        run: |
+          python -m mypy \
+            src/metroliza/integrations/google_credentials_hygiene.py \
+            src/metroliza/industrial/anomaly/contracts.py \
+            src/metroliza/industrial/realtime/stream_contracts.py
+
       - name: Release metadata consistency
         run: python scripts/sync_release_metadata.py --check
 
@@ -97,22 +110,25 @@ jobs:
         run: python scripts/check_release_hygiene.py
 
       - name: Checkout pinned hexafe-groupstats for security audit
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
+          persist-credentials: false
           repository: hexafe/hexafe-groupstats
           ref: 14cc60e7412fa2647a8906f3f8833d0d789fc552
           path: artifacts/security_siblings/hexafe-groupstats
 
       - name: Checkout pinned hexafe-plotstats for security audit
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
+          persist-credentials: false
           repository: hexafe/hexafe-plotstats
           ref: 1e2c72107d342f44a37e5fb78d7d76992ea60315
           path: artifacts/security_siblings/hexafe-plotstats
 
       - name: Checkout pinned oznak for security audit
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
+          persist-credentials: false
           repository: hexafe/oznak
           ref: ed51580dfdec9f91f6320c7937af6d65dd5a1290
           path: artifacts/security_siblings/oznak
@@ -123,12 +139,15 @@ jobs:
   unit-tests:
     name: Unit tests
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
       COVERAGE_MINIMUM_THRESHOLD: '80'
       QT_QPA_PLATFORM: offscreen
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
 
       - name: Install Qt runtime system libraries
         run: |
@@ -136,7 +155,7 @@ jobs:
           sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -294,7 +313,7 @@ jobs:
           PYCODE
 
       - name: Upload unit test coverage artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: unit-test-coverage
           path: |
@@ -304,12 +323,15 @@ jobs:
   native-artifacts:
     name: Native wheel build and smoke checks
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -318,7 +340,9 @@ jobs:
             requirements-build.txt
 
       - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: 1.95.0
 
       - name: Install build dependencies
         run: |
@@ -327,11 +351,11 @@ jobs:
 
       - name: Build native wheels
         run: |
-          python -m maturin build --manifest-path src/metroliza/native/cmm_parser/Cargo.toml --release --out dist/native
-          python -m maturin build --manifest-path src/metroliza/native/group_stats_coercion/Cargo.toml --release --out dist/native
-          python -m maturin build --manifest-path src/metroliza/native/comparison_stats_bootstrap/Cargo.toml --release --out dist/native
-          python -m maturin build --manifest-path src/metroliza/native/distribution_fit_ad/Cargo.toml --release --out dist/native
-          python -m maturin build --manifest-path src/metroliza/native/chart_renderer/Cargo.toml --release --out dist/native
+          python -m maturin build --locked --manifest-path src/metroliza/native/cmm_parser/Cargo.toml --release --out dist/native
+          python -m maturin build --locked --manifest-path src/metroliza/native/group_stats_coercion/Cargo.toml --release --out dist/native
+          python -m maturin build --locked --manifest-path src/metroliza/native/comparison_stats_bootstrap/Cargo.toml --release --out dist/native
+          python -m maturin build --locked --manifest-path src/metroliza/native/distribution_fit_ad/Cargo.toml --release --out dist/native
+          python -m maturin build --locked --manifest-path src/metroliza/native/chart_renderer/Cargo.toml --release --out dist/native
 
       - name: Install built native wheel
         run: |
@@ -473,13 +497,16 @@ jobs:
   cmm-parser-perf-gate:
     name: CMM parser perf guardrail
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [static-checks, unit-tests]
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -488,7 +515,9 @@ jobs:
             requirements-ocr.txt
 
       - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: 1.95.0
 
       - name: Install build dependencies
         run: |
@@ -501,7 +530,7 @@ jobs:
 
       - name: Build and install CMM native wheel
         run: |
-          python -m maturin build --manifest-path src/metroliza/native/cmm_parser/Cargo.toml --release --out dist/native
+          python -m maturin build --locked --manifest-path src/metroliza/native/cmm_parser/Cargo.toml --release --out dist/native
           python -m pip install dist/native/*metroliza_cmm_native*.whl
 
       - name: Warmup CMM benchmark
@@ -546,7 +575,7 @@ jobs:
 
       - name: Upload CMM benchmark artifacts
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: cmm-parser-perf-artifacts
           path: benchmark_results/cmm_perf_gate
@@ -555,14 +584,17 @@ jobs:
   perf-benchmarks:
     name: Performance benchmark trend check (non-blocking)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     continue-on-error: true
     needs: [static-checks, unit-tests]
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -650,7 +682,7 @@ jobs:
 
       - name: Upload benchmark artifacts
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: perf-benchmark-artifacts
           path: benchmark_results/perf_ci
@@ -659,6 +691,7 @@ jobs:
   packaging-smoke:
     name: Packaging smoke (manual/opt-in)
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     needs: [static-checks, unit-tests, native-artifacts]
     # Intentionally opt-in/release-only: packaging smoke build signal is manual and non-blocking for regular PR CI.
     if: github.event_name == 'workflow_dispatch' && inputs.run_packaging_smoke == '1'
@@ -666,10 +699,12 @@ jobs:
       METROLIZA_RUN_PACKAGING_SMOKE: ${{ inputs.run_packaging_smoke }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -699,6 +734,15 @@ jobs:
           test -n "$artifact"
           printf 'path=%s\n' "$artifact" >> "$GITHUB_OUTPUT"
 
+      - name: Stage and verify release notice sidecars
+        run: |
+          python scripts/stage_release_notices.py \
+            --dist-dir dist \
+            --artifact "${{ steps.packaged-artifact.outputs.path }}"
+          test -f "${{ steps.packaged-artifact.outputs.path }}.licenses/THIRD_PARTY_NOTICES.md"
+          test -f "${{ steps.packaged-artifact.outputs.path }}.licenses/third_party_inventory_260711.json"
+          test -f "${{ steps.packaged-artifact.outputs.path }}.licenses/NOTICE_MANIFEST.json"
+
       - name: Smoke parse PDF fixture with packaged artifact
         env:
           METROLIZA_PDF_PARSER_SMOKE_FIXTURE: tests/fixtures/pdf/cmm_smoke_fixture.pdf
@@ -716,57 +760,68 @@ jobs:
           cp -f metroliza.log smoke-artifacts/metroliza.log 2>/dev/null || true
           cp -f "$HOME/.metroliza/metroliza.log" smoke-artifacts/metroliza-user.log 2>/dev/null || true
 
+      - name: Upload verified packaging artifact and notices
+        if: success()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: packaging-smoke-release-artifact
+          path: dist
+          if-no-files-found: error
+
       - name: Upload packaging smoke artifacts
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: packaging-smoke-artifacts
           path: smoke-artifacts
           if-no-files-found: warn
 
-  google-conversion-smoke:
-    name: Google conversion smoke (manual/opt-in)
-    runs-on: ubuntu-latest
-    needs: [static-checks, unit-tests, native-artifacts]
-    # Intentionally opt-in/release-only: this smoke check is not mandatory for regular PR CI runs.
-    if: github.event_name == 'workflow_dispatch' && inputs.run_google_conversion_smoke == '1'
-    env:
-      METROLIZA_RUN_GOOGLE_CONVERSION_SMOKE: ${{ inputs.run_google_conversion_smoke }}
+  windows-core-smoke:
+    name: Windows core smoke
+    runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.11'
           cache: 'pip'
-          cache-dependency-path: requirements-dev.txt
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
 
-      - name: Validate smoke gate env flag
-        run: test "${METROLIZA_RUN_GOOGLE_CONVERSION_SMOKE}" = "1"
-
-      - name: Run Google conversion smoke check
-        run: PYTHONPATH=. python scripts/release_only_google_conversion_smoke.py
+      - name: Run Windows path, SQLite, packaging, and metadata smoke tests
+        env:
+          PYTHONPATH: src;.
+        run: |
+          python -m pytest -q tests/test_db_utils.py tests/test_build_native_and_package_helper.py tests/test_packaging_spec_hiddenimports.py tests/test_release_metadata_sync.py tests/test_google_drive_credentials_hygiene.py
 
   windows-startup-benchmark:
     name: Windows startup benchmark (manual/opt-in)
     runs-on: windows-latest
+    timeout-minutes: 120
     needs: [static-checks, unit-tests]
     if: github.event_name == 'workflow_dispatch' && inputs.run_windows_startup_benchmark == '1'
     env:
       METROLIZA_RUN_WINDOWS_STARTUP_BENCHMARK: ${{ inputs.run_windows_startup_benchmark }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -810,7 +865,7 @@ jobs:
 
       - name: Upload Windows startup artifacts
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: windows-startup-artifacts
           path: startup-artifacts

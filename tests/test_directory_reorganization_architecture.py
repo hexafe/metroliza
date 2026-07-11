@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import importlib
 import os
 import re
@@ -16,7 +17,8 @@ IMPLEMENTATION_IMPORT_ROOTS = (
     REPO_ROOT / "scripts",
     REPO_ROOT / "packaging",
 )
-TEST_LEGACY_REFERENCE_BUDGET = 1142
+TEST_LEGACY_REFERENCE_BUDGET = 991
+CYCLIC_CANONICAL_PACKAGE_BUDGET = 4
 TEST_LEGACY_REFERENCE_EXCLUDED_FILES = {
     "tests/test_directory_reorganization_architecture.py",
     "tests/test_packaging_spec_hiddenimports.py",
@@ -51,8 +53,8 @@ METROLIZA_IMPORT_RE = re.compile(
 )
 PYQT_IMPORT_RE = re.compile(r"^\s*(?:from\s+PyQt6\b|import\s+PyQt6\b|from\s+PyQt6\.|import\s+PyQt6\.)", re.MULTILINE)
 
-SHARED_FEATURE_IMPORT_ALLOWLIST = {
-    "shared/contracts.py",
+SHARED_FEATURE_IMPORT_ALLOWLIST: set[str] = set()
+NON_UI_PACKAGE_UI_COMPATIBILITY_ALIAS_ALLOWLIST = {
     "shared/bom_manager.py",
 }
 QT_IMPORT_ALLOWLIST = {
@@ -60,7 +62,6 @@ QT_IMPORT_ALLOWLIST = {
     "industrial/industrial_workers.py",
     "parsing/metadata_enrichment_thread.py",
     "parsing/parse_reports_thread.py",
-    "shared/bom_manager.py",
     "shared/custom_logger.py",
     "shared/list_selection_utils.py",
     "tabular/tabular_column_selection.py",
@@ -102,6 +103,7 @@ def test_canonical_source_package_exists() -> None:
         "analytics",
         "app",
         "charts",
+        "cmm",
         "exporting",
         "industrial",
         "integrations",
@@ -111,6 +113,7 @@ def test_canonical_source_package_exists() -> None:
         "reports",
         "resources",
         "shared",
+        "storage",
         "tabular",
         "ui",
         "workers",
@@ -219,6 +222,91 @@ def test_behavior_test_legacy_module_references_stay_within_burn_down_budget() -
     )
 
 
+def _canonical_package_graph() -> dict[str, set[str]]:
+    package_names = {
+        path.name for path in SRC_PACKAGE.iterdir() if (path / "__init__.py").is_file()
+    }
+    graph = {package_name: set() for package_name in package_names}
+    for path in sorted(SRC_PACKAGE.rglob("*.py")):
+        relative = path.relative_to(SRC_PACKAGE)
+        if len(relative.parts) < 2:
+            continue
+        source_package = relative.parts[0]
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            imported_modules: list[str] = []
+            if isinstance(node, ast.ImportFrom) and node.module:
+                imported_modules.append(node.module)
+            elif isinstance(node, ast.Import):
+                imported_modules.extend(alias.name for alias in node.names)
+            for module_name in imported_modules:
+                parts = module_name.split(".")
+                if len(parts) < 2 or parts[0] != "metroliza":
+                    continue
+                target_package = parts[1]
+                if target_package in package_names and target_package != source_package:
+                    graph[source_package].add(target_package)
+    return graph
+
+
+def _strongly_connected_components(graph: dict[str, set[str]]) -> list[set[str]]:
+    index = 0
+    indexes: dict[str, int] = {}
+    lowlinks: dict[str, int] = {}
+    stack: list[str] = []
+    on_stack: set[str] = set()
+    components: list[set[str]] = []
+
+    def visit(node: str) -> None:
+        nonlocal index
+        indexes[node] = index
+        lowlinks[node] = index
+        index += 1
+        stack.append(node)
+        on_stack.add(node)
+        for target in graph[node]:
+            if target not in indexes:
+                visit(target)
+                lowlinks[node] = min(lowlinks[node], lowlinks[target])
+            elif target in on_stack:
+                lowlinks[node] = min(lowlinks[node], indexes[target])
+        if lowlinks[node] != indexes[node]:
+            return
+        component: set[str] = set()
+        while stack:
+            member = stack.pop()
+            on_stack.remove(member)
+            component.add(member)
+            if member == node:
+                break
+        components.append(component)
+
+    for node in sorted(graph):
+        if node not in indexes:
+            visit(node)
+    return components
+
+
+def test_canonical_package_cycle_does_not_exceed_reviewed_ratchet() -> None:
+    graph = _canonical_package_graph()
+    cyclic_components = [component for component in _strongly_connected_components(graph) if len(component) > 1]
+    cyclic_package_count = sum(len(component) for component in cyclic_components)
+
+    assert cyclic_package_count <= CYCLIC_CANONICAL_PACKAGE_BUDGET, (
+        f"Canonical package cycle grew to {cyclic_package_count} packages: "
+        f"{sorted(sorted(component) for component in cyclic_components)}"
+    )
+
+
+def test_shared_package_has_no_static_outbound_package_dependencies() -> None:
+    graph = _canonical_package_graph()
+
+    assert graph["shared"] == set(), (
+        "The neutral shared package must not import feature packages: "
+        f"{sorted(graph['shared'])}"
+    )
+
+
 def test_powershell_packaging_legacy_modules_are_explicitly_allowlisted() -> None:
     violations: list[str] = []
 
@@ -241,7 +329,10 @@ def test_non_ui_packages_do_not_import_ui_package() -> None:
 
     for path in sorted(SRC_PACKAGE.rglob("*.py")):
         relative = path.relative_to(SRC_PACKAGE).as_posix()
-        if relative.startswith(("ui/", "app/")):
+        if (
+            relative.startswith(("ui/", "app/"))
+            or relative in NON_UI_PACKAGE_UI_COMPATIBILITY_ALIAS_ALLOWLIST
+        ):
             continue
         text = path.read_text(encoding="utf-8")
         if "metroliza.ui" in text:
@@ -265,6 +356,23 @@ def test_shared_feature_imports_are_explicit_burn_down_items() -> None:
             violations.append(f"{relative}: {sorted(feature_imports)}")
 
     assert not violations, "New shared package feature imports require explicit architecture review: " + ", ".join(violations)
+
+
+def test_canonical_features_import_contracts_from_owning_packages() -> None:
+    violations = []
+    facade_import = "metroliza.shared.contracts"
+
+    for path in sorted(SRC_PACKAGE.rglob("*.py")):
+        relative = path.relative_to(SRC_PACKAGE).as_posix()
+        if relative == "shared/contracts.py":
+            continue
+        if facade_import in path.read_text(encoding="utf-8"):
+            violations.append(relative)
+
+    assert not violations, (
+        "Canonical feature code must import contracts from owning packages: "
+        + ", ".join(violations)
+    )
 
 
 def test_qt_imports_are_limited_to_ui_app_or_worker_boundary_allowlist() -> None:

@@ -8,6 +8,7 @@ import ast
 from datetime import date
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -29,7 +30,27 @@ IMPORT_SCAN_DIRS = ("src/metroliza", "modules", "scripts", "tests")
 BANDIT_SCAN_DIRS = ("src/metroliza", "modules", "scripts")
 PIP_AUDIT_CACHE_DIR = str(Path(tempfile.gettempdir()) / "pip-audit-cache")
 BANDIT_BASELINE_PATH = REPO_ROOT / "config" / "security" / "bandit_baseline.json"
-SECRET_SCAN_SUFFIXES = {".py", ".yml", ".yaml", ".toml", ".ini", ".json", ".env"}
+MAX_SECRET_SCAN_BYTES = 5 * 1024 * 1024
+SECRET_ASSIGNMENT_SUFFIXES = {
+    ".bash",
+    ".cfg",
+    ".conf",
+    ".env",
+    ".ini",
+    ".json",
+    ".md",
+    ".properties",
+    ".ps1",
+    ".py",
+    ".rst",
+    ".sh",
+    ".toml",
+    ".txt",
+    ".yaml",
+    ".yml",
+    ".zsh",
+}
+STRICT_SECRET_TEXT_SUFFIXES = SECRET_ASSIGNMENT_SUFFIXES | {".key", ".pem", ".ppk"}
 SECRET_SCAN_WAIVERS = {
     "config/google/credentials.example.json": "documented placeholder credential fixture",
 }
@@ -144,6 +165,7 @@ IMPORT_TO_PACKAGE = {
     "openpyxl": "openpyxl",
     "openvino": "openvino",
     "oznak": "oznak",
+    "packaging": "packaging",
     "pandas": "pandas",
     "pymupdf": "PyMuPDF",
     "pyi_splash": "pyinstaller",
@@ -777,12 +799,23 @@ def run_sibling_bandit(
     return result
 
 
-def _is_secret_scan_candidate(path: Path) -> bool:
+def _is_secret_assignment_candidate(path: Path) -> bool:
     return (
         path.name == ".env"
         or path.name.startswith(".env.")
-        or path.suffix.lower() in SECRET_SCAN_SUFFIXES
+        or not path.suffix
+        or path.suffix.lower() in SECRET_ASSIGNMENT_SUFFIXES
     )
+
+
+def _requires_text_secret_scan(path: Path) -> bool:
+    return _is_secret_assignment_candidate(path) or path.suffix.lower() in STRICT_SECRET_TEXT_SUFFIXES
+
+
+def _running_in_ci() -> bool:
+    return os.environ.get("CI", "").strip().lower() in {"1", "true", "yes"} or os.environ.get(
+        "GITHUB_ACTIONS", ""
+    ).strip().lower() == "true"
 
 
 def _is_blocked_secret_filename(path: Path) -> bool:
@@ -806,6 +839,7 @@ def scan_secret_paths(
     paths: Iterable[str],
     *,
     waivers: dict[str, str] | None = None,
+    fail_on_unreadable: bool = False,
 ) -> AuditResult:
     waivers = dict(SECRET_SCAN_WAIVERS if waivers is None else waivers)
     errors: list[str] = []
@@ -825,12 +859,33 @@ def scan_secret_paths(
             continue
         if _is_blocked_secret_filename(path):
             errors.append(f"{relative_path}: filename is reserved for untracked credentials")
-        if not _is_secret_scan_candidate(path):
+        strict_text_candidate = _requires_text_secret_scan(path)
+        try:
+            size = path.stat().st_size
+        except OSError as exc:
+            message = f"{relative_path}: secret scan could not inspect file metadata: {exc}"
+            (errors if fail_on_unreadable else warnings).append(message)
+            continue
+        if size > MAX_SECRET_SCAN_BYTES:
+            if strict_text_candidate:
+                message = (
+                    f"{relative_path}: secret-scan text candidate exceeds "
+                    f"{MAX_SECRET_SCAN_BYTES} byte limit"
+                )
+                (errors if fail_on_unreadable else warnings).append(message)
             continue
         try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as exc:
-            warnings.append(f"{relative_path}: secret scan could not read text: {exc}")
+            raw_content = path.read_bytes()
+        except OSError as exc:
+            message = f"{relative_path}: secret scan could not read file: {exc}"
+            (errors if fail_on_unreadable else warnings).append(message)
+            continue
+        try:
+            text = raw_content.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            if strict_text_candidate:
+                message = f"{relative_path}: secret-scan text candidate is not valid UTF-8: {exc}"
+                (errors if fail_on_unreadable else warnings).append(message)
             continue
         for pattern in CONCRETE_SECRET_PATTERNS:
             match = pattern.search(text)
@@ -839,6 +894,8 @@ def scan_secret_paths(
                 errors.append(
                     f"{relative_path}:{line_number}: content matches a concrete secret pattern"
                 )
+        if not _is_secret_assignment_candidate(path):
+            continue
         for match in SECRET_ASSIGNMENT_RE.finditer(text):
             quoted_value = match.group(2)
             unquoted_value = match.group(3)
@@ -854,7 +911,12 @@ def scan_secret_paths(
     return AuditResult(errors=sorted(set(errors)), warnings=sorted(set(warnings)))
 
 
-def audit_repository_secrets(root: Path, *, base_ref: str | None = None) -> AuditResult:
+def audit_repository_secrets(
+    root: Path,
+    *,
+    base_ref: str | None = None,
+    fail_on_unreadable: bool = False,
+) -> AuditResult:
     tracked = run_command(["git", "ls-files"], root)
     if tracked.returncode != 0:
         return AuditResult(errors=[f"git ls-files failed: {tracked.stderr.strip()}"], warnings=[])
@@ -863,7 +925,7 @@ def audit_repository_secrets(root: Path, *, base_ref: str | None = None) -> Audi
         changed = run_command(["git", "diff", "--name-only", f"{base_ref}..HEAD"], root)
         if changed.returncode == 0:
             paths.update(line.strip() for line in changed.stdout.splitlines() if line.strip())
-    return scan_secret_paths(root, paths)
+    return scan_secret_paths(root, paths, fail_on_unreadable=fail_on_unreadable)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -908,7 +970,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     sibling_root = args.sibling_root.resolve() if args.sibling_root else None
     aggregate = AuditResult(errors=[], warnings=[])
 
-    aggregate.extend(audit_repository_secrets(root, base_ref=args.base_ref))
+    aggregate.extend(
+        audit_repository_secrets(
+            root,
+            base_ref=args.base_ref,
+            fail_on_unreadable=args.ci or _running_in_ci(),
+        )
+    )
     if args.secret_scan_only:
         for warning in aggregate.warnings:
             print(f"SECURITY AUDIT WARNING: {warning}")

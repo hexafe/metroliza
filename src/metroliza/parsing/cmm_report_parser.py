@@ -28,7 +28,7 @@ from metroliza.parsing.header_ocr_backend import (
     missing_rapidocr_latin_model_paths,
     rapidocr_latin_runtime_config_from_env,
 )
-from metroliza.parsing.header_ocr_corrections import (
+from metroliza.reports.header_ocr_corrections import (
     canonicalize_header_label,
     compact_token,
     postprocess_header_ocr_items,
@@ -299,12 +299,17 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         )
 
     @classmethod
-    def probe_pdf_candidate(cls, input_ref: str | Path) -> ProbeResult:
+    def probe_pdf_candidate(
+        cls,
+        input_ref: str | Path,
+        *,
+        probe_context: ProbeContext | None = None,
+    ) -> ProbeResult:
         """Compatibility wrapper for legacy detector registration paths."""
 
         return cls.probe(
             input_ref,
-            ProbeContext(source_path=str(input_ref), source_format="pdf"),
+            probe_context or ProbeContext(source_path=str(input_ref), source_format="pdf"),
         )
 
     @staticmethod
@@ -1197,11 +1202,18 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             metadata = self._metadata_selection_result.metadata
             warnings = metadata.warnings
             identity_hash = self._metadata_identity_hash or self.build_report_identity_hash()
+            source_inspection = getattr(self, "source_inspection_context", None)
+            source_sha256 = (
+                source_inspection.verified_sha256()
+                if source_inspection is not None
+                else None
+            )
 
             db_write_start = perf_counter()
             repository = ReportRepository(self.database, connection=self.connection)
             repository.persist_parsed_report(
                 source_path=Path(self.file_path) / self.file_name,
+                source_sha256=source_sha256,
                 parser_id=metadata.parser_id,
                 parser_version=self.manifest.version,
                 template_family=metadata.template_family,

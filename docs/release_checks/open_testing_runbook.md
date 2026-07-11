@@ -15,7 +15,7 @@ Use this runbook to coordinate release-candidate (RC) open testing with internal
 
 - RC package install/launch validation on supported targets.
 - Core workflows: representative input load, processing, and export generation.
-- Release-gated checks from the RC checklist, including packaging/startup expectations, CMM parser perf gate review, and optional manual smoke evidence collection (`packaging-smoke`, `google-conversion-smoke`).
+- Release-gated checks from the RC checklist, including packaging/startup expectations, CMM parser perf gate review, optional hosted packaging evidence, and the local secure-workstation Google conversion smoke.
 - Regression checks for recently changed areas and prior high-impact defects.
 
 Packaging smoke semantics for open-testing evidence review:
@@ -34,7 +34,7 @@ Packaging smoke semantics for open-testing evidence review:
 ### Where to get RC builds
 
 - Canonical RC branch and naming policy: [`branching_strategy.md`](./branching_strategy.md).
-- RC readiness and artifact expectations: [`release_candidate_checklist.md`](./release_candidate_checklist.md).
+- RC readiness and artifact expectations: [Packaging and clean-machine gate](./release_candidate_checklist.md#4-packaging-and-clean-machine-gate).
 - Build artifacts are distributed by release engineering from the active `release/YYYY.MM-rcN` branch through the standard internal distribution channel (shared drive/release tracker entry).
 
 ### Version verification before testing
@@ -87,7 +87,10 @@ Use the template below for every issue found during open testing.
 
 ## 4) Triage policy
 
-This runbook triage policy maps directly to the **Release Candidate Checklist [Defect triage criteria](./release_candidate_checklist.md#defect-triage-criteria) section**.
+This runbook supplies the detailed triage policy used to satisfy the release checklist's
+[scope, ownership, and freeze](./release_candidate_checklist.md#1-scope-ownership-and-freeze)
+gate and its final
+[promotion decision](./release_candidate_checklist.md#8-promotion-decision-and-rollback) gate.
 
 ### Severity labels
 
@@ -102,9 +105,13 @@ This runbook triage policy maps directly to the **Release Candidate Checklist [D
 - **S1:** triage within 1 business day; owner and target RC identified.
 - **S2/S3:** triage within 2 business days; may defer with rationale.
 
-### Blocker definition (aligned with the checklist Defect triage criteria section)
+### Blocker definition
 
-A defect is a release blocker if it meets any "Must-fix before release" criterion in the checklist [Defect triage criteria](./release_candidate_checklist.md#defect-triage-criteria) section. Blockers must be labeled `must-fix` and resolved (or explicitly mitigated and reclassified by release owner + QA) before Go.
+A defect is a release blocker when it causes data loss or corruption, a core-flow crash, an
+export-integrity failure, an unmitigated security or privacy issue, a release-gated workflow
+failure, or an install or launch blocker. Blockers must be labeled `must-fix` and resolved, or
+explicitly mitigated and reclassified by the release owner and QA, before the
+[promotion decision](./release_candidate_checklist.md#8-promotion-decision-and-rollback).
 
 ## 5) Daily/periodic cadence
 
@@ -134,22 +141,37 @@ Post one update per day in release tracker/channel using:
 
 Recommend **Go** only when:
 
-- Required RC checks/evidence are complete per checklist.
+- Required local, CI, packaging, conversion, product, and security evidence is complete under
+  [checklist sections 2–7](./release_candidate_checklist.md#2-clean-python-311-local-gate).
 - No unresolved `must-fix` defects remain.
 - Release owner + QA sign-off are recorded.
 
 Recommend **No-Go/Hold** when any blocker remains unresolved, required evidence is missing, or test coverage is incomplete.
 
-## 6) Exit handoff checklist (to RC checklist)
+## 6) Exit handoff checklist (to promotion evidence)
 
-Before final RC decision, attach/confirm the following evidence in the release tracker and in the canonical RC checklist:
+Before the final RC decision, attach or confirm the following items in the release tracker and
+the dated evidence file for the exact build. The canonical checklist stays timeless and unchecked.
 
 - [ ] Open-testing summary (tested builds, coverage, high-risk areas).
-- [ ] Final defect ledger with `must-fix`/`defer` labels and rationale (aligned to the checklist Defect triage criteria section).
-- [ ] Required test/packaging results linked against the checklist Required test suites and sign-off owners section.
-- [ ] Optional packaging smoke workflow evidence linked (if executed).
-- [ ] Google conversion smoke evidence linked: [`google_conversion_smoke.md`](./google_conversion_smoke.md).
-- [ ] Sign-off note from QA + release owner referencing checklist Open testing exit criteria decision gates.
+- [ ] Final defect ledger with `must-fix`/`defer` labels and rationale, satisfying
+  [scope, ownership, and freeze](./release_candidate_checklist.md#1-scope-ownership-and-freeze).
+- [ ] Local Python 3.11 and automatic CI results linked against the
+  [clean local gate](./release_candidate_checklist.md#2-clean-python-311-local-gate) and
+  [automatic GitHub CI gate](./release_candidate_checklist.md#3-automatic-github-ci-gate).
+- [ ] Packaging and clean-machine results linked against the
+  [packaging gate](./release_candidate_checklist.md#4-packaging-and-clean-machine-gate), including
+  optional hosted packaging-smoke evidence when executed.
+- [ ] Google conversion evidence linked against the
+  [Google conversion gate](./release_candidate_checklist.md#5-google-conversion-gate) and recorded
+  in [`google_conversion_smoke.md`](./google_conversion_smoke.md).
+- [ ] Product/data-integrity and security results linked against
+  [sections 6](./release_candidate_checklist.md#6-product-and-data-integrity-smoke) and
+  [7](./release_candidate_checklist.md#7-security-and-privacy-gate).
+- [ ] QA and release-owner sign-off references the
+  [promotion decision and rollback](./release_candidate_checklist.md#8-promotion-decision-and-rollback)
+  gate.
 
-Then complete and store final decision details in:
-[`release_candidate_checklist.md`](./release_candidate_checklist.md).
+Then make the final decision using the
+[promotion decision and rollback](./release_candidate_checklist.md#8-promotion-decision-and-rollback)
+gate and store the decision details in the dated evidence file, not in the timeless checklist.

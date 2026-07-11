@@ -14,6 +14,7 @@ Fallback behavior:
 from __future__ import annotations
 
 import math
+import warnings
 
 import numpy as np
 
@@ -40,6 +41,19 @@ from metroliza.exporting.export_query_service import RowTable, _coerce_to_row_ta
 
 
 SECTION_GAP = 2
+DEPRECATION_NOTICE = (
+    "The legacy Group Comparison worksheet API is deprecated for the 2026.06 RC2 "
+    "compatibility window; use the canonical Group Analysis service and worksheet."
+)
+_DEPRECATION_WARNING_EMITTED = False
+
+
+def _warn_legacy_group_comparison() -> None:
+    global _DEPRECATION_WARNING_EMITTED
+    if _DEPRECATION_WARNING_EMITTED:
+        return
+    _DEPRECATION_WARNING_EMITTED = True
+    warnings.warn(DEPRECATION_NOTICE, DeprecationWarning, stacklevel=3)
 
 BASE_INTERPRETATION_NOTES = [
     'Alpha threshold: 0.05. Comparisons below this level are treated as statistically reliable signals.',
@@ -820,6 +834,7 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None, correcti
         Returns deterministic empty payload sections when the filtered dataframe
         has no usable numeric measurements.
     """
+    _warn_legacy_group_comparison()
     grouped_table = _as_row_table(grouped_df)
     if grouped_table.empty:
         correction_method = _format_correction_method(correction_method)
@@ -1613,6 +1628,7 @@ def write_group_comparison_sheet(worksheet, payload):
         Section headers are always emitted even when rows are absent so legacy
         validation callers and tests can rely on a stable schema.
     """
+    _warn_legacy_group_comparison()
     formats = _build_format_bundle(worksheet)
     row = 0
     row = _write_kv_section(worksheet, row, 'Summary Block', _build_summary_block(payload))

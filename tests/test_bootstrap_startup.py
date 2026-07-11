@@ -108,7 +108,6 @@ class TestBootstrapStartup(unittest.TestCase):
 
         fake_license_manager = types.SimpleNamespace(generate_hardware_id=unexpected_hardware_id)
         fake_license_module = types.SimpleNamespace(LicenseKeyManager=fake_license_manager)
-        fake_main_window_module = types.SimpleNamespace(MainWindow=FakeMainWindow)
         real_import = __import__
 
         def tracked_import(name, globals=None, locals=None, fromlist=(), level=0):
@@ -118,11 +117,12 @@ class TestBootstrapStartup(unittest.TestCase):
             if name == "metroliza.app.license_key_manager":
                 call_order.append("import_license_manager")
                 return fake_license_module
-            if name == "metroliza.ui.main_window":
-                call_order.append("import_main_window")
-                self.assertTrue(app_state["created"])
-                return fake_main_window_module
             return real_import(name, globals, locals, fromlist, level)
+
+        def load_main_window_factory():
+            call_order.append("import_main_window")
+            self.assertTrue(app_state["created"])
+            return FakeMainWindow
 
         config = bootstrap.StartupConfig(
             startup_smoke_mode=False,
@@ -144,6 +144,9 @@ class TestBootstrapStartup(unittest.TestCase):
         ), patch(
             "metroliza.app.bootstrap.create_startup_splash",
             return_value=fake_splash,
+        ), patch(
+            "metroliza.app.bootstrap.load_main_window_factory",
+            side_effect=load_main_window_factory,
         ):
             result = bootstrap.launch_ui(config)
 

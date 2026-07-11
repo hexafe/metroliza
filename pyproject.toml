@@ -26,3 +26,10 @@ pythonpath = ["src", "."]
 markers = [
   "integration: optional tests that require external runtimes, sample files, or packaged artifacts",
 ]
+
+[tool.mypy]
+python_version = "3.11"
+follow_imports = "skip"
+ignore_missing_imports = true
+strict = true
+warn_unreachable = true

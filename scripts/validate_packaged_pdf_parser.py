@@ -20,6 +20,7 @@ REQUIRED_PYMUPDF_MODULES = (
 )
 REQUIRED_PDF_PARSER_REPORT_MODULES = (
     'metroliza.parsing.cmm_report_parser',
+    'metroliza.parsing.report_parser_factory',
     'metroliza.reports.report_parser_factory',
     'metroliza.parsing.pdf_backend',
 )
@@ -33,6 +34,7 @@ REQUIRED_HEADER_OCR_MODULES = (
 REQUIRED_HEADER_OCR_REPORT_MODULES = (
     'metroliza.parsing.header_ocr_backend',
     'metroliza.parsing.header_ocr_geometry',
+    'metroliza.reports.header_ocr_corrections',
     'metroliza.parsing.header_ocr_corrections',
     *REQUIRED_HEADER_OCR_MODULES,
 )

@@ -4,13 +4,17 @@ import stat
 import tempfile
 import unittest
 import urllib.error
+import urllib.request
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 import sys
 
-from modules.google_drive_export import (
+from metroliza.exporting.google_drive_export import (
     GOOGLE_DRIVE_REPORTS_FOLDER_NAME,
+    GOOGLE_DRIVE_RESUMABLE_CHUNK_BYTES,
+    GOOGLE_DRIVE_RESUMABLE_THRESHOLD_BYTES,
+    GOOGLE_DRIVE_RESUMABLE_UPLOAD_URL,
     GOOGLE_DRIVE_SCOPE,
     GOOGLE_DRIVE_UPLOAD_URL,
     GOOGLE_OAUTH_SCOPES,
@@ -26,6 +30,7 @@ from modules.google_drive_export import (
     _load_token_payload,
     _migrate_legacy_token_if_present,
     _refresh_access_token,
+    _urlopen_google_https,
     map_google_http_error,
     map_google_network_error,
     parse_drive_conversion_response,
@@ -35,10 +40,14 @@ from modules.google_drive_export import (
 
 
 class _FakeResponse:
-    def __init__(self, payload):
+    def __init__(self, payload, *, status=200, headers=None):
         self._payload = payload
+        self.status = status
+        self.headers = headers or {}
 
     def read(self):
+        if isinstance(self._payload, bytes):
+            return self._payload
         return json.dumps(self._payload).encode("utf-8")
 
     def __enter__(self):
@@ -178,6 +187,38 @@ class TestGoogleDriveExport(unittest.TestCase):
         self.assertIsInstance(transient, GoogleDriveTransientError)
         self.assertIn("Google Drive upload failed", str(transient))
 
+    def test_google_https_transport_rejects_unsafe_urls_before_urlopen(self):
+        unsafe_urls = (
+            "http://www.googleapis.com/drive/v3/files",
+            "file:///tmp/fake-google-response.json",
+            "https://example.com/drive/v3/files",
+        )
+
+        with patch(
+            "metroliza.exporting.google_drive_export.urllib.request.urlopen"
+        ) as urlopen_mock:
+            for unsafe_url in unsafe_urls:
+                with self.subTest(url=unsafe_url), self.assertRaises(GoogleDriveResponseError):
+                    _urlopen_google_https(
+                        urllib.request.Request(unsafe_url),
+                        timeout=30,
+                    )
+
+        urlopen_mock.assert_not_called()
+
+    def test_google_https_transport_opens_approved_google_api_url(self):
+        request = urllib.request.Request("https://www.googleapis.com/drive/v3/files")
+        response = _FakeResponse({"files": []})
+
+        with patch(
+            "metroliza.exporting.google_drive_export.urllib.request.urlopen",
+            return_value=response,
+        ) as urlopen_mock:
+            opened = _urlopen_google_https(request, timeout=30)
+
+        self.assertIs(response, opened)
+        urlopen_mock.assert_called_once_with(request, timeout=30)
+
     def test_build_upload_request_body_contains_metadata_and_file(self):
         body = _build_upload_request_body(
             boundary="abc",
@@ -224,8 +265,8 @@ class TestGoogleDriveExport(unittest.TestCase):
                     )
                 raise AssertionError(f"Unexpected request: {request.method} {request.full_url}")
 
-            with patch("modules.google_drive_export._ensure_access_token", return_value="token"), patch(
-                "modules.google_drive_export.urllib.request.urlopen", side_effect=fake_urlopen
+            with patch("metroliza.exporting.google_drive_export._ensure_access_token", return_value="token"), patch(
+                "metroliza.exporting.google_drive_export.urllib.request.urlopen", side_effect=fake_urlopen
             ):
                 result = upload_and_convert_workbook(
                     str(excel_path),
@@ -246,8 +287,12 @@ class TestGoogleDriveExport(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             excel_path = Path(tmpdir) / "report.xlsx"
             excel_path.write_bytes(b"excel-content")
+            deleted_file_ids = []
 
             def fake_urlopen(request, timeout=0):
+                if request.method == "DELETE":
+                    deleted_file_ids.append(request.full_url.rsplit("/", 1)[-1])
+                    return _FakeResponse({}, status=204)
                 if request.method == "GET" and "sheets.googleapis.com/v4/spreadsheets/sheet123" in request.full_url:
                     return _FakeResponse(
                         {
@@ -269,8 +314,8 @@ class TestGoogleDriveExport(unittest.TestCase):
                 raise AssertionError(f"Unexpected request: {request.method} {request.full_url}")
 
             statuses = []
-            with patch("modules.google_drive_export._ensure_access_token", return_value="token"), patch(
-                "modules.google_drive_export.urllib.request.urlopen", side_effect=fake_urlopen
+            with patch("metroliza.exporting.google_drive_export._ensure_access_token", return_value="token"), patch(
+                "metroliza.exporting.google_drive_export.urllib.request.urlopen", side_effect=fake_urlopen
             ):
                 result = upload_and_convert_workbook(
                     str(excel_path),
@@ -285,6 +330,7 @@ class TestGoogleDriveExport(unittest.TestCase):
             self.assertEqual("MEASUREMENTS, Renamed", result.warning_details[0]["actual"])
             self.assertIn("Use local .xlsx fallback", result.fallback_message)
             self.assertEqual(["uploading", "converting", "validating"], statuses)
+            self.assertEqual([], deleted_file_ids)
 
     def test_upload_and_convert_workbook_retries_retryable_failures(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -306,9 +352,9 @@ class TestGoogleDriveExport(unittest.TestCase):
                     }
                 )
 
-            with patch("modules.google_drive_export._ensure_access_token", return_value="token"), patch(
-                "modules.google_drive_export.urllib.request.urlopen", side_effect=fake_urlopen
-            ), patch("modules.google_drive_export.time.sleep") as sleep_mock:
+            with patch("metroliza.exporting.google_drive_export._ensure_access_token", return_value="token"), patch(
+                "metroliza.exporting.google_drive_export.urllib.request.urlopen", side_effect=fake_urlopen
+            ), patch("metroliza.exporting.google_drive_export.time.sleep") as sleep_mock:
                 result = upload_and_convert_workbook(str(excel_path), max_retries=2, retry_delay_seconds=0)
 
             self.assertEqual("sheet456", result.file_id)
@@ -346,15 +392,362 @@ class TestGoogleDriveExport(unittest.TestCase):
                     }
                 )
 
-            with patch("modules.google_drive_export._ensure_access_token", return_value="token"), patch(
-                "modules.google_drive_export.urllib.request.urlopen", side_effect=fake_urlopen
-            ), patch("modules.google_drive_export.time.sleep") as sleep_mock:
+            with patch("metroliza.exporting.google_drive_export._ensure_access_token", return_value="token"), patch(
+                "metroliza.exporting.google_drive_export.urllib.request.urlopen", side_effect=fake_urlopen
+            ), patch("metroliza.exporting.google_drive_export.time.sleep") as sleep_mock:
                 result = upload_and_convert_workbook(str(excel_path), max_retries=3, retry_delay_seconds=0.25)
 
             self.assertEqual("sheet456", result.file_id)
             self.assertEqual(attempts["count"], 3)
             self.assertEqual(sleep_mock.call_count, 2)
             sleep_mock.assert_any_call(0.25)
+
+
+    def test_upload_routes_below_threshold_to_multipart_and_threshold_to_resumable(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            small_path = base / "small.xlsx"
+            threshold_path = base / "threshold.xlsx"
+            with small_path.open("wb") as handle:
+                handle.truncate(GOOGLE_DRIVE_RESUMABLE_THRESHOLD_BYTES - 1)
+            with threshold_path.open("wb") as handle:
+                handle.truncate(GOOGLE_DRIVE_RESUMABLE_THRESHOLD_BYTES)
+
+            session_url = (
+                "https://www.googleapis.com/upload/drive/v3/files?upload_id=threshold-session"
+            )
+            requests = []
+
+            def fake_urlopen(request, timeout=0):
+                requests.append((request.method, request.full_url))
+                if request.full_url == GOOGLE_DRIVE_UPLOAD_URL:
+                    return _FakeResponse(
+                        {
+                            "id": "small-sheet",
+                            "webViewLink": "https://docs.google.com/spreadsheets/d/small-sheet/edit",
+                        }
+                    )
+                if request.full_url == GOOGLE_DRIVE_RESUMABLE_UPLOAD_URL:
+                    return _FakeResponse({}, headers={"Location": session_url})
+                if request.method == "PUT" and request.full_url == session_url:
+                    return _FakeResponse(
+                        {
+                            "id": "threshold-sheet",
+                            "webViewLink": (
+                                "https://docs.google.com/spreadsheets/d/threshold-sheet/edit"
+                            ),
+                        }
+                    )
+                raise AssertionError(f"Unexpected request: {request.method} {request.full_url}")
+
+            with patch("metroliza.exporting.google_drive_export._ensure_access_token", return_value="token"), patch(
+                "metroliza.exporting.google_drive_export._ensure_reports_folder",
+                return_value="folder-123",
+            ), patch(
+                "metroliza.exporting.google_drive_export.urllib.request.urlopen",
+                side_effect=fake_urlopen,
+            ):
+                small_result = upload_and_convert_workbook(str(small_path), max_retries=1)
+                threshold_result = upload_and_convert_workbook(
+                    str(threshold_path),
+                    max_retries=1,
+                )
+
+            self.assertEqual("small-sheet", small_result.file_id)
+            self.assertEqual("threshold-sheet", threshold_result.file_id)
+            self.assertIn(("POST", GOOGLE_DRIVE_UPLOAD_URL), requests)
+            self.assertIn(("POST", GOOGLE_DRIVE_RESUMABLE_UPLOAD_URL), requests)
+            self.assertIn(("PUT", session_url), requests)
+            self.assertFalse(any(method == "DELETE" for method, _url in requests))
+
+    def test_resumable_upload_rejects_untrusted_location_before_chunk_request(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            excel_path = Path(tmpdir) / "report.xlsx"
+            with excel_path.open("wb") as handle:
+                handle.truncate(GOOGLE_DRIVE_RESUMABLE_THRESHOLD_BYTES)
+            requested_urls = []
+
+            def fake_urlopen(request, timeout=0):
+                requested_urls.append(request.full_url)
+                return _FakeResponse(
+                    {},
+                    headers={"Location": "https://example.com/upload/session-id"},
+                )
+
+            with patch(
+                "metroliza.exporting.google_drive_export._ensure_access_token",
+                return_value="token",
+            ), patch(
+                "metroliza.exporting.google_drive_export._ensure_reports_folder",
+                return_value="folder-123",
+            ), patch(
+                "metroliza.exporting.google_drive_export.urllib.request.urlopen",
+                side_effect=fake_urlopen,
+            ):
+                with self.assertRaisesRegex(GoogleDriveResponseError, "invalid session URL"):
+                    upload_and_convert_workbook(str(excel_path), max_retries=1)
+
+            self.assertEqual([GOOGLE_DRIVE_RESUMABLE_UPLOAD_URL], requested_urls)
+
+    def test_resumable_upload_uses_fixed_chunk_offsets_and_retries_current_chunk(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            excel_path = Path(tmpdir) / "large.xlsx"
+            total_bytes = (2 * GOOGLE_DRIVE_RESUMABLE_CHUNK_BYTES) + 3
+            with excel_path.open("wb") as handle:
+                handle.truncate(total_bytes)
+
+            session_url = (
+                "https://www.googleapis.com/upload/drive/v3/files?upload_id=chunk-session"
+            )
+            first_end = GOOGLE_DRIVE_RESUMABLE_CHUNK_BYTES - 1
+            second_end = (2 * GOOGLE_DRIVE_RESUMABLE_CHUNK_BYTES) - 1
+            first_range = f"bytes 0-{first_end}/{total_bytes}"
+            second_range = (
+                f"bytes {GOOGLE_DRIVE_RESUMABLE_CHUNK_BYTES}-{second_end}/{total_bytes}"
+            )
+            final_range = f"bytes {second_end + 1}-{total_bytes - 1}/{total_bytes}"
+            chunk_requests = []
+            session_headers = {}
+
+            def fake_urlopen(request, timeout=0):
+                request_headers = {
+                    key.lower(): value for key, value in request.header_items()
+                }
+                if request.full_url == GOOGLE_DRIVE_RESUMABLE_UPLOAD_URL:
+                    session_headers.update(request_headers)
+                    return _FakeResponse({}, headers={"Location": session_url})
+                if request.method != "PUT" or request.full_url != session_url:
+                    raise AssertionError(
+                        f"Unexpected request: {request.method} {request.full_url}"
+                    )
+
+                content_range = request_headers["content-range"]
+                chunk_requests.append((content_range, len(request.data or b"")))
+                if content_range == second_range and sum(
+                    seen_range == second_range for seen_range, _size in chunk_requests
+                ) == 1:
+                    raise urllib.error.URLError("connection reset after first chunk")
+                if content_range == first_range:
+                    raise urllib.error.HTTPError(
+                        session_url,
+                        308,
+                        "Resume Incomplete",
+                        {"Range": f"bytes=0-{first_end}"},
+                        BytesIO(),
+                    )
+                if content_range == second_range:
+                    return _FakeResponse(
+                        {},
+                        status=308,
+                        headers={"Range": f"bytes=0-{second_end}"},
+                    )
+                if content_range == final_range:
+                    return _FakeResponse(
+                        {
+                            "id": "large-sheet",
+                            "webViewLink": (
+                                "https://docs.google.com/spreadsheets/d/large-sheet/edit"
+                            ),
+                        }
+                    )
+                raise AssertionError(f"Unexpected chunk range: {content_range}")
+
+            statuses = []
+            with patch("metroliza.exporting.google_drive_export._ensure_access_token", return_value="token"), patch(
+                "metroliza.exporting.google_drive_export._ensure_reports_folder",
+                return_value="folder-123",
+            ), patch(
+                "metroliza.exporting.google_drive_export.urllib.request.urlopen",
+                side_effect=fake_urlopen,
+            ), patch("metroliza.exporting.google_drive_export.time.sleep") as sleep_mock:
+                result = upload_and_convert_workbook(
+                    str(excel_path),
+                    max_retries=2,
+                    retry_delay_seconds=0.25,
+                    status_callback=statuses.append,
+                )
+
+            self.assertEqual("large-sheet", result.file_id)
+            self.assertEqual(
+                [
+                    (first_range, GOOGLE_DRIVE_RESUMABLE_CHUNK_BYTES),
+                    (second_range, GOOGLE_DRIVE_RESUMABLE_CHUNK_BYTES),
+                    (second_range, GOOGLE_DRIVE_RESUMABLE_CHUNK_BYTES),
+                    (final_range, 3),
+                ],
+                chunk_requests,
+            )
+            self.assertEqual(str(total_bytes), session_headers["x-upload-content-length"])
+            self.assertIn("spreadsheetml.sheet", session_headers["x-upload-content-type"])
+            sleep_mock.assert_called_once_with(0.25)
+            self.assertEqual("uploading", statuses[0])
+            self.assertTrue(any(status.startswith("uploading retry 2/2") for status in statuses))
+
+    def test_cancellation_after_upload_deletes_created_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            excel_path = Path(tmpdir) / "report.xlsx"
+            excel_path.write_bytes(b"excel-content")
+            canceled = {"value": False}
+            deleted_urls = []
+
+            def fake_urlopen(request, timeout=0):
+                if request.method == "DELETE":
+                    deleted_urls.append(request.full_url)
+                    return _FakeResponse({}, status=204)
+                canceled["value"] = True
+                return _FakeResponse(
+                    {
+                        "id": "cancel-orphan",
+                        "webViewLink": (
+                            "https://docs.google.com/spreadsheets/d/cancel-orphan/edit"
+                        ),
+                    }
+                )
+
+            with patch("metroliza.exporting.google_drive_export._ensure_access_token", return_value="token"), patch(
+                "metroliza.exporting.google_drive_export._ensure_reports_folder",
+                return_value="folder-123",
+            ), patch(
+                "metroliza.exporting.google_drive_export.urllib.request.urlopen",
+                side_effect=fake_urlopen,
+            ):
+                with self.assertRaises(GoogleDriveCanceledError):
+                    upload_and_convert_workbook(
+                        str(excel_path),
+                        max_retries=1,
+                        should_cancel=lambda: canceled["value"],
+                    )
+
+            self.assertEqual(
+                ["https://www.googleapis.com/drive/v3/files/cancel-orphan"],
+                deleted_urls,
+            )
+
+    def test_timeout_after_upload_deletes_created_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            excel_path = Path(tmpdir) / "report.xlsx"
+            excel_path.write_bytes(b"excel-content")
+            clock = {"now": 0.0}
+            deleted_urls = []
+
+            def fake_urlopen(request, timeout=0):
+                if request.method == "DELETE":
+                    deleted_urls.append(request.full_url)
+                    return _FakeResponse({}, status=204)
+                clock["now"] = 2.0
+                return _FakeResponse(
+                    {
+                        "id": "timeout-orphan",
+                        "webViewLink": (
+                            "https://docs.google.com/spreadsheets/d/timeout-orphan/edit"
+                        ),
+                    }
+                )
+
+            with patch("metroliza.exporting.google_drive_export._ensure_access_token", return_value="token"), patch(
+                "metroliza.exporting.google_drive_export._ensure_reports_folder",
+                return_value="folder-123",
+            ), patch(
+                "metroliza.exporting.google_drive_export.urllib.request.urlopen",
+                side_effect=fake_urlopen,
+            ), patch(
+                "metroliza.exporting.google_drive_export.time.monotonic",
+                side_effect=lambda: clock["now"],
+            ):
+                with self.assertRaises(GoogleDriveTimeoutError):
+                    upload_and_convert_workbook(
+                        str(excel_path),
+                        max_retries=1,
+                        overall_timeout_seconds=1.0,
+                    )
+
+            self.assertEqual(
+                ["https://www.googleapis.com/drive/v3/files/timeout-orphan"],
+                deleted_urls,
+            )
+
+    def test_fatal_validation_failure_deletes_created_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            excel_path = Path(tmpdir) / "report.xlsx"
+            excel_path.write_bytes(b"excel-content")
+            deleted_urls = []
+            validation_error = GoogleDriveResponseError("fatal validation failure")
+
+            def fake_urlopen(request, timeout=0):
+                if request.method == "DELETE":
+                    deleted_urls.append(request.full_url)
+                    return _FakeResponse({}, status=204)
+                return _FakeResponse(
+                    {
+                        "id": "validation-orphan",
+                        "webViewLink": (
+                            "https://docs.google.com/spreadsheets/d/validation-orphan/edit"
+                        ),
+                    }
+                )
+
+            with patch("metroliza.exporting.google_drive_export._ensure_access_token", return_value="token"), patch(
+                "metroliza.exporting.google_drive_export._ensure_reports_folder",
+                return_value="folder-123",
+            ), patch(
+                "metroliza.exporting.google_drive_export._fetch_converted_tab_titles",
+                side_effect=validation_error,
+            ), patch(
+                "metroliza.exporting.google_drive_export.urllib.request.urlopen",
+                side_effect=fake_urlopen,
+            ):
+                with self.assertRaises(GoogleDriveResponseError) as caught:
+                    upload_and_convert_workbook(
+                        str(excel_path),
+                        expected_sheet_names=["MEASUREMENTS"],
+                        max_retries=1,
+                    )
+
+            self.assertIs(validation_error, caught.exception)
+            self.assertEqual(
+                ["https://www.googleapis.com/drive/v3/files/validation-orphan"],
+                deleted_urls,
+            )
+
+    def test_cleanup_failure_does_not_mask_original_post_create_error(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            excel_path = Path(tmpdir) / "report.xlsx"
+            excel_path.write_bytes(b"excel-content")
+            validation_error = GoogleDriveResponseError("keep this validation error")
+
+            def fake_urlopen(request, timeout=0):
+                if request.method == "DELETE":
+                    raise RuntimeError("cleanup also failed")
+                return _FakeResponse(
+                    {
+                        "id": "cleanup-failure-orphan",
+                        "webViewLink": (
+                            "https://docs.google.com/spreadsheets/d/cleanup-failure-orphan/edit"
+                        ),
+                    }
+                )
+
+            with patch("metroliza.exporting.google_drive_export._ensure_access_token", return_value="token"), patch(
+                "metroliza.exporting.google_drive_export._ensure_reports_folder",
+                return_value="folder-123",
+            ), patch(
+                "metroliza.exporting.google_drive_export._fetch_converted_tab_titles",
+                side_effect=validation_error,
+            ), patch(
+                "metroliza.exporting.google_drive_export.urllib.request.urlopen",
+                side_effect=fake_urlopen,
+            ), patch(
+                "metroliza.exporting.google_drive_export.logger.warning",
+                side_effect=RuntimeError("cleanup logging failed too"),
+            ):
+                with self.assertRaises(GoogleDriveResponseError) as caught:
+                    upload_and_convert_workbook(
+                        str(excel_path),
+                        expected_sheet_names=["MEASUREMENTS"],
+                        max_retries=1,
+                    )
+
+            self.assertIs(validation_error, caught.exception)
 
 
     def test_upload_and_convert_workbook_creates_reports_folder_when_missing(self):
@@ -373,8 +766,8 @@ class TestGoogleDriveExport(unittest.TestCase):
                 calls["upload"] += 1
                 return _FakeResponse({"id": "sheet123", "webViewLink": "https://docs.google.com/spreadsheets/d/sheet123/edit"})
 
-            with patch("modules.google_drive_export._ensure_access_token", return_value="token"), patch(
-                "modules.google_drive_export.urllib.request.urlopen", side_effect=fake_urlopen
+            with patch("metroliza.exporting.google_drive_export._ensure_access_token", return_value="token"), patch(
+                "metroliza.exporting.google_drive_export.urllib.request.urlopen", side_effect=fake_urlopen
             ):
                 result = upload_and_convert_workbook(str(excel_path), max_retries=1)
 
@@ -408,9 +801,9 @@ class TestGoogleDriveExport(unittest.TestCase):
                 attempts["count"] += 1
                 raise urllib.error.URLError("temporary network failure")
 
-            with patch("modules.google_drive_export._ensure_access_token", return_value="token"), patch(
-                "modules.google_drive_export.urllib.request.urlopen", side_effect=fake_urlopen
-            ), patch("modules.google_drive_export.time.sleep"):
+            with patch("metroliza.exporting.google_drive_export._ensure_access_token", return_value="token"), patch(
+                "metroliza.exporting.google_drive_export.urllib.request.urlopen", side_effect=fake_urlopen
+            ), patch("metroliza.exporting.google_drive_export.time.sleep"):
                 with self.assertRaises(GoogleDriveCanceledError):
                     upload_and_convert_workbook(
                         str(excel_path),
@@ -437,10 +830,10 @@ class TestGoogleDriveExport(unittest.TestCase):
 
             monotonic_values = iter([0, 0, 0, 0, 0, 3, 4, 5, 6, 7])
 
-            with patch("modules.google_drive_export._ensure_access_token", return_value="token"), patch(
-                "modules.google_drive_export.urllib.request.urlopen", side_effect=fake_urlopen
-            ), patch("modules.google_drive_export.time.sleep"), patch(
-                "modules.google_drive_export.time.monotonic",
+            with patch("metroliza.exporting.google_drive_export._ensure_access_token", return_value="token"), patch(
+                "metroliza.exporting.google_drive_export.urllib.request.urlopen", side_effect=fake_urlopen
+            ), patch("metroliza.exporting.google_drive_export.time.sleep"), patch(
+                "metroliza.exporting.google_drive_export.time.monotonic",
                 side_effect=lambda: next(monotonic_values),
             ):
                 with self.assertRaises(GoogleDriveTimeoutError):
@@ -460,13 +853,13 @@ class TestGoogleDriveExport(unittest.TestCase):
 
             monotonic_values = iter([0, 0, 5, 10, 10.01, 10.01, 10.01, 10.01, 10.01])
 
-            with patch("modules.google_drive_export._ensure_access_token", return_value="token"), patch(
-                "modules.google_drive_export._ensure_reports_folder", return_value="folder-123"
+            with patch("metroliza.exporting.google_drive_export._ensure_access_token", return_value="token"), patch(
+                "metroliza.exporting.google_drive_export._ensure_reports_folder", return_value="folder-123"
             ), patch(
-                "modules.google_drive_export.urllib.request.urlopen",
+                "metroliza.exporting.google_drive_export.urllib.request.urlopen",
                 return_value=_FakeResponse({"id": "abc123", "webViewLink": "https://drive.google.com/file/d/abc123/view"}),
             ), patch(
-                "modules.google_drive_export.time.monotonic",
+                "metroliza.exporting.google_drive_export.time.monotonic",
                 side_effect=lambda: next(monotonic_values),
             ):
                 result = upload_and_convert_workbook(
@@ -485,10 +878,10 @@ class TestGoogleDriveExport(unittest.TestCase):
 
             monotonic_values = iter([0, 0, 0.1, 2.5])
 
-            with patch("modules.google_drive_export._ensure_access_token", return_value="token"), patch(
-                "modules.google_drive_export._ensure_reports_folder", return_value="folder-123"
+            with patch("metroliza.exporting.google_drive_export._ensure_access_token", return_value="token"), patch(
+                "metroliza.exporting.google_drive_export._ensure_reports_folder", return_value="folder-123"
             ) as ensure_folder, patch(
-                "modules.google_drive_export.time.monotonic",
+                "metroliza.exporting.google_drive_export.time.monotonic",
                 side_effect=lambda: next(monotonic_values),
             ):
                 with self.assertRaises(GoogleDriveCanceledError):
@@ -507,10 +900,10 @@ class TestGoogleDriveExport(unittest.TestCase):
 
             monotonic_values = iter([0, 0, 0.1, 2.5])
 
-            with patch("modules.google_drive_export._ensure_access_token", return_value="token"), patch(
-                "modules.google_drive_export._ensure_reports_folder", return_value="folder-123"
+            with patch("metroliza.exporting.google_drive_export._ensure_access_token", return_value="token"), patch(
+                "metroliza.exporting.google_drive_export._ensure_reports_folder", return_value="folder-123"
             ) as ensure_folder, patch(
-                "modules.google_drive_export.time.monotonic",
+                "metroliza.exporting.google_drive_export.time.monotonic",
                 side_effect=lambda: next(monotonic_values),
             ):
                 with self.assertRaises(GoogleDriveTimeoutError) as exc:
@@ -565,7 +958,7 @@ class TestGoogleDriveExport(unittest.TestCase):
             store = TokenStore(token_path)
             store.save({"access_token": "old", "expires_at": 123})
 
-            with patch("modules.google_drive_export.os.replace", side_effect=OSError("boom")):
+            with patch("metroliza.exporting.google_drive_export.os.replace", side_effect=OSError("boom")):
                 with self.assertRaisesRegex(OSError, "boom"):
                     store.save({"access_token": "new", "expires_at": 456})
 
@@ -623,7 +1016,7 @@ class TestGoogleDriveExport(unittest.TestCase):
             "token_uri": "https://oauth2.googleapis.com/token",
         }
 
-        with patch("modules.google_drive_export.urllib.request.urlopen", return_value=_FakeResponse({"access_token": "new-token", "expires_in": 3600})):
+        with patch("metroliza.exporting.google_drive_export.urllib.request.urlopen", return_value=_FakeResponse({"access_token": "new-token", "expires_in": 3600})):
             refreshed = _refresh_access_token(token_payload, credentials)
 
         self.assertEqual(GOOGLE_DRIVE_SCOPE, refreshed["scope"])
@@ -668,7 +1061,7 @@ class TestGoogleDriveExport(unittest.TestCase):
                 "sys.modules",
                 {"google_auth_oauthlib.flow": type("M", (), {"InstalledAppFlow": _FakeInstalledAppFlow})()},
             ):
-                from modules.google_drive_export import _interactive_oauth_authorization
+                from metroliza.exporting.google_drive_export import _interactive_oauth_authorization
 
                 payload = _interactive_oauth_authorization(credentials_path, token_path)
 
@@ -704,7 +1097,7 @@ class TestGoogleDriveExport(unittest.TestCase):
             token_path = Path(tmpdir) / "token.json"
             credentials_path.write_text(json.dumps({"installed": ["bad"]}), encoding="utf-8")
 
-            from modules.google_drive_export import _ensure_access_token
+            from metroliza.exporting.google_drive_export import _ensure_access_token
 
             with self.assertRaises(GoogleDriveAuthError) as exc:
                 _ensure_access_token(credentials_path, token_path)
@@ -729,7 +1122,7 @@ class TestGoogleDriveExport(unittest.TestCase):
             )
             token_path.write_text("{not valid json", encoding="utf-8")
 
-            from modules.google_drive_export import _ensure_access_token
+            from metroliza.exporting.google_drive_export import _ensure_access_token
 
             with self.assertRaises(GoogleDriveAuthError) as exc:
                 _ensure_access_token(credentials_path, token_path)
@@ -766,7 +1159,7 @@ class TestGoogleDriveExport(unittest.TestCase):
                 "sys.modules",
                 {"google_auth_oauthlib.flow": type("M", (), {"InstalledAppFlow": _FakeInstalledAppFlow})()},
             ):
-                from modules.google_drive_export import _interactive_oauth_authorization
+                from metroliza.exporting.google_drive_export import _interactive_oauth_authorization
 
                 with self.assertRaises(GoogleDriveAuthError) as exc:
                     _interactive_oauth_authorization(credentials_path, token_path)
@@ -789,8 +1182,8 @@ class TestGoogleDriveExport(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("modules.google_drive_export._interactive_oauth_authorization") as oauth_mock, patch(
-                "modules.google_drive_export._refresh_access_token"
+            with patch("metroliza.exporting.google_drive_export._interactive_oauth_authorization") as oauth_mock, patch(
+                "metroliza.exporting.google_drive_export._refresh_access_token"
             ) as refresh_mock:
                 oauth_mock.return_value = {
                     "access_token": "interactive-token",
@@ -798,7 +1191,7 @@ class TestGoogleDriveExport(unittest.TestCase):
                     "expires_at": 9999999999,
                 }
 
-                from modules.google_drive_export import _ensure_access_token
+                from metroliza.exporting.google_drive_export import _ensure_access_token
 
                 token = _ensure_access_token(credentials_path, token_path)
 
@@ -824,8 +1217,8 @@ class TestGoogleDriveExport(unittest.TestCase):
             )
             token_path.write_text(json.dumps({"access_token": "old", "expires_at": 0}), encoding="utf-8")
 
-            with patch("modules.google_drive_export._interactive_oauth_authorization") as oauth_mock, patch(
-                "modules.google_drive_export._refresh_access_token"
+            with patch("metroliza.exporting.google_drive_export._interactive_oauth_authorization") as oauth_mock, patch(
+                "metroliza.exporting.google_drive_export._refresh_access_token"
             ) as refresh_mock:
                 oauth_mock.return_value = {
                     "access_token": "reauthed-token",
@@ -833,7 +1226,7 @@ class TestGoogleDriveExport(unittest.TestCase):
                     "expires_at": 9999999999,
                 }
 
-                from modules.google_drive_export import _ensure_access_token
+                from metroliza.exporting.google_drive_export import _ensure_access_token
 
                 token = _ensure_access_token(credentials_path, token_path)
 
