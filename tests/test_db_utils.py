@@ -112,22 +112,20 @@ class TestDbUtils(unittest.TestCase):
             execute_with_retry(self.db_path, 'SELECT * FROM missing_table')
 
     def test_execute_with_retry_rolls_back_on_non_operational_error_with_connection(self):
-        conn = sqlite3.connect(self.db_path)
-        self.addCleanup(conn.close)
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            conn.execute('BEGIN')
+            conn.execute("INSERT INTO sample (name) VALUES ('gamma')")
 
-        conn.execute('BEGIN')
-        conn.execute("INSERT INTO sample (name) VALUES ('gamma')")
+            with self.assertRaises(ValueError):
+                execute_with_retry(
+                    self.db_path,
+                    'SELECT name FROM sample WHERE id = ?',
+                    params=42,
+                    connection=conn,
+                )
 
-        with self.assertRaises(ValueError):
-            execute_with_retry(
-                self.db_path,
-                'SELECT name FROM sample WHERE id = ?',
-                params=42,
-                connection=conn,
-            )
-
-        conn.execute("INSERT INTO sample (name) VALUES ('delta')")
-        conn.commit()
+            conn.execute("INSERT INTO sample (name) VALUES ('delta')")
+            conn.commit()
 
         rows = execute_with_retry(self.db_path, 'SELECT name FROM sample ORDER BY id')
         self.assertEqual(rows, [('alpha',), ('beta',), ('delta',)])
