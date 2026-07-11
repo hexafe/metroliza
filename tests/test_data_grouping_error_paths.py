@@ -7,7 +7,9 @@ from unittest.mock import patch
 class TestDataGroupingErrorPaths(unittest.TestCase):
     def test_read_data_to_df_reraises_unexpected_errors(self):
         qtcore = types.ModuleType('PyQt6.QtCore')
-        qtcore.Qt = types.SimpleNamespace()
+        qtcore.Qt = types.SimpleNamespace(
+            ItemDataRole=types.SimpleNamespace(UserRole=0),
+        )
         qtwidgets = types.ModuleType('PyQt6.QtWidgets')
         qtwidgets.QDialog = type('QDialog', (), {})
         qtwidgets.QGridLayout = object
@@ -30,8 +32,23 @@ class TestDataGroupingErrorPaths(unittest.TestCase):
 
         original_modules = {
             name: sys.modules.get(name)
-            for name in ('PyQt6', 'PyQt6.QtCore', 'PyQt6.QtWidgets', 'PyQt6.QtGui')
+            for name in (
+                'PyQt6',
+                'PyQt6.QtCore',
+                'PyQt6.QtWidgets',
+                'PyQt6.QtGui',
+                'modules.data_grouping',
+                'metroliza.ui.data_grouping',
+            )
         }
+        package_attrs = []
+        for package_name, attribute in (
+            ('modules', 'data_grouping'),
+            ('metroliza.ui', 'data_grouping'),
+        ):
+            package = __import__(package_name, fromlist=(attribute,))
+            sentinel = object()
+            package_attrs.append((package, attribute, vars(package).get(attribute, sentinel), sentinel))
         sys.modules['PyQt6'] = pyqt6
         sys.modules['PyQt6.QtCore'] = qtcore
         sys.modules['PyQt6.QtWidgets'] = qtwidgets
@@ -40,6 +57,7 @@ class TestDataGroupingErrorPaths(unittest.TestCase):
         try:
             import importlib
             sys.modules.pop('modules.data_grouping', None)
+            sys.modules.pop('metroliza.ui.data_grouping', None)
             data_grouping_module = importlib.import_module('modules.data_grouping')
             DataGrouping = data_grouping_module.DataGrouping
 
@@ -67,6 +85,11 @@ class TestDataGroupingErrorPaths(unittest.TestCase):
                     sys.modules.pop(name, None)
                 else:
                     sys.modules[name] = module
+            for package, attribute, previous, sentinel in package_attrs:
+                if previous is sentinel:
+                    vars(package).pop(attribute, None)
+                else:
+                    setattr(package, attribute, previous)
 
 
 if __name__ == '__main__':

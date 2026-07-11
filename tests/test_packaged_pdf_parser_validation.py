@@ -355,15 +355,15 @@ def test_pyinstaller_spec_collects_windows_runtime_and_pdf_parser_dependencies()
     assert 'This file intentionally is not named ``metroliza.py``.' in entry
     assert 'from PyInstaller.utils.hooks import (' in common
     assert 'def collect_windows_python_runtime_binaries()' in common
-    assert 'collect_optional_runtime_assets(\n        "pymupdf"\n    )' in common
-    assert 'collect_optional_runtime_assets("fitz")' in common
-    assert 'collect_optional_runtime_assets("hexafe_plotstats")' in common
-    assert 'collect_optional_runtime_assets("oznak")' in common
-    assert 'collect_optional_runtime_assets(\n        "rapidocr"\n    )' in common
-    assert 'collect_optional_runtime_assets("onnxruntime")' in common
-    assert 'collect_optional_runtime_assets(\n        "openvino"\n    )' in common
-    assert 'collect_optional_runtime_assets("cv2")' in common
-    assert 'collect_optional_runtime_assets("numpy")' in common
+    assert 'collect_required_runtime_assets(\n        "pymupdf"\n    )' in common
+    assert 'collect_required_runtime_assets("fitz")' in common
+    assert 'collect_required_runtime_assets("hexafe_plotstats")' in common
+    assert 'collect_required_runtime_assets("oznak")' in common
+    assert 'collect_required_runtime_assets(\n        "rapidocr"\n    )' in common
+    assert 'collect_required_runtime_assets("onnxruntime")' in common
+    assert 'collect_required_runtime_assets(\n        "openvino"\n    )' in common
+    assert 'collect_required_runtime_assets("cv2")' in common
+    assert 'collect_required_runtime_assets("numpy")' in common
     assert 'collect_optional_distribution_metadata("rapidocr")' in common
     assert 'collect_optional_distribution_metadata("onnxruntime")' in common
     assert 'collect_optional_distribution_metadata("openvino")' in common
@@ -445,6 +445,68 @@ def test_pyinstaller_vendored_ocr_models_use_runtime_resource_destination(tmp_pa
         "metroliza/resources/ocr_models/rapidocr",
     ) in datas
     assert not any(destination.startswith("src/") for _source, destination in datas)
+
+
+def test_pyinstaller_required_collection_fails_when_dependency_is_missing(monkeypatch):
+    module_name = "_metroliza_pyinstaller_required_collection_test"
+    spec = importlib.util.spec_from_file_location(
+        module_name,
+        Path("packaging/pyinstaller_common.py"),
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "_package_is_installed", lambda _name: False)
+
+    with pytest.raises(RuntimeError, match="required_dependency.*not installed"):
+        module.collect_required_runtime_assets("required_dependency")
+
+    assert module.collect_optional_runtime_assets("optional_dependency") == ([], [], [])
+
+
+def test_pyinstaller_required_collection_does_not_hide_hook_failures(monkeypatch):
+    module_name = "_metroliza_pyinstaller_failed_collection_test"
+    spec = importlib.util.spec_from_file_location(
+        module_name,
+        Path("packaging/pyinstaller_common.py"),
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "_package_is_installed", lambda _name: True)
+    monkeypatch.setattr(
+        module,
+        "collect_data_files",
+        lambda _name: (_ for _ in ()).throw(ValueError("broken hook")),
+    )
+
+    with pytest.raises(RuntimeError, match="Failed to collect.*required_dependency") as exc_info:
+        module.collect_required_runtime_assets("required_dependency")
+
+    assert isinstance(exc_info.value.__cause__, ValueError)
+
+
+def test_pyinstaller_installed_optional_collection_does_not_hide_hook_failures(monkeypatch):
+    module_name = "_metroliza_pyinstaller_optional_collection_test"
+    spec = importlib.util.spec_from_file_location(
+        module_name,
+        Path("packaging/pyinstaller_common.py"),
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "_package_is_installed", lambda _name: True)
+    monkeypatch.setattr(
+        module,
+        "collect_data_files",
+        lambda _name: (_ for _ in ()).throw(ValueError("broken optional hook")),
+    )
+
+    with pytest.raises(ValueError, match="broken optional hook"):
+        module.collect_optional_runtime_assets("optional_dependency")
 
 
 def test_vendored_plotly_dashboard_asset_is_checked_in():

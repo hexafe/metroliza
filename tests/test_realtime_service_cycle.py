@@ -8,6 +8,7 @@ from metroliza.industrial.realtime.realtime_service import _load_persisted_sampl
 from metroliza.industrial.realtime.sample_repository import RealtimeSampleRepository
 from metroliza.industrial.realtime.stream_config import RealtimePollConfig
 from metroliza.industrial.realtime.stream_contracts import IndustrialSample, SignalDefinition, StreamOffset
+from metroliza.reports.db import sqlite_connection_scope
 
 
 class FakeAdapter:
@@ -293,7 +294,7 @@ def test_realtime_poll_cycle_preserves_last_success_at_on_failure(tmp_path):
         stream_key="cycle_time",
     )
 
-    assert offset.last_success_at == "2026-06-13T10:00:00Z"
+    assert offset.last_success_at == "2026-06-13T10:00:00.000000Z"
     assert offset.status == "failed"
 
 
@@ -321,10 +322,10 @@ def test_realtime_poll_cycle_reports_source_fetch_exception_diagnostics(tmp_path
     assert result.status == "failed"
     assert result.error == "driver timeout password=<redacted>"
     assert result.cursor_value == "75"
-    assert result.event_time_watermark == "2026-06-13T10:00:00Z"
+    assert result.event_time_watermark == "2026-06-13T10:00:00.000000Z"
     assert result.diagnostics["stage"] == "source_fetch"
     assert result.diagnostics["cursor_value"] == "75"
-    assert result.diagnostics["event_time_watermark"] == "2026-06-13T10:00:00Z"
+    assert result.diagnostics["event_time_watermark"] == "2026-06-13T10:00:00.000000Z"
     assert result.diagnostics["error"] == "driver timeout password=<redacted>"
     assert "sql_hash" in result.diagnostics
     assert result.diagnostics["query_summary"].startswith("bounded mssql poll")
@@ -434,11 +435,11 @@ def test_realtime_poll_cycle_does_not_advance_offset_to_trailing_unkeyed_row(tmp
     assert result.rows_fetched == 2
     assert result.samples_inserted == 1
     assert result.cursor_value == "100"
-    assert result.event_time_watermark == "2026-06-13T10:00:00Z"
+    assert result.event_time_watermark == "2026-06-13T10:00:00.000000Z"
     assert offset.cursor_value == "100"
     assert offset.cursor_tie_breaker_column == "record_id"
     assert offset.cursor_tie_breaker_value == "row-100"
-    assert offset.event_time_watermark == "2026-06-13T10:00:00Z"
+    assert offset.event_time_watermark == "2026-06-13T10:00:00.000000Z"
 
 
 def test_realtime_poll_cycle_isolates_detector_failures_and_advances_successful_fetch(tmp_path):
@@ -626,6 +627,8 @@ def test_realtime_poll_cycle_does_not_advance_offset_when_stream_append_fails(
     assert result.diagnostics["stage"] == "append_stream_event"
     assert offset.cursor_value == "50"
     assert offset.last_error == "sqlite busy password=<redacted>"
+    with sqlite_connection_scope(db_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM industrial_samples").fetchone()[0] == 0
 
 
 def config_signal_definition(profile_id):

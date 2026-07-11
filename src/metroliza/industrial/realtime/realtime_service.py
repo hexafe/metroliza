@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Iterable, Mapping
 
 from metroliza.industrial.anomaly.baseline_repository import BaselineRepository
@@ -19,7 +18,10 @@ from metroliza.industrial.realtime.db_poller import (
     safe_query_diagnostics,
 )
 from metroliza.industrial.realtime.event_stream_repository import RealtimeEventStreamRepository
-from metroliza.industrial.realtime.offset_store import StreamOffsetStore
+from metroliza.industrial.realtime.offset_store import (
+    StreamOffsetConflictError,
+    StreamOffsetStore,
+)
 from metroliza.industrial.realtime.replay import run_detectors_for_samples
 from metroliza.industrial.realtime.sample_mapper import map_rows_to_samples
 from metroliza.industrial.realtime.sample_repository import RealtimeSampleRepository, utc_timestamp
@@ -29,6 +31,8 @@ from metroliza.industrial.realtime.stream_contracts import (
     SignalDefinition,
     StreamOffset,
 )
+from metroliza.industrial.realtime.timestamps import parse_utc_timestamp
+from metroliza.reports.db import run_transaction_with_retry
 
 DetectorRunner = Callable[
     [Iterable[IndustrialSample], SignalDefinition, tuple[str, ...]],
@@ -63,6 +67,15 @@ class PollingCycleResult:
     diagnostics: Mapping[str, Any] = field(default_factory=dict)
 
 
+class PollChunkPersistenceError(RuntimeError):
+    """Identify which atomic chunk-persistence stage failed."""
+
+    def __init__(self, stage: str, cause: Exception) -> None:
+        super().__init__(str(cause))
+        self.stage = stage
+        self.cause = cause
+
+
 def run_polling_cycle(
     *,
     database: str,
@@ -70,8 +83,92 @@ def run_polling_cycle(
     config: RealtimePollConfig,
     adapter: SourceDbAdapter,
     detector_runner: DetectorRunner | None = None,
+    stop_check: Callable[[], bool] | None = None,
 ) -> PollingCycleResult:
-    """Poll one bounded source batch, persist samples/events, and update offset after success."""
+    """Poll bounded chunks until exhausted, stopped, or the per-cycle catch-up cap is reached."""
+
+    validated = config.validated()
+    offset_store = StreamOffsetStore(database)
+    previous_offset = offset_store.get_offset(
+        source_profile_id=validated.source_profile_id,
+        stream_key=validated.stream_key,
+    )
+    remaining = validated.max_catchup_rows_per_cycle
+    chunk_results: list[PollingCycleResult] = []
+    aggregate_status = "completed"
+    aggregate_error = None
+    aggregate_warnings: list[str] = []
+
+    while remaining > 0:
+        if _stop_requested(stop_check):
+            aggregate_status = "cancelled" if not chunk_results else "completed_with_warnings"
+            aggregate_warnings.append("Realtime catch-up stopped by request before the next chunk.")
+            break
+        chunk_limit = min(validated.chunk_size, remaining)
+        chunk_config = replace(validated, chunk_size=chunk_limit)
+        result = _run_polling_chunk(
+            database=database,
+            profile=profile,
+            config=chunk_config,
+            adapter=adapter,
+            detector_runner=detector_runner,
+            stop_check=stop_check,
+        )
+        chunk_results.append(result)
+        if result.status in {"failed", "cancelled"}:
+            aggregate_status = result.status
+            aggregate_error = result.error
+            break
+        if result.status == "completed_with_warnings":
+            aggregate_status = "completed_with_warnings"
+
+        current_offset = offset_store.get_offset(
+            source_profile_id=validated.source_profile_id,
+            stream_key=validated.stream_key,
+        )
+        progressed = _offset_checkpoint(current_offset) != _offset_checkpoint(previous_offset)
+        remaining -= result.rows_fetched
+        if result.rows_fetched < chunk_limit:
+            previous_offset = current_offset
+            break
+        if not progressed:
+            aggregate_status = "completed_with_warnings"
+            aggregate_warnings.append(
+                "Realtime catch-up stopped because a full source chunk made no cursor progress."
+            )
+            previous_offset = current_offset
+            break
+        previous_offset = current_offset
+
+    if remaining <= 0 and chunk_results and chunk_results[-1].rows_fetched:
+        aggregate_warnings.append(
+            f"Realtime catch-up reached the configured {validated.max_catchup_rows_per_cycle}-row cap."
+        )
+
+    final_offset = offset_store.get_offset(
+        source_profile_id=validated.source_profile_id,
+        stream_key=validated.stream_key,
+    )
+    return _aggregate_polling_chunks(
+        validated,
+        chunk_results,
+        status=aggregate_status,
+        error=aggregate_error,
+        warnings=aggregate_warnings,
+        offset=final_offset,
+    )
+
+
+def _run_polling_chunk(
+    *,
+    database: str,
+    profile: IndustrialSourceProfile,
+    config: RealtimePollConfig,
+    adapter: SourceDbAdapter,
+    detector_runner: DetectorRunner | None = None,
+    stop_check: Callable[[], bool] | None = None,
+) -> PollingCycleResult:
+    """Fetch and atomically persist one bounded realtime source chunk."""
 
     validated = config.validated()
     sample_repository = RealtimeSampleRepository(database)
@@ -146,6 +243,38 @@ def run_polling_cycle(
             diagnostics=diagnostics,
         )
 
+    if len(read_result.rows) > query.limit:
+        error = (
+            f"Source adapter returned {len(read_result.rows)} rows for a bounded "
+            f"{query.limit}-row request."
+        )
+        diagnostics = _failure_diagnostics(
+            "source_row_bound",
+            error=error,
+            diagnostics=diagnostics,
+            rows_fetched=len(read_result.rows),
+            offset=existing_offset,
+        )
+        _record_failed_offset(offset_store, validated, existing_offset, error)
+        return _result(
+            validated,
+            "failed",
+            rows_fetched=len(read_result.rows),
+            cursor_value=_offset_value(existing_offset),
+            event_time_watermark=_watermark(existing_offset),
+            error=error,
+            diagnostics=diagnostics,
+        )
+    if _stop_requested(stop_check):
+        return _result(
+            validated,
+            "cancelled",
+            rows_fetched=len(read_result.rows),
+            cursor_value=_offset_value(existing_offset),
+            event_time_watermark=_watermark(existing_offset),
+            diagnostics={**diagnostics, "stage": "stopped_before_persist"},
+        )
+
     try:
         signals = {
             signal_key: _ensure_signal_for_config(sample_repository, validated, signal_key)
@@ -169,7 +298,12 @@ def run_polling_cycle(
             diagnostics=diagnostics,
         )
     try:
-        mapping = map_rows_to_samples(read_result.rows, config=validated, signals=signals)
+        mapping = map_rows_to_samples(
+            read_result.rows,
+            config=validated,
+            signals=signals,
+            event_time_watermark=_watermark(existing_offset),
+        )
     except Exception as exc:
         error = redact_sensitive_text(exc)
         diagnostics = _failure_diagnostics(
@@ -187,100 +321,70 @@ def run_polling_cycle(
             error=error,
             diagnostics=diagnostics,
         )
-    try:
-        batch_result = sample_repository.insert_samples(mapping.samples)
-    except Exception as exc:
-        error = redact_sensitive_text(exc)
-        diagnostics = _failure_diagnostics(
-            "persist_samples",
-            error=error,
-            diagnostics=diagnostics,
-            rows_fetched=len(read_result.rows),
-            samples_processed=mapping.stats.mapped,
-            cursor_value=mapping.cursor_value,
-            event_time_watermark=mapping.event_time_watermark,
-            offset=existing_offset,
-        )
-        _record_failed_offset(offset_store, validated, existing_offset, error)
-        return _result(
-            validated,
-            "failed",
-            rows_fetched=len(read_result.rows),
-            samples_processed=mapping.stats.mapped,
-            cursor_value=mapping.cursor_value or _offset_value(existing_offset),
-            event_time_watermark=mapping.event_time_watermark or _watermark(existing_offset),
-            error=error,
-            diagnostics=diagnostics,
-        )
-
     lag_seconds = _lag_seconds(mapping.event_time_watermark)
-    try:
-        stream_append_result = stream_repository.append_sample_batch_committed(
-            source_profile_id=validated.source_profile_id,
-            stream_key=validated.stream_key,
-            sample_ids=batch_result.sample_ids,
-            signal_ids=tuple(signal.id for signal in signals.values() if signal.id is not None),
-            detectors=validated.detectors,
-            event_time=mapping.event_time_watermark or utc_timestamp(),
-            payload={
-                "rows_fetched": len(read_result.rows),
-                "samples_processed": batch_result.processed,
-                "samples_inserted": batch_result.inserted,
-                "samples_skipped": batch_result.skipped,
-                "cursor_column": validated.cursor_column,
-                "cursor_value": mapping.cursor_value or _offset_value(existing_offset),
-                "cursor_tie_breaker_column": validated.record_key_column,
-                "cursor_tie_breaker_value": mapping.cursor_tie_breaker_value
-                or _offset_tie_breaker(existing_offset),
-                "event_time_watermark": mapping.event_time_watermark or _watermark(existing_offset),
-                "lag_seconds": lag_seconds,
-            },
-        )
-    except Exception as exc:
-        error = redact_sensitive_text(exc)
-        diagnostics = _failure_diagnostics(
-            "append_stream_event",
-            error=error,
-            diagnostics=diagnostics,
-            rows_fetched=len(read_result.rows),
-            samples_processed=mapping.stats.mapped,
-            cursor_value=mapping.cursor_value,
-            event_time_watermark=mapping.event_time_watermark,
-            offset=existing_offset,
-        )
-        _record_failed_offset(offset_store, validated, existing_offset, error)
+    diagnostics["mapping"] = {
+        "rows_seen": mapping.stats.rows_seen,
+        "samples_mapped": mapping.stats.mapped,
+        "skipped_missing": mapping.stats.skipped_missing,
+        "skipped_non_numeric": mapping.stats.skipped_non_numeric,
+        "skipped_non_finite": mapping.stats.skipped_non_finite,
+        "skipped_late": mapping.stats.skipped_late,
+        "allowed_lateness_seconds": validated.allowed_lateness_seconds,
+    }
+    if mapping.warnings:
+        diagnostics.setdefault("warnings", [])
+        diagnostics["warnings"].extend(mapping.warnings)
+    if _stop_requested(stop_check):
         return _result(
             validated,
-            "failed",
+            "cancelled",
             rows_fetched=len(read_result.rows),
             samples_processed=mapping.stats.mapped,
-            cursor_value=mapping.cursor_value or _offset_value(existing_offset),
-            event_time_watermark=mapping.event_time_watermark or _watermark(existing_offset),
-            error=error,
-            diagnostics=diagnostics,
+            cursor_value=_offset_value(existing_offset),
+            event_time_watermark=_watermark(existing_offset),
+            diagnostics={**diagnostics, "stage": "stopped_before_persist"},
         )
-
     try:
-        offset_store.upsert_offset(
-            StreamOffset(
+        batch_result, stream_append_result, saved_offset = _commit_mapped_chunk(
+            database=database,
+            config=validated,
+            mapping=mapping,
+            signals=signals,
+            rows_fetched=len(read_result.rows),
+            lag_seconds=lag_seconds,
+            expected_offset=existing_offset,
+            sample_repository=sample_repository,
+            stream_repository=stream_repository,
+            offset_store=offset_store,
+        )
+    except PollChunkPersistenceError as exc:
+        if isinstance(exc.cause, StreamOffsetConflictError):
+            current_offset = offset_store.get_offset(
                 source_profile_id=validated.source_profile_id,
                 stream_key=validated.stream_key,
-                cursor_column=validated.cursor_column,
-                cursor_value=mapping.cursor_value or _offset_value(existing_offset),
-                cursor_tie_breaker_column=validated.record_key_column,
-                cursor_tie_breaker_value=mapping.cursor_tie_breaker_value
-                or _offset_tie_breaker(existing_offset),
-                event_time_watermark=mapping.event_time_watermark or _watermark(existing_offset),
-                last_success_at=utc_timestamp(),
-                last_error=None,
-                lag_seconds=lag_seconds,
-                status="idle",
             )
-        )
-    except Exception as exc:
-        error = redact_sensitive_text(exc)
+            warning = (
+                "Realtime chunk was rolled back because another poller advanced the "
+                "source checkpoint first."
+            )
+            diagnostics["stage"] = "concurrent_offset_advance"
+            diagnostics.setdefault("warnings", [])
+            diagnostics["warnings"].append(warning)
+            diagnostics["expected_cursor_value"] = _offset_value(existing_offset)
+            diagnostics["current_cursor_value"] = _offset_value(current_offset)
+            return _result(
+                validated,
+                "completed_with_warnings",
+                rows_fetched=len(read_result.rows),
+                samples_processed=mapping.stats.mapped,
+                cursor_value=_offset_value(current_offset),
+                event_time_watermark=_watermark(current_offset),
+                lag_seconds=current_offset.lag_seconds if current_offset else None,
+                diagnostics=diagnostics,
+            )
+        error = redact_sensitive_text(exc.cause)
         diagnostics = _failure_diagnostics(
-            "update_source_offset",
+            exc.stage,
             error=error,
             diagnostics=diagnostics,
             rows_fetched=len(read_result.rows),
@@ -295,11 +399,8 @@ def run_polling_cycle(
             "failed",
             rows_fetched=len(read_result.rows),
             samples_processed=mapping.stats.mapped,
-            samples_inserted=batch_result.inserted,
-            samples_skipped=batch_result.skipped,
-            stream_events_appended=stream_append_result.inserted,
-            cursor_value=mapping.cursor_value or _offset_value(existing_offset),
-            event_time_watermark=mapping.event_time_watermark or _watermark(existing_offset),
+            cursor_value=_offset_value(existing_offset),
+            event_time_watermark=_watermark(existing_offset),
             error=error,
             diagnostics=diagnostics,
         )
@@ -323,8 +424,8 @@ def run_polling_cycle(
         detector_consumer_status=detector_consumer_result.status,
         detector_consumer_error=detector_consumer_result.error,
         detector_consumer_last_event_id=detector_consumer_result.last_event_id,
-        cursor_value=mapping.cursor_value or _offset_value(existing_offset),
-        event_time_watermark=mapping.event_time_watermark or _watermark(existing_offset),
+        cursor_value=saved_offset.cursor_value,
+        event_time_watermark=saved_offset.event_time_watermark,
         lag_seconds=lag_seconds,
         diagnostics=diagnostics,
     )
@@ -342,6 +443,133 @@ def _ensure_signal_for_config(
     return sample_repository.upsert_signal_definition(
         _signal_definition_for_config(config, signal_key, existing=existing)
     )
+
+
+def _commit_mapped_chunk(
+    *,
+    database: str,
+    config: RealtimePollConfig,
+    mapping,
+    signals: Mapping[str, SignalDefinition],
+    rows_fetched: int,
+    lag_seconds: float | None,
+    expected_offset: StreamOffset | None,
+    sample_repository: RealtimeSampleRepository,
+    stream_repository: RealtimeEventStreamRepository,
+    offset_store: StreamOffsetStore,
+):
+    cursor_value = mapping.cursor_value or _offset_value(expected_offset)
+    cursor_tie_breaker_value = (
+        mapping.cursor_tie_breaker_value or _offset_tie_breaker(expected_offset)
+    )
+    watermark = mapping.event_time_watermark or _watermark(expected_offset)
+    candidate_offset = StreamOffset(
+        source_profile_id=config.source_profile_id,
+        stream_key=config.stream_key,
+        cursor_column=config.cursor_column,
+        cursor_value=cursor_value,
+        cursor_tie_breaker_column=config.record_key_column,
+        cursor_tie_breaker_value=cursor_tie_breaker_value,
+        event_time_watermark=watermark,
+        last_success_at=utc_timestamp(),
+        last_error=None,
+        lag_seconds=lag_seconds,
+        status="idle",
+    )
+    stage = "persist_samples"
+
+    def _commit(cursor):
+        nonlocal stage
+        stage = "persist_samples"
+        batch_result = sample_repository.insert_samples(mapping.samples, _cursor=cursor)
+        stage = "append_stream_event"
+        stream_append_result = stream_repository.append_sample_batch_committed(
+            source_profile_id=config.source_profile_id,
+            stream_key=config.stream_key,
+            sample_ids=batch_result.sample_ids,
+            signal_ids=tuple(signal.id for signal in signals.values() if signal.id is not None),
+            detectors=config.detectors,
+            event_time=watermark or utc_timestamp(),
+            payload={
+                "rows_fetched": rows_fetched,
+                "samples_processed": batch_result.processed,
+                "samples_inserted": batch_result.inserted,
+                "samples_skipped": batch_result.skipped,
+                "cursor_column": config.cursor_column,
+                "cursor_value": cursor_value,
+                "cursor_tie_breaker_column": config.record_key_column,
+                "cursor_tie_breaker_value": cursor_tie_breaker_value,
+                "event_time_watermark": watermark,
+                "lag_seconds": lag_seconds,
+            },
+            _cursor=cursor,
+        )
+        stage = "update_source_offset"
+        saved_offset = offset_store.upsert_offset(
+            candidate_offset,
+            expected_offset=expected_offset,
+            _cursor=cursor,
+        )
+        return batch_result, stream_append_result, saved_offset
+
+    try:
+        return run_transaction_with_retry(database, _commit)
+    except Exception as exc:
+        raise PollChunkPersistenceError(stage, exc) from exc
+
+
+def _aggregate_polling_chunks(
+    config: RealtimePollConfig,
+    chunks: list[PollingCycleResult],
+    *,
+    status: str,
+    error: str | None,
+    warnings: list[str],
+    offset: StreamOffset | None,
+) -> PollingCycleResult:
+    last = chunks[-1] if chunks else None
+    diagnostics = dict(last.diagnostics) if last is not None else {}
+    chunk_diagnostics = tuple(dict(chunk.diagnostics) for chunk in chunks)
+    diagnostics["chunks_processed"] = len(chunks)
+    diagnostics["chunk_diagnostics"] = chunk_diagnostics
+    all_warnings = [
+        str(warning)
+        for chunk in chunks
+        for warning in tuple(chunk.diagnostics.get("warnings") or ())
+    ]
+    all_warnings.extend(warnings)
+    if all_warnings:
+        diagnostics["warnings"] = tuple(dict.fromkeys(all_warnings))
+    if warnings and any("row cap" in warning for warning in warnings):
+        diagnostics["catchup_limit_reached"] = True
+    return _result(
+        config,
+        status,
+        rows_fetched=sum(chunk.rows_fetched for chunk in chunks),
+        samples_processed=sum(chunk.samples_processed for chunk in chunks),
+        samples_inserted=sum(chunk.samples_inserted for chunk in chunks),
+        samples_skipped=sum(chunk.samples_skipped for chunk in chunks),
+        stream_events_appended=sum(chunk.stream_events_appended for chunk in chunks),
+        detector_events_created=sum(chunk.detector_events_created for chunk in chunks),
+        detector_consumer_status=last.detector_consumer_status if last else None,
+        detector_consumer_error=last.detector_consumer_error if last else None,
+        detector_consumer_last_event_id=(last.detector_consumer_last_event_id if last else None),
+        cursor_value=_offset_value(offset),
+        event_time_watermark=_watermark(offset),
+        lag_seconds=offset.lag_seconds if offset is not None else None,
+        error=error,
+        diagnostics=diagnostics,
+    )
+
+
+def _offset_checkpoint(offset: StreamOffset | None) -> tuple[str | None, str | None]:
+    if offset is None:
+        return None, None
+    return offset.cursor_value, offset.cursor_tie_breaker_value
+
+
+def _stop_requested(stop_check: Callable[[], bool] | None) -> bool:
+    return bool(stop_check is not None and stop_check())
 
 
 def _signal_definition_for_config(
@@ -390,15 +618,24 @@ def _load_detection_samples(
     new_samples = _load_persisted_samples(sample_repository, signals, sample_ids)
     if not new_samples or not (_normalized_detector_set(detectors) & _HISTORY_DETECTORS):
         return new_samples
-    grouped_keys = {
-        (sample.signal_id, _segment_key_tuple(sample.segment_key))
-        for sample in new_samples
-    }
+    grouped_samples: dict[tuple[int, tuple[tuple[str, Any], ...]], list[IndustrialSample]] = {}
+    for sample in new_samples:
+        grouped_samples.setdefault(
+            (sample.signal_id, _segment_key_tuple(sample.segment_key)), []
+        ).append(sample)
     combined: dict[int, IndustrialSample] = {}
-    for signal_id, segment_key_items in grouped_keys:
+    for (signal_id, segment_key_items), boundary_samples in grouped_samples.items():
         segment_key = dict(segment_key_items)
-        for sample in sample_repository.list_recent_samples(
+        earliest = min(
+            boundary_samples,
+            key=lambda sample: (str(sample.event_time or ""), int(sample.id or -1)),
+        )
+        if earliest.id is None:
+            continue
+        for sample in sample_repository.list_samples_before(
             signal_id=signal_id,
+            before_event_time=earliest.event_time,
+            before_sample_id=earliest.id,
             segment_key=segment_key,
             limit=_DETECTOR_HISTORY_LIMIT,
         ):
@@ -478,6 +715,7 @@ def _default_detector_runner(
         signal=signal,
         detectors=detectors,
         baseline=baseline or {},
+        now=utc_timestamp(),
         score_sample_ids=score_sample_ids or None,
     )
 
@@ -514,22 +752,12 @@ def _record_failed_offset(
     existing_offset: StreamOffset | None,
     error: str,
 ) -> None:
-    offset_store.upsert_offset(
-        StreamOffset(
-            source_profile_id=config.source_profile_id,
-            stream_key=config.stream_key,
-            cursor_column=config.cursor_column,
-            cursor_value=_offset_value(existing_offset),
-            cursor_tie_breaker_column=existing_offset.cursor_tie_breaker_column
-            if existing_offset
-            else None,
-            cursor_tie_breaker_value=_offset_tie_breaker(existing_offset),
-            event_time_watermark=_watermark(existing_offset),
-            last_success_at=existing_offset.last_success_at if existing_offset else None,
-            last_error=redact_sensitive_text(error, max_len=500),
-            lag_seconds=existing_offset.lag_seconds if existing_offset else None,
-            status="failed",
-        )
+    offset_store.mark_failure(
+        source_profile_id=config.source_profile_id,
+        stream_key=config.stream_key,
+        cursor_column=config.cursor_column,
+        error=redact_sensitive_text(error, max_len=500),
+        expected_offset=existing_offset,
     )
 
 
@@ -687,12 +915,8 @@ def _lag_seconds(event_time: str | None) -> float | None:
     if not event_time:
         return None
     try:
-        text = str(event_time)
-        if text.endswith("Z"):
-            text = f"{text[:-1]}+00:00"
-        parsed = datetime.fromisoformat(text)
+        parsed = parse_utc_timestamp(event_time)
     except ValueError:
         return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return max(0.0, (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds())
+    now = parse_utc_timestamp(utc_timestamp())
+    return max(0.0, (now - parsed).total_seconds())

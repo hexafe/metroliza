@@ -1346,6 +1346,7 @@ class ExportDialog(QDialog):
 
     def on_export_thread_stopped(self):
         """Restore export UI when the worker stops without a success/cancel signal."""
+        stopped_thread = self.export_thread
         try:
             if getattr(self, '_export_terminal_handled', False):
                 return
@@ -1362,6 +1363,12 @@ class ExportDialog(QDialog):
             self._set_loading_cancel_enabled(True)
         except Exception as e:
             self.log_and_exit(e)
+        finally:
+            if stopped_thread is self.export_thread:
+                delete_later = getattr(stopped_thread, 'deleteLater', None)
+                if callable(delete_later):
+                    delete_later()
+                self.export_thread = None
 
     def log_and_exit(self, exception):
         caller = inspect.stack()[1].function

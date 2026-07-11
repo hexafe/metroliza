@@ -3,17 +3,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
+import math
 import re
 from typing import Any, Iterable, Mapping
 
 from metroliza.reports.db import chunked_values, run_transaction_with_retry
 from metroliza.industrial.industrial_data_schema import SYNC_RUN_STATUSES, ensure_industrial_data_schema
 from metroliza.industrial.json_safety import to_json_storage_text, to_sqlite_storage_text
+from metroliza.industrial.realtime.timestamps import (
+    canonical_utc_timestamp,
+    parse_utc_timestamp,
+)
 
 
 _FINISHED_SYNC_RUN_STATUSES = tuple(status for status in SYNC_RUN_STATUSES if status != "running")
+_STARTUP_STAGING_STALE_AFTER_SECONDS = 60 * 60
 _REDACT_URI_CREDENTIALS = re.compile(
     r"([a-zA-Z][a-zA-Z0-9+.\-]*://)([^:/@\s]+):([^@/\s]+)@([^/\s?#]+)"
 )
@@ -307,6 +313,29 @@ def _dynamic_value_storage(field_value: Any) -> tuple[str | None, str | None]:
     return to_sqlite_storage_text(redacted_value), None
 
 
+def _validate_running_sync_run(
+    cursor,
+    *,
+    sync_run_id: int,
+    source_profile_id: int,
+) -> None:
+    cursor.execute(
+        """
+        SELECT source_profile_id, status
+        FROM industrial_sync_runs
+        WHERE id = ?
+        """,
+        (int(sync_run_id),),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        raise ValueError(f"sync_run_id not found: {sync_run_id}")
+    if int(row[0]) != int(source_profile_id):
+        raise ValueError("sync run does not belong to the requested source profile")
+    if str(row[1]) != "running":
+        raise ValueError(f"sync run {sync_run_id} is not running")
+
+
 class IndustrialDataRepository:
     """Persistence facade for additive industrial cache tables."""
 
@@ -505,7 +534,7 @@ class IndustrialDataRepository:
         started_at: str | None = None,
     ) -> int:
         self.ensure_schema()
-        started = started_at or utc_timestamp()
+        started = canonical_utc_timestamp(started_at or utc_timestamp())
         filters_payload = _redact_sensitive_payload(dict(filters or {}))
         diagnostics_payload = _redact_sensitive_payload(dict(diagnostics or {}))
 
@@ -515,6 +544,7 @@ class IndustrialDataRepository:
                 INSERT INTO industrial_sync_runs (
                     source_profile_id,
                     started_at,
+                    heartbeat_at,
                     status,
                     row_count,
                     error_summary,
@@ -523,10 +553,11 @@ class IndustrialDataRepository:
                     oznak_commit,
                     diagnostics_json
                 )
-                VALUES (?, ?, 'running', 0, NULL, ?, ?, ?, ?)
+                VALUES (?, ?, ?, 'running', 0, NULL, ?, ?, ?, ?)
                 """,
                 (
                     source_profile_id,
+                    started,
                     started,
                     _to_json(filters_payload),
                     oznak_version,
@@ -551,7 +582,7 @@ class IndustrialDataRepository:
         self.ensure_schema()
         if status not in _FINISHED_SYNC_RUN_STATUSES:
             raise ValueError(f"status must be one of: {', '.join(_FINISHED_SYNC_RUN_STATUSES)}")
-        finished = finished_at or utc_timestamp()
+        finished = canonical_utc_timestamp(finished_at or utc_timestamp())
         diagnostics_payload = _redact_sensitive_payload(dict(diagnostics or {}))
         redacted_error_summary = (
             redact_payload_text(error_summary, max_len=500) if error_summary else None
@@ -650,8 +681,10 @@ class IndustrialDataRepository:
         source_db_alias: str,
         rows: Iterable[Mapping[str, Any]],
         sync_run_id: int | None = None,
+        _cursor=None,
     ) -> dict[str, int]:
-        self.ensure_schema()
+        if _cursor is None:
+            self.ensure_schema()
         now = utc_timestamp()
         prepared_rows: list[_PreparedIndustrialRecordRow] = []
         value_rows = 0
@@ -844,7 +877,333 @@ class IndustrialDataRepository:
                 "value_rows": value_rows,
             }
 
+        if _cursor is not None:
+            return _upsert_rows(_cursor)
         return run_transaction_with_retry(self.database, _upsert_rows, connection=self.connection)
+
+    def stage_industrial_records_from_rows(
+        self,
+        *,
+        sync_run_id: int,
+        source_profile_id: int,
+        source_db_alias: str,
+        rows: Iterable[Mapping[str, Any]],
+    ) -> dict[str, int]:
+        """Stage one streamed batch without exposing partial rows to cache readers."""
+
+        self.ensure_schema()
+        staged_rows: list[tuple[str, str]] = []
+        for row in rows:
+            normalized = _normalize_row(row)
+            record_key_raw = normalized.get("source_record_key")
+            record_key = str(record_key_raw).strip() if record_key_raw is not None else ""
+            if not record_key:
+                raise ValueError("each row must include source_record_key (or record_key alias)")
+            normalized["source_record_key"] = record_key
+            normalized["raw_record"] = _redact_sensitive_payload(
+                normalized.get("raw_record", dict(row))
+            )
+            staged_payload = _redact_sensitive_payload(normalized)
+            staged_rows.append((record_key, _to_json(staged_payload) or "{}"))
+        if not staged_rows:
+            return {"processed": 0, "staged": 0}
+        now = canonical_utc_timestamp(utc_timestamp())
+
+        def _stage(cursor) -> dict[str, int]:
+            _validate_running_sync_run(
+                cursor,
+                sync_run_id=sync_run_id,
+                source_profile_id=source_profile_id,
+            )
+            cursor.execute(
+                """
+                UPDATE industrial_sync_runs
+                SET heartbeat_at = ?
+                WHERE id = ? AND status = 'running'
+                """,
+                (now, int(sync_run_id)),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError(f"sync run {sync_run_id} heartbeat could not be refreshed")
+            cursor.execute(
+                """
+                SELECT COALESCE(MAX(sequence_number), 0)
+                FROM industrial_sync_staging_records
+                WHERE sync_run_id = ?
+                """,
+                (int(sync_run_id),),
+            )
+            starting_sequence = int(cursor.fetchone()[0])
+            cursor.executemany(
+                """
+                INSERT INTO industrial_sync_staging_records (
+                    sync_run_id,
+                    source_profile_id,
+                    source_db_alias,
+                    source_record_key,
+                    row_json,
+                    sequence_number,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(sync_run_id, source_profile_id, source_db_alias, source_record_key)
+                DO UPDATE SET
+                    row_json = excluded.row_json,
+                    sequence_number = excluded.sequence_number,
+                    created_at = excluded.created_at
+                """,
+                (
+                    (
+                        int(sync_run_id),
+                        int(source_profile_id),
+                        str(source_db_alias),
+                        record_key,
+                        row_json,
+                        starting_sequence + index,
+                        now,
+                    )
+                    for index, (record_key, row_json) in enumerate(staged_rows, start=1)
+                ),
+            )
+            cursor.execute(
+                """
+                SELECT COUNT(*)
+                FROM industrial_sync_staging_records
+                WHERE sync_run_id = ?
+                """,
+                (int(sync_run_id),),
+            )
+            return {"processed": len(staged_rows), "staged": int(cursor.fetchone()[0])}
+
+        return run_transaction_with_retry(self.database, _stage, connection=self.connection)
+
+    def promote_staged_industrial_records(
+        self,
+        *,
+        sync_run_id: int,
+        source_profile_id: int,
+        source_db_alias: str,
+        status: str,
+        row_count: int,
+        error_summary: str | None = None,
+        diagnostics: Mapping[str, Any] | None = None,
+        finished_at: str | None = None,
+    ) -> dict[str, int]:
+        """Atomically promote staged rows and publish the terminal sync-run status."""
+
+        self.ensure_schema()
+        if status not in {"succeeded", "completed_with_warnings"}:
+            raise ValueError("staged promotion requires a successful terminal sync status")
+        finished = canonical_utc_timestamp(finished_at or utc_timestamp())
+        diagnostics_payload = _redact_sensitive_payload(dict(diagnostics or {}))
+        redacted_error_summary = (
+            redact_payload_text(error_summary, max_len=500) if error_summary else None
+        )
+
+        def _promote(cursor) -> dict[str, int]:
+            _validate_running_sync_run(
+                cursor,
+                sync_run_id=sync_run_id,
+                source_profile_id=source_profile_id,
+            )
+            cursor.execute(
+                """
+                SELECT row_json
+                FROM industrial_sync_staging_records
+                WHERE sync_run_id = ?
+                  AND source_profile_id = ?
+                  AND source_db_alias = ?
+                ORDER BY sequence_number ASC, id ASC
+                """,
+                (int(sync_run_id), int(source_profile_id), str(source_db_alias)),
+            )
+            staged_rows = []
+            for row in cursor.fetchall():
+                payload = _from_json(row[0], None)
+                if not isinstance(payload, dict):
+                    raise ValueError(f"invalid staged industrial row for sync run {sync_run_id}")
+                staged_rows.append(payload)
+            summary = self.upsert_industrial_records_from_rows(
+                source_profile_id=source_profile_id,
+                source_db_alias=source_db_alias,
+                rows=staged_rows,
+                sync_run_id=sync_run_id,
+                _cursor=cursor,
+            )
+            cursor.execute(
+                "DELETE FROM industrial_sync_staging_records WHERE sync_run_id = ?",
+                (int(sync_run_id),),
+            )
+            cursor.execute(
+                """
+                UPDATE industrial_sync_runs
+                SET finished_at = ?, status = ?, row_count = ?, error_summary = ?,
+                    diagnostics_json = ?
+                WHERE id = ? AND status = 'running'
+                """,
+                (
+                    finished,
+                    status,
+                    int(row_count),
+                    redacted_error_summary,
+                    _to_json(diagnostics_payload),
+                    int(sync_run_id),
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError(f"sync run {sync_run_id} could not be finalized")
+            return summary
+
+        return run_transaction_with_retry(self.database, _promote, connection=self.connection)
+
+    def commit_direct_industrial_sync(
+        self,
+        *,
+        sync_run_id: int,
+        source_profile_id: int,
+        source_db_alias: str,
+        rows: Iterable[Mapping[str, Any]],
+        status: str,
+        row_count: int,
+        error_summary: str | None = None,
+        diagnostics: Mapping[str, Any] | None = None,
+        finished_at: str | None = None,
+    ) -> dict[str, int]:
+        """Atomically upsert a direct fetch and publish its terminal sync status."""
+
+        self.ensure_schema()
+        if status not in {"succeeded", "completed_with_warnings"}:
+            raise ValueError("direct sync commit requires a successful terminal sync status")
+        row_batch = tuple(rows)
+        finished = canonical_utc_timestamp(finished_at or utc_timestamp())
+        diagnostics_payload = _redact_sensitive_payload(dict(diagnostics or {}))
+        redacted_error_summary = (
+            redact_payload_text(error_summary, max_len=500) if error_summary else None
+        )
+
+        def _commit(cursor) -> dict[str, int]:
+            _validate_running_sync_run(
+                cursor,
+                sync_run_id=sync_run_id,
+                source_profile_id=source_profile_id,
+            )
+            summary = self.upsert_industrial_records_from_rows(
+                source_profile_id=source_profile_id,
+                source_db_alias=source_db_alias,
+                rows=row_batch,
+                sync_run_id=sync_run_id,
+                _cursor=cursor,
+            )
+            cursor.execute(
+                """
+                UPDATE industrial_sync_runs
+                SET finished_at = ?, status = ?, row_count = ?, error_summary = ?,
+                    diagnostics_json = ?
+                WHERE id = ? AND status = 'running'
+                """,
+                (
+                    finished,
+                    status,
+                    int(row_count),
+                    redacted_error_summary,
+                    _to_json(diagnostics_payload),
+                    int(sync_run_id),
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError(f"sync run {sync_run_id} could not be finalized")
+            return summary
+
+        return run_transaction_with_retry(self.database, _commit, connection=self.connection)
+
+    def discard_staged_industrial_records(self, *, sync_run_id: int) -> int:
+        """Discard unpromoted rows after a failed or cancelled streamed sync."""
+
+        self.ensure_schema()
+
+        def _discard(cursor) -> int:
+            cursor.execute(
+                "DELETE FROM industrial_sync_staging_records WHERE sync_run_id = ?",
+                (int(sync_run_id),),
+            )
+            return int(cursor.rowcount)
+
+        return run_transaction_with_retry(self.database, _discard, connection=self.connection)
+
+    def recover_abandoned_sync_staging(self) -> int:
+        """Remove staging rows belonging to sync runs that are no longer running."""
+
+        self.ensure_schema()
+
+        def _recover(cursor) -> int:
+            cursor.execute(
+                """
+                DELETE FROM industrial_sync_staging_records
+                WHERE sync_run_id IN (
+                    SELECT id FROM industrial_sync_runs WHERE status != 'running'
+                )
+                """
+            )
+            return int(cursor.rowcount)
+
+        return run_transaction_with_retry(self.database, _recover, connection=self.connection)
+
+    def recover_abandoned_sync_staging_at_startup(
+        self,
+        *,
+        recovered_at: str | None = None,
+        stale_after_seconds: float = _STARTUP_STAGING_STALE_AFTER_SECONDS,
+    ) -> dict[str, int]:
+        """Fail and clear stale staged runs during one-time application bootstrap.
+
+        A recent heartbeat is treated as an active lease so another application process cannot
+        lose its in-flight staging rows. This is intentionally not part of ``ensure_schema``
+        because schema reads can occur while a live worker owns a running sync.
+        """
+
+        self.ensure_schema()
+        try:
+            stale_after = float(stale_after_seconds)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("stale_after_seconds must be zero or greater") from exc
+        if isinstance(stale_after_seconds, bool) or not math.isfinite(stale_after) or stale_after < 0:
+            raise ValueError("stale_after_seconds must be zero or greater")
+        recovery_time = parse_utc_timestamp(recovered_at or utc_timestamp())
+        finished = canonical_utc_timestamp(recovery_time)
+        stale_before = canonical_utc_timestamp(
+            recovery_time - timedelta(seconds=stale_after)
+        )
+
+        def _recover(cursor) -> dict[str, int]:
+            cursor.execute(
+                """
+                UPDATE industrial_sync_runs
+                SET finished_at = ?,
+                    status = 'failed',
+                    error_summary = 'Recovered abandoned streamed sync during startup.',
+                    diagnostics_json = '{"stage":"startup_staging_recovery"}'
+                WHERE status = 'running'
+                  AND COALESCE(heartbeat_at, started_at) <= ?
+                  AND EXISTS (
+                      SELECT 1
+                      FROM industrial_sync_staging_records AS staging
+                      WHERE staging.sync_run_id = industrial_sync_runs.id
+                  )
+                """,
+                (finished, stale_before),
+            )
+            runs_failed = int(cursor.rowcount)
+            cursor.execute(
+                """
+                DELETE FROM industrial_sync_staging_records
+                WHERE sync_run_id IN (
+                    SELECT id FROM industrial_sync_runs WHERE status != 'running'
+                )
+                """
+            )
+            return {"runs_failed": runs_failed, "rows_discarded": int(cursor.rowcount)}
+
+        return run_transaction_with_retry(self.database, _recover, connection=self.connection)
 
     def summarize_counts(self, *, source_profile_id: int | None = None) -> IndustrialCacheCounts:
         self.ensure_schema()

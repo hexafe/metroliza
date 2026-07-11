@@ -1,3 +1,4 @@
+from contextlib import closing
 import sqlite3
 
 from modules.report_schema import ensure_report_schema
@@ -62,6 +63,13 @@ def _create_measurement_export_table(conn):
         "CREATE TABLE vw_measurement_export ("
         + ", ".join(f"{column} TEXT" for column in _MEASUREMENT_EXPORT_TEST_COLUMNS)
         + ")"
+    )
+
+
+def _create_typed_membership_table(conn):
+    conn.execute(
+        "CREATE TABLE typed_membership ("
+        "report_id INTEGER, meas REAL, report_date TEXT, reference TEXT)"
     )
 
 
@@ -130,7 +138,7 @@ def test_build_industrial_measurement_export_query_appends_cached_context(tmp_pa
     assert "INDUSTRIAL_RECORD_ID" in query
     assert "INDUSTRIAL_STATION" in query
     assert "INDUSTRIAL_LINK_CONFIDENCE" in query
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         assert conn.execute(query).fetchall() == []
 
 
@@ -145,7 +153,7 @@ def test_industrial_context_export_uses_manual_accepted_link_before_auto_link(tm
     db_path = str(tmp_path / "reports.db")
     seed_production_analytics_cache(db_path, include_report_tables=True)
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         manual_record_id = conn.execute(
             "SELECT id FROM industrial_records WHERE reference = 'REF-200' ORDER BY id LIMIT 1"
         ).fetchone()[0]
@@ -159,7 +167,7 @@ def test_industrial_context_export_uses_manual_accepted_link_before_auto_link(tm
     query = _append_industrial_context_to_export_query(
         "SELECT 1 AS REPORT_ID, 'REF-100' AS REFERENCE"
     )
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         row = conn.execute(query).fetchone()
         columns = [description[0] for description in conn.execute(query).description]
 
@@ -223,7 +231,7 @@ def test_build_measurement_filter_query_combines_expression_with_list_filters():
 
 def test_measurement_expression_filters_duplicate_dimension_by_reference(tmp_path):
     db_path = tmp_path / "measurements.db"
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         _create_measurement_export_table(conn)
         placeholders = ", ".join("?" for _column in _MEASUREMENT_EXPORT_TEST_COLUMNS)
         conn.executemany(
@@ -248,7 +256,7 @@ def test_measurement_expression_supports_case_insensitive_fields_operators_and_s
     tmp_path,
 ):
     db_path = tmp_path / "measurements.db"
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         _create_measurement_export_table(conn)
         placeholders = ", ".join("?" for _column in _MEASUREMENT_EXPORT_TEST_COLUMNS)
         conn.executemany(
@@ -310,6 +318,59 @@ def test_build_measurement_expression_clause_supports_boolean_wildcards_and_alia
     assert 'LOWER(CAST("ax" AS TEXT)) IN (' in clause
 
 
+def test_measurement_membership_matches_real_date_and_text_values(tmp_path):
+    db_path = tmp_path / "typed-membership.db"
+    with closing(sqlite3.connect(db_path)) as conn, conn:
+        _create_typed_membership_table(conn)
+        conn.executemany(
+            "INSERT INTO typed_membership VALUES (?, ?, ?, ?)",
+            [
+                (1, 250.0, "2026-05-01", "Ref-A"),
+                (2, 300.0, "2026-05-02", "Ref-B"),
+                (3, None, None, None),
+                (4, "invalid", "not-a-date", "Ref-D"),
+            ],
+        )
+
+        numeric = build_measurement_expression_clause("MEAS IN (250, 300)")
+        dates = build_measurement_expression_clause(
+            "REPORT_DATE IN (2026-05-01, 2026-05-03)"
+        )
+        text = build_measurement_expression_clause("REFERENCE IN (ref-a, ref-c)")
+        assert conn.execute(
+            f"SELECT report_id FROM typed_membership WHERE {numeric} ORDER BY report_id"
+        ).fetchall() == [(1,), (2,)]
+        assert conn.execute(
+            f"SELECT report_id FROM typed_membership WHERE {dates} ORDER BY report_id"
+        ).fetchall() == [(1,)]
+        assert conn.execute(
+            f"SELECT report_id FROM typed_membership WHERE {text} ORDER BY report_id"
+        ).fetchall() == [(1,)]
+        not_dates = build_measurement_expression_clause(
+            "REPORT_DATE NOT IN (2026-05-01, 2026-05-03)"
+        )
+        assert conn.execute(
+            f"SELECT report_id FROM typed_membership WHERE {not_dates} ORDER BY report_id"
+        ).fetchall() == [(2,), (3,), (4,)]
+
+
+def test_measurement_not_in_includes_missing_and_unparseable_values(tmp_path):
+    db_path = tmp_path / "typed-membership.db"
+    with closing(sqlite3.connect(db_path)) as conn, conn:
+        conn.execute("CREATE TABLE typed_membership (report_id INTEGER, meas)")
+        conn.executemany(
+            "INSERT INTO typed_membership VALUES (?, ?)",
+            [(1, 250.0), (2, 100.0), (3, None), (4, "invalid")],
+        )
+
+        clause = build_measurement_expression_clause("MEAS NOT IN (0, 250, 300)")
+        rows = conn.execute(
+            f"SELECT report_id FROM typed_membership WHERE {clause} ORDER BY report_id"
+        ).fetchall()
+
+    assert rows == [(2,), (3,), (4,)]
+
+
 def test_build_measurement_expression_clause_rejects_unknown_fields():
     try:
         build_measurement_expression_clause("Unknown=1")
@@ -335,7 +396,7 @@ def test_build_measurement_export_query_translates_report_scoped_filters(tmp_pat
     assert "FROM vw_measurement_export" in query
     assert "WHERE report_id IN" in query
     assert report_scope_query in query
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         assert conn.execute(query).fetchall() == []
 
 
@@ -348,7 +409,7 @@ def test_build_industrial_measurement_export_query_wraps_custom_filter_scope(tmp
 
     assert filter_query.rstrip(";") in query
     assert "INDUSTRIAL_RECORD_ID" in query
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         assert conn.execute(query).fetchall() == []
 
 
@@ -361,5 +422,5 @@ def test_build_distinct_value_query_translates_report_scope_for_measurement_valu
 
     assert "FROM vw_measurement_export" in query
     assert "WHERE report_id IN" in query
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         assert conn.execute(query).fetchall() == []

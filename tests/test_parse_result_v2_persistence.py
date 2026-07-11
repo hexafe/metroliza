@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from metroliza.parsing.parse_result_v2_persistence import build_persistence_payload
@@ -139,3 +141,46 @@ def test_parse_result_v2_payload_rejects_blocking_parser_errors():
 
     with pytest.raises(ValueError, match="missing_rows: No measurement table found"):
         build_persistence_payload(parse_result, source_path="/tmp/sample.csv")
+
+
+def test_parse_result_v2_raw_provenance_omits_measurement_tree_and_caps_diagnostics():
+    warnings = tuple(
+        ParseWarning(code=f"warning_{index}", message="x" * 2_000, field="header")
+        for index in range(75)
+    )
+    dimensions = tuple(
+        MeasurementV2(
+            axis_code=f"AXIS-{index}",
+            nominal=1.0,
+            tol_plus=0.1,
+            tol_minus=-0.1,
+            bonus=None,
+            measured=1.0,
+            deviation=0.0,
+            out_of_tolerance=0.0,
+            raw_tokens=("raw" * 1_000,),
+        )
+        for index in range(100)
+    )
+    parse_result = _parse_result(
+        warnings=warnings,
+        blocks=(
+            MeasurementBlockV2(
+                header_raw=("Feature",),
+                header_normalized="Feature",
+                dimensions=dimensions,
+                block_index=0,
+            ),
+        ),
+    )
+
+    payload = build_persistence_payload(parse_result, source_path="/tmp/sample.csv")
+    summary = payload.raw_report_json["parse_result_summary"]
+
+    assert "parse_result" not in payload.raw_report_json
+    assert summary["measurement_count"] == 100
+    assert summary["warning_count"] == 75
+    assert len(summary["warnings"]) == 50
+    assert summary["diagnostics_truncated"] is True
+    assert len(summary["warnings"][0]["message"]) == 500
+    assert len(json.dumps(payload.raw_report_json)) < 35_000

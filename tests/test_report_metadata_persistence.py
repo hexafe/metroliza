@@ -1,3 +1,4 @@
+from contextlib import closing
 import sqlite3
 
 import modules.report_metadata_persistence as report_metadata_persistence
@@ -89,7 +90,7 @@ def test_persist_parsed_report_wrapper_persists_through_repository(tmp_path):
         metadata_version="report_metadata_v1",
     )
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         parsed_report_count = conn.execute("SELECT COUNT(*) FROM parsed_reports").fetchone()[0]
         report_metadata_count = conn.execute("SELECT COUNT(*) FROM report_metadata").fetchone()[0]
         source_file_count = conn.execute("SELECT COUNT(*) FROM source_files").fetchone()[0]

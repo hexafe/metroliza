@@ -7,6 +7,7 @@ from typing import Any
 
 from metroliza.industrial.industrial_data_schema import ensure_industrial_data_schema
 from metroliza.industrial.realtime.sample_repository import to_json, utc_timestamp
+from metroliza.industrial.realtime.timestamps import canonical_utc_timestamp
 from metroliza.reports.db import run_transaction_with_retry
 
 
@@ -74,8 +75,8 @@ class BaselineRepository:
                     baseline.signal_id,
                     to_json(dict(baseline.segment_key or {})),
                     baseline.baseline_version,
-                    baseline.window_start,
-                    baseline.window_end,
+                    _canonical_optional(baseline.window_start),
+                    _canonical_optional(baseline.window_end),
                     int(baseline.n),
                     baseline.mean,
                     baseline.std,
@@ -87,7 +88,7 @@ class BaselineRepository:
                     baseline.p01,
                     baseline.p99,
                     baseline.model_artifact_id,
-                    created_at,
+                    canonical_utc_timestamp(created_at),
                 ),
             )
             return int(cursor.lastrowid)
@@ -148,3 +149,7 @@ class BaselineRepository:
             }
 
         return run_transaction_with_retry(self.database, _latest, connection=self.connection)
+
+
+def _canonical_optional(value: str | None) -> str | None:
+    return canonical_utc_timestamp(value) if value else None

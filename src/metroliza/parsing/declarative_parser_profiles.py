@@ -31,6 +31,7 @@ from metroliza.parsing.parser_plugin_contracts import (
     ReportInfoV2,
     infer_source_format,
 )
+from metroliza.parsing.source_inspection import SourceInspectionContext
 from metroliza.parsing.parser_plugin_paths import (
     default_external_plugin_dir,
     disabled_plugin_ids,
@@ -56,7 +57,12 @@ PLUGIN_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]{2,63}$")
 VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9_.-]+)?$")
 MAX_PROFILE_REGEX_LENGTH = 750
 MAX_PROFILE_SOURCE_TEXT_CHARS = 2_000_000
+MAX_PROFILE_INPUT_LINES = 100_000
+MAX_PROFILE_LINE_CHARS = 20_000
+MAX_PROFILE_ROW_SPECS = 32
 MAX_PROFILE_ROW_MATCHES_PER_BLOCK = 10_000
+MAX_PROFILE_TOTAL_ROW_MATCHES = 25_000
+PROFILE_SOURCE_TEXT_CACHE_KEY = "declarative_profile_source_text"
 DANGEROUS_NESTED_REPEAT_PATTERN = re.compile(
     r"\((?:\?:|\?P<[^>]+>)?[^)]*(?:[+*]|\{\d*,?\d*\})[^)]*\)\s*(?:[+*]|\{\d*,?\d*\})"
 )
@@ -286,6 +292,13 @@ def _profile_policy_checks(payload: dict[str, Any]) -> list[ProfileCheck]:
         )
     )
     checks.append(_check("row_patterns_present", bool(row_patterns), "at least one extraction block/row pattern is required"))
+    checks.append(
+        _check(
+            "row_pattern_count_within_limit",
+            len(row_patterns) <= MAX_PROFILE_ROW_SPECS,
+            f"declarative profiles allow at most {MAX_PROFILE_ROW_SPECS} row patterns",
+        )
+    )
 
     for field, pattern in report_fields.items():
         checks.append(_regex_check(f"report_field_{field}_regex_compiles", pattern))
@@ -318,9 +331,91 @@ def _regex_safety_check(name: str, pattern: Any, *, row_pattern: bool = False) -
         return _check(name, False, "use explicit character classes instead of unbounded dot wildcards")
     if DANGEROUS_NESTED_REPEAT_PATTERN.search(pattern):
         return _check(name, False, "nested repeating groups are not allowed in declarative profiles")
+    if _has_dangerous_quantified_group(pattern):
+        return _check(
+            name,
+            False,
+            "repeating groups containing alternation or another repeat are not allowed",
+        )
     if row_pattern and not pattern.lstrip().startswith("^"):
         return _check(name, False, "row patterns must be line-anchored with ^")
     return _check(name, True)
+
+
+def _quantifier_at(pattern: str, index: int) -> tuple[int, bool] | None:
+    if index >= len(pattern):
+        return None
+    token = pattern[index]
+    if token in {"*", "+"}:
+        return index + 1, True
+    if token == "?":
+        return index + 1, False
+    if token != "{":
+        return None
+    match = re.match(r"\{(\d+)(?:,(\d*)?)?\}", pattern[index:])
+    if match is None:
+        return None
+    lower = int(match.group(1))
+    upper_text = match.group(2)
+    has_comma = "," in match.group(0)
+    repeats_many = lower > 1 or (has_comma and (upper_text == "" or int(upper_text) > 1))
+    return index + len(match.group(0)), repeats_many
+
+
+def _has_dangerous_quantified_group(pattern: str) -> bool:
+    """Conservatively reject repeated groups with ambiguous or nested repetition."""
+
+    frames: list[dict[str, bool]] = [{"alternation": False, "repeat": False}]
+    last_atom = {"alternation": False, "repeat": False}
+    index = 0
+    while index < len(pattern):
+        token = pattern[index]
+        if token == "\\":
+            index += 2
+            last_atom = {"alternation": False, "repeat": False}
+            continue
+        if token == "[":
+            index += 1
+            while index < len(pattern):
+                if pattern[index] == "\\":
+                    index += 2
+                    continue
+                if pattern[index] == "]":
+                    index += 1
+                    break
+                index += 1
+            last_atom = {"alternation": False, "repeat": False}
+            continue
+        if token == "(":
+            frames.append({"alternation": False, "repeat": False})
+            last_atom = {"alternation": False, "repeat": False}
+            index += 1
+            continue
+        if token == "|":
+            frames[-1]["alternation"] = True
+            last_atom = {"alternation": False, "repeat": False}
+            index += 1
+            continue
+        if token == ")" and len(frames) > 1:
+            completed = frames.pop()
+            frames[-1]["alternation"] |= completed["alternation"]
+            frames[-1]["repeat"] |= completed["repeat"]
+            last_atom = completed
+            index += 1
+            continue
+        quantifier = _quantifier_at(pattern, index)
+        if quantifier is not None:
+            next_index, repeats_many = quantifier
+            if repeats_many and (last_atom["alternation"] or last_atom["repeat"]):
+                return True
+            if repeats_many:
+                frames[-1]["repeat"] = True
+                last_atom = {"alternation": False, "repeat": True}
+            index = next_index
+            continue
+        last_atom = {"alternation": False, "repeat": False}
+        index += 1
+    return False
 
 
 def _probe_confidence(payload: dict[str, Any]) -> int:
@@ -345,46 +440,70 @@ def _row_specs(payload: dict[str, Any]) -> tuple[dict[str, Any], ...]:
     return tuple(specs)
 
 
-def _read_source_text(path: str | Path) -> str:
+def _source_limit_error(path: Path, max_chars: int) -> ValueError:
+    return ValueError(f"{path} exceeds the declarative profile limit of {max_chars} characters")
+
+
+def _append_bounded_text(
+    parts: list[str],
+    value: str,
+    *,
+    current_chars: int,
+    max_chars: int,
+    source_path: Path,
+) -> int:
+    next_chars = current_chars + (1 if parts else 0) + len(value)
+    if next_chars > max_chars:
+        raise _source_limit_error(source_path, max_chars)
+    parts.append(value)
+    return next_chars
+
+
+def _read_source_text(path: str | Path, max_chars: int = MAX_PROFILE_SOURCE_TEXT_CHARS) -> str:
     source_path = Path(path)
     if source_path.suffix.lower() == ".pdf":
         try:  # pragma: no cover - depends on local PyMuPDF/runtime PDFs.
             import fitz
 
             parts: list[str] = []
+            current_chars = 0
             with fitz.open(source_path) as document:
                 for page in document:
-                    parts.append(page.get_text())
+                    current_chars = _append_bounded_text(
+                        parts,
+                        page.get_text(),
+                        current_chars=current_chars,
+                        max_chars=max_chars,
+                        source_path=source_path,
+                    )
             text = "\n".join(parts)
             if text.strip():
-                _ensure_text_within_profile_limits(text, source_path)
                 return text
         except Exception as exc:
             if isinstance(exc, ValueError):
                 raise
             pass
     if source_path.suffix.lower() in {".xlsx", ".xls"}:
-        text = _read_excel_source_text(source_path)
-        _ensure_text_within_profile_limits(text, source_path)
-        return text
-    text = source_path.read_text(encoding="utf-8", errors="ignore")
-    _ensure_text_within_profile_limits(text, source_path)
+        return _read_excel_source_text(source_path, max_chars=max_chars)
+    with source_path.open("r", encoding="utf-8", errors="ignore") as handle:
+        text = handle.read(max_chars + 1)
+    _ensure_text_within_profile_limits(text, source_path, max_chars=max_chars)
     return text
 
 
-def _read_excel_source_text(path: Path) -> str:
+def _read_excel_source_text(path: Path, *, max_chars: int) -> str:
     suffix = path.suffix.lower()
     try:
         if suffix == ".xlsx":
-            return _read_xlsx_source_text(path)
+            return _read_xlsx_source_text(path, max_chars=max_chars)
         if suffix == ".xls":
-            return _read_xls_source_text(path)
+            return _read_xls_source_text(path, max_chars=max_chars)
     except Exception as exc:
         raise ValueError(f"failed to read Excel workbook {path}: {exc}") from exc
     raise ValueError(f"unsupported Excel workbook extension for {path}")
 
 
-def _read_xlsx_source_text(path: Path) -> str:
+def _read_xlsx_source_text(path: Path, *, max_chars: int) -> str:
     try:
         from openpyxl import load_workbook
     except ImportError as exc:  # pragma: no cover - dependency hygiene gate covers runtime install.
@@ -392,19 +511,32 @@ def _read_xlsx_source_text(path: Path) -> str:
 
     workbook = load_workbook(path, read_only=True, data_only=True)
     lines: list[str] = []
+    current_chars = 0
     try:
         for worksheet in workbook.worksheets:
-            lines.append(f"SHEET {worksheet.title}")
+            current_chars = _append_bounded_text(
+                lines,
+                f"SHEET {worksheet.title}",
+                current_chars=current_chars,
+                max_chars=max_chars,
+                source_path=path,
+            )
             for row in worksheet.iter_rows(values_only=True):
                 cells = _source_text_cells(row)
                 if cells:
-                    lines.append(" ".join(cells))
+                    current_chars = _append_bounded_text(
+                        lines,
+                        " ".join(cells),
+                        current_chars=current_chars,
+                        max_chars=max_chars,
+                        source_path=path,
+                    )
     finally:
         workbook.close()
     return "\n".join(lines)
 
 
-def _read_xls_source_text(path: Path) -> str:
+def _read_xls_source_text(path: Path, *, max_chars: int) -> str:
     try:
         import xlrd
     except ImportError as exc:  # pragma: no cover - dependency hygiene gate covers runtime install.
@@ -412,14 +544,27 @@ def _read_xls_source_text(path: Path) -> str:
 
     workbook = xlrd.open_workbook(str(path), on_demand=True)
     lines: list[str] = []
+    current_chars = 0
     try:
         for sheet_name in workbook.sheet_names():
             sheet = workbook.sheet_by_name(sheet_name)
-            lines.append(f"SHEET {sheet_name}")
+            current_chars = _append_bounded_text(
+                lines,
+                f"SHEET {sheet_name}",
+                current_chars=current_chars,
+                max_chars=max_chars,
+                source_path=path,
+            )
             for row_index in range(sheet.nrows):
                 cells = _source_text_cells(sheet.row_values(row_index))
                 if cells:
-                    lines.append(" ".join(cells))
+                    current_chars = _append_bounded_text(
+                        lines,
+                        " ".join(cells),
+                        current_chars=current_chars,
+                        max_chars=max_chars,
+                        source_path=path,
+                    )
     finally:
         workbook.release_resources()
     return "\n".join(lines)
@@ -436,12 +581,22 @@ def _source_text_cells(values: Iterable[Any]) -> list[str]:
     return cells
 
 
-def _ensure_text_within_profile_limits(text: str, source_path: Path) -> None:
-    if len(text) > MAX_PROFILE_SOURCE_TEXT_CHARS:
-        raise ValueError(
-            f"{source_path} extracted {len(text)} characters; "
-            f"declarative profiles allow at most {MAX_PROFILE_SOURCE_TEXT_CHARS}"
-        )
+def _ensure_text_within_profile_limits(text: str, source_path: Path, *, max_chars: int) -> None:
+    if len(text) > max_chars:
+        raise _source_limit_error(source_path, max_chars)
+
+
+def _source_text_for_inspection(
+    path: str | Path,
+    source_inspection: SourceInspectionContext | None,
+) -> str:
+    if source_inspection is None:
+        return _read_source_text(path)
+    return source_inspection.get_extracted_text(
+        cache_key=PROFILE_SOURCE_TEXT_CACHE_KEY,
+        max_chars=MAX_PROFILE_SOURCE_TEXT_CHARS,
+        loader=_read_source_text,
+    )
 
 
 def _marker_found(text: str, marker: str) -> bool:
@@ -463,7 +618,7 @@ def profile_probe(payload: dict[str, Any], input_ref: str | Path, context: Probe
     required_markers = _string_tuple(probe.get("required_markers"))
     reject_markers = _string_tuple(probe.get("reject_markers"))
     try:
-        text = _read_source_text(input_ref)
+        text = _source_text_for_inspection(input_ref, context.source_inspection)
     except (OSError, ValueError) as exc:
         return ProbeResult(
             plugin_id=manifest.plugin_id,
@@ -502,9 +657,22 @@ def profile_probe(payload: dict[str, Any], input_ref: str | Path, context: Probe
     )
 
 
+def _bounded_regex_lines(text: str) -> tuple[str, ...]:
+    lines = tuple(text.splitlines())
+    if len(lines) > MAX_PROFILE_INPUT_LINES:
+        raise ValueError(f"declarative profile input exceeds {MAX_PROFILE_INPUT_LINES} lines")
+    for line_number, line in enumerate(lines, start=1):
+        if len(line) > MAX_PROFILE_LINE_CHARS:
+            raise ValueError(
+                f"declarative profile input line {line_number} exceeds "
+                f"{MAX_PROFILE_LINE_CHARS} characters"
+            )
+    return lines
+
+
 def _extract_value(pattern: str, text: str) -> str:
     match = re.search(pattern, text, flags=re.MULTILINE)
-    if not match:
+    if match is None:
         return ""
     if "value" in match.groupdict():
         return str(match.group("value")).strip()
@@ -560,14 +728,20 @@ def _normalize_date_value(value: str, date_formats: Iterable[str]) -> str:
     return text
 
 
-def _line_refs(text: str, start_offset: int) -> tuple[int, ...]:
-    line_number = text.count("\n", 0, start_offset) + 1
-    return (line_number,)
-
-
-def parse_profile_result(payload: dict[str, Any], source_path: str | Path) -> ParseResultV2:
+def parse_profile_result(
+    payload: dict[str, Any],
+    source_path: str | Path,
+    *,
+    source_inspection: SourceInspectionContext | None = None,
+) -> ParseResultV2:
     manifest = profile_manifest(payload)
-    text = _read_source_text(source_path)
+    path = Path(source_path)
+    inspection = source_inspection or SourceInspectionContext.from_path(
+        path,
+        source_format=profile_source_format(payload),
+    )
+    text = _source_text_for_inspection(path, inspection)
+    lines = _bounded_regex_lines(text)
     extraction = _mapping(payload.get("extraction"))
     normalization = _mapping(payload.get("normalization"))
     decimal_separator = str(normalization.get("decimal_separator") or ".")
@@ -582,16 +756,32 @@ def parse_profile_result(payload: dict[str, Any], source_path: str | Path) -> Pa
     )
     sample_number = _extract_value(str(report_fields.get("sample_number", "")), text)
 
+    row_specs = _row_specs(payload)
+    if len(row_specs) > MAX_PROFILE_ROW_SPECS:
+        raise ValueError(
+            f"profile {manifest.plugin_id} exceeds {MAX_PROFILE_ROW_SPECS} row patterns"
+        )
+
     blocks: list[MeasurementBlockV2] = []
-    for block_index, spec in enumerate(_row_specs(payload)):
+    total_row_matches = 0
+    for block_index, spec in enumerate(row_specs):
         header = str(spec.get("header") or spec.get("header_normalized") or f"Block {block_index + 1}").strip()
         pattern = str(spec.get("pattern") or "")
+        compiled_pattern = re.compile(pattern)
         dimensions: list[MeasurementV2] = []
-        for row_index, match in enumerate(re.finditer(pattern, text, flags=re.MULTILINE)):
-            if row_index >= MAX_PROFILE_ROW_MATCHES_PER_BLOCK:
+        for line_number, line in enumerate(lines, start=1):
+            match = compiled_pattern.match(line)
+            if match is None:
+                continue
+            if len(dimensions) >= MAX_PROFILE_ROW_MATCHES_PER_BLOCK:
                 raise ValueError(
                     f"profile {manifest.plugin_id} exceeded "
                     f"{MAX_PROFILE_ROW_MATCHES_PER_BLOCK} row matches in block {block_index}"
+                )
+            if total_row_matches >= MAX_PROFILE_TOTAL_ROW_MATCHES:
+                raise ValueError(
+                    f"profile {manifest.plugin_id} exceeded "
+                    f"{MAX_PROFILE_TOTAL_ROW_MATCHES} total row matches"
                 )
             group = match.groupdict()
 
@@ -613,9 +803,10 @@ def parse_profile_result(payload: dict[str, Any], source_path: str | Path) -> Pa
                     deviation=numeric("deviation"),
                     out_of_tolerance=numeric("out_of_tolerance"),
                     raw_tokens=tuple(str(value) for value in match.groups() if value is not None),
-                    raw_line_refs=_line_refs(text, match.start()),
+                    raw_line_refs=(line_number,),
                 )
             )
+            total_row_matches += 1
         blocks.append(
             MeasurementBlockV2(
                 header_raw=(header,),
@@ -625,8 +816,15 @@ def parse_profile_result(payload: dict[str, Any], source_path: str | Path) -> Pa
             )
         )
 
-    path = Path(source_path)
-    probe = profile_probe(payload, path, ProbeContext(source_path=str(path), source_format=infer_source_format(path)))
+    probe = profile_probe(
+        payload,
+        path,
+        ProbeContext(
+            source_path=str(path),
+            source_format=infer_source_format(path),
+            source_inspection=inspection,
+        ),
+    )
     template_id = probe.matched_template_id
     timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     return ParseResultV2(
@@ -664,7 +862,14 @@ def build_parser_class_from_profile(payload: dict[str, Any], *, origin_path: str
             return profile_probe(cls.profile_payload, input_ref, context)
 
         def open_report(self):
-            self.raw_text = _read_source_text(self.source_path).splitlines()
+            inspection = getattr(self, "source_inspection_context", None)
+            if inspection is None:
+                inspection = SourceInspectionContext.from_path(
+                    self.source_path,
+                    source_format=profile_source_format(self.profile_payload),
+                )
+                self.source_inspection_context = inspection
+            self.raw_text = _source_text_for_inspection(self.source_path, inspection).splitlines()
 
         def split_text_to_blocks(self):
             parse_result = self.parse_to_v2()
@@ -674,7 +879,18 @@ def build_parser_class_from_profile(payload: dict[str, Any], *, origin_path: str
             self.blocks_text = self.to_legacy_blocks(parse_result)
 
         def parse_to_v2(self) -> ParseResultV2:
-            return parse_profile_result(self.profile_payload, self.source_path)
+            inspection = getattr(self, "source_inspection_context", None)
+            if inspection is None:
+                inspection = SourceInspectionContext.from_path(
+                    self.source_path,
+                    source_format=profile_source_format(self.profile_payload),
+                )
+                self.source_inspection_context = inspection
+            return parse_profile_result(
+                self.profile_payload,
+                self.source_path,
+                source_inspection=inspection,
+            )
 
         @staticmethod
         def to_legacy_blocks(parse_result_v2: ParseResultV2):

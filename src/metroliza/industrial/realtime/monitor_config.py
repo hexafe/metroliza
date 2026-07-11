@@ -44,6 +44,7 @@ class RealtimeMonitorConfig:
     chunk_size: int = 500
     max_catchup_rows_per_cycle: int = 5_000
     allowed_lateness_seconds: float = 0.0
+    source_timezone: str = "UTC"
     segment_fields: tuple[str, ...] = DEFAULT_SEGMENT_FIELDS
     context_fields: tuple[str, ...] = DEFAULT_CONTEXT_FIELDS
     detectors: tuple[str, ...] = ("spec_limits",)
@@ -71,6 +72,7 @@ class RealtimeMonitorConfig:
             chunk_size=self.chunk_size,
             max_catchup_rows_per_cycle=self.max_catchup_rows_per_cycle,
             allowed_lateness_seconds=self.allowed_lateness_seconds,
+            source_timezone=self.source_timezone,
             timeout_seconds=self.timeout_seconds,
             segment_fields=self.segment_fields,
             context_fields=self.context_fields,
@@ -133,6 +135,7 @@ class RealtimeMonitorConfig:
             chunk_size=poll_config.chunk_size,
             max_catchup_rows_per_cycle=poll_config.max_catchup_rows_per_cycle,
             allowed_lateness_seconds=poll_config.allowed_lateness_seconds,
+            source_timezone=poll_config.source_timezone,
             segment_fields=poll_config.segment_fields,
             context_fields=poll_config.context_fields,
             detectors=poll_config.detectors,
@@ -176,6 +179,7 @@ class RealtimeMonitorConfigRepository:
                     chunk_size,
                     max_catchup_rows_per_cycle,
                     allowed_lateness_seconds,
+                    source_timezone,
                     segment_fields_json,
                     context_fields_json,
                     detectors_json,
@@ -187,7 +191,7 @@ class RealtimeMonitorConfigRepository:
                     created_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(source_profile_id, stream_key) DO UPDATE SET
                     enabled = excluded.enabled,
                     cursor_column = excluded.cursor_column,
@@ -200,6 +204,7 @@ class RealtimeMonitorConfigRepository:
                     chunk_size = excluded.chunk_size,
                     max_catchup_rows_per_cycle = excluded.max_catchup_rows_per_cycle,
                     allowed_lateness_seconds = excluded.allowed_lateness_seconds,
+                    source_timezone = excluded.source_timezone,
                     segment_fields_json = excluded.segment_fields_json,
                     context_fields_json = excluded.context_fields_json,
                     detectors_json = excluded.detectors_json,
@@ -229,6 +234,7 @@ class RealtimeMonitorConfigRepository:
                     chunk_size,
                     max_catchup_rows_per_cycle,
                     allowed_lateness_seconds,
+                    source_timezone,
                     segment_fields_json,
                     context_fields_json,
                     detectors_json,
@@ -284,6 +290,7 @@ class RealtimeMonitorConfigRepository:
                     chunk_size,
                     max_catchup_rows_per_cycle,
                     allowed_lateness_seconds,
+                    source_timezone,
                     segment_fields_json,
                     context_fields_json,
                     detectors_json,
@@ -339,6 +346,7 @@ def _config_row_values(
         config.chunk_size,
         config.max_catchup_rows_per_cycle,
         config.allowed_lateness_seconds,
+        config.source_timezone,
         to_json(list(config.segment_fields)),
         to_json(list(config.context_fields)),
         to_json(list(config.detectors)),
@@ -354,11 +362,11 @@ def _config_row_values(
 
 def _row_to_config(row) -> RealtimeMonitorConfig:
     signal_keys = tuple(str(value) for value in from_json(row[7], []))
-    segment_fields = tuple(str(value) for value in from_json(row[14], [])) or DEFAULT_SEGMENT_FIELDS
-    context_fields = tuple(str(value) for value in from_json(row[15], [])) or DEFAULT_CONTEXT_FIELDS
-    detectors = tuple(str(value) for value in from_json(row[16], [])) or ("spec_limits",)
+    segment_fields = tuple(str(value) for value in from_json(row[15], [])) or DEFAULT_SEGMENT_FIELDS
+    context_fields = tuple(str(value) for value in from_json(row[16], [])) or DEFAULT_CONTEXT_FIELDS
+    detectors = tuple(str(value) for value in from_json(row[17], [])) or ("spec_limits",)
     aggregation_methods = (
-        tuple(str(value) for value in from_json(row[19], [])) or DEFAULT_AGGREGATION_METHODS
+        tuple(str(value) for value in from_json(row[20], [])) or DEFAULT_AGGREGATION_METHODS
     )
     return RealtimeMonitorConfig(
         id=int(row[0]),
@@ -375,14 +383,15 @@ def _row_to_config(row) -> RealtimeMonitorConfig:
         chunk_size=int(row[11]),
         max_catchup_rows_per_cycle=int(row[12]),
         allowed_lateness_seconds=float(row[13]),
+        source_timezone=str(row[14] or "UTC"),
         segment_fields=segment_fields,
         context_fields=context_fields,
         detectors=detectors,
-        display_mode=str(row[17]),
-        aggregation_time_bucket=str(row[18]),
+        display_mode=str(row[18]),
+        aggregation_time_bucket=str(row[19]),
         aggregation_methods=aggregation_methods,
-        aggregation_group_fields=tuple(str(value) for value in from_json(row[20], [])),
-        dashboard_output_path=row[21],
-        created_at=str(row[22]),
-        updated_at=str(row[23]),
+        aggregation_group_fields=tuple(str(value) for value in from_json(row[21], [])),
+        dashboard_output_path=row[22],
+        created_at=str(row[23]),
+        updated_at=str(row[24]),
     ).validated()

@@ -1,50 +1,8 @@
+from contextlib import closing
 import tempfile
-import importlib.machinery
 import sqlite3
 import unittest
 from pathlib import Path
-import sys
-import types
-
-qtcore_stub = types.ModuleType('PyQt6.QtCore')
-qtcore_stub.Qt = type('Qt', (), {'ItemDataRole': type('ItemDataRole', (), {'UserRole': 0})})
-sys.modules.setdefault('PyQt6.QtCore', qtcore_stub)
-
-qtwidgets_stub = types.ModuleType('PyQt6.QtWidgets')
-for name in [
-    'QApplication',
-    'QDialog',
-    'QFrame',
-    'QGridLayout',
-    'QHBoxLayout',
-    'QHeaderView',
-    'QLabel',
-    'QLineEdit',
-    'QSizePolicy',
-    'QTableWidget',
-    'QTableWidgetItem',
-    'QPushButton',
-    'QFileDialog',
-    'QMessageBox',
-    'QWidget',
-]:
-    setattr(qtwidgets_stub, name, type(name, (), {}))
-qtwidgets_stub.QApplication.instance = staticmethod(lambda: None)
-sys.modules.setdefault('PyQt6.QtWidgets', qtwidgets_stub)
-qtgui_stub = types.ModuleType('PyQt6.QtGui')
-sys.modules.setdefault('PyQt6.QtGui', qtgui_stub)
-
-custom_logger_stub = types.ModuleType('modules.custom_logger')
-custom_logger_stub.CustomLogger = type('CustomLogger', (), {'__init__': lambda self, *args, **kwargs: None})
-sys.modules.setdefault('modules.custom_logger', custom_logger_stub)
-
-fitz_stub = types.ModuleType('fitz')
-fitz_stub.__spec__ = importlib.machinery.ModuleSpec('fitz', loader=None)
-sys.modules.setdefault('fitz', fitz_stub)
-pymupdf_stub = types.ModuleType('pymupdf')
-pymupdf_stub.__spec__ = importlib.machinery.ModuleSpec('pymupdf', loader=None)
-sys.modules.setdefault('pymupdf', pymupdf_stub)
-
 from modules.cmm_report_parser import CMMReportParser  # noqa: E402
 from modules.cmm_schema import ensure_cmm_report_schema  # noqa: E402
 from modules.modify_db import ModifyDB  # noqa: E402
@@ -93,7 +51,7 @@ class TestPhase2DbMigratedBehaviors(unittest.TestCase):
 
             ensure_cmm_report_schema(db_path)
 
-            with sqlite3.connect(db_path) as conn:
+            with closing(sqlite3.connect(db_path)) as conn, conn:
                 tables = {
                     row[0]
                     for row in conn.execute(

@@ -22,6 +22,7 @@ from metroliza.parsing.parse_reports_thread import (
 from metroliza.shared.progress_status import build_three_line_status, format_progress_duration
 from metroliza.reports.report_metadata_profiles import DEFAULT_CMM_PDF_HEADER_BOX_PROFILE
 from metroliza.reports.report_parser_factory import get_parser
+from metroliza.reports.report_repository import compute_sha256
 
 
 logger = logging.getLogger(__name__)
@@ -146,10 +147,41 @@ def enrich_existing_report_metadata(db_file, work_item, *, connection=None, pars
     source_path = Path(work_item.source_path)
     if not source_path.is_file():
         return False
+    expected_sha256 = str(work_item.sha256 or "").strip().casefold()
+    try:
+        actual_sha256 = compute_sha256(source_path).casefold()
+    except OSError:
+        return False
+    if not expected_sha256 or actual_sha256 != expected_sha256:
+        logger.warning(
+            "Metadata enrichment skipped source whose content changed",
+            extra={
+                "report_id": int(work_item.report_id),
+                "source_path": str(source_path),
+                "expected_sha256": expected_sha256,
+                "actual_sha256": actual_sha256,
+            },
+        )
+        return False
 
     parser_factory = parser_factory or get_parser
     parser = parser_factory(str(source_path), db_file, connection=connection)
     selection_result = selection_result_for_complete_metadata_parser(parser)
+    try:
+        current_sha256 = compute_sha256(source_path).casefold()
+    except OSError:
+        return False
+    if current_sha256 != expected_sha256:
+        logger.warning(
+            "Metadata enrichment skipped source changed during extraction",
+            extra={
+                "report_id": int(work_item.report_id),
+                "source_path": str(source_path),
+                "expected_sha256": expected_sha256,
+                "actual_sha256": current_sha256,
+            },
+        )
+        return False
     persist_complete_metadata_enrichment(
         db_file,
         work_item.report_id,

@@ -106,7 +106,8 @@ The legacy `docs/group_analysis/user_manual.md` path is retained only as a redir
 
 Canonical release operations docs (release gate/source-of-truth set):
 
-- `release_checks/release_status.md` — current release operational status and entry-point links, including build `260626` magic-filter syntax and SQLite realtime event-stream evidence.
+- `release_checks/release_status.md` — current release operational status and entry-point links, including build `260709` full-repository hardening evidence.
+- `release_checks/rc2_full_repo_hardening_2026-07-09.md` — build `260709` audit-plan implementation, exact local validation, and remaining packaging, push, and manual release blockers.
 - `release_checks/release_candidate_checklist.md` — primary RC gate checklist and required sign-offs.
 - `release_checks/open_testing_runbook.md` — open-testing execution runbook and evidence expectations.
 - `release_checks/branching_strategy.md` — authoritative branch naming/rules used during release work.

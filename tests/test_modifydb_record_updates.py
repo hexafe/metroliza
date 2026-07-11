@@ -1,47 +1,6 @@
-import sys
-import types
 import unittest
 
-qtcore_stub = types.ModuleType("PyQt6.QtCore")
-qtcore_stub.Qt = type("Qt", (), {"ItemDataRole": type("ItemDataRole", (), {"UserRole": 0})})
-sys.modules["PyQt6.QtCore"] = qtcore_stub
-
-qtwidgets_stub = types.ModuleType("PyQt6.QtWidgets")
-qtwidgets_stub.QSizePolicy = type(
-    "QSizePolicy",
-    (),
-    {"Policy": type("Policy", (), {"Expanding": 1, "Fixed": 2})},
-)
-qtwidgets_stub.QHeaderView = type(
-    "QHeaderView",
-    (),
-    {"ResizeMode": type("ResizeMode", (), {"Interactive": 0, "Stretch": 1, "ResizeToContents": 2})},
-)
-qtwidgets_stub.QApplication = type("QApplication", (), {"instance": staticmethod(lambda: None)})
-for name in [
-    "QDialog",
-    "QGridLayout",
-    "QHBoxLayout",
-    "QTableWidget",
-    "QTableWidgetItem",
-    "QPushButton",
-    "QFileDialog",
-    "QMessageBox",
-    "QFrame",
-    "QLabel",
-    "QLineEdit",
-    "QWidget",
-]:
-    setattr(qtwidgets_stub, name, type(name, (), {}))
-sys.modules["PyQt6.QtWidgets"] = qtwidgets_stub
-sys.modules["PyQt6.QtGui"] = types.ModuleType("PyQt6.QtGui")
-
-custom_logger_stub = types.ModuleType("modules.custom_logger")
-custom_logger_stub.CustomLogger = type("CustomLogger", (), {"__init__": lambda self, *args, **kwargs: None})
-sys.modules["modules.custom_logger"] = custom_logger_stub
-sys.modules.pop("modules.ui_foundation", None)
-sys.modules.pop("modules.modify_db", None)
-
+from PyQt6.QtCore import Qt
 from modules.modify_db import ModifyDB  # noqa: E402
 
 
@@ -51,7 +10,7 @@ class _FakeItem:
         self._current = current
 
     def data(self, role):
-        if role == 0:
+        if role == Qt.ItemDataRole.UserRole:
             return self._original
         return None
 
@@ -84,7 +43,7 @@ class _FakeRepository:
 
 class TestModifyDbRecordUpdates(unittest.TestCase):
     def test_collect_report_record_updates_ignores_readonly_and_unchanged_cells(self):
-        dialog = object.__new__(ModifyDB)
+        dialog = ModifyDB.__new__(ModifyDB)
         specs = [
             {"label": "REPORT_ID", "field": "report_id", "editable": False},
             {"label": "REFERENCE", "field": "reference", "editable": True},
@@ -114,7 +73,7 @@ class TestModifyDbRecordUpdates(unittest.TestCase):
         self.assertEqual(updates, [(42, {"reference": "REF_B", "comment": None})])
 
     def test_collect_measurement_record_updates_coerces_float_cells(self):
-        dialog = object.__new__(ModifyDB)
+        dialog = ModifyDB.__new__(ModifyDB)
         specs = [
             {"label": "MEASUREMENT_ID", "field": "measurement_id", "editable": False},
             {"label": "REPORT_ID", "field": "report_id", "editable": False},
@@ -140,7 +99,7 @@ class TestModifyDbRecordUpdates(unittest.TestCase):
         self.assertEqual(updates, [(7, {"nominal": 10.25, "outtol": None, "status_code": "ok"})])
 
     def test_apply_record_updates_dispatches_to_repository_methods(self):
-        dialog = object.__new__(ModifyDB)
+        dialog = ModifyDB.__new__(ModifyDB)
         repository = _FakeRepository()
 
         dialog.apply_record_updates(
@@ -153,13 +112,13 @@ class TestModifyDbRecordUpdates(unittest.TestCase):
         self.assertEqual(repository.measurement_updates, [(7, {"header": "H2"})])
 
     def test_apply_record_updates_requires_repository_api(self):
-        dialog = object.__new__(ModifyDB)
+        dialog = ModifyDB.__new__(ModifyDB)
 
         with self.assertRaisesRegex(RuntimeError, "update_report_metadata_fields"):
             dialog.apply_record_updates(object(), [(42, {"reference": "REF_B"})], [])
 
     def test_collect_record_table_modifications_reports_original_values(self):
-        dialog = object.__new__(ModifyDB)
+        dialog = ModifyDB.__new__(ModifyDB)
         specs = [
             {"label": "REPORT_ID", "field": "report_id", "editable": False},
             {"label": "REFERENCE", "field": "reference", "editable": True},

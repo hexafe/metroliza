@@ -610,21 +610,21 @@ def test_diagnose_header_ocr_metadata_loads_existing_database_rows(
 
     real_connect = sqlite3.connect
 
-    class ClosingConnection:
-        def __init__(self, path: Path, *args, **kwargs):
-            self.connection = real_connect(path, *args, **kwargs)
+    closed_connections = []
 
-        def __enter__(self):
-            return self.connection
+    class TrackingConnection(sqlite3.Connection):
+        def close(self):
+            closed_connections.append(self)
+            super().close()
 
-        def __exit__(self, exc_type, exc, traceback):
-            self.connection.close()
-            return False
+    def tracking_connect(*args, **kwargs):
+        kwargs["factory"] = TrackingConnection
+        return real_connect(*args, **kwargs)
 
     monkeypatch.setattr(
         diagnose_header_ocr_metadata.sqlite3,
         "connect",
-        lambda *args, **kwargs: ClosingConnection(*args, **kwargs),
+        tracking_connect,
     )
     rows = diagnose_header_ocr_metadata._source_rows_for_sha(db_file, "abc123")
 
@@ -646,6 +646,7 @@ def test_diagnose_header_ocr_metadata_loads_existing_database_rows(
             "metadata_json": {"field_sources": {"reference": "ocr"}},
         }
     ]
+    assert len(closed_connections) == 1
     assert diagnose_header_ocr_metadata._source_rows_for_sha(tmp_path / "missing.sqlite", "abc123") == []
 
 

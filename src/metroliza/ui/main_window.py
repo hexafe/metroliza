@@ -139,6 +139,8 @@ class MainWindow(QMainWindow):
         self.last_realtime_dashboard_path = None
         self.last_realtime_dashboard_db_path = None
         self._realtime_session_db_path = None
+        self._recovered_realtime_db_paths: set[str] = set()
+        self._close_deferred_for_realtime = False
         self.parser_plugin_wizard_dialog = None
         self.directory = None
         self.db_file = None
@@ -494,8 +496,13 @@ class MainWindow(QMainWindow):
             self.stop_metadata_enrichment()
             event.ignore()
             return
-        if self.realtime_monitoring_dialog is not None and self.realtime_monitoring_dialog.isVisible():
+        if self.realtime_monitoring_dialog is not None:
+            if not self.realtime_monitoring_dialog.request_shutdown():
+                self._close_deferred_for_realtime = True
+                event.ignore()
+                return
             self.realtime_monitoring_dialog.close()
+        self._close_deferred_for_realtime = False
         self._cleanup_realtime_session_db()
         super().closeEvent(event)
 
@@ -613,7 +620,6 @@ class MainWindow(QMainWindow):
     def launch_realtime_industrial_monitoring_dialog(self):
         try:
             dashboard_db_path, using_session_db = self._realtime_dashboard_db_file()
-            self.last_realtime_dashboard_db_path = dashboard_db_path
             from metroliza.ui.realtime_industrial_monitoring_dialog import (
                 RealtimeIndustrialMonitoringDialog,
             )
@@ -623,6 +629,12 @@ class MainWindow(QMainWindow):
                 and self.realtime_monitoring_dialog.isVisible()
                 and self.realtime_monitoring_dialog.db_file != dashboard_db_path
             ):
+                if not self.realtime_monitoring_dialog.request_shutdown():
+                    self.statusBar().showMessage(
+                        "Waiting for realtime monitoring to stop before changing databases.",
+                        5000,
+                    )
+                    return
                 self.realtime_monitoring_dialog.close()
                 self.realtime_monitoring_dialog = None
             if self.realtime_monitoring_dialog is None or not self.realtime_monitoring_dialog.isVisible():
@@ -630,9 +642,13 @@ class MainWindow(QMainWindow):
                     self,
                     dashboard_db_path,
                 )
+                self.realtime_monitoring_dialog.shutdown_complete.connect(
+                    self._on_realtime_monitoring_shutdown_complete
+                )
                 self.realtime_monitoring_dialog.show()
             else:
                 self.realtime_monitoring_dialog.reload_from_database()
+            self.last_realtime_dashboard_db_path = dashboard_db_path
             self.realtime_monitoring_dialog.raise_()
             self.realtime_monitoring_dialog.activateWindow()
             if using_session_db:
@@ -644,6 +660,13 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("Real-time industrial monitoring opened.", 5000)
         except Exception as e:
             self.log_and_exit(e)
+
+    def _on_realtime_monitoring_shutdown_complete(self) -> None:
+        dialog = self.realtime_monitoring_dialog
+        if dialog is not None:
+            dialog.close()
+        if self._close_deferred_for_realtime:
+            QTimer.singleShot(0, self.close)
 
     def launch_realtime_industrial_monitoring_dashboard(self):
         self.launch_realtime_industrial_monitoring_dialog()
@@ -707,12 +730,33 @@ class MainWindow(QMainWindow):
 
     def set_db_file(self, db_file):
         try:
+            recovery_result = self._recover_abandoned_realtime_staging(db_file)
             self.db_file = db_file
             self._sync_context_rows()
             if self.industrial_data_dialog and self.industrial_data_dialog.isVisible():
                 self.industrial_data_dialog.update_db_file(db_file)
+            if recovery_result and recovery_result.get("runs_failed", 0):
+                self.statusBar().showMessage(
+                    "Recovered abandoned industrial sync staging: "
+                    f"{recovery_result['runs_failed']} run(s), "
+                    f"{recovery_result.get('rows_discarded', 0)} row(s) discarded.",
+                    8000,
+                )
         except Exception as e:
             self.log_and_exit(e)
+
+    def _recover_abandoned_realtime_staging(self, db_file):
+        if not db_file or str(db_file) == ":memory:":
+            return None
+        db_path = Path(db_file).expanduser().resolve()
+        db_key = str(db_path)
+        if db_key in self._recovered_realtime_db_paths or not db_path.exists():
+            return None
+        from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
+
+        result = IndustrialDataRepository(db_key).recover_abandoned_sync_staging_at_startup()
+        self._recovered_realtime_db_paths.add(db_key)
+        return result
 
     def set_directory(self, directory):
         try:

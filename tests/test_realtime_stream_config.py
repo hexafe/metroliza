@@ -33,6 +33,19 @@ def test_realtime_poll_config_normalizes_bounds_and_signal_columns():
     assert config.cycle_limit == 100
 
 
+def test_realtime_poll_config_normalizes_and_deduplicates_detector_keys():
+    config = _config(detectors=(" Rolling_ZScore ", "rolling_zscore", "SPEC_LIMITS")).validated()
+
+    assert config.detectors == ("rolling_zscore", "spec_limits")
+
+
+def test_realtime_poll_config_rejects_unknown_detector_and_timezone():
+    with pytest.raises(RealtimeStreamConfigError, match="Unsupported realtime detector"):
+        _config(detectors=("not_implemented",)).validated()
+    with pytest.raises(RealtimeStreamConfigError, match="Unknown source timezone"):
+        _config(source_timezone="Mars/Olympus_Mons").validated()
+
+
 @pytest.mark.parametrize(
     "overrides",
     [
@@ -44,6 +57,16 @@ def test_realtime_poll_config_normalizes_bounds_and_signal_columns():
         {"timeout_seconds": 0},
         {"timeout_seconds": 61, "polling_interval_seconds": 60},
         {"allowed_lateness_seconds": -1},
+        {"allowed_lateness_seconds": float("nan")},
+        {"allowed_lateness_seconds": float("inf")},
+        {"polling_interval_seconds": float("nan")},
+        {"timeout_seconds": float("inf")},
+        {"source_profile_id": True},
+        {"source_profile_id": 1.5},
+        {"source_profile_id": 2**63},
+        {"chunk_size": True},
+        {"chunk_size": 1.5},
+        {"max_catchup_rows_per_cycle": 2**63},
         {"signal_keys": ()},
         {"fetch_all_confirmed": True},
     ],

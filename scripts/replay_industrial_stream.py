@@ -6,7 +6,15 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 
+from metroliza.industrial.realtime.numeric_validation import exact_integral
 from metroliza.industrial.realtime.replay import ReplayRequest, replay_industrial_stream
+
+
+def _positive_exact_integer(value: str) -> int:
+    try:
+        return exact_integral(value, field_name="value", minimum=1)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -19,7 +27,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--event-time-column", required=True)
     parser.add_argument("--record-key-column", required=True)
     parser.add_argument("--detectors", default="spec_limits")
-    parser.add_argument("--limit", type=int)
+    parser.add_argument("--limit", type=_positive_exact_integer)
+    parser.add_argument(
+        "--source-timezone",
+        default="UTC",
+        help="IANA timezone for naive source timestamps (default: UTC)",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=_positive_exact_integer,
+        default=500,
+        help="bounded replay rows processed per batch (default: 500)",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--lsl", type=float)
     parser.add_argument("--usl", type=float)
@@ -46,6 +65,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             usl=args.usl,
             lower_warning=args.lower_warning,
             upper_warning=args.upper_warning,
+            source_timezone=args.source_timezone,
+            batch_size=args.batch_size,
         )
     )
     for line in summary.as_lines():

@@ -8,6 +8,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import importlib
 import importlib.util
 import json
@@ -96,7 +97,7 @@ def _source_rows_for_sha(db_file: Path, sha256_value: str) -> list[dict[str, Any
         WHERE sf.sha256 = ?
         ORDER BY pr.id DESC
     """
-    with sqlite3.connect(db_file) as connection:
+    with closing(sqlite3.connect(db_file)) as connection, connection:
         connection.row_factory = sqlite3.Row
         try:
             rows = connection.execute(query, (sha256_value,)).fetchall()

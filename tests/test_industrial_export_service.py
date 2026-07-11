@@ -11,6 +11,7 @@ from modules.industrial_export_service import (
     IndustrialExportCancelled,
     build_industrial_summary,
     export_cached_industrial_workbook,
+    export_industrial_dataframe_workbook,
     export_live_industrial_workbook,
     industrial_records_to_export_dataframe,
     load_cached_industrial_dataframe,
@@ -70,6 +71,25 @@ def _seed_cached_industrial_rows(db_path: str):
             },
         ],
     )
+
+
+def _assert_untrusted_strings_are_literal(output_file, expected_strings):
+    with zipfile.ZipFile(output_file) as workbook_zip:
+        worksheet_xml = b"".join(
+            workbook_zip.read(name)
+            for name in workbook_zip.namelist()
+            if name.startswith("xl/worksheets/sheet") and name.endswith(".xml")
+        )
+        shared_strings = (
+            workbook_zip.read("xl/sharedStrings.xml")
+            if "xl/sharedStrings.xml" in workbook_zip.namelist()
+            else b""
+        )
+    assert b"<f" not in worksheet_xml
+    assert b"<hyperlink" not in worksheet_xml
+    shared_text = shared_strings.decode("utf-8")
+    for expected in expected_strings:
+        assert expected in shared_text
 
 
 def test_cached_industrial_export_respects_reference_filter_and_grouping(tmp_path):
@@ -181,6 +201,67 @@ def test_cached_industrial_export_writes_workbook_with_charts(tmp_path):
     with zipfile.ZipFile(output_file) as workbook_zip:
         chart_files = [name for name in workbook_zip.namelist() if name.startswith("xl/charts/")]
     assert chart_files
+
+
+def test_cached_industrial_export_writes_formula_and_url_like_values_literally(tmp_path):
+    db_path = str(tmp_path / "industrial-hostile.db")
+    repository = IndustrialDataRepository(db_path)
+    profile = repository.upsert_source_profile(
+        profile_key="hostile",
+        profile_name="Hostile fixture",
+        source_db_alias="fixture",
+        database_type="sqlite",
+        source_object_name="events",
+    )
+    repository.upsert_industrial_records_from_rows(
+        source_profile_id=profile.id,
+        source_db_alias=profile.source_db_alias,
+        rows=(
+            {
+                "source_record_key": "ROW-1",
+                "reference": "=2+2",
+                "station": "https://example.invalid/operator",
+                "raw_record": {"reference": "=2+2"},
+            },
+        ),
+    )
+    output_file = tmp_path / "cached-hostile.xlsx"
+
+    export_cached_industrial_workbook(
+        db_file=db_path,
+        output_file=str(output_file),
+        include_charts=False,
+    )
+
+    _assert_untrusted_strings_are_literal(
+        output_file,
+        ("=2+2", "https://example.invalid/operator"),
+    )
+
+
+def test_industrial_dataframe_export_writes_formula_and_url_like_values_literally(tmp_path):
+    output_file = tmp_path / "dataframe-hostile.xlsx"
+    dataframe = pd.DataFrame(
+        (
+            {
+                "source_db_alias": "fixture",
+                "source_record_key": "ROW-1",
+                "reference": "=CMD()",
+                "station": "https://example.invalid/source",
+            },
+        )
+    )
+
+    export_industrial_dataframe_workbook(
+        dataframe=dataframe,
+        output_file=str(output_file),
+        include_charts=False,
+    )
+
+    _assert_untrusted_strings_are_literal(
+        output_file,
+        ("=CMD()", "https://example.invalid/source"),
+    )
 
 
 def test_cached_industrial_export_streams_sqlite_rows_without_full_dataframe_load(

@@ -2,14 +2,49 @@
 
 from __future__ import annotations
 
-from metroliza.reports.db import run_transaction_with_retry
+import json
+from pathlib import Path
+from threading import Lock
+
+from metroliza.industrial.realtime.timestamps import canonical_utc_timestamp
+from metroliza.reports.db import run_transaction_with_retry, sqlite_connection_scope
 
 
-SCHEMA_VERSION = "industrial_data_v6"
+SCHEMA_VERSION = "industrial_data_v7"
 
 SYNC_RUN_STATUSES = ("running", "succeeded", "completed_with_warnings", "failed", "cancelled")
 JOIN_MATCH_MODES = ("exact", "time_window")
 LINK_CANDIDATE_STATUSES = ("candidate", "accepted", "rejected")
+TIMESTAMP_STORAGE_FORMAT = "utc_iso8601_microseconds_v1"
+_SCHEMA_READY_LOCK = Lock()
+_SCHEMA_READY_VERSIONS: dict[str, int] = {}
+
+_CANONICAL_TIMESTAMP_COLUMNS = {
+    "industrial_source_profiles": ("created_at", "updated_at"),
+    "industrial_sync_runs": ("started_at", "finished_at", "heartbeat_at"),
+    "industrial_sync_staging_records": ("created_at",),
+    "industrial_records": ("created_at", "updated_at"),
+    "industrial_record_values": ("created_at",),
+    "industrial_join_rules": ("created_at", "updated_at"),
+    "industrial_link_candidates": ("created_at", "updated_at"),
+    "industrial_stream_offsets": ("event_time_watermark", "last_success_at"),
+    "industrial_realtime_monitor_configs": ("created_at", "updated_at"),
+    "industrial_signal_definitions": ("created_at", "updated_at"),
+    "industrial_samples": ("event_time", "ingest_time"),
+    "industrial_detector_configs": ("created_at", "updated_at"),
+    "industrial_baselines": ("window_start", "window_end", "created_at"),
+    "industrial_anomaly_events": ("event_time", "ack_at", "created_at"),
+    "industrial_realtime_stream_events": ("event_time", "created_at"),
+    "industrial_realtime_consumer_offsets": ("last_success_at", "updated_at"),
+    "industrial_realtime_dead_letters": ("failed_at",),
+    "industrial_realtime_source_health": ("evaluated_at", "latest_event_time"),
+    "industrial_model_artifacts": (
+        "training_window_start",
+        "training_window_end",
+        "created_at",
+        "updated_at",
+    ),
+}
 
 
 def _quoted_values(values: tuple[str, ...]) -> str:
@@ -21,6 +56,7 @@ def _industrial_sync_runs_table_statement(table_name: str = "industrial_sync_run
         id INTEGER PRIMARY KEY,
         source_profile_id INTEGER NOT NULL,
         started_at TEXT NOT NULL,
+        heartbeat_at TEXT,
         finished_at TEXT,
         status TEXT NOT NULL CHECK (status IN ({_quoted_values(SYNC_RUN_STATUSES)})),
         row_count INTEGER NOT NULL DEFAULT 0,
@@ -57,6 +93,19 @@ SCHEMA_TABLE_STATEMENTS = (
         updated_at TEXT NOT NULL
     )""",
     _industrial_sync_runs_table_statement(),
+    """CREATE TABLE IF NOT EXISTS industrial_sync_staging_records (
+        id INTEGER PRIMARY KEY,
+        sync_run_id INTEGER NOT NULL,
+        source_profile_id INTEGER NOT NULL,
+        source_db_alias TEXT NOT NULL,
+        source_record_key TEXT NOT NULL,
+        row_json TEXT NOT NULL,
+        sequence_number INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (sync_run_id) REFERENCES industrial_sync_runs(id) ON DELETE CASCADE,
+        FOREIGN KEY (source_profile_id) REFERENCES industrial_source_profiles(id) ON DELETE CASCADE,
+        UNIQUE(sync_run_id, source_profile_id, source_db_alias, source_record_key)
+    )""",
     """CREATE TABLE IF NOT EXISTS industrial_records (
         id INTEGER PRIMARY KEY,
         source_profile_id INTEGER NOT NULL,
@@ -152,6 +201,7 @@ SCHEMA_TABLE_STATEMENTS = (
         chunk_size INTEGER NOT NULL DEFAULT 500,
         max_catchup_rows_per_cycle INTEGER NOT NULL DEFAULT 5000,
         allowed_lateness_seconds REAL NOT NULL DEFAULT 0,
+        source_timezone TEXT NOT NULL DEFAULT 'UTC',
         segment_fields_json TEXT NOT NULL DEFAULT '[]',
         context_fields_json TEXT NOT NULL DEFAULT '[]',
         detectors_json TEXT NOT NULL DEFAULT '[]',
@@ -286,6 +336,36 @@ SCHEMA_TABLE_STATEMENTS = (
         updated_at TEXT NOT NULL,
         FOREIGN KEY (source_profile_id) REFERENCES industrial_source_profiles(id) ON DELETE CASCADE
     )""",
+    """CREATE TABLE IF NOT EXISTS industrial_realtime_dead_letters (
+        id INTEGER PRIMARY KEY,
+        consumer_key TEXT NOT NULL,
+        source_profile_id INTEGER NOT NULL,
+        stream_key TEXT NOT NULL,
+        event_id INTEGER NOT NULL,
+        event_type TEXT NOT NULL,
+        error_summary TEXT NOT NULL,
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        failed_at TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'quarantined'
+            CHECK (status IN ('quarantined', 'resolved')),
+        FOREIGN KEY (source_profile_id) REFERENCES industrial_source_profiles(id) ON DELETE CASCADE,
+        FOREIGN KEY (event_id) REFERENCES industrial_realtime_stream_events(event_id) ON DELETE CASCADE,
+        UNIQUE(consumer_key, event_id)
+    )""",
+    """CREATE TABLE IF NOT EXISTS industrial_realtime_source_health (
+        id INTEGER PRIMARY KEY,
+        source_profile_id INTEGER NOT NULL,
+        stream_key TEXT NOT NULL,
+        evaluated_at TEXT NOT NULL,
+        latest_event_time TEXT,
+        last_sample_id INTEGER,
+        lag_seconds REAL,
+        status TEXT NOT NULL CHECK (status IN ('healthy', 'warning', 'major', 'no_data')),
+        details_json TEXT NOT NULL DEFAULT '{}',
+        FOREIGN KEY (source_profile_id) REFERENCES industrial_source_profiles(id) ON DELETE CASCADE,
+        FOREIGN KEY (last_sample_id) REFERENCES industrial_samples(id) ON DELETE SET NULL,
+        UNIQUE(source_profile_id, stream_key)
+    )""",
 )
 
 SCHEMA_INDEX_STATEMENTS = (
@@ -293,6 +373,7 @@ SCHEMA_INDEX_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_industrial_source_profiles_alias ON industrial_source_profiles(source_db_alias)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_sync_runs_profile_started ON industrial_sync_runs(source_profile_id, started_at DESC, id DESC)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_sync_runs_status ON industrial_sync_runs(status)",
+    "CREATE INDEX IF NOT EXISTS idx_industrial_sync_staging_run_sequence ON industrial_sync_staging_records(sync_run_id, sequence_number, id)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_records_profile_timestamp ON industrial_records(source_profile_id, process_timestamp)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_records_reference ON industrial_records(reference)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_records_reference_time_id ON industrial_records(reference COLLATE NOCASE, process_timestamp, id)",
@@ -327,6 +408,9 @@ SCHEMA_INDEX_STATEMENTS = (
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_industrial_realtime_consumer_offsets_unique ON industrial_realtime_consumer_offsets(consumer_key, source_profile_id, stream_key)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_realtime_consumer_offsets_stream ON industrial_realtime_consumer_offsets(source_profile_id, stream_key, last_event_id)",
     "CREATE INDEX IF NOT EXISTS idx_industrial_realtime_consumer_offsets_status ON industrial_realtime_consumer_offsets(status, updated_at)",
+    "CREATE INDEX IF NOT EXISTS idx_industrial_realtime_dead_letters_stream ON industrial_realtime_dead_letters(source_profile_id, stream_key, event_id)",
+    "CREATE INDEX IF NOT EXISTS idx_industrial_realtime_dead_letters_status ON industrial_realtime_dead_letters(status, failed_at)",
+    "CREATE INDEX IF NOT EXISTS idx_industrial_realtime_source_health_status ON industrial_realtime_source_health(status, evaluated_at)",
 )
 
 
@@ -335,11 +419,18 @@ def ensure_industrial_data_schema(
 ) -> None:
     """Ensure industrial cache tables, indexes, and schema metadata exist."""
 
+    cache_key = _schema_cache_key(database) if connection is None else None
+    if cache_key is not None and _cached_schema_is_current(database, cache_key):
+        return
+
     def _ensure_schema(cursor) -> None:
         for statement in SCHEMA_TABLE_STATEMENTS:
             cursor.execute(statement)
         _ensure_source_profile_columns(cursor)
+        _ensure_sync_run_columns(cursor)
         _ensure_stream_offset_columns(cursor)
+        _ensure_monitor_config_columns(cursor)
+        _ensure_canonical_timestamp_storage(cursor)
         _ensure_sync_run_status_constraint(cursor)
         _ensure_realtime_stream_event_idempotency_scope(cursor)
         for statement in SCHEMA_INDEX_STATEMENTS:
@@ -358,6 +449,44 @@ def ensure_industrial_data_schema(
     )
     if connection is not None:
         connection.execute("PRAGMA foreign_keys=ON")
+    elif cache_key is not None:
+        _remember_schema_version(database, cache_key)
+
+
+def _schema_cache_key(database: str) -> str | None:
+    if str(database) == ":memory:":
+        return None
+    return str(Path(database).expanduser().resolve(strict=False))
+
+
+def _cached_schema_is_current(database: str, cache_key: str) -> bool:
+    with _SCHEMA_READY_LOCK:
+        expected_schema_version = _SCHEMA_READY_VERSIONS.get(cache_key)
+    if expected_schema_version is None:
+        return False
+    try:
+        with sqlite_connection_scope(database) as conn:
+            schema_version = int(conn.execute("PRAGMA schema_version").fetchone()[0])
+            row = conn.execute(
+                "SELECT value FROM app_schema WHERE key = 'industrial_schema_version'"
+            ).fetchone()
+    except Exception:
+        return False
+    return (
+        schema_version == expected_schema_version
+        and row is not None
+        and str(row[0]) == SCHEMA_VERSION
+    )
+
+
+def _remember_schema_version(database: str, cache_key: str) -> None:
+    try:
+        with sqlite_connection_scope(database) as conn:
+            schema_version = int(conn.execute("PRAGMA schema_version").fetchone()[0])
+    except Exception:
+        return
+    with _SCHEMA_READY_LOCK:
+        _SCHEMA_READY_VERSIONS[cache_key] = schema_version
 
 
 def _ensure_realtime_stream_event_idempotency_scope(cursor) -> None:
@@ -385,6 +514,22 @@ def _ensure_source_profile_columns(cursor) -> None:
             cursor.execute(statement)
 
 
+def _ensure_sync_run_columns(cursor) -> None:
+    """Add the streamed-sync heartbeat without invalidating existing databases."""
+
+    cursor.execute("PRAGMA table_info(industrial_sync_runs)")
+    existing_columns = {str(row[1]) for row in cursor.fetchall()}
+    if "heartbeat_at" not in existing_columns:
+        cursor.execute("ALTER TABLE industrial_sync_runs ADD COLUMN heartbeat_at TEXT")
+    cursor.execute(
+        """
+        UPDATE industrial_sync_runs
+        SET heartbeat_at = started_at
+        WHERE heartbeat_at IS NULL OR TRIM(heartbeat_at) = ''
+        """
+    )
+
+
 def _ensure_stream_offset_columns(cursor) -> None:
     """Apply additive migrations for composite realtime stream cursors."""
 
@@ -401,6 +546,80 @@ def _ensure_stream_offset_columns(cursor) -> None:
     for column_name, statement in migrations.items():
         if column_name not in existing_columns:
             cursor.execute(statement)
+
+
+def _ensure_monitor_config_columns(cursor) -> None:
+    """Apply additive migrations for realtime source timestamp semantics."""
+
+    cursor.execute("PRAGMA table_info(industrial_realtime_monitor_configs)")
+    existing_columns = {str(row[1]) for row in cursor.fetchall()}
+    if "source_timezone" not in existing_columns:
+        cursor.execute(
+            "ALTER TABLE industrial_realtime_monitor_configs "
+            "ADD COLUMN source_timezone TEXT NOT NULL DEFAULT 'UTC'"
+        )
+
+
+def _ensure_canonical_timestamp_storage(cursor) -> None:
+    """One-time migration to fixed-width UTC text so indexed ordering is chronological."""
+
+    cursor.execute(
+        "SELECT value FROM app_schema WHERE key = 'industrial_timestamp_storage_format'"
+    )
+    row = cursor.fetchone()
+    if row is not None and str(row[0]) == TIMESTAMP_STORAGE_FORMAT:
+        return
+
+    converted = 0
+    invalid_skipped = 0
+    for table_name, requested_columns in _CANONICAL_TIMESTAMP_COLUMNS.items():
+        cursor.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table_name,),
+        )
+        if cursor.fetchone() is None:
+            continue
+        cursor.execute(f"PRAGMA table_info({table_name})")
+        existing_columns = {str(column[1]) for column in cursor.fetchall()}
+        for column_name in requested_columns:
+            if column_name not in existing_columns:
+                continue
+            cursor.execute(
+                f"SELECT rowid, {column_name} FROM {table_name} "
+                f"WHERE {column_name} IS NOT NULL AND TRIM({column_name}) != ''"
+            )
+            updates: list[tuple[str, int]] = []
+            for row_id, raw_value in cursor.fetchall():
+                try:
+                    canonical = canonical_utc_timestamp(raw_value)
+                except ValueError:
+                    invalid_skipped += 1
+                    continue
+                if canonical != str(raw_value):
+                    updates.append((canonical, int(row_id)))
+            if updates:
+                cursor.executemany(
+                    f"UPDATE {table_name} SET {column_name} = ? WHERE rowid = ?",
+                    updates,
+                )
+                converted += len(updates)
+
+    diagnostics = json.dumps(
+        {
+            "converted": converted,
+            "invalid_skipped": invalid_skipped,
+            "legacy_naive_policy": "assume_utc",
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    cursor.executemany(
+        "INSERT OR REPLACE INTO app_schema (key, value) VALUES (?, ?)",
+        (
+            ("industrial_timestamp_storage_format", TIMESTAMP_STORAGE_FORMAT),
+            ("industrial_timestamp_migration_diagnostics", diagnostics),
+        ),
+    )
 
 
 def _ensure_sync_run_status_constraint(cursor) -> None:
@@ -422,6 +641,7 @@ def _ensure_sync_run_status_constraint(cursor) -> None:
         "id",
         "source_profile_id",
         "started_at",
+        "heartbeat_at",
         "finished_at",
         "status",
         "row_count",

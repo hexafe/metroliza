@@ -1,3 +1,4 @@
+from contextlib import closing
 import os
 import re
 import tempfile
@@ -339,7 +340,7 @@ def _seed_grouped_measurements(db_path):
             }
         )
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         overview_df = pd.read_sql_query(
             'SELECT report_id AS REPORT_ID, reference AS REFERENCE, report_date AS DATE, sample_number AS SAMPLE_NUMBER '
             'FROM vw_report_overview ORDER BY report_id',

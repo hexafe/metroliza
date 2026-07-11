@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Any, Iterable
 
 from metroliza.industrial.anomaly.contracts import ANOMALY_SEVERITIES, DetectionResult
 from metroliza.industrial.industrial_data_schema import ensure_industrial_data_schema
 from metroliza.industrial.realtime.sample_repository import from_json, to_json, utc_timestamp
+from metroliza.industrial.realtime.numeric_validation import exact_integral
+from metroliza.industrial.realtime.timestamps import canonical_utc_timestamp
 from metroliza.reports.db import run_transaction_with_retry
 
 ANOMALY_EVENT_STATUSES = ("open", "acknowledged", "resolved", "false_positive")
@@ -60,16 +63,12 @@ class AnomalyEventRepository:
         created_at = utc_timestamp()
 
         def _insert(cursor) -> EventBatchResult:
-            for event in event_batch:
-                if event.sample_id is None:
-                    raise ValueError("DetectionResult.sample_id is required for persistence")
-                if event.signal_id is None:
-                    raise ValueError("DetectionResult.signal_id is required for persistence")
+            insert_rows = tuple(_event_insert_row(event, created_at) for event in event_batch)
             processed = len(event_batch)
             before_changes = cursor.connection.total_changes
             cursor.executemany(
                 """
-                INSERT OR IGNORE INTO industrial_anomaly_events (
+                INSERT INTO industrial_anomaly_events (
                     sample_id,
                     signal_id,
                     event_time,
@@ -85,8 +84,9 @@ class AnomalyEventRepository:
                     created_at
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)
+                ON CONFLICT(sample_id, detector_key) DO NOTHING
                 """,
-                tuple(_event_insert_row(event, created_at) for event in event_batch),
+                insert_rows,
             )
             inserted = cursor.connection.total_changes - before_changes
             event_ids = _lookup_event_ids(cursor, event_batch)
@@ -328,7 +328,7 @@ class AnomalyEventRepository:
     ) -> None:
         self.ensure_schema()
         _validate_status(status)
-        updated_at = updated_at or utc_timestamp()
+        updated_at = canonical_utc_timestamp(updated_at or utc_timestamp())
         normalized_operator = str(operator or "").strip()
         if not normalized_operator:
             raise ValueError("operator is required for anomaly event status updates")
@@ -361,20 +361,60 @@ def _validate_status(status: str) -> None:
 
 
 def _event_insert_row(event: DetectionResult, created_at: str) -> tuple[Any, ...]:
-    return (
-        event.sample_id,
-        event.signal_id,
-        event.event_time,
-        event.detector_key,
-        event.severity,
-        float(event.score),
-        float(event.observed_value),
-        event.expected_value,
-        to_json(dict(event.threshold)),
-        event.explanation,
-        to_json(dict(event.context)),
-        created_at,
+    sample_id = _positive_id("DetectionResult.sample_id", event.sample_id)
+    signal_id = _positive_id("DetectionResult.signal_id", event.signal_id)
+    detector_key = str(event.detector_key or "").strip()
+    if not detector_key:
+        raise ValueError("DetectionResult.detector_key is required for persistence")
+    severity = str(event.severity or "").strip().lower()
+    if severity not in ANOMALY_SEVERITIES:
+        raise ValueError(f"unsupported anomaly severity: {event.severity}")
+    event_time = canonical_utc_timestamp(event.event_time)
+    score = _finite_number("DetectionResult.score", event.score)
+    observed_value = _finite_number("DetectionResult.observed_value", event.observed_value)
+    expected_value = (
+        None
+        if event.expected_value is None
+        else _finite_number("DetectionResult.expected_value", event.expected_value)
     )
+    explanation = str(event.explanation or "").strip()
+    if not explanation:
+        raise ValueError("DetectionResult.explanation is required for persistence")
+    return (
+        sample_id,
+        signal_id,
+        event_time,
+        detector_key,
+        severity,
+        score,
+        observed_value,
+        expected_value,
+        to_json(dict(event.threshold)),
+        explanation,
+        to_json(dict(event.context)),
+        canonical_utc_timestamp(created_at),
+    )
+
+
+def _positive_id(field_name: str, value: Any) -> int:
+    if value is None:
+        raise ValueError(f"{field_name} is required for persistence")
+    try:
+        return exact_integral(value, field_name=field_name, minimum=1)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be positive") from exc
+
+
+def _finite_number(field_name: str, value: Any) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be numeric")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be numeric") from exc
+    if not math.isfinite(parsed):
+        raise ValueError(f"{field_name} must be finite")
+    return parsed
 
 
 def _lookup_event_ids(cursor, events: tuple[DetectionResult, ...]) -> list[int]:

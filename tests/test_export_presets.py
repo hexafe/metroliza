@@ -118,7 +118,7 @@ class TestExportPresetOptionMapping(unittest.TestCase):
         self.assertTrue(html_options.generate_html_dashboard)
 
 
-class TestExportPresetFlowIntegration(unittest.TestCase):
+class _ExportPresetFlowStubCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls._missing = object()
@@ -249,6 +249,8 @@ class TestExportPresetFlowIntegration(unittest.TestCase):
             else:
                 sys.modules[module_name] = original_module
 
+
+class TestExportPresetFlowIntegration(_ExportPresetFlowStubCase):
     def test_selected_preset_changes_payload_deterministically(self):
         from modules.export_dialog import build_export_options_payload
 
@@ -281,11 +283,7 @@ class TestExportPresetFlowIntegration(unittest.TestCase):
         self.assertTrue(full_payload.generate_summary_sheet)
 
 
-class TestExportDialogPresetApplication(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        TestExportPresetFlowIntegration.setUpClass()
-
+class TestExportDialogPresetApplication(_ExportPresetFlowStubCase):
     def test_apply_selected_preset_updates_only_preset_owned_controls(self):
         from modules.export_dialog import ExportDialog
 
@@ -343,11 +341,7 @@ class TestExportDialogPresetApplication(unittest.TestCase):
         self.assertFalse(dialog.include_google_sheets_checkbox.isChecked())
 
 
-class TestExportCompletionMessaging(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        TestExportPresetFlowIntegration.setUpClass()
-
+class TestExportCompletionMessaging(_ExportPresetFlowStubCase):
     def test_google_success_includes_local_output_and_google_sheet_url(self):
         from modules.export_dialog import build_export_completion_message
 
@@ -622,11 +616,7 @@ class TestExportCompletionMessaging(unittest.TestCase):
         )
 
 
-class TestExportTargetSelection(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        TestExportPresetFlowIntegration.setUpClass()
-
+class TestExportTargetSelection(_ExportPresetFlowStubCase):
     def test_selected_export_target_defaults_to_excel(self):
         from modules.export_dialog import ExportDialog
 
@@ -666,11 +656,7 @@ class TestExportTargetSelection(unittest.TestCase):
         self.assertEqual(dialog._selected_export_target(), 'html_dashboard')
 
 
-class TestRevealFileInExplorer(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        TestExportPresetFlowIntegration.setUpClass()
-
+class TestRevealFileInExplorer(_ExportPresetFlowStubCase):
     def test_reveal_file_in_explorer_raises_for_missing_file(self):
         from modules.export_dialog import reveal_file_in_explorer
 
@@ -689,11 +675,7 @@ class TestRevealFileInExplorer(unittest.TestCase):
             run_mock.assert_called_once_with(['explorer', '/select,', str(file_path)], check=False)
 
 
-class TestShowExportResultMessage(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        TestExportPresetFlowIntegration.setUpClass()
-
+class TestShowExportResultMessage(_ExportPresetFlowStubCase):
     def test_handle_export_result_link_reveals_file_for_export_link(self):
         from modules.export_dialog import handle_export_result_link
 
@@ -758,11 +740,7 @@ class TestShowExportResultMessage(unittest.TestCase):
         log_exception_mock.assert_called_once()
 
 
-class TestExportDialogCompletionFlow(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        TestExportPresetFlowIntegration.setUpClass()
-
+class TestExportDialogCompletionFlow(_ExportPresetFlowStubCase):
     def test_on_export_finished_success_keeps_dialog_open_and_closes_progress(self):
         from modules.export_dialog import ExportDialog
 
@@ -985,11 +963,7 @@ class TestExportDialogServiceRequestAssembly(unittest.TestCase):
             )
 
 
-class TestExportDialogThreadStartupContract(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        TestExportPresetFlowIntegration.setUpClass()
-
+class TestExportDialogThreadStartupContract(_ExportPresetFlowStubCase):
     def test_show_loading_screen_starts_thread_with_validated_export_request_keyword(self):
         from modules.export_dialog import ExportDialog
 
@@ -1279,11 +1253,7 @@ class TestExportDialogThreadStartupContract(unittest.TestCase):
         self.assertEqual(dialog.metadata_enrichment_notice_label.visible_states, [True])
 
 
-class TestExportDialogDatabaseSwitchContext(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        TestExportPresetFlowIntegration.setUpClass()
-
+class TestExportDialogDatabaseSwitchContext(_ExportPresetFlowStubCase):
     def test_select_db_file_resets_filter_and_grouping_context(self):
         from modules.export_dialog import DEFAULT_FILTER_QUERY, ExportDialog
 
@@ -1348,11 +1318,7 @@ class TestExportDialogDatabaseSwitchContext(unittest.TestCase):
         self.assertIsNone(dialog.grouping_window)
 
 
-class TestExportDialogGroupingAnalysisDefaults(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        TestExportPresetFlowIntegration.setUpClass()
-
+class TestExportDialogGroupingAnalysisDefaults(_ExportPresetFlowStubCase):
     def test_grouping_applied_infers_standard_group_analysis(self):
         from modules.export_dialog import ExportDialog
 
@@ -1372,11 +1338,7 @@ class TestExportDialogGroupingAnalysisDefaults(unittest.TestCase):
         self.assertEqual(dialog._selected_group_analysis_level(), 'standard')
 
 
-class TestExportDialogFilterStateSummary(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        TestExportPresetFlowIntegration.setUpClass()
-
+class TestExportDialogFilterStateSummary(_ExportPresetFlowStubCase):
     def test_clear_filters_resets_query_and_label(self):
         from modules.export_dialog import DEFAULT_FILTER_QUERY, ExportDialog
         from modules.filter_state import FilterState

@@ -1,3 +1,4 @@
+from contextlib import closing
 import json
 import os
 import sqlite3
@@ -9,7 +10,7 @@ import pytest
 
 
 def _create_legacy_database(db_path):
-    with sqlite3.connect(db_path) as connection:
+    with closing(sqlite3.connect(db_path)) as connection, connection:
         connection.execute(
             """
             CREATE TABLE REPORTS (
@@ -145,6 +146,7 @@ def test_modifydb_applies_normalization_to_legacy_database(tmp_path):
         f"""
         import json
         import sqlite3
+        from contextlib import closing
         from PyQt6.QtWidgets import QApplication, QMessageBox
         from modules.modify_db import ModifyDB
 
@@ -157,7 +159,7 @@ def test_modifydb_applies_normalization_to_legacy_database(tmp_path):
             dialog.header_table.item(0, 1).setText("HEIGHT2")
             dialog.apply_changes()
 
-            with sqlite3.connect({json.dumps(str(db_path))}) as connection:
+            with closing(sqlite3.connect({json.dumps(str(db_path))})) as connection, connection:
                 references = connection.execute("SELECT REFERENCE FROM REPORTS ORDER BY ID").fetchall()
                 headers = connection.execute("SELECT HEADER FROM MEASUREMENTS ORDER BY ID").fetchall()
 

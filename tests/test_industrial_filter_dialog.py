@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import closing
 import sqlite3
 
 import pytest
@@ -130,7 +131,7 @@ def test_filter_dialog_loads_references_from_local_metroliza_metadata_only(tmp_p
     _app()
     db_path = str(tmp_path / "metroliza.db")
     ensure_report_schema(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         timestamp = "2026-06-23T00:00:00"
         conn.executemany(
             """

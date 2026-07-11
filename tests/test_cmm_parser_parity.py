@@ -1,3 +1,4 @@
+from contextlib import closing
 import json
 import sqlite3
 import types
@@ -708,7 +709,7 @@ def _assert_tp_pipeline_roundtrip(parsed_blocks, tmp_path):
     )
     assert measurement_rows == [(0.0, 0.2, 0.0, 0.344, 0.344, 0.144)]
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         export_rows = conn.execute(
             """
             SELECT ax, nominal, tol_plus, tol_minus, bonus, meas, dev, outtol, header,
@@ -833,7 +834,12 @@ def test_measurement_row_persistence_parity_python_vs_native_when_available(tmp_
     assert native_duplicate_result.backend == "native"
     assert native_duplicate_result.inserted is False
 
-    with sqlite3.connect(py_db) as py_conn, sqlite3.connect(native_db) as native_conn:
+    with (
+        closing(sqlite3.connect(py_db)) as py_conn,
+        py_conn,
+        closing(sqlite3.connect(native_db)) as native_conn,
+        native_conn,
+    ):
         py_rows = py_conn.execute(
             """
             SELECT MEASUREMENTS.AX, MEASUREMENTS.NOM, MEASUREMENTS."+TOL",
@@ -910,7 +916,7 @@ def test_measurement_row_persistence_duplicate_detection_python_backend(tmp_path
     assert persist_measurement_rows_python(py_db, rows) is True
     assert persist_measurement_rows_python(py_db, rows) is False
 
-    with sqlite3.connect(py_db) as conn:
+    with closing(sqlite3.connect(py_db)) as conn, conn:
         report_count = conn.execute("SELECT COUNT(*) FROM parsed_reports").fetchone()
         measurement_count = conn.execute("SELECT COUNT(*) FROM report_measurements").fetchone()
 
@@ -925,7 +931,7 @@ def test_large_row_persistence_python_backend(tmp_path, large_measurement_rows):
     assert persist_measurement_rows_python(py_db, large_measurement_rows) is True
     assert persist_measurement_rows_python(py_db, large_measurement_rows) is False
 
-    with sqlite3.connect(py_db) as conn:
+    with closing(sqlite3.connect(py_db)) as conn, conn:
         report_count = conn.execute("SELECT COUNT(*) FROM parsed_reports").fetchone()
         measurement_count = conn.execute("SELECT COUNT(*) FROM report_measurements").fetchone()
 
@@ -949,7 +955,12 @@ def test_large_row_persistence_parity_python_vs_native_when_available(tmp_path, 
     assert native_result.backend == "native"
     assert native_result.inserted is True
 
-    with sqlite3.connect(py_db) as py_conn, sqlite3.connect(native_db) as native_conn:
+    with (
+        closing(sqlite3.connect(py_db)) as py_conn,
+        py_conn,
+        closing(sqlite3.connect(native_db)) as native_conn,
+        native_conn,
+    ):
         py_counts = py_conn.execute(
             "SELECT COUNT(*) FROM REPORTS, MEASUREMENTS WHERE REPORTS.ID = MEASUREMENTS.REPORT_ID"
         ).fetchone()

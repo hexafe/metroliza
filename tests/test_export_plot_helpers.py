@@ -1,6 +1,5 @@
-import sys
-import types
 import unittest
+import types
 from unittest import mock
 
 import matplotlib
@@ -20,44 +19,6 @@ from modules.export_summary_utils import (
     resolve_histogram_bin_count,
 )
 
-
-qtcore_stub = types.ModuleType('PyQt6.QtCore')
-
-
-class _DummyThread:
-    def __init__(self, *args, **kwargs):
-        pass
-
-
-class _DummyCoreApp:
-    @staticmethod
-    def processEvents():
-        return None
-
-
-def _dummy_signal(*args, **kwargs):
-    class _Signal:
-        def emit(self, *a, **k):
-            return None
-
-    return _Signal()
-
-
-qtcore_stub.QCoreApplication = _DummyCoreApp
-qtcore_stub.QThread = _DummyThread
-qtcore_stub.pyqtSignal = _dummy_signal
-sys.modules['PyQt6.QtCore'] = qtcore_stub
-
-custom_logger_stub = types.ModuleType('modules.custom_logger')
-
-
-class _DummyLogger:
-    def __init__(self, *args, **kwargs):
-        pass
-
-
-custom_logger_stub.CustomLogger = _DummyLogger
-sys.modules['modules.custom_logger'] = custom_logger_stub
 
 from modules.export_data_thread import (  # noqa: E402
     ExportDataThread,

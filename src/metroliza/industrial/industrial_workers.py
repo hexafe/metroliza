@@ -577,6 +577,7 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
     def run(self):
         repository = IndustrialDataRepository(self.db_file)
         sync_run_id: int | None = None
+        sync_run_terminal_persisted = False
         try:
             status = get_oznak_adapter_status()
             if status.available:
@@ -615,17 +616,7 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                         reference_values=self.reference_values,
                     )
                 )
-            streamed_upsert_summary = {
-                "processed": 0,
-                "inserted": 0,
-                "updated": 0,
-                "value_rows": 0,
-            }
             streamed_upsert_used = False
-
-            def _merge_upsert_summary(summary: dict[str, int]) -> None:
-                for key in streamed_upsert_summary:
-                    streamed_upsert_summary[key] += int(summary.get(key, 0) or 0)
 
             def _upsert_streamed_batch(records: tuple[dict[str, Any], ...]) -> None:
                 nonlocal streamed_upsert_used
@@ -634,13 +625,12 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                 if self._cancel_requested:
                     raise RuntimeError("Industrial fetch cancelled by user.")
                 streamed_upsert_used = True
-                summary = repository.upsert_industrial_records_from_rows(
+                repository.stage_industrial_records_from_rows(
+                    sync_run_id=sync_run_id,
                     source_profile_id=self.profile.id,
                     source_db_alias=self.profile.source_db_alias,
                     rows=records,
-                    sync_run_id=sync_run_id,
                 )
-                _merge_upsert_summary(summary)
             if not self.test_only:
                 filters_payload: dict[str, Any] = {
                     "mode": fetch_state.mode,
@@ -715,7 +705,7 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                     record_batch_callback=_upsert_streamed_batch if not self.test_only else None,
                 )
 
-            result_diagnostics = result.diagnostics
+            result_diagnostics = dict(result.diagnostics or {})
             if is_sql_mode:
                 result_diagnostics = dict(result.diagnostics or {})
                 result_diagnostics.setdefault("sql_hash", sql_hash)
@@ -745,38 +735,98 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
             upsert_summary: dict[str, int] = {}
             cache_summary = repository.summarize_counts(source_profile_id=self.profile.id).as_dict()
             link_summary = None
+            post_persist_warnings: list[str] = []
             if not self.test_only and final_status in {"succeeded", "completed_with_warnings"}:
                 finalize_started = time.perf_counter()
                 if streamed_upsert_used:
-                    upsert_summary = dict(streamed_upsert_summary)
+                    self.progress_message.emit("Promoting streamed rows to the industrial cache...")
+                    pending_error = error or "Post-persist finalization pending."
+                    pending_diagnostics = {
+                        **result_diagnostics,
+                        "post_persist_finalization": "pending",
+                    }
+                    upsert_summary = repository.promote_staged_industrial_records(
+                        sync_run_id=sync_run_id,
+                        source_profile_id=self.profile.id,
+                        source_db_alias=self.profile.source_db_alias,
+                        status="completed_with_warnings",
+                        row_count=result.row_count,
+                        error_summary=pending_error,
+                        diagnostics=pending_diagnostics,
+                    )
+                    sync_run_terminal_persisted = True
                 else:
                     self.progress_message.emit(
                         f"Saving {len(result.records)} fetched row(s) to the local industrial cache..."
                     )
-                    upsert_summary = repository.upsert_industrial_records_from_rows(
+                    pending_error = error or "Post-persist finalization pending."
+                    pending_diagnostics = {
+                        **result_diagnostics,
+                        "post_persist_finalization": "pending",
+                    }
+                    upsert_summary = repository.commit_direct_industrial_sync(
+                        sync_run_id=sync_run_id,
                         source_profile_id=self.profile.id,
                         source_db_alias=self.profile.source_db_alias,
                         rows=result.records,
-                        sync_run_id=sync_run_id,
+                        status="completed_with_warnings",
+                        row_count=result.row_count,
+                        error_summary=pending_error,
+                        diagnostics=pending_diagnostics,
                     )
+                    sync_run_terminal_persisted = True
                 if self.report_db_file:
                     self.progress_message.emit("Refreshing industrial report links...")
-                    link_summary = materialize_industrial_report_links(self.report_db_file)
+                    try:
+                        link_summary = materialize_industrial_report_links(self.report_db_file)
+                    except Exception as exc:
+                        post_persist_warnings.append(
+                            f"Industrial report-link refresh failed: {redact_sensitive_text(exc)}"
+                        )
                 self.progress_message.emit("Updating industrial cache summary...")
-                cache_summary = repository.summarize_counts(source_profile_id=self.profile.id).as_dict()
+                try:
+                    cache_summary = repository.summarize_counts(
+                        source_profile_id=self.profile.id
+                    ).as_dict()
+                except Exception as exc:
+                    post_persist_warnings.append(
+                        f"Industrial cache summary refresh failed: {redact_sensitive_text(exc)}"
+                    )
                 elapsed_seconds = time.perf_counter() - finalize_started
                 self.progress_message.emit(
                     f"Local industrial cache finalization finished in {elapsed_seconds:.1f}s."
                 )
+            elif sync_run_id is not None and streamed_upsert_used:
+                repository.discard_staged_industrial_records(sync_run_id=sync_run_id)
+
+            if post_persist_warnings:
+                final_status = "completed_with_warnings"
+                existing_warnings = tuple(result_diagnostics.get("warnings") or ())
+                result_diagnostics["warnings"] = (*existing_warnings, *post_persist_warnings)
+                result_diagnostics["completed_with_warnings"] = True
+                error = "; ".join(filter(None, (error, *post_persist_warnings)))
 
             if sync_run_id is not None:
-                repository.finish_sync_run(
-                    sync_run_id=sync_run_id,
-                    status=final_status,
-                    row_count=result.row_count,
-                    error_summary=error,
-                    diagnostics=result_diagnostics,
-                )
+                try:
+                    repository.finish_sync_run(
+                        sync_run_id=sync_run_id,
+                        status=final_status,
+                        row_count=result.row_count,
+                        error_summary=error,
+                        diagnostics=result_diagnostics,
+                    )
+                except Exception as exc:
+                    if not sync_run_terminal_persisted:
+                        raise
+                    final_status = "completed_with_warnings"
+                    finalize_warning = (
+                        "Industrial sync final-status refresh failed after atomic promotion: "
+                        f"{redact_sensitive_text(exc)}"
+                    )
+                    existing_warnings = tuple(result_diagnostics.get("warnings") or ())
+                    result_diagnostics["warnings"] = (*existing_warnings, finalize_warning)
+                    result_diagnostics["completed_with_warnings"] = True
+                    error = "; ".join(filter(None, (error, finalize_warning)))
 
             self.result_ready.emit(
                 {
@@ -794,8 +844,9 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
             )
         except Exception as exc:
             sanitized_error = redact_sensitive_text(exc)
-            if sync_run_id is not None:
+            if sync_run_id is not None and not sync_run_terminal_persisted:
                 try:
+                    repository.discard_staged_industrial_records(sync_run_id=sync_run_id)
                     repository.finish_sync_run(
                         sync_run_id=sync_run_id,
                         status="cancelled" if self._cancel_requested else "failed",

@@ -25,7 +25,7 @@ def test_onefile_spec_includes_builtin_cmm_parser_hiddenimport():
 def test_onefile_spec_collects_hexafe_groupstats_hiddenimports():
     spec_text = Path("packaging/pyinstaller_common.py").read_text(encoding="utf-8")
 
-    assert 'collect_optional_runtime_assets("hexafe_groupstats")' in spec_text
+    assert 'collect_required_runtime_assets("hexafe_groupstats")' in spec_text
     assert '"hexafe_groupstats"' in spec_text
     assert "*hexafe_groupstats_hiddenimports" in spec_text
 
@@ -33,7 +33,7 @@ def test_onefile_spec_collects_hexafe_groupstats_hiddenimports():
 def test_onefile_spec_collects_hexafe_plotstats_hiddenimports():
     spec_text = Path("packaging/pyinstaller_common.py").read_text(encoding="utf-8")
 
-    assert 'collect_optional_runtime_assets("hexafe_plotstats")' in spec_text
+    assert 'collect_required_runtime_assets("hexafe_plotstats")' in spec_text
     assert 'collect_optional_distribution_metadata("hexafe-plotstats")' in spec_text
     assert '"hexafe_plotstats"' in spec_text
     assert "*hexafe_plotstats_hiddenimports" in spec_text
@@ -42,7 +42,7 @@ def test_onefile_spec_collects_hexafe_plotstats_hiddenimports():
 def test_onefile_spec_collects_optional_oznak_hiddenimports():
     spec_text = Path("packaging/pyinstaller_common.py").read_text(encoding="utf-8")
 
-    assert 'collect_optional_runtime_assets("oznak")' in spec_text
+    assert 'collect_required_runtime_assets("oznak")' in spec_text
     assert 'collect_optional_distribution_metadata("oznak")' in spec_text
     assert '"oznak"' in spec_text
     assert "*oznak_hiddenimports" in spec_text
@@ -52,11 +52,11 @@ def test_onefile_spec_collects_ocr_runtime_assets_and_model_data():
     spec_text = Path("packaging/pyinstaller_common.py").read_text(encoding="utf-8")
 
     assert "copy_metadata" in spec_text
-    assert 'collect_optional_runtime_assets(\n        "rapidocr"\n    )' in spec_text
-    assert 'collect_optional_runtime_assets("onnxruntime")' in spec_text
-    assert 'collect_optional_runtime_assets(\n        "openvino"\n    )' in spec_text
-    assert 'collect_optional_runtime_assets("cv2")' in spec_text
-    assert 'collect_optional_runtime_assets("numpy")' in spec_text
+    assert 'collect_required_runtime_assets(\n        "rapidocr"\n    )' in spec_text
+    assert 'collect_required_runtime_assets("onnxruntime")' in spec_text
+    assert 'collect_required_runtime_assets(\n        "openvino"\n    )' in spec_text
+    assert 'collect_required_runtime_assets("cv2")' in spec_text
+    assert 'collect_required_runtime_assets("numpy")' in spec_text
     assert 'collect_optional_distribution_metadata("rapidocr")' in spec_text
     assert 'collect_optional_distribution_metadata("onnxruntime")' in spec_text
     assert 'collect_optional_distribution_metadata("openvino")' in spec_text

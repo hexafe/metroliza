@@ -21,10 +21,13 @@ from metroliza.industrial.realtime.event_stream import (
     ANOMALY_EVENTS_COMMITTED_EVENT_TYPE,
     SAMPLE_BATCH_COMMITTED_EVENT_TYPE,
     RealtimeConsumerOffset,
+    RealtimeDeadLetter,
     RealtimeStreamAppendResult,
     RealtimeStreamEvent,
 )
 from metroliza.industrial.realtime.sample_repository import utc_timestamp
+from metroliza.industrial.realtime.numeric_validation import exact_integral
+from metroliza.industrial.realtime.timestamps import canonical_utc_timestamp
 from metroliza.reports.db import run_transaction_with_retry
 
 _SQL_PAYLOAD_KEYS = frozenset({"sql", "sqltext", "sql_text", "statement", "query", "rawsql", "raw_sql"})
@@ -40,11 +43,22 @@ class RealtimeEventStreamRepository:
     def ensure_schema(self) -> None:
         ensure_industrial_data_schema(self.database, connection=self.connection)
 
-    def append_event(self, event: RealtimeStreamEvent) -> RealtimeStreamAppendResult:
-        return self.append_events((event,))
+    def append_event(
+        self,
+        event: RealtimeStreamEvent,
+        *,
+        _cursor=None,
+    ) -> RealtimeStreamAppendResult:
+        return self.append_events((event,), _cursor=_cursor)
 
-    def append_events(self, events: Iterable[RealtimeStreamEvent]) -> RealtimeStreamAppendResult:
-        self.ensure_schema()
+    def append_events(
+        self,
+        events: Iterable[RealtimeStreamEvent],
+        *,
+        _cursor=None,
+    ) -> RealtimeStreamAppendResult:
+        if _cursor is None:
+            self.ensure_schema()
         event_batch = tuple(events)
         if not event_batch:
             return RealtimeStreamAppendResult(processed=0, inserted=0, skipped=0)
@@ -81,6 +95,8 @@ class RealtimeEventStreamRepository:
                 event_ids=tuple(event_ids),
             )
 
+        if _cursor is not None:
+            return _append(_cursor)
         return run_transaction_with_retry(self.database, _append, connection=self.connection)
 
     def append_sample_batch_committed(
@@ -94,6 +110,7 @@ class RealtimeEventStreamRepository:
         idempotency_key: str | None = None,
         event_time: str | None = None,
         payload: Mapping[str, Any] | None = None,
+        _cursor=None,
     ) -> RealtimeStreamAppendResult:
         normalized_sample_ids = tuple(_positive_int("sample_id", sample_id) for sample_id in sample_ids)
         if not normalized_sample_ids:
@@ -133,7 +150,7 @@ class RealtimeEventStreamRepository:
             event_time=event_time or utc_timestamp(),
             payload=event_payload,
         )
-        return self.append_event(event)
+        return self.append_event(event, _cursor=_cursor)
 
     def append_anomaly_events_committed(
         self,
@@ -259,42 +276,19 @@ class RealtimeEventStreamRepository:
         updated_at: str | None = None,
     ) -> RealtimeConsumerOffset:
         self.ensure_schema()
-        now = updated_at or utc_timestamp()
+        now = canonical_utc_timestamp(updated_at or utc_timestamp())
 
         def _update(cursor) -> RealtimeConsumerOffset:
             normalized_consumer_key = _required_text("consumer_key", consumer_key)
             normalized_source_profile_id = _positive_int("source_profile_id", source_profile_id)
             normalized_stream_key = _required_text("stream_key", stream_key)
-            cursor.execute(
-                """
-                INSERT INTO industrial_realtime_consumer_offsets (
-                    consumer_key,
-                    source_profile_id,
-                    stream_key,
-                    last_event_id,
-                    last_success_at,
-                    last_error,
-                    failure_count,
-                    status,
-                    updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, NULL, 0, 'idle', ?)
-                ON CONFLICT(consumer_key, source_profile_id, stream_key) DO UPDATE SET
-                    last_event_id = excluded.last_event_id,
-                    last_success_at = excluded.last_success_at,
-                    last_error = NULL,
-                    failure_count = 0,
-                    status = 'idle',
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    normalized_consumer_key,
-                    normalized_source_profile_id,
-                    normalized_stream_key,
-                    _non_negative_int("last_event_id", last_event_id),
-                    now,
-                    now,
-                ),
+            _upsert_successful_consumer_offset(
+                cursor,
+                consumer_key=normalized_consumer_key,
+                source_profile_id=normalized_source_profile_id,
+                stream_key=normalized_stream_key,
+                last_event_id=_non_negative_int("last_event_id", last_event_id),
+                updated_at=now,
             )
             offset = _select_consumer_offset(
                 cursor,
@@ -314,23 +308,24 @@ class RealtimeEventStreamRepository:
         source_profile_id: int,
         stream_key: str,
         error: Any,
+        expected_last_event_id: int | None = None,
         updated_at: str | None = None,
     ) -> RealtimeConsumerOffset:
+        """Record a failure unless another worker has advanced beyond the expected checkpoint."""
+
         self.ensure_schema()
-        now = updated_at or utc_timestamp()
+        now = canonical_utc_timestamp(updated_at or utc_timestamp())
         normalized_error = redact_sensitive_text(error, max_len=500)
 
         def _failure(cursor) -> RealtimeConsumerOffset:
             normalized_consumer_key = _required_text("consumer_key", consumer_key)
             normalized_source_profile_id = _positive_int("source_profile_id", source_profile_id)
             normalized_stream_key = _required_text("stream_key", stream_key)
-            existing = _select_consumer_offset(
-                cursor,
-                consumer_key=normalized_consumer_key,
-                source_profile_id=normalized_source_profile_id,
-                stream_key=normalized_stream_key,
+            normalized_expected_event_id = (
+                _non_negative_int("expected_last_event_id", expected_last_event_id)
+                if expected_last_event_id is not None
+                else None
             )
-            existing_event_id = existing.last_event_id if existing is not None else 0
             cursor.execute(
                 """
                 INSERT INTO industrial_realtime_consumer_offsets (
@@ -350,14 +345,18 @@ class RealtimeEventStreamRepository:
                     failure_count = industrial_realtime_consumer_offsets.failure_count + 1,
                     status = 'failed',
                     updated_at = excluded.updated_at
+                WHERE ? IS NULL
+                   OR industrial_realtime_consumer_offsets.last_event_id = ?
                 """,
                 (
                     normalized_consumer_key,
                     normalized_source_profile_id,
                     normalized_stream_key,
-                    existing_event_id,
+                    normalized_expected_event_id or 0,
                     normalized_error,
                     now,
+                    normalized_expected_event_id,
+                    normalized_expected_event_id,
                 ),
             )
             offset = _select_consumer_offset(
@@ -370,6 +369,116 @@ class RealtimeEventStreamRepository:
             return offset
 
         return run_transaction_with_retry(self.database, _failure, connection=self.connection)
+
+    def quarantine_event_and_advance(
+        self,
+        *,
+        consumer_key: str,
+        event: RealtimeStreamEvent,
+        error: Any,
+        failed_at: str | None = None,
+    ) -> RealtimeConsumerOffset:
+        """Atomically quarantine a permanent poison event and advance its consumer offset."""
+
+        self.ensure_schema()
+        if event.event_id is None:
+            raise ValueError("stream event id is required for quarantine")
+        now = canonical_utc_timestamp(failed_at or utc_timestamp())
+        normalized_error = redact_sensitive_text(error, max_len=500)
+
+        def _quarantine(cursor) -> RealtimeConsumerOffset:
+            normalized_consumer_key = _required_text("consumer_key", consumer_key)
+            source_profile_id = _positive_int("source_profile_id", event.source_profile_id)
+            stream_key = _required_text("stream_key", event.stream_key)
+            event_id = _positive_int("event_id", event.event_id)
+            cursor.execute(
+                """
+                INSERT INTO industrial_realtime_dead_letters (
+                    consumer_key,
+                    source_profile_id,
+                    stream_key,
+                    event_id,
+                    event_type,
+                    error_summary,
+                    payload_json,
+                    failed_at,
+                    status
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'quarantined')
+                ON CONFLICT(consumer_key, event_id) DO UPDATE SET
+                    error_summary = excluded.error_summary,
+                    payload_json = excluded.payload_json,
+                    failed_at = excluded.failed_at,
+                    status = 'quarantined'
+                """,
+                (
+                    normalized_consumer_key,
+                    source_profile_id,
+                    stream_key,
+                    event_id,
+                    _required_text("event_type", event.event_type),
+                    normalized_error,
+                    _payload_to_json(event.payload),
+                    now,
+                ),
+            )
+            _upsert_successful_consumer_offset(
+                cursor,
+                consumer_key=normalized_consumer_key,
+                source_profile_id=source_profile_id,
+                stream_key=stream_key,
+                last_event_id=event_id,
+                updated_at=now,
+            )
+            offset = _select_consumer_offset(
+                cursor,
+                consumer_key=normalized_consumer_key,
+                source_profile_id=source_profile_id,
+                stream_key=stream_key,
+            )
+            assert offset is not None
+            return offset
+
+        return run_transaction_with_retry(self.database, _quarantine, connection=self.connection)
+
+    def list_dead_letters(
+        self,
+        *,
+        consumer_key: str | None = None,
+        source_profile_id: int | None = None,
+        stream_key: str | None = None,
+        status: str | None = "quarantined",
+    ) -> list[RealtimeDeadLetter]:
+        """List quarantined events for operations and recovery tooling."""
+
+        self.ensure_schema()
+
+        def _list(cursor) -> list[RealtimeDeadLetter]:
+            where: list[str] = []
+            params: list[Any] = []
+            for column, value in (
+                ("consumer_key", consumer_key),
+                ("source_profile_id", source_profile_id),
+                ("stream_key", stream_key),
+                ("status", status),
+            ):
+                if value is not None:
+                    where.append(f"{column} = ?")
+                    params.append(value)
+            where_clause = f"WHERE {' AND '.join(where)}" if where else ""
+            cursor.execute(
+                f"""
+                SELECT id, consumer_key, source_profile_id, stream_key, event_id, event_type,
+                       error_summary, payload_json, failed_at, status
+                FROM industrial_realtime_dead_letters
+                {where_clause}
+                ORDER BY event_id ASC, id ASC
+                """,
+                tuple(params),
+            )
+            return [_row_to_dead_letter(row) for row in cursor.fetchall()]
+
+        return run_transaction_with_retry(self.database, _list, connection=self.connection)
 
 
 def sample_batch_idempotency_key(
@@ -392,7 +501,7 @@ def sample_batch_idempotency_key(
 
 
 def _event_insert_row(event: RealtimeStreamEvent, default_created_at: str) -> tuple[Any, ...]:
-    event_time = event.event_time or event.created_at or default_created_at
+    event_time = canonical_utc_timestamp(event.event_time or event.created_at or default_created_at)
     return (
         _positive_int("source_profile_id", event.source_profile_id),
         _required_text("stream_key", event.stream_key),
@@ -404,7 +513,7 @@ def _event_insert_row(event: RealtimeStreamEvent, default_created_at: str) -> tu
         _required_text("idempotency_key", event.idempotency_key),
         event_time,
         _payload_to_json(event.payload),
-        event.created_at or default_created_at,
+        canonical_utc_timestamp(event.created_at or default_created_at),
     )
 
 
@@ -489,6 +598,42 @@ def _select_consumer_offset(
     return _row_to_consumer_offset(row)
 
 
+def _upsert_successful_consumer_offset(
+    cursor,
+    *,
+    consumer_key: str,
+    source_profile_id: int,
+    stream_key: str,
+    last_event_id: int,
+    updated_at: str,
+) -> None:
+    cursor.execute(
+        """
+        INSERT INTO industrial_realtime_consumer_offsets (
+            consumer_key,
+            source_profile_id,
+            stream_key,
+            last_event_id,
+            last_success_at,
+            last_error,
+            failure_count,
+            status,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, NULL, 0, 'idle', ?)
+        ON CONFLICT(consumer_key, source_profile_id, stream_key) DO UPDATE SET
+            last_event_id = excluded.last_event_id,
+            last_success_at = excluded.last_success_at,
+            last_error = NULL,
+            failure_count = 0,
+            status = 'idle',
+            updated_at = excluded.updated_at
+        WHERE excluded.last_event_id >= industrial_realtime_consumer_offsets.last_event_id
+        """,
+        (consumer_key, source_profile_id, stream_key, last_event_id, updated_at, updated_at),
+    )
+
+
 def _row_to_event(row: tuple[Any, ...]) -> RealtimeStreamEvent:
     payload = _from_json(row[10], {})
     if not isinstance(payload, Mapping):
@@ -521,6 +666,24 @@ def _row_to_consumer_offset(row: tuple[Any, ...]) -> RealtimeConsumerOffset:
         failure_count=int(row[7]),
         status=str(row[8]),
         updated_at=str(row[9]),
+    )
+
+
+def _row_to_dead_letter(row: tuple[Any, ...]) -> RealtimeDeadLetter:
+    payload = _from_json(row[7], {})
+    if not isinstance(payload, Mapping):
+        payload = {"value": payload}
+    return RealtimeDeadLetter(
+        id=int(row[0]),
+        consumer_key=str(row[1]),
+        source_profile_id=int(row[2]),
+        stream_key=str(row[3]),
+        event_id=int(row[4]),
+        event_type=str(row[5]),
+        error_summary=str(row[6]),
+        payload=dict(payload),
+        failed_at=str(row[8]),
+        status=str(row[9]),
     )
 
 
@@ -576,12 +739,9 @@ def _required_text(field_name: str, value: Any) -> str:
 
 def _positive_int(field_name: str, value: Any) -> int:
     try:
-        parsed = int(value)
-    except (TypeError, ValueError) as exc:
+        return exact_integral(value, field_name=field_name, minimum=1)
+    except ValueError as exc:
         raise ValueError(f"{field_name} must be a positive integer") from exc
-    if parsed <= 0:
-        raise ValueError(f"{field_name} must be a positive integer")
-    return parsed
 
 
 def _optional_positive_int(field_name: str, value: Any) -> int | None:
@@ -592,12 +752,9 @@ def _optional_positive_int(field_name: str, value: Any) -> int | None:
 
 def _non_negative_int(field_name: str, value: Any) -> int:
     try:
-        parsed = int(value)
-    except (TypeError, ValueError) as exc:
+        return exact_integral(value, field_name=field_name, minimum=0)
+    except ValueError as exc:
         raise ValueError(f"{field_name} must be zero or greater") from exc
-    if parsed < 0:
-        raise ValueError(f"{field_name} must be zero or greater")
-    return parsed
 
 
 def _compact_key(key: str) -> str:

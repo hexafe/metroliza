@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +10,10 @@ from metroliza.parsing.parser_plugin_contracts import ParseResultV2
 from metroliza.reports.report_identity import build_report_identity_hash
 from metroliza.reports.report_metadata_models import CanonicalReportMetadata, MetadataWarning
 from metroliza.reports.report_repository import ReportRepository
+
+
+MAX_RAW_PROVENANCE_DIAGNOSTICS = 50
+MAX_RAW_PROVENANCE_TEXT_CHARS = 500
 
 
 @dataclass(frozen=True)
@@ -67,6 +71,72 @@ def _raise_for_errors(parse_result: ParseResultV2) -> None:
         for error in parse_result.errors
     )
     raise ValueError(f"ParseResultV2 contains blocking parser errors: {details}")
+
+
+def _bounded_provenance_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    if len(text) <= MAX_RAW_PROVENANCE_TEXT_CHARS:
+        return text
+    return f"{text[: MAX_RAW_PROVENANCE_TEXT_CHARS - 3]}..."
+
+
+def _bounded_diagnostics(values: Any) -> list[dict[str, str | None]]:
+    return [
+        {
+            "code": _bounded_provenance_text(getattr(value, "code", None)),
+            "message": _bounded_provenance_text(getattr(value, "message", None)),
+            "field": _bounded_provenance_text(getattr(value, "field", None)),
+        }
+        for value in tuple(values)[:MAX_RAW_PROVENANCE_DIAGNOSTICS]
+    ]
+
+
+def _raw_provenance_summary(
+    parse_result: ParseResultV2,
+    *,
+    source_path: str | Path,
+    measurement_count: int,
+) -> dict[str, Any]:
+    """Build bounded report-level provenance without duplicating measurement trees."""
+
+    warning_count = len(parse_result.warnings)
+    error_count = len(parse_result.errors)
+    return {
+        "source": "ParseResultV2",
+        "source_path": _bounded_provenance_text(source_path),
+        "provenance_version": 2,
+        "parse_result_summary": {
+            "meta": {
+                "source_file": _bounded_provenance_text(parse_result.meta.source_file),
+                "source_format": _bounded_provenance_text(parse_result.meta.source_format),
+                "plugin_id": _bounded_provenance_text(parse_result.meta.plugin_id),
+                "plugin_version": _bounded_provenance_text(parse_result.meta.plugin_version),
+                "template_id": _bounded_provenance_text(parse_result.meta.template_id),
+                "parse_timestamp": _bounded_provenance_text(parse_result.meta.parse_timestamp),
+                "locale_detected": _bounded_provenance_text(parse_result.meta.locale_detected),
+                "confidence": parse_result.meta.confidence,
+            },
+            "report": {
+                "reference": _bounded_provenance_text(parse_result.report.reference),
+                "report_date": _bounded_provenance_text(parse_result.report.report_date),
+                "sample_number": _bounded_provenance_text(parse_result.report.sample_number),
+                "file_name": _bounded_provenance_text(parse_result.report.file_name),
+                "file_path": _bounded_provenance_text(parse_result.report.file_path),
+            },
+            "block_count": len(parse_result.blocks),
+            "measurement_count": measurement_count,
+            "warning_count": warning_count,
+            "error_count": error_count,
+            "warnings": _bounded_diagnostics(parse_result.warnings),
+            "errors": _bounded_diagnostics(parse_result.errors),
+            "diagnostics_truncated": (
+                warning_count > MAX_RAW_PROVENANCE_DIAGNOSTICS
+                or error_count > MAX_RAW_PROVENANCE_DIAGNOSTICS
+            ),
+        },
+    }
 
 
 def canonical_metadata_from_parse_result_v2(
@@ -185,11 +255,11 @@ def build_persistence_payload(
     )
     measurements = measurements_from_parse_result_v2(parse_result)
     nok_count = sum(1 for row in measurements if row.get("status_code") == "nok")
-    raw_report_json = {
-        "source": "ParseResultV2",
-        "source_path": str(source_path),
-        "parse_result": asdict(parse_result),
-    }
+    raw_report_json = _raw_provenance_summary(
+        parse_result,
+        source_path=source_path,
+        measurement_count=len(measurements),
+    )
     return ParseResultV2PersistencePayload(
         metadata=metadata,
         warnings=metadata.warnings,
@@ -210,6 +280,7 @@ def persist_parse_result_v2(
     database: str,
     connection=None,
     manifest: Any = None,
+    source_sha256: str | None = None,
 ) -> int:
     """Persist a generic plugin parse result through ``ReportRepository``."""
 
@@ -224,6 +295,7 @@ def persist_parse_result_v2(
         source_path=source_path,
         database=database,
         connection=connection,
+        source_sha256=source_sha256,
     )
 
 
@@ -234,12 +306,14 @@ def persist_parse_result_v2_payload(
     source_path: str | Path,
     database: str,
     connection=None,
+    source_sha256: str | None = None,
 ) -> int:
     """Persist a prebuilt V2 payload through ``ReportRepository``."""
 
     repository = ReportRepository(database, connection=connection)
     return repository.persist_parsed_report(
         source_path=source_path,
+        source_sha256=source_sha256,
         parser_id=payload.metadata.parser_id,
         parser_version=parse_result.meta.plugin_version,
         template_family=payload.metadata.template_family,

@@ -14,6 +14,7 @@ from metroliza.industrial.industrial_data_schema import ensure_industrial_data_s
 
 
 SCHEMA_VERSION = "report_metadata_v1"
+SOURCE_LOCATION_OWNERSHIP_VERSION = "1"
 
 PARSE_STATUSES = ("parsed", "parsed_with_warnings", "failed", "unsupported")
 SAMPLE_NUMBER_KINDS = (
@@ -174,6 +175,7 @@ SCHEMA_INDEX_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_source_file_locations_directory ON source_file_locations(directory_path)",
     "CREATE INDEX IF NOT EXISTS idx_source_file_locations_source_active ON source_file_locations(source_file_id, is_active)",
     "CREATE INDEX IF NOT EXISTS idx_source_file_locations_latest_active ON source_file_locations(source_file_id, is_active, discovered_at DESC, id DESC)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_source_file_locations_active_path_unique ON source_file_locations(absolute_path) WHERE is_active = 1",
     "CREATE INDEX IF NOT EXISTS idx_parsed_reports_parser_template ON parsed_reports(parser_id, template_family, template_variant)",
     "CREATE INDEX IF NOT EXISTS idx_parsed_reports_identity_hash ON parsed_reports(identity_hash)",
     "CREATE INDEX IF NOT EXISTS idx_parsed_reports_status ON parsed_reports(parse_status)",
@@ -433,6 +435,31 @@ def _backfill_report_parse_state(cursor) -> None:
     )
     for report_id, metadata_json in cursor.fetchall():
         upsert_report_parse_state(cursor, int(report_id), metadata_json)
+
+
+def _migrate_source_location_ownership(cursor) -> None:
+    """Keep only the newest active content owner for each absolute source path."""
+
+    cursor.execute(
+        """
+        UPDATE source_file_locations AS location
+        SET is_active = 0
+        WHERE location.is_active = 1
+          AND EXISTS (
+              SELECT 1
+              FROM source_file_locations AS newer
+              WHERE newer.absolute_path = location.absolute_path
+                AND newer.is_active = 1
+                AND (
+                    newer.discovered_at > location.discovered_at
+                    OR (
+                        newer.discovered_at = location.discovered_at
+                        AND newer.id > location.id
+                    )
+                )
+          )
+        """
+    )
 
 
 def _float_value(value) -> float | None:
@@ -706,6 +733,7 @@ def ensure_report_schema(database: str, *, connection=None, retries: int = 4, re
         for statement in SCHEMA_TABLE_STATEMENTS:
             cursor.execute(statement)
         _migrate_legacy_report_tables(cursor)
+        _migrate_source_location_ownership(cursor)
         _backfill_report_parse_state(cursor)
         ensure_characteristic_alias_table(cursor)
         for statement in SCHEMA_INDEX_STATEMENTS:
@@ -717,6 +745,10 @@ def ensure_report_schema(database: str, *, connection=None, retries: int = 4, re
         cursor.execute(
             "INSERT OR REPLACE INTO app_schema (key, value) VALUES (?, ?)",
             ("schema_version", SCHEMA_VERSION),
+        )
+        cursor.execute(
+            "INSERT OR REPLACE INTO app_schema (key, value) VALUES (?, ?)",
+            ("source_location_ownership_version", SOURCE_LOCATION_OWNERSHIP_VERSION),
         )
 
     run_transaction_with_retry(

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timezone
 import json
 from typing import Any, Iterable
 
@@ -14,13 +13,14 @@ from metroliza.industrial.realtime.stream_contracts import (
     SampleBatchResult,
     SignalDefinition,
 )
+from metroliza.industrial.realtime.timestamps import canonical_utc_timestamp, utc_now_text
 from metroliza.reports.db import run_transaction_with_retry
 
 
 def utc_timestamp() -> str:
     """Return an ISO-8601 UTC timestamp for SQLite text columns."""
 
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return utc_now_text()
 
 
 def to_json(value: Any) -> str:
@@ -242,8 +242,14 @@ class RealtimeSampleRepository:
 
         return run_transaction_with_retry(self.database, _list, connection=self.connection)
 
-    def insert_samples(self, samples: Iterable[IndustrialSample]) -> SampleBatchResult:
-        self.ensure_schema()
+    def insert_samples(
+        self,
+        samples: Iterable[IndustrialSample],
+        *,
+        _cursor=None,
+    ) -> SampleBatchResult:
+        if _cursor is None:
+            self.ensure_schema()
         sample_batch = tuple(samples)
         if not sample_batch:
             return SampleBatchResult(processed=0, inserted=0, skipped=0)
@@ -287,6 +293,8 @@ class RealtimeSampleRepository:
                 sample_ids=tuple(sample_ids),
             )
 
+        if _cursor is not None:
+            return _insert(_cursor)
         return run_transaction_with_retry(self.database, _insert, connection=self.connection)
 
     def list_samples(self, *, signal_id: int, limit: int | None = None) -> list[IndustrialSample]:
@@ -343,6 +351,65 @@ class RealtimeSampleRepository:
         def _list(cursor) -> list[IndustrialSample]:
             where = "WHERE signal_id = ?"
             params: list[Any] = [int(signal_id)]
+            if segment_json is not None:
+                where += " AND segment_key_json = ?"
+                params.append(segment_json)
+            params.append(safe_limit)
+            cursor.execute(
+                f"""
+                SELECT
+                    id,
+                    source_profile_id,
+                    signal_id,
+                    source_record_key,
+                    event_time,
+                    ingest_time,
+                    metric_name,
+                    value,
+                    reference,
+                    part_number,
+                    revision,
+                    station,
+                    line,
+                    work_order,
+                    batch_lot,
+                    segment_key_json,
+                    quality_flags_json,
+                    raw_record_json
+                FROM industrial_samples
+                {where}
+                ORDER BY event_time DESC, id DESC
+                LIMIT ?
+                """,
+                tuple(params),
+            )
+            return list(reversed([_sample_from_row(row) for row in cursor.fetchall()]))
+
+        return run_transaction_with_retry(self.database, _list, connection=self.connection)
+
+    def list_samples_before(
+        self,
+        *,
+        signal_id: int,
+        before_event_time: str,
+        before_sample_id: int,
+        segment_key: dict[str, Any] | None = None,
+        limit: int = 500,
+    ) -> list[IndustrialSample]:
+        """Load history strictly before an ``(event_time, id)`` boundary."""
+
+        self.ensure_schema()
+        safe_limit = max(1, int(limit))
+        boundary_time = canonical_utc_timestamp(before_event_time)
+        boundary_id = int(before_sample_id)
+        segment_json = to_json(dict(segment_key or {})) if segment_key is not None else None
+
+        def _list(cursor) -> list[IndustrialSample]:
+            where = (
+                "WHERE signal_id = ? "
+                "AND (event_time < ? OR (event_time = ? AND id < ?))"
+            )
+            params: list[Any] = [int(signal_id), boundary_time, boundary_time, boundary_id]
             if segment_json is not None:
                 where += " AND segment_key_json = ?"
                 params.append(segment_json)
@@ -440,8 +507,8 @@ def _sample_insert_row(sample: IndustrialSample, default_ingest_time: str) -> tu
         sample.source_profile_id,
         sample.signal_id,
         sample.source_record_key,
-        sample.event_time,
-        sample.ingest_time or default_ingest_time,
+        canonical_utc_timestamp(sample.event_time),
+        canonical_utc_timestamp(sample.ingest_time or default_ingest_time),
         sample.metric_name,
         float(sample.value),
         sample.reference,

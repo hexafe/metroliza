@@ -3659,6 +3659,13 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
     def _cleanup_chart_images(self):
         self._active_chart_images.clear()
 
+    def _cleanup_dashboard_payloads(self):
+        """Release rendered images and analysis payloads after publication."""
+
+        self._html_dashboard_sections.clear()
+        self._html_group_analysis_payload = None
+        self._html_group_analysis_plot_assets = None
+
     def _begin_html_dashboard_section(
         self,
         *,
@@ -4924,6 +4931,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             self._shutdown_chart_executor()
             self._shutdown_summary_prep_executor()
             self._cleanup_chart_images()
+            self._cleanup_dashboard_payloads()
             self._db_connection = None
             if emit_completed_after_cleanup and not self.export_canceled:
                 self.completed.emit()

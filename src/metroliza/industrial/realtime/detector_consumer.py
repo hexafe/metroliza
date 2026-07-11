@@ -15,11 +15,16 @@ from metroliza.industrial.realtime.event_stream import (
     RealtimeStreamEvent,
 )
 from metroliza.industrial.realtime.event_stream_repository import RealtimeEventStreamRepository
+from metroliza.industrial.realtime.detector_registry import (
+    UnsupportedRealtimeDetectorError,
+    normalize_detector_keys,
+)
 from metroliza.industrial.realtime.realtime_service import (
     DetectorRunner,
     _load_detection_samples,
     _score_detector_events,
 )
+from metroliza.industrial.realtime.numeric_validation import exact_integral
 from metroliza.industrial.realtime.sample_repository import RealtimeSampleRepository
 from metroliza.industrial.realtime.stream_config import RealtimePollConfig
 from metroliza.industrial.realtime.stream_contracts import IndustrialSample, SignalDefinition
@@ -63,7 +68,12 @@ class RealtimeDetectorConsumer:
                 stream_key=validated.stream_key,
             )
         except Exception as exc:
-            return self._failure_result(validated, exc, stage="read_consumer_offset")
+            return self._failure_result(
+                validated,
+                exc,
+                stage="read_consumer_offset",
+                expected_last_event_id=0,
+            )
         last_event_id = offset.last_event_id if offset is not None else 0
         try:
             stream_events = self.event_stream_repository.read_events_after(
@@ -74,7 +84,12 @@ class RealtimeDetectorConsumer:
                 event_types=(SAMPLE_BATCH_COMMITTED_EVENT_TYPE,),
             )
         except Exception as exc:
-            return self._failure_result(validated, exc, stage="read_stream_events")
+            return self._failure_result(
+                validated,
+                exc,
+                stage="read_stream_events",
+                expected_last_event_id=last_event_id,
+            )
 
         if not stream_events:
             return RealtimeDetectorConsumerResult(status="idle", last_event_id=last_event_id)
@@ -87,24 +102,52 @@ class RealtimeDetectorConsumer:
         stream_events_appended = 0
         current_event_id = last_event_id
         diagnostics: dict[str, Any] = {}
+        dead_letter_count = 0
 
         for stream_event in stream_events:
+            expected_checkpoint = current_event_id
             try:
                 processed = self._process_sample_batch_event(stream_event, validated)
-                current_event_id = int(stream_event.event_id or 0)
-                self.event_stream_repository.update_consumer_offset(
+                target_event_id = int(stream_event.event_id or 0)
+                offset = self.event_stream_repository.update_consumer_offset(
                     consumer_key=self.consumer_key,
                     source_profile_id=validated.source_profile_id,
                     stream_key=validated.stream_key,
-                    last_event_id=current_event_id,
+                    last_event_id=target_event_id,
                 )
+                current_event_id = offset.last_event_id
+            except PermanentRealtimeEventError as exc:
+                error = redact_sensitive_text(exc, max_len=500)
+                try:
+                    offset = self.event_stream_repository.quarantine_event_and_advance(
+                        consumer_key=self.consumer_key,
+                        event=stream_event,
+                        error=error,
+                    )
+                except Exception as quarantine_exc:
+                    return self._failure_result(
+                        validated,
+                        quarantine_exc,
+                        stage="quarantine_stream_event",
+                        expected_last_event_id=expected_checkpoint,
+                    )
+                current_event_id = offset.last_event_id
+                processed_count += 1
+                dead_letter_count += 1
+                diagnostics["dead_letter_count"] = dead_letter_count
+                diagnostics.setdefault("warnings", [])
+                diagnostics["warnings"].append(
+                    f"quarantined stream event {stream_event.event_id}: {error}"
+                )
+                continue
             except Exception as exc:
                 error = redact_sensitive_text(exc, max_len=500)
-                self.event_stream_repository.mark_consumer_failure(
+                failure_offset = self.event_stream_repository.mark_consumer_failure(
                     consumer_key=self.consumer_key,
                     source_profile_id=validated.source_profile_id,
                     stream_key=validated.stream_key,
                     error=error,
+                    expected_last_event_id=expected_checkpoint,
                 )
                 return RealtimeDetectorConsumerResult(
                     status="failed",
@@ -114,7 +157,7 @@ class RealtimeDetectorConsumer:
                     detector_events_created=detector_events_created,
                     detector_events_skipped=detector_events_skipped,
                     stream_events_appended=stream_events_appended,
-                    last_event_id=current_event_id,
+                    last_event_id=failure_offset.last_event_id,
                     error=error,
                     diagnostics={"stage": "process_stream_event", "error": error, **diagnostics},
                 )
@@ -147,20 +190,29 @@ class RealtimeDetectorConsumer:
         config: RealtimePollConfig,
     ) -> dict[str, Any]:
         if stream_event.event_id is None:
-            raise ValueError("stream event id is required")
+            raise PermanentRealtimeEventError("stream event id is required")
         payload = dict(stream_event.payload or {})
-        sample_ids = _ids_from_payload(payload.get("sample_ids"))
+        try:
+            sample_ids = _ids_from_payload(payload.get("sample_ids"))
+        except ValueError as exc:
+            raise PermanentRealtimeEventError(str(exc)) from exc
         if not sample_ids:
-            raise ValueError("sample_batch_committed payload requires sample_ids")
+            raise PermanentRealtimeEventError("sample_batch_committed payload requires sample_ids")
 
         samples = self.sample_repository.list_samples_by_ids(sample_ids)
-        _ensure_all_samples_loaded(sample_ids, samples)
-        signal_ids = _ids_from_payload(payload.get("signal_ids")) or tuple(
-            sorted({int(sample.signal_id) for sample in samples})
-        )
+        try:
+            _ensure_all_samples_loaded(sample_ids, samples)
+            signal_ids = _ids_from_payload(payload.get("signal_ids")) or tuple(
+                sorted({int(sample.signal_id) for sample in samples})
+            )
+        except ValueError as exc:
+            raise PermanentRealtimeEventError(str(exc)) from exc
         signals = self.sample_repository.list_signal_definitions_by_ids(signal_ids)
-        _ensure_all_signals_loaded(signal_ids, signals)
-        detectors = _detectors_from_payload(payload, config.detectors)
+        try:
+            _ensure_all_signals_loaded(signal_ids, signals)
+            detectors = _detectors_from_payload(payload, config.detectors)
+        except (ValueError, UnsupportedRealtimeDetectorError) as exc:
+            raise PermanentRealtimeEventError(str(exc)) from exc
 
         detection_samples = _load_detection_samples(
             self.sample_repository,
@@ -208,6 +260,7 @@ class RealtimeDetectorConsumer:
         exc: Exception,
         *,
         stage: str,
+        expected_last_event_id: int,
     ) -> RealtimeDetectorConsumerResult:
         error = redact_sensitive_text(exc, max_len=500)
         try:
@@ -216,6 +269,7 @@ class RealtimeDetectorConsumer:
                 source_profile_id=config.source_profile_id,
                 stream_key=config.stream_key,
                 error=error,
+                expected_last_event_id=expected_last_event_id,
             )
             last_event_id = offset.last_event_id
         except Exception as failure_exc:
@@ -248,9 +302,16 @@ def _ids_from_payload(raw_value: Any) -> tuple[int, ...]:
     else:
         raw_items = raw_value
     try:
-        return tuple(dict.fromkeys(int(value) for value in raw_items if value not in (None, "")))
-    except TypeError as exc:
-        raise ValueError("payload IDs must be iterable") from exc
+        ids = tuple(
+            dict.fromkeys(
+                exact_integral(value, field_name="payload ID", minimum=1)
+                for value in raw_items
+                if value not in (None, "")
+            )
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("payload IDs must contain positive integers") from exc
+    return ids
 
 
 def _detectors_from_payload(
@@ -264,14 +325,15 @@ def _detectors_from_payload(
         raw_items: Iterable[Any] = raw_value.split(",")
     else:
         raw_items = raw_value
-    detectors = tuple(
-        dict.fromkeys(
-            str(detector or "").strip()
-            for detector in raw_items
-            if str(detector or "").strip()
-        )
-    )
+    try:
+        detectors = normalize_detector_keys(raw_items)
+    except TypeError as exc:
+        raise ValueError("payload detector keys must be iterable") from exc
     return detectors or default_detectors
+
+
+class PermanentRealtimeEventError(ValueError):
+    """Raised when retrying a malformed stream event cannot succeed."""
 
 
 def _ensure_all_samples_loaded(sample_ids: tuple[int, ...], samples: list[IndustrialSample]) -> None:

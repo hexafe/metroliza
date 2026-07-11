@@ -1,3 +1,4 @@
+from contextlib import closing
 import sqlite3
 
 import pandas as pd
@@ -36,16 +37,16 @@ def test_load_grouping_dataframe_delegates_to_reader():
 
 
 def test_build_grouping_query_strips_trailing_semicolons_from_filter_query():
-    connection = sqlite3.connect(':memory:')
-    connection.execute(
-        'CREATE TABLE vw_grouping_reports (report_id integer, reference text, report_date text, sample_number text, part_name text, revision text, template_variant text, has_nok integer, nok_count integer, file_name text)'
-    )
+    with closing(sqlite3.connect(':memory:')) as connection, connection:
+        connection.execute(
+            'CREATE TABLE vw_grouping_reports (report_id integer, reference text, report_date text, sample_number text, part_name text, revision text, template_variant text, has_nok integer, nok_count integer, file_name text)'
+        )
 
-    query = build_grouping_query(
-        'SELECT report_id, reference, report_date, sample_number, part_name, revision, template_variant, has_nok, nok_count, file_name '
-        'FROM vw_grouping_reports;  '
-    )
-    rows = connection.execute(query).fetchall()
+        query = build_grouping_query(
+            'SELECT report_id, reference, report_date, sample_number, part_name, revision, template_variant, has_nok, nok_count, file_name '
+            'FROM vw_grouping_reports;  '
+        )
+        rows = connection.execute(query).fetchall()
 
     assert rows == []
     assert 'FROM vw_grouping_reports;' not in query

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import sqlite3
 from pathlib import Path
@@ -105,7 +106,7 @@ def seed_production_analytics_cache(
 def _seed_minimal_report_tables(database: str, *, profile_id: int) -> None:
     """Create minimal report/link tables for optional linked-production tests."""
 
-    with sqlite3.connect(database) as conn:
+    with closing(sqlite3.connect(database)) as conn, conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS parsed_reports (

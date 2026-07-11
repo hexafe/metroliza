@@ -44,3 +44,17 @@ def test_iqr_detector_skips_insufficient_or_zero_iqr():
         )
         is None
     )
+    assert (
+        IQRDetector().score_one(
+            sample,
+            DetectorContext(baseline={"n": 25, "q1": 9.0, "q3": 11.0, "iqr": -2.0}),
+        )
+        is None
+    )
+    assert (
+        IQRDetector().score_one(
+            sample,
+            DetectorContext(baseline={"n": 25, "q1": 11.0, "q3": 9.0, "iqr": 2.0}),
+        )
+        is None
+    )

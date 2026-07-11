@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import math
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Iterator, Mapping
 
 from metroliza.industrial.anomaly.contracts import DetectorContext, DetectorState, DetectionResult
 from metroliza.industrial.anomaly.detectors import (
@@ -17,8 +17,12 @@ from metroliza.industrial.anomaly.detectors import (
     StaleSourceDetector,
 )
 from metroliza.industrial.anomaly.event_repository import AnomalyEventRepository
+from metroliza.industrial.realtime.detector_registry import normalize_detector_keys
+from metroliza.industrial.realtime.numeric_validation import exact_integral
 from metroliza.industrial.realtime.sample_repository import RealtimeSampleRepository
 from metroliza.industrial.realtime.stream_contracts import IndustrialSample, SignalDefinition
+from metroliza.industrial.realtime.timestamps import canonical_utc_timestamp
+from metroliza.industrial.realtime.timestamps import validate_source_timezone
 
 
 @dataclass(frozen=True)
@@ -37,6 +41,8 @@ class ReplayRequest:
     usl: float | None = None
     lower_warning: float | None = None
     upper_warning: float | None = None
+    source_timezone: str = "UTC"
+    batch_size: int = 500
 
 
 @dataclass(frozen=True)
@@ -60,80 +66,98 @@ class ReplaySummary:
 
 
 def load_csv_rows(input_file: str, *, limit: int | None = None) -> list[dict[str, str]]:
+    """Compatibility wrapper returning bounded CSV rows as a list."""
+
+    return list(iter_csv_rows(input_file, limit=limit))
+
+
+def iter_csv_rows(input_file: str, *, limit: int | None = None) -> Iterator[dict[str, str]]:
+    """Yield CSV rows without materializing the replay input."""
+
     path = Path(input_file)
     if path.suffix.lower() != ".csv":
         raise ValueError("Replay MVP supports CSV input only.")
-    rows: list[dict[str, str]] = []
+    validated_limit = (
+        exact_integral(limit, field_name="Replay limit", minimum=1)
+        if limit is not None
+        else None
+    )
     with path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
-        for row in reader:
-            rows.append(dict(row))
-            if limit is not None and len(rows) >= int(limit):
+        for index, row in enumerate(reader, start=1):
+            yield dict(row)
+            if validated_limit is not None and index >= validated_limit:
                 break
-    return rows
 
 
 def rows_to_samples(rows: Iterable[Mapping[str, Any]], request: ReplayRequest, signal_id: int) -> list[IndustrialSample]:
-    samples: list[IndustrialSample] = []
+    return list(iter_rows_to_samples(rows, request, signal_id))
+
+
+def iter_rows_to_samples(
+    rows: Iterable[Mapping[str, Any]],
+    request: ReplayRequest,
+    signal_id: int,
+) -> Iterator[IndustrialSample]:
+    """Yield finite, canonical samples from replay source rows."""
+
     for row in rows:
         metric_raw = row.get(request.metric_column)
-        event_time = str(row.get(request.event_time_column) or "").strip()
+        event_time_raw = row.get(request.event_time_column)
         record_key = str(row.get(request.record_key_column) or "").strip()
-        if metric_raw in (None, "") or not event_time or not record_key:
+        if metric_raw in (None, "") or event_time_raw in (None, "") or not record_key:
             continue
+        event_time = canonical_utc_timestamp(
+            event_time_raw,
+            source_timezone=request.source_timezone,
+        )
         try:
             value = float(metric_raw)
         except (TypeError, ValueError):
             continue
         if not math.isfinite(value):
             continue
-        samples.append(
-            IndustrialSample(
-                source_profile_id=request.source_profile_id,
-                signal_id=signal_id,
-                source_record_key=record_key,
-                event_time=event_time,
-                metric_name=request.metric_column,
-                value=value,
-                reference=str(row.get("reference") or "") or None,
-                part_number=str(row.get("part_number") or "") or None,
-                revision=str(row.get("revision") or "") or None,
-                station=str(row.get("station") or "") or None,
-                line=str(row.get("line") or "") or None,
-                work_order=str(row.get("work_order") or "") or None,
-                batch_lot=str(row.get("batch_lot") or "") or None,
-                segment_key={
-                    key: str(row[key])
-                    for key in ("reference", "part_number", "revision", "station", "line")
-                    if row.get(key) not in (None, "")
-                },
-                raw_record={
-                    key: row[key]
-                    for key in (
-                        request.record_key_column,
-                        request.event_time_column,
-                        request.metric_column,
-                        "reference",
-                        "part_number",
-                        "revision",
-                        "station",
-                        "line",
-                        "work_order",
-                        "batch_lot",
-                    )
-                    if key in row
-                },
-            )
+        yield IndustrialSample(
+            source_profile_id=request.source_profile_id,
+            signal_id=signal_id,
+            source_record_key=record_key,
+            event_time=event_time,
+            metric_name=request.metric_column,
+            value=value,
+            reference=str(row.get("reference") or "") or None,
+            part_number=str(row.get("part_number") or "") or None,
+            revision=str(row.get("revision") or "") or None,
+            station=str(row.get("station") or "") or None,
+            line=str(row.get("line") or "") or None,
+            work_order=str(row.get("work_order") or "") or None,
+            batch_lot=str(row.get("batch_lot") or "") or None,
+            segment_key={
+                key: str(row[key])
+                for key in ("reference", "part_number", "revision", "station", "line")
+                if row.get(key) not in (None, "")
+            },
+            raw_record={
+                key: row[key]
+                for key in (
+                    request.record_key_column,
+                    request.event_time_column,
+                    request.metric_column,
+                    "reference",
+                    "part_number",
+                    "revision",
+                    "station",
+                    "line",
+                    "work_order",
+                    "batch_lot",
+                )
+                if key in row
+            },
         )
-    return samples
 
 
 def _detector_instances(keys: Iterable[str]):
     instances = []
-    for key in keys:
-        normalized = str(key).strip().lower()
-        if not normalized:
-            continue
+    for normalized in normalize_detector_keys(keys):
         if normalized == "spec_limits":
             instances.append(SpecLimitDetector())
         elif normalized == "iqr":
@@ -144,8 +168,6 @@ def _detector_instances(keys: Iterable[str]):
             instances.append(RollingZScoreDetector())
         elif normalized == "stale_source":
             instances.append(StaleSourceDetector())
-        else:
-            raise ValueError(f"Unsupported detector: {key}")
     return tuple(instances)
 
 
@@ -205,7 +227,8 @@ def run_detectors_for_samples(
 
 
 def replay_industrial_stream(request: ReplayRequest) -> ReplaySummary:
-    rows = load_csv_rows(request.input_file, limit=request.limit)
+    request = _validated_replay_request(request)
+    _validate_replay_input_order(request)
     sample_repository = RealtimeSampleRepository(request.database)
     existing_signal = sample_repository.get_signal_definition(
         source_profile_id=request.source_profile_id,
@@ -243,43 +266,35 @@ def replay_industrial_stream(request: ReplayRequest) -> ReplaySummary:
     else:
         signal = sample_repository.upsert_signal_definition(signal_candidate)
     assert signal.id is not None
-    samples = rows_to_samples(rows, request, signal.id)
-    if request.dry_run:
-        persisted_samples = samples
-        inserted = 0
-        skipped = 0
-    else:
-        batch_result = sample_repository.insert_samples(samples)
-        inserted = batch_result.inserted
-        skipped = batch_result.skipped
-        loaded_by_id = {
-            sample.id: sample
-            for sample in sample_repository.list_samples(signal_id=signal.id)
-            if sample.id is not None
-        }
-        persisted_samples = [loaded_by_id[sample_id] for sample_id in batch_result.sample_ids]
-
-    events = run_detectors_for_samples(
-        persisted_samples,
-        signal=signal,
-        detectors=request.detectors,
-        baseline={},
-    )
+    batch_size = request.batch_size
+    detector_session = _ReplayDetectorSession(signal=signal, detectors=request.detectors)
+    processed = 0
+    inserted = 0
+    skipped = 0
     created = 0
     event_counts: dict[str, int] = {}
-    if not request.dry_run and events:
-        event_result = AnomalyEventRepository(request.database).insert_events(events)
-        created = event_result.inserted
-        for event in events:
-            key = f"{event.detector_key}/{event.severity}"
-            event_counts[key] = event_counts.get(key, 0) + 1
-    else:
+    event_repository = AnomalyEventRepository(request.database)
+    rows = iter_csv_rows(request.input_file, limit=request.limit)
+    for row_batch in _batched(rows, batch_size=batch_size):
+        samples = rows_to_samples(row_batch, request, signal.id)
+        processed += len(samples)
+        if request.dry_run:
+            persisted_samples = samples
+        else:
+            batch_result = sample_repository.insert_samples(samples)
+            inserted += batch_result.inserted
+            skipped += batch_result.skipped
+            persisted_samples = sample_repository.list_samples_by_ids(batch_result.sample_ids)
+        events = detector_session.score(persisted_samples)
+        if not request.dry_run and events:
+            event_result = event_repository.insert_events(events)
+            created += event_result.inserted
         for event in events:
             key = f"{event.detector_key}/{event.severity}"
             event_counts[key] = event_counts.get(key, 0) + 1
 
     return ReplaySummary(
-        samples_processed=len(samples),
+        samples_processed=processed,
         samples_inserted=inserted,
         samples_skipped=skipped,
         detector_events_created=created,
@@ -287,5 +302,83 @@ def replay_industrial_stream(request: ReplayRequest) -> ReplaySummary:
     )
 
 
+def _validate_replay_input_order(request: ReplayRequest) -> None:
+    """Reject unordered replay input before any signal, sample, or event is persisted."""
+
+    last_event_time: str | None = None
+    rows = iter_csv_rows(request.input_file, limit=request.limit)
+    for row_batch in _batched(rows, batch_size=request.batch_size):
+        for sample in rows_to_samples(row_batch, request, signal_id=-1):
+            if last_event_time is not None and sample.event_time < last_event_time:
+                raise ValueError(
+                    "Replay input must be ordered by event time for bounded streaming detection."
+                )
+            last_event_time = sample.event_time
+
+
+def _validated_replay_request(request: ReplayRequest) -> ReplayRequest:
+    return replace(
+        request,
+        source_profile_id=exact_integral(
+            request.source_profile_id,
+            field_name="Replay source_profile_id",
+            minimum=1,
+        ),
+        limit=(
+            exact_integral(request.limit, field_name="Replay limit", minimum=1)
+            if request.limit is not None
+            else None
+        ),
+        source_timezone=validate_source_timezone(request.source_timezone),
+        batch_size=exact_integral(
+            request.batch_size,
+            field_name="Replay batch_size",
+            minimum=1,
+        ),
+    )
+
+
 def _signal_attr(signal: SignalDefinition | None, name: str) -> Any:
     return getattr(signal, name) if signal is not None else None
+
+
+class _ReplayDetectorSession:
+    """Bounded detector state carried across streamed replay batches."""
+
+    def __init__(self, *, signal: SignalDefinition, detectors: Iterable[str]) -> None:
+        self.signal = signal
+        self.detectors = _detector_instances(detectors)
+        self.states: dict[str, DetectorState] = {}
+        self.last_event_time: str | None = None
+
+    def score(self, samples: Iterable[IndustrialSample]) -> list[DetectionResult]:
+        events: list[DetectionResult] = []
+        for sample in sorted(_unique_samples_for_detection(samples), key=_sample_sort_key):
+            if self.last_event_time is not None and sample.event_time < self.last_event_time:
+                raise ValueError(
+                    "Replay input must be ordered by event time for bounded streaming detection."
+                )
+            for detector in self.detectors:
+                state = self.states.get(detector.detector_key, DetectorState())
+                context = DetectorContext(signal=self.signal, state=state)
+                result = detector.score_one(sample, context)
+                if result is not None:
+                    events.append(result)
+                self.states[detector.detector_key] = detector.update_one(sample, context)
+            self.last_event_time = sample.event_time
+        return events
+
+
+def _batched(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    batch_size: int,
+) -> Iterator[tuple[Mapping[str, Any], ...]]:
+    batch: list[Mapping[str, Any]] = []
+    for row in rows:
+        batch.append(row)
+        if len(batch) >= batch_size:
+            yield tuple(batch)
+            batch.clear()
+    if batch:
+        yield tuple(batch)

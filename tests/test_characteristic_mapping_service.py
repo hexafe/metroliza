@@ -1,3 +1,4 @@
+from contextlib import closing
 import sqlite3
 
 import pytest
@@ -10,7 +11,7 @@ from modules.characteristic_mapping_service import (
 
 
 def _create_measurement_export_db(db_path):
-    with sqlite3.connect(db_path) as connection:
+    with closing(sqlite3.connect(db_path)) as connection, connection:
         connection.execute(
             """
             CREATE TABLE vw_measurement_export (
@@ -132,7 +133,7 @@ def test_fetch_mapping_impact_counts_validates_inputs(tmp_path):
 
 def test_discovery_helpers_fail_soft_for_alias_only_database(tmp_path):
     db_path = str(tmp_path / 'aliases_only.db')
-    with sqlite3.connect(db_path) as connection:
+    with closing(sqlite3.connect(db_path)) as connection, connection:
         connection.execute(
             """
             CREATE TABLE CHARACTERISTIC_ALIASES (
@@ -157,7 +158,7 @@ def test_discovery_helpers_fail_soft_for_alias_only_database(tmp_path):
 
 def test_discovery_helpers_fail_soft_when_measurement_view_columns_are_missing(tmp_path):
     db_path = str(tmp_path / 'malformed_measurements.db')
-    with sqlite3.connect(db_path) as connection:
+    with closing(sqlite3.connect(db_path)) as connection, connection:
         connection.execute('CREATE TABLE vw_measurement_export (reference TEXT)')
         connection.execute("INSERT INTO vw_measurement_export(reference) VALUES ('REF-1')")
         connection.commit()
@@ -173,7 +174,7 @@ def test_discovery_helpers_fail_soft_when_measurement_view_columns_are_missing(t
 
 def test_service_falls_back_to_legacy_reports_measurements_schema(tmp_path):
     db_path = str(tmp_path / 'legacy.db')
-    with sqlite3.connect(db_path) as connection:
+    with closing(sqlite3.connect(db_path)) as connection, connection:
         connection.execute('CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY, REFERENCE TEXT)')
         connection.execute(
             """

@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import ast
+from datetime import date
+import hashlib
 import json
 import re
 import subprocess
@@ -26,6 +28,86 @@ REQUIREMENT_FILES = (
 IMPORT_SCAN_DIRS = ("src/metroliza", "modules", "scripts", "tests")
 BANDIT_SCAN_DIRS = ("src/metroliza", "modules", "scripts")
 PIP_AUDIT_CACHE_DIR = str(Path(tempfile.gettempdir()) / "pip-audit-cache")
+BANDIT_BASELINE_PATH = REPO_ROOT / "config" / "security" / "bandit_baseline.json"
+SECRET_SCAN_SUFFIXES = {".py", ".yml", ".yaml", ".toml", ".ini", ".json", ".env"}
+SECRET_SCAN_WAIVERS = {
+    "config/google/credentials.example.json": "documented placeholder credential fixture",
+}
+BLOCKED_SECRET_FILENAMES = {"credentials.json", "token.json"}
+CONCRETE_SECRET_PATTERNS = (
+    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+    re.compile(r"\bAIza[0-9A-Za-z_-]{20,}\b"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\b(?:ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}|glpat-[A-Za-z0-9_-]{20,})\b"),
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b"),
+)
+SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)[\"']?\b(password|passwd|pwd|token|api[_-]?key|client[_-]?secret|"
+    r"access[_-]?token|refresh[_-]?token)\b[\"']?\s*[:=]\s*"
+    r"(?:[\"']([^\"'\n]{1,})[\"']|([^\s#,;\"']{1,}))"
+)
+PLACEHOLDER_VALUES = {
+    "<redacted>",
+    "abcdefghijklmnopqrstuvwxyz012345",
+    "secret123",
+}
+PLACEHOLDER_WORDS = {
+    "access",
+    "another",
+    "api",
+    "assembly",
+    "changeme",
+    "client",
+    "diagnostic",
+    "dict",
+    "dummy",
+    "dynamic",
+    "example",
+    "expired",
+    "fake",
+    "filter",
+    "finish",
+    "interactive",
+    "json",
+    "key",
+    "legacy",
+    "me",
+    "metadata",
+    "nested",
+    "new",
+    "not",
+    "old",
+    "only",
+    "password",
+    "passwd",
+    "payload",
+    "persist",
+    "placeholder",
+    "plain",
+    "pwd",
+    "query",
+    "raw",
+    "reauthed",
+    "redacted",
+    "refresh",
+    "remove",
+    "replace",
+    "sample",
+    "secret",
+    "should",
+    "sql",
+    "super",
+    "test",
+    "testing",
+    "token",
+    "very",
+    "weld",
+    "your",
+}
+PLACEHOLDER_TEMPLATE_RE = re.compile(
+    r"^(?:\$\{\{[^{}]+\}\}|\$\{[A-Za-z_][A-Za-z0-9_]*\}|"
+    r"\{[A-Za-z_][A-Za-z0-9_.-]*\})$"
+)
 
 FIRST_PARTY_IMPORTS = {
     "VersionDate",
@@ -121,6 +203,17 @@ class AuditResult:
     def extend(self, other: "AuditResult") -> None:
         self.errors.extend(other.errors)
         self.warnings.extend(other.warnings)
+
+
+@dataclass(frozen=True)
+class BanditBaselineEntry:
+    repository: str
+    fingerprint: str
+    test_id: str
+    path: str
+    owner: str
+    rationale: str
+    expires_on: date
 
 
 def normalize_package_name(name: str) -> str:
@@ -443,7 +536,137 @@ def run_pip_audit(root: Path, sibling_root: Path | None) -> AuditResult:
     return AuditResult(errors=[], warnings=warnings)
 
 
-def run_bandit_report(root: Path, scan_dirs: Sequence[str]) -> AuditResult:
+def _relative_result_path(root: Path, result: dict[str, object]) -> str:
+    filename = Path(str(result.get("filename", "<unknown>")))
+    try:
+        return filename.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return filename.as_posix()
+
+
+def bandit_issue_fingerprint(
+    root: Path,
+    result: dict[str, object],
+    *,
+    repository: str,
+) -> str:
+    code = re.sub(r"(?m)^\s*\d+\s+", "", str(result.get("code", ""))).strip()
+    payload = {
+        "repository": repository,
+        "path": _relative_result_path(root, result),
+        "line_number": int(result.get("line_number", 0) or 0),
+        "test_id": str(result.get("test_id", "B???")),
+        "issue_text": str(result.get("issue_text", "")),
+        "code": code,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def load_bandit_baseline(path: Path) -> tuple[dict[tuple[str, str], BanditBaselineEntry], list[str]]:
+    if not path.exists():
+        return {}, [f"Bandit baseline not found: {path}"]
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {}, [f"Bandit baseline is unreadable: {path}: {exc}"]
+    if payload.get("version") != 1 or not isinstance(payload.get("entries"), list):
+        return {}, [f"Bandit baseline must contain version 1 and an entries list: {path}"]
+
+    entries: dict[tuple[str, str], BanditBaselineEntry] = {}
+    errors: list[str] = []
+    for index, raw_entry in enumerate(payload["entries"]):
+        try:
+            entry = BanditBaselineEntry(
+                repository=str(raw_entry["repository"]),
+                fingerprint=str(raw_entry["fingerprint"]),
+                test_id=str(raw_entry["test_id"]),
+                path=str(raw_entry["path"]),
+                owner=str(raw_entry["owner"]).strip(),
+                rationale=str(raw_entry["rationale"]).strip(),
+                expires_on=date.fromisoformat(str(raw_entry["expires_on"])),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            errors.append(f"Bandit baseline entry {index} is invalid: {exc}")
+            continue
+        key = (entry.repository, entry.fingerprint)
+        if key in entries:
+            errors.append(
+                f"Bandit baseline has duplicate fingerprint {entry.fingerprint} "
+                f"for {entry.repository}"
+            )
+        if not entry.owner or not entry.rationale:
+            errors.append(
+                f"Bandit baseline entry {entry.fingerprint} requires owner and rationale"
+            )
+        entries[key] = entry
+    return entries, errors
+
+
+def _audit_medium_bandit_results(
+    root: Path,
+    results: Sequence[dict[str, object]],
+    *,
+    repository: str,
+    baseline_path: Path,
+) -> AuditResult:
+    baseline, errors = load_bandit_baseline(baseline_path)
+    today = date.today()
+    matched: set[tuple[str, str]] = set()
+    for result in results:
+        fingerprint = bandit_issue_fingerprint(root, result, repository=repository)
+        key = (repository, fingerprint)
+        entry = baseline.get(key)
+        if entry is None:
+            errors.append(
+                f"Unbaselined Bandit medium finding [{fingerprint[:12]}]: "
+                f"{_format_bandit_issue(root, result)}"
+            )
+            continue
+        matched.add(key)
+        result_path = _relative_result_path(root, result)
+        result_test_id = str(result.get("test_id", "B???"))
+        if entry.path != result_path or entry.test_id != result_test_id:
+            errors.append(
+                f"Bandit baseline metadata mismatch for {fingerprint}: "
+                f"expected {result_test_id} at {result_path}"
+            )
+        if entry.expires_on < today:
+            errors.append(
+                f"Bandit baseline entry expired on {entry.expires_on.isoformat()}: "
+                f"{entry.test_id} at {entry.path} (owner: {entry.owner})"
+            )
+    expired_unmatched = [
+        entry
+        for key, entry in baseline.items()
+        if entry.repository == repository and key not in matched and entry.expires_on < today
+    ]
+    for entry in expired_unmatched:
+        errors.append(
+            f"Unused Bandit baseline entry expired on {entry.expires_on.isoformat()}: "
+            f"{entry.test_id} at {entry.path} (owner: {entry.owner})"
+        )
+    warnings = []
+    if results and not errors:
+        try:
+            baseline_display = baseline_path.relative_to(REPO_ROOT)
+        except ValueError:
+            baseline_display = baseline_path
+        warnings.append(
+            f"{repository}: accepted {len(results)} reviewed Bandit medium finding(s) "
+            f"from {baseline_display}"
+        )
+    return AuditResult(errors=errors, warnings=warnings)
+
+
+def run_bandit_report(
+    root: Path,
+    scan_dirs: Sequence[str],
+    *,
+    repository: str = "metroliza",
+    baseline_path: Path = BANDIT_BASELINE_PATH,
+    enforce_medium_baseline: bool = False,
+) -> AuditResult:
     existing_dirs = [directory for directory in scan_dirs if (root / directory).exists()]
     if not existing_dirs:
         return AuditResult(errors=[], warnings=[f"No Bandit scan dirs found under {root}"])
@@ -477,11 +700,22 @@ def run_bandit_report(root: Path, scan_dirs: Sequence[str]) -> AuditResult:
         )
 
     results = payload.get("results", [])
+    scan_errors = payload.get("errors", [])
     high_results = [result for result in results if result.get("issue_severity") == "HIGH"]
     medium_results = [result for result in results if result.get("issue_severity") == "MEDIUM"]
-    errors = [_format_bandit_issue(root, result) for result in high_results]
-    warnings = []
-    if medium_results:
+    errors = [f"Bandit scan error for {root}: {error}" for error in scan_errors]
+    errors.extend(_format_bandit_issue(root, result) for result in high_results)
+    warnings: list[str] = []
+    if medium_results and enforce_medium_baseline:
+        medium_audit = _audit_medium_bandit_results(
+            root,
+            medium_results,
+            repository=repository,
+            baseline_path=baseline_path,
+        )
+        errors.extend(medium_audit.errors)
+        warnings.extend(medium_audit.warnings)
+    elif medium_results:
         warnings.append(
             f"{root}: Bandit found {len(medium_results)} medium issue(s); report-only baseline"
         )
@@ -493,11 +727,7 @@ def run_bandit_report(root: Path, scan_dirs: Sequence[str]) -> AuditResult:
 
 
 def _format_bandit_issue(root: Path, result: dict[str, object]) -> str:
-    filename = str(result.get("filename", "<unknown>"))
-    try:
-        path = Path(filename).relative_to(root)
-    except ValueError:
-        path = Path(filename)
+    path = _relative_result_path(root, result)
     return (
         f"{path}:{result.get('line_number', '?')}: "
         f"{result.get('test_id', 'B???')} {result.get('issue_severity', 'UNKNOWN')} "
@@ -517,7 +747,13 @@ def _extract_json_object(output: str) -> str:
     return stripped[start:]
 
 
-def run_sibling_bandit(root: Path, sibling_root: Path | None) -> AuditResult:
+def run_sibling_bandit(
+    root: Path,
+    sibling_root: Path | None,
+    *,
+    baseline_path: Path = BANDIT_BASELINE_PATH,
+    enforce_medium_baseline: bool = False,
+) -> AuditResult:
     if sibling_root is None:
         return AuditResult(errors=[], warnings=[])
     result = AuditResult(errors=[], warnings=[])
@@ -529,8 +765,105 @@ def run_sibling_bandit(root: Path, sibling_root: Path | None) -> AuditResult:
         if not scan_dirs:
             result.warnings.append(f"{pin.repo}: no src/scripts dirs found for sibling Bandit scan")
             continue
-        result.extend(run_bandit_report(repo_path, scan_dirs))
+        result.extend(
+            run_bandit_report(
+                repo_path,
+                scan_dirs,
+                repository=pin.repo,
+                baseline_path=baseline_path,
+                enforce_medium_baseline=enforce_medium_baseline,
+            )
+        )
     return result
+
+
+def _is_secret_scan_candidate(path: Path) -> bool:
+    return (
+        path.name == ".env"
+        or path.name.startswith(".env.")
+        or path.suffix.lower() in SECRET_SCAN_SUFFIXES
+    )
+
+
+def _is_blocked_secret_filename(path: Path) -> bool:
+    name = path.name.lower()
+    return name in BLOCKED_SECRET_FILENAMES or name.endswith(
+        (".credentials.json", ".token.json")
+    )
+
+
+def _looks_like_placeholder(value: str) -> bool:
+    normalized = value.strip()
+    lowered = normalized.lower()
+    if lowered in PLACEHOLDER_VALUES or PLACEHOLDER_TEMPLATE_RE.fullmatch(normalized):
+        return True
+    words = [word for word in re.split(r"[-_\s]+", lowered) if word]
+    return bool(words) and all(word in PLACEHOLDER_WORDS for word in words)
+
+
+def scan_secret_paths(
+    root: Path,
+    paths: Iterable[str],
+    *,
+    waivers: dict[str, str] | None = None,
+) -> AuditResult:
+    waivers = dict(SECRET_SCAN_WAIVERS if waivers is None else waivers)
+    errors: list[str] = []
+    warnings: list[str] = []
+    for waived_path, rationale in waivers.items():
+        if "/fixtures/" not in f"/{waived_path}" and ".example." not in waived_path:
+            errors.append(
+                f"Secret-scan waiver must be fixture/example-only: {waived_path} ({rationale})"
+            )
+
+    for raw_path in sorted(set(paths)):
+        relative_path = Path(raw_path).as_posix()
+        if relative_path in waivers:
+            continue
+        path = root / relative_path
+        if not path.is_file():
+            continue
+        if _is_blocked_secret_filename(path):
+            errors.append(f"{relative_path}: filename is reserved for untracked credentials")
+        if not _is_secret_scan_candidate(path):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            warnings.append(f"{relative_path}: secret scan could not read text: {exc}")
+            continue
+        for pattern in CONCRETE_SECRET_PATTERNS:
+            match = pattern.search(text)
+            if match:
+                line_number = text.count("\n", 0, match.start()) + 1
+                errors.append(
+                    f"{relative_path}:{line_number}: content matches a concrete secret pattern"
+                )
+        for match in SECRET_ASSIGNMENT_RE.finditer(text):
+            quoted_value = match.group(2)
+            unquoted_value = match.group(3)
+            if unquoted_value is not None and path.suffix.lower() == ".py":
+                continue
+            value = quoted_value or unquoted_value or ""
+            if _looks_like_placeholder(value):
+                continue
+            line_number = text.count("\n", 0, match.start()) + 1
+            errors.append(
+                f"{relative_path}:{line_number}: `{match.group(1)}` contains a secret-like value"
+            )
+    return AuditResult(errors=sorted(set(errors)), warnings=sorted(set(warnings)))
+
+
+def audit_repository_secrets(root: Path, *, base_ref: str | None = None) -> AuditResult:
+    tracked = run_command(["git", "ls-files"], root)
+    if tracked.returncode != 0:
+        return AuditResult(errors=[f"git ls-files failed: {tracked.stderr.strip()}"], warnings=[])
+    paths = {line.strip() for line in tracked.stdout.splitlines() if line.strip()}
+    if base_ref:
+        changed = run_command(["git", "diff", "--name-only", f"{base_ref}..HEAD"], root)
+        if changed.returncode == 0:
+            paths.update(line.strip() for line in changed.stdout.splitlines() if line.strip())
+    return scan_secret_paths(root, paths)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -551,6 +884,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip static Bandit analysis. Intended for focused import/dependency diagnostics only.",
     )
+    parser.add_argument(
+        "--bandit-baseline",
+        type=Path,
+        default=BANDIT_BASELINE_PATH,
+        help="Reviewed Bandit medium-finding baseline used by --ci.",
+    )
+    parser.add_argument(
+        "--secret-scan-only",
+        action="store_true",
+        help="Scan tracked cross-format text files for credential material and exit.",
+    )
+    parser.add_argument(
+        "--base-ref",
+        help="Optional Git base revision whose changed paths are also secret-scanned.",
+    )
     return parser
 
 
@@ -560,13 +908,39 @@ def main(argv: Sequence[str] | None = None) -> int:
     sibling_root = args.sibling_root.resolve() if args.sibling_root else None
     aggregate = AuditResult(errors=[], warnings=[])
 
+    aggregate.extend(audit_repository_secrets(root, base_ref=args.base_ref))
+    if args.secret_scan_only:
+        for warning in aggregate.warnings:
+            print(f"SECURITY AUDIT WARNING: {warning}")
+        if aggregate.errors:
+            print("Secret scan failed:")
+            for error in aggregate.errors:
+                print(f" - {error}")
+            return 1
+        print("Secret scan passed.")
+        return 0
+
     aggregate.extend(audit_import_coverage(root))
     aggregate.extend(audit_internal_dependency_pins(root, sibling_root))
     if not args.skip_pip_audit:
         aggregate.extend(run_pip_audit(root, sibling_root))
     if not args.skip_bandit:
-        aggregate.extend(run_bandit_report(root, BANDIT_SCAN_DIRS))
-        aggregate.extend(run_sibling_bandit(root, sibling_root))
+        aggregate.extend(
+            run_bandit_report(
+                root,
+                BANDIT_SCAN_DIRS,
+                baseline_path=args.bandit_baseline,
+                enforce_medium_baseline=args.ci,
+            )
+        )
+        aggregate.extend(
+            run_sibling_bandit(
+                root,
+                sibling_root,
+                baseline_path=args.bandit_baseline,
+                enforce_medium_baseline=args.ci,
+            )
+        )
 
     for warning in aggregate.warnings:
         print(f"SECURITY AUDIT WARNING: {warning}")

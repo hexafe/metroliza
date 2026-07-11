@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
+from contextlib import closing
 from dataclasses import dataclass
 import json
 import math
@@ -174,7 +175,7 @@ def build_report(request: CalibrationRequest) -> dict[str, Any]:
         warnings.append(f"Database not found: {db_path}")
     else:
         try:
-            with _connect_readonly(db_path) as connection:
+            with closing(_connect_readonly(db_path)) as connection, connection:
                 signal, signal_warnings = _resolve_signal(connection, request)
                 warnings.extend(signal_warnings)
                 if signal.id is not None:

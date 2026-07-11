@@ -15,7 +15,7 @@ The following checks must pass on every PR and branch push.
 
 | Requirement | Workflow job name (`ci.yml`) | What it validates |
 |---|---|---|
-| Lint and static validation | `static-checks` | Python compile check, declarative parser profile self-service smoke, Ruff lint, release metadata consistency check, and repository/diff JSON secret scan. |
+| Lint and static validation | `static-checks` | Python compile check, declarative parser profile self-service smoke, Ruff lint, release metadata consistency, tracked Python/YAML/TOML/INI/JSON/env secret scanning, and Bandit enforcement against the reviewed expiring baseline. |
 | Metadata checks | `static-checks` | `scripts/sync_release_metadata.py --check` is enforced in this job. |
 | Full pytest suite + coverage gate | `unit-tests` | Runs the full Python test suite with coverage, then re-runs selected real-Qt UI shards in isolated pytest processes with `--cov-append` before enforcing `coverage report --fail-under=80` and writing `coverage.xml`. Qt runtime libraries are installed and `QT_QPA_PLATFORM=offscreen` is set for the lane. |
 | Native artifact build + smoke/parity checks | `native-artifacts` | Builds all native wheels, installs them, runs import/smoke checks for each native module plus explicit fallback checks, executes native chart planner/parity smoke checks, runs an export-runtime fast-path contract smoke for extended summary charts, and runs native parser parity tests. |
@@ -30,7 +30,7 @@ The following checks must pass on every PR and branch push.
 - The same job enforces the blocking coverage threshold and publishes a coverage threshold status in the CI job summary.
 - The status summary also reports canonical `src/metroliza` line coverage separately so legacy shim coverage cannot hide source-package regressions.
 - The job installs minimal Qt runtime system libraries before Python setup so PyQt import tests exercise the real UI modules instead of skipping on missing runner libraries.
-- Selected UI tests are re-run in isolated pytest processes with `--cov-append` because legacy module-scope PyQt stubs otherwise undercount real-Qt dialog coverage in a single interpreter.
+- Selected UI tests are re-run in isolated pytest processes with `--cov-append` to exercise real-Qt dialog paths; an architecture test prevents collection-time `sys.modules` replacements from poisoning later test imports.
 - Coverage threshold changes require an explicit threshold update in `.github/workflows/ci.yml` plus this policy file.
 - Reviewers can inspect coverage evidence in:
   - the `unit-tests` job log (terminal summary),
@@ -126,7 +126,9 @@ These checks are explicitly non-blocking for normal PR CI:
 
 ## CI duration measurement (before/after)
 
-Because this repository snapshot is running in a local container without GitHub Actions run history access, timing here is recorded as a **critical-path structural measurement** from workflow topology, which is deterministic from `ci.yml`:
+At the time of this topology change, the measurement was taken from a local
+container without GitHub Actions run-history access. The recorded comparison is
+therefore a **critical-path structural measurement** from `ci.yml`:
 
 | Metric | Before | After | Impact |
 |---|---:|---:|---:|
@@ -150,7 +152,7 @@ Use this quick checklist when opening or reviewing PRs:
 - [ ] Full pytest suite passes (`unit-tests`)
 - [ ] Native artifact smoke/parity checks pass (`native-artifacts`)
 - [ ] CMM parser perf guardrail and trend comparison pass (`cmm-parser-perf-gate`)
-- [ ] Optional/manual non-blocking checks reviewed as needed (`packaging-smoke`, `google-conversion-smoke`)
+- [ ] Optional/manual non-blocking checks reviewed as needed (`packaging-smoke`, `windows-startup-benchmark`, `google-conversion-smoke`)
 
 ### Additional checklist for parser plugin changes
 

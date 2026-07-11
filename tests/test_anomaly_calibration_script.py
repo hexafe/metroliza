@@ -1,3 +1,4 @@
+from contextlib import closing
 import importlib.util
 import json
 import sqlite3
@@ -22,7 +23,7 @@ def _load_script_module():
 
 
 def _write_calibration_db(path: Path) -> None:
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection, connection:
         connection.executescript(
             """
             CREATE TABLE industrial_signal_definitions (

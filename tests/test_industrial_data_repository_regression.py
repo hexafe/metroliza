@@ -1,3 +1,4 @@
+from contextlib import closing
 import json
 import sqlite3
 
@@ -15,7 +16,7 @@ def test_repository_ensure_schema_is_idempotent_for_temp_sqlite(tmp_path):
     repository = IndustrialDataRepository(db_path)
 
     repository.ensure_schema()
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         first_objects = conn.execute(
             """
             SELECT type, name, sql
@@ -29,7 +30,7 @@ def test_repository_ensure_schema_is_idempotent_for_temp_sqlite(tmp_path):
         ).fetchone()[0]
 
     repository.ensure_schema()
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         second_objects = conn.execute(
             """
             SELECT type, name, sql
@@ -145,7 +146,7 @@ def test_repository_profile_and_sync_run_lifecycle_redacts_sensitive_payloads(tm
     assert "diagnostic-message-token" not in latest.diagnostics["message"]
     assert "raw_events" not in latest.diagnostics["message"]
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         filters_json, diagnostics_json = conn.execute(
             """
             SELECT filters_json, diagnostics_json
@@ -244,7 +245,7 @@ def test_repository_record_upsert_replaces_dynamic_values_and_summarizes_counts(
         "link_candidates": 0,
     }
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         row1 = conn.execute(
             """
             SELECT id, reference, station, raw_record_json

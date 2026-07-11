@@ -11,7 +11,9 @@ from metroliza.industrial.realtime.realtime_dashboard_html import (
     RealtimeDashboardSnapshot,
     _stylesheet,
     render_realtime_dashboard_html,
+    write_realtime_dashboard_html,
 )
+import metroliza.industrial.realtime.realtime_dashboard_html as dashboard_html_module
 from metroliza.industrial.realtime.replay import ReplayRequest, replay_industrial_stream
 
 
@@ -314,3 +316,48 @@ def test_static_dashboard_renders_from_replay_populated_database(tmp_path) -> No
     assert "critical" in html
     assert "Observed value 13.5 is above USL 12" in html
     assert 'data-section="signal-charts"' in html
+
+
+def test_realtime_dashboard_write_publishes_atomically(tmp_path, monkeypatch) -> None:
+    output_path = tmp_path / "dashboard.html"
+    output_path.write_text("old generation", encoding="utf-8")
+    replacements: list[tuple[Path, Path]] = []
+    real_replace = dashboard_html_module.os.replace
+
+    def capture_replace(source, destination):
+        replacements.append((Path(source), Path(destination)))
+        real_replace(source, destination)
+
+    monkeypatch.setattr(dashboard_html_module.os, "replace", capture_replace)
+
+    written = write_realtime_dashboard_html(_snapshot(), output_path)
+
+    assert written == output_path
+    assert output_path.read_text(encoding="utf-8").startswith("<!doctype html>")
+    assert len(replacements) == 1
+    assert replacements[0][0].parent == output_path.parent
+    assert replacements[0][1] == output_path
+    assert not list(tmp_path.glob(".*.tmp"))
+
+
+def test_realtime_dashboard_failed_publication_keeps_previous_generation(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    output_path = tmp_path / "dashboard.html"
+    output_path.write_text("old generation", encoding="utf-8")
+    monkeypatch.setattr(
+        dashboard_html_module.os,
+        "replace",
+        lambda *_args: (_ for _ in ()).throw(OSError("replace failed")),
+    )
+
+    try:
+        write_realtime_dashboard_html(_snapshot(), output_path)
+    except OSError as exc:
+        assert str(exc) == "replace failed"
+    else:
+        raise AssertionError("expected atomic publication failure")
+
+    assert output_path.read_text(encoding="utf-8") == "old generation"
+    assert not list(tmp_path.glob(".*.tmp"))

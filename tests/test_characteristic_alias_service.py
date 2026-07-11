@@ -1,4 +1,5 @@
 import csv
+from contextlib import closing
 import tempfile
 import unittest
 from sqlite3 import connect
@@ -53,20 +54,20 @@ class TestCharacteristicAliasService(unittest.TestCase):
         self.assertEqual(len(fetched), 1)
         self.assertEqual(fetched[0]['alias_name'], 'AX-1')
 
-        with connect(self.db_path) as connection:
+        with closing(connect(self.db_path)) as connection, connection:
             index_rows = connection.execute("PRAGMA index_list('CHARACTERISTIC_ALIASES')").fetchall()
         self.assertTrue(any('characteristic_alias_scope_lookup' in row[1] for row in index_rows))
 
     def test_ensure_schema_is_migration_safe_on_existing_database(self):
         legacy_db_path = f"{self.temp_dir.name}/legacy.sqlite"
-        with connect(legacy_db_path) as connection:
+        with closing(connect(legacy_db_path)) as connection, connection:
             connection.execute('CREATE TABLE IF NOT EXISTS LEGACY_TABLE(id INTEGER PRIMARY KEY, value TEXT)')
             connection.execute("INSERT INTO LEGACY_TABLE(value) VALUES ('legacy-row')")
             connection.commit()
 
         ensure_characteristic_alias_schema(legacy_db_path)
 
-        with connect(legacy_db_path) as connection:
+        with closing(connect(legacy_db_path)) as connection, connection:
             legacy_rows = connection.execute('SELECT value FROM LEGACY_TABLE').fetchall()
             alias_table_row = connection.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='CHARACTERISTIC_ALIASES'"

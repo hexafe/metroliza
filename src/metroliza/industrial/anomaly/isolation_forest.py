@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-import pickle
-from statistics import fmean
 from typing import Any, Iterable, Mapping
 
 from metroliza.industrial.anomaly.contracts import (
@@ -13,7 +11,11 @@ from metroliza.industrial.anomaly.contracts import (
     DetectorContext,
     DetectorState,
 )
-from metroliza.industrial.anomaly.model_registry import ModelArtifact, ModelArtifactRegistry
+from metroliza.industrial.anomaly.model_registry import (
+    ModelArtifact,
+    ModelArtifactRegistry,
+    UnsafeModelArtifactError,
+)
 from metroliza.industrial.anomaly.optional_dependencies import load_sklearn_ensemble
 from metroliza.industrial.realtime.stream_contracts import IndustrialSample
 
@@ -143,70 +145,12 @@ def train_isolation_forest_model(
     registry: ModelArtifactRegistry,
     spec: IsolationForestModelSpec,
 ) -> IsolationForestTrainingResult:
-    """Fit an Isolation Forest model and store it through the artifact registry."""
+    """Reject pickle-backed training until a safe serializer is adopted."""
 
-    isolation_forest_class = _load_sklearn_isolation_forest_class()
-    if isolation_forest_class is None:
-        raise OptionalDependencyMissingError(
-            "scikit-learn is required to train Isolation Forest anomaly models"
-        )
-    sample_batch = tuple(samples)
-    feature_rows = _feature_rows(sample_batch)
-    if len(feature_rows) < spec.min_samples:
-        raise ValueError(
-            f"At least {spec.min_samples} finite samples are required, got {len(feature_rows)}"
-        )
-
-    model = isolation_forest_class(
-        contamination=spec.contamination,
-        n_estimators=int(spec.n_estimators),
-        max_samples=spec.max_samples,
-        random_state=spec.random_state,
-    )
-    model.fit(feature_rows)
-    values = tuple(row[0] for row in feature_rows)
-    payload = pickle.dumps(
-        {
-            "metadata_version": 1,
-            "model_type": MODEL_TYPE,
-            "feature_names": ("value",),
-            "model": model,
-        },
-        protocol=pickle.HIGHEST_PROTOCOL,
-    )
-    parameters = {
-        "detector_key": spec.detector_key,
-        "contamination": spec.contamination,
-        "n_estimators": spec.n_estimators,
-        "max_samples": spec.max_samples,
-        "random_state": spec.random_state,
-        "score_threshold": spec.score_threshold,
-        "major_score": spec.major_score,
-        "critical_score": spec.critical_score,
-    }
-    event_times = tuple(sample.event_time for sample in sample_batch if sample.event_time)
-    artifact = registry.store_artifact(
-        artifact_key=spec.artifact_key,
-        model_type=MODEL_TYPE,
-        payload=payload,
-        signal_id=spec.signal_id,
-        training_window_start=min(event_times) if event_times else None,
-        training_window_end=max(event_times) if event_times else None,
-        training_sample_count=len(feature_rows),
-        parameters=parameters,
-        metrics={
-            "training_mean": fmean(values),
-            "training_min": min(values),
-            "training_max": max(values),
-        },
-        shadow_mode=spec.shadow_mode,
-        calibrated=spec.calibrated,
-        critical_allowed=spec.critical_allowed,
-    )
-    return IsolationForestTrainingResult(
-        artifact=artifact,
-        feature_names=("value",),
-        sample_count=len(feature_rows),
+    del samples, registry, spec
+    raise UnsafeModelArtifactError(
+        "Isolation Forest training is disabled because the legacy artifact format used pickle. "
+        "A safe serializer must be adopted before training is re-enabled."
     )
 
 
@@ -227,20 +171,10 @@ def load_isolation_forest_detector(
     )
     if artifact is None:
         raise FileNotFoundError("Isolation Forest model artifact is not registered")
-    try:
-        payload = pickle.loads(registry.load_artifact_bytes(artifact))
-    except (ImportError, ModuleNotFoundError) as exc:
-        raise OptionalDependencyMissingError(
-            "scikit-learn is required to load Isolation Forest anomaly models"
-        ) from exc
-    model_type = payload.get("model_type") if isinstance(payload, dict) else None
-    if model_type != MODEL_TYPE:
-        raise ValueError(f"Unexpected model artifact type: {model_type!r}")
-    return IsolationForestAnomalyDetector(
-        model=payload["model"],
-        artifact=artifact,
-        feature_names=tuple(payload.get("feature_names") or ("value",)),
-        detector_key=str(artifact.parameters.get("detector_key") or DEFAULT_DETECTOR_KEY),
+    registry.archive_artifact(artifact)
+    raise UnsafeModelArtifactError(
+        "Isolation Forest artifact loading is disabled because legacy artifacts use pickle. "
+        "The artifact was archived without deserializing it."
     )
 
 

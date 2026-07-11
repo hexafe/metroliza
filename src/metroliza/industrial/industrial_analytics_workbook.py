@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from metroliza.exporting.xlsx_writer_policy import pandas_xlsxwriter_engine_kwargs
 from metroliza.shared.excel_sheet_utils import unique_sheet_name
 from metroliza.industrial.industrial_analytics_service import (
     ProductionAggregationResult,
@@ -68,7 +69,11 @@ def export_production_analytics_workbook(
         else None
     )
 
-    with pd.ExcelWriter(output_path, engine="xlsxwriter") as writer:
+    with pd.ExcelWriter(
+        output_path,
+        engine="xlsxwriter",
+        engine_kwargs=pandas_xlsxwriter_engine_kwargs(),
+    ) as writer:
         data_sheet = unique_sheet_name("Production Data", used_names)
         safe_dataframe.to_excel(writer, sheet_name=data_sheet, index=False)
         sheet_names.append(data_sheet)

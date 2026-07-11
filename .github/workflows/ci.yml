@@ -91,81 +91,7 @@ jobs:
       - name: Secret scan (diff + repository)
         env:
           BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: |
-          python - <<'PYCODE'
-          import os
-          import pathlib
-          import re
-          import subprocess
-          import sys
-
-          ALLOWLIST = {
-              'config/google/credentials.example.json',
-          }
-          BANNED_NAME_PATTERNS = [
-              re.compile(r'(^|/)credentials\.json$', re.IGNORECASE),
-              re.compile(r'(^|/)token\.json$', re.IGNORECASE),
-              re.compile(r'(^|/).+\.credentials\.json$', re.IGNORECASE),
-              re.compile(r'(^|/).+\.token\.json$', re.IGNORECASE),
-          ]
-
-          SUSPICIOUS_CONTENT_PATTERNS = [
-              re.compile(r'"(client_secret|api_key|access_token|refresh_token)"\s*:\s*"[^"\n]+"'),
-              re.compile(r'(?i)AIza[0-9A-Za-z\-_]{20,}'),
-          ]
-
-          def check_path(path: str) -> list[str]:
-              if path in ALLOWLIST:
-                  return []
-              return [
-                  f'{path}: filename matches blocked secret pattern'
-                  for pattern in BANNED_NAME_PATTERNS
-                  if pattern.search(path)
-              ]
-
-          errors: list[str] = []
-
-          for p in pathlib.Path('.').rglob('*.json'):
-              rel = p.as_posix()
-              if rel.startswith('.git/'):
-                  continue
-              errors.extend(check_path(rel))
-
-              if rel in ALLOWLIST:
-                  continue
-
-              text = p.read_text(encoding='utf-8', errors='ignore')
-              for pattern in SUSPICIOUS_CONTENT_PATTERNS:
-                  if pattern.search(text):
-                      errors.append(f'{rel}: content matches suspicious secret pattern')
-
-          base_ref = os.getenv('BASE_REF', '')
-          diff_targets: set[str] = set()
-          if base_ref:
-              result = subprocess.run(
-                  ['git', 'diff', '--name-only', f'{base_ref}..HEAD'],
-                  capture_output=True,
-                  text=True,
-                  check=False,
-              )
-              if result.returncode == 0:
-                  diff_targets = {line.strip() for line in result.stdout.splitlines() if line.strip()}
-
-          for rel in sorted(diff_targets):
-              if rel in ALLOWLIST:
-                  continue
-              if pathlib.Path(rel).suffix.lower() != '.json':
-                  continue
-              errors.extend(check_path(rel))
-
-          if errors:
-              print('Secret scan failed:')
-              for error in sorted(set(errors)):
-                  print(f' - {error}')
-              sys.exit(1)
-
-          print('Secret scan passed.')
-          PYCODE
+        run: python scripts/security_audit.py --secret-scan-only --base-ref "$BASE_REF"
 
       - name: Release hygiene scan
         run: python scripts/check_release_hygiene.py
@@ -275,7 +201,14 @@ jobs:
             --cov-append \
             --cov-report= \
             --cov-fail-under=0
-          PYTHONPATH=src:. python -m pytest tests/test_data_grouping_filter_query.py tests/test_modifydb_record_updates.py tests/test_modifydb_update_statements.py -q \
+          PYTHONPATH=src:. python -m pytest tests/test_phase2_db_migrated_behaviors.py tests/test_data_grouping_filter_query.py tests/test_modifydb_record_updates.py tests/test_modifydb_update_statements.py -q \
+            --cov=src/metroliza \
+            --cov=modules \
+            --cov=scripts \
+            --cov-append \
+            --cov-report= \
+            --cov-fail-under=0
+          PYTHONPATH=src:. python -m pytest tests/test_export_presets.py tests/test_filter_dialog_behavior.py tests/test_pyqt_ui_geometry_audit.py tests/test_data_grouping_filter_query.py tests/test_data_grouping_error_paths.py tests/test_data_grouping_delete_key.py -q \
             --cov=src/metroliza \
             --cov=modules \
             --cov=scripts \

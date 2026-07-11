@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 import math
 from statistics import fmean, pstdev
 from typing import Any
@@ -14,16 +13,7 @@ from metroliza.industrial.anomaly.contracts import (
     DetectorState,
 )
 from metroliza.industrial.realtime.stream_contracts import IndustrialSample, SignalDefinition
-
-
-def _parse_utc_timestamp(value: str) -> datetime:
-    text = str(value).strip()
-    if text.endswith("Z"):
-        text = f"{text[:-1]}+00:00"
-    parsed = datetime.fromisoformat(text)
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+from metroliza.industrial.realtime.timestamps import parse_utc_timestamp
 
 
 def _finite_float_or_none(value: Any) -> float | None:
@@ -166,7 +156,14 @@ class IQRDetector:
         q3_value = _finite_float_or_none(q3)
         iqr_value = _finite_float_or_none(iqr)
         value = _finite_float_or_none(sample.value)
-        if q1_value is None or q3_value is None or iqr_value is None or value is None:
+        if (
+            q1_value is None
+            or q3_value is None
+            or iqr_value is None
+            or iqr_value <= 0
+            or q1_value > q3_value
+            or value is None
+        ):
             return None
         lower = q1_value - self.fence_multiplier * iqr_value
         upper = q3_value + self.fence_multiplier * iqr_value
@@ -208,7 +205,7 @@ class MadZScoreDetector:
         median_value = _finite_float_or_none(median)
         mad_value = _finite_float_or_none(mad)
         value = _finite_float_or_none(sample.value)
-        if median_value is None or mad_value is None or value is None:
+        if median_value is None or mad_value is None or mad_value <= 0 or value is None:
             return None
         robust_z = 0.6745 * (value - median_value) / mad_value
         if abs(robust_z) < self.threshold:
@@ -293,8 +290,8 @@ class StaleSourceDetector:
         now_text = context.now
         if not now_text:
             return None
-        last_time = _parse_utc_timestamp(sample.event_time)
-        now = _parse_utc_timestamp(now_text)
+        last_time = parse_utc_timestamp(sample.event_time)
+        now = parse_utc_timestamp(now_text)
         stale_seconds = max(0.0, (now - last_time).total_seconds())
         if stale_seconds < self.warning_seconds:
             return None

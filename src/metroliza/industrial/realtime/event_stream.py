@@ -56,6 +56,22 @@ class RealtimeConsumerOffset:
 
 
 @dataclass(frozen=True)
+class RealtimeDeadLetter:
+    """A permanently invalid stream event quarantined by one consumer."""
+
+    id: int
+    consumer_key: str
+    source_profile_id: int
+    stream_key: str
+    event_id: int
+    event_type: str
+    error_summary: str
+    payload: Mapping[str, Any]
+    failed_at: str
+    status: str = "quarantined"
+
+
+@dataclass(frozen=True)
 class RealtimeDetectorConsumerResult:
     """Operator-safe summary for one detector-consumer processing run."""
 

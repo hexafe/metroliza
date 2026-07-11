@@ -10,6 +10,7 @@ from metroliza.shared.grouping_filter_core import (
     MembershipFilterSpec,
     NumberFilterSpec,
     TextFilterSpec,
+    membership_value_kind,
     parse_filter_expression,
 )
 
@@ -197,9 +198,15 @@ def _text_expression_clause(spec):
     if operator == "ends_with":
         return _wildcard_clause(column, f"*{value}")
     if operator == "is_blank":
-        return f"TRIM(CAST({_quote_measurement_filter_column(column)} AS TEXT)) = ''"
+        return (
+            f"({_quote_measurement_filter_column(column)} IS NULL "
+            f"OR TRIM(CAST({_quote_measurement_filter_column(column)} AS TEXT)) = '')"
+        )
     if operator == "is_not_blank":
-        return f"TRIM(CAST({_quote_measurement_filter_column(column)} AS TEXT)) <> ''"
+        return (
+            f"({_quote_measurement_filter_column(column)} IS NOT NULL "
+            f"AND TRIM(CAST({_quote_measurement_filter_column(column)} AS TEXT)) <> '')"
+        )
     raise ValueError(f"Unsupported CMM text filter operator: {spec.operator}")
 
 
@@ -261,26 +268,51 @@ def _membership_expression_clause(spec):
     values = tuple(value for value in spec.values if str(value).strip())
     if not values:
         raise ValueError("IN filters require at least one value")
-    exact_values = [
-        value for value in values if not (spec.wildcards and _has_expression_wildcard(value))
-    ]
+    value_kind = membership_value_kind(values, dayfirst=spec.dayfirst)
+    quoted_column = _quote_measurement_filter_column(spec.column)
     clauses = []
-    if exact_values:
-        values_sql = ", ".join(_sql_text_literal(value) for value in exact_values)
-        clauses.append(f"{_sql_text(spec.column)} IN ({values_sql})")
-    if spec.wildcards:
-        clauses.extend(
-            _wildcard_clause(spec.column, value)
-            for value in values
-            if _has_expression_wildcard(value)
+    missing_clause = f"{quoted_column} IS NULL"
+    if value_kind == "number":
+        text_column = f"TRIM(CAST({quoted_column} AS TEXT))"
+        json_type = (
+            f"CASE WHEN json_valid({text_column}) "
+            f"THEN json_type({text_column}) ELSE NULL END"
         )
+        numeric_guard = (
+            f"({quoted_column} IS NOT NULL AND {text_column} <> '' AND ("
+            f"COALESCE({json_type} IN ('integer', 'real'), 0) "
+            f"OR {text_column} NOT GLOB '*[^0-9]*' "
+            f"OR (substr({text_column}, 1, 1) IN ('+', '-') "
+            f"AND substr({text_column}, 2) <> '' "
+            f"AND substr({text_column}, 2) NOT GLOB '*[^0-9]*')))"
+        )
+        values_sql = ", ".join(f"CAST({_sql_literal(value)} AS REAL)" for value in values)
+        clauses.append(f"({numeric_guard} AND CAST({quoted_column} AS REAL) IN ({values_sql}))")
+        missing_clause = f"NOT {numeric_guard}"
+    elif value_kind == "date":
+        values_sql = ", ".join(f"DATE({_sql_literal(value)})" for value in values)
+        clauses.append(f"DATE({quoted_column}) IN ({values_sql})")
+        missing_clause = f"DATE({quoted_column}) IS NULL"
+    else:
+        exact_values = [
+            value for value in values if not (spec.wildcards and _has_expression_wildcard(value))
+        ]
+        if exact_values:
+            values_sql = ", ".join(_sql_text_literal(value) for value in exact_values)
+            clauses.append(f"{_sql_text(spec.column)} IN ({values_sql})")
+        if spec.wildcards:
+            clauses.extend(
+                _wildcard_clause(spec.column, value)
+                for value in values
+                if _has_expression_wildcard(value)
+            )
     if not clauses:
         clause = "0"
     else:
         clause = "(" + " OR ".join(clauses) + ")"
     negate = bool(spec.negate) or str(spec.operator or "").strip().casefold() == "not_in"
     if negate:
-        return f"NOT {clause}"
+        return f"({missing_clause} OR NOT {clause})"
     return clause
 
 

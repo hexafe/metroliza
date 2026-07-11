@@ -44,7 +44,7 @@ def test_realtime_monitor_config_repository_upserts_and_lists_configs(tmp_path):
     profile = _profile(db_path)
     repository = RealtimeMonitorConfigRepository(db_path)
 
-    created = repository.upsert_config(_config(profile.id))
+    created = repository.upsert_config(_config(profile.id, source_timezone="Europe/Warsaw"))
     updated = repository.upsert_config(
         _config(profile.id, polling_interval_seconds=15, timeout_seconds=10)
     )
@@ -55,6 +55,8 @@ def test_realtime_monitor_config_repository_upserts_and_lists_configs(tmp_path):
     assert updated.to_poll_config().stream_key == "line_a"
     assert [config.id for config in listed] == [updated.id]
     assert listed[0].aggregation_methods == ("mean", "median")
+    assert created.source_timezone == "Europe/Warsaw"
+    assert updated.source_timezone == "UTC"
 
 
 def test_realtime_monitor_config_repository_filters_and_deletes_configs(tmp_path):

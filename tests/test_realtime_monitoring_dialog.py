@@ -317,6 +317,9 @@ def test_realtime_monitoring_dialog_poll_results_schedule_dashboard_write_async(
         assert _FakeDashboardThread.instances[0].db_file == db_path
         assert _FakeDashboardThread.instances[0].output_file == str(dashboard_path)
     finally:
+        if dialog.dashboard_thread is not None:
+            dialog.dashboard_thread.running = False
+            dialog.dashboard_thread.finished.emit()
         dialog.close()
 
 
@@ -373,6 +376,9 @@ def test_realtime_monitoring_dialog_dashboard_writes_are_coalesced(
 
         assert len(_FakeDashboardThread.instances) == 2
     finally:
+        if dialog.dashboard_thread is not None:
+            dialog.dashboard_thread.running = False
+            dialog.dashboard_thread.finished.emit()
         dialog.close()
 
 
@@ -570,6 +576,62 @@ def test_realtime_monitoring_dialog_writes_empty_dashboard(qapp, tmp_path):
         html = Path(written).read_text(encoding="utf-8")
         assert "Real-time Industrial Monitoring" in html
         assert 'data-section="summary-cards"' in html
+    finally:
+        dialog.close()
+
+
+def test_realtime_monitoring_dialog_defers_shutdown_until_all_workers_finish(qapp, tmp_path):
+    db_path = str(tmp_path / "dialog.db")
+    IndustrialDataRepository(db_path).ensure_schema()
+    dialog = RealtimeIndustrialMonitoringDialog(None, db_path)
+
+    class _RunningThread:
+        def __init__(self, *, cancellable: bool):
+            self.running = True
+            self.cancel_calls = 0
+            self.cancellable = cancellable
+
+        def isRunning(self):
+            return self.running
+
+        def cancel(self):
+            assert self.cancellable
+            self.cancel_calls += 1
+
+    poll_thread = _RunningThread(cancellable=True)
+    dashboard_thread = _RunningThread(cancellable=False)
+    default_directory = dialog._default_dashboard_path().parent
+    completions: list[str] = []
+    dialog.shutdown_complete.connect(lambda: completions.append("complete"))
+    dialog.poll_thread = poll_thread
+    dialog.dashboard_thread = dashboard_thread
+
+    assert dialog.request_shutdown() is False
+    assert poll_thread.cancel_calls == 1
+    assert default_directory.exists()
+
+    poll_thread.running = False
+    dialog._clear_poll_thread()
+    assert completions == []
+    assert default_directory.exists()
+
+    dashboard_thread.running = False
+    dialog._on_dashboard_writer_finished()
+    assert completions == ["complete"]
+    assert not default_directory.exists()
+    assert dialog.request_shutdown() is True
+    assert completions == ["complete"]
+
+
+def test_realtime_monitoring_dialog_default_dashboard_directory_is_private(qapp, tmp_path):
+    db_path = str(tmp_path / "dialog.db")
+    IndustrialDataRepository(db_path).ensure_schema()
+    dialog = RealtimeIndustrialMonitoringDialog(None, db_path)
+    try:
+        output_directory = dialog._default_dashboard_path().parent
+
+        assert output_directory.exists()
+        assert output_directory.stat().st_mode & 0o777 == 0o700
     finally:
         dialog.close()
 

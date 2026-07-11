@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 try:
+    from PyQt6.QtGui import QCloseEvent
     from PyQt6.QtWidgets import QApplication, QPushButton
     from modules.main_window import FEATURE_IMPORT_WARMUP_MODULES, MainWindow, warm_feature_imports
 except ImportError as exc:  # pragma: no cover - environment-dependent import
@@ -187,6 +188,29 @@ class TestMainWindowMetadataUi(unittest.TestCase):
                 ["/tmp/metroliza-a.db", "/tmp/metroliza-b.db"],
             )
             self.assertEqual(window.db_file, "/tmp/metroliza-b.db")
+        finally:
+            window.close()
+
+    def test_database_selection_recovers_abandoned_staging_once(self):
+        window = MainWindow(version_label="test", days_until_expiration=None)
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                db_path = Path(temp_dir) / "monitoring.db"
+                db_path.touch()
+                with patch(
+                    "metroliza.industrial.industrial_data_repository.IndustrialDataRepository"
+                ) as repository_type:
+                    repository_type.return_value.recover_abandoned_sync_staging_at_startup.return_value = {
+                        "runs_failed": 1,
+                        "rows_discarded": 7,
+                    }
+
+                    window.set_db_file(str(db_path))
+                    window.set_db_file(str(db_path))
+
+                repository_type.assert_called_once_with(str(db_path.resolve()))
+                repository_type.return_value.recover_abandoned_sync_staging_at_startup.assert_called_once_with()
+                self.assertIn("1 run(s), 7 row(s)", window.statusBar().currentMessage())
         finally:
             window.close()
 
@@ -381,6 +405,47 @@ class TestMainWindowMetadataUi(unittest.TestCase):
         finally:
             window.metadata_enrichment_thread = None
             window.close()
+
+    def test_close_event_keeps_realtime_session_db_until_dialog_shutdown_completes(self):
+        window = MainWindow(version_label="test", days_until_expiration=None)
+
+        class FakeRealtimeDialog:
+            def __init__(self):
+                self.ready = False
+                self.shutdown_calls = 0
+                self.close_calls = 0
+
+            def request_shutdown(self):
+                self.shutdown_calls += 1
+                return self.ready
+
+            def close(self):
+                self.close_calls += 1
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            session_db = Path(temp_dir) / "session.sqlite"
+            session_db.write_text("active", encoding="utf-8")
+            fake_dialog = FakeRealtimeDialog()
+            window._realtime_session_db_path = session_db
+            window.realtime_monitoring_dialog = fake_dialog
+
+            first_event = QCloseEvent()
+            window.closeEvent(first_event)
+
+            self.assertFalse(first_event.isAccepted())
+            self.assertTrue(session_db.exists())
+            self.assertEqual(fake_dialog.shutdown_calls, 1)
+            self.assertEqual(fake_dialog.close_calls, 0)
+
+            fake_dialog.ready = True
+            second_event = QCloseEvent()
+            window.closeEvent(second_event)
+
+            self.assertTrue(second_event.isAccepted())
+            self.assertFalse(session_db.exists())
+            self.assertEqual(fake_dialog.close_calls, 1)
+        window.realtime_monitoring_dialog = None
+        window.close()
 
     def test_metadata_enrichment_thread_is_cleared_after_thread_lifecycle_finishes(self):
         window = MainWindow(version_label="test", days_until_expiration=None)

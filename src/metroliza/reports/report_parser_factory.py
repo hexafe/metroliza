@@ -7,8 +7,7 @@ This module keeps compatibility with both:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-import hashlib
+from dataclasses import dataclass, field, replace
 from importlib import metadata as importlib_metadata
 import importlib.util
 import inspect
@@ -27,6 +26,7 @@ from metroliza.parsing.parser_plugin_contracts import (
     ProbeResult,
     infer_source_format,
 )
+from metroliza.parsing.source_inspection import SourceInspectionContext
 
 
 ParserType = Type[BaseReportParserPlugin]
@@ -48,6 +48,11 @@ class ResolverDiagnostics:
     candidates_considered: tuple[ProbeResult, ...]
     selected: ProbeResult | None
     rejected_reason: str | None = None
+    source_inspection: SourceInspectionContext | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
 
 
 @dataclass(frozen=True)
@@ -66,8 +71,6 @@ PARSER_MAP: dict[str, ParserType] = {}
 PARSER_MANIFESTS: dict[str, PluginManifest] = {}
 PARSER_DETECTORS: dict[str, DetectorType] = {}
 PROBE_RESULT_CACHE: dict[tuple[str, str, tuple[object, ...]], ProbeResult] = {}
-PROBE_CACHE_HASH_CHUNK_BYTES = 1024 * 1024
-
 _EXTERNAL_PLUGINS_LOADED = False
 _EXTERNAL_PLUGIN_CONFIG_SIGNATURE: ExternalPluginConfigSignature | None = None
 _EXTERNAL_PLUGIN_ENTRY_POINTS: tuple[object, ...] | None = None
@@ -241,31 +244,22 @@ def _minimum_confidence_for_selection() -> int:
     return 80 if _strict_matching_enabled() else 1
 
 
-def _probe_cache_identity(normalized_path: str) -> tuple[object, ...]:
-    """Return a cheap file identity for content-sensitive probe cache entries."""
-
-    path = Path(normalized_path)
-    try:
-        stat = path.stat()
-    except OSError:
-        return ("missing",)
-    digest = hashlib.sha256()
-    try:
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(PROBE_CACHE_HASH_CHUNK_BYTES), b""):
-                digest.update(chunk)
-    except OSError:
-        return (stat.st_mtime_ns, stat.st_size, "unreadable")
-    return (stat.st_mtime_ns, stat.st_size, digest.hexdigest())
-
-
 def _probe_with_cache(
     plugin_id: str,
     parser_cls: ParserType,
     normalized_path: str,
     probe_context: ProbeContext,
 ) -> ProbeResult:
-    cache_key = (plugin_id, normalized_path, _probe_cache_identity(normalized_path))
+    source_inspection = probe_context.source_inspection
+    cache_identity = (
+        source_inspection.cache_identity
+        if source_inspection is not None
+        else SourceInspectionContext.from_path(
+            normalized_path,
+            source_format=probe_context.source_format,
+        ).cache_identity
+    )
+    cache_key = (plugin_id, normalized_path, cache_identity)
     cached = PROBE_RESULT_CACHE.get(cache_key)
     if cached is not None:
         return cached
@@ -553,7 +547,15 @@ def resolve_parser_with_diagnostics(file_path: str | Path) -> ResolverDiagnostic
 
     normalized_path = _as_file_path(file_path)
     source_format = infer_source_format(normalized_path)
-    probe_context = ProbeContext(source_path=normalized_path, source_format=source_format)
+    source_inspection = SourceInspectionContext.from_path(
+        normalized_path,
+        source_format=source_format,
+    )
+    probe_context = ProbeContext(
+        source_path=normalized_path,
+        source_format=source_format,
+        source_inspection=source_inspection,
+    )
 
     candidates: list[ProbeResult] = []
     for plugin_id, parser_cls in PARSER_MAP.items():
@@ -574,6 +576,7 @@ def resolve_parser_with_diagnostics(file_path: str | Path) -> ResolverDiagnostic
                 source_format=source_format,
                 candidates_considered=tuple(candidates),
                 selected=fallback,
+                source_inspection=source_inspection,
             )
         rejected_reason = "no_plugin_can_parse"
         if any(c.can_parse for c in candidates):
@@ -584,6 +587,7 @@ def resolve_parser_with_diagnostics(file_path: str | Path) -> ResolverDiagnostic
             candidates_considered=tuple(candidates),
             selected=None,
             rejected_reason=rejected_reason,
+            source_inspection=source_inspection,
         )
 
     selected = max(
@@ -599,6 +603,7 @@ def resolve_parser_with_diagnostics(file_path: str | Path) -> ResolverDiagnostic
         source_format=source_format,
         candidates_considered=tuple(candidates),
         selected=selected,
+        source_inspection=source_inspection,
     )
 
 
@@ -640,6 +645,7 @@ def get_parser(
             constructor_kwargs["metadata_parsing_mode"] = metadata_parsing_mode
 
     parser = parser_cls(normalized_path, database, **constructor_kwargs)
+    parser.source_inspection_context = diagnostics.source_inspection
 
     if metadata_parsing_mode is not None and hasattr(parser, "metadata_parsing_mode"):
         parser.metadata_parsing_mode = metadata_parsing_mode

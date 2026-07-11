@@ -13,7 +13,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}(?:rc\d+)?$")
         self.assertRegex(metadata.build, r"^\d{6}$")
         self.assertEqual(metadata.version_label, f"{metadata.release_version}({metadata.build})")
-        self.assertEqual(metadata.public_version_label, "2026.06 RC2 (build 260626)")
+        self.assertEqual(metadata.public_version_label, "2026.06 RC2 (build 260709)")
         self.assertTrue(metadata.highlight)
 
     def test_in_app_current_release_notes_show_current_version_only(self):
@@ -50,6 +50,17 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertEqual(
             current_bullets,
             [
+                "- Excel and industrial workbook exports now keep imported formula-like and URL-like text literal, preventing source data from becoming active workbook formulas or links<br>",
+                "- Google OAuth tokens now use an atomic private application file, exclude client secrets, reject symlink targets, and migrate legacy local tokens only after a secure write succeeds<br>",
+                "- HTML and realtime dashboards now publish atomically, use private session output where appropriate, and preserve the last complete generation when publication fails<br>",
+                "- Parser resolution now reuses one bounded source inspection, validates source content during metadata enrichment, caps declarative regex work, and stores bounded provenance instead of duplicate parse trees<br>",
+                "- Report paths, typed membership filters, report identifiers, tabular numeric shadows, and measurement summaries now preserve stricter ownership and data-integrity invariants<br>",
+                "- CMM import now processes a valid final line without requiring a trailing newline and rejects empty parses without recording a successful fingerprint<br>",
+                "- Realtime industrial sync now stages streamed rows until atomic promotion, recovers abandoned staging at startup, quarantines permanent poison events, and keeps source health current even when no rows arrive<br>",
+                "- Realtime timestamps now use fixed-width UTC storage with explicit source timezones, detector inputs and identifiers are validated strictly, and legacy pickle model loading is disabled without deserialization<br>",
+                "- Realtime polling now commits samples, stream events, and monotonic offsets together, rejects stale pollers, handles bounded catch-up and late data, and streams replay files in bounded batches<br>",
+                "- Realtime shutdown now waits for database workers before removing session files, and test isolation guards prevent module-scope Qt stubs from contaminating later tests<br>",
+                "- Packaging now reports missing required components instead of silently producing incomplete builds, while automated security checks block newly introduced findings<br>",
                 "- CSV Summary and Excel inputs now use one consistent local row store, keeping large files responsive while avoiding extra data copies<br>",
                 "- CSV Summary filters, grouping, and dashboard preparation can stream selected rows in smaller batches, reducing memory pressure on large tables<br>",
                 "- Grouped metric summaries now calculate directly from stored rows, so large CSV Summary analysis spends less time preparing intermediate tables<br>",

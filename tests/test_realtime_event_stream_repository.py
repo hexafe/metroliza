@@ -1,3 +1,5 @@
+import pytest
+
 from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
 from metroliza.industrial.realtime.event_stream import RealtimeStreamEvent
 from metroliza.industrial.realtime.event_stream_repository import RealtimeEventStreamRepository
@@ -139,6 +141,65 @@ def test_consumer_offsets_are_independent_and_failure_is_redacted(tmp_path):
     assert failed_offset.last_error == "driver password=<redacted> failed"
 
 
+def test_stale_consumer_offset_update_cannot_rewind_newer_progress(tmp_path):
+    db_path = str(tmp_path / "monotonic-offset.db")
+    profile = _profile(db_path)
+    repository = RealtimeEventStreamRepository(db_path)
+
+    advanced = repository.update_consumer_offset(
+        consumer_key="detectors",
+        source_profile_id=profile.id,
+        stream_key="cycle_time",
+        last_event_id=10,
+        updated_at="2026-07-09T10:00:00Z",
+    )
+    stale = repository.update_consumer_offset(
+        consumer_key="detectors",
+        source_profile_id=profile.id,
+        stream_key="cycle_time",
+        last_event_id=5,
+        updated_at="2026-07-09T10:01:00Z",
+    )
+
+    assert advanced.last_event_id == 10
+    assert stale.last_event_id == 10
+    assert stale.updated_at == "2026-07-09T10:00:00.000000Z"
+
+
+def test_stale_consumer_failure_cannot_overwrite_newer_progress(tmp_path):
+    db_path = str(tmp_path / "stale-failure.db")
+    profile = _profile(db_path)
+    repository = RealtimeEventStreamRepository(db_path)
+    repository.update_consumer_offset(
+        consumer_key="detectors",
+        source_profile_id=profile.id,
+        stream_key="cycle_time",
+        last_event_id=2,
+    )
+    advanced = repository.update_consumer_offset(
+        consumer_key="detectors",
+        source_profile_id=profile.id,
+        stream_key="cycle_time",
+        last_event_id=10,
+        updated_at="2026-07-09T10:00:00Z",
+    )
+
+    stale_failure = repository.mark_consumer_failure(
+        consumer_key="detectors",
+        source_profile_id=profile.id,
+        stream_key="cycle_time",
+        error="driver password=secret123 failed",
+        expected_last_event_id=2,
+        updated_at="2026-07-09T10:01:00Z",
+    )
+
+    assert stale_failure == advanced
+    assert stale_failure.last_event_id == 10
+    assert stale_failure.status == "idle"
+    assert stale_failure.failure_count == 0
+    assert stale_failure.last_error is None
+
+
 def test_schema_uses_event_id_column_for_stream_events(tmp_path):
     db_path = str(tmp_path / "schema.db")
     _profile(db_path)
@@ -152,3 +213,23 @@ def test_schema_uses_event_id_column_for_stream_events(tmp_path):
 
     assert "event_id" in columns
     assert "id" not in columns
+
+
+@pytest.mark.parametrize("invalid_id", [True, 1.5, 2**63])
+def test_event_stream_repository_rejects_non_exact_ids(tmp_path, invalid_id):
+    db_path = str(tmp_path / "invalid-id.db")
+    profile = _profile(db_path)
+    repository = RealtimeEventStreamRepository(db_path)
+
+    with pytest.raises(ValueError, match="positive integer"):
+        repository.append_event(
+            RealtimeStreamEvent(
+                source_profile_id=invalid_id,
+                stream_key="cycle_time",
+                event_type="sample_batch_committed",
+                aggregate_type="sample_batch",
+                idempotency_key="bad-id",
+            )
+        )
+
+    assert profile.id == 1

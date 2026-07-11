@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import timedelta
 import math
 from typing import Any, Iterable, Mapping
 
@@ -10,6 +11,7 @@ from metroliza.industrial.industrial_data_repository import looks_sensitive_key,
 from metroliza.industrial.realtime.sample_repository import utc_timestamp
 from metroliza.industrial.realtime.stream_config import RealtimePollConfig
 from metroliza.industrial.realtime.stream_contracts import IndustrialSample, SignalDefinition
+from metroliza.industrial.realtime.timestamps import canonical_utc_timestamp, parse_utc_timestamp
 
 
 @dataclass(frozen=True)
@@ -21,6 +23,7 @@ class SampleMappingStats:
     skipped_missing: int = 0
     skipped_non_numeric: int = 0
     skipped_non_finite: int = 0
+    skipped_late: int = 0
 
 
 @dataclass(frozen=True)
@@ -41,32 +44,51 @@ def map_rows_to_samples(
     config: RealtimePollConfig,
     signals: Mapping[str, SignalDefinition],
     ingest_time: str | None = None,
+    event_time_watermark: str | None = None,
 ) -> SampleMappingResult:
     """Map source rows into zero or more samples per row."""
 
     validated = config.validated()
-    ingest_timestamp = ingest_time or utc_timestamp()
+    ingest_timestamp = canonical_utc_timestamp(ingest_time or utc_timestamp())
     samples: list[IndustrialSample] = []
     rows_seen = 0
     skipped_missing = 0
     skipped_non_numeric = 0
     skipped_non_finite = 0
+    skipped_late = 0
     cursor_value: str | None = None
     cursor_tie_breaker_value: str | None = None
-    watermark: str | None = None
+    watermark = (
+        canonical_utc_timestamp(event_time_watermark)
+        if event_time_watermark
+        else None
+    )
+    lateness_boundary = (
+        parse_utc_timestamp(watermark)
+        - timedelta(seconds=validated.allowed_lateness_seconds)
+        if watermark
+        else None
+    )
     warnings: list[str] = []
 
     for row in rows:
         rows_seen += 1
         record_key = _text_or_none(row.get(validated.record_key_column))
-        event_time = _text_or_none(row.get(validated.event_time_column))
+        event_time_raw = row.get(validated.event_time_column)
         row_cursor = _text_or_none(row.get(validated.cursor_column))
-        if not record_key or not event_time:
+        if not record_key or event_time_raw in (None, ""):
             skipped_missing += len(validated.signal_keys)
             continue
+        event_time = canonical_utc_timestamp(
+            event_time_raw,
+            source_timezone=validated.source_timezone,
+        )
         if row_cursor is not None:
             cursor_value = row_cursor
             cursor_tie_breaker_value = record_key
+        if lateness_boundary is not None and parse_utc_timestamp(event_time) < lateness_boundary:
+            skipped_late += len(validated.signal_keys)
+            continue
         if watermark is None or event_time > watermark:
             watermark = event_time
 
@@ -117,6 +139,12 @@ def map_rows_to_samples(
                 )
             )
 
+    if skipped_late:
+        warnings.append(
+            f"Skipped {skipped_late} signal value(s) older than the allowed lateness "
+            f"boundary ({validated.allowed_lateness_seconds:g} seconds)."
+        )
+
     return SampleMappingResult(
         samples=tuple(samples),
         stats=SampleMappingStats(
@@ -125,6 +153,7 @@ def map_rows_to_samples(
             skipped_missing=skipped_missing,
             skipped_non_numeric=skipped_non_numeric,
             skipped_non_finite=skipped_non_finite,
+            skipped_late=skipped_late,
         ),
         cursor_value=cursor_value,
         cursor_tie_breaker_value=cursor_tie_breaker_value,

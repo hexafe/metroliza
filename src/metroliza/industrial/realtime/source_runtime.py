@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterable
 
 from metroliza.industrial.industrial_data_repository import (
@@ -11,6 +11,7 @@ from metroliza.industrial.industrial_data_repository import (
 )
 from metroliza.industrial.realtime.db_poller import SourceDbAdapter
 from metroliza.industrial.realtime.realtime_service import PollingCycleResult, run_polling_cycle
+from metroliza.industrial.realtime.source_health_service import RealtimeSourceHealthService
 from metroliza.industrial.realtime.stream_config import RealtimePollConfig
 
 
@@ -36,6 +37,7 @@ class RealtimeSourceRuntime:
         self.database = database
         self.configs = tuple(config.validated() for config in configs)
         self.adapter = adapter
+        self.source_health_service = RealtimeSourceHealthService(database)
 
     def list_statuses(self) -> tuple[RealtimeMonitorStatus, ...]:
         return tuple(
@@ -85,12 +87,28 @@ class RealtimeSourceRuntime:
                     )
                 )
                 continue
-            results.append(
-                run_polling_cycle(
-                    database=self.database,
-                    profile=profile,
-                    config=config,
-                    adapter=self.adapter,
-                )
+            result = run_polling_cycle(
+                database=self.database,
+                profile=profile,
+                config=config,
+                adapter=self.adapter,
             )
+            try:
+                health = self.source_health_service.evaluate(config)
+                diagnostics = dict(result.diagnostics)
+                diagnostics["source_health"] = {
+                    "status": health.status,
+                    "evaluated_at": health.evaluated_at,
+                    "lag_seconds": health.lag_seconds,
+                }
+                result = replace(result, diagnostics=diagnostics, lag_seconds=health.lag_seconds)
+            except Exception as exc:
+                diagnostics = dict(result.diagnostics)
+                diagnostics.setdefault("warnings", [])
+                diagnostics["warnings"] = [
+                    *diagnostics["warnings"],
+                    f"source health evaluation failed: {redact_sensitive_text(exc)}",
+                ]
+                result = replace(result, diagnostics=diagnostics)
+            results.append(result)
         return tuple(results)

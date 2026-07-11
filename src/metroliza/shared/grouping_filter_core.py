@@ -489,7 +489,7 @@ class MembershipFilterSpec:
         if not values:
             raise ValueError("IN filters require at least one value")
 
-        value_kind = _membership_value_kind(values, dayfirst=self.dayfirst)
+        value_kind = membership_value_kind(values, dayfirst=self.dayfirst)
         if value_kind == "number":
             numbers = pd.to_numeric(data_frame[self.column], errors="coerce")
             parsed_values = [_coerce_number(value, field_name="IN value") for value in values]
@@ -1121,7 +1121,13 @@ def _wildcard_text_mask(text: pd.Series, pattern: str) -> pd.Series:
     return text.str.match(regex, na=False)
 
 
-def _membership_value_kind(values: tuple[Any, ...], *, dayfirst: bool) -> str:
+def membership_value_kind(
+    values: tuple[Any, ...],
+    *,
+    dayfirst: bool = False,
+) -> Literal["number", "date", "text"]:
+    """Return the shared coercion kind used by membership filter consumers."""
+
     if values and all(_looks_date_like(value) for value in values):
         parsed_dates = pd.to_datetime(
             pd.Series(list(values)),

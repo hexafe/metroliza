@@ -1,3 +1,4 @@
+from contextlib import closing
 import json
 import sqlite3
 
@@ -127,12 +128,41 @@ def _persist_basic_report(
     )
 
 
+def _persist_measurement_payload(
+    tmp_path,
+    repository,
+    *,
+    file_name,
+    measurements,
+    measurement_count=0,
+    has_nok=False,
+    nok_count=0,
+):
+    source_path = tmp_path / file_name
+    source_path.write_bytes(f"{file_name}-content".encode("utf-8"))
+    return repository.persist_parsed_report(
+        source_path=source_path,
+        parser_id="test_parser",
+        parser_version="1.0",
+        template_family="test_template",
+        parse_status="parsed",
+        metadata={"reference": "REF-MEASUREMENT", "metadata_json": {}},
+        candidates=(),
+        warnings=(),
+        measurements=measurements,
+        metadata_version="report_metadata_v1",
+        measurement_count=measurement_count,
+        has_nok=has_nok,
+        nok_count=nok_count,
+    )
+
+
 def test_report_schema_creates_storage_layers_and_views(tmp_path):
     db_path = str(tmp_path / "reports.db")
 
     ensure_report_schema(db_path)
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         tables = {
             row[0]
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
@@ -149,6 +179,9 @@ def test_report_schema_creates_storage_layers_and_views(tmp_path):
         }
         schema_version = conn.execute(
             "SELECT value FROM app_schema WHERE key = 'schema_version'"
+        ).fetchone()[0]
+        source_location_ownership_version = conn.execute(
+            "SELECT value FROM app_schema WHERE key = 'source_location_ownership_version'"
         ).fetchone()[0]
         industrial_schema_version = conn.execute(
             "SELECT value FROM app_schema WHERE key = 'industrial_schema_version'"
@@ -172,6 +205,7 @@ def test_report_schema_creates_storage_layers_and_views(tmp_path):
     assert {"vw_report_overview", "vw_measurement_export", "vw_grouping_reports"}.issubset(views)
     assert {
         "idx_source_files_sha256",
+        "idx_source_file_locations_active_path_unique",
         "idx_report_metadata_reference",
         "idx_report_parse_state_reparse",
         "idx_report_measurements_report",
@@ -179,6 +213,7 @@ def test_report_schema_creates_storage_layers_and_views(tmp_path):
         "idx_industrial_records_reference",
     }.issubset(indexes)
     assert schema_version == SCHEMA_VERSION
+    assert source_location_ownership_version == "1"
     assert industrial_schema_version is not None
 
 
@@ -186,7 +221,7 @@ def test_report_schema_backfills_parse_state_from_metadata_json(tmp_path):
     db_path = str(tmp_path / "reports.db")
     ensure_report_schema(db_path)
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.execute(
             """
             INSERT INTO source_files (sha256, source_format, discovered_at, is_active)
@@ -242,7 +277,7 @@ def test_report_schema_backfills_parse_state_from_metadata_json(tmp_path):
 
     ensure_report_schema(db_path)
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         parse_state = conn.execute(
             """
             SELECT
@@ -274,7 +309,7 @@ def test_report_schema_exposes_expected_view_columns(tmp_path):
     db_path = str(tmp_path / "reports.db")
     ensure_report_schema(db_path)
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         overview_columns = _columns(conn, "vw_report_overview")
         export_columns = _columns(conn, "vw_measurement_export")
         grouping_columns = _columns(conn, "vw_grouping_reports")
@@ -319,12 +354,12 @@ def test_report_schema_exposes_expected_view_columns(tmp_path):
 
 def test_report_schema_refreshes_stale_measurement_export_view(tmp_path):
     db_path = str(tmp_path / "reports.db")
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.execute("CREATE VIEW vw_measurement_export AS SELECT 1 AS report_id")
 
     ensure_report_schema(db_path)
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         export_columns = _columns(conn, "vw_measurement_export")
 
     assert "measurement_id" in export_columns
@@ -332,7 +367,7 @@ def test_report_schema_refreshes_stale_measurement_export_view(tmp_path):
 
 def test_report_schema_migrates_legacy_reports_measurements_into_current_views(tmp_path):
     db_path = str(tmp_path / "legacy.db")
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.executescript(
             """
             CREATE TABLE REPORTS (
@@ -365,7 +400,7 @@ def test_report_schema_migrates_legacy_reports_measurements_into_current_views(t
 
     ensure_report_schema(db_path)
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         export_cursor = conn.execute(build_measurement_export_query())
         export_row = export_cursor.fetchone()
         export_columns = [description[0] for description in export_cursor.description]
@@ -392,14 +427,14 @@ def test_report_schema_migrates_legacy_reports_measurements_into_current_views(t
 
     ensure_report_schema(db_path)
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         assert conn.execute("SELECT COUNT(*) FROM vw_measurement_export").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM report_metadata").fetchone()[0] == 1
 
 
 def test_characteristic_mapping_sees_legacy_rows_after_schema_bootstrap(tmp_path):
     db_path = str(tmp_path / "mixed_legacy.db")
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.executescript(
             """
             CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY, REFERENCE TEXT);
@@ -447,12 +482,92 @@ def test_repository_dedupes_source_files_by_sha256_and_keeps_locations(tmp_path)
     assert first_record.id == second_record.id
     assert first_record.sha256 == compute_sha256(first_path)
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         source_count = conn.execute("SELECT COUNT(*) FROM source_files").fetchone()[0]
         location_count = conn.execute("SELECT COUNT(*) FROM source_file_locations").fetchone()[0]
 
     assert source_count == 1
     assert location_count == 2
+
+
+def test_repository_transfers_active_path_ownership_when_content_changes(tmp_path):
+    db_path = str(tmp_path / "reports.db")
+    source_path = tmp_path / "same.pdf"
+    repository = ReportRepository(db_path)
+    repository.ensure_schema()
+
+    source_path.write_bytes(b"first-content")
+    first_record = repository.upsert_source_file(source_path)
+    source_path.write_bytes(b"replacement-content")
+    replacement_record = repository.upsert_source_file(source_path)
+
+    assert first_record.id != replacement_record.id
+    with closing(sqlite3.connect(db_path)) as conn, conn:
+        locations = conn.execute(
+            """
+            SELECT source_file_id, is_active
+            FROM source_file_locations
+            WHERE absolute_path = ?
+            ORDER BY source_file_id
+            """,
+            (str(source_path.resolve()),),
+        ).fetchall()
+
+    assert locations == [(first_record.id, 0), (replacement_record.id, 1)]
+
+
+def test_report_schema_migrates_duplicate_active_path_owners_idempotently(tmp_path):
+    db_path = str(tmp_path / "reports.db")
+    ensure_report_schema(db_path)
+    duplicate_path = str((tmp_path / "duplicate.pdf").resolve())
+    with closing(sqlite3.connect(db_path)) as conn, conn:
+        conn.execute("DROP INDEX idx_source_file_locations_active_path_unique")
+        conn.executemany(
+            """
+            INSERT INTO source_files (sha256, source_format, discovered_at, is_active)
+            VALUES (?, 'pdf', ?, 1)
+            """,
+            [
+                ("old-sha", "2026-01-01T00:00:00Z"),
+                ("new-sha", "2026-01-02T00:00:00Z"),
+            ],
+        )
+        source_ids = [row[0] for row in conn.execute("SELECT id FROM source_files ORDER BY id")]
+        conn.executemany(
+            """
+            INSERT INTO source_file_locations (
+                source_file_id, absolute_path, directory_path, file_name,
+                file_extension, discovered_at, is_active
+            )
+            VALUES (?, ?, ?, 'duplicate.pdf', '.pdf', ?, 1)
+            """,
+            [
+                (source_ids[-2], duplicate_path, str(tmp_path), "2026-01-01T00:00:00Z"),
+                (source_ids[-1], duplicate_path, str(tmp_path), "2026-01-02T00:00:00Z"),
+            ],
+        )
+
+    ensure_report_schema(db_path)
+    ensure_report_schema(db_path)
+
+    with closing(sqlite3.connect(db_path)) as conn, conn:
+        ownership = conn.execute(
+            """
+            SELECT sf.sha256, sfl.is_active
+            FROM source_file_locations sfl
+            JOIN source_files sf ON sf.id = sfl.source_file_id
+            WHERE sfl.absolute_path = ?
+            ORDER BY sf.sha256
+            """,
+            (duplicate_path,),
+        ).fetchall()
+        index_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'idx_source_file_locations_active_path_unique'"
+        ).fetchone()[0]
+
+    assert ownership == [("new-sha", 1), ("old-sha", 0)]
+    assert "UNIQUE INDEX" in index_sql.upper()
+    assert "WHERE is_active = 1" in index_sql
 
 
 def test_repository_persists_report_payload_and_views(tmp_path):
@@ -548,7 +663,7 @@ def test_repository_persists_report_payload_and_views(tmp_path):
         identity_hash="identity-1",
     )
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         overview = conn.execute("SELECT * FROM vw_report_overview").fetchone()
         overview_columns = [description[0] for description in conn.execute("SELECT * FROM vw_report_overview").description]
         export = conn.execute("SELECT * FROM vw_measurement_export").fetchone()
@@ -621,7 +736,7 @@ def test_update_report_metadata_identity_field_recomputes_hash_and_removes_stale
     )
 
     expected_hash = _identity_hash(reference="REF-2")
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         identity_hash = conn.execute(
             "SELECT identity_hash FROM parsed_reports WHERE id = ?",
             (first_report_id,),
@@ -669,7 +784,7 @@ def test_update_report_metadata_non_identity_field_keeps_hash(tmp_path):
 
     repository.update_report_metadata_fields(report_id, {"operator_name": "New Operator"})
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         row = conn.execute(
             """
             SELECT pr.identity_hash, rm.operator_name
@@ -742,7 +857,7 @@ def test_replace_report_metadata_enrichment_preserves_measurement_rows(tmp_path)
         raw_report_json={"parse_backend": "synthetic", "header_extraction_mode": "ocr"},
     )
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         measurement_rows = conn.execute(
             """
             SELECT id, report_id, row_order, header, ax, meas, raw_measurement_json
@@ -819,7 +934,7 @@ def test_replace_report_metadata_enrichment_rolls_back_as_one_transaction(tmp_pa
         ],
     )
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         original_measurements = conn.execute(
             "SELECT id, report_id, row_order, header, ax, meas FROM report_measurements WHERE report_id = ?",
             (report_id,),
@@ -860,7 +975,7 @@ def test_replace_report_metadata_enrichment_rolls_back_as_one_transaction(tmp_pa
     else:
         raise AssertionError("Expected metadata enrichment replacement to fail")
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         metadata_reference = conn.execute(
             "SELECT reference FROM report_metadata WHERE report_id = ?",
             (report_id,),
@@ -977,7 +1092,7 @@ def test_persist_parsed_report_rolls_back_full_replacement_on_measurement_failur
     else:
         raise AssertionError("Expected parsed-report replacement to fail")
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         parsed_row = conn.execute(
             "SELECT parse_status, parser_version, metadata_confidence, identity_hash FROM parsed_reports WHERE id = ?",
             (report_id,),
@@ -1006,13 +1121,174 @@ def test_persist_parsed_report_rolls_back_full_replacement_on_measurement_failur
     assert warning_count == 0
 
 
+def test_persist_parsed_report_derives_measurement_summary_from_normalized_rows(tmp_path):
+    db_path = str(tmp_path / "reports.db")
+    repository = ReportRepository(db_path)
+    repository.ensure_schema()
+
+    report_id = _persist_measurement_payload(
+        tmp_path,
+        repository,
+        file_name="derived_summary.pdf",
+        measurements=(
+            {"row_order": 1, "header": "Feature 1", "ax": "X", "outtol": 0.0},
+            {"row_order": 2, "header": "Feature 2", "ax": "Y", "outtol": 0.25},
+        ),
+        measurement_count=999,
+        has_nok=False,
+        nok_count=0,
+    )
+
+    with closing(sqlite3.connect(db_path)) as conn, conn:
+        report_summary = conn.execute(
+            "SELECT measurement_count, has_nok, nok_count FROM parsed_reports WHERE id = ?",
+            (report_id,),
+        ).fetchone()
+        measurement_statuses = conn.execute(
+            "SELECT is_nok, status_code FROM report_measurements WHERE report_id = ? ORDER BY row_order",
+            (report_id,),
+        ).fetchall()
+
+    assert report_summary == (2, 1, 1)
+    assert measurement_statuses == [(0, "ok"), (1, "nok")]
+
+
+def test_replace_measurements_to_empty_resets_report_summary(tmp_path):
+    db_path = str(tmp_path / "reports.db")
+    repository = ReportRepository(db_path)
+    repository.ensure_schema()
+    report_id = _persist_measurement_payload(
+        tmp_path,
+        repository,
+        file_name="replace_empty.pdf",
+        measurements=({"row_order": 1, "header": "Feature", "ax": "X", "outtol": 0.2},),
+    )
+
+    repository.replace_measurements(report_id, ())
+
+    with closing(sqlite3.connect(db_path)) as conn, conn:
+        report_summary = conn.execute(
+            "SELECT measurement_count, has_nok, nok_count FROM parsed_reports WHERE id = ?",
+            (report_id,),
+        ).fetchone()
+        measurement_count = conn.execute(
+            "SELECT COUNT(*) FROM report_measurements WHERE report_id = ?",
+            (report_id,),
+        ).fetchone()[0]
+
+    assert report_summary == (0, 0, 0)
+    assert measurement_count == 0
+
+
+def test_replace_measurements_rejects_missing_report_even_when_replacement_is_empty(tmp_path):
+    db_path = str(tmp_path / "reports.db")
+    repository = ReportRepository(db_path)
+    repository.ensure_schema()
+
+    try:
+        repository.replace_measurements(999, ())
+    except ValueError as exc:
+        assert str(exc) == "Report 999 does not exist"
+    else:
+        raise AssertionError("Expected an unknown report replacement to fail")
+
+
+def test_replace_measurements_normalizes_nok_transitions(tmp_path):
+    db_path = str(tmp_path / "reports.db")
+    repository = ReportRepository(db_path)
+    repository.ensure_schema()
+    report_id = _persist_measurement_payload(
+        tmp_path,
+        repository,
+        file_name="replace_nok.pdf",
+        measurements=({"row_order": 1, "header": "Feature", "ax": "X", "outtol": 0.0},),
+    )
+
+    repository.replace_measurements(
+        report_id,
+        ({"row_order": 1, "header": "Feature", "ax": "X", "outtol": 0.3},),
+    )
+    with closing(sqlite3.connect(db_path)) as conn, conn:
+        nok_summary = conn.execute(
+            "SELECT measurement_count, has_nok, nok_count FROM parsed_reports WHERE id = ?",
+            (report_id,),
+        ).fetchone()
+
+    repository.replace_measurements(
+        report_id,
+        (
+            {
+                "row_order": 1,
+                "header": "Feature",
+                "ax": "X",
+                "outtol": 0.3,
+                "is_nok": True,
+                "status_code": "ok",
+            },
+        ),
+    )
+    with closing(sqlite3.connect(db_path)) as conn, conn:
+        ok_summary = conn.execute(
+            "SELECT measurement_count, has_nok, nok_count FROM parsed_reports WHERE id = ?",
+            (report_id,),
+        ).fetchone()
+        status = conn.execute(
+            "SELECT is_nok, status_code FROM report_measurements WHERE report_id = ?",
+            (report_id,),
+        ).fetchone()
+
+    assert nok_summary == (1, 1, 1)
+    assert ok_summary == (1, 0, 0)
+    assert status == (0, "ok")
+
+
+def test_replace_measurements_rolls_back_rows_and_summary_together(tmp_path):
+    db_path = str(tmp_path / "reports.db")
+    repository = ReportRepository(db_path)
+    repository.ensure_schema()
+    report_id = _persist_measurement_payload(
+        tmp_path,
+        repository,
+        file_name="replace_rollback.pdf",
+        measurements=({"row_order": 1, "header": "Original", "ax": "X", "outtol": 0.0},),
+    )
+
+    class FailingSummaryRepository(ReportRepository):
+        def _refresh_measurement_summary(self, cursor, report_id, *, now=None):
+            super()._refresh_measurement_summary(cursor, report_id, now=now)
+            raise RuntimeError("synthetic summary failure")
+
+    try:
+        FailingSummaryRepository(db_path).replace_measurements(
+            report_id,
+            ({"row_order": 1, "header": "Replacement", "ax": "Y", "outtol": 0.5},),
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("Expected measurement summary refresh to fail")
+
+    with closing(sqlite3.connect(db_path)) as conn, conn:
+        measurement = conn.execute(
+            "SELECT header, ax, outtol, is_nok, status_code FROM report_measurements WHERE report_id = ?",
+            (report_id,),
+        ).fetchone()
+        report_summary = conn.execute(
+            "SELECT measurement_count, has_nok, nok_count FROM parsed_reports WHERE id = ?",
+            (report_id,),
+        ).fetchone()
+
+    assert measurement == ("Original", "X", 0.0, 0, "ok")
+    assert report_summary == (1, 0, 0)
+
+
 def test_update_measurement_fields_keeps_status_aggregate_and_raw_json_coherent(tmp_path):
     db_path = str(tmp_path / "reports.db")
     repository = ReportRepository(db_path)
     repository.ensure_schema()
     report_id = _persist_basic_report(tmp_path, repository, file_name="measurement.pdf")
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         measurement_id = conn.execute(
             "SELECT id FROM report_measurements WHERE report_id = ?",
             (report_id,),
@@ -1024,7 +1300,7 @@ def test_update_measurement_fields_keeps_status_aggregate_and_raw_json_coherent(
         source="manual",
     )
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         measurement_row = conn.execute(
             """
             SELECT header, section_name, feature_label, description, outtol, is_nok, status_code, raw_measurement_json
@@ -1051,7 +1327,7 @@ def test_measurement_export_view_exposes_measurement_id(tmp_path):
     repository.ensure_schema()
     report_id = _persist_basic_report(tmp_path, repository, file_name="view_measurement.pdf")
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         measurement_id = conn.execute(
             "SELECT id FROM report_measurements WHERE report_id = ?",
             (report_id,),

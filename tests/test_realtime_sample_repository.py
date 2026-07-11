@@ -309,6 +309,82 @@ def test_list_recent_samples_filters_segment_and_returns_chronological_rows(tmp_
     assert [sample.source_record_key for sample in loaded] == ["S1-1", "S1-2"]
 
 
+def test_list_samples_before_excludes_boundary_and_later_rows(tmp_path):
+    db_path = str(tmp_path / "sample_history_boundary.db")
+    profile = _source_profile(db_path)
+    repository = RealtimeSampleRepository(db_path)
+    signal = repository.upsert_signal_definition(
+        SignalDefinition(
+            source_profile_id=profile.id,
+            signal_key="cycle_time",
+            metric_name="cycle_time_s",
+        )
+    )
+    result = repository.insert_samples(
+        [
+            IndustrialSample(
+                source_profile_id=profile.id,
+                signal_id=signal.id,
+                source_record_key=f"ROW-{index}",
+                event_time=f"2026-06-13T10:0{index}:00+00:00",
+                metric_name="cycle_time_s",
+                value=float(index),
+            )
+            for index in range(4)
+        ]
+    )
+
+    loaded = repository.list_samples_before(
+        signal_id=signal.id,
+        before_event_time="2026-06-13T10:02:00Z",
+        before_sample_id=result.sample_ids[2],
+        limit=10,
+    )
+
+    assert [sample.source_record_key for sample in loaded] == ["ROW-0", "ROW-1"]
+
+
+def test_fixed_width_utc_timestamps_sort_whole_before_fractional_second(tmp_path):
+    db_path = str(tmp_path / "timestamp_order.db")
+    profile = _source_profile(db_path)
+    repository = RealtimeSampleRepository(db_path)
+    signal = repository.upsert_signal_definition(
+        SignalDefinition(
+            source_profile_id=profile.id,
+            signal_key="cycle_time",
+            metric_name="cycle_time_s",
+        )
+    )
+    repository.insert_samples(
+        (
+            IndustrialSample(
+                source_profile_id=profile.id,
+                signal_id=signal.id,
+                source_record_key="HALF",
+                event_time="2026-07-09T10:00:00.500000Z",
+                metric_name="cycle_time_s",
+                value=2.0,
+            ),
+            IndustrialSample(
+                source_profile_id=profile.id,
+                signal_id=signal.id,
+                source_record_key="WHOLE",
+                event_time="2026-07-09T10:00:00Z",
+                metric_name="cycle_time_s",
+                value=1.0,
+            ),
+        )
+    )
+
+    loaded = repository.list_samples(signal_id=signal.id)
+
+    assert [sample.source_record_key for sample in loaded] == ["WHOLE", "HALF"]
+    assert [sample.event_time for sample in loaded] == [
+        "2026-07-09T10:00:00.000000Z",
+        "2026-07-09T10:00:00.500000Z",
+    ]
+
+
 def test_stream_offset_upsert_replaces_cursor(tmp_path):
     db_path = str(tmp_path / "offsets.db")
     profile = _source_profile(db_path)
@@ -342,7 +418,7 @@ def test_stream_offset_upsert_replaces_cursor(tmp_path):
     assert first.id == second.id
     assert second.cursor_value == "101"
     assert second.cursor_tie_breaker_value is None
-    assert second.event_time_watermark == "2026-06-13T10:01:00Z"
+    assert second.event_time_watermark == "2026-06-13T10:01:00.000000Z"
     assert second.lag_seconds == 2.0
     assert second.status == "idle"
 
@@ -385,7 +461,7 @@ def test_stream_offset_failed_update_can_preserve_or_leave_last_success_null(tmp
         )
     )
 
-    assert failed_after_success.last_success_at == "2026-06-13T10:00:00Z"
+    assert failed_after_success.last_success_at == "2026-06-13T10:00:00.000000Z"
 
 
 def test_stream_offset_watermark_is_scoped_by_profile_and_stream(tmp_path):
@@ -427,7 +503,7 @@ def test_stream_offset_watermark_is_scoped_by_profile_and_stream(tmp_path):
     assert loaded_pressure is not None
     assert loaded_cycle_time.id == cycle_time.id
     assert loaded_cycle_time.cursor_value == "102"
-    assert loaded_cycle_time.event_time_watermark == "2026-06-13T10:02:00Z"
+    assert loaded_cycle_time.event_time_watermark == "2026-06-13T10:02:00.000000Z"
     assert loaded_pressure.id == pressure.id
     assert loaded_pressure.cursor_value == "77"
-    assert loaded_pressure.event_time_watermark == "2026-06-13T09:59:00Z"
+    assert loaded_pressure.event_time_watermark == "2026-06-13T09:59:00.000000Z"

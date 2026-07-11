@@ -258,12 +258,12 @@ Examples of metric availability by spec type:
 
 ## Release metadata
 
-Current release highlight (`2026.06 RC2 (build 260626)`): CSV Summary and export performance release with lighter local row handling, faster grouped summaries, lower memory use, and clearer magic filter syntax.
+Current release highlight (`2026.06 RC2 (build 260709)`): Release hardening for safer exports and credentials, atomic industrial synchronization, stricter parser and report integrity, deterministic shutdown, and enforceable packaging and security gates.
 
 Canonical release metadata is in `src/metroliza/app/version.py`. The root `VersionDate.py`
 module remains as a compatibility import for existing scripts.
 
-### Changelog highlights (release `2026.06 RC2 (build 260626)`)
+### Changelog highlights (release `2026.06 RC2 (build 260709)`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 

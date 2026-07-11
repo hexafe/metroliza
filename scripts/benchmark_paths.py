@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import csv
 import json
 import importlib.machinery
@@ -725,7 +726,7 @@ def _create_cmm_fingerprint_db_fixture(db_path: Path, *, report_count: int) -> d
     complete_expected = 0
     light_expected = 0
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         for report_index in range(1, max(1, int(report_count)) + 1):
             sha256 = f'fingerprint-{report_index:08d}'
             conn.execute(
@@ -872,7 +873,7 @@ def benchmark_cmm_fingerprint_sqlite_state_probe(temp_dir: Path, *, report_count
           )
     """
     plan_start = time.perf_counter()
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         plan_metrics = {
             **_sqlite_query_plan_metrics(
                 conn,
@@ -1054,12 +1055,12 @@ def benchmark_export_sqlite_materialization_probe(
         GROUP BY reference, header, ax
     """
     sqlite_start = time.perf_counter()
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         sqlite_grouped = conn.execute(sqlite_aggregate_query).fetchall()
     sqlite_s = time.perf_counter() - sqlite_start
 
     plan_start = time.perf_counter()
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         plan_metrics = {
             **_sqlite_query_plan_metrics(conn, export_query, prefix='export_view'),
             **_sqlite_query_plan_metrics(conn, sqlite_aggregate_query, prefix='sqlite_aggregate'),

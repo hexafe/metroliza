@@ -6,7 +6,7 @@ from metroliza.industrial.industrial_data_schema import SCHEMA_VERSION, ensure_i
 from metroliza.industrial.realtime.offset_store import StreamOffsetStore
 
 
-def test_realtime_schema_creates_v6_tables_and_indexes_idempotently(tmp_path):
+def test_realtime_schema_creates_v7_tables_and_indexes_idempotently(tmp_path):
     db_path = str(tmp_path / "realtime.db")
     ensure_industrial_data_schema(db_path)
     ensure_industrial_data_schema(db_path)
@@ -27,7 +27,7 @@ def test_realtime_schema_creates_v6_tables_and_indexes_idempotently(tmp_path):
         ).fetchall()
 
     assert len(schema_version_rows) == 1
-    assert schema_version_rows[0][0] == SCHEMA_VERSION == "industrial_data_v6"
+    assert schema_version_rows[0][0] == SCHEMA_VERSION == "industrial_data_v7"
     assert {
         "industrial_realtime_monitor_configs",
         "industrial_stream_offsets",
@@ -38,6 +38,9 @@ def test_realtime_schema_creates_v6_tables_and_indexes_idempotently(tmp_path):
         "industrial_anomaly_events",
         "industrial_realtime_stream_events",
         "industrial_realtime_consumer_offsets",
+        "industrial_realtime_dead_letters",
+        "industrial_realtime_source_health",
+        "industrial_sync_staging_records",
     }.issubset(tables)
     assert {
         "idx_industrial_realtime_monitor_configs_enabled",
@@ -52,8 +55,47 @@ def test_realtime_schema_creates_v6_tables_and_indexes_idempotently(tmp_path):
         "idx_industrial_realtime_stream_events_source_stream_id",
         "idx_industrial_realtime_consumer_offsets_unique",
         "idx_industrial_realtime_consumer_offsets_stream",
+        "idx_industrial_realtime_dead_letters_stream",
+        "idx_industrial_realtime_source_health_status",
+        "idx_industrial_sync_staging_run_sequence",
     }.issubset(indexes)
     assert "idx_industrial_realtime_stream_events_idempotency_key" not in indexes
+
+
+def test_realtime_schema_migrates_source_timezone_idempotently(tmp_path):
+    db_path = str(tmp_path / "legacy-monitor-config.db")
+    ensure_industrial_data_schema(db_path)
+    with sqlite_connection_scope(db_path) as conn:
+        with conn:
+            conn.execute(
+                "ALTER TABLE industrial_realtime_monitor_configs "
+                "RENAME TO industrial_realtime_monitor_configs_v7"
+            )
+            conn.execute(
+                """
+                CREATE TABLE industrial_realtime_monitor_configs AS
+                SELECT
+                    id, source_profile_id, stream_key, enabled, cursor_column,
+                    event_time_column, record_key_column, signal_keys_json,
+                    signal_columns_json, polling_interval_seconds, timeout_seconds,
+                    chunk_size, max_catchup_rows_per_cycle, allowed_lateness_seconds,
+                    segment_fields_json, context_fields_json, detectors_json, display_mode,
+                    aggregation_time_bucket, aggregation_methods_json,
+                    aggregation_group_fields_json, dashboard_output_path, created_at, updated_at
+                FROM industrial_realtime_monitor_configs_v7
+                """
+            )
+            conn.execute("DROP TABLE industrial_realtime_monitor_configs_v7")
+
+    ensure_industrial_data_schema(db_path)
+    ensure_industrial_data_schema(db_path)
+
+    with sqlite_connection_scope(db_path) as conn:
+        columns = {
+            row[1]: row[4]
+            for row in conn.execute("PRAGMA table_info(industrial_realtime_monitor_configs)")
+        }
+    assert columns["source_timezone"] == "'UTC'"
 
 
 def test_realtime_schema_preserves_existing_industrial_cache_tables(tmp_path):
@@ -126,13 +168,18 @@ def test_realtime_schema_migrates_legacy_stream_offsets(tmp_path):
 
     with sqlite_connection_scope(db_path) as conn:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(industrial_stream_offsets)")}
+        timestamp_format = conn.execute(
+            "SELECT value FROM app_schema WHERE key = 'industrial_timestamp_storage_format'"
+        ).fetchone()[0]
 
     assert "cursor_tie_breaker_column" in columns
     assert "cursor_tie_breaker_value" in columns
     assert offset.cursor_value == "500"
     assert offset.cursor_tie_breaker_column is None
     assert offset.cursor_tie_breaker_value is None
-    assert offset.event_time_watermark == "2026-06-13T10:00:00Z"
+    assert offset.event_time_watermark == "2026-06-13T10:00:00.000000Z"
+    assert offset.last_success_at == "2026-06-13T10:00:05.000000Z"
+    assert timestamp_format == "utc_iso8601_microseconds_v1"
 
 
 def test_realtime_anomaly_event_requires_sample_id(tmp_path):

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 import sqlite3
 import warnings
@@ -61,7 +61,7 @@ def _sample_table() -> pd.DataFrame:
 
 
 def _sqlite_index_names(store) -> set[str]:
-    with sqlite3.connect(store.path) as connection:
+    with closing(sqlite3.connect(store.path)) as connection:
         return {
             str(row[0])
             for row in connection.execute(
@@ -84,6 +84,67 @@ def test_load_tabular_analytics_file_detects_csv_metrics_and_contract_columns(tm
     assert "reference" in result.dataframe.columns
     assert set(result.dataframe["reference"]) == {"R1", "R2", "R3"}
     assert result.csv_config["delimiter"] == ","
+
+
+def test_load_tabular_analytics_file_preserves_identifier_lexemes_and_large_integers(
+    tmp_path,
+) -> None:
+    input_file = tmp_path / "identifier_values.csv"
+    input_file.write_text(
+        "Code,Metric\n00123,1.5\n00001,2.5\n12345678901234567890,3.5\n",
+        encoding="utf-8",
+    )
+
+    result = load_tabular_analytics_file(input_file)
+    try:
+        assert result.dataframe["code"].tolist() == [
+            "00123",
+            "00001",
+            "12345678901234567890",
+        ]
+        assert result.dataframe["metric"].tolist() == [1.5, 2.5, 3.5]
+        assert {candidate.field_name for candidate in result.metric_candidates} == {"metric"}
+        with closing(sqlite3.connect(result.sqlite_store.path)) as connection:
+            stored = connection.execute(
+                "SELECT code, typeof(code) FROM tabular_rows ORDER BY source_row_number"
+            ).fetchall()
+        assert stored == [
+            ("00123", "text"),
+            ("00001", "text"),
+            ("12345678901234567890", "text"),
+        ]
+    finally:
+        cleanup_tabular_load_result(result)
+
+
+def test_tabular_numeric_shadows_preserve_decimal_comma_analytics(tmp_path) -> None:
+    input_file = tmp_path / "decimal_comma.csv"
+    input_file.write_text(
+        "Code;Metric\n00123;1,5\n00001;2,5\n",
+        encoding="utf-8",
+    )
+
+    result = load_tabular_analytics_file(input_file)
+    try:
+        assert result.dataframe[["code", "metric"]].to_dict("records") == [
+            {"code": "00123", "metric": 1.5},
+            {"code": "00001", "metric": 2.5},
+        ]
+        assert result.sqlite_store.row_ids(
+            grouping_filter_expression="Metric IN (1.5)"
+        ) == [1]
+        assert result.sqlite_store.aggregate_numeric_columns(("metric",)) == [
+            {
+                "metric": "metric",
+                "n": 2,
+                "mean": 2.0,
+                "min": 1.5,
+                "max": 2.5,
+                "stddev": pytest.approx(2**-0.5),
+            }
+        ]
+    finally:
+        cleanup_tabular_load_result(result)
 
 
 def test_build_tabular_file_grouping_dataframe_assigns_custom_file_groups_only() -> None:
@@ -1649,9 +1710,36 @@ def test_tabular_workbook_export_writes_separate_parameter_sheets(tmp_path) -> N
 
     assert Path(result.output_file).exists()
     assert result.parameter_sheet_count == len(loaded.metric_candidates)
-    workbook = pd.ExcelFile(output_file)
-    assert {"Table Data", "Aggregates", "Metrics", "Diagnostics"}.issubset(workbook.sheet_names)
-    assert {"Length Mm", "Width Mm"}.issubset(workbook.sheet_names)
+    with pd.ExcelFile(output_file) as workbook:
+        assert {"Table Data", "Aggregates", "Metrics", "Diagnostics"}.issubset(workbook.sheet_names)
+        assert {"Length Mm", "Width Mm"}.issubset(workbook.sheet_names)
+
+
+def test_tabular_workbook_export_keeps_formula_like_source_values_literal(tmp_path) -> None:
+    output_file = tmp_path / "literal_source_values.xlsx"
+    dataframe = pd.DataFrame(
+        {
+            "source_row_number": [1],
+            "reference": ["=1+1"],
+            "operator_note": ["@SUM(A1:A2)"],
+        }
+    )
+
+    export_tabular_analytics_workbook(
+        dataframe=dataframe,
+        metric_candidates=(),
+        output_file=output_file,
+        separate_parameter_sheets=False,
+    )
+
+    with zipfile.ZipFile(output_file) as workbook_zip:
+        worksheet_xml = "".join(
+            workbook_zip.read(name).decode("utf-8")
+            for name in workbook_zip.namelist()
+            if name.startswith("xl/worksheets/sheet") and name.endswith(".xml")
+        )
+    assert "<f>1+1</f>" not in worksheet_xml
+    assert "<f>SUM(A1:A2)</f>" not in worksheet_xml
 
 
 def test_tabular_workbook_export_includes_selected_chart_outputs(tmp_path) -> None:

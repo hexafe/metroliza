@@ -1,3 +1,4 @@
+from contextlib import closing
 import json
 import sqlite3
 
@@ -8,7 +9,7 @@ from modules.metadata_enrichment_thread import (
     run_metadata_enrichment_batch,
 )
 from modules.report_metadata_models import CanonicalReportMetadata, MetadataCandidate, MetadataSelectionResult
-from modules.report_repository import ReportRepository
+from modules.report_repository import ReportRepository, compute_sha256
 
 
 def _persist_report(tmp_path, repository, *, name, metadata_json, revision=None, operator_name=None):
@@ -140,7 +141,7 @@ def test_discover_metadata_enrichment_work_finds_light_reports_and_skips_enriche
         revision="C",
         operator_name="Synthetic Operator",
     )
-    with sqlite3.connect(db_path) as connection:
+    with closing(sqlite3.connect(db_path)) as connection, connection:
         connection.execute(
             "UPDATE report_metadata SET report_time = '12:34', comment = 'Synthetic comment' WHERE report_id = ?",
             (enriched_id,),
@@ -206,17 +207,21 @@ def test_enrich_existing_report_metadata_preserves_measurement_rows(tmp_path):
         assert connection is not None
         return fake_parser
 
-    with sqlite3.connect(db_path) as connection:
+    with closing(sqlite3.connect(db_path)) as connection, connection:
         enriched = enrich_existing_report_metadata(
             db_path,
-            MetadataEnrichmentWorkItem(report_id=report_id, source_path=str(report_path), sha256="unused"),
+            MetadataEnrichmentWorkItem(
+                report_id=report_id,
+                source_path=str(report_path),
+                sha256=compute_sha256(report_path),
+            ),
             connection=connection,
             parser_factory=_parser_factory,
         )
 
     assert enriched is True
     assert fake_parser.open_modes == ["complete"]
-    with sqlite3.connect(db_path) as connection:
+    with closing(sqlite3.connect(db_path)) as connection, connection:
         metadata_row = connection.execute(
             """
             SELECT reference, report_date, report_time, revision, operator_name, metadata_json
@@ -240,6 +245,40 @@ def test_enrich_existing_report_metadata_preserves_measurement_rows(tmp_path):
     assert metadata_json["metadata_enrichment"]["mode"] == "complete"
     assert "reference" in metadata_json["metadata_enrichment"]["preserved_fields"]
     assert json.loads(raw_report_json)["metadata_enrichment"]["measurement_rows_preserved"] is True
+
+
+def test_enrich_existing_report_metadata_skips_changed_source_content(tmp_path):
+    db_path = str(tmp_path / "reports.db")
+    repository = ReportRepository(db_path)
+    report_id, report_path = _persist_report(
+        tmp_path,
+        repository,
+        name="light.pdf",
+        metadata_json={"metadata_parsing_mode": "light"},
+    )
+    original_sha256 = compute_sha256(report_path)
+    report_path.write_bytes(b"replacement-content")
+
+    def _parser_factory(*_args, **_kwargs):
+        raise AssertionError("changed source must not be parsed")
+
+    enriched = enrich_existing_report_metadata(
+        db_path,
+        MetadataEnrichmentWorkItem(
+            report_id=report_id,
+            source_path=str(report_path),
+            sha256=original_sha256,
+        ),
+        parser_factory=_parser_factory,
+    )
+
+    assert enriched is False
+    with closing(sqlite3.connect(db_path)) as connection, connection:
+        reference = connection.execute(
+            "SELECT reference FROM report_metadata WHERE report_id = ?",
+            (report_id,),
+        ).fetchone()[0]
+    assert reference == "LIGHT-REF"
 
 
 def test_metadata_enrichment_batch_continues_after_per_report_failure(tmp_path):

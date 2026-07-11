@@ -9,6 +9,15 @@ from typing import Any, Mapping
 
 from metroliza.industrial.industrial_data_repository import looks_sensitive_key, redact_sensitive_text
 from metroliza.industrial.industrial_workflow_state import require_identifier
+from metroliza.industrial.realtime.detector_registry import (
+    UnsupportedRealtimeDetectorError,
+    normalize_detector_keys,
+)
+from metroliza.industrial.realtime.numeric_validation import exact_integral, finite_number
+from metroliza.industrial.realtime.timestamps import (
+    IndustrialTimestampError,
+    validate_source_timezone,
+)
 
 
 class RealtimeStreamConfigError(ValueError):
@@ -68,6 +77,7 @@ class RealtimePollConfig:
     chunk_size: int = 500
     max_catchup_rows_per_cycle: int = 5_000
     allowed_lateness_seconds: float = 0.0
+    source_timezone: str = "UTC"
     timeout_seconds: float = 30.0
     segment_fields: tuple[str, ...] = DEFAULT_SEGMENT_FIELDS
     context_fields: tuple[str, ...] = DEFAULT_CONTEXT_FIELDS
@@ -77,8 +87,7 @@ class RealtimePollConfig:
     def validated(self) -> "RealtimePollConfig":
         """Return a normalized, bounded realtime config or raise a safety error."""
 
-        if int(self.source_profile_id) <= 0:
-            raise RealtimeStreamConfigError("Realtime source profile id must be positive.")
+        source_profile_id = _positive_int("source profile id", self.source_profile_id)
         if type(self.enabled) is not bool:
             raise RealtimeStreamConfigError("Realtime enabled setting must be true or false.")
         if self.fetch_all_confirmed:
@@ -102,9 +111,16 @@ class RealtimePollConfig:
         }
         segment_fields = _normalize_identifier_tuple("segment field", self.segment_fields)
         context_fields = _normalize_identifier_tuple("context field", self.context_fields)
-        detectors = tuple(str(detector).strip() for detector in self.detectors if str(detector).strip())
+        try:
+            detectors = normalize_detector_keys(self.detectors)
+        except UnsupportedRealtimeDetectorError as exc:
+            raise RealtimeStreamConfigError(str(exc)) from exc
         if not detectors:
             raise RealtimeStreamConfigError("Configure at least one detector for realtime polling.")
+        try:
+            source_timezone = validate_source_timezone(self.source_timezone)
+        except IndustrialTimestampError as exc:
+            raise RealtimeStreamConfigError(str(exc)) from exc
 
         polling_interval = _positive_float(
             "polling interval seconds",
@@ -116,9 +132,10 @@ class RealtimePollConfig:
             raise RealtimeStreamConfigError(
                 "Max catchup rows per cycle must be greater than or equal to chunk size."
             )
-        allowed_lateness = float(self.allowed_lateness_seconds)
-        if allowed_lateness < 0:
-            raise RealtimeStreamConfigError("Allowed lateness seconds must not be negative.")
+        allowed_lateness = _nonnegative_float(
+            "allowed lateness seconds",
+            self.allowed_lateness_seconds,
+        )
         timeout = _positive_float("timeout seconds", self.timeout_seconds)
         if timeout > polling_interval:
             raise RealtimeStreamConfigError(
@@ -127,7 +144,7 @@ class RealtimePollConfig:
 
         return replace(
             self,
-            source_profile_id=int(self.source_profile_id),
+            source_profile_id=source_profile_id,
             stream_key=stream_key,
             cursor_column=cursor_column,
             event_time_column=event_time_column,
@@ -139,6 +156,7 @@ class RealtimePollConfig:
             chunk_size=chunk_size,
             max_catchup_rows_per_cycle=max_catchup,
             allowed_lateness_seconds=allowed_lateness,
+            source_timezone=source_timezone,
             timeout_seconds=timeout,
             segment_fields=segment_fields,
             context_fields=context_fields,
@@ -234,22 +252,30 @@ def _normalize_identifier_tuple(field_name: str, values: tuple[str, ...] | list[
 
 def _positive_int(field_name: str, value: Any) -> int:
     try:
-        parsed = int(value)
-    except (TypeError, ValueError) as exc:
+        return exact_integral(value, field_name=field_name, minimum=1)
+    except ValueError as exc:
         raise RealtimeStreamConfigError(f"Realtime {field_name} must be a positive integer.") from exc
-    if parsed <= 0:
-        raise RealtimeStreamConfigError(f"Realtime {field_name} must be greater than zero.")
-    return parsed
 
 
 def _positive_float(field_name: str, value: Any) -> float:
     try:
-        parsed = float(value)
-    except (TypeError, ValueError) as exc:
+        return finite_number(
+            value,
+            field_name=field_name,
+            minimum=0.0,
+            minimum_inclusive=False,
+        )
+    except ValueError as exc:
         raise RealtimeStreamConfigError(f"Realtime {field_name} must be a positive number.") from exc
-    if parsed <= 0:
-        raise RealtimeStreamConfigError(f"Realtime {field_name} must be greater than zero.")
-    return parsed
+
+
+def _nonnegative_float(field_name: str, value: Any) -> float:
+    try:
+        return finite_number(value, field_name=field_name, minimum=0.0)
+    except ValueError as exc:
+        raise RealtimeStreamConfigError(
+            f"Realtime {field_name} must be a finite non-negative number."
+        ) from exc
 
 
 def _sensitive_paths(value: Any, *, prefix: str = "") -> set[str]:

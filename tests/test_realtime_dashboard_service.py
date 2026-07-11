@@ -240,8 +240,8 @@ def test_recent_signal_timeline_window_returns_latest_samples_in_chart_order(tmp
     assert [point.sample_id for point in timeline] == list(seeded["cycle_sample_ids"][1:])
     assert [point.value for point in timeline] == [12.8, 13.5]
     assert [point.event_time for point in timeline] == [
-        "2026-06-13T10:01:00Z",
-        "2026-06-13T10:02:00Z",
+        "2026-06-13T10:01:00.000000Z",
+        "2026-06-13T10:02:00.000000Z",
     ]
 
 

@@ -64,6 +64,7 @@ def test_realtime_source_runtime_skips_disabled_streams_and_reports_missing_prof
     assert len(statuses) == 3
     assert len(results) == 2
     assert results[0].status == "completed"
+    assert results[0].diagnostics["source_health"]["status"] == "no_data"
     assert results[1].status == "failed"
     assert "Source profile" in results[1].error
 

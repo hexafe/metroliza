@@ -1,3 +1,5 @@
+import ast
+from contextlib import closing
 import gc
 import os
 import sqlite3
@@ -5,6 +7,7 @@ import tempfile
 import threading
 import time
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from modules.db import (
@@ -27,11 +30,56 @@ from modules.db import (
 from modules.characteristic_alias_service import ensure_characteristic_alias_schema
 
 
+def test_sqlite_connection_contexts_close_explicitly():
+    repo_root = Path(__file__).resolve().parents[1]
+    offenders: list[str] = []
+
+    for source_root in (repo_root / "scripts", repo_root / "tests"):
+        for path in source_root.rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            sqlite_connect_names = {
+                alias.asname or alias.name
+                for node in tree.body
+                if isinstance(node, ast.ImportFrom) and node.module == "sqlite3"
+                for alias in node.names
+                if alias.name == "connect"
+            }
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.With):
+                    continue
+                for item in node.items:
+                    expression = item.context_expr
+                    if not isinstance(expression, ast.Call):
+                        continue
+                    function = expression.func
+                    direct_sqlite_connect = (
+                        isinstance(function, ast.Attribute)
+                        and function.attr == "connect"
+                        and isinstance(function.value, ast.Name)
+                        and function.value.id == "sqlite3"
+                    )
+                    direct_readonly_connect = (
+                        isinstance(function, ast.Name) and function.id == "_connect_readonly"
+                    )
+                    imported_sqlite_connect = (
+                        isinstance(function, ast.Name)
+                        and function.id in sqlite_connect_names
+                    )
+                    if direct_sqlite_connect or direct_readonly_connect or imported_sqlite_connect:
+                        relative_path = path.relative_to(repo_root)
+                        offenders.append(f"{relative_path}:{node.lineno}")
+
+    assert offenders == [], (
+        "SQLite connection context managers do not close connections; wrap them in "
+        f"contextlib.closing: {offenders}"
+    )
+
+
 class TestDbUtils(unittest.TestCase):
     def setUp(self):
         fd, self.db_path = tempfile.mkstemp(suffix='.db')
         os.close(fd)
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute('CREATE TABLE sample (id INTEGER PRIMARY KEY, name TEXT)')
             conn.execute("INSERT INTO sample (name) VALUES ('alpha')")
             conn.execute("INSERT INTO sample (name) VALUES ('beta')")

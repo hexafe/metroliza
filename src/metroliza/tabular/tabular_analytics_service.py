@@ -28,6 +28,7 @@ from metroliza.reports.db import (
     sqlite_connection_scope,
 )
 from metroliza.shared.excel_sheet_utils import unique_sheet_name
+from metroliza.exporting.xlsx_writer_policy import pandas_xlsxwriter_engine_kwargs
 from metroliza.industrial.industrial_analytics_state import (
     ProductionChartSelection,
     ProductionMetricSelection,
@@ -212,6 +213,8 @@ class TabularSqliteStore:
     source_columns: tuple[str, ...]
     row_count: int
     date_filter_columns: dict[str, str] = field(default_factory=dict)
+    numeric_filter_columns: dict[str, str] = field(default_factory=dict)
+    metric_columns: tuple[str, ...] = ()
     owns_file: bool = True
     indexable: bool = True
     cleanup_sql: tuple[str, ...] = ()
@@ -262,7 +265,7 @@ class TabularSqliteStore:
             grouping_filter_aliases=grouping_filter_aliases,
         )
         dataframe = read_sql_dataframe(self.path, scope.sql, params=scope.params)
-        return _restore_sqlite_dataframe(dataframe)
+        return _restore_sqlite_dataframe(dataframe, metric_columns=self.metric_columns)
 
     def query_scope(
         self,
@@ -292,7 +295,7 @@ class TabularSqliteStore:
             grouping_filter_aliases=grouping_filter_aliases,
         )
         query = (
-            f"SELECT {', '.join(_quote_identifier(column) for column in select_columns)} "
+            f"SELECT {', '.join(self._select_column_expression(column) for column in select_columns)} "
             f"FROM {_quote_identifier(self.table_name)}{where_sql}"
         )
         if limit is not None and int(limit) >= 0:
@@ -306,6 +309,14 @@ class TabularSqliteStore:
             columns=tuple(select_columns),
             row_count_sql=row_count_sql,
         )
+
+    def _select_column_expression(self, column: str) -> str:
+        if column in self.metric_columns and column in self.numeric_filter_columns:
+            return (
+                f"{_quote_identifier(self.numeric_filter_columns[column])} "
+                f"AS {_quote_identifier(column)}"
+            )
+        return _quote_identifier(column)
 
     def read_query_result(
         self,
@@ -379,7 +390,10 @@ class TabularSqliteStore:
         metric_layout: list[tuple[str, int]] = []
         field_index = len(group_aliases)
         for metric_index, metric in enumerate(metrics):
-            numeric_expr, numeric_guard = _sqlite_stored_numeric_expr_and_guard(metric)
+            numeric_expr, numeric_guard = _sqlite_stored_numeric_expr_and_guard(
+                metric,
+                self.numeric_filter_columns,
+            )
             prefix = f"m{metric_index}"
             metric_layout.append((metric, field_index))
             aggregate_selects.extend(
@@ -1079,9 +1093,12 @@ class TabularSqliteStore:
         if column_filter.has_numeric_filter:
             numeric_value = _parse_tabular_filter_number(column_filter.numeric_value)
             if numeric_value is not None and column_filter.numeric_operator in _TABULAR_NUMERIC_OPERATORS:
-                text_expr, numeric_guard = _sqlite_numeric_text_and_guard(column_filter.column)
+                numeric_expr, numeric_guard = _sqlite_filter_numeric_expr_and_guard(
+                    column_filter.column,
+                    self.numeric_filter_columns,
+                )
                 filter_clauses.append(
-                    f"(({numeric_guard}) AND CAST({text_expr} AS REAL) "
+                    f"(({numeric_guard}) AND {numeric_expr} "
                     f"{column_filter.numeric_operator} ?)"
                 )
                 params.append(float(numeric_value))
@@ -1293,6 +1310,7 @@ class TabularSqliteStore:
             grouping_filter_expression=grouping_filter_expression,
             grouping_filter_aliases=grouping_filter_aliases,
             date_filter_columns=self.date_filter_columns,
+            numeric_filter_columns=self.numeric_filter_columns,
         )
 
     def _preview_value_rows_from_facets(
@@ -1796,7 +1814,15 @@ def _load_tabular_files_into_sqlite(
         date_filter_source_columns,
         table_columns,
     )
-    storage_columns = (*table_columns, *date_filter_columns.values())
+    numeric_filter_columns = _sqlite_numeric_filter_storage_columns(
+        tuple(source_columns),
+        (*table_columns, *date_filter_columns.values()),
+    )
+    storage_columns = (
+        *table_columns,
+        *date_filter_columns.values(),
+        *numeric_filter_columns.values(),
+    )
     row_number = 0
     bad_timestamp_count = 0
     metric_stats: dict[str, dict[str, Any]] = {}
@@ -1804,7 +1830,12 @@ def _load_tabular_files_into_sqlite(
 
     try:
         with sqlite_connection_scope(str(db_path)) as connection:
-            _create_sqlite_table(connection, _TABULAR_SQLITE_TABLE, storage_columns)
+            _create_sqlite_table(
+                connection,
+                _TABULAR_SQLITE_TABLE,
+                storage_columns,
+                numeric_columns=tuple(numeric_filter_columns.values()),
+            )
             insert_sql = (
                 f"INSERT INTO {_quote_identifier(_TABULAR_SQLITE_TABLE)} "
                 f"({', '.join(_quote_identifier(column) for column in storage_columns)}) "
@@ -1868,10 +1899,10 @@ def _load_tabular_files_into_sqlite(
                             _parse_tabular_number(raw_text, decimal=decimal) if raw_text else None
                         )
                         parsed_numeric_values[column] = parsed_number
-                        row_data[column] = _coerce_tabular_storage_text_value(
-                            raw_text,
-                            parsed_number,
-                        )
+                        row_data[column] = raw_text or None
+                        numeric_storage_column = numeric_filter_columns.get(column)
+                        if numeric_storage_column is not None:
+                            row_data[numeric_storage_column] = parsed_number
                     for column, storage_column in date_filter_columns.items():
                         row_data[storage_column] = _sqlite_datetime_text_value(
                             _parse_tabular_datetime(normalized_row.get(column))
@@ -2017,6 +2048,8 @@ def _load_tabular_files_into_sqlite(
             source_columns=tuple(source_columns),
             row_count=row_number,
             date_filter_columns=dict(date_filter_columns),
+            numeric_filter_columns=dict(numeric_filter_columns),
+            metric_columns=tuple(candidate.field_name for candidate in metric_candidates),
         )
         _emit_tabular_load_progress(
             progress_callback,
@@ -2366,22 +2399,12 @@ def _parse_tabular_number(value: Any, *, decimal: str = ".") -> float | None:
         return None
 
 
-def _coerce_tabular_storage_value(value: Any, *, decimal: str = ".") -> Any:
-    text = _display_cell_text(value)
-    if not text:
-        return None
-    number = _parse_tabular_number(text, decimal=decimal)
-    return _coerce_tabular_storage_text_value(text, number)
-
-
-def _coerce_tabular_storage_text_value(text: str, number: float | None) -> Any:
-    if not text:
-        return None
-    if number is None:
-        return text
-    if number.is_integer() and re.fullmatch(r"[+-]?\d+", text.strip()):
-        return int(number)
-    return float(number)
+def _looks_like_identifier_number(value: str) -> bool:
+    text = str(value or "").strip()
+    if not re.fullmatch(r"[+-]?\d+", text):
+        return False
+    digits = text.lstrip("+-")
+    return (len(digits) > 1 and digits.startswith("0")) or len(digits) > 15
 
 
 def _update_metric_stats_from_row(
@@ -2417,7 +2440,7 @@ def _update_metric_stats_from_row(
             if numeric_values is not None and column in numeric_values
             else _parse_tabular_number(text, decimal=decimal)
         )
-        if parsed_number is not None:
+        if parsed_number is not None and not _looks_like_identifier_number(text):
             stats["numeric_count"] += 1
         _append_metric_sample_text(stats, text)
 
@@ -2493,6 +2516,24 @@ def _sqlite_date_filter_storage_columns(
     return storage_columns
 
 
+def _sqlite_numeric_filter_storage_columns(
+    source_columns: tuple[str, ...],
+    table_columns: tuple[str, ...],
+) -> dict[str, str]:
+    used = {column.casefold() for column in table_columns}
+    storage_columns: dict[str, str] = {}
+    for column in source_columns:
+        base = f"__numeric_filter_{_safe_column_name(column, fallback='column')}"
+        candidate = base
+        suffix = 1
+        while candidate.casefold() in used:
+            suffix += 1
+            candidate = f"{base}_{suffix}"
+        used.add(candidate.casefold())
+        storage_columns[column] = candidate
+    return storage_columns
+
+
 def _sqlite_datetime_text(series: pd.Series) -> pd.Series:
     text = series.dt.strftime("%Y-%m-%d %H:%M:%S")
     return text.where(series.notna(), None)
@@ -2502,14 +2543,18 @@ def _create_sqlite_table(
     connection: sqlite3.Connection,
     table_name: str,
     columns: tuple[str, ...],
+    *,
+    numeric_columns: tuple[str, ...] = (),
 ) -> None:
     column_defs = []
+    numeric_column_set = set(numeric_columns)
     for column in columns:
-        column_type = "INTEGER" if column == "source_row_number" else "TEXT"
         if column == "source_row_number":
-            column_defs.append(f"{_quote_identifier(column)} {column_type}")
+            column_defs.append(f"{_quote_identifier(column)} INTEGER")
+        elif column in numeric_column_set:
+            column_defs.append(f"{_quote_identifier(column)} REAL")
         else:
-            column_defs.append(_quote_identifier(column))
+            column_defs.append(f"{_quote_identifier(column)} TEXT")
     connection.execute(
         f"CREATE TABLE {_quote_identifier(table_name)} ({', '.join(column_defs)})"
     )
@@ -3136,7 +3181,11 @@ def _project_tabular_dataframe(
     return dataframe.loc[:, list(columns)].copy()
 
 
-def _restore_sqlite_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
+def _restore_sqlite_dataframe(
+    dataframe: pd.DataFrame,
+    *,
+    metric_columns: tuple[str, ...] = (),
+) -> pd.DataFrame:
     if hasattr(dataframe, "columns") and hasattr(dataframe, "rows") and not hasattr(dataframe, "index"):
         dataframe = pd.DataFrame(list(dataframe.rows), columns=list(dataframe.columns))
     if "process_datetime" in dataframe.columns:
@@ -3150,6 +3199,9 @@ def _restore_sqlite_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
             dataframe["source_row_number"],
             errors="coerce",
         ).astype("Int64")
+    for column in metric_columns:
+        if column in dataframe.columns:
+            dataframe[column] = pd.to_numeric(dataframe[column], errors="coerce")
     return dataframe
 
 
@@ -3208,6 +3260,7 @@ def compile_tabular_sqlite_grouping_filter(
     grouping_filter_expression: str | None = None,
     grouping_filter_aliases: Mapping[str, str] | None = None,
     date_filter_columns: Mapping[str, str] | None = None,
+    numeric_filter_columns: Mapping[str, str] | None = None,
 ) -> TabularSqliteFilterExpression:
     """Compile shared grouping filters into a SQLite predicate fragment.
 
@@ -3227,6 +3280,7 @@ def compile_tabular_sqlite_grouping_filter(
                 columns=columns,
                 aliases=aliases,
                 date_filter_columns=date_filter_columns,
+                numeric_filter_columns=numeric_filter_columns,
             )
         )
 
@@ -3249,6 +3303,7 @@ def compile_tabular_sqlite_grouping_filter(
                 columns=columns,
                 aliases=aliases,
                 date_filter_columns=date_filter_columns,
+                numeric_filter_columns=numeric_filter_columns,
             )
         )
 
@@ -3261,6 +3316,7 @@ def _compile_sqlite_grouping_filter_input(
     columns: tuple[str, ...],
     aliases: Mapping[str, str],
     date_filter_columns: Mapping[str, str] | None,
+    numeric_filter_columns: Mapping[str, str] | None,
 ) -> tuple[TabularSqliteFilterExpression, ...]:
     if isinstance(grouping_filter, TabularSqliteFilterExpression):
         return (
@@ -3269,6 +3325,7 @@ def _compile_sqlite_grouping_filter_input(
                 columns=columns,
                 aliases=aliases,
                 date_filter_columns=date_filter_columns,
+                numeric_filter_columns=numeric_filter_columns,
             ),
         )
     if isinstance(grouping_filter, str):
@@ -3278,6 +3335,7 @@ def _compile_sqlite_grouping_filter_input(
                 grouping_filter_expression=grouping_filter,
                 grouping_filter_aliases=aliases,
                 date_filter_columns=date_filter_columns,
+                numeric_filter_columns=numeric_filter_columns,
             ),
         )
     compiled_sql_filter = _compiled_sqlite_filter_from_object(
@@ -3285,6 +3343,7 @@ def _compile_sqlite_grouping_filter_input(
         columns=columns,
         aliases=aliases,
         date_filter_columns=date_filter_columns,
+        numeric_filter_columns=numeric_filter_columns,
     )
     if compiled_sql_filter is not None:
         return (compiled_sql_filter,)
@@ -3298,6 +3357,7 @@ def _compile_sqlite_grouping_filter_input(
                     columns=columns,
                     aliases=aliases,
                     date_filter_columns=date_filter_columns,
+                    numeric_filter_columns=numeric_filter_columns,
                 ),
             )
         return (
@@ -3307,6 +3367,7 @@ def _compile_sqlite_grouping_filter_input(
                 columns=columns,
                 aliases=aliases,
                 date_filter_columns=date_filter_columns,
+                numeric_filter_columns=numeric_filter_columns,
             ),
         )
 
@@ -3318,6 +3379,7 @@ def _compile_sqlite_grouping_filter_input(
                 columns=columns,
                 aliases=aliases,
                 date_filter_columns=date_filter_columns,
+                numeric_filter_columns=numeric_filter_columns,
             ),
         )
 
@@ -3328,6 +3390,7 @@ def _compile_sqlite_grouping_filter_input(
             columns=columns,
             aliases=aliases,
             date_filter_columns=date_filter_columns,
+            numeric_filter_columns=numeric_filter_columns,
         ),
     )
 
@@ -3339,6 +3402,7 @@ def _compile_sqlite_filter_specs(
     columns: tuple[str, ...],
     aliases: Mapping[str, str],
     date_filter_columns: Mapping[str, str] | None,
+    numeric_filter_columns: Mapping[str, str] | None,
 ) -> TabularSqliteFilterExpression:
     compiled_terms: list[TabularSqliteFilterExpression] = []
     for spec in specs or ():
@@ -3348,6 +3412,7 @@ def _compile_sqlite_filter_specs(
                 columns=columns,
                 aliases=aliases,
                 date_filter_columns=date_filter_columns,
+                numeric_filter_columns=numeric_filter_columns,
             )
         )
     mode = "OR" if str(match_mode or "").strip().casefold() == "or" else "AND"
@@ -3360,6 +3425,7 @@ def _compile_sqlite_filter_spec(
     columns: tuple[str, ...],
     aliases: Mapping[str, str],
     date_filter_columns: Mapping[str, str] | None,
+    numeric_filter_columns: Mapping[str, str] | None,
 ) -> TabularSqliteFilterExpression:
     children = getattr(spec, "children", None)
     operator = str(getattr(spec, "operator", "")).strip().casefold()
@@ -3370,6 +3436,7 @@ def _compile_sqlite_filter_spec(
                 columns=columns,
                 aliases=aliases,
                 date_filter_columns=date_filter_columns,
+                numeric_filter_columns=numeric_filter_columns,
             )
             for child in children
         ]
@@ -3382,9 +3449,20 @@ def _compile_sqlite_filter_spec(
     if spec_type == "text":
         return _compile_sqlite_text_filter_spec(spec, column, operator)
     if spec_type == "membership":
-        return _compile_sqlite_membership_filter_spec(spec, column, operator, date_filter_columns)
+        return _compile_sqlite_membership_filter_spec(
+            spec,
+            column,
+            operator,
+            date_filter_columns,
+            numeric_filter_columns,
+        )
     if spec_type == "number":
-        return _compile_sqlite_number_filter_spec(spec, column, operator)
+        return _compile_sqlite_number_filter_spec(
+            spec,
+            column,
+            operator,
+            numeric_filter_columns,
+        )
     if spec_type == "date":
         return _compile_sqlite_date_filter_spec(spec, column, operator, date_filter_columns)
     raise TypeError(f"Unsupported SQLite grouping filter spec: {type(spec).__name__}")
@@ -3476,6 +3554,7 @@ def _compile_sqlite_membership_filter_spec(
     column: str,
     operator: str,
     date_filter_columns: Mapping[str, str] | None,
+    numeric_filter_columns: Mapping[str, str] | None,
 ) -> TabularSqliteFilterExpression:
     values = _sqlite_membership_values(getattr(spec, "values", ()))
     if not values:
@@ -3486,7 +3565,13 @@ def _compile_sqlite_membership_filter_spec(
         dayfirst=bool(getattr(spec, "dayfirst", False)),
     )
     if value_kind == "number":
-        return _compile_sqlite_numeric_membership_filter_spec(spec, column, values, negate)
+        return _compile_sqlite_numeric_membership_filter_spec(
+            spec,
+            column,
+            values,
+            negate,
+            numeric_filter_columns,
+        )
     if value_kind == "date":
         return _compile_sqlite_date_membership_filter_spec(
             spec,
@@ -3546,15 +3631,19 @@ def _compile_sqlite_numeric_membership_filter_spec(
     column: str,
     values: tuple[Any, ...],
     negate: bool,
+    numeric_filter_columns: Mapping[str, str] | None,
 ) -> TabularSqliteFilterExpression:
     del spec
-    text_expr, numeric_guard = _sqlite_numeric_text_and_guard(column)
+    numeric_expr, numeric_guard = _sqlite_filter_numeric_expr_and_guard(
+        column,
+        numeric_filter_columns,
+    )
     parsed_values = tuple(
         _sqlite_filter_number_value(value, field_name="IN value")
         for value in values
     )
     predicate, params = _sqlite_membership_in_predicate(
-        f"CAST({text_expr} AS REAL)",
+        numeric_expr,
         parsed_values,
         negate=negate,
     )
@@ -3595,8 +3684,12 @@ def _compile_sqlite_number_filter_spec(
     spec: Any,
     column: str,
     operator: str,
+    numeric_filter_columns: Mapping[str, str] | None,
 ) -> TabularSqliteFilterExpression:
-    text_expr, numeric_guard = _sqlite_numeric_text_and_guard(column)
+    numeric_expr, numeric_guard = _sqlite_filter_numeric_expr_and_guard(
+        column,
+        numeric_filter_columns,
+    )
     if operator == "is_blank":
         return TabularSqliteFilterExpression(clause=f"(NOT ({numeric_guard}))", columns=(column,))
     if operator == "is_not_blank":
@@ -3610,7 +3703,7 @@ def _compile_sqlite_number_filter_spec(
         )
         lower, upper = sorted((value, second_value))
         return TabularSqliteFilterExpression(
-            clause=f"(({numeric_guard}) AND CAST({text_expr} AS REAL) BETWEEN ? AND ?)",
+            clause=f"(({numeric_guard}) AND {numeric_expr} BETWEEN ? AND ?)",
             params=(lower, upper),
             columns=(column,),
         )
@@ -3620,9 +3713,9 @@ def _compile_sqlite_number_filter_spec(
         raise ValueError(f"Unsupported number filter operator: {operator}")
     value = _sqlite_filter_number_value(getattr(spec, "value", None), field_name="value")
     if sql_operator == "!=":
-        clause = f"((NOT ({numeric_guard})) OR CAST({text_expr} AS REAL) != ?)"
+        clause = f"((NOT ({numeric_guard})) OR {numeric_expr} != ?)"
     else:
-        clause = f"(({numeric_guard}) AND CAST({text_expr} AS REAL) {sql_operator} ?)"
+        clause = f"(({numeric_guard}) AND {numeric_expr} {sql_operator} ?)"
     return TabularSqliteFilterExpression(clause=clause, params=(value,), columns=(column,))
 
 
@@ -3709,6 +3802,7 @@ def _compiled_sqlite_filter_from_object(
     columns: tuple[str, ...],
     aliases: Mapping[str, str],
     date_filter_columns: Mapping[str, str] | None,
+    numeric_filter_columns: Mapping[str, str] | None,
 ) -> TabularSqliteFilterExpression | None:
     clause = None
     for attr in _COMPILED_SQLITE_FILTER_SQL_ATTRS:
@@ -3737,6 +3831,7 @@ def _compiled_sqlite_filter_from_object(
         columns=columns,
         aliases=aliases,
         date_filter_columns=date_filter_columns,
+        numeric_filter_columns=numeric_filter_columns,
     )
 
 
@@ -3746,6 +3841,7 @@ def _validate_compiled_sqlite_filter(
     columns: tuple[str, ...],
     aliases: Mapping[str, str],
     date_filter_columns: Mapping[str, str] | None,
+    numeric_filter_columns: Mapping[str, str] | None,
 ) -> TabularSqliteFilterExpression:
     clause = str(compiled_filter.clause or "").strip()
     if clause.upper().startswith("WHERE "):
@@ -3767,7 +3863,11 @@ def _validate_compiled_sqlite_filter(
         identifier.replace('""', '"')
         for identifier in re.findall(r'"((?:[^"]|"")*)"', clause)
     }
-    allowed_sql_identifiers = {*columns, *(date_filter_columns or {}).values()}
+    allowed_sql_identifiers = {
+        *columns,
+        *(date_filter_columns or {}).values(),
+        *(numeric_filter_columns or {}).values(),
+    }
     unknown_identifiers = quoted_identifiers.difference(allowed_sql_identifiers)
     if unknown_identifiers:
         raise KeyError(f"SQLite grouping filter column not allowed: {sorted(unknown_identifiers)[0]}")
@@ -3849,7 +3949,7 @@ def _sqlite_numeric_text_and_guard(column: str) -> tuple[str, str]:
     json_type_expr = f"CASE WHEN json_valid({text_expr}) THEN json_type({text_expr}) ELSE NULL END"
     numeric_guard = (
         f"{text_expr} != '' AND ("
-        f"{json_type_expr} IN ('integer', 'real') "
+        f"COALESCE({json_type_expr} IN ('integer', 'real'), 0) "
         f"OR ({text_expr} NOT GLOB '*[^0-9]*') "
         f"OR (substr({text_expr}, 1, 1) IN ('+', '-') "
         f"AND substr({text_expr}, 2) != '' "
@@ -3859,8 +3959,24 @@ def _sqlite_numeric_text_and_guard(column: str) -> tuple[str, str]:
     return text_expr, numeric_guard
 
 
-def _sqlite_stored_numeric_expr_and_guard(column: str) -> tuple[str, str]:
-    identifier = _quote_identifier(column)
+def _sqlite_filter_numeric_expr_and_guard(
+    column: str,
+    numeric_filter_columns: Mapping[str, str] | None = None,
+) -> tuple[str, str]:
+    storage_column = (numeric_filter_columns or {}).get(column)
+    if storage_column is not None:
+        identifier = _quote_identifier(storage_column)
+        return identifier, f"{identifier} IS NOT NULL"
+    text_expr, numeric_guard = _sqlite_numeric_text_and_guard(column)
+    return f"CAST({text_expr} AS REAL)", numeric_guard
+
+
+def _sqlite_stored_numeric_expr_and_guard(
+    column: str,
+    numeric_filter_columns: Mapping[str, str] | None = None,
+) -> tuple[str, str]:
+    storage_column = (numeric_filter_columns or {}).get(column, column)
+    identifier = _quote_identifier(storage_column)
     return f"CAST({identifier} AS REAL)", f"typeof({identifier}) IN ('integer', 'real')"
 
 
@@ -4201,7 +4317,11 @@ def export_tabular_analytics_workbook(
         if aggregation_result is not None
         else None
     )
-    with pd.ExcelWriter(output_path, engine="xlsxwriter") as writer:
+    with pd.ExcelWriter(
+        output_path,
+        engine="xlsxwriter",
+        engine_kwargs=pandas_xlsxwriter_engine_kwargs(),
+    ) as writer:
         table_sheet = unique_sheet_name("Table Data", used_names)
         safe_dataframe.to_excel(writer, sheet_name=table_sheet, index=False)
         sheet_names.append(table_sheet)

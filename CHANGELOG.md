@@ -1,6 +1,17 @@
 # Changelog (for end users)
 
-## 2026.06 RC2 (build 260626) — current version
+## 2026.06 RC2 (build 260709) — current version
+- Excel and industrial workbook exports now keep imported formula-like and URL-like text literal, preventing source data from becoming active workbook formulas or links.
+- Google OAuth tokens now use an atomic private application file, exclude client secrets, reject symlink targets, and migrate legacy local tokens only after a secure write succeeds.
+- HTML and realtime dashboards now publish atomically, use private session output where appropriate, and preserve the last complete generation when publication fails.
+- Parser resolution now reuses one bounded source inspection, rechecks source content before persistence, preserves approved multiline report fields while capping declarative regex work, and stores bounded provenance instead of duplicate parse trees.
+- Report paths, typed membership filters, report identifiers, tabular numeric shadows, and measurement summaries now preserve stricter ownership and data-integrity invariants.
+- CMM import now processes a valid final line without requiring a trailing newline and rejects empty parses without recording a successful fingerprint.
+- Realtime industrial sync now stages streamed rows until atomic promotion, reclaims only stale heartbeat-leased staging at startup, quarantines permanent poison events, and keeps source health current even when no rows arrive.
+- Realtime timestamps now use fixed-width UTC storage with explicit source timezones, detector inputs and identifiers are validated strictly, and legacy pickle model loading is disabled without deserialization.
+- Realtime polling now atomically commits samples, stream events, and monotonic compare-and-swap offsets without stale failures overwriting newer progress; supports bounded multi-chunk catch-up and allowed lateness; and validates replay order before writing bounded batches.
+- Realtime shutdown now waits for database workers before removing session files, and test isolation guards prevent module-scope Qt stubs from contaminating later tests.
+- Packaging now distinguishes required and optional runtime assets, while CI scans short and cross-format credential assignments and uses an expiring Bandit baseline to turn new security findings into blocking failures.
 - CSV Summary and Excel inputs now use one consistent local row store, keeping large files responsive while avoiding extra data copies.
 - CSV Summary filters, grouping, and dashboard preparation can stream selected rows in smaller batches, reducing memory pressure on large tables.
 - Grouped metric summaries now calculate directly from stored rows, so large CSV Summary analysis spends less time preparing intermediate tables.

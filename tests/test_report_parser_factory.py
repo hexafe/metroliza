@@ -1,39 +1,14 @@
 import importlib
-import importlib.machinery
+from contextlib import closing
 import json
 import logging
 import os
 from pathlib import Path
 import sqlite3
 import sys
-import types
 
 import pytest
 
-
-custom_logger_stub = types.ModuleType("modules.custom_logger")
-
-
-class _DummyCustomLogger:
-    def __init__(self, *_args, **_kwargs):
-        pass
-
-
-custom_logger_stub.CustomLogger = _DummyCustomLogger
-sys.modules.setdefault("modules.custom_logger", custom_logger_stub)
-
-fitz_stub = types.ModuleType("fitz")
-fitz_stub.__spec__ = importlib.machinery.ModuleSpec("fitz", loader=None)
-fitz_stub.open = lambda *_args, **_kwargs: None
-sys.modules.setdefault("fitz", fitz_stub)
-
-# Some integration tests install a lightweight `modules.cmm_report_parser` stub in
-# `sys.modules` before importing thread modules. This test module needs the real
-# parser implementation, so force a clean import of both the parser and factory.
-sys.modules.pop("modules.report_parser_factory", None)
-sys.modules.pop("metroliza.reports.report_parser_factory", None)
-sys.modules.pop("modules.cmm_report_parser", None)
-sys.modules.pop("metroliza.parsing.cmm_report_parser", None)
 
 factory_module = importlib.import_module("modules.report_parser_factory")
 base_module = importlib.import_module("modules.base_report_parser")
@@ -443,7 +418,7 @@ def test_generated_v2_parser_persists_through_base_repository_bridge(tmp_path):
     assert report_id > 0
     assert parser.canonical_metadata.reference == "REF-GEN"
 
-    with sqlite3.connect(database_path) as connection:
+    with closing(sqlite3.connect(database_path)) as connection:
         parsed_row = connection.execute(
             """
             SELECT parser_id, parse_status, measurement_count, has_nok, nok_count
@@ -579,6 +554,139 @@ def test_resolver_uses_probe_cache_for_same_plugin_and_path(tmp_path):
         resolve_parser_with_diagnostics(report_path)
 
         assert CachedProbeParser.probe_calls == 1
+    finally:
+        PARSER_MAP.clear()
+        PARSER_MAP.update(original_map)
+        PARSER_MANIFESTS.clear()
+        PARSER_MANIFESTS.update(original_manifests)
+        PARSER_DETECTORS.clear()
+        PARSER_DETECTORS.update(original_detectors)
+        PROBE_RESULT_CACHE.clear()
+        PROBE_RESULT_CACHE.update(original_cache)
+
+
+def test_resolver_rehashes_before_persistence_and_shares_extraction(monkeypatch, tmp_path):
+    from metroliza.parsing.source_inspection import SourceInspectionContext
+    from metroliza.reports import report_repository
+
+    source_reads = 0
+    hash_reads = 0
+    repository_hash_reads = 0
+    original_context_hash = SourceInspectionContext._compute_sha256
+    original_repository_hash = report_repository.compute_sha256
+
+    def _load_source(path, max_chars):
+        nonlocal source_reads
+        source_reads += 1
+        return path.read_text(encoding="utf-8")[:max_chars]
+
+    def _count_context_hash(self):
+        nonlocal hash_reads
+        hash_reads += 1
+        return original_context_hash(self)
+
+    def _count_repository_hash(path):
+        nonlocal repository_hash_reads
+        repository_hash_reads += 1
+        return original_repository_hash(path)
+
+    class _InspectionParser(BaseReportParser, BaseReportParserPlugin):
+        @classmethod
+        def probe(cls, _path, context: ProbeContext) -> ProbeResult:
+            assert context.source_inspection is not None
+            text = context.source_inspection.get_extracted_text(
+                cache_key="inspection-test",
+                max_chars=1_000,
+                loader=_load_source,
+            )
+            return ProbeResult(
+                plugin_id=cls.manifest.plugin_id,
+                can_parse="SHARED INSPECTION" in text,
+                confidence=cls.manifest.priority,
+            )
+
+        def open_report(self):
+            self.raw_text = []
+
+        def split_text_to_blocks(self):
+            self.blocks_text = []
+
+        def parse_to_v2(self):
+            return ParseResultV2(
+                meta=ParseMetaV2(
+                    source_file=self.file_name,
+                    source_format="csv",
+                    plugin_id=self.manifest.plugin_id,
+                    plugin_version="1.0.0",
+                    template_id=None,
+                    parse_timestamp="2026-07-09T00:00:00Z",
+                    locale_detected=None,
+                    confidence=95,
+                ),
+                report=ReportInfoV2(
+                    reference="REF-SHARED",
+                    report_date="2026-07-09",
+                    sample_number="1",
+                    file_name=self.file_name,
+                    file_path=self.file_path,
+                ),
+                blocks=(),
+            )
+
+        @staticmethod
+        def to_legacy_blocks(_parse_result_v2):
+            return []
+
+    class LowInspectionParser(_InspectionParser):
+        manifest = PluginManifest(
+            plugin_id="inspection_low",
+            display_name="Inspection Low",
+            version="1.0.0",
+            supported_formats=("csv",),
+            priority=90,
+        )
+
+    class HighInspectionParser(_InspectionParser):
+        manifest = PluginManifest(
+            plugin_id="inspection_high",
+            display_name="Inspection High",
+            version="1.0.0",
+            supported_formats=("csv",),
+            priority=95,
+        )
+
+    original_map = dict(PARSER_MAP)
+    original_manifests = dict(PARSER_MANIFESTS)
+    original_detectors = dict(PARSER_DETECTORS)
+    original_cache = dict(PROBE_RESULT_CACHE)
+    try:
+        monkeypatch.setattr(SourceInspectionContext, "_compute_sha256", _count_context_hash)
+        monkeypatch.setattr(report_repository, "compute_sha256", _count_repository_hash)
+        reset_probe_cache()
+        register_parser(LowInspectionParser)
+        register_parser(HighInspectionParser)
+        source_path = tmp_path / "shared.csv"
+        source_path.write_text("SHARED INSPECTION\n", encoding="utf-8")
+
+        parser = get_parser(source_path, database=str(tmp_path / "shared.db"))
+        report_id = parser.open_database_and_check_filename()
+
+        assert isinstance(parser, HighInspectionParser)
+        assert report_id > 0
+        assert hash_reads == 2
+        assert source_reads == 1
+        assert repository_hash_reads == 0
+
+        changing_source_path = tmp_path / "changing.csv"
+        changing_source_path.write_text("SHARED INSPECTION\n", encoding="utf-8")
+        changing_parser = get_parser(
+            changing_source_path,
+            database=str(tmp_path / "changing.db"),
+        )
+        changing_source_path.write_text("CHANGED AFTER RESOLUTION\n", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="Source changed after parser resolution"):
+            changing_parser.open_database_and_check_filename()
     finally:
         PARSER_MAP.clear()
         PARSER_MAP.update(original_map)

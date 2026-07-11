@@ -5,8 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from html import escape as html_escape
 import math
+import os
 from pathlib import Path
 import re
+import tempfile
 from typing import Any, Mapping
 
 
@@ -192,7 +194,26 @@ def write_realtime_dashboard_html(
     """Write the static dashboard HTML and return the resolved output path."""
 
     path = Path(output_path)
-    path.write_text(render_realtime_dashboard_html(snapshot), encoding="utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            handle.write(render_realtime_dashboard_html(snapshot))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
     return path
 
 

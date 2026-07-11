@@ -1,5 +1,7 @@
 import sqlite3
 
+import pytest
+
 from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
 from metroliza.industrial.anomaly.baseline_repository import BaselineRepository, IndustrialBaseline
 from metroliza.industrial.anomaly.contracts import DetectionResult
@@ -98,6 +100,58 @@ def test_anomaly_event_insert_accepts_generator_batches(tmp_path):
     assert result.processed == 1
     assert result.inserted == 1
     assert len(result.event_ids) == 1
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"severity": "fatal"}, "unsupported anomaly severity"),
+        ({"score": float("nan")}, "score must be finite"),
+        ({"event_time": "not-a-time"}, "Invalid ISO-8601 timestamp"),
+        ({"explanation": ""}, "explanation is required"),
+    ],
+)
+def test_anomaly_event_insert_rejects_invalid_detector_output(tmp_path, overrides, message):
+    db_path = str(tmp_path / "invalid-events.db")
+    signal, sample_id = _persist_sample(db_path)
+    values = {
+        "detector_key": "spec_limits",
+        "sample_id": sample_id,
+        "signal_id": signal.id,
+        "event_time": "2026-06-13T10:00:00Z",
+        "severity": "critical",
+        "score": 0.5,
+        "observed_value": 12.5,
+        "expected_value": 10.0,
+        "threshold": {"usl": 12.0},
+        "explanation": "Observed value is above USL.",
+    }
+    values.update(overrides)
+
+    with pytest.raises(ValueError, match=message):
+        AnomalyEventRepository(db_path).insert_events((DetectionResult(**values),))
+
+    assert AnomalyEventRepository(db_path).list_events() == []
+
+
+def test_anomaly_event_insert_does_not_hide_foreign_key_failures(tmp_path):
+    db_path = str(tmp_path / "invalid-foreign-key.db")
+    signal, sample_id = _persist_sample(db_path)
+    event = DetectionResult(
+        detector_key="spec_limits",
+        sample_id=sample_id,
+        signal_id=signal.id + 999,
+        event_time="2026-06-13T10:00:00Z",
+        severity="critical",
+        score=1.0,
+        observed_value=12.5,
+        expected_value=10.0,
+        threshold={},
+        explanation="Invalid signal reference for test.",
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
+        AnomalyEventRepository(db_path).insert_events((event,))
 
 
 def test_anomaly_event_insert_uses_batched_id_lookup(tmp_path):

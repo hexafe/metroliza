@@ -1,41 +1,9 @@
-import importlib.machinery
+from contextlib import closing
 import sqlite3
 import tempfile
-import types
-import sys
 import unittest
 from pathlib import Path
 
-qtcore_stub = types.ModuleType('PyQt6.QtCore')
-qtcore_stub.Qt = type('Qt', (), {'ItemDataRole': type('ItemDataRole', (), {'UserRole': 0})})
-sys.modules.setdefault('PyQt6.QtCore', qtcore_stub)
-
-qtwidgets_stub = types.ModuleType('PyQt6.QtWidgets')
-for name in [
-    'QDialog',
-    'QGridLayout',
-    'QTableWidget',
-    'QTableWidgetItem',
-    'QPushButton',
-    'QFileDialog',
-    'QMessageBox',
-]:
-    setattr(qtwidgets_stub, name, type(name, (), {}))
-sys.modules.setdefault('PyQt6.QtWidgets', qtwidgets_stub)
-
-custom_logger_stub = types.ModuleType('modules.custom_logger')
-custom_logger_stub.CustomLogger = type('CustomLogger', (), {'__init__': lambda self, *args, **kwargs: None})
-sys.modules.setdefault('modules.custom_logger', custom_logger_stub)
-
-fitz_stub = types.ModuleType('fitz')
-fitz_stub.__spec__ = importlib.machinery.ModuleSpec('fitz', loader=None)
-sys.modules.setdefault('fitz', fitz_stub)
-pymupdf_stub = types.ModuleType('pymupdf')
-pymupdf_stub.__spec__ = importlib.machinery.ModuleSpec('pymupdf', loader=None)
-sys.modules.setdefault('pymupdf', pymupdf_stub)
-
-sys.modules.pop('modules.cmm_report_parser', None)
-sys.modules.pop('metroliza.parsing.cmm_report_parser', None)
 import modules.cmm_report_parser as cmm_report_parser_module  # noqa: E402
 from modules.cmm_schema import ensure_cmm_report_schema  # noqa: E402
 from modules.industrial_data_schema import ensure_industrial_data_schema  # noqa: E402
@@ -248,7 +216,7 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
             db_path = str(Path(temp_dir) / 'indexed.db')
             self._insert_report(db_path, 'REF01', '001', 1)
 
-            with sqlite3.connect(db_path) as conn:
+            with closing(sqlite3.connect(db_path)) as conn, conn:
                 actual_index_names = {
                     row[0]
                     for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'").fetchall()
@@ -260,6 +228,7 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
                 'idx_source_file_locations_directory',
                 'idx_source_file_locations_source_active',
                 'idx_source_file_locations_latest_active',
+                'idx_source_file_locations_active_path_unique',
                 'idx_parsed_reports_parser_template',
                 'idx_parsed_reports_identity_hash',
                 'idx_parsed_reports_status',
@@ -285,6 +254,7 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
                 'idx_industrial_source_profiles_alias',
                 'idx_industrial_sync_runs_profile_started',
                 'idx_industrial_sync_runs_status',
+                'idx_industrial_sync_staging_run_sequence',
                 'idx_industrial_records_profile_timestamp',
                 'idx_industrial_records_reference',
                 'idx_industrial_records_reference_time_id',
@@ -319,6 +289,9 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
                 'idx_industrial_realtime_consumer_offsets_unique',
                 'idx_industrial_realtime_consumer_offsets_stream',
                 'idx_industrial_realtime_consumer_offsets_status',
+                'idx_industrial_realtime_dead_letters_stream',
+                'idx_industrial_realtime_dead_letters_status',
+                'idx_industrial_realtime_source_health_status',
             }
             self.assertEqual(actual_index_names, expected_index_names)
 
@@ -351,7 +324,7 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
             no_index_db = Path(temp_dir) / 'no_indexes.db'
             indexed_db = Path(temp_dir) / 'indexed.db'
 
-            with sqlite3.connect(no_index_db) as conn:
+            with closing(sqlite3.connect(no_index_db)) as conn, conn:
                 self._create_schema_without_indexes(conn)
                 self._seed_schema_for_plan_checks(conn)
                 no_index_filter_plan = self._explain(conn, filter_join_query)
@@ -365,7 +338,7 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
                 day = (i % 28) + 1
                 self._insert_report(str(indexed_db), reference, sample_number, day)
 
-            with sqlite3.connect(indexed_db) as conn:
+            with closing(sqlite3.connect(indexed_db)) as conn, conn:
                 indexed_filter_plan = self._explain(conn, filter_join_query)
                 indexed_group_plan = self._explain(conn, group_dialog_query)
                 indexed_duplicate_plan = self._explain(conn, duplicate_guard_query)
@@ -391,7 +364,7 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
             db_path = str(Path(temp_dir) / 'locations.db')
             ensure_report_schema(db_path)
 
-            with sqlite3.connect(db_path) as conn:
+            with closing(sqlite3.connect(db_path)) as conn, conn:
                 conn.execute(
                     """
                     INSERT INTO source_files (sha256, source_format, discovered_at, is_active)
@@ -503,7 +476,7 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = str(Path(temp_dir) / 'industrial_plan_checks.db')
             ensure_industrial_data_schema(db_path)
-            with sqlite3.connect(db_path) as conn:
+            with closing(sqlite3.connect(db_path)) as conn, conn:
                 self._seed_industrial_schema_for_plan_checks(conn)
                 cache_order_plan = self._explain(conn, cache_order_query)
                 dynamic_lookup_plan = self._explain(conn, dynamic_lookup_query)

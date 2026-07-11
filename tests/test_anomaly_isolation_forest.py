@@ -1,3 +1,4 @@
+from contextlib import closing
 from dataclasses import replace
 
 import pytest
@@ -6,12 +7,15 @@ from metroliza.industrial.anomaly.contracts import DetectorContext
 from metroliza.industrial.anomaly.isolation_forest import (
     IsolationForestAnomalyDetector,
     IsolationForestModelSpec,
-    OptionalDependencyMissingError,
     load_isolation_forest_detector,
     sklearn_isolation_forest_available,
     train_isolation_forest_model,
 )
-from metroliza.industrial.anomaly.model_registry import ModelArtifact, ModelArtifactRegistry
+from metroliza.industrial.anomaly.model_registry import (
+    ModelArtifact,
+    ModelArtifactRegistry,
+    UnsafeModelArtifactError,
+)
 from metroliza.industrial.realtime.stream_contracts import IndustrialSample
 
 
@@ -97,16 +101,13 @@ def test_isolation_forest_can_return_critical_when_calibrated_and_allowed():
     assert result.severity == "critical"
 
 
-def test_train_reports_optional_dependency_when_sklearn_loader_missing(tmp_path, monkeypatch):
-    from metroliza.industrial.anomaly import isolation_forest  # noqa: PLC0415
-
-    monkeypatch.setattr(isolation_forest, "_load_sklearn_isolation_forest_class", lambda: None)
+def test_train_rejects_legacy_pickle_artifact_format(tmp_path):
     registry = ModelArtifactRegistry(
         str(tmp_path / "models.db"),
         artifact_root=tmp_path / "artifacts",
     )
 
-    with pytest.raises(OptionalDependencyMissingError, match="scikit-learn"):
+    with pytest.raises(UnsafeModelArtifactError, match="legacy artifact format used pickle"):
         train_isolation_forest_model(
             [_sample(10.0, sample_id=index) for index in range(1, 25)],
             registry,
@@ -114,8 +115,7 @@ def test_train_reports_optional_dependency_when_sklearn_loader_missing(tmp_path,
         )
 
 
-def test_train_and_score_isolation_forest_with_optional_sklearn(tmp_path):
-    pytest.importorskip("sklearn.ensemble")
+def test_train_stays_disabled_even_when_optional_sklearn_is_available(tmp_path):
     registry = ModelArtifactRegistry(
         str(tmp_path / "models.db"),
         artifact_root=tmp_path / "artifacts",
@@ -131,12 +131,37 @@ def test_train_and_score_isolation_forest_with_optional_sklearn(tmp_path):
         random_state=42,
     )
 
-    training = train_isolation_forest_model(samples, registry, spec)
-    detector = load_isolation_forest_detector(registry, artifact_id=training.artifact.id)
-    result = detector.score_one(_sample(50.0, sample_id=99), DetectorContext())
+    with pytest.raises(UnsafeModelArtifactError, match="safe serializer"):
+        train_isolation_forest_model(samples, registry, spec)
 
-    assert training.sample_count == 80
-    assert training.artifact.shadow_mode is True
-    assert result is not None
-    assert result.severity == "info"
-    assert result.context["artifact_key"] == "cycle_time"
+
+def test_load_archives_legacy_pickle_without_deserializing(tmp_path):
+    db_path = str(tmp_path / "models.db")
+    artifact_root = tmp_path / "artifacts"
+    legacy_path = artifact_root / "legacy.pkl"
+    legacy_path.parent.mkdir(parents=True)
+    legacy_path.write_bytes(b"not actually a pickle")
+    registry = ModelArtifactRegistry(db_path, artifact_root=artifact_root)
+    registry.ensure_schema()
+    import sqlite3  # noqa: PLC0415
+
+    with closing(sqlite3.connect(db_path)) as connection, connection:
+        with connection:
+            connection.execute(
+                """
+                INSERT INTO industrial_model_artifacts (
+                    artifact_key, model_type, artifact_path, checksum_sha256,
+                    training_sample_count, shadow_mode, calibrated, critical_allowed,
+                    status, created_at, updated_at
+                )
+                VALUES ('legacy', 'sklearn_isolation_forest', ?, 'ignored', 1, 1, 0, 0,
+                        'active', '2026-07-09T10:00:00Z', '2026-07-09T10:00:00Z')
+                """,
+                (str(legacy_path),),
+            )
+
+    with pytest.raises(UnsafeModelArtifactError, match="archived without deserializing"):
+        load_isolation_forest_detector(registry, artifact_key="legacy")
+
+    assert registry.list_artifacts(status="active") == []
+    assert registry.list_artifacts(status="archived")[0].artifact_key == "legacy"

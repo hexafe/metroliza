@@ -7,16 +7,25 @@ from pathlib import Path
 import hashlib
 import os
 import re
+import tempfile
+from uuid import uuid4
 from typing import Any, Mapping
 
 from metroliza.industrial.industrial_data_schema import ensure_industrial_data_schema
 from metroliza.industrial.realtime.sample_repository import from_json, to_json, utc_timestamp
+from metroliza.industrial.realtime.timestamps import canonical_utc_timestamp
 from metroliza.reports.db import run_transaction_with_retry
 
 
 MODEL_ARTIFACT_STATUSES = ("active", "archived", "failed")
+ALLOWED_MODEL_ARTIFACT_EXTENSIONS = frozenset({".artifact", ".json"})
+UNSAFE_MODEL_ARTIFACT_EXTENSIONS = frozenset({".pkl", ".pickle", ".joblib"})
 
 _SAFE_PATH_PART = re.compile(r"[^A-Za-z0-9_.-]+")
+
+
+class UnsafeModelArtifactError(RuntimeError):
+    """Raised when an executable or path-unsafe model artifact is requested."""
 
 
 @dataclass(frozen=True)
@@ -55,7 +64,8 @@ class ModelArtifactRegistry:
     ):
         self.database = database
         self.connection = connection
-        self.artifact_root = Path(artifact_root) if artifact_root is not None else _default_root(database)
+        root = Path(artifact_root) if artifact_root is not None else _default_root(database)
+        self.artifact_root = root.resolve(strict=False)
 
     def ensure_schema(self) -> None:
         ensure_industrial_data_schema(self.database, connection=self.connection)
@@ -115,7 +125,7 @@ class ModelArtifactRegistry:
         artifact_key: str,
         model_type: str,
         payload: bytes,
-        file_extension: str = ".pkl",
+        file_extension: str = ".artifact",
         signal_id: int | None = None,
         segment_key: Mapping[str, Any] | None = None,
         training_window_start: str | None = None,
@@ -136,7 +146,7 @@ class ModelArtifactRegistry:
         _validate_status(status)
         if not isinstance(payload, bytes):
             raise TypeError("payload must be bytes")
-        created = created_at or utc_timestamp()
+        created = canonical_utc_timestamp(created_at or utc_timestamp())
         checksum = hashlib.sha256(payload).hexdigest()
         artifact_path = self._write_payload(
             artifact_key=artifact_key,
@@ -146,24 +156,28 @@ class ModelArtifactRegistry:
             file_extension=file_extension,
             created_at=created,
         )
-        return self.register_artifact(
-            artifact_key=artifact_key,
-            model_type=model_type,
-            artifact_path=artifact_path,
-            checksum_sha256=checksum,
-            signal_id=signal_id,
-            segment_key=segment_key,
-            training_window_start=training_window_start,
-            training_window_end=training_window_end,
-            training_sample_count=training_sample_count,
-            parameters=parameters,
-            metrics=metrics,
-            shadow_mode=shadow_mode,
-            calibrated=calibrated,
-            critical_allowed=critical_allowed,
-            status=status,
-            created_at=created,
-        )
+        try:
+            return self.register_artifact(
+                artifact_key=artifact_key,
+                model_type=model_type,
+                artifact_path=artifact_path,
+                checksum_sha256=checksum,
+                signal_id=signal_id,
+                segment_key=segment_key,
+                training_window_start=training_window_start,
+                training_window_end=training_window_end,
+                training_sample_count=training_sample_count,
+                parameters=parameters,
+                metrics=metrics,
+                shadow_mode=shadow_mode,
+                calibrated=calibrated,
+                critical_allowed=critical_allowed,
+                status=status,
+                created_at=created,
+            )
+        except Exception:
+            artifact_path.unlink(missing_ok=True)
+            raise
 
     def register_artifact(
         self,
@@ -191,9 +205,9 @@ class ModelArtifactRegistry:
         _validate_non_empty("artifact_key", artifact_key)
         _validate_non_empty("model_type", model_type)
         _validate_status(status)
-        path = Path(artifact_path).resolve(strict=False)
+        path = self._validated_artifact_path(artifact_path, require_file=True)
         checksum = checksum_sha256 or _sha256_file(path)
-        created = created_at or utc_timestamp()
+        created = canonical_utc_timestamp(created_at or utc_timestamp())
         updated = utc_timestamp()
         segment_json = to_json(dict(segment_key or {}))
         parameters_json = to_json(dict(parameters or {}))
@@ -230,8 +244,8 @@ class ModelArtifactRegistry:
                     checksum,
                     signal_id,
                     segment_json,
-                    training_window_start,
-                    training_window_end,
+                    _canonical_optional(training_window_start),
+                    _canonical_optional(training_window_end),
                     int(training_sample_count),
                     parameters_json,
                     metrics_json,
@@ -342,7 +356,12 @@ class ModelArtifactRegistry:
         record = self.get_artifact(artifact) if isinstance(artifact, int) else artifact
         if record is None:
             raise FileNotFoundError(f"Model artifact {artifact!r} is not registered")
-        path = Path(record.artifact_path)
+        try:
+            path = self._validated_artifact_path(record.artifact_path, require_file=True)
+        except UnsafeModelArtifactError:
+            if record.id is not None:
+                self.archive_artifact(record.id)
+            raise
         payload = path.read_bytes()
         if verify_checksum:
             checksum = hashlib.sha256(payload).hexdigest()
@@ -352,6 +371,33 @@ class ModelArtifactRegistry:
                     f"expected {record.checksum_sha256}, got {checksum}"
                 )
         return payload
+
+    def archive_artifact(self, artifact: ModelArtifact | int) -> ModelArtifact:
+        """Mark an artifact inactive without loading its payload."""
+
+        self.ensure_schema()
+        artifact_id = artifact.id if isinstance(artifact, ModelArtifact) else int(artifact)
+        if artifact_id is None:
+            raise ValueError("registered artifact id is required")
+        updated_at = utc_timestamp()
+
+        def _archive(cursor) -> ModelArtifact:
+            cursor.execute(
+                """
+                UPDATE industrial_model_artifacts
+                SET status = 'archived', updated_at = ?
+                WHERE id = ?
+                """,
+                (updated_at, int(artifact_id)),
+            )
+            if cursor.rowcount < 1:
+                raise FileNotFoundError(f"Model artifact {artifact_id!r} is not registered")
+            cursor.execute("SELECT * FROM industrial_model_artifacts WHERE id = ?", (int(artifact_id),))
+            row = cursor.fetchone()
+            assert row is not None
+            return _row_to_artifact(row)
+
+        return run_transaction_with_retry(self.database, _archive, connection=self.connection)
 
     def _write_payload(
         self,
@@ -363,7 +409,7 @@ class ModelArtifactRegistry:
         file_extension: str,
         created_at: str,
     ) -> Path:
-        extension = file_extension if file_extension.startswith(".") else f".{file_extension}"
+        extension = _validated_extension(file_extension)
         safe_model_type = _safe_path_part(model_type)
         safe_key = _safe_path_part(artifact_key)
         safe_created = _safe_path_part(created_at)
@@ -371,13 +417,43 @@ class ModelArtifactRegistry:
             self.artifact_root
             / safe_model_type
             / safe_key
-            / f"{safe_created}-{checksum[:12]}{extension}"
+            / f"{safe_created}-{checksum[:12]}-{uuid4().hex[:8]}{extension}"
         )
         artifact_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary_path = artifact_path.with_name(f".{artifact_path.name}.{os.getpid()}.tmp")
-        temporary_path.write_bytes(payload)
-        temporary_path.replace(artifact_path)
+        file_descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{artifact_path.name}.",
+            suffix=".tmp",
+            dir=artifact_path.parent,
+        )
+        temporary_path = Path(temporary_name)
+        try:
+            with os.fdopen(file_descriptor, "wb") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_path, artifact_path)
+        except Exception:
+            temporary_path.unlink(missing_ok=True)
+            raise
         return artifact_path
+
+    def _validated_artifact_path(
+        self,
+        artifact_path: str | Path,
+        *,
+        require_file: bool,
+    ) -> Path:
+        path = Path(artifact_path).resolve(strict=False)
+        try:
+            path.relative_to(self.artifact_root)
+        except ValueError as exc:
+            raise UnsafeModelArtifactError(
+                "Model artifact path must remain inside the configured artifact root"
+            ) from exc
+        _validated_extension(path.suffix)
+        if require_file and not path.is_file():
+            raise FileNotFoundError(f"Model artifact file does not exist: {path}")
+        return path
 
 
 def _default_root(database: str) -> Path:
@@ -390,6 +466,23 @@ def _default_root(database: str) -> Path:
 def _safe_path_part(value: str) -> str:
     safe = _SAFE_PATH_PART.sub("_", str(value).strip()).strip("._")
     return (safe or "artifact")[:120]
+
+
+def _validated_extension(value: str) -> str:
+    text = str(value or "").strip().lower()
+    extension = text if text.startswith(".") else f".{text}"
+    if extension in UNSAFE_MODEL_ARTIFACT_EXTENSIONS:
+        raise UnsafeModelArtifactError(
+            f"Executable model artifact extension is disabled: {extension}"
+        )
+    if extension not in ALLOWED_MODEL_ARTIFACT_EXTENSIONS:
+        allowed = ", ".join(sorted(ALLOWED_MODEL_ARTIFACT_EXTENSIONS))
+        raise UnsafeModelArtifactError(f"Model artifact extension must be one of: {allowed}")
+    return extension
+
+
+def _canonical_optional(value: str | None) -> str | None:
+    return canonical_utc_timestamp(value) if value else None
 
 
 def _sha256_file(path: Path) -> str:

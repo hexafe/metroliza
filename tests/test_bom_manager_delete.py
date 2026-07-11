@@ -1,25 +1,8 @@
-import sys
-import types
 import unittest
+from unittest.mock import patch
 
-
-qtcore_stub = types.ModuleType('PyQt6.QtCore')
-qtcore_stub.Qt = type('Qt', (), {'UserRole': 0})
-sys.modules['PyQt6.QtCore'] = qtcore_stub
-
-qtwidgets_stub = types.ModuleType('PyQt6.QtWidgets')
-for name in [
-    'QMainWindow',
-    'QLabel',
-    'QWidget',
-    'QVBoxLayout',
-    'QLineEdit',
-    'QPushButton',
-    'QTableWidget',
-    'QTableWidgetItem',
-    'QComboBox',
-]:
-    setattr(qtwidgets_stub, name, type(name, (), {}))
+import metroliza.shared.bom_manager as bom_manager_module
+from modules.bom_manager import BOMManager  # noqa: E402
 
 
 class _MessageBox:
@@ -34,12 +17,6 @@ class _MessageBox:
     @staticmethod
     def question(*args, **kwargs):
         return _MessageBox.StandardButton.Yes
-
-
-qtwidgets_stub.QMessageBox = _MessageBox
-sys.modules['PyQt6.QtWidgets'] = qtwidgets_stub
-
-from modules.bom_manager import BOMManager  # noqa: E402
 
 
 class _FakeIndex:
@@ -126,6 +103,11 @@ class _FakeManager:
 
 
 class TestBOMManagerDeleteEntry(unittest.TestCase):
+    def setUp(self):
+        message_box_patch = patch.object(bom_manager_module, "QMessageBox", _MessageBox)
+        message_box_patch.start()
+        self.addCleanup(message_box_patch.stop)
+
     def test_delete_selected_row_with_multiple_cells_uses_one_delete_per_row_and_refreshes(self):
         manager = _FakeManager()
 

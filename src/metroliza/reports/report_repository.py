@@ -196,6 +196,20 @@ def _status_from_outtol(outtol: float | None) -> tuple[int, str]:
     return _coerce_bool_int(is_nok), "nok" if is_nok else "ok"
 
 
+def _measurement_status_values(measurement: Any, outtol: float | None) -> tuple[int, str]:
+    status_code = _get_value(measurement, "status_code")
+    if status_code not in (None, ""):
+        normalized_status = _coerce_status_code(status_code)
+        return _coerce_bool_int(normalized_status == "nok"), normalized_status
+
+    is_nok = _get_value(measurement, "is_nok")
+    if is_nok is not None:
+        normalized_is_nok = _coerce_bool_int(is_nok)
+        return normalized_is_nok, "nok" if normalized_is_nok else "ok"
+
+    return _status_from_outtol(outtol)
+
+
 class ReportRepository:
     """Persistence facade for the report metadata schema."""
 
@@ -250,6 +264,16 @@ class ReportRepository:
             )
             cursor.execute("SELECT id FROM source_files WHERE sha256 = ?", (digest,))
             source_file_id = int(cursor.fetchone()[0])
+            cursor.execute(
+                """
+                UPDATE source_file_locations
+                SET is_active = 0
+                WHERE absolute_path = ?
+                  AND source_file_id <> ?
+                  AND is_active = 1
+                """,
+                (str(path), source_file_id),
+            )
             cursor.execute(
                 """
                 INSERT INTO source_file_locations (
@@ -341,7 +365,14 @@ class ReportRepository:
 
         return run_transaction_with_retry(self.database, _upsert, connection=self.connection)
 
-    def _upsert_parsed_report(
+    def _upsert_parsed_report(self, cursor, **report_values: Any) -> int:
+        """Compatibility full-replace helper that also clears dependent rows."""
+
+        report_id = self._apply_parsed_report_row(cursor, **report_values)
+        self._clear_full_report_replacement_children(cursor, report_id)
+        return report_id
+
+    def _apply_parsed_report_row(
         self,
         cursor,
         *,
@@ -427,11 +458,13 @@ class ReportRepository:
             ),
         )
         cursor.execute("SELECT id FROM parsed_reports WHERE source_file_id = ?", (int(source_file_id),))
-        report_id = int(cursor.fetchone()[0])
+        return int(cursor.fetchone()[0])
+
+    @staticmethod
+    def _clear_full_report_replacement_children(cursor, report_id: int) -> None:
         cursor.execute("DELETE FROM report_measurements WHERE report_id = ?", (report_id,))
         cursor.execute("DELETE FROM report_metadata_candidates WHERE report_id = ?", (report_id,))
         cursor.execute("DELETE FROM report_metadata_warnings WHERE report_id = ?", (report_id,))
-        return report_id
 
     def _replace_report_metadata(
         self,
@@ -730,12 +763,14 @@ class ReportRepository:
         run_transaction_with_retry(self.database, _insert, connection=self.connection)
 
     def replace_measurements(self, report_id: int, measurements: Iterable[Any]) -> None:
-        """Replace flat measurements for a parsed report."""
+        """Replace flat measurements and refresh report-level summaries atomically."""
 
         rows = self._measurement_rows(report_id, measurements)
+        now = utc_timestamp()
 
         def _replace(cursor) -> None:
             self._replace_measurements(cursor, report_id, rows)
+            self._refresh_measurement_summary(cursor, report_id, now=now)
 
         run_transaction_with_retry(self.database, _replace, connection=self.connection)
 
@@ -744,12 +779,7 @@ class ReportRepository:
         for row_order, measurement in enumerate(measurements, start=1):
             explicit_order = _get_value(measurement, "row_order")
             outtol = _coerce_float(_get_value(measurement, "outtol"))
-            is_nok = _get_value(measurement, "is_nok")
-            if is_nok is None:
-                is_nok = bool(outtol is not None and outtol > 0)
-            status_code = _get_value(measurement, "status_code")
-            if not status_code:
-                status_code = "nok" if is_nok else "ok"
+            is_nok, status_code = _measurement_status_values(measurement, outtol)
             rows.append(
                 (
                     int(report_id),
@@ -769,7 +799,7 @@ class ReportRepository:
                     _coerce_float(_get_value(measurement, "meas")),
                     _coerce_float(_get_value(measurement, "dev")),
                     outtol,
-                    _coerce_bool_int(is_nok),
+                    is_nok,
                     status_code,
                     _to_json(_get_value(measurement, "raw_measurement_json", _as_mapping(measurement))),
                 )
@@ -806,6 +836,40 @@ class ReportRepository:
             """,
             rows,
         )
+
+    def _refresh_measurement_summary(
+        self,
+        cursor,
+        report_id: int,
+        *,
+        now: str | None = None,
+    ) -> tuple[int, int, int]:
+        """Refresh and return ``(measurement_count, has_nok, nok_count)``."""
+
+        cursor.execute(
+            """
+            SELECT COUNT(*), COALESCE(SUM(CASE WHEN is_nok = 1 THEN 1 ELSE 0 END), 0)
+            FROM report_measurements
+            WHERE report_id = ?
+            """,
+            (int(report_id),),
+        )
+        measurement_count, nok_count = (int(value) for value in cursor.fetchone())
+        has_nok = _coerce_bool_int(nok_count > 0)
+        cursor.execute(
+            """
+            UPDATE parsed_reports
+            SET measurement_count = ?,
+                has_nok = ?,
+                nok_count = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (measurement_count, has_nok, nok_count, now or utc_timestamp(), int(report_id)),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(f"Report {report_id} does not exist")
+        return measurement_count, has_nok, nok_count
 
     def update_report_metadata_fields(
         self,
@@ -956,18 +1020,8 @@ class ReportRepository:
 
         run_transaction_with_retry(self.database, _update, connection=self.connection)
 
-    def update_measurement_fields(
-        self,
-        measurement_id: int,
-        fields: dict[str, Any],
-        *,
-        source: str | None = None,
-        reason: str | None = None,
-    ) -> None:
-        """Update selected measurement fields and keep status/raw JSON coherent."""
-
-        if not fields:
-            return
+    @staticmethod
+    def _prepare_measurement_field_updates(fields: dict[str, Any]) -> dict[str, Any]:
         unknown_fields = set(fields) - MEASUREMENT_EDITABLE_FIELDS
         if unknown_fields:
             raise ValueError(f"Unsupported measurement fields: {sorted(unknown_fields)}")
@@ -983,127 +1037,144 @@ class ReportRepository:
             normalized_fields["is_nok"] = _coerce_bool_int(normalized_fields["is_nok"])
         if "status_code" in normalized_fields:
             normalized_fields["status_code"] = _coerce_status_code(normalized_fields["status_code"])
+        return normalized_fields
 
+    @staticmethod
+    def _load_measurement_for_update(cursor, measurement_id: int) -> dict[str, Any]:
+        cursor.execute(
+            """
+            SELECT
+                id,
+                report_id,
+                page_number,
+                row_order,
+                header,
+                section_name,
+                feature_label,
+                characteristic_name,
+                characteristic_family,
+                description,
+                ax,
+                nominal,
+                tol_plus,
+                tol_minus,
+                bonus,
+                meas,
+                dev,
+                outtol,
+                is_nok,
+                status_code,
+                raw_measurement_json
+            FROM report_measurements
+            WHERE id = ?
+            """,
+            (int(measurement_id),),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise ValueError(f"Measurement {measurement_id} does not exist")
+        columns = [description[0] for description in cursor.description]
+        return dict(zip(columns, row))
+
+    @staticmethod
+    def _prepare_measurement_update_values(
+        measurement: dict[str, Any],
+        normalized_fields: dict[str, Any],
+        *,
+        source_value: str,
+        reason: str | None,
+        now: str,
+    ) -> dict[str, Any]:
+        old_header = measurement.get("header")
+        update_values = dict(normalized_fields)
+
+        if "header" in update_values:
+            new_header = update_values["header"]
+            for dependent_field in ("section_name", "feature_label", "description"):
+                if dependent_field in update_values:
+                    continue
+                current_value = measurement.get(dependent_field)
+                if current_value in (None, "", old_header):
+                    update_values[dependent_field] = new_header
+
+        if "status_code" in update_values:
+            update_values["is_nok"] = 1 if update_values["status_code"] == "nok" else 0
+        elif "is_nok" in update_values:
+            update_values["status_code"] = "nok" if update_values["is_nok"] else "ok"
+        elif "outtol" in update_values:
+            is_nok, status_code = _status_from_outtol(update_values["outtol"])
+            update_values["is_nok"] = is_nok
+            update_values["status_code"] = status_code
+
+        if "raw_measurement_json" in update_values:
+            raw_measurement_json = update_values.pop("raw_measurement_json")
+            raw_json = _json_object(raw_measurement_json)
+        else:
+            raw_json = _json_object(measurement.get("raw_measurement_json"))
+            if "header" in update_values:
+                raw_json["header"] = update_values["header"]
+            manual_overrides = dict(raw_json.get("manual_overrides") or {})
+            for field_name, value in update_values.items():
+                if field_name in raw_json or field_name == "header":
+                    raw_json[field_name] = value
+                override_record = {
+                    "value": value,
+                    "source": source_value,
+                    "updated_at": now,
+                }
+                if reason:
+                    override_record["reason"] = reason
+                manual_overrides[field_name] = override_record
+            raw_json["manual_overrides"] = manual_overrides
+
+        update_values["raw_measurement_json"] = _to_json(raw_json)
+        return update_values
+
+    @staticmethod
+    def _apply_measurement_field_updates(
+        cursor,
+        measurement_id: int,
+        update_values: dict[str, Any],
+    ) -> None:
+        assignments = [f"{field_name} = ?" for field_name in update_values]
+        params = [update_values[field_name] for field_name in update_values]
+        params.append(int(measurement_id))
+        cursor.execute(
+            f"""
+            UPDATE report_measurements
+            SET {", ".join(assignments)}
+            WHERE id = ?
+            """,
+            tuple(params),
+        )
+
+    def update_measurement_fields(
+        self,
+        measurement_id: int,
+        fields: dict[str, Any],
+        *,
+        source: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        """Update selected measurement fields and keep status/raw JSON coherent."""
+
+        if not fields:
+            return
+        normalized_fields = self._prepare_measurement_field_updates(fields)
         now = utc_timestamp()
         source_value = _manual_source(source)
 
         def _update(cursor) -> None:
-            cursor.execute(
-                """
-                SELECT
-                    id,
-                    report_id,
-                    page_number,
-                    row_order,
-                    header,
-                    section_name,
-                    feature_label,
-                    characteristic_name,
-                    characteristic_family,
-                    description,
-                    ax,
-                    nominal,
-                    tol_plus,
-                    tol_minus,
-                    bonus,
-                    meas,
-                    dev,
-                    outtol,
-                    is_nok,
-                    status_code,
-                    raw_measurement_json
-                FROM report_measurements
-                WHERE id = ?
-                """,
-                (int(measurement_id),),
+            measurement = self._load_measurement_for_update(cursor, measurement_id)
+            update_values = self._prepare_measurement_update_values(
+                measurement,
+                normalized_fields,
+                source_value=source_value,
+                reason=reason,
+                now=now,
             )
-            row = cursor.fetchone()
-            if row is None:
-                raise ValueError(f"Measurement {measurement_id} does not exist")
-
-            columns = [description[0] for description in cursor.description]
-            measurement = dict(zip(columns, row))
-            old_header = measurement.get("header")
-            update_values = dict(normalized_fields)
-
-            if "header" in update_values:
-                new_header = update_values["header"]
-                for dependent_field in ("section_name", "feature_label", "description"):
-                    if dependent_field in update_values:
-                        continue
-                    current_value = measurement.get(dependent_field)
-                    if current_value in (None, "", old_header):
-                        update_values[dependent_field] = new_header
-
-            if "status_code" in update_values:
-                update_values["is_nok"] = 1 if update_values["status_code"] == "nok" else 0
-            elif "is_nok" in update_values:
-                update_values["status_code"] = "nok" if update_values["is_nok"] else "ok"
-            elif "outtol" in update_values:
-                is_nok, status_code = _status_from_outtol(update_values["outtol"])
-                update_values["is_nok"] = is_nok
-                update_values["status_code"] = status_code
-
-            if "raw_measurement_json" in update_values:
-                raw_measurement_json = update_values.pop("raw_measurement_json")
-                raw_json = _json_object(raw_measurement_json)
-            else:
-                raw_json = _json_object(measurement.get("raw_measurement_json"))
-                if "header" in update_values:
-                    raw_json["header"] = update_values["header"]
-                manual_overrides = dict(raw_json.get("manual_overrides") or {})
-                for field_name, value in update_values.items():
-                    if field_name in raw_json or field_name == "header":
-                        raw_json[field_name] = value
-                    override_record = {
-                        "value": value,
-                        "source": source_value,
-                        "updated_at": now,
-                    }
-                    if reason:
-                        override_record["reason"] = reason
-                    manual_overrides[field_name] = override_record
-                raw_json["manual_overrides"] = manual_overrides
-
-            update_values["raw_measurement_json"] = _to_json(raw_json)
-            assignments = [f"{field_name} = ?" for field_name in update_values]
-            params = [update_values[field_name] for field_name in update_values]
-            params.append(int(measurement_id))
-            cursor.execute(
-                f"""
-                UPDATE report_measurements
-                SET {", ".join(assignments)}
-                WHERE id = ?
-                """,
-                tuple(params),
-            )
-
-            cursor.execute(
-                """
-                SELECT COUNT(*), COALESCE(SUM(is_nok), 0)
-                FROM report_measurements
-                WHERE report_id = ?
-                """,
-                (int(measurement["report_id"]),),
-            )
-            measurement_count, nok_count = cursor.fetchone()
-            cursor.execute(
-                """
-                UPDATE parsed_reports
-                SET measurement_count = ?,
-                    has_nok = ?,
-                    nok_count = ?,
-                    updated_at = ?
-                WHERE id = ?
-                """,
-                (
-                    int(measurement_count),
-                    _coerce_bool_int(int(nok_count) > 0),
-                    int(nok_count),
-                    now,
-                    int(measurement["report_id"]),
-                ),
-            )
+            self._apply_measurement_field_updates(cursor, measurement_id, update_values)
+            self._refresh_measurement_summary(cursor, int(measurement["report_id"]), now=now)
 
         run_transaction_with_retry(self.database, _update, connection=self.connection)
 
@@ -1171,6 +1242,38 @@ class ReportRepository:
 
         return run_transaction_with_retry(self.database, _persist, connection=self.connection)
 
+    def _replace_full_report_payload(
+        self,
+        cursor,
+        report_id: int,
+        *,
+        metadata: Any,
+        candidates: Iterable[Any],
+        warnings: Iterable[Any],
+        measurements: Iterable[Any],
+        metadata_version: str,
+        metadata_profile_id: str | None,
+        metadata_profile_version: str | None,
+        identity_hash: str | None,
+        now: str,
+    ) -> None:
+        """Apply all dependent rows for one full-report replacement transaction."""
+
+        self._replace_report_metadata(
+            cursor,
+            report_id,
+            metadata,
+            metadata_version=metadata_version,
+            metadata_profile_id=metadata_profile_id,
+            metadata_profile_version=metadata_profile_version,
+        )
+        self._replace_metadata_candidates(cursor, report_id, candidates)
+        self._replace_metadata_warnings(cursor, report_id, warnings)
+        measurement_rows = self._measurement_rows(report_id, measurements)
+        self._replace_measurements(cursor, report_id, measurement_rows)
+        self._refresh_measurement_summary(cursor, report_id, now=now)
+        self._persist_semantic_duplicate_warnings(cursor, report_id, identity_hash)
+
     def persist_parsed_report(
         self,
         *,
@@ -1199,15 +1302,20 @@ class ReportRepository:
         identity_hash: str | None = None,
         raw_report_json: Any = None,
     ) -> int:
-        """Persist a full parsed report payload through the repository facade."""
+        """Persist a full report, deriving measurement summaries from normalized rows.
+
+        The count arguments remain accepted for compatibility but are not authoritative.
+        """
 
         self.ensure_schema()
         source_record = self.upsert_source_file(source_path, sha256=source_sha256)
         now = utc_timestamp()
         measurement_values = tuple(measurements)
+        candidate_values = tuple(candidates)
+        warning_values = tuple(warnings)
 
         def _persist(cursor) -> int:
-            report_id = self._upsert_parsed_report(
+            report_id = self._apply_parsed_report_row(
                 cursor,
                 source_file_id=source_record.id,
                 parser_id=parser_id,
@@ -1219,27 +1327,27 @@ class ReportRepository:
                 parse_finished_at=parse_finished_at,
                 parse_duration_ms=parse_duration_ms,
                 page_count=page_count,
-                measurement_count=measurement_count,
-                has_nok=has_nok,
-                nok_count=nok_count,
+                measurement_count=0,
+                has_nok=False,
+                nok_count=0,
                 metadata_confidence=metadata_confidence,
                 identity_hash=identity_hash,
                 raw_report_json=raw_report_json,
                 now=now,
             )
-            self._replace_report_metadata(
+            self._replace_full_report_payload(
                 cursor,
                 report_id,
-                metadata,
+                metadata=metadata,
+                candidates=candidate_values,
+                warnings=warning_values,
+                measurements=measurement_values,
                 metadata_version=metadata_version,
                 metadata_profile_id=metadata_profile_id,
                 metadata_profile_version=metadata_profile_version,
+                identity_hash=identity_hash,
+                now=now,
             )
-            self._replace_metadata_candidates(cursor, report_id, candidates)
-            self._replace_metadata_warnings(cursor, report_id, warnings)
-            measurement_rows = self._measurement_rows(report_id, measurement_values)
-            self._replace_measurements(cursor, report_id, measurement_rows)
-            self._persist_semantic_duplicate_warnings(cursor, report_id, identity_hash)
             return report_id
 
         return run_transaction_with_retry(self.database, _persist, connection=self.connection)

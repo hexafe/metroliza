@@ -1,3 +1,4 @@
+from contextlib import closing
 import importlib.util
 import json
 import sqlite3
@@ -45,7 +46,7 @@ def test_classify_runtime_issue_reports_ocr_and_missing_model_modes():
 def test_source_rows_for_sha_decodes_metadata_json(tmp_path):
     module = _load_script_module()
     db_path = tmp_path / "reports.sqlite"
-    with sqlite3.connect(db_path) as connection:
+    with closing(sqlite3.connect(db_path)) as connection, connection:
         connection.executescript(
             """
             CREATE TABLE source_files (

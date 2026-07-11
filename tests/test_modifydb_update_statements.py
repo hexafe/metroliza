@@ -1,47 +1,7 @@
-import sys
-import types
 import unittest
 
-qtcore_stub = types.ModuleType('PyQt6.QtCore')
-qtcore_stub.Qt = type('Qt', (), {'ItemDataRole': type('ItemDataRole', (), {'UserRole': 0})})
-sys.modules['PyQt6.QtCore'] = qtcore_stub
-
-qtwidgets_stub = types.ModuleType('PyQt6.QtWidgets')
-qtwidgets_stub.QSizePolicy = type(
-    'QSizePolicy',
-    (),
-    {'Policy': type('Policy', (), {'Expanding': 1, 'Fixed': 2})},
-)
-qtwidgets_stub.QHeaderView = type(
-    'QHeaderView',
-    (),
-    {'ResizeMode': type('ResizeMode', (), {'Interactive': 0, 'Stretch': 1, 'ResizeToContents': 2})},
-)
-qtwidgets_stub.QApplication = type('QApplication', (), {'instance': staticmethod(lambda: None)})
-for name in [
-    'QDialog',
-    'QGridLayout',
-    'QHBoxLayout',
-    'QTableWidget',
-    'QTableWidgetItem',
-    'QPushButton',
-    'QFileDialog',
-    'QMessageBox',
-    'QFrame',
-    'QLabel',
-    'QLineEdit',
-    'QWidget',
-]:
-    setattr(qtwidgets_stub, name, type(name, (), {}))
-sys.modules['PyQt6.QtWidgets'] = qtwidgets_stub
-sys.modules['PyQt6.QtGui'] = types.ModuleType('PyQt6.QtGui')
-
-custom_logger_stub = types.ModuleType('modules.custom_logger')
-custom_logger_stub.CustomLogger = type('CustomLogger', (), {'__init__': lambda self, *args, **kwargs: None})
-sys.modules['modules.custom_logger'] = custom_logger_stub
-sys.modules.pop('modules.ui_foundation', None)
-sys.modules.pop('modules.modify_db', None)
-
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QHeaderView
 from modules.modify_db import ModifyDB  # noqa: E402
 
 
@@ -51,7 +11,7 @@ class _FakeItem:
         self._current = current
 
     def data(self, role):
-        if role == 0:
+        if role == Qt.ItemDataRole.UserRole:
             return self._original
         return None
 
@@ -197,7 +157,7 @@ class TestModifyDbUpdateStatements(unittest.TestCase):
 
         ModifyDB._configure_normalize_table(table)
 
-        resize_mode = qtwidgets_stub.QHeaderView.ResizeMode
+        resize_mode = QHeaderView.ResizeMode
         self._assert_resize_mode(
             table.header.resize_modes[0],
             expected_name="Stretch",
@@ -215,7 +175,7 @@ class TestModifyDbUpdateStatements(unittest.TestCase):
         )
 
     def test_available_specs_and_select_exprs_quote_aliases(self):
-        dialog = object.__new__(ModifyDB)
+        dialog = ModifyDB.__new__(ModifyDB)
         specs = [
             {"label": "ID", "field": "report_id", "source": "ID"},
             {"label": "+TOL", "field": "tol_plus", "source": "+TOL"},
@@ -229,7 +189,7 @@ class TestModifyDbUpdateStatements(unittest.TestCase):
         self.assertEqual(expressions, ['"ID" AS "report_id"', '"+TOL" AS "tol_plus"'])
 
     def test_filter_table_rows_matches_across_columns_and_hides_misses(self):
-        dialog = object.__new__(ModifyDB)
+        dialog = ModifyDB.__new__(ModifyDB)
         table = _FakeFilterTable(
             [
                 [_FakeItem("REF-A", "REF-A"), _FakeItem("Part", "Part")],
@@ -242,7 +202,7 @@ class TestModifyDbUpdateStatements(unittest.TestCase):
         self.assertEqual(table.hidden_rows, {0: True, 1: False})
 
     def test_collect_table_modifications_includes_occurrence_count(self):
-        dialog = object.__new__(ModifyDB)
+        dialog = ModifyDB.__new__(ModifyDB)
         table = _FakeMatrixTable(
             [
                 [_FakeItem("A", "A"), _FakeItem("A", "A2"), _FakeItem(3, "3")],
@@ -255,7 +215,7 @@ class TestModifyDbUpdateStatements(unittest.TestCase):
         self.assertEqual(summary, 'References: "A" -> "A2" (occurrences: 3)')
 
     def test_legacy_record_update_statements_skip_unknown_fields(self):
-        dialog = object.__new__(ModifyDB)
+        dialog = ModifyDB.__new__(ModifyDB)
 
         statements = dialog._build_legacy_record_update_statements(
             [(4, {"reference": "REF-4", "unknown": "ignored"})],

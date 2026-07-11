@@ -1,5 +1,3 @@
-import sys
-import types
 import unittest
 import re
 
@@ -8,68 +6,18 @@ from collections import namedtuple
 import pandas as pd
 
 
-qtcore_stub = types.ModuleType('PyQt6.QtCore')
-qtcore_stub.Qt = type('Qt', (), {'ItemDataRole': type('ItemDataRole', (), {'UserRole': 0})})
-sys.modules['PyQt6.QtCore'] = qtcore_stub
-
-
-qtgui_stub = types.ModuleType('PyQt6.QtGui')
-
-
-class _DummyQColor:
-    def __init__(self, value=None):
-        self._value = str(value or '#000000')
-
-    def isValid(self):
-        return isinstance(self._value, str) and self._value.startswith('#') and len(self._value) in {7}
-
-    def red(self):
-        return int(self._value[1:3], 16) if self.isValid() else 0
-
-    def green(self):
-        return int(self._value[3:5], 16) if self.isValid() else 0
-
-    def blue(self):
-        return int(self._value[5:7], 16) if self.isValid() else 0
-
-    def name(self):
-        return self._value.upper() if self.isValid() else '#000000'
-
-    @classmethod
-    def fromHsl(cls, h, s, lightness):
-        return cls(f'#{(h % 256):02X}{(s % 256):02X}{(lightness % 256):02X}')
-
-
-class _DummyQBrush:
-    def __init__(self, *args, **kwargs):
-        pass
-
-
-qtgui_stub.QColor = _DummyQColor
-qtgui_stub.QBrush = _DummyQBrush
-sys.modules['PyQt6.QtGui'] = qtgui_stub
-
-qtwidgets_stub = types.ModuleType('PyQt6.QtWidgets')
-for name in [
-    'QAbstractItemView',
-    'QDialog',
-    'QGridLayout',
-    'QLabel',
-    'QLineEdit',
-    'QListWidget',
-    'QListWidgetItem',
-    'QPushButton',
-    'QInputDialog',
-    'QMessageBox',
-]:
-    setattr(qtwidgets_stub, name, type(name, (), {}))
-sys.modules['PyQt6.QtWidgets'] = qtwidgets_stub
-
-custom_logger_stub = types.ModuleType('modules.custom_logger')
-custom_logger_stub.CustomLogger = type('CustomLogger', (), {'__init__': lambda self, *a, **k: None})
-sys.modules['modules.custom_logger'] = custom_logger_stub
-
 from modules.data_grouping import DataGrouping  # noqa: E402
+
+
+_DataGroupingHarness = type(
+    "_DataGroupingHarness",
+    (),
+    {
+        name: value
+        for name, value in vars(DataGrouping).items()
+        if name not in {"__dict__", "__init__", "__weakref__", "__module__"}
+    },
+)
 
 
 class TestDataGroupingFilterQuery(unittest.TestCase):
@@ -105,7 +53,7 @@ class TestDataGroupingFilterQuery(unittest.TestCase):
             def get_filter_query(self):
                 raise AssertionError('full export filter should not be read')
 
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.parent = lambda: _Parent()
 
         query = dialog._initial_grouping_filter_query()
@@ -128,7 +76,7 @@ class TestDataGroupingPartDisplayLabel(unittest.TestCase):
         self.assertTrue(DataGrouping._truthy_text('yes'))
 
     def test_part_display_label_accepts_namedtuple_row(self):
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         Row = namedtuple(
             'Row',
             [
@@ -163,7 +111,7 @@ class TestDataGroupingPartDisplayLabel(unittest.TestCase):
         )
 
     def test_part_display_label_handles_missing_values(self):
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         row = {'SAMPLE_NUMBER': 7, 'DATE': pd.NA, 'FILENAME': None}
 
         label = dialog._part_display_label(row)
@@ -171,7 +119,7 @@ class TestDataGroupingPartDisplayLabel(unittest.TestCase):
         self.assertEqual(label, 'Sample: 7')
 
     def test_part_display_label_includes_supplier_when_present(self):
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         row = {'SAMPLE_NUMBER': 7, 'SUPPLIER': 'SUPPLIER'}
 
         label = dialog._part_display_label(row)
@@ -269,7 +217,7 @@ class TestDataGroupingScopeFilterAliases(unittest.TestCase):
         class _Parent:
             filter_state = FilterState(reference_values=('REF1',), header_values=('VAL1',))
 
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.parent = lambda: _Parent()
 
         self.assertEqual(dialog._suggested_scope_group_name('REF1'), 'REF1-VAL1')
@@ -280,7 +228,7 @@ class TestDataGroupingScopeFilterAliases(unittest.TestCase):
         class _Parent:
             filter_state = FilterState(reference_values=('REF1',), header_values=('VAL1', 'VAL2'))
 
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.parent = lambda: _Parent()
 
         self.assertEqual(dialog._suggested_scope_group_name('REF1'), 'REF1')
@@ -328,7 +276,7 @@ class TestDataGroupingScopeFilterAliases(unittest.TestCase):
 
 class TestDataGroupingColorAssignments(unittest.TestCase):
     def _dialog_with_df(self, df):
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.default_group = 'POPULATION'
         dialog.default_group_color = '#FFFFFF'
         dialog.group_color_column = 'GROUP_COLOR'
@@ -427,7 +375,7 @@ class _ThemeListWidget:
 
 class TestDataGroupingSelectionStyling(unittest.TestCase):
     def test_apply_item_color_only_sets_background_for_non_selected_theme_blending(self):
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.default_group_color = '#FFFFFF'
         item = _ColorCaptureItem()
 
@@ -437,7 +385,7 @@ class TestDataGroupingSelectionStyling(unittest.TestCase):
         self.assertIsNotNone(item.foreground)
 
     def test_apply_list_theme_styles_sets_selection_rules_for_all_lists(self):
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.reference_list = _ThemeListWidget('#112233')
         dialog.part_list = _ThemeListWidget('#112233')
         dialog.groups_list = _ThemeListWidget('#112233')
@@ -600,14 +548,14 @@ class TestDataGroupingGroupLabels(unittest.TestCase):
         )
 
     def test_selected_group_name_prefers_user_role(self):
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog._group_display_to_name = {'Sales [1] (n=2)': 'Sales'}
         dialog.groups_list = _FakeListWidget([_FakeListItem(text='Sales [1] (n=2)', user_role='Sales')])
 
         self.assertEqual(dialog._selected_group_name(), 'Sales')
 
     def test_selected_group_name_falls_back_to_display_mapping(self):
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog._group_display_to_name = {'Ops Team [1] (n=1)': 'Ops Team'}
         dialog.groups_list = _FakeListWidget([_FakeListItem(text='Ops Team [1] (n=1)', user_role=None)])
 
@@ -616,7 +564,7 @@ class TestDataGroupingGroupLabels(unittest.TestCase):
     def test_rename_group_uses_canonical_group_name(self):
         from unittest.mock import patch
 
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.default_group = 'POPULATION'
         dialog.group_color_column = 'GROUP_COLOR'
         dialog.df = pd.DataFrame(
@@ -641,7 +589,7 @@ class TestDataGroupingGroupLabels(unittest.TestCase):
     def test_rename_group_allows_default_population_group(self):
         from unittest.mock import patch
 
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.default_group = 'POPULATION'
         dialog.group_color_column = 'GROUP_COLOR'
         dialog.df = pd.DataFrame(
@@ -666,7 +614,7 @@ class TestDataGroupingGroupLabels(unittest.TestCase):
     def test_delete_group_ignores_default_population_group(self):
         from unittest.mock import patch
 
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.default_group = 'POPULATION'
         dialog.default_group_color = '#FFFFFF'
         dialog.group_color_column = 'GROUP_COLOR'
@@ -692,7 +640,7 @@ class TestDataGroupingGroupLabels(unittest.TestCase):
     def test_delete_group_reassigns_non_default_group_to_population(self):
         from unittest.mock import patch
 
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.default_group = 'POPULATION'
         dialog.default_group_color = '#FFFFFF'
         dialog.group_color_column = 'GROUP_COLOR'
@@ -719,7 +667,7 @@ class TestDataGroupingGroupLabels(unittest.TestCase):
     def test_delete_group_allows_legacy_empty_group_name(self):
         from unittest.mock import patch
 
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.default_group = 'POPULATION'
         dialog.default_group_color = '#FFFFFF'
         dialog.group_color_column = 'GROUP_COLOR'
@@ -744,7 +692,7 @@ class TestDataGroupingGroupLabels(unittest.TestCase):
         self.assertTrue((dialog.df['GROUP'] == 'POPULATION').all())
 
     def test_on_group_selection_changed_disables_delete_but_keeps_rename_for_default_group(self):
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.default_group = 'POPULATION'
         dialog.groups_list = _FakeListWidget([_FakeListItem(text='POPULATION (n=2)', user_role='POPULATION')])
         dialog.part_group_list = _FakeListWidget([_FakeListItem(text='P1')])
@@ -761,7 +709,7 @@ class TestDataGroupingGroupLabels(unittest.TestCase):
         self.assertTrue(dialog.remove_from_group_button.disabled)
 
     def test_on_group_selection_changed_enables_rename_and_delete_for_non_default_group(self):
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.default_group = 'POPULATION'
         dialog.groups_list = _FakeListWidget([_FakeListItem(text='Ops Team [1] (n=1)', user_role='Ops Team')])
         dialog.part_group_list = _FakeListWidget([_FakeListItem(text='P1')])
@@ -780,7 +728,7 @@ class TestDataGroupingGroupLabels(unittest.TestCase):
     def test_group_search_matches_canonical_name(self):
         from modules.list_selection_utils import ListSelectionUtils
 
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog._list_selection_utils = ListSelectionUtils()
         dialog.groups_list = _FakeListWidget([_FakeListItem(text='Fancy Label [1] (n=4)', user_role='CanonicalGroup')])
 
@@ -791,7 +739,7 @@ class TestDataGroupingGroupLabels(unittest.TestCase):
     def test_group_search_ignores_display_counts_and_indexes(self):
         from modules.list_selection_utils import ListSelectionUtils
 
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog._list_selection_utils = ListSelectionUtils()
         dialog.groups_list = _FakeListWidget(
             [_FakeListItem(text='Ops Team [42] (n=99)', user_role='Ops Team')]
@@ -808,7 +756,7 @@ class TestDataGroupingGroupLabels(unittest.TestCase):
 
         user_role = DataGrouping.search_list_widgets.__globals__['Qt'].ItemDataRole.UserRole
         search_role = DataGrouping.search_list_widgets.__globals__['_GROUPING_SEARCH_ROLE']
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog._list_selection_utils = ListSelectionUtils()
         dialog.part_list = _FakeListWidget(
             [
@@ -826,7 +774,7 @@ class TestDataGroupingGroupLabels(unittest.TestCase):
         self.assertFalse(dialog.part_list.item(0).hidden)
 
     def test_search_inputs_update_live_but_scope_filter_waits_for_enter(self):
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         calls = []
 
         dialog.reference_search_input = _FakeLineEdit()
@@ -879,7 +827,7 @@ class TestDataGroupingGroupLabels(unittest.TestCase):
     def test_double_click_group_item_triggers_rename(self):
         from unittest.mock import Mock
 
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.rename_group = Mock()
 
         dialog.on_group_item_double_clicked(_FakeListItem(text='Any'))
@@ -889,7 +837,7 @@ class TestDataGroupingGroupLabels(unittest.TestCase):
     def test_double_click_ignores_none_item(self):
         from unittest.mock import Mock
 
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.rename_group = Mock()
 
         dialog.on_group_item_double_clicked(None)
@@ -944,7 +892,7 @@ class _PopulateListWidget:
 
 class TestDataGroupingCreateGroupSelectionPriority(unittest.TestCase):
     def _base_dialog(self):
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.default_group = 'POPULATION'
         dialog.group_color_column = 'GROUP_COLOR'
         dialog.df = pd.DataFrame(
@@ -1123,7 +1071,7 @@ class TestDataGroupingCreateGroupSelectionPriority(unittest.TestCase):
 
 class TestDataGroupingReferenceDoubleClick(unittest.TestCase):
     def test_reference_double_click_opens_create_group_with_reference_name(self):
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         captured = {'initial_group_name': None}
 
         def _capture_create_group(initial_group_name=''):
@@ -1143,7 +1091,7 @@ class TestDataGroupingPartDoubleClick(unittest.TestCase):
     def test_part_double_click_opens_create_group_flow(self):
         from unittest.mock import Mock
 
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.create_group = Mock()
 
         dialog.on_part_item_double_clicked(_FakeListItem(text='1', user_role='k1'))
@@ -1153,7 +1101,7 @@ class TestDataGroupingPartDoubleClick(unittest.TestCase):
     def test_part_double_click_ignores_none_item(self):
         from unittest.mock import Mock
 
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.create_group = Mock()
 
         dialog.on_part_item_double_clicked(None)
@@ -1167,7 +1115,7 @@ class TestDataGroupingSelectionRetention(unittest.TestCase):
             def text(self):
                 return ' Part=Body '
 
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.scope_filter_input = _TextInput()
         dialog._cached_filtered_grouping_dataframe = pd.DataFrame({'A': [1]})
         dialog._cached_grouping_row_index = pd.DataFrame({'B': [1]})
@@ -1191,7 +1139,7 @@ class TestDataGroupingSelectionRetention(unittest.TestCase):
             def setText(self, value):
                 self.value = value
 
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.df = pd.DataFrame({'REFERENCE': ['R1', 'R2']})
         dialog._applied_scope_filter_text = ''
         dialog._cached_filtered_grouping_dataframe = None
@@ -1205,7 +1153,7 @@ class TestDataGroupingSelectionRetention(unittest.TestCase):
     def test_populate_list_widgets_prefers_existing_group_name(self):
         from unittest.mock import patch
 
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.default_group = 'POPULATION'
         dialog.default_group_color = '#FFFFFF'
         dialog.group_color_column = 'GROUP_COLOR'
@@ -1242,7 +1190,7 @@ class TestDataGroupingSelectionRetention(unittest.TestCase):
     def test_populate_list_widgets_uses_counted_reference_labels_with_canonical_selection(self):
         from unittest.mock import patch
 
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.default_group = 'POPULATION'
         dialog.default_group_color = '#FFFFFF'
         dialog.group_color_column = 'GROUP_COLOR'
@@ -1293,7 +1241,7 @@ class TestDataGroupingSelectionRetention(unittest.TestCase):
             def setText(self, value):
                 self.value = value
 
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.default_group = 'POPULATION'
         dialog.default_group_color = '#FFFFFF'
         dialog.group_color_column = 'GROUP_COLOR'
@@ -1344,7 +1292,7 @@ class TestDataGroupingSelectionRetention(unittest.TestCase):
             def setText(self, value):
                 self.value = value
 
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.df = pd.DataFrame(
             {
                 'REFERENCE': ['REF-1', 'REF-2', 'REF-3'],
@@ -1364,7 +1312,7 @@ class TestDataGroupingSelectionRetention(unittest.TestCase):
         self.assertEqual(dialog.scope_filter_summary_label.value, 'Scope: 2 of 3 rows')
 
     def test_scope_filter_accepts_parts_display_field_aliases(self):
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         frame = pd.DataFrame(
             {
                 'SAMPLE_NUMBER': [42, 43],
@@ -1398,7 +1346,7 @@ class TestDataGroupingSelectionRetention(unittest.TestCase):
             def setText(self, value):
                 self.value = value
 
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.df = pd.DataFrame(
             {
                 'REFERENCE': ['REF-1', 'REF-2'],
@@ -1420,7 +1368,7 @@ class TestDataGroupingSelectionRetention(unittest.TestCase):
         from modules.data_grouping_service import build_grouping_row_index as real_build_grouping_row_index
         from unittest.mock import patch
 
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.default_group = 'POPULATION'
         dialog.default_group_color = '#FFFFFF'
         dialog.group_color_column = 'GROUP_COLOR'
@@ -1470,7 +1418,7 @@ class TestDataGroupingSelectionRetention(unittest.TestCase):
     def test_populate_list_widgets_falls_back_to_first_when_group_missing(self):
         from unittest.mock import patch
 
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.default_group = 'POPULATION'
         dialog.default_group_color = '#FFFFFF'
         dialog.group_color_column = 'GROUP_COLOR'
@@ -1502,7 +1450,7 @@ class TestDataGroupingSelectionRetention(unittest.TestCase):
         self.assertEqual(dialog._selected_group_name(), 'POPULATION')
 
     def test_delete_selected_parts_requests_preferred_group_reselection(self):
-        dialog = DataGrouping.__new__(DataGrouping)
+        dialog = _DataGroupingHarness()
         dialog.default_group = 'POPULATION'
         dialog.default_group_color = '#FFFFFF'
         dialog.group_color_column = 'GROUP_COLOR'

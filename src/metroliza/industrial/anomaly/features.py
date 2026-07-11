@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
 import math
 from statistics import fmean, median
 
 from metroliza.industrial.realtime.stream_contracts import IndustrialSample, SignalDefinition
+from metroliza.industrial.realtime.timestamps import parse_utc_timestamp
 
 
 @dataclass(frozen=True)
@@ -132,19 +132,9 @@ def _seconds_since_previous(
 ) -> float | None:
     if previous_sample is None:
         return None
-    current_time = _parse_utc_timestamp(sample.event_time)
-    previous_time = _parse_utc_timestamp(previous_sample.event_time)
+    current_time = parse_utc_timestamp(sample.event_time)
+    previous_time = parse_utc_timestamp(previous_sample.event_time)
     return (current_time - previous_time).total_seconds()
-
-
-def _parse_utc_timestamp(value: str) -> datetime:
-    text = str(value).strip()
-    if text.endswith("Z"):
-        text = f"{text[:-1]}+00:00"
-    parsed = datetime.fromisoformat(text)
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
 
 
 def _finite_float_or_none(value: object) -> float | None:

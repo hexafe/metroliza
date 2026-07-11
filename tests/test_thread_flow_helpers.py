@@ -1720,6 +1720,24 @@ class TestExportBackendSmoke(unittest.TestCase):
 
         return pd.DataFrame(rows)
 
+    def test_dashboard_payload_cleanup_releases_sections_and_group_analysis(self):
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_html_dashboard=True),
+        )
+        thread = ExportDataThread(request)
+        thread._html_dashboard_sections.append(
+            {'charts': [{'image_buffer': object(), 'payload': {'values': [1, 2, 3]}}]}
+        )
+        thread._html_group_analysis_payload = {'metrics': [object()]}
+        thread._html_group_analysis_plot_assets = {'metrics': {'A': object()}}
+
+        thread._cleanup_dashboard_payloads()
+
+        self.assertEqual(thread._html_dashboard_sections, [])
+        self.assertIsNone(thread._html_group_analysis_payload)
+        self.assertIsNone(thread._html_group_analysis_plot_assets)
+
     def test_export_run_emits_monotonic_progress_from_zero_to_hundred_for_multi_header_data(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 

@@ -421,6 +421,7 @@ def test_export_lifecycle_success_cancel_and_terminal_paths(monkeypatch, tmp_pat
                 self.running = True
                 self.started = False
                 self.stopped = False
+                self.deleted = False
                 self.export_target = "excel_xlsx"
                 self.completion_metadata = {"excel_file": str(tmp_path / "validated.xlsx")}
 
@@ -432,6 +433,9 @@ def test_export_lifecycle_success_cancel_and_terminal_paths(monkeypatch, tmp_pat
 
             def stop_exporting(self):
                 self.stopped = True
+
+            def deleteLater(self):
+                self.deleted = True
 
         events = []
 
@@ -549,6 +553,8 @@ def test_export_lifecycle_success_cancel_and_terminal_paths(monkeypatch, tmp_pat
 
         assert progress_dialog.accepted
         assert dialog.export_button.isEnabled()
+        assert fake_thread.deleted
+        assert dialog.export_thread is None
 
         dialog.stop_exporting()
 

@@ -97,6 +97,30 @@ def test_declarative_profile_validates_and_parses_expected_results(tmp_path):
     assert report.contract_reports[0].passed is True
 
 
+def test_declarative_profile_preserves_multiline_report_field_patterns(tmp_path):
+    profile_path, sample_path, expected_path = _write_fixture(tmp_path)
+    profile_path.write_text(
+        profile_path.read_text(encoding="utf-8").replace(
+            r"reference: 'Reference:\s*(?P<value>\S+)'",
+            r"reference: 'Reference:\s*\n\s*(?P<value>\S+)'",
+        ),
+        encoding="utf-8",
+    )
+    sample_path.write_text(
+        _sample_text().replace("Reference: REF123", "Reference:\n  REF123"),
+        encoding="utf-8",
+    )
+
+    report = validate_profile_file(
+        profile_path,
+        sample_paths=(sample_path,),
+        expected_results_ref=expected_path,
+    )
+
+    assert report.passed is True
+    assert report.contract_reports[0].passed is True
+
+
 def test_declarative_profile_rejects_header_only_expected_results(tmp_path):
     profile_path, sample_path, expected_path = _write_fixture(tmp_path)
     expected_path.write_text(
@@ -378,6 +402,102 @@ def test_declarative_profile_policy_rejects_dangerous_regex(tmp_path):
 
     assert report.passed is False
     assert any(check.name == "row_pattern_0_regex_safe" and not check.passed for check in report.checks)
+
+
+def test_declarative_profile_policy_rejects_quantified_alternation(tmp_path):
+    profile_path, sample_path, expected_path = _write_fixture(tmp_path)
+    text = profile_path.read_text(encoding="utf-8")
+    text = text.replace(r"(?P<axis_code>\w+)", r"(?P<axis_code>(a|aa)+)")
+    profile_path.write_text(text, encoding="utf-8")
+
+    report = validate_profile_file(
+        profile_path,
+        sample_paths=(sample_path,),
+        expected_results_ref=expected_path,
+    )
+
+    assert report.passed is False
+    assert any(check.name == "row_pattern_0_regex_safe" and not check.passed for check in report.checks)
+
+
+def test_declarative_profile_reuses_bounded_source_extraction(monkeypatch, tmp_path):
+    from metroliza.parsing import declarative_parser_profiles as profiles
+    from metroliza.parsing.source_inspection import SourceInspectionContext
+
+    profile_path, sample_path, _expected_path = _write_fixture(tmp_path)
+    payload = load_profile_payload(profile_path)
+    inspection = SourceInspectionContext.from_path(sample_path, source_format="pdf")
+    original_reader = profiles._read_source_text
+    reads = 0
+
+    def _counted_reader(path, max_chars):
+        nonlocal reads
+        reads += 1
+        return original_reader(path, max_chars)
+
+    monkeypatch.setattr(profiles, "_read_source_text", _counted_reader)
+    context = ProbeContext(
+        source_path=str(sample_path),
+        source_format="pdf",
+        source_inspection=inspection,
+    )
+
+    assert profiles.profile_probe(payload, sample_path, context).can_parse is True
+    result = profiles.parse_profile_result(
+        payload,
+        sample_path,
+        source_inspection=inspection,
+    )
+
+    assert result.report.reference == "REF123"
+    assert reads == 1
+
+
+def test_declarative_profile_caps_regex_input_line_length(monkeypatch, tmp_path):
+    from metroliza.parsing import declarative_parser_profiles as profiles
+
+    profile_path, sample_path, _expected_path = _write_fixture(tmp_path)
+    payload = load_profile_payload(profile_path)
+    monkeypatch.setattr(profiles, "MAX_PROFILE_LINE_CHARS", 32)
+
+    with pytest.raises(ValueError, match="input line 5 exceeds 32 characters"):
+        profiles.parse_profile_result(payload, sample_path)
+
+
+def test_declarative_profile_caps_row_pattern_count_in_validation_and_runtime(tmp_path):
+    from metroliza.parsing import declarative_parser_profiles as profiles
+
+    profile_path, sample_path, _expected_path = _write_fixture(tmp_path)
+    payload = load_profile_payload(profile_path)
+    payload["extraction"]["blocks"] *= profiles.MAX_PROFILE_ROW_SPECS + 1
+
+    checks = profiles._profile_policy_checks(payload)
+
+    assert any(
+        check.name == "row_pattern_count_within_limit" and not check.passed
+        for check in checks
+    )
+    with pytest.raises(ValueError, match="exceeds 32 row patterns"):
+        profiles.parse_profile_result(payload, sample_path)
+
+
+def test_declarative_profile_caps_total_row_matches(monkeypatch, tmp_path):
+    from metroliza.parsing import declarative_parser_profiles as profiles
+
+    profile_path, sample_path, _expected_path = _write_fixture(tmp_path)
+    payload = load_profile_payload(profile_path)
+    sample_path.write_text(
+        _sample_text().replace(
+            "DIM X 10.0 0.1 -0.1 - 10.02 0.02 0",
+            "DIM X 10.0 0.1 -0.1 - 10.02 0.02 0\n"
+            "DIM Y 11.0 0.1 -0.1 - 11.02 0.02 0",
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(profiles, "MAX_PROFILE_TOTAL_ROW_MATCHES", 1)
+
+    with pytest.raises(ValueError, match="exceeded 1 total row matches"):
+        profiles.parse_profile_result(payload, sample_path)
 
 
 def test_declarative_profile_install_refuses_failed_validation(tmp_path):

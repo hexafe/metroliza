@@ -1,30 +1,10 @@
 import importlib
-import importlib.machinery
 import importlib.util
 import os
-import sys
-import types
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-
-custom_logger_stub = types.ModuleType("modules.custom_logger")
-
-
-class _DummyCustomLogger:
-    def __init__(self, *_args, **_kwargs):
-        pass
-
-
-custom_logger_stub.CustomLogger = _DummyCustomLogger
-sys.modules.setdefault("modules.custom_logger", custom_logger_stub)
-
-fitz_stub = types.ModuleType("fitz")
-fitz_stub.__spec__ = importlib.machinery.ModuleSpec("fitz", loader=None)
-fitz_stub.open = lambda *_args, **_kwargs: None
-sys.modules.setdefault("fitz", fitz_stub)
-
 
 def _load_script_module(script_name: str):
     script_path = REPO_ROOT / "scripts" / script_name

@@ -359,3 +359,141 @@ def test_sync_thread_fetches_sql_rows_and_records_only_sql_metadata(monkeypatch,
     assert "SELECT" not in diagnostics_json
     assert "raw-sql-secret" not in diagnostics_json
     assert station_value == "S1"
+
+
+def test_sync_thread_promotes_streamed_batches_only_after_fetch_completes(monkeypatch, tmp_path):
+    db_path = str(tmp_path / "industrial-streamed.db")
+    repository = IndustrialDataRepository(db_path)
+    profile = repository.upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="events",
+        allowed_columns=("event_id", "reference"),
+    )
+    status = OznakAdapterStatus(available=True, version="0.2.0", fetch_available=True)
+    visibility_during_fetch = {}
+
+    def fake_fetch(*_args, **kwargs):
+        kwargs["record_batch_callback"](
+            (
+                {"source_primary_key": "ROW-1", "reference": "REF-1"},
+                {"source_primary_key": "ROW-2", "reference": "REF-2"},
+            )
+        )
+        with sqlite_connection_scope(db_path) as connection:
+            visibility_during_fetch["records"] = connection.execute(
+                "SELECT COUNT(*) FROM industrial_records"
+            ).fetchone()[0]
+            visibility_during_fetch["staging"] = connection.execute(
+                "SELECT COUNT(*) FROM industrial_sync_staging_records"
+            ).fetchone()[0]
+        return OznakAdapterFetchResult(
+            status=status,
+            records=(),
+            row_count=2,
+            implemented=True,
+            diagnostics={"stage": "mapped", "streamed_to_callback": True},
+        )
+
+    monkeypatch.setattr(industrial_workers, "get_oznak_adapter_status", lambda: status)
+    monkeypatch.setattr(industrial_workers, "create_oznak_cancellation_token", lambda: None)
+    monkeypatch.setattr(industrial_workers, "fetch_oznak_records_for_source_profile", fake_fetch)
+    thread = IndustrialOznakSyncThread(
+        db_file=db_path,
+        profile=profile,
+        username="operator",
+        password="secret-password",
+        limit=50,
+        timeout_seconds=30,
+        reference_filter_column="reference",
+        reference_values=("REF-1",),
+        test_only=False,
+    )
+    emitted = []
+    _capture_signal(thread.result_ready, emitted)
+
+    thread.run()
+
+    assert visibility_during_fetch == {"records": 0, "staging": 2}
+    assert emitted[0]["status"] == "succeeded"
+    assert emitted[0]["upsert_summary"]["inserted"] == 2
+    with sqlite_connection_scope(db_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM industrial_records").fetchone()[0] == 2
+        assert connection.execute(
+            "SELECT COUNT(*) FROM industrial_sync_staging_records"
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT status FROM industrial_sync_runs"
+        ).fetchone()[0] == "succeeded"
+
+
+def test_streamed_sync_reports_post_persist_link_failure_as_persisted_warning(
+    monkeypatch,
+    tmp_path,
+):
+    db_path = str(tmp_path / "industrial-streamed-warning.db")
+    repository = IndustrialDataRepository(db_path)
+    profile = repository.upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="events",
+        allowed_columns=("event_id", "reference"),
+    )
+    status = OznakAdapterStatus(available=True, version="0.2.0", fetch_available=True)
+
+    def fake_fetch(*_args, **kwargs):
+        kwargs["record_batch_callback"](
+            ({"source_primary_key": "ROW-1", "reference": "REF-1"},)
+        )
+        return OznakAdapterFetchResult(
+            status=status,
+            records=(),
+            row_count=1,
+            implemented=True,
+            diagnostics={"stage": "mapped", "streamed_to_callback": True},
+        )
+
+    monkeypatch.setattr(industrial_workers, "get_oznak_adapter_status", lambda: status)
+    monkeypatch.setattr(industrial_workers, "create_oznak_cancellation_token", lambda: None)
+    monkeypatch.setattr(industrial_workers, "fetch_oznak_records_for_source_profile", fake_fetch)
+    monkeypatch.setattr(
+        industrial_workers,
+        "materialize_industrial_report_links",
+        lambda _db: (_ for _ in ()).throw(RuntimeError("link password=raw-secret")),
+    )
+    thread = IndustrialOznakSyncThread(
+        db_file=db_path,
+        profile=profile,
+        username="operator",
+        password="secret-password",
+        limit=50,
+        timeout_seconds=30,
+        reference_filter_column="reference",
+        reference_values=("REF-1",),
+        test_only=False,
+        report_db_file=db_path,
+    )
+    results = []
+    errors = []
+    _capture_signal(thread.result_ready, results)
+    _capture_signal(thread.error_occurred, errors)
+
+    thread.run()
+
+    assert errors == []
+    assert results[0]["status"] == "completed_with_warnings"
+    assert results[0]["error"] == "Industrial report-link refresh failed: link password=<redacted>"
+    with sqlite_connection_scope(db_path) as connection:
+        run = connection.execute(
+            "SELECT status, error_summary FROM industrial_sync_runs"
+        ).fetchone()
+        record_count = connection.execute("SELECT COUNT(*) FROM industrial_records").fetchone()[0]
+    assert run == (
+        "completed_with_warnings",
+        "Industrial report-link refresh failed: link password=<redacted>",
+    )
+    assert record_count == 1

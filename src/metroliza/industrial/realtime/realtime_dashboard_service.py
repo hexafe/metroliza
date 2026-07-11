@@ -12,6 +12,7 @@ from metroliza.industrial.anomaly.event_repository import (
 )
 from metroliza.industrial.industrial_data_schema import ensure_industrial_data_schema
 from metroliza.industrial.realtime.sample_repository import from_json, utc_timestamp
+from metroliza.industrial.realtime.timestamps import canonical_utc_timestamp
 from metroliza.reports.db import run_transaction_with_retry
 
 _SEVERITY_RANKS = {"info": 1, "warning": 2, "major": 3, "critical": 4}
@@ -275,10 +276,10 @@ class RealtimeDashboardService:
             params: list[Any] = [int(signal_id)]
             if start_time is not None:
                 where.append("samples.event_time >= ?")
-                params.append(start_time)
+                params.append(canonical_utc_timestamp(start_time))
             if end_time is not None:
                 where.append("samples.event_time <= ?")
-                params.append(end_time)
+                params.append(canonical_utc_timestamp(end_time))
             params.append(_positive_limit(limit))
             cursor.execute(
                 f"""
@@ -559,19 +560,34 @@ class RealtimeDashboardService:
         def _list(cursor) -> list[SourceLagHealth]:
             cursor.execute(
                 """
+                WITH source_streams AS (
+                    SELECT source_profile_id, stream_key
+                    FROM industrial_realtime_source_health
+                    UNION
+                    SELECT source_profile_id, stream_key
+                    FROM industrial_stream_offsets
+                )
                 SELECT
-                    offsets.source_profile_id,
+                    source_streams.source_profile_id,
                     profiles.profile_key,
                     profiles.profile_name,
-                    offsets.stream_key,
-                    offsets.event_time_watermark,
+                    source_streams.stream_key,
+                    COALESCE(health.latest_event_time, offsets.event_time_watermark),
                     offsets.last_success_at,
-                    offsets.lag_seconds,
-                    offsets.status,
-                    profiles.is_enabled
-                FROM industrial_stream_offsets AS offsets
-                JOIN industrial_source_profiles AS profiles ON profiles.id = offsets.source_profile_id
-                ORDER BY offsets.source_profile_id ASC, offsets.stream_key ASC
+                    COALESCE(health.lag_seconds, offsets.lag_seconds),
+                    COALESCE(offsets.status, health.status, 'idle'),
+                    profiles.is_enabled,
+                    health.status
+                FROM source_streams
+                JOIN industrial_source_profiles AS profiles
+                  ON profiles.id = source_streams.source_profile_id
+                LEFT JOIN industrial_stream_offsets AS offsets
+                  ON offsets.source_profile_id = source_streams.source_profile_id
+                 AND offsets.stream_key = source_streams.stream_key
+                LEFT JOIN industrial_realtime_source_health AS health
+                  ON health.source_profile_id = source_streams.source_profile_id
+                 AND health.stream_key = source_streams.stream_key
+                ORDER BY source_streams.source_profile_id ASC, source_streams.stream_key ASC
                 """
             )
             return [_source_health_from_row(row, max_lag) for row in cursor.fetchall()]
@@ -828,6 +844,19 @@ def _timeline_point_from_row(row) -> SignalTimelinePoint:
 def _source_health_from_row(row, max_lag_seconds: float) -> SourceLagHealth:
     lag_seconds = float(row[6]) if row[6] is not None else None
     status = str(row[7])
+    computed_status = str(row[9]) if len(row) > 9 and row[9] is not None else None
+    if computed_status == "healthy":
+        health = "healthy"
+    elif computed_status in {"warning", "major"}:
+        health = "lagging"
+    elif computed_status == "no_data":
+        health = "unknown"
+    else:
+        health = _offset_health(
+            status=status,
+            lag_seconds=lag_seconds,
+            max_lag_seconds=max_lag_seconds,
+        )
     return SourceLagHealth(
         source_profile_id=int(row[0]),
         profile_key=str(row[1]),
@@ -837,7 +866,7 @@ def _source_health_from_row(row, max_lag_seconds: float) -> SourceLagHealth:
         last_success_at=row[5],
         lag_seconds=lag_seconds,
         status=status,
-        health=_offset_health(status=status, lag_seconds=lag_seconds, max_lag_seconds=max_lag_seconds),
+        health=health,
         is_enabled=bool(row[8]),
     )
 

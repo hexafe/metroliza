@@ -7,7 +7,7 @@ import tempfile
 from time import monotonic
 from typing import Any
 
-from PyQt6.QtCore import Qt, QTimer, QUrl
+from PyQt6.QtCore import Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -74,6 +74,8 @@ from metroliza.ui.ui_foundation import (
 class RealtimeIndustrialMonitoringDialog(QDialog):
     """Configure and run live polling for one or more industrial source profiles."""
 
+    shutdown_complete = pyqtSignal()
+
     def __init__(
         self,
         parent=None,
@@ -98,6 +100,11 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self._dashboard_open_pending = False
         self._dashboard_open_after_current = False
         self._closing = False
+        self._shutdown_waiting = False
+        self._shutdown_completion_emitted = False
+        self._dashboard_temp_dir = tempfile.TemporaryDirectory(
+            prefix="metroliza-realtime-dashboard-"
+        )
         self.profiles: list[IndustrialSourceProfile] = []
         self.configs_by_profile_id: dict[int, RealtimeMonitorConfig] = {}
         self.active_configs: tuple[RealtimeMonitorConfig, ...] = ()
@@ -642,6 +649,8 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             self._next_poll_due_by_profile_id[config.source_profile_id] = now + interval
 
     def _on_poll_results(self, results: tuple[Any, ...]) -> None:
+        if self._closing:
+            return
         self.last_poll_results = tuple(results or ())
         self._populate_result_table(self.last_poll_results)
         failed = [result for result in self.last_poll_results if _result_has_actionable_failure(result)]
@@ -660,11 +669,16 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             )
 
     def _on_poll_error(self, message: str) -> None:
+        if self._closing:
+            return
         self._set_status(f"Polling failed: {message}", "danger")
         self._append_diagnostic(message)
 
     def _clear_poll_thread(self) -> None:
         self.poll_thread = None
+        if self._closing:
+            self._complete_deferred_shutdown()
+            return
         self._sync_buttons()
 
     def _populate_result_table(self, results: tuple[Any, ...]) -> None:
@@ -739,6 +753,8 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.dashboard_thread.start()
 
     def _on_dashboard_written(self, path: object) -> None:
+        if self._closing:
+            return
         self.last_dashboard_path = Path(path)
         if self._dashboard_open_after_current:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.last_dashboard_path)))
@@ -747,6 +763,8 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             self._set_status(f"Dashboard refreshed: {self.last_dashboard_path}", "success")
 
     def _on_dashboard_write_error(self, message: str) -> None:
+        if self._closing:
+            return
         self._append_diagnostic(f"Dashboard write failed: {message}")
         self._set_status(f"Dashboard write failed: {message}", "warning")
 
@@ -754,6 +772,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.dashboard_thread = None
         self._dashboard_open_after_current = False
         if self._closing:
+            self._complete_deferred_shutdown()
             return
         if self._dashboard_write_pending:
             if self._dashboard_open_pending:
@@ -776,7 +795,9 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             return None
 
     def _default_dashboard_path(self) -> Path:
-        output_dir = Path(tempfile.gettempdir()) / "metroliza" / "realtime_dashboards"
+        if self._dashboard_temp_dir is None:
+            raise RuntimeError("Realtime dashboard session has already been closed")
+        output_dir = Path(self._dashboard_temp_dir.name)
         return output_dir / "realtime_industrial_monitoring.html"
 
     def _sync_running_state(self, running: bool) -> None:
@@ -820,12 +841,50 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.diagnostics_text.setTextCursor(cursor)
         self.diagnostics_text.ensureCursorVisible()
 
-    def closeEvent(self, event) -> None:
+    def request_shutdown(self) -> bool:
+        """Request worker cancellation and report whether database use has stopped."""
+
         self._closing = True
         self.dashboard_write_debounce_timer.stop()
-        self.stop_monitoring(wait_for_thread=True)
-        if self.dashboard_thread is not None and self.dashboard_thread.isRunning():
-            self.dashboard_thread.wait(3_000)
+        self._dashboard_write_pending = False
+        self._dashboard_open_pending = False
+        self.poll_timer.stop()
+        self.active_configs = ()
+        self._next_poll_due_by_profile_id = {}
+        if self.poll_thread is not None and self.poll_thread.isRunning():
+            self.poll_thread.cancel()
+        if self._workers_running():
+            self._shutdown_waiting = True
+            self._set_status("Stopping realtime monitoring...", "warning")
+            return False
+        self._cleanup_dashboard_session()
+        return True
+
+    def _workers_running(self) -> bool:
+        return any(
+            thread is not None and thread.isRunning()
+            for thread in (self.poll_thread, self.dashboard_thread)
+        )
+
+    def _complete_deferred_shutdown(self) -> None:
+        if not self._closing or self._workers_running():
+            return
+        self._cleanup_dashboard_session()
+        if self._shutdown_waiting and not self._shutdown_completion_emitted:
+            self._shutdown_completion_emitted = True
+            self.shutdown_complete.emit()
+            QTimer.singleShot(0, self.close)
+
+    def _cleanup_dashboard_session(self) -> None:
+        temp_dir = self._dashboard_temp_dir
+        self._dashboard_temp_dir = None
+        if temp_dir is not None:
+            temp_dir.cleanup()
+
+    def closeEvent(self, event) -> None:
+        if not self.request_shutdown():
+            event.ignore()
+            return
         super().closeEvent(event)
 
 

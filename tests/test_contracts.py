@@ -223,6 +223,16 @@ class TestValidateGroupingDf(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_grouping_df(rows)
 
+    def test_accepts_integral_decimal_report_id(self):
+        validated = validate_grouping_df([{'REPORT_ID': '2.0', 'GROUP': 'A'}])
+
+        self.assertEqual(validated[0].report_id, 2)
+
+    def test_rejects_fractional_boolean_and_out_of_range_report_ids(self):
+        for report_id in (1.9, True, 0, -1, 2**63, 'Infinity'):
+            with self.subTest(report_id=report_id), self.assertRaises(ValueError):
+                validate_grouping_df([{'REPORT_ID': report_id, 'GROUP': 'A'}])
+
 
 class TestValidateExportRequest(unittest.TestCase):
     def test_validates_nested_contracts(self):

@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from metroliza.parsing.source_inspection import SourceInspectionContext
+
 
 @dataclass(frozen=True)
 class PluginManifest:
@@ -126,6 +128,7 @@ class ProbeContext:
 
     source_path: str
     source_format: str | None = None
+    source_inspection: SourceInspectionContext | None = None
 
 
 def infer_source_format(file_path: str | Path) -> str:

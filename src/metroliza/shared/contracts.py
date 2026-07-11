@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -619,12 +620,20 @@ def _optional_text(value: object) -> str | None:
 def _optional_int(value: object) -> int | None:
     if value is None:
         return None
+    if isinstance(value, bool):
+        return None
     try:
         text = str(value).strip()
         if not text or text.lower() in {"nan", "nat", "none", "<na>"}:
             return None
-        return int(float(text))
-    except (TypeError, ValueError):
+        decimal_value = Decimal(text)
+        if not decimal_value.is_finite() or decimal_value != decimal_value.to_integral_value():
+            return None
+        integer_value = int(decimal_value)
+        if integer_value <= 0 or integer_value > 2**63 - 1:
+            return None
+        return integer_value
+    except (InvalidOperation, TypeError, ValueError):
         return None
 
 

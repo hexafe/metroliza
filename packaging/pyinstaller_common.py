@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 import sys
 
@@ -64,17 +65,46 @@ def collect_windows_python_runtime_binaries() -> list[tuple[str, str]]:
     return binaries
 
 
+def _collect_runtime_assets(
+    package_name: str,
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]], list[str]]:
+    return (
+        collect_data_files(package_name),
+        collect_dynamic_libs(package_name),
+        collect_submodules(package_name),
+    )
+
+
+def _package_is_installed(package_name: str) -> bool:
+    try:
+        return importlib.util.find_spec(package_name) is not None
+    except (ImportError, ModuleNotFoundError, ValueError):
+        return False
+
+
+def collect_required_runtime_assets(
+    package_name: str,
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]], list[str]]:
+    """Collect required package assets and fail with package context on any error."""
+
+    if not _package_is_installed(package_name):
+        raise RuntimeError(f"Required packaging dependency `{package_name}` is not installed")
+    try:
+        return _collect_runtime_assets(package_name)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to collect required packaging dependency `{package_name}`"
+        ) from exc
+
+
 def collect_optional_runtime_assets(
     package_name: str,
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str]], list[str]]:
-    """Collect package data, dynamic libraries, and hidden imports if installed."""
-    try:
-        datas = collect_data_files(package_name)
-        binaries = collect_dynamic_libs(package_name)
-        hiddenimports = collect_submodules(package_name)
-    except Exception:
+    """Collect an optional package only when it is installed."""
+
+    if not _package_is_installed(package_name):
         return [], [], []
-    return datas, binaries, hiddenimports
+    return _collect_runtime_assets(package_name)
 
 
 def collect_optional_distribution_metadata(distribution_name: str) -> list[tuple[str, str]]:
@@ -107,34 +137,34 @@ def collect_optional_vendored_model_data(root_dir: Path) -> list[tuple[str, str]
 def build_pyinstaller_collection(root_dir: Path) -> dict[str, list]:
     """Return shared PyInstaller binaries, datas, and hidden imports."""
     metroliza_hiddenimports = collect_submodules("metroliza")
-    pymupdf_datas, pymupdf_binaries, pymupdf_hiddenimports = collect_optional_runtime_assets(
+    pymupdf_datas, pymupdf_binaries, pymupdf_hiddenimports = collect_required_runtime_assets(
         "pymupdf"
     )
-    fitz_datas, fitz_binaries, fitz_hiddenimports = collect_optional_runtime_assets("fitz")
+    fitz_datas, fitz_binaries, fitz_hiddenimports = collect_required_runtime_assets("fitz")
     (
         hexafe_groupstats_datas,
         hexafe_groupstats_binaries,
         hexafe_groupstats_hiddenimports,
-    ) = collect_optional_runtime_assets("hexafe_groupstats")
+    ) = collect_required_runtime_assets("hexafe_groupstats")
     (
         hexafe_plotstats_datas,
         hexafe_plotstats_binaries,
         hexafe_plotstats_hiddenimports,
-    ) = collect_optional_runtime_assets("hexafe_plotstats")
-    oznak_datas, oznak_binaries, oznak_hiddenimports = collect_optional_runtime_assets("oznak")
-    rapidocr_datas, rapidocr_binaries, rapidocr_hiddenimports = collect_optional_runtime_assets(
+    ) = collect_required_runtime_assets("hexafe_plotstats")
+    oznak_datas, oznak_binaries, oznak_hiddenimports = collect_required_runtime_assets("oznak")
+    rapidocr_datas, rapidocr_binaries, rapidocr_hiddenimports = collect_required_runtime_assets(
         "rapidocr"
     )
     (
         onnxruntime_datas,
         onnxruntime_binaries,
         onnxruntime_hiddenimports,
-    ) = collect_optional_runtime_assets("onnxruntime")
-    openvino_datas, openvino_binaries, openvino_hiddenimports = collect_optional_runtime_assets(
+    ) = collect_required_runtime_assets("onnxruntime")
+    openvino_datas, openvino_binaries, openvino_hiddenimports = collect_required_runtime_assets(
         "openvino"
     )
-    cv2_datas, cv2_binaries, cv2_hiddenimports = collect_optional_runtime_assets("cv2")
-    numpy_datas, numpy_binaries, numpy_hiddenimports = collect_optional_runtime_assets("numpy")
+    cv2_datas, cv2_binaries, cv2_hiddenimports = collect_required_runtime_assets("cv2")
+    numpy_datas, numpy_binaries, numpy_hiddenimports = collect_required_runtime_assets("numpy")
 
     html_dashboard_datas = [
         (

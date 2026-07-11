@@ -16,6 +16,11 @@ from metroliza.industrial.industrial_workflow_state import (
 )
 from metroliza.industrial.oznak_adapter import fetch_oznak_records_for_source_profile
 from metroliza.charts.xlsx_chart_utils import apply_chart_options, create_workbook_chart, insert_chart
+from metroliza.exporting.xlsx_writer_policy import (
+    pandas_xlsxwriter_engine_kwargs,
+    write_untrusted_xlsx_cell,
+    xlsxwriter_workbook_options,
+)
 
 
 class _LazyPandas:
@@ -683,7 +688,7 @@ class _XlsxwriterWorkbookWriter:
     def __init__(self, output_path: Path) -> None:
         import xlsxwriter
 
-        self.book = xlsxwriter.Workbook(str(output_path), {"nan_inf_to_errors": True})
+        self.book = xlsxwriter.Workbook(str(output_path), xlsxwriter_workbook_options())
         self.sheets: dict[str, Any] = {}
 
     def __enter__(self) -> "_XlsxwriterWorkbookWriter":
@@ -721,7 +726,12 @@ def _mapping_headers(rows: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
 
 def _write_excel_row(worksheet, row_index: int, values: list[Any] | tuple[Any, ...]) -> None:
     for column_index, value in enumerate(values):
-        worksheet.write(row_index, column_index, _excel_cell_value(value))
+        write_untrusted_xlsx_cell(
+            worksheet,
+            row_index,
+            column_index,
+            _excel_cell_value(value),
+        )
 
 
 def export_live_industrial_workbook(
@@ -853,7 +863,11 @@ def export_industrial_dataframe_workbook(
         diagnostics_row.update(dict(diagnostics_extra))
 
     try:
-        with pd.ExcelWriter(temp_output_path, engine="xlsxwriter") as writer:
+        with pd.ExcelWriter(
+            temp_output_path,
+            engine="xlsxwriter",
+            engine_kwargs=pandas_xlsxwriter_engine_kwargs(),
+        ) as writer:
             export_frame.to_excel(writer, sheet_name="Industrial Data", index=False)
             _raise_if_cancelled(cancel_check)
             if include_raw_data and not raw_frame.empty:

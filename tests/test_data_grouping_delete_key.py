@@ -252,8 +252,27 @@ class TestDataGroupingDeleteKey(unittest.TestCase):
         return dialog
 
     def _load_data_grouping_module(self):
+        package_attrs = []
+        for package_name, attribute in (
+            ("modules", "data_grouping"),
+            ("metroliza.ui", "data_grouping"),
+        ):
+            package = importlib.import_module(package_name)
+            sentinel = object()
+            previous = vars(package).get(attribute, sentinel)
+            package_attrs.append((package, attribute, previous, sentinel))
+
+        def restore_package_attrs():
+            for package, attribute, previous, sentinel in package_attrs:
+                if previous is sentinel:
+                    vars(package).pop(attribute, None)
+                else:
+                    setattr(package, attribute, previous)
+
+        self.addCleanup(restore_package_attrs)
         sys.modules.pop("modules.ui_foundation", None)
         sys.modules.pop("modules.data_grouping", None)
+        sys.modules.pop("metroliza.ui.data_grouping", None)
         return importlib.import_module("modules.data_grouping")
 
     def test_delete_key_moves_selected_part_group_items_to_population(self):

@@ -113,7 +113,7 @@ def test_end_to_end_replay_stale_source_event_attaches_to_last_sample(tmp_path):
     assert len(events) == 1
     assert events[0].sample_id == last_sample.id
     assert events[0].context["source_level"] is True
-    assert events[0].context["last_event_time"] == "2026-06-13T10:01:00Z"
+    assert events[0].context["last_event_time"] == "2026-06-13T10:01:00.000000Z"
     assert "No new samples" in events[0].explanation
 
 

@@ -3,19 +3,23 @@ from metroliza.industrial.realtime.stream_config import RealtimePollConfig
 from metroliza.industrial.realtime.stream_contracts import SignalDefinition
 
 
-def _config():
-    return RealtimePollConfig(
-        source_profile_id=1,
-        stream_key="process_metrics",
-        cursor_column="event_id",
-        event_time_column="process_timestamp",
-        record_key_column="record_id",
-        signal_keys=("cycle_time", "temperature"),
-        signal_columns={
+def _config(**overrides):
+    values = {
+        "source_profile_id": 1,
+        "stream_key": "process_metrics",
+        "cursor_column": "event_id",
+        "event_time_column": "process_timestamp",
+        "record_key_column": "record_id",
+        "signal_keys": ("cycle_time", "temperature"),
+        "signal_columns": {
             "cycle_time": "cycle_time_s",
             "temperature": "temperature_c",
         },
-        segment_fields=("station", "line"),
+        "segment_fields": ("station", "line"),
+    }
+    values.update(overrides)
+    return RealtimePollConfig(
+        **values,
     )
 
 
@@ -60,7 +64,7 @@ def test_sample_mapper_maps_multiple_signals_and_redacts_raw_record():
     assert result.stats.rows_seen == 1
     assert result.stats.mapped == 2
     assert result.cursor_value == "100"
-    assert result.event_time_watermark == "2026-06-13T10:00:00Z"
+    assert result.event_time_watermark == "2026-06-13T10:00:00.000000Z"
     assert {sample.signal_id for sample in result.samples} == {10, 11}
     first = result.samples[0]
     assert first.segment_key == {"station": "S1", "line": "L1"}
@@ -96,4 +100,37 @@ def test_sample_mapper_skips_invalid_values_without_crashing():
     assert result.stats.skipped_missing == 2
     assert result.cursor_value == "101"
     assert result.cursor_tie_breaker_value == "row-101"
-    assert result.event_time_watermark == "2026-06-13T10:01:00Z"
+    assert result.event_time_watermark == "2026-06-13T10:01:00.000000Z"
+
+
+def test_sample_mapper_canonicalizes_offsets_and_naive_source_timezone():
+    result = map_rows_to_samples(
+        [
+            {
+                "event_id": "1",
+                "record_id": "offset-aware",
+                "process_timestamp": "2026-06-13T12:00:00+02:00",
+                "cycle_time_s": 10,
+                "temperature_c": 20,
+            },
+            {
+                "event_id": "2",
+                "record_id": "source-local",
+                "process_timestamp": "2026-06-13T13:00:00",
+                "cycle_time_s": 11,
+                "temperature_c": 21,
+            },
+        ],
+        config=_config(source_timezone="Europe/Warsaw"),
+        signals=_signals(),
+        ingest_time="2026-06-13T10:00:05+00:00",
+    )
+
+    assert [sample.event_time for sample in result.samples[::2]] == [
+        "2026-06-13T10:00:00.000000Z",
+        "2026-06-13T11:00:00.000000Z",
+    ]
+    assert result.event_time_watermark == "2026-06-13T11:00:00.000000Z"
+    assert {sample.ingest_time for sample in result.samples} == {
+        "2026-06-13T10:00:05.000000Z"
+    }
