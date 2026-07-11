@@ -347,8 +347,8 @@ def _config_row_values(
         config.max_catchup_rows_per_cycle,
         config.allowed_lateness_seconds,
         config.source_timezone,
-        to_json(list(config.segment_fields)),
-        to_json(list(config.context_fields)),
+        _field_selection_json(config.segment_fields),
+        _field_selection_json(config.context_fields),
         to_json(list(config.detectors)),
         config.display_mode,
         config.aggregation_time_bucket,
@@ -362,8 +362,8 @@ def _config_row_values(
 
 def _row_to_config(row) -> RealtimeMonitorConfig:
     signal_keys = tuple(str(value) for value in from_json(row[7], []))
-    segment_fields = tuple(str(value) for value in from_json(row[15], [])) or DEFAULT_SEGMENT_FIELDS
-    context_fields = tuple(str(value) for value in from_json(row[16], [])) or DEFAULT_CONTEXT_FIELDS
+    segment_fields = _field_selection_from_json(row[15], DEFAULT_SEGMENT_FIELDS)
+    context_fields = _field_selection_from_json(row[16], DEFAULT_CONTEXT_FIELDS)
     detectors = tuple(str(value) for value in from_json(row[17], [])) or ("spec_limits",)
     aggregation_methods = (
         tuple(str(value) for value in from_json(row[20], [])) or DEFAULT_AGGREGATION_METHODS
@@ -395,3 +395,24 @@ def _row_to_config(row) -> RealtimeMonitorConfig:
         created_at=str(row[23]),
         updated_at=str(row[24]),
     ).validated()
+
+
+def _field_selection_json(values: tuple[str, ...]) -> str:
+    """Persist explicit emptiness without changing legacy ``[]`` default semantics."""
+
+    return to_json(list(values) if values else None)
+
+
+def _field_selection_from_json(
+    value: Any,
+    legacy_default: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Decode fields, treating JSON null as explicit empty and legacy [] as default."""
+
+    decoded = from_json(value, [])
+    if decoded is None:
+        return ()
+    if not isinstance(decoded, (list, tuple)):
+        return legacy_default
+    fields = tuple(str(field).strip() for field in decoded if str(field).strip())
+    return fields or legacy_default

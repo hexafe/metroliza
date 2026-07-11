@@ -60,7 +60,8 @@ smoke, and release-owner/legal notice review remain manual blockers.
 
 - Realtime dashboard refresh reads one SQLite transaction snapshot, limits the
   timeline before joins, and batches related lookups. Older source-health evaluations
-  cannot overwrite newer status.
+  cannot overwrite newer status. Operator-cleared context and segment field lists
+  persist as empty without changing legacy default-row behavior.
 - CSV Summary grouping assignments use a session-owned, connection-local temporary
   store with explicit cleanup and isolated concurrent dialogs. UI code no longer
   owns private store SQL.

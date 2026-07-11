@@ -78,6 +78,37 @@ def test_realtime_monitoring_dialog_saves_checked_source_configs(qapp, tmp_path)
         dialog.close()
 
 
+def test_realtime_monitoring_dialog_preserves_cleared_context_and_segment_fields(
+    qapp,
+    tmp_path,
+):
+    db_path = str(tmp_path / "dialog.db")
+    repository = IndustrialDataRepository(db_path)
+    profile = _profile(repository, "line_a", "Line A")
+    dialog = RealtimeIndustrialMonitoringDialog(None, db_path)
+    try:
+        dialog.cursor_column_edit.setText("event_id")
+        dialog.event_time_column_edit.setText("process_timestamp")
+        dialog.record_key_column_edit.setText("record_id")
+        dialog.signal_columns_edit.setPlainText("cycle_time=cycle_time_s")
+        dialog.context_fields_edit.clear()
+        dialog.segment_fields_edit.clear()
+
+        saved = dialog.save_current_source_config()
+        persisted = RealtimeMonitorConfigRepository(db_path).list_configs(
+            source_profile_id=profile.id
+        )
+
+        assert len(saved) == 1
+        assert saved[0].context_fields == ()
+        assert saved[0].segment_fields == ()
+        assert len(persisted) == 1
+        assert persisted[0].context_fields == ()
+        assert persisted[0].segment_fields == ()
+    finally:
+        dialog.close()
+
+
 def test_realtime_monitoring_dialog_disabled_sources_are_not_selectable(qapp, tmp_path):
     db_path = str(tmp_path / "dialog.db")
     repository = IndustrialDataRepository(db_path)

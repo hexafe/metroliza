@@ -1,3 +1,6 @@
+from contextlib import closing
+import sqlite3
+
 import pytest
 
 from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
@@ -6,6 +9,10 @@ from metroliza.industrial.realtime.monitor_config import (
     RealtimeMonitorConfigRepository,
 )
 from metroliza.industrial.realtime.stream_config import RealtimeStreamConfigError
+from metroliza.industrial.realtime.stream_config import (
+    DEFAULT_CONTEXT_FIELDS,
+    DEFAULT_SEGMENT_FIELDS,
+)
 
 
 def _profile(db_path: str):
@@ -70,6 +77,45 @@ def test_realtime_monitor_config_repository_filters_and_deletes_configs(tmp_path
     repository.delete_config(source_profile_id=profile.id, stream_key="line_a")
 
     assert repository.list_configs() == []
+
+
+def test_realtime_monitor_config_roundtrips_explicit_empty_field_selections(tmp_path):
+    db_path = str(tmp_path / "monitor_config.db")
+    profile = _profile(db_path)
+    repository = RealtimeMonitorConfigRepository(db_path)
+
+    saved = repository.upsert_config(
+        _config(profile.id, segment_fields=(), context_fields=())
+    )
+    listed = repository.list_configs()
+
+    assert saved.segment_fields == ()
+    assert saved.context_fields == ()
+    assert listed[0].segment_fields == ()
+    assert listed[0].context_fields == ()
+
+    with closing(sqlite3.connect(db_path)) as connection, connection:
+        stored = connection.execute(
+            """
+            SELECT segment_fields_json, context_fields_json
+            FROM industrial_realtime_monitor_configs
+            WHERE id = ?
+            """,
+            (saved.id,),
+        ).fetchone()
+        assert stored == ("null", "null")
+        connection.execute(
+            """
+            UPDATE industrial_realtime_monitor_configs
+            SET segment_fields_json = '[]', context_fields_json = '[]'
+            WHERE id = ?
+            """,
+            (saved.id,),
+        )
+
+    legacy = repository.list_configs()[0]
+    assert legacy.segment_fields == DEFAULT_SEGMENT_FIELDS
+    assert legacy.context_fields == DEFAULT_CONTEXT_FIELDS
 
 
 def test_realtime_monitor_config_rejects_sensitive_and_invalid_payloads(tmp_path):

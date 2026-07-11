@@ -515,8 +515,8 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             aggregation_time_bucket=self.aggregation_bucket_combo.currentText(),
             aggregation_methods=_parse_csv_text(self.aggregation_methods_edit.text()),
             aggregation_group_fields=_parse_csv_text(self.aggregation_groups_edit.text()),
-            context_fields=_parse_csv_text(self.context_fields_edit.text()) or DEFAULT_CONTEXT_FIELDS,
-            segment_fields=_parse_csv_text(self.segment_fields_edit.text()) or DEFAULT_SEGMENT_FIELDS,
+            context_fields=_parse_csv_text(self.context_fields_edit.text()),
+            segment_fields=_parse_csv_text(self.segment_fields_edit.text()),
             detectors=_parse_csv_text(self.detectors_edit.text()) or ("spec_limits",),
             dashboard_output_path=_field_path(self.dashboard_path_field.text()),
         ).validated()

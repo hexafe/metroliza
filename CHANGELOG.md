@@ -3,7 +3,7 @@
 ## 2026.06 RC2 (build 260711) — current version
 - Large Google Sheets conversions now use bounded resumable chunks, retry transient failures, and clean up created Drive files when cancellation or validation prevents a usable result.
 - Parser profile installs and reloads now publish one locked generation at a time, so concurrent imports never observe half-written profile or approval state.
-- Realtime dashboard refreshes now read one consistent SQLite snapshot, batch related lookups, bound timeline rows before joins, and reject stale source-health updates.
+- Realtime dashboard refreshes now read one consistent SQLite snapshot, batch related lookups, bound timeline rows before joins, reject stale source-health updates, and preserve intentionally cleared context or segment fields.
 - CSV Summary group edits now use an isolated session-local assignment store, avoiding source-table pollution and database-lock failures when multiple dialogs or previews are active.
 - Packaged release artifacts now carry a generated Python/Rust dependency inventory, visible third-party notice sidecars, and a hash manifest for release review.
 - Legacy Group Comparison worksheet and BOM Manager entry points now emit deprecation notices while remaining compatible for this release window.
