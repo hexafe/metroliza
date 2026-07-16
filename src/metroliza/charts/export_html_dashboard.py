@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime
 import copy
+import errno
 import html
 import json
 import math
@@ -11,9 +13,11 @@ import os
 from pathlib import Path
 import re
 import shutil
-from time import perf_counter
-from typing import Any
+from threading import local, Lock, RLock
+from time import perf_counter, sleep
+from typing import Any, Iterator
 from uuid import uuid4
+from weakref import WeakValueDictionary
 
 from metroliza.charts.dashboard_navigation import (
     render_back_to_section,
@@ -90,6 +94,9 @@ _PLOTLY_MODEBAR_REMOVE = [
 ]
 _DEFAULT_PLOTLY_SPEC_COUNT_BUDGET = 160
 _DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET = 24_000_000
+_DASHBOARD_PUBLICATION_LOCKS_GUARD = Lock()
+_DASHBOARD_PUBLICATION_LOCKS: WeakValueDictionary[Path, RLock] = WeakValueDictionary()
+_DASHBOARD_PUBLICATION_LOCK_STATE = local()
 _STAT_DASH_BY_LABEL = {
     "Min": "dot",
     "Q1": "dash",
@@ -98,6 +105,91 @@ _STAT_DASH_BY_LABEL = {
     "Q3": "dash",
     "Max": "dot",
 }
+
+
+def _canonical_path_entry(path: Path) -> Path:
+    """Resolve parent aliases without following the replaceable final entry."""
+
+    return path.parent.resolve(strict=False) / path.name
+
+
+def _lock_dashboard_publication_file(handle: Any) -> None:
+    if os.name == "nt":  # pragma: no cover - exercised by Windows release smoke.
+        import msvcrt
+
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        handle.seek(0)
+        retryable_errors = {errno.EACCES, errno.EAGAIN, errno.EDEADLK}
+        while True:
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                return
+            except OSError as exc:
+                if exc.errno not in retryable_errors:
+                    raise
+                sleep(0.05)
+
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+
+
+def _unlock_dashboard_publication_file(handle: Any) -> None:
+    if os.name == "nt":  # pragma: no cover - exercised by Windows release smoke.
+        import msvcrt
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _dashboard_thread_lock(lock_path: Path) -> RLock:
+    with _DASHBOARD_PUBLICATION_LOCKS_GUARD:
+        thread_lock = _DASHBOARD_PUBLICATION_LOCKS.get(lock_path)
+        if thread_lock is None:
+            thread_lock = RLock()
+            _DASHBOARD_PUBLICATION_LOCKS[lock_path] = thread_lock
+        return thread_lock
+
+
+@contextmanager
+def _dashboard_publication_lock(dashboard_path: Path) -> Iterator[None]:
+    """Serialize one output's complete generation lifecycle across writers."""
+
+    canonical_dashboard_path = _canonical_path_entry(dashboard_path)
+    lock_path = canonical_dashboard_path.with_name(
+        f".{canonical_dashboard_path.name}.publish.lock"
+    )
+    thread_lock = _dashboard_thread_lock(lock_path)
+
+    with thread_lock:
+        held_paths = getattr(_DASHBOARD_PUBLICATION_LOCK_STATE, "held_paths", [])
+        if lock_path in held_paths:
+            held_paths.append(lock_path)
+            try:
+                yield
+            finally:
+                held_paths.pop()
+            return
+
+        # The lock file intentionally persists: unlinking it while another process
+        # waits on its inode could split future writers across two different locks.
+        with lock_path.open("a+b") as handle:
+            _lock_dashboard_publication_file(handle)
+            held_paths.append(lock_path)
+            _DASHBOARD_PUBLICATION_LOCK_STATE.held_paths = held_paths
+            try:
+                yield
+            finally:
+                held_paths.pop()
+                _unlock_dashboard_publication_file(handle)
 
 
 def _new_dashboard_timing_summary() -> dict[str, float]:
@@ -135,6 +227,15 @@ def resolve_html_dashboard_assets_dir(html_path: str | Path) -> Path:
     dashboard_path = Path(str(html_path))
     stem = dashboard_path.stem or "metroliza_dashboard"
     return dashboard_path.with_name(f"{stem}_assets")
+
+
+def _validate_dashboard_path_pair(dashboard_path: Path, asset_base: Path) -> None:
+    expected_asset_base = resolve_html_dashboard_assets_dir(dashboard_path)
+    if _canonical_path_entry(asset_base) == _canonical_path_entry(expected_asset_base):
+        return
+    raise ValueError(
+        "Dashboard assets_dir must match resolve_html_dashboard_assets_dir(output_path)."
+    )
 
 
 def _resolve_bundled_plotly_js_path() -> Path:
@@ -351,47 +452,50 @@ def write_export_html_dashboard(
     plotly_visual_settings: dict[str, Any] | None = None,
     dashboard_visual_settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Publish one complete dashboard generation without mixing old and new assets."""
+    """Publish one serialized dashboard generation without mixing writer assets."""
 
     dashboard_path = Path(str(output_path))
     asset_base = Path(str(assets_dir))
-    generation_id = uuid4().hex
-    generation_directory = asset_base.with_name(
-        f"{asset_base.name}.generation-{generation_id}"
-    )
-    temporary_dashboard_path = dashboard_path.with_name(
-        f".{dashboard_path.name}.{generation_id}.tmp"
-    )
+    _validate_dashboard_path_pair(dashboard_path, asset_base)
     dashboard_path.parent.mkdir(parents=True, exist_ok=True)
 
-    try:
-        result = _write_export_html_dashboard_generation(
-            excel_file=excel_file,
-            output_path=temporary_dashboard_path,
-            assets_dir=generation_directory,
-            sections=sections,
-            chart_observability_summary=chart_observability_summary,
-            backend_diagnostics_lines=backend_diagnostics_lines,
-            group_analysis_payload=group_analysis_payload,
-            group_analysis_plot_assets=group_analysis_plot_assets,
-            source_label=source_label or dashboard_path.name,
-            dashboard_mode=dashboard_mode,
-            plotly_spec_count_budget=plotly_spec_count_budget,
-            plotly_serialized_json_bytes_budget=plotly_serialized_json_bytes_budget,
-            plotly_visual_settings=plotly_visual_settings,
-            dashboard_visual_settings=dashboard_visual_settings,
+    with _dashboard_publication_lock(dashboard_path):
+        generation_id = uuid4().hex
+        generation_directory = asset_base.with_name(
+            f"{asset_base.name}.generation-{generation_id}"
         )
-        os.replace(temporary_dashboard_path, dashboard_path)
-    except BaseException:
-        temporary_dashboard_path.unlink(missing_ok=True)
-        shutil.rmtree(generation_directory, ignore_errors=True)
-        raise
+        temporary_dashboard_path = dashboard_path.with_name(
+            f".{dashboard_path.name}.{generation_id}.tmp"
+        )
 
-    _remove_obsolete_dashboard_generations(asset_base, keep=generation_directory)
-    result["html_dashboard_path"] = str(dashboard_path)
-    result["html_dashboard_assets_path"] = str(generation_directory)
-    result["html_dashboard_generation"] = generation_id
-    return result
+        try:
+            result = _write_export_html_dashboard_generation(
+                excel_file=excel_file,
+                output_path=temporary_dashboard_path,
+                assets_dir=generation_directory,
+                sections=sections,
+                chart_observability_summary=chart_observability_summary,
+                backend_diagnostics_lines=backend_diagnostics_lines,
+                group_analysis_payload=group_analysis_payload,
+                group_analysis_plot_assets=group_analysis_plot_assets,
+                source_label=source_label or dashboard_path.name,
+                dashboard_mode=dashboard_mode,
+                plotly_spec_count_budget=plotly_spec_count_budget,
+                plotly_serialized_json_bytes_budget=plotly_serialized_json_bytes_budget,
+                plotly_visual_settings=plotly_visual_settings,
+                dashboard_visual_settings=dashboard_visual_settings,
+            )
+            os.replace(temporary_dashboard_path, dashboard_path)
+        except BaseException:
+            temporary_dashboard_path.unlink(missing_ok=True)
+            shutil.rmtree(generation_directory, ignore_errors=True)
+            raise
+
+        _remove_obsolete_dashboard_generations(asset_base, keep=generation_directory)
+        result["html_dashboard_path"] = str(dashboard_path)
+        result["html_dashboard_assets_path"] = str(generation_directory)
+        result["html_dashboard_generation"] = generation_id
+        return result
 
 
 def _write_export_html_dashboard_generation(

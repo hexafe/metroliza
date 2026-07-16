@@ -13,7 +13,7 @@
 - Legacy Group Comparison worksheet and BOM Manager entry points now emit deprecation notices while remaining compatible for this release window.
 - Excel and industrial workbook exports now keep imported formula-like and URL-like text literal, preventing source data from becoming active workbook formulas or links.
 - Google OAuth tokens now use an atomic private application file, exclude client secrets, reject symlink targets, and migrate legacy local tokens only after a secure write succeeds.
-- HTML and realtime dashboards now publish atomically, use private session output where appropriate, and preserve the last complete generation when publication fails.
+- HTML and realtime dashboards now publish atomically, same-path HTML exporters serialize generation cleanup, private session output is used where appropriate, and the last complete generation survives publication failures.
 - Parser resolution now reuses one bounded source inspection, rechecks source content before persistence, preserves approved multiline report fields while capping declarative regex work, and stores bounded provenance instead of duplicate parse trees.
 - Report paths, typed membership filters, report identifiers, tabular numeric shadows, and measurement summaries now preserve stricter ownership and data-integrity invariants.
 - CMM import now processes a valid final line without requiring a trailing newline and rejects empty parses without recording a successful fingerprint.

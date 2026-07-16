@@ -1,17 +1,22 @@
 import html
 import json
+from concurrent.futures import ThreadPoolExecutor
+from multiprocessing import get_context
+import os
 import re
 import tempfile
+from threading import Barrier, Event, Thread
 import unittest
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 
-from modules.export_html_dashboard import (
+from metroliza.charts.export_html_dashboard import (
     _build_group_analysis_plotly_spec,
     _build_group_analysis_plotly_spec_bundle,
     _build_plotly_chart_spec,
     _build_plotly_chart_spec_bundle,
+    _dashboard_publication_lock,
     _dashboard_visual_preview_labels_from_manifest,
     extract_dashboard_chart_details,
     _render_overview_cards,
@@ -21,7 +26,19 @@ from modules.export_html_dashboard import (
     summarize_dashboard_chart_payload,
     write_export_html_dashboard,
 )
-from modules.export_summary_utils import resolve_histogram_bin_count
+from metroliza.exporting.export_summary_utils import resolve_histogram_bin_count
+
+
+def _hold_dashboard_publication_lock_in_process(
+    output_path: str,
+    acquired,
+    release,
+) -> None:
+    dashboard_path = Path(output_path)
+    with _dashboard_publication_lock(dashboard_path):
+        acquired.set()
+        if not release.wait(10):
+            raise TimeoutError("Timed out waiting to release dashboard publication lock")
 
 
 def _embedded_plotly_specs(html_text: str) -> list[dict]:
@@ -158,6 +175,42 @@ class TestExportHtmlDashboard(unittest.TestCase):
 
         self.assertEqual(html_path, Path('reports/out_dashboard.html'))
         self.assertEqual(assets_path, Path('reports/out_dashboard_assets'))
+
+    def test_write_rejects_assets_directory_not_paired_with_output(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            html_path = Path(tmpdir) / 'report_dashboard.html'
+
+            with self.assertRaisesRegex(
+                ValueError,
+                'must match resolve_html_dashboard_assets_dir',
+            ):
+                write_export_html_dashboard(
+                    output_path=html_path,
+                    assets_dir=Path(tmpdir) / 'shared_assets',
+                    sections=[],
+                )
+
+            self.assertFalse(html_path.exists())
+
+    @unittest.skipIf(os.name == 'nt', 'Symlink creation is not guaranteed on Windows CI.')
+    def test_publication_lock_tracks_symlink_entry_replaced_by_dashboard(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_root = Path(tmpdir)
+            target_path = output_root / 'previous_dashboard.html'
+            dashboard_path = output_root / 'report_dashboard.html'
+            target_path.write_text('previous', encoding='utf-8')
+            dashboard_path.symlink_to(target_path.name)
+
+            with _dashboard_publication_lock(dashboard_path):
+                pass
+
+            dashboard_path.unlink()
+            dashboard_path.write_text('replacement', encoding='utf-8')
+            with _dashboard_publication_lock(dashboard_path):
+                pass
+
+            self.assertTrue((output_root / '.report_dashboard.html.publish.lock').exists())
+            self.assertFalse((output_root / '.previous_dashboard.html.publish.lock').exists())
 
     def test_write_export_html_dashboard_writes_html_and_assets(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -548,6 +601,11 @@ class TestExportHtmlDashboard(unittest.TestCase):
                 ],
             )
             old_generation = Path(old_result['html_dashboard_assets_path'])
+            orphan_generation = assets_dir.with_name(
+                f'{assets_dir.name}.generation-interrupted'
+            )
+            orphan_generation.mkdir()
+            (orphan_generation / 'partial.png').write_bytes(b'partial')
 
             new_result = write_export_html_dashboard(
                 output_path=html_path,
@@ -564,12 +622,164 @@ class TestExportHtmlDashboard(unittest.TestCase):
             new_generation = Path(new_result['html_dashboard_assets_path'])
 
             self.assertFalse(old_generation.exists())
+            self.assertFalse(orphan_generation.exists())
             self.assertTrue(new_generation.exists())
             self.assertEqual(
                 [b'new-only'],
                 [path.read_bytes() for path in new_generation.glob('*.png')],
             )
             self.assertIn(new_generation.name, html_path.read_text(encoding='utf-8'))
+
+    def test_same_output_writers_serialize_generation_and_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            html_path = Path(tmpdir) / 'report_dashboard.html'
+            assets_dir = resolve_html_dashboard_assets_dir(html_path)
+            first_entered = Event()
+            second_started = Event()
+            second_entered = Event()
+            release_first = Event()
+
+            def write_generation(**kwargs):
+                writer = kwargs['sections'][0]['header']
+                generation_directory = Path(kwargs['assets_dir'])
+                generation_directory.mkdir(parents=True, exist_ok=True)
+                if writer == 'First':
+                    first_entered.set()
+                    if not release_first.wait(5):
+                        raise TimeoutError('Timed out waiting to release first dashboard writer')
+                else:
+                    second_entered.set()
+                (generation_directory / 'writer.txt').write_text(writer, encoding='utf-8')
+                Path(kwargs['output_path']).write_text(
+                    f'{generation_directory.name}/writer.txt:{writer}',
+                    encoding='utf-8',
+                )
+                return {'writer': writer}
+
+            def publish(writer):
+                return write_export_html_dashboard(
+                    output_path=html_path,
+                    assets_dir=assets_dir,
+                    sections=[{'header': writer, 'charts': []}],
+                )
+
+            def publish_second():
+                second_started.set()
+                return publish('Second')
+
+            with patch(
+                'modules.export_html_dashboard._write_export_html_dashboard_generation',
+                side_effect=write_generation,
+            ):
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    first_future = executor.submit(publish, 'First')
+                    self.assertTrue(first_entered.wait(2))
+                    second_future = executor.submit(publish_second)
+                    self.assertTrue(second_started.wait(2))
+                    second_entered_while_first_active = second_entered.wait(0.25)
+                    release_first.set()
+                    first_result = first_future.result(timeout=5)
+                    second_result = second_future.result(timeout=5)
+
+            self.assertFalse(second_entered_while_first_active)
+            self.assertFalse(Path(first_result['html_dashboard_assets_path']).exists())
+            final_generation = Path(second_result['html_dashboard_assets_path'])
+            self.assertTrue(final_generation.exists())
+            self.assertEqual(
+                'Second',
+                (final_generation / 'writer.txt').read_text(encoding='utf-8'),
+            )
+            self.assertIn(
+                f'{final_generation.name}/writer.txt:Second',
+                html_path.read_text(encoding='utf-8'),
+            )
+            self.assertEqual(
+                [final_generation],
+                list(assets_dir.parent.glob(f'{assets_dir.name}.generation-*')),
+            )
+
+    def test_publication_lock_serializes_other_processes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            html_path = Path(tmpdir) / 'report_dashboard.html'
+            process_context = get_context('spawn')
+            process_acquired = process_context.Event()
+            release_process = process_context.Event()
+            waiter_acquired = Event()
+            waiter_started = Event()
+            waiter_errors = []
+            process = process_context.Process(
+                target=_hold_dashboard_publication_lock_in_process,
+                args=(str(html_path), process_acquired, release_process),
+            )
+            waiter = None
+            process.start()
+            try:
+                self.assertTrue(process_acquired.wait(10))
+
+                def wait_for_publication_lock():
+                    waiter_started.set()
+                    try:
+                        with _dashboard_publication_lock(html_path):
+                            waiter_acquired.set()
+                    except BaseException as exc:
+                        waiter_errors.append(exc)
+
+                waiter = Thread(target=wait_for_publication_lock, daemon=True)
+                waiter.start()
+                self.assertTrue(waiter_started.wait(2))
+                waiter_acquired_while_process_active = waiter_acquired.wait(1)
+            finally:
+                release_process.set()
+                process.join(10)
+                if process.is_alive():
+                    process.terminate()
+                    process.join(5)
+                if waiter is not None:
+                    waiter.join(5)
+
+            self.assertFalse(waiter_acquired_while_process_active)
+            self.assertEqual(0, process.exitcode)
+            self.assertEqual([], waiter_errors)
+            self.assertTrue(waiter_acquired.is_set())
+            self.assertIsNotNone(waiter)
+            self.assertFalse(waiter.is_alive())
+
+    def test_different_output_writers_can_build_in_parallel(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dashboard_paths = [
+                Path(tmpdir) / 'first_dashboard.html',
+                Path(tmpdir) / 'second_dashboard.html',
+            ]
+            writers_inside_generation = Barrier(2)
+
+            def write_generation(**kwargs):
+                generation_directory = Path(kwargs['assets_dir'])
+                generation_directory.mkdir(parents=True, exist_ok=True)
+                writers_inside_generation.wait(timeout=5)
+                (generation_directory / 'writer.txt').write_text('complete', encoding='utf-8')
+                Path(kwargs['output_path']).write_text(
+                    f'{generation_directory.name}/writer.txt',
+                    encoding='utf-8',
+                )
+                return {}
+
+            def publish(dashboard_path):
+                return write_export_html_dashboard(
+                    output_path=dashboard_path,
+                    assets_dir=resolve_html_dashboard_assets_dir(dashboard_path),
+                    sections=[],
+                )
+
+            with patch(
+                'modules.export_html_dashboard._write_export_html_dashboard_generation',
+                side_effect=write_generation,
+            ):
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    results = list(executor.map(publish, dashboard_paths))
+
+            for result in results:
+                self.assertTrue(Path(result['html_dashboard_path']).exists())
+                self.assertTrue(Path(result['html_dashboard_assets_path']).exists())
 
     def test_write_export_html_dashboard_section_sample_size_is_independent_from_plot_count(self):
         with tempfile.TemporaryDirectory() as tmpdir:
