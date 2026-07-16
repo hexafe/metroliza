@@ -12,6 +12,7 @@ ParseMetaV2 = contracts.ParseMetaV2
 ParseResultV2 = contracts.ParseResultV2
 PluginManifest = contracts.PluginManifest
 ProbeResult = contracts.ProbeResult
+ProbeOutcome = contracts.ProbeOutcome
 ReportInfoV2 = contracts.ReportInfoV2
 
 
@@ -26,7 +27,13 @@ def test_validate_plugin_contract_passes_for_well_formed_plugin():
 
         @classmethod
         def probe(cls, _input_ref, _context):
-            return ProbeResult(plugin_id="demo_plugin", can_parse=True, confidence=90)
+            return ProbeResult(
+                plugin_id="demo_plugin",
+                can_parse=True,
+                confidence=90,
+                outcome=ProbeOutcome.MATCH,
+                semantic_row_count=1,
+            )
 
         def open_report(self):
             self.raw_text = ["ok"]
@@ -53,7 +60,25 @@ def test_validate_plugin_contract_passes_for_well_formed_plugin():
                     file_name="sample.pdf",
                     file_path=".",
                 ),
-                blocks=(),
+                blocks=(
+                    MeasurementBlockV2(
+                        header_raw=("Feature",),
+                        header_normalized="Feature",
+                        dimensions=(
+                            MeasurementV2(
+                                axis_code="X",
+                                nominal=1.0,
+                                tol_plus=0.1,
+                                tol_minus=-0.1,
+                                bonus=None,
+                                measured=1.0,
+                                deviation=0.0,
+                                out_of_tolerance=0.0,
+                            ),
+                        ),
+                        block_index=0,
+                    ),
+                ),
             )
 
         @staticmethod
@@ -109,7 +134,13 @@ def test_validate_plugin_contract_compares_against_expected_results_csv(tmp_path
 
         @classmethod
         def probe(cls, _input_ref, _context):
-            return ProbeResult(plugin_id="demo_semantic", can_parse=True, confidence=90)
+            return ProbeResult(
+                plugin_id="demo_semantic",
+                can_parse=True,
+                confidence=90,
+                outcome=ProbeOutcome.MATCH,
+                semantic_row_count=1,
+            )
 
         def open_report(self):
             self.raw_text = ["ok"]
@@ -192,7 +223,13 @@ def test_validate_plugin_contract_reports_expected_results_mismatch(tmp_path):
 
         @classmethod
         def probe(cls, _input_ref, _context):
-            return ProbeResult(plugin_id="demo_mismatch", can_parse=True, confidence=90)
+            return ProbeResult(
+                plugin_id="demo_mismatch",
+                can_parse=True,
+                confidence=90,
+                outcome=ProbeOutcome.MATCH,
+                semantic_row_count=1,
+            )
 
         def open_report(self):
             self.raw_text = ["ok"]

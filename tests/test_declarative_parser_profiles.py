@@ -21,7 +21,8 @@ from metroliza.parsing.declarative_parser_profiles import (
     rollback_profile,
     validate_profile_file,
 )
-from metroliza.parsing.parser_plugin_contracts import ProbeContext
+from metroliza.parsing.pdf_backend import require_pdf_backend
+from metroliza.parsing.parser_plugin_contracts import ProbeContext, ProbeOutcome
 
 
 def _sample_text() -> str:
@@ -76,12 +77,25 @@ def _expected_results() -> str:
     )
 
 
+def _write_pdf_text(path: Path, text: str) -> Path:
+    backend = require_pdf_backend()
+    document = backend.open()
+    try:
+        page = document.new_page()
+        page.insert_text((72, 72), text)
+        path.unlink(missing_ok=True)
+        document.save(str(path), garbage=4, deflate=True)
+    finally:
+        document.close()
+    return path
+
+
 def _write_fixture(tmp_path: Path):
     profile_path = tmp_path / "profile.yaml"
     sample_path = tmp_path / "sample_report_01.pdf"
     expected_path = tmp_path / "expected_results_template.csv"
     profile_path.write_text(_profile_text(), encoding="utf-8")
-    sample_path.write_text(_sample_text(), encoding="utf-8")
+    _write_pdf_text(sample_path, _sample_text())
     expected_path.write_text(_expected_results(), encoding="utf-8")
     return profile_path, sample_path, expected_path
 
@@ -110,9 +124,9 @@ def test_declarative_profile_preserves_multiline_report_field_patterns(tmp_path)
         ),
         encoding="utf-8",
     )
-    sample_path.write_text(
+    _write_pdf_text(
+        sample_path,
         _sample_text().replace("Reference: REF123", "Reference:\n  REF123"),
-        encoding="utf-8",
     )
 
     report = validate_profile_file(
@@ -148,12 +162,12 @@ def test_declarative_profile_rejects_header_only_expected_results(tmp_path):
 
 def test_declarative_profile_rejects_unexpected_extra_rows(tmp_path):
     profile_path, sample_path, expected_path = _write_fixture(tmp_path)
-    sample_path.write_text(
+    _write_pdf_text(
+        sample_path,
         _sample_text().replace(
             "DIM X 10.0 0.1 -0.1 - 10.02 0.02 0",
             "DIM X 10.0 0.1 -0.1 - 10.02 0.02 0\nDIM Y 11.0 0.1 -0.1 - 11.01 0.01 0",
         ),
-        encoding="utf-8",
     )
 
     report = validate_profile_file(
@@ -171,12 +185,12 @@ def test_declarative_profile_rejects_unexpected_extra_rows(tmp_path):
 
 def test_declarative_profile_matches_duplicate_axis_rows_by_occurrence(tmp_path):
     profile_path, sample_path, expected_path = _write_fixture(tmp_path)
-    sample_path.write_text(
+    _write_pdf_text(
+        sample_path,
         _sample_text().replace(
             "DIM X 10.0 0.1 -0.1 - 10.02 0.02 0",
             "DIM X 10.0 0.1 -0.1 - 10.02 0.02 0\nDIM X 10.0 0.1 -0.1 - 10.03 0.03 0",
         ),
-        encoding="utf-8",
     )
     expected_path.write_text(
         "sample_file,reference,report_date,sample_number,block_index,header_normalized,"
@@ -237,11 +251,11 @@ def test_declarative_profile_applies_date_and_missing_value_normalization(tmp_pa
         'missing_value_tokens: ["MISSING"]',
     )
     profile_path.write_text(profile_text, encoding="utf-8")
-    sample_path.write_text(
+    _write_pdf_text(
+        sample_path,
         _sample_text()
         .replace("Date: 2026-01-05", "Date: 05/01/2026")
         .replace("DIM X 10.0 0.1 -0.1 - 10.02 0.02 0", "DIM X 10.0 0.1 -0.1 MISSING 10.02 0.02 0"),
-        encoding="utf-8",
     )
 
     report = validate_profile_file(
@@ -313,6 +327,48 @@ def test_declarative_profile_disable_enable_moves_between_store_states(tmp_path)
     assert any(profile.plugin_id == "supplier_alpha" and not profile.enabled for profile in installed_after_disable)
     assert enabled_dir.exists()
     assert list_profiles(home=tmp_path)[0].enabled is True
+
+
+def test_profile_lifecycle_invalidates_runtime_after_store_lock_release(
+    monkeypatch,
+    tmp_path,
+):
+    from metroliza.parsing import declarative_parser_profiles as profiles
+    from metroliza.parsing import parser_plugin_paths
+
+    invalidation_lock_states: list[bool] = []
+
+    def _record_invalidation_lock_state():
+        held_paths = getattr(parser_plugin_paths._PROFILE_STORE_LOCK_STATE, "held_paths", ())
+        invalidation_lock_states.append(bool(held_paths))
+
+    monkeypatch.setattr(
+        profiles,
+        "invalidate_parser_plugin_runtime",
+        _record_invalidation_lock_state,
+    )
+    profile_path, sample_path, expected_path = _write_fixture(tmp_path)
+    install_profile(
+        profile_path,
+        sample_paths=(sample_path,),
+        expected_results_ref=expected_path,
+        home=tmp_path,
+    )
+    disable_profile("supplier_alpha", home=tmp_path)
+    enable_profile("supplier_alpha", home=tmp_path)
+    profile_path.write_text(
+        _profile_text().replace("version: 0.1.0", "version: 0.2.0"),
+        encoding="utf-8",
+    )
+    install_profile(
+        profile_path,
+        sample_paths=(sample_path,),
+        expected_results_ref=expected_path,
+        home=tmp_path,
+    )
+    rollback_profile("supplier_alpha", home=tmp_path)
+
+    assert invalidation_lock_states == [False, False, False, False, False]
 
 
 def test_declarative_profile_disabled_listing_validates_approval_checksum(tmp_path):
@@ -426,12 +482,13 @@ def test_declarative_profile_policy_rejects_quantified_alternation(tmp_path):
 
 def test_declarative_profile_reuses_bounded_source_extraction(monkeypatch, tmp_path):
     from metroliza.parsing import declarative_parser_profiles as profiles
+    from metroliza.parsing import source_inspection as source_inspection_module
     from metroliza.parsing.source_inspection import SourceInspectionContext
 
     profile_path, sample_path, _expected_path = _write_fixture(tmp_path)
     payload = load_profile_payload(profile_path)
     inspection = SourceInspectionContext.from_path(sample_path, source_format="pdf")
-    original_reader = profiles._read_source_text
+    original_reader = source_inspection_module._extract_pdf_embedded_text
     reads = 0
 
     def _counted_reader(path, max_chars):
@@ -439,7 +496,11 @@ def test_declarative_profile_reuses_bounded_source_extraction(monkeypatch, tmp_p
         reads += 1
         return original_reader(path, max_chars)
 
-    monkeypatch.setattr(profiles, "_read_source_text", _counted_reader)
+    monkeypatch.setattr(
+        source_inspection_module,
+        "_extract_pdf_embedded_text",
+        _counted_reader,
+    )
     context = ProbeContext(
         source_path=str(sample_path),
         source_format="pdf",
@@ -455,6 +516,105 @@ def test_declarative_profile_reuses_bounded_source_extraction(monkeypatch, tmp_p
 
     assert result.report.reference == "REF123"
     assert reads == 1
+
+
+def test_declarative_profile_markers_without_measurement_rows_are_no_match(tmp_path):
+    from metroliza.parsing import declarative_parser_profiles as profiles
+
+    profile_path, sample_path, _expected_path = _write_fixture(tmp_path)
+    payload = load_profile_payload(profile_path)
+    _write_pdf_text(
+        sample_path,
+        "SYNTHETIC SUPPLIER ALPHA\nReference: REF123\nGraph summary only\n",
+    )
+
+    probe = profiles.profile_probe(
+        payload,
+        sample_path,
+        ProbeContext(source_path=str(sample_path), source_format="pdf"),
+    )
+
+    assert probe.can_parse is False
+    assert probe.outcome is ProbeOutcome.NO_MATCH
+    assert probe.semantic_row_count == 0
+    assert "no_semantic_measurements" in probe.reasons
+
+
+def test_declarative_profile_match_reports_semantic_row_count(tmp_path):
+    from metroliza.parsing import declarative_parser_profiles as profiles
+
+    profile_path, sample_path, _expected_path = _write_fixture(tmp_path)
+    payload = load_profile_payload(profile_path)
+    _write_pdf_text(
+        sample_path,
+        _sample_text().replace(
+            "DIM X 10.0 0.1 -0.1 - 10.02 0.02 0",
+            "DIM X 10.0 0.1 -0.1 - 10.02 0.02 0\n"
+            "DIM Y 11.0 0.1 -0.1 - 11.02 0.02 0",
+        ),
+    )
+
+    probe = profiles.profile_probe(
+        payload,
+        sample_path,
+        ProbeContext(source_path=str(sample_path), source_format="pdf"),
+    )
+
+    assert probe.can_parse is True
+    assert probe.outcome is ProbeOutcome.MATCH
+    assert probe.semantic_row_count == 2
+
+
+def test_declarative_profile_empty_text_pdf_is_no_match(tmp_path):
+    from metroliza.parsing import declarative_parser_profiles as profiles
+
+    profile_path, sample_path, _expected_path = _write_fixture(tmp_path)
+    payload = load_profile_payload(profile_path)
+    _write_pdf_text(sample_path, "")
+
+    probe = profiles.profile_probe(
+        payload,
+        sample_path,
+        ProbeContext(source_path=str(sample_path), source_format="pdf"),
+    )
+
+    assert probe.outcome is ProbeOutcome.NO_MATCH
+    assert probe.reasons == ("empty_embedded_text",)
+
+
+def test_declarative_profile_corrupt_pdf_is_inspection_error(tmp_path):
+    from metroliza.parsing import declarative_parser_profiles as profiles
+
+    profile_path, sample_path, _expected_path = _write_fixture(tmp_path)
+    payload = load_profile_payload(profile_path)
+    sample_path.write_bytes(b"not a pdf but contains SYNTHETIC SUPPLIER ALPHA")
+
+    probe = profiles.profile_probe(
+        payload,
+        sample_path,
+        ProbeContext(source_path=str(sample_path), source_format="pdf"),
+    )
+
+    assert probe.outcome is ProbeOutcome.INSPECTION_ERROR
+    assert probe.can_parse is False
+    assert probe.reasons == ("content_inspection_failed",)
+
+
+def test_declarative_profile_source_limit_is_inspection_error(monkeypatch, tmp_path):
+    from metroliza.parsing import declarative_parser_profiles as profiles
+
+    profile_path, sample_path, _expected_path = _write_fixture(tmp_path)
+    payload = load_profile_payload(profile_path)
+    monkeypatch.setattr(profiles, "MAX_PROFILE_SOURCE_TEXT_CHARS", 10)
+
+    probe = profiles.profile_probe(
+        payload,
+        sample_path,
+        ProbeContext(source_path=str(sample_path), source_format="pdf"),
+    )
+
+    assert probe.outcome is ProbeOutcome.INSPECTION_ERROR
+    assert "inspection limit" in probe.warnings[0]
 
 
 def test_declarative_profile_caps_regex_input_line_length(monkeypatch, tmp_path):
@@ -490,13 +650,13 @@ def test_declarative_profile_caps_total_row_matches(monkeypatch, tmp_path):
 
     profile_path, sample_path, _expected_path = _write_fixture(tmp_path)
     payload = load_profile_payload(profile_path)
-    sample_path.write_text(
+    _write_pdf_text(
+        sample_path,
         _sample_text().replace(
             "DIM X 10.0 0.1 -0.1 - 10.02 0.02 0",
             "DIM X 10.0 0.1 -0.1 - 10.02 0.02 0\n"
             "DIM Y 11.0 0.1 -0.1 - 11.02 0.02 0",
         ),
-        encoding="utf-8",
     )
     monkeypatch.setattr(profiles, "MAX_PROFILE_TOTAL_ROW_MATCHES", 1)
 
@@ -506,7 +666,7 @@ def test_declarative_profile_caps_total_row_matches(monkeypatch, tmp_path):
 
 def test_declarative_profile_install_refuses_failed_validation(tmp_path):
     profile_path, sample_path, expected_path = _write_fixture(tmp_path)
-    sample_path.write_text("wrong supplier\n", encoding="utf-8")
+    _write_pdf_text(sample_path, "wrong supplier\n")
 
     with pytest.raises(ValueError):
         install_profile(
@@ -772,7 +932,7 @@ def test_report_factory_invalidates_changed_sidecar_and_removed_profile_generati
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     profile_path, sample_path, expected_path = _write_fixture(tmp_path)
     old_report = tmp_path / "old_supplier_report.pdf"
-    old_report.write_text(_sample_text(), encoding="utf-8")
+    _write_pdf_text(old_report, _sample_text())
     original_map = dict(report_parser_factory.PARSER_MAP)
     original_manifests = dict(report_parser_factory.PARSER_MANIFESTS)
     original_detectors = dict(report_parser_factory.PARSER_DETECTORS)
@@ -811,12 +971,12 @@ def test_report_factory_invalidates_changed_sidecar_and_removed_profile_generati
             .replace("SYNTHETIC SUPPLIER ALPHA", "SYNTHETIC SUPPLIER BETA"),
             encoding="utf-8",
         )
-        sample_path.write_text(
+        _write_pdf_text(
+            sample_path,
             _sample_text().replace(
                 "SYNTHETIC SUPPLIER ALPHA",
                 "SYNTHETIC SUPPLIER BETA",
             ),
-            encoding="utf-8",
         )
         install_profile(
             profile_path,

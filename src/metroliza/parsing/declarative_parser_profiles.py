@@ -28,6 +28,7 @@ from metroliza.parsing.parser_plugin_contracts import (
     ParseResultV2,
     PluginManifest,
     ProbeContext,
+    ProbeOutcome,
     ProbeResult,
     ReportInfoV2,
     infer_source_format,
@@ -465,27 +466,8 @@ def _append_bounded_text(
 def _read_source_text(path: str | Path, max_chars: int = MAX_PROFILE_SOURCE_TEXT_CHARS) -> str:
     source_path = Path(path)
     if source_path.suffix.lower() == ".pdf":
-        try:  # pragma: no cover - depends on local PyMuPDF/runtime PDFs.
-            import fitz
-
-            parts: list[str] = []
-            current_chars = 0
-            with fitz.open(source_path) as document:
-                for page in document:
-                    current_chars = _append_bounded_text(
-                        parts,
-                        page.get_text(),
-                        current_chars=current_chars,
-                        max_chars=max_chars,
-                        source_path=source_path,
-                    )
-            text = "\n".join(parts)
-            if text.strip():
-                return text
-        except Exception as exc:
-            if isinstance(exc, ValueError):
-                raise
-            pass
+        inspection = SourceInspectionContext.from_path(source_path, source_format="pdf")
+        return inspection.get_pdf_text(max_chars=max_chars)
     if source_path.suffix.lower() in {".xlsx", ".xls"}:
         return _read_excel_source_text(source_path, max_chars=max_chars)
     with source_path.open("r", encoding="utf-8", errors="ignore") as handle:
@@ -593,9 +575,14 @@ def _source_text_for_inspection(
     path: str | Path,
     source_inspection: SourceInspectionContext | None,
 ) -> str:
-    if source_inspection is None:
-        return _read_source_text(path)
-    return source_inspection.get_extracted_text(
+    inspection = source_inspection or SourceInspectionContext.from_path(
+        path,
+        source_format=infer_source_format(path),
+    )
+    source_format = (inspection.source_format or infer_source_format(path)).strip().lower()
+    if source_format == "pdf":
+        return inspection.get_pdf_text(max_chars=MAX_PROFILE_SOURCE_TEXT_CHARS)
+    return inspection.get_extracted_text(
         cache_key=PROFILE_SOURCE_TEXT_CACHE_KEY,
         max_chars=MAX_PROFILE_SOURCE_TEXT_CHARS,
         loader=_read_source_text,
@@ -615,6 +602,8 @@ def profile_probe(payload: dict[str, Any], input_ref: str | Path, context: Probe
             can_parse=False,
             confidence=0,
             reasons=("unsupported_source_format",),
+            outcome=ProbeOutcome.NO_MATCH,
+            semantic_row_count=0,
         )
 
     probe = _mapping(payload.get("probe"))
@@ -627,8 +616,20 @@ def profile_probe(payload: dict[str, Any], input_ref: str | Path, context: Probe
             plugin_id=manifest.plugin_id,
             can_parse=False,
             confidence=0,
-            reasons=("source_unreadable",),
+            reasons=("content_inspection_failed",),
             warnings=(str(exc),),
+            outcome=ProbeOutcome.INSPECTION_ERROR,
+            semantic_row_count=0,
+        )
+
+    if not text.strip():
+        return ProbeResult(
+            plugin_id=manifest.plugin_id,
+            can_parse=False,
+            confidence=0,
+            reasons=("empty_embedded_text",),
+            outcome=ProbeOutcome.NO_MATCH,
+            semantic_row_count=0,
         )
 
     missing = tuple(marker for marker in required_markers if not _marker_found(text, marker))
@@ -640,6 +641,8 @@ def profile_probe(payload: dict[str, Any], input_ref: str | Path, context: Probe
             confidence=0,
             reasons=("missing_required_markers",),
             warnings=tuple(f"missing marker: {marker}" for marker in missing),
+            outcome=ProbeOutcome.NO_MATCH,
+            semantic_row_count=0,
         )
     if rejected:
         return ProbeResult(
@@ -648,6 +651,32 @@ def profile_probe(payload: dict[str, Any], input_ref: str | Path, context: Probe
             confidence=0,
             reasons=("reject_marker_found",),
             warnings=tuple(f"reject marker: {marker}" for marker in rejected),
+            outcome=ProbeOutcome.NO_MATCH,
+            semantic_row_count=0,
+        )
+
+    try:
+        row_matches = _collect_profile_row_matches(payload, _bounded_regex_lines(text))
+    except (OSError, ValueError, re.error) as exc:
+        return ProbeResult(
+            plugin_id=manifest.plugin_id,
+            can_parse=False,
+            confidence=0,
+            reasons=("content_inspection_failed", "semantic_preflight_failed"),
+            warnings=(str(exc),),
+            outcome=ProbeOutcome.INSPECTION_ERROR,
+            semantic_row_count=0,
+        )
+
+    semantic_row_count = sum(len(block_matches) for block_matches in row_matches)
+    if semantic_row_count == 0:
+        return ProbeResult(
+            plugin_id=manifest.plugin_id,
+            can_parse=False,
+            confidence=0,
+            reasons=("required_markers_found", "no_semantic_measurements"),
+            outcome=ProbeOutcome.NO_MATCH,
+            semantic_row_count=0,
         )
 
     template_ids = manifest.template_ids
@@ -656,7 +685,9 @@ def profile_probe(payload: dict[str, Any], input_ref: str | Path, context: Probe
         can_parse=True,
         confidence=_probe_confidence(payload),
         matched_template_id=template_ids[0] if template_ids else None,
-        reasons=("required_markers_found",),
+        reasons=("required_markers_found", "semantic_measurements_found"),
+        outcome=ProbeOutcome.MATCH,
+        semantic_row_count=semantic_row_count,
     )
 
 
@@ -671,6 +702,44 @@ def _bounded_regex_lines(text: str) -> tuple[str, ...]:
                 f"{MAX_PROFILE_LINE_CHARS} characters"
             )
     return lines
+
+
+def _collect_profile_row_matches(
+    payload: dict[str, Any],
+    lines: tuple[str, ...],
+) -> tuple[tuple[tuple[int, re.Match[str]], ...], ...]:
+    """Collect the bounded row matches shared by semantic probing and parsing."""
+
+    manifest = profile_manifest(payload)
+    row_specs = _row_specs(payload)
+    if len(row_specs) > MAX_PROFILE_ROW_SPECS:
+        raise ValueError(
+            f"profile {manifest.plugin_id} exceeds {MAX_PROFILE_ROW_SPECS} row patterns"
+        )
+
+    matches_by_block: list[tuple[tuple[int, re.Match[str]], ...]] = []
+    total_row_matches = 0
+    for block_index, spec in enumerate(row_specs):
+        compiled_pattern = re.compile(str(spec.get("pattern") or ""))
+        block_matches: list[tuple[int, re.Match[str]]] = []
+        for line_number, line in enumerate(lines, start=1):
+            match = compiled_pattern.match(line)
+            if match is None:
+                continue
+            if len(block_matches) >= MAX_PROFILE_ROW_MATCHES_PER_BLOCK:
+                raise ValueError(
+                    f"profile {manifest.plugin_id} exceeded "
+                    f"{MAX_PROFILE_ROW_MATCHES_PER_BLOCK} row matches in block {block_index}"
+                )
+            if total_row_matches >= MAX_PROFILE_TOTAL_ROW_MATCHES:
+                raise ValueError(
+                    f"profile {manifest.plugin_id} exceeded "
+                    f"{MAX_PROFILE_TOTAL_ROW_MATCHES} total row matches"
+                )
+            block_matches.append((line_number, match))
+            total_row_matches += 1
+        matches_by_block.append(tuple(block_matches))
+    return tuple(matches_by_block)
 
 
 def _extract_value(pattern: str, text: str) -> str:
@@ -760,32 +829,13 @@ def parse_profile_result(
     sample_number = _extract_value(str(report_fields.get("sample_number", "")), text)
 
     row_specs = _row_specs(payload)
-    if len(row_specs) > MAX_PROFILE_ROW_SPECS:
-        raise ValueError(
-            f"profile {manifest.plugin_id} exceeds {MAX_PROFILE_ROW_SPECS} row patterns"
-        )
+    row_matches = _collect_profile_row_matches(payload, lines)
 
     blocks: list[MeasurementBlockV2] = []
-    total_row_matches = 0
-    for block_index, spec in enumerate(row_specs):
+    for block_index, (spec, block_matches) in enumerate(zip(row_specs, row_matches)):
         header = str(spec.get("header") or spec.get("header_normalized") or f"Block {block_index + 1}").strip()
-        pattern = str(spec.get("pattern") or "")
-        compiled_pattern = re.compile(pattern)
         dimensions: list[MeasurementV2] = []
-        for line_number, line in enumerate(lines, start=1):
-            match = compiled_pattern.match(line)
-            if match is None:
-                continue
-            if len(dimensions) >= MAX_PROFILE_ROW_MATCHES_PER_BLOCK:
-                raise ValueError(
-                    f"profile {manifest.plugin_id} exceeded "
-                    f"{MAX_PROFILE_ROW_MATCHES_PER_BLOCK} row matches in block {block_index}"
-                )
-            if total_row_matches >= MAX_PROFILE_TOTAL_ROW_MATCHES:
-                raise ValueError(
-                    f"profile {manifest.plugin_id} exceeded "
-                    f"{MAX_PROFILE_TOTAL_ROW_MATCHES} total row matches"
-                )
+        for line_number, match in block_matches:
             group = match.groupdict()
 
             def numeric(name: str) -> float | None:
@@ -809,7 +859,6 @@ def parse_profile_result(
                     raw_line_refs=(line_number,),
                 )
             )
-            total_row_matches += 1
         blocks.append(
             MeasurementBlockV2(
                 header_raw=(header,),
@@ -1191,7 +1240,7 @@ def install_profile(
         finally:
             if staging_dir.exists():
                 shutil.rmtree(staging_dir)
-        invalidate_parser_plugin_runtime()
+    invalidate_parser_plugin_runtime()
     return ProfileInstallResult(plugin_id, target_dir, target_profile, target_approval, backup_dir, profile_hash)
 
 
@@ -1313,7 +1362,7 @@ def disable_profile(plugin_id: str, *, home: Path | None = None) -> Path:
         if target_dir.exists():
             shutil.rmtree(target_dir)
         source_dir.replace(target_dir)
-        invalidate_parser_plugin_runtime()
+    invalidate_parser_plugin_runtime()
     return target_dir
 
 
@@ -1328,7 +1377,7 @@ def enable_profile(plugin_id: str, *, home: Path | None = None) -> Path:
         if target_dir.exists():
             raise FileExistsError(f"approved profile already exists: {plugin_id}")
         source_dir.replace(target_dir)
-        invalidate_parser_plugin_runtime()
+    invalidate_parser_plugin_runtime()
     return target_dir
 
 
@@ -1377,7 +1426,7 @@ def rollback_profile(plugin_id: str, *, backup_name: str | None = None, home: Pa
         )
         if not restored:
             raise ValueError(f"restored profile is not approved: {restored_detail}")
-        invalidate_parser_plugin_runtime()
+    invalidate_parser_plugin_runtime()
     return target_dir
 
 

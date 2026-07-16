@@ -350,16 +350,19 @@ The generated plugin must:
 
 The parser factory evaluates a report in this order:
 
-1. Infer the source format from the file suffix.
-2. Load built-in and external parser plugins.
+1. Use the file suffix only to admit a supported transport candidate.
+2. Publish one validated registry generation containing built-in and currently enabled plugins.
 3. Keep only plugins whose manifest `supported_formats` includes that format.
 4. Ask each remaining plugin to `probe(...)` with a `ProbeContext`.
-5. Accept only plugins whose probe says `can_parse=True` and whose confidence is
-   high enough for the active selection mode.
-6. Choose the winner by confidence, then manifest `priority`, then `plugin_id`.
+5. Accept only probes that recognize measurement rows from decoded source content and
+   whose confidence is high enough for the active selection mode.
+6. Prefer semantic probes over legacy lexical probes, then compare confidence and
+   manifest `priority`. An unresolved tie is rejected as ambiguous.
 
 This means `probe(...)` must be cheap, deterministic, and specific enough to
-distinguish the intended template family from generic format-level parsers.
+distinguish the intended template family from generic format-level parsers. A
+file name, directory name, date-like name, or supplier suffix must never affect
+report-family confidence.
 
 ### Required Behavior
 
@@ -383,20 +386,36 @@ plugins.
 
 #### `probe(...)`
 
-The probe must be deterministic and cheap.
+The probe must be deterministic, bounded, and content-semantic.
 
 It should rely on:
 
-- file extension / source format,
 - stable template markers,
 - predictable header strings,
-- version strings or supplier-specific labels when available.
+- version strings or supplier-specific labels inside the decoded report,
+- at least one row that satisfies the parser's measurement grammar.
+
+The suffix is already used as a transport prefilter. It is not report-family
+evidence. Markers alone are also insufficient: a graph or summary report may
+share supplier labels with a measurement report without containing parseable
+measurement rows.
 
 It must return a valid `ProbeResult` with:
 
 - the same `plugin_id` as the manifest,
 - confidence in the `0..100` range,
-- useful `reasons`.
+- a typed `outcome` (`match`, `no_match`, or `inspection_error`),
+- `semantic_row_count` when measurement rows were checked,
+- useful `reasons` that are diagnostic only.
+
+Probe exceptions and unreadable containers are inspection errors, not semantic
+no-matches. Successful `ParseResultV2` output must contain at least one
+measurement and must report the selected plugin id and source format.
+
+At registration time, a parser class must be constructible as
+`Parser(file_path, database, connection=None)`, and its class probe must accept
+`(input_ref, context)`. A malformed class is isolated as a plugin load error and
+is never published into the active registry generation.
 
 #### `open_report(...)`
 

@@ -17,6 +17,22 @@ MAX_RAW_PROVENANCE_DIAGNOSTICS = 50
 MAX_RAW_PROVENANCE_TEXT_CHARS = 500
 
 
+class ParseResultContractError(ValueError):
+    """Raised when plugin output violates the selected parser contract."""
+
+
+class EmptyParseResultError(ParseResultContractError):
+    """Raised when a parser produces no persistable measurement rows."""
+
+    def __init__(self, source_path: str | Path, *, plugin_id: str) -> None:
+        self.source_path = str(source_path)
+        self.plugin_id = str(plugin_id)
+        super().__init__(
+            "Parser produced no persistable measurements: "
+            f"plugin={self.plugin_id or 'unknown'} source={self.source_path}"
+        )
+
+
 @dataclass(frozen=True)
 class ParseResultV2PersistencePayload:
     """Repository-ready payload derived from one parser result."""
@@ -72,6 +88,119 @@ def _raise_for_errors(parse_result: ParseResultV2) -> None:
         for error in parse_result.errors
     )
     raise ValueError(f"ParseResultV2 contains blocking parser errors: {details}")
+
+
+def _normalized_required_meta_value(
+    value: Any,
+    *,
+    field_name: str,
+    source_path: str | Path,
+    lowercase: bool = False,
+) -> str:
+    raw_value = str(value or "")
+    normalized = raw_value.strip()
+    if lowercase:
+        normalized = normalized.lower()
+    if not normalized:
+        raise ParseResultContractError(
+            f"ParseResultV2.meta.{field_name} is required for {source_path}"
+        )
+    if raw_value != normalized:
+        raise ParseResultContractError(
+            f"ParseResultV2.meta.{field_name} must be normalized exactly: "
+            f"actual={raw_value!r} source={source_path}"
+        )
+    return normalized
+
+
+def _validate_plugin_provenance(
+    parse_result: ParseResultV2,
+    *,
+    source_path: str | Path,
+    manifest: Any,
+) -> str:
+    parse_plugin_id = _normalized_required_meta_value(
+        parse_result.meta.plugin_id,
+        field_name="plugin_id",
+        source_path=source_path,
+    )
+
+    manifest_plugin_id = str(getattr(manifest, "plugin_id", "") or "").strip()
+    if manifest_plugin_id and parse_plugin_id != manifest_plugin_id:
+        raise ParseResultContractError(
+            "ParseResultV2 plugin_id does not match the selected parser: "
+            f"expected={manifest_plugin_id} actual={parse_plugin_id} source={source_path}"
+        )
+
+    parse_plugin_version = _normalized_required_meta_value(
+        parse_result.meta.plugin_version,
+        field_name="plugin_version",
+        source_path=source_path,
+    )
+    manifest_plugin_version = str(getattr(manifest, "version", "") or "").strip()
+    if manifest_plugin_version and parse_plugin_version != manifest_plugin_version:
+        raise ParseResultContractError(
+            "ParseResultV2 plugin_version does not match the selected parser: "
+            f"expected={manifest_plugin_version} actual={parse_plugin_version} "
+            f"source={source_path}"
+        )
+    return parse_plugin_id
+
+
+def _validate_source_format_provenance(
+    parse_result: ParseResultV2,
+    *,
+    source_path: str | Path,
+    manifest: Any,
+    expected_source_format: str | None,
+    parse_plugin_id: str,
+) -> None:
+    source_format = _normalized_required_meta_value(
+        parse_result.meta.source_format,
+        field_name="source_format",
+        source_path=source_path,
+        lowercase=True,
+    )
+    expected_format = str(expected_source_format or "").strip().lower()
+    if expected_format and source_format != expected_format:
+        raise ParseResultContractError(
+            "ParseResultV2 source_format does not match the inspected source: "
+            f"expected={expected_format} actual={source_format} source={source_path}"
+        )
+
+    supported_formats = tuple(
+        str(value).strip().lower()
+        for value in (getattr(manifest, "supported_formats", ()) or ())
+        if str(value).strip()
+    )
+    if supported_formats and source_format not in supported_formats:
+        raise ParseResultContractError(
+            "ParseResultV2 source_format is not supported by the selected parser: "
+            f"plugin={parse_plugin_id} format={source_format} source={source_path}"
+        )
+
+
+def _validate_parse_result_identity(
+    parse_result: ParseResultV2,
+    *,
+    source_path: str | Path,
+    manifest: Any = None,
+    expected_source_format: str | None = None,
+) -> None:
+    """Ensure parse provenance agrees with the selected registration."""
+
+    parse_plugin_id = _validate_plugin_provenance(
+        parse_result,
+        source_path=source_path,
+        manifest=manifest,
+    )
+    _validate_source_format_provenance(
+        parse_result,
+        source_path=source_path,
+        manifest=manifest,
+        expected_source_format=expected_source_format,
+        parse_plugin_id=parse_plugin_id,
+    )
 
 
 def _bounded_provenance_text(value: Any) -> str | None:
@@ -245,16 +374,28 @@ def build_persistence_payload(
     *,
     source_path: str | Path,
     manifest: Any = None,
+    expected_source_format: str | None = None,
 ) -> ParseResultV2PersistencePayload:
     """Build the full repository payload and reject blocking parser errors."""
 
     _raise_for_errors(parse_result)
+    _validate_parse_result_identity(
+        parse_result,
+        source_path=source_path,
+        manifest=manifest,
+        expected_source_format=expected_source_format,
+    )
+    measurements = measurements_from_parse_result_v2(parse_result)
+    if not measurements:
+        raise EmptyParseResultError(
+            source_path,
+            plugin_id=parse_result.meta.plugin_id,
+        )
     metadata = canonical_metadata_from_parse_result_v2(
         parse_result,
         source_path=source_path,
         manifest=manifest,
     )
-    measurements = measurements_from_parse_result_v2(parse_result)
     nok_count = sum(1 for row in measurements if row.get("status_code") == "nok")
     raw_report_json = _raw_provenance_summary(
         parse_result,
@@ -290,6 +431,9 @@ def persist_parse_result_v2(
         parse_result,
         source_path=source_path,
         manifest=manifest,
+        expected_source_format=(
+            source_inspection.source_format if source_inspection is not None else None
+        ),
     )
     return persist_parse_result_v2_payload(
         payload,
@@ -313,6 +457,12 @@ def persist_parse_result_v2_payload(
     source_inspection: SourceInspectionContext | None = None,
 ) -> int:
     """Persist a prebuilt V2 payload through ``ReportRepository``."""
+
+    if payload.measurement_count <= 0 or not payload.measurements:
+        raise EmptyParseResultError(
+            source_path,
+            plugin_id=parse_result.meta.plugin_id,
+        )
 
     verified_source_sha256 = source_sha256
     if source_inspection is not None:

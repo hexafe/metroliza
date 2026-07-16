@@ -15,6 +15,7 @@ from metroliza.parsing.parser_plugin_contracts import (
     ParseResultV2,
     PluginManifest,
     ProbeContext,
+    ProbeOutcome,
     ProbeResult,
     infer_source_format,
 )
@@ -456,6 +457,25 @@ def validate_plugin_contract(
                     "confidence should be in [0, 100]",
                 )
             )
+            checks.append(
+                _check(
+                    "probe_outcome_consistent",
+                    (probe_result.outcome is ProbeOutcome.MATCH)
+                    == bool(probe_result.can_parse),
+                    "match outcome and can_parse must agree",
+                )
+            )
+            checks.append(
+                _check(
+                    "probe_match_has_semantic_rows",
+                    probe_result.outcome is not ProbeOutcome.MATCH
+                    or (
+                        probe_result.semantic_row_count is not None
+                        and probe_result.semantic_row_count > 0
+                    ),
+                    "matching probes must report at least one semantic measurement row",
+                )
+            )
     except Exception as exc:
         checks.append(_check("probe_execution", False, f"probe raised exception: {exc}"))
 
@@ -469,6 +489,32 @@ def validate_plugin_contract(
             parse_result_ok = isinstance(parse_result, ParseResultV2)
             checks.append(_check("parse_to_v2_returns_parse_result_v2", parse_result_ok))
             if parse_result_ok:
+                measurement_count = sum(
+                    len(tuple(block.dimensions or ()))
+                    for block in tuple(parse_result.blocks or ())
+                )
+                checks.append(
+                    _check(
+                        "parse_result_plugin_id_matches_manifest",
+                        parse_result.meta.plugin_id == plugin_id,
+                        "ParseResultV2.meta.plugin_id must match manifest.plugin_id",
+                    )
+                )
+                checks.append(
+                    _check(
+                        "parse_result_source_format_supported",
+                        isinstance(manifest, PluginManifest)
+                        and parse_result.meta.source_format in manifest.supported_formats,
+                        "ParseResultV2.meta.source_format must be declared by the manifest",
+                    )
+                )
+                checks.append(
+                    _check(
+                        "parse_result_has_measurements",
+                        measurement_count > 0,
+                        "ParseResultV2 must contain at least one measurement row",
+                    )
+                )
                 legacy_blocks = parser_cls.to_legacy_blocks(parse_result)
                 checks.append(_check("legacy_adapter_returns_list", isinstance(legacy_blocks, list)))
                 if expected_results_ref is not None:

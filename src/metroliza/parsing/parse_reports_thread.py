@@ -95,13 +95,29 @@ def _format_parser_resolution_diagnostics(diagnostics) -> str:
     for candidate in diagnostics.candidates_considered:
         reasons = ",".join(candidate.reasons) if candidate.reasons else "-"
         warnings = ",".join(candidate.warnings) if candidate.warnings else "-"
+        outcome = getattr(getattr(candidate, "outcome", None), "value", None) or "legacy"
+        semantic_rows = getattr(candidate, "semantic_row_count", None)
+        semantic_rows_text = "legacy" if semantic_rows is None else str(semantic_rows)
         candidate_parts.append(
             f"{candidate.plugin_id}:can_parse={candidate.can_parse}:confidence={candidate.confidence}:"
+            f"outcome={outcome}:semantic_rows={semantic_rows_text}:"
             f"reasons={reasons}:warnings={warnings}"
         )
 
+    generation_id = getattr(diagnostics, "registry_generation_id", None) or "-"
+    competing = ",".join(getattr(diagnostics, "ambiguous_plugin_ids", ()) or ()) or "-"
+    origins = ",".join(
+        f"{plugin_id}:{origin}"
+        for plugin_id, origin in (getattr(diagnostics, "registration_origins", ()) or ())
+    ) or "-"
+    registry_errors = "|".join(
+        getattr(diagnostics, "registry_load_errors", ()) or ()
+    ) or "-"
     return (
-        f"resolver_selected={selected} resolver_rejected_reason={diagnostics.rejected_reason or '-'} "
+        f"resolver_generation={generation_id} resolver_selected={selected} "
+        f"resolver_rejected_reason={diagnostics.rejected_reason or '-'} "
+        f"resolver_ambiguous={competing} "
+        f"resolver_origins=[{origins}] resolver_registry_errors=[{registry_errors}] "
         f"resolver_candidates=[{'; '.join(candidate_parts) if candidate_parts else '-'}]"
     )
 
@@ -484,12 +500,14 @@ def supported_report_file_extensions() -> set[str]:
     """Return suffixes supported by registered parser manifests."""
 
     try:
-        report_parser_factory.load_external_plugins()
+        registry_snapshot = report_parser_factory.get_registry_snapshot()
     except Exception:
-        logger.warning("Could not load external parser plugins during discovery", exc_info=True)
+        logger.warning("Could not refresh parser registry during discovery", exc_info=True)
+        return set(_REPORT_EXTENSIONS_BY_SOURCE_FORMAT["pdf"])
 
     extensions = set(_REPORT_EXTENSIONS_BY_SOURCE_FORMAT["pdf"])
-    for manifest in report_parser_factory.list_plugins():
+    for registration in registry_snapshot.registrations:
+        manifest = registration.manifest
         for source_format in getattr(manifest, "supported_formats", ()) or ():
             extensions.update(_REPORT_EXTENSIONS_BY_SOURCE_FORMAT.get(str(source_format).lower(), ()))
     return extensions

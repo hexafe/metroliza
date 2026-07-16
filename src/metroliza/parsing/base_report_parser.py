@@ -375,6 +375,11 @@ class BaseReportParser(ABC):
             parse_result,
             source_path=self.source_path,
             manifest=getattr(self, "manifest", None),
+            expected_source_format=getattr(
+                self.source_inspection_context,
+                "source_format",
+                None,
+            ),
         )
         self.canonical_metadata = payload.metadata
         return persist_parse_result_v2_payload(

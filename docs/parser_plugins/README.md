@@ -179,24 +179,35 @@ PYTHONPATH=src:. python scripts/parser_plugin_self_service.py evidence supplier_
   `~/.metroliza/parser_plugins/`.
 - Normal report import discovers `.pdf`, `.csv`, `.xlsx`, and `.xls` files when
   an installed parser manifest supports the corresponding source format.
-- The parser factory infers the report source format from the file suffix,
-  filters plugins whose manifests declare that format, asks each remaining
-  plugin to `probe(...)`, and selects the best match by confidence, then
-  manifest priority, then plugin id.
-- Probe results are cached per plugin/path during the process lifetime so batch
-  parsing does not repeat the same work.
+- The file suffix is only a transport/discovery gate. The parser factory asks
+  compatible plugins to recognize the report family from decoded contents and
+  requires semantic measurement-row evidence from current plugins.
+- Semantic matches rank ahead of legacy lexical matches, followed by confidence
+  and manifest priority. A remaining tie is reported as ambiguous instead of
+  selecting a parser by name.
+- Match and no-match probe results are cached by source content and registry
+  generation. Inspection failures are retried instead of becoming sticky.
+- Registry refresh is validated, single-flight, and atomic. Removed or disabled
+  plugins disappear from the next generation, and external plugins cannot
+  replace reserved built-in ids such as `cmm`.
 - `PARSER_EXTERNAL_PLUGIN_PATHS` remains available for advanced overrides and
   developer testing.
 
 ## Manifest Governance
 
-- `plugin_id` must be stable and unique because it is the registry key.
+- `plugin_id` must be stable and unique because it is the registry key. Duplicate
+  ids are rejected; explicit replacement is limited to non-built-in manual
+  registrations.
+- Parser classes must be constructible with `file_path`, `database`, and the
+  optional `connection` keyword, and their probe must accept `(input_ref,
+  context)`. Invalid signatures are rejected before a registry generation is
+  published.
 - `display_name` is for human-facing UI and logs.
 - `supported_formats` must list every format the parser is allowed to consider
   during selection.
 - `supported_locales`, `template_ids`, and `capabilities` are metadata fields
   used for policy, diagnostics, and review, not for hidden registration logic.
-- `priority` is a tie-breaker only. Higher values win when confidence is equal.
+- `priority` is a tie-breaker only after semantic evidence and confidence.
 
 ## Advanced Python Commands
 

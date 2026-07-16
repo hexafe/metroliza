@@ -6,7 +6,7 @@ import pytest
 
 from metroliza.parsing.cmm_report_parser import CMMReportParser
 from metroliza.parsing.pdf_backend import require_pdf_backend
-from metroliza.parsing.parser_plugin_contracts import ProbeContext, ProbeResult
+from metroliza.parsing.parser_plugin_contracts import ProbeContext, ProbeOutcome, ProbeResult
 from metroliza.parsing.report_parser_factory import (
     ParserInspectionError,
     UnsupportedReportFormatError,
@@ -70,6 +70,8 @@ def test_cmm_probe_rejects_generic_pdf_without_canonical_measurements(tmp_path):
     assert probe.plugin_id == "cmm"
     assert probe.can_parse is False
     assert probe.confidence == 0
+    assert probe.outcome is ProbeOutcome.NO_MATCH
+    assert probe.semantic_row_count == 0
     assert "no_canonical_measurements" in probe.reasons
 
 
@@ -80,6 +82,8 @@ def test_cmm_probe_accepts_content_with_a_canonical_measurement(tmp_path):
 
     assert probe.can_parse is True
     assert probe.confidence >= 80
+    assert probe.outcome is ProbeOutcome.MATCH
+    assert probe.semantic_row_count == 1
     assert probe.matched_template_id == "default"
     assert "canonical_measurements" in probe.reasons
     assert "pdf_backend_text_probe" in probe.reasons
@@ -146,6 +150,8 @@ def test_marker_heavy_pdf_without_canonical_rows_is_rejected_in_every_mode(
     assert "no_canonical_measurements" in probe.reasons
     assert probe.can_parse is False
     assert probe.confidence == 0
+    assert probe.outcome is ProbeOutcome.NO_MATCH
+    assert probe.semantic_row_count == 0
     assert diagnostics.selected is None
     assert diagnostics.rejected_reason == "no_plugin_can_parse"
     with pytest.raises(UnsupportedReportFormatError) as exc_info:
@@ -173,13 +179,13 @@ def test_pdf_extraction_failure_is_not_classified_as_unsupported_content(
 ):
     report = _write_pdf(tmp_path / "unreadable.pdf", _valid_cmm_text())
 
-    def fail_inspection(_path, _max_chars):
+    def fail_inspection(_self, *, max_chars):
         raise OSError("simulated PDF read failure")
 
     monkeypatch.setattr(
-        CMMReportParser,
-        "_load_pdf_text_for_inspection",
-        staticmethod(fail_inspection),
+        SourceInspectionContext,
+        "get_pdf_text",
+        fail_inspection,
     )
     reset_probe_cache()
 
@@ -187,6 +193,7 @@ def test_pdf_extraction_failure_is_not_classified_as_unsupported_content(
 
     assert diagnostics.selected is None
     assert diagnostics.rejected_reason == "parser_inspection_failed"
+    assert diagnostics.candidates_considered[0].outcome is ProbeOutcome.INSPECTION_ERROR
     assert "content_inspection_failed" in diagnostics.candidates_considered[0].reasons
     assert any(
         "simulated PDF read failure" in warning
@@ -200,18 +207,18 @@ def test_pdf_extraction_failure_is_not_classified_as_unsupported_content(
 def test_resolver_and_parser_share_cached_embedded_text(tmp_path, monkeypatch):
     report = _write_pdf(tmp_path / "cached.pdf", _valid_cmm_text())
     inspection = SourceInspectionContext.from_path(report, source_format="pdf")
-    original_loader = CMMReportParser._load_pdf_text_for_inspection
+    original_loader = SourceInspectionContext.get_pdf_text
     load_count = 0
 
-    def counting_loader(path, max_chars):
+    def counting_loader(self, *, max_chars):
         nonlocal load_count
         load_count += 1
-        return original_loader(path, max_chars)
+        return original_loader(self, max_chars=max_chars)
 
     monkeypatch.setattr(
-        CMMReportParser,
-        "_load_pdf_text_for_inspection",
-        staticmethod(counting_loader),
+        SourceInspectionContext,
+        "get_pdf_text",
+        counting_loader,
     )
     reset_probe_cache()
 

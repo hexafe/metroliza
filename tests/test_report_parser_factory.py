@@ -81,6 +81,18 @@ def _write_cmm_probe_fixture(path: Path) -> Path:
     return path
 
 
+def _write_non_cmm_pdf(path: Path) -> Path:
+    backend = require_pdf_backend()
+    document = backend.open()
+    try:
+        page = document.new_page()
+        page.insert_text((72, 72), "ALTERNATE SUMMARY REPORT\nNO MEASUREMENT TABLE\n")
+        document.save(str(path), garbage=4, deflate=True)
+    finally:
+        document.close()
+    return path
+
+
 def test_detect_format_accepts_pathlike(tmp_path):
     report_path = tmp_path / "A1234_2024-01-01_001.PDF"
     _write_cmm_probe_fixture(report_path)
@@ -717,6 +729,19 @@ def test_resolver_uses_immutable_registry_snapshot_during_registration(
                 confidence=100,
             )
 
+        def parse_to_v2(self):
+            raise NotImplementedError
+
+        @staticmethod
+        def to_legacy_blocks(_parse_result_v2):
+            raise NotImplementedError
+
+        def open_report(self):
+            raise NotImplementedError
+
+        def split_text_to_blocks(self):
+            raise NotImplementedError
+
     class LateParser(BaseReportParser, BaseReportParserPlugin):
         manifest = PluginManifest(
             plugin_id="late_parser",
@@ -732,6 +757,19 @@ def test_resolver_uses_immutable_registry_snapshot_during_registration(
                 can_parse=True,
                 confidence=100,
             )
+
+        def parse_to_v2(self):
+            raise NotImplementedError
+
+        @staticmethod
+        def to_legacy_blocks(_parse_result_v2):
+            raise NotImplementedError
+
+        def open_report(self):
+            raise NotImplementedError
+
+        def split_text_to_blocks(self):
+            raise NotImplementedError
 
     source_path = tmp_path / "snapshot.pdf"
     source_path.write_bytes(b"snapshot")
@@ -853,7 +891,7 @@ def test_get_parser_constructs_class_selected_from_same_registry_snapshot(
                 database=str(tmp_path / "swap.sqlite3"),
             )
             probe_started.wait(timeout=2)
-            register_parser(ReplacementParser)
+            register_parser(ReplacementParser, replace=True)
             allow_probe_to_finish.wait(timeout=2)
             parser = future.result(timeout=2)
 
@@ -938,7 +976,25 @@ def test_resolver_rehashes_before_persistence_and_shares_extraction(monkeypatch,
                     file_name=self.file_name,
                     file_path=self.file_path,
                 ),
-                blocks=(),
+                blocks=(
+                    MeasurementBlockV2(
+                        header_raw=("SHARED INSPECTION",),
+                        header_normalized="SHARED INSPECTION",
+                        dimensions=(
+                            MeasurementV2(
+                                axis_code="X",
+                                nominal=1.0,
+                                tol_plus=0.1,
+                                tol_minus=-0.1,
+                                bonus=0.0,
+                                measured=1.0,
+                                deviation=0.0,
+                                out_of_tolerance=0.0,
+                            ),
+                        ),
+                        block_index=0,
+                    ),
+                ),
             )
 
         @staticmethod
@@ -1136,7 +1192,7 @@ def test_reregistering_parser_without_detector_clears_stale_detector(tmp_path):
             ),
         )
 
-        register_parser(ReregisteredProbeParser)
+        register_parser(ReregisteredProbeParser, replace=True)
         PARSER_MAP.pop("cmm", None)
         PARSER_MANIFESTS.pop("cmm", None)
         PARSER_DETECTORS.pop("cmm", None)
@@ -1201,7 +1257,7 @@ def test_strict_matching_rejects_low_confidence_candidate(tmp_path):
         PARSER_DETECTORS.pop("cmm", None)
         reset_probe_cache()
 
-        report_path = tmp_path / "strict_mode.pdf"
+        report_path = _write_non_cmm_pdf(tmp_path / "strict_mode.pdf")
 
         non_strict = resolve_parser_with_diagnostics(report_path)
         assert non_strict.selected is not None
@@ -1268,7 +1324,7 @@ def test_strict_matching_is_default_when_env_is_unset(tmp_path, monkeypatch):
         PARSER_DETECTORS.pop("cmm", None)
         reset_probe_cache()
 
-        report_path = tmp_path / "strict_default_mode.pdf"
+        report_path = _write_non_cmm_pdf(tmp_path / "strict_default_mode.pdf")
         diagnostics = resolve_parser_with_diagnostics(report_path)
 
         assert diagnostics.selected is None

@@ -101,7 +101,12 @@ class DemoExternalParser(BaseReportParser, BaseReportParserPlugin):
     assert result == 0
     assert "Source path:" in captured
     assert "Candidates considered:" in captured
+    assert "Registry generation:" in captured
+    assert "Registry load errors: 0" in captured
     assert "demo_external_script" in captured
+    assert "outcome=match" in captured
+    assert "semantic_rows=legacy" in captured
+    assert "origin=python_path" in captured
     assert "priority=1000" in captured
     assert "Selected: demo_external_script" in captured
 

@@ -127,7 +127,8 @@ def test_llm_plugin_factory_scaffold_contains_required_entrypoints():
     assert "priority" in scaffold.plugin_template
     assert "probe_result = {{CLASS_NAME}}.probe" in scaffold.test_template
     assert "legacy_blocks = parser.to_legacy_blocks(parse_result)" in scaffold.test_template
-    assert "template_markers_not_configured" in scaffold.plugin_template
+    assert "semantic_probe_not_configured" in scaffold.plugin_template
+    assert "TODO_REPLACE_WITH_MEASUREMENT_ROW_REGEX" in scaffold.plugin_template
     assert "missing_template_markers" in scaffold.plugin_template
 
 

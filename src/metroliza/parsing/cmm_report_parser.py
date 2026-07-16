@@ -53,6 +53,7 @@ from metroliza.parsing.parser_plugin_contracts import (
     ParseResultV2,
     PluginManifest,
     ProbeContext,
+    ProbeOutcome,
     ProbeResult,
     ReportInfoV2,
 )
@@ -69,7 +70,6 @@ SUPPORTED_METADATA_PARSING_MODES = {
     METADATA_PARSING_MODE_COMPLETE,
 }
 CMM_PROBE_MAX_EXTRACTED_CHARS = 16 * 1024 * 1024
-CMM_PROBE_TEXT_CACHE_KEY = "cmm_pdf_embedded_text_v1"
 CMM_PROBE_MIN_CONFIDENCE = 80
 CMM_PROBE_HIGH_CONFIDENCE = 95
 
@@ -142,42 +142,6 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         capabilities={"ocr_required": False, "table_extraction_mode": "mixed"},
     )
 
-    @staticmethod
-    def _extract_probe_page_text(page) -> str:
-        get_text = getattr(page, "get_text", None)
-        if not callable(get_text):
-            return ""
-        try:
-            return str(get_text() or "")
-        except TypeError:
-            return str(get_text("text") or "")
-
-    @classmethod
-    def _load_pdf_text_for_inspection(cls, input_path: Path, max_chars: int) -> str:
-        """Extract bounded embedded text from every PDF page in ingestion order."""
-
-        document = None
-        try:
-            backend = _load_pdf_backend()
-            document = backend.open(str(input_path))
-            page_texts: list[str] = []
-            extracted_chars = 0
-            for page in document:
-                page_text = cls._extract_probe_page_text(page)
-                if not page_text:
-                    continue
-                extracted_chars += len(page_text) + (1 if page_texts else 0)
-                if extracted_chars > max_chars:
-                    raise ValueError(
-                        f"Embedded PDF text exceeds the {max_chars}-character inspection limit"
-                    )
-                page_texts.append(page_text)
-            return "\n".join(page_texts)
-        finally:
-            close = getattr(document, "close", None)
-            if callable(close):
-                close()
-
     @classmethod
     def _read_pdf_backend_probe_text(
         cls,
@@ -189,10 +153,8 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             source_format="pdf",
         )
         try:
-            extracted_text = inspection.get_extracted_text(
-                cache_key=CMM_PROBE_TEXT_CACHE_KEY,
+            extracted_text = inspection.get_pdf_text(
                 max_chars=CMM_PROBE_MAX_EXTRACTED_CHARS,
-                loader=cls._load_pdf_text_for_inspection,
             )
         except Exception as exc:
             detail = " ".join(str(exc).split())[:300]
@@ -264,6 +226,8 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                 can_parse=False,
                 confidence=0,
                 reasons=("unsupported_source_format",),
+                outcome=ProbeOutcome.NO_MATCH,
+                semantic_row_count=0,
             )
 
         if not path_text.lower().endswith(".pdf"):
@@ -272,6 +236,8 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                 can_parse=False,
                 confidence=0,
                 reasons=("unsupported_extension",),
+                outcome=ProbeOutcome.NO_MATCH,
+                semantic_row_count=0,
             )
 
         inspection_text, pdf_probe_issue = cls._read_pdf_backend_probe_text(
@@ -298,6 +264,8 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                     *evidence_reasons,
                 ),
                 warnings=warnings,
+                outcome=ProbeOutcome.INSPECTION_ERROR,
+                semantic_row_count=0,
             )
 
         confidence, marker_reasons = cls._score_probe_text_sample(inspection_text)
@@ -323,6 +291,8 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                     *marker_reasons,
                 ),
                 warnings=warnings,
+                outcome=ProbeOutcome.INSPECTION_ERROR,
+                semantic_row_count=0,
             )
 
         can_parse = measurement_count > 0
@@ -344,6 +314,8 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                 *marker_reasons,
             ),
             warnings=warnings,
+            outcome=ProbeOutcome.MATCH if can_parse else ProbeOutcome.NO_MATCH,
+            semantic_row_count=measurement_count,
         )
 
     @classmethod
@@ -753,8 +725,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         if source_inspection is None:
             return None
         try:
-            return source_inspection.get_cached_extracted_text(
-                cache_key=CMM_PROBE_TEXT_CACHE_KEY,
+            return source_inspection.get_cached_pdf_text(
                 max_chars=CMM_PROBE_MAX_EXTRACTED_CHARS,
             )
         except Exception:

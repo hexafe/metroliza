@@ -110,6 +110,7 @@ class SupplierAlphaReportParser(BaseReportParser, BaseReportParserPlugin):
             confidence=92,
             matched_template_id="synthetic_fixture",
             reasons=("source_format_match", "synthetic_fixture_marker"),
+            semantic_row_count=1,
         )
 
     def open_report(self):
@@ -309,7 +310,12 @@ class DemoExternalParser(BaseReportParser, BaseReportParserPlugin):
 
     @classmethod
     def probe(cls, _input_ref, _context: ProbeContext) -> ProbeResult:
-        return ProbeResult(plugin_id=cls.manifest.plugin_id, can_parse=True, confidence=75)
+        return ProbeResult(
+            plugin_id=cls.manifest.plugin_id,
+            can_parse=True,
+            confidence=75,
+            semantic_row_count=1,
+        )
 
     def open_report(self):
         self.raw_text = ["ok"]
@@ -364,7 +370,12 @@ class DemoSemanticParser(BaseReportParser, BaseReportParserPlugin):
 
     @classmethod
     def probe(cls, _input_ref, _context):
-        return ProbeResult(plugin_id="demo_semantic_script", can_parse=True, confidence=90)
+        return ProbeResult(
+            plugin_id="demo_semantic_script",
+            can_parse=True,
+            confidence=90,
+            semantic_row_count=1,
+        )
 
     def open_report(self):
         self.raw_text = ["ok"]
@@ -537,7 +548,12 @@ class SemanticMismatchParser(BaseReportParser, BaseReportParserPlugin):
 
     @classmethod
     def probe(cls, _input_ref, _context):
-        return ProbeResult(plugin_id="semantic_mismatch_script", can_parse=True, confidence=90)
+        return ProbeResult(
+            plugin_id="semantic_mismatch_script",
+            can_parse=True,
+            confidence=90,
+            semantic_row_count=1,
+        )
 
     def open_report(self):
         self.raw_text = ["ok"]

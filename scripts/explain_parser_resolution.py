@@ -58,16 +58,20 @@ def _format_values(values: tuple[str, ...]) -> str:
     return ", ".join(values) if values else "-"
 
 
-def _format_candidate(report_parser_factory, candidate) -> str:
+def _format_candidate(report_parser_factory, candidate, *, origin: str = "-") -> str:
     manifest = report_parser_factory.PARSER_MANIFESTS.get(candidate.plugin_id)
     priority = manifest.priority if manifest is not None else "?"
     supported_formats = _format_values(manifest.supported_formats) if manifest is not None else "-"
     template_id = candidate.matched_template_id or "-"
     reasons = _format_values(candidate.reasons)
     warnings = _format_values(candidate.warnings)
+    outcome = getattr(getattr(candidate, "outcome", None), "value", None) or "legacy"
+    semantic_rows = getattr(candidate, "semantic_row_count", None)
+    semantic_rows_text = "legacy" if semantic_rows is None else str(semantic_rows)
     return (
         f"- {candidate.plugin_id} | can_parse={candidate.can_parse} | confidence={candidate.confidence} | "
-        f"priority={priority} | formats={supported_formats} | template={template_id} | "
+        f"outcome={outcome} | semantic_rows={semantic_rows_text} | priority={priority} | "
+        f"origin={origin} | formats={supported_formats} | template={template_id} | "
         f"reasons={reasons} | warnings={warnings}"
     )
 
@@ -90,7 +94,10 @@ def main(argv: list[str] | None = None) -> int:
             combined_paths = args.paths if not original_env else os.pathsep.join((args.paths, original_env))
             os.environ[env_var_name] = combined_paths
 
-        diagnostics = report_parser_factory.resolve_parser_with_diagnostics(report_path)
+        try:
+            diagnostics = report_parser_factory.resolve_parser_with_diagnostics(report_path)
+        except report_parser_factory.ParserAmbiguityError as exc:
+            diagnostics = exc.diagnostics
     finally:
         if original_env is None:
             os.environ.pop(env_var_name, None)
@@ -99,14 +106,35 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Source path: {diagnostics.source_path}")
     print(f"Source format: {diagnostics.source_format}")
+    generation_id = getattr(diagnostics, "registry_generation_id", None)
+    if generation_id is not None:
+        print(f"Registry generation: {generation_id}")
     print(f"Selection threshold: {_selection_threshold()}")
     print(f"Candidates considered: {len(diagnostics.candidates_considered)}")
+
+    registration_origins = dict(getattr(diagnostics, "registration_origins", ()) or ())
+    load_errors = tuple(getattr(diagnostics, "registry_load_errors", ()) or ())
+    print(f"Registry load errors: {len(load_errors)}")
+    for load_error in load_errors:
+        print(f"- registry-load-error | {load_error}")
+
+    ambiguous_plugin_ids = tuple(
+        getattr(diagnostics, "ambiguous_plugin_ids", ()) or ()
+    )
+    if ambiguous_plugin_ids:
+        print(f"Ambiguous plugins: {', '.join(ambiguous_plugin_ids)}")
 
     if not report_path.exists():
         print(f"Warning: report file does not exist: {report_path}")
 
     for candidate in diagnostics.candidates_considered:
-        print(_format_candidate(report_parser_factory, candidate))
+        print(
+            _format_candidate(
+                report_parser_factory,
+                candidate,
+                origin=registration_origins.get(candidate.plugin_id, "unknown"),
+            )
+        )
 
     if diagnostics.selected is None:
         print("Selected: none")

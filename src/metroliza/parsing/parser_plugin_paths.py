@@ -47,8 +47,8 @@ def configured_external_plugin_path_entries(
     """Return ordered external-plugin path entries for runtime discovery.
 
     The default drop-in directory is listed first, then any explicitly configured
-    env-var entries. Later entries can override earlier ones by re-registering the
-    same plugin id.
+    env-var entries. Entries are inspected in this order; duplicate plugin ids are
+    reported as conflicts and never override an earlier registration.
     """
 
     entries: list[str] = []

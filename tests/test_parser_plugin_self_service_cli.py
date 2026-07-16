@@ -2,6 +2,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+from metroliza.parsing.pdf_backend import require_pdf_backend
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -44,6 +46,17 @@ normalization:
 """
 
 
+def _write_pdf_text(path: Path, text: str) -> None:
+    backend = require_pdf_backend()
+    document = backend.open()
+    try:
+        page = document.new_page()
+        page.insert_text((72, 72), text)
+        document.save(str(path), garbage=4, deflate=True)
+    finally:
+        document.close()
+
+
 def _write_fixture_workspace(tmp_path, *, version: str = "0.1.0", marker: str = "SUPPLIER TEMPLATE MARKER"):
     workspace = tmp_path / "workspace"
     samples = workspace / "samples"
@@ -51,7 +64,8 @@ def _write_fixture_workspace(tmp_path, *, version: str = "0.1.0", marker: str = 
     profile = workspace / "profile.yaml"
     profile.write_text(_profile_yaml(version=version, marker=marker), encoding="utf-8")
     sample = samples / "sample_report_01.pdf"
-    sample.write_text(
+    _write_pdf_text(
+        sample,
         "\n".join(
             (
                 "SUPPLIER TEMPLATE MARKER",
@@ -62,7 +76,6 @@ def _write_fixture_workspace(tmp_path, *, version: str = "0.1.0", marker: str = 
                 "",
             )
         ),
-        encoding="utf-8",
     )
     expected = workspace / "expected_results.csv"
     expected.write_text(
@@ -161,7 +174,7 @@ def test_repair_command_writes_profile_only_prompt_on_validation_failure(tmp_pat
     assert "Do not return Python code" in prompt_text
 
 
-def test_validate_and_diagnose_plain_text_pdf_profile(tmp_path, capsys):
+def test_validate_and_diagnose_real_pdf_profile(tmp_path, capsys):
     module = _load_cli_module()
     workspace, profile, sample, expected = _write_fixture_workspace(tmp_path)
 

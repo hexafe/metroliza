@@ -304,11 +304,16 @@ the normal report parsing flow:
 
 When you load a report:
 
-- Metroliza identifies the source format,
+- Metroliza uses the suffix only to identify a candidate transport format,
 - the parser factory asks only parsers whose manifest supports that format to
   `probe(...)`,
-- the best matching parser is selected automatically by confidence, then
-  priority, then plugin id.
+- each parser checks decoded report contents for its own measurement rows,
+- the best semantic match is selected by confidence and priority; unresolved
+  ambiguity is reported instead of guessing.
+
+Changing a report's file name does not change which report family it matches.
+A readable PDF with no supported measurement-row structure is skipped as
+unsupported.
 
 You do not need to edit Metroliza source code to register the new parser.
 

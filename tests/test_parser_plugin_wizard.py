@@ -6,6 +6,8 @@ from unittest.mock import patch
 
 import yaml
 
+from metroliza.parsing.pdf_backend import require_pdf_backend
+
 try:
     from PyQt6.QtWidgets import QApplication
 
@@ -26,6 +28,17 @@ except ImportError as exc:  # pragma: no cover - environment-dependent import
     PYQT_IMPORT_ERROR = exc
 else:
     PYQT_IMPORT_ERROR = None
+
+
+def _write_pdf_text(path: Path, text: str) -> None:
+    backend = require_pdf_backend()
+    document = backend.open()
+    try:
+        page = document.new_page()
+        page.insert_text((72, 72), text)
+        document.save(str(path), garbage=4, deflate=True)
+    finally:
+        document.close()
 
 
 class TestParserPluginWizard(unittest.TestCase):
@@ -125,7 +138,8 @@ class TestParserPluginWizard(unittest.TestCase):
                     (dialog.last_handoff_workspace.root / "artifacts" / "handoff_integrity.txt").is_file()
                 )
                 sample = dialog.last_handoff_workspace.root / "samples" / "sample_report_01.pdf"
-                sample.write_text(
+                _write_pdf_text(
+                    sample,
                     "\n".join(
                         (
                             "SUPPLIER TEMPLATE MARKER",
@@ -136,7 +150,6 @@ class TestParserPluginWizard(unittest.TestCase):
                             "",
                         )
                     ),
-                    encoding="utf-8",
                 )
                 dialog.last_handoff_workspace.expected_results_path.write_text(
                     "sample_file,reference,report_date,sample_number,block_index,header_normalized,"

@@ -1,6 +1,10 @@
 # Changelog (for end users)
 
 ## 2026.06 RC2 (build 260711) — current version
+- Parser selection now validates and atomically refreshes plugin generations,
+  recognizes report families from decoded measurement rows rather than file
+  names, retries transient inspection failures, and rejects ambiguous or empty
+  parser results before database writes.
 - Large Google Sheets conversions now use bounded resumable chunks, retry transient failures, and clean up created Drive files when cancellation or validation prevents a usable result.
 - Parser profile installs and reloads now publish one locked generation at a time, so concurrent imports never observe half-written profile or approval state.
 - Realtime dashboard refreshes now read one consistent SQLite snapshot, batch related lookups, bound timeline rows before joins, reject stale source-health updates, and preserve intentionally cleared context or segment fields.

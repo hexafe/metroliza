@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from metroliza.parsing.cmm_report_parser import CMMReportParser, EmptyCMMReportError
+from metroliza.parsing.cmm_report_parser import EmptyCMMReportError
 from metroliza.parsing.parse_reports_thread import enrich_report_metadata, parse_new_reports
 from metroliza.parsing.pdf_backend import require_pdf_backend
 from metroliza.parsing.report_parser_factory import (
@@ -13,6 +13,7 @@ from metroliza.parsing.report_parser_factory import (
     get_parser,
     reset_probe_cache,
 )
+from metroliza.parsing.source_inspection import SourceInspectionContext
 from metroliza.ui.parsing_dialog import ParsingDialog
 
 
@@ -123,13 +124,13 @@ def test_batch_counts_content_inspection_errors_as_failures(tmp_path, monkeypatc
     database = tmp_path / "reports.sqlite3"
     failures = []
 
-    def fail_inspection(_path, _max_chars):
+    def fail_inspection(_self, *, max_chars):
         raise OSError("simulated PDF read failure")
 
     monkeypatch.setattr(
-        CMMReportParser,
-        "_load_pdf_text_for_inspection",
-        staticmethod(fail_inspection),
+        SourceInspectionContext,
+        "get_pdf_text",
+        fail_inspection,
     )
     reset_probe_cache()
 

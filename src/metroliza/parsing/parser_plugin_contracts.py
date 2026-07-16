@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -29,9 +30,23 @@ class PluginManifest:
     capabilities: dict[str, Any] = field(default_factory=dict)
 
 
+class ProbeOutcome(str, Enum):
+    """Typed outcome of source inspection performed by a parser probe."""
+
+    MATCH = "match"
+    NO_MATCH = "no_match"
+    INSPECTION_ERROR = "inspection_error"
+
+
 @dataclass(frozen=True)
 class ProbeResult:
-    """Detection result returned by plugin probes."""
+    """Detection result returned by plugin probes.
+
+    ``can_parse`` remains the compatibility field consumed by older plugins.  New
+    probes should also set ``outcome`` and may report how many semantic data rows
+    they recognized.  Results constructed through the old API receive a typed
+    outcome automatically.
+    """
 
     plugin_id: str
     can_parse: bool
@@ -39,6 +54,30 @@ class ProbeResult:
     matched_template_id: str | None = None
     reasons: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
+    outcome: ProbeOutcome | None = None
+    semantic_row_count: int | None = None
+
+    def __post_init__(self) -> None:
+        """Infer new fields for legacy probe implementations."""
+
+        outcome = self.outcome
+        if outcome is None:
+            outcome = ProbeOutcome.MATCH if self.can_parse else ProbeOutcome.NO_MATCH
+        elif not isinstance(outcome, ProbeOutcome):
+            try:
+                outcome = ProbeOutcome(str(outcome))
+            except ValueError as exc:
+                raise ValueError(f"Unsupported probe outcome: {self.outcome!r}") from exc
+        object.__setattr__(self, "outcome", outcome)
+
+        if self.semantic_row_count is not None:
+            try:
+                semantic_row_count = int(self.semantic_row_count)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("semantic_row_count must be an integer or None") from exc
+            if semantic_row_count < 0:
+                raise ValueError("semantic_row_count must be non-negative")
+            object.__setattr__(self, "semantic_row_count", semantic_row_count)
 
 
 @dataclass(frozen=True)

@@ -2,7 +2,11 @@ import json
 
 import pytest
 
-from metroliza.parsing.parse_result_v2_persistence import build_persistence_payload
+from metroliza.parsing.parse_result_v2_persistence import (
+    EmptyParseResultError,
+    ParseResultContractError,
+    build_persistence_payload,
+)
 from metroliza.parsing.parser_plugin_contracts import (
     MeasurementBlockV2,
     MeasurementV2,
@@ -21,13 +25,16 @@ def _parse_result(
     errors=(),
     template_id=None,
     confidence=120,
+    plugin_id="supplier_alpha",
+    plugin_version="0.1.0",
+    source_format="csv",
 ):
     return ParseResultV2(
         meta=ParseMetaV2(
             source_file="sample.csv",
-            source_format="csv",
-            plugin_id="supplier_alpha",
-            plugin_version="0.1.0",
+            source_format=source_format,
+            plugin_id=plugin_id,
+            plugin_version=plugin_version,
             template_id=template_id,
             parse_timestamp="2026-06-11T10:00:00Z",
             locale_detected="en-US",
@@ -110,28 +117,220 @@ def test_parse_result_v2_payload_maps_warnings_and_measurement_statuses():
     assert payload.raw_report_json["source"] == "ParseResultV2"
 
 
-def test_parse_result_v2_payload_uses_manifest_template_fallback_and_allows_no_measurements():
+def test_parse_result_v2_payload_rejects_no_measurements_before_persistence():
     manifest = type(
         "Manifest",
         (),
         {
-            "plugin_id": "manifest_supplier",
+            "plugin_id": "supplier_alpha",
+            "supported_formats": ("csv",),
             "template_ids": ("fallback_template",),
         },
     )()
     parse_result = _parse_result(blocks=(), confidence=-5)
 
-    payload = build_persistence_payload(
-        parse_result,
-        source_path="/tmp/sample.csv",
-        manifest=manifest,
+    with pytest.raises(EmptyParseResultError, match="no persistable measurements"):
+        build_persistence_payload(
+            parse_result,
+            source_path="/tmp/sample.csv",
+            manifest=manifest,
+        )
+
+
+def test_parse_result_v2_payload_rejects_selected_plugin_identity_mismatch():
+    manifest = type(
+        "Manifest",
+        (),
+        {
+            "plugin_id": "another_supplier",
+            "supported_formats": ("csv",),
+            "template_ids": (),
+        },
+    )()
+    parse_result = _parse_result(
+        blocks=(
+            MeasurementBlockV2(
+                header_raw=("Length",),
+                header_normalized="Length",
+                block_index=0,
+                dimensions=(
+                    MeasurementV2(
+                        axis_code="X",
+                        nominal=1.0,
+                        tol_plus=0.1,
+                        tol_minus=-0.1,
+                        bonus=None,
+                        measured=1.0,
+                        deviation=0.0,
+                        out_of_tolerance=0.0,
+                    ),
+                ),
+            ),
+        ),
     )
 
-    assert payload.parse_status == "parsed"
-    assert payload.measurement_count == 0
-    assert payload.has_nok is False
-    assert payload.metadata.metadata_confidence == 0.0
-    assert payload.metadata.template_family == "fallback_template"
+    with pytest.raises(ParseResultContractError, match="plugin_id does not match"):
+        build_persistence_payload(
+            parse_result,
+            source_path="/tmp/sample.csv",
+            manifest=manifest,
+        )
+
+
+def test_parse_result_v2_payload_rejects_non_normalized_plugin_identity():
+    manifest = type(
+        "Manifest",
+        (),
+        {
+            "plugin_id": "supplier_alpha",
+            "version": "0.1.0",
+            "supported_formats": ("csv",),
+            "template_ids": (),
+        },
+    )()
+    parse_result = _parse_result(
+        plugin_id="supplier_alpha ",
+        blocks=(
+            MeasurementBlockV2(
+                header_raw=("Length",),
+                header_normalized="Length",
+                block_index=0,
+                dimensions=(
+                    MeasurementV2(
+                        axis_code="X",
+                        nominal=1.0,
+                        tol_plus=0.1,
+                        tol_minus=-0.1,
+                        bonus=None,
+                        measured=1.0,
+                        deviation=0.0,
+                        out_of_tolerance=0.0,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    with pytest.raises(ParseResultContractError, match="plugin_id must be normalized"):
+        build_persistence_payload(
+            parse_result,
+            source_path="/tmp/sample.csv",
+            manifest=manifest,
+        )
+
+
+@pytest.mark.parametrize("plugin_version", ["", "0.2.0", "0.1.0 "])
+def test_parse_result_v2_payload_rejects_invalid_plugin_version(plugin_version):
+    manifest = type(
+        "Manifest",
+        (),
+        {
+            "plugin_id": "supplier_alpha",
+            "version": "0.1.0",
+            "supported_formats": ("csv",),
+            "template_ids": (),
+        },
+    )()
+    parse_result = _parse_result(
+        plugin_version=plugin_version,
+        blocks=(
+            MeasurementBlockV2(
+                header_raw=("Length",),
+                header_normalized="Length",
+                block_index=0,
+                dimensions=(
+                    MeasurementV2(
+                        axis_code="X",
+                        nominal=1.0,
+                        tol_plus=0.1,
+                        tol_minus=-0.1,
+                        bonus=None,
+                        measured=1.0,
+                        deviation=0.0,
+                        out_of_tolerance=0.0,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    with pytest.raises(ParseResultContractError, match="plugin_version"):
+        build_persistence_payload(
+            parse_result,
+            source_path="/tmp/sample.csv",
+            manifest=manifest,
+        )
+
+
+def test_parse_result_v2_payload_rejects_selected_source_format_mismatch():
+    manifest = type(
+        "Manifest",
+        (),
+        {
+            "plugin_id": "supplier_alpha",
+            "supported_formats": ("pdf",),
+            "template_ids": (),
+        },
+    )()
+    parse_result = _parse_result(
+        blocks=(
+            MeasurementBlockV2(
+                header_raw=("Length",),
+                header_normalized="Length",
+                block_index=0,
+                dimensions=(
+                    MeasurementV2(
+                        axis_code="X",
+                        nominal=1.0,
+                        tol_plus=0.1,
+                        tol_minus=-0.1,
+                        bonus=None,
+                        measured=1.0,
+                        deviation=0.0,
+                        out_of_tolerance=0.0,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    with pytest.raises(ParseResultContractError, match="source_format is not supported"):
+        build_persistence_payload(
+            parse_result,
+            source_path="/tmp/sample.csv",
+            manifest=manifest,
+        )
+
+
+def test_parse_result_v2_payload_rejects_inspected_source_format_mismatch():
+    parse_result = _parse_result(
+        blocks=(
+            MeasurementBlockV2(
+                header_raw=("Length",),
+                header_normalized="Length",
+                block_index=0,
+                dimensions=(
+                    MeasurementV2(
+                        axis_code="X",
+                        nominal=1.0,
+                        tol_plus=0.1,
+                        tol_minus=-0.1,
+                        bonus=None,
+                        measured=1.0,
+                        deviation=0.0,
+                        out_of_tolerance=0.0,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    with pytest.raises(ParseResultContractError, match="does not match the inspected source"):
+        build_persistence_payload(
+            parse_result,
+            source_path="/tmp/sample.pdf",
+            expected_source_format="pdf",
+        )
 
 
 def test_parse_result_v2_payload_rejects_blocking_parser_errors():

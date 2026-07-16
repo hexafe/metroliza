@@ -126,16 +126,17 @@ class TestParseHelpers(unittest.TestCase):
         import modules.parse_reports_thread as parse_thread_module
 
         factory = parse_thread_module.report_parser_factory
-        original_manifests = dict(factory.PARSER_MANIFESTS)
-        original_load_external_plugins = factory.load_external_plugins
+        original_get_registry_snapshot = factory.get_registry_snapshot
+        manifest = PluginManifest(
+            plugin_id="csv_excel_test",
+            display_name="CSV Excel Test",
+            version="0.1.0",
+            supported_formats=("csv", "excel"),
+        )
         try:
-            factory.PARSER_MANIFESTS["csv_excel_test"] = PluginManifest(
-                plugin_id="csv_excel_test",
-                display_name="CSV Excel Test",
-                version="0.1.0",
-                supported_formats=("csv", "excel"),
+            factory.get_registry_snapshot = lambda: types.SimpleNamespace(
+                registrations=(types.SimpleNamespace(manifest=manifest),),
             )
-            factory.load_external_plugins = lambda *_args, **_kwargs: None
             with tempfile.TemporaryDirectory() as tmpdir:
                 root = Path(tmpdir)
                 for name, contents in (
@@ -156,9 +157,7 @@ class TestParseHelpers(unittest.TestCase):
                 {"one.pdf", "two.csv", "three.xlsx", "four.xls"},
             )
         finally:
-            factory.PARSER_MANIFESTS.clear()
-            factory.PARSER_MANIFESTS.update(original_manifests)
-            factory.load_external_plugins = original_load_external_plugins
+            factory.get_registry_snapshot = original_get_registry_snapshot
 
 
 

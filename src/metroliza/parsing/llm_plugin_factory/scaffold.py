@@ -190,6 +190,11 @@ class PluginManifest:
     priority: int = 100
     capabilities: dict[str, Any] = field(default_factory=dict)
 
+class ProbeOutcome(str, Enum):
+    MATCH = "match"
+    NO_MATCH = "no_match"
+    INSPECTION_ERROR = "inspection_error"
+
 @dataclass(frozen=True)
 class ProbeResult:
     plugin_id: str
@@ -198,6 +203,8 @@ class ProbeResult:
     matched_template_id: str | None = None
     reasons: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
+    outcome: ProbeOutcome | None = None
+    semantic_row_count: int | None = None
 
 @dataclass(frozen=True)
 class ParseMetaV2:
@@ -287,17 +294,19 @@ class GeneratedParser(BaseReportParser, BaseReportParserPlugin):
 Metroliza selects one parser before parsing a report.
 
 ## Probe behavior
-- `probe(...)` must be cheap: inspect suffix, short text snippets, workbook sheet names, or stable markers.
-- Return `can_parse=False` with confidence `0` for unsupported formats or missing required markers.
-- Return confidence `80-100` only when the parser has strong template evidence.
+- `probe(...)` must be bounded and inspect decoded source contents, never the file name.
+- Return `outcome=NO_MATCH`, `can_parse=False`, and confidence `0` for unsupported content.
+- Return `outcome=INSPECTION_ERROR` when the source container cannot be decoded reliably.
+- Return confidence `80-100` only after at least one row matches the parser's measurement grammar.
 - Return confidence below `80` for weak matches; strict runtime selection rejects those by default.
-- Do not read or parse the whole report in `probe(...)` unless the source format makes that unavoidable.
+- Report the bounded preflight count in `semantic_row_count`.
 
 ## Selection order
-1. Source format is inferred from file suffix.
+1. Source format from the suffix is a transport prefilter only.
 2. Only plugins whose manifest supports that source format are considered.
-3. Candidates are sorted by confidence, then manifest priority, then plugin id.
-4. Strict matching requires confidence >= 80 by default.
+3. Semantic candidates rank before legacy lexical candidates, then by confidence and priority.
+4. A remaining tie is rejected as ambiguous instead of being decided by plugin id.
+5. Strict matching requires confidence >= 80 by default.
 
 ## Manifest guidance for `{{PLUGIN_ID}}`
 - `plugin_id`: `{{PLUGIN_ID}}`
@@ -529,8 +538,9 @@ Hard constraints:
 - plugin id: `{{PLUGIN_ID}}`
 - source format: `{{SOURCE_FORMAT}}`
 - return `ProbeResult`
-- confidence must be 80-100 only for strong template evidence
-- do not parse the whole report in `probe(...)` unless unavoidable
+- confidence must be 80-100 only after bounded measurement-row evidence
+- report `semantic_row_count` and a typed outcome
+- never use the file name as report-family evidence
 """,
             "prompts/microtasks/03_parser_implementation.md": """# Task 3 - Write Source Extraction
 
@@ -710,7 +720,8 @@ def build_plugin_scaffold() -> PluginScaffoldArtifacts:
             "- Keep parsing deterministic.\n"
             "- Preserve the requested `plugin_id` and supported format.\n"
             "- Set the manifest fields explicitly: `plugin_id`, `display_name`, `supported_formats`, `supported_locales`, `template_ids`, `priority`, and `capabilities`.\n"
-            "- Make `probe(...)` cheap and specific enough to participate in runtime selection without false positives.\n"
+            "- Make `probe(...)` bounded and require at least one measurement-row match before returning MATCH.\n"
+            "- Report a typed probe outcome and `semantic_row_count`; never use the file name as family evidence.\n"
             "- Replace scaffold TODO template markers with text, sheet names, or header labels visible in every intended supplier sample.\n"
             "- Use `ParseResultV2` and nested dataclasses from `metroliza.parsing.parser_plugin_contracts`.\n"
             "- Use only stdlib plus imports already present in the approved scaffold.\n"
@@ -722,6 +733,7 @@ def build_plugin_scaffold() -> PluginScaffoldArtifacts:
         plugin_template=(
             "from __future__ import annotations\n\n"
             "from pathlib import Path\n"
+            "import re\n"
             "from time import strftime\n\n"
             "from metroliza.parsing.base_report_parser import BaseReportParser\n"
             "from metroliza.parsing.parser_plugin_contracts import (\n"
@@ -732,9 +744,11 @@ def build_plugin_scaffold() -> PluginScaffoldArtifacts:
             "    ParseResultV2,\n"
             "    PluginManifest,\n"
             "    ProbeContext,\n"
+            "    ProbeOutcome,\n"
             "    ProbeResult,\n"
             "    ReportInfoV2,\n"
-            ")\n\n\n"
+            ")\n"
+            "from metroliza.parsing.source_inspection import SourceInspectionContext\n\n\n"
             "class {{CLASS_NAME}}(BaseReportParser, BaseReportParserPlugin):\n"
             "    manifest = PluginManifest(\n"
             "        plugin_id=\"{{PLUGIN_ID}}\",\n"
@@ -755,42 +769,73 @@ def build_plugin_scaffold() -> PluginScaffoldArtifacts:
             "                can_parse=False,\n"
             "                confidence=0,\n"
             "                reasons=(\"unsupported_source_format\",),\n"
-            "            )\n"
-            "        if not source_format and not str(input_ref).lower().endswith(\".{{FILE_EXTENSION}}\"):\n"
-            "            return ProbeResult(\n"
-            "                plugin_id=cls.manifest.plugin_id,\n"
-            "                can_parse=False,\n"
-            "                confidence=0,\n"
-            "                reasons=(\"unsupported_extension\",),\n"
+            "                outcome=ProbeOutcome.NO_MATCH,\n"
+            "                semantic_row_count=0,\n"
             "            )\n\n"
-            "        # Replace this placeholder tuple with supplier-specific markers before installation.\n"
+            "        # Replace these placeholders with content evidence before installation.\n"
             "        required_markers = (\"TODO_REPLACE_WITH_SUPPLIER_TEMPLATE_MARKER\",)\n"
-            "        if any(marker.startswith(\"TODO_\") for marker in required_markers):\n"
+            "        measurement_row_pattern = r\"TODO_REPLACE_WITH_MEASUREMENT_ROW_REGEX\"\n"
+            "        if any(marker.startswith(\"TODO_\") for marker in required_markers) or measurement_row_pattern.startswith(\"TODO_\"):\n"
             "            return ProbeResult(\n"
             "                plugin_id=cls.manifest.plugin_id,\n"
             "                can_parse=False,\n"
             "                confidence=0,\n"
-            "                reasons=(\"template_markers_not_configured\",),\n"
+            "                reasons=(\"semantic_probe_not_configured\",),\n"
+            "                outcome=ProbeOutcome.NO_MATCH,\n"
+            "                semantic_row_count=0,\n"
             "            )\n\n"
+            "        inspection = context.source_inspection or SourceInspectionContext.from_path(\n"
+            "            input_ref, source_format=source_format or \"{{SOURCE_FORMAT}}\"\n"
+            "        )\n"
             "        try:\n"
-            "            sample_text = Path(input_ref).read_text(encoding=\"utf-8\", errors=\"ignore\")[:20000].casefold()\n"
-            "        except OSError:\n"
-            "            sample_text = \"\"\n"
-            "        missing_markers = tuple(marker for marker in required_markers if marker.casefold() not in sample_text)\n"
-            "        if not missing_markers:\n"
+            "            if (source_format or \"{{SOURCE_FORMAT}}\") == \"pdf\":\n"
+            "                sample_text = inspection.get_pdf_text(max_chars=2_000_000)\n"
+            "            elif (source_format or \"{{SOURCE_FORMAT}}\") == \"csv\":\n"
+            "                sample_text = Path(input_ref).read_text(encoding=\"utf-8\", errors=\"strict\")\n"
+            "                if len(sample_text) > 2_000_000:\n"
+            "                    raise ValueError(\"decoded source exceeds the semantic probe limit\")\n"
+            "            else:\n"
+            "                return ProbeResult(\n"
+            "                    plugin_id=cls.manifest.plugin_id,\n"
+            "                    can_parse=False,\n"
+            "                    confidence=0,\n"
+            "                    reasons=(\"source_reader_not_configured\",),\n"
+            "                    outcome=ProbeOutcome.NO_MATCH,\n"
+            "                    semantic_row_count=0,\n"
+            "                )\n"
+            "        except Exception as exc:\n"
+            "            return ProbeResult(\n"
+            "                plugin_id=cls.manifest.plugin_id,\n"
+            "                can_parse=False,\n"
+            "                confidence=0,\n"
+            "                reasons=(\"content_inspection_failed\",),\n"
+            "                warnings=(f\"{type(exc).__name__}: {exc}\",),\n"
+            "                outcome=ProbeOutcome.INSPECTION_ERROR,\n"
+            "                semantic_row_count=0,\n"
+            "            )\n"
+            "        normalized_text = sample_text.casefold()\n"
+            "        missing_markers = tuple(marker for marker in required_markers if marker.casefold() not in normalized_text)\n"
+            "        semantic_row_count = sum(\n"
+            "            1 for line in sample_text.splitlines() if re.match(measurement_row_pattern, line)\n"
+            "        )\n"
+            "        if not missing_markers and semantic_row_count > 0:\n"
             "            return ProbeResult(\n"
             "                plugin_id=cls.manifest.plugin_id,\n"
             "                can_parse=True,\n"
             "                confidence=85,\n"
             "                matched_template_id=\"default\",\n"
-            "                reasons=(\"source_format_match\", \"template_markers\"),\n"
+            "                reasons=(\"template_markers\", \"semantic_measurements\"),\n"
+            "                outcome=ProbeOutcome.MATCH,\n"
+            "                semantic_row_count=semantic_row_count,\n"
             "            )\n"
             "        return ProbeResult(\n"
             "            plugin_id=cls.manifest.plugin_id,\n"
             "            can_parse=False,\n"
             "            confidence=0,\n"
-            "            reasons=(\"missing_template_markers\",),\n"
+            "            reasons=(\"missing_template_markers\" if missing_markers else \"no_semantic_measurements\",),\n"
             "            warnings=missing_markers,\n"
+            "            outcome=ProbeOutcome.NO_MATCH,\n"
+            "            semantic_row_count=0,\n"
             "        )\n\n"
             "    def open_report(self):\n"
             "        \"\"\"Populate `raw_text` from the source file deterministically.\"\"\"\n"
@@ -952,10 +997,10 @@ python scripts/explain_parser_resolution.py samples/{{SAMPLE_FILE_NAME}} --paths
 - Advanced override: `PARSER_EXTERNAL_PLUGIN_PATHS` can still point to extra plugin files or folders.
 
 ## How selection works
-- Metroliza infers the source format from the file suffix first.
+- Metroliza uses the file suffix only as a transport prefilter.
 - The factory only asks plugins whose manifests declare that format in `supported_formats`.
-- Each candidate is probed with the source path and a probe context.
-- The winner is the highest-confidence parseable plugin, then the highest manifest `priority`, then `plugin_id`.
+- Each candidate inspects decoded content through the shared probe context and must recognize measurement rows.
+- Semantic matches rank before legacy matches, then by confidence and manifest `priority`; an unresolved tie is rejected as ambiguous.
 - Strict matching requires confidence >= 80 by default. If confidence is too weak, the resolver rejects the report instead of guessing.
 
 ## Human approval checklist

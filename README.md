@@ -185,9 +185,10 @@ python -m maturin build --locked --manifest-path src/metroliza/native/chart_rend
 ## Parser plugin resolver controls
 
 - End-user drop-in folder: Metroliza automatically discovers parser plugins placed in `~/.metroliza/parser_plugins/`.
-- Default selection is strict and accepts parser probes only with confidence `>=80`; ties are resolved by confidence, plugin priority, then plugin id.
-- To relax selection temporarily, set `PARSER_STRICT_MATCHING=false`.
-- Probe results are cached per plugin/path during process runtime to reduce repeated probe work in batch parses.
+- File suffixes admit a transport candidate; report-family recognition comes from decoded content and semantic measurement-row evidence.
+- Default selection is strict and accepts parser probes only with confidence `>=80`. Set `PARSER_STRICT_MATCHING=false` only for compatibility testing that needs the legacy `>=1` threshold.
+- Semantic matches rank ahead of legacy probes, then by confidence and plugin priority. An unresolved tie is rejected as ambiguous instead of being decided by a plugin id or file name.
+- Match and no-match probes are cached by source content and registry generation. Inspection errors remain retryable.
 - Normal report import discovers parser-supported `.pdf`, `.csv`, `.xlsx`, and `.xls` files, so approved CSV/Excel declarative profiles feed the same SQLite, CSV Summary, export, and dashboard path as PDF parsers.
 - Advanced override: `PARSER_EXTERNAL_PLUGIN_PATHS` can point to extra plugin files or directories.
 - Active parser plugin onboarding docs live under [`docs/parser_plugins/README.md`](docs/parser_plugins/README.md).
