@@ -1,275 +1,242 @@
+from __future__ import annotations
+
+import shutil
+
 import pytest
 
-from metroliza.parsing import cmm_report_parser
 from metroliza.parsing.cmm_report_parser import CMMReportParser
 from metroliza.parsing.pdf_backend import require_pdf_backend
 from metroliza.parsing.parser_plugin_contracts import ProbeContext, ProbeResult
-from metroliza.reports import report_parser_factory
+from metroliza.parsing.report_parser_factory import (
+    ParserInspectionError,
+    UnsupportedReportFormatError,
+    get_parser,
+    reset_probe_cache,
+    resolve_parser_with_diagnostics,
+)
+from metroliza.parsing.source_inspection import SourceInspectionContext
 
 
-def _pdf_context(path):
-    return ProbeContext(source_path=str(path), source_format="pdf")
+def _pdf_context(path, *, source_inspection=None):
+    return ProbeContext(
+        source_path=str(path),
+        source_format="pdf",
+        source_inspection=source_inspection,
+    )
 
 
-def _write_encoded_cmm_pdf(path):
+def _write_pdf(path, *page_texts):
     backend = require_pdf_backend()
     document = backend.open()
     try:
-        page = document.new_page()
-        page.insert_text(
-            (72, 72),
-            "CMM REPORT\n"
-            "REFERENCE: REF01\n"
-            "DATE: 2026-06-23\n"
-            "PART NAME: BRACKET\n"
-            "MEASUREMENT MADE BY: CMM OPERATOR A\n"
-            "NOMINAL TOL MEASURED DEVIATION OUTTOL\n"
-            "X NOMINAL 10 +TOL 0.1 ACT 10.02 DEV 0.02 OUTTOL 0",
-        )
+        for text in page_texts:
+            page = document.new_page()
+            page.insert_text((72, 72), text)
         document.save(str(path), garbage=4, deflate=True)
     finally:
         document.close()
     return path
 
 
-def _write_near_threshold_cmm_marker_pdf(path):
-    path.write_text(
-        "%PDF-1.4\n"
+def _valid_cmm_text(*, title="CMM REPORT"):
+    return (
+        f"{title}\n"
+        "REFERENCE: REF01\n"
+        "DATE: 2026-06-23\n"
+        "#FEATURE 1\n"
+        "DIM\n"
+        "X 10 0.2 -0.2 10.1 0.1 0\n"
+    )
+
+
+def _marker_heavy_non_cmm_text():
+    return (
+        "CMM REPORT\n"
+        "REFERENCE: REF01\n"
+        "DATE: 2026-06-23\n"
+        "PART NAME: BRACKET\n"
+        "MEASUREMENT MADE BY: OPERATOR\n"
         "NOMINAL TOL MEASURED DEVIATION OUTTOL BONUS\n"
         "X NOMINAL 10 +TOL 0.2 TOL -0.2 ACT 10.1 DEV 0.1 OUT 0 BONUS 0\n"
-        "%%EOF\n",
-        encoding="utf-8",
     )
-    return path
 
 
-def test_cmm_probe_does_not_give_generic_pdf_full_confidence(tmp_path):
-    generic_pdf = tmp_path / "generic.pdf"
-    generic_pdf.write_text(
-        "%PDF-1.4\n"
-        "1 0 obj\n"
-        "<< /Type /Catalog >>\n"
-        "endobj\n"
-        "%%EOF\n",
-        encoding="utf-8",
-    )
+def test_cmm_probe_rejects_generic_pdf_without_canonical_measurements(tmp_path):
+    generic_pdf = _write_pdf(tmp_path / "generic.pdf", "Generic production report\n")
 
     probe = CMMReportParser.probe(generic_pdf, _pdf_context(generic_pdf))
 
     assert isinstance(probe, ProbeResult)
     assert probe.plugin_id == "cmm"
-    assert probe.confidence < 100
-    assert probe.confidence < 80 or probe.can_parse is False
+    assert probe.can_parse is False
+    assert probe.confidence == 0
+    assert "no_canonical_measurements" in probe.reasons
 
 
-def test_cmm_probe_detects_cmm_like_synthetic_pdf_text(tmp_path):
-    cmm_pdf = tmp_path / "synthetic_cmm.pdf"
-    cmm_pdf.write_text(
-        "%PDF-1.4\n"
-        "#TOKEN LABELS\n"
-        "DIM\n"
-        "X NOMINAL 10 +TOL 0.2 TOL -0.2 ACT 10.1 DEV 0.1 OUT 0\n"
-        "TP MMC NOM: 0 +TOL: 0.3 BONUS 0.05 MEAS 0.12 DEV 0.12 OUTTOL 0\n"
-        "%%EOF\n",
-        encoding="utf-8",
-    )
+def test_cmm_probe_accepts_content_with_a_canonical_measurement(tmp_path):
+    cmm_pdf = _write_pdf(tmp_path / "anything.pdf", _valid_cmm_text())
 
     probe = CMMReportParser.probe(cmm_pdf, _pdf_context(cmm_pdf))
 
     assert probe.can_parse is True
     assert probe.confidence >= 80
     assert probe.matched_template_id == "default"
-    assert "axis_value_marker" in probe.reasons
+    assert "canonical_measurements" in probe.reasons
+    assert "pdf_backend_text_probe" in probe.reasons
 
 
-def test_cmm_probe_uses_pdf_text_when_raw_pdf_bytes_hide_markers(tmp_path):
-    cmm_pdf = _write_encoded_cmm_pdf(tmp_path / "encoded_cmm.pdf")
+def test_cmm_probe_uses_decoded_pdf_text_when_raw_bytes_hide_content(tmp_path):
+    cmm_pdf = _write_pdf(tmp_path / "encoded.pdf", _valid_cmm_text())
 
-    raw_probe_sample = cmm_pdf.read_bytes()[:65536].upper()
-    assert b"CMM REPORT" not in raw_probe_sample
+    assert b"CMM REPORT" not in cmm_pdf.read_bytes()[:65536].upper()
 
     probe = CMMReportParser.probe(cmm_pdf, _pdf_context(cmm_pdf))
 
     assert probe.can_parse is True
-    assert probe.confidence >= 80
-    assert probe.matched_template_id == "default"
     assert "pdf_backend_text_probe" in probe.reasons
     assert "strong_cmm_marker" in probe.reasons
 
 
-def test_cmm_resolver_selects_encoded_cmm_pdf(tmp_path):
-    cmm_pdf = _write_encoded_cmm_pdf(tmp_path / "encoded_cmm.pdf")
-    report_parser_factory.reset_probe_cache()
+def test_cmm_resolver_selects_semantically_valid_pdf(tmp_path):
+    cmm_pdf = _write_pdf(tmp_path / "encoded.pdf", _valid_cmm_text())
+    reset_probe_cache()
 
-    diagnostics = report_parser_factory.resolve_parser_with_diagnostics(cmm_pdf)
+    diagnostics = resolve_parser_with_diagnostics(cmm_pdf)
 
     assert diagnostics.selected is not None
     assert diagnostics.selected.plugin_id == "cmm"
     assert diagnostics.selected.confidence >= 80
-    assert "pdf_backend_text_probe" in diagnostics.selected.reasons
-    assert report_parser_factory.detect_format(cmm_pdf) == "cmm"
-    assert report_parser_factory.get_parser(cmm_pdf, database=":memory:").__class__.__name__ == "CMMReportParser"
+    assert get_parser(cmm_pdf, database=":memory:").__class__ is CMMReportParser
 
 
-def test_cmm_probe_treats_extension_only_pdf_as_low_confidence_or_unsupported(tmp_path):
-    extension_only_pdf = tmp_path / "extension_only.pdf"
+def test_identical_pdf_bytes_resolve_identically_under_arbitrary_filenames(tmp_path):
+    original = _write_pdf(tmp_path / "default.pdf", _valid_cmm_text())
+    renamed_paths = [
+        tmp_path / "VSPC015888_2017.05.22_01.PDF",
+        tmp_path / "unrelated_G.pdf",
+        tmp_path / "plain-name.pdf",
+    ]
+    for renamed in renamed_paths:
+        shutil.copyfile(original, renamed)
 
-    probe = CMMReportParser.probe(extension_only_pdf, _pdf_context(extension_only_pdf))
+    reset_probe_cache()
+    probes = [CMMReportParser.probe(path, _pdf_context(path)) for path in renamed_paths]
+    selected = [resolve_parser_with_diagnostics(path).selected for path in renamed_paths]
 
-    assert probe.confidence < 80
+    assert probes[1:] == probes[:-1]
+    assert all(candidate is not None for candidate in selected)
+    assert [candidate.plugin_id for candidate in selected] == ["cmm", "cmm", "cmm"]
+    assert len({candidate.confidence for candidate in selected}) == 1
+
+
+@pytest.mark.parametrize("strict_matching", ["true", "false"])
+def test_marker_heavy_pdf_without_canonical_rows_is_rejected_in_every_mode(
+    tmp_path,
+    monkeypatch,
+    strict_matching,
+):
+    report = _write_pdf(tmp_path / "supplier_2026.07.16_01.pdf", _marker_heavy_non_cmm_text())
+    monkeypatch.setenv("PARSER_STRICT_MATCHING", strict_matching)
+    reset_probe_cache()
+
+    probe = CMMReportParser.probe(report, _pdf_context(report))
+    diagnostics = resolve_parser_with_diagnostics(report)
+
+    assert "strong_cmm_marker" in probe.reasons
+    assert "no_canonical_measurements" in probe.reasons
     assert probe.can_parse is False
+    assert probe.confidence == 0
+    assert diagnostics.selected is None
+    assert diagnostics.rejected_reason == "no_plugin_can_parse"
+    with pytest.raises(UnsupportedReportFormatError) as exc_info:
+        get_parser(report, database=":memory:")
+    assert exc_info.value.diagnostics.selected is None
 
 
-def test_cmm_probe_does_not_use_full_pdf_backend(tmp_path, monkeypatch):
-    cmm_pdf = tmp_path / "synthetic_cmm.pdf"
-    cmm_pdf.write_text(
-        "%PDF-1.4\n"
-        "#TOKEN LABELS\n"
-        "DIM\n"
-        "X NOMINAL 10 +TOL 0.2 TOL -0.2 ACT 10.1 DEV 0.1 OUT 0\n"
-        "%%EOF\n",
-        encoding="utf-8",
+def test_probe_scans_all_pages_before_classifying_report(tmp_path):
+    report = _write_pdf(
+        tmp_path / "multipage.pdf",
+        "Supplier report title page\nNo measurements on this page\n",
+        _valid_cmm_text(title="MEASUREMENT RESULTS"),
     )
 
-    def fail_pdf_backend(*_args, **_kwargs):
-        raise AssertionError("probe must not invoke the PDF parser backend")
+    diagnostics = resolve_parser_with_diagnostics(report)
 
-    monkeypatch.setattr(cmm_report_parser, "_load_pdf_backend", fail_pdf_backend)
-    monkeypatch.setattr(cmm_report_parser, "require_pdf_backend", fail_pdf_backend)
-
-    probe = CMMReportParser.probe(cmm_pdf, _pdf_context(cmm_pdf))
-
-    assert probe.can_parse is True
-    assert probe.confidence >= 80
-
-
-def test_cmm_probe_accepts_dotted_report_date_filename_with_measurement_markers(tmp_path):
-    cmm_pdf = tmp_path / "VSPC015888_throttle_body_DV5R_2017.05.22_01.PDF"
-    cmm_pdf.write_text(
-        "%PDF-1.4\n"
-        "NOMINAL TOL MEASURED DEVIATION OUTTOL BONUS\n"
-        "X NOMINAL 10 +TOL 0.2 TOL -0.2 ACT 10.1 DEV 0.1 OUT 0 BONUS 0\n"
-        "%%EOF\n",
-        encoding="utf-8",
-    )
-
-    probe = CMMReportParser.probe(cmm_pdf, _pdf_context(cmm_pdf))
-
-    assert probe.can_parse is True
-    assert probe.confidence >= 80
-    assert "cmm_identity_filename_pattern" in probe.reasons
-    assert "partial_cmm_markers" not in probe.reasons
-    report_parser_factory.reset_probe_cache()
-    diagnostics = report_parser_factory.resolve_parser_with_diagnostics(cmm_pdf)
     assert diagnostics.selected is not None
     assert diagnostics.selected.plugin_id == "cmm"
+    assert "canonical_measurements" in diagnostics.selected.reasons
 
 
-def test_cmm_probe_accepts_supplier_reference_date_filename_without_sample_suffix(tmp_path):
-    cmm_pdf = tmp_path / "04L_128_637_outlet gas_duct_2018.01.11.PDF"
-    cmm_pdf.write_text(
-        "%PDF-1.4\n"
-        "NOMINAL TOL MEASURED DEVIATION OUTTOL\n"
-        "X NOMINAL 10 +TOL 0.2 TOL -0.2 ACT 10.1 DEV 0.1 OUTTOL 0\n"
-        "%%EOF\n",
-        encoding="utf-8",
+def test_pdf_extraction_failure_is_not_classified_as_unsupported_content(
+    tmp_path,
+    monkeypatch,
+):
+    report = _write_pdf(tmp_path / "unreadable.pdf", _valid_cmm_text())
+
+    def fail_inspection(_path, _max_chars):
+        raise OSError("simulated PDF read failure")
+
+    monkeypatch.setattr(
+        CMMReportParser,
+        "_load_pdf_text_for_inspection",
+        staticmethod(fail_inspection),
     )
+    reset_probe_cache()
 
-    probe = CMMReportParser.probe(cmm_pdf, _pdf_context(cmm_pdf))
+    diagnostics = resolve_parser_with_diagnostics(report)
 
-    assert probe.can_parse is True
-    assert probe.confidence >= 80
-    assert "cmm_identity_filename_pattern" in probe.reasons
-    assert "partial_cmm_markers" not in probe.reasons
-    report_parser_factory.reset_probe_cache()
-    diagnostics = report_parser_factory.resolve_parser_with_diagnostics(cmm_pdf)
+    assert diagnostics.selected is None
+    assert diagnostics.rejected_reason == "parser_inspection_failed"
+    assert "content_inspection_failed" in diagnostics.candidates_considered[0].reasons
+    assert any(
+        "simulated PDF read failure" in warning
+        for warning in diagnostics.candidates_considered[0].warnings
+    )
+    with pytest.raises(ParserInspectionError) as exc_info:
+        get_parser(report, database=":memory:")
+    assert exc_info.value.diagnostics == diagnostics
+
+
+def test_resolver_and_parser_share_cached_embedded_text(tmp_path, monkeypatch):
+    report = _write_pdf(tmp_path / "cached.pdf", _valid_cmm_text())
+    inspection = SourceInspectionContext.from_path(report, source_format="pdf")
+    original_loader = CMMReportParser._load_pdf_text_for_inspection
+    load_count = 0
+
+    def counting_loader(path, max_chars):
+        nonlocal load_count
+        load_count += 1
+        return original_loader(path, max_chars)
+
+    monkeypatch.setattr(
+        CMMReportParser,
+        "_load_pdf_text_for_inspection",
+        staticmethod(counting_loader),
+    )
+    reset_probe_cache()
+
+    diagnostics = resolve_parser_with_diagnostics(report, source_inspection=inspection)
+    parser = get_parser(
+        report,
+        database=str(tmp_path / "cached.sqlite3"),
+        metadata_parsing_mode="light",
+        source_inspection=inspection,
+    )
+    parser.open_report()
+
     assert diagnostics.selected is not None
-    assert diagnostics.selected.plugin_id == "cmm"
+    assert load_count == 1
+    assert any(line.startswith("X 10") for line in parser.raw_text)
 
 
-@pytest.mark.parametrize(
-    "filename",
-    [
-        "04L_128_637_outlet gas_duct_2018.01.15_01.PDF",
-        "Compression_limiter_assy_2022.08.31_7.PDF",
-        "V29112255_T6_Throttle_body_2019.07.09_1_1.pdf",
-        "V29121544_Throttle_body_DV5R_Sonafi_2020.28.26_01.PDF",
-        "V29121544_Throttle_body_DV5R_Sonafi_2020.28.26_02.PDF",
-        "VSPC012693_R4_Throttle_body_2018.02.20_01.1.PDF",
-        "VTST5001_Widget_AB123_1.0L_2024.06_20_01.1.PDF",
-    ],
-)
-def test_cmm_probe_accepts_supplier_filename_date_shapes_from_real_logs(tmp_path, filename):
-    cmm_pdf = _write_near_threshold_cmm_marker_pdf(tmp_path / filename)
+def test_cmm_probe_rejects_non_pdf_source_format(tmp_path):
+    report = tmp_path / "report.csv"
+    report.write_text(_valid_cmm_text(), encoding="utf-8")
 
-    probe = CMMReportParser.probe(cmm_pdf, _pdf_context(cmm_pdf))
-
-    assert probe.can_parse is True
-    assert probe.confidence >= 80
-    assert "cmm_identity_filename_pattern" in probe.reasons
-    assert "partial_cmm_markers" not in probe.reasons
-
-
-@pytest.mark.parametrize(
-    "filename",
-    [
-        "V29120517_001_Body_EB_EP_2021.07.08_01_Sonafi.PDF",
-        "V29120517_003_Body_EB_EP-Sonafi_2022.05.18_cav.1.3_4.PDF",
-        "V29120517_003_Body_EB_EP_2023.03.16_AE-C11_1.PDF",
-        "V29120517_003_Body_EB_EP_2023.04.18_rework_1.PDF",
-    ],
-)
-def test_cmm_probe_accepts_real_supplier_suffix_filename_shapes(tmp_path, filename):
-    cmm_pdf = tmp_path / filename
-    cmm_pdf.write_text(
-        "%PDF-1.4\n"
-        "NOMINAL TOL MEASURED DEVIATION OUTTOL BONUS\n"
-        "X NOMINAL 10 +TOL 0.2 TOL -0.2 ACT 10.1 DEV 0.1 OUT 0 BONUS 0\n"
-        "%%EOF\n",
-        encoding="utf-8",
+    probe = CMMReportParser.probe(
+        report,
+        ProbeContext(source_path=str(report), source_format="csv"),
     )
 
-    probe = CMMReportParser.probe(cmm_pdf, _pdf_context(cmm_pdf))
-
-    assert probe.can_parse is True
-    assert probe.confidence >= 80
-    assert "cmm_identity_filename_pattern" in probe.reasons
-    assert "partial_cmm_markers" not in probe.reasons
-
-
-def test_cmm_probe_preserves_near_threshold_marker_score_for_diagnostics(tmp_path):
-    cmm_pdf = tmp_path / "generic_measurement_markers.PDF"
-    cmm_pdf.write_text(
-        "%PDF-1.4\n"
-        "NOMINAL TOL MEASURED DEVIATION OUTTOL BONUS\n"
-        "X NOMINAL 10 +TOL 0.2 TOL -0.2 ACT 10.1 DEV 0.1 OUT 0 BONUS 0\n"
-        "%%EOF\n",
-        encoding="utf-8",
-    )
-
-    probe = CMMReportParser.probe(cmm_pdf, _pdf_context(cmm_pdf))
-
     assert probe.can_parse is False
-    assert probe.confidence == 76
-    assert "partial_cmm_markers" in probe.reasons
-
-
-@pytest.mark.parametrize(
-    "filename",
-    [
-        "generic_measurement_markers_2018.01.11.PDF",
-        "generic_measurement_markers_2020.28.26_01.PDF",
-        "V29121544_Throttle_body_DV5R_Sonafi_01.PDF",
-        "V29121544_Throttle_body_DV5R_Sonafi_2020.28.26.PDF",
-        "Report_2024.06.PDF",
-        "Fixture_2024_06_20.PDF",
-    ],
-)
-def test_cmm_probe_keeps_generic_date_filename_shapes_below_threshold(tmp_path, filename):
-    cmm_pdf = _write_near_threshold_cmm_marker_pdf(tmp_path / filename)
-
-    probe = CMMReportParser.probe(cmm_pdf, _pdf_context(cmm_pdf))
-
-    assert probe.can_parse is False
-    assert probe.confidence == 76
-    assert "cmm_identity_filename_pattern" not in probe.reasons
+    assert probe.reasons == ("unsupported_source_format",)

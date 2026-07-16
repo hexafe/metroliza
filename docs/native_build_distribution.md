@@ -174,6 +174,13 @@ Distribution audit status:
   startup splash or smoke path has taken over.
 - the root `build_windows_exe.ps1` wrapper supports
   `-Mode onefile|onedir|both` and defaults to `both` for RC testing.
+- PyInstaller builds embed `metroliza/app/build_provenance.json` with the full Git SHA,
+  dirty state, UTC build time, release label, packager, and Python version. Startup logs
+  include that identity together with the PID, executable path, runtime mode, and effective
+  parser strict-matching setting.
+- The supported build wrappers validate exact release-derived artifact paths and write
+  `<artifact>.provenance.json` sidecars containing the binary SHA-256 and size. They do not
+  discover or bless arbitrary older executables left in `dist/`.
 - The spec explicitly preserves the known fragile runtime pieces for this app: optional native parser module, PyMuPDF backends, and Windows CPython runtime DLLs.
 - The root `build_windows_exe.ps1` wrapper installs `requirements-build.txt`, then
   `requirements-ocr.txt`, and runs the packaged-dependency validator with

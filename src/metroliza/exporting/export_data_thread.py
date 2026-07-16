@@ -4348,28 +4348,32 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         worksheet.insert_image(slot['row'], slot['col'], '', options)
 
     def _build_iqr_plot_payload(self, labels, values, sampled_group, *, grouping_active=False):
-        if not grouping_active and sampled_group is not None and 'MEAS' in sampled_group:
+        sampled_columns = getattr(sampled_group, 'columns', ()) if sampled_group is not None else ()
+        has_measurements = 'MEAS' in sampled_columns
+        sampled_measurements = sampled_group['MEAS'] if has_measurements else None
+
+        if not grouping_active and has_measurements:
             # A single ungrouped population should render as one boxplot. Building
             # one box per sample creates thousands of degenerate single-point
             # boxes, which is both slow and statistically misleading.
-            numeric_values = _numeric_list(sampled_group['MEAS'])
+            numeric_values = _numeric_list(sampled_measurements)
             if numeric_values:
                 return ['All'], [numeric_values]
 
         strategy_labels = build_summary_panel_labels(labels or ['All'], grouping_active=grouping_active)
         boxplot_labels = strategy_labels
         boxplot_values = _normalize_iqr_boxplot_series(values)
-        if not boxplot_values and sampled_group is not None and 'MEAS' in sampled_group:
-            boxplot_values = [_numeric_list(sampled_group['MEAS'])]
+        if not boxplot_values and has_measurements:
+            boxplot_values = [_numeric_list(sampled_measurements)]
 
         if len(boxplot_labels) != len(boxplot_values):
-            if sampled_group is not None and 'MEAS' in sampled_group:
+            if has_measurements:
                 logger.warning(
                     "IQR payload labels/values mismatch detected; rebuilding fallback payload.",
                     extra={'label_count': len(boxplot_labels), 'value_count': len(boxplot_values)},
                 )
                 boxplot_labels = ['All']
-                boxplot_values = [_numeric_list(sampled_group['MEAS'])]
+                boxplot_values = [_numeric_list(sampled_measurements)]
             else:
                 min_length = min(len(boxplot_labels), len(boxplot_values))
                 logger.warning(
@@ -5074,18 +5078,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                         return
 
                     if self.generate_summary_sheet:
-                        if self._summary_sheet_failed:
-                            if not self._summary_sheet_skip_warning_emitted:
-                                self.update_label.emit(
-                                    build_three_line_status(
-                                        "Warning: summary charts skipped after earlier error.",
-                                        "Continuing export without summary panel rendering",
-                                        "ETA --",
-                                    )
-                                )
-                                self._summary_sheet_skip_warning_emitted = True
-                        else:
-                            self.summary_sheet_fill(summary_worksheet, header, header_group, col)
+                        self.summary_sheet_fill(summary_worksheet, header, header_group, col)
                         if self._check_canceled():
                             return
 
@@ -5903,6 +5896,31 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         except Exception as e:
             self.log_and_exit(e)
 
+    def _record_summary_sheet_warning(self, header, chart_name, exception):
+        chart_context = f" ({chart_name})" if chart_name else ""
+        warning_message = (
+            f"Summary sheet charts skipped after error in {header}{chart_context}: {exception}"
+        )
+        logger.warning(warning_message, exc_info=True)
+        self.completion_metadata.setdefault('summary_sheet_warnings', []).append(warning_message)
+        self._log_export_stage(
+            "Summary sheet chart generation skipped after error",
+            stage="summary_sheet_warning",
+            level="warning",
+            exception_class=type(exception).__name__,
+            summary_sheet_header=str(header),
+            summary_sheet_chart=chart_name or "unknown",
+            summary_sheet_warning=warning_message,
+        )
+        self.update_label.emit(
+            build_three_line_status(
+                "Warning: summary charts skipped after earlier error.",
+                "Continuing export with remaining summary panel rendering",
+                "ETA --",
+            )
+        )
+        self._summary_sheet_failed = True
+
     def summary_sheet_fill(self, summary_worksheet, header, header_group, col):
         """Handle `summary_sheet_fill` for `ExportDataThread`.
 
@@ -6102,6 +6120,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
 
             if self._summary_chart_required('distribution'):
+                fig = None
                 try:
                     active_summary_chart = 'distribution'
                     chart_start = time.perf_counter()
@@ -6302,13 +6321,16 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                     )
                     if self._check_canceled():
                         return
-                finally:
-                    pass
+                except Exception as e:
+                    if fig is not None:
+                        plt.close(fig)
+                    self._record_summary_sheet_warning(header, active_summary_chart, e)
 
             if self._check_canceled():
                 return
 
             if self._summary_chart_required('iqr'):
+                fig = None
                 try:
                     active_summary_chart = 'iqr'
                     chart_start = time.perf_counter()
@@ -6427,10 +6449,13 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
 
                     if self._check_canceled():
                         return
-                finally:
-                    pass
+                except Exception as e:
+                    if fig is not None:
+                        plt.close(fig)
+                    self._record_summary_sheet_warning(header, active_summary_chart, e)
 
             if self._summary_chart_required('histogram'):
+                fig = None
                 try:
                     active_summary_chart = 'histogram'
                     base_histogram_figsize = (8.8, 4.0)
@@ -6815,10 +6840,13 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                     )
                     if self._check_canceled():
                         return
-                finally:
-                    pass
+                except Exception as e:
+                    if fig is not None:
+                        plt.close(fig)
+                    self._record_summary_sheet_warning(header, active_summary_chart, e)
 
             if self._summary_chart_required('trend'):
+                fig = None
                 try:
                     active_summary_chart = 'trend'
                     chart_start = time.perf_counter()
@@ -6962,31 +6990,13 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                     )
                     if self._check_canceled():
                         return
-                finally:
-                    pass
+                except Exception as e:
+                    if fig is not None:
+                        plt.close(fig)
+                    self._record_summary_sheet_warning(header, active_summary_chart, e)
 
         except Exception as e:
-            chart_context = f" ({active_summary_chart})" if active_summary_chart else ""
-            warning_message = f"Summary sheet charts skipped after error in {header}{chart_context}: {e}"
-            logger.warning(warning_message, exc_info=True)
-            self.completion_metadata.setdefault('summary_sheet_warnings', []).append(warning_message)
-            self._log_export_stage(
-                "Summary sheet chart generation skipped after error",
-                stage="summary_sheet_warning",
-                level="warning",
-                exception_class=type(e).__name__,
-                summary_sheet_header=str(header),
-                summary_sheet_chart=active_summary_chart or "unknown",
-                summary_sheet_warning=warning_message,
-            )
-            self.update_label.emit(
-                build_three_line_status(
-                    "Warning: summary charts skipped after earlier error.",
-                    "Continuing export without summary panel rendering",
-                    "ETA --",
-                )
-            )
-            self._summary_sheet_failed = True
+            self._record_summary_sheet_warning(header, active_summary_chart, e)
 
     def log_and_exit(self, exception):
         """Handle `log_and_exit` for `ExportDataThread`.

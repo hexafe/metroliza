@@ -149,3 +149,20 @@ class SourceInspectionContext:
         if isinstance(cached, Exception):
             raise cached
         return str(cached)
+
+    def get_cached_extracted_text(
+        self,
+        *,
+        cache_key: str,
+        max_chars: int,
+    ) -> str | None:
+        """Return an already-loaded text representation without invoking its loader."""
+
+        key = (str(cache_key), int(max_chars))
+        with self._cache.lock:
+            cached = self._cache.extracted_text.get(key, _UNSET)
+        if cached is _UNSET:
+            return None
+        if isinstance(cached, Exception):
+            raise cached
+        return str(cached)

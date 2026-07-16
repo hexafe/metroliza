@@ -419,6 +419,7 @@ class ParsingDialog(QDialog):
         total_files = max(0, int(getattr(result, "total_files", 0) or 0))
         parsed_files = max(0, int(getattr(result, "parsed_files", 0) or 0))
         failed_files = max(0, int(getattr(result, "failed_files", 0) or 0))
+        skipped_files = max(0, int(getattr(result, "skipped_files", 0) or 0))
 
         if total_files == 0:
             return (
@@ -431,6 +432,12 @@ class ParsingDialog(QDialog):
             )
 
         if failed_files and parsed_files == 0:
+            skipped_message = ""
+            if skipped_files:
+                skipped_message = (
+                    " Unsupported based on file contents and skipped: "
+                    f"{skipped_files} {self._report_file_label(skipped_files)}."
+                )
             return (
                 "warning",
                 "No reports parsed",
@@ -438,11 +445,30 @@ class ParsingDialog(QDialog):
                     f"Metroliza found {total_files} {self._report_file_label(total_files)}, "
                     f"but none were saved to {self.db_file}. "
                     f"{failed_files} {self._report_file_label(failed_files)} could not be parsed. "
+                    f"{skipped_message} "
                     "Review the log for details, then check the report format and retry."
                 ),
             )
 
+        if skipped_files and parsed_files == 0:
+            return (
+                "warning",
+                "No compatible reports parsed",
+                (
+                    f"Metroliza inspected {total_files} {self._report_file_label(total_files)}, "
+                    f"but {skipped_files} did not contain a supported report structure. "
+                    f"Nothing was written to {self.db_file}. Parser recognition uses file contents, "
+                    "not filenames."
+                ),
+            )
+
         if failed_files:
+            skipped_message = ""
+            if skipped_files:
+                skipped_message = (
+                    " Unsupported based on file contents and skipped: "
+                    f"{skipped_files} {self._report_file_label(skipped_files)}."
+                )
             return (
                 "warning",
                 "Parsing completed with warnings",
@@ -450,7 +476,20 @@ class ParsingDialog(QDialog):
                     f"{parsed_files} of {total_files} {self._report_file_label(total_files)} "
                     f"completed successfully and are available in {self.db_file}. "
                     f"{failed_files} {self._report_file_label(failed_files)} could not be parsed. "
+                    f"{skipped_message} "
                     "Skipped files are listed in the log."
+                ),
+            )
+
+        if skipped_files:
+            return (
+                "warning",
+                "Parsing completed with skipped files",
+                (
+                    f"{parsed_files} of {total_files} {self._report_file_label(total_files)} "
+                    f"completed successfully and are available in {self.db_file}. "
+                    "Unsupported based on file contents and skipped: "
+                    f"{skipped_files} {self._report_file_label(skipped_files)}."
                 ),
             )
 

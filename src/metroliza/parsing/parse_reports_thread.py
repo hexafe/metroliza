@@ -43,6 +43,7 @@ class ParseBatchResult:
     parsed_files: int
     total_files: int
     failed_files: int = 0
+    skipped_files: int = 0
 
 
 @dataclass(frozen=True)
@@ -88,12 +89,7 @@ def _exception_traceback_text(exception):
     return "".join(traceback.format_exception(type(exception), exception, exception.__traceback__)).rstrip()
 
 
-def _parser_resolution_diagnostic_summary(report) -> str:
-    try:
-        diagnostics = report_parser_factory.resolve_parser_with_diagnostics(report)
-    except Exception as exc:  # pragma: no cover - defensive logging path
-        return f"resolver_diagnostics_error={type(exc).__name__}: {exc}"
-
+def _format_parser_resolution_diagnostics(diagnostics) -> str:
     selected = diagnostics.selected.plugin_id if diagnostics.selected is not None else "none"
     candidate_parts = []
     for candidate in diagnostics.candidates_considered:
@@ -110,13 +106,53 @@ def _parser_resolution_diagnostic_summary(report) -> str:
     )
 
 
+def _parser_resolution_diagnostic_summary(report) -> str:
+    try:
+        diagnostics = report_parser_factory.resolve_parser_with_diagnostics(report)
+    except Exception as exc:  # pragma: no cover - defensive logging path
+        return f"resolver_diagnostics_error={type(exc).__name__}: {exc}"
+    return _format_parser_resolution_diagnostics(diagnostics)
+
+
+def _log_unsupported_report_skip(
+    report,
+    exception,
+    processed_files,
+    total_files,
+    *,
+    cancel_flag=False,
+):
+    resolver_summary = _format_parser_resolution_diagnostics(exception.diagnostics)
+    logger.info(
+        "Parse skipped unsupported report: file=%s %s",
+        report,
+        resolver_summary,
+        extra=build_parse_log_extra(
+            source_path=report,
+            total_files=total_files,
+            parsed_count=processed_files,
+            cancel_flag=cancel_flag,
+        )
+        | {
+            "source_file": str(report),
+            "stage": "parser_selection",
+            "skip_reason": "unsupported_report_format",
+            "parser_resolution": resolver_summary,
+        },
+    )
+
+
 def _log_parse_file_failure(report, stage, exception, processed_files, total_files, *, cancel_flag=False):
     exception_class = type(exception).__name__
     exception_message = str(exception)
     traceback_text = _exception_traceback_text(exception)
     resolver_summary = ""
-    if str(stage) == "parser" and exception_class == "ValueError" and "Unsupported report format" in exception_message:
-        resolver_summary = _parser_resolution_diagnostic_summary(report)
+    if str(stage) == "parser":
+        diagnostics = getattr(exception, "diagnostics", None)
+        if diagnostics is not None:
+            resolver_summary = _format_parser_resolution_diagnostics(diagnostics)
+        elif exception_class == "ValueError" and "Unsupported report format" in exception_message:
+            resolver_summary = _parser_resolution_diagnostic_summary(report)
     resolver_suffix = f" {resolver_summary}" if resolver_summary else ""
     exc_info = (
         (type(exception), exception, exception.__traceback__)
@@ -124,7 +160,7 @@ def _log_parse_file_failure(report, stage, exception, processed_files, total_fil
         else None
     )
     logger.warning(
-        "Parse skipped report after parser failure: file=%s stage=%s exception=%s message=%s%s",
+        "Parse report failed: file=%s stage=%s exception=%s message=%s%s",
         report,
         stage,
         exception_class,
@@ -163,16 +199,29 @@ def parse_new_reports(
 ):
     parsed_files = 0
     failed_files = 0
+    skipped_files = 0
     total_files = len(report_paths)
 
     def _emit_processed_progress():
         if on_progress:
-            on_progress(parsed_files + failed_files, total_files)
+            on_progress(parsed_files + failed_files + skipped_files, total_files)
+
+    def _record_unsupported_skip(report, exception):
+        nonlocal skipped_files
+        skipped_files += 1
+        processed_files = parsed_files + failed_files + skipped_files
+        _log_unsupported_report_skip(
+            report,
+            exception,
+            processed_files,
+            total_files,
+        )
+        _emit_processed_progress()
 
     def _record_file_failure(report, stage, exception):
         nonlocal failed_files
         failed_files += 1
-        processed_files = parsed_files + failed_files
+        processed_files = parsed_files + failed_files + skipped_files
         setattr(exception, "_metroliza_parse_failure_stage", str(stage))
         if log_file_failures:
             _log_parse_file_failure(
@@ -250,6 +299,9 @@ def parse_new_reports(
                 report, fingerprint = future_context[future]
                 try:
                     parser, stage1_completed_at = future.result()
+                except report_parser_factory.UnsupportedReportFormatError as exc:
+                    _record_unsupported_skip(report, exc)
+                    continue
                 except Exception as exc:
                     _record_file_failure(
                         report,
@@ -286,6 +338,7 @@ def parse_new_reports(
             parsed_files=parsed_files,
             total_files=total_files,
             failed_files=failed_files,
+            skipped_files=skipped_files,
         )
 
     for report in report_paths:
@@ -305,6 +358,9 @@ def parse_new_reports(
                     report,
                     source_inspection=source_inspection,
                 )
+            except report_parser_factory.UnsupportedReportFormatError as exc:
+                _record_unsupported_skip(report, exc)
+                continue
             except Exception as exc:
                 _record_file_failure(report, "parser", exc)
                 continue
@@ -329,6 +385,7 @@ def parse_new_reports(
         parsed_files=parsed_files,
         total_files=total_files,
         failed_files=failed_files,
+        skipped_files=skipped_files,
     )
 
 
@@ -369,6 +426,14 @@ def enrich_report_metadata(
             except (AttributeError, TypeError):
                 pass
             enriched = parser is not None and persist_enrichment(report, parser)
+        except report_parser_factory.UnsupportedReportFormatError as exc:
+            skipped_files += 1
+            _log_unsupported_report_skip(
+                report,
+                exc,
+                processed_files + 1,
+                total_files,
+            )
         except Exception as exc:
             failed_files += 1
             logger.warning(

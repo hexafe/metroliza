@@ -2848,6 +2848,29 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertEqual(iqr_labels, ['All'])
         self.assertEqual(iqr_values, [[1.0, 2.0, 3.5]])
 
+    def test_build_iqr_plot_payload_uses_row_table_column_membership(self):
+        from metroliza.analytics.row_table import RowTable
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        sampled_group = RowTable(
+            rows=((1.0,), ('2.0',), (None,), (3.5,)),
+            columns=('MEAS',),
+        )
+
+        iqr_labels, iqr_values = thread._build_iqr_plot_payload(
+            ['1', '2', '3'],
+            [[1.0], [2.0], [3.5]],
+            sampled_group,
+            grouping_active=False,
+        )
+
+        self.assertEqual(iqr_labels, ['All'])
+        self.assertEqual(iqr_values, [[1.0, 2.0, 3.5]])
+
     def test_grouped_summary_scatter_payload_appends_group_sample_sizes_to_labels(self):
         import pandas as pd
 
@@ -3065,6 +3088,166 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertIn('summary_sheet_warnings', thread.completion_metadata)
         self.assertIn('(iqr)', thread.completion_metadata['summary_sheet_warnings'][0])
         self.assertIn("'int' object is not iterable", thread.completion_metadata['summary_sheet_warnings'][0])
+
+    def test_summary_sheet_fill_row_table_renders_violin_iqr_and_later_charts(self):
+        import metroliza.exporting.export_data_thread as export_thread_module
+        from metroliza.analytics.row_table import RowTable
+
+        class _FakeSummaryWorksheet:
+            def __init__(self):
+                self.inserted_images = []
+
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, row, col, *_args, **_kwargs):
+                self.inserted_images.append((row, col))
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread.violin_plot_min_samplesize = 2
+        chart_calls = []
+
+        def _capture_chart(_fig, mode='workbook', *, chart_type=None, native_payload=None):
+            chart_calls.append(chart_type)
+            return types.SimpleNamespace(png_bytes=b'png', backend='matplotlib')
+
+        thread._save_summary_chart = _capture_chart
+        measurements = (9.9, 10.0, 10.2, 10.1, 10.05, 9.95)
+        header_group = RowTable(
+            rows=tuple(
+                (value, 10.0, 0.2, -0.2, str(index), '2024-01-01')
+                for index, value in enumerate(measurements, start=1)
+            ),
+            columns=('MEAS', 'NOM', '+TOL', '-TOL', 'SAMPLE_NUMBER', 'DATE'),
+        )
+
+        with (
+            mock.patch.object(
+                export_thread_module,
+                'resolve_distribution_renderer_backend',
+                return_value='matplotlib',
+            ),
+            mock.patch.object(
+                export_thread_module,
+                'resolve_iqr_renderer_backend',
+                return_value='matplotlib',
+            ),
+            mock.patch.object(
+                export_thread_module,
+                'resolve_chart_renderer_backend',
+                return_value='matplotlib',
+            ),
+            mock.patch.object(
+                export_thread_module,
+                'resolve_trend_renderer_backend',
+                return_value='matplotlib',
+            ),
+            mock.patch.object(
+                export_thread_module,
+                'render_violin',
+                wraps=export_thread_module.render_violin,
+            ) as render_violin_mock,
+            mock.patch.object(
+                export_thread_module,
+                'render_iqr_boxplot',
+                wraps=export_thread_module.render_iqr_boxplot,
+            ) as render_iqr_mock,
+        ):
+            thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
+
+        self.assertTrue(render_violin_mock.called)
+        self.assertTrue(render_iqr_mock.called)
+        self.assertEqual(chart_calls, ['distribution', 'iqr', 'histogram', 'trend'])
+        self.assertFalse(thread._summary_sheet_failed)
+
+    def test_summary_sheet_chart_failure_does_not_suppress_later_charts_or_headers(self):
+        import metroliza.exporting.export_data_thread as export_thread_module
+        from metroliza.analytics.row_table import RowTable
+
+        class _FakeSummaryWorksheet:
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, *_args, **_kwargs):
+                return None
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread.violin_plot_min_samplesize = 2
+        chart_calls = []
+
+        def _capture_chart(_fig, mode='workbook', *, chart_type=None, native_payload=None):
+            chart_calls.append(chart_type)
+            return types.SimpleNamespace(png_bytes=b'png', backend='matplotlib')
+
+        original_iqr_payload = thread._build_iqr_plot_payload
+        iqr_calls = 0
+
+        def _fail_first_iqr(*args, **kwargs):
+            nonlocal iqr_calls
+            iqr_calls += 1
+            if iqr_calls == 1:
+                raise TypeError("'int' object is not iterable")
+            return original_iqr_payload(*args, **kwargs)
+
+        thread._save_summary_chart = _capture_chart
+        thread._build_iqr_plot_payload = _fail_first_iqr
+        measurements = (9.9, 10.0, 10.2, 10.1, 10.05, 9.95)
+        header_group = RowTable(
+            rows=tuple(
+                (value, 10.0, 0.2, -0.2, str(index), '2024-01-01')
+                for index, value in enumerate(measurements, start=1)
+            ),
+            columns=('MEAS', 'NOM', '+TOL', '-TOL', 'SAMPLE_NUMBER', 'DATE'),
+        )
+
+        with (
+            mock.patch.object(
+                export_thread_module,
+                'resolve_distribution_renderer_backend',
+                return_value='matplotlib',
+            ),
+            mock.patch.object(
+                export_thread_module,
+                'resolve_iqr_renderer_backend',
+                return_value='matplotlib',
+            ),
+            mock.patch.object(
+                export_thread_module,
+                'resolve_chart_renderer_backend',
+                return_value='matplotlib',
+            ),
+            mock.patch.object(
+                export_thread_module,
+                'resolve_trend_renderer_backend',
+                return_value='matplotlib',
+            ),
+        ):
+            thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
+            thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H2', header_group, col=10)
+
+        self.assertEqual(
+            chart_calls,
+            [
+                'distribution',
+                'histogram',
+                'trend',
+                'distribution',
+                'iqr',
+                'histogram',
+                'trend',
+            ],
+        )
+        self.assertTrue(thread._summary_sheet_failed)
+        self.assertEqual(len(thread.completion_metadata['summary_sheet_warnings']), 1)
+        self.assertIn('H1 (iqr)', thread.completion_metadata['summary_sheet_warnings'][0])
 
     def test_summary_sheet_distribution_scatter_fallback_uses_sample_numbers_when_grouped(self):
         import pandas as pd

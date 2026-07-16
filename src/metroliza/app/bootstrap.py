@@ -4,7 +4,7 @@ import sys
 from dataclasses import dataclass
 
 from metroliza.app import version as VersionDate
-
+from metroliza.app.build_provenance import load_build_provenance, runtime_mode
 from metroliza.app.license_bootstrap import (
     show_invalid_license_message,
     validate_license_bootstrap,
@@ -16,6 +16,7 @@ from metroliza.app.startup_splash import (
 )
 from metroliza.app.startup_profile import record_event, ui_smoke_enabled
 from metroliza.app.ui_entrypoint import MainWindowFactory, load_main_window_factory
+from metroliza.shared.env_utils import env_bool
 from metroliza.shared.logging_utils import ensure_application_logging
 
 VERSION_DATE = VersionDate.VERSION_DATE
@@ -23,6 +24,7 @@ STARTUP_SMOKE_ENV = "METROLIZA_STARTUP_SMOKE"
 PDF_PARSER_SMOKE_FIXTURE_ENV = "METROLIZA_PDF_PARSER_SMOKE_FIXTURE"
 PDF_PARSER_SMOKE_EXPECTED_TEXT_ENV = "METROLIZA_PDF_PARSER_SMOKE_EXPECTED_TEXT"
 LICENSE_MODE_ENV = "METROLIZA_LICENSE_VERIFICATION"
+PARSER_STRICT_MATCHING_ENV = "PARSER_STRICT_MATCHING"
 
 record_event("process_entry")
 
@@ -75,7 +77,27 @@ def initialize_logging() -> logging.Logger:
     record_event("logging_init_start")
     ensure_application_logging()
     record_event("logging_init_done")
-    return logging.getLogger(__name__)
+    logger = logging.getLogger(__name__)
+    log_runtime_provenance(logger)
+    return logger
+
+
+def log_runtime_provenance(logger: logging.Logger) -> None:
+    """Emit one build/process identity line for correlating field diagnostics."""
+
+    provenance = load_build_provenance()
+    dirty = "unknown" if provenance.dirty is None else str(provenance.dirty).lower()
+    logger.info(
+        "Runtime provenance pid=%s executable=%s mode=%s git_sha=%s dirty=%s "
+        "packager=%s parser_strict_matching=%s",
+        os.getpid(),
+        os.path.abspath(sys.executable),
+        runtime_mode(),
+        provenance.git_sha,
+        dirty,
+        provenance.packager,
+        str(env_bool(PARSER_STRICT_MATCHING_ENV, default=True)).lower(),
+    )
 
 
 def get_or_create_qapplication():

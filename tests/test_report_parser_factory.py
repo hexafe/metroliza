@@ -12,6 +12,8 @@ import time
 
 import pytest
 
+from metroliza.parsing.pdf_backend import require_pdf_backend
+
 
 factory_module = importlib.import_module("modules.report_parser_factory")
 base_module = importlib.import_module("modules.base_report_parser")
@@ -57,15 +59,25 @@ def _restore_real_cmm_registration():
 
 
 def _write_cmm_probe_fixture(path: Path) -> Path:
-    path.write_bytes(
-        b"%PDF-1.4\n"
-        b"CMM REPORT\n"
-        b"REFERENCE: REF01\n"
-        b"DATE: 2024-01-02\n"
-        b"PART NAME: BRACKET\n"
-        b"MEASUREMENT MADE BY: CMM OPERATOR A\n"
-        b"NOMINAL TOL MEASURED DEVIATION OUTTOL\n"
-    )
+    backend = require_pdf_backend()
+    document = backend.open()
+    try:
+        page = document.new_page()
+        page.insert_text(
+            (72, 72),
+            "CMM REPORT\n"
+            "REFERENCE: REF01\n"
+            "DATE: 2024-01-02\n"
+            "PART NAME: BRACKET\n"
+            "MEASUREMENT MADE BY: CMM OPERATOR A\n"
+            "NOMINAL TOL MEASURED DEVIATION OUTTOL\n"
+            "#FEATURE 1\n"
+            "DIM\n"
+            "X 10 0.2 -0.2 10.1 0.1 0\n",
+        )
+        document.save(str(path), garbage=4, deflate=True)
+    finally:
+        document.close()
     return path
 
 
@@ -1481,7 +1493,7 @@ class BrokenProbeParser(BaseReportParser, BaseReportParserPlugin):
         )
 
         assert diagnostics.selected is None
-        assert diagnostics.rejected_reason == "no_plugin_can_parse"
+        assert diagnostics.rejected_reason == "parser_inspection_failed"
         assert broken_candidate.can_parse is False
         assert broken_candidate.confidence == 0
         assert "probe_exception" in broken_candidate.reasons
@@ -1638,13 +1650,7 @@ class LateExternalParser(BaseReportParser, BaseReportParserPlugin):
         _restore_real_cmm_registration()
 
         initial_report = tmp_path / "REF01_2024-01-02_001.pdf"
-        initial_report.write_bytes(
-            b"%PDF-1.4\n"
-            b"REFERENCE: REF01\n"
-            b"DATE: 2024-01-02\n"
-            b"PART NAME: BRACKET\n"
-            b"NOMINAL TOL MEASURED\n"
-        )
+        _write_cmm_probe_fixture(initial_report)
 
         initial = resolve_parser_with_diagnostics(initial_report)
         assert initial.selected is not None

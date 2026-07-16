@@ -156,8 +156,9 @@ class BrokenProbeParser(BaseReportParser, BaseReportParserPlugin):
         _restore_factory_state(factory_module, snapshot)
 
     captured = capsys.readouterr().out
-    assert result == 0
+    assert result == 1
     assert "broken_probe_script" in captured
     assert "probe_exception" in captured
     assert "probe exploded" in captured
-    assert "Selected: cmm" in captured
+    assert "Selected: none" in captured
+    assert "Rejected reason: parser_inspection_failed" in captured

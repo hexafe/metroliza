@@ -268,10 +268,27 @@ class RowTable:
     def __len__(self) -> int:
         return len(self.rows)
 
+    def __contains__(self, column_name: object) -> bool:
+        """Return whether ``column_name`` is present in the table schema.
+
+        Defining membership explicitly is important because Python otherwise
+        falls back to integer ``__getitem__`` probes.  ``RowTable`` reserves
+        ``__getitem__`` for column selection; positional row access belongs to
+        :attr:`iloc`.
+        """
+
+        return column_name in self.columns
+
     def __getitem__(self, key: str | Sequence[str]) -> RowColumn | "RowTable":
         if isinstance(key, str):
             column_index = self.columns.index(key)
             return RowColumn(row[column_index] for row in self.rows)
+
+        if not isinstance(key, Sequence) or isinstance(key, (bytes, bytearray)):
+            raise TypeError(
+                "RowTable column selection requires a column name or a sequence "
+                "of column names; use .iloc for positional row access"
+            )
 
         selected_columns = tuple(str(column) for column in key)
         column_indexes = [self.columns.index(column) for column in selected_columns]

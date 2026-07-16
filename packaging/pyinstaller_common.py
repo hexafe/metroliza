@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 import sys
 
@@ -34,6 +35,36 @@ def read_version_label(root_dir: Path) -> str:
     version_ns: dict[str, str] = {}
     exec((root_dir / "VersionDate.py").read_text(encoding="utf-8"), version_ns)
     return f"{version_ns['RELEASE_VERSION']}({version_ns['VERSION_DATE']})"
+
+
+def prepare_build_provenance_manifest(root_dir: Path) -> Path:
+    """Resolve or generate the manifest embedded into this exact build."""
+
+    from scripts.build_provenance import (
+        generate_build_provenance,
+        validate_build_provenance_manifest,
+    )
+
+    configured_path = os.getenv("METROLIZA_BUILD_PROVENANCE_PATH")
+    if configured_path:
+        manifest_path = Path(configured_path).resolve()
+        if not manifest_path.is_file():
+            raise FileNotFoundError(
+                f"Configured build provenance manifest is missing: {manifest_path}"
+            )
+    else:
+        manifest_path = generate_build_provenance(
+            root_dir / "build" / "provenance" / "build_provenance.json",
+            packager="pyinstaller",
+            repo_root=root_dir,
+        )
+
+    validate_build_provenance_manifest(
+        manifest_path,
+        expected_packager="pyinstaller",
+        expected_release_label=read_version_label(root_dir),
+    )
+    return manifest_path
 
 
 def collect_windows_python_runtime_binaries() -> list[tuple[str, str]]:
@@ -136,6 +167,7 @@ def collect_optional_vendored_model_data(root_dir: Path) -> list[tuple[str, str]
 
 def build_pyinstaller_collection(root_dir: Path) -> dict[str, list]:
     """Return shared PyInstaller binaries, datas, and hidden imports."""
+    build_provenance_manifest = prepare_build_provenance_manifest(root_dir)
     metroliza_hiddenimports = collect_submodules("metroliza")
     pymupdf_datas, pymupdf_binaries, pymupdf_hiddenimports = collect_required_runtime_assets(
         "pymupdf"
@@ -186,6 +218,9 @@ def build_pyinstaller_collection(root_dir: Path) -> dict[str, list]:
             ".",
         ),
     ]
+    build_provenance_datas = [
+        (str(build_provenance_manifest), "metroliza/app"),
+    ]
 
     return {
         "binaries": (
@@ -202,7 +237,8 @@ def build_pyinstaller_collection(root_dir: Path) -> dict[str, list]:
             + numpy_binaries
         ),
         "datas": (
-            third_party_notice_datas
+            build_provenance_datas
+            + third_party_notice_datas
             + html_dashboard_datas
             + pymupdf_datas
             + fitz_datas

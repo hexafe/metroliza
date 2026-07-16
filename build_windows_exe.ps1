@@ -10,6 +10,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+$originalBuildProvenancePath = $env:METROLIZA_BUILD_PROVENANCE_PATH
 
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $venvDir = Join-Path $repoRoot '.venv-build'
@@ -19,6 +20,7 @@ $onefileSpecPath = Join-Path $repoRoot 'packaging/metroliza_onefile.spec'
 $onedirSpecPath = Join-Path $repoRoot 'packaging/metroliza_onedir.spec'
 $distDir = Join-Path $repoRoot 'dist'
 $buildDir = Join-Path $repoRoot 'build'
+$provenanceManifestPath = Join-Path $buildDir 'provenance/build_provenance.json'
 
 function Invoke-Step {
     param(
@@ -77,6 +79,23 @@ function Get-PyInstallerBuildSpecs {
         $specs += [pscustomobject]@{ Label = 'onedir'; Path = $onedirSpecPath }
     }
     return $specs
+}
+
+function Get-ExpectedPyInstallerArtifacts {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ReleaseLabel
+    )
+
+    $outputBase = "metroliza_P_$ReleaseLabel"
+    $artifacts = @()
+    if ($Mode -in @('onefile', 'both')) {
+        $artifacts += Join-Path $distDir "$outputBase.exe"
+    }
+    if ($Mode -in @('onedir', 'both')) {
+        $artifacts += Join-Path $distDir "${outputBase}_onedir/metroliza.exe"
+    }
+    return $artifacts
 }
 
 Push-Location $repoRoot
@@ -159,6 +178,39 @@ try {
         )
     }
 
+    Invoke-Step 'Generating build provenance' {
+        Invoke-Checked -Executable $venvPython -Arguments @(
+            'scripts/build_provenance.py',
+            'generate',
+            '--output',
+            $provenanceManifestPath,
+            '--packager',
+            'pyinstaller'
+        )
+        $env:METROLIZA_BUILD_PROVENANCE_PATH = $provenanceManifestPath
+    }
+    Invoke-Checked -Executable $venvPython -Arguments @(
+        'scripts/build_provenance.py',
+        'validate',
+        '--manifest',
+        $provenanceManifestPath,
+        '--packager',
+        'pyinstaller'
+    )
+    $buildProvenance = Get-Content -LiteralPath $provenanceManifestPath -Raw | ConvertFrom-Json
+    $expectedExecutables = @(
+        Get-ExpectedPyInstallerArtifacts -ReleaseLabel $buildProvenance.release_label
+    )
+
+    Invoke-Step 'Removing previous exact output EXEs' {
+        foreach ($exe in $expectedExecutables) {
+            if (Test-Path -LiteralPath $exe -PathType Leaf) {
+                Remove-Item -LiteralPath $exe -Force
+                Write-Host "    Removed $exe"
+            }
+        }
+    }
+
     if ($WithNative) {
         Invoke-Step 'Building native modules and PyInstaller artifacts' {
             $helper = Join-Path $repoRoot 'packaging/build_native_and_package.ps1'
@@ -181,31 +233,56 @@ try {
         }
     }
 
-    Invoke-Step 'Finding output EXEs' {
-        $executables = @(
-            Get-ChildItem -LiteralPath $distDir -Recurse -File -Filter '*.exe' -ErrorAction SilentlyContinue |
-                Sort-Object FullName
-        )
-
-        if (-not $executables -or $executables.Count -eq 0) {
-            throw "Build finished but no .exe was found under $distDir"
-        }
-
+    Invoke-Step 'Validating exact output EXEs' {
         Write-Host ""
         Write-Host "Built EXE artifacts:"
-        foreach ($exe in $executables) {
-            Write-Host "    $($exe.FullName)"
+        foreach ($exe in $expectedExecutables) {
+            if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+                throw "Expected packaged artifact is missing: $exe"
+            }
+            Write-Host "    $exe"
         }
     }
 
     Invoke-Step 'Staging third-party notice sidecars' {
-        Invoke-Checked -Executable $venvPython -Arguments @(
+        $noticeArguments = [System.Collections.Generic.List[string]]::new()
+        foreach ($argument in @(
             'scripts/stage_release_notices.py',
             '--dist-dir',
             $distDir
-        )
+        )) {
+            [void]$noticeArguments.Add($argument)
+        }
+        foreach ($exe in $expectedExecutables) {
+            [void]$noticeArguments.Add('--artifact')
+            [void]$noticeArguments.Add($exe)
+        }
+        Invoke-Checked -Executable $venvPython -Arguments $noticeArguments.ToArray()
+    }
+
+    Invoke-Step 'Staging exact artifact provenance sidecars' {
+        $provenanceArguments = [System.Collections.Generic.List[string]]::new()
+        foreach ($argument in @(
+            'scripts/build_provenance.py',
+            'stage',
+            '--manifest',
+            $provenanceManifestPath
+        )) {
+            [void]$provenanceArguments.Add($argument)
+        }
+        foreach ($exe in $expectedExecutables) {
+            [void]$provenanceArguments.Add('--artifact')
+            [void]$provenanceArguments.Add($exe)
+        }
+        Invoke-Checked -Executable $venvPython -Arguments $provenanceArguments.ToArray()
     }
 }
 finally {
+    if ($null -eq $originalBuildProvenancePath) {
+        Remove-Item Env:METROLIZA_BUILD_PROVENANCE_PATH -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:METROLIZA_BUILD_PROVENANCE_PATH = $originalBuildProvenancePath
+    }
     Pop-Location
 }

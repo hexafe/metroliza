@@ -32,4 +32,7 @@ def test_build_native_and_package_helper_covers_native_build_and_packaging_paths
     assert "Get-PyInstallerSpecPathsForMode" in script
     assert "'PyInstaller'," in script
     assert "'--noconfirm'," in script
+    assert "Build provenance does not match this PyInstaller release." in script
+    assert "if ($DryRun) {\n                break\n            }" in script
+    assert "Remove-Item -LiteralPath $artifact -Force" in script
     assert "Windows native packaging is validated primarily on CPython 3.11 x64." in script

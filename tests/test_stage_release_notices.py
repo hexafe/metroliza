@@ -48,3 +48,26 @@ def test_stage_release_notices_fails_when_inventory_is_missing(tmp_path: Path) -
             notice_path=notice,
             inventory_path=tmp_path / "missing.json",
         )
+
+
+def test_explicit_release_artifact_does_not_pick_up_stale_dist_outputs(tmp_path: Path) -> None:
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    exact_artifact = dist / "metroliza_P_current.exe"
+    stale_artifact = dist / "metroliza_P_old.exe"
+    exact_artifact.write_bytes(b"current")
+    stale_artifact.write_bytes(b"old")
+    notice = tmp_path / "THIRD_PARTY_NOTICES.md"
+    inventory = tmp_path / "inventory.json"
+    notice.write_text("notice\n", encoding="utf-8")
+    inventory.write_text('{"packages": []}\n', encoding="utf-8")
+
+    stage_release_notices(
+        dist_dir=dist,
+        artifacts=(exact_artifact,),
+        notice_path=notice,
+        inventory_path=inventory,
+    )
+
+    assert exact_artifact.with_name(f"{exact_artifact.name}.licenses").is_dir()
+    assert not stale_artifact.with_name(f"{stale_artifact.name}.licenses").exists()

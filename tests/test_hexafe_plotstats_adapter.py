@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import sys
 from types import ModuleType, SimpleNamespace
 
+import pytest
+
 from modules.hexafe_plotstats_adapter import (
     PLOTSTATS_EXPORT_CHARTS_ENV_VAR,
     _fallback_dashboard_plotly_spec,
@@ -1440,3 +1442,26 @@ def test_render_chart_artifact_png_returns_bytes(monkeypatch) -> None:
     assert result is not None
     assert result.png_bytes.startswith(b"\x89PNG")
     assert result.backend == "hexafe-plotstats:matplotlib"
+
+
+def test_render_chart_artifact_png_closes_figures_created_by_real_plotstats() -> None:
+    pytest.importorskip("hexafe_plotstats.adapters")
+    import matplotlib.pyplot as plt
+
+    existing_figure_numbers = set(plt.get_fignums())
+    try:
+        result = render_chart_artifact_png(
+            {
+                "type": "histogram",
+                "values": [9.8, 9.9, 10.0, 10.1, 10.2],
+                "title": "Figure ownership regression",
+                "limits": {"lsl": 9.5, "nominal": 10.0, "usl": 10.5},
+            }
+        )
+
+        assert result is not None
+        assert result.png_bytes.startswith(b"\x89PNG")
+        assert set(plt.get_fignums()) == existing_figure_numbers
+    finally:
+        for figure_number in set(plt.get_fignums()) - existing_figure_numbers:
+            plt.close(figure_number)

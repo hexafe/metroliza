@@ -65,6 +65,15 @@ class TestExportQueryService(unittest.TestCase):
 
         self.assertEqual([row['ORDER'] for _index, row in sorted_table.iterrows()], [1, 3, 2])
 
+    def test_row_table_membership_is_schema_based_and_rows_require_iloc(self):
+        table = RowTable(rows=((1.23,),), columns=('MEAS',))
+
+        self.assertIn('MEAS', table)
+        self.assertNotIn('MISSING', table)
+        self.assertEqual(table.iloc[0]['MEAS'], 1.23)
+        with self.assertRaisesRegex(TypeError, r"use \.iloc for positional row access"):
+            table[0]
+
     def test_fetch_partition_header_counts_uses_sqlite_literal_delimiter(self):
         captured = {}
 

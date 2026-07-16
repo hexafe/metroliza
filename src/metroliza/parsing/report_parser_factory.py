@@ -11,7 +11,7 @@ This module keeps compatibility with both:
 from __future__ import annotations
 
 from collections import OrderedDict
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from importlib import metadata as importlib_metadata
 import importlib.util
 import inspect
@@ -58,6 +58,30 @@ class ResolverDiagnostics:
         compare=False,
         repr=False,
     )
+
+
+class UnsupportedReportFormatError(ValueError):
+    """Raised when no registered parser semantically accepts a report source."""
+
+    def __init__(self, diagnostics: ResolverDiagnostics):
+        self.diagnostics = diagnostics
+        self.source_path = diagnostics.source_path
+        super().__init__(
+            "Unsupported report format: "
+            f"{diagnostics.source_format or 'unknown'} ({diagnostics.source_path})"
+        )
+
+
+class ParserInspectionError(ValueError):
+    """Raised when parser compatibility could not be determined reliably."""
+
+    def __init__(self, diagnostics: ResolverDiagnostics):
+        self.diagnostics = diagnostics
+        self.source_path = diagnostics.source_path
+        super().__init__(
+            "Report content inspection failed: "
+            f"{diagnostics.source_format or 'unknown'} ({diagnostics.source_path})"
+        )
 
 
 @dataclass(frozen=True)
@@ -328,6 +352,13 @@ def _minimum_confidence_for_selection() -> int:
     return 80 if _strict_matching_enabled() else 1
 
 
+def _probe_result_has_inspection_failure(candidate: ProbeResult) -> bool:
+    return any(
+        reason == "content_inspection_failed" or reason.endswith("_exception")
+        for reason in candidate.reasons
+    )
+
+
 def _probe_with_cache(
     plugin_id: str,
     parser_cls: ParserType,
@@ -391,38 +422,6 @@ def _probe_with_cache(
         with _PROBE_RESULT_CACHE_LOCK:
             completed = _PROBE_RESULT_CACHE_INFLIGHT.pop(inflight_key, inflight)
             completed.set()
-
-
-def _non_strict_pdf_extension_fallback(
-    candidates: list[ProbeResult],
-    priorities: dict[str, int],
-) -> ProbeResult | None:
-    """Keep diagnostics/backward-compat fallback explicit when strict matching is disabled."""
-
-    if _strict_matching_enabled():
-        return None
-    extension_candidates = [
-        candidate
-        for candidate in candidates
-        if candidate.plugin_id == "cmm"
-        and candidate.confidence > 0
-        and "pdf_extension" in candidate.reasons
-    ]
-    if not extension_candidates:
-        return None
-    selected = max(
-        extension_candidates,
-        key=lambda match: (
-            match.confidence,
-            priorities[match.plugin_id],
-            match.plugin_id,
-        ),
-    )
-    return replace(
-        selected,
-        can_parse=True,
-        reasons=tuple(dict.fromkeys((*selected.reasons, "non_strict_pdf_extension_fallback"))),
-    )
 
 
 def _iter_external_plugin_candidate_files(path_entry: str) -> list[Path]:
@@ -731,20 +730,10 @@ def _resolve_parser_with_registration(
     minimum_confidence = _minimum_confidence_for_selection()
     parseable = [c for c in candidates if c.can_parse and c.confidence >= minimum_confidence]
     if not parseable:
-        fallback = _non_strict_pdf_extension_fallback(candidates, priorities)
-        if fallback is not None:
-            return (
-                ResolverDiagnostics(
-                    source_path=normalized_path,
-                    source_format=source_format,
-                    candidates_considered=tuple(candidates),
-                    selected=fallback,
-                    source_inspection=source_inspection,
-                ),
-                registrations_by_id[fallback.plugin_id],
-            )
         rejected_reason = "no_plugin_can_parse"
-        if any(c.can_parse for c in candidates):
+        if any(_probe_result_has_inspection_failure(c) for c in candidates):
+            rejected_reason = "parser_inspection_failed"
+        elif any(c.can_parse for c in candidates):
             rejected_reason = "no_plugin_above_confidence_threshold"
         return (
             ResolverDiagnostics(
@@ -814,7 +803,9 @@ def get_parser(
         source_inspection=source_inspection,
     )
     if diagnostics.selected is None or registration is None:
-        raise ValueError(f"Unsupported report format: unknown ({normalized_path})")
+        if diagnostics.rejected_reason == "parser_inspection_failed":
+            raise ParserInspectionError(diagnostics)
+        raise UnsupportedReportFormatError(diagnostics)
 
     parser_cls = registration.parser_cls
 

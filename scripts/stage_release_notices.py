@@ -68,7 +68,8 @@ def stage_release_notices(
 
     manifests = [_copy_notice_bundle(dist / "release-notices", notice=notice, inventory=inventory)]
     candidates = {Path(path).resolve() for path in artifacts}
-    candidates.update(discover_release_artifacts(dist))
+    if not candidates:
+        candidates.update(discover_release_artifacts(dist))
     for artifact in sorted(candidates):
         if not artifact.is_file():
             raise FileNotFoundError(f"Packaged artifact is missing: {artifact}")

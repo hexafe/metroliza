@@ -35,7 +35,6 @@ from metroliza.reports.header_ocr_corrections import (
 )
 from metroliza.parsing.header_ocr_geometry import convert_ocr_records_to_header_items, select_header_crop
 from metroliza.reports.report_identity import build_report_identity_hash
-from metroliza.reports.report_filename_parser import parse_report_filename
 from metroliza.reports.report_metadata_extractor import extract_report_metadata
 from metroliza.reports.report_metadata_models import MetadataExtractionContext
 from metroliza.reports.report_metadata_normalizers import (
@@ -57,6 +56,7 @@ from metroliza.parsing.parser_plugin_contracts import (
     ProbeResult,
     ReportInfoV2,
 )
+from metroliza.parsing.source_inspection import SourceInspectionContext
 
 
 logger = logging.getLogger(__name__)
@@ -68,10 +68,10 @@ SUPPORTED_METADATA_PARSING_MODES = {
     METADATA_PARSING_MODE_LIGHT,
     METADATA_PARSING_MODE_COMPLETE,
 }
-CMM_PROBE_SAMPLE_BYTES = 64 * 1024
+CMM_PROBE_MAX_EXTRACTED_CHARS = 16 * 1024 * 1024
+CMM_PROBE_TEXT_CACHE_KEY = "cmm_pdf_embedded_text_v1"
 CMM_PROBE_MIN_CONFIDENCE = 80
 CMM_PROBE_HIGH_CONFIDENCE = 95
-CMM_PROBE_EXTENSION_CONFIDENCE = 20
 
 _CMM_PROBE_DIMENSION_PATTERN = re.compile(r"(?im)^\s*DIM(?:ENSION)?S?\s*$")
 _CMM_PROBE_HEADER_PATTERN = re.compile(r"(?m)^\s*#[A-Z0-9 _./:-]{2,}")
@@ -143,53 +143,71 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
     )
 
     @staticmethod
-    def _read_probe_text_sample(input_ref: str | Path) -> tuple[str, str | None]:
-        try:
-            with Path(input_ref).open("rb") as handle:
-                sample = handle.read(CMM_PROBE_SAMPLE_BYTES)
-        except OSError:
-            return "", "probe_sample_unavailable"
-
-        if not sample:
-            return "", "probe_sample_empty"
-
-        return sample.decode("utf-8", errors="ignore"), None
-
-    @staticmethod
     def _extract_probe_page_text(page) -> str:
         get_text = getattr(page, "get_text", None)
         if not callable(get_text):
             return ""
         try:
-            return str(get_text("text", sort=True) or "").strip()
+            return str(get_text() or "")
         except TypeError:
-            return str(get_text("text") or "").strip()
+            return str(get_text("text") or "")
 
     @classmethod
-    def _read_pdf_backend_probe_text(cls, input_ref: str | Path) -> tuple[str, str | None]:
+    def _load_pdf_text_for_inspection(cls, input_path: Path, max_chars: int) -> str:
+        """Extract bounded embedded text from every PDF page in ingestion order."""
+
         document = None
         try:
             backend = _load_pdf_backend()
-            document = backend.open(str(input_ref))
-            if len(document) <= 0:
-                return "", "pdf_backend_text_probe_empty"
-            page_text = cls._extract_probe_page_text(document[0])
-        except Exception as exc:
-            return "", f"pdf_backend_text_probe_failed:{type(exc).__name__}"
+            document = backend.open(str(input_path))
+            page_texts: list[str] = []
+            extracted_chars = 0
+            for page in document:
+                page_text = cls._extract_probe_page_text(page)
+                if not page_text:
+                    continue
+                extracted_chars += len(page_text) + (1 if page_texts else 0)
+                if extracted_chars > max_chars:
+                    raise ValueError(
+                        f"Embedded PDF text exceeds the {max_chars}-character inspection limit"
+                    )
+                page_texts.append(page_text)
+            return "\n".join(page_texts)
         finally:
             close = getattr(document, "close", None)
             if callable(close):
                 close()
 
-        if not page_text:
+    @classmethod
+    def _read_pdf_backend_probe_text(
+        cls,
+        input_ref: str | Path,
+        source_inspection: SourceInspectionContext | None,
+    ) -> tuple[str, str | None]:
+        inspection = source_inspection or SourceInspectionContext.from_path(
+            input_ref,
+            source_format="pdf",
+        )
+        try:
+            extracted_text = inspection.get_extracted_text(
+                cache_key=CMM_PROBE_TEXT_CACHE_KEY,
+                max_chars=CMM_PROBE_MAX_EXTRACTED_CHARS,
+                loader=cls._load_pdf_text_for_inspection,
+            )
+        except Exception as exc:
+            detail = " ".join(str(exc).split())[:300]
+            detail_suffix = f":{detail}" if detail else ""
+            return "", (
+                f"pdf_backend_text_probe_failed:{type(exc).__name__}{detail_suffix}"
+            )
+
+        if not extracted_text.strip():
             return "", "pdf_backend_text_probe_empty"
-        return page_text, None
+        return extracted_text, None
 
     @staticmethod
     def _score_probe_text_sample(
         sample_text: str,
-        *,
-        filename_stem: str = "",
     ) -> tuple[int, tuple[str, ...]]:
         reasons: list[str] = []
         score = 0
@@ -223,19 +241,15 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             score += 16
             reasons.append("axis_value_marker")
 
-        if score >= 36 and CMMReportParser._has_probe_identity_filename_pattern(filename_stem):
-            score += 20
-            reasons.append("cmm_identity_filename_pattern")
-
         if score >= CMM_PROBE_MIN_CONFIDENCE:
             return min(CMM_PROBE_HIGH_CONFIDENCE, score), tuple(reasons)
 
         if reasons:
             reasons.append("partial_cmm_markers")
-            confidence = max(CMM_PROBE_EXTENSION_CONFIDENCE, min(score, CMM_PROBE_MIN_CONFIDENCE - 1))
+            confidence = min(score, CMM_PROBE_MIN_CONFIDENCE - 1)
         else:
             reasons.append("missing_cmm_markers")
-            confidence = CMM_PROBE_EXTENSION_CONFIDENCE
+            confidence = 0
         return confidence, tuple(reasons)
 
     @classmethod
@@ -260,41 +274,75 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                 reasons=("unsupported_extension",),
             )
 
-        sample_text, sample_issue = cls._read_probe_text_sample(input_ref)
-        filename_stem = Path(input_ref).stem
-        if sample_issue:
-            confidence = CMM_PROBE_EXTENSION_CONFIDENCE
-            evidence_reasons = (sample_issue,)
+        inspection_text, pdf_probe_issue = cls._read_pdf_backend_probe_text(
+            input_ref,
+            context.source_inspection,
+        )
+        evidence_reasons: tuple[str, ...]
+        warnings: tuple[str, ...] = ()
+        if inspection_text:
+            evidence_reasons = ("pdf_backend_text_probe",)
         else:
-            confidence, evidence_reasons = cls._score_probe_text_sample(
-                sample_text,
-                filename_stem=filename_stem,
+            evidence_reasons = (pdf_probe_issue or "pdf_backend_text_probe_empty",)
+            if pdf_probe_issue:
+                warnings = (pdf_probe_issue,)
+
+        if pdf_probe_issue and pdf_probe_issue.startswith("pdf_backend_text_probe_failed:"):
+            return ProbeResult(
+                plugin_id=cls.manifest.plugin_id,
+                can_parse=False,
+                confidence=0,
+                reasons=(
+                    "pdf_extension",
+                    "content_inspection_failed",
+                    *evidence_reasons,
+                ),
+                warnings=warnings,
             )
 
-        warnings: tuple[str, ...] = ()
-        if confidence < CMM_PROBE_MIN_CONFIDENCE:
-            pdf_text, pdf_probe_issue = cls._read_pdf_backend_probe_text(input_ref)
-            if pdf_text:
-                combined_text = "\n".join(part for part in (sample_text, pdf_text) if part)
-                confidence, scored_reasons = cls._score_probe_text_sample(
-                    combined_text,
-                    filename_stem=filename_stem,
-                )
-                leading_reasons = (sample_issue,) if sample_issue else ()
-                evidence_reasons = tuple(
-                    dict.fromkeys((*leading_reasons, "pdf_backend_text_probe", *scored_reasons))
-                )
-            elif pdf_probe_issue:
-                warnings = (pdf_probe_issue,)
-                evidence_reasons = tuple(dict.fromkeys((*evidence_reasons, pdf_probe_issue)))
+        confidence, marker_reasons = cls._score_probe_text_sample(inspection_text)
+        try:
+            canonical_blocks = parse_raw_lines_to_blocks(inspection_text.splitlines())
+            measurement_count = sum(
+                len(block[1])
+                for block in canonical_blocks
+                if isinstance(block, (list, tuple)) and len(block) > 1
+            )
+        except Exception as exc:
+            warnings = tuple(
+                dict.fromkeys((*warnings, f"canonical_decoder_failed:{type(exc).__name__}"))
+            )
+            return ProbeResult(
+                plugin_id=cls.manifest.plugin_id,
+                can_parse=False,
+                confidence=0,
+                reasons=(
+                    "pdf_extension",
+                    "content_inspection_failed",
+                    *evidence_reasons,
+                    *marker_reasons,
+                ),
+                warnings=warnings,
+            )
 
-        can_parse = confidence >= CMM_PROBE_MIN_CONFIDENCE
+        can_parse = measurement_count > 0
+        if can_parse:
+            confidence = max(CMM_PROBE_MIN_CONFIDENCE, confidence)
+            semantic_reasons = ("canonical_measurements",)
+        else:
+            confidence = 0
+            semantic_reasons = ("no_canonical_measurements",)
         return ProbeResult(
             plugin_id=cls.manifest.plugin_id,
             can_parse=can_parse,
             confidence=confidence,
             matched_template_id="default" if can_parse else None,
-            reasons=("pdf_extension", *evidence_reasons),
+            reasons=(
+                "pdf_extension",
+                *evidence_reasons,
+                *semantic_reasons,
+                *marker_reasons,
+            ),
             warnings=warnings,
         )
 
@@ -311,17 +359,6 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             input_ref,
             probe_context or ProbeContext(source_path=str(input_ref), source_format="pdf"),
         )
-
-    @staticmethod
-    def _has_probe_identity_filename_pattern(name_text: str) -> bool:
-        parsed = parse_report_filename(str(name_text or ""))
-        if parsed.report_date and parsed.sample_tail:
-            return True
-        if parsed.report_date and parsed.reference:
-            return True
-        if parsed.raw_date_candidate and parsed.reference and parsed.sample_tail:
-            return True
-        return False
 
     def __init__(
         self,
@@ -711,6 +748,18 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             diagnostics["header_ocr_error"] = ocr_error
         return word_items, diagnostics
 
+    def _cached_embedded_text_for_open_report(self) -> str | None:
+        source_inspection = getattr(self, "source_inspection_context", None)
+        if source_inspection is None:
+            return None
+        try:
+            return source_inspection.get_cached_extracted_text(
+                cache_key=CMM_PROBE_TEXT_CACHE_KEY,
+                max_chars=CMM_PROBE_MAX_EXTRACTED_CHARS,
+            )
+        except Exception:
+            return None
+
     def open_report(self):
         """Handle `cmm_open` for `CMMReportParser`.
 
@@ -730,8 +779,27 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             """
             pdf_backend = self._require_pdf_backend()
             pdf_path = Path(self.file_path) / self.file_name
+            cached_embedded_text = self._cached_embedded_text_for_open_report()
+
             with pdf_backend.open(str(pdf_path)) as pdf_report:
                 self._page_count = self._resolve_page_count(pdf_report)
+                if cached_embedded_text is not None:
+                    if self._page_count:
+                        first_page = pdf_report[0]
+                        self._first_page_width, self._first_page_height = self._page_size(
+                            first_page
+                        )
+                        (
+                            self._first_page_header_items,
+                            self._header_extraction_diagnostics,
+                        ) = self._extract_first_page_header_items(
+                            first_page,
+                            pdf_backend,
+                            metadata_parsing_mode=self.metadata_parsing_mode,
+                        )
+                    self.raw_text.extend(cached_embedded_text.splitlines())
+                    return
+
                 page_counter = 0
                 for page in pdf_report:
                     page_counter += 1

@@ -36,6 +36,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+$originalBuildProvenancePath = $env:METROLIZA_BUILD_PROVENANCE_PATH
 
 $invocationBoundParameters = @{}
 foreach ($entry in $PSBoundParameters.GetEnumerator()) {
@@ -431,6 +432,60 @@ try {
         }
 
         'pyinstaller' {
+            $provenanceManifestPath = $env:METROLIZA_BUILD_PROVENANCE_PATH
+            if ([string]::IsNullOrWhiteSpace($provenanceManifestPath)) {
+                $provenanceManifestPath = Join-Path $repoRoot 'build/provenance/build_provenance.json'
+                Invoke-CheckedPythonCommand -Arguments @(
+                    'scripts/build_provenance.py',
+                    'generate',
+                    '--output',
+                    $provenanceManifestPath,
+                    '--packager',
+                    'pyinstaller'
+                ) -FailureMessage 'Failed to generate PyInstaller build provenance.'
+                $env:METROLIZA_BUILD_PROVENANCE_PATH = $provenanceManifestPath
+            }
+            elseif (-not $DryRun -and -not (Test-Path -LiteralPath $provenanceManifestPath -PathType Leaf)) {
+                throw "Configured build provenance manifest is missing: $provenanceManifestPath"
+            }
+
+            $expectedArtifacts = @()
+            if (-not $DryRun) {
+                $releaseLabel = Invoke-CheckedPythonCommand -Arguments @(
+                    'scripts/build_provenance.py',
+                    'validate',
+                    '--manifest',
+                    $provenanceManifestPath,
+                    '--packager',
+                    'pyinstaller'
+                ) -FailureMessage 'Build provenance does not match this PyInstaller release.'
+                if ([string]::IsNullOrWhiteSpace($releaseLabel)) {
+                    throw 'Build provenance validation did not return a release label.'
+                }
+
+                $executableSuffix = if (
+                    [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+                ) { '.exe' } else { '' }
+                $outputBase = "metroliza_P_$($releaseLabel.Trim())"
+                if ($PyInstallerMode -in @('onefile', 'both')) {
+                    $expectedArtifacts += Join-Path $repoRoot "dist/$outputBase$executableSuffix"
+                }
+                if ($PyInstallerMode -in @('onedir', 'both')) {
+                    $expectedArtifacts += Join-Path $repoRoot (
+                        "dist/${outputBase}_onedir/metroliza$executableSuffix"
+                    )
+                }
+                foreach ($artifact in $expectedArtifacts) {
+                    if (Test-Path -LiteralPath $artifact -PathType Leaf) {
+                        Remove-Item -LiteralPath $artifact -Force
+                    }
+                }
+            }
+
+            if ($DryRun) {
+                Write-Host '      Dry run: provenance validation, artifact checks, and sidecar staging will run after a real build.'
+            }
+
             $pyInstallerSpecPaths = @(Get-PyInstallerSpecPathsForMode)
             foreach ($specPath in $pyInstallerSpecPaths) {
                 if (-not (Test-Path -LiteralPath $specPath)) {
@@ -446,11 +501,34 @@ try {
                     $specPath
                 ) -FailureMessage "PyInstaller packaging failed for spec: $specPath"
             }
-            Invoke-CheckedPythonCommand -Arguments @(
+
+            if ($DryRun) {
+                break
+            }
+
+            foreach ($artifact in $expectedArtifacts) {
+                if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) {
+                    throw "Expected packaged artifact is missing: $artifact"
+                }
+            }
+
+            $noticeArguments = @(
                 'scripts/stage_release_notices.py',
                 '--dist-dir',
                 'dist'
-            ) -FailureMessage 'Failed to stage third-party notice sidecars.'
+            )
+            $provenanceArguments = @(
+                'scripts/build_provenance.py',
+                'stage',
+                '--manifest',
+                $provenanceManifestPath
+            )
+            foreach ($artifact in $expectedArtifacts) {
+                $noticeArguments += @('--artifact', $artifact)
+                $provenanceArguments += @('--artifact', $artifact)
+            }
+            Invoke-CheckedPythonCommand -Arguments $noticeArguments -FailureMessage 'Failed to stage third-party notice sidecars.'
+            Invoke-CheckedPythonCommand -Arguments $provenanceArguments -FailureMessage 'Failed to stage exact artifact provenance sidecars.'
         }
     }
 
@@ -458,5 +536,11 @@ try {
     Write-Host '      Native build/package helper completed successfully.'
 }
 finally {
+    if ($null -eq $originalBuildProvenancePath) {
+        Remove-Item Env:METROLIZA_BUILD_PROVENANCE_PATH -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:METROLIZA_BUILD_PROVENANCE_PATH = $originalBuildProvenancePath
+    }
     Pop-Location
 }

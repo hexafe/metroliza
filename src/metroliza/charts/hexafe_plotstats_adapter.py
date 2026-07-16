@@ -564,17 +564,40 @@ def render_chart_artifact_png(
     backend: str = "auto",
     theme: str | Mapping[str, Any] | None = None,
 ) -> ChartArtifactPngResult | None:
-    """Render a chart PNG through plotstats artifact API when available."""
+    """Render a chart PNG and release figures owned by the artifact call.
 
-    artifact = build_chart_artifact(
-        payload,
-        target=target,
-        theme=theme,
-        backend=backend,
-        include_plotly=False,
-        include_png=True,
-        static=True,
-    )
+    The artifact contract returns bytes rather than a live Matplotlib figure, so
+    any figure manager created while satisfying this call belongs to this
+    boundary.  Some plotstats versions clear their internal figure without
+    closing its pyplot manager; tracking the delta prevents repeated extended
+    exports from accumulating those managers while preserving caller-owned
+    figures that were already open.
+    """
+
+    pyplot = None
+    existing_figure_numbers: set[int] = set()
+    try:
+        import matplotlib.pyplot as pyplot
+
+        existing_figure_numbers = set(pyplot.get_fignums())
+    except Exception:
+        pyplot = None
+
+    try:
+        artifact = build_chart_artifact(
+            payload,
+            target=target,
+            theme=theme,
+            backend=backend,
+            include_plotly=False,
+            include_png=True,
+            static=True,
+        )
+    finally:
+        if pyplot is not None:
+            created_figure_numbers = set(pyplot.get_fignums()) - existing_figure_numbers
+            for figure_number in created_figure_numbers:
+                pyplot.close(figure_number)
     if not artifact:
         return None
     png_bytes = artifact.get("png_bytes")
