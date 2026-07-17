@@ -552,6 +552,50 @@ def test_realtime_poll_cycle_advances_past_keyed_row_with_missing_event_time(tmp
     assert offset.event_time_watermark == "2026-06-13T10:00:00.000000Z"
 
 
+def test_realtime_poll_cycle_advances_past_keyed_row_with_invalid_event_time(tmp_path):
+    db_path = str(tmp_path / "trailing-invalid-event-time.db")
+    profile = _profile(db_path)
+    config = _config(profile.id)
+
+    result = run_polling_cycle(
+        database=db_path,
+        profile=profile,
+        config=config,
+        adapter=FakeAdapter(
+            [
+                {
+                    "event_id": "100",
+                    "record_id": "row-100",
+                    "process_timestamp": "2026-06-13T10:00:00Z",
+                    "cycle_time_s": "10",
+                    "station": "S1",
+                },
+                {
+                    "event_id": "101",
+                    "record_id": "row-101",
+                    "process_timestamp": "corrupt-timestamp",
+                    "cycle_time_s": "11",
+                    "station": "S1",
+                },
+            ]
+        ),
+        detector_runner=lambda samples, signal, detectors: [],
+    )
+    offset = StreamOffsetStore(db_path).get_offset(
+        source_profile_id=profile.id,
+        stream_key="cycle_time",
+    )
+
+    assert result.status == "completed"
+    assert result.rows_fetched == 2
+    assert result.samples_inserted == 1
+    assert result.cursor_value == "101"
+    assert result.event_time_watermark == "2026-06-13T10:00:00.000000Z"
+    assert offset.cursor_value == "101"
+    assert offset.cursor_tie_breaker_value == "row-101"
+    assert offset.event_time_watermark == "2026-06-13T10:00:00.000000Z"
+
+
 def test_realtime_poll_cycle_isolates_detector_failures_and_advances_successful_fetch(tmp_path):
     db_path = str(tmp_path / "detector-error.db")
     profile = _profile(db_path)

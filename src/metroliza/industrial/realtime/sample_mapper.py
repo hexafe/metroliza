@@ -11,7 +11,11 @@ from metroliza.industrial.industrial_data_repository import looks_sensitive_key,
 from metroliza.industrial.realtime.sample_repository import utc_timestamp
 from metroliza.industrial.realtime.stream_config import RealtimePollConfig
 from metroliza.industrial.realtime.stream_contracts import IndustrialSample, SignalDefinition
-from metroliza.industrial.realtime.timestamps import canonical_utc_timestamp, parse_utc_timestamp
+from metroliza.industrial.realtime.timestamps import (
+    IndustrialTimestampError,
+    canonical_utc_timestamp,
+    parse_utc_timestamp,
+)
 
 
 @dataclass(frozen=True)
@@ -24,6 +28,7 @@ class SampleMappingStats:
     skipped_non_numeric: int = 0
     skipped_non_finite: int = 0
     skipped_late: int = 0
+    skipped_invalid_timestamp: int = 0
 
 
 @dataclass(frozen=True)
@@ -56,6 +61,7 @@ def map_rows_to_samples(
     skipped_non_numeric = 0
     skipped_non_finite = 0
     skipped_late = 0
+    skipped_invalid_timestamp = 0
     cursor_value: str | None = None
     cursor_tie_breaker_value: str | None = None
     watermark = (
@@ -85,10 +91,14 @@ def map_rows_to_samples(
         if not record_key or event_time_raw in (None, ""):
             skipped_missing += len(validated.signal_keys)
             continue
-        event_time = canonical_utc_timestamp(
-            event_time_raw,
-            source_timezone=validated.source_timezone,
-        )
+        try:
+            event_time = canonical_utc_timestamp(
+                event_time_raw,
+                source_timezone=validated.source_timezone,
+            )
+        except IndustrialTimestampError:
+            skipped_invalid_timestamp += len(validated.signal_keys)
+            continue
         if lateness_boundary is not None and parse_utc_timestamp(event_time) < lateness_boundary:
             skipped_late += len(validated.signal_keys)
             continue
@@ -147,6 +157,11 @@ def map_rows_to_samples(
             f"Skipped {skipped_late} signal value(s) older than the allowed lateness "
             f"boundary ({validated.allowed_lateness_seconds:g} seconds)."
         )
+    if skipped_invalid_timestamp:
+        warnings.append(
+            f"Skipped {skipped_invalid_timestamp} signal value(s) from rows with invalid "
+            "event timestamps."
+        )
 
     return SampleMappingResult(
         samples=tuple(samples),
@@ -157,6 +172,7 @@ def map_rows_to_samples(
             skipped_non_numeric=skipped_non_numeric,
             skipped_non_finite=skipped_non_finite,
             skipped_late=skipped_late,
+            skipped_invalid_timestamp=skipped_invalid_timestamp,
         ),
         cursor_value=cursor_value,
         cursor_tie_breaker_value=cursor_tie_breaker_value,

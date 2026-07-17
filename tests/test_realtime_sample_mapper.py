@@ -156,6 +156,39 @@ def test_sample_mapper_advances_past_keyed_row_with_missing_event_time():
     assert result.event_time_watermark == "2026-06-13T10:01:00.000000Z"
 
 
+def test_sample_mapper_advances_past_keyed_row_with_invalid_event_time():
+    result = map_rows_to_samples(
+        [
+            {
+                "event_id": "101",
+                "record_id": "row-101",
+                "process_timestamp": "2026-06-13T10:01:00Z",
+                "cycle_time_s": "10",
+            },
+            {
+                "event_id": "102",
+                "record_id": "row-102",
+                "process_timestamp": "not-a-timestamp",
+                "cycle_time_s": "11",
+            },
+        ],
+        config=_config(
+            signal_keys=("cycle_time",),
+            signal_columns={"cycle_time": "cycle_time_s"},
+        ),
+        signals=_signals(),
+    )
+
+    assert [sample.source_record_key for sample in result.samples] == ["row-101"]
+    assert result.stats.skipped_invalid_timestamp == 1
+    assert result.cursor_value == "102"
+    assert result.cursor_tie_breaker_value == "row-102"
+    assert result.event_time_watermark == "2026-06-13T10:01:00.000000Z"
+    assert result.warnings == (
+        "Skipped 1 signal value(s) from rows with invalid event timestamps.",
+    )
+
+
 def test_sample_mapper_canonicalizes_offsets_and_naive_source_timezone():
     result = map_rows_to_samples(
         [
