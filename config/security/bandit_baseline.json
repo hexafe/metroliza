@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated_on": "2026-07-11",
+  "generated_on": "2026-07-17",
   "entries": [
     {
       "repository": "hexafe-plotstats",
@@ -67,7 +67,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "5846227773c611bc5d1e97dd101f9bd96396c721cb7f8646504ca3309de71920",
+      "fingerprint": "1918b31037e4ffb405a9925339abd9300719c7f2c3c840260910b208c6c73add",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_data_thread.py",
       "owner": "Security review",
@@ -76,7 +76,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "9729b5cc13110daf2acaf231a93dfc584abf538cb043fdea32ef9685d39bb946",
+      "fingerprint": "9899c637896368ec54c9aadb2d1b73515c57a35c36bbb6b61bbdc0aff1437057",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_data_thread.py",
       "owner": "Security review",
@@ -148,38 +148,38 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "39890899c424523dd9e5ffe0333afdb3cd658a4511d5377baceb92416f052eb8",
+      "fingerprint": "117fbf5909d1cceea1582ef69d029adcc0ea3d9702223d576eafc17be8d5e3a3",
       "test_id": "B608",
       "path": "src/metroliza/industrial/anomaly/event_repository.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
+      "rationale": "Anomaly-event queries select only fixed optional clauses, validate statuses, and bind detector, signal, status, and limit values; expiry requires renewed query-boundary review.",
       "expires_on": "2026-10-31"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "a46c1cc12224dad23acc171d666e9a7f10d41db898964645d4b48d4562eca545",
+      "fingerprint": "a2aceb0fa80249d26a2d063d7e0764e2e9ecfb8937381ed853f1a2dd4ba47e0a",
       "test_id": "B608",
       "path": "src/metroliza/industrial/anomaly/event_repository.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
+      "rationale": "Anomaly-event queries select only fixed optional clauses, validate statuses, and bind detector, signal, status, and limit values; expiry requires renewed query-boundary review.",
       "expires_on": "2026-10-31"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "c5efb6cce31c5717459e0957571b0b2d9b0b137ba8ba0dd9e7c368c167415e8b",
+      "fingerprint": "bc8ac950207057009c7b0e6537ef57acbc354bcf977657b99e9e80f5a58e6aca",
       "test_id": "B608",
       "path": "src/metroliza/industrial/anomaly/event_repository.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
+      "rationale": "Anomaly-event queries select only fixed optional clauses, validate statuses, and bind detector, signal, status, and limit values; expiry requires renewed query-boundary review.",
       "expires_on": "2026-10-31"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "d28a0750f0ea3a14c83dec6d8537e84eecc9675c98126f9b59d53d3bf30c826d",
+      "fingerprint": "f7c4b49bae3c86322efd529b6c9b3c2acd236ec5f0acdf6a64b46fbd81c954ac",
       "test_id": "B608",
       "path": "src/metroliza/industrial/anomaly/event_repository.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
+      "rationale": "Anomaly-event queries select only fixed optional clauses, validate statuses, and bind detector, signal, status, and limit values; expiry requires renewed query-boundary review.",
       "expires_on": "2026-10-31"
     },
     {
@@ -607,7 +607,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "67d96443f091e58cbe7dedb7a4cb57ce02819d0b472860a84dfa26fe1182349f",
+      "fingerprint": "1178be26a5c2d0029d4c7a14caff519441375ab143691813136b66ce3270b204",
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
       "owner": "Security review",
@@ -616,7 +616,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "e6c0ac15c8ea5ac96655001e98eb4e59239257dc8a67b6cead1f2cc81e27a9e6",
+      "fingerprint": "cbeda498dfb3ef9333cbc972cd0f9a0a7d527ef20fb1bc610f699429aa3512f6",
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
       "owner": "Security review",
@@ -625,7 +625,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "3186d9c99c4d213339bb0eb285183a20221961976b13c6fb706681e9ce887301",
+      "fingerprint": "c96db965e44658603d5f0431a3eb538712a7e6d1dcafb7a0afc561804e13da81",
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
       "owner": "Security review",
@@ -733,11 +733,11 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "88261997b3f463dea1ce281e0d221d0d46e4339f96dbc7f9d869871c9c9e301d",
+      "fingerprint": "0c8268c8d9800566495047454110bc920f38cd2dda8efd09d9eea4359d4bf957",
       "test_id": "B608",
       "path": "src/metroliza/reports/db.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
+      "rationale": "Row counting wraps an internal QueryScope whose constructors quote identifiers and bind values; raw external SQL is outside this trusted contract.",
       "expires_on": "2026-10-31"
     },
     {
@@ -1336,7 +1336,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "3432d532d92dcae2a5f18b8325d2af8bdd0b629efe6749ce93e10ed99fb4d64d",
+      "fingerprint": "586a812737f0783a8e8e51ec16cd559862ecb042539cda01cdd8951c1a878afc",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1345,7 +1345,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "7e6a8c2d840bff0f6989f59cce99fbdfbecf5c399a3f0b4686e06486ccf2f7be",
+      "fingerprint": "9cb91eec7cf4694a55994724475387dba69d3021481806638a5e23245e94cba8",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1354,7 +1354,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "f9dbeb0b65636dd924797112e53f2cf325d816e97b338bb48b9e98c1d74d3bfd",
+      "fingerprint": "bab1dd0aa023121a922c89067c701088a52ff4165c91a12e5c17398360f46e9d",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1363,7 +1363,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "98f5a0720fa298e8dac90c5a377e1995058abf65e0bc2df9d6071ee8e6fad0ec",
+      "fingerprint": "3170f798d140ba0a3ee3a0c414f778fdcb28d38ded2829c51d6e5cbc0c871816",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1372,7 +1372,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "71f05305750c785576472f604d0bb518f05e09fc8386ea4d6b595f6032fa958c",
+      "fingerprint": "e09626764f42b8954d68d6915f3d0cffd010d9736d5288ad6b889bc3a14fecc5",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1381,7 +1381,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "7d9607c1b31f1a006e55fd795d0d67808d2b16d1884fe0f22cd73fa3d7308e5e",
+      "fingerprint": "ac22369e781bf046b9b6c9561cecca9dad231b0fd02453bf5e18b6982c2694be",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",

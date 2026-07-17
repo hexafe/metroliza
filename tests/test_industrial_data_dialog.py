@@ -6,7 +6,9 @@ from types import SimpleNamespace
 import pytest
 
 try:
-    from PyQt6.QtWidgets import QApplication, QComboBox, QWidget  # noqa: F401
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+    from PyQt6.QtWidgets import QApplication, QComboBox, QMessageBox, QWidget  # noqa: F401
 
     from modules import industrial_data_dialog
     from modules import industrial_source_profiles_dialog
@@ -196,6 +198,50 @@ def test_source_dialog_form_helpers_and_config_browse(monkeypatch, tmp_path):
     assert dialog.order_by_checkbox.isChecked()
     assert "New production source" in dialog.status_label.text()
     dialog.close()
+
+
+@pytest.mark.parametrize("exit_action", ("reject", "escape", "close", "close_button"))
+def test_source_dialog_guards_unsaved_draft_on_every_native_exit(
+    monkeypatch,
+    tmp_path,
+    exit_action,
+):
+    app = _app()
+    answers = [QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes]
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: answers.pop(0),
+    )
+    dialog = IndustrialSourceProfilesDialog(
+        db_file=None,
+        config_path=tmp_path / "industrial_sources.yaml",
+    )
+    dialog.show()
+    app.processEvents()
+    dialog.source_name_edit.setText("Unsaved production source")
+
+    def request_exit():
+        if exit_action == "reject":
+            dialog.reject()
+        elif exit_action == "escape":
+            QTest.keyClick(dialog, Qt.Key.Key_Escape)
+        elif exit_action == "close_button":
+            dialog.close_button.click()
+        else:
+            dialog.close()
+        app.processEvents()
+
+    request_exit()
+
+    assert dialog.isVisible()
+    assert dialog.source_name_edit.text() == "Unsaved production source"
+
+    request_exit()
+
+    assert not dialog.isVisible()
+    assert dialog.source_name_edit.text() == ""
+    assert answers == []
 
 
 def test_sync_thread_upserts_rows_and_finishes_sync_run(monkeypatch, tmp_path):
@@ -546,7 +592,10 @@ def test_launcher_dialog_keeps_connection_fields_out_of_main_surface(tmp_path):
     assert dialog.initialize_button.isHidden()
     assert "Source -> Access -> Cache -> CSV Summary" in dialog.workflow_label.text()
     assert "Last sync/cache outcome" in dialog.sync_summary_label.text()
-    assert dialog.sizeHint().height() <= 560
+    # The persistent lifecycle/status rows are part of the safety contract;
+    # keep the launcher compact enough for a 720 px working area without
+    # forcing those rows into overlays or transient messages.
+    assert dialog.sizeHint().height() <= 640
     dialog.close()
 
 
@@ -900,6 +949,7 @@ def test_launcher_initializes_cache_and_opens_owned_child_dialogs(monkeypatch, t
 def test_launcher_refresh_links_thread_states(monkeypatch, tmp_path):
     _app()
     db_path = str(tmp_path / "metroliza.db")
+    next_db_path = str(tmp_path / "next-metroliza.db")
     started = []
 
     class Signal:
@@ -929,17 +979,34 @@ def test_launcher_refresh_links_thread_states(monkeypatch, tmp_path):
     assert started[0].db_file == db_path
     assert started[0].started is True
     assert not dialog.initialize_button.isEnabled()
+    assert not dialog.select_database_button.isEnabled()
+    assert not dialog.create_database_button.isEnabled()
+    assert not dialog.use_temp_button.isEnabled()
+
+    assert dialog.update_db_file(next_db_path) is False
+    assert dialog.db_file == db_path
+    assert dialog.report_db_file == db_path
+
+    dialog.use_temporary_cache()
+    assert dialog.db_file == db_path
+    assert dialog.report_db_file == db_path
+    assert "finish before changing storage" in dialog.status_label.text()
 
     summary = SimpleNamespace(accepted_links=2, ambiguous_reports=1, unmatched_reports=3)
     dialog.on_link_refresh_finished(summary)
     assert "2 accepted, 1 ambiguous, 3 unmatched" in dialog.status_label.text()
+    assert not dialog.select_database_button.isEnabled()
 
     dialog.on_link_refresh_error("boom")
     assert "Could not refresh links: boom" in warnings[0][2]
+    assert not dialog.select_database_button.isEnabled()
 
     dialog.on_link_refresh_thread_stopped()
     assert dialog.link_refresh_thread is None
     assert dialog.initialize_button.isEnabled()
+    assert dialog.select_database_button.isEnabled()
+    assert dialog.update_db_file(next_db_path) is True
+    assert dialog.db_file == next_db_path
     dialog.close()
 
 

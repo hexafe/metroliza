@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from metroliza.ui.realtime_industrial_monitoring_dialog import (
     RealtimeIndustrialMonitoringDialog,
@@ -74,6 +74,198 @@ def test_realtime_monitoring_dialog_saves_checked_source_configs(qapp, tmp_path)
         assert {config.stream_key for config in listed} == {"line_a", "line_b"}
         assert all(config.polling_interval_seconds == 10 for config in listed)
         assert all(config.signal_columns == {"cycle_time": "cycle_time_s"} for config in listed)
+    finally:
+        dialog.close()
+
+
+def test_realtime_monitoring_refuses_implicit_configs_for_other_checked_sources(
+    qapp,
+    tmp_path,
+    monkeypatch,
+):
+    db_path = str(tmp_path / "dialog.db")
+    repository = IndustrialDataRepository(db_path)
+    _profile(repository, "line_a", "Line A")
+    _profile(repository, "line_b", "Line B")
+    dialog = RealtimeIndustrialMonitoringDialog(None, db_path)
+    warnings = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda *args, **_kwargs: warnings.append(args),
+    )
+    try:
+        dialog.select_all_sources()
+
+        configs = dialog._configs_for_checked_sources(save_current=True)
+
+        assert configs == ()
+        assert RealtimeMonitorConfigRepository(db_path).list_configs() == []
+        assert "Save realtime setup" in dialog.config_readiness_label.text()
+        assert "Line B" in dialog.config_readiness_label.text()
+        assert warnings
+        assert dialog.workflow_tabs.currentIndex() == 1
+    finally:
+        dialog.close()
+
+
+def test_realtime_stop_remains_stopping_until_poll_worker_finishes(qapp, tmp_path):
+    db_path = str(tmp_path / "dialog.db")
+    IndustrialDataRepository(db_path).ensure_schema()
+    dialog = RealtimeIndustrialMonitoringDialog(None, db_path)
+
+    class _RunningPoll:
+        def __init__(self):
+            self.running = True
+            self.cancel_calls = 0
+
+        def isRunning(self):
+            return self.running
+
+        def cancel(self):
+            self.cancel_calls += 1
+
+    poll = _RunningPoll()
+    try:
+        dialog.poll_thread = poll
+
+        dialog.stop_monitoring()
+
+        assert poll.cancel_calls == 1
+        assert dialog._stop_requested is True
+        assert "stopping" in dialog.monitor_state_label.text().lower()
+        assert not dialog.start_button.isEnabled()
+
+        poll.running = False
+        dialog._clear_poll_thread()
+
+        assert dialog.poll_thread is None
+        assert dialog._stop_requested is False
+        assert dialog.monitor_state_label.text() == "Monitor: stopped"
+    finally:
+        dialog.poll_thread = None
+        dialog.close()
+
+
+def test_realtime_event_review_requires_operator_comment_and_persists_action(
+    qapp,
+    tmp_path,
+    monkeypatch,
+):
+    import metroliza.ui.realtime_industrial_monitoring_dialog as dialog_module
+
+    db_path = str(tmp_path / "dialog.db")
+    IndustrialDataRepository(db_path).ensure_schema()
+    calls = []
+    event = SimpleNamespace(
+        id=41,
+        event_time="2026-07-17T10:00:00Z",
+        profile_name="Line A",
+        signal_key="cycle_time",
+        severity="warning",
+        observed_value=12.5,
+        detector_key="spec_limits",
+        explanation="Above warning limit.",
+    )
+
+    class _FakeDashboardService:
+        def __init__(self, database):
+            self.database = database
+
+        def list_open_anomaly_events(self, *, limit):
+            assert limit == 100
+            return [event]
+
+        def acknowledge_event(self, **kwargs):
+            calls.append(("acknowledge", kwargs))
+
+        def resolve_event(self, **kwargs):
+            calls.append(("resolve", kwargs))
+
+        def mark_event_false_positive(self, **kwargs):
+            calls.append(("false_positive", kwargs))
+
+    monkeypatch.setattr(dialog_module, "RealtimeDashboardService", _FakeDashboardService)
+    dialog = RealtimeIndustrialMonitoringDialog(None, db_path)
+    try:
+        dialog.event_review_table.selectRow(0)
+        dialog.event_operator_edit.setText("operator-a")
+
+        dialog._apply_selected_event_action("resolve")
+
+        assert calls == []
+        assert "comment" in dialog.event_review_status_label.text().lower()
+
+        dialog.event_comment_edit.setText("Verified after line inspection")
+        dialog._apply_selected_event_action("resolve")
+
+        assert calls == [
+            (
+                "resolve",
+                {
+                    "event_id": 41,
+                    "resolved_by": "operator-a",
+                    "comment": "Verified after line inspection",
+                    "expected_status": "open",
+                },
+            )
+        ]
+        assert "resolved by operator-a" in dialog.event_review_status_label.text()
+    finally:
+        dialog.close()
+
+
+def test_realtime_event_review_refreshes_instead_of_overwriting_stale_decision(
+    qapp,
+    tmp_path,
+    monkeypatch,
+):
+    import metroliza.ui.realtime_industrial_monitoring_dialog as dialog_module
+    from metroliza.industrial.anomaly.event_repository import AnomalyEventStatusConflictError
+
+    db_path = str(tmp_path / "dialog-conflict.db")
+    IndustrialDataRepository(db_path).ensure_schema()
+    event = SimpleNamespace(
+        id=42,
+        event_time="2026-07-17T10:00:00Z",
+        profile_name="Line A",
+        signal_key="cycle_time",
+        severity="warning",
+        observed_value=12.5,
+        detector_key="spec_limits",
+        explanation="Above warning limit.",
+    )
+
+    class _ConflictingDashboardService:
+        load_count = 0
+
+        def __init__(self, _database):
+            pass
+
+        def list_open_anomaly_events(self, *, limit):
+            assert limit == 100
+            type(self).load_count += 1
+            return [event] if type(self).load_count == 1 else []
+
+        def resolve_event(self, **_kwargs):
+            raise AnomalyEventStatusConflictError(42, "open", "acknowledged")
+
+    monkeypatch.setattr(
+        dialog_module,
+        "RealtimeDashboardService",
+        _ConflictingDashboardService,
+    )
+    dialog = RealtimeIndustrialMonitoringDialog(None, db_path)
+    try:
+        dialog.event_review_table.selectRow(0)
+        dialog.event_operator_edit.setText("operator-b")
+        dialog.event_comment_edit.setText("stale review")
+
+        dialog._apply_selected_event_action("resolve")
+
+        assert dialog.event_review_table.rowCount() == 0
+        assert "already reviewed elsewhere" in dialog.event_review_status_label.text().lower()
+        assert dialog.event_review_status_label.property("statusVariant") == "warning"
     finally:
         dialog.close()
 
@@ -236,6 +428,8 @@ def test_realtime_monitoring_dialog_poll_once_uses_current_checked_sources(
             line_a.id
         ]
     finally:
+        if dialog.poll_thread is not None:
+            dialog.poll_thread.finished.emit()
         dialog.close()
 
 
@@ -296,6 +490,8 @@ def test_realtime_monitoring_dialog_timer_polls_only_due_sources(qapp, tmp_path,
         assert dialog._next_poll_due_by_profile_id[line_b.id] == 60.0
     finally:
         dialog.poll_timer.stop()
+        if dialog.poll_thread is not None:
+            dialog.poll_thread.finished.emit()
         dialog.close()
 
 
@@ -652,6 +848,115 @@ def test_realtime_monitoring_dialog_defers_shutdown_until_all_workers_finish(qap
     assert not default_directory.exists()
     assert dialog.request_shutdown() is True
     assert completions == ["complete"]
+    dialog.close()
+    qapp.processEvents()
+
+
+def test_stale_finished_callbacks_do_not_clear_new_worker_ownership(qapp, tmp_path):
+    db_path = str(tmp_path / "dialog.db")
+    IndustrialDataRepository(db_path).ensure_schema()
+    dialog = RealtimeIndustrialMonitoringDialog(None, db_path)
+    old_poll = object()
+    new_poll = object()
+    old_dashboard = object()
+    new_dashboard = object()
+    try:
+        dialog.poll_thread = new_poll
+        dialog._clear_poll_thread(old_poll)
+        assert dialog.poll_thread is new_poll
+
+        dialog.dashboard_thread = new_dashboard
+        dialog._on_dashboard_writer_finished(old_dashboard)
+        assert dialog.dashboard_thread is new_dashboard
+    finally:
+        dialog.poll_thread = None
+        dialog.dashboard_thread = None
+        dialog.close()
+
+
+def test_realtime_parent_close_observes_dirty_modeless_source_editor(
+    qapp,
+    tmp_path,
+    monkeypatch,
+):
+    db_path = str(tmp_path / "dialog.db")
+    IndustrialDataRepository(db_path).ensure_schema()
+    answers = [QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes]
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: answers.pop(0),
+    )
+    dialog = RealtimeIndustrialMonitoringDialog(None, db_path)
+    dialog.show()
+    dialog.open_source_profiles_dialog()
+    qapp.processEvents()
+    source_window = dialog.source_window
+    assert source_window is not None
+    source_window.source_name_edit.setText("Unsaved line source")
+
+    assert dialog.close() is False
+    qapp.processEvents()
+
+    assert dialog.isVisible()
+    assert source_window.isVisible()
+    assert source_window.source_name_edit.text() == "Unsaved line source"
+    assert dialog.source_window is source_window
+    assert dialog._closing is False
+    assert "before closing realtime monitoring" in dialog.config_readiness_label.text()
+
+    assert dialog.close() is True
+    qapp.processEvents()
+
+    assert not dialog.isVisible()
+    assert not source_window.isVisible()
+    assert dialog.source_window is None
+    assert answers == []
+    dialog.deleteLater()
+    qapp.processEvents()
+
+
+def test_realtime_rebind_refuses_dirty_source_editor_bound_to_previous_database(
+    qapp,
+    tmp_path,
+    monkeypatch,
+):
+    first_db = str(tmp_path / "first.db")
+    second_db = str(tmp_path / "second.db")
+    IndustrialDataRepository(first_db).ensure_schema()
+    IndustrialDataRepository(second_db).ensure_schema()
+    answers = [QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes]
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: answers.pop(0),
+    )
+    dialog = RealtimeIndustrialMonitoringDialog(None, first_db)
+    dialog.show()
+    dialog.open_source_profiles_dialog()
+    qapp.processEvents()
+    source_window = dialog.source_window
+    assert source_window is not None
+    assert source_window.db_file == first_db
+    source_window.source_name_edit.setText("Unsaved line source")
+
+    assert dialog.rebind_database(second_db) is False
+
+    assert dialog.db_file == first_db
+    assert dialog.source_window is source_window
+    assert source_window.isVisible()
+    assert source_window.source_name_edit.text() == "Unsaved line source"
+    assert "before changing the workspace database" in dialog.config_readiness_label.text()
+
+    assert dialog.rebind_database(second_db) is True
+
+    assert dialog.db_file == second_db
+    assert dialog.source_window is None
+    assert not source_window.isVisible()
+    assert answers == []
+    dialog.close()
+    dialog.deleteLater()
+    qapp.processEvents()
 
 
 def test_realtime_monitoring_dialog_default_dashboard_directory_is_private(qapp, tmp_path):

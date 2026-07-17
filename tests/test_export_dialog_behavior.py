@@ -61,6 +61,48 @@ def _set_combo_to_existing_label(combo, needle):
     raise AssertionError(f"Missing combo label containing {needle!r}: {_combo_labels(combo)}")
 
 
+def test_result_dialog_sanitizes_details_before_display_or_copy(monkeypatch):
+    captured = {}
+
+    class _Dialog:
+        def exec(self):
+            captured["executed"] = True
+
+    monkeypatch.setattr(export_dialog, "QMessageBox", lambda _parent: _Dialog())
+    monkeypatch.setattr(
+        export_dialog,
+        "_configure_export_result_dialog",
+        lambda _dialog, **kwargs: captured.setdefault("display", kwargs["diagnostics"]),
+    )
+    monkeypatch.setattr(
+        export_dialog,
+        "_add_export_result_actions",
+        lambda _dialog, **_kwargs: (None, None),
+    )
+    monkeypatch.setattr(export_dialog, "_connect_export_result_links", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        export_dialog,
+        "_handle_export_result_action",
+        lambda _dialog, **kwargs: captured.setdefault("copy", kwargs["diagnostics"]),
+    )
+    secret = "postgresql://operator:secret-password@host/reports"
+
+    export_dialog.show_export_result_message(
+        None,
+        "error",
+        "Export failed",
+        "The export failed.",
+        diagnostics=f"terminal_failure: RuntimeError: could not connect to {secret}",
+    )
+
+    assert captured["executed"]
+    assert captured["display"] == captured["copy"]
+    assert secret not in captured["display"]
+    assert "could not connect" not in captured["display"]
+    assert "terminal_failure" in captured["display"]
+    assert "failure_type=ExportError" in captured["display"]
+
+
 def test_path_filter_group_controls_and_button_state(monkeypatch, tmp_path):
     dialog = _build_dialog(monkeypatch, tmp_path)
     try:
@@ -118,6 +160,45 @@ def test_path_filter_group_controls_and_button_state(monkeypatch, tmp_path):
         assert dialog.select_filter_label.text() == NOT_APPLIED_LABEL
         assert dialog.select_group_label.text() == "Not applied"
     finally:
+        dialog.close()
+
+
+def test_export_parent_honors_dirty_child_close_refusal(monkeypatch, tmp_path):
+    original_db = str(tmp_path / "original.db")
+    dialog = _build_dialog(monkeypatch, tmp_path, db_file=original_db)
+
+    class _RefusingChild:
+        def __init__(self):
+            self.allow_close = False
+            self.close_calls = 0
+            self.deleted = False
+
+        def close(self):
+            self.close_calls += 1
+            return self.allow_close
+
+        def deleteLater(self):
+            self.deleted = True
+
+    child = _RefusingChild()
+    dialog.filter_window = child
+    dialog.show()
+    try:
+        assert dialog._update_database_context(str(tmp_path / "replacement.db")) is False
+        assert dialog.db_file == original_db
+        assert dialog.filter_window is child
+        assert child.deleted is False
+
+        assert dialog.close() is False
+        assert dialog.isVisible()
+        assert dialog.filter_window is child
+
+        child.allow_close = True
+        assert dialog.close() is True
+        assert child.deleted is True
+        assert dialog.filter_window is None
+    finally:
+        child.allow_close = True
         dialog.close()
 
 
@@ -497,11 +578,20 @@ def test_export_lifecycle_success_cancel_and_terminal_paths(monkeypatch, tmp_pat
             events.append("message")
 
         monkeypatch.setattr(export_dialog.QMessageBox, "information", _record_information)
+        cancel_results = []
+        monkeypatch.setattr(
+            export_dialog,
+            "show_export_result_message",
+            lambda *args, **kwargs: (
+                cancel_results.append((args, kwargs)),
+                events.append("rich_message"),
+            ),
+        )
         dialog.on_export_canceled()
 
-        assert notices[-1][1] == "Export canceled"
+        assert cancel_results[-1][0][2] == "Export cancelled"
         assert progress_dialog.rejected_as_terminal
-        assert events[-2:] == ["progress_rejected", "message"]
+        assert events[-2:] == ["progress_rejected", "rich_message"]
         assert dialog.export_button.isEnabled()
         assert dialog._cancel_requested is False
         assert progress_dialog.cancel_button.isEnabled()
@@ -510,7 +600,11 @@ def test_export_lifecycle_success_cancel_and_terminal_paths(monkeypatch, tmp_pat
         monkeypatch.setattr(
             export_dialog,
             "build_export_completion_message",
-            lambda **kwargs: ("info", "Export complete", "Done"),
+            lambda **kwargs: (
+                ("error", "Export failed", "The export did not complete its required output.")
+                if kwargs.get("terminal_failure")
+                else ("info", "Export complete", "Done")
+            ),
         )
         monkeypatch.setattr(
             export_dialog,
@@ -531,18 +625,15 @@ def test_export_lifecycle_success_cancel_and_terminal_paths(monkeypatch, tmp_pat
         assert events[:2] == ["progress_accepted", "rich_message"]
         assert dialog.export_error_message is None
 
-        warnings = []
-        monkeypatch.setattr(
-            export_dialog.QMessageBox,
-            "warning",
-            lambda *args: (warnings.append(args), events.append("warning")),
-        )
         dialog.export_error_message = "disk full"
         events.clear()
         dialog.on_export_finished()
 
-        assert warnings[-1][1:] == ("Export failed", "disk full")
-        assert events[:2] == ["progress_accepted", "warning"]
+        assert result_messages[-1][0][2:4] == (
+            "Export failed",
+            "The export did not complete its required output.",
+        )
+        assert events[:2] == ["progress_accepted", "rich_message"]
 
         progress_dialog.accepted = False
         fake_thread.running = False

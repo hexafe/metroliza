@@ -2,6 +2,11 @@
 
 from metroliza.shared.progress_status import build_three_line_status
 from metroliza.parsing.parse_reports_thread import ParseReportsThread
+from metroliza.parsing.preflight import ParsePreflightStatus
+try:
+    from metroliza.ui.parser_preflight_worker import ParsePreflightThread
+except ImportError:  # pragma: no cover - lightweight Qt test stubs.
+    ParsePreflightThread = None
 from metroliza.shared.custom_logger import CustomLogger
 from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import (
@@ -37,6 +42,7 @@ from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
     configure_accessibility,
+    configure_dialog_button_roles,
     configure_window_size,
     path_field,
     section_label,
@@ -79,6 +85,10 @@ class ParsingDialog(QDialog):
         # Initialize variables
         self.directory = directory
         self.db_file = db_file
+        self.preflight_thread = None
+        self._preflight_result = None
+        self._preflight_error_detail = ""
+        self._close_requested = False
 
         # Initialize the widgets
         self.source_section_label = section_label("Source")
@@ -125,14 +135,28 @@ class ParsingDialog(QDialog):
         self.metadata_mode_label.setToolTip(f"{fast_tooltip} {enrich_tooltip} {complete_tooltip}")
         self.metadata_mode_combo.setToolTip(f"{fast_tooltip} {enrich_tooltip} {complete_tooltip}")
 
-        self.parse_button = QPushButton("Parse reports")
+        self.scan_button = QPushButton("Scan report contents")
+        self.scan_button.clicked.connect(self.scan_reports)
+        self.scan_button.setEnabled(False)
+        self.scan_button.setToolTip(
+            "Inspect report contents and parser evidence without writing to the database."
+        )
+
+        self.review_scan_button = QPushButton("Review scan")
+        self.review_scan_button.clicked.connect(self.show_preflight_details)
+        self.review_scan_button.setEnabled(False)
+
+        self.parse_button = QPushButton("Import ready reports")
         self.parse_button.clicked.connect(self.show_loading_screen)
         self.parse_button.setEnabled(False)
-        self.parse_button.setToolTip("Use this button to start reading data from PDF files and writing to the database")
-        if hasattr(self.parse_button, "setDefault"):
-            self.parse_button.setDefault(True)
+        self.parse_button.setToolTip(
+            "Import only the exact report contents approved by the latest scan."
+        )
 
-        self.readiness_label = status_chip("Select a source and database to enable parsing.", "warning")
+        self.readiness_label = status_chip(
+            "Select a source and database to scan report contents.",
+            "warning",
+        )
 
         self.mode_guidance_label = secondary_label(
             "Fast import stays light by default. OCR metadata can run after import or during complete import."
@@ -158,6 +182,9 @@ class ParsingDialog(QDialog):
         self.parsing_canceled = False
         self.parse_error_message = None
         self._pending_modeless_metadata_enrichment = False
+        current_index_changed = getattr(self.metadata_mode_combo, "currentIndexChanged", None)
+        if current_index_changed is not None and hasattr(current_index_changed, "connect"):
+            current_index_changed.connect(self._on_parse_inputs_changed)
 
         # Initialize the layout
         self.layout = QGridLayout()
@@ -202,6 +229,8 @@ class ParsingDialog(QDialog):
         row += 1
         self.layout.addWidget(self.readiness_label, row, 0, 1, 4)
         row += 1
+        self.layout.addWidget(self.review_scan_button, row, 1)
+        self.layout.addWidget(self.scan_button, row, 2)
         self.layout.addWidget(self.parse_button, row, 3)
 
         self.setLayout(self.layout)
@@ -210,7 +239,9 @@ class ParsingDialog(QDialog):
         configure_accessibility(self.archive_button, name="Browse parse archive source")
         configure_accessibility(self.database_button, name="Browse parse database")
         configure_accessibility(self.metadata_mode_combo, name="Metadata mode")
-        configure_accessibility(self.parse_button, name="Parse reports")
+        configure_accessibility(self.scan_button, name="Scan report contents")
+        configure_accessibility(self.review_scan_button, name="Review parser scan")
+        configure_accessibility(self.parse_button, name="Import ready reports")
         apply_metroliza_theme(self)
 
     def _selected_metadata_request_fields(self):
@@ -259,22 +290,87 @@ class ParsingDialog(QDialog):
         return metadata_parsing_mode, run_background_metadata_enrichment, request_modeless_enrichment
 
     def _sync_readiness_state(self):
-        is_ready = bool(self.directory and self.db_file)
-        self.parse_button.setEnabled(is_ready)
-        if is_ready:
-            self.readiness_label.setText("Ready to parse selected reports into the database.")
-            set_status_variant(self.readiness_label, "success")
+        inputs_ready = bool(self.directory and self.db_file)
+        self.scan_button.setEnabled(inputs_ready)
+        preflight_current = self._preflight_is_current()
+        ready_count = (
+            self._preflight_result.count(ParsePreflightStatus.READY)
+            if preflight_current
+            else 0
+        )
+        self.parse_button.setEnabled(preflight_current and ready_count > 0)
+        self.review_scan_button.setEnabled(bool(self._preflight_result or self._preflight_error_detail))
+        configure_dialog_button_roles(
+            primary=self.parse_button if preflight_current and ready_count > 0 else self.scan_button,
+            secondary=(
+                self.scan_button if preflight_current and ready_count > 0 else self.parse_button,
+                self.directory_button,
+                self.archive_button,
+                self.database_button,
+            ),
+            quiet=(self.review_scan_button,),
+        )
+        if preflight_current:
+            self.readiness_label.setText(self._preflight_summary_text(self._preflight_result))
+            has_review_items = any(
+                self._preflight_result.count(status)
+                for status in (
+                    ParsePreflightStatus.UNSUPPORTED,
+                    ParsePreflightStatus.AMBIGUOUS,
+                    ParsePreflightStatus.UNREADABLE,
+                )
+            )
+            set_status_variant(
+                self.readiness_label,
+                "success" if ready_count and not has_review_items else "warning",
+            )
+        elif inputs_ready:
+            self.readiness_label.setText(
+                "Ready to scan. No database changes are made until you review and import."
+            )
+            set_status_variant(self.readiness_label, "warning")
         elif self.directory:
-            self.readiness_label.setText("Select or create a database before parsing.")
+            self.readiness_label.setText("Select or create a database before scanning.")
             set_status_variant(self.readiness_label, "warning")
         else:
-            self.readiness_label.setText("Select a source and database to enable parsing.")
+            self.readiness_label.setText("Select a source and database to scan report contents.")
             set_status_variant(self.readiness_label, "warning")
+
+    def _preflight_is_current(self):
+        if self._preflight_result is None or self._preflight_result.cancelled:
+            return False
+        metadata_parsing_mode, _background, _modeless = self._build_parse_request_fields()
+        return self._preflight_result.matches_request(
+            source_path=self.directory,
+            database_path=self.db_file,
+            metadata_parsing_mode=metadata_parsing_mode,
+        )
+
+    @staticmethod
+    def _preflight_summary_text(result):
+        counts = result.status_counts
+        return (
+            f"Scan complete: {counts[ParsePreflightStatus.READY]} ready, "
+            f"{counts[ParsePreflightStatus.DUPLICATE]} already imported, "
+            f"{counts[ParsePreflightStatus.UNSUPPORTED]} unsupported, "
+            f"{counts[ParsePreflightStatus.AMBIGUOUS]} ambiguous, "
+            f"{counts[ParsePreflightStatus.UNREADABLE]} unreadable."
+        )
+
+    def _invalidate_preflight(self):
+        self._preflight_result = None
+        self._preflight_error_detail = ""
+
+    @pyqtSlot()
+    def _on_parse_inputs_changed(self, *_args):
+        self._invalidate_preflight()
+        self._sync_readiness_state()
 
     def _set_parse_source(self, selected_source):
         if not selected_source:
             return
         logger.info("Selected parse source: %s", selected_source)
+        self._invalidate_preflight()
         self.directory = selected_source
         update_path_field(self.directory_text_label, selected_source)
         self.database_button.setEnabled(True)
@@ -340,6 +436,7 @@ class ParsingDialog(QDialog):
                 if not filename.endswith(".db"):
                     filename += ".db"
                 logger.info("Selected parse database file: %s", filename)
+                self._invalidate_preflight()
                 self.db_file = filename
                 update_path_field(self.database_text_label, filename)
                 if self.parent() is not None and hasattr(self.parent(), "set_db_file"):
@@ -350,21 +447,146 @@ class ParsingDialog(QDialog):
             self.log_and_exit(e)
 
     @pyqtSlot()
+    def scan_reports(self):
+        """Start a non-mutating content/parser recognition pass."""
+
+        try:
+            metadata_parsing_mode, _background, _modeless = self._build_parse_request_fields()
+            request = validate_parse_request(
+                ParseRequest(
+                    source_directory=self.directory,
+                    db_file=self.db_file,
+                    metadata_parsing_mode=metadata_parsing_mode,
+                )
+            )
+            if ParsePreflightThread is None:
+                raise RuntimeError("Parser scan worker is unavailable in this runtime.")
+
+            self._invalidate_preflight()
+            (
+                self.scan_loading_dialog,
+                self.scan_loading_label,
+                self.scan_loading_bar,
+                self.scan_loading_gif,
+            ) = create_worker_progress_dialog(
+                self,
+                window_title="Scanning report contents...",
+                initial_status_text=build_three_line_status(
+                    "Scanning report contents...",
+                    "Discovering report files and parser evidence",
+                    "No database changes are being made",
+                ),
+                on_cancel=self.stop_scanning,
+            )
+            self.scan_button.setEnabled(False)
+            self.parse_button.setEnabled(False)
+            self.preflight_thread = ParsePreflightThread(
+                source_path=request.source_directory,
+                database_path=request.db_file,
+                metadata_parsing_mode=request.metadata_parsing_mode,
+            )
+            self.preflight_thread.update_label.connect(self.scan_loading_label.setText)
+            self.preflight_thread.update_progress.connect(self.scan_loading_bar.setValue)
+            self.preflight_thread.completed.connect(self.on_preflight_completed)
+            self.preflight_thread.failed.connect(self.on_preflight_failed)
+            self.preflight_thread.finished.connect(
+                lambda thread=self.preflight_thread: self._on_preflight_thread_stopped(thread)
+            )
+            self.preflight_thread.start()
+            self.scan_loading_dialog.show()
+        except Exception as exc:
+            dismiss_worker_progress_dialog(getattr(self, "scan_loading_dialog", None), rejected=True)
+            self._sync_readiness_state()
+            self.log_and_exit(exc)
+
+    @pyqtSlot()
+    def stop_scanning(self):
+        thread = self.preflight_thread
+        if thread is not None and thread.isRunning():
+            thread.stop_scan()
+            loading_label = getattr(self, "scan_loading_label", None)
+            if loading_label is not None:
+                loading_label.setText(
+                    build_three_line_status(
+                        "Canceling scan...",
+                        "Waiting for the current content inspection to stop",
+                        "No database changes were made",
+                    )
+                )
+
+    def _on_preflight_thread_stopped(self, stopped_thread):
+        if stopped_thread is self.preflight_thread:
+            self.preflight_thread = None
+        self._complete_deferred_close_if_idle()
+
+    @pyqtSlot(object)
+    def on_preflight_completed(self, result):
+        dismiss_worker_progress_dialog(
+            getattr(self, "scan_loading_dialog", None),
+            rejected=bool(result.cancelled),
+        )
+        if result.cancelled:
+            self._preflight_result = None
+            self.readiness_label.setText("Scan canceled. No database changes were made.")
+            set_status_variant(self.readiness_label, "warning")
+            self.scan_button.setEnabled(bool(self.directory and self.db_file))
+            return
+        self._preflight_result = result
+        self._preflight_error_detail = ""
+        self._sync_readiness_state()
+
+    @pyqtSlot(str)
+    def on_preflight_failed(self, detail):
+        dismiss_worker_progress_dialog(getattr(self, "scan_loading_dialog", None), rejected=True)
+        self._preflight_result = None
+        self._preflight_error_detail = str(detail)
+        self._sync_readiness_state()
+        self.readiness_label.setText("Scan failed before report compatibility could be reviewed.")
+        set_status_variant(self.readiness_label, "warning")
+        QMessageBox.warning(
+            self,
+            "Report scan failed",
+            "Metroliza could not complete the report-content scan. Review details and retry.",
+        )
+
+    @pyqtSlot()
+    def show_preflight_details(self):
+        result = self._preflight_result
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Report-content scan")
+        if result is None:
+            dialog.setText("The report-content scan did not complete.")
+            dialog.setDetailedText(self._preflight_error_detail or "No diagnostic detail is available.")
+            dialog.exec()
+            return
+
+        dialog.setText(
+            self._preflight_summary_text(result)
+            + "\n\nParser recognition is based on file contents, not filenames."
+        )
+        detail_lines = []
+        for item in result.files:
+            parser = item.parser_id or "none"
+            confidence = "--" if item.confidence is None else str(item.confidence)
+            digest = item.fingerprint.removeprefix("sha256:")[:12] if item.fingerprint else "unavailable"
+            detail_lines.append(
+                f"[{item.status.value.upper()}] {item.display_name} | parser={parser} | "
+                f"confidence={confidence} | sha256={digest} | "
+                f"reasons={','.join(item.reason_codes) or '-'}"
+            )
+            if item.competing_parser_ids:
+                detail_lines.append(
+                    "  competing parsers: " + ", ".join(item.competing_parser_ids)
+                )
+            if item.diagnostic_detail:
+                detail_lines.append("  diagnostic: " + item.diagnostic_detail)
+        dialog.setDetailedText("\n".join(detail_lines) or "No report files were discovered.")
+        dialog.exec()
+
+    @pyqtSlot()
     def show_loading_screen(self):
         """Validate parse request and hand processing to the parser thread."""
         try:
-            self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif = create_worker_progress_dialog(
-                self,
-                window_title="Parsing reports...",
-                initial_status_text=build_three_line_status("Parsing files...", "Preparing parser thread", "ETA --"),
-                on_cancel=self.stop_parsing,
-            )
-
-            # Disable the parse button before the worker starts.
-            self.parse_button.setEnabled(False)
-            self.parsing_canceled = False
-            self.parse_error_message = None
-
             (
                 metadata_parsing_mode,
                 run_background_metadata_enrichment,
@@ -379,15 +601,39 @@ class ParsingDialog(QDialog):
                 )
             )
 
+            self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif = create_worker_progress_dialog(
+                self,
+                window_title="Importing reviewed reports...",
+                initial_status_text=build_three_line_status(
+                    "Importing reviewed reports...",
+                    "Preparing parser thread",
+                    "ETA --",
+                ),
+                on_cancel=self.stop_parsing,
+            )
+
+            # Disable the parse button before the worker starts.
+            self.parse_button.setEnabled(False)
+            self.scan_button.setEnabled(False)
+            self.parsing_canceled = False
+            self.parse_error_message = None
+
             # Start the parsing thread
             self.parse_thread = ParseReportsThread(request)
+            if self._preflight_is_current():
+                self.parse_thread.preflight_result = self._preflight_result
             self.parse_thread.update_label.connect(self.loading_label.setText)
             self.parse_thread.update_progress.connect(self.loading_bar.setValue)
             self.parse_thread.error_occurred.connect(self.on_parse_error)
             self.parse_thread.finished.connect(self.on_parse_finished)
+            self.parse_thread.finished.connect(
+                lambda thread=self.parse_thread: self._on_parse_thread_stopped(thread)
+            )
             self.parse_thread.start()
             self.loading_dialog.show()
         except Exception as e:
+            dismiss_worker_progress_dialog(getattr(self, "loading_dialog", None), rejected=True)
+            self._sync_readiness_state()
             self.log_and_exit(e)
 
     @pyqtSlot()
@@ -398,9 +644,22 @@ class ParsingDialog(QDialog):
             self.parsing_canceled = True
             if self.parse_thread is not None and self.parse_thread.isRunning():
                 self.parse_thread.stop_parsing()
-                self.loading_label.setText(build_three_line_status("Canceling parsing...", "Waiting for parser thread to stop", "ETA --"))
+                loading_label = getattr(self, "loading_label", None)
+                if loading_label is not None:
+                    loading_label.setText(
+                        build_three_line_status(
+                            "Canceling parsing...",
+                            "Waiting for parser thread to stop",
+                            "ETA --",
+                        )
+                    )
         except Exception as e:
             self.log_and_exit(e)
+
+    def _on_parse_thread_stopped(self, stopped_thread):
+        if stopped_thread is self.parse_thread:
+            self.parse_thread = None
+        self._complete_deferred_close_if_idle()
 
 
     @staticmethod
@@ -420,6 +679,33 @@ class ParsingDialog(QDialog):
         parsed_files = max(0, int(getattr(result, "parsed_files", 0) or 0))
         failed_files = max(0, int(getattr(result, "failed_files", 0) or 0))
         skipped_files = max(0, int(getattr(result, "skipped_files", 0) or 0))
+        duplicate_files = max(
+            0,
+            int(getattr(result, "preflight_duplicate_files", 0) or 0),
+        )
+        unsupported_files = max(
+            0,
+            int(getattr(result, "preflight_unsupported_files", 0) or 0),
+        )
+        ambiguous_files = max(
+            0,
+            int(getattr(result, "preflight_ambiguous_files", 0) or 0),
+        )
+        unreadable_files = max(
+            0,
+            int(getattr(result, "preflight_unreadable_files", 0) or 0),
+        )
+        changed_files = max(
+            0,
+            int(getattr(result, "preflight_changed_files", 0) or 0),
+        )
+        reviewed_omissions = (
+            duplicate_files
+            + unsupported_files
+            + ambiguous_files
+            + unreadable_files
+            + changed_files
+        )
 
         if total_files == 0:
             return (
@@ -431,7 +717,7 @@ class ParsingDialog(QDialog):
                 ),
             )
 
-        if failed_files and parsed_files == 0:
+        if (failed_files or changed_files) and parsed_files == 0:
             skipped_message = ""
             if skipped_files:
                 skipped_message = (
@@ -445,24 +731,29 @@ class ParsingDialog(QDialog):
                     f"Metroliza found {total_files} {self._report_file_label(total_files)}, "
                     f"but none were saved to {self.db_file}. "
                     f"{failed_files} {self._report_file_label(failed_files)} could not be parsed. "
+                    "Content or parser selection changed after scan: "
+                    f"{changed_files}. "
                     f"{skipped_message} "
                     "Review the log for details, then check the report format and retry."
                 ),
             )
 
-        if skipped_files and parsed_files == 0:
+        if (skipped_files or reviewed_omissions) and parsed_files == 0:
             return (
                 "warning",
                 "No compatible reports parsed",
                 (
                     f"Metroliza inspected {total_files} {self._report_file_label(total_files)}, "
-                    f"but {skipped_files} did not contain a supported report structure. "
+                    f"but none were approved for import. Already imported: {duplicate_files}; "
+                    f"unsupported: {unsupported_files + skipped_files}; ambiguous: {ambiguous_files}; "
+                    f"unreadable: {unreadable_files}; content or parser selection changed "
+                    f"after scan: {changed_files}. "
                     f"Nothing was written to {self.db_file}. Parser recognition uses file contents, "
                     "not filenames."
                 ),
             )
 
-        if failed_files:
+        if failed_files or changed_files:
             skipped_message = ""
             if skipped_files:
                 skipped_message = (
@@ -476,20 +767,24 @@ class ParsingDialog(QDialog):
                     f"{parsed_files} of {total_files} {self._report_file_label(total_files)} "
                     f"completed successfully and are available in {self.db_file}. "
                     f"{failed_files} {self._report_file_label(failed_files)} could not be parsed. "
+                    "Content or parser selection changed after scan and was not imported: "
+                    f"{changed_files}. "
                     f"{skipped_message} "
                     "Skipped files are listed in the log."
                 ),
             )
 
-        if skipped_files:
+        if skipped_files or reviewed_omissions:
             return (
                 "warning",
-                "Parsing completed with skipped files",
+                "Import completed with reviewed omissions",
                 (
                     f"{parsed_files} of {total_files} {self._report_file_label(total_files)} "
                     f"completed successfully and are available in {self.db_file}. "
-                    "Unsupported based on file contents and skipped: "
-                    f"{skipped_files} {self._report_file_label(skipped_files)}."
+                    f"Already imported: {duplicate_files}; unsupported: "
+                    f"{unsupported_files + skipped_files}; ambiguous: {ambiguous_files}; "
+                    f"unreadable: {unreadable_files}; content or parser selection changed "
+                    f"after scan: {changed_files}."
                 ),
             )
 
@@ -510,28 +805,26 @@ class ParsingDialog(QDialog):
     def on_parse_finished(self):
         """Handle parse completion, including cancellation and error paths."""
         try:
+            close_requested = getattr(self, "_close_requested", False)
             should_request_modeless_enrichment = (
-                not self.parse_error_message
+                not close_requested
+                and not self.parse_error_message
                 and not self.parsing_canceled
                 and self._pending_modeless_metadata_enrichment
             )
             dismiss_worker_progress_dialog(getattr(self, "loading_dialog", None))
 
-            if self.parse_error_message:
-                QMessageBox.warning(self, "Parsing failed", self.parse_error_message)
-            elif self.parsing_canceled:
-                # Show a message box to inform the user that parsing has been canceled
-                QMessageBox.information(self, "Parsing canceled", "Parsing has been canceled")
-            elif not should_request_modeless_enrichment:
-                # Show a message box to inform the user that parsing is complete
-                severity, title, message = self._build_parse_completion_feedback()
-                if severity == "warning":
-                    QMessageBox.warning(self, title, message)
-                else:
-                    QMessageBox.information(self, title, message)
-
-            # Re-enable the parse button
-            self.parse_button.setEnabled(True)
+            if not close_requested:
+                if self.parse_error_message:
+                    QMessageBox.warning(self, "Parsing failed", self.parse_error_message)
+                elif self.parsing_canceled:
+                    QMessageBox.information(self, "Parsing canceled", "Parsing has been canceled")
+                elif not should_request_modeless_enrichment:
+                    severity, title, message = self._build_parse_completion_feedback()
+                    if severity == "warning":
+                        QMessageBox.warning(self, title, message)
+                    else:
+                        QMessageBox.information(self, title, message)
 
             # Reset parse state flags
             self.parsing_canceled = False
@@ -543,13 +836,65 @@ class ParsingDialog(QDialog):
                 if parent is not None and hasattr(parent, "set_db_file"):
                     parent.set_db_file(self.db_file)
 
-            # Close the parsing dialog
-            self.accept()
+            # The destination changed, so require a fresh duplicate/content scan
+            # before another import while keeping this dialog open for review.
+            self._invalidate_preflight()
+            self._sync_readiness_state()
 
             if should_request_modeless_enrichment:
                 self.metadata_enrichment_requested.emit(self.db_file)
         except Exception as e:
             self.log_and_exit(e)
+
+    @staticmethod
+    def _thread_is_running(thread):
+        if thread is None:
+            return False
+        try:
+            return bool(thread.isRunning())
+        except (AttributeError, RuntimeError):
+            return False
+
+    def _workers_running(self):
+        return any(
+            self._thread_is_running(thread)
+            for thread in (self.preflight_thread, self.parse_thread)
+        )
+
+    def _request_active_worker_cancellation(self):
+        if self._thread_is_running(self.preflight_thread):
+            self.stop_scanning()
+        if self._thread_is_running(self.parse_thread):
+            self.stop_parsing()
+
+    def _defer_close_for_active_workers(self):
+        if not self._workers_running():
+            return False
+        self._close_requested = True
+        self._request_active_worker_cancellation()
+        return True
+
+    def is_close_deferred(self):
+        """Return whether an active worker has accepted a deferred close request."""
+
+        return bool(getattr(self, "_close_requested", False))
+
+    def _complete_deferred_close_if_idle(self):
+        if not getattr(self, "_close_requested", False) or self._workers_running():
+            return
+        self._close_requested = False
+        QDialog.reject(self)
+
+    def reject(self):
+        if self._defer_close_for_active_workers():
+            return
+        QDialog.reject(self)
+
+    def closeEvent(self, event):
+        if self._defer_close_for_active_workers():
+            event.ignore()
+            return
+        super().closeEvent(event)
 
     def log_and_exit(self, exception):
         CustomLogger(exception, reraise=False)

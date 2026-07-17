@@ -80,6 +80,9 @@ def _write_minimal_export_dashboard(tmpdir: str | Path) -> str:
                 "grouping_applied": True,
                 "sample_size": 2,
                 "limits": {"nominal": 10.0, "lsl": 9.8, "usl": 10.2},
+                "metadata_rows": [
+                    {"label": "Data through", "value": "2026-06-13T10:04:00Z"},
+                ],
                 "charts": [
                     {
                         "chart_type": "distribution",
@@ -146,10 +149,12 @@ def test_render_plotly_shell_exposes_chart_key_for_point_marks() -> None:
 
     assert 'data-dashboard-chart-key="section-001:chart-02"' in html_markup
     assert 'data-plotly-spec-light=' in html_markup
+    assert 'class="plotly-runtime-fallback" role="status"' in html_markup
+    assert "saved dashboard" in html_markup
 
 
 class TestExportHtmlDashboard(unittest.TestCase):
-    def test_render_overview_cards_formats_generated_as_date_and_time_lines(self):
+    def test_render_overview_cards_omits_timestamp_already_shown_in_header(self):
         html_markup = _render_overview_cards(
             {
                 'generated_at': '2026-03-29T18:09:38+02:00',
@@ -161,11 +166,11 @@ class TestExportHtmlDashboard(unittest.TestCase):
             }
         )
 
-        self.assertIn('metric-value-line', html_markup)
-        self.assertIn('2026-03-29', html_markup)
-        self.assertIn('18:09:38', html_markup)
-        self.assertNotIn('18:09:38+02:00', html_markup)
-        self.assertNotIn('2026-03-29T18:09:38+02:00', html_markup)
+        self.assertNotIn('Generated', html_markup)
+        self.assertIn('Sections', html_markup)
+        self.assertIn('>3<', html_markup)
+        self.assertIn('Charts', html_markup)
+        self.assertIn('>7<', html_markup)
         self.assertNotIn('Native renders', html_markup)
         self.assertNotIn('Matplotlib renders', html_markup)
 
@@ -1984,6 +1989,35 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertIn(".plotly-point-controls input[type=\"search\"]", css)
         self.assertIn("@media (max-width: 780px)", css)
         self.assertIn("grid-template-columns: 1fr 1fr;", css)
+
+    def test_export_dashboard_header_has_snapshot_times_without_duplicate_metric(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            html_text = _write_minimal_export_dashboard(tmpdir)
+
+        self.assertIn('class="dashboard-meta"', html_text)
+        self.assertIn("Generated at", html_text)
+        self.assertIn("Data through", html_text)
+        self.assertIn("2026-06-13T10:04:00Z", html_text)
+        self.assertIn('data-freshness="snapshot"', html_text)
+        self.assertIn("Saved snapshot", html_text)
+        self.assertNotIn('<div class="metric-label">Generated</div>', html_text)
+        self.assertIn('class="skip-link" href="#dashboard-content"', html_text)
+        self.assertIn('<main id="dashboard-content" tabindex="-1">', html_text)
+
+    def test_export_dashboard_exposes_accessible_plotly_runtime_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            html_text = _write_minimal_export_dashboard(tmpdir)
+
+        css = _extract_style_block(html_text)
+        self.assertIn("@media (prefers-reduced-motion: reduce)", css)
+        self.assertIn("@media (forced-colors: active)", css)
+        self.assertIn("@media print", css)
+        self.assertIn('class="plotly-runtime-fallback" role="status"', html_text)
+        self.assertIn("Its image snapshot remains available below.", html_text)
+        self.assertIn("const showPlotlyRuntimeFallback", html_text)
+        self.assertIn("showPlotlyRuntimeFallback(container, 'render-error');", html_text)
+        self.assertIn("showPlotlyRuntimeUnavailable();", html_text)
+        self.assertNotIn("cdn.plot.ly", html_text)
 
 
 if __name__ == '__main__':

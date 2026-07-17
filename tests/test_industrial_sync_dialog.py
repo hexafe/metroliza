@@ -88,6 +88,9 @@ class _CapturingLinkRefreshThread:
     def start(self):
         self.started = True
 
+    def isRunning(self):
+        return self.started
+
 
 def test_sync_dialog_requires_saved_source_and_masks_password(tmp_path):
     _app()
@@ -974,15 +977,19 @@ def test_sync_dialog_batch_fetch_refreshes_links_once_after_all_sources(monkeypa
     assert _CapturingLinkRefreshThread.instances[0].db_file == db_path
     assert _CapturingLinkRefreshThread.instances[0].started is True
     assert "Refreshing report links" in dialog.status_label.text()
+    assert not dialog.close_button.isEnabled()
     _CapturingSyncThread.instances[1].started = False
     dialog.on_oznak_thread_stopped()
+    assert not dialog.close_button.isEnabled()
 
     dialog._on_batch_link_refresh_ready(
         types.SimpleNamespace(accepted_links=4, ambiguous_reports=1)
     )
+    _CapturingLinkRefreshThread.instances[0].started = False
     dialog._clear_batch_link_refresh_thread()
 
     assert "Links refreshed: 4 links, 1 ambiguous" in dialog.status_label.text()
+    assert dialog.close_button.isEnabled()
     dialog.close()
 
 
@@ -1403,7 +1410,9 @@ def test_sync_dialog_error_and_close_running_paths(monkeypatch, tmp_path):
 
     assert "password=<redacted>" in warnings[0][2]
     assert "super-secret" not in warnings[0][2]
-    assert infos[0][2] == "Cancel or wait for the operation to finish."
+    assert infos[0][2] == (
+        "Cancellation was requested where supported. Wait for the operation to finish."
+    )
     assert not event.isAccepted()
     dialog.oznak_sync_thread = None
     dialog.close()

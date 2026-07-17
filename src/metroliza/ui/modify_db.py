@@ -28,7 +28,12 @@ from metroliza.reports.report_edit_service import (
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.reports.report_repository import ReportRepository
 from metroliza.reports.report_schema import ensure_report_schema
-from metroliza.ui.ui_foundation import apply_metroliza_theme, configure_table, configure_window_size
+from metroliza.ui.ui_foundation import (
+    apply_metroliza_theme,
+    configure_dialog_button_roles,
+    configure_table,
+    configure_window_size,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -127,6 +132,8 @@ class ModifyDB(QDialog):
         self._last_clicked_row_by_table = {}
         self._record_specs_by_table = {}
         self._storage_flavor = "current"
+        self._changes_committed = False
+        self._discard_confirmed = False
 
         self.setup_ui()
 
@@ -204,14 +211,11 @@ class ModifyDB(QDialog):
                 self.apply_button.setEnabled(False)
             self.undo_button = QPushButton("Undo last change")
             self.cancel_button = QPushButton("Cancel")
-            if hasattr(self.apply_button, "setDefault"):
-                self.apply_button.setDefault(True)
-            if hasattr(self.apply_button, "setAutoDefault"):
-                self.apply_button.setAutoDefault(True)
-            if hasattr(self.cancel_button, "setAutoDefault"):
-                self.cancel_button.setAutoDefault(False)
-            if hasattr(self.select_db_button, "setAutoDefault"):
-                self.select_db_button.setAutoDefault(False)
+            configure_dialog_button_roles(
+                primary=self.apply_button,
+                secondary=(self.select_db_button,),
+                quiet=(self.cancel_button,),
+            )
         except Exception as e:
             self.log_and_exit(e)
 
@@ -425,6 +429,10 @@ class ModifyDB(QDialog):
     def select_db_file(self):
         """Select a database file and load editable values into each table."""
         try:
+            if self.has_pending_changes() and not self._confirm_discard_changes(
+                "Choose another database"
+            ):
+                return
             """Open a file dialog to select a database file"""
             filename, _ = QFileDialog.getOpenFileName(
                 self, "Select a database file", "", "SQLite database (*.db);;All files (*)"
@@ -450,6 +458,8 @@ class ModifyDB(QDialog):
             self.measurement_records_table.clearContents()
             self.undo_data.clear()
             self._record_specs_by_table.clear()
+            self._changes_committed = False
+            self._discard_confirmed = False
             self._prepare_database_for_loading()
 
             reference_source = ("REPORTS", "REFERENCE") if self._uses_legacy_schema() else ("report_metadata", "reference")
@@ -854,6 +864,7 @@ class ModifyDB(QDialog):
             QMessageBox.information(self, "Changes applied", "Changes have been applied successfully.")
 
             # Close the dialog
+            self._changes_committed = True
             self.close()
         except Exception as e:
             self.log_and_exit(e)
@@ -1017,6 +1028,48 @@ class ModifyDB(QDialog):
 
     def cancel_changes(self):
         self.close()
+
+    def has_pending_changes(self) -> bool:
+        """Return whether the editor contains unapplied table changes."""
+
+        if not hasattr(self, "reference_table"):
+            return False
+        return bool(self.collect_modifications().strip())
+
+    def _confirm_discard_changes(self, action: str = "Close editor") -> bool:
+        choice = QMessageBox.question(
+            self,
+            "Unapplied database changes",
+            f"{action} and discard the unapplied table changes?",
+            QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        return choice == QMessageBox.StandardButton.Discard
+
+    def reject(self) -> None:
+        """Route Escape through the same dirty-state guard as the Close button."""
+
+        if (
+            not self._changes_committed
+            and not self._discard_confirmed
+            and self.has_pending_changes()
+            and not self._confirm_discard_changes()
+        ):
+            return
+        self._discard_confirmed = True
+        super().reject()
+
+    def closeEvent(self, event) -> None:
+        if (
+            not self._changes_committed
+            and not self._discard_confirmed
+            and self.has_pending_changes()
+            and not self._confirm_discard_changes()
+        ):
+            event.ignore()
+            return
+        self._discard_confirmed = True
+        super().closeEvent(event)
 
     def log_and_exit(self, exception):
         CustomLogger(exception, reraise=False)

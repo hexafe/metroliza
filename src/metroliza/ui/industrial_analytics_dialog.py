@@ -82,6 +82,7 @@ from metroliza.tabular.tabular_analytics_service import (
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
     configure_accessibility,
+    configure_dialog_button_roles,
     configure_window_size,
     path_field,
     section_label,
@@ -99,6 +100,13 @@ except ImportError:  # pragma: no cover - compatibility with lightweight test st
 SOURCE_PRODUCTION_CACHE = "production_cache"
 SOURCE_TABULAR_FILE = "tabular_file"
 PRESENTATION_INDUSTRIAL_CACHE = "industrial_cache"
+
+
+def _explicit_output_path(path: str) -> str:
+    """Resolve generated relative paths so the UI always shows a real destination folder."""
+
+    candidate = Path(path).expanduser()
+    return str(candidate if candidate.is_absolute() else candidate.resolve())
 
 
 def _coerce_int_or_none(value):
@@ -192,6 +200,10 @@ class DashboardInteractivityOptionsDialog(QDialog):
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
+        apply_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        apply_button.setText("Apply")
+        configure_dialog_button_roles(primary=apply_button, secondary=(cancel_button,))
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -282,6 +294,10 @@ class DashboardPopulationLayerOptionsDialog(QDialog):
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
+        apply_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        apply_button.setText("Apply")
+        configure_dialog_button_roles(primary=apply_button, secondary=(cancel_button,))
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -360,8 +376,8 @@ class MetricSelectionDialog(QDialog):
 
         self.select_all_button.clicked.connect(lambda: self._set_metric_checks(True))
         self.clear_button.clicked.connect(lambda: self._set_metric_checks(False))
-        self.cancel_button.clicked.connect(self.reject)
-        self.apply_button.clicked.connect(self.accept)
+        self.cancel_button.clicked.connect(self._request_cancel)
+        self.apply_button.clicked.connect(self._accept_selection)
         self.metrics_list.itemChanged.connect(lambda _item: self._sync_summary())
         self.search_field.textChanged.connect(self._filter_metrics)
 
@@ -384,7 +400,35 @@ class MetricSelectionDialog(QDialog):
         layout.addLayout(actions)
 
         self._populate_metrics(selected_fields)
+        self._committed_metric_fields = self._selected_metric_fields()
+        configure_dialog_button_roles(
+            primary=self.apply_button,
+            secondary=(self.cancel_button,),
+            quiet=(self.select_all_button, self.clear_button),
+        )
         apply_metroliza_theme(self)
+
+    def _selected_metric_fields(self) -> tuple[str, ...]:
+        return tuple(metric.field_name for metric in self.selected_metrics())
+
+    def _request_cancel(self) -> None:
+        if self._selected_metric_fields() != self._committed_metric_fields:
+            answer = QMessageBox.question(
+                self,
+                "Discard metric changes?",
+                "Discard changes to the selected metrics?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        self.reject()
+
+    def _accept_selection(self) -> None:
+        if not self.selected_metrics():
+            return
+        self._committed_metric_fields = self._selected_metric_fields()
+        self.accept()
 
     def _populate_metrics(self, selected_fields: set[str] | None) -> None:
         selected_lookup = None if selected_fields is None else set(selected_fields)
@@ -414,6 +458,7 @@ class MetricSelectionDialog(QDialog):
         total_count = len(self.metrics)
         self.summary_label.setText(f"{selected_count} of {total_count} metrics selected")
         set_status_variant(self.summary_label, "success" if selected_count else "warning")
+        self.apply_button.setEnabled(bool(selected_count))
 
     def _filter_metrics(self) -> None:
         search = self.search_field.text().strip().casefold()
@@ -474,7 +519,7 @@ class MetricLimitsDialog(QDialog):
         self.cancel_button = QPushButton("Cancel")
         self.apply_button = QPushButton("Use limits")
         self.apply_button.setDefault(True)
-        self.cancel_button.clicked.connect(self.reject)
+        self.cancel_button.clicked.connect(self._request_cancel)
         self.apply_button.clicked.connect(self._accept_if_valid)
 
         layout = QVBoxLayout(self)
@@ -489,12 +534,37 @@ class MetricLimitsDialog(QDialog):
         footer.addWidget(self.cancel_button)
         footer.addWidget(self.apply_button)
         layout.addLayout(footer)
+        self._committed_limits_signature = self._limits_signature()
+        self.table.itemChanged.connect(lambda _item: self._sync_validation())
+        configure_dialog_button_roles(
+            primary=self.apply_button,
+            secondary=(self.cancel_button,),
+        )
         apply_metroliza_theme(self)
 
-    def limits(self) -> dict[str, tuple[float | None, float | None]]:
-        return dict(self._limits)
+    def _limits_signature(self) -> tuple[tuple[str, str], ...]:
+        return tuple(
+            (
+                "" if self.table.item(row, 1) is None else self.table.item(row, 1).text().strip(),
+                "" if self.table.item(row, 2) is None else self.table.item(row, 2).text().strip(),
+            )
+            for row in range(self.table.rowCount())
+        )
 
-    def _accept_if_valid(self) -> None:
+    def _request_cancel(self) -> None:
+        if self._limits_signature() != self._committed_limits_signature:
+            answer = QMessageBox.question(
+                self,
+                "Discard limit changes?",
+                "Discard changes to metric limits?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        self.reject()
+
+    def _parsed_limits(self) -> tuple[dict[str, tuple[float | None, float | None]], str]:
         parsed: dict[str, tuple[float | None, float | None]] = {}
         for row in range(self.table.rowCount()):
             metric_item = self.table.item(row, 0)
@@ -504,16 +574,35 @@ class MetricLimitsDialog(QDialog):
             lsl = self._optional_float(row, 1)
             usl = self._optional_float(row, 2)
             if isinstance(lsl, str) or isinstance(usl, str):
-                self.status_label.setText(f"Invalid numeric limit for {metric_item.text()}.")
-                set_status_variant(self.status_label, "danger")
-                return
+                return {}, f"Invalid numeric limit for {metric_item.text()}."
             if lsl is not None and usl is not None and lsl >= usl:
-                self.status_label.setText(f"LSL must be lower than USL for {metric_item.text()}.")
-                set_status_variant(self.status_label, "danger")
-                return
+                return {}, f"LSL must be lower than USL for {metric_item.text()}."
             if field_name and (lsl is not None or usl is not None):
                 parsed[field_name] = (lsl, usl)
+        return parsed, ""
+
+    def _sync_validation(self) -> None:
+        _parsed, error = self._parsed_limits()
+        self.apply_button.setEnabled(not error)
+        if error:
+            self.status_label.setText(error)
+            set_status_variant(self.status_label, "danger")
+            return
+        self.status_label.setText(
+            "Leave one side blank for one-sided tolerance; leave both blank for no limits."
+        )
+        set_status_variant(self.status_label, "info")
+
+    def limits(self) -> dict[str, tuple[float | None, float | None]]:
+        return dict(self._limits)
+
+    def _accept_if_valid(self) -> None:
+        parsed, error = self._parsed_limits()
+        if error:
+            self._sync_validation()
+            return
         self._limits = parsed
+        self._committed_limits_signature = self._limits_signature()
         self.accept()
 
     def _optional_float(self, row: int, column: int) -> float | None | str:
@@ -556,8 +645,12 @@ class IndustrialAnalyticsDialog(QDialog):
         self._preloaded_tabular_source = bool(
             source_kind == SOURCE_TABULAR_FILE and tabular_load_result is not None
         )
-        self.output_dashboard_file = default_dashboard_path(self.db_file or "production_analytics")
-        self.output_workbook_file = default_workbook_path(self.db_file or "production_analytics")
+        self.output_dashboard_file = _explicit_output_path(
+            default_dashboard_path(self.db_file or "production_analytics")
+        )
+        self.output_workbook_file = _explicit_output_path(
+            default_workbook_path(self.db_file or "production_analytics")
+        )
         self.analytics_thread = None
         self.tabular_load_thread = None
         self.metric_candidates: tuple[ProductionMetricSelection, ...] = ()
@@ -742,6 +835,26 @@ class IndustrialAnalyticsDialog(QDialog):
 
         self._build_layout()
         self._configure_accessibility()
+        configure_dialog_button_roles(
+            primary=self.start_button,
+            secondary=(self.close_button,),
+            quiet=(
+                self.browse_input_button,
+                self.filters_button,
+                self.clear_filter_button,
+                self.load_metrics_button,
+                self.choose_metrics_button,
+                self.edit_limits_button,
+                self.edit_groups_button,
+                self.clear_groups_button,
+                self.dashboard_button,
+                self.workbook_button,
+                self.dashboard_interactivity_button,
+                self.population_layer_button,
+                self.dashboard_visuals_button,
+                self.advanced_toggle_button,
+            ),
+        )
         self._sync_source_visibility()
         self._reset_group_options(())
         if tabular_load_result is not None:
@@ -1531,8 +1644,8 @@ class IndustrialAnalyticsDialog(QDialog):
         if len(selected_files) > 1:
             first_path = Path(self.input_file)
             output_seed = str(first_path.with_name(f"{first_path.stem}_combined.csv"))
-        self.output_dashboard_file = default_dashboard_path(output_seed)
-        self.output_workbook_file = default_workbook_path(output_seed)
+        self.output_dashboard_file = _explicit_output_path(default_dashboard_path(output_seed))
+        self.output_workbook_file = _explicit_output_path(default_workbook_path(output_seed))
         self._tabular_reload_notice = ""
         self.metric_candidates = ()
         self._set_tabular_load_result(None)
@@ -1982,7 +2095,7 @@ class IndustrialAnalyticsDialog(QDialog):
                 for item in self.tabular_column_filters
             )
         elif self.tabular_filter_expression:
-            columns_text = "Magic filter"
+            columns_text = "Advanced expression"
         else:
             columns_text = " | ".join(
                 str(label_lookup.get(column, column)) for column in self.tabular_filter_columns

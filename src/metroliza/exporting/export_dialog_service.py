@@ -8,6 +8,12 @@ from metroliza.exporting.contracts import (
     validate_export_request,
 )
 from metroliza.exporting.export_preset_utils import build_export_options_for_preset
+from metroliza.exporting.export_outcomes import (
+    ExportRunResult,
+    build_export_run_message,
+    derive_export_run_result,
+    format_export_diagnostics,
+)
 from pathlib import Path
 
 
@@ -139,70 +145,46 @@ def build_validated_export_request(
     )
 
 
-def build_export_completion_message(*, excel_file, export_target, completion_metadata):
-    """Compose the completion dialog payload for local and Google export flows."""
-    metadata = completion_metadata or {}
-    warnings = [str(w) for w in metadata.get('conversion_warnings', []) if str(w).strip()]
-    dashboard_warnings = [str(w) for w in metadata.get('html_dashboard_warnings', []) if str(w).strip()]
-    summary_warnings = [str(w) for w in metadata.get('summary_sheet_warnings', []) if str(w).strip()]
-    fallback_message = str(metadata.get('fallback_message', '')).strip()
-    converted_url = str(metadata.get('converted_url', '')).strip()
-    export_directory_line = build_export_directory_link_line(excel_file)
-    dashboard_file_line = build_export_artifact_link_line('HTML dashboard', metadata.get('html_dashboard_path'))
+def build_export_completion_message(
+    *,
+    excel_file,
+    export_target,
+    completion_metadata,
+    run_result: ExportRunResult | None = None,
+    cancelled: bool = False,
+    terminal_failure: str = "",
+):
+    """Compose primary completion copy from all requested artifact outcomes."""
 
-    def _append_warning_sections(message_lines):
-        if dashboard_warnings:
-            message_lines.extend(["", "HTML dashboard warnings:", *[f"- {warning}" for warning in dashboard_warnings]])
-        if summary_warnings:
-            message_lines.extend(["", "Summary sheet warnings:", *[f"- {warning}" for warning in summary_warnings]])
+    result = run_result or derive_export_run_result(
+        excel_file=excel_file,
+        export_target=export_target,
+        completion_metadata=completion_metadata,
+        cancelled=cancelled,
+        terminal_failure=terminal_failure,
+    )
+    return build_export_run_message(result)
 
-    if export_target == 'html_dashboard':
-        message_lines = ["HTML dashboard exported successfully!"]
-        if dashboard_file_line:
-            message_lines.extend(["", dashboard_file_line])
-        _append_warning_sections(message_lines)
-        if summary_warnings:
-            return 'warning', 'Export completed with warnings', "\n".join(message_lines)
-        return 'info', 'Export successful', "\n".join(message_lines)
 
-    base_success_lines = ["Data exported successfully!"]
-    artifact_lines = [line for line in (export_directory_line, dashboard_file_line) if line]
-    for artifact_line in artifact_lines:
-        base_success_lines.extend(["", artifact_line])
+def build_export_completion_diagnostics(
+    *,
+    excel_file,
+    export_target,
+    completion_metadata,
+    run_result: ExportRunResult | None = None,
+    cancelled: bool = False,
+    terminal_failure: str = "",
+):
+    """Return copyable diagnostics kept out of the primary completion copy."""
 
-    if export_target == 'google_sheets_drive_convert':
-        if warnings or fallback_message:
-            message_lines = [
-                f"Data exported locally to {excel_file}.",
-            ]
-            if export_directory_line:
-                message_lines.append(export_directory_line)
-            if dashboard_file_line:
-                message_lines.append(dashboard_file_line)
-            message_lines.extend([
-                "",
-                "Google Sheets conversion was not fully completed.",
-            ])
-            if converted_url:
-                message_lines.append(f"Google Sheet: {converted_url}")
-            if warnings:
-                message_lines.append("Warnings/Errors:")
-                message_lines.extend(f"- {warning}" for warning in warnings)
-            _append_warning_sections(message_lines)
-            return 'warning', 'Export completed with Google fallback', "\n".join(message_lines)
-
-        if converted_url:
-            message_lines = list(base_success_lines)
-            message_lines.extend(["", f"Google Sheet: {converted_url}"])
-            _append_warning_sections(message_lines)
-            if summary_warnings:
-                return 'warning', 'Export completed with warnings', "\n".join(message_lines)
-            return 'info', 'Export successful', "\n".join(message_lines)
-
-    _append_warning_sections(base_success_lines)
-    if summary_warnings:
-        return 'warning', 'Export completed with warnings', "\n".join(base_success_lines)
-    return 'info', 'Export successful', "\n".join(base_success_lines)
+    result = run_result or derive_export_run_result(
+        excel_file=excel_file,
+        export_target=export_target,
+        completion_metadata=completion_metadata,
+        cancelled=cancelled,
+        terminal_failure=terminal_failure,
+    )
+    return format_export_diagnostics(result)
 
 
 def build_export_directory_link_line(excel_file):

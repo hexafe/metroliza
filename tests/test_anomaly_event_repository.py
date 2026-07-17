@@ -5,7 +5,10 @@ import pytest
 from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
 from metroliza.industrial.anomaly.baseline_repository import BaselineRepository, IndustrialBaseline
 from metroliza.industrial.anomaly.contracts import DetectionResult
-from metroliza.industrial.anomaly.event_repository import AnomalyEventRepository
+from metroliza.industrial.anomaly.event_repository import (
+    AnomalyEventRepository,
+    AnomalyEventStatusConflictError,
+)
 from metroliza.industrial.realtime.sample_repository import RealtimeSampleRepository
 from metroliza.industrial.realtime.stream_contracts import IndustrialSample, SignalDefinition
 
@@ -73,6 +76,50 @@ def test_anomaly_event_insert_deduplicates_and_acknowledges(tmp_path):
     assert events[0].status == "acknowledged"
     assert events[0].threshold == {"usl": 12.0}
     assert events[0].context == {"source": "pytest"}
+
+
+def test_event_review_update_rejects_stale_open_status(tmp_path):
+    db_path = str(tmp_path / "event-conflict.db")
+    signal, sample_id = _persist_sample(db_path)
+    repository = AnomalyEventRepository(db_path)
+    inserted = repository.insert_events(
+        [
+            DetectionResult(
+                detector_key="spec_limits",
+                sample_id=sample_id,
+                signal_id=signal.id,
+                signal_key=signal.signal_key,
+                event_time="2026-06-13T10:00:00Z",
+                severity="warning",
+                score=0.5,
+                observed_value=12.5,
+                expected_value=10.0,
+                threshold={"usl": 12.0},
+                explanation="Observed value is above the specification limit.",
+            )
+        ]
+    )
+    event_id = inserted.event_ids[0]
+
+    repository.acknowledge_event(
+        event_id=event_id,
+        ack_by="operator-a",
+        comment="inspected",
+        expected_status="open",
+    )
+    with pytest.raises(AnomalyEventStatusConflictError) as conflict:
+        repository.resolve_event(
+            event_id=event_id,
+            resolved_by="operator-b",
+            comment="stale decision",
+            expected_status="open",
+        )
+
+    assert conflict.value.actual_status == "acknowledged"
+    event = repository.list_events()[0]
+    assert event.status == "acknowledged"
+    assert event.ack_by == "operator-a"
+    assert event.comment == "inspected"
 
 
 def test_anomaly_event_insert_accepts_generator_batches(tmp_path):

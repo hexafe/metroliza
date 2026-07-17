@@ -21,6 +21,18 @@ except Exception:  # pragma: no cover - fallback for heavily stubbed tests
             del variant
             return QtWidgets.QLabel(text)
 
+        @staticmethod
+        def configure_accessibility(_widget, **_kwargs):
+            return None
+
+        @staticmethod
+        def configure_dialog_button_roles(**_kwargs):
+            return None
+
+        @staticmethod
+        def set_status_variant(_widget, _variant):
+            return None
+
     ui_foundation = _UiFoundationFallback()
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.shared.filter_state import FilterState
@@ -116,6 +128,21 @@ class FilterDialog(QDialog):
             ),
         ),
     )
+    _FILTER_LIST_ATTRS = (
+        "ax_list",
+        "reference_list",
+        "header_list",
+        "part_name_list",
+        "revision_list",
+        "template_variant_list",
+        "sample_number_list",
+        "operator_name_list",
+        "sample_number_kind_list",
+        "status_code_list",
+        "filename_list",
+        "parser_id_list",
+        "template_family_list",
+    )
 
     def __init__(self, parent=None, db_file=""):
         super().__init__(parent)
@@ -132,6 +159,7 @@ class FilterDialog(QDialog):
             self.filter_query = ""
 
         self._list_selection_utils = ListSelectionUtils()
+        self._discard_gate_active = False
 
         try:
             self._ensure_schema_ready()
@@ -161,6 +189,7 @@ class FilterDialog(QDialog):
             self._apply_list_theme_styles()
             self.connect_signals()
             self._refresh_filter_summary()
+            self._committed_draft_snapshot = self._draft_snapshot()
         except Exception as e:
             self.log_and_exit(e)
 
@@ -243,7 +272,7 @@ class FilterDialog(QDialog):
             self.date_to_calendar.setDate(QDate.currentDate())
             self.date_to_calendar.setMinimumWidth(100)
 
-            self.expression_label = QLabel("Filter expression:")
+            self.expression_label = QLabel("Advanced expression (optional):")
             self.expression_input = QLineEdit()
             self.expression_input.setPlaceholderText("Reference=REF1 AND Dimension=VAL1")
             expression_tooltip = (
@@ -311,7 +340,21 @@ class FilterDialog(QDialog):
 
             # Create a button to select the beginning of time
             self.select_beginning_button = QPushButton("Select beginning of time")
+            self.reset_button = QPushButton("Reset draft")
+            self.cancel_button = QPushButton("Cancel")
             self.filter_summary_label = ui_foundation.status_chip("No active filters", variant="neutral")
+            ui_foundation.configure_accessibility(
+                self.expression_input,
+                name="Advanced report filter expression",
+                description=expression_tooltip,
+            )
+            ui_foundation.configure_accessibility(
+                self.filter_summary_label,
+                name="Report filter validation and active condition summary",
+            )
+            ui_foundation.configure_accessibility(self.reset_button, name="Reset report filter draft")
+            ui_foundation.configure_accessibility(self.cancel_button, name="Cancel report filter changes")
+            ui_foundation.configure_accessibility(self.apply_button, name="Apply report filters")
         except Exception as e:
             self.log_and_exit(e)
 
@@ -395,6 +438,8 @@ class FilterDialog(QDialog):
         action_layout = QtWidgets.QHBoxLayout()
         action_layout.setContentsMargins(0, 0, 0, 0)
         action_layout.addStretch(1)
+        action_layout.addWidget(self.reset_button)
+        action_layout.addWidget(self.cancel_button)
         action_layout.addWidget(self.apply_button)
         footer_layout.addLayout(action_layout, 2, 3, 2, 1)
         footer_layout.setColumnStretch(1, 1)
@@ -463,6 +508,17 @@ class FilterDialog(QDialog):
             self.select_today_button.clicked.connect(self.select_today_as_date_to)
             self.select_beginning_button.clicked.connect(self.select_beginning_of_time)
             self.apply_button.clicked.connect(self.apply_filters)
+            self.reset_button.clicked.connect(self._request_reset_draft)
+            self.cancel_button.clicked.connect(self._request_cancel)
+            ui_foundation.configure_dialog_button_roles(
+                primary=self.apply_button,
+                secondary=(self.cancel_button,),
+                quiet=(
+                    self.reset_button,
+                    self.select_today_button,
+                    self.select_beginning_button,
+                ),
+            )
             for list_widget in (
                 self.ax_list,
                 self.header_list,
@@ -558,58 +614,231 @@ class FilterDialog(QDialog):
             build_measurement_expression_clause(expression_text)
         return expression_text
 
+    def _draft_snapshot(self):
+        selections = []
+        for attr_name in self._FILTER_LIST_ATTRS:
+            list_widget = getattr(self, attr_name, None)
+            values = ()
+            if list_widget is not None and hasattr(list_widget, "selectedItems"):
+                values = tuple(
+                    sorted(
+                        item.text()
+                        for item in list_widget.selectedItems()
+                        if item is not None and hasattr(item, "text")
+                    )
+                )
+            selections.append((attr_name, values))
+        date_from = (
+            self.date_from_calendar.date().toString("yyyy-MM-dd")
+            if hasattr(self, "date_from_calendar")
+            else "1970-01-01"
+        )
+        date_to = (
+            self.date_to_calendar.date().toString("yyyy-MM-dd")
+            if hasattr(self, "date_to_calendar")
+            else QDate.currentDate().toString("yyyy-MM-dd")
+        )
+        has_nok_only = bool(getattr(self.has_nok_button, "isChecked", lambda: False)())
+        return tuple(selections), date_from, date_to, has_nok_only, self._filter_expression_text()
+
+    def _is_dirty(self):
+        committed = getattr(self, "_committed_draft_snapshot", self._draft_snapshot())
+        return self._draft_snapshot() != committed
+
+    def _has_active_draft(self):
+        selections, date_from, date_to, has_nok_only, expression = self._draft_snapshot()
+        has_selected_values = any(
+            any(value != "SELECT ALL" for value in selected_values)
+            for _attr_name, selected_values in selections
+        )
+        return bool(
+            has_selected_values
+            or has_nok_only
+            or expression
+            or date_from != "1970-01-01"
+            or date_to != QDate.currentDate().toString("yyyy-MM-dd")
+        )
+
+    def _confirm_discard(self, *, title, message):
+        result = QtWidgets.QMessageBox.question(
+            self,
+            title,
+            message,
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No,
+        )
+        return result == QtWidgets.QMessageBox.StandardButton.Yes
+
+    def _set_selected_values(self, list_widget, selected_values):
+        if list_widget is None or not hasattr(list_widget, "count"):
+            return
+        previous_state = list_widget.blockSignals(True) if hasattr(list_widget, "blockSignals") else False
+        try:
+            selected_lookup = set(selected_values)
+            for row in range(list_widget.count()):
+                item = list_widget.item(row)
+                if item is not None and hasattr(item, "setSelected") and hasattr(item, "text"):
+                    item.setSelected(item.text() in selected_lookup)
+        finally:
+            if hasattr(list_widget, "blockSignals"):
+                list_widget.blockSignals(previous_state)
+
+    def _restore_draft_snapshot(self, snapshot):
+        selections, date_from, date_to, has_nok_only, expression = snapshot
+        for attr_name, selected_values in selections:
+            self._set_selected_values(getattr(self, attr_name, None), selected_values)
+        if hasattr(self, "date_from_calendar"):
+            self.date_from_calendar.setDate(QDate.fromString(date_from, "yyyy-MM-dd"))
+        if hasattr(self, "date_to_calendar"):
+            self.date_to_calendar.setDate(QDate.fromString(date_to, "yyyy-MM-dd"))
+        if hasattr(self.has_nok_button, "setChecked"):
+            self.has_nok_button.setChecked(has_nok_only)
+        if hasattr(self.expression_input, "setText"):
+            self.expression_input.setText(expression)
+        self.update_selected_headers()
+        self._refresh_filter_summary()
+
+    def _reset_draft(self):
+        for attr_name in self._FILTER_LIST_ATTRS:
+            self._set_selected_values(getattr(self, attr_name, None), ())
+        self.date_from_calendar.setDate(QDate(1970, 1, 1))
+        self.date_to_calendar.setDate(QDate.currentDate())
+        if hasattr(self.has_nok_button, "setChecked"):
+            self.has_nok_button.setChecked(False)
+        self.expression_input.clear()
+        self.update_selected_headers()
+        self._refresh_filter_summary()
+
+    def _request_reset_draft(self):
+        if self._has_active_draft() and not self._confirm_discard(
+            title="Reset filter draft?",
+            message=(
+                "Reset every condition in this draft? The applied filter will not change "
+                "until you choose Apply Filters."
+            ),
+        ):
+            return
+        self._reset_draft()
+
+    def _request_cancel(self):
+        self.reject()
+
+    def _discard_draft_if_allowed(self):
+        """Guard every native reject path and restore retained modeless state once."""
+
+        if self._discard_gate_active:
+            return False
+        if not self._is_dirty():
+            return True
+        if self.isVisible():
+            self._discard_gate_active = True
+            try:
+                allowed = self._confirm_discard(
+                    title="Discard filter changes?",
+                    message="Discard the changes made since this filter dialog was opened?",
+                )
+            finally:
+                self._discard_gate_active = False
+            if not allowed:
+                return False
+        committed = getattr(self, "_committed_draft_snapshot", None)
+        if committed is not None:
+            self._restore_draft_snapshot(committed)
+        return True
+
+    def reject(self):
+        if not self._discard_draft_if_allowed():
+            return
+        super().reject()
+
+    def closeEvent(self, event):
+        if not self._discard_draft_if_allowed():
+            event.ignore()
+            return
+        super().closeEvent(event)
+
+    def _selected_filter_counts(self):
+        field_widgets = (
+            ("AX", "ax_list"),
+            ("Reference", "reference_list"),
+            ("Header", "header_list"),
+            ("Part", "part_name_list"),
+            ("Revision", "revision_list"),
+            ("Variant", "template_variant_list"),
+            ("Sample", "sample_number_list"),
+            ("Operator", "operator_name_list"),
+            ("Sample kind", "sample_number_kind_list"),
+            ("Status", "status_code_list"),
+            ("Filename", "filename_list"),
+            ("Parser", "parser_id_list"),
+            ("Template family", "template_family_list"),
+        )
+        return {
+            label: self._selected_value_count(getattr(self, attribute, None))
+            for label, attribute in field_widgets
+        }
+
+    def _has_custom_date_range(self) -> bool:
+        if not hasattr(self, "date_from_calendar") or not hasattr(self, "date_to_calendar"):
+            return False
+        date_from = self.date_from_calendar.date().toString("yyyy-MM-dd")
+        date_to = self.date_to_calendar.date().toString("yyyy-MM-dd")
+        return date_from != "1970-01-01" or date_to != QDate.currentDate().toString(
+            "yyyy-MM-dd"
+        )
+
+    def _validate_filter_expression(self, expression_text: str) -> str:
+        if not expression_text:
+            return ""
+        try:
+            build_measurement_expression_clause(expression_text)
+        except (KeyError, TypeError, ValueError) as exc:
+            return str(exc)
+        return ""
+
+    def _set_filter_apply_enabled(self, enabled: bool) -> None:
+        button = getattr(self, "apply_button", None)
+        if button is not None and hasattr(button, "setEnabled"):
+            button.setEnabled(enabled)
+
     def _refresh_filter_summary(self):
         summary_label = getattr(self, "filter_summary_label", None)
         if summary_label is None or not hasattr(summary_label, "setText"):
             return
-
-        selected_counts = {
-            "AX": self._selected_value_count(getattr(self, "ax_list", None)),
-            "Reference": self._selected_value_count(getattr(self, "reference_list", None)),
-            "Header": self._selected_value_count(getattr(self, "header_list", None)),
-            "Part": self._selected_value_count(getattr(self, "part_name_list", None)),
-            "Revision": self._selected_value_count(getattr(self, "revision_list", None)),
-            "Variant": self._selected_value_count(getattr(self, "template_variant_list", None)),
-            "Sample": self._selected_value_count(getattr(self, "sample_number_list", None)),
-            "Operator": self._selected_value_count(getattr(self, "operator_name_list", None)),
-            "Sample kind": self._selected_value_count(getattr(self, "sample_number_kind_list", None)),
-            "Status": self._selected_value_count(getattr(self, "status_code_list", None)),
-            "Filename": self._selected_value_count(getattr(self, "filename_list", None)),
-            "Parser": self._selected_value_count(getattr(self, "parser_id_list", None)),
-            "Template family": self._selected_value_count(getattr(self, "template_family_list", None)),
-        }
+        selected_counts = self._selected_filter_counts()
         active_fields = sum(1 for count in selected_counts.values() if count > 0)
         selected_values = sum(selected_counts.values())
-
-        has_nok_only = bool(getattr(self.has_nok_button, "isChecked", lambda: False)()) if hasattr(self, "has_nok_button") else False
+        has_nok_only = bool(
+            getattr(self.has_nok_button, "isChecked", lambda: False)()
+            if hasattr(self, "has_nok_button")
+            else False
+        )
         if has_nok_only:
             active_fields += 1
-
-        date_from = self.date_from_calendar.date().toString("yyyy-MM-dd") if hasattr(self, "date_from_calendar") else "1970-01-01"
-        date_to = self.date_to_calendar.date().toString("yyyy-MM-dd") if hasattr(self, "date_to_calendar") else QDate.currentDate().toString("yyyy-MM-dd")
-        default_date_to = QDate.currentDate().toString("yyyy-MM-dd")
-        if not (date_from == "1970-01-01" and date_to == default_date_to):
+        if self._has_custom_date_range():
             active_fields += 1
-
         expression_text = self._filter_expression_text()
         if expression_text:
             active_fields += 1
-            try:
-                build_measurement_expression_clause(expression_text)
-            except (KeyError, TypeError, ValueError) as exc:
-                summary_label.setText(f"Invalid expression: {exc}")
-                return
-
+        expression_error = self._validate_filter_expression(expression_text)
+        if expression_error:
+            summary_label.setText(f"Invalid expression: {expression_error}")
+            ui_foundation.set_status_variant(summary_label, "danger")
+            self._set_filter_apply_enabled(False)
+            return
+        self._set_filter_apply_enabled(True)
         if active_fields == 0:
             summary_label.setText("No active filters")
+            ui_foundation.set_status_variant(summary_label, "neutral")
             return
 
         summary_text = f"Active filters: {active_fields} | Selected values: {selected_values}"
         if has_nok_only:
             summary_text += " | NOK only"
         if expression_text:
-            summary_text += " | Expression"
+            summary_text += " | Advanced expression"
         summary_label.setText(summary_text)
+        ui_foundation.set_status_variant(summary_label, "success")
 
     def _delete_selected_headers(self):
         selected_headers = {item.text() for item in self.selected_headers_list.selectedItems()}
@@ -753,11 +982,13 @@ class FilterDialog(QDialog):
             has_nok_only = bool(getattr(self.has_nok_button, "isChecked", lambda: False)())
             date_from = self.date_from_calendar.date().toString("yyyy-MM-dd")
             date_to = self.date_to_calendar.date().toString("yyyy-MM-dd")
-            try:
-                expression_text = self._validate_filter_expression()
-            except (KeyError, TypeError, ValueError) as exc:
+            expression_text = self._filter_expression_text()
+            expression_error = self._validate_filter_expression(expression_text)
+            if expression_error:
                 if self.filter_summary_label is not None and hasattr(self.filter_summary_label, "setText"):
-                    self.filter_summary_label.setText(f"Invalid expression: {exc}")
+                    self.filter_summary_label.setText(f"Invalid expression: {expression_error}")
+                    ui_foundation.set_status_variant(self.filter_summary_label, "danger")
+                self._set_filter_apply_enabled(False)
                 return
 
             ax_values = [] if "SELECT ALL" in ax_selected_items else ax_selected_items
@@ -822,6 +1053,8 @@ class FilterDialog(QDialog):
                 parent.set_filter_state(filter_state)
             if parent is not None and hasattr(parent, "set_filter_applied"):
                 self._call_parent_filter_applied(parent, filter_state)
+
+            self._committed_draft_snapshot = self._draft_snapshot()
 
             # Hide the filter window
             self.hide()

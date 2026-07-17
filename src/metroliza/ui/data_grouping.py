@@ -42,6 +42,18 @@ except Exception:  # pragma: no cover - fallback for heavily stubbed tests
             del variant
             return QtWidgets.QLabel(text)
 
+        @staticmethod
+        def configure_accessibility(_widget, **_kwargs):
+            return None
+
+        @staticmethod
+        def configure_dialog_button_roles(**_kwargs):
+            return None
+
+        @staticmethod
+        def set_status_variant(_widget, _variant):
+            return None
+
     ui_foundation = _UiFoundationFallback()
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from PyQt6.QtCore import Qt
@@ -159,6 +171,7 @@ class DataGrouping(QDialog):
         self._cached_filtered_grouping_dataframe = None
         self._cached_grouping_row_index = None
         self._cached_full_grouping_row_index = None
+        self._discard_gate_active = False
 
         self.setup_ui()
 
@@ -166,6 +179,7 @@ class DataGrouping(QDialog):
         self.add_default_group()
         self._restore_saved_grouping_state()
         self.populate_list_widgets()
+        self._capture_committed_grouping_state()
 
     @staticmethod
     def _multi_selection_mode():
@@ -252,7 +266,8 @@ class DataGrouping(QDialog):
             self.delete_group_button.setDisabled(True)
 
             self.use_grouping_button = QPushButton("Use grouping")
-            self.dont_use_grouping_button = QPushButton("Clear grouping")
+            self.dont_use_grouping_button = QPushButton("Reset changes")
+            self.cancel_button = QPushButton("Cancel")
             for button in (
                 self.create_group_button,
                 self.rename_group_button,
@@ -260,6 +275,7 @@ class DataGrouping(QDialog):
                 self.delete_group_button,
                 self.use_grouping_button,
                 self.dont_use_grouping_button,
+                self.cancel_button,
             ):
                 if hasattr(button, "setDefault"):
                     button.setDefault(False)
@@ -271,6 +287,24 @@ class DataGrouping(QDialog):
             self.scope_filter_input = QLineEdit()
             self.scope_filter_input.setPlaceholderText(self._scope_filter_placeholder())
             self.scope_filter_summary_label = ui_foundation.status_chip("Scope: all rows", variant="neutral")
+            ui_foundation.configure_accessibility(
+                self.scope_filter_input,
+                name="Grouping scope search or advanced expression",
+                description=(
+                    "Press Enter to apply a temporary row scope. This does not change grouping "
+                    "until Use grouping is chosen."
+                ),
+            )
+            ui_foundation.configure_accessibility(
+                self.scope_filter_summary_label,
+                name="Grouping scope validation",
+            )
+            ui_foundation.configure_accessibility(
+                self.dont_use_grouping_button,
+                name="Reset grouping draft",
+            )
+            ui_foundation.configure_accessibility(self.cancel_button, name="Cancel grouping changes")
+            ui_foundation.configure_accessibility(self.use_grouping_button, name="Apply grouping")
         except Exception as e:
             self.log_and_exit(e)
 
@@ -355,6 +389,7 @@ class DataGrouping(QDialog):
             final_row.setSpacing(8)
             final_row.addStretch(1)
             final_row.addWidget(self.dont_use_grouping_button)
+            final_row.addWidget(self.cancel_button)
             final_row.addWidget(self.use_grouping_button)
             self.layout.addLayout(final_row, 6, 0, 1, 4)
 
@@ -455,7 +490,21 @@ class DataGrouping(QDialog):
             self.delete_group_button.clicked.connect(self.delete_group)
 
             self.use_grouping_button.clicked.connect(self.use_grouping)
-            self.dont_use_grouping_button.clicked.connect(self.dont_use_grouping)
+            self.dont_use_grouping_button.clicked.connect(self._request_reset_grouping)
+            cancel_button = self._safe_attr(self, "cancel_button")
+            if cancel_button is not None:
+                cancel_button.clicked.connect(self._request_cancel)
+            ui_foundation.configure_dialog_button_roles(
+                primary=self.use_grouping_button,
+                secondary=((cancel_button,) if cancel_button is not None else ()),
+                quiet=(
+                    self.dont_use_grouping_button,
+                    self.create_group_button,
+                    self.rename_group_button,
+                    self.remove_from_group_button,
+                ),
+                danger=(self.delete_group_button,),
+            )
             for list_widget in (
                 self.reference_list,
                 self.part_list,
@@ -510,8 +559,12 @@ class DataGrouping(QDialog):
             reference_label.setText(f"Reference: {reference_text}")
 
         selected_group_name = self._selected_group_name() or "none"
+        custom_group_count, assigned_row_count = self._grouping_counts()
         if group_label is not None and hasattr(group_label, "setText"):
-            group_label.setText(f"Group: {selected_group_name}")
+            group_label.setText(
+                f"Group: {selected_group_name} | Draft: {custom_group_count} custom, "
+                f"{assigned_row_count:,} assigned"
+            )
 
         part_list = self._safe_attr(self, "part_list")
         part_group_list = self._safe_attr(self, "part_group_list")
@@ -525,6 +578,119 @@ class DataGrouping(QDialog):
         create_button = self._safe_attr(self, "create_group_button")
         if create_button is not None and hasattr(create_button, "setEnabled"):
             create_button.setEnabled(self._has_groupable_selection())
+        use_button = self._safe_attr(self, "use_grouping_button")
+        if use_button is not None and hasattr(use_button, "setEnabled"):
+            use_button.setEnabled(not bool(self._safe_attr(self, "_scope_filter_error", "")))
+
+    def _grouping_counts(self):
+        df = self._safe_attr(self, "df")
+        if not isinstance(df, pd.DataFrame) or df.empty or "GROUP" not in df.columns:
+            return 0, 0
+        group_names = df["GROUP"].fillna(self.default_group).astype(str)
+        custom_mask = group_names != str(self.default_group)
+        custom_group_count = int(group_names.loc[custom_mask].nunique())
+        if not custom_mask.any():
+            return custom_group_count, 0
+        if "GROUP_KEY" in df.columns:
+            assigned_row_count = int(df.loc[custom_mask, "GROUP_KEY"].nunique())
+        else:
+            assigned_row_count = int(custom_mask.sum())
+        return custom_group_count, assigned_row_count
+
+    def _capture_committed_grouping_state(self):
+        df = self._safe_attr(self, "df")
+        self._committed_grouping_dataframe = self._copy_grouping_dataframe(df)
+        self._committed_default_group = self.default_group
+
+    @staticmethod
+    def _copy_grouping_dataframe(dataframe):
+        copy_method = getattr(dataframe, "copy", None)
+        if not callable(copy_method):
+            return None
+        try:
+            return copy_method(deep=True)
+        except TypeError:
+            return copy_method()
+
+    def _is_grouping_dirty(self):
+        df = self._safe_attr(self, "df")
+        committed_df = self._safe_attr(self, "_committed_grouping_dataframe")
+        if self.default_group != self._safe_attr(self, "_committed_default_group", self.default_group):
+            return True
+        equals = getattr(df, "equals", None)
+        if callable(equals) and committed_df is not None:
+            return not bool(equals(committed_df))
+        return df is not committed_df
+
+    def _confirm_discard(self, *, title, message):
+        answer = QMessageBox.question(
+            self,
+            title,
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def _reset_grouping_draft(self):
+        committed_df = self._safe_attr(self, "_committed_grouping_dataframe")
+        self.df = self._copy_grouping_dataframe(committed_df)
+        self.default_group = self._safe_attr(
+            self,
+            "_committed_default_group",
+            self.default_group,
+        )
+        self._invalidate_grouping_cache()
+        self.populate_list_widgets(preferred_group_name=self.default_group)
+
+    def _request_reset_grouping(self):
+        if not self._is_grouping_dirty():
+            return
+        if not self._confirm_discard(
+            title="Reset grouping changes?",
+            message="Restore the grouping draft to the last applied state?",
+        ):
+            return
+        self._reset_grouping_draft()
+
+    def _request_cancel(self):
+        self.reject()
+
+    def _discard_draft_if_allowed(self):
+        """Guard Cancel, Escape, and window close through one reentrancy-safe path."""
+
+        if self._discard_gate_active:
+            return False
+        if not self._is_grouping_dirty():
+            return True
+        if self.isVisible():
+            self._discard_gate_active = True
+            try:
+                allowed = self._confirm_discard(
+                    title="Discard grouping changes?",
+                    message="Discard all grouping changes made in this dialog?",
+                )
+            finally:
+                self._discard_gate_active = False
+            if not allowed:
+                return False
+        self._reset_grouping_draft()
+        return True
+
+    def reject(self):
+        """Route Escape and dialog rejection through the unsaved-draft guard."""
+
+        if not self._discard_draft_if_allowed():
+            return
+        super().reject()
+
+    def closeEvent(self, event):
+        """Accept a native close only after the grouping draft is resolved."""
+
+        if not self._discard_draft_if_allowed():
+            event.ignore()
+            return
+        super().closeEvent(event)
 
     def read_data_to_df(self):
         """Handle `read_data_to_df` for `DataGrouping`.
@@ -583,6 +749,7 @@ class DataGrouping(QDialog):
             self._restore_saved_grouping_state()
             self._invalidate_grouping_cache()
             self.populate_list_widgets()
+            self._capture_committed_grouping_state()
         except Exception as e:
             self.log_and_exit(e, reraise=True)
 
@@ -981,8 +1148,10 @@ class DataGrouping(QDialog):
         expression = str(getattr(self, "_applied_scope_filter_text", "") or "").strip()
         summary_label = self._safe_attr(self, "scope_filter_summary_label")
         if not expression:
+            self._scope_filter_error = ""
             if summary_label is not None and hasattr(summary_label, "setText"):
                 summary_label.setText(f"Scope: all rows ({len(df.index)} rows)")
+                ui_foundation.set_status_variant(summary_label, "neutral")
             self._cached_filtered_grouping_dataframe = df
             return df
         try:
@@ -991,13 +1160,17 @@ class DataGrouping(QDialog):
             mask = parsed.mask(filter_frame).reindex(df.index, fill_value=False).astype(bool)
             filtered = df.loc[mask].copy()
         except (KeyError, TypeError, ValueError) as exc:
+            self._scope_filter_error = str(exc)
             if summary_label is not None and hasattr(summary_label, "setText"):
                 summary_label.setText(self._scope_filter_error_text(exc))
+                ui_foundation.set_status_variant(summary_label, "danger")
             filtered = df.iloc[0:0].copy()
             self._cached_filtered_grouping_dataframe = filtered
             return filtered
+        self._scope_filter_error = ""
         if summary_label is not None and hasattr(summary_label, "setText"):
             summary_label.setText(f"Scope: {len(filtered.index)} of {len(df.index)} rows")
+            ui_foundation.set_status_variant(summary_label, "info")
         self._cached_filtered_grouping_dataframe = filtered
         return filtered
 
@@ -1754,10 +1927,17 @@ class DataGrouping(QDialog):
         """
 
         try:
+            if bool(self._safe_attr(self, "_scope_filter_error", "")):
+                self._refresh_selection_summary()
+                return
             self.hide()
-            set_default_group_label(self.df, self.default_group)
-            self.parent().set_df_for_grouping(self.df)
-            self.parent().set_grouping_applied(True)
+            committed_df = self.df.copy(deep=True)
+            set_default_group_label(committed_df, self.default_group)
+            parent = self.parent()
+            if parent is not None:
+                parent.set_df_for_grouping(committed_df)
+                parent.set_grouping_applied(True)
+            self._capture_committed_grouping_state()
         except Exception as e:
             self.log_and_exit(e)
 

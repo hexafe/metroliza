@@ -58,6 +58,13 @@ def _build_qt_stubs():
 def _qt_stubbed_imports():
     qtcore, qtgui, qtwidgets = _build_qt_stubs()
     fake_pandas = types.ModuleType('pandas')
+    module_cache = sys.modules
+    isolated_prefixes = ('metroliza.ui.', 'modules' + '.')
+    preserved_modules = {
+        name: module
+        for name, module in module_cache.items()
+        if name.startswith(isolated_prefixes)
+    }
     with patch.dict(
         sys.modules,
         {
@@ -68,7 +75,13 @@ def _qt_stubbed_imports():
         },
         clear=False,
     ):
-        yield
+        try:
+            yield
+        finally:
+            for name in tuple(module_cache):
+                if name.startswith(isolated_prefixes) and name not in preserved_modules:
+                    module_cache.pop(name, None)
+            module_cache.update(preserved_modules)
 
 
 def _import_fresh(module_name):

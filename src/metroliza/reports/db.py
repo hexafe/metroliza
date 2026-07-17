@@ -2,7 +2,9 @@ import sqlite3
 import time
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Iterator, TypeVar
+from urllib.parse import quote
 
 
 TRANSIENT_SQLITE_ERRORS = (
@@ -146,6 +148,29 @@ def sqlite_connection_scope(
 
     with closing(connect_sqlite(db_path, timeout_s=timeout_s, pragma_config=pragma_config)) as conn:
         yield conn
+
+
+@contextmanager
+def sqlite_readonly_connection_scope(db_path: str) -> Iterator[sqlite3.Connection]:
+    """Yield a managed read-only connection without changing database PRAGMAs."""
+
+    resolved_path = Path(db_path).resolve(strict=False)
+    database_uri = f"file:{quote(str(resolved_path))}?mode=ro"
+    with closing(sqlite3.connect(database_uri, uri=True)) as connection:
+        yield connection
+
+
+def backup_sqlite_database(source_path: str, destination_path: str) -> None:
+    """Write and integrity-check a consistent SQLite backup at ``destination_path``."""
+
+    with (
+        closing(sqlite3.connect(source_path)) as source_connection,
+        closing(sqlite3.connect(destination_path)) as destination_connection,
+    ):
+        source_connection.backup(destination_connection)
+        integrity = destination_connection.execute("PRAGMA integrity_check").fetchone()
+        if integrity is None or str(integrity[0]).lower() != "ok":
+            raise RuntimeError("SQLite backup failed integrity validation")
 
 
 def execute_with_retry(

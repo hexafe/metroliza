@@ -11,6 +11,13 @@ import re
 import tempfile
 from typing import Any, Mapping
 
+from metroliza.charts.dashboard_html_controls import (
+    latest_dashboard_timestamp,
+    render_dashboard_semantic_css,
+    render_dashboard_snapshot_metadata,
+    resolve_dashboard_freshness,
+)
+
 
 @dataclass(frozen=True)
 class DashboardSamplePoint:
@@ -145,7 +152,20 @@ def render_realtime_dashboard_html(snapshot: RealtimeDashboardSnapshot | Mapping
     open_events = _open_events(all_events)
     summary_cards = normalized.summary_cards or tuple(_default_summary_cards(normalized, open_events))
     title = _safe_text(normalized.title)
-    generated_at = _safe_text(normalized.generated_at or "not recorded")
+    generated_at = _redact_sensitive_text(str(normalized.generated_at or "")).strip()
+    data_through = _realtime_data_through(normalized)
+    freshness = resolve_dashboard_freshness(
+        generated_at=generated_at,
+        data_through=data_through,
+        live=True,
+        max_source_lag_seconds=_max_source_lag_seconds(normalized.source_health),
+        source_reports_stale=_source_health_reports_stale(normalized.source_health),
+    )
+    snapshot_metadata = render_dashboard_snapshot_metadata(
+        generated_at=generated_at,
+        data_through=data_through,
+        freshness=freshness,
+    )
 
     return "\n".join(
         (
@@ -160,11 +180,15 @@ def render_realtime_dashboard_html(snapshot: RealtimeDashboardSnapshot | Mapping
             "</style>",
             "</head>",
             "<body>",
-            "<header>",
+            '<a class="skip-link" href="#dashboard-content">Skip to dashboard content</a>',
+            '<header class="dashboard-header">',
+            '<div class="dashboard-header-inner">',
+            '<p class="dashboard-eyebrow">Persisted realtime dashboard</p>',
             f"<h1>{title}</h1>",
-            f'<p class="generated">Generated from persisted data: {generated_at}</p>',
+            snapshot_metadata,
+            "</div>",
             "</header>",
-            "<main>",
+            '<main id="dashboard-content" tabindex="-1">',
             _render_summary_cards(summary_cards),
             _render_open_events_table(open_events),
             _render_severity_timeline(open_events),
@@ -176,6 +200,42 @@ def render_realtime_dashboard_html(snapshot: RealtimeDashboardSnapshot | Mapping
             "</body>",
             "</html>",
         )
+    )
+
+
+def _realtime_data_through(snapshot: RealtimeDashboardSnapshot) -> str:
+    candidates: list[str] = []
+    candidates.extend(
+        source.last_event_time or "" for source in snapshot.source_health
+    )
+    candidates.extend(row.last_event_time for row in snapshot.aggregate_rows)
+    candidates.extend(event.event_time for event in snapshot.events)
+    for signal in snapshot.signals:
+        candidates.extend(sample.event_time for sample in signal.samples)
+        candidates.extend(event.event_time for event in signal.events)
+    redacted_candidates = (_redact_sensitive_text(candidate) for candidate in candidates)
+    return latest_dashboard_timestamp(redacted_candidates)
+
+
+def _max_source_lag_seconds(
+    source_health: tuple[DashboardSourceHealth, ...],
+) -> float | None:
+    lag_values = [
+        float(source.lag_seconds)
+        for source in source_health
+        if source.lag_seconds is not None
+        and math.isfinite(float(source.lag_seconds))
+        and float(source.lag_seconds) >= 0
+    ]
+    return max(lag_values) if lag_values else None
+
+
+def _source_health_reports_stale(
+    source_health: tuple[DashboardSourceHealth, ...],
+) -> bool:
+    return any(
+        str(source.health or source.status or "").strip().casefold() in {"lagging", "stale"}
+        for source in source_health
     )
 
 
@@ -1119,15 +1179,54 @@ def _stylesheet() -> str:
   color: #1d232a;
   background: #f5f7f9;
   font-family: Arial, Helvetica, sans-serif;
+  --ink: #1d232a;
+  --muted: #5d6975;
+  --accent: #2f80ed;
+  --line: #d8dee6;
+  --panel-strong: #ffffff;
+  --detail-panel-bg: #edf1f5;
+  --focus-ring: #155eef;
+  --runtime-note-bg: #fff4eb;
+  --teal: #245a5a;
+  --teal-soft: #e2efef;
+  --teal-border: #9bb7b7;
+  --dashboard-current-border: #67a877;
+  --dashboard-current-bg: #d1fadf;
+  --dashboard-current-ink: #14532d;
+  --dashboard-stale-border: #d79d00;
+  --dashboard-stale-bg: #fef0c7;
+  --dashboard-stale-ink: #704000;
 }
 body {
   margin: 0;
   background: #f5f7f9;
 }
-header {
+.dashboard-header {
   background: #243447;
   color: #ffffff;
-  padding: 28px 32px;
+  padding: 20px 24px;
+}
+.dashboard-header-inner {
+  margin: 0 auto;
+  max-width: 1180px;
+}
+.dashboard-header .dashboard-meta,
+.dashboard-header .dashboard-meta dt,
+.dashboard-header .dashboard-freshness-detail {
+  color: #d9e2ec;
+}
+.dashboard-eyebrow {
+  color: #b8d8f2;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+.dashboard-header h1 {
+  font-size: clamp(1.65rem, 3vw, 2.25rem);
+  line-height: 1.12;
+  margin-bottom: 0;
 }
 h1, h2, h3, p {
   margin-top: 0;
@@ -1136,10 +1235,6 @@ main {
   margin: 0 auto;
   max-width: 1180px;
   padding: 24px 20px 40px;
-}
-.generated {
-  color: #d9e2ec;
-  margin-bottom: 0;
 }
 .section {
   margin-bottom: 24px;
@@ -1268,7 +1363,7 @@ th {
 .signal-panel {
   margin-bottom: 14px;
 }
-""".strip()
+""".strip() + "\n" + render_dashboard_semantic_css()
 
 
 __all__ = [

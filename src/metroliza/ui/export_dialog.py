@@ -5,12 +5,14 @@ from metroliza.ui.filter_dialog import FilterDialog
 from metroliza.ui.data_grouping import DataGrouping
 import metroliza.shared.custom_logger as custom_logger
 from metroliza.exporting.export_dialog_service import (
+    build_export_completion_diagnostics,
     build_export_completion_message,
     build_export_directory_link_line as build_export_directory_link_line,
     build_export_folder_link_line as build_export_folder_link_line,
     build_export_options_payload as build_export_options_payload,
     build_validated_export_request,
 )
+from metroliza.exporting.export_outcomes import sanitize_export_diagnostics
 from metroliza.exporting.export_preset_utils import (
     build_export_options_for_preset,
     get_export_preset_id_for_label,
@@ -26,7 +28,7 @@ from metroliza.charts.dashboard_visual_options import (
     dashboard_visual_swatch_palette,
     load_dashboard_visual_settings,
 )
-from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtCore import Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import(
     QApplication,
@@ -77,6 +79,7 @@ from metroliza.shared.filter_state import NOT_APPLIED_LABEL, summarize_filter_st
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
     configure_accessibility,
+    configure_dialog_button_roles,
     configure_window_size,
     info_button,
     path_field,
@@ -128,38 +131,125 @@ def handle_export_result_link(parent, url, excel_file=None):
     QDesktopServices.openUrl(parsed if parsed.isValid() else QUrl(str(url or "")))
 
 
-def show_export_result_message(parent, level, title, message, excel_file=None):
-    """Display export result message with external links enabled when supported."""
-    dialog = QMessageBox(parent)
-    icon = QMessageBox.Icon.Warning if level == 'warning' else QMessageBox.Icon.Information
+def _configure_export_result_dialog(dialog, *, level, title, message, diagnostics):
+    icon = {
+        "error": QMessageBox.Icon.Critical,
+        "warning": QMessageBox.Icon.Warning,
+    }.get(level, QMessageBox.Icon.Information)
     dialog.setIcon(icon)
     dialog.setWindowTitle(title)
     dialog.setText(format_message_with_clickable_links(message))
-    if hasattr(dialog, 'setTextFormat') and hasattr(Qt, 'TextFormat'):
+    if hasattr(dialog, "setTextFormat") and hasattr(Qt, "TextFormat"):
         dialog.setTextFormat(Qt.TextFormat.RichText)
-    if hasattr(dialog, 'setTextInteractionFlags') and hasattr(Qt, 'TextInteractionFlag'):
+    if hasattr(dialog, "setTextInteractionFlags") and hasattr(Qt, "TextInteractionFlag"):
         dialog.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
-    if hasattr(dialog, 'setStandardButtons'):
+    if hasattr(dialog, "setStandardButtons"):
         dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
+    if diagnostics and hasattr(dialog, "setDetailedText"):
+        dialog.setDetailedText(str(diagnostics))
 
-    message_label = dialog.findChild(QLabel, 'qt_msgbox_label') if hasattr(dialog, 'findChild') else None
-    if message_label and hasattr(message_label, 'setOpenExternalLinks'):
-        message_label.setOpenExternalLinks(False)
-        if hasattr(message_label, 'linkActivated'):
-            message_label.linkActivated.connect(lambda link: _open_export_result_link(parent, link, excel_file))
 
+def _add_export_result_actions(dialog, *, excel_file, diagnostics):
+    button_role = getattr(QMessageBox, "ButtonRole", None)
+    if button_role is None or not hasattr(dialog, "addButton"):
+        return None, None
+    open_button = (
+        dialog.addButton("Open output folder", button_role.ActionRole)
+        if excel_file
+        else None
+    )
+    copy_button = (
+        dialog.addButton("Copy diagnostics", button_role.ActionRole)
+        if diagnostics
+        else None
+    )
+    return open_button, copy_button
+
+
+def _connect_export_result_links(dialog, *, parent, excel_file):
+    message_label = (
+        dialog.findChild(QLabel, "qt_msgbox_label")
+        if hasattr(dialog, "findChild")
+        else None
+    )
+    if not message_label or not hasattr(message_label, "setOpenExternalLinks"):
+        return
+    message_label.setOpenExternalLinks(False)
+    if hasattr(message_label, "linkActivated"):
+        message_label.linkActivated.connect(
+            lambda link: _open_export_result_link(parent, link, excel_file)
+        )
+
+
+def _handle_export_result_action(
+    dialog,
+    *,
+    parent,
+    excel_file,
+    diagnostics,
+    open_output_button,
+    copy_diagnostics_button,
+):
+    clicked_button = dialog.clickedButton() if hasattr(dialog, "clickedButton") else None
+    if clicked_button is open_output_button and excel_file:
+        _open_export_result_link(
+            parent,
+            Path(str(excel_file)).resolve(strict=False).as_uri(),
+            excel_file,
+        )
+        return
+    if clicked_button is copy_diagnostics_button and diagnostics:
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(str(diagnostics))
+
+
+def show_export_result_message(
+    parent,
+    level,
+    title,
+    message,
+    excel_file=None,
+    diagnostics="",
+):
+    """Display an export outcome with copyable diagnostics and output actions."""
+    diagnostics = sanitize_export_diagnostics(diagnostics)
+    dialog = QMessageBox(parent)
+    _configure_export_result_dialog(
+        dialog,
+        level=level,
+        title=title,
+        message=message,
+        diagnostics=diagnostics,
+    )
+    open_output_button, copy_diagnostics_button = _add_export_result_actions(
+        dialog,
+        excel_file=excel_file,
+        diagnostics=diagnostics,
+    )
+    _connect_export_result_links(dialog, parent=parent, excel_file=excel_file)
     dialog.exec()
+    _handle_export_result_action(
+        dialog,
+        parent=parent,
+        excel_file=excel_file,
+        diagnostics=diagnostics,
+        open_output_button=open_output_button,
+        copy_diagnostics_button=copy_diagnostics_button,
+    )
 
 
 def _open_export_result_link(parent, link, excel_file):
     try:
         handle_export_result_link(parent, link, excel_file=excel_file)
     except (OSError, ValueError, RuntimeError) as exc:
+        logger.warning("Unable to open export location; error_type=%s", type(exc).__name__)
         try:
             QMessageBox.warning(
                 parent,
                 "Unable to open file location",
-                f"Could not open the export location for {excel_file}.\n{exc}",
+                "Could not open the export location. Check that the output still exists and "
+                "try again.",
             )
         except (RuntimeError, TypeError) as warning_error:
             _log_exception(warning_error, context="show export link failure warning", reraise=False)
@@ -221,6 +311,8 @@ class ExportDialog(QDialog):
     selections, and persisted preset preferences stored in a user config file.
     """
 
+    close_deferral_cancelled = pyqtSignal()
+
     def __init__(self, parent=None, db_file=""):
         super().__init__(parent)
 
@@ -240,6 +332,7 @@ class ExportDialog(QDialog):
         self.export_thread = None
         self.export_error_message = None
         self._cancel_requested = False
+        self._close_requested = False
         self._grouping_applied = False
         self.config_path = Path.home() / '.metroliza' / '.export_dialog_config.json'
         self.config = self._load_dialog_config()
@@ -338,7 +431,6 @@ class ExportDialog(QDialog):
             self.export_button.setDisabled(True)
             self.export_button.clicked.connect(self.show_loading_screen)
             self.export_button.setToolTip("Start exporting")
-            self.export_button.setDefault(True)
 
             self.close_button = QPushButton("Close")
             self.close_button.clicked.connect(self.close)
@@ -662,6 +754,22 @@ class ExportDialog(QDialog):
             self.setLayout(self.layout)
             self._apply_window_size_constraints()
             apply_metroliza_theme(self)
+            configure_dialog_button_roles(
+                primary=self.export_button,
+                secondary=(
+                    self.select_db_button,
+                    self.select_excel_button,
+                    self.filter_button,
+                    self.group_button,
+                    self.dashboard_visuals_button,
+                ),
+                quiet=(
+                    self.clear_filter_button,
+                    self.clear_group_button,
+                    self.advanced_toggle_button,
+                    self.close_button,
+                ),
+            )
 
             self.setTabOrder(self.preset_combobox, self.select_db_button)
             self.setTabOrder(self.select_db_button, self.select_excel_button)
@@ -1003,7 +1111,8 @@ class ExportDialog(QDialog):
                 if not filename.endswith(".db"):
                     filename += ".db"
                 logger.info("Selected database file: %s", filename)
-                self._update_database_context(filename)
+                if not self._update_database_context(filename):
+                    return
                 parent = self.parent() if hasattr(self, "parent") else None
                 if parent is not None and hasattr(parent, "set_db_file"):
                     parent.set_db_file(filename)
@@ -1013,14 +1122,29 @@ class ExportDialog(QDialog):
     def _discard_child_dialog(self, dialog_name):
         dialog = getattr(self, dialog_name, None)
         if dialog is None:
-            return
+            return True
         if hasattr(dialog, 'close'):
-            dialog.close()
+            try:
+                if dialog.close() is False:
+                    return False
+            except RuntimeError:
+                setattr(self, dialog_name, None)
+                return True
         if hasattr(dialog, 'deleteLater'):
             dialog.deleteLater()
         setattr(self, dialog_name, None)
+        return True
+
+    def _discard_child_drafts(self):
+        accepted = True
+        for dialog_name in ('filter_window', 'grouping_window'):
+            if not self._discard_child_dialog(dialog_name):
+                accepted = False
+        return accepted
 
     def _update_database_context(self, db_file):
+        if not self._discard_child_drafts():
+            return False
         self.db_file = db_file
         self._set_path_field_value(self.database_text_label, db_file)
 
@@ -1031,8 +1155,7 @@ class ExportDialog(QDialog):
         self.set_grouping_applied(False)
         self._update_export_button_enabled_state()
 
-        self._discard_child_dialog('filter_window')
-        self._discard_child_dialog('grouping_window')
+        return True
 
     def open_filter_window(self):
         """Open or focus the filter dialog while keeping a single dialog instance."""
@@ -1296,7 +1419,29 @@ class ExportDialog(QDialog):
         try:
             self._export_terminal_handled = True
             _reject_progress_dialog_as_terminal(self.loading_dialog)
-            QMessageBox.information(self, "Export canceled", "Cancel confirmed. Data exporting has been canceled")
+            if not getattr(self, "_close_requested", False):
+                export_target = getattr(self.export_thread, 'export_target', 'excel_xlsx')
+                completion_metadata = getattr(self.export_thread, 'completion_metadata', {})
+                run_result = getattr(self.export_thread, "export_run_result", None)
+                result_path = (
+                    completion_metadata.get("html_dashboard_path")
+                    if export_target == "html_dashboard"
+                    else self.excel_file
+                )
+                outcome_kwargs = {
+                    "excel_file": result_path,
+                    "export_target": export_target,
+                    "completion_metadata": completion_metadata,
+                    "cancelled": True,
+                }
+                if run_result is not None:
+                    outcome_kwargs["run_result"] = run_result
+                level, title, message = build_export_completion_message(**outcome_kwargs)
+                diagnostics = build_export_completion_diagnostics(**outcome_kwargs)
+                show_kwargs = {"excel_file": result_path}
+                if diagnostics:
+                    show_kwargs["diagnostics"] = diagnostics
+                show_export_result_message(self, level, title, message, **show_kwargs)
             self.export_button.setEnabled(True)
             self._cancel_requested = False
             self._set_loading_cancel_enabled(True)
@@ -1308,32 +1453,39 @@ class ExportDialog(QDialog):
         try:
             self._export_terminal_handled = True
             dismiss_worker_progress_dialog(getattr(self, "loading_dialog", None))
+            if getattr(self, "_close_requested", False):
+                return
+            export_target = getattr(self.export_thread, 'export_target', 'excel_xlsx')
+            completion_metadata = getattr(self.export_thread, 'completion_metadata', {})
+            run_result = getattr(self.export_thread, "export_run_result", None)
+            result_path = (
+                completion_metadata.get('html_dashboard_path')
+                if export_target == 'html_dashboard'
+                else self.excel_file
+            )
+            outcome_kwargs = {
+                "excel_file": result_path,
+                "export_target": export_target,
+                "completion_metadata": completion_metadata,
+            }
+            if run_result is not None:
+                outcome_kwargs["run_result"] = run_result
             if self.export_error_message:
-                QMessageBox.warning(self, "Export failed", self.export_error_message)
-            else:
-                export_target = getattr(self.export_thread, 'export_target', 'excel_xlsx')
-                completion_metadata = getattr(self.export_thread, 'completion_metadata', {})
-                result_path = (
-                    completion_metadata.get('html_dashboard_path')
-                    if export_target == 'html_dashboard'
-                    else self.excel_file
-                )
-                level, title, message = build_export_completion_message(
-                    excel_file=result_path,
-                    export_target=export_target,
-                    completion_metadata=completion_metadata,
-                )
+                outcome_kwargs["terminal_failure"] = self.export_error_message
+            level, title, message = build_export_completion_message(**outcome_kwargs)
+            diagnostics = build_export_completion_diagnostics(**outcome_kwargs)
 
-                try:
-                    reveal_path = None if export_target == 'html_dashboard' else self.excel_file
-                    show_export_result_message(self, level, title, message, excel_file=reveal_path)
-                except Exception:
-                    logger.exception("Failed to show rich export completion dialog; falling back to basic message box.")
-                    QMessageBox.information(
-                        self,
-                        title,
-                        message,
-                    )
+            try:
+                show_kwargs = {"excel_file": result_path}
+                if diagnostics:
+                    show_kwargs["diagnostics"] = diagnostics
+                show_export_result_message(self, level, title, message, **show_kwargs)
+            except Exception:
+                logger.exception("Failed to show rich export completion dialog; falling back to basic message box.")
+                if level in {"warning", "error"}:
+                    QMessageBox.warning(self, title, message)
+                else:
+                    QMessageBox.information(self, title, message)
 
             self._cancel_requested = False
             self._set_loading_cancel_enabled(True)
@@ -1369,6 +1521,55 @@ class ExportDialog(QDialog):
                 if callable(delete_later):
                     delete_later()
                 self.export_thread = None
+            self._complete_deferred_close_if_idle()
+
+    @staticmethod
+    def _thread_is_running(thread):
+        if thread is None:
+            return False
+        try:
+            return bool(thread.isRunning())
+        except (AttributeError, RuntimeError):
+            return False
+
+    def _defer_close_for_active_export(self):
+        if not self._thread_is_running(self.export_thread):
+            return False
+        self._close_requested = True
+        self.stop_exporting()
+        return True
+
+    def is_close_deferred(self):
+        """Return whether an active export has accepted a deferred close request."""
+
+        return bool(getattr(self, "_close_requested", False))
+
+    def _complete_deferred_close_if_idle(self):
+        if not getattr(self, "_close_requested", False):
+            return
+        if self._thread_is_running(self.export_thread):
+            return
+        self._close_requested = False
+        if not self._discard_child_drafts():
+            self.close_deferral_cancelled.emit()
+            return
+        QDialog.reject(self)
+
+    def reject(self):
+        if self._defer_close_for_active_export():
+            return
+        if not self._discard_child_drafts():
+            return
+        QDialog.reject(self)
+
+    def closeEvent(self, event):
+        if self._defer_close_for_active_export():
+            event.ignore()
+            return
+        if not self._discard_child_drafts():
+            event.ignore()
+            return
+        super().closeEvent(event)
 
     def log_and_exit(self, exception):
         caller = inspect.stack()[1].function

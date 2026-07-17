@@ -22,6 +22,7 @@ EXPECTED_INDUSTRIAL_TO_REPORTS_EDGES = {
     ("industrial/anomaly/event_repository.py", "metroliza.reports.db"),
     ("industrial/anomaly/model_registry.py", "metroliza.reports.db"),
     ("industrial/industrial_analytics_service.py", "metroliza.reports.db"),
+    ("industrial/industrial_cache_target.py", "metroliza.reports.db"),
     ("industrial/industrial_data_repository.py", "metroliza.reports.db"),
     ("industrial/industrial_data_schema.py", "metroliza.reports.db"),
     ("industrial/industrial_export_service.py", "metroliza.reports.db"),

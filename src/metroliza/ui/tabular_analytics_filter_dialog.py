@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QMessageBox,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
@@ -37,6 +38,7 @@ from metroliza.ui.ui_foundation import (
     apply_list_selection_style,
     apply_metroliza_theme,
     configure_accessibility,
+    configure_dialog_button_roles,
     configure_window_size,
     section_label,
     set_status_variant,
@@ -165,6 +167,8 @@ class TabularAnalyticsFilterDialog(QDialog):
         self._preview_loading_label = None
         self._preview_loading_bar = None
         self._preview_loading_gif = None
+        self._discard_gate_active = False
+        self._preview_cleanup_done = False
         self._initial_filter_expression = str(filter_expression or "").strip()
         self._status_timer = QTimer(self)
         self._status_timer.setSingleShot(True)
@@ -184,12 +188,25 @@ class TabularAnalyticsFilterDialog(QDialog):
         layout.addWidget(section_label("Column filters"))
         layout.addWidget(self.status_label)
 
-        layout.addWidget(QLabel("Magic filter"))
+        layout.addWidget(QLabel("Advanced expression (optional)"))
         self.expression_input = QLineEdit()
         self.expression_input.setPlaceholderText("Param1 > 4000 and < 5000")
         self.expression_input.setText(self._initial_filter_expression)
-        configure_accessibility(self.expression_input, name="CSV row-filter expression")
+        configure_accessibility(
+            self.expression_input,
+            name="Advanced CSV row-filter expression",
+            description=(
+                "Optional expression for conditions that cannot be represented by the column controls."
+            ),
+        )
         layout.addWidget(self.expression_input)
+        self.expression_error_label = status_chip("", "danger")
+        self.expression_error_label.setVisible(False)
+        configure_accessibility(
+            self.expression_error_label,
+            name="Advanced filter expression validation",
+        )
+        layout.addWidget(self.expression_error_label)
 
         columns_grid = QGridLayout()
         columns_grid.setContentsMargins(0, 0, 0, 0)
@@ -307,8 +324,8 @@ class TabularAnalyticsFilterDialog(QDialog):
         self.remove_column_button.clicked.connect(self.remove_selected_filter_column)
         self.clear_columns_button.clicked.connect(self.clear_filter_columns)
         self.clear_selection_button.clicked.connect(self.clear_selection)
-        self.clear_filter_button.clicked.connect(self.clear_filter)
-        self.cancel_button.clicked.connect(self.reject)
+        self.clear_filter_button.clicked.connect(self._request_reset_filter)
+        self.cancel_button.clicked.connect(self._request_cancel)
         self.apply_button.clicked.connect(self._accept_filter)
         self.expression_input.textChanged.connect(lambda _text: self._schedule_status_sync())
         self.matching_search.textChanged.connect(self._handle_matching_search_text_changed)
@@ -318,9 +335,21 @@ class TabularAnalyticsFilterDialog(QDialog):
         self.date_from_calendar.dateChanged.connect(self._store_current_date_filter)
         self.date_to_calendar.dateChanged.connect(self._store_current_date_filter)
 
+        configure_dialog_button_roles(
+            primary=self.apply_button,
+            secondary=(self.cancel_button,),
+            quiet=(
+                self.clear_filter_button,
+                self.clear_selection_button,
+                self.add_column_button,
+                self.remove_column_button,
+                self.clear_columns_button,
+            ),
+        )
         apply_metroliza_theme(self)
         self._list_selection_utils.connect_shift_range_behavior(self.matching_list)
         self._refresh_all()
+        self._capture_committed_filter_state()
 
     def _source_columns(self) -> list[str]:
         if self.sqlite_store is not None:
@@ -481,6 +510,106 @@ class TabularAnalyticsFilterDialog(QDialog):
         self._filter_date_series_by_column = {}
         self.expression_input.clear()
         self._refresh_all()
+
+    def _draft_signature(self) -> tuple[object, ...]:
+        """Return a stable value-only snapshot of the editable filter draft."""
+
+        return (
+            tuple(self.filter_columns),
+            tuple(
+                (
+                    column,
+                    tuple(sorted(self.value_filters.get(column, set()))),
+                    str(self.date_filters.get(column, {}).get("mode") or "any"),
+                    self.date_filters.get(column, {}).get("from"),
+                    self.date_filters.get(column, {}).get("to"),
+                )
+                for column in self.filter_columns
+            ),
+            self._filter_expression_text(),
+        )
+
+    def _capture_committed_filter_state(self) -> None:
+        self._committed_filter_state = self._draft_signature()
+        self._committed_filter_signature = self._committed_filter_state
+
+    def _restore_committed_filter_state(self) -> None:
+        snapshot = getattr(self, "_committed_filter_state", self._draft_signature())
+        columns, filters, expression = snapshot
+        self.filter_columns = list(columns)
+        self.value_filters = {
+            str(column): set(selected_values)
+            for column, selected_values, _mode, _date_from, _date_to in filters
+        }
+        self.date_filters = {
+            str(column): {
+                "mode": str(mode),
+                "from": date_from,
+                "to": date_to,
+            }
+            for column, _selected_values, mode, date_from, date_to in filters
+        }
+        self._value_index_by_column = {}
+        self._filter_value_series_by_column = {}
+        self._filter_date_series_by_column = {}
+        self.expression_input.setText(str(expression))
+        self._refresh_all()
+
+    def _is_dirty(self) -> bool:
+        committed = getattr(self, "_committed_filter_signature", self._draft_signature())
+        return self._draft_signature() != committed
+
+    def _has_draft_content(self) -> bool:
+        return bool(
+            self.filter_columns
+            or self._active_column_filters()
+            or self._filter_expression_text()
+        )
+
+    def _confirm_discard(self, *, title: str, message: str) -> bool:
+        answer = QMessageBox.question(
+            self,
+            title,
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def _request_reset_filter(self) -> None:
+        if self._has_draft_content() and not self._confirm_discard(
+            title="Reset filter draft?",
+            message=(
+                "Reset all column conditions and the advanced expression? "
+                "The applied filter will not change until you choose Apply filter."
+            ),
+        ):
+            return
+        self.clear_filter()
+
+    def _request_cancel(self) -> None:
+        self.reject()
+
+    def _discard_draft_if_allowed(self) -> bool:
+        """Guard all reject paths and restore state before a retained dialog can close."""
+
+        if self._discard_gate_active:
+            return False
+        if not self._is_dirty():
+            return True
+        if self.isVisible():
+            self._discard_gate_active = True
+            try:
+                allowed = self._confirm_discard(
+                    title="Discard filter changes?",
+                    message="Discard the changes made since this filter dialog was opened?",
+                )
+            finally:
+                self._discard_gate_active = False
+            if not allowed:
+                return False
+        self._restore_committed_filter_state()
+        return True
 
     def _store_current_selection(self) -> None:
         if self._syncing_current_filter:
@@ -716,16 +845,36 @@ class TabularAnalyticsFilterDialog(QDialog):
             _DETACHED_PREVIEW_THREADS.append(thread)
             thread.finished.connect(lambda thread=thread: _release_detached_preview_thread(thread))
 
-    def accept(self) -> None:
+    def _cleanup_preview_once(self) -> None:
+        if self._preview_cleanup_done:
+            return
+        self._preview_cleanup_done = True
+        self._status_timer.stop()
         self._detach_sqlite_value_preview_threads()
+
+    def showEvent(self, event) -> None:
+        was_cleaned = self._preview_cleanup_done
+        self._preview_cleanup_done = False
+        super().showEvent(event)
+        if was_cleaned:
+            self._refresh_all()
+
+    def accept(self) -> None:
+        self._capture_committed_filter_state()
+        self._cleanup_preview_once()
         super().accept()
 
     def reject(self) -> None:
-        self._detach_sqlite_value_preview_threads()
+        if not self._discard_draft_if_allowed():
+            return
+        self._cleanup_preview_once()
         super().reject()
 
     def closeEvent(self, event) -> None:
-        self._detach_sqlite_value_preview_threads()
+        if not self._discard_draft_if_allowed():
+            event.ignore()
+            return
+        self._cleanup_preview_once()
         super().closeEvent(event)
 
     def _is_date_filterable(self, column: str | None) -> bool:
@@ -864,8 +1013,10 @@ class TabularAnalyticsFilterDialog(QDialog):
         try:
             self._filtered_row_count(self._active_column_filters())
         except (KeyError, RuntimeError, ValueError) as exc:
-            self.status_label.setText(f"Invalid magic filter: {exc}")
+            self.status_label.setText("Advanced expression needs attention")
             set_status_variant(self.status_label, "danger")
+            self.expression_error_label.setText(f"Invalid advanced expression: {exc}")
+            self.expression_error_label.setVisible(True)
             self._sync_status_controls(self._active_column_filters(), expression_valid=False)
             return
         self.accept()
@@ -888,21 +1039,26 @@ class TabularAnalyticsFilterDialog(QDialog):
         try:
             row_count = self._filtered_row_count(active_filters)
         except (KeyError, RuntimeError, ValueError) as exc:
-            self.status_label.setText(f"Invalid magic filter: {exc}")
+            self.status_label.setText("Advanced expression needs attention")
             set_status_variant(self.status_label, "danger")
+            self.expression_error_label.setText(f"Invalid advanced expression: {exc}")
+            self.expression_error_label.setVisible(True)
             self._sync_status_controls(active_filters, expression_valid=False)
             return
+
+        self.expression_error_label.clear()
+        self.expression_error_label.setVisible(False)
 
         if not self.filter_columns and not expression_text:
             self.status_label.setText("No row filter selected")
             set_status_variant(self.status_label, "neutral")
         elif expression_text and active_filters:
             self.status_label.setText(
-                f"{len(active_filters)} column filter(s) + magic filter, {row_count} rows"
+                f"{len(active_filters)} column filter(s) + advanced expression, {row_count} rows"
             )
             set_status_variant(self.status_label, "success" if row_count else "danger")
         elif expression_text:
-            self.status_label.setText(f"Magic filter, {row_count} rows")
+            self.status_label.setText(f"Advanced expression, {row_count} rows")
             set_status_variant(self.status_label, "success" if row_count else "danger")
         elif active_filters:
             self.status_label.setText(f"{len(active_filters)} column filter(s), {row_count} rows")

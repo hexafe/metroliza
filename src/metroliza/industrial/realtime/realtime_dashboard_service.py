@@ -417,12 +417,14 @@ class RealtimeDashboardService:
         ack_by: str,
         comment: str | None = None,
         ack_at: str | None = None,
+        expected_status: str | None = None,
     ) -> None:
         self._event_repository.acknowledge_event(
             event_id=event_id,
             ack_by=ack_by,
             comment=comment,
             ack_at=ack_at,
+            expected_status=expected_status,
         )
 
     def resolve_event(
@@ -432,12 +434,14 @@ class RealtimeDashboardService:
         resolved_by: str,
         comment: str | None = None,
         resolved_at: str | None = None,
+        expected_status: str | None = None,
     ) -> None:
         self._event_repository.resolve_event(
             event_id=event_id,
             resolved_by=resolved_by,
             comment=comment,
             resolved_at=resolved_at,
+            expected_status=expected_status,
         )
 
     def mark_event_false_positive(
@@ -447,12 +451,14 @@ class RealtimeDashboardService:
         marked_by: str,
         comment: str | None = None,
         marked_at: str | None = None,
+        expected_status: str | None = None,
     ) -> None:
         self._event_repository.mark_event_false_positive(
             event_id=event_id,
             marked_by=marked_by,
             comment=comment,
             marked_at=marked_at,
+            expected_status=expected_status,
         )
 
     def dashboard_snapshot(

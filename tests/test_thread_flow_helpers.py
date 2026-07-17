@@ -3146,10 +3146,14 @@ class TestExportBackendSmoke(unittest.TestCase):
 
         self.assertEqual(errors, [])
         self.assertTrue(thread._summary_sheet_failed)
-        self.assertTrue(any('summary charts skipped' in label.lower() for label in labels))
+        self.assertTrue(any('one summary chart could not' in label.lower() for label in labels))
         self.assertIn('summary_sheet_warnings', thread.completion_metadata)
         self.assertIn('(iqr)', thread.completion_metadata['summary_sheet_warnings'][0])
-        self.assertIn("'int' object is not iterable", thread.completion_metadata['summary_sheet_warnings'][0])
+        self.assertNotIn("'int' object is not iterable", thread.completion_metadata['summary_sheet_warnings'][0])
+        self.assertIn(
+            "'int' object is not iterable",
+            thread.completion_metadata['summary_sheet_warning_details'][0]['exception_message'],
+        )
 
     def test_summary_sheet_fill_row_table_renders_violin_iqr_and_later_charts(self):
         import metroliza.exporting.export_data_thread as export_thread_module

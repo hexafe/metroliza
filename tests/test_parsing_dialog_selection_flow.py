@@ -164,9 +164,9 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         dialog.metadata_mode_combo.setCurrentIndex(fast_index)
 
         with patch(
-            'modules.parsing_dialog.create_worker_progress_dialog',
+            'metroliza.ui.parsing_dialog.create_worker_progress_dialog',
             return_value=(_ProgressDialog(), _ProgressLabel(), _ProgressBar(), None),
-        ), patch('modules.parsing_dialog.ParseReportsThread', _FakeParseThread):
+        ), patch('metroliza.ui.parsing_dialog.ParseReportsThread', _FakeParseThread):
             dialog.show_loading_screen()
 
         self.assertTrue(captured['started'])
@@ -261,6 +261,62 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         self.assertTrue(captured['started'])
         self.assertEqual(captured['request'].metadata_parsing_mode, 'complete')
         self.assertFalse(captured['request'].run_background_metadata_enrichment)
+
+    def test_reviewed_preflight_enables_import_and_is_attached_to_worker(self):
+        from metroliza.parsing.preflight import (
+            ParseFilePreflight,
+            ParsePreflightResult,
+            ParsePreflightStatus,
+        )
+
+        result = ParsePreflightResult(
+            source_path='/tmp/reports',
+            database_path='/tmp/reports.db',
+            metadata_parsing_mode='light',
+            files=(
+                ParseFilePreflight(
+                    display_name='report.pdf',
+                    source_path='/tmp/reports/report.pdf',
+                    status=ParsePreflightStatus.READY,
+                    source_format='pdf',
+                    fingerprint='sha256:abc',
+                    parser_id='cmm',
+                    confidence=90,
+                ),
+            ),
+        )
+        dialog = ParsingDialog(
+            parent=None,
+            directory='/tmp/reports',
+            db_file='/tmp/reports.db',
+        )
+        dialog.on_preflight_completed(result)
+
+        self.assertTrue(dialog.parse_button.isEnabled())
+        self.assertTrue(dialog.review_scan_button.isEnabled())
+        self.assertIn('1 ready', dialog.readiness_label.text())
+
+        captured = {}
+
+        class _FakeParseThread:
+            def __init__(self, request):
+                captured['thread'] = self
+                self.update_label = _Signal()
+                self.update_progress = _Signal()
+                self.error_occurred = _Signal()
+                self.finished = _Signal()
+
+            def start(self):
+                captured['started'] = True
+
+        with patch(
+            'metroliza.ui.parsing_dialog.create_worker_progress_dialog',
+            return_value=(_ProgressDialog(), _ProgressLabel(), _ProgressBar(), None),
+        ), patch('metroliza.ui.parsing_dialog.ParseReportsThread', _FakeParseThread):
+            dialog.show_loading_screen()
+
+        self.assertTrue(captured['started'])
+        self.assertIs(captured['thread'].preflight_result, result)
 
     def test_successful_fast_then_enrich_requests_modeless_metadata_enrichment(self):
         parent = _DummyParent()

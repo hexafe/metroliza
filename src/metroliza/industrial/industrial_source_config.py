@@ -173,6 +173,26 @@ def source_profile_to_config_entry(
     return entry
 
 
+def source_profile_configuration_signature(profile: IndustrialSourceProfile) -> tuple[Any, ...]:
+    """Return the durable non-secret fields that identify one profile configuration."""
+
+    return (
+        profile.profile_key,
+        profile.profile_name,
+        profile.source_db_alias,
+        profile.database_type,
+        profile.host,
+        profile.port,
+        profile.database_name,
+        profile.source_object_name,
+        tuple(profile.allowed_columns),
+        profile.timestamp_column,
+        profile.default_pagination_column,
+        bool(profile.is_enabled),
+        bool(profile.order_by_enabled),
+    )
+
+
 def build_source_profile(
     *,
     profile_key: str,

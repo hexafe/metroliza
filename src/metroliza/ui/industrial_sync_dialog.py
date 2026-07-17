@@ -990,13 +990,36 @@ class IndustrialSyncDialog(QDialog):
             self._active_batch_total = len(self._batch_results) + 1
         thread = self.oznak_sync_thread
         if thread is not None and thread.isRunning():
-            thread.cancel()
-            self.status_label.setText("Cancelling industrial fetch...")
+            cancel = getattr(thread, "cancel", None)
+            if callable(cancel):
+                cancel()
+                self.status_label.setText("Cancelling industrial fetch...")
+            else:
+                self.status_label.setText("Waiting for industrial fetch to finish...")
             set_status_variant(self.status_label, "neutral")
+            return
+        self._active_operation = None
+        self._active_batch_total = 0
+        self.cancel_sync_button.setEnabled(False)
+        self._set_action_buttons_enabled(True)
+
+    @staticmethod
+    def _thread_is_running(thread: Any) -> bool:
+        if thread is None:
+            return False
+        try:
+            return bool(thread.isRunning())
+        except (AttributeError, RuntimeError):
+            return False
 
     def _is_oznak_operation_running(self) -> bool:
-        thread = self.oznak_sync_thread
-        return bool(thread is not None and thread.isRunning()) or bool(self._batch_operations)
+        return self._thread_is_running(self.oznak_sync_thread) or bool(self._batch_operations)
+
+    def _is_link_refresh_running(self) -> bool:
+        return self._thread_is_running(self.link_refresh_thread)
+
+    def _operation_blocks_close(self) -> bool:
+        return self._is_oznak_operation_running() or self._is_link_refresh_running()
 
     def _start_oznak_operation(self, *, test_only: bool) -> None:
         if self.oznak_sync_thread is not None and self.oznak_sync_thread.isRunning():
@@ -1200,6 +1223,8 @@ class IndustrialSyncDialog(QDialog):
         self.oznak_sync_thread.start()
 
     def _set_action_buttons_enabled(self, enabled: bool) -> None:
+        if enabled and self._operation_blocks_close():
+            enabled = False
         if enabled:
             self._sync_action_buttons()
             self.close_button.setEnabled(True)
@@ -1427,6 +1452,8 @@ class IndustrialSyncDialog(QDialog):
 
     def _clear_batch_link_refresh_thread(self) -> None:
         self.link_refresh_thread = None
+        self._set_action_buttons_enabled(True)
+        self.cancel_sync_button.setEnabled(False)
 
     def _batch_final_status_variant(self) -> str:
         return (
@@ -1503,16 +1530,30 @@ class IndustrialSyncDialog(QDialog):
         self._update_credentials_location_label(saved_path=saved_path)
 
     def closeEvent(self, event) -> None:
-        thread = self.oznak_sync_thread
-        if thread is not None and thread.isRunning():
-            QMessageBox.information(self, "Industrial data fetch", "Cancel or wait for the operation to finish.")
+        if self._guard_active_operation_close():
             event.ignore()
             return
         super().closeEvent(event)
 
+    def reject(self) -> None:
+        if self._guard_active_operation_close():
+            return
+        super().reject()
+
+    def _guard_active_operation_close(self) -> bool:
+        if not self._operation_blocks_close():
+            return False
+        if self._is_oznak_operation_running():
+            self.cancel_sync()
+        QMessageBox.information(
+            self,
+            "Industrial data fetch",
+            "Cancellation was requested where supported. Wait for the operation to finish.",
+        )
+        return True
+
     def _sync_action_buttons(self) -> None:
-        thread = self.oznak_sync_thread
-        if (thread is not None and thread.isRunning()) or self._batch_operations:
+        if self._operation_blocks_close():
             self.edit_filter_button.setEnabled(False)
             self.open_sql_button.setEnabled(False)
             self.save_sql_button.setEnabled(False)
@@ -1521,6 +1562,7 @@ class IndustrialSyncDialog(QDialog):
             self.test_connection_button.setEnabled(False)
             self.sync_now_button.setEnabled(False)
             self.fetch_csv_summary_button.setEnabled(False)
+            self.close_button.setEnabled(False)
             return
         has_source = self.current_profile() is not None
         self.forget_credentials_button.setEnabled(
@@ -1537,6 +1579,7 @@ class IndustrialSyncDialog(QDialog):
             has_fetch_source and (not self.access_only)
         )
         self.fetch_csv_summary_button.setEnabled(has_fetch_source and (not self.access_only))
+        self.close_button.setEnabled(True)
         self._sync_limit_controls()
 
     def _sync_limit_controls(self) -> None:

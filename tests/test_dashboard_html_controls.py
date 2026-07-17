@@ -6,8 +6,12 @@ import re
 from modules.dashboard_html_controls import (
     dashboard_visual_runtime_config_json,
     render_dashboard_controls_css,
+    render_dashboard_semantic_css,
+    render_dashboard_snapshot_metadata,
     render_dashboard_visual_dialog,
     render_dashboard_visual_runtime_js,
+    render_plotly_runtime_fallback_helpers,
+    resolve_dashboard_freshness,
 )
 
 
@@ -19,6 +23,72 @@ def _css_block(css: str, selector: str) -> str | None:
     if not match:
         return None
     return match.group(0)
+
+
+def test_dashboard_freshness_uses_live_evidence_and_preserves_report_semantics() -> None:
+    current = resolve_dashboard_freshness(
+        generated_at="2026-06-13T10:05:00Z",
+        data_through="2026-06-13T10:04:00Z",
+        live=True,
+    )
+    stale = resolve_dashboard_freshness(
+        generated_at="2026-06-13T10:30:00Z",
+        data_through="2026-06-13T10:00:00Z",
+        live=True,
+    )
+    report = resolve_dashboard_freshness(
+        generated_at="2026-07-17T10:00:00Z",
+        data_through="2026-01-01T10:00:00Z",
+        live=False,
+    )
+    source_reported_stale = resolve_dashboard_freshness(
+        generated_at="",
+        data_through="",
+        live=True,
+        source_reports_stale=True,
+    )
+
+    assert current.state == "current"
+    assert current.age_seconds == 60
+    assert stale.state == "stale"
+    assert stale.age_seconds == 1_800
+    assert report.state == "snapshot"
+    assert "not a live data view" in report.detail
+    assert source_reported_stale.state == "stale"
+    assert "Source health reports lagging" in source_reported_stale.detail
+
+
+def test_dashboard_snapshot_metadata_is_semantic_honest_and_escaped() -> None:
+    freshness = resolve_dashboard_freshness(
+        generated_at="2026-06-13T10:05:00Z",
+        data_through="",
+        live=True,
+    )
+    markup = render_dashboard_snapshot_metadata(
+        generated_at="2026-06-13T10:05:00Z",
+        data_through="<not recorded>",
+        freshness=freshness,
+    )
+
+    assert '<dl class="dashboard-meta"' in markup
+    assert '<time datetime="2026-06-13T10:05:00Z">' in markup
+    assert "Data through" in markup
+    assert "&lt;not recorded&gt;" in markup
+    assert 'data-freshness="unknown"' in markup
+
+
+def test_dashboard_semantic_contract_covers_accessibility_print_and_runtime_failure() -> None:
+    css = render_dashboard_semantic_css()
+    runtime_js = render_plotly_runtime_fallback_helpers()
+
+    assert ":focus-visible" in css
+    assert "@media (prefers-reduced-motion: reduce)" in css
+    assert "@media (forced-colors: active)" in css
+    assert "@media print" in css
+    assert ".skip-link:focus" in css
+    assert "const showPlotlyRuntimeFallback" in runtime_js
+    assert "runtime-unavailable" in runtime_js
+    assert "trigger.disabled = true" in runtime_js
 
 
 def test_dashboard_visual_runtime_detects_trend_before_scatter() -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from dataclasses import dataclass
 from pathlib import Path
 import re
 
@@ -37,12 +38,47 @@ from metroliza.industrial.industrial_source_config import (
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
+    configure_dialog_button_roles,
     configure_window_size,
+    finalize_window_size,
     path_field,
     section_label,
     status_chip,
     update_path_field,
 )
+
+
+@dataclass(frozen=True)
+class _SourceFormSnapshot:
+    profile_key: str | None
+    source_name: str
+    alias: str
+    database_type: str
+    host: str
+    port: int
+    database_name: str
+    source_object_name: str
+    columns: str
+    record_key: str
+    timestamp_column: str
+    order_by_enabled: bool
+
+    def draft_values(self) -> tuple[object, ...]:
+        """Return editable values without the profile-navigation key."""
+
+        return (
+            self.source_name,
+            self.alias,
+            self.database_type,
+            self.host,
+            self.port,
+            self.database_name,
+            self.source_object_name,
+            self.columns,
+            self.record_key,
+            self.timestamp_column,
+            self.order_by_enabled,
+        )
 
 
 class IndustrialSourceProfilesDialog(QDialog):
@@ -60,6 +96,8 @@ class IndustrialSourceProfilesDialog(QDialog):
         self.db_file = db_file
         self.config_path = Path(config_path or default_industrial_source_config_path()).expanduser()
         self._loading_profile = False
+        self._committed_form_snapshot: _SourceFormSnapshot | None = None
+        self._discard_gate_active = False
         self.setWindowTitle("Production line sources")
         configure_window_size(self, minimum=(620, 420), initial=(760, 600))
 
@@ -108,13 +146,19 @@ class IndustrialSourceProfilesDialog(QDialog):
         self.close_button = QPushButton("Close")
         self.new_source_button.clicked.connect(self.clear_form)
         self.browse_config_button.clicked.connect(self.browse_config_file)
-        self.reload_config_button.clicked.connect(self.reload_profiles)
+        self.reload_config_button.clicked.connect(self._request_reload_profiles)
         self.save_source_button.clicked.connect(self.save_source)
-        self.close_button.clicked.connect(self.accept)
+        self.close_button.clicked.connect(self.close)
+        configure_dialog_button_roles(
+            primary=self.save_source_button,
+            secondary=(self.new_source_button, self.close_button),
+            quiet=(self.browse_config_button, self.reload_config_button),
+        )
 
         self._build_layout()
         self.reload_profiles()
         apply_metroliza_theme(self)
+        finalize_window_size(self)
 
     def _build_layout(self) -> None:
         body = QWidget()
@@ -122,6 +166,8 @@ class IndustrialSourceProfilesDialog(QDialog):
         form.setContentsMargins(4, 4, 4, 4)
         form.setSpacing(8)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
         form.addRow("Saved production source", self.profile_combo)
         form.addRow("Source name", self.source_name_edit)
         form.addRow("Source alias", self.alias_edit)
@@ -145,14 +191,14 @@ class IndustrialSourceProfilesDialog(QDialog):
         layout.setSpacing(10)
         attach_help_menu_to_layout(layout, self, [("Industrial Data manual", "industrial_data")])
         layout.addWidget(section_label("Production line database configuration"))
-        config_row = QHBoxLayout()
-        config_row.setContentsMargins(0, 0, 0, 0)
-        config_row.setSpacing(8)
-        config_row.addWidget(section_label("Production source config file"))
-        config_row.addWidget(self.config_path_field, 1)
-        config_row.addWidget(self.browse_config_button)
-        config_row.addWidget(self.reload_config_button)
-        layout.addLayout(config_row)
+        layout.addWidget(section_label("Production source config file"))
+        config_controls = QHBoxLayout()
+        config_controls.setContentsMargins(0, 0, 0, 0)
+        config_controls.setSpacing(8)
+        config_controls.addWidget(self.config_path_field, 1)
+        config_controls.addWidget(self.browse_config_button)
+        config_controls.addWidget(self.reload_config_button)
+        layout.addLayout(config_controls)
         layout.addWidget(self.status_label)
         layout.addWidget(scroll, 1)
 
@@ -174,6 +220,14 @@ class IndustrialSourceProfilesDialog(QDialog):
         )
         if not filename:
             return
+        if not self._discard_draft_if_allowed(
+            title="Discard source changes?",
+            message=(
+                "Changing the source config file will discard source-profile changes "
+                "you have not saved."
+            ),
+        ):
+            return
         selected = Path(filename).expanduser()
         if selected.suffix.lower() not in {".yaml", ".yml"}:
             selected = selected.with_suffix(".yaml")
@@ -183,6 +237,17 @@ class IndustrialSourceProfilesDialog(QDialog):
             str(self.config_path),
             empty_text="No config file selected",
         )
+        self.reload_profiles()
+
+    def _request_reload_profiles(self) -> None:
+        if not self._discard_draft_if_allowed(
+            title="Discard source changes?",
+            message=(
+                "Reloading the source config will discard source-profile changes "
+                "you have not saved."
+            ),
+        ):
+            return
         self.reload_profiles()
 
     def reload_profiles(self) -> None:
@@ -255,7 +320,8 @@ class IndustrialSourceProfilesDialog(QDialog):
             self.status_label.setText(
                 "No production sources yet. Create one and save it to the config file."
             )
-        self.on_profile_selected()
+        self._populate_selected_profile()
+        self._capture_committed_form_state()
 
     def _select_profile_key(self, profile_key: str) -> None:
         for index in range(self.profile_combo.count()):
@@ -274,8 +340,28 @@ class IndustrialSourceProfilesDialog(QDialog):
     def on_profile_selected(self) -> None:
         if self._loading_profile:
             return
+        target_index = self.profile_combo.currentIndex()
+        if not self._discard_draft_if_allowed(
+            title="Discard source changes?",
+            message=(
+                "Selecting another production source will discard source-profile changes "
+                "you have not saved."
+            ),
+        ):
+            self._restore_committed_profile_selection()
+            return
+        self._loading_profile = True
+        try:
+            self.profile_combo.setCurrentIndex(target_index)
+        finally:
+            self._loading_profile = False
+        self._populate_selected_profile()
+        self._capture_committed_form_state()
+
+    def _populate_selected_profile(self) -> None:
         profile = self.profile_combo.currentData()
         if not isinstance(profile, IndustrialSourceProfile):
+            self._populate_new_source_form()
             return
         self.source_name_edit.setText(profile.profile_name)
         self.alias_edit.setText(profile.source_db_alias)
@@ -301,7 +387,23 @@ class IndustrialSourceProfilesDialog(QDialog):
             self.port_spin.setValue(1433)
 
     def clear_form(self) -> None:
-        self.profile_combo.setCurrentIndex(0)
+        if not self._discard_draft_if_allowed(
+            title="Discard source changes?",
+            message=(
+                "Creating a new production source will discard source-profile changes "
+                "you have not saved."
+            ),
+        ):
+            return
+        self._loading_profile = True
+        try:
+            self.profile_combo.setCurrentIndex(0)
+        finally:
+            self._loading_profile = False
+        self._populate_new_source_form()
+        self._capture_committed_form_state()
+
+    def _populate_new_source_form(self) -> None:
         for widget in (
             self.source_name_edit,
             self.alias_edit,
@@ -336,7 +438,114 @@ class IndustrialSourceProfilesDialog(QDialog):
             parent.refresh_status()
         self.reload_profiles()
         self._select_profile_key(saved_profile.profile_key)
+        self._capture_committed_form_state()
         self.status_label.setText(self._saved_source_status(saved_profile))
+
+    def _form_snapshot(self) -> _SourceFormSnapshot:
+        profile = self.profile_combo.currentData()
+        profile_key = profile.profile_key if isinstance(profile, IndustrialSourceProfile) else None
+        return _SourceFormSnapshot(
+            profile_key=profile_key,
+            source_name=self.source_name_edit.text(),
+            alias=self.alias_edit.text(),
+            database_type=str(self.db_type_combo.currentData() or ""),
+            host=self.host_edit.text(),
+            port=self.port_spin.value(),
+            database_name=self.database_edit.text(),
+            source_object_name=self.table_edit.text(),
+            columns=self.columns_edit.text(),
+            record_key=self.record_key_edit.text(),
+            timestamp_column=self.timestamp_column_edit.text(),
+            order_by_enabled=self.order_by_checkbox.isChecked(),
+        )
+
+    def _capture_committed_form_state(self) -> None:
+        self._committed_form_snapshot = self._form_snapshot()
+
+    def _is_dirty(self) -> bool:
+        committed = self._committed_form_snapshot
+        if committed is None:
+            return False
+        current = self._form_snapshot()
+        return current.draft_values() != committed.draft_values()
+
+    def _restore_committed_profile_selection(self) -> None:
+        committed = self._committed_form_snapshot
+        if committed is None:
+            return
+        selected_index = 0
+        if committed.profile_key is not None:
+            for index in range(self.profile_combo.count()):
+                profile = self.profile_combo.itemData(index)
+                if (
+                    isinstance(profile, IndustrialSourceProfile)
+                    and profile.profile_key == committed.profile_key
+                ):
+                    selected_index = index
+                    break
+        self._loading_profile = True
+        try:
+            self.profile_combo.setCurrentIndex(selected_index)
+        finally:
+            self._loading_profile = False
+
+    def _restore_committed_form_state(self) -> None:
+        committed = self._committed_form_snapshot
+        if committed is None:
+            return
+        self._restore_committed_profile_selection()
+        self.source_name_edit.setText(committed.source_name)
+        self.alias_edit.setText(committed.alias)
+        database_type_index = self.db_type_combo.findData(committed.database_type)
+        if database_type_index >= 0:
+            self.db_type_combo.setCurrentIndex(database_type_index)
+        self.host_edit.setText(committed.host)
+        self.port_spin.setValue(committed.port)
+        self.database_edit.setText(committed.database_name)
+        self.table_edit.setText(committed.source_object_name)
+        self.columns_edit.setText(committed.columns)
+        self.record_key_edit.setText(committed.record_key)
+        self.timestamp_column_edit.setText(committed.timestamp_column)
+        self.order_by_checkbox.setChecked(committed.order_by_enabled)
+
+    def _discard_draft_if_allowed(self, *, title: str, message: str) -> bool:
+        if self._discard_gate_active:
+            return False
+        if not self._is_dirty():
+            return True
+        if self.isVisible():
+            self._discard_gate_active = True
+            try:
+                answer = QMessageBox.question(
+                    self,
+                    title,
+                    message,
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+            finally:
+                self._discard_gate_active = False
+            if answer != QMessageBox.StandardButton.Yes:
+                return False
+        self._restore_committed_form_state()
+        return True
+
+    def reject(self) -> None:
+        if not self._discard_draft_if_allowed(
+            title="Discard source changes?",
+            message="Closing will discard source-profile changes you have not saved.",
+        ):
+            return
+        super().reject()
+
+    def closeEvent(self, event) -> None:
+        if not self._discard_draft_if_allowed(
+            title="Discard source changes?",
+            message="Closing will discard source-profile changes you have not saved.",
+        ):
+            event.ignore()
+            return
+        super().closeEvent(event)
 
     def _saved_source_status(self, profile: IndustrialSourceProfile) -> str:
         next_step = (

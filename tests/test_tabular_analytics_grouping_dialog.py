@@ -9,6 +9,7 @@ import pytest
 
 try:
     from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
     from PyQt6.QtWidgets import (
         QApplication,
         QLabel,
@@ -29,6 +30,7 @@ try:
     from metroliza.ui.tabular_analytics_grouping_dialog import TabularAnalyticsGroupingDialog
 except ImportError as exc:  # pragma: no cover - depends on PyQt collection order
     Qt = None
+    QTest = None
     QApplication = None
     QWidget = None
     QListWidgetItem = None
@@ -415,7 +417,8 @@ def test_grouping_dialog_uses_double_click_column_selection_without_action_butto
         assert not hasattr(dialog, "add_scope_filter_button")
         assert not hasattr(dialog, "clear_scope_filters_button")
         assert dialog.selector_search.placeholderText() == (
-            "Search values or filter, e.g. Supplier=SUPPLIER AND Value > 1"
+            "Search values, or enter an advanced expression such as "
+            "Supplier=SUPPLIER AND Value > 1"
         )
         assert dialog.create_group_button.accessibleName() == (
             "Assign selected CSV row values to a CSV analytics group"
@@ -430,10 +433,30 @@ def test_grouping_dialog_uses_double_click_column_selection_without_action_butto
             dialog.delete_group_button,
             dialog.clear_selection_button,
             dialog.dont_use_grouping_button,
+            dialog.cancel_button,
             dialog.use_grouping_button,
         )
-        assert [button.isDefault() for button in action_buttons] == [False] * len(action_buttons)
-        assert [button.autoDefault() for button in action_buttons] == [False] * len(action_buttons)
+        assert [button.isDefault() for button in action_buttons] == [
+            False,
+            False,
+            False,
+            False,
+            False,
+            False,
+            False,
+            True,
+        ]
+        assert [button.autoDefault() for button in action_buttons] == [
+            False,
+            False,
+            False,
+            False,
+            False,
+            False,
+            False,
+            True,
+        ]
+        assert dialog.dont_use_grouping_button.text() == "Reset changes"
         assert dialog.previous_page_button.accessibleName() == "Previous matching rows page"
         assert dialog.selector_page_label.accessibleName() == "Matching rows page"
 
@@ -1538,6 +1561,106 @@ def test_invalid_search_expression_disables_assign_all_and_preview() -> None:
         assert dialog.selector_preview_label.text().startswith("Invalid filter:")
         assert dialog.selector_page_label.text() == "Page 0 of 0"
         assert dialog.assign_filtered_rows_button.isEnabled() is False
+        assert dialog.use_grouping_button.isEnabled() is False
+    finally:
+        dialog.close()
+
+
+def test_grouping_reset_restores_committed_draft_only_after_confirmation(monkeypatch) -> None:
+    _app()
+    frame = pd.DataFrame(
+        {
+            "source_row_number": [1, 2],
+            "tracecode": ["TC-001", "TC-002"],
+        }
+    )
+    dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
+    try:
+        dialog._temp_group_assignments[1] = ("Fixture", "#336699")
+        answers = iter([QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes])
+        monkeypatch.setattr(
+            grouping_dialog_module.QMessageBox,
+            "question",
+            lambda *_args, **_kwargs: next(answers),
+        )
+
+        dialog._request_reset_grouping()
+        assert 1 in dialog._temp_group_assignments
+        dialog._request_reset_grouping()
+        assert dialog._temp_group_assignments == {}
+        assert dialog.result() != dialog.DialogCode.Accepted
+    finally:
+        dialog.close()
+
+
+def test_grouping_dirty_x_and_escape_restore_committed_state(monkeypatch) -> None:
+    _app()
+    frame = pd.DataFrame(
+        {
+            "source_row_number": [1, 2],
+            "tracecode": ["TC-001", "TC-002"],
+        }
+    )
+    dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
+    answers = iter(
+        [
+            QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+            QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        ]
+    )
+    monkeypatch.setattr(
+        grouping_dialog_module.QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: next(answers),
+    )
+    detach_calls = []
+    store_cleanup_calls = []
+    original_detach = dialog._detach_sqlite_selector_preview_threads
+    original_store_cleanup = dialog._cleanup_sqlite_assignment_store
+
+    def counted_detach():
+        detach_calls.append(True)
+        original_detach()
+
+    def counted_store_cleanup():
+        store_cleanup_calls.append(True)
+        original_store_cleanup()
+
+    monkeypatch.setattr(dialog, "_detach_sqlite_selector_preview_threads", counted_detach)
+    monkeypatch.setattr(dialog, "_cleanup_sqlite_assignment_store", counted_store_cleanup)
+    try:
+        dialog.show()
+        _app().processEvents()
+        dialog._temp_group_assignments[1] = ("Fixture A", "#336699")
+
+        assert dialog.close() is False
+        assert detach_calls == []
+        assert store_cleanup_calls == []
+        assert dialog.isVisible()
+        assert _temporary_groups(dialog) == {1: "Fixture A"}
+        assert dialog.close() is True
+        assert detach_calls == [True]
+        assert store_cleanup_calls == [True]
+        assert not dialog.isVisible()
+        assert _temporary_groups(dialog) == {}
+
+        dialog.show()
+        _app().processEvents()
+        dialog._temp_group_assignments[2] = ("Fixture B", "#663399")
+        QTest.keyClick(dialog, Qt.Key.Key_Escape)
+        _app().processEvents()
+        assert dialog.isVisible()
+        assert _temporary_groups(dialog) == {2: "Fixture B"}
+        assert detach_calls == [True]
+        assert store_cleanup_calls == [True]
+        QTest.keyClick(dialog, Qt.Key.Key_Escape)
+        _app().processEvents()
+        assert not dialog.isVisible()
+        assert _temporary_groups(dialog) == {}
+        assert detach_calls == [True, True]
+        assert store_cleanup_calls == [True, True]
     finally:
         dialog.close()
 
@@ -1811,6 +1934,7 @@ def test_enter_in_matching_rows_opens_group_prompt_and_assigns_rows(monkeypatch)
         assert enter_event.accepted is True
         assert _temporary_groups(dialog) == {1: "Fixture A", 2: "Fixture A"}
     finally:
+        dialog.hide()
         dialog.close()
 
 
@@ -1840,6 +1964,7 @@ def test_double_click_matching_rows_opens_group_prompt_and_assigns_selection(mon
 
         assert _temporary_groups(dialog) == {1: "Fixture A", 2: "Fixture A"}
     finally:
+        dialog.hide()
         dialog.close()
 
 
@@ -1953,6 +2078,7 @@ def test_delete_key_on_group_members_removes_selected_rows_from_group() -> None:
         assert delete_event.accepted is True
         assert _temporary_groups(dialog) == {2: "Fixture A"}
     finally:
+        dialog.hide()
         dialog.close()
 
 

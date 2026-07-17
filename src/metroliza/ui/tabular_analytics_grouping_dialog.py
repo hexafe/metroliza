@@ -64,6 +64,7 @@ from metroliza.ui.ui_foundation import (
     apply_list_selection_style,
     apply_metroliza_theme,
     configure_accessibility,
+    configure_dialog_button_roles,
     configure_window_size,
     set_status_variant,
     status_chip,
@@ -286,6 +287,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._selector_preview_loading_label = None
         self._selector_preview_loading_bar = None
         self._selector_preview_loading_gif = None
+        self._discard_gate_active = False
+        self._dialog_cleanup_done = False
         self._last_group_counts: dict[str, int] = {}
         self._applied_column_search_text = ""
         self._applied_selected_column_search_text = ""
@@ -314,6 +317,26 @@ class TabularAnalyticsGroupingDialog(QDialog):
 
         self.selector_status_label = status_chip("No grouping columns selected", "neutral")
         layout.addWidget(self.selector_status_label)
+        self.group_status_label = status_chip("Draft: no custom groups", "neutral")
+        configure_accessibility(self.group_status_label, name="CSV grouping draft summary")
+        layout.addWidget(self.group_status_label)
+        base_condition_count = self._base_filter_condition_count()
+        source_row_count = (
+            int(getattr(self.sqlite_store, "row_count", 0) or 0)
+            if self._is_sqlite_backed()
+            else int(len(self.source_dataframe.index))
+        )
+        base_filter_text = (
+            f"{base_condition_count} active base condition(s)"
+            if base_condition_count
+            else "no base filter"
+        )
+        self.context_status_label = status_chip(
+            f"Source: {source_row_count:,} rows | {base_filter_text}",
+            "info",
+        )
+        configure_accessibility(self.context_status_label, name="CSV grouping source context")
+        layout.addWidget(self.context_status_label)
 
         column_area = QWidget()
         columns_grid = QGridLayout(column_area)
@@ -355,14 +378,21 @@ class TabularAnalyticsGroupingDialog(QDialog):
         selector_column = QVBoxLayout(selector_widget)
         selector_column.setContentsMargins(0, 0, 0, 0)
         selector_column.setSpacing(6)
-        selector_column.addWidget(QLabel("Matching rows"))
+        selector_column.addWidget(QLabel("Matching rows: search or advanced expression"))
         self.selector_search = QLineEdit()
         self.selector_search.setPlaceholderText(
-            "Search values or filter, e.g. Supplier=SUPPLIER AND Value > 1"
+            "Search values, or enter an advanced expression such as Supplier=SUPPLIER AND Value > 1"
         )
-        configure_accessibility(self.selector_search, name="Search or filter CSV grouping row selectors")
+        configure_accessibility(
+            self.selector_search,
+            name="Search or advanced expression for CSV grouping rows",
+            description=(
+                "Plain text searches visible selector values. An expression filters source rows."
+            ),
+        )
         selector_column.addWidget(self.selector_search)
         self.selector_preview_label = status_chip("", "neutral")
+        configure_accessibility(self.selector_preview_label, name="Grouping expression validation")
         selector_column.addWidget(self.selector_preview_label)
         self.selector_list = QListWidget()
         self.selector_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
@@ -444,7 +474,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.delete_group_button = QPushButton("Delete group")
         self.clear_selection_button = QPushButton("Clear selection")
         self.use_grouping_button = QPushButton("Use grouping")
-        self.dont_use_grouping_button = QPushButton("Clear grouping")
+        self.dont_use_grouping_button = QPushButton("Reset changes")
+        self.cancel_button = QPushButton("Cancel")
         for button in (
             self.assign_filtered_rows_button,
             self.create_group_button,
@@ -453,6 +484,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
             self.clear_selection_button,
             self.use_grouping_button,
             self.dont_use_grouping_button,
+            self.cancel_button,
         ):
             if hasattr(button, "setDefault"):
                 button.setDefault(False)
@@ -469,7 +501,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
         configure_accessibility(self.rename_group_button, name="Rename selected CSV analytics group")
         configure_accessibility(self.delete_group_button, name="Delete selected CSV analytics group")
         configure_accessibility(self.clear_selection_button, name="Clear selected matching rows")
-        configure_accessibility(self.dont_use_grouping_button, name="Clear CSV analytics grouping")
+        configure_accessibility(self.dont_use_grouping_button, name="Reset CSV grouping draft")
+        configure_accessibility(self.cancel_button, name="Cancel CSV analytics grouping")
         configure_accessibility(self.use_grouping_button, name="Use CSV analytics grouping")
         footer.addWidget(self.assign_filtered_rows_button)
         footer.addWidget(self.create_group_button)
@@ -478,6 +511,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         footer.addWidget(self.clear_selection_button)
         footer.addStretch(1)
         footer.addWidget(self.dont_use_grouping_button)
+        footer.addWidget(self.cancel_button)
         footer.addWidget(self.use_grouping_button)
         layout.addLayout(footer)
 
@@ -505,8 +539,26 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.delete_group_button.clicked.connect(self.delete_group)
         self.clear_selection_button.clicked.connect(self.clear_selection)
         self.use_grouping_button.clicked.connect(self.use_grouping)
-        self.dont_use_grouping_button.clicked.connect(self.dont_use_grouping)
+        self.dont_use_grouping_button.clicked.connect(self._request_reset_grouping)
+        self.cancel_button.clicked.connect(self._request_cancel)
 
+        configure_dialog_button_roles(
+            primary=self.use_grouping_button,
+            secondary=(self.cancel_button,),
+            quiet=(
+                self.dont_use_grouping_button,
+                self.assign_filtered_rows_button,
+                self.create_group_button,
+                self.rename_group_button,
+                self.clear_selection_button,
+                self.first_page_button,
+                self.previous_page_button,
+                self.next_page_button,
+                self.last_page_button,
+                self.jump_page_button,
+            ),
+            danger=(self.delete_group_button,),
+        )
         apply_metroliza_theme(self)
         self._configure_stretch_panes()
         self._list_selection_utils.connect_shift_range_behavior(self.selector_list)
@@ -530,12 +582,108 @@ class TabularAnalyticsGroupingDialog(QDialog):
             qt_namespace=Qt,
         )
         self._refresh_all()
+        self._capture_committed_grouping_state()
 
     def _is_sqlite_backed(self) -> bool:
         return vars(self).get("sqlite_store") is not None
 
+    def _base_filter_condition_count(self) -> int:
+        count = len(self.sqlite_column_filters)
+        if not count and self.sqlite_filter_columns and self.sqlite_selected_filter_keys:
+            count = 1
+        if self.sqlite_filter_expression:
+            count += 1
+        return count
+
+    def _grouping_state_signature(self) -> tuple[object, ...]:
+        return (
+            self.default_group,
+            tuple(
+                sorted(
+                    (int(row_id), str(group_name), str(color))
+                    for row_id, (group_name, color) in self._temp_assignments().items()
+                )
+            ),
+            tuple(self._sqlite_assignment_operations),
+        )
+
+    def _capture_committed_grouping_state(self) -> None:
+        self._committed_default_group = self.default_group
+        self._committed_group_assignments = dict(self._temp_assignments())
+        self._committed_sqlite_operations = tuple(self._sqlite_assignment_operations)
+        self._committed_grouping_signature = self._grouping_state_signature()
+
+    def _is_grouping_dirty(self) -> bool:
+        committed = getattr(
+            self,
+            "_committed_grouping_signature",
+            self._grouping_state_signature(),
+        )
+        return self._grouping_state_signature() != committed
+
+    def _confirm_discard(self, *, title: str, message: str) -> bool:
+        answer = QMessageBox.question(
+            self,
+            title,
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def _reset_grouping_draft(self) -> None:
+        self.default_group = getattr(self, "_committed_default_group", TABULAR_DEFAULT_GROUP)
+        assignments = dict(getattr(self, "_committed_group_assignments", {}))
+        self._apply_group_assignments(assignments)
+        self._sqlite_assignment_operations = list(
+            getattr(self, "_committed_sqlite_operations", ())
+        )
+        self._invalidate_sqlite_assignment_cache()
+        self.df = self._empty_grouping_dataframe()
+        self._refresh_all(preferred_group=self.default_group)
+
+    def _request_reset_grouping(self) -> None:
+        if not self._is_grouping_dirty():
+            return
+        if not self._confirm_discard(
+            title="Reset grouping changes?",
+            message=(
+                "Restore the grouping draft to the state that was applied when this dialog opened?"
+            ),
+        ):
+            return
+        self._reset_grouping_draft()
+
+    def _request_cancel(self) -> None:
+        self.reject()
+
+    def _discard_draft_if_allowed(self) -> bool:
+        """Guard every reject path and restore committed grouping state before close."""
+
+        if self._discard_gate_active:
+            return False
+        if not self._is_grouping_dirty():
+            return True
+        if self.isVisible():
+            self._discard_gate_active = True
+            try:
+                allowed = self._confirm_discard(
+                    title="Discard grouping changes?",
+                    message="Discard all grouping changes made in this dialog?",
+                )
+            finally:
+                self._discard_gate_active = False
+            if not allowed:
+                return False
+        self._reset_grouping_draft()
+        return True
+
     def showEvent(self, event) -> None:
+        was_cleaned = self._dialog_cleanup_done
+        self._dialog_cleanup_done = False
         super().showEvent(event)
+        if was_cleaned:
+            self._refresh_all(preferred_group=self.default_group)
         self._configure_stretch_panes()
         QTimer.singleShot(0, self._configure_stretch_panes)
 
@@ -1964,6 +2112,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.rename_group_button.setEnabled(bool(selected_group))
         self.delete_group_button.setEnabled(bool(selected_group and selected_group != self.default_group))
         self.clear_selection_button.setEnabled(bool(self.selected_selector_keys))
+        self.use_grouping_button.setEnabled(filter_state.mode != "invalid")
 
     def _refresh_selectors(self) -> None:
         self.selector_list.blockSignals(True)
@@ -2031,7 +2180,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         end = min(self._selector_page_offset + len(preview_rows), total_rows)
         if filter_state.mode == "invalid":
             self.selector_preview_label.setText(f"Invalid filter: {filter_state.error}")
-            set_status_variant(self.selector_preview_label, "warning")
+            set_status_variant(self.selector_preview_label, "danger")
         elif not self.selector_columns:
             self.selector_preview_label.setText("Add a grouping column to preview row groups.")
             set_status_variant(self.selector_preview_label, "neutral")
@@ -2078,6 +2227,23 @@ class TabularAnalyticsGroupingDialog(QDialog):
         if not group_counts:
             group_counts[self.default_group] = 0
         self._last_group_counts = {str(group): int(count) for group, count in group_counts.items()}
+        custom_group_count = sum(
+            1 for group_name in group_counts if str(group_name) != self.default_group
+        )
+        assigned_row_count = sum(
+            int(count)
+            for group_name, count in group_counts.items()
+            if str(group_name) != self.default_group
+        )
+        total_row_count = sum(int(count) for count in group_counts.values())
+        self.group_status_label.setText(
+            f"Draft: {custom_group_count} custom group(s) | "
+            f"{assigned_row_count:,} assigned of {total_row_count:,} rows"
+        )
+        set_status_variant(
+            self.group_status_label,
+            "success" if custom_group_count else "neutral",
+        )
         non_default_group_index = 0
         for group_name, count in sorted(group_counts.items(), key=lambda item: (item[0] != self.default_group, str(item[0]))):
             group_name = str(group_name)
@@ -2255,6 +2421,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
         return bool(viewport is not None and viewport.hasFocus())
 
     def use_grouping(self) -> None:
+        if self._selector_filter_state().mode == "invalid":
+            self._sync_status(recompute_counts=False, recompute_scope=False)
+            return
         parent = self.parent()
         materialized = self._materialize_grouping_dataframe()
         set_default_group_label(materialized, self.default_group)
@@ -2262,6 +2431,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         if parent is not None:
             parent.set_df_for_grouping(materialized)
             parent.set_grouping_applied(True)
+        self._capture_committed_grouping_state()
         self.accept()
 
     def dont_use_grouping(self) -> None:
@@ -2275,19 +2445,28 @@ class TabularAnalyticsGroupingDialog(QDialog):
             parent.set_grouping_applied(False)
         self.accept()
 
-    def accept(self) -> None:
+    def _cleanup_dialog_once(self) -> None:
+        if self._dialog_cleanup_done:
+            return
+        self._dialog_cleanup_done = True
         self._detach_sqlite_selector_preview_threads()
         self._cleanup_sqlite_assignment_store()
+
+    def accept(self) -> None:
+        self._cleanup_dialog_once()
         super().accept()
 
     def reject(self) -> None:
-        self._detach_sqlite_selector_preview_threads()
-        self._cleanup_sqlite_assignment_store()
+        if not self._discard_draft_if_allowed():
+            return
+        self._cleanup_dialog_once()
         super().reject()
 
     def closeEvent(self, event) -> None:
-        self._detach_sqlite_selector_preview_threads()
-        self._cleanup_sqlite_assignment_store()
+        if not self._discard_draft_if_allowed():
+            event.ignore()
+            return
+        self._cleanup_dialog_once()
         super().closeEvent(event)
 
 

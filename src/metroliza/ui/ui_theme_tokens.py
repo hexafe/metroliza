@@ -13,15 +13,16 @@ BORDER_SUBTLE = "#D6DDE3"
 BORDER_STRONG = "#B7C2CC"
 TEXT_PRIMARY = "#1F2933"
 TEXT_SECONDARY = "#586574"
-TEXT_MUTED = "#6C7886"
+TEXT_MUTED = "#5F6B78"
 ACCENT_PRIMARY = "#256D85"
 ACCENT_PRIMARY_HOVER = "#1F5B70"
-ACCENT_INFO = "#2F6FED"
+ACCENT_INFO = "#2459B8"
 ACCENT_SUCCESS = "#2E7D5B"
 ACCENT_WARNING = "#B7791F"
+ACCESSIBLE_ACCENT_WARNING = "#805000"
 ACCENT_DANGER = "#B42318"
 DISABLED_TEXT = "#8B98A7"
-FOCUS_RING = "#8AB7C7"
+FOCUS_RING = "#337A93"
 
 SPACING_XS = 4
 SPACING_SM = 8
@@ -36,6 +37,10 @@ STATUS_COLORS = {
     "warning": (ACCENT_WARNING, "#FFF6E5"),
     "danger": (ACCENT_DANGER, "#FDEDEC"),
     "neutral": (TEXT_SECONDARY, SURFACE_MUTED_BACKGROUND),
+}
+ACCESSIBLE_STATUS_COLORS = {
+    **STATUS_COLORS,
+    "warning": (ACCESSIBLE_ACCENT_WARNING, STATUS_COLORS["warning"][1]),
 }
 
 DARK_WINDOW_BACKGROUND = "#0F1720"
@@ -110,11 +115,13 @@ def theme_tokens(dark_mode=False):
         "ACCENT_PRIMARY_HOVER": ACCENT_PRIMARY_HOVER,
         "ACCENT_INFO": ACCENT_INFO,
         "ACCENT_SUCCESS": ACCENT_SUCCESS,
-        "ACCENT_WARNING": ACCENT_WARNING,
+        # Keep the historical ACCENT_WARNING/STATUS_COLORS exports stable for
+        # compatibility while returning WCAG-safe effective application tokens.
+        "ACCENT_WARNING": ACCESSIBLE_ACCENT_WARNING,
         "ACCENT_DANGER": ACCENT_DANGER,
         "DISABLED_TEXT": DISABLED_TEXT,
         "FOCUS_RING": FOCUS_RING,
-        "STATUS_COLORS": STATUS_COLORS,
+        "STATUS_COLORS": ACCESSIBLE_STATUS_COLORS,
         "BUTTON_HOVER_BACKGROUND": "#F9FCFD",
         "DEFAULT_BUTTON_TEXT": "#FFFFFF",
     }
@@ -139,6 +146,32 @@ def _to_hex(red, green, blue):
     return f"#{int(red):02X}{int(green):02X}{int(blue):02X}"
 
 
+def relative_luminance(color_hex):
+    """Return WCAG relative luminance for a valid ``#RRGGBB`` color."""
+    parsed = _parse_hex_color(color_hex)
+    if parsed is None:
+        return None
+
+    def _linearize(channel):
+        value = channel / 255.0
+        if value <= 0.04045:
+            return value / 12.92
+        return ((value + 0.055) / 1.055) ** 2.4
+
+    red, green, blue = (_linearize(channel) for channel in parsed)
+    return (0.2126 * red) + (0.7152 * green) + (0.0722 * blue)
+
+
+def contrast_ratio(foreground_hex, background_hex):
+    """Return the WCAG contrast ratio for two colors, or ``1.0`` if invalid."""
+    foreground = relative_luminance(foreground_hex)
+    background = relative_luminance(background_hex)
+    if foreground is None or background is None:
+        return 1.0
+    lighter, darker = sorted((foreground, background), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
 def normalize_hex_color(color_hex, fallback=BASE_ROW_BACKGROUND_FALLBACK):
     """Return normalized #RRGGBB color (uppercase), or fallback when invalid."""
     parsed = _parse_hex_color(color_hex)
@@ -151,13 +184,12 @@ def normalize_hex_color(color_hex, fallback=BASE_ROW_BACKGROUND_FALLBACK):
 
 
 def ideal_text_color(background_hex):
-    """Return high-contrast text token (#000000 or #FFFFFF)."""
-    parsed = _parse_hex_color(background_hex)
-    if parsed is None:
+    """Return whichever of black or white has the higher WCAG contrast."""
+    if _parse_hex_color(background_hex) is None:
         return "#000000"
-    red, green, blue = parsed
-    luminance = ((0.299 * red) + (0.587 * green) + (0.114 * blue)) / 255
-    return "#000000" if luminance > 0.6 else "#FFFFFF"
+    black_contrast = contrast_ratio("#000000", background_hex)
+    white_contrast = contrast_ratio("#FFFFFF", background_hex)
+    return "#000000" if black_contrast >= white_contrast else "#FFFFFF"
 
 
 def resolve_base_row_background(base_hex=None):

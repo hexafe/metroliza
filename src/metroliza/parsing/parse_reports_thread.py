@@ -6,6 +6,7 @@ import logging
 import os
 import time
 import traceback
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from metroliza.parsing import report_parser_factory
@@ -14,7 +15,6 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import shutil
 from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
 from metroliza.reports.cmm_schema import ensure_cmm_report_schema
 from metroliza.reports.db import execute_with_retry, sqlite_connection_scope
@@ -32,6 +32,12 @@ from metroliza.parsing.base_report_parser import BaseReportParser
 from metroliza.parsing.cmm_report_parser import CMMReportParser
 from metroliza.parsing.parser_plugin_contracts import infer_source_format
 from metroliza.parsing.source_inspection import SourceInspectionContext
+from metroliza.parsing.preflight import (
+    ParsePreflightResult,
+    ParsePreflightStatus,
+    is_supported_report_archive,
+    safe_unpack_report_archive,
+)
 from metroliza.reports.report_metadata_profiles import DEFAULT_CMM_PDF_HEADER_BOX_PROFILE
 
 
@@ -44,6 +50,11 @@ class ParseBatchResult:
     total_files: int
     failed_files: int = 0
     skipped_files: int = 0
+    preflight_duplicate_files: int = 0
+    preflight_unsupported_files: int = 0
+    preflight_ambiguous_files: int = 0
+    preflight_unreadable_files: int = 0
+    preflight_changed_files: int = 0
 
 
 @dataclass(frozen=True)
@@ -780,6 +791,8 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         self.run_background_metadata_enrichment = validated_request.run_background_metadata_enrichment
         self.parsing_canceled = False
         self._extracted_archive_dir = None
+        self._preflight_reviewed_total = 0
+        self.preflight_result: ParsePreflightResult | None = None
         self.last_parse_result = ParseBatchResult(parsed_files=0, total_files=0)
         self._last_emitted_progress = -1
         self._progress_stage_ranges = dict(self.PROGRESS_STAGE_RANGES)
@@ -834,19 +847,12 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         eta_display = format_progress_duration(eta_seconds)
         return build_three_line_status(stage_line, detail_line, f"{elapsed_display} elapsed, ETA {eta_display}")
 
-    @staticmethod
-    def _build_archive_extension_set():
-        archive_extensions = set()
-        for _format_name, extensions, _description in shutil.get_unpack_formats():
-            archive_extensions.update(ext.lower() for ext in extensions)
-        return archive_extensions
-
     def _resolve_report_root(self):
         source_path = Path(self.directory)
 
-        if source_path.is_file() and source_path.suffix.lower() in self._build_archive_extension_set():
+        if source_path.is_file() and is_supported_report_archive(source_path):
             self._extracted_archive_dir = TemporaryDirectory()
-            shutil.unpack_archive(str(source_path), self._extracted_archive_dir.name)
+            safe_unpack_report_archive(source_path, self._extracted_archive_dir.name)
             return Path(self._extracted_archive_dir.name)
 
         return source_path
@@ -896,6 +902,100 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
             return report_files
         except Exception as e:
             self.log_and_exit(e)
+
+    def _filter_reports_for_preflight(self, report_paths):
+        """Apply an operator-approved scan and reject changed/new content.
+
+        Parser selection is verified again against the scanned parser id.  The
+        normal parser still verifies the content digest immediately before
+        persistence, closing the remaining scan-to-import race.
+        """
+
+        preflight = self.preflight_result
+        if preflight is None:
+            self._preflight_reviewed_total = len(report_paths)
+            return list(report_paths), 0
+        self._preflight_reviewed_total = max(len(report_paths), len(preflight.files))
+        if not preflight.matches_request(
+            source_path=self.directory,
+            database_path=self.db_file,
+            metadata_parsing_mode=self.metadata_parsing_mode,
+        ):
+            return [], max(len(report_paths), len(preflight.ready_files))
+
+        expected_fingerprint_counts = Counter(
+            item.fingerprint for item in preflight.files if item.fingerprint
+        )
+        ready_fingerprint_counts = Counter(
+            item.fingerprint for item in preflight.ready_files if item.fingerprint
+        )
+        parser_approval_by_fingerprint = preflight.parser_approval_by_ready_fingerprint
+        observed_fingerprint_counts: Counter[str] = Counter()
+        used_ready_fingerprint_counts: Counter[str] = Counter()
+        approved: list[Path] = []
+        changed_observed_files = 0
+        for report in report_paths:
+            if self.parsing_canceled:
+                break
+            inspection = SourceInspectionContext.from_path(
+                report,
+                source_format=infer_source_format(report),
+            )
+            sha256_value = inspection.sha256
+            fingerprint = f"sha256:{sha256_value}" if sha256_value else None
+            if (
+                not fingerprint
+                or observed_fingerprint_counts[fingerprint]
+                >= expected_fingerprint_counts[fingerprint]
+            ):
+                changed_observed_files += 1
+                continue
+            observed_fingerprint_counts[fingerprint] += 1
+
+            parser_approval = parser_approval_by_fingerprint.get(fingerprint)
+            if parser_approval is None:
+                # Duplicate/unsupported/ambiguous/unreadable entries are review
+                # evidence, not approved import work.
+                continue
+            if used_ready_fingerprint_counts[fingerprint] >= ready_fingerprint_counts[fingerprint]:
+                # A reviewed duplicate is expected input, but it is not a
+                # second persistence operation.
+                continue
+            approved_parser_id, approved_registry_generation_id = parser_approval
+            try:
+                diagnostics = report_parser_factory.resolve_parser_with_diagnostics(
+                    report,
+                    source_inspection=inspection,
+                )
+            except Exception:
+                changed_observed_files += 1
+                continue
+            selected_parser_id = (
+                diagnostics.selected.plugin_id
+                if diagnostics.selected is not None
+                else None
+            )
+            resolved_registry_generation_id = getattr(
+                diagnostics,
+                "registry_generation_id",
+                None,
+            )
+            if (
+                selected_parser_id != approved_parser_id
+                or approved_registry_generation_id is None
+                or resolved_registry_generation_id != approved_registry_generation_id
+            ):
+                changed_observed_files += 1
+                continue
+            approved.append(report)
+            used_ready_fingerprint_counts[fingerprint] += 1
+
+        missing_ready_files = sum(
+            max(0, expected_count - observed_fingerprint_counts[fingerprint])
+            for fingerprint, expected_count in ready_fingerprint_counts.items()
+        )
+        changed_files = max(changed_observed_files, missing_ready_files)
+        return approved, changed_files
 
     def get_report_fingerprints_in_database(self, connection=None):
         try:
@@ -1131,6 +1231,16 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 self.parsing_finished.emit()
                 return
 
+            reports_to_parse, preflight_changed_files = self._filter_reports_for_preflight(
+                list_of_reports
+            )
+            preflight = self.preflight_result
+            preflight_counts = (
+                preflight.status_counts
+                if preflight is not None
+                else {}
+            )
+
             with sqlite_connection_scope(self.db_file) as connection:
                 ensure_cmm_report_schema(
                     self.db_file,
@@ -1254,7 +1364,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                     )
 
                 result = parse_new_reports(
-                    list_of_reports,
+                    reports_to_parse,
                     report_fingerprints,
                     parser_factory=_parser_factory,
                     persist_report=_persist_report,
@@ -1284,10 +1394,34 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                     worker_count=two_stage_workers,
                     log_file_failures=False,
                 )
+                if preflight is not None:
+                    result = ParseBatchResult(
+                        parsed_files=result.parsed_files,
+                        total_files=self._preflight_reviewed_total,
+                        failed_files=result.failed_files,
+                        skipped_files=result.skipped_files,
+                        preflight_duplicate_files=preflight_counts.get(
+                            ParsePreflightStatus.DUPLICATE,
+                            0,
+                        ),
+                        preflight_unsupported_files=preflight_counts.get(
+                            ParsePreflightStatus.UNSUPPORTED,
+                            0,
+                        ),
+                        preflight_ambiguous_files=preflight_counts.get(
+                            ParsePreflightStatus.AMBIGUOUS,
+                            0,
+                        ),
+                        preflight_unreadable_files=preflight_counts.get(
+                            ParsePreflightStatus.UNREADABLE,
+                            0,
+                        ),
+                        preflight_changed_files=preflight_changed_files,
+                    )
                 self.last_parse_result = result
 
                 if not self.parsing_canceled and self.run_background_metadata_enrichment:
-                    self._run_background_metadata_enrichment(list_of_reports, connection)
+                    self._run_background_metadata_enrichment(reports_to_parse, connection)
 
             if result.total_files == 0:
                 self._emit_stage_progress('parse_reports', 1.0)

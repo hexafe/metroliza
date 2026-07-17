@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime, timezone
 import hashlib
 import html
 import json
+import math
+from typing import Any, Iterable
 
 from metroliza.charts.dashboard_visual_options import (
     DEFAULT_DASHBOARD_PALETTE,
@@ -26,6 +30,378 @@ DASHBOARD_THEME_STORAGE_KEY = "metroliza-dashboard-theme"
 DASHBOARD_VISUAL_STORAGE_KEY = "metroliza-dashboard-visuals"
 DASHBOARD_VISUAL_THEME_STORAGE_KEY = "metroliza-dashboard-visual-themes"
 DASHBOARD_POINT_MARK_STORAGE_KEY = "metroliza-dashboard-point-marks"
+DASHBOARD_STALE_AFTER_SECONDS = 5 * 60
+
+
+@dataclass(frozen=True)
+class DashboardFreshness:
+    """Honest freshness state for generated dashboard metadata."""
+
+    state: str
+    label: str
+    detail: str
+    age_seconds: float | None = None
+
+
+def _parse_dashboard_timestamp(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    normalized = text[:-1] + "+00:00" if text.endswith(("Z", "z")) else text
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def latest_dashboard_timestamp(values: Iterable[Any]) -> str:
+    """Return the latest parseable timestamp without inventing missing precision."""
+
+    candidates = [str(value).strip() for value in values if str(value or "").strip()]
+    parsed_candidates = [
+        (parsed, value)
+        for value in candidates
+        if (parsed := _parse_dashboard_timestamp(value)) is not None
+    ]
+    if parsed_candidates:
+        return max(parsed_candidates, key=lambda item: item[0])[1]
+    unique_candidates = tuple(dict.fromkeys(candidates))
+    return unique_candidates[0] if len(unique_candidates) == 1 else ""
+
+
+def _format_dashboard_age(seconds: float) -> str:
+    rounded = max(0, int(round(seconds)))
+    if rounded < 60:
+        return f"{rounded} seconds"
+    minutes = rounded // 60
+    if minutes < 60:
+        return f"{minutes} minute{'s' if minutes != 1 else ''}"
+    hours, remaining_minutes = divmod(minutes, 60)
+    if remaining_minutes:
+        return f"{hours}h {remaining_minutes}m"
+    return f"{hours} hour{'s' if hours != 1 else ''}"
+
+
+def resolve_dashboard_freshness(
+    *,
+    generated_at: Any,
+    data_through: Any,
+    live: bool,
+    max_source_lag_seconds: float | None = None,
+    source_reports_stale: bool = False,
+    stale_after_seconds: float = DASHBOARD_STALE_AFTER_SECONDS,
+) -> DashboardFreshness:
+    """Resolve freshness only from timestamps or explicit source lag."""
+
+    data_timestamp = _parse_dashboard_timestamp(data_through)
+    if not live:
+        if data_timestamp is None:
+            return DashboardFreshness(
+                state="unknown",
+                label="Data time unavailable",
+                detail="The report did not record a data-through timestamp.",
+            )
+        return DashboardFreshness(
+            state="snapshot",
+            label="Saved snapshot",
+            detail="This report is a fixed export, not a live data view.",
+        )
+
+    age_candidates: list[float] = []
+    generated_timestamp = _parse_dashboard_timestamp(generated_at)
+    if generated_timestamp is not None and data_timestamp is not None:
+        age_candidates.append(max(0.0, (generated_timestamp - data_timestamp).total_seconds()))
+    try:
+        source_lag = float(max_source_lag_seconds) if max_source_lag_seconds is not None else None
+    except (TypeError, ValueError):
+        source_lag = None
+    if source_lag is not None and math.isfinite(source_lag) and source_lag >= 0:
+        age_candidates.append(source_lag)
+    if not age_candidates:
+        if source_reports_stale:
+            return DashboardFreshness(
+                state="stale",
+                label="Stale data",
+                detail="Source health reports lagging data; its age was not recorded.",
+            )
+        return DashboardFreshness(
+            state="unknown",
+            label="Freshness unavailable",
+            detail="No comparable data watermark or source lag was recorded.",
+        )
+
+    age_seconds = max(age_candidates)
+    age_label = _format_dashboard_age(age_seconds)
+    threshold = max(0.0, float(stale_after_seconds))
+    if age_seconds > threshold or source_reports_stale:
+        detail = f"Latest persisted data is {age_label} behind this snapshot."
+        if source_reports_stale and age_seconds <= threshold:
+            detail = f"Source health reports lagging data; its watermark is {age_label} behind."
+        return DashboardFreshness(
+            state="stale",
+            label="Stale data",
+            detail=detail,
+            age_seconds=age_seconds,
+        )
+    return DashboardFreshness(
+        state="current",
+        label="Current snapshot",
+        detail=f"Latest persisted data is {age_label} behind this snapshot.",
+        age_seconds=age_seconds,
+    )
+
+
+def _render_dashboard_time(label: str, value: Any) -> str:
+    raw_value = str(value or "").strip()
+    display_value = raw_value or "not recorded"
+    value_markup = html.escape(display_value)
+    if raw_value and _parse_dashboard_timestamp(raw_value) is not None:
+        value_markup = (
+            f'<time datetime="{html.escape(raw_value, quote=True)}">{value_markup}</time>'
+        )
+    return (
+        '<div class="dashboard-meta-item">'
+        f'<dt>{html.escape(label)}</dt><dd>{value_markup}</dd>'
+        "</div>"
+    )
+
+
+def render_dashboard_snapshot_metadata(
+    *,
+    generated_at: Any,
+    data_through: Any,
+    freshness: DashboardFreshness,
+) -> str:
+    """Render compact generated/data-through/freshness dashboard metadata."""
+
+    state = freshness.state if freshness.state in {"current", "stale", "snapshot", "unknown"} else "unknown"
+    return (
+        '<dl class="dashboard-meta" aria-label="Dashboard snapshot details">'
+        f'{_render_dashboard_time("Generated at", generated_at)}'
+        f'{_render_dashboard_time("Data through", data_through)}'
+        '<div class="dashboard-meta-item dashboard-meta-freshness">'
+        '<dt>Freshness</dt><dd>'
+        f'<span class="dashboard-freshness" data-freshness="{state}">'
+        f'{html.escape(freshness.label)}</span>'
+        f'<span class="dashboard-freshness-detail">{html.escape(freshness.detail)}</span>'
+        "</dd></div></dl>"
+    )
+
+
+def render_dashboard_semantic_css() -> str:
+    """Return shared semantic, accessibility, fallback, and print dashboard CSS."""
+
+    return """
+    .skip-link {
+      position: fixed;
+      z-index: 2000;
+      top: 8px;
+      left: 8px;
+      padding: 10px 14px;
+      border: 2px solid var(--accent, currentColor);
+      border-radius: 6px;
+      background: var(--panel-strong, Canvas);
+      color: var(--ink, CanvasText);
+      font-weight: 700;
+      transform: translateY(calc(-100% - 16px));
+    }
+    .skip-link:focus {
+      transform: translateY(0);
+    }
+    .dashboard-meta {
+      display: flex;
+      align-items: flex-start;
+      flex-wrap: wrap;
+      gap: 8px 18px;
+      margin: 14px 0 0;
+      color: var(--ink, #1d232a);
+    }
+    .dashboard-meta-item {
+      display: grid;
+      gap: 3px;
+      min-width: 150px;
+      margin: 0;
+    }
+    .dashboard-meta dt {
+      color: var(--muted, #5d6975);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .dashboard-meta dd {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 650;
+      line-height: 1.35;
+    }
+    .dashboard-meta-freshness {
+      flex: 1 1 280px;
+    }
+    .dashboard-freshness {
+      display: inline-block;
+      margin-right: 8px;
+      border: 1px solid var(--line, #d8dee6);
+      border-radius: 999px;
+      padding: 2px 8px;
+      white-space: nowrap;
+    }
+    .dashboard-freshness[data-freshness="current"] {
+      border-color: var(--dashboard-current-border, #67a877);
+      background: var(--dashboard-current-bg, #d1fadf);
+      color: var(--dashboard-current-ink, #14532d);
+    }
+    .dashboard-freshness[data-freshness="stale"] {
+      border-color: var(--dashboard-stale-border, #d79d00);
+      background: var(--dashboard-stale-bg, #fef0c7);
+      color: var(--dashboard-stale-ink, #704000);
+    }
+    .dashboard-freshness[data-freshness="snapshot"] {
+      border-color: var(--teal-border, #9bb7b7);
+      background: var(--teal-soft, #e2efef);
+      color: var(--teal, #245a5a);
+    }
+    .dashboard-freshness[data-freshness="unknown"] {
+      background: var(--detail-panel-bg, #edf1f5);
+      color: var(--muted, #5d6975);
+    }
+    .dashboard-freshness-detail {
+      color: var(--muted, #5d6975);
+      font-weight: 500;
+    }
+    .plotly-runtime-fallback {
+      margin: 10px 0 0;
+      border-left: 4px solid var(--accent, currentColor);
+      padding: 9px 12px;
+      background: var(--runtime-note-bg, #fff4eb);
+      color: var(--ink, #1d232a);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .plotly-runtime-fallback[hidden] {
+      display: none;
+    }
+    .plotly-expand-trigger:disabled {
+      cursor: not-allowed;
+      opacity: 0.58;
+    }
+    :where(a, button, summary, input, select, textarea, [tabindex]):focus-visible {
+      outline: 3px solid var(--focus-ring, Highlight);
+      outline-offset: 3px;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+    @media (forced-colors: active) {
+      .dashboard-freshness,
+      .plotly-runtime-fallback,
+      .metric-card,
+      .summary-card,
+      .signal-panel,
+      .measurement-section,
+      .chart-card,
+      table,
+      th,
+      td {
+        border-color: CanvasText;
+        forced-color-adjust: auto;
+      }
+      .dashboard-freshness[data-freshness="stale"] {
+        border-width: 3px;
+      }
+    }
+    @media print {
+      :root { color-scheme: light; }
+      body { background: #fff !important; color: #000 !important; }
+      .skip-link,
+      .dashboard-control-bar,
+      .theme-switch,
+      .visual-dialog,
+      .plotly-actions,
+      .lightbox,
+      .back-to-dashboard,
+      .back-to-section {
+        display: none !important;
+      }
+      .hero,
+      .dashboard-header,
+      .metric-card,
+      .summary-card,
+      .signal-panel,
+      .measurement-section,
+      .chart-card,
+      table {
+        background: #fff !important;
+        color: #000 !important;
+        box-shadow: none !important;
+        break-inside: avoid;
+      }
+      .dashboard-freshness,
+      .plotly-runtime-fallback {
+        color: #000 !important;
+        background: #fff !important;
+        border-color: #000 !important;
+      }
+    }
+    """.strip()
+
+
+def render_plotly_runtime_fallback_helpers(*, indent: str = "      ") -> str:
+    """Return browser helpers that expose Plotly runtime failures accessibly."""
+
+    return f"""
+{indent}const showPlotlyRuntimeFallback = (container, reason) => {{
+{indent}  if (!container) return;
+{indent}  container.dataset.plotlyReady = 'error';
+{indent}  container.setAttribute('aria-hidden', 'true');
+{indent}  const shell = container.closest('.plotly-shell');
+{indent}  const fallback = shell
+{indent}    ? shell.querySelector('.plotly-runtime-fallback')
+{indent}    : document.getElementById('chart-lightbox-plotly-fallback');
+{indent}  if (fallback) {{
+{indent}    fallback.hidden = false;
+{indent}    fallback.dataset.runtimeFailure = reason || 'unknown';
+{indent}  }}
+{indent}  const trigger = shell ? shell.querySelector('.plotly-expand-trigger') : null;
+{indent}  if (trigger) {{
+{indent}    trigger.disabled = true;
+{indent}    trigger.setAttribute('aria-disabled', 'true');
+{indent}  }}
+{indent}}};
+
+{indent}const clearPlotlyRuntimeFallback = (container) => {{
+{indent}  if (!container) return;
+{indent}  container.removeAttribute('aria-hidden');
+{indent}  const shell = container.closest('.plotly-shell');
+{indent}  const fallback = shell
+{indent}    ? shell.querySelector('.plotly-runtime-fallback')
+{indent}    : document.getElementById('chart-lightbox-plotly-fallback');
+{indent}  if (fallback) {{
+{indent}    fallback.hidden = true;
+{indent}    delete fallback.dataset.runtimeFailure;
+{indent}  }}
+{indent}  const trigger = shell ? shell.querySelector('.plotly-expand-trigger') : null;
+{indent}  if (trigger) {{
+{indent}    trigger.disabled = false;
+{indent}    trigger.removeAttribute('aria-disabled');
+{indent}  }}
+{indent}}};
+
+{indent}const showPlotlyRuntimeUnavailable = () => {{
+{indent}  document.querySelectorAll('.plotly-chart').forEach((container) => {{
+{indent}    if (container.dataset.plotlyReady !== '1') {{
+{indent}      showPlotlyRuntimeFallback(container, 'runtime-unavailable');
+{indent}    }}
+{indent}  }});
+{indent}}};""".strip("\n")
 
 
 def _render_visual_range_field(

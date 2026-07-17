@@ -242,7 +242,9 @@ class TestParsingDialogParentNoneSafety(unittest.TestCase):
 
         self.assertEqual(dialog.db_file, "/tmp/output.db")
         self.assertEqual(dialog.database_text_label.text(), "/tmp/output.db")
-        self.assertTrue(dialog.parse_button.isEnabled())
+        self.assertTrue(dialog.scan_button.isEnabled())
+        self.assertFalse(dialog.parse_button.isEnabled())
+        self.assertIn("scan", dialog.readiness_label.text().lower())
         log_and_exit_mock.assert_not_called()
 
 

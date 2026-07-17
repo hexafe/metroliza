@@ -6,6 +6,8 @@ import sqlite3
 import pytest
 
 try:
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
     from PyQt6.QtWidgets import QApplication, QDialog
 
     import metroliza.ui.industrial_filter_dialog as industrial_filter_dialog
@@ -20,6 +22,8 @@ try:
 except Exception as exc:  # pragma: no cover - depends on local Qt runtime availability.
     QApplication = None
     QDialog = None
+    QTest = None
+    Qt = None
     IndustrialFilterDialog = None
     IndustrialFilterState = None
     IndustrialQueryFilter = None
@@ -176,10 +180,12 @@ def test_filter_dialog_loads_references_from_local_metroliza_metadata_only(tmp_p
     dialog.load_database_references()
 
     assert dialog.references_edit.toPlainText().splitlines() == ["REF-1", "REF-2"]
+    assert dialog.summary_label.text().startswith("1 active condition.")
+    assert "2 value(s) loaded" in dialog.source_context_label.text()
     dialog.close()
 
 
-def test_filter_dialog_warning_and_clear_paths(monkeypatch):
+def test_filter_dialog_uses_inline_validation_and_clear_paths(monkeypatch):
     _app()
     warnings = []
     monkeypatch.setattr(
@@ -195,8 +201,146 @@ def test_filter_dialog_warning_and_clear_paths(monkeypatch):
     dialog.references_edit.setPlainText("REF-2")
     dialog.apply_filter()
 
-    assert len(warnings) == 2
+    assert len(warnings) == 1
     assert "Select a Metroliza report database" in warnings[0][2]
-    assert "cleared" in dialog.summary_label.text()
-    assert "reference column" in warnings[1][2]
+    assert not dialog.apply_button.isEnabled()
+    assert not dialog.validation_error_label.isHidden()
+    assert "reference column" in dialog.validation_error_label.text()
     dialog.close()
+
+
+def test_filter_dialog_exposes_count_accessibility_and_semantic_actions():
+    _app()
+    dialog = IndustrialFilterDialog(
+        state=IndustrialFilterState(
+            references=("REF-1", "REF-2"),
+            query_filters=(IndustrialQueryFilter("station", "=", ("S1",)),),
+        )
+    )
+
+    assert dialog.summary_label.text().startswith("2 active conditions.")
+    assert dialog.summary_label.accessibleName() == "Industrial sync filter draft summary"
+    assert dialog.validation_error_label.accessibleName() == "Industrial sync filter error"
+    assert dialog.apply_button.property("buttonRole") == "primary"
+    assert dialog.apply_button.isDefault()
+    assert dialog.cancel_button.property("buttonRole") == "secondary"
+    assert dialog.clear_button.property("buttonRole") == "quiet"
+    assert dialog.clear_button.text() == "Reset filters"
+    dialog.close()
+
+
+def test_filter_dialog_reset_and_cancel_discard_only_confirmed_draft_changes(monkeypatch):
+    _app()
+
+    class _ParentDialog(QDialog):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        def set_industrial_filter_state(self, state):
+            self.calls.append(state)
+
+    parent = _ParentDialog()
+    committed = IndustrialFilterState(references=("REF-1",))
+    dialog = IndustrialFilterDialog(parent=parent, state=committed)
+    answers = iter(
+        (
+            industrial_filter_dialog.QMessageBox.StandardButton.No,
+            industrial_filter_dialog.QMessageBox.StandardButton.Yes,
+            industrial_filter_dialog.QMessageBox.StandardButton.Yes,
+        )
+    )
+    prompts = []
+    monkeypatch.setattr(
+        industrial_filter_dialog.QMessageBox,
+        "question",
+        lambda *args: prompts.append(args) or next(answers),
+    )
+
+    dialog.references_edit.setPlainText("REF-2")
+    dialog._request_reset_filter()
+    assert dialog.current_state().references == ("REF-2",)
+
+    dialog._request_reset_filter()
+    assert dialog.current_state() == IndustrialFilterState()
+    assert parent.calls == []
+
+    dialog.references_edit.setPlainText("REF-3")
+    dialog.show()
+    _app().processEvents()
+    dialog._request_cancel()
+    assert dialog.current_state() == committed
+    assert parent.calls == []
+    assert len(prompts) == 3
+
+
+def test_filter_dialog_clean_cancel_and_window_close_do_not_prompt(monkeypatch):
+    _app()
+    dialog = IndustrialFilterDialog(state=IndustrialFilterState(references=("REF-1",)))
+    monkeypatch.setattr(
+        industrial_filter_dialog.QMessageBox,
+        "question",
+        lambda *_args: pytest.fail("clean cancel should not ask for confirmation"),
+    )
+    dialog._request_cancel()
+
+    dialog = IndustrialFilterDialog(state=IndustrialFilterState())
+    dialog.references_edit.setPlainText("REF-2")
+    dialog.close()
+
+
+def test_filter_dialog_dirty_x_and_escape_restore_without_parent_commit(monkeypatch):
+    app = _app()
+
+    class _ParentDialog(QDialog):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        def set_industrial_filter_state(self, state):
+            self.calls.append(state)
+
+    parent = _ParentDialog()
+    committed = IndustrialFilterState(references=("REF-1",))
+    dialog = IndustrialFilterDialog(parent=parent, state=committed)
+    answers = iter(
+        (
+            industrial_filter_dialog.QMessageBox.StandardButton.No,
+            industrial_filter_dialog.QMessageBox.StandardButton.Yes,
+            industrial_filter_dialog.QMessageBox.StandardButton.No,
+            industrial_filter_dialog.QMessageBox.StandardButton.Yes,
+        )
+    )
+    monkeypatch.setattr(
+        industrial_filter_dialog.QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: next(answers),
+    )
+    try:
+        dialog.show()
+        app.processEvents()
+        dialog.references_edit.setPlainText("REF-2")
+
+        assert dialog.close() is False
+        assert dialog.isVisible()
+        assert dialog.current_state().references == ("REF-2",)
+        assert dialog.close() is True
+        assert not dialog.isVisible()
+        assert dialog.current_state() == committed
+        assert parent.calls == []
+
+        dialog.show()
+        app.processEvents()
+        dialog.references_edit.setPlainText("REF-3")
+        QTest.keyClick(dialog, Qt.Key.Key_Escape)
+        app.processEvents()
+        assert dialog.isVisible()
+        assert dialog.current_state().references == ("REF-3",)
+        QTest.keyClick(dialog, Qt.Key.Key_Escape)
+        app.processEvents()
+        assert not dialog.isVisible()
+        assert dialog.current_state() == committed
+        assert parent.calls == []
+    finally:
+        dialog.close()
+        parent.close()

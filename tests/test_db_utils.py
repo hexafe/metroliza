@@ -14,6 +14,7 @@ from modules.db import (
     QueryResult,
     QueryScope,
     RowBatch,
+    backup_sqlite_database,
     chunked_values,
     count_query_scope_rows,
     execute_many_with_retry,
@@ -26,6 +27,7 @@ from modules.db import (
     read_sql_dataframe,
     read_sql_query_result,
     run_transaction_with_retry,
+    sqlite_readonly_connection_scope,
 )
 from modules.characteristic_alias_service import ensure_characteristic_alias_schema
 
@@ -106,6 +108,24 @@ class TestDbUtils(unittest.TestCase):
     def test_execute_with_retry_returns_rows(self):
         rows = execute_with_retry(self.db_path, 'SELECT name FROM sample ORDER BY id')
         self.assertEqual(rows, [('alpha',), ('beta',)])
+
+    def test_backup_sqlite_database_writes_integrity_checked_snapshot(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            destination = str(Path(temp_dir) / "snapshot.db")
+
+            backup_sqlite_database(self.db_path, destination)
+
+            with closing(sqlite3.connect(destination)) as connection:
+                rows = connection.execute("SELECT name FROM sample ORDER BY id").fetchall()
+            self.assertEqual(rows, [("alpha",), ("beta",)])
+
+    def test_sqlite_readonly_connection_scope_reads_without_writes(self):
+        with sqlite_readonly_connection_scope(self.db_path) as connection:
+            rows = connection.execute("SELECT name FROM sample ORDER BY id").fetchall()
+            with self.assertRaises(sqlite3.OperationalError):
+                connection.execute("INSERT INTO sample (name) VALUES ('blocked')")
+
+        self.assertEqual(rows, [("alpha",), ("beta",)])
 
     def test_execute_with_retry_raises_for_non_transient_error(self):
         with self.assertRaises(sqlite3.OperationalError):

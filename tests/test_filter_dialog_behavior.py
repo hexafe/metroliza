@@ -5,7 +5,8 @@ import types
 import pytest
 
 try:
-    from PyQt6.QtCore import QDate
+    from PyQt6.QtCore import QDate, Qt
+    from PyQt6.QtTest import QTest
     from PyQt6.QtWidgets import QApplication, QDialog, QListWidget, QListWidgetItem
 
     import metroliza.ui.filter_dialog as filter_dialog
@@ -13,6 +14,8 @@ except Exception as exc:  # pragma: no cover - depends on local Qt runtime avail
     QApplication = None
     QDate = None
     QDialog = None
+    QTest = None
+    Qt = None
     QListWidget = None
     QListWidgetItem = None
     filter_dialog = None
@@ -69,6 +72,8 @@ def test_filter_dialog_construction_controls_and_summary(monkeypatch):
         assert dialog.filter_tabs.count() == 3
         assert dialog.apply_button.text() == "Apply Filters"
         assert dialog.apply_button.isDefault()
+        assert dialog.reset_button.text() == "Reset draft"
+        assert dialog.cancel_button.text() == "Cancel"
         assert dialog.has_nok_button.isCheckable()
         assert not dialog.has_nok_button.isChecked()
         assert dialog.filter_summary_label.text() == "No active filters"
@@ -90,6 +95,57 @@ def test_filter_dialog_construction_controls_and_summary(monkeypatch):
         assert dialog.date_to_calendar.date().toString("yyyy-MM-dd") == QDate.currentDate().toString(
             "yyyy-MM-dd"
         )
+    finally:
+        dialog.close()
+
+
+def test_filter_dialog_invalid_expression_and_native_exits_are_transactional(
+    monkeypatch,
+):
+    dialog = _build_dialog(monkeypatch)
+    try:
+        dialog.expression_input.setText("Reference IN ()")
+        dialog._refresh_filter_summary()
+
+        assert dialog.apply_button.isEnabled() is False
+        assert dialog.filter_summary_label.text().startswith("Invalid expression:")
+
+        dialog.expression_input.setText("Reference=REF1")
+        dialog.show()
+        _app().processEvents()
+        answers = iter(
+            [
+                filter_dialog.QtWidgets.QMessageBox.StandardButton.No,
+                filter_dialog.QtWidgets.QMessageBox.StandardButton.Yes,
+                filter_dialog.QtWidgets.QMessageBox.StandardButton.No,
+                filter_dialog.QtWidgets.QMessageBox.StandardButton.Yes,
+            ]
+        )
+        monkeypatch.setattr(
+            filter_dialog.QtWidgets.QMessageBox,
+            "question",
+            lambda *_args, **_kwargs: next(answers),
+        )
+
+        assert dialog.close() is False
+        _app().processEvents()
+        assert dialog.isVisible()
+        assert dialog.expression_input.text() == "Reference=REF1"
+        assert dialog.close() is True
+        _app().processEvents()
+        assert not dialog.isVisible()
+        assert dialog.expression_input.text() == ""
+
+        dialog.show()
+        dialog.expression_input.setText("Reference=REF2")
+        QTest.keyClick(dialog, Qt.Key.Key_Escape)
+        _app().processEvents()
+        assert dialog.isVisible()
+        assert dialog.expression_input.text() == "Reference=REF2"
+        QTest.keyClick(dialog, Qt.Key.Key_Escape)
+        _app().processEvents()
+        assert not dialog.isVisible()
+        assert dialog.expression_input.text() == ""
     finally:
         dialog.close()
 

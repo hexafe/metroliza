@@ -24,13 +24,17 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
+    QSplitter,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
+from metroliza.industrial.anomaly.event_repository import AnomalyEventStatusConflictError
 from metroliza.industrial.industrial_data_repository import (
     IndustrialDataRepository,
     IndustrialSourceProfile,
@@ -60,11 +64,13 @@ from metroliza.industrial.industrial_workers import (
 from metroliza.ui.industrial_source_profiles_dialog import IndustrialSourceProfilesDialog
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
+    configure_dialog_button_roles,
     configure_table,
     configure_window_size,
     path_field,
     section_label,
     separator,
+    set_button_role,
     set_status_variant,
     status_chip,
     update_path_field,
@@ -75,15 +81,19 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
     """Configure and run live polling for one or more industrial source profiles."""
 
     shutdown_complete = pyqtSignal()
+    monitor_stopped = pyqtSignal()
+    database_work_idle = pyqtSignal()
 
     def __init__(
         self,
         parent=None,
         db_file: str | None = None,
         config_path: str | Path | None = None,
+        temporary_session: bool = False,
     ):
         super().__init__(parent)
         self.db_file = str(db_file or "")
+        self.temporary_session = bool(temporary_session)
         self.config_path = Path(config_path or default_industrial_source_config_path()).expanduser()
         self.repository = RealtimeMonitorConfigRepository(self.db_file)
         self.source_repository = IndustrialDataRepository(self.db_file)
@@ -99,6 +109,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self._dashboard_write_pending = False
         self._dashboard_open_pending = False
         self._dashboard_open_after_current = False
+        self._stop_requested = False
         self._closing = False
         self._shutdown_waiting = False
         self._shutdown_completion_emitted = False
@@ -124,21 +135,113 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         layout.setSpacing(8)
 
         header_row = QHBoxLayout()
-        header_row.addWidget(section_label("Real-time industrial monitoring"))
-        self.status_label = status_chip("Stopped", "neutral")
-        header_row.addWidget(self.status_label)
+        header_row.addWidget(section_label("Real-time industrial monitoring"), 1)
+        self.monitor_state_label = status_chip("Monitor: stopped", "neutral")
+        header_row.addWidget(self.monitor_state_label)
         layout.addLayout(header_row)
 
-        body_row = QHBoxLayout()
-        body_row.addWidget(self._build_source_panel(), 1)
-        body_row.addWidget(self._build_config_panel(), 2)
-        layout.addLayout(body_row, 2)
+        self.status_label = status_chip("Ready", "neutral")
+        layout.addWidget(self.status_label)
+        self.storage_lifecycle_label = status_chip("", "neutral")
+        layout.addWidget(self.storage_lifecycle_label)
+        self.set_temporary_session_storage(self.temporary_session)
+        subsystem_row = QHBoxLayout()
+        self.config_readiness_label = status_chip("Setup: not checked", "neutral")
+        self.poll_status_label = status_chip("Poll: not run", "neutral")
+        self.dashboard_status_label = status_chip("Dashboard: not generated", "neutral")
+        subsystem_row.addWidget(self.config_readiness_label, 1)
+        subsystem_row.addWidget(self.poll_status_label, 1)
+        subsystem_row.addWidget(self.dashboard_status_label, 1)
+        layout.addLayout(subsystem_row)
 
-        layout.addWidget(separator())
-        layout.addLayout(self._build_action_row())
+        self.workflow_tabs = QTabWidget()
+        self.workflow_tabs.setObjectName("realtimeWorkflowTabs")
+        self.workflow_tabs.addTab(self._build_monitor_page(), "Monitor")
+        self.workflow_tabs.addTab(self._build_setup_page(), "Setup")
+        self.workflow_tabs.addTab(self._build_event_review_page(), "Event Review")
+        self.workflow_tabs.currentChanged.connect(self._sync_default_action_for_tab)
+        layout.addWidget(self.workflow_tabs, 1)
+
+        close_row = QHBoxLayout()
+        close_row.addStretch(1)
+        self.close_button = QPushButton("Close")
+        self.close_button.clicked.connect(self.close)
+        configure_dialog_button_roles(
+            secondary=(
+                self.start_button,
+                self.poll_once_button,
+                self.open_dashboard_button,
+                self.save_button,
+                self.apply_checked_button,
+                self.refresh_events_button,
+                self.acknowledge_event_button,
+                self.resolve_event_button,
+                self.false_positive_event_button,
+            ),
+            quiet=(self.close_button,),
+            danger=(self.stop_button,),
+        )
+        close_row.addWidget(self.close_button)
+        layout.addLayout(close_row)
+        self._sync_running_state(False)
+        self._sync_default_action_for_tab(0)
+
+    def set_temporary_session_storage(self, temporary: bool) -> None:
+        self.temporary_session = bool(temporary)
+        if self.temporary_session:
+            self.storage_lifecycle_label.setText(
+                "Temporary session storage · samples, events, and monitor setup must be saved "
+                "or explicitly discarded before this session is removed."
+            )
+            set_status_variant(self.storage_lifecycle_label, "warning")
+        else:
+            self.storage_lifecycle_label.setText(
+                "Durable storage · realtime samples, events, and monitor setup are retained."
+            )
+            set_status_variant(self.storage_lifecycle_label, "success")
+
+    def _sync_default_action_for_tab(self, index: int) -> None:
+        candidates = (
+            self.start_button,
+            self.save_button,
+            self.refresh_events_button,
+        )
+        selected = candidates[index] if 0 <= index < len(candidates) else None
+        for button in candidates:
+            set_button_role(button, "primary", default=button is selected)
+
+    def _build_monitor_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+        layout.addLayout(self._build_monitor_action_row())
         layout.addWidget(self._build_status_panel(), 2)
         layout.addWidget(self._build_diagnostics_panel(), 1)
-        self._sync_running_state(False)
+        return page
+
+    def _build_setup_page(self) -> QWidget:
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(8, 8, 8, 8)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.addWidget(self._build_source_panel())
+        splitter.addWidget(self._build_config_panel())
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 2)
+        splitter.setSizes((340, 680))
+        content_layout.addWidget(splitter, 1)
+        content_layout.addWidget(separator())
+        content_layout.addLayout(self._build_setup_action_row())
+        scroll.setWidget(content)
+        page_layout.addWidget(scroll)
+        return page
 
     def _build_source_panel(self) -> QWidget:
         panel = QGroupBox("Sources")
@@ -189,7 +292,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.record_key_column_edit = QLineEdit()
         self.signal_columns_edit = QPlainTextEdit()
         self.signal_columns_edit.setPlaceholderText("cycle_time=cycle_time_s\npressure=pressure_bar")
-        self.signal_columns_edit.setFixedHeight(86)
+        self.signal_columns_edit.setMinimumHeight(96)
 
         self.interval_spin = QSpinBox()
         self.interval_spin.setRange(1, 86_400)
@@ -219,18 +322,24 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         form.addRow("Event time column", self.event_time_column_edit)
         form.addRow("Record key column", self.record_key_column_edit)
         form.addRow("Signal columns", self.signal_columns_edit)
-        form.addRow("Polling interval seconds", self.interval_spin)
-        form.addRow("Query timeout seconds", self.timeout_spin)
-        form.addRow("Rows per fetch", self.chunk_spin)
-        form.addRow("Max catchup rows", self.max_catchup_spin)
-        form.addRow("Dashboard mode", self.display_mode_combo)
-        form.addRow("Aggregation bucket", self.aggregation_bucket_combo)
-        form.addRow("Aggregation methods", self.aggregation_methods_edit)
-        form.addRow("Aggregation groups", self.aggregation_groups_edit)
-        form.addRow("Context fields", self.context_fields_edit)
-        form.addRow("Segment fields", self.segment_fields_edit)
-        form.addRow("Detectors", self.detectors_edit)
         layout.addLayout(form)
+
+        advanced_group = QGroupBox("Advanced polling, aggregation, and detectors")
+        advanced_group.setCheckable(True)
+        advanced_group.setChecked(False)
+        advanced_form = QFormLayout(advanced_group)
+        advanced_form.addRow("Polling interval seconds", self.interval_spin)
+        advanced_form.addRow("Query timeout seconds", self.timeout_spin)
+        advanced_form.addRow("Rows per fetch", self.chunk_spin)
+        advanced_form.addRow("Max catchup rows", self.max_catchup_spin)
+        advanced_form.addRow("Dashboard mode", self.display_mode_combo)
+        advanced_form.addRow("Aggregation bucket", self.aggregation_bucket_combo)
+        advanced_form.addRow("Aggregation methods", self.aggregation_methods_edit)
+        advanced_form.addRow("Aggregation groups", self.aggregation_groups_edit)
+        advanced_form.addRow("Context fields", self.context_fields_edit)
+        advanced_form.addRow("Segment fields", self.segment_fields_edit)
+        advanced_form.addRow("Detectors", self.detectors_edit)
+        layout.addWidget(advanced_group)
 
         path_row = QHBoxLayout()
         self.dashboard_path_field = path_field("", empty_text="Default temp dashboard")
@@ -242,27 +351,30 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         layout.addLayout(path_row)
         return panel
 
-    def _build_action_row(self) -> QHBoxLayout:
+    def _build_setup_action_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
         self.save_button = QPushButton("Save Current Source")
         self.apply_checked_button = QPushButton("Apply Current to Checked")
+        self.save_button.clicked.connect(self.save_current_source_config)
+        self.apply_checked_button.clicked.connect(self.apply_current_to_checked_configs)
+        row.addWidget(self.save_button)
+        row.addWidget(self.apply_checked_button)
+        row.addStretch(1)
+        return row
+
+    def _build_monitor_action_row(self) -> QHBoxLayout:
+        row = QHBoxLayout()
         self.start_button = QPushButton("Start Checked")
         self.poll_once_button = QPushButton("Poll Once")
         self.stop_button = QPushButton("Stop")
         self.open_dashboard_button = QPushButton("Open Dashboard")
-        self.close_button = QPushButton("Close")
 
-        self.save_button.clicked.connect(self.save_current_source_config)
-        self.apply_checked_button.clicked.connect(self.apply_current_to_checked_configs)
         self.start_button.clicked.connect(self.start_monitoring)
         self.poll_once_button.clicked.connect(self.poll_once)
         self.stop_button.clicked.connect(self.stop_monitoring)
         self.open_dashboard_button.clicked.connect(self.open_dashboard)
-        self.close_button.clicked.connect(self.close)
 
         for button in (
-            self.save_button,
-            self.apply_checked_button,
             self.start_button,
             self.poll_once_button,
             self.stop_button,
@@ -270,7 +382,6 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         ):
             row.addWidget(button)
         row.addStretch(1)
-        row.addWidget(self.close_button)
         return row
 
     def _build_status_panel(self) -> QWidget:
@@ -305,27 +416,278 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         layout.addWidget(self.diagnostics_text)
         return panel
 
-    def reload_from_database(self) -> None:
+    def _build_event_review_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+        intro = QLabel(
+            "Review persisted anomaly events. Every operator action requires an operator name "
+            "and a comment; Metroliza never automates hold, release, or scrap decisions."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        self.event_review_table = QTableWidget(0, 8)
+        self.event_review_table.setHorizontalHeaderLabels(
+            (
+                "Time",
+                "Source",
+                "Signal",
+                "Severity",
+                "Value",
+                "Detector",
+                "Explanation",
+                "Event ID",
+            )
+        )
+        self.event_review_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.event_review_table.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
+        )
+        self.event_review_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.event_review_table.itemSelectionChanged.connect(self._sync_event_action_buttons)
+        configure_table(self.event_review_table, stretch_column=6, min_height=220)
+        layout.addWidget(self.event_review_table, 1)
+
+        operator_row = QHBoxLayout()
+        self.event_operator_edit = QLineEdit()
+        self.event_operator_edit.setPlaceholderText("Operator name")
+        self.event_comment_edit = QLineEdit()
+        self.event_comment_edit.setPlaceholderText("Required review comment")
+        operator_row.addWidget(QLabel("Operator"))
+        operator_row.addWidget(self.event_operator_edit, 1)
+        operator_row.addWidget(QLabel("Comment"))
+        operator_row.addWidget(self.event_comment_edit, 2)
+        layout.addLayout(operator_row)
+
+        action_row = QHBoxLayout()
+        self.refresh_events_button = QPushButton("Refresh events")
+        self.acknowledge_event_button = QPushButton("Acknowledge")
+        self.resolve_event_button = QPushButton("Resolve")
+        self.false_positive_event_button = QPushButton("Mark false positive")
+        self.refresh_events_button.clicked.connect(self.refresh_event_review)
+        self.acknowledge_event_button.clicked.connect(
+            lambda: self._apply_selected_event_action("acknowledge")
+        )
+        self.resolve_event_button.clicked.connect(
+            lambda: self._apply_selected_event_action("resolve")
+        )
+        self.false_positive_event_button.clicked.connect(
+            lambda: self._apply_selected_event_action("false_positive")
+        )
+        action_row.addWidget(self.refresh_events_button)
+        action_row.addStretch(1)
+        action_row.addWidget(self.acknowledge_event_button)
+        action_row.addWidget(self.resolve_event_button)
+        action_row.addWidget(self.false_positive_event_button)
+        layout.addLayout(action_row)
+        self.event_review_status_label = status_chip("Open events: not loaded", "neutral")
+        layout.addWidget(self.event_review_status_label)
+        self._sync_event_action_buttons()
+        return page
+
+    def refresh_event_review(self) -> None:
         try:
-            self.source_repository.ensure_schema()
-            self.repository.ensure_schema()
-            self.config_path = Path(self.source_config_path_field.text() or self.config_path).expanduser()
-            imported = import_source_profiles_to_repository(self.config_path, self.source_repository)
-            self.profiles = self.source_repository.list_source_profiles(include_disabled=True)
-            configs = self.repository.list_configs()
-            self.configs_by_profile_id = {config.source_profile_id: config for config in configs}
-            self._populate_sources()
-            if self.profiles:
-                source_text = (
-                    f"Ready; imported {len(imported)} source(s) from YAML"
-                    if imported
-                    else "Ready"
-                )
-            else:
-                source_text = "No industrial sources configured"
-            self._set_status(source_text, "info")
+            events = RealtimeDashboardService(self.db_file).list_open_anomaly_events(limit=100)
         except Exception as exc:
-            self._set_status(f"Load failed: {exc}", "danger")
+            message = redact_sensitive_text(exc)
+            self.event_review_status_label.setText(f"Could not load open events: {message}")
+            set_status_variant(self.event_review_status_label, "danger")
+            return
+
+        self.event_review_table.setRowCount(len(events))
+        for row, event in enumerate(events):
+            values = (
+                event.event_time,
+                event.profile_name,
+                event.signal_key,
+                event.severity,
+                f"{event.observed_value:g}",
+                event.detector_key,
+                event.explanation,
+                str(event.id),
+            )
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                if column == 7:
+                    item.setData(Qt.ItemDataRole.UserRole, int(event.id))
+                self.event_review_table.setItem(row, column, item)
+        self.event_review_status_label.setText(f"Open events: {len(events)}")
+        set_status_variant(
+            self.event_review_status_label,
+            "warning" if events else "success",
+        )
+        self._sync_event_action_buttons()
+
+    def _selected_event_id(self) -> int | None:
+        row = self.event_review_table.currentRow()
+        if row < 0:
+            return None
+        item = self.event_review_table.item(row, 7)
+        if item is None:
+            return None
+        value = item.data(Qt.ItemDataRole.UserRole)
+        return int(value) if value is not None else None
+
+    def _sync_event_action_buttons(self) -> None:
+        selected = self._selected_event_id() is not None
+        for button_name in (
+            "acknowledge_event_button",
+            "resolve_event_button",
+            "false_positive_event_button",
+        ):
+            button = getattr(self, button_name, None)
+            if button is not None:
+                button.setEnabled(selected)
+
+    def _apply_selected_event_action(self, action: str) -> None:
+        event_id = self._selected_event_id()
+        operator = self.event_operator_edit.text().strip()
+        comment = self.event_comment_edit.text().strip()
+        if event_id is None:
+            self.event_review_status_label.setText("Select one event to review.")
+            set_status_variant(self.event_review_status_label, "warning")
+            return
+        if not operator or not comment:
+            self.event_review_status_label.setText(
+                "Operator name and review comment are required."
+            )
+            set_status_variant(self.event_review_status_label, "warning")
+            return
+        service = RealtimeDashboardService(self.db_file)
+        try:
+            if action == "acknowledge":
+                service.acknowledge_event(
+                    event_id=event_id,
+                    ack_by=operator,
+                    comment=comment,
+                    expected_status="open",
+                )
+                verb = "acknowledged"
+            elif action == "resolve":
+                service.resolve_event(
+                    event_id=event_id,
+                    resolved_by=operator,
+                    comment=comment,
+                    expected_status="open",
+                )
+                verb = "resolved"
+            elif action == "false_positive":
+                service.mark_event_false_positive(
+                    event_id=event_id,
+                    marked_by=operator,
+                    comment=comment,
+                    expected_status="open",
+                )
+                verb = "marked false positive"
+            else:
+                raise ValueError(f"Unsupported event action: {action}")
+        except AnomalyEventStatusConflictError:
+            self.refresh_event_review()
+            self.event_review_status_label.setText(
+                "This event was already reviewed elsewhere. The open-event list was refreshed."
+            )
+            set_status_variant(self.event_review_status_label, "warning")
+            return
+        except Exception as exc:
+            message = redact_sensitive_text(exc)
+            self.event_review_status_label.setText(f"Event review failed: {message}")
+            set_status_variant(self.event_review_status_label, "danger")
+            return
+
+        self.event_comment_edit.clear()
+        self.refresh_event_review()
+        self.event_review_status_label.setText(f"Event {event_id} {verb} by {operator}.")
+        set_status_variant(self.event_review_status_label, "success")
+
+    def _load_database_state(self, source_repository, config_repository):
+        source_repository.ensure_schema()
+        config_repository.ensure_schema()
+        config_path = Path(
+            self.source_config_path_field.text() or self.config_path
+        ).expanduser()
+        imported = import_source_profiles_to_repository(config_path, source_repository)
+        profiles = source_repository.list_source_profiles(include_disabled=True)
+        configs = config_repository.list_configs()
+        return config_path, imported, profiles, configs
+
+    def _apply_loaded_database_state(self, state) -> None:
+        config_path, imported, profiles, configs = state
+        self.config_path = config_path
+        self.profiles = profiles
+        self.configs_by_profile_id = {config.source_profile_id: config for config in configs}
+        self._populate_sources()
+        if profiles:
+            source_text = (
+                f"Ready; imported {len(imported)} source(s) from YAML"
+                if imported
+                else "Ready"
+            )
+        else:
+            source_text = "No industrial sources configured"
+        self._set_config_status(source_text, "info")
+        self.refresh_event_review()
+
+    def _report_database_load_failure(self, exc: Exception) -> None:
+        self._append_diagnostic(f"Database load failed; error_type={type(exc).__name__}")
+        self._set_config_status(
+            "Database load failed. The previous realtime context is still active.",
+            "danger",
+        )
+
+    def reload_from_database(self) -> bool:
+        try:
+            state = self._load_database_state(self.source_repository, self.repository)
+        except Exception as exc:
+            self._report_database_load_failure(exc)
+            return False
+        self._apply_loaded_database_state(state)
+        return True
+
+    def rebind_database(self, db_file: str) -> bool:
+        """Move an idle monitor to the active workspace database without stale context."""
+
+        target = str(db_file or "").strip()
+        if not target:
+            return False
+        if self.is_monitoring_active():
+            self._set_monitor_status(
+                "Monitor: stop active work before changing the workspace database",
+                "warning",
+            )
+            return False
+        if target == self.db_file:
+            return True
+        if not self._close_source_profiles_for_context_change(
+            "changing the workspace database"
+        ):
+            return False
+
+        candidate_repository = RealtimeMonitorConfigRepository(target)
+        candidate_source_repository = IndustrialDataRepository(target)
+        try:
+            state = self._load_database_state(
+                candidate_source_repository,
+                candidate_repository,
+            )
+        except Exception as exc:
+            self._report_database_load_failure(exc)
+            return False
+
+        self.db_file = target
+        self.repository = candidate_repository
+        self.source_repository = candidate_source_repository
+        self.active_configs = ()
+        self._next_poll_due_by_profile_id = {}
+        self.last_poll_results = ()
+        self.status_table.setRowCount(0)
+        self._apply_loaded_database_state(state)
+        self._set_monitor_status("Monitor: stopped", "neutral")
+        self._set_status("Realtime monitor moved to the active workspace database.", "success")
+        return True
 
     def choose_source_config_path(self) -> None:
         selected, _filter = QFileDialog.getOpenFileName(
@@ -341,6 +703,14 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.reload_from_database()
 
     def open_source_profiles_dialog(self) -> None:
+        if self.source_window is not None:
+            try:
+                if self.source_window.isVisible():
+                    self.source_window.raise_()
+                    self.source_window.activateWindow()
+                    return
+            except RuntimeError:
+                self.source_window = None
         self.source_window = IndustrialSourceProfilesDialog(
             self,
             db_file=self.db_file,
@@ -350,6 +720,28 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.source_window.show()
         self.source_window.raise_()
         self.source_window.activateWindow()
+
+    def _close_source_profiles_for_context_change(self, action: str) -> bool:
+        source_window = self.source_window
+        if source_window is None:
+            return True
+        try:
+            closed = source_window.close()
+            still_visible = source_window.isVisible()
+        except RuntimeError:
+            self.source_window = None
+            return True
+        if not closed or still_visible:
+            self._set_config_status(
+                f"Save or discard Production line source changes before {action}.",
+                "warning",
+            )
+            return False
+        if self.source_window is source_window:
+            self.config_path = source_window.config_path
+            update_path_field(self.source_config_path_field, str(self.config_path))
+            self.source_window = None
+        return True
 
     def _handle_source_dialog_closed(self, _result: int) -> None:
         if self.source_window is not None:
@@ -417,9 +809,18 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         profile = self.current_profile()
         if profile is None or not profile.is_enabled:
             self._apply_config_to_form(None)
+            self._set_config_status("Setup: select an enabled source", "warning")
             self._sync_buttons()
             return
-        self._apply_config_to_form(self.configs_by_profile_id.get(profile.id) or _default_config(profile))
+        saved_config = self.configs_by_profile_id.get(profile.id)
+        self._apply_config_to_form(saved_config or _default_config(profile))
+        if saved_config is None:
+            self._set_config_status(
+                f"Setup: {profile.profile_name} is using unsaved suggested values",
+                "warning",
+            )
+        else:
+            self._set_config_status(f"Setup: {profile.profile_name} saved", "success")
         self._sync_buttons()
 
     def current_profile(self) -> IndustrialSourceProfile | None:
@@ -524,24 +925,28 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
     def save_current_source_config(self) -> tuple[RealtimeMonitorConfig, ...]:
         profile = self.current_profile()
         if profile is None or not profile.is_enabled:
-            self._set_status("Select an enabled source to save.", "warning")
+            self._set_config_status("Select an enabled source to save.", "warning")
             return ()
         try:
             config = self.repository.upsert_config(self._config_from_form(profile))
             self.configs_by_profile_id[profile.id] = config
             self.active_configs = ()
-            self._set_status(f"Saved realtime monitor config for {profile.profile_name}.", "success")
+            self._set_config_status(
+                f"Saved realtime monitor config for {profile.profile_name}.",
+                "success",
+            )
             self._sync_buttons()
             return (config,)
         except Exception as exc:
-            self._set_status(f"Config save failed: {exc}", "danger")
-            QMessageBox.warning(self, "Realtime monitor config", str(exc))
+            message = redact_sensitive_text(exc)
+            self._set_config_status(f"Config save failed: {message}", "danger")
+            QMessageBox.warning(self, "Realtime monitor config", message)
             return ()
 
     def apply_current_to_checked_configs(self) -> tuple[RealtimeMonitorConfig, ...]:
         profiles = self.selected_profiles()
         if not profiles:
-            self._set_status("Select at least one source to monitor.", "warning")
+            self._set_config_status("Select at least one source to monitor.", "warning")
             return ()
         saved: list[RealtimeMonitorConfig] = []
         try:
@@ -550,12 +955,16 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
                 self.configs_by_profile_id[profile.id] = config
                 saved.append(config)
             self.active_configs = ()
-            self._set_status(f"Applied current settings to {len(saved)} checked source(s).", "success")
+            self._set_config_status(
+                f"Applied current settings to {len(saved)} checked source(s).",
+                "success",
+            )
             self._sync_buttons()
             return tuple(saved)
         except Exception as exc:
-            self._set_status(f"Config save failed: {exc}", "danger")
-            QMessageBox.warning(self, "Realtime monitor config", str(exc))
+            message = redact_sensitive_text(exc)
+            self._set_config_status(f"Config save failed: {message}", "danger")
+            QMessageBox.warning(self, "Realtime monitor config", message)
             return ()
 
     def save_selected_configs(self) -> tuple[RealtimeMonitorConfig, ...]:
@@ -566,9 +975,26 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
     def _configs_for_checked_sources(self, *, save_current: bool) -> tuple[RealtimeMonitorConfig, ...]:
         profiles = self.selected_profiles()
         if not profiles:
-            self._set_status("Select at least one source to monitor.", "warning")
+            self._set_config_status("Select at least one source to monitor.", "warning")
             return ()
         current_profile = self.current_profile()
+        missing_profiles = [
+            profile
+            for profile in profiles
+            if profile.id not in self.configs_by_profile_id
+            and not (
+                save_current
+                and current_profile is not None
+                and profile.id == current_profile.id
+            )
+        ]
+        if missing_profiles:
+            names = ", ".join(profile.profile_name for profile in missing_profiles)
+            message = f"Save realtime setup before monitoring: {names}."
+            self._set_config_status(message, "warning")
+            QMessageBox.warning(self, "Realtime setup required", message)
+            self.workflow_tabs.setCurrentIndex(1)
+            return ()
         configs: list[RealtimeMonitorConfig] = []
         try:
             for profile in profiles:
@@ -577,12 +1003,14 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
                     config = self.repository.upsert_config(self._config_from_form(profile))
                     self.configs_by_profile_id[profile.id] = config
                 elif config is None:
-                    config = self.repository.upsert_config(_default_config(profile))
-                    self.configs_by_profile_id[profile.id] = config
+                    # Missing configs are rejected by preflight above. Never persist
+                    # suggested defaults as an implicit live-monitoring decision.
+                    continue
                 configs.append(config)
         except Exception as exc:
-            self._set_status(f"Config save failed: {exc}", "danger")
-            QMessageBox.warning(self, "Realtime monitor config", str(exc))
+            message = redact_sensitive_text(exc)
+            self._set_config_status(f"Config save failed: {message}", "danger")
+            QMessageBox.warning(self, "Realtime monitor config", message)
             return ()
         return tuple(configs)
 
@@ -591,6 +1019,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         if not configs:
             return
         self.active_configs = configs
+        self._stop_requested = False
         now = monotonic()
         self._next_poll_due_by_profile_id = {
             config.source_profile_id: now for config in configs
@@ -598,18 +1027,37 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         interval_ms = max(1_000, int(min(config.polling_interval_seconds for config in configs) * 1_000))
         self.poll_timer.start(interval_ms)
         self._sync_running_state(True)
+        self._set_monitor_status(
+            f"Monitor: running {len(configs)} checked source(s)",
+            "success",
+        )
+        self.workflow_tabs.setCurrentIndex(0)
         self.poll_once()
 
     def stop_monitoring(self, _checked: bool = False, *, wait_for_thread: bool = False) -> None:
         self.poll_timer.stop()
-        if self.poll_thread is not None and self.poll_thread.isRunning():
+        poll_owned = self.poll_thread is not None
+        poll_running = poll_owned and self.poll_thread.isRunning()
+        if poll_owned:
+            self._stop_requested = True
+        if poll_running:
             self.poll_thread.cancel()
             if wait_for_thread:
                 self.poll_thread.wait(3_000)
         self.active_configs = ()
         self._next_poll_due_by_profile_id = {}
+        if self.poll_thread is not None:
+            self._sync_running_state(True)
+            self.stop_button.setEnabled(False)
+            self._set_monitor_status("Monitor: stopping after the active poll", "warning")
+            self._set_status("Stopping realtime monitoring...", "warning")
+            return
+        self._stop_requested = False
         self._sync_running_state(False)
+        self._set_monitor_status("Monitor: stopped", "neutral")
         self._set_status("Stopped", "neutral")
+        self.monitor_stopped.emit()
+        self._emit_database_work_idle_if_ready()
 
     def poll_once(self) -> None:
         timer_active = self.poll_timer.isActive()
@@ -620,19 +1068,20 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             configs = self._configs_for_checked_sources(save_current=True)
             if not configs:
                 return
-        if self.poll_thread is not None and self.poll_thread.isRunning():
-            self._append_diagnostic("Poll skipped because a previous cycle is still running.")
+        if self.poll_thread is not None:
+            self._append_diagnostic("Poll skipped because a previous cycle is still finishing.")
             return
         if timer_active:
             self._advance_poll_due_times(configs)
-        self.poll_thread = RealtimeMonitorPollThread(db_file=self.db_file, configs=configs)
-        self.poll_thread.update_label.connect(lambda text: self._set_status(text, "info"))
-        self.poll_thread.result_ready.connect(self._on_poll_results)
-        self.poll_thread.error_occurred.connect(self._on_poll_error)
-        self.poll_thread.cancelled.connect(lambda text: self._set_status(text, "warning"))
-        self.poll_thread.finished.connect(self._clear_poll_thread)
-        self._set_status("Polling realtime industrial sources...", "info")
-        self.poll_thread.start()
+        poll_thread = RealtimeMonitorPollThread(db_file=self.db_file, configs=configs)
+        self.poll_thread = poll_thread
+        poll_thread.update_label.connect(lambda text: self._set_poll_status(text, "info"))
+        poll_thread.result_ready.connect(self._on_poll_results)
+        poll_thread.error_occurred.connect(self._on_poll_error)
+        poll_thread.cancelled.connect(lambda text: self._set_poll_status(text, "warning"))
+        poll_thread.finished.connect(lambda: self._clear_poll_thread(poll_thread))
+        self._set_poll_status("Polling realtime industrial sources...", "info")
+        poll_thread.start()
 
     def _due_active_configs(self) -> tuple[RealtimeMonitorConfig, ...]:
         now = monotonic()
@@ -660,10 +1109,11 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         )
         self._append_diagnostic(_format_results_for_diagnostics(self.last_poll_results))
         self._schedule_dashboard_write(open_after=False)
+        self.refresh_event_review()
         if failed:
-            self._set_status(_format_failed_status(failed), "warning")
+            self._set_poll_status(_format_failed_status(failed), "warning")
         else:
-            self._set_status(
+            self._set_poll_status(
                 f"Polling completed: {inserted} sample(s), {event_count} event(s).",
                 "success",
             )
@@ -671,15 +1121,29 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
     def _on_poll_error(self, message: str) -> None:
         if self._closing:
             return
-        self._set_status(f"Polling failed: {message}", "danger")
+        self._set_poll_status(f"Polling failed: {message}", "danger")
         self._append_diagnostic(message)
 
-    def _clear_poll_thread(self) -> None:
+    def _clear_poll_thread(self, finished_thread=None) -> None:
+        if finished_thread is not None and finished_thread is not self.poll_thread:
+            return
         self.poll_thread = None
+        delete_later = getattr(finished_thread, "deleteLater", None)
+        if callable(delete_later):
+            delete_later()
         if self._closing:
             self._complete_deferred_shutdown()
             return
+        if self._stop_requested:
+            self._stop_requested = False
+            self._sync_running_state(False)
+            self._set_monitor_status("Monitor: stopped", "neutral")
+            self._set_status("Stopped", "neutral")
+            self.monitor_stopped.emit()
+            self._emit_database_work_idle_if_ready()
+            return
         self._sync_buttons()
+        self._emit_database_work_idle_if_ready()
 
     def _populate_result_table(self, results: tuple[Any, ...]) -> None:
         self.status_table.setRowCount(len(results))
@@ -722,9 +1186,12 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             return
         self._dashboard_write_pending = True
         self._dashboard_open_pending = self._dashboard_open_pending or open_after
-        if self.dashboard_thread is not None and self.dashboard_thread.isRunning():
+        if self.dashboard_thread is not None:
             if open_after:
-                self._set_status("Dashboard refresh queued; current write is finishing.", "info")
+                self._set_dashboard_status(
+                    "Dashboard refresh queued; current write is finishing.",
+                    "info",
+                )
             return
         if open_after:
             self._start_dashboard_write()
@@ -734,23 +1201,26 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
     def _start_dashboard_write(self) -> None:
         if self._closing or not self._dashboard_write_pending:
             return
-        if self.dashboard_thread is not None and self.dashboard_thread.isRunning():
+        if self.dashboard_thread is not None:
             return
         self.dashboard_write_debounce_timer.stop()
         output_path = Path(_field_path(self.dashboard_path_field.text()) or self._default_dashboard_path())
         self._dashboard_write_pending = False
         self._dashboard_open_after_current = self._dashboard_open_pending
         self._dashboard_open_pending = False
-        self.dashboard_thread = RealtimeDashboardWriterThread(
+        dashboard_thread = RealtimeDashboardWriterThread(
             db_file=self.db_file,
             output_file=str(output_path),
         )
-        self.dashboard_thread.result_ready.connect(self._on_dashboard_written)
-        self.dashboard_thread.error_occurred.connect(self._on_dashboard_write_error)
-        self.dashboard_thread.finished.connect(self._on_dashboard_writer_finished)
+        self.dashboard_thread = dashboard_thread
+        dashboard_thread.result_ready.connect(self._on_dashboard_written)
+        dashboard_thread.error_occurred.connect(self._on_dashboard_write_error)
+        dashboard_thread.finished.connect(
+            lambda: self._on_dashboard_writer_finished(dashboard_thread)
+        )
         if self._dashboard_open_after_current:
-            self._set_status("Preparing realtime dashboard...", "info")
-        self.dashboard_thread.start()
+            self._set_dashboard_status("Preparing realtime dashboard...", "info")
+        dashboard_thread.start()
 
     def _on_dashboard_written(self, path: object) -> None:
         if self._closing:
@@ -758,18 +1228,29 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.last_dashboard_path = Path(path)
         if self._dashboard_open_after_current:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.last_dashboard_path)))
-            self._set_status(f"Dashboard opened: {self.last_dashboard_path}", "success")
+            self._set_dashboard_status(
+                f"Dashboard opened: {self.last_dashboard_path}",
+                "success",
+            )
         else:
-            self._set_status(f"Dashboard refreshed: {self.last_dashboard_path}", "success")
+            self._set_dashboard_status(
+                f"Dashboard refreshed: {self.last_dashboard_path}",
+                "success",
+            )
 
     def _on_dashboard_write_error(self, message: str) -> None:
         if self._closing:
             return
         self._append_diagnostic(f"Dashboard write failed: {message}")
-        self._set_status(f"Dashboard write failed: {message}", "warning")
+        self._set_dashboard_status(f"Dashboard write failed: {message}", "warning")
 
-    def _on_dashboard_writer_finished(self) -> None:
+    def _on_dashboard_writer_finished(self, finished_thread=None) -> None:
+        if finished_thread is not None and finished_thread is not self.dashboard_thread:
+            return
         self.dashboard_thread = None
+        delete_later = getattr(finished_thread, "deleteLater", None)
+        if callable(delete_later):
+            delete_later()
         self._dashboard_open_after_current = False
         if self._closing:
             self._complete_deferred_shutdown()
@@ -779,6 +1260,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
                 self._start_dashboard_write()
             else:
                 self.dashboard_write_debounce_timer.start()
+        self._emit_database_work_idle_if_ready()
 
     def write_dashboard(self, *, open_after: bool = False) -> Path | None:
         try:
@@ -791,7 +1273,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             return self.last_dashboard_path
         except Exception as exc:
             self._append_diagnostic(f"Dashboard write failed: {exc}")
-            self._set_status(f"Dashboard write failed: {exc}", "warning")
+            self._set_dashboard_status(f"Dashboard write failed: {exc}", "warning")
             return None
 
     def _default_dashboard_path(self) -> Path:
@@ -809,18 +1291,26 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.browse_config_button.setEnabled(not running)
         self.edit_sources_button.setEnabled(not running)
         self.source_list.setEnabled(not running)
+        self.monitor_state_label.setText("Monitor: running" if running else "Monitor: stopped")
+        set_status_variant(self.monitor_state_label, "success" if running else "neutral")
         self._sync_buttons()
 
     def _sync_buttons(self) -> None:
         has_sources = bool(self.selected_profiles())
         current = self.current_profile()
         current_is_enabled = bool(current and current.is_enabled)
-        running = self.poll_timer.isActive()
+        poll_thread_owned = self.poll_thread is not None
+        running = self.poll_timer.isActive() or poll_thread_owned or self._stop_requested
         has_enabled_sources = any(profile.is_enabled for profile in self.profiles)
+        selected_profiles = self.selected_profiles()
+        selected_are_configured = bool(selected_profiles) and all(
+            profile.id in self.configs_by_profile_id for profile in selected_profiles
+        )
         self.save_button.setEnabled(current_is_enabled and not running)
         self.apply_checked_button.setEnabled(has_sources and current_is_enabled and not running)
-        self.start_button.setEnabled(has_sources and not self.poll_timer.isActive())
-        self.poll_once_button.setEnabled(has_sources and not self.poll_timer.isActive())
+        self.start_button.setEnabled(selected_are_configured and not running)
+        self.poll_once_button.setEnabled(selected_are_configured and not running)
+        self.stop_button.setEnabled(running and not self._stop_requested)
         self.select_all_sources_button.setEnabled(has_enabled_sources and not running)
         self.clear_sources_button.setEnabled(has_sources and not running)
         has_dashboard_context = bool(self.last_poll_results or self.configs_by_profile_id or has_sources)
@@ -829,6 +1319,25 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
     def _set_status(self, text: str, variant: str) -> None:
         self.status_label.setText(text)
         set_status_variant(self.status_label, variant)
+
+    def _set_config_status(self, text: str, variant: str) -> None:
+        self.config_readiness_label.setText(text)
+        set_status_variant(self.config_readiness_label, variant)
+        self._set_status(text, variant)
+
+    def _set_monitor_status(self, text: str, variant: str) -> None:
+        self.monitor_state_label.setText(text)
+        set_status_variant(self.monitor_state_label, variant)
+
+    def _set_poll_status(self, text: str, variant: str) -> None:
+        self.poll_status_label.setText(text)
+        set_status_variant(self.poll_status_label, variant)
+        self._set_status(text, variant)
+
+    def _set_dashboard_status(self, text: str, variant: str) -> None:
+        self.dashboard_status_label.setText(text)
+        set_status_variant(self.dashboard_status_label, variant)
+        self._set_status(text, variant)
 
     def _append_diagnostic(self, text: str) -> None:
         if not str(text or "").strip():
@@ -844,6 +1353,8 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
     def request_shutdown(self) -> bool:
         """Request worker cancellation and report whether database use has stopped."""
 
+        if not self._close_source_profiles_for_context_change("closing realtime monitoring"):
+            return False
         self._closing = True
         self.dashboard_write_debounce_timer.stop()
         self._dashboard_write_pending = False
@@ -853,21 +1364,41 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self._next_poll_due_by_profile_id = {}
         if self.poll_thread is not None and self.poll_thread.isRunning():
             self.poll_thread.cancel()
-        if self._workers_running():
+        if self._workers_own_context():
             self._shutdown_waiting = True
+            self._set_monitor_status("Monitor: stopping", "warning")
             self._set_status("Stopping realtime monitoring...", "warning")
             return False
         self._cleanup_dashboard_session()
         return True
 
-    def _workers_running(self) -> bool:
-        return any(
-            thread is not None and thread.isRunning()
-            for thread in (self.poll_thread, self.dashboard_thread)
+    def is_close_deferred(self) -> bool:
+        """Return whether shutdown was accepted and is waiting only on owned workers."""
+
+        return bool(self._closing and self._shutdown_waiting)
+
+    def is_monitoring_active(self) -> bool:
+        """Return whether queued or active work prevents a safe database rebind."""
+
+        return (
+            self.poll_timer.isActive()
+            or self._stop_requested
+            or self._workers_own_context()
+            or self.dashboard_write_debounce_timer.isActive()
+            or self._dashboard_write_pending
         )
 
+    def _emit_database_work_idle_if_ready(self) -> None:
+        if not self._closing and not self.is_monitoring_active():
+            self.database_work_idle.emit()
+
+    def _workers_own_context(self) -> bool:
+        """Return whether queued terminal callbacks still own the bound database."""
+
+        return self.poll_thread is not None or self.dashboard_thread is not None
+
     def _complete_deferred_shutdown(self) -> None:
-        if not self._closing or self._workers_running():
+        if not self._closing or self._workers_own_context():
             return
         self._cleanup_dashboard_session()
         if self._shutdown_waiting and not self._shutdown_completion_emitted:

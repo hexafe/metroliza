@@ -43,6 +43,10 @@ from metroliza.shared.env_utils import env_bool
 from metroliza.shared.excel_sheet_utils import unique_sheet_name
 from metroliza.exporting.export_backends import ExcelExportBackend, HtmlDashboardExportBackend
 from metroliza.exporting.execution import ExportStageOutcome, normalize_export_outcome
+from metroliza.exporting.export_outcomes import (
+    ExportRunStatus,
+    derive_export_run_result,
+)
 from metroliza.exporting.google_drive_export import (
     GoogleDriveAuthError,
     GoogleDriveCanceledError,
@@ -3565,6 +3569,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         self.group_analysis_scope = validated_request.options.group_analysis_scope
         self.export_canceled = False
         self._cancel_signal_emitted = False
+        self.export_run_result = None
         self._prepared_grouping_df = None
         self.completion_metadata = {
             "local_xlsx_path": self.excel_file,
@@ -3578,6 +3583,12 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             "html_dashboard_path": None,
             "html_dashboard_assets_path": None,
             "html_dashboard_warnings": [],
+            "html_dashboard_warning_details": [],
+            "html_dashboard_requested": bool(
+                validated_request.options.generate_html_dashboard
+                or validated_request.options.export_target == "html_dashboard"
+            ),
+            "summary_sheet_requested": bool(validated_request.options.generate_summary_sheet),
             "html_dashboard_plotly_spec_count": 0,
             "html_dashboard_embedded_plotly_spec_count": 0,
             "html_dashboard_plotly_serialized_json_bytes": 0,
@@ -3650,6 +3661,18 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         self._backend_diagnostic_summary = build_backend_diagnostic_summary()
         self.completion_metadata["backend_diagnostics"] = dict(self._backend_diagnostic_summary)
         self.completion_metadata["backend_diagnostics_lines"] = format_backend_diagnostic_lines(self._backend_diagnostic_summary)
+
+    def _set_export_run_result(self, *, cancelled=False, terminal_failure=""):
+        result = derive_export_run_result(
+            excel_file=self._primary_output_file,
+            export_target=self.export_target,
+            completion_metadata=self.completion_metadata,
+            cancelled=cancelled,
+            terminal_failure=str(terminal_failure or ""),
+        )
+        self.export_run_result = result
+        self.completion_metadata["export_run_result"] = result
+        return result
 
     def _register_chart_image(self, payload: bytes):
         image_data = BytesIO(payload)
@@ -3750,9 +3773,16 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             if html_only_export:
                 logger.exception("HTML dashboard export failed")
                 raise RuntimeError(f"HTML dashboard export failed: {exc}") from exc
-            warning_message = f"HTML dashboard export skipped: {exc}"
-            logger.warning(warning_message, exc_info=True)
+            warning_message = "HTML dashboard could not be generated; workbook export continued."
+            logger.warning("HTML dashboard export skipped: %s", exc, exc_info=True)
             self.completion_metadata.setdefault('html_dashboard_warnings', []).append(warning_message)
+            self.completion_metadata.setdefault('html_dashboard_warning_details', []).append(
+                {
+                    "exception_class": type(exc).__name__,
+                    "exception_message": str(exc),
+                    "stage": "dashboard_generation",
+                }
+            )
             self._log_export_stage(
                 "HTML dashboard generation skipped after workbook export",
                 stage="dashboard_warning",
@@ -3765,9 +3795,15 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         if dashboard_output_error:
             if html_only_export:
                 raise RuntimeError(dashboard_output_error)
-            warning_message = f"HTML dashboard export skipped: {dashboard_output_error}"
-            logger.warning(warning_message)
+            warning_message = "HTML dashboard output was not created; workbook export continued."
+            logger.warning("HTML dashboard export skipped: %s", dashboard_output_error)
             self.completion_metadata.setdefault('html_dashboard_warnings', []).append(warning_message)
+            self.completion_metadata.setdefault('html_dashboard_warning_details', []).append(
+                {
+                    "detail": str(dashboard_output_error),
+                    "stage": "dashboard_output_validation",
+                }
+            )
             self._log_export_stage(
                 "HTML dashboard output missing after workbook export",
                 stage="dashboard_warning",
@@ -4641,6 +4677,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
     def _check_canceled(self):
         if self.export_canceled:
             if not self._cancel_signal_emitted:
+                self._set_export_run_result(cancelled=True)
                 self.update_label.emit(build_three_line_status("Export canceled.", "No further work will be processed.", "ETA --"))
                 self._log_export_stage("Export cancellation observed", stage="canceled", cancel_flag=True)
                 self.canceled.emit()
@@ -4890,13 +4927,6 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             self._write_html_dashboard_if_requested()
             self._update_completion_chart_telemetry()
             self._emit_stage_progress('finalize', 1.0)
-            completion_detail = (
-                "Dashboard finalized"
-                if self.export_target == "html_dashboard"
-                else "Workbook and metadata finalized"
-            )
-            self.update_label.emit(build_three_line_status("Export completed successfully.", completion_detail, "ETA 0:00"))
-            self._log_export_stage("Export completed successfully", stage="completed")
             emit_completed_after_cleanup = True
         except GoogleDriveCanceledError:
             self.export_canceled = True
@@ -4911,7 +4941,6 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 self._write_html_dashboard_if_requested()
                 self._update_completion_chart_telemetry()
                 self._emit_stage_progress('finalize', 1.0)
-                self.update_label.emit(build_three_line_status("Export completed successfully.", "Workbook and metadata finalized", "ETA 0:00"))
                 self._log_export_stage("Export completed with local fallback after Google conversion failure", stage="fallback", level="warning", fallback_reason=self.completion_metadata["fallback_message"])
                 emit_completed_after_cleanup = True
                 self._log_google_issue(
@@ -4952,6 +4981,34 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             self._cleanup_dashboard_payloads()
             self._db_connection = None
             if emit_completed_after_cleanup and not self.export_canceled:
+                result = self._set_export_run_result()
+                if result.status is ExportRunStatus.COMPLETE_WITH_OMISSIONS:
+                    self.update_label.emit(
+                        build_three_line_status(
+                            "Export complete with omissions.",
+                            "Usable outputs were created; review the completion summary",
+                            "ETA 0:00",
+                        )
+                    )
+                    self._log_export_stage(
+                        "Export completed with omissions",
+                        stage="completed_with_omissions",
+                        level="warning",
+                    )
+                else:
+                    final_detail = (
+                        "Dashboard finalized"
+                        if self.export_target == "html_dashboard"
+                        else "Workbook and metadata finalized"
+                    )
+                    self.update_label.emit(
+                        build_three_line_status(
+                            "Export completed.",
+                            final_detail,
+                            "ETA 0:00",
+                        )
+                    )
+                    self._log_export_stage("Export completed", stage="completed")
                 self.completed.emit()
                 QCoreApplication.processEvents()
 
@@ -5899,10 +5956,24 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
     def _record_summary_sheet_warning(self, header, chart_name, exception):
         chart_context = f" ({chart_name})" if chart_name else ""
         warning_message = (
-            f"Summary sheet charts skipped after error in {header}{chart_context}: {exception}"
+            f"Summary chart {header}{chart_context} could not be generated; other charts continued."
         )
-        logger.warning(warning_message, exc_info=True)
+        logger.warning(
+            "Summary chart generation failed for %s%s: %s",
+            header,
+            chart_context,
+            exception,
+            exc_info=True,
+        )
         self.completion_metadata.setdefault('summary_sheet_warnings', []).append(warning_message)
+        self.completion_metadata.setdefault('summary_sheet_warning_details', []).append(
+            {
+                "chart": chart_name or "unknown",
+                "exception_class": type(exception).__name__,
+                "exception_message": str(exception),
+                "header": str(header),
+            }
+        )
         self._log_export_stage(
             "Summary sheet chart generation skipped after error",
             stage="summary_sheet_warning",
@@ -5914,8 +5985,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         )
         self.update_label.emit(
             build_three_line_status(
-                "Warning: summary charts skipped after earlier error.",
-                "Continuing export with remaining summary panel rendering",
+                "One summary chart could not be generated.",
+                "Continuing with remaining summary charts and workbook data",
                 "ETA --",
             )
         )
@@ -7013,6 +7084,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
 
         caller = inspect.stack()[1].function
         context = f"export operation ({caller})"
+        self._set_export_run_result(terminal_failure=f"{context}: {exception}")
         self._log_export_stage(
             "Export operation failed",
             stage="error",

@@ -16,6 +16,19 @@ from metroliza.reports.db import run_transaction_with_retry
 ANOMALY_EVENT_STATUSES = ("open", "acknowledged", "resolved", "false_positive")
 
 
+class AnomalyEventStatusConflictError(RuntimeError):
+    """Raised when an event changed after an operator loaded it for review."""
+
+    def __init__(self, event_id: int, expected_status: str, actual_status: str):
+        self.event_id = int(event_id)
+        self.expected_status = expected_status
+        self.actual_status = actual_status
+        super().__init__(
+            f"anomaly event {self.event_id} status changed from "
+            f"{self.expected_status} to {self.actual_status}"
+        )
+
+
 @dataclass(frozen=True)
 class PersistedAnomalyEvent:
     id: int
@@ -276,6 +289,7 @@ class AnomalyEventRepository:
         ack_by: str,
         comment: str | None = None,
         ack_at: str | None = None,
+        expected_status: str | None = None,
     ) -> None:
         self.update_event_status(
             event_id=event_id,
@@ -283,6 +297,7 @@ class AnomalyEventRepository:
             operator=ack_by,
             comment=comment,
             updated_at=ack_at,
+            expected_status=expected_status,
         )
 
     def resolve_event(
@@ -292,6 +307,7 @@ class AnomalyEventRepository:
         resolved_by: str,
         comment: str | None = None,
         resolved_at: str | None = None,
+        expected_status: str | None = None,
     ) -> None:
         self.update_event_status(
             event_id=event_id,
@@ -299,6 +315,7 @@ class AnomalyEventRepository:
             operator=resolved_by,
             comment=comment,
             updated_at=resolved_at,
+            expected_status=expected_status,
         )
 
     def mark_event_false_positive(
@@ -308,6 +325,7 @@ class AnomalyEventRepository:
         marked_by: str,
         comment: str | None = None,
         marked_at: str | None = None,
+        expected_status: str | None = None,
     ) -> None:
         self.update_event_status(
             event_id=event_id,
@@ -315,6 +333,7 @@ class AnomalyEventRepository:
             operator=marked_by,
             comment=comment,
             updated_at=marked_at,
+            expected_status=expected_status,
         )
 
     def update_event_status(
@@ -325,6 +344,7 @@ class AnomalyEventRepository:
         operator: str,
         comment: str | None = None,
         updated_at: str | None = None,
+        expected_status: str | None = None,
     ) -> None:
         self.ensure_schema()
         _validate_status(status)
@@ -332,17 +352,41 @@ class AnomalyEventRepository:
         normalized_operator = str(operator or "").strip()
         if not normalized_operator:
             raise ValueError("operator is required for anomaly event status updates")
+        if expected_status is not None:
+            _validate_status(expected_status)
 
         def _update(cursor) -> None:
-            cursor.execute(
-                """
-                UPDATE industrial_anomaly_events
-                SET status = ?, ack_by = ?, ack_at = ?, comment = ?
-                WHERE id = ?
-                """,
-                (status, normalized_operator, updated_at, comment, int(event_id)),
-            )
+            params = [status, normalized_operator, updated_at, comment, int(event_id)]
+            if expected_status is None:
+                cursor.execute(
+                    """
+                    UPDATE industrial_anomaly_events
+                    SET status = ?, ack_by = ?, ack_at = ?, comment = ?
+                    WHERE id = ?
+                    """,
+                    tuple(params),
+                )
+            else:
+                cursor.execute(
+                    """
+                    UPDATE industrial_anomaly_events
+                    SET status = ?, ack_by = ?, ack_at = ?, comment = ?
+                    WHERE id = ? AND status = ?
+                    """,
+                    (*params, expected_status),
+                )
             if cursor.rowcount < 1:
+                cursor.execute(
+                    "SELECT status FROM industrial_anomaly_events WHERE id = ?",
+                    (int(event_id),),
+                )
+                row = cursor.fetchone()
+                if row is not None and expected_status is not None:
+                    raise AnomalyEventStatusConflictError(
+                        int(event_id),
+                        expected_status,
+                        str(row[0]),
+                    )
                 raise ValueError(f"anomaly event not found: {event_id}")
 
         run_transaction_with_retry(self.database, _update, connection=self.connection)

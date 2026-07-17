@@ -69,6 +69,11 @@ def _audit_and_close(dialog) -> None:
     try:
         assert_dialog_geometry_clean(dialog, app)
     finally:
+        # Geometry probes intentionally mutate fields without committing them.
+        # Hide before teardown so transactional editors restore drafts without
+        # opening an operator confirmation modal in the headless test process.
+        dialog.hide()
+        app.processEvents()
         dialog.close()
         dialog.deleteLater()
         app.processEvents()

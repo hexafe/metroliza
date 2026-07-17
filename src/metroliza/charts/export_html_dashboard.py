@@ -35,12 +35,17 @@ from metroliza.charts.dashboard_shell import (
 )
 from metroliza.charts.dashboard_html_controls import (
     DASHBOARD_THEME_STORAGE_KEY,
+    latest_dashboard_timestamp,
     render_dashboard_control_bar,
     render_dashboard_controls_css,
+    render_dashboard_semantic_css,
+    render_dashboard_snapshot_metadata,
     render_dashboard_theme_bootstrap_script,
     render_dashboard_theme_runtime_helpers,
     render_dashboard_visual_dialog,
     render_dashboard_visual_runtime_js,
+    render_plotly_runtime_fallback_helpers,
+    resolve_dashboard_freshness,
 )
 from metroliza.charts.distribution_iqr_plotly_specs import build_distribution_iqr_plotly_spec
 from metroliza.charts.dashboard_plotly_visuals import apply_dashboard_visual_settings
@@ -583,6 +588,7 @@ def _write_export_html_dashboard_generation(
                 "limits": _normalize_limits(raw_section.get("limits")),
                 "summary_rows": _normalize_summary_rows(raw_section.get("summary_rows")),
                 "metadata_rows": _normalize_summary_rows(raw_section.get("metadata_rows")),
+                "data_through": _section_data_through(raw_section),
                 "charts": charts,
             }
         )
@@ -656,11 +662,15 @@ def _write_export_html_dashboard_generation(
     timings_s["plotly_json_measurement"] += embedded_json_measurement_elapsed
     timings_s["plotly_json_measurement_embedded"] += embedded_json_measurement_elapsed
     timings_s["total"] = perf_counter() - total_start
+    data_through = latest_dashboard_timestamp(
+        section.get("data_through") for section in section_entries
+    )
     manifest = {
         "excel_file": str(Path(str(excel_file)).name) if excel_file else "",
         "source_label": str(source_label or (Path(str(excel_file)).name if excel_file else dashboard_path.name)),
         "dashboard_mode": str(dashboard_mode or "workbook_sidecar"),
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "data_through": data_through,
         "section_count": len(section_entries),
         "chart_count": chart_count,
         "interactive_chart_count": interactive_chart_count,
@@ -786,6 +796,42 @@ def _normalize_summary_rows(rows: Any) -> list[dict[str, str]]:
             }
         )
     return normalized
+
+
+def _section_data_through(raw_section: dict[str, Any]) -> str:
+    direct_value = next(
+        (
+            raw_section.get(key)
+            for key in (
+                "data_through",
+                "last_event_time",
+                "latest_event_time",
+                "window_end",
+                "report_end",
+            )
+            if raw_section.get(key) not in (None, "")
+        ),
+        "",
+    )
+    if direct_value:
+        return str(direct_value).strip()
+
+    timestamp_labels = {
+        "data through",
+        "last event time",
+        "latest event time",
+        "window end",
+        "report end",
+        "measurement end",
+        "period end",
+    }
+    candidates: list[str] = []
+    for row in (*_normalize_summary_rows(raw_section.get("metadata_rows")),
+                *_normalize_summary_rows(raw_section.get("summary_rows"))):
+        normalized_label = re.sub(r"[^a-z0-9]+", " ", row["label"].casefold()).strip()
+        if normalized_label in timestamp_labels and row["value"].strip():
+            candidates.append(row["value"].strip())
+    return latest_dashboard_timestamp(candidates)
 
 
 def _normalize_histogram_annotation_rows(rows: Any) -> list[dict[str, str]]:
@@ -2946,7 +2992,26 @@ def _render_dashboard_html(
         lede_text = "Review measurement charts and group comparisons in the saved dashboard."
     else:
         lede_text = ""
-    lede_markup = f'<p class="lede">{html.escape(lede_text)}</p>' if lede_text else ""
+    generated_at = str(manifest.get("generated_at") or "").strip()
+    data_through = str(manifest.get("data_through") or "").strip()
+    if not data_through:
+        data_through = latest_dashboard_timestamp(
+            section.get("data_through") for section in sections if isinstance(section, dict)
+        )
+    freshness = resolve_dashboard_freshness(
+        generated_at=generated_at,
+        data_through=data_through,
+        live=False,
+    )
+    metadata_markup = render_dashboard_snapshot_metadata(
+        generated_at=generated_at,
+        data_through=data_through,
+        freshness=freshness,
+    )
+    lede_markup = (
+        (f'<p class="lede">{html.escape(lede_text)}</p>' if lede_text else "")
+        + metadata_markup
+    )
     nav_items = [
         {"id": str(section["id"]), "label": str(section["header"] or section["id"])}
         for section in sections
@@ -2968,6 +3033,7 @@ def _render_dashboard_html(
         include_visuals=interactive_plotly_available
     )
     dashboard_controls_css = render_dashboard_controls_css()
+    dashboard_semantic_css = render_dashboard_semantic_css()
     visual_preview_labels = _dashboard_visual_preview_labels_from_manifest(
         sections,
         group_analysis,
@@ -2990,6 +3056,7 @@ def _render_dashboard_html(
         storage_key_var="themeStorageKey",
         indent="      ",
     )
+    plotly_runtime_fallback_helpers = render_plotly_runtime_fallback_helpers(indent="      ")
     plotly_theme_tokens_json = json.dumps(
         {
             "light": _build_plotly_theme_tokens("light"),
@@ -3168,7 +3235,7 @@ def _render_dashboard_html(
       border: 1px solid var(--line);
       border-radius: 8px;
       box-shadow: var(--shadow);
-      padding: 28px 28px 22px;
+      padding: 20px 22px 18px;
     }}
     .hero-top {{
       display: flex;
@@ -3182,7 +3249,7 @@ def _render_dashboard_html(
       flex: 1 1 620px;
     }}
     .eyebrow {{
-      margin: 0 0 10px;
+      margin: 0 0 7px;
       font-size: 12px;
       text-transform: uppercase;
       letter-spacing: 0.18em;
@@ -3191,8 +3258,8 @@ def _render_dashboard_html(
     }}
     h1 {{
       margin: 0;
-      font-size: clamp(30px, 3.6vw, 46px);
-      line-height: 1.05;
+      font-size: clamp(26px, 3vw, 38px);
+      line-height: 1.1;
     }}
     .lede {{
       margin: 12px 0 0;
@@ -3250,6 +3317,7 @@ def _render_dashboard_html(
       outline: 3px solid var(--focus-ring);
       outline-offset: 2px;
     }}
+{dashboard_semantic_css}
 {dashboard_controls_css}
     .runtime-note {{
       margin: 14px 0 0;
@@ -3265,7 +3333,7 @@ def _render_dashboard_html(
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
       gap: 12px;
-      margin-top: 24px;
+      margin-top: 16px;
     }}
     .metric-card {{
       background: var(--panel-strong);
@@ -3706,10 +3774,13 @@ def _render_dashboard_html(
   </style>
 </head>
 <body>
+  <a class="skip-link" href="#dashboard-content">Skip to dashboard content</a>
   <div class="shell">
     {hero_markup}
-    {section_blocks}
-    {group_analysis_block}
+    <main id="dashboard-content" tabindex="-1">
+      {section_blocks}
+      {group_analysis_block}
+    </main>
   </div>
   <dialog id="chart-lightbox" class="lightbox" aria-label="Enlarged chart">
     <div class="lightbox-shell">
@@ -3721,6 +3792,10 @@ def _render_dashboard_html(
         <div class="lightbox-plotly-shell lightbox-pane" id="chart-lightbox-plotly-shell" hidden>
           <div class="lightbox-plotly-note">Interactive chart view</div>
           <div id="chart-lightbox-plotly" class="lightbox-plotly-chart" aria-label="Enlarged interactive chart"></div>
+          <p id="chart-lightbox-plotly-fallback" class="plotly-runtime-fallback"
+             role="status" aria-live="polite" hidden>
+            The enlarged interactive view could not be rendered. Close it and use the image snapshot.
+          </p>
         </div>
       </div>
       <p id="chart-lightbox-caption" class="lightbox-caption"></p>
@@ -3732,6 +3807,7 @@ def _render_dashboard_html(
       const themeStorageKey = {json.dumps(_DASHBOARD_THEME_STORAGE_KEY)};
       const plotlyThemeTokens = {plotly_theme_tokens_json};
 {theme_runtime_helpers}
+{plotly_runtime_fallback_helpers}
 
       const readCssVar = (name, fallback) => {{
         const value = window.getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -3920,6 +3996,7 @@ def _render_dashboard_html(
         }}
         const baseSpec = parsePlotlySpec(container);
         if (!baseSpec) {{
+          showPlotlyRuntimeFallback(container, 'invalid-spec');
           return false;
         }}
         const visualSpec = typeof applyDashboardVisualsToPlotlySpec === 'function'
@@ -3934,20 +4011,27 @@ def _render_dashboard_html(
         const spec = applyThemeToPlotlySpec(markedSpec);
         const config = Object.assign({{ responsive: true }}, spec.config || {{}});
         try {{
+          let renderResult = null;
           if (force && container.dataset.plotlyReady === '1') {{
-            window.Plotly.react(container, spec.data, spec.layout, config);
+            renderResult = window.Plotly.react(container, spec.data, spec.layout, config);
           }} else if (container.dataset.plotlyReady !== '1') {{
-            window.Plotly.newPlot(container, spec.data, spec.layout, config);
+            renderResult = window.Plotly.newPlot(container, spec.data, spec.layout, config);
           }} else {{
             return true;
           }}
           container.dataset.plotlyReady = '1';
+          clearPlotlyRuntimeFallback(container);
+          if (renderResult && typeof renderResult.catch === 'function') {{
+            renderResult.catch(() => {{
+              showPlotlyRuntimeFallback(container, 'render-error');
+            }});
+          }}
           if (typeof window.metrolizaInstallVisualSelectionHandlers === 'function') {{
             window.metrolizaInstallVisualSelectionHandlers(container);
           }}
           return true;
         }} catch (_error) {{
-          container.dataset.plotlyReady = 'error';
+          showPlotlyRuntimeFallback(container, 'render-error');
           return false;
         }}
       }};
@@ -3956,14 +4040,13 @@ def _render_dashboard_html(
         if (!window.Plotly) {{
           return false;
         }}
-        let rendered = false;
         document.querySelectorAll('.plotly-chart').forEach((container) => {{
           if (container.dataset.plotlyReady === '1') {{
             return;
           }}
-          rendered = renderPlotlyContainer(container) || rendered;
+          renderPlotlyContainer(container);
         }});
-        return rendered;
+        return true;
       }};
 
       const refreshPlotlyCharts = () => {{
@@ -4013,7 +4096,11 @@ def _render_dashboard_html(
       const closeButton = document.getElementById('chart-lightbox-close');
       let plotlyAttempts = 0;
       const tryInitPlotly = () => {{
-        if (initializePlotlyCharts() || plotlyAttempts >= 16) {{
+        if (initializePlotlyCharts()) {{
+          return;
+        }}
+        if (plotlyAttempts >= 16) {{
+          showPlotlyRuntimeUnavailable();
           return;
         }}
         plotlyAttempts += 1;
@@ -4068,6 +4155,7 @@ def _render_dashboard_html(
             // Ignore purge failures during teardown.
           }}
         }}
+        clearPlotlyRuntimeFallback(lightboxPlotly);
         lightboxPlotly.dataset.plotlyReady = '0';
         lightboxPlotly.removeAttribute('data-plotly-spec-light');
         lightboxPlotly.removeAttribute('data-plotly-spec-dark');
@@ -4209,7 +4297,6 @@ def _render_dashboard_html(
 def _render_overview_cards(manifest: dict[str, Any]) -> str:
     group_analysis = manifest.get("group_analysis") or {}
     cards = [
-        ("Generated", _format_generated_card_value(manifest.get("generated_at")), True),
         ("Sections", str(manifest.get("section_count") or 0), False),
         ("Charts", str(manifest.get("chart_count") or 0), False),
     ]
@@ -4321,6 +4408,14 @@ def _render_plotly_shell(chart: dict[str, Any]) -> str:
         or chart.get("id")
         or f"{chart.get('chart_type') or 'chart'}:{title}"
     )
+    has_image_fallback = bool(str(chart.get("image_path") or "").strip())
+    if has_image_fallback:
+        fallback_copy = (
+            "The interactive chart could not be loaded. "
+            "Its image snapshot remains available below."
+        )
+    else:
+        fallback_copy = "The interactive chart could not be loaded in this saved dashboard."
     return (
         '<div class="plotly-shell">'
         '<div class="plotly-shell-header">'
@@ -4332,9 +4427,12 @@ def _render_plotly_shell(chart: dict[str, Any]) -> str:
         f'<button type="button" class="plotly-expand-trigger" data-lightbox-route="plotly" aria-label="Open larger view: {html.escape(title)}" data-image-caption="{html.escape(title)}">Open large view</button>'
         '</div>'
         '</div>'
-        f'<div class="plotly-chart" aria-label="Interactive chart: {html.escape(title)}" '
+        f'<div class="plotly-chart" role="group" '
+        f'aria-label="Interactive chart: {html.escape(title)}" '
         f'data-dashboard-chart-key="{html.escape(chart_key)}" '
         f'data-plotly-spec-light="{spec_json_light}" data-plotly-spec-dark="{spec_json_dark}"></div>'
+        '<p class="plotly-runtime-fallback" role="status" aria-live="polite" hidden>'
+        f'{html.escape(fallback_copy)}</p>'
         '</div>'
     )
 

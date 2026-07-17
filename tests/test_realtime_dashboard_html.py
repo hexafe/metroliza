@@ -90,6 +90,62 @@ def test_static_dashboard_renders_required_sections_cards_tables_and_chart() -> 
     assert "<script" not in html.lower()
 
 
+def test_realtime_dashboard_header_reports_latest_watermark_and_freshness() -> None:
+    html = render_realtime_dashboard_html(_snapshot())
+
+    assert 'class="dashboard-meta"' in html
+    assert "Generated at" in html
+    assert "Data through" in html
+    assert "2026-06-13T10:04:00Z" in html
+    assert 'data-freshness="current"' in html
+    assert "Current snapshot" in html
+    assert 'class="skip-link" href="#dashboard-content"' in html
+    assert '<main id="dashboard-content" tabindex="-1">' in html
+
+
+def test_realtime_dashboard_marks_stale_data_only_when_timestamps_support_it() -> None:
+    html = render_realtime_dashboard_html(
+        RealtimeDashboardSnapshot(
+            generated_at="2026-06-13T10:30:00Z",
+            signals=(
+                DashboardSignalSeries(
+                    signal_key="pressure",
+                    metric_name="pressure",
+                    samples=(
+                        DashboardSamplePoint(
+                            event_time="2026-06-13T10:00:00Z",
+                            value=4.2,
+                        ),
+                    ),
+                ),
+            ),
+        )
+    )
+
+    assert 'data-freshness="stale"' in html
+    assert "Stale data" in html
+    assert "30 minutes behind" in html
+
+
+def test_realtime_dashboard_is_honest_when_data_watermark_is_unknown() -> None:
+    html = render_realtime_dashboard_html(
+        RealtimeDashboardSnapshot(generated_at="2026-06-13T10:30:00Z")
+    )
+
+    assert "Data through</dt><dd>not recorded" in html
+    assert 'data-freshness="unknown"' in html
+    assert "Freshness unavailable" in html
+
+
+def test_realtime_dashboard_css_covers_focus_forced_colors_motion_and_print() -> None:
+    styles = _stylesheet()
+
+    assert ":focus-visible" in styles
+    assert "@media (prefers-reduced-motion: reduce)" in styles
+    assert "@media (forced-colors: active)" in styles
+    assert "@media print" in styles
+
+
 def test_realtime_dashboard_tables_are_scrollable_on_small_viewports() -> None:
     html = render_realtime_dashboard_html(_snapshot())
     styles = _stylesheet()

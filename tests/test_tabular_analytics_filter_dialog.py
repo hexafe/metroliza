@@ -7,6 +7,7 @@ import pytest
 
 try:
     from PyQt6.QtCore import QDate, Qt
+    from PyQt6.QtTest import QTest
     from PyQt6.QtWidgets import QApplication, QListWidgetItem
     import metroliza.ui.tabular_analytics_filter_dialog as filter_dialog_module
     from metroliza.ui.tabular_analytics_filter_dialog import TabularAnalyticsFilterDialog
@@ -20,6 +21,7 @@ except ImportError as exc:  # pragma: no cover - depends on optional PyQt availa
     QListWidgetItem = None
     QDate = None
     Qt = None
+    QTest = None
     filter_dialog_module = None
     TabularAnalyticsFilterDialog = None
     TabularColumnFilter = None
@@ -181,7 +183,7 @@ def test_filter_dialog_returns_selected_tracecode_keys(tmp_path) -> None:
         dialog.close()
 
 
-def test_filter_dialog_magic_expression_counts_and_clears(tmp_path) -> None:
+def test_filter_dialog_advanced_expression_counts_and_clears(tmp_path) -> None:
     _app()
     loaded = _sample_loaded_table(tmp_path)
 
@@ -195,12 +197,137 @@ def test_filter_dialog_magic_expression_counts_and_clears(tmp_path) -> None:
 
         assert dialog.get_filter_expression() == "length mm > 10.1 AND < 10.5"
         assert dialog.get_column_filters() == ()
-        assert dialog.status_label.text() == "Magic filter, 2 rows"
+        assert dialog.status_label.text() == "Advanced expression, 2 rows"
 
         dialog.clear_filter()
 
         assert dialog.get_filter_expression() == ""
         assert dialog.status_label.text() == "No row filter selected"
+    finally:
+        dialog.close()
+
+
+def test_filter_dialog_invalid_advanced_expression_is_inline_and_blocks_apply(tmp_path) -> None:
+    _app()
+    loaded = _sample_loaded_table(tmp_path)
+
+    dialog = TabularAnalyticsFilterDialog(
+        dataframe=loaded.dataframe,
+        column_mapping=loaded.column_mapping,
+    )
+    try:
+        dialog.expression_input.setText("MissingColumn > 10")
+        dialog._sync_status_now()
+
+        assert dialog.apply_button.isEnabled() is False
+        assert dialog.status_label.text() == "Advanced expression needs attention"
+        assert dialog.expression_error_label.isHidden() is False
+        assert dialog.expression_error_label.text().startswith("Invalid advanced expression:")
+    finally:
+        dialog.close()
+
+
+def test_filter_dialog_reset_and_cancel_preserve_committed_state_until_confirmed(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _app()
+    loaded = _sample_loaded_table(tmp_path)
+    dialog = TabularAnalyticsFilterDialog(
+        dataframe=loaded.dataframe,
+        column_mapping=loaded.column_mapping,
+        filter_expression="length mm > 10.1",
+    )
+    try:
+        answers = iter(
+            [
+                filter_dialog_module.QMessageBox.StandardButton.No,
+                filter_dialog_module.QMessageBox.StandardButton.Yes,
+                filter_dialog_module.QMessageBox.StandardButton.No,
+                filter_dialog_module.QMessageBox.StandardButton.Yes,
+            ]
+        )
+        monkeypatch.setattr(
+            filter_dialog_module.QMessageBox,
+            "question",
+            lambda *_args, **_kwargs: next(answers),
+        )
+
+        dialog._request_reset_filter()
+        assert dialog.get_filter_expression() == "length mm > 10.1"
+        dialog._request_reset_filter()
+        assert dialog.get_filter_expression() == ""
+
+        dialog.show()
+        _app().processEvents()
+        dialog.cancel_button.click()
+        assert dialog.isVisible()
+        dialog.cancel_button.click()
+        assert not dialog.isVisible()
+        assert dialog.get_filter_expression() == "length mm > 10.1"
+    finally:
+        dialog.close()
+
+
+def test_filter_dialog_dirty_x_and_escape_share_the_discard_gate(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _app()
+    loaded = _sample_loaded_table(tmp_path)
+    dialog = TabularAnalyticsFilterDialog(
+        dataframe=loaded.dataframe,
+        column_mapping=loaded.column_mapping,
+        filter_expression="length mm > 10.1",
+    )
+    answers = iter(
+        [
+            filter_dialog_module.QMessageBox.StandardButton.No,
+            filter_dialog_module.QMessageBox.StandardButton.Yes,
+            filter_dialog_module.QMessageBox.StandardButton.No,
+            filter_dialog_module.QMessageBox.StandardButton.Yes,
+        ]
+    )
+    monkeypatch.setattr(
+        filter_dialog_module.QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: next(answers),
+    )
+    detach_calls = []
+    original_detach = dialog._detach_sqlite_value_preview_threads
+
+    def counted_detach():
+        detach_calls.append(True)
+        original_detach()
+
+    monkeypatch.setattr(dialog, "_detach_sqlite_value_preview_threads", counted_detach)
+    try:
+        dialog.show()
+        _app().processEvents()
+        dialog.expression_input.setText("length mm > 10.2")
+
+        assert dialog.close() is False
+        assert detach_calls == []
+        assert dialog.isVisible()
+        assert dialog.get_filter_expression() == "length mm > 10.2"
+        assert dialog.close() is True
+        assert detach_calls == [True]
+        assert not dialog.isVisible()
+        assert dialog.get_filter_expression() == "length mm > 10.1"
+
+        dialog.show()
+        _app().processEvents()
+        dialog.expression_input.setText("length mm > 10.3")
+        QTest.keyClick(dialog, Qt.Key.Key_Escape)
+        _app().processEvents()
+        assert dialog.isVisible()
+        assert detach_calls == [True]
+        assert dialog.get_filter_expression() == "length mm > 10.3"
+        QTest.keyClick(dialog, Qt.Key.Key_Escape)
+        _app().processEvents()
+        assert not dialog.isVisible()
+        assert dialog.get_filter_expression() == "length mm > 10.1"
+        assert detach_calls == [True, True]
     finally:
         dialog.close()
 

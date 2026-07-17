@@ -161,6 +161,7 @@ class _ExportPresetFlowStubCase(unittest.TestCase):
         qtcore_stub.QSize = object
         qtcore_stub.QTemporaryFile = object
         qtcore_stub.Qt = object
+        qtcore_stub.pyqtSignal = lambda *_args, **_kwargs: object()
 
         class _FakeQUrl:
             def __init__(self, value=''):
@@ -359,16 +360,10 @@ class TestExportCompletionMessaging(_ExportPresetFlowStubCase):
         )
 
         self.assertEqual(level, 'info')
-        self.assertEqual(title, 'Export successful')
-        expected_file_uri = Path('out.xlsx').resolve().as_uri()
-        self.assertEqual(
-            message,
-            'Data exported successfully!\n'
-            '\n'
-            f'Export file: {expected_file_uri}\n'
-            '\n'
-            'Google Sheet: https://docs.google.com/spreadsheets/d/abc/edit',
-        )
+        self.assertEqual(title, 'Export complete')
+        self.assertIn(f'Workbook: {Path("out.xlsx").resolve()}', message)
+        self.assertIn('Google Sheet: https://docs.google.com/spreadsheets/d/abc/edit', message)
+        self.assertNotIn('file://', message)
 
     def test_google_fallback_promotes_warning_dialog(self):
         from modules.export_dialog import build_export_completion_message
@@ -386,17 +381,11 @@ class TestExportCompletionMessaging(_ExportPresetFlowStubCase):
         )
 
         self.assertEqual(level, 'warning')
-        self.assertEqual(title, 'Export completed with Google fallback')
-        expected_file_uri = Path('out.xlsx').resolve().as_uri()
-        self.assertEqual(
-            message,
-            'Data exported locally to out.xlsx.\n'
-            f'Export file: {expected_file_uri}\n'
-            '\n'
-            'Google Sheets conversion was not fully completed.\n'
-            'Warnings/Errors:\n'
-            '- Missing token.json for Google Drive export. Please complete OAuth authorization first.',
-        )
+        self.assertEqual(title, 'Export complete with omissions')
+        self.assertIn(f'Workbook: {Path("out.xlsx").resolve()}', message)
+        self.assertIn('Google Sheets conversion was not completed', message)
+        self.assertNotIn('Missing token.json', message)
+        self.assertNotIn('file://', message)
 
     def test_google_fallback_only_shows_conversion_partial_message(self):
         from modules.export_dialog import build_export_completion_message
@@ -414,15 +403,9 @@ class TestExportCompletionMessaging(_ExportPresetFlowStubCase):
         )
 
         self.assertEqual(level, 'warning')
-        self.assertEqual(title, 'Export completed with Google fallback')
-        expected_file_uri = Path('out.xlsx').resolve().as_uri()
-        self.assertEqual(
-            message,
-            'Data exported locally to out.xlsx.\n'
-            f'Export file: {expected_file_uri}\n'
-            '\n'
-            'Google Sheets conversion was not fully completed.',
-        )
+        self.assertEqual(title, 'Export complete with omissions')
+        self.assertIn(f'Workbook: {Path("out.xlsx").resolve()}', message)
+        self.assertIn('Google Sheets conversion was not completed', message)
 
     def test_google_empty_metadata_defaults_to_standard_success_message(self):
         from modules.export_dialog import build_export_completion_message
@@ -433,15 +416,10 @@ class TestExportCompletionMessaging(_ExportPresetFlowStubCase):
             completion_metadata={},
         )
 
-        self.assertEqual(level, 'info')
-        self.assertEqual(title, 'Export successful')
-        expected_file_uri = Path('out.xlsx').resolve().as_uri()
-        self.assertEqual(
-            message,
-            'Data exported successfully!\n'
-            '\n'
-            f'Export file: {expected_file_uri}'
-        )
+        self.assertEqual(level, 'warning')
+        self.assertEqual(title, 'Export complete with omissions')
+        self.assertIn(f'Workbook: {Path("out.xlsx").resolve()}', message)
+        self.assertIn('Google Sheets conversion was not completed', message)
 
 
     def test_link_formatting_converts_google_urls_to_anchors(self):
@@ -499,7 +477,7 @@ class TestExportCompletionMessaging(_ExportPresetFlowStubCase):
         )
 
         self.assertEqual(level, 'warning')
-        self.assertEqual(title, 'Export completed with Google fallback')
+        self.assertEqual(title, 'Export complete with omissions')
         self.assertIn('Google Sheet: https://docs.google.com/spreadsheets/d/abc/edit', message)
 
     def test_excel_target_message_uses_standard_success_copy_even_with_google_metadata(self):
@@ -518,14 +496,9 @@ class TestExportCompletionMessaging(_ExportPresetFlowStubCase):
         )
 
         self.assertEqual(level, 'info')
-        self.assertEqual(title, 'Export successful')
-        expected_file_uri = Path('out.xlsx').resolve().as_uri()
-        self.assertEqual(
-            message,
-            'Data exported successfully!\n'
-            '\n'
-            f'Export file: {expected_file_uri}'
-        )
+        self.assertEqual(title, 'Export complete')
+        self.assertIn(f'Workbook: {Path("out.xlsx").resolve()}', message)
+        self.assertNotIn('file://', message)
 
     def test_excel_target_summary_sheet_warning_promotes_warning_dialog(self):
         from metroliza.exporting.export_dialog_service import build_export_completion_message
@@ -542,10 +515,10 @@ class TestExportCompletionMessaging(_ExportPresetFlowStubCase):
         )
 
         self.assertEqual(level, 'warning')
-        self.assertEqual(title, 'Export completed with warnings')
-        self.assertIn('Data exported successfully!', message)
-        self.assertIn('Summary sheet warnings:', message)
-        self.assertIn("'int' object is not iterable", message)
+        self.assertEqual(title, 'Export complete with omissions')
+        self.assertIn('Some summary charts could not be generated', message)
+        self.assertNotIn("'int' object is not iterable", message)
+        self.assertIn('Show Details', message)
 
     def test_completion_message_ignores_backend_diagnostics_when_present(self):
         from modules.export_dialog import build_export_completion_message
@@ -562,12 +535,10 @@ class TestExportCompletionMessaging(_ExportPresetFlowStubCase):
             completion_metadata=metadata,
         )
 
-        self.assertEqual(
-            message,
-            'Data exported successfully!\n'
-            '\n'
-            f'Export file: {Path("out.xlsx").resolve().as_uri()}'
-        )
+        self.assertIn('All requested export outputs are complete.', message)
+        self.assertIn(f'Workbook: {Path("out.xlsx").resolve()}', message)
+        self.assertNotIn('chart_renderer:', message)
+        self.assertNotIn('file://', message)
 
     def test_completion_message_includes_html_dashboard_link_without_assets(self):
         from modules.export_dialog import build_export_completion_message
@@ -582,16 +553,9 @@ class TestExportCompletionMessaging(_ExportPresetFlowStubCase):
             completion_metadata=metadata,
         )
 
-        expected_file_uri = Path('out.xlsx').resolve().as_uri()
-        expected_dashboard_uri = Path('out_dashboard.html').resolve().as_uri()
-        self.assertEqual(
-            message,
-            'Data exported successfully!\n'
-            '\n'
-            f'Export file: {expected_file_uri}\n'
-            '\n'
-            f'HTML dashboard: {expected_dashboard_uri}'
-        )
+        self.assertIn(f'Workbook: {Path("out.xlsx").resolve()}', message)
+        self.assertIn(f'HTML dashboard: {Path("out_dashboard.html").resolve()}', message)
+        self.assertNotIn('file://', message)
 
     def test_completion_message_for_html_only_uses_dashboard_link_only(self):
         from modules.export_dialog import build_export_completion_message
@@ -605,15 +569,10 @@ class TestExportCompletionMessaging(_ExportPresetFlowStubCase):
             completion_metadata=metadata,
         )
 
-        expected_dashboard_uri = Path('dashboard.html').resolve().as_uri()
         self.assertEqual(level, 'info')
-        self.assertEqual(title, 'Export successful')
-        self.assertEqual(
-            message,
-            'HTML dashboard exported successfully!\n'
-            '\n'
-            f'HTML dashboard: {expected_dashboard_uri}'
-        )
+        self.assertEqual(title, 'Export complete')
+        self.assertIn(f'HTML dashboard: {Path("dashboard.html").resolve()}', message)
+        self.assertNotIn('file://', message)
 
 
 class TestExportTargetSelection(_ExportPresetFlowStubCase):
@@ -726,8 +685,9 @@ class TestShowExportResultMessage(_ExportPresetFlowStubCase):
         self.assertEqual(len(FakeMessageBox.warning_calls), 1)
         _, warning_title, warning_text = FakeMessageBox.warning_calls[0]
         self.assertEqual(warning_title, 'Unable to open file location')
-        self.assertIn('Could not open the export location for out.xlsx.', warning_text)
-        self.assertIn('boom', warning_text)
+        self.assertIn('Could not open the export location.', warning_text)
+        self.assertNotIn('out.xlsx', warning_text)
+        self.assertNotIn('boom', warning_text)
 
     def test_open_export_result_link_reraises_unexpected_exception_after_logging(self):
         from modules.export_dialog import _open_export_result_link
