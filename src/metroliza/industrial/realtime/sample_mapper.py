@@ -76,6 +76,12 @@ def map_rows_to_samples(
         record_key = _text_or_none(row.get(validated.record_key_column))
         event_time_raw = row.get(validated.event_time_column)
         row_cursor = _text_or_none(row.get(validated.cursor_column))
+        # A source row with a stable key/cursor has been consumed even when its event time is
+        # unusable. Advancing here prevents one permanently malformed row from being fetched on
+        # every poll, while unkeyed rows remain unable to move the durable offset.
+        if record_key and row_cursor is not None:
+            cursor_value = row_cursor
+            cursor_tie_breaker_value = record_key
         if not record_key or event_time_raw in (None, ""):
             skipped_missing += len(validated.signal_keys)
             continue
@@ -83,9 +89,6 @@ def map_rows_to_samples(
             event_time_raw,
             source_timezone=validated.source_timezone,
         )
-        if row_cursor is not None:
-            cursor_value = row_cursor
-            cursor_tie_breaker_value = record_key
         if lateness_boundary is not None and parse_utc_timestamp(event_time) < lateness_boundary:
             skipped_late += len(validated.signal_keys)
             continue
@@ -201,5 +204,7 @@ def _redacted_value(key: str, value: Any) -> Any:
 
 
 def _text_or_none(value: Any) -> str | None:
-    text = str(value or "").strip()
+    if value is None:
+        return None
+    text = str(value).strip()
     return text or None

@@ -3,9 +3,115 @@ from __future__ import annotations
 import builtins
 from datetime import datetime, timezone
 import importlib
+import os
+from pathlib import Path
+import subprocess
 import sys
+import textwrap
 
 import numpy as np
+
+
+def test_csv_runtime_load_filter_group_preview_and_cleanup_block_pandas_imports(tmp_path):
+    project_root = Path(__file__).resolve().parents[1]
+    script = textwrap.dedent(
+        f"""
+        import builtins
+        from pathlib import Path
+        import sys
+
+        real_import = builtins.__import__
+        def guarded_import(name, *args, **kwargs):
+            if name == "pandas" or name.startswith("pandas."):
+                raise AssertionError(f"unexpected pandas import: {{name}}")
+            return real_import(name, *args, **kwargs)
+        builtins.__import__ = guarded_import
+
+        from metroliza.analytics.row_table import RowTable
+        from metroliza.tabular.tabular_analytics_service import (
+            TabularColumnFilter,
+            cleanup_tabular_load_result,
+            load_tabular_analytics_file,
+            materialize_tabular_rows,
+        )
+        from metroliza.ui import tabular_analytics_filter_dialog
+        from metroliza.ui import tabular_analytics_grouping_dialog
+        from PyQt6.QtWidgets import QApplication
+
+        source = Path({str(tmp_path / "runtime.csv")!r})
+        source.write_text(
+            "When,Station,Metric\\n"
+            "2026-05-01,A,1\\n"
+            "2026-05-02,B,2\\n"
+            "2026-05-03,A,3\\n",
+            encoding="utf-8",
+        )
+        loaded = load_tabular_analytics_file(source)
+        sqlite_path = Path(loaded.sqlite_store.path)
+        try:
+            assert isinstance(loaded.dataframe, RowTable)
+            assert isinstance(loaded.row_table, RowTable)
+            assert loaded.row_table["metric"].tolist() == [1.0, 2.0, 3.0]
+
+            filtered = materialize_tabular_rows(
+                loaded,
+                column_filters=(
+                    TabularColumnFilter("station", selected_values=("A",)),
+                    TabularColumnFilter(
+                        "when",
+                        date_operator=">=",
+                        date_value="2026-05-02",
+                    ),
+                ),
+                row_filter_expression="Metric >= 3",
+            )
+            assert isinstance(filtered.dataframe, RowTable)
+            assert filtered.dataframe["source_row_number"].tolist() == [3]
+
+            groups, total = loaded.sqlite_store.preview_group_rows(("station",), limit=10)
+            assert total == 2
+            assert {{tuple(row["key"]): row["row_count"] for row in groups}} == {{
+                ("A",): 2,
+                ("B",): 1,
+            }}
+
+            app = QApplication.instance() or QApplication([])
+            filter_dialog = tabular_analytics_filter_dialog.TabularAnalyticsFilterDialog(
+                dataframe=loaded.dataframe,
+                column_mapping=loaded.column_mapping,
+                sqlite_store=loaded.sqlite_store,
+            )
+            assert isinstance(filter_dialog.source_dataframe, RowTable)
+            filter_dialog.reject()
+            grouping_dialog = tabular_analytics_grouping_dialog.TabularAnalyticsGroupingDialog(
+                dataframe=loaded.dataframe,
+                column_mapping=loaded.column_mapping,
+                sqlite_store=loaded.sqlite_store,
+            )
+            assert isinstance(grouping_dialog.source_dataframe, RowTable)
+            grouping_dialog.dont_use_grouping()
+            app.processEvents()
+            assert "pandas" not in sys.modules
+        finally:
+            cleanup_tabular_load_result(loaded)
+        assert not sqlite_path.exists()
+        assert "pandas" not in sys.modules
+        """
+    )
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = f"{project_root / 'src'}:{project_root}"
+    environment["QT_QPA_PLATFORM"] = "offscreen"
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=project_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
 def test_lightweight_runtime_helpers_import_without_pandas(monkeypatch):

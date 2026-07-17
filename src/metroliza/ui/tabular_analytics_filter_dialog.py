@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from PyQt6.QtCore import QDate, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
@@ -17,7 +19,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-from metroliza.tabular.csv_summary_utils import CsvGroupingIndex
+from metroliza.analytics.row_table import RowTable
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.shared.list_selection_utils import ListSelectionUtils
 from metroliza.tabular.tabular_column_selection import (
@@ -47,6 +49,9 @@ except ImportError:  # pragma: no cover - compatibility with lightweight test st
         create_worker_progress_dialog as create_delayed_worker_progress_dialog,
     )
 
+if TYPE_CHECKING:
+    from metroliza.tabular.csv_summary_utils import CsvGroupingIndex
+
 
 _MAX_VISIBLE_MATCHES = 1000
 _DETACHED_PREVIEW_THREADS: list[QThread] = []
@@ -70,6 +75,12 @@ class _LazyPandas:
 
 
 pd = _LazyPandas()
+
+
+def _legacy_grouping_index(dataframe, columns):
+    from metroliza.tabular.csv_summary_utils import CsvGroupingIndex
+
+    return CsvGroupingIndex(dataframe, columns)
 
 
 def _release_detached_preview_thread(thread: QThread) -> None:
@@ -121,8 +132,17 @@ class TabularAnalyticsFilterDialog(QDialog):
         self.setWindowTitle("CSV / Excel row filter")
         configure_window_size(self, minimum=(860, 560), initial=(1060, 720))
 
-        self.source_dataframe = dataframe.copy() if isinstance(dataframe, pd.DataFrame) else pd.DataFrame()
         self.sqlite_store = sqlite_store
+        if sqlite_store is not None:
+            self.source_dataframe = (
+                dataframe.copy()
+                if isinstance(dataframe, RowTable)
+                else RowTable(rows=(), columns=tuple(sqlite_store.columns))
+            )
+        else:
+            self.source_dataframe = (
+                dataframe.copy() if isinstance(dataframe, pd.DataFrame) else pd.DataFrame()
+            )
         self.column_labels = {
             normalized: original
             for original, normalized in (column_mapping or {}).items()
@@ -525,7 +545,7 @@ class TabularAnalyticsFilterDialog(QDialog):
     def _value_index(self, column: str) -> CsvGroupingIndex:
         index = self._value_index_by_column.get(column)
         if index is None:
-            index = CsvGroupingIndex(self.source_dataframe, (column,))
+            index = _legacy_grouping_index(self.source_dataframe, (column,))
             self._value_index_by_column[column] = index
         return index
 
@@ -984,7 +1004,7 @@ class TabularAnalyticsFilterDialog(QDialog):
         columns = tuple(item.column for item in active_filters)
         if filtered.empty:
             return columns, ()
-        preview_rows, _total = CsvGroupingIndex(filtered, columns).preview_rows()
+        preview_rows, _total = _legacy_grouping_index(filtered, columns).preview_rows()
         keys = {tuple(row["key"]) for row in preview_rows}
         return columns, tuple(sorted(keys))
 

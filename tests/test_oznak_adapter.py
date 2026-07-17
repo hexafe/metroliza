@@ -7,6 +7,7 @@ import pytest
 
 from modules import oznak_adapter
 from modules.industrial_workflow_state import IndustrialQueryFilter
+from metroliza.industrial.oznak_adapter import map_oznak_rows_to_industrial_records
 
 
 def test_adapter_status_reports_unavailable_package_with_import_diagnostics(monkeypatch):
@@ -181,6 +182,15 @@ def test_map_rows_normalizes_dataframe_like_payload_with_profile_mappings():
     assert record["status"] == "OK"
     assert record["part_number"] == "PN-11"
     assert record["raw_record"]["wo"] == "WO-7"
+
+
+def test_map_rows_preserves_zero_source_primary_key():
+    records = map_oznak_rows_to_industrial_records(
+        {"rows": [{"id": 0, "serial_number": "SN-0"}]},
+        profile={"profile_id": "profile-a"},
+    )
+
+    assert records[0]["source_primary_key"] == 0
 
 
 def test_fetch_supports_temporary_two_argument_fetch_shape(monkeypatch):

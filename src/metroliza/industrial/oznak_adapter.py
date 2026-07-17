@@ -1007,7 +1007,7 @@ def map_oznak_rows_to_industrial_records(payload: Any, *, profile: Any) -> tuple
                     if value is not None:
                         break
             record[canonical_name] = value
-        if not record.get("source_primary_key"):
+        if record.get("source_primary_key") in (None, ""):
             record["source_primary_key"] = _stable_row_key(row_dict)
         for source_name, target_name in _REPOSITORY_FIELD_ALIASES.items():
             if record.get(source_name) is not None and record.get(target_name) is None:

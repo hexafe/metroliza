@@ -72,6 +72,29 @@ def test_sample_mapper_maps_multiple_signals_and_redacts_raw_record():
     assert first.raw_record["work_order"] == "mysql://operator:<redacted>@db/prod"
 
 
+def test_sample_mapper_preserves_zero_record_and_cursor_keys():
+    result = map_rows_to_samples(
+        [
+            {
+                "event_id": 0,
+                "record_id": 0,
+                "process_timestamp": "2026-06-13T10:00:00Z",
+                "cycle_time_s": "10.5",
+            }
+        ],
+        config=_config(
+            signal_keys=("cycle_time",),
+            signal_columns={"cycle_time": "cycle_time_s"},
+        ),
+        signals=_signals(),
+    )
+
+    assert result.stats.mapped == 1
+    assert result.cursor_value == "0"
+    assert result.cursor_tie_breaker_value == "0"
+    assert result.samples[0].source_record_key == "0"
+
+
 def test_sample_mapper_skips_invalid_values_without_crashing():
     result = map_rows_to_samples(
         [
@@ -100,6 +123,36 @@ def test_sample_mapper_skips_invalid_values_without_crashing():
     assert result.stats.skipped_missing == 2
     assert result.cursor_value == "101"
     assert result.cursor_tie_breaker_value == "row-101"
+    assert result.event_time_watermark == "2026-06-13T10:01:00.000000Z"
+
+
+def test_sample_mapper_advances_past_keyed_row_with_missing_event_time():
+    result = map_rows_to_samples(
+        [
+            {
+                "event_id": "101",
+                "record_id": "row-101",
+                "process_timestamp": "2026-06-13T10:01:00Z",
+                "cycle_time_s": "10",
+            },
+            {
+                "event_id": "102",
+                "record_id": "row-102",
+                "process_timestamp": "",
+                "cycle_time_s": "11",
+            },
+        ],
+        config=_config(
+            signal_keys=("cycle_time",),
+            signal_columns={"cycle_time": "cycle_time_s"},
+        ),
+        signals=_signals(),
+    )
+
+    assert [sample.source_record_key for sample in result.samples] == ["row-101"]
+    assert result.stats.skipped_missing == 1
+    assert result.cursor_value == "102"
+    assert result.cursor_tie_breaker_value == "row-102"
     assert result.event_time_watermark == "2026-06-13T10:01:00.000000Z"
 
 

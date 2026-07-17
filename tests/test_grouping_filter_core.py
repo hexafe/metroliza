@@ -105,7 +105,88 @@ def test_date_filter_parses_source_series_vectorized(monkeypatch) -> None:
     mask = DateFilterSpec("created_at", "on_or_after", "2026-05-03").mask(frame)
 
     assert mask.sum() == 2600
-    assert calls == ["Series", "str"]
+    assert calls == ["Series"]
+
+
+def test_date_filter_compares_timezone_aware_source_as_calendar_dates() -> None:
+    frame = pd.DataFrame(
+        {
+            "created_at": [
+                "2026-05-02T23:59:59Z",
+                "2026-05-03T00:00:00Z",
+                "2026-05-04T00:00:00Z",
+            ]
+        }
+    )
+
+    assert DateFilterSpec("created_at", "on", "2026-05-03T12:00:00Z").mask(frame).tolist() == [
+        False,
+        True,
+        False,
+    ]
+    assert DateFilterSpec("created_at", "on_or_after", "2026-05-03").mask(frame).tolist() == [
+        False,
+        True,
+        True,
+    ]
+
+
+def test_date_filter_preserves_common_month_name_literals() -> None:
+    frame = pd.DataFrame({"created_at": ["2026-05-02", "2026-05-03", "2026-05-04"]})
+
+    assert DateFilterSpec("created_at", "after", "May 3 2026").mask(frame).tolist() == [
+        False,
+        False,
+        True,
+    ]
+    assert parse_filter_expression("created_at = '03 May 2026'", frame.columns).mask(
+        frame
+    ).tolist() == [False, True, False]
+
+
+@pytest.mark.parametrize(
+    "literal",
+    (
+        "2026/05/03",
+        "2026.05.03",
+        "03-May-2026",
+        "2026-05-03 1:45 PM",
+        "05/03/26",
+    ),
+)
+def test_date_filter_preserves_common_legacy_scalar_formats(literal: str) -> None:
+    frame = pd.DataFrame({"created_at": ["2026-05-02", "2026-05-03", "2026-05-04"]})
+
+    assert DateFilterSpec("created_at", "on", literal).mask(frame).tolist() == [
+        False,
+        True,
+        False,
+    ]
+
+
+@pytest.mark.parametrize("literal", ("05-03-26", "03-May-26"))
+def test_filter_expression_classifies_hyphenated_short_dates(literal: str) -> None:
+    frame = pd.DataFrame({"created_at": ["2026-05-02", "2026-05-03", "2026-05-04"]})
+
+    assert parse_filter_expression(f"created_at = '{literal}'", frame.columns).mask(
+        frame
+    ).tolist() == [False, True, False]
+
+
+def test_date_filter_handles_mixed_utc_offsets_as_source_wall_dates() -> None:
+    frame = pd.DataFrame(
+        {
+            "created_at": [
+                "2026-03-28T12:00:00+01:00",
+                "2026-03-29T12:00:00+02:00",
+            ]
+        }
+    )
+
+    assert DateFilterSpec("created_at", "on_or_after", "2026-03-29").mask(frame).tolist() == [
+        False,
+        True,
+    ]
 
 
 def test_apply_filter_specs_combines_filters_with_or() -> None:
@@ -412,6 +493,14 @@ def test_parse_filter_expression_resolves_display_aliases() -> None:
 
     assert resolve_filter_column("sample", frame.columns, aliases=aliases) == "sample_id"
     assert filtered.index.tolist() == [2]
+
+
+def test_exact_display_alias_wins_over_casefold_normalized_column_collision() -> None:
+    columns = ("metric", "metric_2", "metric_2_2")
+    aliases = {"Metric": "metric", "Metric_2": "metric_2_2"}
+
+    assert resolve_filter_column("Metric_2", columns, aliases=aliases) == "metric_2_2"
+    assert resolve_filter_column("metric_2", columns, aliases=aliases) == "metric_2"
 
 
 def test_parse_filter_expression_supports_quoted_values_and_delimited_fields() -> None:

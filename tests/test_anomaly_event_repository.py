@@ -102,6 +102,15 @@ def test_anomaly_event_insert_accepts_generator_batches(tmp_path):
     assert len(result.event_ids) == 1
 
 
+def test_anomaly_event_insert_empty_batch_returns_complete_result(tmp_path):
+    result = AnomalyEventRepository(str(tmp_path / "empty-events.db")).insert_events(())
+
+    assert result.processed == 0
+    assert result.inserted == 0
+    assert result.skipped == 0
+    assert result.event_ids == ()
+
+
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [

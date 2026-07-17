@@ -6,6 +6,7 @@ import types
 
 import pandas as pd
 
+from metroliza.analytics.row_table import RowTable
 from tests.industrial_analytics_fixtures import seed_production_analytics_cache
 from modules.contracts import DashboardInteractivityOptions
 
@@ -26,6 +27,7 @@ try:
     from modules.tabular_analytics_service import (
         TabularColumnFilter,
         cleanup_tabular_load_result,
+        load_tabular_analytics_file,
         load_tabular_analytics_files,
     )
 except ImportError as exc:  # pragma: no cover - environment/order dependent
@@ -1294,6 +1296,34 @@ def test_tabular_grouping_summary_and_groupstats_do_not_require_population_group
         assert dialog.groupstats_reason_label.isHidden()
     finally:
         dialog.close()
+
+
+def test_sqlite_grouping_summary_accepts_sparse_row_table_assignments(tmp_path) -> None:
+    _app()
+    input_file = tmp_path / "sqlite_grouping_summary.csv"
+    pd.DataFrame(
+        {
+            "TraceCode": ["TC-001", "TC-002", "TC-003"],
+            "Length mm": [10.0, 10.1, 10.2],
+        }
+    ).to_csv(input_file, index=False)
+    loaded = load_tabular_analytics_file(input_file, force_sqlite=True)
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.tabular_load_result = loaded
+        dialog.set_df_for_grouping(
+            RowTable(
+                rows=((1, "Fixture A"), (2, "Fixture A")),
+                columns=("REPORT_ID", "GROUP"),
+            )
+        )
+        dialog.set_grouping_applied(True)
+        dialog._sync_ui_state()
+
+        assert dialog.grouping_summary_label.text() == "Groups: 1 custom + POPULATION"
+    finally:
+        dialog.close()
+        cleanup_tabular_load_result(loaded)
 
 
 def test_tabular_clear_controls_reset_filters_and_groups(tmp_path) -> None:

@@ -254,3 +254,33 @@ def test_bounded_poll_query_rejects_columns_outside_source_allowlist(tmp_path):
         build_bounded_poll_query(profile=profile, config=_config(profile.id))
 
     assert "cycle_time_s" in str(exc.value)
+
+
+def test_bounded_poll_query_rejects_explicit_segment_outside_source_allowlist(tmp_path):
+    db_path = str(tmp_path / "poller.db")
+    profile = _profile(
+        db_path,
+        allowed_columns=(
+            "event_id",
+            "process_timestamp",
+            "record_id",
+            "cycle_time_s",
+            "station",
+        ),
+    )
+    config = RealtimePollConfig(
+        source_profile_id=profile.id,
+        stream_key="cycle_time",
+        cursor_column="event_id",
+        event_time_column="process_timestamp",
+        record_key_column="record_id",
+        signal_keys=("cycle_time",),
+        signal_columns={"cycle_time": "cycle_time_s"},
+        segment_fields=("station", "unlisted_segment"),
+        context_fields=(),
+    )
+
+    with pytest.raises(RealtimeStreamConfigError) as exc:
+        build_bounded_poll_query(profile=profile, config=config)
+
+    assert "unlisted_segment" in str(exc.value)

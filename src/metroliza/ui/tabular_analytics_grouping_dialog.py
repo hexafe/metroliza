@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+import math
+from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QThread, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QIntValidator
@@ -25,7 +27,7 @@ from PyQt6.QtWidgets import (
 )
 
 from metroliza.ui import ui_theme_tokens
-from metroliza.tabular.csv_summary_utils import CsvGroupingIndex
+from metroliza.analytics.row_table import RowTable
 from metroliza.shared.grouping_filter_core import (
     DateFilterSpec,
     NumberFilterSpec,
@@ -73,6 +75,9 @@ except ImportError:  # pragma: no cover - compatibility with lightweight test st
         create_worker_progress_dialog as create_delayed_worker_progress_dialog,
     )
 
+if TYPE_CHECKING:
+    from metroliza.tabular.csv_summary_utils import CsvGroupingIndex
+
 
 _SELECTOR_PAGE_SIZE = 1000
 _GROUP_MEMBER_PREVIEW_LIMIT = 1000
@@ -119,6 +124,17 @@ _SQLITE_SOURCE_EXCLUDED_COLUMNS = {
     "GROUP_COLOR",
 }
 logger = logging.getLogger(__name__)
+_GROUPING_COLUMNS = (
+    "REPORT_ID",
+    "REFERENCE",
+    "DATE",
+    "SAMPLE_NUMBER",
+    "PART_NAME",
+    "FILENAME",
+    "GROUP",
+    "GROUP_COLOR",
+    "GROUP_KEY",
+)
 
 
 class _LazyPandas:
@@ -129,6 +145,24 @@ class _LazyPandas:
 
 
 pd = _LazyPandas()
+
+
+def _legacy_grouping_index(dataframe, columns):
+    from metroliza.tabular.csv_summary_utils import CsvGroupingIndex
+
+    return CsvGroupingIndex(dataframe, columns)
+
+
+def _is_missing_scalar(value) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, float):
+        return math.isnan(value)
+    value_type = type(value)
+    return (
+        str(getattr(value_type, "__module__", "")).startswith("pandas.")
+        and value_type.__name__ in {"NAType", "NaTType"}
+    )
 
 
 def _release_detached_selector_preview_thread(thread: QThread) -> None:
@@ -210,8 +244,17 @@ class TabularAnalyticsGroupingDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("CSV / Excel groups")
         configure_window_size(self, minimum=(760, 560), initial=(980, 700))
-        self.source_dataframe = dataframe.copy() if isinstance(dataframe, pd.DataFrame) else pd.DataFrame()
         self.sqlite_store = sqlite_store
+        if sqlite_store is not None:
+            self.source_dataframe = (
+                dataframe.copy()
+                if isinstance(dataframe, RowTable)
+                else RowTable(rows=(), columns=tuple(sqlite_store.columns))
+            )
+        else:
+            self.source_dataframe = (
+                dataframe.copy() if isinstance(dataframe, pd.DataFrame) else pd.DataFrame()
+            )
         self._sqlite_assignment_store = (
             TabularGroupingAssignmentStore(sqlite_store) if sqlite_store is not None else None
         )
@@ -606,7 +649,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
 
     def _group_color_for_row(self, row) -> str:
         color = row.get(self.group_color_column, self.default_group_color)
-        if pd.isna(color) or not str(color).strip():
+        if _is_missing_scalar(color) or not str(color).strip():
             return self.default_group_color
         return self._normalized_group_color(str(color))
 
@@ -892,9 +935,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
         except TabularGroupingAssignmentCleanupError as exc:
             logger.warning("Could not clean up tabular grouping assignments: %s", exc)
 
-    def _scoped_source_dataframe(self) -> pd.DataFrame:
+    def _scoped_source_dataframe(self):
         if self._is_sqlite_backed():
-            return pd.DataFrame()
+            return RowTable(rows=(), columns=tuple(self.sqlite_store.columns))
         state = self._selector_filter_state()
         cache_key = (state.text, state.mode, state.match_mode, state.specs, state.parsed_filter)
         cached = vars(self).get("_scoped_source_dataframe_cache")
@@ -1012,19 +1055,11 @@ class TabularAnalyticsGroupingDialog(QDialog):
         frame["GROUP_KEY"] = pd.to_numeric(frame["REPORT_ID"], errors="coerce").astype("Int64")
         return frame
 
-    def _empty_grouping_dataframe(self) -> pd.DataFrame:
+    def _empty_grouping_dataframe(self):
+        if self._is_sqlite_backed():
+            return RowTable(rows=(), columns=_GROUPING_COLUMNS)
         return pd.DataFrame(
-            columns=[
-                "REPORT_ID",
-                "REFERENCE",
-                "DATE",
-                "SAMPLE_NUMBER",
-                "PART_NAME",
-                "FILENAME",
-                "GROUP",
-                self.group_color_column,
-                "GROUP_KEY",
-            ]
+            columns=list(_GROUPING_COLUMNS)
         )
 
     def _base_grouping_dataframe(self) -> pd.DataFrame:
@@ -1053,7 +1088,23 @@ class TabularAnalyticsGroupingDialog(QDialog):
             .tolist()
         )
 
-    def _group_assignments(self, dataframe: pd.DataFrame | None) -> dict[int, tuple[str, str | None]]:
+    def _group_assignments(self, dataframe) -> dict[int, tuple[str, str | None]]:
+        if dataframe is None:
+            return {}
+        if isinstance(dataframe, RowTable):
+            if dataframe.empty or "REPORT_ID" not in dataframe.columns or "GROUP" not in dataframe.columns:
+                return {}
+            assignments: dict[int, tuple[str, str | None]] = {}
+            for row in dataframe.iter_rows(as_dict=True):
+                try:
+                    report_id = int(row.get("REPORT_ID"))
+                except (TypeError, ValueError):
+                    continue
+                group_name = str(row.get("GROUP") or self.default_group).strip()
+                if not group_name or group_name == self.default_group:
+                    continue
+                assignments[report_id] = (group_name, row.get(self.group_color_column))
+            return assignments
         if (
             not isinstance(dataframe, pd.DataFrame)
             or dataframe.empty
@@ -1091,7 +1142,47 @@ class TabularAnalyticsGroupingDialog(QDialog):
         *,
         group_names: list[str] | tuple[str, ...] | None = None,
         colors: list[str] | tuple[str, ...] | None = None,
-    ) -> pd.DataFrame:
+    ):
+        if self._is_sqlite_backed():
+            resolved_groups = (
+                tuple(group_names)
+                if group_names is not None
+                else tuple(
+                    str(group_name or self.default_group).strip() or self.default_group
+                    for _row_id in row_ids
+                )
+            )
+            resolved_colors = (
+                tuple(colors)
+                if colors is not None
+                else tuple(
+                    self._normalized_group_color(color or self.default_group_color)
+                    for _row_id in row_ids
+                )
+            )
+            return RowTable(
+                rows=tuple(
+                    (
+                        int(row_id),
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        str(group),
+                        str(row_color),
+                        int(row_id),
+                    )
+                    for row_id, group, row_color in zip(
+                        row_ids,
+                        resolved_groups,
+                        resolved_colors,
+                        strict=True,
+                    )
+                ),
+                columns=_GROUPING_COLUMNS,
+            )
+
         index = pd.RangeIndex(len(row_ids))
         frame = pd.DataFrame(index=index)
         frame["REPORT_ID"] = pd.Series(row_ids, index=index, dtype="int64")
@@ -1111,19 +1202,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
             else self._normalized_group_color(color or self.default_group_color)
         )
         frame["GROUP_KEY"] = frame["REPORT_ID"]
-        return frame[
-            [
-                "REPORT_ID",
-                "REFERENCE",
-                "DATE",
-                "SAMPLE_NUMBER",
-                "PART_NAME",
-                "FILENAME",
-                "GROUP",
-                self.group_color_column,
-                "GROUP_KEY",
-            ]
-        ]
+        return frame[list(_GROUPING_COLUMNS)]
 
     def _apply_group_assignments(self, assignments: dict[int, tuple[str, str | None]]) -> None:
         temp_assignments = self._temp_assignments()
@@ -1154,7 +1233,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 self._append_sqlite_row_assignment_operation(row_ids, group_name, color)
         self._ensure_group_color_integrity()
 
-    def _materialize_grouping_dataframe(self) -> pd.DataFrame:
+    def _materialize_grouping_dataframe(self):
         assignments = self._temp_assignments()
         if self._is_sqlite_backed():
             records = self._sqlite_grouping_assignment_store().assignments(
@@ -1190,9 +1269,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
         group_name = item.data(Qt.ItemDataRole.UserRole)
         return str(group_name) if group_name is not None else item.text()
 
-    def _filtered_source_for_next_level(self) -> pd.DataFrame:
+    def _filtered_source_for_next_level(self):
         if self._is_sqlite_backed():
-            return pd.DataFrame()
+            return RowTable(rows=(), columns=tuple(self.sqlite_store.columns))
         return self._current_selector_index().filter_rows(self.selected_selector_keys)
 
     def add_selector_column(self) -> None:
@@ -1210,7 +1289,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
             filtered_source = self._filtered_source_for_next_level()
             previous_filter_active = bool(self.selected_selector_keys)
             if previous_filter_active:
-                child_index = CsvGroupingIndex(filtered_source, self.selector_columns)
+                child_index = _legacy_grouping_index(filtered_source, self.selector_columns)
                 self.selected_selector_keys = child_index.child_keys_for_selected(self.selected_selector_keys)
             else:
                 self.selected_selector_keys = set()
@@ -1723,7 +1802,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
             or selector_index.row_count != int(len(source_frame.index))
             or not source_frame.index.equals(self._selector_index_source_frame.index)
         ):
-            self._selector_index = CsvGroupingIndex(source_frame, self.selector_columns)
+            self._selector_index = _legacy_grouping_index(source_frame, self.selector_columns)
             self._selector_index_source_frame = source_frame
         return self._selector_index
 
@@ -2070,7 +2149,11 @@ class TabularAnalyticsGroupingDialog(QDialog):
             ]
             total_rows = len(row_ids)
         rows = self._group_member_rows(row_ids, selected_group)
-        preview = rows.head(_GROUP_MEMBER_PREVIEW_LIMIT)
+        preview = (
+            rows.iloc[:_GROUP_MEMBER_PREVIEW_LIMIT]
+            if isinstance(rows, RowTable)
+            else rows.head(_GROUP_MEMBER_PREVIEW_LIMIT)
+        )
         column_positions = {str(column): index for index, column in enumerate(preview.columns)}
 
         def _row_value(values: tuple[object, ...], column: str) -> object:
@@ -2079,7 +2162,12 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 return None
             return values[position]
 
-        for values in preview.itertuples(index=False, name=None):
+        preview_values = (
+            preview.rows
+            if isinstance(preview, RowTable)
+            else preview.itertuples(index=False, name=None)
+        )
+        for values in preview_values:
             label = str(
                 _row_value(values, "REFERENCE")
                 or _row_value(values, "PART_NAME")
@@ -2093,7 +2181,11 @@ class TabularAnalyticsGroupingDialog(QDialog):
             color = _row_value(values, self.group_color_column)
             self._apply_item_color(
                 item,
-                self.default_group_color if pd.isna(color) or not str(color).strip() else str(color),
+                (
+                    self.default_group_color
+                    if _is_missing_scalar(color) or not str(color).strip()
+                    else str(color)
+                ),
             )
             self.group_members_list.addItem(item)
         if total_rows > _GROUP_MEMBER_PREVIEW_LIMIT:

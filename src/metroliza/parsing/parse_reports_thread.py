@@ -278,10 +278,14 @@ def parse_new_reports(
 
             return parser, time.perf_counter()
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = []
+        executor = ThreadPoolExecutor(max_workers=max_workers)
+        futures = []
+        cancel_requested = False
+
+        try:
             for report in report_paths:
                 if should_cancel():
+                    cancel_requested = True
                     break
                 source_inspection = SourceInspectionContext.from_path(
                     report,
@@ -309,6 +313,7 @@ def parse_new_reports(
             future_context = {future: (report, fingerprint) for report, fingerprint, future in futures}
             for future in as_completed(future_context):
                 if should_cancel():
+                    cancel_requested = True
                     break
 
                 report_parse_start = time.perf_counter()
@@ -346,9 +351,12 @@ def parse_new_reports(
 
                 _emit_processed_progress()
 
+        finally:
             for _, _, future in futures:
                 if not future.done():
                     future.cancel()
+
+            executor.shutdown(wait=not cancel_requested, cancel_futures=True)
 
         return ParseBatchResult(
             parsed_files=parsed_files,

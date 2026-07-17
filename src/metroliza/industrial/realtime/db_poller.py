@@ -172,11 +172,11 @@ def _selected_segment_columns(
     profile: IndustrialSourceProfile,
     config: RealtimePollConfig,
 ) -> tuple[str, ...]:
+    if tuple(config.segment_fields) != tuple(DEFAULT_SEGMENT_FIELDS):
+        return tuple(config.segment_fields)
     allowed = set(profile.allowed_columns or ())
     if allowed:
         return tuple(column for column in config.segment_fields if column in allowed)
-    if tuple(config.segment_fields) != tuple(DEFAULT_SEGMENT_FIELDS):
-        return tuple(config.segment_fields)
     return ()
 
 

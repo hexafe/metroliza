@@ -41,6 +41,7 @@ DetectorRunner = Callable[
 
 _BASELINE_DETECTORS = frozenset({"iqr", "mad_zscore"})
 _HISTORY_DETECTORS = frozenset({"rolling_zscore"})
+_SOURCE_HEALTH_DETECTORS = frozenset({"stale_source"})
 _DETECTOR_HISTORY_LIMIT = 500
 
 
@@ -671,6 +672,11 @@ def _score_detector_events(
     }
     events: list[Any] = []
     baseline_detectors_enabled = bool(_normalized_detector_set(detectors) & _BASELINE_DETECTORS)
+    default_sample_detectors = tuple(
+        detector
+        for detector in detectors
+        if str(detector or "").strip().lower() not in _SOURCE_HEALTH_DETECTORS
+    )
     for (signal_id, segment_key_items), signal_samples in by_signal_segment.items():
         signal = signal_by_id.get(signal_id)
         if signal is None:
@@ -684,12 +690,12 @@ def _score_detector_events(
         try:
             if detector_runner is not None:
                 events.extend(detector_runner(signal_samples, signal, detectors))
-            else:
+            elif default_sample_detectors:
                 events.extend(
                     _default_detector_runner(
                         signal_samples,
                         signal,
-                        detectors,
+                        default_sample_detectors,
                         baseline=baseline,
                         score_sample_ids=score_sample_ids,
                     )

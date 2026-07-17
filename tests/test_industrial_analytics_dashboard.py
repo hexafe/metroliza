@@ -392,6 +392,8 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     assert "dashboard-visual-dialog" in html_text
     assert "metroliza-dashboard-visuals" in html_text
     assert "applyDashboardVisualsToPlotlySpec(baseSpec)" in html_text
+    assert "applyDashboardPointMarksToPlotlySpec(visualSpec, chartKey)" in html_text
+    assert "target.dataset.dashboardChartKey = String(chart.id || '');" in html_text
     assert '"initialSettings":{' in html_text
     assert '"preset":"custom"' in html_text
     assert '"palette_preset":"custom"' in html_text
@@ -406,6 +408,7 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
         'class="plotly-chart" id="histogram-cycle_time_s"' in html_text
         or 'class="chart-image"' in html_text
     )
+    assert 'data-dashboard-chart-key="histogram-cycle_time_s"' in html_text
     assert "Image snapshot" in html_text
     assert '<details class="chart-stats">' in html_text
     assert "<summary>Chart statistics (" in html_text
@@ -447,6 +450,43 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     for chart in chart_payload:
         if chart["id"] in {"histogram-cycle_time_s", "violin-cycle_time_s", "box-cycle_time_s"}:
             assert chart["plotly_spec"]["config"].get("staticPlot") is not True
+
+
+def test_industrial_plotly_runtime_applies_point_marks_after_visuals_before_theme() -> None:
+    runtime = dashboard_module._render_plotly_runtime("[]")
+
+    visual_step = "const visualSpec = applyDashboardVisualsToPlotlySpec(baseSpec);"
+    mark_step = "applyDashboardPointMarksToPlotlySpec(visualSpec, chartKey)"
+    theme_step = "const spec = applyThemeToPlotlySpec(markedSpec);"
+    assert runtime.index(visual_step) < runtime.index(mark_step) < runtime.index(theme_step)
+    assert "target.dataset.dashboardChartKey = String(chart.id || '');" in runtime
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        {},
+        {"base64": base64.b64encode(b"image").decode("ascii"), "mime_type": "image/png"},
+    ],
+)
+def test_industrial_plotly_chart_shell_uses_stable_unique_chart_key(image) -> None:
+    chart_ids = ("histogram-cycle-time-s", "violin-cycle-time-s")
+    markups = [
+        dashboard_module._render_chart_shell(
+            {
+                "id": chart_id,
+                "title": "Cycle time",
+                "image": image,
+                "plotly_spec": {"data": [], "layout": {}},
+            }
+        )
+        for chart_id in chart_ids
+    ]
+
+    for chart_id, markup in zip(chart_ids, markups, strict=True):
+        assert f'id="{chart_id}"' in markup
+        assert f'data-dashboard-chart-key="{chart_id}"' in markup
+    assert markups[0] != markups[1]
 
 
 def test_write_production_dashboard_omits_plotly_when_payload_exceeds_budget(tmp_path) -> None:

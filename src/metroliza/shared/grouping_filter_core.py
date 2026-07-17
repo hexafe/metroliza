@@ -8,8 +8,12 @@ specs for tabular DataFrame views.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
+import math
 import re
 from typing import Any, Iterable, Literal, Mapping, Protocol
+
+from metroliza.shared.datetime_parsing import parse_datetime_literal
 
 
 FilterMatchMode = Literal["and", "or"]
@@ -610,11 +614,24 @@ def resolve_filter_column(
 
     requested = _undelimit_filter_field(str(column or "").strip())
     column_list = tuple(str(item) for item in columns)
-    resolved = _find_column_match(requested, column_list)
+    resolved = _find_exact_column_match(requested, column_list)
     if resolved is not None:
         return resolved
 
+    for alias, target in _iter_filter_aliases(aliases):
+        if str(alias).strip() != requested:
+            continue
+        target_text = str(target).strip()
+        resolved = _find_column_match(target_text, column_list)
+        if resolved is None:
+            raise KeyError(f"Filter alias {alias!r} points to missing DataFrame column: {target}")
+        return resolved
+
     requested_key = requested.casefold()
+    for candidate in column_list:
+        if candidate.casefold() == requested_key:
+            return candidate
+
     for alias, target in _iter_filter_aliases(aliases):
         if str(alias).strip().casefold() != requested_key:
             continue
@@ -836,24 +853,19 @@ def _parse_filter_condition(
 ) -> DataFrameFilterSpec:
     column = resolve_filter_column(column_text, columns, aliases=aliases)
 
-    looks_date_like = bool(re.search(r"\d{4}", value) or any(marker in value for marker in ("-", "/", ":")))
-    date_value = pd.to_datetime(
-        pd.Series([value]),
-        errors="coerce",
-        dayfirst=dayfirst,
-        format="mixed",
-    ).iloc[0]
-    number_value = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
-    if not pd.isna(number_value) and not any(marker in str(value) for marker in ("-", "/", ":")):
+    looks_date_like = _looks_date_like(value)
+    date_value = _parse_scalar_datetime(value, dayfirst=dayfirst)
+    number_value = _parse_scalar_number(value)
+    if number_value is not None and not any(marker in str(value) for marker in ("-", "/", ":")):
         return NumberFilterSpec(column, _symbol_to_number_operator(operator), value)
-    if looks_date_like and not pd.isna(date_value):
+    if looks_date_like and date_value is not None:
         return DateFilterSpec(
             column,
             _symbol_to_date_operator(operator),
             value,
             dayfirst=dayfirst,
         )
-    if not pd.isna(number_value):
+    if number_value is not None:
         return NumberFilterSpec(column, _symbol_to_number_operator(operator), value)
     if operator in {"=", "!="}:
         return TextFilterSpec(
@@ -1035,12 +1047,19 @@ def _iter_filter_aliases(aliases: FilterAliases | None) -> tuple[tuple[str, str]
 
 
 def _find_column_match(requested: str, columns: Iterable[str]) -> str | None:
-    for candidate in columns:
-        if candidate == requested:
-            return candidate
+    exact = _find_exact_column_match(requested, columns)
+    if exact is not None:
+        return exact
     requested_key = requested.casefold()
     for candidate in columns:
         if candidate.casefold() == requested_key:
+            return candidate
+    return None
+
+
+def _find_exact_column_match(requested: str, columns: Iterable[str]) -> str | None:
+    for candidate in columns:
+        if candidate == requested:
             return candidate
     return None
 
@@ -1129,23 +1148,16 @@ def membership_value_kind(
     """Return the shared coercion kind used by membership filter consumers."""
 
     if values and all(_looks_date_like(value) for value in values):
-        parsed_dates = pd.to_datetime(
-            pd.Series(list(values)),
-            errors="coerce",
-            dayfirst=dayfirst,
-            format="mixed",
-        )
-        if parsed_dates.notna().all():
+        if all(_parse_scalar_datetime(value, dayfirst=dayfirst) is not None for value in values):
             return "date"
-    parsed_numbers = pd.to_numeric(pd.Series(list(values)), errors="coerce")
-    if values and parsed_numbers.notna().all():
+    if values and all(_parse_scalar_number(value) is not None for value in values):
         return "number"
     return "text"
 
 
 def _looks_date_like(value: Any) -> bool:
     text = str(value or "").strip()
-    return bool(re.search(r"\d{4}", text) or any(marker in text for marker in ("/", ":")))
+    return bool(re.search(r"\d{4}", text) or any(marker in text for marker in ("-", "/", ":")))
 
 
 def _symbol_to_number_operator(operator: str) -> str:
@@ -1171,7 +1183,7 @@ def _symbol_to_date_operator(operator: str) -> str:
 
 
 def _normalize_grouping_value(value: Any, *, blank_value: str) -> str:
-    if pd.isna(value):
+    if _is_missing_scalar(value):
         return blank_value
     text = str(value).strip()
     return text or blank_value
@@ -1190,23 +1202,77 @@ def _require_column(data_frame: pd.DataFrame, column: str) -> None:
 def _coerce_number(value: float | int | str | None, *, field_name: str) -> float:
     if value is None:
         raise ValueError(f"{field_name} is required for this number filter")
-    number = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
-    if pd.isna(number):
+    number = _parse_scalar_number(value)
+    if number is None:
         raise ValueError(f"{field_name} must be numeric")
-    return float(number)
+    return number
 
 
-def _coerce_date(value: Any, *, dayfirst: bool, field_name: str) -> pd.Timestamp:
+def _coerce_date(value: Any, *, dayfirst: bool, field_name: str) -> datetime:
     if value is None:
         raise ValueError(f"{field_name} is required for this date filter")
-    parsed = pd.to_datetime(value, errors="coerce", dayfirst=dayfirst, format="mixed")
-    if pd.isna(parsed):
+    parsed = _parse_scalar_datetime(value, dayfirst=dayfirst)
+    if parsed is None:
         raise ValueError(f"{field_name} must be date-like")
-    return pd.Timestamp(parsed).normalize()
+    return parsed.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+
+
+def _parse_scalar_number(value: Any) -> float | None:
+    """Parse one numeric filter literal without importing pandas."""
+
+    if value is None or isinstance(value, bool):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        number = float(text)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _parse_scalar_datetime(value: Any, *, dayfirst: bool) -> datetime | None:
+    """Parse one date literal using the stable formats accepted by filter expressions."""
+
+    return parse_datetime_literal(value, dayfirst=dayfirst)
+
+
+def _is_missing_scalar(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, float):
+        return math.isnan(value)
+    value_type = type(value)
+    module = str(getattr(value_type, "__module__", ""))
+    if module.startswith("pandas.") and value_type.__name__ in {"NAType", "NaTType"}:
+        return True
+    try:
+        unequal = value != value
+        return bool(unequal) if isinstance(unequal, bool) else False
+    except (TypeError, ValueError):
+        return False
 
 
 def _coerce_date_series(series: pd.Series, *, dayfirst: bool) -> pd.Series:
-    return pd.to_datetime(series, errors="coerce", dayfirst=dayfirst, format="mixed").dt.normalize()
+    try:
+        dates = pd.to_datetime(
+            series,
+            errors="coerce",
+            dayfirst=dayfirst,
+            format="mixed",
+        ).dt.normalize()
+    except (AttributeError, ValueError):
+        dates = pd.Series(
+            (parse_datetime_literal(value, dayfirst=dayfirst) for value in series),
+            index=series.index,
+            dtype="datetime64[ns]",
+        ).dt.normalize()
+    if dates.dt.tz is not None:
+        # Date filters compare calendar days, so discard the common source timezone only
+        # after normalizing.  Scalar filter values follow the same wall-date semantics.
+        dates = dates.dt.tz_localize(None)
+    return dates
 
 
 def _normalize_match_mode(match_mode: str) -> FilterMatchMode:

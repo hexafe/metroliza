@@ -1,6 +1,7 @@
 from metroliza.industrial.anomaly.baseline_repository import BaselineRepository, IndustrialBaseline
 from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
 from metroliza.industrial.anomaly.event_repository import AnomalyEventRepository
+from metroliza.industrial.realtime import realtime_service
 from metroliza.industrial.realtime.event_stream_repository import RealtimeEventStreamRepository
 from metroliza.industrial.realtime.db_poller import SourceReadResult
 from metroliza.industrial.realtime.offset_store import StreamOffsetStore
@@ -126,6 +127,71 @@ def test_realtime_poll_cycle_creates_explainable_detector_events(tmp_path):
     assert result.detector_events_created == 1
     assert events[0].severity == "critical"
     assert "above USL" in events[0].explanation
+
+
+def test_default_detector_runner_supplies_current_time_to_stale_source(monkeypatch):
+    current_time = "2026-06-13T10:20:00Z"
+    monkeypatch.setattr(realtime_service, "utc_timestamp", lambda: current_time)
+    signal = SignalDefinition(
+        id=10,
+        source_profile_id=1,
+        signal_key="cycle_time",
+        metric_name="cycle_time_s",
+    )
+    sample = IndustrialSample(
+        id=20,
+        source_profile_id=1,
+        signal_id=10,
+        source_record_key="ROW-20",
+        event_time="2026-06-13T10:00:00Z",
+        metric_name="cycle_time_s",
+        value=10.0,
+    )
+
+    events = realtime_service._default_detector_runner(
+        (sample,),
+        signal,
+        ("stale_source",),
+    )
+
+    assert len(events) == 1
+    assert events[0].detector_key == "stale_source"
+    assert events[0].context["now"] == current_time
+
+
+def test_realtime_poll_cycle_defers_stale_source_to_source_health(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "source-health-stale.db")
+    profile = _profile(db_path)
+    monkeypatch.setattr(realtime_service, "utc_timestamp", lambda: "2026-06-13T10:20:00Z")
+
+    result = run_polling_cycle(
+        database=db_path,
+        profile=profile,
+        config=_config(profile.id, detectors=("stale_source",)),
+        adapter=FakeAdapter(
+            [
+                {
+                    "event_id": "100",
+                    "record_id": "row-100",
+                    "process_timestamp": "2026-06-13T10:00:00Z",
+                    "cycle_time_s": "10",
+                    "station": "S1",
+                },
+                {
+                    "event_id": "101",
+                    "record_id": "row-101",
+                    "process_timestamp": "2026-06-13T10:01:00Z",
+                    "cycle_time_s": "11",
+                    "station": "S1",
+                },
+            ]
+        ),
+    )
+
+    assert result.status == "completed"
+    assert result.samples_inserted == 2
+    assert result.detector_events_created == 0
+    assert AnomalyEventRepository(db_path).list_events(detector_key="stale_source") == []
 
 
 def test_realtime_poll_cycle_loads_segment_baseline_for_iqr_detector(tmp_path):
@@ -439,6 +505,50 @@ def test_realtime_poll_cycle_does_not_advance_offset_to_trailing_unkeyed_row(tmp
     assert offset.cursor_value == "100"
     assert offset.cursor_tie_breaker_column == "record_id"
     assert offset.cursor_tie_breaker_value == "row-100"
+    assert offset.event_time_watermark == "2026-06-13T10:00:00.000000Z"
+
+
+def test_realtime_poll_cycle_advances_past_keyed_row_with_missing_event_time(tmp_path):
+    db_path = str(tmp_path / "trailing-missing-event-time.db")
+    profile = _profile(db_path)
+    config = _config(profile.id)
+
+    result = run_polling_cycle(
+        database=db_path,
+        profile=profile,
+        config=config,
+        adapter=FakeAdapter(
+            [
+                {
+                    "event_id": "100",
+                    "record_id": "row-100",
+                    "process_timestamp": "2026-06-13T10:00:00Z",
+                    "cycle_time_s": "10",
+                    "station": "S1",
+                },
+                {
+                    "event_id": "101",
+                    "record_id": "row-101",
+                    "process_timestamp": "",
+                    "cycle_time_s": "11",
+                    "station": "S1",
+                },
+            ]
+        ),
+        detector_runner=lambda samples, signal, detectors: [],
+    )
+    offset = StreamOffsetStore(db_path).get_offset(
+        source_profile_id=profile.id,
+        stream_key="cycle_time",
+    )
+
+    assert result.status == "completed"
+    assert result.rows_fetched == 2
+    assert result.samples_inserted == 1
+    assert result.cursor_value == "101"
+    assert result.event_time_watermark == "2026-06-13T10:00:00.000000Z"
+    assert offset.cursor_value == "101"
+    assert offset.cursor_tie_breaker_value == "row-101"
     assert offset.event_time_watermark == "2026-06-13T10:00:00.000000Z"
 
 

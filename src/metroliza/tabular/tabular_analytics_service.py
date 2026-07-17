@@ -6,17 +6,16 @@ from collections.abc import Callable, Iterable, Mapping
 import csv
 from dataclasses import dataclass, field
 from datetime import date, datetime
+import math
 from pathlib import Path
 import re
 import sqlite3
+import sys
 import tempfile
 import time
 from typing import TYPE_CHECKING, Any
 
-from metroliza.tabular.csv_summary_utils import (
-    filter_csv_summary_by_group_keys,
-    detect_csv_read_configs,
-)
+from metroliza.analytics.row_table import RowTable, coerce_to_row_table
 from metroliza.reports.db import (
     QueryResult,
     QueryScope,
@@ -28,6 +27,7 @@ from metroliza.reports.db import (
     sqlite_connection_scope,
 )
 from metroliza.shared.excel_sheet_utils import unique_sheet_name
+from metroliza.shared.datetime_parsing import parse_datetime_literal
 from metroliza.exporting.xlsx_writer_policy import pandas_xlsxwriter_engine_kwargs
 from metroliza.industrial.industrial_analytics_state import (
     ProductionChartSelection,
@@ -128,6 +128,7 @@ _COMPILED_SQLITE_FILTER_SQL_ATTRS = ("clause", "where_sql", "sqlite_where_sql", 
 _COMPILED_SQLITE_FILTER_COLUMN_ATTRS = ("columns", "referenced_columns", "source_columns")
 TabularProgressCallback = Callable[[dict[str, Any]], None]
 TabularCancelCheck = Callable[[], bool]
+_HeaderIdentity = tuple[str, int]
 
 
 class _LazyPandas:
@@ -326,6 +327,13 @@ class TabularSqliteStore:
 
         scope = self.query_scope(**scope_kwargs)
         return read_query_scope_result(self.path, scope)
+
+    def read_row_table(self, **scope_kwargs: Any) -> RowTable:
+        """Read selected rows through the pandas-free runtime table contract."""
+
+        result = self.read_query_result(**scope_kwargs)
+        table = coerce_to_row_table(result)
+        return _restore_sqlite_row_table(table, metric_columns=self.metric_columns)
 
     def iter_row_batches(
         self,
@@ -1424,7 +1432,7 @@ class TabularSqliteStore:
 class TabularAnalyticsLoadResult:
     """Loaded CSV/Excel table normalized for shared analytics."""
 
-    dataframe: pd.DataFrame
+    dataframe: Any
     metric_candidates: tuple[ProductionMetricCandidate, ...]
     diagnostics: tuple[ProductionAnalyticsDiagnostic, ...] = ()
     column_mapping: dict[str, str] = field(default_factory=dict)
@@ -1441,6 +1449,7 @@ class TabularAnalyticsLoadResult:
     sqlite_store: TabularSqliteStore | None = None
     row_count: int | None = None
     load_timings_s: dict[str, float] = field(default_factory=dict)
+    row_table: RowTable | None = None
 
 
 @dataclass(frozen=True)
@@ -1700,8 +1709,8 @@ def _load_tabular_files_into_sqlite(
     diagnostics: list[ProductionAnalyticsDiagnostic] = []
     sampled_specs: list[dict[str, Any]] = []
     file_specs: list[dict[str, Any]] = []
-    global_original_columns: list[str] = []
-    seen_original_columns: set[str] = set()
+    global_header_identities: list[_HeaderIdentity] = []
+    seen_header_identities: set[_HeaderIdentity] = set()
     date_filter_source_columns: set[str] = set()
     timestamp_field: str | None = None
     reference_field: str | None = None
@@ -1720,24 +1729,28 @@ def _load_tabular_files_into_sqlite(
         sampled = _sample_tabular_source(path, sheet_name=sheet_name)
         if sampled["sheet_name"] is not None:
             resolved_sheet_name = str(sampled["sheet_name"])
-        for column in sampled["header"]:
-            original = str(column)
-            if original in seen_original_columns:
+        header_identities = _header_identities(sampled["header"])
+        for identity in header_identities:
+            if identity in seen_header_identities:
                 continue
-            seen_original_columns.add(original)
-            global_original_columns.append(original)
-        sampled_specs.append({"path": path, **sampled})
+            seen_header_identities.add(identity)
+            global_header_identities.append(identity)
+        sampled_specs.append({"path": path, "header_identities": header_identities, **sampled})
         _record_load_timing("sampling", sampling_started_at)
 
-    global_mapping = _reserve_internal_column_names(_normalize_column_names(global_original_columns))
-    source_columns = list(dict.fromkeys(global_mapping.values()))
+    identity_mapping = _reserve_internal_column_names(
+        _normalize_header_identities(global_header_identities)
+    )
+    global_mapping = _first_raw_label_aliases(global_header_identities, identity_mapping)
+    source_columns = [identity_mapping[identity] for identity in global_header_identities]
 
     for sampled_spec in sampled_specs:
         header = tuple(str(column) for column in sampled_spec["header"])
-        mapping = {column: global_mapping[column] for column in header if column in global_mapping}
-        normalized_columns = tuple(mapping[column] for column in header if column in mapping)
+        header_identities = tuple(sampled_spec["header_identities"])
+        normalized_columns = tuple(identity_mapping[identity] for identity in header_identities)
+        mapping = _first_raw_label_aliases(header_identities, identity_mapping)
         normalized_sample_rows = [
-            _normalize_raw_row(header, row, mapping) for row in sampled_spec["sample_rows"]
+            _normalize_raw_row(normalized_columns, row) for row in sampled_spec["sample_rows"]
         ]
         file_timestamp_field = _resolve_requested_column(timestamp_column, mapping, normalized_columns)
         if file_timestamp_field is None:
@@ -1769,6 +1782,7 @@ def _load_tabular_files_into_sqlite(
                 "csv_config": sampled_spec["csv_config"],
                 "header": header,
                 "mapping": mapping,
+                "normalized_columns": normalized_columns,
                 "timestamp_field": file_timestamp_field,
                 "reference_field": file_reference_field,
                 "sheet_name": sampled_spec["sheet_name"],
@@ -1866,7 +1880,7 @@ def _load_tabular_files_into_sqlite(
                     _record_load_timing("chunk_read", chunk_started_at)
                     _raise_if_tabular_load_cancelled(cancel_check)
                     normalize_started_at = time.perf_counter()
-                    normalized_row = _normalize_raw_row(spec["header"], raw_row, spec["mapping"])
+                    normalized_row = _normalize_raw_row(spec["normalized_columns"], raw_row)
                     _record_load_timing("chunk_normalize", normalize_started_at)
                     row_started_at = time.perf_counter()
                     row_number += 1
@@ -2059,7 +2073,8 @@ def _load_tabular_files_into_sqlite(
         )
         _raise_if_tabular_load_cancelled(cancel_check)
         preview_started_at = time.perf_counter()
-        preview = store.read_dataframe(limit=TABULAR_SQLITE_PREVIEW_ROWS)
+        preview_rows = store.read_row_table(limit=TABULAR_SQLITE_PREVIEW_ROWS)
+        preview = _legacy_preview_if_pandas_is_already_loaded(preview_rows)
         _record_load_timing("preview", preview_started_at)
         _emit_tabular_load_progress(
             progress_callback,
@@ -2081,6 +2096,7 @@ def _load_tabular_files_into_sqlite(
         return TabularAnalyticsLoadResult(
             dataframe=preview,
             metric_candidates=metric_candidates,
+            row_table=preview_rows,
             diagnostics=tuple(diagnostics),
             column_mapping=global_mapping,
             source_file=str(paths[0]),
@@ -2233,7 +2249,14 @@ def _iter_excel_rows(
             start = 0 if include_header else 1
             for row_index in range(start, worksheet.nrows):
                 yield tuple(
-                    _display_cell_text(worksheet.cell_value(row_index, column_index))
+                    _display_xlrd_cell(
+                        xlrd,
+                        workbook,
+                        worksheet,
+                        path=path,
+                        row_index=row_index,
+                        column_index=column_index,
+                    )
                     for column_index in range(worksheet.ncols)
                 )
         finally:
@@ -2242,11 +2265,51 @@ def _iter_excel_rows(
     raise ValueError("Unsupported analytics file type. Use CSV or Excel.")
 
 
-def _normalize_column_names(columns: Iterable[Any]) -> dict[str, str]:
-    mapping: dict[str, str] = {}
+def _display_xlrd_cell(
+    xlrd_module: Any,
+    workbook: Any,
+    worksheet: Any,
+    *,
+    path: Path,
+    row_index: int,
+    column_index: int,
+) -> str:
+    """Render one BIFF cell, preserving Excel date semantics and workbook epoch."""
+
+    cell = worksheet.cell(row_index, column_index)
+    value = cell.value
+    if cell.ctype == xlrd_module.XL_CELL_DATE:
+        try:
+            value = xlrd_module.xldate_as_datetime(value, workbook.datemode)
+        except (TypeError, ValueError, OverflowError) as exc:
+            sheet_name = str(getattr(worksheet, "name", "") or "<unknown>")
+            raise ValueError(
+                f"Invalid Excel date in {path.name!r}, sheet {sheet_name!r}, "
+                f"row {row_index + 1}, column {column_index + 1}: {exc}"
+            ) from exc
+    return _display_cell_text(value)
+
+
+def _header_identities(columns: Iterable[Any]) -> tuple[_HeaderIdentity, ...]:
+    """Identify duplicate headers by raw label and left-to-right occurrence."""
+
+    occurrences: dict[str, int] = {}
+    identities: list[_HeaderIdentity] = []
+    for column in columns:
+        raw_label = str(column)
+        occurrence = occurrences.get(raw_label, 0) + 1
+        occurrences[raw_label] = occurrence
+        identities.append((raw_label, occurrence))
+    return tuple(identities)
+
+
+def _normalize_header_identities(
+    identities: Iterable[_HeaderIdentity],
+) -> dict[_HeaderIdentity, str]:
+    mapping: dict[_HeaderIdentity, str] = {}
     used: set[str] = set()
-    for index, column in enumerate(columns, start=1):
-        original = str(column)
+    for index, identity in enumerate(identities, start=1):
+        original, _occurrence = identity
         candidate = _safe_column_name(original, fallback=f"column_{index}")
         base = candidate
         suffix = 1
@@ -2254,14 +2317,32 @@ def _normalize_column_names(columns: Iterable[Any]) -> dict[str, str]:
             suffix += 1
             candidate = f"{base}_{suffix}"
         used.add(candidate.casefold())
-        mapping[original] = candidate
+        mapping[identity] = candidate
     return mapping
 
 
-def _reserve_internal_column_names(mapping: dict[str, str]) -> dict[str, str]:
+def _normalize_column_names(columns: Iterable[Any]) -> dict[str, str]:
+    """Return legacy first-label aliases for a positionally normalized header."""
+
+    identities = _header_identities(columns)
+    normalized = _normalize_header_identities(identities)
+    return _first_raw_label_aliases(identities, normalized)
+
+
+def _first_raw_label_aliases(
+    identities: Iterable[_HeaderIdentity],
+    mapping: Mapping[_HeaderIdentity, str],
+) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for identity in identities:
+        aliases.setdefault(identity[0], mapping[identity])
+    return aliases
+
+
+def _reserve_internal_column_names(mapping: dict[Any, str]) -> dict[Any, str]:
     used = {value.casefold() for value in mapping.values()}
     internal_names = {name.casefold() for name in _INTERNAL_COLUMNS}
-    renamed: dict[str, str] = {}
+    renamed: dict[Any, str] = {}
     for original, normalized in mapping.items():
         if normalized.casefold() not in internal_names:
             renamed[original] = normalized
@@ -2278,16 +2359,12 @@ def _reserve_internal_column_names(mapping: dict[str, str]) -> dict[str, str]:
 
 
 def _normalize_raw_row(
-    header: Iterable[Any],
+    normalized_columns: Iterable[str],
     row: Iterable[Any],
-    mapping: Mapping[str, str],
 ) -> dict[str, str | None]:
     values = tuple(row)
     normalized: dict[str, str | None] = {}
-    for index, original in enumerate(header):
-        column = mapping.get(str(original))
-        if column is None:
-            continue
+    for index, column in enumerate(normalized_columns):
         value = values[index] if index < len(values) else None
         normalized[column] = _display_cell_text(value) if value is not None else None
     return normalized
@@ -2352,31 +2429,8 @@ def _row_values_look_like_timestamp(rows: Iterable[Mapping[str, Any]], column: s
     return (parsed_count / len(values)) >= 0.6
 
 
-def _parse_tabular_datetime(value: Any) -> datetime | None:
-    text = _display_cell_text(value)
-    if not text:
-        return None
-    normalized = text.strip().replace("Z", "+00:00")
-    try:
-        return datetime.fromisoformat(normalized).replace(tzinfo=None)
-    except ValueError:
-        pass
-    for fmt in (
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%d %H:%M",
-        "%Y-%m-%d",
-        "%m/%d/%Y %H:%M:%S",
-        "%m/%d/%Y %H:%M",
-        "%m/%d/%Y",
-        "%d/%m/%Y %H:%M:%S",
-        "%d/%m/%Y %H:%M",
-        "%d/%m/%Y",
-    ):
-        try:
-            return datetime.strptime(text, fmt)
-        except ValueError:
-            continue
-    return None
+def _parse_tabular_datetime(value: Any, *, dayfirst: bool = False) -> datetime | None:
+    return parse_datetime_literal(_display_cell_text(value), dayfirst=dayfirst)
 
 
 def _sqlite_datetime_text_value(value: datetime | None) -> str | None:
@@ -2394,9 +2448,10 @@ def _parse_tabular_number(value: Any, *, decimal: str = ".") -> float | None:
     else:
         text = text.replace(",", "")
     try:
-        return float(text)
+        parsed = float(text)
     except ValueError:
         return None
+    return parsed if math.isfinite(parsed) else None
 
 
 def _looks_like_identifier_number(value: str) -> bool:
@@ -2456,8 +2511,44 @@ def _append_metric_sample_text(stats: dict[str, Any], text: str) -> None:
 
 
 def _detect_csv_config(path: Path) -> dict[str, Any]:
-    best_config = detect_csv_read_configs(path)[0]
-    return {"delimiter": best_config["delimiter"], "decimal": best_config["decimal"]}
+    candidates: list[dict[str, Any]] = []
+    for delimiter in (";", ",", "\t", "|"):
+        for decimal in (",", "."):
+            try:
+                header, rows = _read_csv_header_and_sample(
+                    path,
+                    delimiter=delimiter,
+                    sample_size=200,
+                )
+            except (OSError, UnicodeError, csv.Error):
+                continue
+            numeric_cells = sum(
+                1
+                for row in rows
+                for value in row[: len(header)]
+                if _parse_tabular_number(value, decimal=decimal) is not None
+            )
+            candidates.append(
+                {
+                    "delimiter": delimiter,
+                    "decimal": decimal,
+                    "score": len(header) * 10 + numeric_cells,
+                    "preference": int(
+                        (delimiter == "," and decimal == ".")
+                        or (delimiter == ";" and decimal == ",")
+                    ),
+                }
+            )
+    if not candidates:
+        raise ValueError(f"Unable to read CSV file: {path}")
+    best = max(candidates, key=lambda item: (item["score"], item["preference"]))
+    return {"delimiter": best["delimiter"], "decimal": best["decimal"]}
+
+
+def _legacy_filter_csv_summary_by_group_keys(dataframe, columns, selected_keys):
+    from metroliza.tabular.csv_summary_utils import filter_csv_summary_by_group_keys
+
+    return filter_csv_summary_by_group_keys(dataframe, columns, selected_keys)
 
 
 def _raise_if_tabular_load_cancelled(cancel_check: TabularCancelCheck | None) -> None:
@@ -2894,7 +2985,7 @@ def apply_tabular_row_filter(
             )
             mask &= parsed_expression.mask(dataframe).fillna(False)
         if columns and selected_keys:
-            grouped = filter_csv_summary_by_group_keys(dataframe, columns, selected_keys)
+            grouped = _legacy_filter_csv_summary_by_group_keys(dataframe, columns, selected_keys)
             mask &= dataframe.index.isin(grouped.index)
         filtered = dataframe.loc[mask].copy()
         output_count = int(len(filtered.index))
@@ -2944,7 +3035,7 @@ def apply_tabular_row_filter(
             output_row_count=input_count,
         )
 
-    filtered = filter_csv_summary_by_group_keys(dataframe, columns, selected_keys)
+    filtered = _legacy_filter_csv_summary_by_group_keys(dataframe, columns, selected_keys)
     output_count = int(len(filtered.index))
     diagnostic = ProductionAnalyticsDiagnostic(
         severity="info",
@@ -3049,6 +3140,97 @@ def materialize_tabular_dataframe(
         )
     return TabularFilterResult(
         dataframe=dataframe.reset_index(drop=True),
+        diagnostics=diagnostics,
+        applied=is_applied,
+        input_row_count=input_count,
+        output_row_count=output_count,
+    )
+
+
+def materialize_tabular_rows(
+    loaded: TabularAnalyticsLoadResult,
+    *,
+    filter_columns: tuple[str, ...] | list[str] | None = None,
+    selected_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
+    column_filters: tuple[TabularColumnFilter, ...] | list[TabularColumnFilter] | None = None,
+    row_filter_expression: str | None = None,
+    row_filter_aliases: Mapping[str, str] | None = None,
+    required_columns: tuple[str, ...] | list[str] | None = None,
+) -> TabularFilterResult:
+    """Materialize filtered runtime rows without importing pandas.
+
+    ``materialize_tabular_dataframe`` remains the explicit compatibility adapter for
+    analytics implementations that still require a pandas DataFrame.
+    """
+
+    store = loaded.sqlite_store
+    if store is None:
+        if loaded.row_table is not None and not any(
+            (
+                filter_columns,
+                selected_filter_keys,
+                column_filters,
+                str(row_filter_expression or "").strip(),
+            )
+        ):
+            table = loaded.row_table
+            if required_columns is not None:
+                columns = _normalized_tabular_required_columns(table.columns, required_columns)
+                table = table[columns]
+            return TabularFilterResult(
+                dataframe=table,
+                input_row_count=len(table),
+                output_row_count=len(table),
+            )
+        raise RuntimeError(
+            "Pandas-free tabular materialization requires a TabularSqliteStore; "
+            "use materialize_tabular_dataframe for a legacy in-memory DataFrame load."
+        )
+
+    normalized_filters = _normalized_tabular_column_filters_for_columns(
+        store.columns,
+        column_filters,
+    )
+    raw_expression = str(row_filter_expression or "").strip()
+    legacy_columns = tuple(column for column in (filter_columns or ()) if column in store.columns)
+    legacy_keys = tuple(
+        tuple(str(part) for part in key)
+        for key in (selected_filter_keys or ())
+        if isinstance(key, (list, tuple)) and len(key) == len(legacy_columns)
+    )
+    is_applied = bool(normalized_filters or raw_expression or (legacy_columns and legacy_keys))
+    table = store.read_row_table(
+        filter_columns=legacy_columns,
+        selected_filter_keys=legacy_keys,
+        column_filters=normalized_filters,
+        grouping_filter_expression=raw_expression,
+        grouping_filter_aliases=row_filter_aliases or loaded.column_mapping,
+        columns=required_columns,
+    )
+    input_count = int(store.row_count)
+    output_count = len(table)
+    diagnostics: tuple[ProductionAnalyticsDiagnostic, ...] = ()
+    if is_applied:
+        diagnostics = (
+            ProductionAnalyticsDiagnostic(
+                severity="info",
+                code="tabular_filters_applied",
+                message=(
+                    f"CSV/Excel row filter reduced rows from {input_count} to {output_count}."
+                ),
+                context={
+                    "input_row_count": input_count,
+                    "output_row_count": output_count,
+                    **(
+                        {"row_filter_expression": raw_expression}
+                        if raw_expression
+                        else {}
+                    ),
+                },
+            ),
+        )
+    return TabularFilterResult(
+        dataframe=table,
         diagnostics=diagnostics,
         applied=is_applied,
         input_row_count=input_count,
@@ -3203,6 +3385,53 @@ def _restore_sqlite_dataframe(
         if column in dataframe.columns:
             dataframe[column] = pd.to_numeric(dataframe[column], errors="coerce")
     return dataframe
+
+
+def _restore_sqlite_row_table(
+    table: RowTable,
+    *,
+    metric_columns: tuple[str, ...] = (),
+) -> RowTable:
+    """Restore SQLite storage types without crossing the pandas adapter boundary."""
+
+    process_position = (
+        table.columns.index("process_datetime") if "process_datetime" in table.columns else None
+    )
+    row_number_position = (
+        table.columns.index("source_row_number") if "source_row_number" in table.columns else None
+    )
+    metric_positions = {
+        table.columns.index(column)
+        for column in metric_columns
+        if column in table.columns
+    }
+    restored_rows: list[tuple[Any, ...]] = []
+    for row in table.rows:
+        restored = list(row)
+        if process_position is not None:
+            restored[process_position] = _parse_tabular_datetime(restored[process_position])
+        if row_number_position is not None and restored[row_number_position] is not None:
+            try:
+                restored[row_number_position] = int(restored[row_number_position])
+            except (TypeError, ValueError):
+                restored[row_number_position] = None
+        for position in metric_positions:
+            restored[position] = _parse_tabular_number(restored[position])
+        restored_rows.append(tuple(restored))
+    return RowTable(rows=tuple(restored_rows), columns=tuple(table.columns))
+
+
+def _legacy_preview_if_pandas_is_already_loaded(table: RowTable) -> Any:
+    """Preserve the historical preview type only for explicit pandas consumers.
+
+    Production startup does not import pandas. Development callers that already imported
+    pandas keep the legacy ``.dataframe`` view while ``.row_table`` remains canonical.
+    """
+
+    if "pandas" not in sys.modules:
+        return table
+    dataframe = pd.DataFrame(list(table.rows), columns=list(table.columns))
+    return _restore_sqlite_dataframe(dataframe)
 
 
 def _sqlite_like_pattern(
@@ -3996,13 +4225,8 @@ def _sqlite_filter_number_value(value: Any, *, field_name: str) -> float:
 
 
 def _sqlite_filter_date_value(value: Any, *, dayfirst: bool, field_name: str) -> date:
-    parsed = pd.to_datetime(
-        pd.Series([value]),
-        errors="coerce",
-        dayfirst=dayfirst,
-        format="mixed",
-    ).iloc[0]
-    if pd.isna(parsed):
+    parsed = _parse_tabular_datetime(value, dayfirst=dayfirst)
+    if parsed is None:
         raise ValueError(f"{field_name} must be date-like")
     return parsed.date()
 
@@ -4018,23 +4242,16 @@ def _sqlite_membership_values(values: Iterable[Any]) -> tuple[Any, ...]:
 
 def _sqlite_membership_value_kind(values: tuple[Any, ...], *, dayfirst: bool) -> str:
     if values and all(_sqlite_membership_value_looks_date_like(value) for value in values):
-        parsed_dates = pd.to_datetime(
-            pd.Series(list(values)),
-            errors="coerce",
-            dayfirst=dayfirst,
-            format="mixed",
-        )
-        if parsed_dates.notna().all():
+        if all(_parse_tabular_datetime(value, dayfirst=dayfirst) is not None for value in values):
             return "date"
-    parsed_numbers = pd.to_numeric(pd.Series(list(values)), errors="coerce")
-    if values and parsed_numbers.notna().all():
+    if values and all(_parse_tabular_filter_number(value) is not None for value in values):
         return "number"
     return "text"
 
 
 def _sqlite_membership_value_looks_date_like(value: Any) -> bool:
     text = str(value or "").strip()
-    return bool(re.search(r"\d{4}", text) or any(marker in text for marker in ("/", ":")))
+    return bool(re.search(r"\d{4}", text) or any(marker in text for marker in ("-", "/", ":")))
 
 
 def _sqlite_membership_in_predicate(
@@ -4076,19 +4293,14 @@ def _normalized_tabular_filter_series(series: pd.Series) -> pd.Series:
 def _parse_tabular_filter_date(value: str | None):
     if not value:
         return None
-    parsed = pd.to_datetime(value, errors="coerce")
-    if pd.isna(parsed):
-        return None
-    return parsed.date()
+    parsed = _parse_tabular_datetime(value)
+    return parsed.date() if parsed is not None else None
 
 
 def _parse_tabular_filter_number(value: float | int | str | None) -> float | None:
     if value is None:
         return None
-    parsed = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
-    if pd.isna(parsed):
-        return None
-    return float(parsed)
+    return _parse_tabular_number(value)
 
 
 def _tabular_date_filter_mask(series: pd.Series, column_filter: TabularColumnFilter) -> pd.Series:
@@ -4501,6 +4713,13 @@ def _tabular_grouping_records(grouping_df: Any | None) -> list[Mapping[str, Any]
         return []
     if bool(empty):
         return []
+    iter_rows = getattr(grouping_df, "iter_rows", None)
+    if callable(iter_rows):
+        return [
+            row
+            for row in iter_rows(as_dict=True)
+            if isinstance(row, Mapping)
+        ]
     to_dict = getattr(grouping_df, "to_dict", None)
     if callable(to_dict):
         try:
@@ -4671,6 +4890,7 @@ __all__ = [
     "load_tabular_analytics_file",
     "load_tabular_analytics_files",
     "materialize_tabular_dataframe",
+    "materialize_tabular_rows",
     "selectable_tabular_source_columns",
     "tabular_file_group_labels",
     "tabular_load_result_row_count",

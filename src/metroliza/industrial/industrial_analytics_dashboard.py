@@ -4656,7 +4656,14 @@ def _render_plotly_runtime(
       if (!target || !chart || !chart.plotly_spec || !window.Plotly) return;
       const baseSpec = clonePlotlySpec(chart.plotly_spec);
       const visualSpec = applyDashboardVisualsToPlotlySpec(baseSpec);
-      const spec = applyThemeToPlotlySpec(visualSpec);
+      target.dataset.dashboardChartKey = String(chart.id || '');
+      const chartKey = typeof dashboardChartKeyForContainer === 'function'
+        ? dashboardChartKeyForContainer(target)
+        : String(chart.id || '');
+      const markedSpec = typeof applyDashboardPointMarksToPlotlySpec === 'function'
+        ? applyDashboardPointMarksToPlotlySpec(visualSpec, chartKey)
+        : visualSpec;
+      const spec = applyThemeToPlotlySpec(markedSpec);
       const config = Object.assign({}, spec.config || {}, configOverrides);
       if (plotlySpecHasStaticImageLayer(spec) && !Object.prototype.hasOwnProperty.call(config, 'doubleClick')) {
         config.doubleClick = 'reset';
@@ -5623,12 +5630,16 @@ def _render_chart_shell(chart: dict[str, Any]) -> str:
                 f"{image_markup}"
                 "</details>"
             )
-            media_markup = f'<div class="plotly-chart" id="{html.escape(chart_id)}"></div>'
+            media_markup = (
+                f'<div class="plotly-chart" id="{html.escape(chart_id)}" '
+                f'data-dashboard-chart-key="{html.escape(chart_id)}"></div>'
+            )
         else:
             media_markup = image_markup
     else:
         media_markup = (
-            f'<div class="plotly-chart" id="{html.escape(chart_id)}"></div>'
+            f'<div class="plotly-chart" id="{html.escape(chart_id)}" '
+            f'data-dashboard-chart-key="{html.escape(chart_id)}"></div>'
             if has_plotly
             else ""
         )

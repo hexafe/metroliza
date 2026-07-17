@@ -59,7 +59,7 @@ class AnomalyEventRepository:
         self.ensure_schema()
         event_batch = tuple(events)
         if not event_batch:
-            return EventBatchResult(processed=0, inserted=0, skipped=0)
+            return EventBatchResult(processed=0, inserted=0, skipped=0, event_ids=())
         created_at = utc_timestamp()
 
         def _insert(cursor) -> EventBatchResult:

@@ -1080,8 +1080,14 @@ def test_dashboard_visual_dialog_choose_color_and_reset_defaults(monkeypatch) ->
 
         dialog._set_button_color(dialog._palette_buttons[0], "#010203")
         dialog._reset_defaults()
+        reset_settings = dialog.visual_settings()
         assert dialog._palette_buttons[0].property("color") != "#010203"
-        assert dialog.visual_settings()["palette"][0] == dialog._palette_buttons[0].property("color")
+        assert reset_settings["palette"][0] == dialog._palette_buttons[0].property("color")
+        assert dialog.preset_combo.currentData() == "auto"
+        assert reset_settings["preset"] == "auto"
+        assert reset_settings["recipe"] == "auto"
+        assert reset_settings["palette_preset"] == "metroliza"
+        assert reset_settings["series_overrides"] == {}
         assert dialog._preview_timer.isActive()
     finally:
         dialog.close()

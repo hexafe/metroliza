@@ -1922,7 +1922,11 @@ class IndustrialAnalyticsDialog(QDialog):
             column_filters=self.tabular_column_filters,
             row_filter_expression=self.tabular_filter_expression,
         )
-        assigned_rows = self.df_for_grouping.loc[:, ["REPORT_ID", "GROUP"]].to_dict("records")
+        assignment_columns = self.df_for_grouping[["REPORT_ID", "GROUP"]]
+        if hasattr(assignment_columns, "iter_rows"):
+            assigned_rows = list(assignment_columns.iter_rows(as_dict=True))
+        else:
+            assigned_rows = assignment_columns.to_dict("records")
         valid_assigned_rows = []
         for row in assigned_rows:
             report_id = _coerce_int_or_none(row.get("REPORT_ID"))

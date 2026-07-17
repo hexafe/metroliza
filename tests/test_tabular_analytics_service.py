@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 from contextlib import closing, contextmanager
+from datetime import datetime
 from pathlib import Path
 import sqlite3
 import warnings
@@ -8,6 +10,9 @@ import zipfile
 
 import pandas as pd
 import pytest
+
+import metroliza.tabular.tabular_analytics_service as canonical_tabular_service
+
 
 from modules.grouping_filter_core import (
     NumberFilterSpec,
@@ -29,6 +34,7 @@ from modules.industrial_analytics_state import (
 from modules.tabular_analytics_service import (
     TABULAR_DEFAULT_GROUP,
     TABULAR_GROUP_COLUMN,
+    TabularAnalyticsLoadResult,
     TabularColumnFilter,
     TabularLoadCancelled,
     TabularSourceSnapshot,
@@ -44,7 +50,11 @@ from modules.tabular_analytics_service import (
     load_tabular_analytics_file,
     load_tabular_analytics_files,
     materialize_tabular_dataframe,
+    materialize_tabular_rows,
 )
+
+
+_GENUINE_XLS_DATE_WORKBOOK = "0M8R4KGxGuEAAAAAAAAAAAAAAAAAAAAAOwADAP7/CQAGAAAAAAAAAAAAAAABAAAACAAAAAAAAAAAEAAAAgAAAAEAAAD+////AAAAAAAAAAD////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////9//////////7///8EAAAABQAAAAYAAAAHAAAA/v///wkAAAD+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////1IAbwBvAHQAIABFAG4AdAByAHkAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWAAUA////////////////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/v///wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD///////////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD+////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP///////////////wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP7///8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA////////////////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/v///wAAAAAAAAAAAQAAAAIAAAADAAAABAAAAAUAAAAGAAAABwAAAAgAAAAJAAAACgAAAAsAAAAMAAAADQAAAA4AAAAPAAAAEAAAABEAAAASAAAAEwAAABQAAAAVAAAAFgAAABcAAAAYAAAAGQAAABoAAAD+////HAAAAP7////+////HwAAACAAAAAhAAAA/v///yMAAAAkAAAA/v////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////8JCBAAAAYFALsNzAcAAAAABgAAAOEAAgCwBMEAAgAAAOIAAABcAHAABAAAQ2FsYyAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIEIAAgCwBGEBAgAAAMABAAA9AQIAAQCcAAIADgCvAQIAAAC8AQIAAAA9ABIAAAAAAABAACA4AAAAAAABAFgCQAACAAAAjQACAAAAIgACAAAADgACAAEAtwECAAAA2gACAAAAMQAeANwAAAAIAJABAAAAAgEABwFDAGEAbABpAGIAcgBpADEAGgDIAAAA/3+QAQAAAAAAAAUBQQByAGkAYQBsADEAGgDIAAAA/3+QAQAAAAAAAAUBQQByAGkAYQBsADEAGgDIAAAA/3+QAQAAAAAAAAUBQQByAGkAYQBsAB4EDACkAAcAAEdlbmVyYWweBBsApQAWAAB5eXl5XC1tbVwtZGRcIGhoOm1tOnNz4AAUAAAApAD1/yAAAAAAAAAAAAAAAMAg4AAUAAEAAAD1/yAAAPQAAAAAAAAAAMAg4AAUAAEAAAD1/yAAAPQAAAAAAAAAAMAg4AAUAAIAAAD1/yAAAPQAAAAAAAAAAMAg4AAUAAIAAAD1/yAAAPQAAAAAAAAAAMAg4AAUAAAAAAD1/yAAAPQAAAAAAAAAAMAg4AAUAAAAAAD1/yAAAPQAAAAAAAAAAMAg4AAUAAAAAAD1/yAAAPQAAAAAAAAAAMAg4AAUAAAAAAD1/yAAAPQAAAAAAAAAAMAg4AAUAAAAAAD1/yAAAPQAAAAAAAAAAMAg4AAUAAAAAAD1/yAAAPQAAAAAAAAAAMAg4AAUAAAAAAD1/yAAAPQAAAAAAAAAAMAg4AAUAAAAAAD1/yAAAPQAAAAAAAAAAMAg4AAUAAAAAAD1/yAAAPQAAAAAAAAAAMAg4AAUAAAAAAD1/yAAAPQAAAAAAAAAAMAg4AAUAAAApAABACAAAAAAAAAAAAAAAMAg4AAUAAEAKwD1/yAAAPAAAAAAAAAAAMAg4AAUAAEAKQD1/yAAAPAAAAAAAAAAAMAg4AAUAAEALAD1/yAAAPAAAAAAAAAAAMAg4AAUAAEAKgD1/yAAAPAAAAAAAAAAAMAg4AAUAAEACQD1/yAAAPAAAAAAAAAAAMAg4AAUAAAApQABACAAAAQAAAAAAAAAAMAgkwIEAACAAP+TAgQAEIAD/5MCBAARgAb/kwIEABKABP+TAgQAE4AH/5MCBAAUgAX/YAECAAAAhQAMALQEAAAAAAQARGF0YYwABAABAAEAwQEIAMEBAABUjQEA6wBaAA8AAPBSAAAAAAAG8BgAAAAABAAAAgAAAAEAAAABAAAAAQAAAAEAAAAzAAvwEgAAAL8ACAAIAIEBCQAACMABQAAACEAAHvEQAAAADQAACAwAAAgXAAAI9wAAEPwAGAACAAAAAgAAAAQAAFdoZW4GAABNZXRyaWP/AAoACAB5BAAADAAAAGMIFQBjCAAAAAAAAAAAAAAVAAAAAAAAAAIKAAAACQgQAAAGEAC7DcwHAAAAAAYAAAAMAAIAZAAPAAIAAQARAAIAAAAQAAgALUMc6+I2Gj9fAAIAAQCAAAgAAAAAAAAAAAAlAgQAAAAsAYEAAgDBBCoAAgAAACsAAgAAAIIAAgABABQAAAAVAAAAgwACAAAAhAACAAAAJgAIAAAAAAAAAOg/JwAIAAAAAAAAAOg/KAAIAAAAAAAAAPA/KQAIAAAAAAAAAPA/oQAiAAkAZAAAAAEAAQACACwBLAEYDAaDwWDgPxgMBoPBYOA/AQBVAAIACAB9AAwAAAAAAZ4IDwAAAAAAAAIOAAAAAAACAAAAAAACAAAACAIQAAAAAAACACwBAAAAAAABDwAIAhAAAQAAAAIALAEAAAAAAAEPAP0ACgAAAAAADwAAAAAA/QAKAAAAAQAPAAEAAAADAg4AAQAAABUAVFVVVZId5kB+AgoAAQABAA8AFgAAAOwAUAAPAALwSAAAABAACPAIAAAAAQAAAAAEAAAPAAPwMAAAAA8ABPAoAAAAAQAJ8BAAAAAAAAAAAAAAAAAAAAAAAAAAAgAK8AgAAAAABAAABQAAAD4CEgC2BgAAAABAAAAAPABkAAAAAAAdAA8AAwAAAAAAAAEAAAAAAAAAZwgXAGcIAAAAAAAAAAAAAAIAAf////8AAAAACgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAP7/AwoAAP////8QCAIAAAAAAMAAAAAAAABGGwAAAE1pY3Jvc29mdCBFeGNlbCA5Ny1UYWJlbGxlAAYAAABCaWZmOAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD+/wAAAQACAAAAAAAAAAAAAAAAAAAAAAABAAAA4IWf8vlPaBCrkQgAKyez2TAAAACYAAAABwAAAAEAAABAAAAABAAAAEgAAAAJAAAAXAAAAAoAAABoAAAACwAAAHQAAAAMAAAAgAAAAA0AAACMAAAAAgAAAOn9AAAeAAAACQAAAG9wZW5weXhsAAAAAB4AAAACAAAAMAAAAEAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAEAAAAAA1rSwkxXdAUAAAAAA1rSwkxXdAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/v8AAAEAAgAAAAAAAAAAAAAAAAAAAAAAAgAAAALVzdWcLhsQk5cIACss+a5EAAAABdXN1ZwuGxCTlwgAKyz5rlwAAAAYAAAAAQAAAAEAAAAQAAAAAgAAAOn9AABMAAAAAwAAAAAAAAAgAAAAAQAAADgAAAACAAAAQAAAAAEAAAACAAAACwAAAEFwcFZlcnNpb24AAAIAAADp/QAAHgAAAAQAAAAzLjEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAUgBvAG8AdAAgAEUAbgB0AHIAeQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABYABQD//////////wEAAAAQCAIAAAAAAMAAAAAAAABGAAAAAAAAAAAAAAAAAAAAAAAAAAADAAAAQAkAAAAAAABXAG8AcgBrAGIAbwBvAGsAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEgACAAIAAAAEAAAA/////wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACqBgAAAAAAAAEAQwBvAG0AcABPAGIAagAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAASAAIAAwAAAP//////////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGwAAAEkAAAAAAAAAAQBPAGwAZQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAoAAgD///////////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAdAAAAFAAAAAAAAAAFAFMAdQBtAG0AYQByAHkASQBuAGYAbwByAG0AYQB0AGkAbwBuAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAKAACAP////8FAAAA/////wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB4AAADIAAAAAAAAAAUARABvAGMAdQBtAGUAbgB0AFMAdQBtAG0AYQByAHkASQBuAGYAbwByAG0AYQB0AGkAbwBuAAAAAAAAAAAAAAA4AAIA////////////////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIgAAAKgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD///////////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD+////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP///////////////wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP7///8AAAAAAAAAAA=="
 
 
 def _sample_table() -> pd.DataFrame:
@@ -69,6 +79,15 @@ def _sqlite_index_names(store) -> set[str]:
                 (store.table_name,),
             ).fetchall()
         }
+
+
+def test_tabular_load_result_preserves_existing_positional_field_order() -> None:
+    diagnostics = ("legacy diagnostic",)
+
+    result = TabularAnalyticsLoadResult(None, (), diagnostics)
+
+    assert result.diagnostics == diagnostics
+    assert result.row_table is None
 
 
 def test_load_tabular_analytics_file_detects_csv_metrics_and_contract_columns(tmp_path) -> None:
@@ -349,6 +368,74 @@ def test_multi_csv_sqlite_uses_global_header_mapping_for_sanitized_collisions(tm
         assert materialized["a"].iloc[0] == "first-a"
         assert pd.isna(materialized["a"].iloc[1])
         assert materialized["a_2"].tolist() == ["first-bang", "second-bang"]
+    finally:
+        cleanup_tabular_load_result(result)
+
+
+def test_duplicate_headers_are_preserved_positionally_with_sanitized_collision(tmp_path) -> None:
+    input_file = tmp_path / "duplicate_headers.csv"
+    input_file.write_text(
+        "Metric,Metric,Metric_2,Part\n1,2,3,A\n4,5,6,B\n",
+        encoding="utf-8",
+    )
+
+    result = load_tabular_analytics_file(input_file)
+    try:
+        assert result.sqlite_store.source_columns == (
+            "metric",
+            "metric_2",
+            "metric_2_2",
+            "part",
+        )
+        assert result.column_mapping == {
+            "Metric": "metric",
+            "Metric_2": "metric_2_2",
+            "Part": "part",
+        }
+        materialized = materialize_tabular_dataframe(
+            result,
+            required_columns=("metric", "metric_2", "metric_2_2"),
+        ).dataframe
+        assert materialized.to_dict("records") == [
+            {"metric": 1.0, "metric_2": 2.0, "metric_2_2": 3.0},
+            {"metric": 4.0, "metric_2": 5.0, "metric_2_2": 6.0},
+        ]
+        assert result.sqlite_store.row_ids(
+            grouping_filter_expression="Metric_2 = 3",
+            grouping_filter_aliases=result.column_mapping,
+        ) == [1]
+        assert result.sqlite_store.row_ids(
+            grouping_filter_expression="metric_2 = 2",
+            grouping_filter_aliases=result.column_mapping,
+        ) == [1]
+    finally:
+        cleanup_tabular_load_result(result)
+
+
+def test_duplicate_header_occurrences_align_across_multiple_csv_files(tmp_path) -> None:
+    first_file = tmp_path / "first.csv"
+    second_file = tmp_path / "second.csv"
+    first_file.write_text("Metric,Metric\n1,2\n", encoding="utf-8")
+    second_file.write_text("Metric,Metric,Metric_2\n4,5,6\n", encoding="utf-8")
+
+    result = load_tabular_analytics_files((first_file, second_file), min_numeric_count=1)
+    try:
+        materialized = materialize_tabular_dataframe(
+            result,
+            required_columns=("source_file", "metric", "metric_2", "metric_2_2"),
+        ).dataframe
+        assert materialized.loc[0, ["source_file", "metric", "metric_2"]].tolist() == [
+            "first.csv",
+            1.0,
+            2.0,
+        ]
+        assert pd.isna(materialized.loc[0, "metric_2_2"])
+        assert materialized.loc[1].to_dict() == {
+            "source_file": "second.csv",
+            "metric": 4.0,
+            "metric_2": 5.0,
+            "metric_2_2": 6.0,
+        }
     finally:
         cleanup_tabular_load_result(result)
 
@@ -728,6 +815,21 @@ def test_sqlite_grouping_filter_expression_applies_to_preview_count_and_row_ids(
             grouping_filter_expression=expression,
             grouping_filter_aliases=aliases,
         ) == [2, 3, 4, 6]
+        assert result.sqlite_store.row_ids(
+            grouping_filter_expression="TimeStamp >= 'May 3 2026'",
+            grouping_filter_aliases=aliases,
+        ) == [3, 4, 5, 6]
+        for literal in (
+            "2026/05/03",
+            "2026.05.03",
+            "03-May-2026",
+            "2026-05-03 1:45 PM",
+            "05/03/26",
+        ):
+            assert result.sqlite_store.row_ids(
+                grouping_filter_expression=f"TimeStamp = '{literal}'",
+                grouping_filter_aliases=aliases,
+            ) == [3]
         value_rows, value_total = result.sqlite_store.preview_value_rows(
             "station",
             grouping_filter_expression=expression,
@@ -823,6 +925,10 @@ def test_sqlite_grouping_filter_expression_supports_membership_lists(tmp_path) -
             grouping_filter_expression="Time IN (2026-05-02, 2026-05-05)",
             grouping_filter_aliases=aliases,
         ) == [2, 5]
+        assert result.sqlite_store.row_ids(
+            grouping_filter_expression="Time IN (03-May-26)",
+            grouping_filter_aliases=aliases,
+        ) == [3]
     finally:
         cleanup_tabular_load_result(result)
 
@@ -1004,6 +1110,107 @@ def test_load_tabular_analytics_file_detects_excel_metrics(tmp_path) -> None:
     assert {"length_mm", "width_mm"}.issubset(metric_names)
     assert result.sheet_name == "Measurements"
     assert result.dataframe["process_datetime"].notna().all()
+
+
+def test_xlsx_duplicate_headers_preserve_each_position_and_sanitized_collision(tmp_path) -> None:
+    from openpyxl import Workbook
+
+    input_file = tmp_path / "duplicate_headers.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Measurements"
+    worksheet.append(["Metric", "Metric", "Metric_2"])
+    worksheet.append([1, 2, 3])
+    worksheet.append([4, 5, 6])
+    workbook.save(input_file)
+
+    result = load_tabular_analytics_file(input_file, sheet_name="Measurements")
+    try:
+        assert result.sqlite_store.source_columns == ("metric", "metric_2", "metric_2_2")
+        assert result.column_mapping == {"Metric": "metric", "Metric_2": "metric_2_2"}
+        assert materialize_tabular_dataframe(
+            result,
+            required_columns=("metric", "metric_2", "metric_2_2"),
+        ).dataframe.to_dict("records") == [
+            {"metric": 1.0, "metric_2": 2.0, "metric_2_2": 3.0},
+            {"metric": 4.0, "metric_2": 5.0, "metric_2_2": 6.0},
+        ]
+    finally:
+        cleanup_tabular_load_result(result)
+
+
+def test_load_genuine_xls_converts_typed_date_cells_with_workbook_epoch(tmp_path) -> None:
+    input_file = tmp_path / "typed_date.xls"
+    workbook_bytes = base64.b64decode(_GENUINE_XLS_DATE_WORKBOOK).replace(b"When", b"Date", 1)
+    input_file.write_bytes(workbook_bytes)
+
+    result = load_tabular_analytics_file(
+        input_file,
+        sheet_name="Data",
+        min_numeric_count=1,
+    )
+    try:
+        assert result.timestamp_column == "date"
+        assert result.row_table is not None
+        assert result.row_table["date"].tolist() == ["2024-01-01 13:45:00"]
+        assert result.row_table["process_datetime"].tolist() == [
+            pd.Timestamp("2024-01-01 13:45:00").to_pydatetime()
+        ]
+        assert result.row_table["metric"].tolist() == [5.0]
+        filtered = materialize_tabular_rows(
+            result,
+            column_filters=(
+                TabularColumnFilter(
+                    "date",
+                    date_operator="=",
+                    date_value="2024-01-01",
+                ),
+            ),
+        )
+        assert filtered.dataframe["source_row_number"].tolist() == [1]
+        assert materialize_tabular_rows(
+            result,
+            column_filters=(
+                TabularColumnFilter(
+                    "date",
+                    date_operator="=",
+                    date_value="2024-01-02",
+                ),
+            ),
+        ).dataframe.empty
+    finally:
+        cleanup_tabular_load_result(result)
+
+
+def test_xlrd_date_display_passes_workbook_datemode_to_converter() -> None:
+    calls: list[tuple[float, int]] = []
+
+    class FakeXlrd:
+        XL_CELL_DATE = 3
+
+        @staticmethod
+        def xldate_as_datetime(value, datemode):
+            calls.append((value, datemode))
+            return datetime(2026, 7, 17, 8, 30)
+
+    class FakeSheet:
+        name = "Measurements"
+
+        @staticmethod
+        def cell(_row, _column):
+            return type("Cell", (), {"ctype": 3, "value": 123.5})()
+
+    value = canonical_tabular_service._display_xlrd_cell(
+        FakeXlrd,
+        type("Workbook", (), {"datemode": 1})(),
+        FakeSheet(),
+        path=Path("epoch.xls"),
+        row_index=2,
+        column_index=4,
+    )
+
+    assert calls == [(123.5, 1)]
+    assert value == "2026-07-17 08:30:00"
 
 
 def test_tabular_reference_inference_does_not_treat_width_as_id(tmp_path) -> None:

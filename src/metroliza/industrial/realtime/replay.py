@@ -43,6 +43,7 @@ class ReplayRequest:
     upper_warning: float | None = None
     source_timezone: str = "UTC"
     batch_size: int = 500
+    now: str | None = None
 
 
 @dataclass(frozen=True)
@@ -206,11 +207,18 @@ def run_detectors_for_samples(
     score_sample_ids: Iterable[int] | None = None,
 ) -> list[DetectionResult]:
     detector_objects = _detector_instances(detectors)
+    sample_detectors = tuple(
+        detector for detector in detector_objects if detector.detector_key != "stale_source"
+    )
+    source_detectors = tuple(
+        detector for detector in detector_objects if detector.detector_key == "stale_source"
+    )
     states: dict[str, DetectorState] = {}
     events: list[DetectionResult] = []
     scored_ids = None if score_sample_ids is None else {int(sample_id) for sample_id in score_sample_ids}
-    for sample in sorted(_unique_samples_for_detection(samples), key=_sample_sort_key):
-        for detector in detector_objects:
+    sorted_samples = sorted(_unique_samples_for_detection(samples), key=_sample_sort_key)
+    for sample in sorted_samples:
+        for detector in sample_detectors:
             state = states.get(detector.detector_key, DetectorState())
             context = DetectorContext(
                 signal=signal,
@@ -223,6 +231,22 @@ def run_detectors_for_samples(
             if result is not None and should_emit:
                 events.append(result)
             states[detector.detector_key] = detector.update_one(sample, context)
+    if sorted_samples:
+        latest_sample = sorted_samples[-1]
+        latest_is_eligible = scored_ids is None or (
+            latest_sample.id is not None and int(latest_sample.id) in scored_ids
+        )
+        if latest_is_eligible:
+            for detector in source_detectors:
+                context = DetectorContext(
+                    signal=signal,
+                    baseline=dict(baseline or {}),
+                    state=DetectorState(),
+                    now=now,
+                )
+                result = detector.score_one(latest_sample, context)
+                if result is not None:
+                    events.append(result)
     return events
 
 
@@ -267,7 +291,11 @@ def replay_industrial_stream(request: ReplayRequest) -> ReplaySummary:
         signal = sample_repository.upsert_signal_definition(signal_candidate)
     assert signal.id is not None
     batch_size = request.batch_size
-    detector_session = _ReplayDetectorSession(signal=signal, detectors=request.detectors)
+    detector_session = _ReplayDetectorSession(
+        signal=signal,
+        detectors=request.detectors,
+        now=request.now,
+    )
     processed = 0
     inserted = 0
     skipped = 0
@@ -293,6 +321,17 @@ def replay_industrial_stream(request: ReplayRequest) -> ReplaySummary:
             key = f"{event.detector_key}/{event.severity}"
             event_counts[key] = event_counts.get(key, 0) + 1
 
+    # Source staleness is a property of the final replay watermark, not of every historical
+    # sample. Evaluate it once so deterministic replays do not manufacture one stale event per
+    # old row.
+    final_events = detector_session.finalize()
+    if not request.dry_run and final_events:
+        event_result = event_repository.insert_events(final_events)
+        created += event_result.inserted
+    for event in final_events:
+        key = f"{event.detector_key}/{event.severity}"
+        event_counts[key] = event_counts.get(key, 0) + 1
+
     return ReplaySummary(
         samples_processed=processed,
         samples_inserted=inserted,
@@ -314,11 +353,21 @@ def _validate_replay_input_order(request: ReplayRequest) -> None:
                     "Replay input must be ordered by event time for bounded streaming detection."
                 )
             last_event_time = sample.event_time
+    if request.now is not None and last_event_time is not None and request.now < last_event_time:
+        raise ValueError(
+            "Replay now must be at or after the final replay sample event time."
+        )
 
 
 def _validated_replay_request(request: ReplayRequest) -> ReplayRequest:
+    detectors = normalize_detector_keys(request.detectors)
+    now_text = str(request.now or "").strip()
+    if "stale_source" in detectors and not now_text:
+        raise ValueError("Replay now is required when stale_source is selected.")
+    source_timezone = validate_source_timezone(request.source_timezone)
     return replace(
         request,
+        detectors=detectors,
         source_profile_id=exact_integral(
             request.source_profile_id,
             field_name="Replay source_profile_id",
@@ -329,11 +378,16 @@ def _validated_replay_request(request: ReplayRequest) -> ReplayRequest:
             if request.limit is not None
             else None
         ),
-        source_timezone=validate_source_timezone(request.source_timezone),
+        source_timezone=source_timezone,
         batch_size=exact_integral(
             request.batch_size,
             field_name="Replay batch_size",
             minimum=1,
+        ),
+        now=(
+            canonical_utc_timestamp(now_text, source_timezone=source_timezone)
+            if now_text
+            else None
         ),
     )
 
@@ -345,11 +399,30 @@ def _signal_attr(signal: SignalDefinition | None, name: str) -> Any:
 class _ReplayDetectorSession:
     """Bounded detector state carried across streamed replay batches."""
 
-    def __init__(self, *, signal: SignalDefinition, detectors: Iterable[str]) -> None:
+    def __init__(
+        self,
+        *,
+        signal: SignalDefinition,
+        detectors: Iterable[str],
+        now: str | None,
+    ) -> None:
         self.signal = signal
-        self.detectors = _detector_instances(detectors)
+        detector_instances = _detector_instances(detectors)
+        self.detectors = tuple(
+            detector for detector in detector_instances if detector.detector_key != "stale_source"
+        )
+        self.stale_detector = next(
+            (
+                detector
+                for detector in detector_instances
+                if detector.detector_key == "stale_source"
+            ),
+            None,
+        )
+        self.now = now
         self.states: dict[str, DetectorState] = {}
         self.last_event_time: str | None = None
+        self.latest_sample: IndustrialSample | None = None
 
     def score(self, samples: Iterable[IndustrialSample]) -> list[DetectionResult]:
         events: list[DetectionResult] = []
@@ -366,7 +439,23 @@ class _ReplayDetectorSession:
                     events.append(result)
                 self.states[detector.detector_key] = detector.update_one(sample, context)
             self.last_event_time = sample.event_time
+            self.latest_sample = sample
         return events
+
+    def finalize(self) -> list[DetectionResult]:
+        """Evaluate source-level detectors once against the final replay watermark."""
+
+        if self.stale_detector is None or self.latest_sample is None:
+            return []
+        sample = self.latest_sample
+        if sample.id is None:
+            # Dry-run samples are intentionally not persisted, but the detector contract uses a
+            # sample identity in its explainable result. The synthetic id never reaches storage.
+            sample = replace(sample, id=-1)
+        state = self.states.get(self.stale_detector.detector_key, DetectorState())
+        context = DetectorContext(signal=self.signal, state=state, now=self.now)
+        result = self.stale_detector.score_one(sample, context)
+        return [result] if result is not None else []
 
 
 def _batched(

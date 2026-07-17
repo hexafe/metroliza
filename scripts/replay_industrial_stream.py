@@ -27,6 +27,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--event-time-column", required=True)
     parser.add_argument("--record-key-column", required=True)
     parser.add_argument("--detectors", default="spec_limits")
+    parser.add_argument(
+        "--now",
+        help=(
+            "ISO-8601 replay evaluation time; required when stale_source is selected so replay "
+            "results remain deterministic (naive values use --source-timezone)"
+        ),
+    )
     parser.add_argument("--limit", type=_positive_exact_integer)
     parser.add_argument(
         "--source-timezone",
@@ -67,6 +74,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             upper_warning=args.upper_warning,
             source_timezone=args.source_timezone,
             batch_size=args.batch_size,
+            now=args.now,
         )
     )
     for line in summary.as_lines():

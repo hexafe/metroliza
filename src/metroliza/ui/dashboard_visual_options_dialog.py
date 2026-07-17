@@ -1529,7 +1529,7 @@ class DashboardVisualOptionsDialog(QDialog):
     def _reset_defaults(self) -> None:
         self._suppress_preview_schedule = False
         self._populate_from_settings(default_dashboard_visual_settings())
-        self._handle_control_changed()
+        self._schedule_preview()
 
     def _reference_line_width(self, key: str, *, fallback: float, preserve: bool) -> float:
         if preserve:
