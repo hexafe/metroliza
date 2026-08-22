@@ -1,5 +1,13 @@
 # Contributing to Metroliza
 
+## Before starting work
+
+- Read [`docs/project/README.md`](docs/project/README.md) for the current source-of-truth hierarchy and repository snapshot.
+- Start from a GitHub Issue and follow [`docs/project/development_workflow.md`](docs/project/development_workflow.md).
+- Use [`docs/project/roadmap.md`](docs/project/roadmap.md) for current priorities; old roadmap checklists do not schedule work by themselves.
+- Until Issue #900 resolves the repository transition, branch current approved work from `rc2` and target pull requests at `rc2`; do not merge development work directly into stale `master`.
+- Keep one primary Issue per pull request and separate behavior changes from structural refactors.
+
 ## Setup
 
 ```bash
@@ -14,7 +22,6 @@ Dependency files are split by purpose:
 - `requirements.txt` for runtime.
 - `requirements-dev.txt` for local development/tests.
 - `requirements-build.txt` for packaging executables.
-
 
 ## Pre-commit hooks
 
@@ -34,22 +41,26 @@ The hook set includes whitespace/end-of-file normalization, Ruff linting, and se
 
 ## Baseline checks
 
-Before opening a PR, run:
+Before opening a PR, run the validation tier required by the Issue. The baseline source checks are:
 
 ```bash
-python -m compileall .
-ruff check .
-PYTHONPATH=src:. python -m pytest tests -q
+PYTHONPATH=src:. python -m compileall -q -x '^\./\.git/' .
+PYTHONPATH=src:. python -m ruff check .
+QT_QPA_PLATFORM=offscreen PYTHONPATH=src:. python -m pytest tests -q
 ```
+
+Do not claim packaged, clean-machine, Google, or other manual behavior from baseline tests alone. See the validation tiers in `docs/project/development_workflow.md`.
 
 ## Architecture notes
 
 Metroliza's core flow is:
 
-1. **Parse** (`src/metroliza/parsing/parse_reports_thread.py`) ingests reports/archives and normalizes rows.
-2. **Persist** (`src/metroliza/reports/db.py` + DB call sites) stores and queries SQLite data.
-3. **Group/Filter** (`src/metroliza/ui/data_grouping.py`, `src/metroliza/ui/filter_dialog.py`) prepares user-selected subsets.
-4. **Export** (`src/metroliza/exporting/export_data_thread.py`) creates Excel outputs with summary stats/charts.
+1. **Preflight/parse** (`src/metroliza/parsing/`) inspects inputs, resolves a parser, and normalizes reports/rows.
+2. **Persist** (`src/metroliza/reports/`, `src/metroliza/storage/`, and domain repositories) stores and queries SQLite data.
+3. **Group/filter/analyze** (`src/metroliza/tabular/`, `src/metroliza/industrial/`, `src/metroliza/analytics/`) prepares and evaluates selected data.
+4. **Export/publish** (`src/metroliza/exporting/`, `src/metroliza/charts/`) creates Excel outputs and offline dashboards with optional Google conversion.
+
+The full current package map and dependency rules are in [`docs/project/architecture.md`](docs/project/architecture.md).
 
 ## Contracts usage
 
@@ -62,7 +73,6 @@ Request/option contracts live with their owning packages:
 - Export flows should build and validate `ExportRequest` and nested dataclasses (`AppPaths`, `ExportOptions`, `GroupingAssignment`).
 - Prefer adding validation to contract constructors/helpers instead of duplicating checks in UI/dialog code.
 
-
 ## Module naming policy (`src/metroliza/`)
 
 - Use **`snake_case.py`** for all new Python modules under `src/metroliza/`.
@@ -70,48 +80,64 @@ Request/option contracts live with their owning packages:
 - CamelCase module filenames are no longer supported; use snake_case paths exclusively.
 - The root `modules/` tree is compatibility shim space only; do not add new implementation code there.
 - The completed migration closeout is archived at [`docs/archive/2026/module_naming_migration.md`](docs/archive/2026/module_naming_migration.md).
+- Behavior tests should migrate toward canonical imports; keep only explicit compatibility tests on `modules.*` as tracked by Issue #905.
 
 ## Coding guidance
 
-- Keep changes incremental and aligned with active operational docs under `docs/` (especially release-check workflows in `docs/release_checks/`).
+- Keep changes incremental and aligned with the linked Issue and active project/release docs.
 - Prefer shared helpers in `src/metroliza/reports/db.py` over direct `sqlite3.connect` in feature modules.
-- **Transaction granularity:** each logical write unit (e.g., inserting one parsed report and all related measurements, or applying all edits from one Modify DB submission) must execute inside a single `run_transaction_with_retry` call so retries are atomic and rollback-safe.
+- **Transaction granularity:** each logical write unit (for example inserting one parsed report and all related measurements, or applying all edits from one Modify DB submission) must execute inside a single `run_transaction_with_retry` call so retries are atomic and rollback-safe.
 - Use `run_transaction_with_retry` for multi-statement write workflows; keep retries centralized in `src/metroliza/reports/db.py` rather than implementing ad-hoc retry loops in feature modules.
 - Add or update tests in `tests/` for each behavior change.
-- Naming guardrail: `tests/test_directory_reorganization_architecture.py` enforces canonical source packages and legacy-shim boundaries.
-
+- Naming and boundary guardrail: `tests/test_directory_reorganization_architecture.py` enforces canonical source packages and legacy-shim boundaries.
+- Do not hide follow-up work in TODO comments or stale Markdown checklists; create a GitHub Issue.
+- Do not commit credentials, OAuth tokens, proprietary reports, production extracts, private keys, or unredacted sensitive diagnostics.
 
 ## Documentation source-of-truth hierarchy
 
-Follow this canonical hierarchy (aligned with `docs/documentation_policy.md`):
+Follow the canonical hierarchy in `docs/project/README.md` and `docs/documentation_policy.md`:
 
-1. **Active operational docs in `docs/` are the source of truth.**
-   - Key entry points: [`docs/release_checks/release_candidate_checklist.md`](docs/release_checks/release_candidate_checklist.md), [`docs/release_checks/release_branching_playbook.md`](docs/release_checks/release_branching_playbook.md), and [`docs/release_checks/branching_strategy.md`](docs/release_checks/branching_strategy.md).
-2. **Historical plans live under `docs/archive/YYYY/` and are not active source-of-truth documents.**
-   - Use archived plans only for historical context.
+1. **GitHub Issues** define accepted in-flight work and its acceptance criteria.
+2. **`docs/project/`** defines current product scope, architecture intent, roadmap, and development workflow.
+3. **`docs/release_checks/`** defines release state, evidence, blockers, and promotion decisions.
+4. **`docs/user_manual/`** defines current end-user behavior.
+5. **`docs/archive/YYYY/`** and explicitly historical/reference-only plans preserve context but do not assign new work.
 
+Key release entry points remain:
+
+- [`docs/release_checks/release_candidate_checklist.md`](docs/release_checks/release_candidate_checklist.md)
+- [`docs/release_checks/release_branching_playbook.md`](docs/release_checks/release_branching_playbook.md)
+- [`docs/release_checks/branching_strategy.md`](docs/release_checks/branching_strategy.md)
 
 ## Documentation sync policy
 
-For repository cleanup and docs organization sequencing, follow [`docs/archive/2026/repo_cleanup_and_docs_plan.md`](docs/archive/2026/repo_cleanup_and_docs_plan.md) (status: archived historical context).
-
-- Keep documentation-only sync PRs separate from implementation PRs when updating roadmap/project-state docs.
-- Treat [`docs/archive/2026/IMPLEMENTATION_PLAN.md`](docs/archive/2026/IMPLEMENTATION_PLAN.md) and [`docs/archive/2026/GOOGLE_SHEETS_MIGRATION_PLAN.md`](docs/archive/2026/GOOGLE_SHEETS_MIGRATION_PLAN.md) as archived historical context only (not active source of truth).
-- For release-candidate documentation PRs, use [`docs/release_checks/release_candidate_checklist.md`](docs/release_checks/release_candidate_checklist.md) as the single RC source of truth and update all files referenced there in the same PR.
-- For Google export docs, explicitly describe both:
-  - required local secret files (`credentials.json`, `token.json`) and
-  - fallback expectations (`.xlsx` remains the guaranteed artifact when conversion warns/fails).
-- For branch/release flow guidance, follow [`docs/release_checks/release_branching_playbook.md`](docs/release_checks/release_branching_playbook.md) and keep the current RC scope frozen once `release/<version>-rcN` is cut.
-- For a beginner-friendly end-to-end walkthrough, see [`docs/release_checks/release_playbook_beginner.md`](docs/release_checks/release_playbook_beginner.md).
-- Quick branch role/naming/merge/tag reference: [`docs/release_checks/branching_strategy.md`](docs/release_checks/branching_strategy.md).
+- Keep documentation-only synchronization separate from implementation when practical.
+- When adding/renaming an active document under `docs/`, update `docs/README.md` in the same change.
+- Use `docs/project/roadmap.md` as the single current planning overview and GitHub Issues as executable work.
+- Treat archived implementation plans as historical context only.
+- For release-candidate documentation, use `docs/release_checks/release_candidate_checklist.md` as the RC gate source of truth and update all linked evidence files in the same closeout slice.
+- For Google export docs, explicitly describe required local secret files and the guaranteed local `.xlsx` fallback.
+- For branch/release guidance, follow `docs/release_checks/branching_strategy.md` and keep release scope frozen after `release/<version>-rcN` is cut.
+- For a beginner-friendly release walkthrough, see `docs/release_checks/release_playbook_beginner.md`.
 
 ## Google export contributor checklist
 
 When touching Google conversion/auth flows, validate and document:
 
-1. **Prerequisites:** local OAuth setup, required env vars for optional smoke check, and sandbox-account usage.
+1. **Prerequisites:** local OAuth setup, required environment variables for optional smoke checks, and sandbox-account usage.
 2. **Secrets posture:** `credentials.json`/`token.json` are local-only, never committed, and covered by `.gitignore` patterns.
 3. **Fallback behavior:** conversion degradation/failure messaging still reports the preserved `.xlsx` output path.
-4. **Testing strategy:** baseline automated tests remain passing; optional live smoke check stays release-gated/non-default.
-5. **Troubleshooting notes:** conversion warning guidance stays current in `README.md`.
-6. **PR evidence for Google export surface changes:** any PR touching `src/metroliza/exporting/google_drive_export.py`, `src/metroliza/exporting/export_backends.py`, `src/metroliza/exporting/export_data_thread.py`, or Google export UI/contract paths (for example `src/metroliza/ui/export_dialog.py`, `src/metroliza/exporting/contracts.py`) must include Google conversion smoke-check evidence in the PR description using the standard evidence format; if evidence is omitted, include explicit justification.
+4. **Testing strategy:** baseline automated tests remain passing; live smoke remains release-gated and non-default.
+5. **Troubleshooting notes:** conversion warning guidance stays current in `README.md` and user docs.
+6. **PR evidence:** any PR touching `src/metroliza/exporting/google_drive_export.py`, `src/metroliza/exporting/export_backends.py`, `src/metroliza/exporting/export_data_thread.py`, or Google export UI/contract/transport paths must include the standard Google conversion smoke evidence or explicit omission justification.
+
+## Pull request expectations
+
+Use `.github/pull_request_template.md` completely. In particular:
+
+- link the primary Issue;
+- state scope and non-goals;
+- identify contracts, risk, failure, cancellation, and rollback behavior;
+- select a validation tier and record exact commands/results;
+- update project, user, or release documentation when applicable;
+- ensure evidence refers to the exact PR head.

@@ -1,0 +1,135 @@
+name: Bug report
+description: Report reproducible incorrect behavior, a regression, crash, data-integrity risk, or unsafe failure mode.
+title: "[Bug] "
+labels: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Provide enough evidence to reproduce and triage the defect. Do not attach credentials, OAuth tokens, proprietary customer reports, or unredacted production extracts.
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Suggested priority
+      description: Choose impact/urgency, not implementation size.
+      options:
+        - P0 - product head, data, security, or release cannot be trusted safely
+        - P1 - important regression, integrity risk, or high-impact workflow failure
+        - P2 - material defect with a safe workaround
+        - P3 - minor defect or polish
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - App / startup / license
+        - UI / window / task lifecycle
+        - Parsing / preflight / parser plugins
+        - OCR / packaged runtime
+        - Reports / SQLite / metadata
+        - Export / Excel / Google
+        - Charts / HTML dashboard
+        - CSV / Excel Summary / tabular
+        - Industrial data / cache / sources
+        - Realtime monitoring / anomaly detection
+        - Analytics / statistics
+        - Native / Rust / performance
+        - Packaging / CI / release
+        - Documentation
+        - Unknown / cross-cutting
+    validations:
+      required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Problem summary
+      description: What is wrong and why does it matter?
+      placeholder: A concise description of the observed defect and affected workflow.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Use a sanitized fixture or synthetic data where possible.
+      placeholder: |
+        1. Start from...
+        2. Select...
+        3. Run...
+        4. Observe...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the exact error/status text when safe.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version / branch / commit
+      placeholder: "Example: 2026.06 RC2 build 260711, rc2, SHA 202690e"
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, source or packaged build, Python/runtime details, optional backend settings, input type/size.
+      placeholder: |
+        OS:
+        Source/PyInstaller/Nuitka:
+        Python/Qt:
+        Relevant METROLIZA_* settings:
+        Input type and approximate size:
+    validations:
+      required: true
+
+  - type: textarea
+    id: regression
+    attributes:
+      label: Regression range
+      description: Last known good version/SHA and first known bad version/SHA, if known.
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: Stack trace, redacted logs, screenshots, fixture description, test failure, or CI run. Remove secrets and proprietary data.
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Workaround and data/release impact
+      description: State whether prior data/artifacts remain safe and whether a workaround exists.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Reporter checklist
+      options:
+        - label: I searched open and closed Issues for a duplicate.
+          required: true
+        - label: I removed credentials, tokens, proprietary reports, and sensitive production data.
+          required: true
+        - label: I distinguished a real packaged/manual failure from a mocked or unit-test-only result.
+          required: true

@@ -1,0 +1,162 @@
+name: Technical task
+description: Track architecture, refactor, tests, performance, security, documentation, CI, or release work.
+title: "[Task] "
+labels: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Technical work must state the engineering risk or outcome and remain bounded. Do not use this form as an unreviewable “clean everything” bucket.
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - P0 - blocks trusted development, release, security, or data integrity
+        - P1 - important risk reduction or high-blast-radius maintenance
+        - P2 - valuable platform improvement
+        - P3 - polish, experiment, or optional cleanup
+    validations:
+      required: true
+
+  - type: dropdown
+    id: task_type
+    attributes:
+      label: Task type
+      options:
+        - Architecture
+        - Refactor
+        - Test / quality
+        - Performance
+        - Security
+        - Documentation
+        - CI / packaging
+        - Release evidence
+        - Research / decision
+        - Dependency maintenance
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Primary area
+      options:
+        - App / startup
+        - UI / task lifecycle
+        - Parsing / OCR / plugins
+        - Reports / SQLite / storage
+        - Export / Excel / Google
+        - Charts / dashboards
+        - Tabular analytics
+        - Industrial data
+        - Realtime / anomaly
+        - Analytics / statistics
+        - Native / Rust
+        - Packaging / CI / release
+        - Documentation / governance
+        - Cross-cutting
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context and evidence
+      description: Current state, file/contract/metric, failing gate, audit finding, or operational risk.
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Intended engineering outcome
+      description: Describe the improved boundary, property, evidence, or decision.
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: In scope
+      placeholder: |
+        - bounded change 1
+        - bounded change 2
+    validations:
+      required: true
+
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Non-goals
+      description: Explicitly prevent scope creep and unrelated behavior changes.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      placeholder: |
+        - [ ] Contract/property/evidence is...
+        - [ ] Focused validation passes...
+        - [ ] Rollback/compatibility is...
+    validations:
+      required: true
+
+  - type: textarea
+    id: contracts
+    attributes:
+      label: Affected contracts and risks
+      description: Package ownership, SQLite/schema, public imports, parser API, dashboard DOM/storage, artifacts, packaging, environment variables, or release evidence.
+    validations:
+      required: true
+
+  - type: textarea
+    id: slice_plan
+    attributes:
+      label: Slice plan
+      description: For broad tasks, list independently reviewable PRs. One behavior-preserving seam per refactor PR.
+
+  - type: textarea
+    id: rollback
+    attributes:
+      label: Rollback or deferral path
+      description: How can the change be reverted, disabled, or safely deferred?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: validation_tier
+    attributes:
+      label: Validation tier
+      options:
+        - Tier 0 - documentation/process only
+        - Tier 1 - focused behavior
+        - Tier 2 - subsystem integration
+        - Tier 3 - full repository CI
+        - Tier 4 - packaged/manual release evidence
+    validations:
+      required: true
+
+  - type: textarea
+    id: validation
+    attributes:
+      label: Planned validation
+      description: Exact tests, audits, benchmarks, packaging/manual evidence, and expected thresholds.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Task checklist
+      options:
+        - label: The task is small enough for one PR or includes an explicit slice plan.
+          required: true
+        - label: Behavior change is separated from structural refactoring or explicitly justified.
+          required: true
+        - label: Follow-up discoveries will become separate Issues rather than hidden TODOs.
+          required: true

@@ -1,0 +1,154 @@
+name: Feature request
+description: Propose a user-facing capability or intentional behavior change.
+title: "[Feature] "
+labels: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Start with the user problem, not a preferred implementation. A feature is not scheduled until it has testable acceptance criteria and a clear data/privacy/failure boundary.
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Suggested priority
+      options:
+        - P0 - required to make the current product safe or usable
+        - P1 - important product/release capability
+        - P2 - valuable improvement with a workable current path
+        - P3 - experiment or convenience
+    validations:
+      required: true
+
+  - type: dropdown
+    id: persona
+    attributes:
+      label: Primary user
+      options:
+        - Metrology / quality engineer
+        - Manufacturing / production-data engineer
+        - Operator / process owner
+        - Parser author / maintainer
+        - Release / packaging maintainer
+        - Multiple personas
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Primary workflow area
+      options:
+        - Report import / parsing / OCR
+        - Report database / metadata
+        - Filtering / grouping
+        - Excel / Google export
+        - HTML dashboards / visual review
+        - CSV / Excel Summary
+        - Industrial data / cache / sources
+        - Realtime monitoring / anomaly review
+        - Parser profiles / plugins
+        - Analytics / statistics
+        - Native / performance
+        - Packaging / distribution
+        - Documentation / onboarding
+        - Cross-cutting
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: What is difficult, unsafe, slow, or impossible today?
+      placeholder: Describe the workflow and consequence without assuming a solution.
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: What should the user be able to accomplish?
+    validations:
+      required: true
+
+  - type: textarea
+    id: current_path
+    attributes:
+      label: Current workaround or alternative
+      description: Explain the current path and why it is insufficient.
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Use observable, testable statements.
+      placeholder: |
+        - [ ] Given..., when..., then...
+        - [ ] Failure/cancellation reports...
+        - [ ] Existing workflow remains compatible...
+    validations:
+      required: true
+
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Non-goals
+      description: What should explicitly remain outside this feature?
+    validations:
+      required: true
+
+  - type: textarea
+    id: data_privacy
+    attributes:
+      label: Data, privacy, and security impact
+      description: Inputs, persistence, credentials, external services, logs, exports, and sensitive-data boundaries.
+    validations:
+      required: true
+
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and migration impact
+      description: SQLite schema, parser/plugin API, imports, environment variables, workbook/dashboard contracts, packaged builds, or user migration.
+
+  - type: textarea
+    id: failure
+    attributes:
+      label: Failure, cancellation, and rollback behavior
+      description: What remains usable when the feature fails or is disabled?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: validation_tier
+    attributes:
+      label: Minimum validation tier
+      options:
+        - Tier 1 - focused behavior
+        - Tier 2 - subsystem integration
+        - Tier 3 - full repository CI
+        - Tier 4 - packaged/manual release evidence
+        - Unknown - needs triage
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Supporting evidence
+      description: Sanitized example, workflow recording, benchmark, user feedback, or related Issue/PR.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Proposer checklist
+      options:
+        - label: I searched open and closed Issues for an existing request.
+          required: true
+        - label: I described the problem before proposing implementation details.
+          required: true
+        - label: I did not include credentials, proprietary reports, or sensitive production data.
+          required: true
