@@ -10,7 +10,7 @@ Start here for current product scope, architecture, planning, and development pr
 - `project/product_specification.md` — product personas, workflows, functional/non-functional requirements, boundaries, and release-quality target.
 - `project/architecture.md` — canonical package ownership, data flows, compatibility/native policies, and active architecture risks.
 - `project/roadmap.md` — single current planning overview backed by GitHub Issues.
-- `project/development_workflow.md` — issue-first workflow, transitional branch rules, validation tiers, and definitions of ready/done.
+- `project/development_workflow.md` — issue-first workflow, active development/release branch rules, validation tiers, and definitions of ready/done.
 - `project/chatgpt_workspace.md` — recommended ChatGPT project sources, control chats, Issue-specific chat workflow, and privacy rules.
 
 ## Active docs
@@ -118,6 +118,7 @@ The legacy `docs/group_analysis/user_manual.md` path is retained only as a redir
 Canonical release operations docs (release gate/source-of-truth set):
 
 - `release_checks/release_status.md` — current release operational status and entry-point links, including build `260711` detailed audit pass-two evidence.
+- `release_checks/rc2_branch_transition_decision_2026-08-22.md` — exact automatic validation evidence, `develop`/release/transition branch decision, and explicit no-go for `master` pending #901.
 - `release_checks/rc2_audit_pass2_release_check_2026-07-11.md` — build `260711` detailed repository audit implementation, exact local CI-parity validation, and remaining packaging, push, Google, legal, and clean-machine blockers.
 - `release_checks/rc2_full_repo_hardening_2026-07-09.md` — historical build `260709` first-pass audit implementation and local validation.
 - `release_checks/release_candidate_checklist.md` — primary RC gate checklist and required sign-offs.
