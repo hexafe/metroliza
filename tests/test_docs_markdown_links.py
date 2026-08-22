@@ -7,6 +7,7 @@ from pathlib import Path
 MARKDOWN_LINK_PATTERN = re.compile(r"!?\[[^\]]+\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 IGNORED_PREFIXES = ("http://", "https://", "mailto:", "#")
 DOCS_INDEX_PATH = Path("docs/README.md")
+PROJECT_DOCS_ROOT = Path("docs/project")
 ROADMAPS_ROOT = Path("docs/roadmaps")
 RELEASE_CHECKLIST_PATH = Path("docs/release_checks/release_candidate_checklist.md")
 RELEASE_GUIDE_PATHS = (
@@ -16,6 +17,7 @@ RELEASE_GUIDE_PATHS = (
 RELEASE_CHECKLIST_FRAGMENT_PATTERN = re.compile(
     r"\]\(\./release_candidate_checklist\.md#([^)]+)\)"
 )
+PROJECT_METADATA_MARKERS = ("Status:", "Owner:", "Last reviewed:")
 
 
 def iter_markdown_files(root: Path) -> list[Path]:
@@ -57,6 +59,29 @@ def test_docs_markdown_local_links_resolve() -> None:
                 failures.append(f"{markdown_file}: {target}")
 
     assert not failures, "Broken markdown local links:\n" + "\n".join(failures)
+
+
+def test_docs_index_inventories_every_project_document() -> None:
+    docs_index = DOCS_INDEX_PATH.read_text(encoding="utf-8")
+    missing = [
+        str(path.relative_to("docs"))
+        for path in iter_markdown_files(PROJECT_DOCS_ROOT)
+        if str(path.relative_to("docs")) not in docs_index
+    ]
+
+    assert not missing, "Project docs missing from docs/README.md index:\n" + "\n".join(missing)
+
+
+def test_project_documents_declare_status_owner_and_review_date() -> None:
+    failures: list[str] = []
+
+    for path in iter_markdown_files(PROJECT_DOCS_ROOT):
+        content = path.read_text(encoding="utf-8")
+        missing_markers = [marker for marker in PROJECT_METADATA_MARKERS if marker not in content]
+        if missing_markers:
+            failures.append(f"{path}: missing {', '.join(missing_markers)}")
+
+    assert not failures, "Project docs missing maintenance metadata:\n" + "\n".join(failures)
 
 
 def test_docs_index_inventories_every_roadmap() -> None:

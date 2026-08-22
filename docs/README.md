@@ -1,6 +1,17 @@
 # Documentation Index
 
-This directory contains active operational, maintenance, and end-user documentation.
+This directory contains active operational, maintenance, project, and end-user documentation.
+
+## Project control
+
+Start here for current product scope, architecture, planning, and development process:
+
+- `project/README.md` — canonical Metroliza project control center and source-of-truth hierarchy.
+- `project/product_specification.md` — product personas, workflows, functional/non-functional requirements, boundaries, and release-quality target.
+- `project/architecture.md` — canonical package ownership, data flows, compatibility/native policies, and active architecture risks.
+- `project/roadmap.md` — single current planning overview backed by GitHub Issues.
+- `project/development_workflow.md` — issue-first workflow, transitional branch rules, validation tiers, and definitions of ready/done.
+- `project/chatgpt_workspace.md` — recommended ChatGPT project sources, control chats, Issue-specific chat workflow, and privacy rules.
 
 ## Active docs
 
@@ -45,23 +56,23 @@ This directory contains active operational, maintenance, and end-user documentat
 
 ## Roadmap inventory
 
-Use this inventory before assigning work from `docs/roadmaps/`. Active entries
-can drive new implementation. Completed records and historical handoffs preserve
-pre-reorganization context and must be refreshed against canonical
-`src/metroliza/*` paths before being used as write scopes.
+The canonical current project roadmap is `project/roadmap.md` and is backed by GitHub Issues.
+Use the inventory below before assigning work from `docs/roadmaps/`. These entries are supporting
+domain plans, decision records, closeout evidence, or historical handoffs. Active entries can
+inform an Issue, but an unchecked bullet alone does not schedule implementation.
 
 | Roadmap | Status | Notes |
 |---|---|---|
-| `roadmaps/post_reorganization_next_implementation_plan.md` | Active | Current post-reorganization implementation plan and workstream hub. |
-| `roadmaps/full_module_audit_2026_06.md` | Active | Full-module audit matrix for parser/report persistence, export/charting, CSV Summary, UI/UX, CI, packaging, and release gates. |
-| `roadmaps/OZNAK_PRODUCTION_ANALYTICS_IMPLEMENTATION_PLAN.md` | Active | Production and tabular analytics roadmap; paths are canonicalized to `src/metroliza/*`. |
-| `roadmaps/realtime_industrial_monitoring_plan.md` | Active | Realtime industrial monitoring rollout plan for source safety, replay, operator workflow, and rollback. |
-| `roadmaps/sqlite_realtime_event_stream.md` | Active | SQLite-backed local event stream and consumer-offset design for realtime industrial monitoring. |
-| `roadmaps/OCR_BENCHMARKING_MASTER.md` | Active | OCR benchmarking and acceleration handoff; new work follows the post-reorganization path policy. |
+| `roadmaps/post_reorganization_next_implementation_plan.md` | Active reference pending #902 | Post-reorganization workstream hub; verify every item against current code and GitHub Issues before assignment. |
+| `roadmaps/full_module_audit_2026_06.md` | Active reference pending #902 | Audit matrix with fixes and deferred findings; some deferred work is already implemented in later RC2 builds. |
+| `roadmaps/OZNAK_PRODUCTION_ANALYTICS_IMPLEMENTATION_PLAN.md` | Active domain plan pending #902 | Production and tabular analytics plan; paths are canonicalized to `src/metroliza/*`. |
+| `roadmaps/realtime_industrial_monitoring_plan.md` | Active domain plan pending #902 | Realtime industrial monitoring rollout plan for source safety, replay, operator workflow, and rollback. |
+| `roadmaps/sqlite_realtime_event_stream.md` | Active domain/reference pending #902 | SQLite-backed local event stream and consumer-offset design for realtime industrial monitoring. |
+| `roadmaps/OCR_BENCHMARKING_MASTER.md` | Active domain plan pending #902 | OCR benchmarking and acceleration handoff; new work follows canonical project/Issue policy. |
 | `roadmaps/static_population_layer_dashboard_plan.md` | Completed record | Static large-group layer optimization closeout for large CSV Summary dashboards and shared dashboard renderer parity. |
-| `roadmaps/PLOTSTATS_CENTRALIZATION_IMPLEMENTATION_PLAN.md` | Future active | Plotstats boundary migration plan. |
-| `roadmaps/exporter_audit_2026_03.md` | Active follow-up | Exporter Phase-B structural backlog after RC2 seam closeout. |
-| `roadmaps/rust_acceleration_scope.md` | Active decision record | Native-acceleration promotion gate and candidate-scope decision record. |
+| `roadmaps/PLOTSTATS_CENTRALIZATION_IMPLEMENTATION_PLAN.md` | Future reference; tracked by #907 | Plotstats boundary migration plan. |
+| `roadmaps/exporter_audit_2026_03.md` | Active follow-up; tracked by #903 | Exporter Phase-B structural backlog after RC2 seam closeout. |
+| `roadmaps/rust_acceleration_scope.md` | Active decision record; tracked by #908 | Native-acceleration promotion gate and candidate-scope decision record. |
 | `roadmaps/directory_reorganization_long_term.md` | Completed record | Directory reorganization closeout and compatibility-shim policy. |
 | `roadmaps/2026_03_rc2_stabilization_execution.md` | Completed record | RC2 export-path stabilization closeout; `modules/*` references are historical. |
 | `roadmaps/UI_UX_RELEASE_FIX_PLAN.md` | Completed record | May 2026 UI/UX release-fix closeout; pre-reorganization path references are historical. |
@@ -69,7 +80,7 @@ pre-reorganization context and must be refreshed against canonical
 | `roadmaps/TESTS_CLEANUP_PLAN.md` | Completed record | Test-cleanup closeout and future cleanup cautions. |
 | `roadmaps/METROLIZA_AUDIT_NEXT_SESSION.md` | Historical handoff | April 2026 audit handoff; refresh before assigning new work. |
 | `roadmaps/OCR_TEST_CLEANUP_NEXT_SESSION_README.md` | Historical handoff | OCR/test-cleanup handoff after the 2026-04-28 pass. |
-| `roadmaps/OZNAK_METROLIZA_INTEGRATION_AUDIT_PLAN.md` | Historical implementation record | Oznak integration branch record; new industrial work should use the active production analytics plan. |
+| `roadmaps/OZNAK_METROLIZA_INTEGRATION_AUDIT_PLAN.md` | Historical implementation record | Oznak integration branch record; new industrial work should use current Issues and validated domain docs. |
 
 ## Active end-user manual area
 
