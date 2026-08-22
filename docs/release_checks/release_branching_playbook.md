@@ -9,18 +9,21 @@ For canonical policy (branch naming, merge rules, and tagging rules), always fol
 
 ## TL;DR flow
 
-1. Create `release/YYYY.MM-rc1` from `master` to start the release cycle.
-2. Build each planned change on its own `feature/*` branch.
-3. Merge only release-approved features into the active release branch.
-4. Freeze feature scope, then build EXE from the release branch and deploy internally.
-5. During testing, keep working only on release fixes/improvements inside the release branch (`rc2`, `rc3`, ...).
-6. After test deployment is green and sign-off is complete, merge release into `master` and tag final release.
+1. Integrate each planned change into `develop` through its reviewed `feature/*` or `fix/*` PR.
+2. At the approved feature-freeze point, create `release/YYYY.MM-rc1` from `develop`.
+3. After freeze, use short-lived release-fix branches that target the active release branch and
+   reconcile each accepted fix into `develop`.
+4. Build the EXE from the release branch and deploy it internally.
+5. Repeat release-fix and validation cycles on the same candidate branch or a successor candidate.
+6. After validation and sign-off are complete, merge the approved release into `master` and tag
+   the final release.
 
 ---
 
 ## Branch roles
 
 - `feature/<name>`: one isolated feature/fix.
+- `develop`: canonical integration line and source for a new release branch at feature freeze.
 - `master`: stable line; updated only by completed releases/hotfixes.
 - `release/YYYY.MM-rcN`: active release integration + stabilization branch used for packaging and internal testing.
 - `hotfix/<name>`: urgent production patch after a release.
@@ -31,8 +34,10 @@ Do **not** rename a feature branch into a release branch.
 
 Instead:
 - Keep feature branches short-lived.
-- Cut the release branch first from `master`.
-- Merge selected/approved features into that release branch only.
+- Merge approved feature branches into `develop` through reviewed PRs before feature freeze.
+- Cut the release branch from `develop` at the approved feature-freeze point.
+- After freeze, target only approved release-fix branches at the release branch and reconcile each
+  accepted fix into `develop`.
 - Keep `master` untouched until release sign-off.
 
 This keeps `master` maximally stable during the full RC cycle.
@@ -46,26 +51,25 @@ Assume you finished:
 - `feature/google-export-warning-copy`
 - `feature/export-speed-tuning`
 
-### 1) Cut release branch first
+### 1) Integrate the approved feature set into `develop`
+
+Review and merge each approved feature PR into `develop`. Do not merge the feature branches
+directly into the frozen release line. When the approved scope is integrated:
 
 ```bash
-git checkout master
-git pull --ff-only origin master
+git checkout develop
+git pull --ff-only origin develop
+```
+
+### 2) Cut the release branch at feature freeze
+
+```bash
 git checkout -b release/2026.05-rc1
+git push -u origin release/2026.05-rc1
 ```
 
-This branch is now the release integration target; `master` stays stable.
-
-### 2) Merge release-approved features into release branch
-
-```bash
-git checkout release/2026.05-rc1
-git merge --no-ff feature/csv-presets-improvement
-git merge --no-ff feature/google-export-warning-copy
-git merge --no-ff feature/export-speed-tuning
-```
-
-Run baseline checks and commit release-doc updates on the release branch.
+This branch is now the frozen release target; `master` stays stable and `develop` continues as the
+normal integration line.
 
 ### 3) Freeze scope
 
@@ -82,26 +86,30 @@ Use the packaging/checklist flow in `release_candidate_checklist.md`.
 
 ### 5) If internal testing finds issues
 
-Fix directly on RC:
+Create a short-lived fix branch from the current RC:
 
 ```bash
 git checkout release/2026.05-rc1
+git pull --ff-only origin release/2026.05-rc1
+git checkout -b fix/<issue>-release-blocker
 # apply fix
 git commit -m "Fix: <issue>"
-git tag -a v2026.05-rc2 -m "Release candidate v2026.05-rc2"
+git push -u origin fix/<issue>-release-blocker
 ```
 
-Deploy rc2 and repeat until stable.
+Open a reviewed PR targeting `release/2026.05-rc1`. After it is accepted, reconcile the fix into
+`develop` through a separate reviewed PR, then deploy and repeat validation until stable.
 
 ### 6) Finalize release
 
 ```bash
 git checkout master
 git merge --no-ff release/2026.05-rc1
-git tag v2026.05
+git tag -a v2026.05 -m "Release v2026.05"
 ```
 
-Then close/delete RC branch.
+Then reconcile the production result into `develop` through a reviewed PR. Close or delete the RC
+branch only under the repository's separately approved cleanup policy.
 
 ---
 

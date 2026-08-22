@@ -1,9 +1,9 @@
 # Release Status — Active Operations
 
-Status: Active release status hub  
-Owner: Release maintainer  
-Last reviewed: 2026-08-22  
-Current release identity: `2026.06 RC2 (build 260711)`
+- Status: Active release status hub
+- Owner: Release maintainer
+- Last reviewed: 2026-08-22
+- Current release identity: `2026.06 RC2 (build 260711)`
 
 Use this page for the current release state. Exact decision evidence belongs in the linked
 release-check documents. Historical run-by-run detail remains in those documents and in git history;
@@ -22,7 +22,13 @@ it is not repeated indefinitely in this active hub.
 
 ## Candidate identity and branches
 
-Release/window metadata is canonical in `src/metroliza/app/version.py` and validated with:
+Release line metadata is canonical in `src/metroliza/app/version.py`:
+
+- `RELEASE_VERSION` defines the release version;
+- `VERSION_DATE` defines the release date;
+- `CURRENT_RELEASE_HIGHLIGHT` defines the current release summary.
+
+Validate those values and their synchronized consumers with:
 
 ```bash
 python scripts/sync_release_metadata.py --check
@@ -46,6 +52,15 @@ Validated branch-point content before the #900 decision documentation:
 The tested synthetic merge and final governance merge have the same tree SHA, so the automatic
 results apply to the exact selected repository content. The branch-transition PR itself is
 documentation-only and must also complete normal exact-tree CI before #900 closes.
+
+## Gate sources
+
+- **PR-blocking CI gates** are defined in [`../ci-policy.md`](../ci-policy.md) and must be green for
+  merge readiness on the exact pull-request content.
+- **Release-blocking manual evidence gates** are defined in [`release_candidate_checklist.md`](./release_candidate_checklist.md)
+  and must be complete before a candidate can be promoted.
+- Google conversion smoke is intentionally local-only and remains release-blocking for promotion;
+  a green hosted CI run does not satisfy that evidence gate.
 
 ## Current automatic evidence
 

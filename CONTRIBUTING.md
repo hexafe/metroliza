@@ -7,7 +7,8 @@
 - Use [`docs/project/roadmap.md`](docs/project/roadmap.md) for current priorities; old roadmap checklists do not schedule work by themselves.
 - Branch normal development from `develop` and target pull requests at `develop`.
 - Branch only approved release fixes/evidence from `release/2026.06-rc2` and target that release branch; reconcile accepted release changes into `develop`.
-- Do not start new routine work from `rc2` or stale `master`.
+- Do not start new routine work from `rc2` or the current production `master`; neither is the
+  development base.
 - GitHub currently presents `master` as the default branch, so select the pull-request base explicitly.
 - Keep one primary Issue per pull request and separate behavior changes from structural refactors.
 

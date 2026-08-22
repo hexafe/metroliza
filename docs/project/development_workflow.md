@@ -26,7 +26,7 @@ The branch decision and exact validation evidence are recorded in
 - Create feature, fix, refactor, test, security, documentation, and chore branches from `develop`
   unless the Issue is explicitly release-specific.
 - Normal pull requests target `develop`.
-- Broad new work must not target `rc2`, `release/2026.06-rc2`, or stale `master`.
+- Broad new work must not target `rc2`, `release/2026.06-rc2`, or the current production `master`.
 
 ### Current release candidate
 

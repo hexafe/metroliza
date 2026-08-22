@@ -1,15 +1,15 @@
 # RC2 Branch Transition and Automated Validation Decision — 2026-08-22
 
-Status: Active release/branch decision  
-Owner: Release and architecture maintainer  
-Decision Issue: #900  
-Manual promotion evidence: #901  
-Release identity: `2026.06 RC2 (build 260711)`
+- Status: Active release/branch decision
+- Owner: Release and architecture maintainer
+- Decision Issue: #900
+- Manual promotion evidence: #901
+- Release identity: `2026.06 RC2 (build 260711)`
 
 ## Decision summary
 
 **GO** for establishing a trustworthy development/release branch topology from the validated RC2
-content.  
+content.
 **NO-GO** for promotion to `master`, a stable tag, or a production-release claim.
 
 The approved topology is:

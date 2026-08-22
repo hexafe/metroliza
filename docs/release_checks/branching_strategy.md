@@ -35,8 +35,10 @@ its base explicitly: normally `develop`, or `release/2026.06-rc2` for approved r
 
 ### `master`
 
-Production-ready branch after an approved release promotion. Only reviewed, release-owner-approved
-candidate merges and minimal production hotfixes belong here.
+`master`: current production-ready branch and historical/default production anchor. It represents
+the last accepted production state; the current `2026.06 RC2` candidate is not approved for
+promotion while #901 remains open. Only reviewed, release-owner-approved candidate merges and
+minimal production hotfixes belong here.
 
 `master` is not a development base. Its default-branch status does not authorize feature/refactor
 work or promotion from an unvalidated branch.
