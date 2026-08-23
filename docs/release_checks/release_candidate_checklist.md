@@ -121,8 +121,9 @@ on hosted runners.
 ```bash
 git checkout master
 git pull --ff-only origin master
-git merge --no-ff rc2
+git merge --no-ff release/2026.06-rc2
 ```
 
 - [ ] The release tag is created from the reviewed merge commit and pushed.
+- [ ] The production result is reconciled into `develop` through a reviewed PR.
 - [ ] Final artifact hashes, publication location, announcement, and post-release monitoring owner are recorded.
