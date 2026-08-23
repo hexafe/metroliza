@@ -2,9 +2,9 @@
 
 Status: Active planning source of truth  
 Owner: Product/architecture maintainer  
-Last reviewed: 2026-08-22  
-Planning unit: GitHub Issue  
-Product backlog epic: [#925](https://github.com/hexafe/metroliza/issues/925)  
+Last reviewed: 2026-08-23
+Planning unit: GitHub Issue
+Product backlog epic: [#925](https://github.com/hexafe/metroliza/issues/925)
 Feature catalog: [feature_catalog.md](./feature_catalog.md)
 
 This roadmap orders outcomes and defines gates. It does not duplicate every Issue acceptance
@@ -29,25 +29,17 @@ under `docs/release_checks/`.
 
 ## 2. Current repository and product state
 
-Audit snapshot: 2026-08-22.
+Branch decision date: 2026-08-22. Authoritative branch rationale and release evidence remain in
+[`rc2_branch_transition_decision_2026-08-22.md`](../release_checks/rc2_branch_transition_decision_2026-08-22.md)
+and [`release_status.md`](../release_checks/release_status.md).
 
-- Current product line: `rc2` at `202690eb21087314a3c8000aa3ebdb58a1a09c1b`.
-- Default branch: stale `master` at `ab26258e72d285c3917a595515798da185800373`.
-- `rc2` is 278 commits ahead of `master` and zero behind.
-- Canonical release metadata still identifies `2026.06 RC2 (build 260711)`.
-- PR #895 records successful exact-head CI for earlier RC2 head
-  `ce7556098626f93d3ade95abd49ede00be341611` and was intentionally closed without promotion.
-- Current `rc2` contains one additional large product-wide commit after that validated head.
-- [#900](https://github.com/hexafe/metroliza/issues/900) must validate the exact current candidate
-  and name the canonical development/release base.
-
-Until #900 closes:
-
-- product documentation and narrowly scoped fixes branch from `rc2`;
-- `master` remains untouched;
-- no documentation may imply that the current RC2 head is released merely because it exists;
-- broad feature implementation should wait unless it directly supports baseline/release evidence or
-  is isolated behind an approved Issue.
+- `develop` is the canonical branch for normal Issue-driven development and integration.
+- `release/2026.06-rc2` is the frozen release-candidate and evidence branch.
+- `rc2` is a temporary historical transition/reference alias, not a routine development base.
+- `master` remains the current production/history anchor and is unchanged pending the separate
+  [#901 release-promotion decision](https://github.com/hexafe/metroliza/issues/901).
+- Canonical release metadata remains `2026.06 RC2 (build 260711)`; this roadmap does not duplicate
+  or supersede the release evidence required for promotion.
 
 ## 3. Roadmap overview
 
@@ -55,12 +47,12 @@ Until #900 closes:
 |---|---|---|
 | **0. Project control and branch truth** | One source of truth, full Issue backlog, explicit branch/release decision | #899, #900, #902, #911, #921, #923, #924, #925 |
 | **1. Reproducible baseline and toolchain** | Clean setup, canonical end-to-end fixture, trustworthy CI/diagnostics/performance evidence | #901, #906, #912, #913, #914, #918, #922, #944, #952 |
-| **2. Stable data and application core** | Versioned model, headless vertical slice, controlled import/OCR/database/filter/group/curation | #915, #916, #926, #927, #928, #929, #930, #931, #932, #945, #954 |
-| **3. Stable analysis and reporting** | One result model, supported statistics/capability, presets, Excel, dashboard, optional Google | #903, #904, #907, #917, #933, #934, #935, #936, #937, #938 |
+| **2. Stable data and application core** | Versioned model, headless vertical slice, controlled import/OCR/database/filter/group/curation | #915, #916, #926, #927, #928, #929, #930, #931, #932, #945, #952, #954 |
+| **3. Stable analysis and reporting** | One result model, supported statistics/capability, presets, Excel, dashboard, optional Google | #903, #904, #907, #917, #933, #934, #935, #936, #937, #938, #952 |
 | **4. Tabular, industrial and realtime product lines** | Shared contracts for large flat files, cache-first production data and replayable monitoring | #919, #939, #940, #941, #952 |
-| **5. Reproducibility, automation and sharing** | Workspaces, CLI, scheduled jobs, history, baselines, visual recipes and evidence bundles | #926, #942, #943, #947, #948, #949, #953 |
-| **6. Controlled extensibility and optimization** | Canonical imports, reviewed security, extension contracts, LLM parser assistance, measured native promotion | #905, #906, #908, #950, #951, #952 |
-| **7. Stable release and lifecycle closeout** | Supported platform/build, manual evidence, accessibility/help, legacy/licensing decisions, 1.0 gate | #901, #920, #946, #955, #956, #957 |
+| **5. Reproducibility, automation and sharing** | Workspaces, CLI, scheduled jobs, history, baselines, visual recipes and evidence bundles | #926, #942, #943, #945, #947, #948, #949, #952, #953 |
+| **6. Controlled extensibility and optimization** | Canonical imports, reviewed security, extension contracts, LLM parser assistance, measured native promotion | #905, #906, #908, #928, #950, #951, #952 |
+| **7. Stable release and lifecycle closeout** | Supported platform/build, manual evidence, accessibility/help, legacy/licensing decisions, 1.0 gate | #901, #920, #938, #946, #952, #955, #956, #957 |
 
 Phases overlap where work is safely parallel, but their exit gates define dependency order. For
 example, parser-profile documentation can progress while exact-head CI runs, but a new workspace
@@ -84,15 +76,15 @@ planning sources.
 | [#924](https://github.com/hexafe/metroliza/issues/924) | Review/preserve/retire release branches without history loss |
 | [#921](https://github.com/hexafe/metroliza/issues/921) | Labels, milestones, repository defaults and branch protection |
 | [#923](https://github.com/hexafe/metroliza/issues/923) | ChatGPT project sources/chats aligned to GitHub Issues and docs |
-| [#900](https://github.com/hexafe/metroliza/issues/900) | Exact current-head validation and canonical branch/release decision |
+| [#900](https://github.com/hexafe/metroliza/issues/900) | Completed canonical branch/release decision and non-destructive transition |
 
 ### Exit criteria
 
 - full product and engineering backlog exists as Issues;
 - every remote branch has a documented role/disposition;
 - no active work depends only on a chat or stale roadmap checklist;
-- exact current candidate SHA is validated or explicitly rejected;
-- canonical development base is named without force-push/history rewrite;
+- the accepted candidate content and branch decision are recorded without force-push/history rewrite;
+- `develop` is named as the canonical development base;
 - repository settings support issue/PR-driven work;
 - `docs/project/` is the planning entry point and `docs/release_checks/` remains release evidence.
 
@@ -172,6 +164,7 @@ Make the central import-to-analysis workflow versioned, headless and independent
 | [#931](https://github.com/hexafe/metroliza/issues/931) | Shared typed filter contract and backend conformance |
 | [#932](https://github.com/hexafe/metroliza/issues/932) | Reusable grouping and characteristic mapping |
 | [#945](https://github.com/hexafe/metroliza/issues/945) | Consistent workspace context, task ownership and preferences |
+| [#952](https://github.com/hexafe/metroliza/issues/952) | Bounded core import, query and analysis behavior |
 | [#926](https://github.com/hexafe/metroliza/issues/926) | Workspace schema foundation, initially for the canonical slice |
 
 ### Delivery sequence
@@ -216,6 +209,7 @@ model.
 | [#903](https://github.com/hexafe/metroliza/issues/903) | Behavior-preserving exporter decomposition |
 | [#904](https://github.com/hexafe/metroliza/issues/904) | Bounded dashboard modules and stable browser contracts |
 | [#907](https://github.com/hexafe/metroliza/issues/907) | Measured plotstats package boundary |
+| [#952](https://github.com/hexafe/metroliza/issues/952) | Bounded analysis, rendering and publication behavior |
 
 ### Delivery sequence
 
@@ -298,6 +292,8 @@ Turn repeatable interactive work into durable, scriptable, reviewable engineerin
 | [#947](https://github.com/hexafe/metroliza/issues/947) | Versioned visual recipes and local annotations |
 | [#953](https://github.com/hexafe/metroliza/issues/953) | Portable verifiable evidence bundle |
 | [#944](https://github.com/hexafe/metroliza/issues/944) | Shared diagnostic/redaction/bundle support |
+| [#945](https://github.com/hexafe/metroliza/issues/945) | Workspace context and task ownership across interactive and automated flows |
+| [#952](https://github.com/hexafe/metroliza/issues/952) | Bounded automation, sharing and cleanup behavior |
 
 ### Delivery sequence
 
@@ -334,6 +330,7 @@ Allow safe extension and measured optimization without recreating uncontrolled m
 | [#905](https://github.com/hexafe/metroliza/issues/905) | Canonical imports in behavior tests; compatibility tests isolated |
 | [#906](https://github.com/hexafe/metroliza/issues/906) | Current finite reviewed security exceptions |
 | [#908](https://github.com/hexafe/metroliza/issues/908) | Promote, keep experimental or retire each native candidate |
+| [#928](https://github.com/hexafe/metroliza/issues/928) | Declarative parser lifecycle as the controlled extension foundation |
 | [#950](https://github.com/hexafe/metroliza/issues/950) | Privacy-reviewed LLM parser-profile generation/repair |
 | [#951](https://github.com/hexafe/metroliza/issues/951) | Versioned parser/analysis/report extension interfaces |
 | [#952](https://github.com/hexafe/metroliza/issues/952) | End-to-end performance and resource envelopes |
@@ -373,7 +370,9 @@ Ship a stable, supported product identity and close scope that otherwise remains
 |---:|---|
 | [#920](https://github.com/hexafe/metroliza/issues/920) | Supported OS/architecture/browser, versioning, packaging and release process |
 | [#901](https://github.com/hexafe/metroliza/issues/901) | Exact-build Windows, Google, notices/hashes and legal evidence |
+| [#938](https://github.com/hexafe/metroliza/issues/938) | Exact-build optional Google conversion evidence with local fallback |
 | [#946](https://github.com/hexafe/metroliza/issues/946) | Keyboard/accessibility baseline and manual smoke |
+| [#952](https://github.com/hexafe/metroliza/issues/952) | Supported workload and packaged resource-behavior evidence |
 | [#955](https://github.com/hexafe/metroliza/issues/955) | Contextual help, current manuals and troubleshooting |
 | [#956](https://github.com/hexafe/metroliza/issues/956) | Legacy Group Comparison/BOM retain/migrate/remove decisions |
 | [#957](https://github.com/hexafe/metroliza/issues/957) | Licensing/activation retain/extract/redesign/remove decision |

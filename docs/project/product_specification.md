@@ -1,10 +1,10 @@
 # Metroliza Product Specification
 
-Status: Active product specification  
+Status: Active product specification
 Owner: Product/architecture maintainer  
-Last reviewed: 2026-08-22  
-Applies to: current `rc2` product line and post-RC2 development  
-Product backlog epic: [#925](https://github.com/hexafe/metroliza/issues/925)  
+Last reviewed: 2026-08-23
+Applies to: product scope integrated through `develop`; release claims remain evidence-controlled
+Product backlog epic: [#925](https://github.com/hexafe/metroliza/issues/925)
 Feature catalog: [feature_catalog.md](./feature_catalog.md)
 
 ## 1. Purpose of this specification
@@ -16,21 +16,19 @@ GitHub Issues carry implementation work. The linked feature Issue is authoritati
 scope and acceptance criteria of an in-flight capability. This specification remains the stable
 product-level contract across individual implementation Issues and pull requests.
 
-The current repository state is transitional:
+The accepted branch policy separates development from release evidence:
 
-- `master` is the default branch but is stale at
-  `ab26258e72d285c3917a595515798da185800373` from 2026-03-30;
-- `rc2` is the current product line at
-  `202690eb21087314a3c8000aa3ebdb58a1a09c1b` from 2026-07-17;
-- `rc2` is 278 commits ahead of `master` and zero commits behind at the 2026-08-22 audit;
-- PR #895 records green exact-head CI for the earlier RC2 head
-  `ce7556098626f93d3ade95abd49ede00be341611`, but the current head requires new evidence;
-- [#900](https://github.com/hexafe/metroliza/issues/900) owns the exact-head validation and
-  canonical-branch decision.
+- `develop` is the canonical branch for normal Issue-driven development and integration;
+- `release/2026.06-rc2` is the frozen release-candidate and evidence branch;
+- `rc2` is a temporary historical transition/reference alias, not a routine development base;
+- `master` remains the current production/history anchor and is unchanged pending the separate
+  [#901 release-promotion decision](https://github.com/hexafe/metroliza/issues/901).
 
-Until #900 closes, product maturity statements in this document describe the `rc2` implementation
-and intended post-RC direction; they are not a declaration that the current head has been promoted
-or released.
+The authoritative branch rationale and release evidence remain in
+[`docs/release_checks/`](../release_checks/), especially the
+[branch transition decision](../release_checks/rc2_branch_transition_decision_2026-08-22.md) and
+[release status](../release_checks/release_status.md). Product maturity statements here describe
+scope and implementation maturity; they do not declare promotion or release.
 
 ## 2. Product definition
 
@@ -145,8 +143,8 @@ baseline without requiring repository access.
 
 A feature can be:
 
-- **release-candidate** — substantial behavior exists on `rc2`, but the supported-release
-  acceptance gate is not fully closed;
+- **release-candidate** — substantial behavior exists in the current candidate lineage, but the
+  supported-release acceptance gate is not fully closed;
 - **partial** — components exist, but no single coherent supported workflow exists;
 - **experimental** — code/research exists behind opt-in, limited rollout or unresolved contracts;
 - **planned** — the outcome is approved for the roadmap but not implemented as a supported flow;
@@ -802,7 +800,8 @@ No feature is claimed in a supported release only because a branch or local test
 
 The first stable post-RC line requires:
 
-1. #900 names the canonical development/release base with terminal exact-head evidence.
+1. The accepted #900 branch decision remains followed: normal work integrates through `develop`
+   while release evidence stays authoritative on the frozen candidate line.
 2. #901 either closes every manual promotion gate or explicitly blocks release.
 3. #912 provides one reproducible end-to-end reference workflow.
 4. #915/#916/#917 establish the canonical core contracts and at least one headless vertical slice.
@@ -855,7 +854,6 @@ Unless a separately approved Feature/Research Issue changes scope, Metroliza is 
 
 ## 18. Open product decisions
 
-- Current head and canonical branch/release path — #900.
 - Exact-build package/Google/legal promotion evidence — #901.
 - Active-roadmap archival and document authority — #902.
 - Domain/application/report/realtime contracts — #915, #916, #917, #919.

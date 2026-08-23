@@ -2,7 +2,7 @@
 
 Status: Active  
 Owner: Architecture maintainer  
-Last reviewed: 2026-08-22
+Last reviewed: 2026-08-23
 
 ## 1. Architectural intent
 
@@ -272,8 +272,8 @@ Native acceleration is optional and policy-controlled.
 
 | Risk | Evidence | Treatment |
 |---|---|---|
-| Branch/source-of-truth divergence | `rc2` is 278 commits ahead of stale default `master` | #900 before promotion or broad feature work |
-| Unvalidated product-wide head | current `rc2` is one large commit after the last documented green exact head | #900 exact-head CI and review |
+| Default/development branch divergence | GitHub still defaults to `master` while normal Issue-driven work belongs on `develop` | #921 repository-default/protection decision; select PR bases explicitly |
+| Incomplete release promotion evidence | the frozen `release/2026.06-rc2` candidate still lacks the manual evidence owned by #901 | keep release evidence authoritative and do not promote `master` before the release-owner decision |
 | Exporter concentration | `export_data_thread.py` is about 306 KB and owns mixed concerns | #903 incremental seams |
 | Dashboard concentration | controls/options/spec modules embed large shared behavior surfaces | #904 contract-preserving split |
 | Compatibility ambiguity in tests | behavior tests still use many `modules.*` imports | #905 measured burn-down, shims retained |

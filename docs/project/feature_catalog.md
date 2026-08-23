@@ -1,14 +1,14 @@
 # Metroliza Feature Catalog
 
-Status: Active product backlog index  
-Owner: Product/architecture maintainer  
-Last reviewed: 2026-08-22  
+Status: Active product backlog index
+Owner: Product/architecture maintainer
+Last reviewed: 2026-08-23
 Canonical product epic: [#925](https://github.com/hexafe/metroliza/issues/925)
 
 This catalog maps every major Metroliza product capability to a GitHub Issue. It is the bridge
 between the product specification and executable development work.
 
-The catalog does **not** claim that every capability starts from zero. The current `rc2` product
+The catalog does **not** claim that every capability starts from zero. The current release-candidate
 line already contains substantial implementations. A capability remains open until its supported
 release contract, acceptance tests, documentation, diagnostics, compatibility behavior, and
 release evidence are complete.
@@ -127,5 +127,5 @@ A feature tracking Issue may be closed only when all applicable conditions are t
 7. Confidential data and credential boundaries are verified.
 8. The supported release evidence names the exact commit/build where the feature is claimed.
 
-Code existing on `rc2` is evidence of implementation progress; it is not by itself evidence that a
-feature has completed this release contract.
+Code existing on any branch is evidence of implementation progress; it is not by itself evidence
+that a feature has completed this release contract.

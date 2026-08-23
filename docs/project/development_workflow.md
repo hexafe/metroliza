@@ -15,26 +15,37 @@ evidence, or a public contract. Even then, the pull request must explain the sco
 One pull request should have one primary Issue. If an Issue needs several independently reviewable
 slices, use several pull requests and keep the Issue open until all acceptance criteria are met.
 
-## 2. Transitional branch policy
+## 2. Active branch policy
 
-The documented long-term policy says `master` is production-ready, but the repository currently has
-a different physical state:
+The branch decision and exact validation evidence are recorded in
+[`rc2_branch_transition_decision_2026-08-22.md`](../release_checks/rc2_branch_transition_decision_2026-08-22.md).
 
-- `master`: `ab26258e72d285c3917a595515798da185800373`;
-- `rc2`: `202690eb21087314a3c8000aa3ebdb58a1a09c1b`;
-- `rc2` is 278 commits ahead and zero behind at the 2026-08-22 audit snapshot.
+### Normal development
 
-Until #900 closes:
+- `develop` is the canonical development base.
+- Create feature, fix, refactor, test, security, documentation, and chore branches from `develop`
+  unless the Issue is explicitly release-specific.
+- Normal pull requests target `develop`.
+- Broad new work must not target `rc2`, `release/2026.06-rc2`, or the current production `master`.
 
-- base current documentation, validation fixes, and narrowly approved work on `rc2`;
-- target pull requests at `rc2`;
-- do not merge feature/docs/refactor work directly into stale `master`;
-- do not cut a new release from stale `master`;
-- do not force-push, rebase-rewrite, or create a synthetic history reconciliation that changes the
-  validated product tree;
-- treat promotion to `master` as a release-owner decision requiring #900 and #901 evidence.
+### Current release candidate
 
-After #900, update this document and `docs/release_checks/branching_strategy.md` in the decision PR.
+- `release/2026.06-rc2` is the frozen candidate/evidence branch for
+  `2026.06 RC2 (build 260711)`.
+- Only release-blocking fixes, packaging/evidence work, release metadata/notes, and narrowly
+  approved security/legal changes target this branch.
+- Every accepted release-line change is reconciled into `develop` through a reviewed PR or an
+  explicitly recorded equivalent; do not allow a release-only fix to disappear from future work.
+
+### Transitional and production branches
+
+- `rc2` is retained as a historical transition/reference branch. Do not start new routine work from
+  it or target new routine pull requests at it after #900.
+- `master` remains unchanged until exact candidate automation plus all applicable #901 packaged,
+  clean-machine Windows, Google, notices, and legal evidence receives a release-owner Go decision.
+- No force-push, history rewrite, or synthetic branch reconciliation is permitted.
+- GitHub still presents `master` as the default branch, so select the PR base explicitly:
+  `develop` for normal work or `release/2026.06-rc2` for approved release work.
 
 ## 3. Issue lifecycle
 
@@ -46,11 +57,10 @@ Use one of the structured forms:
 - Feature request — a user-facing capability or behavior change.
 - Technical task — architecture, refactor, tests, performance, docs, security, or release work.
 
-The title uses the temporary explicit prefix format until repository labels/milestones are fully
-configured:
+Use explicit priority/type prefixes until repository labels are expanded:
 
 ```text
-[P0][Release] Validate current rc2 HEAD
+[P0][Release] Close packaged promotion evidence
 [P1][Architecture] Decompose exporter stage coordination
 [P2][Feature] Add an approved analytical view
 ```
@@ -66,6 +76,7 @@ Confirm:
 - dependencies/blockers;
 - data, security, compatibility, packaging, and documentation impact;
 - validation tier;
+- target base branch;
 - whether the work must be split.
 
 Close duplicate, superseded, or rejected Issues with a reason. Do not leave an Issue open merely as
@@ -79,6 +90,7 @@ An Issue is ready when:
 - [ ] intended outcome and non-goals are stated;
 - [ ] acceptance criteria are testable;
 - [ ] affected package/workflow is identified;
+- [ ] target branch (`develop` or approved release branch) is identified;
 - [ ] compatibility/data migration risk is identified;
 - [ ] validation tier and likely focused tests are named;
 - [ ] dependencies are resolved or linked;
@@ -86,7 +98,7 @@ An Issue is ready when:
 
 ### 3.4 Implement
 
-Create a branch from the current approved base.
+Create a branch from the approved base.
 
 Recommended names:
 
@@ -96,6 +108,7 @@ feature/<issue>-short-description
 refactor/<issue>-short-description
 docs/<issue>-short-description
 test/<issue>-short-description
+security/<issue>-short-description
 chore/<issue>-short-description
 release/YYYY.MM-rcN
 hotfix/<version>-short-description
@@ -104,9 +117,9 @@ hotfix/<version>-short-description
 Examples:
 
 ```text
-docs/899-project-governance-reset
+docs/902-roadmap-consolidation
 refactor/903-export-run-stages
-fix/900-parser-preflight-regression
+security/906-bandit-renewal
 ```
 
 Implementation rules:
@@ -120,17 +133,21 @@ Implementation rules:
 - Preserve atomic transactions/publication and deterministic cleanup.
 - Do not commit generated local artifacts unless the repository explicitly tracks that artifact
   and its regeneration contract.
+- Release-line work must remain within the frozen candidate scope and name its reconciliation path
+  to `develop`.
 
 ### 3.5 Pull request
 
 A pull request must:
 
+- target the correct base branch explicitly;
 - link the primary Issue (`Closes #...` when the PR completes it, otherwise `Refs #...`);
 - state user/engineering impact and non-goals;
 - describe risk and rollback;
 - identify validation tier and exact commands/results;
 - call out schema, public contract, packaging, security, native, Google, dashboard, or compatibility
   impact;
+- explain release-to-`develop` reconciliation when it targets a release branch;
 - remain small enough to review or explain why a larger integration PR is unavoidable.
 
 Do not use “tests pass” as evidence without the command, result, or CI run. Do not mark a manual gate
@@ -141,12 +158,14 @@ complete from a mocked/unit test.
 Review checks:
 
 - acceptance criteria are covered;
+- the base branch is correct;
 - behavior and failure paths are understood;
 - ownership boundaries improve or remain stable;
 - tests prove the changed contract rather than only implementation details;
 - sensitive data is absent;
 - documentation/release evidence is synchronized;
-- rollback is possible.
+- rollback is possible;
+- release fixes have a documented reconciliation path into `develop`.
 
 Preferred merge style for normal work is squash when repository policy/settings allow it, so one
 Issue slice becomes one understandable commit. Release reconciliation may use a different method
@@ -156,9 +175,10 @@ only when history/evidence requires it.
 
 - [ ] Issue acceptance criteria are satisfied.
 - [ ] Required focused/full/manual validation is recorded.
-- [ ] CI is terminal for the exact merged head.
+- [ ] CI is terminal for the exact merged content/tree.
 - [ ] Documentation and changelog/release evidence are updated when applicable.
 - [ ] Compatibility/data migration and rollback are complete.
+- [ ] Release-line work is reconciled into `develop` or has an explicit tracked blocker.
 - [ ] Temporary files/flags/dead plans are removed or explicitly tracked.
 - [ ] Follow-up work has separate Issues rather than hidden TODOs.
 - [ ] The primary Issue is closed by the merge or closed with a final evidence comment.
@@ -167,7 +187,7 @@ only when history/evidence requires it.
 
 | Priority | Meaning | Typical examples |
 |---|---|---|
-| P0 | Product head, data, release, or development base cannot be trusted safely | unvalidated release head, destructive corruption risk, active secret exposure |
+| P0 | Product head, data, release, or development base cannot be trusted safely | unvalidated candidate, destructive corruption risk, active secret exposure |
 | P1 | Important release/integrity/security risk or major maintenance blast radius | packaging blocker, expiring security waiver, giant critical orchestrator |
 | P2 | Valuable platform/product improvement with a workable current path | package centralization, measured optional acceleration |
 | P3 | Polish, experiment, or low-impact convenience | minor visual refinements, exploratory spike |
@@ -176,7 +196,7 @@ Priority is about impact and urgency, not implementation size.
 
 ## 5. Type and area taxonomy
 
-Recommended labels when repository label configuration is added:
+Recommended labels when repository label configuration is expanded:
 
 ### Type
 
@@ -274,7 +294,7 @@ Expected evidence:
 - security and dependency audit;
 - native locked builds/tests;
 - release hygiene/docs/metadata checks;
-- terminal GitHub Actions run for the exact head.
+- terminal GitHub Actions run for the exact head/content tree.
 
 ### Tier 4 — Release/manual evidence
 
@@ -295,7 +315,7 @@ packaged executable, OAuth service, clean machine, or legal sign-off.
 Use concise imperative messages with a useful scope:
 
 ```text
-docs(project): add canonical roadmap and workflow
+docs(project): consolidate active roadmaps
 fix(parsing): reject mutated source before persistence
 refactor(export): extract cancellation-safe stage coordinator
 test(compat): move report behavior tests to canonical imports
@@ -306,17 +326,26 @@ A commit should be understandable without reading the entire diff. Avoid message
 
 ## 8. Release workflow
 
-Long-term intended flow:
+Current RC2 flow:
 
-1. develop features/refactors on Issue branches from the approved development base;
+1. normal development proceeds on Issue branches from `develop`;
+2. `release/2026.06-rc2` is frozen for release fixes/evidence only;
+3. each release fix is validated on the exact candidate head and reconciled into `develop`;
+4. #901 closes packaged Windows, Google, notice, and legal evidence;
+5. the release owner records Go/No-Go;
+6. only a Go candidate merges to `master` and receives a stable tag;
+7. the production result is synchronized back to `develop`;
+8. `rc2` can then be retired through an explicit cleanup decision.
+
+Future normal flow:
+
+1. develop features/refactors on Issue branches from `develop`;
 2. cut `release/YYYY.MM-rcN` when scope freezes;
 3. allow only fixes, evidence, version metadata, and release documentation on the release branch;
 4. validate exact head automatically and manually;
 5. merge approved release into `master` and tag `vYYYY.MM`;
-6. sync the production result back to the development base;
+6. sync the production result back to `develop`;
 7. archive completed release plans/evidence appropriately.
-
-The current ad-hoc `rc2` state is governed by #900 and #901 before this normal flow resumes.
 
 ## 9. AI-assisted development rules
 
@@ -324,6 +353,7 @@ AI tools may inspect GitHub, propose plans, edit bounded branches, create Issues
 results. They do not replace review/evidence.
 
 - Begin from the Issue and read current branch/code/docs before proposing a change.
+- Verify the target branch explicitly; do not rely on GitHub's default `master` selection.
 - Do not invent repository state or claim tests were run without an actual result.
 - Do not make one product-wide commit when the work can be reviewed in slices.
 - Keep private reasoning out of commits/Issues; record the decision, evidence, and trade-off.

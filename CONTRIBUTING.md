@@ -2,11 +2,18 @@
 
 ## Before starting work
 
-- Read [`docs/project/README.md`](docs/project/README.md) for the current source-of-truth hierarchy and repository snapshot.
+- Read [`docs/project/README.md`](docs/project/README.md) for the current source-of-truth hierarchy and repository/branch state.
 - Start from a GitHub Issue and follow [`docs/project/development_workflow.md`](docs/project/development_workflow.md).
 - Use [`docs/project/roadmap.md`](docs/project/roadmap.md) for current priorities; old roadmap checklists do not schedule work by themselves.
-- Until Issue #900 resolves the repository transition, branch current approved work from `rc2` and target pull requests at `rc2`; do not merge development work directly into stale `master`.
+- Branch normal development from `develop` and target pull requests at `develop`.
+- Branch only approved release fixes/evidence from `release/2026.06-rc2` and target that release branch; reconcile accepted release changes into `develop`.
+- Do not start new routine work from `rc2` or the current production `master`; neither is the
+  development base.
+- GitHub currently presents `master` as the default branch, so select the pull-request base explicitly.
 - Keep one primary Issue per pull request and separate behavior changes from structural refactors.
+
+The exact branch decision and automated evidence are recorded in
+[`docs/release_checks/rc2_branch_transition_decision_2026-08-22.md`](docs/release_checks/rc2_branch_transition_decision_2026-08-22.md).
 
 ## Setup
 
@@ -108,6 +115,7 @@ Key release entry points remain:
 - [`docs/release_checks/release_candidate_checklist.md`](docs/release_checks/release_candidate_checklist.md)
 - [`docs/release_checks/release_branching_playbook.md`](docs/release_checks/release_branching_playbook.md)
 - [`docs/release_checks/branching_strategy.md`](docs/release_checks/branching_strategy.md)
+- [`docs/release_checks/rc2_branch_transition_decision_2026-08-22.md`](docs/release_checks/rc2_branch_transition_decision_2026-08-22.md)
 
 ## Documentation sync policy
 
@@ -135,9 +143,11 @@ When touching Google conversion/auth flows, validate and document:
 
 Use `.github/pull_request_template.md` completely. In particular:
 
+- select the correct base branch explicitly;
 - link the primary Issue;
 - state scope and non-goals;
 - identify contracts, risk, failure, cancellation, and rollback behavior;
 - select a validation tier and record exact commands/results;
+- for release-line changes, document reconciliation into `develop`;
 - update project, user, or release documentation when applicable;
-- ensure evidence refers to the exact PR head.
+- ensure evidence refers to the exact PR head/content tree.

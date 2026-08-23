@@ -2,7 +2,7 @@
 
 Status: Active  
 Owner: Product/architecture maintainer  
-Last reviewed: 2026-08-22  
+Last reviewed: 2026-08-23
 Review cadence: every release cycle or monthly, whichever is sooner
 
 This directory is the canonical entry point for planning and developing Metroliza. GitHub Issues
@@ -23,6 +23,8 @@ rules and ordered roadmap. Release evidence remains under `docs/release_checks/`
    validation tiers, Definition of Ready and Definition of Done.
 6. [ChatGPT workspace](./chatgpt_workspace.md) — project sources/chats aligned to GitHub so chat
    history never becomes the only record of a decision.
+7. [RC2 branch transition decision](../release_checks/rc2_branch_transition_decision_2026-08-22.md)
+   — authoritative branch roles, exact automatic evidence and the pending release blockers.
 
 ## GitHub control plane
 
@@ -41,7 +43,7 @@ rules and ordered roadmap. Release evidence remains under `docs/release_checks/`
 | Issue | Purpose |
 |---:|---|
 | [#899](https://github.com/hexafe/metroliza/issues/899) | Establish the project source of truth and issue-driven workflow. |
-| [#900](https://github.com/hexafe/metroliza/issues/900) | Validate current `rc2` and decide the canonical promotion/development path. |
+| [#900](https://github.com/hexafe/metroliza/issues/900) | Accepted the canonical development, frozen candidate, transition and production branch roles. |
 | [#901](https://github.com/hexafe/metroliza/issues/901) | Close exact-build Windows, Google, notices/hashes and legal evidence. |
 | [#902](https://github.com/hexafe/metroliza/issues/902) | Consolidate active roadmaps and archive superseded planning documents. |
 | [#903](https://github.com/hexafe/metroliza/issues/903) | Decompose `ExportDataThread` one behavior-preserving seam at a time. |
@@ -81,23 +83,19 @@ When sources disagree, use this order:
 A decision made only in chat, local notes, an unmerged branch or an unchecked roadmap bullet is not
 a durable project decision. Record it in an Issue, pull request, ADR or active document.
 
-## Repository snapshot
+## Repository and branch state
 
-Audit date: 2026-08-22.
+Decision date: 2026-08-22. The authoritative rationale and release evidence are in the
+[RC2 branch transition decision](../release_checks/rc2_branch_transition_decision_2026-08-22.md)
+and the active [release status](../release_checks/release_status.md).
 
-- `master` is the default branch at `ab26258e72d285c3917a595515798da185800373`
-  from 2026-03-30.
-- `rc2` contains the current product line at
-  `202690eb21087314a3c8000aa3ebdb58a1a09c1b` from 2026-07-17.
-- At the audit snapshot, `rc2` is 278 commits ahead of `master` and zero behind.
-- PR #895 records green exact-head CI for earlier RC2 head
-  `ce7556098626f93d3ade95abd49ede00be341611` and was intentionally closed without promotion.
-- The current RC2 head is one large product-wide commit after that validated head and must be
-  revalidated before promotion.
-- Canonical release metadata still identifies `2026.06 RC2 (build 260711)`.
-
-Until #900 is resolved, `rc2` is the working base for current product documentation and narrow
-fixes, while `master` remains untouched. This is a temporary repository rule, not a release claim.
+- `develop` is the canonical branch for normal Issue-driven development and integration.
+- `release/2026.06-rc2` is the frozen release-candidate and evidence branch.
+- `rc2` is a temporary historical transition/reference alias, not a routine development base.
+- `master` remains the current production/history anchor and is unchanged pending the separate
+  [#901 release-promotion decision](https://github.com/hexafe/metroliza/issues/901).
+- Normal work branches from and targets `develop`; approved release fixes target the frozen line
+  and must be reconciled into `develop`.
 
 ## Delivery model
 
@@ -114,6 +112,8 @@ product requirement / evidence
 ### Working rules
 
 - Start meaningful implementation from an Issue with testable acceptance criteria.
+- Branch normal work from and target `develop`; use `release/2026.06-rc2` only for approved
+  release fixes and evidence.
 - Use one primary Issue/outcome per pull request; split broad work before coding.
 - Keep behavior changes separate from structural refactors.
 - New implementation imports use `metroliza.*`; `modules.*` remains compatibility-only.
@@ -123,7 +123,7 @@ product requirement / evidence
 - Never commit credentials, tokens, customer reports, production extracts, proprietary drawings or
   unsanitized fixtures.
 - Close a feature only when code, acceptance criteria, docs, diagnostics, compatibility and release
-  evidence are complete—not merely because code exists on `rc2`.
+  evidence are complete—not merely because code exists on a branch.
 
 ## Maintaining this control center
 
