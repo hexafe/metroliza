@@ -1,59 +1,96 @@
 # Branch inventory
 
-- Status: Audit snapshot
+- Status: Current non-destructive audit snapshot
 - Owner: Repository maintainer
-- Last reviewed: 2026-08-22
+- Last reviewed: 2026-08-23
+- Audit timestamp: `2026-08-23T23:27:31+02:00` (`Europe/Warsaw`)
 - Repository: `hexafe/metroliza`
 - Tracking issue: [#911](https://github.com/hexafe/metroliza/issues/911)
 - Time zone: Europe/Warsaw
+- Comparison baseline: `develop` at `1b58303fee1483a88d2c987f7f06595dac8db7f3`
+- Live remote branch count: 9
 
 This is a non-destructive archaeology report. The audit fetched and read refs, commits, diffs,
-pull-request metadata, and CI metadata. It did not delete, merge, tag, force-update, or rewrite any
-branch. Recommendations below are decisions for later work, not actions taken by this audit.
+pull-request metadata, and CI metadata. Its only branch-history change is the authorized normal
+merge of current `develop` into this existing topic branch. It did not merge a PR, delete a branch,
+create or move a tag, force-update or rewrite history, update a protected/release ref, or execute a
+recommendation below.
 
-## Audit basis
+## Audit basis and changes since the previous snapshot
 
-The live remote exposed seven heads at the snapshot:
+`git fetch --prune` plus an explicit all-heads refspec and a fresh GitHub query exposed nine remote
+heads at the timestamp above:
 
 - `develop`
 - `docs/900-branch-transition`
+- `docs/911-branch-archaeology-audit`
+- `docs/960-branch-cleanup-execution`
 - `docs/project-governance-reset`
 - `docs/project-specification-roadmap-2026-08`
 - `master`
 - `rc2`
 - `release/2026.06-rc2`
 
-The repository default branch is `master`, but `develop` is used as the comparison baseline. That
-choice is based on the existing `develop` ref and the explicit branch-transition decision in
-[#900](https://github.com/hexafe/metroliza/issues/900) and
-[#910](https://github.com/hexafe/metroliza/pull/910), which name `develop` as the canonical base for
-new Issue-driven work. PR #910 is still open, so the branch-role documentation is not yet fully
-integrated even though the refs and decision already exist.
+The previous audit used `develop` at `a03bbdacbd6c308acf46ca31c16d0dd2caeab304` and seven live
+branches. Since then:
+
+- [PR #910](https://github.com/hexafe/metroliza/pull/910) was squash-merged as
+  `1eeeab27352ed2c6bcbdca2af81f3fdd7c1f8cac`; its branch policy and Dependabot version-update
+  targeting are integrated;
+- [PR #958](https://github.com/hexafe/metroliza/pull/958) was squash-merged as current `develop`
+  `1b58303fee1483a88d2c987f7f06595dac8db7f3`; the product specification, feature catalog, roadmap,
+  and acyclic dependency model are integrated;
+- `rc2` and `release/2026.06-rc2` remain at `1eeeab2`, one commit behind `develop`, so they are no
+  longer identical to it; their seven-file drift is the develop-only #958 product-control delta;
+- the merged #910 and #958 source branches became deletion candidates subject to the normal gate;
+- the #959 audit branch and stacked #961 cleanup-plan branch are now live active branches.
+
+The repository default remains `master`, while `develop` is the accepted canonical base for normal
+Issue-driven development. `master` is retained as the production/history anchor pending #901, and
+the frozen release line is not expected to absorb later develop-only product planning.
 
 For `develop...branch`, **behind** means commits reachable only from `develop`; **ahead** means
 commits reachable only from the named branch. “Unique commits” uses graph reachability, not commit
 message similarity. A squash-merged branch can therefore have graph-unique commits while having no
 tree-content difference from `develop`.
 
-Age is shown in whole calendar days as of the snapshot. “Changed files” means the branch-side
-three-dot delta unless otherwise stated. For an ancestor or patch-equivalent branch, tip-to-tip tree
-drift is reported separately so missing canonical work is not mistaken for branch-unique work.
+“Tip-tree drift” is the two-dot file/content difference between each tip and this exact `develop`.
+For squash-integrated branches, the audit also compares the source tip with its recorded squash
+commit. This prevents graph-unique source commits from being misclassified as tree-unique work.
+Historical PR deltas remain historical evidence and are not substituted for current tip drift.
+
+The published #959 head at the remote snapshot is `56150b4a20d0ef510cf8364bb0786ec2257c3393`.
+During this authorized reconciliation, current `develop` was merged normally as local merge commit
+`ec467735f93d62933f1a12811d2e0a8735db0c35`; its parents are the published #959 head and the exact
+`develop` baseline above. The eventual audit commit and exact-head CI are recorded in PR #959
+because a version-controlled document cannot contain its own commit SHA without changing it.
 
 ## Summary
 
-| Branch or recovered ref | Tip at audit | Last commit | Age | Behind / ahead vs `develop` | Unique commits | Changed files | Recommendation |
-| --- | --- | --- | ---: | ---: | ---: | --- | --- |
-| `develop` | `a03bbdacbd6c` | 2026-08-22 — project control center (#909) | 0 d | 0 / 0 | 0 | 0 | **KEEP** |
-| `docs/900-branch-transition` | `94753979a05b` | 2026-08-22 — establish `develop` and frozen RC2 flow | 0 d | 0 / 1 | 1 | 8 | **MERGE** after CI is green |
-| `docs/project-governance-reset` | `375cc433f0af` | 2026-08-22 — project control center | 0 d | 1 / 1 | 1 graph-only | 15 in original delta; 0 tip-tree drift | **DELETE** after normal deletion gate |
-| `docs/project-specification-roadmap-2026-08` | `0e166bfa95c9` | 2026-08-22 — full feature backlog | 0 d | 0 / 4 | 4 | 4 | **MERGE** after CI and branch-order reconciliation |
-| `master` | `ab26258e72d2` | 2026-03-30 — revert performance boost | 145 d | 279 / 0 | 0 | 0 unique; 904 files of tip-tree drift | **KEEP** |
-| `rc2` | `a03bbdacbd6c` | 2026-08-22 — project control center (#909) | 0 d | 0 / 0 | 0 | 0 | **KEEP** temporarily |
-| `release/2026.06-rc2` | `a03bbdacbd6c` | 2026-08-22 — project control center (#909) | 0 d | 0 / 0 | 0 | 0 | **KEEP** |
-| requested `rc1`; recovered `release/2026.03-rc1` | `260a70d00eec` | 2026-03-18 — merge group-analysis improvements | 157 d | 652 / 0 | 0 | 238 in recovered release delta | **TAG_AND_DELETE**; exact bare-ref tip needs verification |
-| historical `performance-boost` | `75f79b5a1c92` | 2026-03-30 — parser cancellation shutdown fix | 145 d | 282 / 0 | 0 | 107 in RC2-era delta | **SALVAGE** |
-| requested `report-metadata-redesign`; recovered `codex/report-metadata-redesign` | `efe1c430c30e` | 2026-04-29 — stabilize OCR metadata enrichment | 115 d | 243 / 0 | 0 | 241 in PR delta | **SALVAGE** |
-| historical `feature/realtime-industrial-ml-anomaly` | `13c47617ef85` | 2026-06-17 — fit industrial sync dialog in CI | 66 d | 57 / 0 | 0 | 776 in PR delta | **SALVAGE** |
+Every live branch appears exactly once in this current-state table. Behind/ahead and tree drift use
+the same exact `develop` SHA recorded in the metadata.
+
+| Live branch | Exact head and last commit | Behind / ahead | Graph-unique commits | Tip-tree drift vs `develop` | Open PR use | Relevant exact-head CI | Recommendation |
+|---|---|---:|---:|---|---|---|---|
+| `develop` | `1b58303fee1483a88d2c987f7f06595dac8db7f3`; 2026-08-23T23:08:56+02:00 — product specification, roadmap and feature backlog (#958) | 0 / 0 | 0 | 0 files | base of #959 | [32666611423](https://github.com/hexafe/metroliza/actions/runs/32666611423) — success | **KEEP** |
+| `docs/900-branch-transition` | `b978a759f341d2c0c44f61bc4d0416aec868fb0e`; 2026-08-23T10:23:15+02:00 — target Dependabot updates at `develop` | 2 / 3 | 3 squash-source commits | 7 files; source tree equals #910 squash `1eeeab2` | none; #910 merged | [32628140821](https://github.com/hexafe/metroliza/actions/runs/32628140821) — success | **DELETE** after gate |
+| `docs/911-branch-archaeology-audit` | `56150b4a20d0ef510cf8364bb0786ec2257c3393`; 2026-08-22T21:57:43+02:00 — separate cleanup plan | 2 / 3 at remote snapshot | 3 published audit-history commits | 17 files before reconciliation | head of #959; base of #961 | [32595391862](https://github.com/hexafe/metroliza/actions/runs/32595391862) — success on snapshot head | **KEEP** until #959 and #961 dependency clear |
+| `docs/960-branch-cleanup-execution` | `2a80a0dd3317fe17b5b4c3538e1adff1b284bd0b`; 2026-08-22T21:59:59+02:00 — cleanup execution plan | 2 / 4 | 4, including 3 inherited audit commits | 18 files; unique plan delta vs #959 is 2 files | head of draft #961 | [32595415370](https://github.com/hexafe/metroliza/actions/runs/32595415370) — success | **KEEP** until #961 is reconciled and merged |
+| `docs/project-governance-reset` | `375cc433f0af4d2d0a49e5dacc33ec0b53733479`; 2026-08-22T18:37:10+02:00 — project control center | 3 / 1 | 1 squash-source commit | 16 files; source tree equals #909 squash `a03bbda` | none; #909 merged | [32585291955](https://github.com/hexafe/metroliza/actions/runs/32585291955) — success | **DELETE** after gate |
+| `docs/project-specification-roadmap-2026-08` | `b8b698c020f616a3c53bcc5286291206ae1026f3`; 2026-08-23T22:49:16+02:00 — normalize dependency graph | 1 / 6 | 6 squash-source/history commits | 0 files; tree equals #958 squash/current `develop` | none; #958 merged | [32665601016](https://github.com/hexafe/metroliza/actions/runs/32665601016) — success | **DELETE** after gate |
+| `master` | `ab26258e72d285c3917a595515798da185800373`; 2026-03-30T19:43:19+02:00 — revert performance boost (#888) | 281 / 0 | 0; ancestor of `develop` | 907 files | none | [23758996717](https://github.com/hexafe/metroliza/actions/runs/23758996717) — success, historical 2026-03-30 evidence | **KEEP** |
+| `rc2` | `1eeeab27352ed2c6bcbdca2af81f3fdd7c1f8cac`; 2026-08-23T10:56:09+02:00 — branch transition (#910) | 1 / 0 | 0; ancestor of `develop` | 7 files, all from develop-only #958 | none | [32629600614](https://github.com/hexafe/metroliza/actions/runs/32629600614) — success | **KEEP** temporarily |
+| `release/2026.06-rc2` | `1eeeab27352ed2c6bcbdca2af81f3fdd7c1f8cac`; 2026-08-23T10:56:09+02:00 — branch transition (#910) | 1 / 0 | 0; ancestor of `develop` | 7 files, all from develop-only #958 | none | [32629649201](https://github.com/hexafe/metroliza/actions/runs/32629649201) — success | **KEEP** while #901 is open |
+
+### Recovered historical refs
+
+| Requested or historical ref | Recovered exact head and last commit | Behind / ahead | Current tip-tree drift | Evidence | Recommendation |
+|---|---|---:|---|---|---|
+| requested `rc1`; recovered `release/2026.03-rc1` | `260a70d00eec296e101b736776129778d86aa042`; 2026-03-18T06:19:15+01:00 — merge group-analysis improvements | 654 / 0 | 927 files | merged PR #713; ancestor of `develop` | **TAG_AND_DELETE** only after exact historical-state verification |
+| later `rc1/fixes-and-grouping-improvements` | `c593953f3f862289be84252d120a1c79c6f468ad`; 2026-03-22T09:37:23+01:00 — open Markdown files in default browser | 530 / 0 | 907 files | merged PR #774; ancestor of `develop` | **ARCHIVE** as supporting RC1 evidence |
+| historical `performance-boost` | `75f79b5a1c9211019c8b5d75ea61a904aad5fc55`; 2026-03-30T19:29:25+02:00 — parser cancellation shutdown fix | 284 / 0 | 897 files | PRs #887/#889; ancestor of `develop` | **SALVAGE** evidence only |
+| requested `report-metadata-redesign`; recovered `codex/report-metadata-redesign` | `efe1c430c30ecb98ecb1246113e4869192f9c3bf`; 2026-04-29T07:24:04+02:00 — stabilize OCR metadata enrichment | 245 / 0 | 822 files | closed draft PR #892; ancestor of `develop` | **SALVAGE** unmet intent only |
+| historical `feature/realtime-industrial-ml-anomaly` | `13c47617ef85dc1a92d2088a8e1bd873cee4fe76`; 2026-06-17T21:37:41+02:00 — fit industrial sync dialog in CI | 59 / 0 | 410 files | closed draft PR #898; ancestor of `develop` | **SALVAGE** contracts/fixtures only |
 
 ## Current remote branches
 
@@ -61,8 +98,9 @@ drift is reported separately so missing canonical work is not mistaken for branc
 
 - **Purpose:** canonical integration branch for new Issue-driven features, fixes, refactors, tests,
   documentation, security, and dependency work.
-- **Current status:** tip `a03bbdacbd6c308acf46ca31c16d0dd2caeab304`; also the exact tip of
-  `rc2` and `release/2026.06-rc2`. It is 279 commits ahead of stale `master`.
+- **Current status:** tip `1b58303fee1483a88d2c987f7f06595dac8db7f3`; 0 behind/0 ahead of
+  itself and 281 commits ahead of `master`. It contains squash-merged #910 and #958. Open PR #959
+  targets it.
 - **Unique commits and changed files:** none relative to itself.
 - **Architectural areas affected:** this is the current product-wide baseline: `src/metroliza`,
   legacy compatibility modules, report/OCR storage, parsing, exports, native/Rust acceleration,
@@ -70,13 +108,13 @@ drift is reported separately so missing canonical work is not mistaken for branc
 - **Valuable changes:** it contains all recoverable tips examined for `performance-boost`, the report
   metadata redesign, realtime industrial work, and the RC1 release line. Nothing in those recovered
   tips is graph-unique against `develop`.
-- **Tests/build impact:** the exact `a03bbdac` tree has green static checks, unit tests, native wheel
-  build/import smoke, Windows core smoke, CMM parser performance guardrail, and performance trend
-  evidence. The recorded main suite result is `3030 passed, 21 skipped`, with 83.80% aggregate
-  coverage. Manual/opt-in packaged Windows startup, packaging, live Google conversion, notices, and
-  legal/release-owner evidence remain open under [#901](https://github.com/hexafe/metroliza/issues/901).
-- **Risks:** GitHub still defaults to stale `master`, and PR #910—the documentation that makes the
-  branch roles unambiguous—is open and currently has a failing unit-test job.
+- **Tests/build impact:** exact-head push CI
+  [32666611423](https://github.com/hexafe/metroliza/actions/runs/32666611423) is green. The #910 and
+  #958 PR heads also completed exact-head CI before squash integration. Manual/opt-in packaged
+  Windows startup, packaging, live Google conversion, notices, and legal/release-owner evidence
+  remain open under [#901](https://github.com/hexafe/metroliza/issues/901).
+- **Risks:** GitHub still defaults to `master`, so contributors must select `develop` explicitly.
+  Green development CI is not production-promotion evidence and does not waive #901.
 - **Recommendation: KEEP.** Use it as the base and explicit PR target for this audit and normal new
   work. Do not confuse “canonical development” with “approved for production promotion.”
 
@@ -86,17 +124,17 @@ drift is reported separately so missing canonical work is not mistaken for branc
 - **Current status:** tip `ab26258e72d285c3917a595515798da185800373`, dated 2026-03-30. Its
   final commit is [PR #888](https://github.com/hexafe/metroliza/pull/888), which reverted the merge
   of `performance-boost` from [PR #887](https://github.com/hexafe/metroliza/pull/887).
-- **Unique commits:** none relative to `develop`; it is 279 behind and 0 ahead.
+- **Unique commits:** none relative to `develop`; it is an ancestor 281 behind and 0 ahead.
 - **Changed files and architecture:** no branch-unique files, but its tree differs from `develop` in
-  904 files. The missing work is product-wide: about 17% of changed paths are under legacy
-  `modules/`, about 27% under `tests/`, and large areas under `src/metroliza` cover reports,
-  parsing, exports, charts, UI, native code, and industrial/realtime services. CI, scripts,
-  packaging, security, and documentation also drift substantially.
+  907 files. The drift is product-wide across canonical `src/metroliza`, compatibility-only
+  `modules`, tests, parsing, reports, exports, UI, native code, industrial/realtime services, CI,
+  packaging, security, and documentation.
 - **Valuable changes:** it is the preserved production/history anchor and GitHub default. The
   performance merge and revert remain traceable in its history.
-- **Tests/build impact:** no current exact-head evidence comparable to `develop` was found. A
-  wholesale promotion would change 904 files and must not be inferred safe from the green
-  development-tree evidence.
+- **Tests/build impact:** exact-head run
+  [23758996717](https://github.com/hexafe/metroliza/actions/runs/23758996717) succeeded on 2026-03-30.
+  That historical result is not comparable to current `develop` evidence and cannot validate a
+  907-file promotion delta.
 - **Risks:** contributors can accidentally base or target work here because GitHub presents it as
   default. Merging `develop` wholesale would also bypass the open manual release gates.
 - **Recommendation: KEEP.** Preserve as the historical production line until the explicit release
@@ -106,16 +144,20 @@ drift is reported separately so missing canonical work is not mistaken for branc
 ### `rc2`
 
 - **Purpose:** long-running ad-hoc RC integration line, now a transition/reference alias.
-- **Current status:** tip `a03bbdacbd6c`, exactly equal to `develop` and
-  `release/2026.06-rc2`; 0 behind, 0 ahead.
-- **Unique commits and changed files:** none relative to `develop`.
-- **Architectural areas affected:** no distinct current delta. Historically it accumulated the
-  product-wide line now shared by all three refs.
+- **Current status:** tip `1eeeab27352ed2c6bcbdca2af81f3fdd7c1f8cac`, exactly equal to
+  `release/2026.06-rc2`; it is an ancestor 1 behind and 0 ahead of `develop`.
+- **Unique commits and changed files:** no graph-unique commits. Its seven-file tip-tree drift is
+  exactly the develop-only #958 product-control delta: product/index/architecture/roadmap/catalog
+  documentation plus the offline catalog test.
+- **Architectural areas affected:** no distinct active implementation delta. The branch simply
+  predates the later product-planning squash merge.
 - **Valuable changes:** preserves external references and the history of the RC2 stabilization line
   while branch roles are being changed.
-- **Tests/build impact:** identical tree, automated evidence, and manual blockers to `develop`.
-- **Risks:** three names for one commit invite wrong-base PRs and false assumptions that an RC label
-  means release approval. It must not receive routine work after the transition decision.
+- **Tests/build impact:** exact-head push CI
+  [32629600614](https://github.com/hexafe/metroliza/actions/runs/32629600614) is green. That evidence
+  belongs to `1eeeab2`, not the later `develop` tree.
+- **Risks:** its stale-looking proximity to both development and release refs can still attract
+  wrong-base work. The name has historical/external value but no routine development role.
 - **Recommendation: KEEP** temporarily. Retire only through the separate verification/tagging gate
   in [#924](https://github.com/hexafe/metroliza/issues/924), after release reconciliation and after
   no open workflow, PR, or document depends on the name.
@@ -124,47 +166,88 @@ drift is reported separately so missing canonical work is not mistaken for branc
 
 - **Purpose:** convention-compliant frozen stabilization and evidence line for the current RC2
   candidate.
-- **Current status:** tip `a03bbdacbd6c`, exactly equal to `develop` and `rc2`; 0 behind, 0 ahead.
-- **Unique commits and changed files:** none at the snapshot.
-- **Architectural areas affected:** no distinct current delta. Future changes should be limited to
-  release-blocking fixes, release evidence, packaging, security/legal notices, and metadata.
+- **Current status:** tip `1eeeab27352ed2c6bcbdca2af81f3fdd7c1f8cac`, exactly equal to `rc2`;
+  it is an ancestor 1 behind and 0 ahead of `develop`.
+- **Unique commits and changed files:** no graph-unique commits. The seven-file tree drift is the
+  develop-only #958 product-control delta; frozen release policy does not require this candidate
+  branch to absorb later planning documents or their documentation-contract test.
+- **Architectural areas affected:** no release-line implementation delta. Future changes remain
+  limited to release blockers/evidence, packaging, security/legal notices, and metadata.
 - **Valuable changes:** provides a bounded place to close [#901](https://github.com/hexafe/metroliza/issues/901)
   without putting routine feature work onto the candidate.
-- **Tests/build impact:** shares `develop`'s green automated evidence and its still-open manual
-  release blockers. Every accepted candidate fix must be reconciled back into `develop`.
-- **Risks:** because it currently equals `develop`, it has not yet demonstrated separation from new
-  feature work. Accidental feature merges would invalidate the freeze and require new exact-head
-  evidence.
+- **Tests/build impact:** exact-head push CI
+  [32629649201](https://github.com/hexafe/metroliza/actions/runs/32629649201) is green. Manual release
+  blockers remain open in #901, and every accepted candidate fix must be reconciled into `develop`.
+- **Risks:** treating its one-commit lag as missing work would violate the freeze. Conversely,
+  accidental feature/planning merges would invalidate evidence and require a new candidate audit.
 - **Recommendation: KEEP.** It is an active release/evidence branch, not a historical alias.
 
 ### `docs/900-branch-transition`
 
 - **Purpose:** implement the non-destructive branch-role decision: canonical `develop`, frozen
   `release/2026.06-rc2`, transition-only `rc2`, and no promotion of `master` before #901.
-- **Current status:** open [PR #910](https://github.com/hexafe/metroliza/pull/910), targeting `rc2`.
-  Tip `94753979a05b263fdd2f486e42e328dfe7318146`; 0 behind, 1 ahead.
-- **Unique commits:** `9475397 docs(release): establish develop and frozen RC2 branch flow`.
-- **Changed files:** 8 documentation/process files: `CONTRIBUTING.md`, `docs/README.md`,
-  `docs/project/{README.md,development_workflow.md,roadmap.md}`,
-  `docs/release_checks/{branching_strategy.md,release_status.md}`, plus new
-  `docs/release_checks/rc2_branch_transition_decision_2026-08-22.md` (624 insertions, 347
-  deletions).
+- **Current status:** [PR #910](https://github.com/hexafe/metroliza/pull/910) was squash-merged as
+  `1eeeab27352ed2c6bcbdca2af81f3fdd7c1f8cac`. The source branch remains at
+  `b978a759f341d2c0c44f61bc4d0416aec868fb0e`; it is 2 behind/3 ahead by graph.
+- **Unique commits:** three source commits (`9475397`, `cc86af8`, `b978a75`) remain graph-unique
+  because of the squash merge. The source tree is byte-for-byte equal to the #910 squash tree, so
+  none is tree-unique.
+- **Changed files:** the seven-file tip drift from current `develop` is entirely the later #958
+  product-control merge. It is not an unreviewed source-branch delta.
 - **Architectural areas affected:** repository governance, contributor workflow, branch/release
   policy, evidence ownership, and roadmap routing. No runtime or build code changes.
 - **Valuable changes:** resolves the most dangerous ambiguity in the repository: default branch,
   development base, release evidence line, and promotion are given separate roles.
-- **Tests/build impact:** static checks, native wheel smoke, and Windows core smoke passed on the
-  head. Both observed unit-test jobs failed in Actions run
-  [`32586369190`](https://github.com/hexafe/metroliza/actions/runs/32586369190); downstream
-  performance jobs and manual lanes were skipped. `git diff --check` also reports Markdown
-  trailing spaces used in two changed status documents; the audit does not claim these caused the
-  unit-test failure.
-- **Risks:** merging with red required checks would contradict the exact-head evidence policy it
-  introduces. It also overlaps `docs/project/README.md` and `roadmap.md` with the product-roadmap
-  branch.
-- **Recommendation: MERGE** through PR #910 only after the unit-test failure is diagnosed, the
-  exact head is green, and the planned post-merge fast-forwards are reviewed. Do not cherry-pick
-  fragments or merge this audit into the same branch.
+- **Tests/build impact:** exact source-head PR CI
+  [32628140821](https://github.com/hexafe/metroliza/actions/runs/32628140821) succeeded before merge;
+  current `develop` also has green post-#958 push CI.
+- **Risks:** no open PR, workflow, or tree-unique delta was found. The remaining risk is an external
+  reference to the branch name or loss of its recovery SHA during later cleanup.
+- **Recommendation: DELETE** only through #960 after the normal deletion gate. Record recovery SHA
+  `b978a759f341d2c0c44f61bc4d0416aec868fb0e`; no merge or salvage remains to perform.
+
+### `docs/911-branch-archaeology-audit`
+
+- **Purpose:** carry this non-destructive #911 audit through
+  [PR #959](https://github.com/hexafe/metroliza/pull/959).
+- **Current status:** published tip `56150b4a20d0ef510cf8364bb0786ec2257c3393`; 2 behind/3 ahead
+  at the remote snapshot. It is both the head of draft PR #959 and the base of stacked draft PR
+  #961. The normal reconciliation merge is local commit `ec467735f93d62933f1a12811d2e0a8735db0c35`.
+- **Unique commits:** published graph-unique commits are `31bfb94` (audit), `b158c92` (initial
+  cleanup-plan placement), and `56150b4` (separate that plan). After the normal merge, the branch is
+  0 behind and 4 ahead before this refresh commit.
+- **Changed files:** the stale remote tip differs from `develop` in 17 files because it predates
+  #910/#958. After reconciliation, the intended PR delta is only `docs/project/branch_audit.md` and
+  its `docs/README.md` index entry.
+- **Open PRs and CI:** #959 uses it as head; #961 uses it as base. Snapshot-head CI
+  [32595391862](https://github.com/hexafe/metroliza/actions/runs/32595391862) succeeded. Fresh
+  exact-head CI is required after this report is committed and pushed.
+- **Valuable changes:** the audit evidence and recovery ledger inputs are prerequisites for safe
+  #960 decisions. The branch also anchors the current stacked base of #961.
+- **Risks:** deleting or rewriting it now would disrupt both active PRs. Recording only graph counts
+  would also misstate the squash-integrated source branches.
+- **Recommendation: KEEP** until #959 is merged and #961 no longer depends on its branch/history;
+  only then evaluate deletion under #960.
+
+### `docs/960-branch-cleanup-execution`
+
+- **Purpose:** carry the separate #960 gated cleanup execution plan through stacked
+  [PR #961](https://github.com/hexafe/metroliza/pull/961).
+- **Current status:** tip `2a80a0dd3317fe17b5b4c3538e1adff1b284bd0b`; 2 behind/4 ahead of
+  current `develop`. Draft PR #961 remains based on the #959 audit branch and is mergeable in that
+  stacked relationship; it must not be retargeted or merged until #959 lands.
+- **Unique commits:** four against current `develop`: the three inherited published #959 commits
+  plus `2a80a0d`. Relative to the published #959 head, the only tree-unique content is
+  `docs/project/branch_cleanup_execution.md` plus one `docs/README.md` index line (176 insertions).
+- **Open PRs and CI:** #961 is the only open head use. Exact-head PR CI
+  [32595415370](https://github.com/hexafe/metroliza/actions/runs/32595415370) succeeded on `2a80a0d`.
+- **Valuable changes:** the plan's branch matrix, deletion gate, recovery procedure, and retained
+  two-file delta remain intact. Normal future reconciliation with merged #959 does not require
+  dropping or redefining that content.
+- **Risks:** its metrics and sequencing are stale, and premature retargeting could obscure its
+  stacked diff. It authorizes no cleanup by itself.
+- **Recommendation: KEEP** until #959 merges, then retarget/reconcile #961 normally, review its
+  refreshed two-file diff, obtain exact-head CI, and merge before considering deletion.
 
 ### `docs/project-governance-reset`
 
@@ -172,50 +255,50 @@ drift is reported separately so missing canonical work is not mistaken for branc
   Issue forms, PR template, and documentation guardrails.
 - **Current status:** [PR #909](https://github.com/hexafe/metroliza/pull/909) was squash-merged as
   `a03bbdac`; the remote source branch still points to `375cc433f0af4d2d0a49e5dacc33ec0b53733479`.
-  It is 1 behind and 1 ahead by graph, but its tip tree is identical to `develop`.
-- **Unique commits:** one graph-unique source commit, `375cc43`; no unique content remains.
+  It is 3 behind and 1 ahead by graph. Its tip tree is identical to the #909 squash commit, not to
+  later current `develop`.
+- **Unique commits:** one graph-unique source commit, `375cc43`; no tree-unique source content
+  remains because `375cc43` and `a03bbda` have identical trees.
 - **Changed files:** the original delta touched 15 files (2,523 insertions, 101 deletions): Issue
   templates, PR template, contributor/docs indexes, seven `docs/project` and branching documents,
-  and `tests/test_docs_markdown_links.py`. Tip-to-tip tree drift is 0 files.
+  and `tests/test_docs_markdown_links.py`. Current tip-to-`develop` drift is 16 files, all explained
+  by later #910/#958 integration.
 - **Architectural areas affected:** governance and documentation architecture only; no application
   runtime, schema, packaging, or dependency changes.
 - **Valuable changes:** fully retained in the squash commit and PR record.
-- **Tests/build impact:** the resulting canonical tree has green full automated evidence. Keeping
-  the source branch adds no testable content.
+- **Tests/build impact:** source-head PR CI
+  [32585291955](https://github.com/hexafe/metroliza/actions/runs/32585291955) succeeded, and the
+  later integrated `develop` head is green. Keeping the source branch adds no testable content.
 - **Risks:** the branch looks active despite being fully integrated and can attract accidental new
   work. Deleting it would make the source commit unreachable from normal heads, but the merged PR
   and squash commit preserve review and content history.
-- **Recommendation: DELETE** after confirming no open PR/workflow depends on the branch. No tag is
-  justified because it is not a release state and has no distinct tree content. This audit does
-  not perform the deletion.
+- **Recommendation: DELETE** after the #960 gate. No open PR dependency was found; recheck external
+  and workflow references and record recovery SHA
+  `375cc433f0af4d2d0a49e5dacc33ec0b53733479`. No tag is justified.
 
 ### `docs/project-specification-roadmap-2026-08`
 
 - **Purpose:** add the full product capability catalog, expanded product specification, and an
   Issue-linked multi-phase roadmap.
-- **Current status:** open [PR #958](https://github.com/hexafe/metroliza/pull/958), targeting `rc2`.
-  Tip `0e166bfa95c98c81fbeaf77d75727cfe70a20b68`; 0 behind, 4 ahead.
-- **Unique commits:** `2d7045c` feature catalog; `8e651db` product specification; `8c25c35`
-  delivery roadmap; `0e166bf` project control-center update.
-- **Changed files:** 4 files, 1,448 insertions and 457 deletions:
-  `docs/project/README.md`, new `docs/project/feature_catalog.md`,
-  `docs/project/product_specification.md`, and `docs/project/roadmap.md`.
+- **Current status:** [PR #958](https://github.com/hexafe/metroliza/pull/958) was reconciled with
+  #910, retargeted to `develop`, and squash-merged as current `develop`
+  `1b58303fee1483a88d2c987f7f06595dac8db7f3`. The source remains at
+  `b8b698c020f616a3c53bcc5286291206ae1026f3`; it is 1 behind/6 ahead by graph.
+- **Unique commits:** six source/history commits (`2d7045c`, `8e651db`, `8c25c35`, `0e166bf`,
+  reconciliation merge `be2b61c`, and DAG fix `b8b698c`) remain graph-unique because of squash.
+- **Changed files:** tip-to-tip tree drift against current `develop` is exactly 0 files. The complete
+  approved product content and test tree are present in the squash result.
 - **Architectural areas affected:** product requirements, domain/feature boundaries, roadmap
   sequencing, and Issue traceability. No runtime or build code changes.
 - **Valuable changes:** converts a diffuse backlog into explicit capabilities, requirement IDs,
   phases, and Issues.
-- **Tests/build impact:** static checks, native wheel smoke, and Windows core smoke passed on the
-  head. Both observed unit-test jobs failed in Actions run
-  [`32590398667`](https://github.com/hexafe/metroliza/actions/runs/32590398667); downstream
-  performance jobs and manual lanes were skipped. `git diff --check` reports Markdown trailing
-  spaces in three changed project documents; the audit does not claim these caused the unit-test
-  failure.
-- **Risks:** `README.md` and `roadmap.md` overlap PR #910, and its text still describes `rc2` as the
-  active product line. Merge order can therefore reintroduce stale branch policy or produce a
-  content conflict.
-- **Recommendation: MERGE** only after the unit-test failure is fixed and the branch is reconciled
-  on top of the accepted #910 branch-role language. Retarget to the canonical branch when the
-  transition permits; do not merge red CI.
+- **Tests/build impact:** exact source-head PR CI
+  [32665601016](https://github.com/hexafe/metroliza/actions/runs/32665601016) succeeded before merge;
+  post-merge `develop` run 32666611423 also succeeded.
+- **Risks:** no open PR, workflow, or unreviewed tree delta was found. The remaining risk is an
+  external branch-name dependency or failure to retain the recovery SHA.
+- **Recommendation: DELETE** only after the #960 gate. Record recovery SHA
+  `b8b698c020f616a3c53bcc5286291206ae1026f3`; no further merge or salvage is required.
 
 ## Requested names that are no longer remote heads
 
@@ -232,11 +315,11 @@ uses only concrete PR/head evidence and labels the gap instead of inventing a ti
   `release/2026.03-rc1` at `260a70d00eec296e101b736776129778d86aa042`. A later, separate
   [PR #774](https://github.com/hexafe/metroliza/pull/774) came from
   `rc1/fixes-and-grouping-improvements` at `c593953f3f862289be84252d120a1c79c6f468ad`.
-- **Last commit and age:** recovered release head: 2026-03-18, 157 days old; later fixes head:
-  2026-03-22, 153 days old.
+- **Last commits:** recovered release head: 2026-03-18; later fixes head: 2026-03-22.
 - **Unique commits:** both recovered heads are ancestors of `develop`; 0 commits are unique to
-  either recovered line. The release head is 652 behind/0 ahead; the fixes head is 528 behind/0
-  ahead.
+  either recovered line. The release head is 654 behind/0 ahead; the fixes head is 530 behind/0
+  ahead. Their current tip-tree drift is 927 and 907 files respectively; this is later canonical
+  evolution, not missing RC1 content.
 - **Changed files:** the recoverable `release/2026.03-rc1` PR-base delta spans 238 files (52,576
   insertions, 4,265 deletions). The later fixes delta spans 120 files (8,058 insertions, 953
   deletions). These counts are historical branch deltas, not current unique content.
@@ -271,8 +354,9 @@ uses only concrete PR/head evidence and labels the gap instead of inventing a ti
   [#889](https://github.com/hexafe/metroliza/pull/889). It was merged into `master`, immediately
   reverted there by PR #888, and separately merged into the RC2 line. The tip is now an ancestor of
   `develop`.
-- **Unique commits:** 0 relative to `develop`; 282 behind, 0 ahead. Against the RC2 base captured
-  by PR #889, the historical line contains 228 commits.
+- **Unique commits:** 0 relative to `develop`; it is an ancestor 284 behind, 0 ahead. Current
+  tip-tree drift is 897 files. Against the RC2 base captured by PR #889, the historical line
+  contains 228 commits.
 - **Changed files:** 107 files in the RC2-era delta (22,135 insertions, 1,913 deletions). Key paths
   include `modules/{comparison_stats,distribution_fit_service,chart_renderer,cmm_native_parser,
   export_data_thread}.py`, native crates under `modules/native/`, benchmark scripts, packaging
@@ -307,8 +391,9 @@ uses only concrete PR/head evidence and labels the gap instead of inventing a ti
   `efe1c430c30ecb98ecb1246113e4869192f9c3bf`, dated 2026-04-29. That tip is nevertheless an
   ancestor of current `develop`, so the work entered the later product line by another integration
   path.
-- **Unique commits:** 0 relative to `develop`; 243 behind, 0 ahead. The original PR line contained
-  40 commits relative to its recorded `master` base.
+- **Unique commits:** 0 relative to `develop`; it is an ancestor 245 behind, 0 ahead, with 822 files
+  of current tip-tree drift. The original PR line contained 40 commits relative to its recorded
+  `master` base.
 - **Changed files:** 241 files in the historical PR delta (39,115 insertions, 2,961 deletions).
   Principal paths include `report_schema.py`, `report_repository.py`, metadata model/normalizer/
   selector/extractor modules, `report_query_service.py`, parser/persistence/query/export/grouping
@@ -345,8 +430,9 @@ uses only concrete PR/head evidence and labels the gap instead of inventing a ti
   [PR #898](https://github.com/hexafe/metroliza/pull/898) identifies tip
   `13c47617ef85dc1a92d2088a8e1bd873cee4fe76`, dated 2026-06-17. The tip is an ancestor of
   `develop`, so the code entered the current product line by another integration path.
-- **Unique commits:** 0 relative to `develop`; 57 behind, 0 ahead. Its historical PR line contained
-  226 commits relative to the recorded `master` base.
+- **Unique commits:** 0 relative to `develop`; it is an ancestor 59 behind, 0 ahead, with 410 files
+  of current tip-tree drift. Its historical PR line contained 226 commits relative to the recorded
+  `master` base.
 - **Changed files:** 776 files in the PR-base delta (199,015 insertions, 38,432 deletions). That
   number includes intervening product-line integration, so it must not be read as 776 files of
   realtime-only work. The feature-specific paths include `src/metroliza/industrial/{anomaly,
@@ -379,17 +465,26 @@ uses only concrete PR/head evidence and labels the gap instead of inventing a ti
 ## Consolidated disposition and sequencing
 
 1. Keep `develop`, `master`, `release/2026.06-rc2`, and—temporarily—`rc2`.
-2. Fix the failed unit-test job on `docs/900-branch-transition`, then merge PR #910 through review.
-3. Reconcile `docs/project-specification-roadmap-2026-08` on the accepted branch-role documents,
-   fix its failed unit-test job, then merge PR #958 through review.
-4. Treat `docs/project-governance-reset` as an integrated delete candidate; apply the normal
-   deletion gate in #911, not this audit PR.
-5. Keep `rc1` absent. Verify an exact evidence-backed historical SHA before creating any annotated
+2. Record #910 as merged at `1eeeab27352ed2c6bcbdca2af81f3fdd7c1f8cac` with exact-head CI
+   `32628140821`; no #910 integration work remains.
+3. Record #958 as merged at `1b58303fee1483a88d2c987f7f06595dac8db7f3` with exact-head CI
+   `32665601016`; no #958 reconciliation or product-DAG work remains.
+4. Reconcile, review, and merge #959 into `develop` with fresh exact-head evidence. Keep its branch
+   while draft #961 still uses it as a base.
+5. After #959 lands, retarget/reconcile #961 to `develop`, verify that its unique delta remains the
+   cleanup-plan document plus index entry, obtain fresh review/CI, and merge it.
+6. Only after both documents are integrated may #960 re-run gates and execute separately approved
+   mutations. This audit executes none.
+7. Treat `docs/900-branch-transition`, `docs/project-governance-reset`, and
+   `docs/project-specification-roadmap-2026-08` as squash-integrated **DELETE** candidates with
+   recovery SHAs `b978a759...`, `375cc433...`, and `b8b698c...`; never infer safety from graph
+   counts alone.
+8. Keep `rc1` absent. Verify an exact evidence-backed historical SHA before creating any annotated
    RC1 tag under #924.
-6. Do not resurrect the performance, metadata, or realtime branches. Their recovered tips are
+9. Do not resurrect the performance, metadata, or realtime branches. Their recovered tips are
    already ancestors of `develop`; use #918, #917, and #919 for focused salvage and explicit
    acceptance/rejection decisions.
-7. Do not promote or merge the development/candidate line into `master` until #901 supplies the
+10. Do not promote or merge the development/candidate line into `master` until #901 supplies the
    missing manual release evidence and the release owner records a Go decision.
 
 ## Reproduction notes
@@ -401,11 +496,15 @@ git ls-remote --heads origin
 git show -s --format=<sha,date,subject> <ref>
 git rev-list --left-right --count origin/develop...<ref>
 git log origin/develop..<ref>
-git diff --name-status origin/develop...<ref>
-git diff --shortstat origin/develop..<ref>
+git diff --name-status origin/develop <ref>
+git diff --shortstat origin/develop <ref>
+gh pr list --state open --json number,headRefName,baseRefName,headRefOid
+gh run list --branch <branch> --json databaseId,event,headSha,status,conclusion
 ```
 
 Historical refs were resolved from concrete PR head/base SHAs, then checked with the same
 `rev-list`, `log`, `diff`, and ancestry operations. GitHub PR/check metadata was read to distinguish
-merged, closed-unmerged, open, and failing-CI states. No branch name was treated as evidence of its
-contents or safety.
+merged, closed-unmerged, and open state and to match CI to exact heads. Source-tip trees for squash
+PRs #909, #910, and #958 were compared directly with squash commits `a03bbda`, `1eeeab2`, and
+`1b58303`; all three comparisons returned zero files. No branch name, graph count, old CI run, or
+closed PR state was treated alone as evidence of content or deletion safety.
