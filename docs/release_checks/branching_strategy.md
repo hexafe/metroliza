@@ -31,6 +31,14 @@ third-party notice/artifact, and legal/release-owner evidence remains open in #9
 Because GitHub still presents `master` as the default branch, every new pull request must select
 its base explicitly: normally `develop`, or `release/2026.06-rc2` for approved release work.
 
+Dependabot is an explicit platform exception. The checked-in `.github/dependabot.yml` policy sets
+normal version-update pull requests to target `develop`. GitHub reads that file from the configured
+default branch, so this policy becomes active only after the content reaches that branch or the
+default-branch setting changes through a separate reviewed decision. Security-update pull requests
+always target the repository default branch, currently `master`; `target-branch` does not redirect
+them. That generated base does not authorize routine work on `master`, and accepted security fixes
+must be reconciled into `develop` and any active release line where applicable.
+
 ## 1) Branch purposes
 
 ### `master`
