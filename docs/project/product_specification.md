@@ -171,6 +171,11 @@ but cannot redefine their meaning.
 
 ## 8. Supported workflow specifications
 
+The numbered workflow sections catalogue product capabilities; their numbering is not dependency
+order. Authoritative strict prerequisites live in the feature Issues and
+[feature catalog](./feature_catalog.md), while the [roadmap](./roadmap.md) orders foundational and
+downstream delivery.
+
 ### 8.1 Workspace lifecycle — #926
 
 A user can create, save, reopen, relink and validate a versioned analysis workspace containing
@@ -181,6 +186,8 @@ Reopening determines whether the workspace is equivalent, stale, changed, partia
 newer than the application supports. Missing/moved inputs require explicit relinking; changed input
 cannot be silently substituted.
 
+The #926 schema/service foundation precedes and is consumed by #945 application-shell integration.
+
 ### 8.2 Unified import — #927
 
 The user selects files, folders or supported archives. A non-destructive bounded preflight reports
@@ -190,6 +197,9 @@ cancellation, retry/resume and explicit duplicate policy.
 
 A logical report is persisted atomically. Completion counts agree with actual database state and
 separate imported, skipped, warned, failed and cancelled items.
+
+#927 owns the orchestration and parser/OCR ports; #928 and #929 complete their downstream lifecycle
+integrations over those accepted ports.
 
 ### 8.3 Parser profiles and plugins — #928
 
@@ -237,6 +247,10 @@ In-memory and SQLite adapters share conformance fixtures. Values are bound; iden
 validated/quoted. Numeric/date/text coercion, invalid values, blanks, case and locale-independent
 storage have explicit semantics.
 
+#931 can close on the canonical contract, reference adapters/fixtures and foundational report
+slice. The #939 tabular and #940 industrial adapters must pass those fixtures before their own
+Issues close, but do not block #931.
+
 ### 8.8 Grouping and characteristic mapping — #932
 
 Users can create manual and rule-based groups; preview counts, overlaps, unassigned/excluded rows;
@@ -246,6 +260,9 @@ colors.
 Characteristic aliases use documented reference-scoped and global precedence. Ambiguity or
 collision is diagnosed instead of silently selected. Session-local assignments do not pollute
 source data.
+
+#932 owns the grouping/alias foundation consumed first by #933 descriptive/pairwise analysis and
+then by #934 capability/distribution/risk analysis.
 
 ### 8.9 Presets/templates — #935
 
@@ -282,6 +299,9 @@ schema, characteristic mapping, units, filters and methods.
 Approved baselines are immutable. Current-versus-baseline results distinguish engineering
 thresholds from statistical evidence and preserve both dataset identities and data-through ranges.
 
+#948 consumes the #949 run-history/manifest foundation; later #953 packaging does not block the
+baseline library.
+
 ### 8.13 Excel export — #936
 
 The workbook exporter consumes canonical results and produces validated measurement sheets,
@@ -301,6 +321,9 @@ static/dense-layer fallbacks, themes, visual preferences and local point marks.
 DOM IDs, storage keys and manifest/payload schemas are versioned/tested. Plotly/browser failures
 produce visible usable status/fallback, not blank panels. Publication is atomic and preserves the
 last complete output.
+
+#937 owns the core dashboard and baseline accessibility contract. #946 hardens accessibility
+across the product, and #947 then adds reusable recipes/annotations over #937/#946.
 
 ### 8.15 Google conversion — #938
 
@@ -322,6 +345,9 @@ workbooks.
 Changed source snapshots invalidate or explicitly refresh reuse. Sampling/static visualization is
 declared and does not silently change full-data calculation.
 
+#939 is a downstream consumer of #931 and adds tabular adapters plus workflow-specific conformance
+evidence without redefining canonical filter semantics.
+
 ### 8.17 Industrial/Oznak analytics — #940
 
 Approved source profiles define table/view/column or reviewed read-only SQL boundaries. Credentials
@@ -331,6 +357,9 @@ fetch-all, timeout, cancellation and chunked atomic/explicit-partial cache persi
 Routine analysis is cache-first and does not require a CMM database. Dynamic fields remain
 available through filters, dashboards and workbooks. Source health, lag and data-through time remain
 visible.
+
+#940 follows #939, consumes #931 and adds industrial adapters plus applicable shared-conformance
+evidence without creating a prerequisite back to the filter foundation.
 
 ### 8.18 Realtime monitoring and replay — #941
 
@@ -361,6 +390,8 @@ manifests are required.
 
 Automation never guesses through parser ambiguity or metadata conflict.
 
+#943 consumes the #949 run-history/manifest foundation for unattended jobs.
+
 ### 8.21 Diagnostic bundle — #944
 
 Desktop/CLI can create a previewable sanitized bundle containing application/build/platform,
@@ -369,6 +400,10 @@ codes and stage timings. Credentials, tokens, private keys, connection passwords
 measurements are excluded by default.
 
 Redaction is deterministic/tested. Optional attachments remain the user’s explicit responsibility.
+
+#944 closes with the shared diagnostic envelope, redaction/bundle contracts and reference adapters.
+Workflow-specific parser, OCR, Google, industrial, realtime and automation payloads are downstream
+integrations owned by those workflows.
 
 ### 8.22 Application shell and preferences — #945
 
@@ -388,6 +423,8 @@ fallback status is accessible.
 Formal certification is not claimed without an appropriate audit; supported baseline and known
 limitations remain explicit.
 
+#946 consumes the core #937 dashboard and #945 shell contracts before #947 visual recipes.
+
 ### 8.24 Visual recipes and annotations — #947
 
 Presentation-only recipes control compatible palette, opacity, point size, overlays and layout
@@ -395,6 +432,8 @@ without altering analysis values. Built-ins are theme-aware and colorblind-safe.
 and annotations remain separate from source data and identify the result snapshot they reference.
 
 Compatibility/fallback is explicit across HTML and static renderers.
+
+#947 consumes #937/#946; it does not define the core dashboard or accessibility foundations.
 
 ### 8.25 Run history and reproducibility manifest — #949
 
@@ -404,6 +443,9 @@ paths/hashes and parent/derived relationships.
 
 Rerun status distinguishes equivalent, changed input, changed configuration, changed method and
 unavailable. Default manifests contain no credentials or raw measurements.
+
+#949 owns the accepted interactive/CLI run identity, manifest and history foundation. #943
+automation, #948 baselines and #953 bundles consume it later.
 
 ### 8.26 Evidence bundle — #953
 
@@ -427,6 +469,9 @@ report; and require explicit approval/install/rollback.
 
 LLM output remains an untrusted proposal. No report is uploaded automatically.
 
+#950 consumes the accepted #928 parser lifecycle and #951 extension interfaces; generated artifacts
+cannot define those foundations.
+
 ### 8.29 Extension interfaces — #951
 
 Parser, analysis and report/visual extensions use narrow versioned contracts with capability
@@ -436,6 +481,8 @@ and license/security review, packaging behavior and run-manifest identity.
 Analysis extensions cannot depend on PyQt widgets. Report extensions cannot silently recalculate
 domain statistics.
 
+#951 owns the stable extension-interface foundation and precedes the optional #950 AI workflow.
+
 ### 8.30 Predictable large-workload behavior — #952
 
 Import, query, tabular, grouping, statistics, chart, Excel, dashboard and realtime workflows have
@@ -444,6 +491,10 @@ memory-vs-SQLite and sampling/static policies, responsive background execution, 
 cleanup.
 
 Unsupported sizes fail early or visibly degrade rather than exhausting resources unpredictably.
+
+#952 owns the shared workload, bounded-behavior, telemetry and cancellation envelope. #939, #940
+and #941 add workflow-specific evidence before their own closure without blocking #952 on their
+complete product workflows.
 
 ### 8.31 Legacy and licensing decisions — #956 and #957
 

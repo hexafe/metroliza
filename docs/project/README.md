@@ -14,9 +14,9 @@ rules and ordered roadmap. Release evidence remains under `docs/release_checks/`
 1. [Product specification](./product_specification.md) — product definition, personas, workflows,
    full requirements, domain concepts, quality attributes, compatibility and release acceptance.
 2. [Feature catalog](./feature_catalog.md) — every major product capability, current maturity,
-   roadmap phase, dependencies and tracking Issue.
+   roadmap phase, strict prerequisites and tracking Issue.
 3. [Roadmap](./roadmap.md) — eight ordered delivery phases, exit gates, milestone mapping and Issue
-   dependencies.
+   prerequisite/integration sequencing.
 4. [Architecture](./architecture.md) — canonical packages, dependency direction, data flows,
    compatibility layers, native backends and concentration risks.
 5. [Development workflow](./development_workflow.md) — issue-first delivery, branch/PR rules,
@@ -37,6 +37,13 @@ rules and ordered roadmap. Release evidence remains under `docs/release_checks/`
   tabular/industrial/realtime, automation, traceability, accessibility, extensibility, performance,
   legacy and licensing decisions.
 - The full mapping and maturity status live in [feature_catalog.md](./feature_catalog.md).
+
+### Dependency policy
+
+[Issue #967](https://github.com/hexafe/metroliza/issues/967) defines `Dependencies` as strict
+prerequisites only. The resulting #926–#957 graph must remain acyclic. Downstream consumers,
+cross-phase integrations and shared-fixture obligations remain visible in their Issues and the
+roadmap, but they do not create reverse prerequisites for their foundations.
 
 ### Project and engineering backlog
 

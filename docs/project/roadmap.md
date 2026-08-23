@@ -46,17 +46,37 @@ and [`release_status.md`](../release_checks/release_status.md).
 | Phase | Outcome | Principal Issues |
 |---|---|---|
 | **0. Project control and branch truth** | One source of truth, full Issue backlog, explicit branch/release decision | #899, #900, #902, #911, #921, #923, #924, #925 |
-| **1. Reproducible baseline and toolchain** | Clean setup, canonical end-to-end fixture, trustworthy CI/diagnostics/performance evidence | #901, #906, #912, #913, #914, #918, #922, #944, #952 |
+| **1. Reproducible baseline and toolchain** | Clean setup, canonical end-to-end fixture, trustworthy CI/diagnostics/performance evidence | #901, #906, #912, #913, #914, #918, #922, initial #917/#920, #944, initial #952 |
 | **2. Stable data and application core** | Versioned model, headless vertical slice, controlled import/OCR/database/filter/group/curation | #915, #916, #926, #927, #928, #929, #930, #931, #932, #945, #952, #954 |
 | **3. Stable analysis and reporting** | One result model, supported statistics/capability, presets, Excel, dashboard, optional Google | #903, #904, #907, #917, #933, #934, #935, #936, #937, #938, #952 |
-| **4. Tabular, industrial and realtime product lines** | Shared contracts for large flat files, cache-first production data and replayable monitoring | #919, #939, #940, #941, #952 |
-| **5. Reproducibility, automation and sharing** | Workspaces, CLI, scheduled jobs, history, baselines, visual recipes and evidence bundles | #926, #942, #943, #945, #947, #948, #949, #952, #953 |
-| **6. Controlled extensibility and optimization** | Canonical imports, reviewed security, extension contracts, LLM parser assistance, measured native promotion | #905, #906, #908, #928, #950, #951, #952 |
+| **4. Tabular, industrial and realtime product lines** | Shared contracts for large flat files, cache-first production data and replayable monitoring | #952, #939, #940, #919, #941 |
+| **5. Reproducibility, automation and sharing** | Workspaces, CLI, scheduled jobs, history, accessibility hardening, baselines, visual recipes and evidence bundles | #926, #945, #942, #944, #952, #949, #943, #948, #946, #947, #953 |
+| **6. Controlled extensibility and optimization** | Canonical imports, reviewed security, extension contracts, LLM parser assistance, measured native promotion | #905, #906, #908, #928, #951, #950, #952 |
 | **7. Stable release and lifecycle closeout** | Supported platform/build, manual evidence, accessibility/help, legacy/licensing decisions, 1.0 gate | #901, #920, #938, #946, #952, #955, #956, #957 |
 
 Phases overlap where work is safely parallel, but their exit gates define dependency order. For
 example, parser-profile documentation can progress while exact-head CI runs, but a new workspace
 schema should not become stable before the canonical model and compatibility policy are accepted.
+
+### Dependency and phase semantics
+
+Under [#967](https://github.com/hexafe/metroliza/issues/967), an Issue's `## Dependencies` section
+contains strict prerequisites only. `## Downstream consumers`, `## Cross-phase integration` and
+conformance obligations keep important later relationships visible without reversing the strict
+edge. A foundation may close with stable contracts, reference implementations/fixtures and one
+accepted vertical slice; later adapters must pass those fixtures before their own Issues close.
+
+Multi-phase Issues distinguish an early contract slice from later product integration or release
+evidence. These slices keep the strict graph schedulable without pretending that the full feature
+is complete early:
+
+| Foundation | Earlier accepted slice | Later completion or integration |
+|---|---|---|
+| #917 result/provenance/error schema | baseline contracts begin in Phase 1 and support Phase 2 services | complete cross-renderer/report integration in Phase 3 |
+| #920 compatibility/version/platform policy | version and compatibility rules begin in Phase 1 | packaged-platform and release-process closeout in Phase 7 |
+| #944 diagnostics/redaction | shared envelope, redaction, bundle writer and reference adapters in Phase 1 | workflow-specific payload integrations continue in Phases 2–7 |
+| #952 performance envelopes | workload/telemetry/bounded-behavior foundation begins in Phase 1 and closes after its #903/#904 prerequisites in Phase 3 | workflow-specific evidence continues in Phases 4–7 |
+| #946 accessibility | cross-product hardening required by #947 occurs in Phase 5 | complete manual release evidence in Phase 7 |
 
 ## 4. Phase 0 — Project control and branch truth
 
@@ -111,8 +131,10 @@ behavior.
 | [#914](https://github.com/hexafe/metroliza/issues/914) | Pull-request quality gates and release smoke lanes |
 | [#918](https://github.com/hexafe/metroliza/issues/918) | Representative benchmarks and Python/Rust parity foundation |
 | [#922](https://github.com/hexafe/metroliza/issues/922) | Honest current-state code/data-flow and supported-workflow map |
-| [#944](https://github.com/hexafe/metroliza/issues/944) | Sanitized diagnostic bundle and shared redaction rules |
-| [#952](https://github.com/hexafe/metroliza/issues/952) | Workload classes, bounded behavior and performance envelopes |
+| [#917](https://github.com/hexafe/metroliza/issues/917) | Initial result/provenance/error contracts needed by cross-cutting foundations |
+| [#920](https://github.com/hexafe/metroliza/issues/920) | Initial compatibility, version identity and supported-platform policy |
+| [#944](https://github.com/hexafe/metroliza/issues/944) | Shared diagnostic envelope, bundle and redaction foundation with reference adapters |
+| [#952](https://github.com/hexafe/metroliza/issues/952) | Initial workload classes, bounded-behavior and performance-envelope contracts |
 | [#906](https://github.com/hexafe/metroliza/issues/906) | Eliminate or explicitly renew expiring reviewed security findings |
 | [#901](https://github.com/hexafe/metroliza/issues/901) | Exact-build Windows/Google/notices/legal manual evidence |
 
@@ -136,7 +158,10 @@ behavior.
 - local and CI commands are the same or explicitly shared;
 - native extensions can be built/tested or fail with explicit supported fallback;
 - diagnostics distinguish environment, parser, persistence, analysis and rendering failure;
+- the shared #944 diagnostic/redaction contract is proven without requiring every downstream
+  workflow payload;
 - performance baselines identify fixture/environment/build and are not unsupported seed numbers;
+- #917/#920 foundation slices and the initial #952 envelope are accepted for later consumers;
 - exact packaged/manual release blockers are visible and owned.
 
 ## 6. Phase 2 — Stable data and application core
@@ -156,35 +181,46 @@ Make the central import-to-analysis workflow versioned, headless and independent
 
 | Issue | Outcome |
 |---:|---|
-| [#927](https://github.com/hexafe/metroliza/issues/927) | Unified preflight/import queue/cancel/retry/partial-batch contract |
-| [#928](https://github.com/hexafe/metroliza/issues/928) | Parser-profile/plugin lifecycle and resolver evidence |
-| [#929](https://github.com/hexafe/metroliza/issues/929) | Reviewable OCR candidates and safe enrichment |
-| [#930](https://github.com/hexafe/metroliza/issues/930) | Database/cache schema migration, backup, integrity and repair |
-| [#954](https://github.com/hexafe/metroliza/issues/954) | Report browser, curation and transactional corrections |
-| [#931](https://github.com/hexafe/metroliza/issues/931) | Shared typed filter contract and backend conformance |
-| [#932](https://github.com/hexafe/metroliza/issues/932) | Reusable grouping and characteristic mapping |
-| [#945](https://github.com/hexafe/metroliza/issues/945) | Consistent workspace context, task ownership and preferences |
-| [#952](https://github.com/hexafe/metroliza/issues/952) | Bounded core import, query and analysis behavior |
 | [#926](https://github.com/hexafe/metroliza/issues/926) | Workspace schema foundation, initially for the canonical slice |
+| [#927](https://github.com/hexafe/metroliza/issues/927) | Import orchestration, preflight, queue and parser/OCR ports |
+| [#928](https://github.com/hexafe/metroliza/issues/928) | Parser-profile/plugin lifecycle consuming the #927 resolver port |
+| [#929](https://github.com/hexafe/metroliza/issues/929) | Reviewable OCR extraction consuming #927/#928 contracts |
+| [#930](https://github.com/hexafe/metroliza/issues/930) | Database/cache schema migration, backup, integrity and repair |
+| [#931](https://github.com/hexafe/metroliza/issues/931) | Canonical typed filter contract and reference in-memory/SQLite conformance |
+| [#932](https://github.com/hexafe/metroliza/issues/932) | Canonical grouping, aliases, preview, presets and serialization foundation |
+| [#945](https://github.com/hexafe/metroliza/issues/945) | Shell/context integration consuming #926 and #944 |
+| [#954](https://github.com/hexafe/metroliza/issues/954) | Report browser and transactional curation after OCR/database/group foundations |
+| [#952](https://github.com/hexafe/metroliza/issues/952) | Bounded core import, query and analysis behavior |
 
 ### Delivery sequence
 
-1. Characterize current vertical flow and side effects with #912/#922.
-2. Accept canonical domain/request/result/error contracts in #915.
-3. Wrap existing behavior behind one headless use case; do not rewrite algorithms yet.
-4. Route one existing PyQt action through that service.
-5. Stabilize parser/OCR/database/filter/group contracts around the same vertical slice.
-6. Introduce workspace persistence only for accepted stable contracts.
-7. Remove duplicated orchestration after parity, not before.
+1. Characterize the current vertical flow and side effects with #912/#922.
+2. Accept #915 domain contracts, the required #917/#920 foundation slices and the #916 headless
+   application-service boundary.
+3. Establish #927 import orchestration and its parser-resolution/metadata-extraction ports using
+   deterministic current/reference adapters for the foundational slice.
+4. Complete #928 parser lifecycle over the #927 resolver port, then #929 OCR review/enrichment over
+   the accepted import/parser contracts.
+5. Establish #926 workspace schema/services before #945 integrates them into the application shell.
+6. Establish #931 expression/parser/validation/serialization/compiler contracts and prove
+   reference in-memory/SQLite conformance on the foundational/report slice.
+7. Establish #932 grouping/alias identities, preview and serialization before Phase 3 analysis.
+8. Complete #930 lifecycle safety, then #954 curation over accepted OCR/database/group contracts.
+9. Route the accepted vertical slice through #945 shell/task/context integration.
+10. Remove duplicated orchestration after parity, not before.
 
 ### Exit criteria
 
 - selected import/analysis workflow runs without starting PyQt;
 - domain/application code does not import widgets;
 - invalid/missing/excluded/provenance/unit behavior is explicit and tested;
+- #927 ports are stable before the #928/#929 lifecycle integrations close;
 - parser/OCR/data edits are traceable and transactional;
-- filter/group semantics are consistent across supported adapters;
+- #931 reference in-memory/SQLite adapters and the foundational/report slice pass shared filter
+  conformance; unfinished Phase 4 adapters do not block #931 closure;
+- #932 grouping/alias semantics are stable before #933 descriptive/pairwise analysis begins;
 - one versioned workspace can save/reopen the canonical configuration safely;
+- #945 consumes #926/#944 rather than redefining workspace or diagnostic contracts;
 - progress, cancellation and errors use structured application outcomes;
 - existing GUI remains functional through the extracted service.
 
@@ -213,14 +249,16 @@ model.
 
 ### Delivery sequence
 
-1. Define result/report metadata and method/version/warning contracts.
-2. Freeze supported statistical definitions with fixtures and parity.
-3. Make GUI/dashboard/workbook consume the same result structures.
-4. Split exporter/dashboard concentration one behavior-preserving seam at a time.
-5. Stabilize preset schema and report regressions.
-6. Close Excel and dashboard 1.0 structural, failure and accessibility contracts.
-7. Treat Google as optional post-processing after local workbook validation.
-8. Move reusable plots to external package only chart-by-chart behind parity/rollback.
+1. Complete the #917 result/report metadata and method/version/warning contract begun earlier.
+2. Complete #933 descriptive/pairwise analysis over #932 group identities, then extend those scopes
+   with #934 capability/distribution/risk analysis.
+3. Stabilize #935 presets only after the accepted filter/group/analysis contracts.
+4. Split exporter/dashboard concentration through #903/#904 behavior-preserving seams and close the
+   shared #952 envelope before Phase 4 workflow-specific evidence.
+5. Close #936 Excel and the core #937 offline dashboard over the same result structures; #937 owns
+   baseline accessibility, while #946 hardening and #947 recipes remain downstream.
+6. Treat #938 Google conversion as optional post-processing after local workbook validation.
+7. Move reusable plots to an external package only chart-by-chart behind parity/rollback.
 
 ### Exit criteria
 
@@ -246,21 +284,23 @@ rather than parallel applications.
 
 | Issue | Outcome |
 |---:|---|
+| [#952](https://github.com/hexafe/metroliza/issues/952) | Shared performance envelope required before workflow-specific evidence |
 | [#939](https://github.com/hexafe/metroliza/issues/939) | CSV/Excel Summary v1.0 |
 | [#940](https://github.com/hexafe/metroliza/issues/940) | Cache-first Oznak/production analytics v1.0 |
 | [#919](https://github.com/hexafe/metroliza/issues/919) | Event/time/window/detector/replay architecture contracts |
 | [#941](https://github.com/hexafe/metroliza/issues/941) | Operator-ready realtime monitoring/replay v1.0 |
-| [#952](https://github.com/hexafe/metroliza/issues/952) | Bounded large-data behavior and workflow-level performance evidence |
 
 ### Delivery sequence
 
-1. Run filter/group/analysis conformance fixtures across report, tabular and industrial adapters.
-2. Stabilize multi-file source/column/type and SQLite snapshot identity.
-3. Complete cache lifecycle, dynamic fields, source freshness and credential separation.
-4. Accept realtime event/time/window/offset/detector contracts.
-5. Validate deterministic replay and transparent detectors before live rollout.
-6. Add operator review states, restart recovery and honest dashboard freshness.
-7. Produce representative load/lag/false-positive/rollback evidence before production use.
+1. Start from the closed #931/#932/#933/#934/#936/#937 contracts and shared #952 performance
+   envelope; do not redefine canonical semantics inside a workflow adapter.
+2. Complete #939 tabular field/execution adapters and run the shared filter/group/analysis and
+   workload fixtures against in-memory and SQLite-backed modes.
+3. Complete #940 industrial adapters after #939, including cache lifecycle, dynamic fields, source
+   freshness, credential separation and the same applicable #931 conformance fixtures.
+4. Complete #941 after #940 and #919, then validate deterministic replay, transparent detectors,
+   operator review states, restart recovery and honest dashboard freshness.
+5. Produce representative load/lag/false-positive/rollback evidence before production use.
 
 ### Exit criteria
 
@@ -285,25 +325,29 @@ Turn repeatable interactive work into durable, scriptable, reviewable engineerin
 | Issue | Outcome |
 |---:|---|
 | [#926](https://github.com/hexafe/metroliza/issues/926) | Complete portable/relinkable workspace lifecycle |
+| [#945](https://github.com/hexafe/metroliza/issues/945) | Workspace context and task ownership across interactive and automated flows |
 | [#942](https://github.com/hexafe/metroliza/issues/942) | Supported headless CLI |
-| [#943](https://github.com/hexafe/metroliza/issues/943) | Watched folders and scheduled local jobs |
+| [#944](https://github.com/hexafe/metroliza/issues/944) | Downstream workflow payload integration over the shared diagnostic foundation |
+| [#952](https://github.com/hexafe/metroliza/issues/952) | Workflow-specific bounded automation, sharing and cleanup evidence |
 | [#949](https://github.com/hexafe/metroliza/issues/949) | Run history and reproducibility manifests |
+| [#943](https://github.com/hexafe/metroliza/issues/943) | Watched folders and scheduled local jobs |
 | [#948](https://github.com/hexafe/metroliza/issues/948) | Approved cross-dataset baselines |
+| [#946](https://github.com/hexafe/metroliza/issues/946) | Cross-product accessibility hardening required by reusable visual recipes |
 | [#947](https://github.com/hexafe/metroliza/issues/947) | Versioned visual recipes and local annotations |
 | [#953](https://github.com/hexafe/metroliza/issues/953) | Portable verifiable evidence bundle |
-| [#944](https://github.com/hexafe/metroliza/issues/944) | Shared diagnostic/redaction/bundle support |
-| [#945](https://github.com/hexafe/metroliza/issues/945) | Workspace context and task ownership across interactive and automated flows |
-| [#952](https://github.com/hexafe/metroliza/issues/952) | Bounded automation, sharing and cleanup behavior |
 
 ### Delivery sequence
 
-1. Complete workspace schema on accepted stable contracts.
-2. Expose the same services via CLI with stable JSON/exit codes.
-3. Add run identity/manifests and artifact hashes.
-4. Add safe watched/scheduled jobs using CLI/application contracts.
-5. Add immutable approved baseline snapshots and comparison history.
-6. Separate visual recipes/annotations from statistical configuration/source data.
-7. Produce portable evidence bundles with outputs-only default and explicit data preview.
+1. Complete the portable #926 workspace lifecycle and #945 shell/context integration on the
+   accepted Phase 2 foundations.
+2. Expose the same services through #942 CLI with stable JSON/exit codes.
+3. Establish #949 run identity/manifests and artifact hashes before its downstream consumers.
+4. Add #943 watched/scheduled jobs and #948 immutable baselines over the #949 history contract.
+5. Complete the Phase 5 #946 accessibility-hardening slice over #937/#945 before #947 reusable
+   visual recipes and annotations.
+6. Produce #953 portable evidence bundles over #949 manifests with outputs-only default and
+   explicit data preview.
+7. Apply the already accepted #944/#952 contracts to workflow-specific payloads and evidence.
 
 ### Exit criteria
 
@@ -331,17 +375,18 @@ Allow safe extension and measured optimization without recreating uncontrolled m
 | [#906](https://github.com/hexafe/metroliza/issues/906) | Current finite reviewed security exceptions |
 | [#908](https://github.com/hexafe/metroliza/issues/908) | Promote, keep experimental or retire each native candidate |
 | [#928](https://github.com/hexafe/metroliza/issues/928) | Declarative parser lifecycle as the controlled extension foundation |
-| [#950](https://github.com/hexafe/metroliza/issues/950) | Privacy-reviewed LLM parser-profile generation/repair |
 | [#951](https://github.com/hexafe/metroliza/issues/951) | Versioned parser/analysis/report extension interfaces |
+| [#950](https://github.com/hexafe/metroliza/issues/950) | Privacy-reviewed LLM parser-profile generation/repair |
 | [#952](https://github.com/hexafe/metroliza/issues/952) | End-to-end performance and resource envelopes |
 
 ### Delivery sequence
 
 1. Isolate legacy compatibility tests and enforce decreasing import budgets.
 2. Renew/eliminate security findings before expiry.
-3. Stabilize parser interface and trust levels first.
-4. Quarantine/validate/approve generated parser artifacts.
-5. Define analysis/report extension contracts only after canonical core/result schemas are stable.
+3. Complete the #928 parser lifecycle and trust levels first.
+4. Establish #951 parser/analysis/report extension interfaces over #928 and canonical schemas.
+5. Add #950 LLM-assisted generation/repair as an optional consumer of #928/#951, with quarantine,
+   deterministic validation and explicit approval.
 6. Re-evaluate native candidates against current representative workloads.
 7. Retain only extensions/accelerators with ownership, contracts, parity, packaging and maintenance
    rationale.
@@ -398,11 +443,11 @@ GitHub milestone creation/configuration is tracked by #921. Recommended mileston
 | Milestone | Included phases/issues |
 |---|---|
 | **Foundation and branch recovery** | Phase 0: #899, #900, #902, #911, #921, #923, #924, #925 |
-| **Reproducible baseline** | Phase 1: #912, #913, #914, #918, #922, #944, initial #952 |
+| **Reproducible baseline** | Phase 1: #912, #913, #914, #918, #922, initial #917/#920, #944, initial #952 |
 | **Stable core and reporting** | Phases 2–3: #915–#917, #926–#937, #903, #904, #907, #954 |
 | **Tabular and industrial analytics** | Phase 4 tabular/industrial: #939, #940, relevant #931/#932/#952 |
 | **Realtime analytics MVP** | #919, #941, realtime parts of #937/#944/#952 |
-| **Automation and reproducibility** | Phase 5: #942, #943, #947–#949, #953, complete #926 |
+| **Automation and reproducibility** | Phase 5: #942, #943, #946–#949, #953, complete #926 |
 | **Extensibility and performance** | Phase 6: #905, #906, #908, #950–#952 |
 | **1.0 release hardening** | Phase 7: #901, #920, #946, #955–#957 and all selected feature gates |
 
