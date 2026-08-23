@@ -8,6 +8,7 @@ Start here for current product scope, architecture, planning, and development pr
 
 - `project/README.md` — canonical Metroliza project control center and source-of-truth hierarchy.
 - `project/product_specification.md` — product personas, workflows, functional/non-functional requirements, boundaries, and release-quality target.
+- `project/feature_catalog.md` — capability maturity, roadmap phase, dependencies, completion rules, and tracking Issues.
 - `project/architecture.md` — canonical package ownership, data flows, compatibility/native policies, and active architecture risks.
 - `project/roadmap.md` — single current planning overview backed by GitHub Issues.
 - `project/development_workflow.md` — issue-first workflow, active development/release branch rules, validation tiers, and definitions of ready/done.
