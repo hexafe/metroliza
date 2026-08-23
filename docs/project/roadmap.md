@@ -23,53 +23,61 @@ Issue is authoritative for an executable work item. Release evidence belongs und
 
 ## 2. Current state
 
-- Current product line: `rc2` at `202690eb21087314a3c8000aa3ebdb58a1a09c1b`.
-- Default branch: stale `master` at `ab26258e72d285c3917a595515798da185800373`.
+Branch decision date: 2026-08-22. Exact evidence is recorded in
+[`rc2_branch_transition_decision_2026-08-22.md`](../release_checks/rc2_branch_transition_decision_2026-08-22.md).
+
+- Canonical development base: `develop`.
+- Frozen candidate/evidence line: `release/2026.06-rc2`.
+- Retained transition/reference branch: `rc2`; no new routine development targets it.
+- Default/historical production branch: `master` at
+  `ab26258e72d285c3917a595515798da185800373`; promotion is not approved.
+- Validated branch-point content: commit `a03bbdacbd6c308acf46ca31c16d0dd2caeab304`,
+  tree `dc10e028332cb311cb0b2c110deecee2841b9799`.
+- PR CI run `32585291955` passed static/security, full tests/coverage, native, Windows core, CMM
+  performance, and benchmark trend gates for the same tree.
 - Canonical release metadata: `2026.06 RC2 (build 260711)`.
-- Last documented exact-head green CI: earlier RC2 commit
-  `ce7556098626f93d3ade95abd49ede00be341611`, recorded by PR #895.
-- Immediate constraint: current head must be validated and the canonical development/promotion
-  branch must be decided before broad feature work.
+- Immediate release constraint: #901 manual packaged/clean-machine Windows/Google/notices/legal
+  evidence blocks `master` and stable-tag promotion.
 
 ## 3. Milestones
 
-### Milestone 0 — Project governance reset
+### Milestone 0 — Project governance reset — completed
 
 Purpose: establish one control center and make GitHub Issues the work queue.
 
-| Issue | Priority | Deliverable | Exit signal |
+| Issue | Priority | Deliverable | Outcome |
 |---|---|---|---|
-| #899 | P0 | Project specification, architecture, roadmap, delivery workflow, ChatGPT workspace, Issue forms, PR/branch governance | Governance PR merged into the current product line |
-
-This milestone changes documentation and development process only. It does not promote `rc2`, alter
-release metadata, or refactor application behavior.
+| #899 | P0 | Product specification, architecture, roadmap, delivery workflow, ChatGPT workspace, Issue forms, PR/branch governance | Completed by PR #909; merged to the product line with green automatic CI |
 
 ### Milestone 1 — Trustworthy current product baseline
 
-Purpose: prove what is releasable and remove branch ambiguity.
+Purpose: prove what is releasable, remove branch ambiguity, and close promotion blockers.
 
-| Issue | Priority | Deliverable | Depends on |
+| Issue | Priority | Deliverable | State/dependency |
 |---|---|---|---|
-| #900 | P0 | Exact-head automated validation and explicit `rc2`/`master`/release-branch decision | #899 process baseline |
-| #901 | P1 | Packaged Windows, Google conversion, artifact/notices, and legal manual evidence | candidate SHA selected by #900 |
-| #906 | P1 | Review/eliminate/renew expiring Bandit findings before 2026-10-31 | current validated code and dependency pins |
+| #900 | P0 | Exact-content automated validation and explicit branch/promotion decision | Decision implemented: `develop` + `release/2026.06-rc2`; closes after decision PR/ref sync |
+| #901 | P1 | Packaged Windows, Google conversion, artifact/notices, and legal manual evidence | Active release blocker on the exact candidate |
+| #906 | P1 | Review/eliminate/renew expiring Bandit findings before 2026-10-31 | Can proceed from `develop`; release-relevant fixes must be reconciled into the candidate |
 
 Exit criteria:
 
-- exact SHA and terminal CI run recorded;
-- no current-head validation gap;
-- manual release blockers satisfied or explicitly block promotion;
-- canonical development base named;
-- branch strategy updated to match the decision;
-- no expired security exception;
-- release owner records go/no-go.
+- [x] exact tested/final tree identity and terminal automatic CI are recorded;
+- [x] manual release blockers explicitly remain open rather than being waived;
+- [x] `develop` is the canonical development base;
+- [x] `release/2026.06-rc2` is the frozen candidate/evidence line;
+- [x] `master` promotion is explicitly rejected pending manual evidence;
+- [ ] #901 packaged, clean-machine Windows, Google, notices, and legal evidence is complete;
+- [ ] no expired security exception remains;
+- [ ] release owner records final Go/No-Go for promotion.
 
-Do not mix broad refactoring into this milestone unless it fixes a release-blocking defect found by
-validation.
+Do not mix broad refactoring into the release branch. Release-blocking fixes remain narrow and are
+reconciled into `develop`.
 
 ### Milestone 2 — Planning and structural-risk reduction
 
 Purpose: reduce the largest maintenance blast radii without changing product behavior.
+
+Base branch: `develop`.
 
 | Issue | Priority | Deliverable | Delivery style |
 |---|---|---|---|
@@ -91,6 +99,8 @@ Exit criteria:
 Purpose: clarify package ownership and reduce duplicated high-cost logic only where evidence
 supports it.
 
+Base branch: `develop`.
+
 | Issue | Priority | Deliverable | Promotion gate |
 |---|---|---|---|
 | #907 | P2 | Reusable plot specifications in `hexafe-plotstats` for approved chart kinds | numerical/visual parity, rollback, packaging |
@@ -105,34 +115,38 @@ Exit criteria:
 
 ### Milestone 4 — First stable post-RC product line
 
-Purpose: ship a stable product identity after the branch/release decision and structural risk
-baseline.
+Purpose: complete evidence, promote a reviewed candidate, and normalize the branch lifecycle.
 
-Candidate outcomes, to be converted into separate Feature/Release Issues after #900:
+Approved sequence:
 
-- final stable version/branch/tag naming and migration from the ad-hoc `rc2` line;
+1. close #901 against `release/2026.06-rc2`;
+2. rerun required exact-head automatic/manual gates after any release fix;
+3. record release-owner Go/No-Go;
+4. merge only a Go candidate into `master` and create the approved stable tag;
+5. synchronize the production result back into `develop`;
+6. retire or archive the historical `rc2` branch through an explicit cleanup decision;
+7. update user manuals and distribution/install guidance against the shipped binary.
+
+Potential post-RC work becomes separate Issues before implementation:
+
 - polished installer/update/distribution instructions;
-- supported-workflow smoke matrix for report parsing, DB modification, export, CSV Summary,
+- supported-workflow packaged smoke matrix for parsing, DB modification, export, CSV Summary,
   industrial cache, and realtime review;
 - explicit deprecation plan for legacy Group Comparison/BOM entry points;
-- user-manual refresh against the shipped binary;
 - stable compatibility matrix for Python source, PyInstaller, Nuitka, OCR, and optional native
   extensions.
-
-These candidates are not approved implementation work until Issues define their scope and
-acceptance criteria.
 
 ## 4. Workstream map
 
 ### Release and quality
 
-- #900 exact-head validation and branch decision.
-- #901 manual packaged/integration/legal evidence.
+- #900 branch decision and exact automatic evidence — closing through the transition PR.
+- #901 manual packaged/integration/legal evidence — next release priority.
 - #906 time-bound security baseline review.
 
 ### Product and documentation
 
-- #899 project control center and workflow.
+- #899 project control center and workflow — completed.
 - #902 active-roadmap consolidation and archive hygiene.
 
 ### Architecture and maintainability
@@ -153,6 +167,7 @@ A new Issue enters the roadmap only after triage confirms:
 - a clear user/problem or engineering-risk statement;
 - one primary owner area;
 - priority and validation tier;
+- target base (`develop` or the explicitly approved release branch);
 - acceptance criteria;
 - dependencies and compatibility/data impact;
 - rollback or deferral option for high-risk work.
@@ -176,10 +191,11 @@ privacy/data boundary, expected decision, and measurable acceptance criteria.
 At every monthly/release review:
 
 1. compare this document with open/closed Issues;
-2. verify branch and release snapshot values;
-3. remove closed work from active milestone tables or mark the outcome;
-4. create Issues for newly approved work;
-5. archive or reclassify superseded implementation plans;
-6. update `Last reviewed` and link the review PR.
+2. verify default, development, release, and transition branch state;
+3. verify the active candidate SHA/tree and release metadata;
+4. remove closed work from active milestone tables or mark the outcome;
+5. create Issues for newly approved work;
+6. archive or reclassify superseded implementation plans;
+7. update `Last reviewed` and link the review PR.
 
 A roadmap item without an open Issue is a candidate idea, not scheduled development.
