@@ -151,6 +151,9 @@ A branch remains **KEEP** unless every item is freshly proven for its exact curr
   integrated branch is never judged from graph uniqueness or ancestry alone;
 - [ ] no release, support, or rollback evidence depends on the branch;
 - [ ] any required historical tag already exists at the verified exact SHA;
+- [ ] the exact commit object is durably recoverable without the branch being deleted: it is either
+  reachable through a retained fetchable ref whose retention is verified, or stored in a verified
+  Git bundle in maintainer-controlled durable storage with its checksum and restore test recorded;
 - [ ] the full recovery SHA, evidence, approver, approval timestamp, and rollback owner are recorded
   in #960;
 - [ ] external orchestrator approval names this one ref and exact SHA.
@@ -170,6 +173,7 @@ Record one entry in #960 before each later operation:
 | Integration evidence | Source/squash/tree/patch and PR links |
 | Dependency evidence | PR, workflow, ruleset, setting, release, document and external checks |
 | Release/tag evidence | Release/rollback dependency result and any required existing tag |
+| Object-retention evidence | Retained fetchable ref, or durable Git-bundle location, checksum and clean restore-test result |
 | Approval | Named approver, external-orchestrator decision link, and timestamp |
 | Rollback owner | Named person responsible for recovery and verification |
 | Expected result | Exact expected post-operation ref state |
@@ -179,15 +183,21 @@ Record one entry in #960 before each later operation:
 
 ### Branch deleted incorrectly
 
-After separate recovery approval, recreate only the exact deleted branch from the ledger's recorded
-full SHA:
+The SHA is an identifier, not an archive. Before deletion, prove that the exact commit can be
+fetched from a retained durable ref or restored from the verified Git bundle recorded in the
+ledger. A GitHub PR page or remembered SHA is not sufficient unless its backing ref is confirmed
+fetchable and retained for the required recovery period.
+
+After separate recovery approval, fetch or restore that preserved object into a clean clone,
+verify that it resolves to the ledger's full SHA, and only then recreate the exact deleted branch:
 
 ```bash
 git push origin <RECORDED_FULL_SHA>:refs/heads/<EXACT_BRANCH_NAME>
 ```
 
 Then repair verified PR bases, workflows, settings, release references, or handoffs and rerun their
-checks. Never guess a recovery SHA from a commit subject, prefix, nearby branch, or similar tree.
+checks. Never assume an unreachable SHA can be pushed, and never guess a recovery SHA from a commit
+subject, prefix, nearby branch, or similar tree.
 
 ### Documentation or policy integration fails
 
@@ -216,5 +226,6 @@ PR #961 is ready to integrate only when:
 - PR metadata records the final head and confirms that no cleanup mutation occurred.
 
 Cleanup itself is complete only after the plan is integrated and every later mutation has passed a
-fresh exact-ref gate, has an individual recovery ledger/approval, is verified immediately, and is
-included in the final inventory. This document never supplies those approvals.
+fresh exact-ref gate, has a verified durable recovery object plus an individual recovery ledger and
+approval, is verified immediately, and is included in the final inventory. This document never
+supplies those approvals.
