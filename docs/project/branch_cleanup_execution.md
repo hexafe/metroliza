@@ -212,9 +212,28 @@ fetched from a retained durable ref or restored from the verified Git bundle rec
 ledger. A GitHub PR page or remembered SHA is not sufficient unless its backing ref is confirmed
 fetchable and retained for the required recovery period.
 
-After separate recovery approval, fetch or restore that preserved object into a clean clone,
-verify that it resolves to the ledger's full SHA, confirm the remote branch is still absent, and
-only then recreate the exact deleted branch with GitHub's atomic create-ref operation:
+After separate recovery approval, fetch or restore that preserved object into a clean clone and
+verify that it resolves to the ledger's full SHA. A commit restored only from a bundle or another
+off-repository location must first be uploaded without risking an existing ref. Create a unique,
+one-use staging commit whose parent is `<RECORDED_FULL_SHA>`, then push that commit to a newly
+generated recovery-staging branch with an expected-absent lease. The recovery approval and ledger
+must cover the exact staging-ref name, staging SHA, owner and later removal:
+
+```bash
+git push --porcelain \
+  --force-with-lease=refs/heads/recovery-staging/<ONE_USE_ID>:0000000000000000000000000000000000000000 \
+  origin <UNIQUE_STAGING_COMMIT>:refs/heads/recovery-staging/<ONE_USE_ID>
+```
+
+The staging commit must be created locally after the one-use name is chosen, must have the recovered
+commit as a parent, and must not be reused. Continue only when the porcelain result reports a newly
+created reference; an up-to-date result, rejection or pre-existing staging ref is changed external
+state and requires an abort. Verify through GitHub's Git API that `<RECORDED_FULL_SHA>` now exists in
+the target repository. If the recovery object was already retained by a fetchable ref in the target
+repository, record and verify that ref instead of creating a staging ref.
+
+Confirm the deleted branch is still absent, then recreate it with GitHub's atomic create-ref
+operation:
 
 ```bash
 gh api --method POST repos/hexafe/metroliza/git/refs \
@@ -222,12 +241,14 @@ gh api --method POST repos/hexafe/metroliza/git/refs \
   -f sha='<RECORDED_FULL_SHA>'
 ```
 
-Then repair verified PR bases, workflows, settings, release references, or handoffs and rerun their
-checks. GitHub's create-ref endpoint rejects any existing branch, including a concurrent recreation
-at the same SHA. Treat that rejection as a changed external state: abort, rerun ownership and
-dependency checks, and never overwrite the ref during recovery. Never assume an unreachable SHA
-can be restored, and never guess a recovery SHA from a commit subject, prefix, nearby branch, or
-similar tree.
+GitHub's create-ref endpoint rejects any existing branch, including a concurrent recreation
+at the same SHA. Treat that rejection as changed external state: abort, rerun ownership and
+dependency checks, and never overwrite the ref during recovery. After the restored branch is
+verified, remove any one-use staging branch with an expected-old-value lease bound to its recorded
+staging SHA; if that cleanup fails, retain and record the staging ref for separate review rather than
+forcing it. Then repair verified PR bases, workflows, settings, release references, or handoffs and
+rerun their checks. Never assume an unreachable SHA can be restored, and never guess a recovery SHA
+from a commit subject, prefix, nearby branch, or similar tree.
 
 ### Documentation or policy integration fails
 
