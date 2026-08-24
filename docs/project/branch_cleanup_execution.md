@@ -1,23 +1,48 @@
 # Branch cleanup execution plan
 
-- Status: Proposed; execution is not authorized by this document
+- Status: Reconciled plan; no cleanup mutation is authorized
 - Owner: Repository maintainer
-- Last reviewed: 2026-08-22
+- Last reviewed: 2026-08-24
+- Evidence timestamp: `2026-08-24T06:46:02+02:00` (`Europe/Warsaw`)
 - Repository: `hexafe/metroliza`
+- Current integration baseline: `develop` at
+  `1a060bfcc8c6e01901be7884d3a805f544eb918c`
+- Live remote branch count: 9
 - Execution issue: [#960](https://github.com/hexafe/metroliza/issues/960)
-- Source audit: [#911](https://github.com/hexafe/metroliza/issues/911),
+- Integrated source audit: closed [#911](https://github.com/hexafe/metroliza/issues/911), merged
   [PR #959](https://github.com/hexafe/metroliza/pull/959), and
   [`branch_audit.md`](branch_audit.md)
 
-This is the approval artifact for later branch cleanup. It converts the evidence in the branch
-audit into an ordered decision matrix, deletion gate, and rollback procedure. It does not perform
-or authorize a branch deletion, tag creation, merge, force-update, or history rewrite. Each future
-mutation requires a separate human approval recorded in #960 after the prerequisites below have
-been reverified against live refs.
+This document prepares later cleanup; it does not approve or perform it. A candidate disposition is
+not permission to delete a ref. Every later mutation requires a fresh live-gate run, an exact-ref
+decision recorded in #960, and external orchestrator approval under the project's destructive-
+operation boundary. Approval covers one ref at one exact SHA. Any movement resets it.
+
+No branch is deleted, no tag is created, moved, or deleted, no protected or release ref is updated,
+and no history is rewritten by this plan or by PR #961.
+
+## Integrated state and current gate
+
+Completed:
+
+- PR #910 integrated as `1eeeab27352ed2c6bcbdca2af81f3fdd7c1f8cac`;
+- the approved transition refs were reconciled without force;
+- PR #958 integrated as `1b58303fee1483a88d2c987f7f06595dac8db7f3`;
+- PR #959 integrated as current `develop`
+  `1a060bfcc8c6e01901be7884d3a805f544eb918c`;
+- #911 closed as completed.
+
+The current gate is to reconcile, review, validate, and integrate PR #961. Its published remote head
+at the evidence timestamp was `2a80a0dd3317fe17b5b4c3538e1adff1b284bd0b`. The normal merge of
+current `develop` into the topic branch is `fcde300b13bca6b5cf6a49e7ee00ca410ddbca0a`.
+The final content commit and exact-head CI belong in PR #961 metadata because a tracked document
+cannot contain its own final commit SHA without changing that SHA.
+
+The repository default remains `master`. `develop` is nevertheless the canonical base for normal
+Issue-driven work. `release/2026.06-rc2` remains frozen release/evidence state, and `rc2` remains a
+temporary transition/reference alias rather than a routine development base.
 
 ## Target branch model
-
-The target day-to-day development model is:
 
 ```text
 develop
@@ -27,149 +52,169 @@ develop
 └── research/*
 ```
 
-- `develop` is the protected canonical integration base and the target for normal pull requests.
-- `feature/*`, `fix/*`, and `refactor/*` are short-lived Issue branches. They merge through reviewed
-  pull requests and become deletion candidates only after integration.
-- `research/*` contains bounded experiments with explicit exit criteria. Production behavior is
-  recovered through a new `feature/*`, `fix/*`, or `refactor/*` branch rather than by merging a
-  research branch wholesale.
-- `master` remains outside the development tree as the protected historical/production anchor
-  until the release strategy is approved.
-- `release/2026.06-rc2` and `rc2` are temporary transition exceptions. They receive no routine
-  development work and do not become permanent parents in the target model.
+- Normal Issue branches are short-lived and merge through reviewed PRs into `develop`.
+- `research/*` has bounded exit criteria; accepted behavior returns through a focused Issue branch.
+- `master` stays outside the development tree as the default production/history anchor pending
+  the separate #901 promotion decision.
+- `release/2026.06-rc2` and `rc2` receive no routine development work.
 
-The target model does not itself change GitHub's default branch, protection rules, release policy,
-or any ref. Those are separately reviewed repository operations.
+The target model changes no GitHub default, protection, ruleset, release policy, tag, or ref by
+itself.
 
-## Branch decision matrix
+## Current live-branch decision matrix
 
-Counts and SHAs below come from the 2026-08-22 audit snapshot. Before executing any row, refresh
-the live head, ancestry, unique-commit count, open pull requests, workflow references, and release
-dependencies. A decision describes the intended outcome; it is not approval to perform it.
+The nine rows below are the exact live remote inventory at the evidence timestamp. The active #961
+row necessarily records its published pre-update head; its final reconciled head must be copied
+from PR #961 into #960's recovery ledger before any later deletion evaluation.
 
-| Branch | Current role | Decision | Prerequisites | Risk | Rollback |
-| --- | --- | --- | --- | --- | --- |
-| `develop` | Canonical development baseline at audited tip `a03bbdacbd6c`; 0 unique commits relative to itself. | **KEEP** as the protected root of the target model. | Accept the branch-role policy in #900/PR #910; verify required checks and protections; separately review any default-branch setting change. | GitHub still presents stale `master` as default, so new work can start from the wrong base. An unreviewed release-only update could also diverge the release line. | The branch itself is not removed. If repository settings change incorrectly, restore the recorded prior default/protection settings and repair affected PR bases; never reset or force-push `develop`. |
-| `master` | GitHub default and historical/production anchor at `ab26258e72d2`; 279 behind / 0 ahead of `develop`, 0 unique commits, but 904 files of tip-tree drift. | **KEEP** until a separate release strategy and promotion decision. | Complete #901 release evidence and #920 release-policy work before any promotion; require a dedicated reviewed release PR. | Treating “0 unique commits” as permission to replace `master` would bypass a product-wide diff and unresolved manual release gates. | No cleanup mutation is planned. If a later promotion is faulty, use a reviewed revert or forward hotfix and reconcile it to `develop`; do not rewrite production history. |
-| `rc2` | Temporary transition/reference alias at `a03bbdacbd6c`, exactly equal to audited `develop` and `release/2026.06-rc2`; 0 unique commits. Open PRs #910 and #958 currently target it. | **KEEP TEMPORARILY**; reconsider retirement only after the transition is complete. | Resolve #910 and #958; freeze routine work; reconcile release state; pass the deletion gate; under #924 verify whether a historical tag is required. | Early deletion breaks active PR bases and historical references. Continued use creates competing integration branches. | If a later approved deletion is wrong, recreate only `refs/heads/rc2` from the full SHA recorded immediately before deletion, then repair affected PR bases. |
-| `release/2026.06-rc2` | Frozen release-candidate/evidence line at audited tip `a03bbdacbd6c`; 0 unique commits at the snapshot. | **KEEP** through release closeout. | Restrict changes to release blockers/evidence; complete #901; reconcile every accepted release-only commit back to `develop`; verify exact-head CI. | Feature drift invalidates release evidence; failure to reconcile a release fix can lose it from future development. | Revert a faulty release change through review or recreate the branch from its recorded SHA if it is accidentally removed. Never force-move the branch or a published tag. |
-| `docs/900-branch-transition` | Active documentation/governance branch for #900 and open PR #910; audited 0 behind / 1 ahead with 1 unique commit. | **MERGE** through PR #910, then evaluate the source branch for deletion separately. | Diagnose the observed unit-test failure; obtain green exact-head CI; review overlap with #958; record source and merge SHAs; obtain maintainer approval. | Merging red CI contradicts the policy being introduced. Wrong ordering can block the planned fast-forward of `develop` and restore stale roadmap language. | Revert a faulty documentation merge through a new PR. If the source branch is later deleted incorrectly, recreate it from the recorded full source SHA. |
-| `docs/project-governance-reset` | Obsolete source branch for squash-merged PR #909. It has 1 graph-unique source commit at `375cc433f0af`, but its tip tree is identical to `develop`, so no unique content remains. | **DELETE** only after the deletion gate passes. | Reconfirm zero tip-tree drift; verify no open PR, workflow, protection rule, release process, or documentation depends on the name; record full recovery SHA; obtain explicit deletion approval. | Its source commit will cease to be reachable from a normal branch head, and an unsearched external dependency may still name it. | Recreate exactly `refs/heads/docs/project-governance-reset` from recorded SHA `375cc433f0af4d2d0a49e5dacc33ec0b53733479`, after approval. |
-| `docs/project-specification-roadmap-2026-08` | Active product-planning branch in open PR #958; audited 0 behind / 4 ahead with 4 unique documentation commits. | **MERGE** after branch-policy reconciliation, then evaluate the source branch for deletion separately. | Integrate #910 first; reconcile overlapping `docs/project/README.md` and `roadmap.md`; retarget to `develop` when permitted; fix the observed unit-test failure; obtain review and green exact-head CI. | Merging out of order can reintroduce `rc2` as the normal product line or overwrite accepted branch policy. | Revert a faulty documentation merge through a new PR. Recreate the source branch from its recorded full SHA if an approved post-merge deletion proves premature. |
-| `performance-boost` | Historical broad performance/native line at recovered tip `75f79b5a1c92`; no live remote head and 0 unique commits relative to `develop`. It was merged and reverted on `master` and later integrated into the development line. | **SALVAGE** evidence and requirements only; keep the old branch absent. | Route still-valid work through #918/#908; establish a current benchmark; define parity, test, and rollback gates; create a focused branch from `develop`. | Replaying the old 107-file delta can duplicate integrated changes and revive regressions that motivated the production revert. | Close or revert the focused salvage PR. The historical branch remains absent and no historical ref needs restoration. |
-| `report-metadata-redesign` | Historical metadata/provenance work recovered from closed draft PR #892 at `efe1c430c30e`; no live exact-name head and 0 unique commits relative to `develop`. | **SALVAGE** unmet schema intent only; keep historical names absent. | Map requirements to current code and #917, with #915/#929/#930 for adjacent model, OCR, and database work; prove compatibility and migration rollback in a focused branch from `develop`. | The historical 241-file delta mixes schema, OCR, persistence, UI, and tests and can duplicate landed behavior or regress the canonical result model. | Revert or close the focused salvage PR and restore data only through its reviewed migration rollback. No historical branch restoration is required. |
-| `feature/realtime-industrial-ml-anomaly` | Historical realtime/ML line recovered from closed PR #898 at `13c47617ef85`; no live remote head and 0 unique commits relative to `develop`. | **SALVAGE** validated contracts, fixtures, and operator safeguards only; keep the old branch absent. | Route gaps through #919/#941; define replay, bounded-read, detector, performance, UI, and rollback acceptance criteria; use a focused branch from `develop`. | The historical 776-file delta contains line integration and unrelated changes; wholesale revival obscures provenance and invalidates current evidence. | Close or revert the focused salvage PR and disable the new behavior through its reviewed rollback path. The historical branch remains unchanged and absent. |
+| Branch and exact current SHA | Current role | Decision | Prerequisites | Risk | Rollback / recovery |
+|---|---|---|---|---|---|
+| `develop` — `1a060bfcc8c6e01901be7884d3a805f544eb918c` | Canonical Issue-driven integration branch and base of PR #961. | **KEEP**. | Preserve required checks and accepted branch policy; no #960 promotion operation. | GitHub still defaults to `master`, so contributors can select the wrong base. | Never delete or force-move it. Correct policy/settings through review and repair affected PR bases. |
+| `master` — `ab26258e72d285c3917a595515798da185800373` | Repository default and production/history anchor. | **KEEP**; no promotion through #960. | Complete #901 and use a dedicated release decision/PR for any future promotion. | Treating ancestry as release evidence would bypass the product-wide delta and manual gates. | Use a reviewed revert or forward hotfix, then reconcile to `develop`; never rewrite production history. |
+| `rc2` — `1eeeab27352ed2c6bcbdca2af81f3fdd7c1f8cac` | Temporary historical transition/reference alias; two commits behind `develop`. | **KEEP TEMPORARILY**. | #924 historical-ref decision, release reconciliation, full live deletion gate, and any required historical tag already present. | Early retirement can break unknown external references; continued use can attract wrong-base work. | Recreate only `refs/heads/rc2` from the exact full SHA in the approved ledger, then repair verified consumers. |
+| `release/2026.06-rc2` — `1eeeab27352ed2c6bcbdca2af81f3fdd7c1f8cac` | Frozen candidate/evidence line while #901 remains open. | **KEEP**. | Complete #901 and a separate release-owner decision; reconcile accepted fixes into `develop`. | Feature drift or premature removal would invalidate release and rollback evidence. | Restore only from the approved exact ledger SHA or use a reviewed release-line revert; never move a published tag. |
+| `docs/900-branch-transition` — `b978a759f341d2c0c44f61bc4d0416aec868fb0e` | Squash-integrated source of merged PR #910. | **DELETE candidate** after a fresh live gate. | Reconfirm its tree equals #910 squash `1eeeab27352ed2c6bcbdca2af81f3fdd7c1f8cac`; verify every dependency class; record approval and ledger. | Graph-unique squash-source commits and an unknown external name consumer can be mistaken for unique product work or ignored. | Recreate the exact branch from recovery SHA `b978a759f341d2c0c44f61bc4d0416aec868fb0e`. |
+| `docs/project-governance-reset` — `375cc433f0af4d2d0a49e5dacc33ec0b53733479` | Squash-integrated source of merged PR #909. | **DELETE candidate** after a fresh live gate. | Reconfirm its tree equals #909 squash `a03bbdacbd6c308acf46ca31c16d0dd2caeab304`; verify every dependency class; record approval and ledger. | The source commit leaves normal branch reachability, and an unknown external consumer may still use the name. | Recreate the exact branch from recovery SHA `375cc433f0af4d2d0a49e5dacc33ec0b53733479`. |
+| `docs/project-specification-roadmap-2026-08` — `b8b698c020f616a3c53bcc5286291206ae1026f3` | Squash-integrated source of merged PR #958. | **DELETE candidate** after a fresh live gate. | Reconfirm its tree equals #958 squash `1b58303fee1483a88d2c987f7f06595dac8db7f3`; verify every dependency class; record approval and ledger. | Graph history differs despite zero source-to-squash tree delta; external name use remains unknown until the gate. | Recreate the exact branch from recovery SHA `b8b698c020f616a3c53bcc5286291206ae1026f3`. |
+| `docs/911-branch-archaeology-audit` — `ee026f6a5af96792c7b3c2a76d5ced4cb57c6ff3` | Source of merged PR #959; its tree equals the #959 squash result. | **DELETE candidate**, but only after PR #961 is integrated and no longer depends on its history. | Reconfirm tree equivalence to `1a060bfcc8c6e01901be7884d3a805f544eb918c`; rerun every dependency check after #961 integration; record approval and ledger. | Removing it before the stacked-history handoff is complete can impair review or recovery. | Recreate the exact branch from recovery SHA `ee026f6a5af96792c7b3c2a76d5ced4cb57c6ff3`. |
+| `docs/960-branch-cleanup-execution` — published snapshot `2a80a0dd3317fe17b5b4c3538e1adff1b284bd0b` | Active PR #961 head carrying this two-file plan. | **KEEP** while PR #961 is active; evaluate as a separate **DELETE candidate** only after merge. | Integrate #961 first; record its final reconciled full head from PR metadata as the recovery SHA; then rerun every live gate and obtain a separate approval. | A self-referential or stale SHA, active PR use, or premature deletion would break review and make recovery ambiguous. | Recreate only from the final PR-head SHA recorded in #960 immediately before any approved deletion; never substitute this pre-update snapshot or a similar commit. |
 
-## Exact execution order
+The first three DELETE candidates have no current open PR head/base use. Direct source-to-squash
+tree comparison returned equality for all three. The audit source also equals its #959 squash tree.
+Those facts establish integration evidence, not deletion permission. Repository documents that
+name a branch for history or recovery do not by themselves require the live ref, but workflows,
+rulesets, settings, releases, external handoffs, and rollback dependencies must still be checked
+immediately before each proposed mutation.
 
-Do not skip or parallelize steps that have an explicit dependency. Stop when a prerequisite fails
-or the live ref differs from its recorded audit state.
+## Historical dispositions
 
-1. **Approve the evidence base.** Review #911, PR #959, and `branch_audit.md`; record the accepted
-   inventory SHAs in #960. Keep PR #959 audit-only.
-2. **Accept the branch-role policy first.** Repair PR #910's test failure, obtain green exact-head
-   checks, review its overlap with #958, and merge #910 only after approval.
-3. **Reconcile the transition refs.** Confirm the accepted #910 result is a fast-forward for both
-   `develop` and `release/2026.06-rc2`. Update either ref only with separate human approval, then
-   verify the `develop`, `rc2`, and release-candidate trees expected by #900.
-4. **Integrate the audit.** Update `docs/911-branch-archaeology-audit` from the accepted `develop`
-   state without rewriting history, refresh stale measurements, obtain green checks, and merge
-   PR #959 only after review.
-5. **Integrate this plan.** Retarget the #960 plan PR from the audit branch to `develop` after #959
-   lands, verify that its diff contains only this artifact and its index entry, obtain approval,
-   and merge it. This step authorizes no cleanup by itself.
-6. **Freeze branch roles.** Protect `develop`; keep `master`, `rc2`, and
-   `release/2026.06-rc2` in the roles stated in the matrix; stop routine work from targeting
-   `master` or `rc2`.
-7. **Integrate product-planning documentation.** Reconcile
-   `docs/project-specification-roadmap-2026-08` with accepted #910 language, fix its CI, retarget it
-   to `develop`, and merge through #958 only after approval.
-8. **Evaluate the already-integrated source branch.** Run the deletion gate for
-   `docs/project-governance-reset`. If every item passes and deletion is explicitly approved, it is
-   eligible for a later one-branch deletion operation.
-9. **Evaluate merged source branches individually.** After their PRs land, run the same deletion
-   gate separately for `docs/900-branch-transition`, `docs/911-branch-archaeology-audit`, the #960
-   plan branch, and `docs/project-specification-roadmap-2026-08`. Never batch the approval.
-10. **Salvage historical themes.** Use new focused branches from `develop` for approved work from
-    performance (#918/#908), report metadata (#917), and realtime industrial (#919/#941). Do not
-    recreate or wholesale-merge the historical branch names.
-11. **Close the release transition separately.** Complete #901, reconcile every release fix, and
-    make any production promotion through a dedicated reviewed PR. Under #924, verify the final RC
-    tag requirement and all dependencies before even proposing retirement of `rc2`.
-12. **Run a final audit.** Confirm that remaining long-lived refs have one documented role and all
-    other heads are active, short-lived branches rooted in the target model. Attach the final
-    inventory and every approval/recovery SHA to #960.
+These records preserve useful evidence without resurrecting broad historical branches:
 
-## Deletion gate
+- **Recovered RC1 evidence:** no exact bare `rc1` tip is proven. Under #924, verify the intended
+  state using concrete evidence such as `release/2026.03-rc1` at
+  `260a70d00eec296e101b736776129778d86aa042` and the later fixes head
+  `c593953f3f862289be84252d120a1c79c6f468ad`. Any tag decision is separate; this plan creates none.
+- **Performance boost:** **SALVAGE** benchmark evidence, parity intent, and focused requirements
+  through #918/#908 from recovered tip `75f79b5a1c9211019c8b5d75ea61a904aad5fc55`;
+  do not recreate or wholesale-merge the historical branch.
+- **Report metadata redesign:** **SALVAGE** unmet contract/schema intent through #917 from recovered
+  tip `efe1c430c30ecb98ecb1246113e4869192f9c3bf`; do not wholesale-merge it.
+- **Realtime/industrial/ML:** **SALVAGE** contracts, deterministic fixtures, source-safety and
+  operator safeguards through #919/#941 from recovered tip
+  `13c47617ef85dc1a92d2088a8e1bd873cee4fe76`; do not wholesale-merge it.
 
-A branch may be proposed for deletion only when **all** boxes are checked against current remote
-state. A failed or unknown item means **KEEP** until the uncertainty is resolved.
+All recovered tips are already ancestors of `develop`; they are not missing code branches.
 
-- [ ] **No open PR:** no open pull request uses the branch as either head or base, and no stacked PR
-  still needs its commits.
-- [ ] **No workflow dependency:** no workflow, ruleset, deployment, submodule, script, status check,
-  scheduled job, external integration, or repository setting names the branch.
-- [ ] **No unique commits:** graph and tree checks prove that every valuable commit/content change
-  is reachable from an intentional retained ref. Squash merges require tree/patch verification;
-  ancestry alone is insufficient.
-- [ ] **No release dependency:** no active release, packaging job, evidence record, changelog,
-  download, support procedure, or rollback runbook depends on the branch name or tip.
-- [ ] **Historical tag exists if required:** for a meaningful release boundary, an approved
-  immutable annotated tag already resolves to the verified historical SHA before branch deletion.
-  Tag creation is a separate human-approved action and is not performed by this plan.
+## Exact execution sequence
 
-The execution record must also contain the branch's full pre-deletion SHA, evidence links for all
-five checks, approver, timestamp, and rollback owner. Approval applies to one exact branch at one
-exact SHA. If the ref moves after review, the gate resets.
+### Completed
 
-## Rollback strategy
+1. Integrate #910 and the accepted branch policy.
+2. Reconcile the approved transition refs without force.
+3. Reconcile and integrate #958.
+4. Reconcile and integrate #959.
+5. Close #911 as completed.
 
-### Recovery ledger
+### Current
 
-Before any future mutation, record in #960:
+6. Reconcile PR #961 with current `develop`, preserve the merged audit byte-for-byte, confirm the
+   net diff is only this plan and its docs index entry, obtain exact-head review/CI, and integrate
+   it through normal review. Integration of the plan authorizes no cleanup.
 
-- exact branch name and full source/target SHAs;
-- decision-matrix row and deletion-gate evidence;
-- approving maintainer and rollback owner;
-- expected result and verification commands;
-- timestamp and links to the governing PR, Issue, CI run, and release evidence.
+### After PR #961
+
+7. Fetch and refresh the complete live inventory.
+8. Evaluate each deletion candidate separately against the live gate.
+9. Record one exact recovery-ledger entry per ref.
+10. Obtain a separate external-orchestrator approval for each destructive operation.
+11. Execute at most one approved mutation at a time.
+12. Verify the resulting remote state immediately after that mutation and update #960.
+13. Repeat only for another separately approved exact ref.
+14. Run and attach a final live-branch inventory.
+
+Recommended evaluation order, which is **not permission to delete anything**:
+
+1. `docs/900-branch-transition`
+2. `docs/project-governance-reset`
+3. `docs/project-specification-roadmap-2026-08`
+4. `docs/911-branch-archaeology-audit`, only after PR #961 integration
+5. `docs/960-branch-cleanup-execution`, only after PR #961 integration
+
+## Strict deletion gate
+
+A branch remains **KEEP** unless every item is freshly proven for its exact current SHA:
+
+- [ ] no open PR uses it as head or base, and no stacked review depends on its history;
+- [ ] no workflow, ruleset, release, repository setting, document, scheduled job, deployment,
+  submodule, script, known external integration, or handoff depends on the live branch name;
+- [ ] graph plus direct tree/patch comparison proves no unreviewed unique work remains; a squash-
+  integrated branch is never judged from graph uniqueness or ancestry alone;
+- [ ] no release, support, or rollback evidence depends on the branch;
+- [ ] any required historical tag already exists at the verified exact SHA;
+- [ ] the full recovery SHA, evidence, approver, approval timestamp, and rollback owner are recorded
+  in #960;
+- [ ] external orchestrator approval names this one ref and exact SHA.
+
+Any ref movement invalidates every prior check and approval. A published tag is never moved. Tag
+creation or correction requires its own reviewed decision and is outside this plan.
+
+## Recovery ledger template
+
+Record one entry in #960 before each later operation:
+
+| Field | Required value |
+|---|---|
+| Exact ref | Full `refs/heads/...` or `refs/tags/...` name |
+| Observed SHA | Full 40-character SHA immediately before approval |
+| Intended mutation | One operation on this exact ref |
+| Integration evidence | Source/squash/tree/patch and PR links |
+| Dependency evidence | PR, workflow, ruleset, setting, release, document and external checks |
+| Release/tag evidence | Release/rollback dependency result and any required existing tag |
+| Approval | Named approver, external-orchestrator decision link, and timestamp |
+| Rollback owner | Named person responsible for recovery and verification |
+| Expected result | Exact expected post-operation ref state |
+| Verification | Commands/results and final remote inventory link |
+
+## Rollback rules
 
 ### Branch deleted incorrectly
 
-After separate approval, recreate only the exact deleted ref from the ledger's full SHA:
+After separate recovery approval, recreate only the exact deleted branch from the ledger's recorded
+full SHA:
 
 ```bash
 git push origin <RECORDED_FULL_SHA>:refs/heads/<EXACT_BRANCH_NAME>
 ```
 
-Then restore affected PR bases, workflows, or release references and rerun their checks. Never infer
-the recovery SHA from a similar message and never use force-push.
+Then repair verified PR bases, workflows, settings, release references, or handoffs and rerun their
+checks. Never guess a recovery SHA from a commit subject, prefix, nearby branch, or similar tree.
 
-### Documentation or policy merge fails
+### Documentation or policy integration fails
 
-Revert the accepted merge or squash commit through a new reviewed PR. Reopen the governing Issue,
-restore the previously recorded policy text if needed, and rerun the exact-head documentation and
-CI checks. Do not reset a protected branch.
+Revert through a new reviewed PR, reopen the governing Issue if needed, and rerun exact-head docs
+and CI checks. Never reset a protected branch.
 
-### Release change fails
+### Release state fails
 
-Use a reviewed revert or forward hotfix on `master` or the active release branch, then reconcile the
-correction into `develop`. A published tag is never silently moved. A wrong tag requires release
-freeze, an incident record, and a separately approved correction strategy.
+Use a reviewed revert or forward hotfix on the affected retained branch, then reconcile it into
+`develop`. Freeze on any tag error: a published tag is never silently moved or recreated.
 
 ### Salvaged work fails
 
-Close or revert the focused salvage PR and apply its documented feature, schema, or data rollback.
-Because salvage starts from `develop` and does not resurrect historical refs, the archived branch
-state remains untouched.
+Close or revert only the focused salvage PR and apply its documented feature/schema/data rollback.
+Historical branch names remain absent and are not used as rollback mechanisms.
 
-## Completion criteria
+## Acceptance gates
 
-Branch cleanup is complete only when:
+PR #961 is ready to integrate only when:
 
-- the target development model is documented and reflected in open PR bases;
-- every remaining long-lived branch has one intentional, protected role;
-- every removed branch passed the gate and has a recovery ledger entry;
-- no valuable commit or release boundary is reachable only from a deleted branch;
-- historical themes survive through current Issues and focused work rather than revived branches;
-- the final inventory and all human approvals are attached to #960.
+- its base is current `develop` and its net diff contains exactly
+  `docs/project/branch_cleanup_execution.md` plus the matching `docs/README.md` entry;
+- `branch_audit.md` is byte-for-byte the current `develop` version;
+- all nine live branches appear exactly once with current SHAs and bounded dispositions;
+- focused validation, the deterministic live audit, exact-head GitHub CI, and review are terminal;
+- PR metadata records the final head and confirms that no cleanup mutation occurred.
+
+Cleanup itself is complete only after the plan is integrated and every later mutation has passed a
+fresh exact-ref gate, has an individual recovery ledger/approval, is verified immediately, and is
+included in the final inventory. This document never supplies those approvals.
