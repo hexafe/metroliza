@@ -242,13 +242,14 @@ gh api --method POST repos/hexafe/metroliza/git/refs \
 ```
 
 GitHub's create-ref endpoint rejects any existing branch, including a concurrent recreation
-at the same SHA. Treat that rejection as changed external state: abort, rerun ownership and
-dependency checks, and never overwrite the ref during recovery. After the restored branch is
-verified, remove any one-use staging branch with an expected-old-value lease bound to its recorded
-staging SHA; if that cleanup fails, retain and record the staging ref for separate review rather than
-forcing it. Then repair verified PR bases, workflows, settings, release references, or handoffs and
-rerun their checks. Never assume an unreachable SHA can be restored, and never guess a recovery SHA
-from a commit subject, prefix, nearby branch, or similar tree.
+at the same SHA. Treat that rejection as changed external state and never overwrite the target ref.
+Before aborting, remove any one-use staging branch with an expected-old-value lease bound to its
+recorded staging SHA; if that cleanup fails, retain and record the staging ref for separate review
+rather than forcing it. Then abort and rerun ownership and dependency checks. Apply the same
+lease-guarded staging cleanup after the restored target branch is successfully verified. Only then
+repair verified PR bases, workflows, settings, release references, or handoffs and rerun their
+checks. Never assume an unreachable SHA can be restored, and never guess a recovery SHA from a
+commit subject, prefix, nearby branch, or similar tree.
 
 ### Documentation or policy integration fails
 
