@@ -13,6 +13,7 @@ Start here for current product scope, architecture, planning, and development pr
 - `project/roadmap.md` — single current planning overview backed by GitHub Issues.
 - `project/development_workflow.md` — issue-first workflow, active development/release branch rules, validation tiers, and definitions of ready/done.
 - `project/chatgpt_workspace.md` — recommended ChatGPT project sources, control chats, Issue-specific chat workflow, and privacy rules.
+- `project/branch_audit.md` — current non-destructive branch archaeology snapshot, recovery SHAs, and recommended dispositions.
 
 ## Active docs
 
