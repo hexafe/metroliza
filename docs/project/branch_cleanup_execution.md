@@ -214,18 +214,20 @@ fetchable and retained for the required recovery period.
 
 After separate recovery approval, fetch or restore that preserved object into a clean clone,
 verify that it resolves to the ledger's full SHA, confirm the remote branch is still absent, and
-only then recreate the exact deleted branch with an atomic absent-ref lease:
+only then recreate the exact deleted branch with GitHub's atomic create-ref operation:
 
 ```bash
-git push \
-  --force-with-lease=refs/heads/<EXACT_BRANCH_NAME>:0000000000000000000000000000000000000000 \
-  origin <RECORDED_FULL_SHA>:refs/heads/<EXACT_BRANCH_NAME>
+gh api --method POST repos/hexafe/metroliza/git/refs \
+  -f ref='refs/heads/<EXACT_BRANCH_NAME>' \
+  -f sha='<RECORDED_FULL_SHA>'
 ```
 
 Then repair verified PR bases, workflows, settings, release references, or handoffs and rerun their
-checks. If the branch already exists, abort and investigate its current owner/content; never
-overwrite it during recovery. Never assume an unreachable SHA can be pushed, and never guess a
-recovery SHA from a commit subject, prefix, nearby branch, or similar tree.
+checks. GitHub's create-ref endpoint rejects any existing branch, including a concurrent recreation
+at the same SHA. Treat that rejection as a changed external state: abort, rerun ownership and
+dependency checks, and never overwrite the ref during recovery. Never assume an unreachable SHA
+can be restored, and never guess a recovery SHA from a commit subject, prefix, nearby branch, or
+similar tree.
 
 ### Documentation or policy integration fails
 
