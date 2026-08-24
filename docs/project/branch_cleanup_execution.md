@@ -213,15 +213,19 @@ ledger. A GitHub PR page or remembered SHA is not sufficient unless its backing 
 fetchable and retained for the required recovery period.
 
 After separate recovery approval, fetch or restore that preserved object into a clean clone,
-verify that it resolves to the ledger's full SHA, and only then recreate the exact deleted branch:
+verify that it resolves to the ledger's full SHA, confirm the remote branch is still absent, and
+only then recreate the exact deleted branch with an atomic absent-ref lease:
 
 ```bash
-git push origin <RECORDED_FULL_SHA>:refs/heads/<EXACT_BRANCH_NAME>
+git push \
+  --force-with-lease=refs/heads/<EXACT_BRANCH_NAME>:0000000000000000000000000000000000000000 \
+  origin <RECORDED_FULL_SHA>:refs/heads/<EXACT_BRANCH_NAME>
 ```
 
 Then repair verified PR bases, workflows, settings, release references, or handoffs and rerun their
-checks. Never assume an unreachable SHA can be pushed, and never guess a recovery SHA from a commit
-subject, prefix, nearby branch, or similar tree.
+checks. If the branch already exists, abort and investigate its current owner/content; never
+overwrite it during recovery. Never assume an unreachable SHA can be pushed, and never guess a
+recovery SHA from a commit subject, prefix, nearby branch, or similar tree.
 
 ### Documentation or policy integration fails
 
