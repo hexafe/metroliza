@@ -214,23 +214,27 @@ fetchable and retained for the required recovery period.
 
 After separate recovery approval, fetch or restore that preserved object into a clean clone and
 verify that it resolves to the ledger's full SHA. A commit restored only from a bundle or another
-off-repository location must first be uploaded without risking an existing ref. Create a unique,
-one-use staging commit whose parent is `<RECORDED_FULL_SHA>`, then push that commit to a newly
-generated recovery-staging branch with an expected-absent lease. The recovery approval and ledger
-must cover the exact staging-ref name, staging SHA, owner and later removal:
+off-repository location must first be uploaded without risking an existing ref or running historical
+workflow code. Create a unique, one-use staging commit whose parent is `<RECORDED_FULL_SHA>`, then
+push that commit to a newly generated non-branch ref under
+`refs/notes/metroliza-recovery-staging/` with an expected-absent lease. The recovery approval and
+ledger must cover the exact staging-ref name, staging SHA, owner and later removal:
 
 ```bash
 git push --porcelain \
-  --force-with-lease=refs/heads/recovery-staging/<ONE_USE_ID>:0000000000000000000000000000000000000000 \
-  origin <UNIQUE_STAGING_COMMIT>:refs/heads/recovery-staging/<ONE_USE_ID>
+  --force-with-lease=refs/notes/metroliza-recovery-staging/<ONE_USE_ID>:0000000000000000000000000000000000000000 \
+  origin <UNIQUE_STAGING_COMMIT>:refs/notes/metroliza-recovery-staging/<ONE_USE_ID>
 ```
 
 The staging commit must be created locally after the one-use name is chosen, must have the recovered
 commit as a parent, and must not be reused. Continue only when the porcelain result reports a newly
 created reference; an up-to-date result, rejection or pre-existing staging ref is changed external
-state and requires an abort. Verify through GitHub's Git API that `<RECORDED_FULL_SHA>` now exists in
-the target repository. If the recovery object was already retained by a fetchable ref in the target
-repository, record and verify that ref instead of creating a staging ref.
+state and requires an abort. Before use, audit every push-triggered workflow and integration to prove
+that the non-branch staging namespace cannot trigger it; do not fall back to a branch or tag without
+a separately reviewed automation exclusion. Verify through GitHub's Git API that
+`<RECORDED_FULL_SHA>` now exists in the target repository. If the recovery object was already
+retained by a fetchable ref in the target repository, record and verify that ref instead of creating
+a staging ref.
 
 Confirm the deleted branch is still absent, then recreate it with GitHub's atomic create-ref
 operation:
@@ -243,7 +247,7 @@ gh api --method POST repos/hexafe/metroliza/git/refs \
 
 GitHub's create-ref endpoint rejects any existing branch, including a concurrent recreation
 at the same SHA. Treat that rejection as changed external state and never overwrite the target ref.
-Before aborting, remove any one-use staging branch with an expected-old-value lease bound to its
+Before aborting, remove any one-use staging ref with an expected-old-value lease bound to its
 recorded staging SHA; if that cleanup fails, retain and record the staging ref for separate review
 rather than forcing it. Then abort and rerun ownership and dependency checks. Apply the same
 lease-guarded staging cleanup after the restored target branch is successfully verified. Only then
