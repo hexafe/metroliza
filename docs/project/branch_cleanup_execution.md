@@ -49,11 +49,17 @@ develop
 ├── feature/*
 ├── fix/*
 ├── refactor/*
-└── research/*
+├── docs/*
+├── test/*
+├── security/*
+└── chore/*
 ```
 
-- Normal Issue branches are short-lived and merge through reviewed PRs into `develop`.
-- `research/*` has bounded exit criteria; accepted behavior returns through a focused Issue branch.
+- The canonical Issue namespaces above match [`branching_strategy.md`](../release_checks/branching_strategy.md)
+  and [`development_workflow.md`](development_workflow.md). They are short-lived and merge through
+  reviewed PRs into `develop`.
+- Exploratory work still uses the documented namespace appropriate to its deliverable, a tracking
+  Issue, bounded exit criteria, and a focused review; this plan adds no separate branch class.
 - `master` stays outside the development tree as the default production/history anchor pending
   the separate #901 promotion decision.
 - `release/2026.06-rc2` and `rc2` receive no routine development work.
@@ -127,7 +133,8 @@ All recovered tips are already ancestors of `develop`; they are not missing code
 8. Evaluate each deletion candidate separately against the live gate.
 9. Record one exact recovery-ledger entry per ref.
 10. Obtain a separate external-orchestrator approval for each destructive operation.
-11. Execute at most one approved mutation at a time.
+11. Execute at most one approved mutation at a time, using an atomic expected-old-value guard tied
+    to the exact approved SHA; abort without mutation if the ref moved.
 12. Verify the resulting remote state immediately after that mutation and update #960.
 13. Repeat only for another separately approved exact ref.
 14. Run and attach a final live-branch inventory.
@@ -156,6 +163,8 @@ A branch remains **KEEP** unless every item is freshly proven for its exact curr
   Git bundle in maintainer-controlled durable storage with its checksum and restore test recorded;
 - [ ] the full recovery SHA, evidence, approver, approval timestamp, and rollback owner are recorded
   in #960;
+- [ ] the exact deletion command uses an expected-old-value lease for the approved full SHA and
+  cannot delete a different tip if the branch moves between approval and execution;
 - [ ] external orchestrator approval names this one ref and exact SHA.
 
 Any ref movement invalidates every prior check and approval. A published tag is never moved. Tag
@@ -169,7 +178,7 @@ Record one entry in #960 before each later operation:
 |---|---|
 | Exact ref | Full `refs/heads/...` or `refs/tags/...` name |
 | Observed SHA | Full 40-character SHA immediately before approval |
-| Intended mutation | One operation on this exact ref |
+| Intended mutation | One operation on this exact ref, including the expected-old-value guard |
 | Integration evidence | Source/squash/tree/patch and PR links |
 | Dependency evidence | PR, workflow, ruleset, setting, release, document and external checks |
 | Release/tag evidence | Release/rollback dependency result and any required existing tag |
@@ -178,6 +187,21 @@ Record one entry in #960 before each later operation:
 | Rollback owner | Named person responsible for recovery and verification |
 | Expected result | Exact expected post-operation ref state |
 | Verification | Commands/results and final remote inventory link |
+
+### Conditional deletion command
+
+After every gate and approval is complete, the separately authorized operator must bind deletion to
+the approved old value atomically:
+
+```bash
+git push \
+  --force-with-lease=refs/heads/<EXACT_BRANCH_NAME>:<APPROVED_FULL_SHA> \
+  origin :refs/heads/<EXACT_BRANCH_NAME>
+```
+
+Here `--force-with-lease` is an expected-old-value guard for deletion, not permission to rewrite a
+surviving branch. If the remote ref no longer equals `<APPROVED_FULL_SHA>`, the command must fail and
+the gate must restart from the new tip. A name-only deletion command is not permitted.
 
 ## Rollback rules
 
