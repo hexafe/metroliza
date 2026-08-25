@@ -95,8 +95,9 @@ The required sequence is:
 
 1. Reuse `docs/960-branch-cleanup-execution`; do not create a competing branch.
 2. Merge current `develop` into it normally, preserving published history; do not rebase or force.
-3. Update only this document and `branch_audit.md`, validate the exact two-file net diff, and open
-   one focused PR to `develop` with `Refs #960` rather than closing the Issue.
+3. Update exactly `docs/README.md`, `docs/project/branch_audit.md`, and
+   `docs/project/branch_cleanup_execution.md`; validate the exact three-file net diff, and open one
+   focused PR to `develop` with `Refs #960` rather than closing the Issue.
 4. Run focused validation, exact-head GitHub CI, and review before merging that closeout PR.
 5. Only after the closeout PR merges may Gate 5 begin against the branch's new exact final head.
 6. Verify the new PR's `refs/pull/<number>/head` at that exact final head and use it as the required
@@ -201,7 +202,8 @@ This documentation closeout is ready only when:
 
 - the existing source branch was normally merged with exact
   `develop@112151f6983c7131c6d2861cb5437a706a3356c4` without rebase or force;
-- the net PR diff contains exactly `docs/project/branch_audit.md` and this file;
+- the net PR diff contains exactly `docs/README.md`, `docs/project/branch_audit.md`, and
+  `docs/project/branch_cleanup_execution.md`;
 - the observed five-branch state, four completed gates, four recovery refs, and final four-branch
   target are validated against the live remote;
 - focused documentation/policy/catalog tests, release hygiene, and `git diff --check` pass;

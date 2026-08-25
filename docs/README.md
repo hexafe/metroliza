@@ -13,8 +13,8 @@ Start here for current product scope, architecture, planning, and development pr
 - `project/roadmap.md` — single current planning overview backed by GitHub Issues.
 - `project/development_workflow.md` — issue-first workflow, active development/release branch rules, validation tiers, and definitions of ready/done.
 - `project/chatgpt_workspace.md` — recommended ChatGPT project sources, control chats, Issue-specific chat workflow, and privacy rules.
-- `project/branch_audit.md` — current non-destructive branch archaeology snapshot, recovery SHAs, and recommended dispositions.
-- `project/branch_cleanup_execution.md` — #960 non-destructive cleanup-plan matrix, live gates, recovery ledger, and rollback procedure.
+- `project/branch_audit.md` — durable branch archaeology and cleanup-closeout record with historical recovery evidence, executed Gates 1–4, the observed pre-Gate-5 state, and the final branch target.
+- `project/branch_cleanup_execution.md` — branch-cleanup closeout and final-state contract with the Gate 5 handoff; #960 remains the authoritative exact-ref execution ledger.
 
 ## Active docs
 
