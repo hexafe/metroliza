@@ -2,7 +2,7 @@
 
 Status: Active workspace convention  
 Owner: Maintainer  
-Last reviewed: 2026-08-22
+Last reviewed: 2026-08-25
 
 ## 1. Purpose
 
@@ -20,7 +20,7 @@ GitHub remains the source of truth:
 Any important decision reached in chat must be written back to an Issue, pull request, or active
 repository document before the chat is considered complete.
 
-## 2. Project container
+## 2. Project container and copyable instructions
 
 Recommended project name:
 
@@ -28,20 +28,45 @@ Recommended project name:
 Metroliza Development
 ```
 
-Recommended project-level instruction:
+Use the first block as a concise reusable global custom instruction across projects. It contains
+only universal orchestration rules; repository-specific rules belong in each project's block and
+sources of truth.
 
 ```text
-Treat GitHub repository hexafe/metroliza as the source of truth. Start development work from a
-GitHub Issue, inspect the current target branch and relevant files before proposing changes, and
-keep one primary Issue per implementation chat. Use src/metroliza as the canonical package and
-modules only as a compatibility layer. Preserve local-first behavior, SQLite atomicity, offline
-dashboards, deterministic Python fallbacks, packaging compatibility, and sensitive-data hygiene.
-Never claim tests or CI passed without an actual result. Record durable decisions and follow-up
-work back in GitHub Issues, pull requests, or docs/project.
+Treat the active Issue/specification and repository instructions as task authority; inspect the
+current branch and exact head as execution state. Keep Product Owner, external orchestrator, Codex
+coordinator, and bounded-worker roles distinct. Classify the whole PR separately from worker
+slices; never silently downgrade an externally selected coordinator, and escalate on evidence. Use
+explicit MUST, SHOULD, and DEFERRED task-packet sections with owned and forbidden scope,
+acceptance, validation, stop conditions, and remote-operation policy. Verify the exact head and
+report only observed tests, CI, reviews, model,
+reasoning, usage, cost, merge, release, and remote actions; use `not visible` when runtime identity
+is unavailable. Codex coordinators and workers do not merge their own PRs. Require separate
+approval for release, deployment, migration, destructive, secret, billing, publication, and other
+remote product mutations.
 ```
 
-Keep project-level instructions short and stable. Put feature-specific detail in the linked Issue,
-not in a permanently growing instruction block.
+Use this second block as the Metroliza project instruction:
+
+```text
+Treat GitHub repository hexafe/metroliza and its active Issue as durable truth. Read root AGENTS.md,
+docs/project/README.md, docs/project/architecture.md, docs/project/development_workflow.md, and
+docs/release_checks/branching_strategy.md before changing a bounded branch. Start normal work from
+and target develop; never rely on the default branch. Use src/metroliza as canonical and modules
+only for compatibility. Preserve local-first behavior, SQLite atomicity, bounded processing,
+offline dashboards, deterministic Python fallbacks, Python/Rust parity and representative
+benchmark gates, packaged Windows compatibility, and confidential measurement-data hygiene. Apply
+the coordinator/worker routes and exact-head readiness policy in
+docs/engineering/codex-model-routing.md. Never claim tests, CI,
+benchmarks, packaged/manual gates, model/reasoning, merge, release, or remote actions without an
+observed result. Record durable decisions and follow-up work in Issues, PRs, or active repository
+docs.
+```
+
+Keep both instruction blocks short and stable. Put feature-specific detail and the exact selected
+route in the linked Issue/task packet, not in a permanently growing instruction block. Named-model
+mappings remain authoritative in the repository playbook and should be refreshed there rather than
+copied into global instructions.
 
 ## 3. Canonical project sources
 
@@ -49,34 +74,38 @@ Use the following small source set as the persistent context layer:
 
 ### Always-current control sources
 
-1. `docs/project/README.md`
-2. `docs/project/product_specification.md`
-3. `docs/project/architecture.md`
-4. `docs/project/roadmap.md`
-5. `docs/project/development_workflow.md`
-6. `docs/project/chatgpt_workspace.md`
+1. `AGENTS.md`
+2. `docs/project/README.md`
+3. `docs/project/product_specification.md`
+4. `docs/project/architecture.md`
+5. `docs/project/roadmap.md`
+6. `docs/project/development_workflow.md`
+7. `docs/project/chatgpt_workspace.md`
+8. `docs/engineering/codex-model-routing.md`
 
 ### Repository and contributor sources
 
-7. `README.md`
-8. `CONTRIBUTING.md`
-9. `pyproject.toml`
-10. `.github/pull_request_template.md`
-11. `.github/workflows/ci.yml`
+9. `README.md`
+10. `CONTRIBUTING.md`
+11. `pyproject.toml`
+12. `.github/pull_request_template.md`
+13. `.github/workflows/ci.yml`
+14. `docs/engineering/codex-task-packet-template.md`
+15. `docs/engineering/pr-routing-report-template.md`
 
 ### Release sources
 
-12. `src/metroliza/app/version.py`
-13. `docs/release_checks/release_status.md`
-14. `docs/release_checks/release_candidate_checklist.md`
-15. `docs/release_checks/branching_strategy.md`
-16. the latest exact release-audit/evidence document
+16. `src/metroliza/app/version.py`
+17. `docs/release_checks/release_status.md`
+18. `docs/release_checks/release_candidate_checklist.md`
+19. `docs/release_checks/branching_strategy.md`
+20. the latest exact release-audit/evidence document
 
 ### Architecture guard sources
 
-17. `tests/test_directory_reorganization_architecture.py`
-18. packaging/hidden-import guard tests
-19. current package-owned contract files relevant to the active Issue
+21. `tests/test_directory_reorganization_architecture.py`
+22. packaging/hidden-import guard tests
+23. current package-owned contract files relevant to the active Issue
 
 Do not make every historical roadmap a permanent project source. Retrieve archived/reference files
 only when the Issue needs their history. A smaller canonical source set reduces contradictions and
@@ -319,23 +348,33 @@ Start the chat with:
 1. the Issue link/number;
 2. target/base branch;
 3. explicit requested outcome (audit, implementation, review, or evidence);
-4. any local test/artifact constraint not already in the Issue.
+4. whole-PR coordinator class/model/reasoning and any delegated-slice route;
+5. the accepted execution packet or a completed
+   [`Codex task packet`](../engineering/codex-task-packet-template.md);
+6. any local test/artifact constraint not already in the Issue.
 
 The first action should be to read the Issue and current branch state through GitHub, not to rely on
-memory from another chat.
+memory from another chat. Read the repository sources of truth before editing and report a moved
+base, contradiction, or missing authority instead of silently adapting the packet.
 
 ## 6. Standard chat-to-GitHub workflow
 
 1. **Open Issue** — problem, scope, acceptance criteria, validation tier.
 2. **Create Issue chat** — read Issue, relevant code/docs/tests, and branch state.
-3. **Plan bounded slice** — state affected files/contracts, risks, rollback, and tests.
-4. **Create branch** — use Issue-number naming.
-5. **Implement** — keep scope narrow; surface discoveries early.
-6. **Validate** — run actual focused/full/manual gates as required.
-7. **Open PR** — link Issue, evidence, risk/rollback, docs/release impact.
-8. **Review/repair** — resolve review threads and CI for the exact head.
-9. **Merge/close** — update Issue and durable docs.
-10. **Archive chat** — retain only as history after the GitHub record is complete.
+3. **Classify and packet** — select the whole-PR coordinator separately from worker slices; record
+   MUST, SHOULD, DEFERRED, ownership, forbidden work, validation, stops, and remote policy.
+4. **Plan bounded slice** — state affected files/contracts, risks, rollback, and tests.
+5. **Create branch** — use Issue-number naming.
+6. **Implement** — keep scope narrow; surface discoveries early.
+7. **Validate** — run actual focused/full/manual gates as required.
+8. **Open PR** — link Issue and use the
+   [`PR routing report`](../engineering/pr-routing-report-template.md) for evidence, risk, rollback,
+   and routing details.
+9. **Review/repair** — coordinator audits the exact diff/readiness; external orchestrator performs
+   the independent exact-head merge review; resolve threads and CI for the unchanged head.
+10. **Merge/close** — only the authorized external orchestrator merges after all standing gates;
+    update Issue and durable docs. Codex coordinators/workers do not merge.
+11. **Archive chat** — retain only as history after the GitHub record is complete.
 
 ## 7. Context handoff template
 
@@ -344,11 +383,16 @@ When moving work between chats, post a concise handoff to the Issue or PR:
 ```text
 Current branch/SHA:
 Issue and acceptance criteria status:
+Whole-PR class and requested coordinator/reasoning:
+Actual runtime model/reasoning or not visible:
 Implemented:
 Validation executed and exact results:
+Review findings (P0/P1/P2) and correction cycles:
+Exact-head CI/review/thread status:
 Open blocker/risk:
 Next bounded action:
 Files/contracts that must not change:
+Remote operations performed/not performed:
 ```
 
 Do not copy a long chat transcript. Preserve the facts and decisions needed to continue.
@@ -362,6 +406,8 @@ Do not copy a long chat transcript. Preserve the facts and decisions needed to c
 - Keep one control chat per domain; close/archive obsolete implementation chats.
 - Do not paste the same broad context into every chat. Link the Issue and canonical docs instead.
 - Do not use chat memory as evidence that a test, purchase, release, or manual smoke happened.
+- Refresh `AGENTS.md`, the routing playbook, and both templates together when the accepted
+  capability mapping or orchestration contract changes; do not patch an uploaded copy alone.
 
 ## 9. Privacy and security
 
@@ -381,10 +427,12 @@ runbooks.
 ## 10. Initial workspace setup checklist
 
 - [ ] Create/use the `Metroliza Development` project container.
-- [ ] Add the stable project-level instruction from section 2.
+- [ ] Add the reusable global and Metroliza project instruction blocks from section 2 to their
+      respective settings.
 - [ ] Add the canonical sources from section 3.
 - [ ] Create the nine control chats from section 4 only as they become useful.
 - [ ] Use `00 — Control Tower / Roadmap` to select the next open Issue.
 - [ ] Use one new implementation chat for each Issue slice.
+- [ ] Use the routing playbook and task-packet template for nontrivial work.
 - [ ] Write every durable decision/follow-up back to GitHub.
 - [ ] Review and prune sources/chats monthly or each release cycle.

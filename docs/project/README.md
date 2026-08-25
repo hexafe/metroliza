@@ -2,7 +2,7 @@
 
 Status: Active  
 Owner: Product/architecture maintainer  
-Last reviewed: 2026-08-23
+Last reviewed: 2026-08-25
 Review cadence: every release cycle or monthly, whichever is sooner
 
 This directory is the canonical entry point for planning and developing Metroliza. GitHub Issues
@@ -21,10 +21,29 @@ rules and ordered roadmap. Release evidence remains under `docs/release_checks/`
    compatibility layers, native backends and concentration risks.
 5. [Development workflow](./development_workflow.md) — issue-first delivery, branch/PR rules,
    validation tiers, Definition of Ready and Definition of Done.
-6. [ChatGPT workspace](./chatgpt_workspace.md) — project sources/chats aligned to GitHub so chat
+6. [AI orchestration and model routing](../engineering/codex-model-routing.md) — authority,
+   whole-PR and worker routing, exact-head evidence, review, and merge boundaries; use the
+   [task-packet](../engineering/codex-task-packet-template.md) and
+   [PR-routing-report](../engineering/pr-routing-report-template.md) templates for durable records.
+7. [ChatGPT workspace](./chatgpt_workspace.md) — project sources/chats aligned to GitHub so chat
    history never becomes the only record of a decision.
-7. [RC2 branch transition decision](../release_checks/rc2_branch_transition_decision_2026-08-22.md)
+8. [RC2 branch transition decision](../release_checks/rc2_branch_transition_decision_2026-08-22.md)
    — authoritative branch roles, exact automatic evidence and the pending release blockers.
+
+## AI orchestration ownership
+
+- The Product Owner owns product direction and separately gated remote or destructive decisions.
+- The external project orchestrator owns the Issue/specification, task packet, whole-PR routing,
+  independent exact-head review, and merge decision.
+- The Codex coordinator owns bounded execution, integration, validation, internal exact-head
+  readiness audit, and PR preparation.
+- Workers own only explicitly bounded slices and cannot override the packet or repository sources
+  of truth.
+
+Root [`AGENTS.md`](../../AGENTS.md) is the concise session entry point. The expanded playbook owns
+the reusable routing contract; this control center and the architecture/workflow/release documents
+own Metroliza-specific product and engineering rules. Codex coordinators and workers never merge
+their own PRs.
 
 ## GitHub control plane
 
@@ -73,6 +92,7 @@ roadmap, but they do not create reverse prerequisites for their foundations.
 | [#922](https://github.com/hexafe/metroliza/issues/922) | Map current codebase, data flow and supported workflows. |
 | [#923](https://github.com/hexafe/metroliza/issues/923) | Apply the ChatGPT project source/chat policy. |
 | [#924](https://github.com/hexafe/metroliza/issues/924) | Review, preserve and retire historical release branches safely. |
+| [#965](https://github.com/hexafe/metroliza/issues/965) | Adopt the AI orchestration, task-packet and model-routing policy; Dependabot activation remains separate. |
 
 ## Source-of-truth hierarchy
 

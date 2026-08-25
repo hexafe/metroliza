@@ -6,6 +6,7 @@ This directory contains active operational, maintenance, project, and end-user d
 
 Start here for current product scope, architecture, planning, and development process:
 
+- [`../AGENTS.md`](../AGENTS.md) — concise repository instructions and AI-orchestration entry point.
 - `project/README.md` — canonical Metroliza project control center and source-of-truth hierarchy.
 - `project/product_specification.md` — product personas, workflows, functional/non-functional requirements, boundaries, and release-quality target.
 - `project/feature_catalog.md` — capability maturity, roadmap phase, dependencies, completion rules, and tracking Issues.
@@ -13,6 +14,9 @@ Start here for current product scope, architecture, planning, and development pr
 - `project/roadmap.md` — single current planning overview backed by GitHub Issues.
 - `project/development_workflow.md` — issue-first workflow, active development/release branch rules, validation tiers, and definitions of ready/done.
 - `project/chatgpt_workspace.md` — recommended ChatGPT project sources, control chats, Issue-specific chat workflow, and privacy rules.
+- [`engineering/codex-model-routing.md`](engineering/codex-model-routing.md) — universal coordinator/worker routing, exact-head evidence, review feedback, merge authority, and Metroliza adaptation.
+- [`engineering/codex-task-packet-template.md`](engineering/codex-task-packet-template.md) — reusable pre-dispatch and post-execution packet with MUST/SHOULD/DEFERRED scope.
+- [`engineering/pr-routing-report-template.md`](engineering/pr-routing-report-template.md) — PR-ready routing, MUST-to-evidence, validation, review, and remote-operation report.
 - `project/branch_audit.md` — durable branch archaeology and cleanup-closeout record with historical recovery evidence, executed Gates 1–4, the observed pre-Gate-5 state, and the final branch target.
 - `project/branch_cleanup_execution.md` — branch-cleanup closeout and final-state contract with the Gate 5 handoff; #960 remains the authoritative exact-ref execution ledger.
 
