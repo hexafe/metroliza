@@ -1,22 +1,99 @@
-# Branch inventory
+# Branch archaeology and cleanup closeout
 
-- Status: Current non-destructive audit snapshot
+- Status: Durable archaeology record and cleanup closeout
 - Owner: Repository maintainer
-- Last reviewed: 2026-08-23
-- Audit timestamp: `2026-08-23T23:27:31+02:00` (`Europe/Warsaw`)
+- Last reviewed: 2026-08-25
 - Repository: `hexafe/metroliza`
-- Tracking issue: [#911](https://github.com/hexafe/metroliza/issues/911)
+- Historical audit issue: [#911](https://github.com/hexafe/metroliza/issues/911)
+- Authoritative exact-ref execution ledger: [#960](https://github.com/hexafe/metroliza/issues/960)
 - Time zone: Europe/Warsaw
-- Comparison baseline: `develop` at `1b58303fee1483a88d2c987f7f06595dac8db7f3`
-- Live remote branch count: 9
 
-This is a non-destructive archaeology report. The audit fetched and read refs, commits, diffs,
-pull-request metadata, and CI metadata. Its only branch-history change is the authorized normal
-merge of current `develop` into this existing topic branch. It did not merge a PR, delete a branch,
-create or move a tag, force-update or rewrite history, update a protected/release ref, or execute a
-recommendation below.
+This document deliberately separates three states that must not be confused:
 
-## Audit basis and changes since the previous snapshot
+1. the historical nine-branch archaeology snapshot captured for #911 and merged through PR #959;
+2. the observed five-branch state after separately approved and verified Gates 1–4;
+3. the intended four-long-lived-branch state after a future, separately gated Gate 5.
+
+The historical sections retain the original commit, CI, recovery, and disposition evidence. They
+do not claim that all nine branches remain live. Issue #960 and its execution comments are the
+authoritative source for exact deletion timestamps, approvals, commands, SHAs, and immediate
+before/after verification.
+
+## Observed pre-Gate-5 state
+
+The complete authenticated remote advertisement observed at
+`2026-08-25T06:53:22+02:00` contained exactly these five ordinary branches:
+
+| Observed live branch | Exact observed SHA | Closeout role |
+|---|---|---|
+| `develop` | `112151f6983c7131c6d2861cb5437a706a3356c4` | Canonical Issue-driven integration branch. |
+| `docs/960-branch-cleanup-execution` | `6bd6e543288156ae676fc5205a15f18ec2dce593` | Sole remaining short-lived cleanup source branch; this SHA is pre-closeout evidence only. |
+| `master` | `ab26258e72d285c3917a595515798da185800373` | Repository default and production/history anchor; no promotion through #960. |
+| `rc2` | `1eeeab27352ed2c6bcbdca2af81f3fdd7c1f8cac` | Temporary transition/reference alias; retirement remains governed by #924 and release reconciliation. |
+| `release/2026.06-rc2` | `1eeeab27352ed2c6bcbdca2af81f3fdd7c1f8cac` | Frozen candidate/evidence line while #901 remains open. |
+
+The four deleted ordinary branches remained absent, and their retained GitHub-managed recovery
+refs remained fetchable at the recorded source SHAs.
+
+## Executed cleanup: Gates 1–4
+
+Each operation below received its own fresh exact-ref gate, independent verification, Product
+Owner authorization, expected-old-SHA guard, one-time execution, and complete post-operation
+verification. A result in this table is a historical fact, not standing deletion permission.
+
+| Gate | Deleted exact ref and authorized old SHA | Integration evidence | Retained recovery ref | Verified result |
+|---:|---|---|---|---|
+| 1 | `refs/heads/docs/900-branch-transition` at `b978a759f341d2c0c44f61bc4d0416aec868fb0e` | PR #910 / squash `1eeeab27352ed2c6bcbdca2af81f3fdd7c1f8cac` | `refs/pull/910/head` at `b978a759f341d2c0c44f61bc4d0416aec868fb0e` | `DELETED AND VERIFIED`; #960 comment `5397731377` |
+| 2 | `refs/heads/docs/project-governance-reset` at `375cc433f0af4d2d0a49e5dacc33ec0b53733479` | PR #909 / squash `a03bbdacbd6c308acf46ca31c16d0dd2caeab304` | `refs/pull/909/head` at `375cc433f0af4d2d0a49e5dacc33ec0b53733479` | `DELETED AND VERIFIED`; #960 comment `5399428127` |
+| 3 | `refs/heads/docs/project-specification-roadmap-2026-08` at `b8b698c020f616a3c53bcc5286291206ae1026f3` | PR #958 / squash `1b58303fee1483a88d2c987f7f06595dac8db7f3` | `refs/pull/958/head` at `b8b698c020f616a3c53bcc5286291206ae1026f3` | `DELETED AND VERIFIED`; #960 comment `5401133929` |
+| 4 | `refs/heads/docs/911-branch-archaeology-audit` at `ee026f6a5af96792c7b3c2a76d5ced4cb57c6ff3` | PR #959 / squash `1a060bfcc8c6e01901be7884d3a805f544eb918c` | `refs/pull/959/head` at `ee026f6a5af96792c7b3c2a76d5ced4cb57c6ff3` | `DELETED AND VERIFIED`; #960 comment `5405315752` |
+
+## Final intended state after Gate 5
+
+The repository target after the closeout PR is merged and the source branch later passes a new,
+separately authorized Gate 5 is exactly four long-lived ordinary branches:
+
+| Final branch | Durable role |
+|---|---|
+| `develop` | Canonical Issue-driven integration branch. |
+| `master` | Repository default and production/history anchor. No promotion occurs through #960. |
+| `release/2026.06-rc2` | Frozen candidate/evidence line retained while #901 remains open. |
+| `rc2` | Temporary transition/reference alias. Its retirement remains separately governed by #924 and release reconciliation. |
+
+This target is recorded before Gate 5 so no follow-up repository edit is required merely to record
+the later deletion of `docs/960-branch-cleanup-execution`. After that operation, #960 supplies the
+final execution timestamp, exact post-closeout SHA, retained PR recovery ref, and verification.
+
+The current source head `6bd6e543288156ae676fc5205a15f18ec2dce593` is not a valid future Gate 5
+approval target after this closeout changes the branch. Gate 5 may begin only after the closeout PR
+merges, using the branch's new exact head and the new PR's verified `refs/pull/<number>/head`.
+Any branch movement invalidates earlier evidence. This closeout authorizes no destructive action.
+
+## Product, architecture, release, and data boundaries
+
+Branch cleanup changes reachability and repository clarity only. It does not change these accepted
+contracts:
+
+- `develop` remains canonical for Issue-driven integration;
+- `src/metroliza` remains the canonical implementation package and `modules` remains
+  compatibility-only;
+- local-first behavior, SQLite transaction atomicity, deterministic Python fallbacks, and offline
+  dashboards remain required;
+- packaged Windows compatibility remains a release requirement;
+- measurement data remains confidential and must not be exposed through fixtures, logs, Issues,
+  pull requests, or external services;
+- #901 promotion evidence, release rollback boundaries, published-tag immutability, and #924's
+  separate RC-history decision remain unchanged.
+
+## Historical archaeology snapshot (2026-08-23)
+
+The remainder of the archaeology evidence in this section is intentionally preserved as the
+original snapshot. Terms such as “live”, “current”, and “current status” inside this historical
+section refer only to the recorded `2026-08-23T23:27:31+02:00` snapshot, whose comparison baseline
+was `develop@1b58303fee1483a88d2c987f7f06595dac8db7f3`; they do not describe the live repository after
+Gates 1–4.
+
+### Audit basis and changes since the previous snapshot
 
 `git fetch --prune` plus an explicit all-heads refspec and a fresh GitHub query exposed nine remote
 heads at the timestamp above:
@@ -65,10 +142,10 @@ During this authorized reconciliation, current `develop` was merged normally as 
 `develop` baseline above. The eventual audit commit and exact-head CI are recorded in PR #959
 because a version-controlled document cannot contain its own commit SHA without changing it.
 
-## Summary
+### Original nine-branch snapshot summary
 
-Every live branch appears exactly once in this current-state table. Behind/ahead and tree drift use
-the same exact `develop` SHA recorded in the metadata.
+Every branch that was live at the historical snapshot appears exactly once in this table.
+Behind/ahead and tree drift use the same historical `develop` SHA recorded above.
 
 | Live branch | Exact head and last commit | Behind / ahead | Graph-unique commits | Tip-tree drift vs `develop` | Open PR use | Relevant exact-head CI | Recommendation |
 |---|---|---:|---:|---|---|---|---|
@@ -92,7 +169,10 @@ the same exact `develop` SHA recorded in the metadata.
 | requested `report-metadata-redesign`; recovered `codex/report-metadata-redesign` | `efe1c430c30ecb98ecb1246113e4869192f9c3bf`; 2026-04-29T07:24:04+02:00 — stabilize OCR metadata enrichment | 245 / 0 | 822 files | closed draft PR #892; ancestor of `develop` | **SALVAGE** unmet intent only |
 | historical `feature/realtime-industrial-ml-anomaly` | `13c47617ef85dc1a92d2088a8e1bd873cee4fe76`; 2026-06-17T21:37:41+02:00 — fit industrial sync dialog in CI | 59 / 0 | 410 files | closed draft PR #898; ancestor of `develop` | **SALVAGE** contracts/fixtures only |
 
-## Current remote branches
+### Historical snapshot branch details
+
+Every status and open-PR statement below is preserved as evidence from the original snapshot and
+must not be used as a live dependency or authorization check.
 
 ### `develop`
 
@@ -462,32 +542,30 @@ uses only concrete PR/head evidence and labels the gap instead of inventing a ti
   contracts and an ADR under [#919](https://github.com/hexafe/metroliza/issues/919). Current product
   delivery remains separately tracked by [#941](https://github.com/hexafe/metroliza/issues/941).
 
-## Consolidated disposition and sequencing
+## Cleanup closeout and remaining sequence
 
-1. Keep `develop`, `master`, `release/2026.06-rc2`, and—temporarily—`rc2`.
-2. Record #910 as merged at `1eeeab27352ed2c6bcbdca2af81f3fdd7c1f8cac` with exact-head CI
-   `32628140821`; no #910 integration work remains.
-3. Record #958 as merged at `1b58303fee1483a88d2c987f7f06595dac8db7f3` with exact-head CI
-   `32665601016`; no #958 reconciliation or product-DAG work remains.
-4. Reconcile, review, and merge #959 into `develop` with fresh exact-head evidence. Keep its branch
-   while draft #961 still uses it as a base.
-5. After #959 lands, retarget/reconcile #961 to `develop`, verify that its unique delta remains the
-   cleanup-plan document plus index entry, obtain fresh review/CI, and merge it.
-6. Only after both documents are integrated may #960 re-run gates and execute separately approved
-   mutations. This audit executes none.
-7. Treat `docs/900-branch-transition`, `docs/project-governance-reset`, and
-   `docs/project-specification-roadmap-2026-08` as squash-integrated **DELETE** candidates with
-   recovery SHAs `b978a759...`, `375cc433...`, and `b8b698c...`; never infer safety from graph
-   counts alone.
-8. Keep `rc1` absent. Verify an exact evidence-backed historical SHA before creating any annotated
-   RC1 tag under #924.
-9. Do not resurrect the performance, metadata, or realtime branches. Their recovered tips are
-   already ancestors of `develop`; use #918, #917, and #919 for focused salvage and explicit
-   acceptance/rejection decisions.
+1. PRs #910, #958, #959, and #961 are merged; #911 is closed completed.
+2. Gates 1–4 are complete, individually approved, executed with exact-old-SHA protection, and
+   verified in #960. Their four ordinary source branches are absent and their four PR recovery
+   refs remain available.
+3. Reuse the existing `docs/960-branch-cleanup-execution` branch for one focused closeout PR to
+   `develop`; preserve published history and merge `develop` normally without rebase or force.
+4. Validate and merge that PR through the normal review process. The closeout PR itself authorizes
+   no deletion and does not close #960.
+5. Only after the closeout PR merges may a fresh Gate 5 bind the branch's new exact head, the new
+   PR number, and that PR's verified `refs/pull/<number>/head`. Any movement resets the gate.
+6. Gate 5 must receive separate Product Owner authorization and one guarded execution. #960 records
+   the final timestamp, SHA, command, recovery ref, and complete verification; these documents
+   already describe the four-branch target and therefore need no deletion-only follow-up edit.
+7. Keep `develop`, `master`, `release/2026.06-rc2`, and—temporarily—`rc2` under their recorded roles.
+8. Keep `rc1` absent. Any evidence-backed historical tag or `rc2` retirement remains under #924
+   and release reconciliation, not this closeout.
+9. Do not resurrect the performance, metadata, or realtime branches. Use #918/#908, #917, and
+   #919/#941 for focused salvage of the preserved evidence.
 10. Do not promote or merge the development/candidate line into `master` until #901 supplies the
-   missing manual release evidence and the release owner records a Go decision.
+    missing manual release evidence and the release owner records a Go decision.
 
-## Reproduction notes
+## Historical snapshot reproduction notes
 
 The core mechanical checks used for each live ref were:
 
