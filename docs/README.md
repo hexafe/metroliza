@@ -20,6 +20,8 @@ Start here for current product scope, architecture, planning, and development pr
 - `project/branch_audit.md` — durable branch archaeology and cleanup-closeout record with historical recovery evidence, executed Gates 1–4, the observed pre-Gate-5 state, and the final branch target.
 - `project/branch_cleanup_execution.md` — branch-cleanup closeout and final-state contract with the Gate 5 handoff; #960 remains the authoritative exact-ref execution ledger.
 
+- [Repository-wide bug sweep](quality/bug_sweep/README.md) — canonical #974/#975–#985 control plane, machine-readable ownership ledger, finding protocol, and residual-risk closeout.
+
 ## Active docs
 
 - `user_manual/README.md` — canonical hub for active end-user manuals.

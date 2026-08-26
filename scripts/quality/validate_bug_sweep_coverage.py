@@ -1,0 +1,621 @@
+#!/usr/bin/env python3
+"""Validate deterministic repository-wide bug-sweep ownership coverage."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+from collections import Counter
+from pathlib import Path
+from typing import Any, Iterable, Mapping, Sequence
+
+
+SCHEMA_VERSION = 1
+EXPECTED_BASELINE_SHA = "fcb462942e90aeeb64bba84bfe080d556da0efdb"
+EXPECTED_BASELINE_TRACKED_FILE_COUNT = 929
+EXPECTED_OWNER_ISSUES = frozenset(range(975, 986))
+EXPECTED_MAPPED_ISSUES = frozenset({*range(901, 909), *range(912, 958), 971})
+EXPECTED_EXECUTION_ORDER = {
+    975: "0",
+    976: "1",
+    983: "2",
+    979: "3",
+    980: "4",
+    978: "5",
+    981: "6",
+    977: "7",
+    982: "8",
+    984: "9",
+    985: "10",
+}
+EXPECTED_FOUNDATION_ADDED_PATHS = frozenset(
+    {
+        "docs/quality/bug_sweep/README.md",
+        "docs/quality/bug_sweep/coverage.json",
+        "docs/quality/bug_sweep/finding_template.md",
+        "docs/quality/bug_sweep/residual_risk_template.md",
+        "scripts/quality/validate_bug_sweep_coverage.py",
+        "tests/test_bug_sweep_coverage.py",
+    }
+)
+PATH_CLASSES = frozenset(
+    {
+        "canonical runtime",
+        "compatibility runtime",
+        "test",
+        "fixture",
+        "script/tooling",
+        "workflow/configuration",
+        "packaging/build",
+        "active documentation",
+        "archive/reference",
+        "generated/static asset",
+    }
+)
+AUDIT_STATUSES = frozenset(
+    {
+        "pending",
+        "in progress",
+        "completed",
+        "blocked",
+        "deferred residual risk",
+        "accepted behavior",
+    }
+)
+CONSEQUENCE_TIERS = frozenset({"P0", "P1", "P2", "P3"})
+CONSEQUENCE_TAGS = frozenset(
+    {
+        "audit-control",
+        "cancellation",
+        "compatibility",
+        "confidentiality",
+        "data-integrity",
+        "dependency-platform",
+        "native-parity",
+        "numerical-correctness",
+        "offline-behavior",
+        "output-atomicity",
+        "release-evidence",
+        "windows-packaging",
+    }
+)
+
+
+class CoverageValidationError(ValueError):
+    """Raised when the ledger or its expansion is invalid."""
+
+
+def _object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Build a JSON object while rejecting ambiguous duplicate keys."""
+
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise CoverageValidationError(f"duplicate JSON object key: {key!r}")
+        result[key] = value
+    return result
+
+
+def repository_root() -> Path:
+    """Return the repository root containing this validator."""
+
+    return Path(__file__).resolve().parents[2]
+
+
+def load_ledger(path: Path) -> dict[str, Any]:
+    """Load a coverage ledger using only the Python standard library."""
+
+    try:
+        raw = path.read_text(encoding="utf-8")
+        document = json.loads(raw, object_pairs_hook=_object_without_duplicate_keys)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CoverageValidationError(f"unable to load coverage ledger {path}: {exc}") from exc
+    if not isinstance(document, dict):
+        raise CoverageValidationError("coverage ledger root must be a JSON object")
+    return document
+
+
+def git_tracked_paths(repo_root: Path) -> list[str]:
+    """Return the exact tracked Git index as normalized POSIX paths."""
+
+    completed = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        stderr = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise CoverageValidationError(f"git ls-files failed: {stderr or 'unknown error'}")
+    return sorted(
+        item.decode("utf-8", errors="strict")
+        for item in completed.stdout.split(b"\0")
+        if item
+    )
+
+
+def _glob_regex(pattern: str) -> re.Pattern[str]:
+    """Compile a slash-aware glob where ``**`` crosses directory boundaries."""
+
+    chunks: list[str] = ["^"]
+    index = 0
+    while index < len(pattern):
+        character = pattern[index]
+        if character == "*":
+            if index + 1 < len(pattern) and pattern[index + 1] == "*":
+                if index + 2 < len(pattern) and pattern[index + 2] == "/":
+                    chunks.append("(?:.*/)?")
+                    index += 3
+                else:
+                    chunks.append(".*")
+                    index += 2
+            else:
+                chunks.append("[^/]*")
+                index += 1
+        elif character == "?":
+            chunks.append("[^/]")
+            index += 1
+        else:
+            chunks.append(re.escape(character))
+            index += 1
+    chunks.append("$")
+    return re.compile("".join(chunks))
+
+
+def path_matches(pattern: str, path: str) -> bool:
+    """Return whether a repository-relative POSIX path matches a ledger glob."""
+
+    return bool(_glob_regex(pattern).fullmatch(path))
+
+
+def rule_matches(rule: Mapping[str, Any], path: str) -> bool:
+    """Return whether a path is included, and not excluded, by a rule."""
+
+    includes = rule["include"]
+    excludes = rule["exclude"]
+    return any(path_matches(pattern, path) for pattern in includes) and not any(
+        path_matches(pattern, path) for pattern in excludes
+    )
+
+
+def _string_list(value: object) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def _non_empty_string_list(value: object) -> bool:
+    return _string_list(value) and all(item.strip() for item in value)
+
+
+def _owner_list(value: object) -> bool:
+    return (
+        isinstance(value, list)
+        and all(isinstance(item, int) and not isinstance(item, bool) for item in value)
+        and len(value) == len(set(value))
+    )
+
+
+def _validate_pattern(pattern: str, context: str, errors: list[str]) -> None:
+    if not pattern:
+        errors.append(f"{context}: glob must not be empty")
+    if pattern.startswith("/") or "\\" in pattern:
+        errors.append(f"{context}: glob must be a repository-relative POSIX path: {pattern!r}")
+    if ".." in Path(pattern).parts:
+        errors.append(f"{context}: glob must not traverse above the repository: {pattern!r}")
+    try:
+        _glob_regex(pattern)
+    except re.error as exc:
+        errors.append(f"{context}: invalid glob {pattern!r}: {exc}")
+
+
+def _validate_ledger_schema(ledger: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    schema_version = ledger.get("schema_version")
+    if (
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version != SCHEMA_VERSION
+    ):
+        errors.append(f"schema_version must equal {SCHEMA_VERSION}")
+
+    baseline = ledger.get("baseline")
+    if not isinstance(baseline, dict):
+        errors.append("baseline must be an object")
+        baseline_sha = None
+    else:
+        baseline_sha = baseline.get("sha")
+        if baseline.get("branch") != "develop":
+            errors.append("baseline.branch must equal 'develop'")
+        if baseline_sha != EXPECTED_BASELINE_SHA:
+            errors.append(f"baseline.sha must equal the authorized SHA {EXPECTED_BASELINE_SHA}")
+        tracked_count = baseline.get("tracked_file_count")
+        if (
+            not isinstance(tracked_count, int)
+            or isinstance(tracked_count, bool)
+            or tracked_count != EXPECTED_BASELINE_TRACKED_FILE_COUNT
+        ):
+            errors.append(
+                "baseline.tracked_file_count must equal the verified baseline count "
+                f"{EXPECTED_BASELINE_TRACKED_FILE_COUNT}"
+            )
+        if baseline.get("tree_source") != "git ls-files":
+            errors.append("baseline.tree_source must equal 'git ls-files'")
+
+    foundation_paths = ledger.get("foundation_added_paths")
+    if (
+        not _non_empty_string_list(foundation_paths)
+        or len(foundation_paths) != len(set(foundation_paths))
+        or set(foundation_paths) != EXPECTED_FOUNDATION_ADDED_PATHS
+    ):
+        errors.append("foundation_added_paths must contain exactly the six authorized new paths")
+
+    configured_classes = ledger.get("path_classes")
+    if (
+        not _non_empty_string_list(configured_classes)
+        or len(configured_classes) != len(set(configured_classes))
+        or set(configured_classes) != PATH_CLASSES
+    ):
+        errors.append("path_classes must contain exactly the authorized ten classes")
+    configured_statuses = ledger.get("audit_statuses")
+    if (
+        not _non_empty_string_list(configured_statuses)
+        or len(configured_statuses) != len(set(configured_statuses))
+        or set(configured_statuses) != AUDIT_STATUSES
+    ):
+        errors.append("audit_statuses must contain exactly the validator-supported statuses")
+    configured_tags = ledger.get("consequence_tags")
+    if (
+        not _non_empty_string_list(configured_tags)
+        or len(configured_tags) != len(set(configured_tags))
+        or set(configured_tags) != CONSEQUENCE_TAGS
+    ):
+        errors.append("consequence_tags must contain exactly the validator-supported tags")
+
+    workstreams = ledger.get("workstreams")
+    if not isinstance(workstreams, dict):
+        errors.append("workstreams must be an object")
+        workstream_issues: set[int] = set()
+    else:
+        expected_workstream_keys = {str(issue) for issue in EXPECTED_OWNER_ISSUES}
+        workstream_keys = set(workstreams)
+        workstream_issues = {
+            int(key) for key in workstream_keys if key in expected_workstream_keys
+        }
+        if workstream_keys != expected_workstream_keys:
+            errors.append("workstreams must define exactly Issues #975-#985")
+        for issue in sorted(EXPECTED_OWNER_ISSUES & workstream_issues):
+            record = workstreams.get(str(issue))
+            context = f"workstream #{issue}"
+            if not isinstance(record, dict):
+                errors.append(f"{context}: record must be an object")
+                continue
+            if record.get("issue_url") != f"https://github.com/hexafe/metroliza/issues/{issue}":
+                errors.append(f"{context}: issue_url must reference the authoritative GitHub Issue")
+            if not isinstance(record.get("title"), str) or not record["title"].strip():
+                errors.append(f"{context}: title must be non-empty")
+            if record.get("state") != "open":
+                errors.append(f"{context}: captured state must be 'open'")
+            if record.get("execution_order") != EXPECTED_EXECUTION_ORDER[issue]:
+                errors.append(
+                    f"{context}: execution_order must equal "
+                    f"{EXPECTED_EXECUTION_ORDER[issue]!r}"
+                )
+
+    rules = ledger.get("rules")
+    if not isinstance(rules, list) or not rules:
+        errors.append("rules must be a non-empty array")
+        return errors
+
+    rule_ids: set[str] = set()
+    for position, rule in enumerate(rules):
+        context = f"rule[{position}]"
+        if not isinstance(rule, dict):
+            errors.append(f"{context}: rule must be an object")
+            continue
+        rule_id = rule.get("id")
+        if not isinstance(rule_id, str) or not rule_id.strip():
+            errors.append(f"{context}: id must be non-empty")
+        elif rule_id in rule_ids:
+            errors.append(f"{context}: duplicate rule id {rule_id!r}")
+        else:
+            rule_ids.add(rule_id)
+            context = f"rule {rule_id!r}"
+
+        includes = rule.get("include")
+        excludes = rule.get("exclude")
+        if not _string_list(includes) or not includes:
+            errors.append(f"{context}: include must be a non-empty string array")
+        else:
+            for pattern in includes:
+                _validate_pattern(pattern, context, errors)
+        if not _string_list(excludes):
+            errors.append(f"{context}: exclude must be a string array")
+        else:
+            for pattern in excludes:
+                _validate_pattern(pattern, context, errors)
+
+        path_class = rule.get("class")
+        if path_class not in PATH_CLASSES:
+            errors.append(f"{context}: invalid class {path_class!r}")
+        primary_owner = rule.get("primary_owner")
+        if (
+            not isinstance(primary_owner, int)
+            or isinstance(primary_owner, bool)
+            or primary_owner not in workstream_issues
+        ):
+            errors.append(f"{context}: unknown Issue owner {primary_owner!r}")
+        secondary_owners = rule.get("secondary_owners")
+        if not _owner_list(secondary_owners):
+            errors.append(f"{context}: secondary_owners must be a unique integer array")
+        else:
+            unknown_secondary = set(secondary_owners) - workstream_issues
+            if unknown_secondary:
+                errors.append(
+                    f"{context}: unknown secondary Issue owner(s) "
+                    + ", ".join(f"#{issue}" for issue in sorted(unknown_secondary))
+                )
+            if primary_owner in secondary_owners:
+                errors.append(f"{context}: primary owner cannot also be a secondary owner")
+
+        consequence_tier = rule.get("consequence_tier")
+        if consequence_tier not in CONSEQUENCE_TIERS:
+            errors.append(f"{context}: invalid consequence tier {consequence_tier!r}")
+        tags = rule.get("consequence_tags")
+        if not _string_list(tags) or not tags:
+            errors.append(f"{context}: consequence_tags must be a non-empty string array")
+        else:
+            unknown_tags = set(tags) - CONSEQUENCE_TAGS
+            if unknown_tags:
+                errors.append(
+                    f"{context}: invalid consequence tag(s) " + ", ".join(sorted(unknown_tags))
+                )
+            if len(tags) != len(set(tags)):
+                errors.append(f"{context}: consequence_tags must not contain duplicates")
+
+        status = rule.get("audit_status")
+        if status not in AUDIT_STATUSES:
+            errors.append(f"{context}: invalid audit status {status!r}")
+        if rule.get("baseline_sha") != baseline_sha:
+            errors.append(f"{context}: baseline_sha must equal baseline.sha")
+        for field in ("evidence_links", "finding_links"):
+            if not _non_empty_string_list(rule.get(field)):
+                errors.append(f"{context}: {field} must contain only non-empty strings")
+        disposition = rule.get("disposition")
+        if disposition is not None and (
+            not isinstance(disposition, str) or not disposition.strip()
+        ):
+            errors.append(f"{context}: disposition must be null or a non-empty string")
+        if not isinstance(rule.get("residual_risk"), str) or not rule["residual_risk"].strip():
+            errors.append(f"{context}: residual_risk must be non-empty")
+        if status == "completed":
+            if not rule.get("evidence_links"):
+                errors.append(f"{context}: completed coverage requires evidence")
+            if not isinstance(disposition, str) or not disposition.strip():
+                errors.append(f"{context}: completed coverage requires a disposition")
+
+    issue_map = ledger.get("existing_issue_map")
+    if not isinstance(issue_map, list):
+        errors.append("existing_issue_map must be an array")
+    else:
+        mapped_issues: set[int] = set()
+        for position, record in enumerate(issue_map):
+            context = f"existing_issue_map[{position}]"
+            if not isinstance(record, dict):
+                errors.append(f"{context}: record must be an object")
+                continue
+            issue = record.get("issue")
+            if not isinstance(issue, int) or isinstance(issue, bool):
+                errors.append(f"{context}: issue must be an integer")
+                continue
+            if issue in mapped_issues:
+                errors.append(f"{context}: duplicate Issue #{issue}")
+            mapped_issues.add(issue)
+            if not (901 <= issue <= 957 or issue == 971):
+                errors.append(f"{context}: Issue #{issue} is outside the required current map")
+            if record.get("state") != "open":
+                errors.append(f"{context}: mapped Issue state must be 'open'")
+            if not isinstance(record.get("title"), str) or not record["title"].strip():
+                errors.append(f"{context}: title must be non-empty")
+            if not isinstance(record.get("surface"), str) or not record["surface"].strip():
+                errors.append(f"{context}: surface must be non-empty")
+            owners = record.get("audit_owners")
+            if not _owner_list(owners) or not owners:
+                errors.append(f"{context}: audit_owners must be a non-empty unique integer array")
+            elif set(owners) - workstream_issues:
+                errors.append(f"{context}: audit_owners contains an unknown workstream")
+        if mapped_issues != EXPECTED_MAPPED_ISSUES:
+            missing = EXPECTED_MAPPED_ISSUES - mapped_issues
+            unexpected = mapped_issues - EXPECTED_MAPPED_ISSUES
+            if missing:
+                errors.append(
+                    "existing_issue_map is missing current open Issue(s): "
+                    + ", ".join(f"#{issue}" for issue in sorted(missing))
+                )
+            if unexpected:
+                errors.append(
+                    "existing_issue_map contains unexpected Issue(s): "
+                    + ", ".join(f"#{issue}" for issue in sorted(unexpected))
+                )
+
+    compatibility_inputs = ledger.get("external_compatibility_inputs")
+    if not isinstance(compatibility_inputs, list):
+        errors.append("external_compatibility_inputs must be an array")
+    else:
+        input_numbers = [item.get("pr") for item in compatibility_inputs if isinstance(item, dict)]
+        if (
+            len(input_numbers) != 2
+            or any(
+                not isinstance(number, int) or isinstance(number, bool)
+                for number in input_numbers
+            )
+            or len(input_numbers) != len(set(input_numbers))
+            or set(input_numbers) != {972, 973}
+        ):
+            errors.append("external_compatibility_inputs must contain exactly PRs #972 and #973")
+        for position, record in enumerate(compatibility_inputs):
+            context = f"external_compatibility_inputs[{position}]"
+            if not isinstance(record, dict):
+                errors.append(f"{context}: record must be an object")
+                continue
+            if record.get("treatment") != "compatibility input only; no edit, merge, or acceptance":
+                errors.append(f"{context}: treatment must preserve the no-mutation boundary")
+            if record.get("state") != "open" or record.get("base") != "develop":
+                errors.append(f"{context}: captured PR state/base must be open/develop")
+            head_sha = record.get("head_sha")
+            if not isinstance(head_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", head_sha):
+                errors.append(f"{context}: head_sha must be a lowercase 40-character Git SHA")
+            owners = record.get("audit_owners")
+            if not _owner_list(owners) or not owners:
+                errors.append(f"{context}: audit_owners must be a non-empty unique integer array")
+            elif set(owners) - workstream_issues:
+                errors.append(f"{context}: audit_owners contains an unknown workstream")
+
+    return errors
+
+
+def validate_coverage(
+    ledger: Mapping[str, Any], tracked_paths: Iterable[str]
+) -> dict[str, Any]:
+    """Validate the ledger and expand every tracked path to one primary rule."""
+
+    errors = _validate_ledger_schema(ledger)
+    if errors:
+        raise CoverageValidationError("\n".join(errors))
+
+    paths = list(tracked_paths)
+    if paths != sorted(paths):
+        errors.append("tracked paths must be sorted deterministically")
+    if len(paths) != len(set(paths)):
+        errors.append("tracked paths must not contain duplicates")
+    for path in paths:
+        if not path or path.startswith("/") or "\\" in path:
+            errors.append(f"invalid tracked repository path: {path!r}")
+    missing_foundation_paths = EXPECTED_FOUNDATION_ADDED_PATHS - set(paths)
+    if missing_foundation_paths:
+        errors.append(
+            "tracked tree is missing authorized foundation path(s): "
+            + ", ".join(sorted(missing_foundation_paths))
+        )
+    rules: Sequence[Mapping[str, Any]] = ledger["rules"]
+    rows: list[dict[str, Any]] = []
+    uncovered: list[str] = []
+    duplicate_primary: list[tuple[str, list[str]]] = []
+    rule_match_counts: Counter[str] = Counter()
+    for path in paths:
+        matches = [rule for rule in rules if rule_matches(rule, path)]
+        for rule in matches:
+            rule_match_counts[str(rule["id"])] += 1
+        if not matches:
+            uncovered.append(path)
+            continue
+        if len(matches) > 1:
+            duplicate_primary.append((path, [str(rule["id"]) for rule in matches]))
+            continue
+        rule = matches[0]
+        rows.append(
+            {
+                "path": path,
+                "rule": rule["id"],
+                "class": rule["class"],
+                "primary_owner": rule["primary_owner"],
+                "secondary_owners": list(rule["secondary_owners"]),
+                "consequence_tier": rule["consequence_tier"],
+                "consequence_tags": list(rule["consequence_tags"]),
+                "audit_status": rule["audit_status"],
+                "baseline_sha": rule["baseline_sha"],
+                "evidence_links": list(rule["evidence_links"]),
+                "finding_links": list(rule["finding_links"]),
+                "disposition": rule["disposition"],
+                "residual_risk": rule["residual_risk"],
+            }
+        )
+
+    for path in uncovered:
+        errors.append(f"unassigned tracked path: {path}")
+    for path, rule_ids in duplicate_primary:
+        errors.append(
+            f"duplicate primary ownership: {path} matched rules {', '.join(rule_ids)}"
+        )
+    for rule in rules:
+        if rule_match_counts[str(rule["id"])] == 0:
+            errors.append(f"ownership rule matches zero tracked paths: {rule['id']}")
+
+    owner_counts = Counter(row["primary_owner"] for row in rows)
+    missing_workstreams = EXPECTED_OWNER_ISSUES - set(owner_counts)
+    if missing_workstreams:
+        errors.append(
+            "workstream(s) with zero primary paths: "
+            + ", ".join(f"#{issue}" for issue in sorted(missing_workstreams))
+        )
+    if errors:
+        raise CoverageValidationError("\n".join(errors))
+
+    class_counts = Counter(row["class"] for row in rows)
+    return {
+        "baseline_sha": ledger["baseline"]["sha"],
+        "baseline_tracked_file_count": ledger["baseline"]["tracked_file_count"],
+        "tracked_file_count": len(paths),
+        "covered_file_count": len(rows),
+        "uncovered_count": 0,
+        "duplicate_primary_count": 0,
+        "owner_counts": {str(key): owner_counts[key] for key in sorted(owner_counts)},
+        "class_counts": {key: class_counts[key] for key in sorted(class_counts)},
+        "rows": rows,
+    }
+
+
+def _print_human_summary(report: Mapping[str, Any]) -> None:
+    print(
+        "Bug-sweep coverage valid: "
+        f"{report['covered_file_count']}/{report['tracked_file_count']} tracked paths covered; "
+        "0 uncovered; 0 duplicate-primary."
+    )
+    print("Primary owners:")
+    for issue, count in report["owner_counts"].items():
+        print(f"  #{issue}: {count}")
+    print("Path classes:")
+    for path_class, count in report["class_counts"].items():
+        print(f"  {path_class}: {count}")
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--repo-root",
+        type=Path,
+        default=repository_root(),
+        help="repository root used for git ls-files",
+    )
+    parser.add_argument(
+        "--ledger",
+        type=Path,
+        default=None,
+        help="coverage ledger path (default: docs/quality/bug_sweep/coverage.json)",
+    )
+    parser.add_argument("--json", action="store_true", help="emit the summary as JSON")
+    args = parser.parse_args(argv)
+
+    repo_root = args.repo_root.resolve()
+    ledger_path = (
+        args.ledger.resolve()
+        if args.ledger is not None
+        else repo_root / "docs" / "quality" / "bug_sweep" / "coverage.json"
+    )
+    try:
+        report = validate_coverage(load_ledger(ledger_path), git_tracked_paths(repo_root))
+    except CoverageValidationError as exc:
+        print(f"Bug-sweep coverage invalid:\n{exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        compact_report = {key: value for key, value in report.items() if key != "rows"}
+        print(json.dumps(compact_report, indent=2, sort_keys=True))
+    else:
+        _print_human_summary(report)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -2,7 +2,7 @@
 
 Status: Active planning source of truth  
 Owner: Product/architecture maintainer  
-Last reviewed: 2026-08-23
+Last reviewed: 2026-08-26
 Planning unit: GitHub Issue
 Product backlog epic: [#925](https://github.com/hexafe/metroliza/issues/925)
 Feature catalog: [feature_catalog.md](./feature_catalog.md)
@@ -46,7 +46,7 @@ and [`release_status.md`](../release_checks/release_status.md).
 | Phase | Outcome | Principal Issues |
 |---|---|---|
 | **0. Project control and branch truth** | One source of truth, full Issue backlog, explicit branch/release decision | #899, #900, #902, #911, #921, #923, #924, #925 |
-| **1. Reproducible baseline and toolchain** | Clean setup, canonical end-to-end fixture, trustworthy CI/diagnostics/performance evidence | #901, #906, #912, #913, #914, #918, #922, initial #917/#920, #944, initial #952 |
+| **1. Reproducible baseline and toolchain** | Clean setup, canonical end-to-end fixture, complete bug-sweep ownership, trustworthy CI/diagnostics/performance evidence | #974, #975–#985, #901, #906, #912, #913, #914, #918, #922, initial #917/#920, #944, initial #952 |
 | **2. Stable data and application core** | Versioned model, headless vertical slice, controlled import/OCR/database/filter/group/curation | #915, #916, #926, #927, #928, #929, #930, #931, #932, #945, #952, #954 |
 | **3. Stable analysis and reporting** | One result model, supported statistics/capability, presets, Excel, dashboard, optional Google | #903, #904, #907, #917, #933, #934, #935, #936, #937, #938, #952 |
 | **4. Tabular, industrial and realtime product lines** | Shared contracts for large flat files, cache-first production data and replayable monitoring | #952, #939, #940, #919, #941 |
@@ -138,6 +138,29 @@ behavior.
 | [#906](https://github.com/hexafe/metroliza/issues/906) | Eliminate or explicitly renew expiring reviewed security findings |
 | [#901](https://github.com/hexafe/metroliza/issues/901) | Exact-build Windows/Google/notices/legal manual evidence |
 
+### Repository-wide bug sweep
+
+| Issue | Ordered quality outcome |
+|---:|---|
+| [#974](https://github.com/hexafe/metroliza/issues/974) | Complete-surface bug-sweep program and final acceptance |
+| [#975](https://github.com/hexafe/metroliza/issues/975) | Exact baseline, one-primary-owner coverage ledger, finding protocol, and validator |
+| [#976](https://github.com/hexafe/metroliza/issues/976) | Build, CI, dependencies, packaging, and Windows audit |
+| [#983](https://github.com/hexafe/metroliza/issues/983) | Security, confidentiality, configuration, diagnostics, and licensing audit |
+| [#979](https://github.com/hexafe/metroliza/issues/979) | SQLite, cache, migration, persistence, and atomicity audit |
+| [#980](https://github.com/hexafe/metroliza/issues/980) | Filtering, grouping, analytics, statistics, and Python/native parity audit |
+| [#978](https://github.com/hexafe/metroliza/issues/978) | Import, parsing, OCR, archive, and validation audit |
+| [#981](https://github.com/hexafe/metroliza/issues/981) | Reports, Excel, Google, dashboards, and atomic publication audit |
+| [#977](https://github.com/hexafe/metroliza/issues/977) | Startup, PyQt lifecycle, threading, cancellation, and state audit |
+| [#982](https://github.com/hexafe/metroliza/issues/982) | Tabular, industrial, realtime, and long-running workflow audit |
+| [#984](https://github.com/hexafe/metroliza/issues/984) | Compatibility, import, dead-path, and packaged-discovery audit |
+| [#985](https://github.com/hexafe/metroliza/issues/985) | Test-gap challenge and final residual-risk closeout |
+
+#975 runs first. The initial Product Owner decision then requires one audit PR at a time in the
+table order; later parallelization requires an explicit decision and proof that shared artifacts,
+test environments, and exact-baseline assumptions do not overlap. #985 runs after every wave has a
+merged exact-SHA report or an explicit blocker. The canonical control plane is
+[docs/quality/bug_sweep/README.md](../quality/bug_sweep/README.md).
+
 ### Canonical baseline must exercise
 
 1. source preflight and parser resolution;
@@ -162,6 +185,8 @@ behavior.
   workflow payload;
 - performance baselines identify fixture/environment/build and are not unsupported seed numbers;
 - #917/#920 foundation slices and the initial #952 envelope are accepted for later consumers;
+- every tracked path has exactly one primary #975–#985 audit owner, every confirmed finding has one
+  authoritative Issue, and remaining uncertainty is categorized explicitly;
 - exact packaged/manual release blockers are visible and owned.
 
 ## 6. Phase 2 — Stable data and application core
@@ -443,7 +468,7 @@ GitHub milestone creation/configuration is tracked by #921. Recommended mileston
 | Milestone | Included phases/issues |
 |---|---|
 | **Foundation and branch recovery** | Phase 0: #899, #900, #902, #911, #921, #923, #924, #925 |
-| **Reproducible baseline** | Phase 1: #912, #913, #914, #918, #922, initial #917/#920, #944, initial #952 |
+| **Reproducible baseline** | Phase 1: #974, #975–#985, #912, #913, #914, #918, #922, initial #917/#920, #944, initial #952 |
 | **Stable core and reporting** | Phases 2–3: #915–#917, #926–#937, #903, #904, #907, #954 |
 | **Tabular and industrial analytics** | Phase 4 tabular/industrial: #939, #940, relevant #931/#932/#952 |
 | **Realtime analytics MVP** | #919, #941, realtime parts of #937/#944/#952 |
