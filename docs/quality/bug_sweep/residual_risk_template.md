@@ -81,8 +81,9 @@ Repeat this section for every remaining risk.
 - Affected platform/backend/environment:
 - User/data/security/release impact:
 - Workaround or containment:
+- Preserved seam/rollback:
 - Authoritative Issue:
-- Owner:
+- Accountable person/role:
 - Next gate and expected evidence:
 - Due date/event:
 - Product Owner acceptance link and expiry, or `not accepted`:

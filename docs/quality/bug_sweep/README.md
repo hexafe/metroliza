@@ -41,6 +41,7 @@ library. It contains:
 - current open-Issue mappings for #901–#957 and #971;
 - PRs #972/#973 as compatibility inputs only;
 - allowed classes, statuses, consequence tiers, and consequence tags;
+- the exact structured fields required for a deferred residual risk;
 - non-overlapping include/exclude rules; and
 - per-rule primary owner, secondary owners, audit state, evidence, findings, disposition, and
   residual risk.
@@ -57,7 +58,10 @@ The validator fails offline, without network access, when:
 - a tracked path matches more than one primary rule;
 - an owner is not one of the captured existing Issues #975–#985;
 - a class, status, consequence tier, or consequence tag is invalid;
-- completed coverage lacks both evidence and a disposition;
+- terminal coverage (`completed`, `accepted behavior`, or `deferred residual risk`) lacks evidence
+  or a disposition;
+- deferred residual risk lacks a reason, accountable person/role, target Issue/phase, next gate, or
+  preserved seam;
 - a workstream has no primary path;
 - a rule matches zero tracked paths or the immutable baseline metadata is altered;
 - the open-Issue map or #972/#973 compatibility-input contract is malformed; or
@@ -192,7 +196,8 @@ Every candidate receives exactly one disposition:
 - **Design/maintainability risk** without demonstrated incorrectness
 - **Dependency/platform compatibility risk**
 - **Accepted behavior / false positive**
-- **Deferred residual risk** with owner, reason, and next gate
+- **Deferred residual risk** with reason, accountable person/role, target Issue/phase, next gate, and
+  preserved seam
 
 Severity is consequence and reach, not repair effort:
 
@@ -297,8 +302,9 @@ Each wave publishes one sanitized report with:
 10. exact-head CI, GitHub Codex Review, independent review, and unresolved-thread count; and
 11. confirmation that the audit PR made no opportunistic runtime/dependency/release change.
 
-Update the ledger status only from durable evidence. Completed rules require both an evidence link
-and a disposition; silence cannot mean complete.
+Update the ledger status only from durable evidence. Completed, accepted-behavior, and deferred
+residual-risk rules require both an evidence link and a disposition; a deferral also requires the
+five structured fields named in the ledger. Silence cannot mean terminal.
 
 ## Confidentiality and safe evidence
 

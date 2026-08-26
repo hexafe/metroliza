@@ -31,7 +31,8 @@ Select one:
 - [ ] Design/maintainability risk without demonstrated incorrectness
 - [ ] Dependency/platform compatibility risk
 - [ ] Accepted behavior / false positive
-- [ ] Deferred residual risk with owner, reason, and next gate
+- [ ] Deferred residual risk with reason, accountable person/role, target Issue/phase, next gate, and
+      preserved seam
 
 ## Severity
 
@@ -153,7 +154,7 @@ Reviewer and result:
 ## Disposition and next gate
 
 - Current disposition:
-- Owner:
+- Accountable person/role:
 - Target Issue/phase:
 - Required next evidence:
 - Due date or event:

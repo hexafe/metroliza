@@ -35,6 +35,13 @@
     "deferred residual risk",
     "accepted behavior"
   ],
+  "deferred_residual_risk_fields": [
+    "reason",
+    "accountable_owner",
+    "target_issue_or_phase",
+    "next_gate",
+    "preserved_seam"
+  ],
   "consequence_tags": [
     "audit-control",
     "cancellation",

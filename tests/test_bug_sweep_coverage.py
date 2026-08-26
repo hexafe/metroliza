@@ -134,6 +134,64 @@ def test_completed_rule_without_evidence_and_disposition_is_rejected() -> None:
     _assert_invalid(ledger, "completed coverage requires a disposition")
 
 
+@pytest.mark.parametrize("status", ["accepted behavior", "deferred residual risk"])
+def test_other_terminal_statuses_require_evidence_and_disposition(status: str) -> None:
+    ledger = _ledger()
+    rule = _rule(ledger, "root-application-entrypoint")
+    rule["audit_status"] = status
+    rule["evidence_links"] = []
+    rule["disposition"] = None
+
+    _assert_invalid(ledger, f"{status} coverage requires evidence")
+    _assert_invalid(ledger, f"{status} coverage requires a disposition")
+
+
+def test_deferred_residual_risk_requires_structured_deferral_details() -> None:
+    ledger = _ledger()
+    rule = _rule(ledger, "root-application-entrypoint")
+    rule["audit_status"] = "deferred residual risk"
+    rule["evidence_links"] = ["https://github.com/hexafe/metroliza/issues/975"]
+    rule["disposition"] = "Deferred to a later evidence gate."
+
+    _assert_invalid(ledger, "deferred residual risk requires structured deferral details")
+
+
+def test_complete_deferred_residual_risk_record_is_accepted() -> None:
+    ledger = _ledger()
+    rule = _rule(ledger, "root-application-entrypoint")
+    rule["audit_status"] = "deferred residual risk"
+    rule["evidence_links"] = ["https://github.com/hexafe/metroliza/issues/975"]
+    rule["disposition"] = "Deferred to the named gate with the entrypoint preserved."
+    rule["deferral_details"] = {
+        "reason": "The required clean-machine environment is unavailable.",
+        "accountable_owner": "Issue #977 audit coordinator",
+        "target_issue_or_phase": "Issue #977",
+        "next_gate": "Clean-machine lifecycle evidence at the exact audit SHA.",
+        "preserved_seam": "Keep metroliza.py behavior unchanged until that evidence exists.",
+    }
+
+    report = COVERAGE.validate_coverage(ledger, _tracked_paths())
+
+    assert report["covered_file_count"] == report["tracked_file_count"]
+
+
+def test_deferral_accountable_owner_requires_a_non_empty_identity() -> None:
+    ledger = _ledger()
+    rule = _rule(ledger, "root-application-entrypoint")
+    rule["audit_status"] = "deferred residual risk"
+    rule["evidence_links"] = ["https://github.com/hexafe/metroliza/issues/975"]
+    rule["disposition"] = "Deferred to the named gate with the entrypoint preserved."
+    rule["deferral_details"] = {
+        "reason": "The required clean-machine environment is unavailable.",
+        "accountable_owner": 977,
+        "target_issue_or_phase": "Issue #977",
+        "next_gate": "Clean-machine lifecycle evidence at the exact audit SHA.",
+        "preserved_seam": "Keep metroliza.py behavior unchanged until that evidence exists.",
+    }
+
+    _assert_invalid(ledger, "deferral_details.accountable_owner must be non-empty")
+
+
 def test_completed_rule_with_blank_evidence_is_rejected() -> None:
     ledger = _ledger()
     rule = _rule(ledger, "root-application-entrypoint")

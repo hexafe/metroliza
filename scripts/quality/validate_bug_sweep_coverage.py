@@ -65,6 +65,12 @@ AUDIT_STATUSES = frozenset(
         "accepted behavior",
     }
 )
+TERMINAL_AUDIT_STATUSES = frozenset(
+    {"completed", "accepted behavior", "deferred residual risk"}
+)
+DEFERRED_DETAIL_FIELDS = frozenset(
+    {"reason", "accountable_owner", "target_issue_or_phase", "next_gate", "preserved_seam"}
+)
 CONSEQUENCE_TIERS = frozenset({"P0", "P1", "P2", "P3"})
 CONSEQUENCE_TAGS = frozenset(
     {
@@ -265,6 +271,15 @@ def _validate_ledger_schema(ledger: Mapping[str, Any]) -> list[str]:
         or set(configured_statuses) != AUDIT_STATUSES
     ):
         errors.append("audit_statuses must contain exactly the validator-supported statuses")
+    configured_deferral_fields = ledger.get("deferred_residual_risk_fields")
+    if (
+        not _non_empty_string_list(configured_deferral_fields)
+        or len(configured_deferral_fields) != len(set(configured_deferral_fields))
+        or set(configured_deferral_fields) != DEFERRED_DETAIL_FIELDS
+    ):
+        errors.append(
+            "deferred_residual_risk_fields must contain exactly the required deferral fields"
+        )
     configured_tags = ledger.get("consequence_tags")
     if (
         not _non_empty_string_list(configured_tags)
@@ -389,11 +404,31 @@ def _validate_ledger_schema(ledger: Mapping[str, Any]) -> list[str]:
             errors.append(f"{context}: disposition must be null or a non-empty string")
         if not isinstance(rule.get("residual_risk"), str) or not rule["residual_risk"].strip():
             errors.append(f"{context}: residual_risk must be non-empty")
-        if status == "completed":
+        if status in TERMINAL_AUDIT_STATUSES:
             if not rule.get("evidence_links"):
-                errors.append(f"{context}: completed coverage requires evidence")
+                errors.append(f"{context}: {status} coverage requires evidence")
             if not isinstance(disposition, str) or not disposition.strip():
-                errors.append(f"{context}: completed coverage requires a disposition")
+                errors.append(f"{context}: {status} coverage requires a disposition")
+        deferral_details = rule.get("deferral_details")
+        if status == "deferred residual risk":
+            if not isinstance(deferral_details, dict):
+                errors.append(
+                    f"{context}: deferred residual risk requires structured deferral details"
+                )
+            else:
+                detail_keys = set(deferral_details)
+                if detail_keys != DEFERRED_DETAIL_FIELDS:
+                    errors.append(
+                        f"{context}: deferral_details must contain exactly the required fields"
+                    )
+                for field in DEFERRED_DETAIL_FIELDS:
+                    value = deferral_details.get(field)
+                    if not isinstance(value, str) or not value.strip():
+                        errors.append(f"{context}: deferral_details.{field} must be non-empty")
+        elif deferral_details is not None:
+            errors.append(
+                f"{context}: deferral_details is allowed only for deferred residual risk"
+            )
 
     issue_map = ledger.get("existing_issue_map")
     if not isinstance(issue_map, list):
@@ -529,6 +564,7 @@ def validate_coverage(
                 "finding_links": list(rule["finding_links"]),
                 "disposition": rule["disposition"],
                 "residual_risk": rule["residual_risk"],
+                "deferral_details": rule.get("deferral_details"),
             }
         )
 
