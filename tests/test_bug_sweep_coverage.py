@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 import importlib.util
-import sys
 from pathlib import Path
 
 import pytest
@@ -15,7 +14,6 @@ LEDGER_PATH = REPO_ROOT / "docs" / "quality" / "bug_sweep" / "coverage.json"
 SPEC = importlib.util.spec_from_file_location("validate_bug_sweep_coverage", SCRIPT_PATH)
 assert SPEC is not None and SPEC.loader is not None
 COVERAGE = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = COVERAGE
 SPEC.loader.exec_module(COVERAGE)
 
 

@@ -195,6 +195,10 @@ def _non_empty_string_list(value: object) -> bool:
     return _string_list(value) and all(item.strip() for item in value)
 
 
+def _non_empty_string(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
 def _owner_list(value: object) -> bool:
     return (
         isinstance(value, list)
@@ -216,8 +220,7 @@ def _validate_pattern(pattern: str, context: str, errors: list[str]) -> None:
         errors.append(f"{context}: invalid glob {pattern!r}: {exc}")
 
 
-def _validate_ledger_schema(ledger: Mapping[str, Any]) -> list[str]:
-    errors: list[str] = []
+def _validate_schema_version(ledger: Mapping[str, Any], errors: list[str]) -> None:
     schema_version = ledger.get("schema_version")
     if (
         not isinstance(schema_version, int)
@@ -226,102 +229,290 @@ def _validate_ledger_schema(ledger: Mapping[str, Any]) -> list[str]:
     ):
         errors.append(f"schema_version must equal {SCHEMA_VERSION}")
 
+
+def _validate_baseline(ledger: Mapping[str, Any], errors: list[str]) -> object:
     baseline = ledger.get("baseline")
     if not isinstance(baseline, dict):
         errors.append("baseline must be an object")
-        baseline_sha = None
-    else:
-        baseline_sha = baseline.get("sha")
-        if baseline.get("branch") != "develop":
-            errors.append("baseline.branch must equal 'develop'")
-        if baseline_sha != EXPECTED_BASELINE_SHA:
-            errors.append(f"baseline.sha must equal the authorized SHA {EXPECTED_BASELINE_SHA}")
-        tracked_count = baseline.get("tracked_file_count")
-        if (
-            not isinstance(tracked_count, int)
-            or isinstance(tracked_count, bool)
-            or tracked_count != EXPECTED_BASELINE_TRACKED_FILE_COUNT
-        ):
-            errors.append(
-                "baseline.tracked_file_count must equal the verified baseline count "
-                f"{EXPECTED_BASELINE_TRACKED_FILE_COUNT}"
-            )
-        if baseline.get("tree_source") != "git ls-files":
-            errors.append("baseline.tree_source must equal 'git ls-files'")
+        return None
 
-    foundation_paths = ledger.get("foundation_added_paths")
+    baseline_sha = baseline.get("sha")
+    if baseline.get("branch") != "develop":
+        errors.append("baseline.branch must equal 'develop'")
+    if baseline_sha != EXPECTED_BASELINE_SHA:
+        errors.append(f"baseline.sha must equal the authorized SHA {EXPECTED_BASELINE_SHA}")
+    tracked_count = baseline.get("tracked_file_count")
     if (
-        not _non_empty_string_list(foundation_paths)
-        or len(foundation_paths) != len(set(foundation_paths))
-        or set(foundation_paths) != EXPECTED_FOUNDATION_ADDED_PATHS
-    ):
-        errors.append("foundation_added_paths must contain exactly the six authorized new paths")
-
-    configured_classes = ledger.get("path_classes")
-    if (
-        not _non_empty_string_list(configured_classes)
-        or len(configured_classes) != len(set(configured_classes))
-        or set(configured_classes) != PATH_CLASSES
-    ):
-        errors.append("path_classes must contain exactly the authorized ten classes")
-    configured_statuses = ledger.get("audit_statuses")
-    if (
-        not _non_empty_string_list(configured_statuses)
-        or len(configured_statuses) != len(set(configured_statuses))
-        or set(configured_statuses) != AUDIT_STATUSES
-    ):
-        errors.append("audit_statuses must contain exactly the validator-supported statuses")
-    configured_deferral_fields = ledger.get("deferred_residual_risk_fields")
-    if (
-        not _non_empty_string_list(configured_deferral_fields)
-        or len(configured_deferral_fields) != len(set(configured_deferral_fields))
-        or set(configured_deferral_fields) != DEFERRED_DETAIL_FIELDS
+        not isinstance(tracked_count, int)
+        or isinstance(tracked_count, bool)
+        or tracked_count != EXPECTED_BASELINE_TRACKED_FILE_COUNT
     ):
         errors.append(
-            "deferred_residual_risk_fields must contain exactly the required deferral fields"
+            "baseline.tracked_file_count must equal the verified baseline count "
+            f"{EXPECTED_BASELINE_TRACKED_FILE_COUNT}"
         )
-    configured_tags = ledger.get("consequence_tags")
-    if (
-        not _non_empty_string_list(configured_tags)
-        or len(configured_tags) != len(set(configured_tags))
-        or set(configured_tags) != CONSEQUENCE_TAGS
-    ):
-        errors.append("consequence_tags must contain exactly the validator-supported tags")
+    if baseline.get("tree_source") != "git ls-files":
+        errors.append("baseline.tree_source must equal 'git ls-files'")
+    return baseline_sha
 
+
+def _validate_exact_string_set(
+    value: object,
+    expected: frozenset[str],
+    message: str,
+    errors: list[str],
+) -> None:
+    if (
+        not _non_empty_string_list(value)
+        or len(value) != len(set(value))
+        or set(value) != expected
+    ):
+        errors.append(message)
+
+
+def _validate_declared_contracts(ledger: Mapping[str, Any], errors: list[str]) -> None:
+    _validate_exact_string_set(
+        ledger.get("foundation_added_paths"),
+        EXPECTED_FOUNDATION_ADDED_PATHS,
+        "foundation_added_paths must contain exactly the six authorized new paths",
+        errors,
+    )
+    _validate_exact_string_set(
+        ledger.get("path_classes"),
+        PATH_CLASSES,
+        "path_classes must contain exactly the authorized ten classes",
+        errors,
+    )
+    _validate_exact_string_set(
+        ledger.get("audit_statuses"),
+        AUDIT_STATUSES,
+        "audit_statuses must contain exactly the validator-supported statuses",
+        errors,
+    )
+    _validate_exact_string_set(
+        ledger.get("deferred_residual_risk_fields"),
+        DEFERRED_DETAIL_FIELDS,
+        "deferred_residual_risk_fields must contain exactly the required deferral fields",
+        errors,
+    )
+    _validate_exact_string_set(
+        ledger.get("consequence_tags"),
+        CONSEQUENCE_TAGS,
+        "consequence_tags must contain exactly the validator-supported tags",
+        errors,
+    )
+
+
+def _validate_workstream_record(issue: int, record: object, errors: list[str]) -> None:
+    context = f"workstream #{issue}"
+    if not isinstance(record, dict):
+        errors.append(f"{context}: record must be an object")
+        return
+    if record.get("issue_url") != f"https://github.com/hexafe/metroliza/issues/{issue}":
+        errors.append(f"{context}: issue_url must reference the authoritative GitHub Issue")
+    if not _non_empty_string(record.get("title")):
+        errors.append(f"{context}: title must be non-empty")
+    if record.get("state") != "open":
+        errors.append(f"{context}: captured state must be 'open'")
+    if record.get("execution_order") != EXPECTED_EXECUTION_ORDER[issue]:
+        errors.append(
+            f"{context}: execution_order must equal {EXPECTED_EXECUTION_ORDER[issue]!r}"
+        )
+
+
+def _validate_workstreams(ledger: Mapping[str, Any], errors: list[str]) -> set[int]:
     workstreams = ledger.get("workstreams")
     if not isinstance(workstreams, dict):
         errors.append("workstreams must be an object")
-        workstream_issues: set[int] = set()
-    else:
-        expected_workstream_keys = {str(issue) for issue in EXPECTED_OWNER_ISSUES}
-        workstream_keys = set(workstreams)
-        workstream_issues = {
-            int(key) for key in workstream_keys if key in expected_workstream_keys
-        }
-        if workstream_keys != expected_workstream_keys:
-            errors.append("workstreams must define exactly Issues #975-#985")
-        for issue in sorted(EXPECTED_OWNER_ISSUES & workstream_issues):
-            record = workstreams.get(str(issue))
-            context = f"workstream #{issue}"
-            if not isinstance(record, dict):
-                errors.append(f"{context}: record must be an object")
-                continue
-            if record.get("issue_url") != f"https://github.com/hexafe/metroliza/issues/{issue}":
-                errors.append(f"{context}: issue_url must reference the authoritative GitHub Issue")
-            if not isinstance(record.get("title"), str) or not record["title"].strip():
-                errors.append(f"{context}: title must be non-empty")
-            if record.get("state") != "open":
-                errors.append(f"{context}: captured state must be 'open'")
-            if record.get("execution_order") != EXPECTED_EXECUTION_ORDER[issue]:
-                errors.append(
-                    f"{context}: execution_order must equal "
-                    f"{EXPECTED_EXECUTION_ORDER[issue]!r}"
-                )
+        return set()
 
+    expected_workstream_keys = {str(issue) for issue in EXPECTED_OWNER_ISSUES}
+    workstream_keys = set(workstreams)
+    workstream_issues = {
+        int(key) for key in workstream_keys if key in expected_workstream_keys
+    }
+    if workstream_keys != expected_workstream_keys:
+        errors.append("workstreams must define exactly Issues #975-#985")
+    for issue in sorted(EXPECTED_OWNER_ISSUES & workstream_issues):
+        _validate_workstream_record(issue, workstreams.get(str(issue)), errors)
+    return workstream_issues
+
+
+def _rule_context(
+    rule: Mapping[str, Any],
+    position: int,
+    rule_ids: set[str],
+    errors: list[str],
+) -> str:
+    context = f"rule[{position}]"
+    rule_id = rule.get("id")
+    if not _non_empty_string(rule_id):
+        errors.append(f"{context}: id must be non-empty")
+    elif rule_id in rule_ids:
+        errors.append(f"{context}: duplicate rule id {rule_id!r}")
+    else:
+        rule_ids.add(rule_id)
+        context = f"rule {rule_id!r}"
+    return context
+
+
+def _validate_rule_patterns(
+    rule: Mapping[str, Any], context: str, errors: list[str]
+) -> None:
+    includes = rule.get("include")
+    excludes = rule.get("exclude")
+    if not _string_list(includes) or not includes:
+        errors.append(f"{context}: include must be a non-empty string array")
+    else:
+        for pattern in includes:
+            _validate_pattern(pattern, context, errors)
+    if not _string_list(excludes):
+        errors.append(f"{context}: exclude must be a string array")
+    else:
+        for pattern in excludes:
+            _validate_pattern(pattern, context, errors)
+
+
+def _validate_rule_ownership(
+    rule: Mapping[str, Any],
+    context: str,
+    workstream_issues: set[int],
+    errors: list[str],
+) -> None:
+    path_class = rule.get("class")
+    if path_class not in PATH_CLASSES:
+        errors.append(f"{context}: invalid class {path_class!r}")
+    primary_owner = rule.get("primary_owner")
+    if (
+        not isinstance(primary_owner, int)
+        or isinstance(primary_owner, bool)
+        or primary_owner not in workstream_issues
+    ):
+        errors.append(f"{context}: unknown Issue owner {primary_owner!r}")
+    secondary_owners = rule.get("secondary_owners")
+    if not _owner_list(secondary_owners):
+        errors.append(f"{context}: secondary_owners must be a unique integer array")
+        return
+    unknown_secondary = set(secondary_owners) - workstream_issues
+    if unknown_secondary:
+        errors.append(
+            f"{context}: unknown secondary Issue owner(s) "
+            + ", ".join(f"#{issue}" for issue in sorted(unknown_secondary))
+        )
+    if primary_owner in secondary_owners:
+        errors.append(f"{context}: primary owner cannot also be a secondary owner")
+
+
+def _validate_rule_consequence(
+    rule: Mapping[str, Any], context: str, errors: list[str]
+) -> None:
+    consequence_tier = rule.get("consequence_tier")
+    if consequence_tier not in CONSEQUENCE_TIERS:
+        errors.append(f"{context}: invalid consequence tier {consequence_tier!r}")
+    tags = rule.get("consequence_tags")
+    if not _string_list(tags) or not tags:
+        errors.append(f"{context}: consequence_tags must be a non-empty string array")
+        return
+    unknown_tags = set(tags) - CONSEQUENCE_TAGS
+    if unknown_tags:
+        errors.append(
+            f"{context}: invalid consequence tag(s) " + ", ".join(sorted(unknown_tags))
+        )
+    if len(tags) != len(set(tags)):
+        errors.append(f"{context}: consequence_tags must not contain duplicates")
+
+
+def _validate_rule_evidence(
+    rule: Mapping[str, Any], context: str, errors: list[str]
+) -> object:
+    for field in ("evidence_links", "finding_links"):
+        if not _non_empty_string_list(rule.get(field)):
+            errors.append(f"{context}: {field} must contain only non-empty strings")
+    disposition = rule.get("disposition")
+    if disposition is not None and not _non_empty_string(disposition):
+        errors.append(f"{context}: disposition must be null or a non-empty string")
+    if not _non_empty_string(rule.get("residual_risk")):
+        errors.append(f"{context}: residual_risk must be non-empty")
+    return disposition
+
+
+def _validate_terminal_rule(
+    rule: Mapping[str, Any],
+    status: object,
+    disposition: object,
+    context: str,
+    errors: list[str],
+) -> None:
+    if status not in TERMINAL_AUDIT_STATUSES:
+        return
+    if not rule.get("evidence_links"):
+        errors.append(f"{context}: {status} coverage requires evidence")
+    if not _non_empty_string(disposition):
+        errors.append(f"{context}: {status} coverage requires a disposition")
+
+
+def _validate_deferred_detail_record(
+    details: Mapping[str, Any], context: str, errors: list[str]
+) -> None:
+    if set(details) != DEFERRED_DETAIL_FIELDS:
+        errors.append(f"{context}: deferral_details must contain exactly the required fields")
+    for field in DEFERRED_DETAIL_FIELDS:
+        if not _non_empty_string(details.get(field)):
+            errors.append(f"{context}: deferral_details.{field} must be non-empty")
+
+
+def _validate_deferral_details(
+    status: object, details: object, context: str, errors: list[str]
+) -> None:
+    if status == "deferred residual risk":
+        if not isinstance(details, dict):
+            errors.append(
+                f"{context}: deferred residual risk requires structured deferral details"
+            )
+            return
+        _validate_deferred_detail_record(details, context, errors)
+    elif details is not None:
+        errors.append(f"{context}: deferral_details is allowed only for deferred residual risk")
+
+
+def _validate_rule_audit(
+    rule: Mapping[str, Any], baseline_sha: object, context: str, errors: list[str]
+) -> None:
+    status = rule.get("audit_status")
+    if status not in AUDIT_STATUSES:
+        errors.append(f"{context}: invalid audit status {status!r}")
+    if rule.get("baseline_sha") != baseline_sha:
+        errors.append(f"{context}: baseline_sha must equal baseline.sha")
+    disposition = _validate_rule_evidence(rule, context, errors)
+    _validate_terminal_rule(rule, status, disposition, context, errors)
+    _validate_deferral_details(status, rule.get("deferral_details"), context, errors)
+
+
+def _validate_rule(
+    rule: Mapping[str, Any],
+    position: int,
+    rule_ids: set[str],
+    baseline_sha: object,
+    workstream_issues: set[int],
+    errors: list[str],
+) -> None:
+    context = _rule_context(rule, position, rule_ids, errors)
+    _validate_rule_patterns(rule, context, errors)
+    _validate_rule_ownership(rule, context, workstream_issues, errors)
+    _validate_rule_consequence(rule, context, errors)
+    _validate_rule_audit(rule, baseline_sha, context, errors)
+
+
+def _validate_rules(
+    ledger: Mapping[str, Any],
+    baseline_sha: object,
+    workstream_issues: set[int],
+    errors: list[str],
+) -> bool:
     rules = ledger.get("rules")
     if not isinstance(rules, list) or not rules:
         errors.append("rules must be a non-empty array")
-        return errors
+        return False
 
     rule_ids: set[str] = set()
     for position, rule in enumerate(rules):
@@ -329,197 +520,161 @@ def _validate_ledger_schema(ledger: Mapping[str, Any]) -> list[str]:
         if not isinstance(rule, dict):
             errors.append(f"{context}: rule must be an object")
             continue
-        rule_id = rule.get("id")
-        if not isinstance(rule_id, str) or not rule_id.strip():
-            errors.append(f"{context}: id must be non-empty")
-        elif rule_id in rule_ids:
-            errors.append(f"{context}: duplicate rule id {rule_id!r}")
-        else:
-            rule_ids.add(rule_id)
-            context = f"rule {rule_id!r}"
+        _validate_rule(
+            rule,
+            position,
+            rule_ids,
+            baseline_sha,
+            workstream_issues,
+            errors,
+        )
+    return True
 
-        includes = rule.get("include")
-        excludes = rule.get("exclude")
-        if not _string_list(includes) or not includes:
-            errors.append(f"{context}: include must be a non-empty string array")
-        else:
-            for pattern in includes:
-                _validate_pattern(pattern, context, errors)
-        if not _string_list(excludes):
-            errors.append(f"{context}: exclude must be a string array")
-        else:
-            for pattern in excludes:
-                _validate_pattern(pattern, context, errors)
 
-        path_class = rule.get("class")
-        if path_class not in PATH_CLASSES:
-            errors.append(f"{context}: invalid class {path_class!r}")
-        primary_owner = rule.get("primary_owner")
-        if (
-            not isinstance(primary_owner, int)
-            or isinstance(primary_owner, bool)
-            or primary_owner not in workstream_issues
-        ):
-            errors.append(f"{context}: unknown Issue owner {primary_owner!r}")
-        secondary_owners = rule.get("secondary_owners")
-        if not _owner_list(secondary_owners):
-            errors.append(f"{context}: secondary_owners must be a unique integer array")
-        else:
-            unknown_secondary = set(secondary_owners) - workstream_issues
-            if unknown_secondary:
-                errors.append(
-                    f"{context}: unknown secondary Issue owner(s) "
-                    + ", ".join(f"#{issue}" for issue in sorted(unknown_secondary))
-                )
-            if primary_owner in secondary_owners:
-                errors.append(f"{context}: primary owner cannot also be a secondary owner")
+def _validate_audit_owners(
+    record: Mapping[str, Any],
+    context: str,
+    workstream_issues: set[int],
+    errors: list[str],
+) -> None:
+    owners = record.get("audit_owners")
+    if not _owner_list(owners) or not owners:
+        errors.append(f"{context}: audit_owners must be a non-empty unique integer array")
+    elif set(owners) - workstream_issues:
+        errors.append(f"{context}: audit_owners contains an unknown workstream")
 
-        consequence_tier = rule.get("consequence_tier")
-        if consequence_tier not in CONSEQUENCE_TIERS:
-            errors.append(f"{context}: invalid consequence tier {consequence_tier!r}")
-        tags = rule.get("consequence_tags")
-        if not _string_list(tags) or not tags:
-            errors.append(f"{context}: consequence_tags must be a non-empty string array")
-        else:
-            unknown_tags = set(tags) - CONSEQUENCE_TAGS
-            if unknown_tags:
-                errors.append(
-                    f"{context}: invalid consequence tag(s) " + ", ".join(sorted(unknown_tags))
-                )
-            if len(tags) != len(set(tags)):
-                errors.append(f"{context}: consequence_tags must not contain duplicates")
 
-        status = rule.get("audit_status")
-        if status not in AUDIT_STATUSES:
-            errors.append(f"{context}: invalid audit status {status!r}")
-        if rule.get("baseline_sha") != baseline_sha:
-            errors.append(f"{context}: baseline_sha must equal baseline.sha")
-        for field in ("evidence_links", "finding_links"):
-            if not _non_empty_string_list(rule.get(field)):
-                errors.append(f"{context}: {field} must contain only non-empty strings")
-        disposition = rule.get("disposition")
-        if disposition is not None and (
-            not isinstance(disposition, str) or not disposition.strip()
-        ):
-            errors.append(f"{context}: disposition must be null or a non-empty string")
-        if not isinstance(rule.get("residual_risk"), str) or not rule["residual_risk"].strip():
-            errors.append(f"{context}: residual_risk must be non-empty")
-        if status in TERMINAL_AUDIT_STATUSES:
-            if not rule.get("evidence_links"):
-                errors.append(f"{context}: {status} coverage requires evidence")
-            if not isinstance(disposition, str) or not disposition.strip():
-                errors.append(f"{context}: {status} coverage requires a disposition")
-        deferral_details = rule.get("deferral_details")
-        if status == "deferred residual risk":
-            if not isinstance(deferral_details, dict):
-                errors.append(
-                    f"{context}: deferred residual risk requires structured deferral details"
-                )
-            else:
-                detail_keys = set(deferral_details)
-                if detail_keys != DEFERRED_DETAIL_FIELDS:
-                    errors.append(
-                        f"{context}: deferral_details must contain exactly the required fields"
-                    )
-                for field in DEFERRED_DETAIL_FIELDS:
-                    value = deferral_details.get(field)
-                    if not isinstance(value, str) or not value.strip():
-                        errors.append(f"{context}: deferral_details.{field} must be non-empty")
-        elif deferral_details is not None:
-            errors.append(
-                f"{context}: deferral_details is allowed only for deferred residual risk"
-            )
+def _validate_mapped_issue_identity(
+    record: object,
+    context: str,
+    mapped_issues: set[int],
+    errors: list[str],
+) -> int | None:
+    if not isinstance(record, dict):
+        errors.append(f"{context}: record must be an object")
+        return None
+    issue = record.get("issue")
+    if not isinstance(issue, int) or isinstance(issue, bool):
+        errors.append(f"{context}: issue must be an integer")
+        return None
+    if issue in mapped_issues:
+        errors.append(f"{context}: duplicate Issue #{issue}")
+    mapped_issues.add(issue)
+    if not (901 <= issue <= 957 or issue == 971):
+        errors.append(f"{context}: Issue #{issue} is outside the required current map")
+    return issue
 
+
+def _validate_mapped_issue_record(
+    record: Mapping[str, Any],
+    context: str,
+    workstream_issues: set[int],
+    errors: list[str],
+) -> None:
+    if record.get("state") != "open":
+        errors.append(f"{context}: mapped Issue state must be 'open'")
+    if not _non_empty_string(record.get("title")):
+        errors.append(f"{context}: title must be non-empty")
+    if not _non_empty_string(record.get("surface")):
+        errors.append(f"{context}: surface must be non-empty")
+    _validate_audit_owners(record, context, workstream_issues, errors)
+
+
+def _validate_mapped_issue_set(mapped_issues: set[int], errors: list[str]) -> None:
+    if mapped_issues == EXPECTED_MAPPED_ISSUES:
+        return
+    missing = EXPECTED_MAPPED_ISSUES - mapped_issues
+    unexpected = mapped_issues - EXPECTED_MAPPED_ISSUES
+    if missing:
+        errors.append(
+            "existing_issue_map is missing current open Issue(s): "
+            + ", ".join(f"#{issue}" for issue in sorted(missing))
+        )
+    if unexpected:
+        errors.append(
+            "existing_issue_map contains unexpected Issue(s): "
+            + ", ".join(f"#{issue}" for issue in sorted(unexpected))
+        )
+
+
+def _validate_issue_map(
+    ledger: Mapping[str, Any], workstream_issues: set[int], errors: list[str]
+) -> None:
     issue_map = ledger.get("existing_issue_map")
     if not isinstance(issue_map, list):
         errors.append("existing_issue_map must be an array")
-    else:
-        mapped_issues: set[int] = set()
-        for position, record in enumerate(issue_map):
-            context = f"existing_issue_map[{position}]"
-            if not isinstance(record, dict):
-                errors.append(f"{context}: record must be an object")
-                continue
-            issue = record.get("issue")
-            if not isinstance(issue, int) or isinstance(issue, bool):
-                errors.append(f"{context}: issue must be an integer")
-                continue
-            if issue in mapped_issues:
-                errors.append(f"{context}: duplicate Issue #{issue}")
-            mapped_issues.add(issue)
-            if not (901 <= issue <= 957 or issue == 971):
-                errors.append(f"{context}: Issue #{issue} is outside the required current map")
-            if record.get("state") != "open":
-                errors.append(f"{context}: mapped Issue state must be 'open'")
-            if not isinstance(record.get("title"), str) or not record["title"].strip():
-                errors.append(f"{context}: title must be non-empty")
-            if not isinstance(record.get("surface"), str) or not record["surface"].strip():
-                errors.append(f"{context}: surface must be non-empty")
-            owners = record.get("audit_owners")
-            if not _owner_list(owners) or not owners:
-                errors.append(f"{context}: audit_owners must be a non-empty unique integer array")
-            elif set(owners) - workstream_issues:
-                errors.append(f"{context}: audit_owners contains an unknown workstream")
-        if mapped_issues != EXPECTED_MAPPED_ISSUES:
-            missing = EXPECTED_MAPPED_ISSUES - mapped_issues
-            unexpected = mapped_issues - EXPECTED_MAPPED_ISSUES
-            if missing:
-                errors.append(
-                    "existing_issue_map is missing current open Issue(s): "
-                    + ", ".join(f"#{issue}" for issue in sorted(missing))
-                )
-            if unexpected:
-                errors.append(
-                    "existing_issue_map contains unexpected Issue(s): "
-                    + ", ".join(f"#{issue}" for issue in sorted(unexpected))
-                )
+        return
 
+    mapped_issues: set[int] = set()
+    for position, record in enumerate(issue_map):
+        context = f"existing_issue_map[{position}]"
+        issue = _validate_mapped_issue_identity(record, context, mapped_issues, errors)
+        if issue is None:
+            continue
+        _validate_mapped_issue_record(record, context, workstream_issues, errors)
+    _validate_mapped_issue_set(mapped_issues, errors)
+
+
+def _compatibility_input_numbers_valid(inputs: Sequence[object]) -> bool:
+    input_numbers = [item.get("pr") for item in inputs if isinstance(item, dict)]
+    return (
+        len(input_numbers) == 2
+        and all(
+            isinstance(number, int) and not isinstance(number, bool)
+            for number in input_numbers
+        )
+        and len(input_numbers) == len(set(input_numbers))
+        and set(input_numbers) == {972, 973}
+    )
+
+
+def _validate_compatibility_input_record(
+    record: object,
+    position: int,
+    workstream_issues: set[int],
+    errors: list[str],
+) -> None:
+    context = f"external_compatibility_inputs[{position}]"
+    if not isinstance(record, dict):
+        errors.append(f"{context}: record must be an object")
+        return
+    if record.get("treatment") != "compatibility input only; no edit, merge, or acceptance":
+        errors.append(f"{context}: treatment must preserve the no-mutation boundary")
+    if record.get("state") != "open" or record.get("base") != "develop":
+        errors.append(f"{context}: captured PR state/base must be open/develop")
+    head_sha = record.get("head_sha")
+    if not isinstance(head_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", head_sha):
+        errors.append(f"{context}: head_sha must be a lowercase 40-character Git SHA")
+    _validate_audit_owners(record, context, workstream_issues, errors)
+
+
+def _validate_compatibility_inputs(
+    ledger: Mapping[str, Any], workstream_issues: set[int], errors: list[str]
+) -> None:
     compatibility_inputs = ledger.get("external_compatibility_inputs")
     if not isinstance(compatibility_inputs, list):
         errors.append("external_compatibility_inputs must be an array")
-    else:
-        input_numbers = [item.get("pr") for item in compatibility_inputs if isinstance(item, dict)]
-        if (
-            len(input_numbers) != 2
-            or any(
-                not isinstance(number, int) or isinstance(number, bool)
-                for number in input_numbers
-            )
-            or len(input_numbers) != len(set(input_numbers))
-            or set(input_numbers) != {972, 973}
-        ):
-            errors.append("external_compatibility_inputs must contain exactly PRs #972 and #973")
-        for position, record in enumerate(compatibility_inputs):
-            context = f"external_compatibility_inputs[{position}]"
-            if not isinstance(record, dict):
-                errors.append(f"{context}: record must be an object")
-                continue
-            if record.get("treatment") != "compatibility input only; no edit, merge, or acceptance":
-                errors.append(f"{context}: treatment must preserve the no-mutation boundary")
-            if record.get("state") != "open" or record.get("base") != "develop":
-                errors.append(f"{context}: captured PR state/base must be open/develop")
-            head_sha = record.get("head_sha")
-            if not isinstance(head_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", head_sha):
-                errors.append(f"{context}: head_sha must be a lowercase 40-character Git SHA")
-            owners = record.get("audit_owners")
-            if not _owner_list(owners) or not owners:
-                errors.append(f"{context}: audit_owners must be a non-empty unique integer array")
-            elif set(owners) - workstream_issues:
-                errors.append(f"{context}: audit_owners contains an unknown workstream")
+        return
+    if not _compatibility_input_numbers_valid(compatibility_inputs):
+        errors.append("external_compatibility_inputs must contain exactly PRs #972 and #973")
+    for position, record in enumerate(compatibility_inputs):
+        _validate_compatibility_input_record(record, position, workstream_issues, errors)
 
+
+def _validate_ledger_schema(ledger: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    _validate_schema_version(ledger, errors)
+    baseline_sha = _validate_baseline(ledger, errors)
+    _validate_declared_contracts(ledger, errors)
+    workstream_issues = _validate_workstreams(ledger, errors)
+    if not _validate_rules(ledger, baseline_sha, workstream_issues, errors):
+        return errors
+    _validate_issue_map(ledger, workstream_issues, errors)
+    _validate_compatibility_inputs(ledger, workstream_issues, errors)
     return errors
 
 
-def validate_coverage(
-    ledger: Mapping[str, Any], tracked_paths: Iterable[str]
-) -> dict[str, Any]:
-    """Validate the ledger and expand every tracked path to one primary rule."""
-
-    errors = _validate_ledger_schema(ledger)
-    if errors:
-        raise CoverageValidationError("\n".join(errors))
-
-    paths = list(tracked_paths)
+def _validate_tracked_paths(paths: list[str], errors: list[str]) -> None:
     if paths != sorted(paths):
         errors.append("tracked paths must be sorted deterministically")
     if len(paths) != len(set(paths)):
@@ -533,7 +688,35 @@ def validate_coverage(
             "tracked tree is missing authorized foundation path(s): "
             + ", ".join(sorted(missing_foundation_paths))
         )
-    rules: Sequence[Mapping[str, Any]] = ledger["rules"]
+
+
+def _coverage_row(path: str, rule: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "path": path,
+        "rule": rule["id"],
+        "class": rule["class"],
+        "primary_owner": rule["primary_owner"],
+        "secondary_owners": list(rule["secondary_owners"]),
+        "consequence_tier": rule["consequence_tier"],
+        "consequence_tags": list(rule["consequence_tags"]),
+        "audit_status": rule["audit_status"],
+        "baseline_sha": rule["baseline_sha"],
+        "evidence_links": list(rule["evidence_links"]),
+        "finding_links": list(rule["finding_links"]),
+        "disposition": rule["disposition"],
+        "residual_risk": rule["residual_risk"],
+        "deferral_details": rule.get("deferral_details"),
+    }
+
+
+def _expand_coverage(
+    rules: Sequence[Mapping[str, Any]], paths: Sequence[str]
+) -> tuple[
+    list[dict[str, Any]],
+    list[str],
+    list[tuple[str, list[str]]],
+    Counter[str],
+]:
     rows: list[dict[str, Any]] = []
     uncovered: list[str] = []
     duplicate_primary: list[tuple[str, list[str]]] = []
@@ -548,26 +731,18 @@ def validate_coverage(
         if len(matches) > 1:
             duplicate_primary.append((path, [str(rule["id"]) for rule in matches]))
             continue
-        rule = matches[0]
-        rows.append(
-            {
-                "path": path,
-                "rule": rule["id"],
-                "class": rule["class"],
-                "primary_owner": rule["primary_owner"],
-                "secondary_owners": list(rule["secondary_owners"]),
-                "consequence_tier": rule["consequence_tier"],
-                "consequence_tags": list(rule["consequence_tags"]),
-                "audit_status": rule["audit_status"],
-                "baseline_sha": rule["baseline_sha"],
-                "evidence_links": list(rule["evidence_links"]),
-                "finding_links": list(rule["finding_links"]),
-                "disposition": rule["disposition"],
-                "residual_risk": rule["residual_risk"],
-                "deferral_details": rule.get("deferral_details"),
-            }
-        )
+        rows.append(_coverage_row(path, matches[0]))
+    return rows, uncovered, duplicate_primary, rule_match_counts
 
+
+def _append_expansion_errors(
+    rules: Sequence[Mapping[str, Any]],
+    rows: Sequence[Mapping[str, Any]],
+    uncovered: Sequence[str],
+    duplicate_primary: Sequence[tuple[str, list[str]]],
+    rule_match_counts: Counter[str],
+    errors: list[str],
+) -> Counter[int]:
     for path in uncovered:
         errors.append(f"unassigned tracked path: {path}")
     for path, rule_ids in duplicate_primary:
@@ -585,9 +760,15 @@ def validate_coverage(
             "workstream(s) with zero primary paths: "
             + ", ".join(f"#{issue}" for issue in sorted(missing_workstreams))
         )
-    if errors:
-        raise CoverageValidationError("\n".join(errors))
+    return owner_counts
 
+
+def _coverage_report(
+    ledger: Mapping[str, Any],
+    paths: Sequence[str],
+    rows: list[dict[str, Any]],
+    owner_counts: Counter[int],
+) -> dict[str, Any]:
     class_counts = Counter(row["class"] for row in rows)
     return {
         "baseline_sha": ledger["baseline"]["sha"],
@@ -600,6 +781,32 @@ def validate_coverage(
         "class_counts": {key: class_counts[key] for key in sorted(class_counts)},
         "rows": rows,
     }
+
+
+def validate_coverage(
+    ledger: Mapping[str, Any], tracked_paths: Iterable[str]
+) -> dict[str, Any]:
+    """Validate the ledger and expand every tracked path to one primary rule."""
+
+    errors = _validate_ledger_schema(ledger)
+    if errors:
+        raise CoverageValidationError("\n".join(errors))
+
+    paths = list(tracked_paths)
+    _validate_tracked_paths(paths, errors)
+    rules: Sequence[Mapping[str, Any]] = ledger["rules"]
+    rows, uncovered, duplicate_primary, rule_match_counts = _expand_coverage(rules, paths)
+    owner_counts = _append_expansion_errors(
+        rules,
+        rows,
+        uncovered,
+        duplicate_primary,
+        rule_match_counts,
+        errors,
+    )
+    if errors:
+        raise CoverageValidationError("\n".join(errors))
+    return _coverage_report(ledger, paths, rows, owner_counts)
 
 
 def _print_human_summary(report: Mapping[str, Any]) -> None:
