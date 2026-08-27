@@ -8,7 +8,7 @@ Parent program: [#974](https://github.com/hexafe/metroliza/issues/974)
 
 Baseline: `develop@fcb462942e90aeeb64bba84bfe080d556da0efdb`
 
-Last reviewed: 2026-08-26
+Last reviewed: 2026-08-27
 
 This directory is the canonical control plane for the repository-wide bug sweep. It proves review
 surface ownership; it does **not** claim that a finite review proves the absence of every bug.
@@ -27,9 +27,10 @@ paths. The validator always expands the actual Git index/tree rather than trusti
 counts.
 
 Every wave records the exact audited commit SHA, repository path expansion, environment, command,
-fixture, and evidence link. If `develop` moves, earlier exact-head evidence remains historical
-evidence but cannot be represented as proof for the new tree. A wave must re-expand the current
-tree and state whether earlier findings still apply.
+fixture, and evidence link. The planning `baseline.sha` is not terminal evidence. If `develop`
+moves, earlier exact-head evidence remains historical evidence but cannot be represented as proof
+for the new tree. A wave must re-expand the current tree and state whether earlier findings still
+apply.
 
 ## Machine-readable ownership ledger
 
@@ -41,6 +42,7 @@ library. It contains:
 - current open-Issue mappings for #901–#957 and #971;
 - PRs #972/#973 as compatibility inputs only;
 - allowed classes, statuses, consequence tiers, and consequence tags;
+- the exact fields required for a rule-scoped terminal snapshot;
 - the exact structured fields required for a deferred residual risk;
 - non-overlapping include/exclude rules; and
 - per-rule primary owner, secondary owners, audit state, evidence, findings, disposition, and
@@ -59,7 +61,10 @@ The validator fails offline, without network access, when:
 - an owner is not one of the captured existing Issues #975–#985;
 - a class, status, consequence tier, or consequence tag is invalid;
 - terminal coverage (`completed`, `accepted behavior`, or `deferred residual risk`) lacks evidence
-  or a disposition;
+  or a disposition, an exact audited commit SHA, or its exact matched-path snapshot;
+- a terminal snapshot contains a glob, a non-repository path, an empty, duplicate, or unsorted path,
+  or differs from the rule's current deterministic expansion;
+- a pending, in-progress, or blocked rule carries terminal snapshot evidence;
 - deferred residual risk lacks a reason, accountable person/role, target Issue/phase, next gate, or
   preserved seam;
 - a workstream has no primary path;
@@ -73,6 +78,35 @@ Run:
 python scripts/quality/validate_bug_sweep_coverage.py
 python scripts/quality/validate_bug_sweep_coverage.py --json
 ~~~
+
+### Rule-scoped terminal snapshots
+
+Schema version 2 requires every rule to contain `terminal_snapshot` explicitly. It is `null` while
+the rule is `pending`, `in progress`, or `blocked`. A `completed`, `accepted behavior`, or
+`deferred residual risk` rule instead records exactly:
+
+~~~json
+{
+  "audited_commit_sha": "<lowercase 40-character Git commit SHA>",
+  "matched_paths": ["<exact sorted repository-relative POSIX path>"]
+}
+~~~
+
+`audited_commit_sha` identifies the commit at which the rule's evidence was produced.
+`matched_paths` is a non-empty, sorted, unique list of explicit paths, not a glob or a digest. The
+validator compares that list byte-for-byte with the rule's current deterministic expansion.
+
+Ownership globs select the current audit surface; they do not extend old evidence to files that
+happen to match later. A newly added, removed, renamed, reclassified, or newly matching path makes
+the expansion differ and invalidates the terminal rule until the rule is audited and snapshotted
+again. A path owned only by another rule does not invalidate an unchanged terminal rule, because
+this evidence is rule-scoped rather than a whole-repository lock.
+
+The snapshot also does not claim that an older SHA proves later content at an unchanged path.
+Wave-level change review must decide whether the older evidence still applies, and any later claim
+must remain explicit about that boundary. Coverage rows expose `terminal_snapshot`; JSON output
+also exposes each value in `rule_snapshots`. All foundation rules are currently `pending`, so every
+snapshot is `null` and no terminal evidence is fabricated.
 
 ### Expanded foundation counts
 
@@ -294,7 +328,8 @@ Each wave publishes one sanitized report with:
 2. expanded primary paths and relevant secondary paths, with zero ownership ambiguity;
 3. environments/platforms/backends, dependency versions, fixtures, seeds, and exact commands;
 4. supported workflows and happy, boundary, negative, cancellation, rollback, and failure paths;
-5. per-path audit status, evidence, exact disposition, finding links, and residual-risk note;
+5. per-path audit status, exact terminal snapshot, evidence, exact disposition, finding links, and
+   residual-risk note;
 6. confirmed findings and credible hypotheses, each linked to one authoritative Issue;
 7. accepted behaviors/false positives and the evidence that rejected each candidate;
 8. skips, unavailable/manual evidence, sampled scope, blocked access, and unsupported scope;
@@ -319,9 +354,10 @@ safe description, and request a restricted evidence path rather than weakening t
 
 ## Final closeout through #985
 
-#985 re-expands the exact closeout tree, requires a final disposition for every path, reconciles
-every finding to one authoritative Issue, challenges high-consequence “no defect found” claims, and
-uses targeted property/fuzz/mutation/state-machine/fault/parity probes where justified.
+#985 re-expands the exact closeout tree, rebinds final closeout evidence to that tree, requires a
+final disposition for every path, reconciles every finding to one authoritative Issue, challenges
+high-consequence “no defect found” claims, and uses targeted
+property/fuzz/mutation/state-machine/fault/parity probes where justified.
 
 The closeout uses [`residual_risk_template.md`](./residual_risk_template.md) and separates:
 automated proof, manual proof, sampled coverage, blocked environment/access, unsupported scope,

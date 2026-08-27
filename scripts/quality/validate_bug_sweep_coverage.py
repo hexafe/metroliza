@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 EXPECTED_BASELINE_SHA = "fcb462942e90aeeb64bba84bfe080d556da0efdb"
 EXPECTED_BASELINE_TRACKED_FILE_COUNT = 929
 EXPECTED_OWNER_ISSUES = frozenset(range(975, 986))
@@ -68,6 +68,7 @@ AUDIT_STATUSES = frozenset(
 TERMINAL_AUDIT_STATUSES = frozenset(
     {"completed", "accepted behavior", "deferred residual risk"}
 )
+TERMINAL_SNAPSHOT_FIELDS = frozenset({"audited_commit_sha", "matched_paths"})
 DEFERRED_DETAIL_FIELDS = frozenset(
     {"reason", "accountable_owner", "target_issue_or_phase", "next_gate", "preserved_seam"}
 )
@@ -290,6 +291,12 @@ def _validate_declared_contracts(ledger: Mapping[str, Any], errors: list[str]) -
         errors,
     )
     _validate_exact_string_set(
+        ledger.get("terminal_snapshot_fields"),
+        TERMINAL_SNAPSHOT_FIELDS,
+        "terminal_snapshot_fields must contain exactly the required snapshot fields",
+        errors,
+    )
+    _validate_exact_string_set(
         ledger.get("deferred_residual_risk_fields"),
         DEFERRED_DETAIL_FIELDS,
         "deferred_residual_risk_fields must contain exactly the required deferral fields",
@@ -451,6 +458,77 @@ def _validate_terminal_rule(
         errors.append(f"{context}: {status} coverage requires a disposition")
 
 
+def _validate_terminal_snapshot_path(
+    path: str, context: str, errors: list[str]
+) -> None:
+    parts = path.split("/")
+    if path.startswith("/") or "\\" in path or any(
+        part in {"", ".", ".."} for part in parts
+    ):
+        errors.append(
+            f"{context}: terminal_snapshot.matched_paths must contain only "
+            f"repository-relative POSIX paths: {path!r}"
+        )
+    if "*" in path or "?" in path:
+        errors.append(
+            f"{context}: terminal_snapshot.matched_paths must contain explicit paths, "
+            f"not globs: {path!r}"
+        )
+
+
+def _validate_terminal_snapshot_record(
+    snapshot: Mapping[str, Any], context: str, errors: list[str]
+) -> None:
+    if set(snapshot) != TERMINAL_SNAPSHOT_FIELDS:
+        errors.append(
+            f"{context}: terminal_snapshot must contain exactly "
+            "audited_commit_sha and matched_paths"
+        )
+    audited_commit_sha = snapshot.get("audited_commit_sha")
+    if not isinstance(audited_commit_sha, str) or not re.fullmatch(
+        r"[0-9a-f]{40}", audited_commit_sha
+    ):
+        errors.append(
+            f"{context}: terminal_snapshot.audited_commit_sha must be a lowercase "
+            "40-character Git SHA"
+        )
+    matched_paths = snapshot.get("matched_paths")
+    if not _non_empty_string_list(matched_paths) or not matched_paths:
+        errors.append(
+            f"{context}: terminal_snapshot.matched_paths must be a non-empty array "
+            "of non-empty strings"
+        )
+        return
+    if matched_paths != sorted(matched_paths):
+        errors.append(
+            f"{context}: terminal_snapshot.matched_paths must be sorted deterministically"
+        )
+    if len(matched_paths) != len(set(matched_paths)):
+        errors.append(
+            f"{context}: terminal_snapshot.matched_paths must not contain duplicates"
+        )
+    for path in matched_paths:
+        _validate_terminal_snapshot_path(path, context, errors)
+
+
+def _validate_terminal_snapshot(
+    rule: Mapping[str, Any], status: object, context: str, errors: list[str]
+) -> None:
+    if "terminal_snapshot" not in rule:
+        errors.append(f"{context}: terminal_snapshot must be present explicitly")
+        return
+    snapshot = rule.get("terminal_snapshot")
+    if status in TERMINAL_AUDIT_STATUSES:
+        if not isinstance(snapshot, dict):
+            errors.append(f"{context}: {status} coverage requires a terminal_snapshot")
+            return
+        _validate_terminal_snapshot_record(snapshot, context, errors)
+    elif snapshot is not None:
+        errors.append(
+            f"{context}: terminal_snapshot is allowed only for a terminal audit status"
+        )
+
+
 def _validate_deferred_detail_record(
     details: Mapping[str, Any], context: str, errors: list[str]
 ) -> None:
@@ -485,6 +563,7 @@ def _validate_rule_audit(
         errors.append(f"{context}: baseline_sha must equal baseline.sha")
     disposition = _validate_rule_evidence(rule, context, errors)
     _validate_terminal_rule(rule, status, disposition, context, errors)
+    _validate_terminal_snapshot(rule, status, context, errors)
     _validate_deferral_details(status, rule.get("deferral_details"), context, errors)
 
 
@@ -690,6 +769,16 @@ def _validate_tracked_paths(paths: list[str], errors: list[str]) -> None:
         )
 
 
+def _copy_terminal_snapshot(rule: Mapping[str, Any]) -> dict[str, Any] | None:
+    snapshot = rule["terminal_snapshot"]
+    if snapshot is None:
+        return None
+    return {
+        "audited_commit_sha": snapshot["audited_commit_sha"],
+        "matched_paths": list(snapshot["matched_paths"]),
+    }
+
+
 def _coverage_row(path: str, rule: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "path": path,
@@ -700,6 +789,7 @@ def _coverage_row(path: str, rule: Mapping[str, Any]) -> dict[str, Any]:
         "consequence_tier": rule["consequence_tier"],
         "consequence_tags": list(rule["consequence_tags"]),
         "audit_status": rule["audit_status"],
+        "terminal_snapshot": _copy_terminal_snapshot(rule),
         "baseline_sha": rule["baseline_sha"],
         "evidence_links": list(rule["evidence_links"]),
         "finding_links": list(rule["finding_links"]),
@@ -712,32 +802,42 @@ def _coverage_row(path: str, rule: Mapping[str, Any]) -> dict[str, Any]:
 def _expand_coverage(
     rules: Sequence[Mapping[str, Any]], paths: Sequence[str]
 ) -> tuple[
-    list[dict[str, Any]],
+    list[tuple[str, Mapping[str, Any]]],
     list[str],
     list[tuple[str, list[str]]],
     Counter[str],
+    dict[str, list[str]],
 ]:
-    rows: list[dict[str, Any]] = []
+    assignments: list[tuple[str, Mapping[str, Any]]] = []
     uncovered: list[str] = []
     duplicate_primary: list[tuple[str, list[str]]] = []
     rule_match_counts: Counter[str] = Counter()
+    rule_matched_paths = {str(rule["id"]): [] for rule in rules}
     for path in paths:
         matches = [rule for rule in rules if rule_matches(rule, path)]
         for rule in matches:
-            rule_match_counts[str(rule["id"])] += 1
+            rule_id = str(rule["id"])
+            rule_match_counts[rule_id] += 1
+            rule_matched_paths[rule_id].append(path)
         if not matches:
             uncovered.append(path)
             continue
         if len(matches) > 1:
             duplicate_primary.append((path, [str(rule["id"]) for rule in matches]))
             continue
-        rows.append(_coverage_row(path, matches[0]))
-    return rows, uncovered, duplicate_primary, rule_match_counts
+        assignments.append((path, matches[0]))
+    return (
+        assignments,
+        uncovered,
+        duplicate_primary,
+        rule_match_counts,
+        rule_matched_paths,
+    )
 
 
 def _append_expansion_errors(
     rules: Sequence[Mapping[str, Any]],
-    rows: Sequence[Mapping[str, Any]],
+    assignments: Sequence[tuple[str, Mapping[str, Any]]],
     uncovered: Sequence[str],
     duplicate_primary: Sequence[tuple[str, list[str]]],
     rule_match_counts: Counter[str],
@@ -753,7 +853,7 @@ def _append_expansion_errors(
         if rule_match_counts[str(rule["id"])] == 0:
             errors.append(f"ownership rule matches zero tracked paths: {rule['id']}")
 
-    owner_counts = Counter(row["primary_owner"] for row in rows)
+    owner_counts = Counter(rule["primary_owner"] for _, rule in assignments)
     missing_workstreams = EXPECTED_OWNER_ISSUES - set(owner_counts)
     if missing_workstreams:
         errors.append(
@@ -763,6 +863,35 @@ def _append_expansion_errors(
     return owner_counts
 
 
+def _append_terminal_snapshot_errors(
+    rules: Sequence[Mapping[str, Any]],
+    rule_matched_paths: Mapping[str, list[str]],
+    errors: list[str],
+) -> None:
+    for rule in rules:
+        if rule["audit_status"] not in TERMINAL_AUDIT_STATUSES:
+            continue
+        recorded_paths = rule["terminal_snapshot"]["matched_paths"]
+        current_paths = rule_matched_paths[str(rule["id"])]
+        if recorded_paths == current_paths:
+            continue
+        recorded_set = set(recorded_paths)
+        current_set = set(current_paths)
+        details: list[str] = []
+        newly_matched = sorted(current_set - recorded_set)
+        no_longer_matched = sorted(recorded_set - current_set)
+        if newly_matched:
+            details.append("newly matched: " + ", ".join(newly_matched))
+        if no_longer_matched:
+            details.append("no longer matched: " + ", ".join(no_longer_matched))
+        if not details:
+            details.append("recorded order differs from current deterministic expansion")
+        errors.append(
+            f"rule {rule['id']!r}: terminal_snapshot.matched_paths does not equal "
+            f"the current deterministic expansion ({'; '.join(details)})"
+        )
+
+
 def _coverage_report(
     ledger: Mapping[str, Any],
     paths: Sequence[str],
@@ -770,6 +899,7 @@ def _coverage_report(
     owner_counts: Counter[int],
 ) -> dict[str, Any]:
     class_counts = Counter(row["class"] for row in rows)
+    rules: Sequence[Mapping[str, Any]] = ledger["rules"]
     return {
         "baseline_sha": ledger["baseline"]["sha"],
         "baseline_tracked_file_count": ledger["baseline"]["tracked_file_count"],
@@ -779,6 +909,13 @@ def _coverage_report(
         "duplicate_primary_count": 0,
         "owner_counts": {str(key): owner_counts[key] for key in sorted(owner_counts)},
         "class_counts": {key: class_counts[key] for key in sorted(class_counts)},
+        "rule_snapshots": [
+            {
+                "rule": rule["id"],
+                "terminal_snapshot": _copy_terminal_snapshot(rule),
+            }
+            for rule in rules
+        ],
         "rows": rows,
     }
 
@@ -795,17 +932,25 @@ def validate_coverage(
     paths = list(tracked_paths)
     _validate_tracked_paths(paths, errors)
     rules: Sequence[Mapping[str, Any]] = ledger["rules"]
-    rows, uncovered, duplicate_primary, rule_match_counts = _expand_coverage(rules, paths)
+    (
+        assignments,
+        uncovered,
+        duplicate_primary,
+        rule_match_counts,
+        rule_matched_paths,
+    ) = _expand_coverage(rules, paths)
     owner_counts = _append_expansion_errors(
         rules,
-        rows,
+        assignments,
         uncovered,
         duplicate_primary,
         rule_match_counts,
         errors,
     )
+    _append_terminal_snapshot_errors(rules, rule_matched_paths, errors)
     if errors:
         raise CoverageValidationError("\n".join(errors))
+    rows = [_coverage_row(path, rule) for path, rule in assignments]
     return _coverage_report(ledger, paths, rows, owner_counts)
 
 

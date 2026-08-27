@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "captured_at": "2026-08-26",
   "baseline": {
     "branch": "develop",
@@ -34,6 +34,10 @@
     "blocked",
     "deferred residual risk",
     "accepted behavior"
+  ],
+  "terminal_snapshot_fields": [
+    "audited_commit_sha",
+    "matched_paths"
   ],
   "deferred_residual_risk_fields": [
     "reason",
@@ -892,6 +896,7 @@
         "confidentiality"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -918,6 +923,7 @@
         "windows-packaging"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -943,6 +949,7 @@
         "compatibility"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -969,6 +976,7 @@
         "windows-packaging"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -995,6 +1003,7 @@
         "release-evidence"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1022,6 +1031,7 @@
         "windows-packaging"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1051,6 +1061,7 @@
         "windows-packaging"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1078,6 +1089,7 @@
         "windows-packaging"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1104,6 +1116,7 @@
         "windows-packaging"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1127,6 +1140,7 @@
         "release-evidence"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1153,6 +1167,7 @@
         "release-evidence"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1182,6 +1197,7 @@
         "windows-packaging"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1207,6 +1223,7 @@
         "windows-packaging"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1231,6 +1248,7 @@
         "compatibility"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1257,6 +1275,7 @@
         "compatibility"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1288,6 +1307,7 @@
         "compatibility"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1317,6 +1337,7 @@
         "release-evidence"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1355,6 +1376,7 @@
         "release-evidence"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1380,6 +1402,7 @@
         "windows-packaging"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1403,6 +1426,7 @@
         "dependency-platform"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1430,6 +1454,7 @@
         "windows-packaging"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1458,6 +1483,7 @@
         "windows-packaging"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1490,6 +1516,7 @@
         "windows-packaging"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1521,6 +1548,7 @@
         "data-integrity"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1549,6 +1577,7 @@
         "offline-behavior"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1574,6 +1603,7 @@
         "numerical-correctness"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1606,6 +1636,7 @@
         "output-atomicity"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1642,6 +1673,7 @@
         "offline-behavior"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1667,6 +1699,7 @@
         "output-atomicity"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1694,6 +1727,7 @@
         "numerical-correctness"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1722,6 +1756,7 @@
         "windows-packaging"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1749,6 +1784,7 @@
         "native-parity"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1775,6 +1811,7 @@
         "numerical-correctness"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1801,6 +1838,7 @@
         "offline-behavior"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1828,6 +1866,7 @@
         "numerical-correctness"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1854,6 +1893,7 @@
         "native-parity"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1882,6 +1922,7 @@
         "numerical-correctness"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1913,6 +1954,7 @@
         "output-atomicity"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1939,6 +1981,7 @@
         "offline-behavior"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1973,6 +2016,7 @@
         "output-atomicity"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -1998,6 +2042,7 @@
         "output-atomicity"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -2040,6 +2085,7 @@
         "offline-behavior"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -2067,6 +2113,7 @@
         "data-integrity"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -2094,6 +2141,7 @@
         "data-integrity"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -2120,6 +2168,7 @@
         "offline-behavior"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -2150,6 +2199,7 @@
         "numerical-correctness"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -2175,6 +2225,7 @@
         "offline-behavior"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -2218,6 +2269,7 @@
         "data-integrity"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -2244,6 +2296,7 @@
         "windows-packaging"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -2270,6 +2323,7 @@
         "dependency-platform"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -2296,6 +2350,7 @@
         "windows-packaging"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -2323,6 +2378,7 @@
         "windows-packaging"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -2347,6 +2403,7 @@
         "release-evidence"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -2390,6 +2447,7 @@
         "windows-packaging"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -2430,6 +2488,7 @@
         "offline-behavior"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -2458,6 +2517,7 @@
         "release-evidence"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -2489,6 +2549,7 @@
         "data-integrity"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -2517,6 +2578,7 @@
         "release-evidence"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -2549,6 +2611,7 @@
         "numerical-correctness"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -2571,6 +2634,7 @@
         "audit-control"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
@@ -2607,6 +2671,7 @@
         "release-evidence"
       ],
       "audit_status": "pending",
+      "terminal_snapshot": null,
       "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
       "evidence_links": [],
       "finding_links": [],
