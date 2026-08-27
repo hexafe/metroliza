@@ -62,8 +62,11 @@ The validator fails offline, without network access, when:
 - a class, status, consequence tier, or consequence tag is invalid;
 - terminal coverage (`completed`, `accepted behavior`, or `deferred residual risk`) lacks evidence
   or a disposition, an exact audited commit SHA, or its exact matched-path snapshot;
+- an audited SHA is unavailable in the local Git object database, resolves to anything other than
+  an exact commit object, or its historical tree cannot be enumerated safely;
 - a terminal snapshot contains a glob, a non-repository path, an empty, duplicate, or unsorted path,
-  or differs from the rule's current deterministic expansion;
+  or differs from either the rule's historical commit-tree expansion or its current deterministic
+  expansion;
 - a pending, in-progress, or blocked rule carries terminal snapshot evidence;
 - deferred residual risk lacks a reason, accountable person/role, target Issue/phase, next gate, or
   preserved seam;
@@ -81,7 +84,7 @@ python scripts/quality/validate_bug_sweep_coverage.py --json
 
 ### Rule-scoped terminal snapshots
 
-Schema version 2 requires every rule to contain `terminal_snapshot` explicitly. It is `null` while
+Schema version 3 requires every rule to contain `terminal_snapshot` explicitly. It is `null` while
 the rule is `pending`, `in progress`, or `blocked`. A `completed`, `accepted behavior`, or
 `deferred residual risk` rule instead records exactly:
 
@@ -92,9 +95,23 @@ the rule is `pending`, `in progress`, or `blocked`. A `completed`, `accepted beh
 }
 ~~~
 
-`audited_commit_sha` identifies the commit at which the rule's evidence was produced.
+`audited_commit_sha` identifies the commit at which the rule's evidence was produced. The validator
+resolves that exact SHA from the local Git object database with no tag peeling and requires its
+object type to be `commit`. It enumerates the full historical path set with the NUL-delimited
+equivalent of `git ls-tree -r -z --name-only --full-tree <audited_commit_sha>`, decodes paths as
+strict UTF-8, and applies the rule's include/exclude contract to that historical tree.
+
 `matched_paths` is a non-empty, sorted, unique list of explicit paths, not a glob or a digest. The
-validator compares that list byte-for-byte with the rule's current deterministic expansion.
+validator first requires that list to equal the rule's expansion in the exact historical commit
+tree. It independently requires the same list to equal the rule's expansion over the current
+deterministic `git ls-files -z` tree. Either comparison failing invalidates the terminal snapshot.
+
+Historical resolution is local-only. The validator never fetches, contacts the GitHub API, or
+silently skips this proof. A missing object—including an older commit omitted by a shallow
+clone—is insufficient evidence and fails closed. Before claiming terminal evidence, the audit
+environment must make every required historical commit and tree available in its local Git object
+database. A shallow repository is not rejected merely for being shallow when the exact required
+objects are locally available.
 
 Ownership globs select the current audit surface; they do not extend old evidence to files that
 happen to match later. A newly added, removed, renamed, reclassified, or newly matching path makes
@@ -102,11 +119,12 @@ the expansion differ and invalidates the terminal rule until the rule is audited
 again. A path owned only by another rule does not invalidate an unchanged terminal rule, because
 this evidence is rule-scoped rather than a whole-repository lock.
 
-The snapshot also does not claim that an older SHA proves later content at an unchanged path.
-Wave-level change review must decide whether the older evidence still applies, and any later claim
-must remain explicit about that boundary. Coverage rows expose `terminal_snapshot`; JSON output
-also exposes each value in `rule_snapshots`. All foundation rules are currently `pending`, so every
-snapshot is `null` and no terminal evidence is fabricated.
+The two automatic comparisons prove path expansion, not content equivalence. The snapshot does not
+claim that an older SHA proves later content at an unchanged path. Wave-level change review must
+decide whether the older evidence still applies, and any later claim must remain explicit about
+that boundary. Coverage rows expose `terminal_snapshot`; JSON output also exposes each value in
+`rule_snapshots`. All foundation rules are currently `pending`, so every snapshot is `null` and no
+terminal evidence is fabricated. #985 rebinds final closeout evidence to the exact closeout tree.
 
 ### Expanded foundation counts
 

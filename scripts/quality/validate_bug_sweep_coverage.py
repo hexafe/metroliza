@@ -5,15 +5,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+GIT_COMMAND_TIMEOUT_SECONDS = 30
 EXPECTED_BASELINE_SHA = "fcb462942e90aeeb64bba84bfe080d556da0efdb"
 EXPECTED_BASELINE_TRACKED_FILE_COUNT = 929
 EXPECTED_OWNER_ISSUES = frozenset(range(975, 986))
@@ -95,6 +98,9 @@ class CoverageValidationError(ValueError):
     """Raised when the ledger or its expansion is invalid."""
 
 
+HistoricalPathResolver = Callable[[str], Sequence[str]]
+
+
 def _object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     """Build a JSON object while rejecting ambiguous duplicate keys."""
 
@@ -142,6 +148,142 @@ def git_tracked_paths(repo_root: Path) -> list[str]:
         for item in completed.stdout.split(b"\0")
         if item
     )
+
+
+def _run_local_git(
+    repo_root: Path, arguments: Sequence[str], failure_context: str
+) -> subprocess.CompletedProcess[bytes]:
+    git_environment = os.environ.copy()
+    git_environment.update(
+        {
+            "GIT_NO_LAZY_FETCH": "1",
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
+    )
+    try:
+        return subprocess.run(
+            ["git", *arguments],
+            cwd=repo_root,
+            check=False,
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            shell=False,
+            timeout=GIT_COMMAND_TIMEOUT_SECONDS,
+            env=git_environment,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise CoverageValidationError(
+            f"{failure_context}: local Git command failed to execute"
+        ) from exc
+
+
+def _is_repository_relative_posix_path(path: str) -> bool:
+    return (
+        bool(path)
+        and not path.startswith("/")
+        and "\\" not in path
+        and all(part not in {"", ".", ".."} for part in path.split("/"))
+    )
+
+
+def _git_object_type(repo_root: Path, audited_commit_sha: str) -> str:
+    completed = _run_local_git(
+        repo_root,
+        ["cat-file", "-t", audited_commit_sha],
+        f"unable to inspect audited_commit_sha {audited_commit_sha!r}",
+    )
+    if completed.returncode != 0:
+        raise CoverageValidationError(
+            f"audited commit {audited_commit_sha!r} is unavailable locally; "
+            "a shallow clone lacking the object is insufficient evidence"
+        )
+    try:
+        output = completed.stdout.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise CoverageValidationError(
+            f"git cat-file returned non-UTF-8 object-type data for "
+            f"audited_commit_sha {audited_commit_sha!r}"
+        ) from exc
+    match = re.fullmatch(r"(blob|commit|tag|tree)\n", output)
+    if match is None:
+        raise CoverageValidationError(
+            f"git cat-file returned invalid object-type data for "
+            f"audited_commit_sha {audited_commit_sha!r}"
+        )
+    return match.group(1)
+
+
+def _decode_historical_tree_paths(output: bytes, audited_commit_sha: str) -> list[str]:
+    if output and not output.endswith(b"\0"):
+        raise CoverageValidationError(
+            f"git ls-tree returned malformed NUL-delimited path data for "
+            f"audited commit {audited_commit_sha!r}"
+        )
+    raw_paths = output[:-1].split(b"\0") if output else []
+    if any(not raw_path for raw_path in raw_paths):
+        raise CoverageValidationError(
+            f"git ls-tree returned malformed NUL-delimited path data for "
+            f"audited commit {audited_commit_sha!r}"
+        )
+    try:
+        paths = [raw_path.decode("utf-8", errors="strict") for raw_path in raw_paths]
+    except UnicodeDecodeError as exc:
+        raise CoverageValidationError(
+            f"git ls-tree returned non-UTF-8 path data for "
+            f"audited commit {audited_commit_sha!r}"
+        ) from exc
+    duplicate_paths = sorted(path for path, count in Counter(paths).items() if count > 1)
+    if duplicate_paths:
+        raise CoverageValidationError(
+            f"git ls-tree returned duplicate path(s) for audited commit "
+            f"{audited_commit_sha!r}: {', '.join(duplicate_paths)}"
+        )
+    invalid_paths = sorted(
+        path for path in paths if not _is_repository_relative_posix_path(path)
+    )
+    if invalid_paths:
+        raise CoverageValidationError(
+            f"git ls-tree returned invalid repository-relative POSIX path(s) for "
+            f"audited commit {audited_commit_sha!r}: "
+            + ", ".join(repr(path) for path in invalid_paths)
+        )
+    return sorted(paths)
+
+
+def git_tracked_paths_at_commit(repo_root: Path, audited_commit_sha: str) -> list[str]:
+    """Return tracked paths from an exact locally available Git commit tree."""
+
+    if not isinstance(audited_commit_sha, str) or not re.fullmatch(
+        r"[0-9a-f]{40}", audited_commit_sha
+    ):
+        raise CoverageValidationError(
+            "terminal_snapshot.audited_commit_sha must be a lowercase "
+            "40-character Git SHA before historical resolution"
+        )
+    object_type = _git_object_type(repo_root, audited_commit_sha)
+    if object_type != "commit":
+        raise CoverageValidationError(
+            f"audited_commit_sha {audited_commit_sha!r} names a {object_type!r} "
+            "object, not a commit"
+        )
+    completed = _run_local_git(
+        repo_root,
+        [
+            "ls-tree",
+            "-r",
+            "-z",
+            "--name-only",
+            "--full-tree",
+            audited_commit_sha,
+        ],
+        f"git ls-tree failed for audited commit {audited_commit_sha!r}",
+    )
+    if completed.returncode != 0:
+        raise CoverageValidationError(
+            f"git ls-tree failed for audited commit {audited_commit_sha!r}"
+        )
+    return _decode_historical_tree_paths(completed.stdout, audited_commit_sha)
 
 
 def _glob_regex(pattern: str) -> re.Pattern[str]:
@@ -863,32 +1005,175 @@ def _append_expansion_errors(
     return owner_counts
 
 
+def _validate_resolved_historical_paths(
+    audited_commit_sha: str, resolved_paths: Sequence[str]
+) -> list[str]:
+    if isinstance(resolved_paths, (str, bytes)):
+        raise CoverageValidationError(
+            f"historical resolver for audited commit {audited_commit_sha!r} "
+            "must return only repository-relative path strings"
+        )
+    paths = list(resolved_paths)
+    if not all(isinstance(path, str) for path in paths):
+        raise CoverageValidationError(
+            f"historical resolver for audited commit {audited_commit_sha!r} "
+            "must return only repository-relative path strings"
+        )
+    if paths != sorted(paths):
+        raise CoverageValidationError(
+            f"historical resolver for audited commit {audited_commit_sha!r} "
+            "returned paths that are not sorted deterministically"
+        )
+    if len(paths) != len(set(paths)):
+        raise CoverageValidationError(
+            f"historical resolver for audited commit {audited_commit_sha!r} "
+            "returned duplicate paths"
+        )
+    invalid_paths = [
+        path for path in paths if not _is_repository_relative_posix_path(path)
+    ]
+    if invalid_paths:
+        raise CoverageValidationError(
+            f"historical resolver for audited commit {audited_commit_sha!r} returned "
+            "invalid repository-relative POSIX path(s): "
+            + ", ".join(repr(path) for path in invalid_paths)
+        )
+    return paths
+
+
+def _resolve_historical_paths(
+    audited_commit_sha: str,
+    historical_path_resolver: HistoricalPathResolver | None,
+) -> tuple[list[str] | None, str | None]:
+    if historical_path_resolver is None:
+        return (
+            None,
+            "terminal snapshot historical validation requires a local "
+            "commit-tree resolver",
+        )
+    try:
+        resolved_paths = historical_path_resolver(audited_commit_sha)
+        return (
+            _validate_resolved_historical_paths(audited_commit_sha, resolved_paths),
+            None,
+        )
+    except CoverageValidationError as exc:
+        return None, str(exc)
+    except Exception:
+        return (
+            None,
+            f"historical resolver failed for audited commit {audited_commit_sha!r}",
+        )
+
+
+def _terminal_historical_resolutions(
+    rules: Sequence[Mapping[str, Any]],
+    historical_path_resolver: HistoricalPathResolver | None,
+) -> dict[str, tuple[list[str] | None, str | None]]:
+    audited_commit_shas = sorted(
+        {
+            rule["terminal_snapshot"]["audited_commit_sha"]
+            for rule in rules
+            if rule["audit_status"] in TERMINAL_AUDIT_STATUSES
+        }
+    )
+    return {
+        audited_commit_sha: _resolve_historical_paths(
+            audited_commit_sha, historical_path_resolver
+        )
+        for audited_commit_sha in audited_commit_shas
+    }
+
+
+def _snapshot_expansion_details(
+    recorded_paths: Sequence[str], actual_paths: Sequence[str], expansion: str
+) -> list[str]:
+    newly_matched = sorted(set(actual_paths) - set(recorded_paths))
+    no_longer_matched = sorted(set(recorded_paths) - set(actual_paths))
+    if expansion == "historical":
+        details = (
+            [
+                "historical expansion newly contains paths not recorded: "
+                + ", ".join(newly_matched)
+            ]
+            if newly_matched
+            else []
+        )
+        if no_longer_matched:
+            details.append(
+                "recorded paths were absent from the audited commit expansion: "
+                + ", ".join(no_longer_matched)
+            )
+        order_message = "recorded order differs from historical deterministic expansion"
+    else:
+        details = (
+            ["newly matched: " + ", ".join(newly_matched)]
+            if newly_matched
+            else []
+        )
+        if no_longer_matched:
+            details.append("no longer matched: " + ", ".join(no_longer_matched))
+        order_message = "recorded order differs from current deterministic expansion"
+    return details or [order_message]
+
+
+def _append_snapshot_expansion_error(
+    rule: Mapping[str, Any],
+    recorded_paths: Sequence[str],
+    actual_paths: Sequence[str],
+    expansion: str,
+    errors: list[str],
+) -> None:
+    if recorded_paths == actual_paths:
+        return
+    details = _snapshot_expansion_details(recorded_paths, actual_paths, expansion)
+    if expansion == "historical":
+        audited_commit_sha = rule["terminal_snapshot"]["audited_commit_sha"]
+        target = (
+            "the historical deterministic expansion at audited_commit_sha "
+            f"{audited_commit_sha!r}"
+        )
+    else:
+        target = "the current deterministic expansion"
+    errors.append(
+        f"rule {rule['id']!r}: terminal_snapshot.matched_paths does not equal "
+        f"{target} ({'; '.join(details)})"
+    )
+
+
 def _append_terminal_snapshot_errors(
     rules: Sequence[Mapping[str, Any]],
     rule_matched_paths: Mapping[str, list[str]],
+    historical_path_resolver: HistoricalPathResolver | None,
     errors: list[str],
 ) -> None:
+    resolutions = _terminal_historical_resolutions(rules, historical_path_resolver)
     for rule in rules:
         if rule["audit_status"] not in TERMINAL_AUDIT_STATUSES:
             continue
-        recorded_paths = rule["terminal_snapshot"]["matched_paths"]
-        current_paths = rule_matched_paths[str(rule["id"])]
-        if recorded_paths == current_paths:
-            continue
-        recorded_set = set(recorded_paths)
-        current_set = set(current_paths)
-        details: list[str] = []
-        newly_matched = sorted(current_set - recorded_set)
-        no_longer_matched = sorted(recorded_set - current_set)
-        if newly_matched:
-            details.append("newly matched: " + ", ".join(newly_matched))
-        if no_longer_matched:
-            details.append("no longer matched: " + ", ".join(no_longer_matched))
-        if not details:
-            details.append("recorded order differs from current deterministic expansion")
-        errors.append(
-            f"rule {rule['id']!r}: terminal_snapshot.matched_paths does not equal "
-            f"the current deterministic expansion ({'; '.join(details)})"
+        snapshot = rule["terminal_snapshot"]
+        audited_commit_sha = snapshot["audited_commit_sha"]
+        recorded_paths = snapshot["matched_paths"]
+        historical_paths, resolution_error = resolutions[audited_commit_sha]
+        if resolution_error is not None:
+            errors.append(f"rule {rule['id']!r}: {resolution_error}")
+        elif historical_paths is not None:
+            historical_matches = [
+                path for path in historical_paths if rule_matches(rule, path)
+            ]
+            _append_snapshot_expansion_error(
+                rule,
+                recorded_paths,
+                historical_matches,
+                "historical",
+                errors,
+            )
+        _append_snapshot_expansion_error(
+            rule,
+            recorded_paths,
+            rule_matched_paths[str(rule["id"])],
+            "current",
+            errors,
         )
 
 
@@ -921,7 +1206,9 @@ def _coverage_report(
 
 
 def validate_coverage(
-    ledger: Mapping[str, Any], tracked_paths: Iterable[str]
+    ledger: Mapping[str, Any],
+    tracked_paths: Iterable[str],
+    historical_path_resolver: HistoricalPathResolver | None = None,
 ) -> dict[str, Any]:
     """Validate the ledger and expand every tracked path to one primary rule."""
 
@@ -947,7 +1234,12 @@ def validate_coverage(
         rule_match_counts,
         errors,
     )
-    _append_terminal_snapshot_errors(rules, rule_matched_paths, errors)
+    _append_terminal_snapshot_errors(
+        rules,
+        rule_matched_paths,
+        historical_path_resolver,
+        errors,
+    )
     if errors:
         raise CoverageValidationError("\n".join(errors))
     rows = [_coverage_row(path, rule) for path, rule in assignments]
@@ -992,7 +1284,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         else repo_root / "docs" / "quality" / "bug_sweep" / "coverage.json"
     )
     try:
-        report = validate_coverage(load_ledger(ledger_path), git_tracked_paths(repo_root))
+        report = validate_coverage(
+            load_ledger(ledger_path),
+            git_tracked_paths(repo_root),
+            historical_path_resolver=lambda audited_commit_sha: (
+                git_tracked_paths_at_commit(repo_root, audited_commit_sha)
+            ),
+        )
     except CoverageValidationError as exc:
         print(f"Bug-sweep coverage invalid:\n{exc}", file=sys.stderr)
         return 1

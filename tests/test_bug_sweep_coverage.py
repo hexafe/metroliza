@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,48 @@ def _tracked_paths() -> list[str]:
     return COVERAGE.git_tracked_paths(REPO_ROOT)
 
 
+def _git(repo_root: Path, *arguments: str) -> str:
+    completed = subprocess.run(
+        ["git", *arguments],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
+
+
+def _current_commit_sha() -> str:
+    return _git(REPO_ROOT, "rev-parse", "HEAD")
+
+
+def _historical_resolver(
+    paths: list[str] | None = None,
+) -> COVERAGE.HistoricalPathResolver:
+    resolved_paths = list(paths if paths is not None else _tracked_paths())
+
+    def resolve(_audited_commit_sha: str) -> list[str]:
+        return list(resolved_paths)
+
+    return resolve
+
+
+def _validate_coverage(
+    ledger: dict[str, object],
+    paths: list[str] | None = None,
+    historical_path_resolver: COVERAGE.HistoricalPathResolver | None = None,
+) -> dict[str, object]:
+    return COVERAGE.validate_coverage(
+        ledger,
+        paths if paths is not None else _tracked_paths(),
+        historical_path_resolver=(
+            historical_path_resolver
+            if historical_path_resolver is not None
+            else _historical_resolver()
+        ),
+    )
+
+
 def _rule(ledger: dict[str, object], rule_id: str) -> dict[str, object]:
     return next(rule for rule in ledger["rules"] if rule["id"] == rule_id)
 
@@ -47,39 +90,72 @@ def _terminalize_rule(
     *,
     status: str = "completed",
     paths: list[str] | None = None,
+    audited_commit_sha: str = SYNTHETIC_AUDITED_SHA,
 ) -> dict[str, object]:
     rule = _rule(ledger, rule_id)
     rule["audit_status"] = status
     rule["evidence_links"] = ["https://github.com/hexafe/metroliza/issues/975"]
     rule["disposition"] = "Synthetic terminal evidence for validator testing."
     rule["terminal_snapshot"] = {
-        "audited_commit_sha": SYNTHETIC_AUDITED_SHA,
+        "audited_commit_sha": audited_commit_sha,
         "matched_paths": _matched_paths(rule, paths),
     }
     return rule
 
 
 def _assert_invalid(
-    ledger: dict[str, object], expected: str, paths: list[str] | None = None
+    ledger: dict[str, object],
+    expected: str,
+    paths: list[str] | None = None,
+    historical_path_resolver: COVERAGE.HistoricalPathResolver | None = None,
 ) -> None:
     with pytest.raises(COVERAGE.CoverageValidationError) as exc_info:
-        COVERAGE.validate_coverage(ledger, paths if paths is not None else _tracked_paths())
+        _validate_coverage(ledger, paths, historical_path_resolver)
     assert expected in str(exc_info.value)
+
+
+@pytest.fixture
+def local_git_history(tmp_path: Path) -> tuple[Path, dict[str, str]]:
+    repo_root = tmp_path / "local-history"
+    repo_root.mkdir()
+    _git(repo_root, "init", "-b", "main")
+    _git(repo_root, "config", "user.name", "Coverage Validator Test")
+    _git(repo_root, "config", "user.email", "coverage-validator@example.invalid")
+
+    source_dir = repo_root / "src" / "metroliza" / "app"
+    source_dir.mkdir(parents=True)
+    (repo_root / "README.md").write_text("local history\n", encoding="utf-8")
+    (source_dir / "first.py").write_text("FIRST = 1\n", encoding="utf-8")
+    _git(repo_root, "add", ".")
+    _git(repo_root, "commit", "-m", "first tree")
+    first_commit = _git(repo_root, "rev-parse", "HEAD")
+    object_shas = {
+        "blob": _git(repo_root, "rev-parse", f"{first_commit}:src/metroliza/app/first.py"),
+        "tree": _git(repo_root, "rev-parse", f"{first_commit}^{{tree}}"),
+    }
+    _git(repo_root, "tag", "-a", "first-snapshot", "-m", "first snapshot", first_commit)
+    object_shas["tag"] = _git(repo_root, "rev-parse", "refs/tags/first-snapshot")
+
+    (source_dir / "second.py").write_text("SECOND = 2\n", encoding="utf-8")
+    _git(repo_root, "add", ".")
+    _git(repo_root, "commit", "-m", "second tree")
+    object_shas["first_commit"] = first_commit
+    object_shas["second_commit"] = _git(repo_root, "rev-parse", "HEAD")
+    return repo_root, object_shas
 
 
 def test_repository_tree_has_exactly_one_primary_owner_per_path() -> None:
     ledger = _ledger()
-    report = COVERAGE.validate_coverage(ledger, _tracked_paths())
+    report = _validate_coverage(ledger)
 
     assert report["covered_file_count"] == report["tracked_file_count"]
     assert report["uncovered_count"] == 0
     assert report["duplicate_primary_count"] == 0
     assert set(report["owner_counts"]) == {str(issue) for issue in range(975, 986)}
     assert set(report["class_counts"]) == COVERAGE.PATH_CLASSES
-    assert all(
-        "terminal_snapshot" in rule and rule["terminal_snapshot"] is None
-        for rule in ledger["rules"]
-    )
+    assert len(ledger["rules"]) == 61
+    assert all(rule["audit_status"] == "pending" for rule in ledger["rules"])
+    assert all(rule.get("terminal_snapshot") is None for rule in ledger["rules"])
 
 
 def test_missing_ownership_is_rejected() -> None:
@@ -118,7 +194,7 @@ def test_schema_version_boolean_is_rejected() -> None:
     ledger = _ledger()
     ledger["schema_version"] = True
 
-    _assert_invalid(ledger, "schema_version must equal 2")
+    _assert_invalid(ledger, "schema_version must equal 3")
 
 
 def test_terminal_snapshot_field_declaration_cannot_drift() -> None:
@@ -238,6 +314,38 @@ def test_malformed_terminal_snapshot_sha_is_rejected(audited_commit_sha: str) ->
     )
 
 
+def test_malformed_sha_is_rejected_before_historical_resolver_invocation() -> None:
+    ledger = _ledger()
+    rule = _terminalize_rule(ledger, "application-lifecycle")
+    rule["terminal_snapshot"]["audited_commit_sha"] = "A" * 40
+    resolver_calls: list[str] = []
+
+    def resolver(audited_commit_sha: str) -> list[str]:
+        resolver_calls.append(audited_commit_sha)
+        return _tracked_paths()
+
+    with pytest.raises(COVERAGE.CoverageValidationError, match="lowercase 40-character"):
+        COVERAGE.validate_coverage(
+            ledger,
+            _tracked_paths(),
+            historical_path_resolver=resolver,
+        )
+
+    assert resolver_calls == []
+
+
+def test_git_resolver_rejects_malformed_sha_before_git_invocation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unexpected_run(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("Git must not run for a malformed audited SHA")
+
+    monkeypatch.setattr(COVERAGE.subprocess, "run", unexpected_run)
+
+    with pytest.raises(COVERAGE.CoverageValidationError, match="before historical resolution"):
+        COVERAGE.git_tracked_paths_at_commit(REPO_ROOT, "A" * 40)
+
+
 def test_unexpected_terminal_snapshot_keys_are_rejected() -> None:
     ledger = _ledger()
     rule = _terminalize_rule(ledger, "application-lifecycle")
@@ -293,12 +401,186 @@ def test_terminal_snapshot_paths_must_be_explicit_repository_relative_posix_path
     _assert_invalid(ledger, expected)
 
 
+def test_pending_ledger_does_not_invoke_historical_resolver() -> None:
+    def unexpected_resolver(_audited_commit_sha: str) -> list[str]:
+        pytest.fail("pending-only ledgers must not resolve historical commits")
+
+    report = COVERAGE.validate_coverage(
+        _ledger(),
+        _tracked_paths(),
+        historical_path_resolver=unexpected_resolver,
+    )
+
+    assert report["covered_file_count"] == report["tracked_file_count"]
+
+
+def test_terminal_validation_without_historical_resolver_fails_closed() -> None:
+    ledger = _ledger()
+    _terminalize_rule(ledger, "application-lifecycle")
+
+    with pytest.raises(
+        COVERAGE.CoverageValidationError,
+        match="historical validation requires a local commit-tree resolver",
+    ):
+        COVERAGE.validate_coverage(ledger, _tracked_paths())
+
+
+def test_unavailable_historical_object_is_rejected() -> None:
+    ledger = _ledger()
+    _terminalize_rule(
+        ledger,
+        "application-lifecycle",
+        audited_commit_sha="0" * 40,
+    )
+
+    _assert_invalid(
+        ledger,
+        "is unavailable locally; a shallow clone lacking the object is insufficient evidence",
+        historical_path_resolver=lambda sha: COVERAGE.git_tracked_paths_at_commit(
+            REPO_ROOT, sha
+        ),
+    )
+
+
+def test_real_local_git_commits_enumerate_exact_historical_trees(
+    local_git_history: tuple[Path, dict[str, str]],
+) -> None:
+    repo_root, object_shas = local_git_history
+
+    assert COVERAGE.git_tracked_paths_at_commit(
+        repo_root, object_shas["first_commit"]
+    ) == ["README.md", "src/metroliza/app/first.py"]
+    assert COVERAGE.git_tracked_paths_at_commit(
+        repo_root, object_shas["second_commit"]
+    ) == [
+        "README.md",
+        "src/metroliza/app/first.py",
+        "src/metroliza/app/second.py",
+    ]
+
+
+@pytest.mark.parametrize("object_type", ["blob", "tree", "tag"])
+def test_non_commit_git_object_is_rejected_without_tag_peeling(
+    local_git_history: tuple[Path, dict[str, str]], object_type: str
+) -> None:
+    repo_root, object_shas = local_git_history
+
+    with pytest.raises(
+        COVERAGE.CoverageValidationError,
+        match=rf"names a '{object_type}' object, not a commit",
+    ):
+        COVERAGE.git_tracked_paths_at_commit(repo_root, object_shas[object_type])
+
+
+def test_shallow_clone_missing_historical_commit_fails_closed(
+    local_git_history: tuple[Path, dict[str, str]], tmp_path: Path
+) -> None:
+    repo_root, object_shas = local_git_history
+    shallow_root = tmp_path / "shallow-history"
+    _git(
+        tmp_path,
+        "clone",
+        "--depth",
+        "1",
+        "--no-tags",
+        "--branch",
+        "main",
+        repo_root.resolve().as_uri(),
+        str(shallow_root),
+    )
+
+    assert (shallow_root / ".git" / "shallow").is_file()
+    with pytest.raises(
+        COVERAGE.CoverageValidationError,
+        match="is unavailable locally; a shallow clone lacking the object is insufficient",
+    ):
+        COVERAGE.git_tracked_paths_at_commit(
+            shallow_root, object_shas["first_commit"]
+        )
+
+
+@pytest.mark.parametrize(
+    ("ls_tree_output", "expected"),
+    [
+        (b"src/a.py", "malformed NUL-delimited path data"),
+        (b"src/\xff.py\0", "non-UTF-8 path data"),
+        (b"src/a.py\0src/a.py\0", "duplicate path"),
+        (b"../a.py\0", "invalid repository-relative POSIX path"),
+    ],
+)
+def test_historical_git_output_is_validated_strictly(
+    monkeypatch: pytest.MonkeyPatch,
+    ls_tree_output: bytes,
+    expected: str,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(
+        command: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[bytes]:
+        commands.append(command)
+        assert kwargs["shell"] is False
+        environment = kwargs["env"]
+        assert isinstance(environment, dict)
+        assert environment["GIT_NO_LAZY_FETCH"] == "1"
+        assert environment["GIT_NO_REPLACE_OBJECTS"] == "1"
+        assert environment["GIT_TERMINAL_PROMPT"] == "0"
+        if command[1] == "cat-file":
+            return subprocess.CompletedProcess(command, 0, stdout=b"commit\n", stderr=b"")
+        return subprocess.CompletedProcess(command, 0, stdout=ls_tree_output, stderr=b"")
+
+    monkeypatch.setattr(COVERAGE.subprocess, "run", fake_run)
+
+    with pytest.raises(COVERAGE.CoverageValidationError, match=expected):
+        COVERAGE.git_tracked_paths_at_commit(REPO_ROOT, SYNTHETIC_AUDITED_SHA)
+
+    assert commands == [
+        ["git", "cat-file", "-t", SYNTHETIC_AUDITED_SHA],
+        [
+            "git",
+            "ls-tree",
+            "-r",
+            "-z",
+            "--name-only",
+            "--full-tree",
+            SYNTHETIC_AUDITED_SHA,
+        ],
+    ]
+    assert all("fetch" not in command for command in commands)
+
+
+def test_historical_git_ls_tree_failure_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(
+        command: list[str], **_kwargs: object
+    ) -> subprocess.CompletedProcess[bytes]:
+        if command[1] == "cat-file":
+            return subprocess.CompletedProcess(command, 0, stdout=b"commit\n", stderr=b"")
+        return subprocess.CompletedProcess(command, 128, stdout=b"", stderr=b"failed")
+
+    monkeypatch.setattr(COVERAGE.subprocess, "run", fake_run)
+
+    with pytest.raises(COVERAGE.CoverageValidationError, match="git ls-tree failed"):
+        COVERAGE.git_tracked_paths_at_commit(REPO_ROOT, SYNTHETIC_AUDITED_SHA)
+
+
 def test_valid_terminal_snapshot_is_accepted_and_preserved_in_report() -> None:
     ledger = _ledger()
-    rule = _terminalize_rule(ledger, "application-lifecycle")
+    audited_commit_sha = _current_commit_sha()
+    rule = _terminalize_rule(
+        ledger,
+        "application-lifecycle",
+        audited_commit_sha=audited_commit_sha,
+    )
     expected_snapshot = copy.deepcopy(rule["terminal_snapshot"])
 
-    report = COVERAGE.validate_coverage(ledger, _tracked_paths())
+    report = _validate_coverage(
+        ledger,
+        historical_path_resolver=lambda sha: COVERAGE.git_tracked_paths_at_commit(
+            REPO_ROOT, sha
+        ),
+    )
 
     matching_rows = [
         row for row in report["rows"] if row["rule"] == "application-lifecycle"
@@ -313,12 +595,61 @@ def test_valid_terminal_snapshot_is_accepted_and_preserved_in_report() -> None:
     assert snapshot_record["terminal_snapshot"] == expected_snapshot
 
 
+def test_historical_additional_matching_path_invalidates_terminal_snapshot() -> None:
+    ledger = _ledger()
+    _terminalize_rule(ledger, "application-lifecycle")
+    historical_paths = sorted(
+        [*_tracked_paths(), "src/metroliza/app/historical_addition.py"]
+    )
+
+    _assert_invalid(
+        ledger,
+        "historical expansion newly contains paths not recorded: "
+        "src/metroliza/app/historical_addition.py",
+        historical_path_resolver=_historical_resolver(historical_paths),
+    )
+
+
+def test_recorded_path_absent_from_historical_expansion_is_rejected() -> None:
+    ledger = _ledger()
+    rule = _terminalize_rule(ledger, "application-lifecycle")
+    missing_path = _matched_paths(rule)[0]
+    historical_paths = [path for path in _tracked_paths() if path != missing_path]
+
+    _assert_invalid(
+        ledger,
+        f"recorded paths were absent from the audited commit expansion: {missing_path}",
+        historical_path_resolver=_historical_resolver(historical_paths),
+    )
+
+
+def test_historical_resolution_is_cached_for_repeated_terminal_sha() -> None:
+    ledger = _ledger()
+    _terminalize_rule(ledger, "application-lifecycle")
+    _terminalize_rule(ledger, "report-ingestion-contracts")
+    resolver_calls: list[str] = []
+    historical_paths = _tracked_paths()
+
+    def resolver(audited_commit_sha: str) -> list[str]:
+        resolver_calls.append(audited_commit_sha)
+        return list(historical_paths)
+
+    report = _validate_coverage(ledger, historical_path_resolver=resolver)
+
+    assert report["covered_file_count"] == report["tracked_file_count"]
+    assert resolver_calls == [SYNTHETIC_AUDITED_SHA]
+
+
 def test_json_output_exposes_terminal_snapshot(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     ledger = _ledger()
     expected_snapshot = copy.deepcopy(
-        _terminalize_rule(ledger, "application-lifecycle")["terminal_snapshot"]
+        _terminalize_rule(
+            ledger,
+            "application-lifecycle",
+            audited_commit_sha=_current_commit_sha(),
+        )["terminal_snapshot"]
     )
     ledger_path = tmp_path / "coverage.json"
     ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
@@ -349,6 +680,26 @@ def test_newly_matching_path_invalidates_terminal_snapshot() -> None:
     )
 
 
+def test_current_drift_is_reported_even_when_historical_resolution_fails() -> None:
+    ledger = _ledger()
+    _terminalize_rule(ledger, "application-lifecycle")
+    paths = sorted([*_tracked_paths(), "src/metroliza/app/current_drift.py"])
+
+    def unavailable(_audited_commit_sha: str) -> list[str]:
+        raise COVERAGE.CoverageValidationError("audited commit unavailable")
+
+    with pytest.raises(COVERAGE.CoverageValidationError) as exc_info:
+        COVERAGE.validate_coverage(
+            ledger,
+            paths,
+            historical_path_resolver=unavailable,
+        )
+
+    diagnostic = str(exc_info.value)
+    assert "audited commit unavailable" in diagnostic
+    assert "newly matched: src/metroliza/app/current_drift.py" in diagnostic
+
+
 def test_removed_matched_path_invalidates_terminal_snapshot() -> None:
     ledger = _ledger()
     rule = _terminalize_rule(ledger, "application-lifecycle")
@@ -371,13 +722,29 @@ def test_renamed_matched_path_invalidates_terminal_snapshot() -> None:
     _assert_invalid(ledger, f"no longer matched: {removed_path}", paths)
 
 
+def test_current_expansion_order_only_mismatch_is_distinguished() -> None:
+    ledger = _ledger()
+    rule = _terminalize_rule(ledger, "application-lifecycle")
+    matching_paths = _matched_paths(rule)
+    paths = _tracked_paths()
+    first_index = paths.index(matching_paths[0])
+    second_index = paths.index(matching_paths[1])
+    paths[first_index], paths[second_index] = paths[second_index], paths[first_index]
+
+    _assert_invalid(
+        ledger,
+        "recorded order differs from current deterministic expansion",
+        paths,
+    )
+
+
 def test_path_owned_by_another_rule_does_not_invalidate_terminal_snapshot() -> None:
     ledger = _ledger()
     rule = _terminalize_rule(ledger, "application-lifecycle")
     expected_snapshot = copy.deepcopy(rule["terminal_snapshot"])
     paths = sorted([*_tracked_paths(), "src/metroliza/reports/new.py"])
 
-    report = COVERAGE.validate_coverage(ledger, paths)
+    report = _validate_coverage(ledger, paths)
 
     assert report["tracked_file_count"] == len(_tracked_paths()) + 1
     synthetic_row = next(
@@ -418,7 +785,7 @@ def test_complete_deferred_residual_risk_record_is_accepted() -> None:
         "preserved_seam": "Keep metroliza.py behavior unchanged until that evidence exists.",
     }
 
-    report = COVERAGE.validate_coverage(ledger, _tracked_paths())
+    report = _validate_coverage(ledger)
 
     assert report["covered_file_count"] == report["tracked_file_count"]
 
@@ -459,7 +826,7 @@ def test_newly_tracked_path_cannot_bypass_all_rules() -> None:
 def test_legitimate_tracked_path_deletion_does_not_invalidate_baseline_metadata() -> None:
     paths = [path for path in _tracked_paths() if path != "README.md"]
 
-    report = COVERAGE.validate_coverage(_ledger(), paths)
+    report = _validate_coverage(_ledger(), paths)
 
     assert report["tracked_file_count"] == len(_tracked_paths()) - 1
     assert report["covered_file_count"] == report["tracked_file_count"]
@@ -496,7 +863,7 @@ def test_baseline_tracked_count_requires_an_integer() -> None:
 def test_duplicate_json_object_keys_are_rejected(tmp_path: Path) -> None:
     ledger_path = tmp_path / "duplicate-keys.json"
     ledger_path.write_text(
-        '{"schema_version": 2, "schema_version": 2}',
+        '{"schema_version": 3, "schema_version": 3}',
         encoding="utf-8",
     )
 
