@@ -8,7 +8,7 @@ Parent program: [#974](https://github.com/hexafe/metroliza/issues/974)
 
 Baseline: `develop@fcb462942e90aeeb64bba84bfe080d556da0efdb`
 
-Last reviewed: 2026-08-27
+Last reviewed: 2026-08-28
 
 This directory is the canonical control plane for the repository-wide bug sweep. It proves review
 surface ownership; it does **not** claim that a finite review proves the absence of every bug.
@@ -61,7 +61,11 @@ The validator fails offline, without network access, when:
 - an owner is not one of the captured existing Issues #975–#985;
 - a class, status, consequence tier, or consequence tag is invalid;
 - terminal coverage (`completed`, `accepted behavior`, or `deferred residual risk`) lacks evidence
-  or a disposition, an exact audited commit SHA, or its exact matched-path snapshot;
+  or a disposition, an exact audited commit SHA, its exact matched-path snapshot, or the canonical
+  digest of its complete rule record;
+- a terminal rule's identity, include/exclude contract, ownership, class, consequence, status,
+  evidence, findings, disposition, residual risk, deferral details, or any other non-snapshot field
+  differs from the record bound by its snapshot;
 - an audited SHA is unavailable in the local Git object database, resolves to anything other than
   an exact commit object, or its historical tree cannot be enumerated safely;
 - a terminal snapshot contains a glob, a non-repository path, an empty, duplicate, or unsorted path,
@@ -84,16 +88,31 @@ python scripts/quality/validate_bug_sweep_coverage.py --json
 
 ### Rule-scoped terminal snapshots
 
-Schema version 3 requires every rule to contain `terminal_snapshot` explicitly. It is `null` while
+Schema version 4 requires every rule to contain `terminal_snapshot` explicitly. It is `null` while
 the rule is `pending`, `in progress`, or `blocked`. A `completed`, `accepted behavior`, or
 `deferred residual risk` rule instead records exactly:
 
 ~~~json
 {
   "audited_commit_sha": "<lowercase 40-character Git commit SHA>",
-  "matched_paths": ["<exact sorted repository-relative POSIX path>"]
+  "matched_paths": ["<exact sorted repository-relative POSIX path>"],
+  "rule_record_sha256": "<lowercase 64-character SHA-256>"
 }
 ~~~
+
+`rule_record_sha256` binds the evidence to the complete rule record. To compute it, copy the deep
+JSON-compatible rule mapping, remove only `terminal_snapshot`, serialize the result as UTF-8 JSON
+with `sort_keys=True`, `ensure_ascii=False`, and `separators=(",", ":")`, then SHA-256 hash
+those exact bytes and store lowercase hexadecimal. The validator's `rule_record_sha256()` helper is
+the reusable implementation of that contract.
+
+Every other rule key and value participates, including identity, include/exclude list order,
+ownership, class, consequence tier/tags, audit status, baseline, evidence/finding links,
+disposition, residual risk, structured deferral details, and unknown future fields. The digest does
+not sort or otherwise normalize arrays and does not silently omit new metadata. Any non-snapshot
+mutation invalidates the old evidence until the digest is deliberately regenerated and the changed
+rule is re-reviewed. Changes inside `terminal_snapshot` do not alter this digest; its exact keys,
+SHA, explicit paths, digest syntax, and historical/current path proofs are validated separately.
 
 `audited_commit_sha` identifies the commit at which the rule's evidence was produced. The validator
 resolves that exact SHA from the local Git object database with no tag peeling and requires its
@@ -119,7 +138,8 @@ the expansion differ and invalidates the terminal rule until the rule is audited
 again. A path owned only by another rule does not invalidate an unchanged terminal rule, because
 this evidence is rule-scoped rather than a whole-repository lock.
 
-The two automatic comparisons prove path expansion, not content equivalence. The snapshot does not
+The historical/current comparisons and rule-record digest prove path expansion and the recorded
+audit contract, not content equivalence. The snapshot does not
 claim that an older SHA proves later content at an unchanged path. Wave-level change review must
 decide whether the older evidence still applies, and any later claim must remain explicit about
 that boundary. Coverage rows expose `terminal_snapshot`; JSON output also exposes each value in

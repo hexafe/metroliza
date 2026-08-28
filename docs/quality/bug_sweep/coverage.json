@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "captured_at": "2026-08-26",
   "baseline": {
     "branch": "develop",
@@ -37,7 +37,8 @@
   ],
   "terminal_snapshot_fields": [
     "audited_commit_sha",
-    "matched_paths"
+    "matched_paths",
+    "rule_record_sha256"
   ],
   "deferred_residual_risk_fields": [
     "reason",
