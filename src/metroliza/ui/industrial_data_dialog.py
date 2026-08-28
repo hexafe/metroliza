@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PyQt6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -26,7 +28,6 @@ from metroliza.industrial.industrial_cache_target import (
     disposable_cache_counts,
     existing_metroliza_cache_target,
     persist_temporary_industrial_cache,
-    persistent_industrial_cache_target,
 )
 from metroliza.industrial.industrial_tabular_bridge import load_industrial_cache_tabular_result
 from metroliza.ui.help_menu import attach_help_menu_to_layout
@@ -350,22 +351,32 @@ class IndustrialDataDialog(QDialog):
         )
         if not filename:
             return
-        if not filename.lower().endswith((".db", ".sqlite", ".sqlite3")):
-            filename = f"{filename}.db"
+        destination = self._normalized_cache_destination(filename)
+        confirmed, overwrite_authorization = self._confirm_cache_destination_overwrite(
+            destination
+        )
+        if not confirmed:
+            return
         previous = self.cache_target
+        generated_target = None
         try:
             if previous.is_temporary:
-                target = persist_temporary_industrial_cache(
-                    previous,
-                    filename,
-                    forbidden_destinations=self._forbidden_cache_destinations(),
-                )
+                source_target = previous
             else:
-                IndustrialDataRepository(filename).ensure_schema()
-                target = persistent_industrial_cache_target(filename)
+                generated_target = create_temporary_industrial_cache_target()
+                IndustrialDataRepository(generated_target.cache_db_file).ensure_schema()
+                source_target = generated_target
+            target = persist_temporary_industrial_cache(
+                source_target,
+                destination,
+                forbidden_destinations=self._forbidden_cache_destinations(),
+                overwrite_authorized_destination=overwrite_authorization,
+            )
         except Exception as exc:
             QMessageBox.warning(self, self.windowTitle(), f"Could not save cache: {exc}")
             return
+        finally:
+            cleanup_temporary_industrial_cache(generated_target)
         cleanup_temporary_industrial_cache(previous)
         self.cache_target = target
         self.db_file = target.cache_db_file
@@ -405,25 +416,64 @@ class IndustrialDataDialog(QDialog):
         )
         if not filename:
             return False
-        if not filename.lower().endswith((".db", ".sqlite", ".sqlite3")):
-            filename = f"{filename}.db"
+        destination = self._normalized_cache_destination(filename)
+        confirmed, overwrite_authorization = self._confirm_cache_destination_overwrite(
+            destination
+        )
+        if not confirmed:
+            return False
         try:
             persist_temporary_industrial_cache(
                 target,
-                filename,
+                destination,
                 forbidden_destinations=self._forbidden_cache_destinations(
                     *additional_forbidden
                 ),
+                overwrite_authorized_destination=overwrite_authorization,
             )
         except Exception as exc:
             QMessageBox.warning(self, self.windowTitle(), f"Could not save cache: {exc}")
             return False
         return True
 
+    @staticmethod
+    def _normalized_cache_destination(filename: str) -> Path:
+        candidate = Path(filename).expanduser()
+        if not candidate.name.lower().endswith((".db", ".sqlite", ".sqlite3")):
+            candidate = Path(f"{candidate}.db")
+        return candidate.parent.resolve(strict=False) / candidate.name
+
+    def _confirm_cache_destination_overwrite(
+        self,
+        destination: Path,
+    ) -> tuple[bool, Path | None]:
+        if not destination.exists() and not destination.is_symlink():
+            return True, None
+        canonical_destination = destination.resolve(strict=False)
+        answer = QMessageBox.question(
+            self,
+            "Replace existing cache database?",
+            "The exact final cache destination already exists:\n\n"
+            f"{canonical_destination}\n\n"
+            "Replace it with the industrial cache? Existing contents will be permanently lost.",
+            QMessageBox.StandardButton.Yes
+            | QMessageBox.StandardButton.No
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return False, None
+        return True, canonical_destination
+
     def _forbidden_cache_destinations(self, *additional: str) -> tuple[str, ...]:
+        active_target = getattr(self, "cache_target", None)
         destinations = {
             str(candidate)
-            for candidate in (self._workspace_db_file, *additional)
+            for candidate in (
+                self._workspace_db_file,
+                active_target.cache_db_file if active_target is not None else None,
+                *additional,
+            )
             if str(candidate or "").strip()
         }
         return tuple(sorted(destinations))
