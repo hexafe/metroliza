@@ -2,7 +2,7 @@
 
 Status: Active  
 Owner: Product/architecture maintainer  
-Last reviewed: 2026-08-25
+Last reviewed: 2026-08-26
 Review cadence: every release cycle or monthly, whichever is sooner
 
 This directory is the canonical entry point for planning and developing Metroliza. GitHub Issues
@@ -25,9 +25,11 @@ rules and ordered roadmap. Release evidence remains under `docs/release_checks/`
    whole-PR and worker routing, exact-head evidence, review, and merge boundaries; use the
    [task-packet](../engineering/codex-task-packet-template.md) and
    [PR-routing-report](../engineering/pr-routing-report-template.md) templates for durable records.
-7. [ChatGPT workspace](./chatgpt_workspace.md) — project sources/chats aligned to GitHub so chat
+7. [Repository-wide bug sweep](../quality/bug_sweep/README.md) — #974/#975–#985 exact-tree
+   ownership, finding protocol, current evidence inventory, and residual-risk closeout.
+8. [ChatGPT workspace](./chatgpt_workspace.md) — project sources/chats aligned to GitHub so chat
    history never becomes the only record of a decision.
-8. [RC2 branch transition decision](../release_checks/rc2_branch_transition_decision_2026-08-22.md)
+9. [RC2 branch transition decision](../release_checks/rc2_branch_transition_decision_2026-08-22.md)
    — authoritative branch roles, exact automatic evidence and the pending release blockers.
 
 ## AI orchestration ownership
@@ -63,6 +65,25 @@ their own PRs.
 prerequisites only. The resulting #926–#957 graph must remain acyclic. Downstream consumers,
 cross-phase integrations and shared-fixture obligations remain visible in their Issues and the
 roadmap, but they do not create reverse prerequisites for their foundations.
+
+### Repository-wide quality audit
+
+- [#974](https://github.com/hexafe/metroliza/issues/974) owns the repository-wide bug-sweep
+  program and its honest complete-surface, not “no bugs,” completion standard.
+- [#975](https://github.com/hexafe/metroliza/issues/975) establishes the exact-tree ownership
+  ledger and finding protocol before audit waves [#976](https://github.com/hexafe/metroliza/issues/976),
+  [#983](https://github.com/hexafe/metroliza/issues/983),
+  [#979](https://github.com/hexafe/metroliza/issues/979),
+  [#980](https://github.com/hexafe/metroliza/issues/980),
+  [#978](https://github.com/hexafe/metroliza/issues/978),
+  [#981](https://github.com/hexafe/metroliza/issues/981),
+  [#977](https://github.com/hexafe/metroliza/issues/977),
+  [#982](https://github.com/hexafe/metroliza/issues/982), and
+  [#984](https://github.com/hexafe/metroliza/issues/984).
+- [#985](https://github.com/hexafe/metroliza/issues/985) independently challenges test confidence
+  and publishes the final residual-risk closeout.
+- The durable artifacts and deterministic validator are indexed at
+  [docs/quality/bug_sweep/README.md](../quality/bug_sweep/README.md).
 
 ### Project and engineering backlog
 

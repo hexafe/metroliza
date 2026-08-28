@@ -1,0 +1,2682 @@
+{
+  "schema_version": 3,
+  "captured_at": "2026-08-26",
+  "baseline": {
+    "branch": "develop",
+    "sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+    "tracked_file_count": 929,
+    "tree_source": "git ls-files"
+  },
+  "foundation_added_paths": [
+    "docs/quality/bug_sweep/README.md",
+    "docs/quality/bug_sweep/coverage.json",
+    "docs/quality/bug_sweep/finding_template.md",
+    "docs/quality/bug_sweep/residual_risk_template.md",
+    "scripts/quality/validate_bug_sweep_coverage.py",
+    "tests/test_bug_sweep_coverage.py"
+  ],
+  "path_classes": [
+    "canonical runtime",
+    "compatibility runtime",
+    "test",
+    "fixture",
+    "script/tooling",
+    "workflow/configuration",
+    "packaging/build",
+    "active documentation",
+    "archive/reference",
+    "generated/static asset"
+  ],
+  "audit_statuses": [
+    "pending",
+    "in progress",
+    "completed",
+    "blocked",
+    "deferred residual risk",
+    "accepted behavior"
+  ],
+  "terminal_snapshot_fields": [
+    "audited_commit_sha",
+    "matched_paths"
+  ],
+  "deferred_residual_risk_fields": [
+    "reason",
+    "accountable_owner",
+    "target_issue_or_phase",
+    "next_gate",
+    "preserved_seam"
+  ],
+  "consequence_tags": [
+    "audit-control",
+    "cancellation",
+    "compatibility",
+    "confidentiality",
+    "data-integrity",
+    "dependency-platform",
+    "native-parity",
+    "numerical-correctness",
+    "offline-behavior",
+    "output-atomicity",
+    "release-evidence",
+    "windows-packaging"
+  ],
+  "workstreams": {
+    "975": {
+      "title": "[P0][Quality] Establish bug-sweep baseline, coverage ledger and finding protocol",
+      "state": "open",
+      "issue_url": "https://github.com/hexafe/metroliza/issues/975",
+      "execution_order": "0"
+    },
+    "976": {
+      "title": "[P1][Audit] Build, CI, dependencies, packaging and Windows correctness sweep",
+      "state": "open",
+      "issue_url": "https://github.com/hexafe/metroliza/issues/976",
+      "execution_order": "1"
+    },
+    "977": {
+      "title": "[P1][Audit] Startup, PyQt lifecycle, threading, cancellation and state sweep",
+      "state": "open",
+      "issue_url": "https://github.com/hexafe/metroliza/issues/977",
+      "execution_order": "7"
+    },
+    "978": {
+      "title": "[P1][Audit] Import, parsing, OCR, archive and validation correctness sweep",
+      "state": "open",
+      "issue_url": "https://github.com/hexafe/metroliza/issues/978",
+      "execution_order": "5"
+    },
+    "979": {
+      "title": "[P0][Audit] SQLite, cache, migration, persistence and atomicity sweep",
+      "state": "open",
+      "issue_url": "https://github.com/hexafe/metroliza/issues/979",
+      "execution_order": "3"
+    },
+    "980": {
+      "title": "[P0][Audit] Filtering, grouping, analytics, statistics and Python/native parity sweep",
+      "state": "open",
+      "issue_url": "https://github.com/hexafe/metroliza/issues/980",
+      "execution_order": "4"
+    },
+    "981": {
+      "title": "[P1][Audit] Reports, Excel, Google, dashboard and atomic publication sweep",
+      "state": "open",
+      "issue_url": "https://github.com/hexafe/metroliza/issues/981",
+      "execution_order": "6"
+    },
+    "982": {
+      "title": "[P1][Audit] Tabular, industrial, realtime and long-running workflow sweep",
+      "state": "open",
+      "issue_url": "https://github.com/hexafe/metroliza/issues/982",
+      "execution_order": "8"
+    },
+    "983": {
+      "title": "[P0][Audit] Security, confidentiality, configuration, diagnostics and licensing sweep",
+      "state": "open",
+      "issue_url": "https://github.com/hexafe/metroliza/issues/983",
+      "execution_order": "2"
+    },
+    "984": {
+      "title": "[P1][Audit] Compatibility shims, import boundaries, dead paths and packaged discovery sweep",
+      "state": "open",
+      "issue_url": "https://github.com/hexafe/metroliza/issues/984",
+      "execution_order": "9"
+    },
+    "985": {
+      "title": "[P1][Quality] Test-gap closure, property/fuzz/mutation probes and residual-risk closeout",
+      "state": "open",
+      "issue_url": "https://github.com/hexafe/metroliza/issues/985",
+      "execution_order": "10"
+    }
+  },
+  "external_compatibility_inputs": [
+    {
+      "pr": 972,
+      "state": "open",
+      "base": "develop",
+      "head_sha": "678241e48bab6ae89c94cb559dfc9aeaf9280031",
+      "title": "Bump the github-actions group with 3 updates",
+      "scope": "Three SHA-pinned GitHub Action updates in .github/workflows/ci.yml.",
+      "audit_owners": [
+        976,
+        983,
+        985
+      ],
+      "treatment": "compatibility input only; no edit, merge, or acceptance"
+    },
+    {
+      "pr": 973,
+      "state": "open",
+      "base": "develop",
+      "head_sha": "b599c54c624490d1aa53457727975f33d6a47716",
+      "title": "Bump the python-dependencies group with 35 updates",
+      "scope": "Thirty-five grouped runtime, scientific, Qt, OCR, workbook, native, test, lint, security, and packaging updates across five manifests.",
+      "audit_owners": [
+        976,
+        977,
+        978,
+        979,
+        980,
+        981,
+        982,
+        983,
+        984,
+        985
+      ],
+      "treatment": "compatibility input only; no edit, merge, or acceptance"
+    }
+  ],
+  "existing_issue_map": [
+    {
+      "issue": 901,
+      "state": "open",
+      "title": "[P1][Release] Close packaged Windows, Google, and legal promotion evidence",
+      "surface": "Packaged Windows, Google, notices, hashes, legal, and exact-build promotion evidence.",
+      "audit_owners": [
+        976,
+        977,
+        978,
+        979,
+        981,
+        982,
+        983,
+        984,
+        985
+      ]
+    },
+    {
+      "issue": 902,
+      "state": "open",
+      "title": "[P1][Docs] Consolidate active roadmaps and archive superseded planning documents",
+      "surface": "Active planning accuracy and archive/reference classification.",
+      "audit_owners": [
+        975,
+        985
+      ]
+    },
+    {
+      "issue": 903,
+      "state": "open",
+      "title": "[P1][Architecture] Continue behavior-preserving decomposition of ExportDataThread",
+      "surface": "Export orchestration, output publication, cancellation, and compatibility entry points.",
+      "audit_owners": [
+        981,
+        977,
+        980,
+        984
+      ]
+    },
+    {
+      "issue": 904,
+      "state": "open",
+      "title": "[P1][Architecture] Split dashboard HTML controls and visual configuration into bounded modules",
+      "surface": "Offline dashboard contracts, rendering, accessibility, injection, and packaged discovery.",
+      "audit_owners": [
+        981,
+        980,
+        982,
+        983,
+        984
+      ]
+    },
+    {
+      "issue": 905,
+      "state": "open",
+      "title": "[P1][Architecture] Burn down legacy modules.* imports in behavior tests without removing shims",
+      "surface": "Compatibility shims, canonical imports, hidden imports, and test masking.",
+      "audit_owners": [
+        984,
+        976,
+        985
+      ]
+    },
+    {
+      "issue": 906,
+      "state": "open",
+      "title": "[P1][Security] Renew or eliminate reviewed Bandit findings before 2026-10-31",
+      "surface": "Bandit baseline, SQL findings, expiry, fingerprints, and security gates.",
+      "audit_owners": [
+        983,
+        976,
+        979,
+        980,
+        982,
+        985
+      ]
+    },
+    {
+      "issue": 907,
+      "state": "open",
+      "title": "[P2][Architecture] Centralize reusable plot specifications in hexafe-plotstats behind parity gates",
+      "surface": "Chart ownership, package adapter, numerical/visual parity, offline and packaged behavior.",
+      "audit_owners": [
+        981,
+        980,
+        976,
+        984
+      ]
+    },
+    {
+      "issue": 908,
+      "state": "open",
+      "title": "[P2][Performance] Re-evaluate Rust/native acceleration candidates using promotion gates",
+      "surface": "Native build, parser, persistence, statistics, and rendering promotion/parity.",
+      "audit_owners": [
+        980,
+        976,
+        978,
+        979,
+        981
+      ]
+    },
+    {
+      "issue": 912,
+      "state": "open",
+      "title": "[Baseline] Define and automate one canonical end-to-end analysis workflow",
+      "surface": "Sanitized end-to-end fixture from import through analysis and output.",
+      "audit_owners": [
+        985,
+        978,
+        980,
+        981,
+        976
+      ]
+    },
+    {
+      "issue": 913,
+      "state": "open",
+      "title": "[Build] Consolidate a reproducible Python and Rust development environment",
+      "surface": "Python/Rust manifests, locks, clean setup/build/import/start/test.",
+      "audit_owners": [
+        976,
+        984
+      ]
+    },
+    {
+      "issue": 914,
+      "state": "open",
+      "title": "[CI] Add pull-request quality gates and release smoke checks",
+      "surface": "CI truthfulness, local parity, skips, native/application/package smoke.",
+      "audit_owners": [
+        976,
+        985,
+        983,
+        984
+      ]
+    },
+    {
+      "issue": 915,
+      "state": "open",
+      "title": "[Architecture] Define the canonical measurement, analysis and result model",
+      "surface": "Measurement, provenance, validation, analysis/result, persistence, and renderer contracts.",
+      "audit_owners": [
+        980,
+        978,
+        979,
+        981
+      ]
+    },
+    {
+      "issue": 916,
+      "state": "open",
+      "title": "[Architecture] Extract a headless application service from the PyQt workflow",
+      "surface": "Application-service and Qt lifecycle boundary with cancellation and structured outcomes.",
+      "audit_owners": [
+        977,
+        978,
+        980,
+        981,
+        985
+      ]
+    },
+    {
+      "issue": 917,
+      "state": "open",
+      "title": "[Reporting] Consolidate report metadata, provenance and result schema",
+      "surface": "Shared report/result metadata across ingestion, analysis, GUI, HTML, and workbook.",
+      "audit_owners": [
+        981,
+        978,
+        980,
+        985
+      ]
+    },
+    {
+      "issue": 918,
+      "state": "open",
+      "title": "[Performance] Establish representative benchmarks and Python/Rust parity tests",
+      "surface": "Representative cross-domain benchmarks and native/reference parity.",
+      "audit_owners": [
+        980,
+        976,
+        978,
+        979,
+        981,
+        985
+      ]
+    },
+    {
+      "issue": 919,
+      "state": "open",
+      "title": "[Realtime] Define replay, stream/window and anomaly-detector contracts",
+      "surface": "Realtime ordering, replay, detectors, persistence, lifecycle, dashboard, and evidence.",
+      "audit_owners": [
+        982,
+        977,
+        979,
+        980,
+        981,
+        985
+      ]
+    },
+    {
+      "issue": 920,
+      "state": "open",
+      "title": "[Release] Define supported platforms, versioning and reproducible release process",
+      "surface": "Platform/toolchain matrix, version propagation, clean builds, artifacts, and release process.",
+      "audit_owners": [
+        976,
+        984,
+        981,
+        985
+      ]
+    },
+    {
+      "issue": 921,
+      "state": "open",
+      "title": "[Project] Configure labels, milestones, branch protection and repository defaults",
+      "surface": "GitHub workflows/templates/settings, permissions, protection, and required checks.",
+      "audit_owners": [
+        976,
+        983,
+        985
+      ]
+    },
+    {
+      "issue": 922,
+      "state": "open",
+      "title": "[Docs] Map the current codebase, data flow and supported workflows",
+      "surface": "Cross-wave architecture, entry-point, workflow, and evidence-claim reconciliation.",
+      "audit_owners": [
+        975,
+        985,
+        976,
+        977,
+        978,
+        979,
+        980,
+        981,
+        982,
+        983,
+        984
+      ]
+    },
+    {
+      "issue": 923,
+      "state": "open",
+      "title": "[Project] Apply the Metroliza ChatGPT project structure and source policy",
+      "surface": "Source authority, confidential-data exclusion, and external ChatGPT state.",
+      "audit_owners": [
+        983,
+        985
+      ]
+    },
+    {
+      "issue": 924,
+      "state": "open",
+      "title": "[Branch recovery] Review, preserve and retire rc1 and rc2",
+      "surface": "Historical refs, recovered behavior, tags, release dependencies, and deletion evidence.",
+      "audit_owners": [
+        976,
+        984,
+        985
+      ]
+    },
+    {
+      "issue": 925,
+      "state": "open",
+      "title": "[P0][EPIC][Product] Deliver the complete Metroliza feature roadmap",
+      "surface": "Product roadmap, capability mapping, maturity, support claims, and cross-wave evidence.",
+      "audit_owners": [
+        975,
+        985,
+        976,
+        977,
+        978,
+        979,
+        980,
+        981,
+        982,
+        983,
+        984
+      ]
+    },
+    {
+      "issue": 926,
+      "state": "open",
+      "title": "[P1][Feature][Workspace] Save, reopen and reproduce a complete analysis workspace",
+      "surface": "Workspace persistence, migration, recovery, lifecycle, portability, and confidentiality.",
+      "audit_owners": [
+        979,
+        977,
+        983,
+        984
+      ]
+    },
+    {
+      "issue": 927,
+      "state": "open",
+      "title": "[P1][Feature][Import] Unified preflight, import queue and resumable batch processing",
+      "surface": "Import preflight, parser/OCR ports, archives, duplicate identity, cancellation, and persistence.",
+      "audit_owners": [
+        978,
+        977,
+        979,
+        983
+      ]
+    },
+    {
+      "issue": 928,
+      "state": "open",
+      "title": "[P1][Feature][Parsers] Productionize declarative parser profiles and plugin lifecycle",
+      "surface": "Parser profiles, registry/discovery, trust, install/rollback, cache, and packaging.",
+      "audit_owners": [
+        978,
+        984,
+        983,
+        979,
+        976
+      ]
+    },
+    {
+      "issue": 929,
+      "state": "open",
+      "title": "[P1][Feature][OCR] Reviewable header metadata extraction, correction and enrichment",
+      "surface": "OCR/native text, model lookup, confidence/review, background work, and idempotent persistence.",
+      "audit_owners": [
+        978,
+        977,
+        979,
+        976,
+        983
+      ]
+    },
+    {
+      "issue": 930,
+      "state": "open",
+      "title": "[P1][Feature][Database] Safe report database lifecycle, migration, backup and repair",
+      "surface": "SQLite lifecycle, migration, backup/restore, integrity, repair, and active-store identity.",
+      "audit_owners": [
+        979,
+        977,
+        982,
+        983,
+        985
+      ]
+    },
+    {
+      "issue": 931,
+      "state": "open",
+      "title": "[P1][Feature][Filtering] One validated filter model across reports, tabular and industrial data",
+      "surface": "Filter contracts, coercion, serialization, SQLite equivalence, and SQL safety.",
+      "audit_owners": [
+        980,
+        979,
+        982,
+        983,
+        985
+      ]
+    },
+    {
+      "issue": 932,
+      "state": "open",
+      "title": "[P1][Feature][Grouping] Reusable grouping presets and characteristic-name mappings",
+      "surface": "Grouping identity/order, aliases, overlap, presets, state isolation, and serialization.",
+      "audit_owners": [
+        980,
+        977,
+        979,
+        982,
+        981
+      ]
+    },
+    {
+      "issue": 933,
+      "state": "open",
+      "title": "[P1][Feature][Analysis] Group statistics and pairwise comparison workflow v1.0",
+      "surface": "Statistical scope, pairwise methods, warnings, ordering, and native/package parity.",
+      "audit_owners": [
+        980,
+        981,
+        977,
+        985
+      ]
+    },
+    {
+      "issue": 934,
+      "state": "open",
+      "title": "[P1][Feature][Analysis] Capability, distribution-shape and risk analysis v1.0",
+      "surface": "Capability/distribution/risk semantics, edge cases, stochastic identity, and parity.",
+      "audit_owners": [
+        980,
+        981,
+        985
+      ]
+    },
+    {
+      "issue": 935,
+      "state": "open",
+      "title": "[P1][Feature][Reporting] Versioned analysis and export presets/templates",
+      "surface": "Preset schema/migration, analysis/output configuration, dirty state, and provenance.",
+      "audit_owners": [
+        981,
+        980,
+        979,
+        977,
+        983
+      ]
+    },
+    {
+      "issue": 936,
+      "state": "open",
+      "title": "[P1][Feature][Export] Excel workbook export v1.0",
+      "surface": "Workbook parity, injection, limits, structure, atomic output, cancellation, and Windows.",
+      "audit_owners": [
+        981,
+        980,
+        983,
+        976,
+        977
+      ]
+    },
+    {
+      "issue": 937,
+      "state": "open",
+      "title": "[P1][Feature][Dashboard] Offline interactive HTML dashboard v1.0",
+      "surface": "Offline assets, payload/DOM contracts, escaping, fallback, accessibility, and publication.",
+      "audit_owners": [
+        981,
+        980,
+        983,
+        976,
+        985
+      ]
+    },
+    {
+      "issue": 938,
+      "state": "open",
+      "title": "[P2][Feature][Integration] Reliable Google Sheets conversion with guaranteed local fallback",
+      "surface": "OAuth/network conversion, retries, validation, cancellation, redaction, and local fallback.",
+      "audit_owners": [
+        981,
+        983,
+        976,
+        977,
+        985
+      ]
+    },
+    {
+      "issue": 939,
+      "state": "open",
+      "title": "[P1][Feature][Tabular] CSV and Excel Summary analytics workflow v1.0",
+      "surface": "Tabular identity, type/header ambiguity, SQLite parity, analysis, output, and cleanup.",
+      "audit_owners": [
+        982,
+        980,
+        979,
+        981,
+        983,
+        977,
+        978
+      ]
+    },
+    {
+      "issue": 940,
+      "state": "open",
+      "title": "[P1][Feature][Industrial] Cache-first Oznak and production-data analytics v1.0",
+      "surface": "Bounded industrial acquisition, cache freshness, outcomes, analytics, and output handoff.",
+      "audit_owners": [
+        982,
+        979,
+        980,
+        981,
+        983,
+        977
+      ]
+    },
+    {
+      "issue": 941,
+      "state": "open",
+      "title": "[P1][Feature][Realtime] Operator-ready monitoring, anomaly review and replay v1.0",
+      "surface": "Polling, ordering, replay, detectors, persistence, dashboard freshness, and shutdown.",
+      "audit_owners": [
+        982,
+        979,
+        977,
+        980,
+        981,
+        983
+      ]
+    },
+    {
+      "issue": 942,
+      "state": "open",
+      "title": "[P2][Feature][Automation] Headless CLI for reproducible import, analysis and export jobs",
+      "surface": "Headless orchestration, GUI/CLI parity, exit contracts, cancellation, and packaged entry.",
+      "audit_owners": [
+        982,
+        977,
+        984,
+        976,
+        978,
+        980,
+        981,
+        983
+      ]
+    },
+    {
+      "issue": 943,
+      "state": "open",
+      "title": "[P2][Feature][Automation] Watched folders and scheduled analysis jobs",
+      "surface": "File stability, scheduling, locking, restart, idempotency, quarantine, and artifacts.",
+      "audit_owners": [
+        982,
+        979,
+        977,
+        978,
+        981,
+        983
+      ]
+    },
+    {
+      "issue": 944,
+      "state": "open",
+      "title": "[P1][Feature][Diagnostics] Create a sanitized diagnostic bundle for support and issue reporting",
+      "surface": "Diagnostic envelopes, recursive redaction, inventories, preview, and atomic bundles.",
+      "audit_owners": [
+        983,
+        981,
+        976,
+        977,
+        984
+      ]
+    },
+    {
+      "issue": 945,
+      "state": "open",
+      "title": "[P2][Feature][UX] Unified application shell, workspace context and user preferences",
+      "surface": "Startup/shutdown, task ownership, close guards, dirty state, preferences, and outcomes.",
+      "audit_owners": [
+        977,
+        983,
+        981
+      ]
+    },
+    {
+      "issue": 946,
+      "state": "open",
+      "title": "[P2][Feature][Accessibility] Keyboard-first and assistive-friendly desktop and dashboard workflows",
+      "surface": "Desktop and dashboard keyboard/focus/status behavior plus manual packaged/browser evidence.",
+      "audit_owners": [
+        977,
+        981,
+        976,
+        985
+      ]
+    },
+    {
+      "issue": 947,
+      "state": "open",
+      "title": "[P2][Feature][Visualization] Reusable visual recipes, annotations and comparison views",
+      "surface": "Chart recipes, annotations, serialization, renderer parity, and fallback.",
+      "audit_owners": [
+        981,
+        980,
+        977,
+        979,
+        983
+      ]
+    },
+    {
+      "issue": 948,
+      "state": "open",
+      "title": "[P2][Feature][Comparison] Cross-dataset baselines and engineering benchmark library",
+      "surface": "Baseline identity/versioning, mapping, comparison statistics, and output identity.",
+      "audit_owners": [
+        980,
+        979,
+        981,
+        983
+      ]
+    },
+    {
+      "issue": 949,
+      "state": "open",
+      "title": "[P2][Feature][Traceability] Analysis run history, provenance and reproducibility manifest",
+      "surface": "Durable run history, provenance/config identity, artifact hashes, retention, and redaction.",
+      "audit_owners": [
+        979,
+        981,
+        983,
+        982,
+        978,
+        980
+      ]
+    },
+    {
+      "issue": 950,
+      "state": "open",
+      "title": "[P3][Feature][AI] LLM-assisted parser profile generation and repair loop",
+      "surface": "Generated profile validation, quarantine, resolver evidence, privacy, install, and rollback.",
+      "audit_owners": [
+        978,
+        983,
+        984,
+        981
+      ]
+    },
+    {
+      "issue": 951,
+      "state": "open",
+      "title": "[P3][Feature][Extensibility] Stable parser, analysis and report extension interfaces",
+      "surface": "Discovery, version/trust compatibility, numerical/report contracts, and packaging.",
+      "audit_owners": [
+        984,
+        983,
+        978,
+        980,
+        981,
+        976
+      ]
+    },
+    {
+      "issue": 952,
+      "state": "open",
+      "title": "[P1][Feature][Performance] Predictable large-dataset and long-running workflow behavior",
+      "surface": "Workload bounds, telemetry, cancellation, backend choice, sampling, and benchmarks.",
+      "audit_owners": [
+        982,
+        977,
+        979,
+        980,
+        981,
+        976
+      ]
+    },
+    {
+      "issue": 953,
+      "state": "open",
+      "title": "[P2][Feature][Sharing] Create a portable, verifiable engineering evidence bundle",
+      "surface": "Offline artifacts, hashes, relative links, atomic publication, redaction, and portability.",
+      "audit_owners": [
+        981,
+        983,
+        976,
+        984,
+        979
+      ]
+    },
+    {
+      "issue": 954,
+      "state": "open",
+      "title": "[P1][Feature][Curation] Report browser, validation review and safe metadata correction",
+      "surface": "Transactional edits, OCR review, ownership/provenance, stale analysis, and deletion guards.",
+      "audit_owners": [
+        979,
+        978,
+        980,
+        977,
+        983
+      ]
+    },
+    {
+      "issue": 955,
+      "state": "open",
+      "title": "[P2][Feature][Help] Contextual onboarding, manuals and in-app troubleshooting",
+      "surface": "Packaged offline help, anchors/version identity, UI wiring, and safe support guidance.",
+      "audit_owners": [
+        976,
+        984,
+        977,
+        983
+      ]
+    },
+    {
+      "issue": 956,
+      "state": "open",
+      "title": "[P1][Product][Legacy] Decide, migrate and retire legacy Group Comparison and BOM Manager entry points",
+      "surface": "Legacy entry points, compatibility window, stored-data migration, and replacement parity.",
+      "audit_owners": [
+        984,
+        979,
+        980,
+        981,
+        976
+      ]
+    },
+    {
+      "issue": 957,
+      "state": "open",
+      "title": "[P2][Product][Licensing] Define the supported licensing and activation policy",
+      "surface": "Licensing/bootstrap trust, hardware identity, startup lockout, packaged and disabled paths.",
+      "audit_owners": [
+        983,
+        977,
+        984,
+        976
+      ]
+    },
+    {
+      "issue": 971,
+      "state": "open",
+      "title": "[P1][CI] Restore deterministic Ruff validation for legacy master maintenance PRs",
+      "surface": "Legacy-master Ruff pinning, differential gate, baseline growth, and CI truthfulness.",
+      "audit_owners": [
+        976,
+        985
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "github-control-plane",
+      "include": [
+        ".github/ISSUE_TEMPLATE/**",
+        ".github/pull_request_template.md"
+      ],
+      "exclude": [],
+      "class": "workflow/configuration",
+      "primary_owner": 975,
+      "secondary_owners": [
+        983,
+        985
+      ],
+      "consequence_tier": "P2",
+      "consequence_tags": [
+        "audit-control",
+        "confidentiality"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Repository-host settings and rendered form behavior require later external verification."
+    },
+    {
+      "id": "github-delivery-configuration",
+      "include": [
+        ".github/workflows/**",
+        ".github/dependabot.yml"
+      ],
+      "exclude": [],
+      "class": "workflow/configuration",
+      "primary_owner": 976,
+      "secondary_owners": [
+        983,
+        985
+      ],
+      "consequence_tier": "P1",
+      "consequence_tags": [
+        "dependency-platform",
+        "release-evidence",
+        "windows-packaging"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Hosted-runner, permission, cache, skip, and manual-lane behavior remains to be audited."
+    },
+    {
+      "id": "root-project-documentation",
+      "include": [
+        "AGENTS.md",
+        "CONTRIBUTING.md",
+        "README.md"
+      ],
+      "exclude": [],
+      "class": "active documentation",
+      "primary_owner": 975,
+      "secondary_owners": [
+        985
+      ],
+      "consequence_tier": "P2",
+      "consequence_tags": [
+        "audit-control",
+        "compatibility"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Active claims require reconciliation against final wave evidence."
+    },
+    {
+      "id": "root-release-documentation",
+      "include": [
+        "CHANGELOG.md",
+        "THIRD_PARTY_NOTICES.md"
+      ],
+      "exclude": [],
+      "class": "active documentation",
+      "primary_owner": 976,
+      "secondary_owners": [
+        983,
+        985
+      ],
+      "consequence_tier": "P1",
+      "consequence_tags": [
+        "dependency-platform",
+        "release-evidence",
+        "windows-packaging"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Release identity, notice completeness, and packaged inclusion require exact-build evidence."
+    },
+    {
+      "id": "root-repository-configuration",
+      "include": [
+        ".gitignore",
+        ".pre-commit-config.yaml",
+        ".python-version"
+      ],
+      "exclude": [],
+      "class": "workflow/configuration",
+      "primary_owner": 976,
+      "secondary_owners": [
+        983,
+        985
+      ],
+      "consequence_tier": "P2",
+      "consequence_tags": [
+        "dependency-platform",
+        "release-evidence"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Developer and CI behavior can drift across hosts or tool versions."
+    },
+    {
+      "id": "python-build-manifests",
+      "include": [
+        "pyproject.toml",
+        "requirements*.txt"
+      ],
+      "exclude": [],
+      "class": "packaging/build",
+      "primary_owner": 976,
+      "secondary_owners": [
+        983,
+        984,
+        985
+      ],
+      "consequence_tier": "P1",
+      "consequence_tags": [
+        "dependency-platform",
+        "release-evidence",
+        "windows-packaging"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Resolution, optional groups, clean installation, and package compatibility remain unproven."
+    },
+    {
+      "id": "windows-build-entrypoints",
+      "include": [
+        "build_windows_exe.bat",
+        "build_windows_exe.ps1",
+        "setup_windows_runtime.bat",
+        "setup_windows_runtime.ps1"
+      ],
+      "exclude": [],
+      "class": "packaging/build",
+      "primary_owner": 976,
+      "secondary_owners": [
+        983,
+        984,
+        985
+      ],
+      "consequence_tier": "P1",
+      "consequence_tags": [
+        "dependency-platform",
+        "release-evidence",
+        "windows-packaging"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Packaged Windows behavior requires clean-machine and artifact evidence."
+    },
+    {
+      "id": "windows-ocr-diagnostics",
+      "include": [
+        "diagnose_windows_ocr.bat",
+        "diagnose_windows_ocr.ps1"
+      ],
+      "exclude": [],
+      "class": "script/tooling",
+      "primary_owner": 978,
+      "secondary_owners": [
+        976,
+        983,
+        985
+      ],
+      "consequence_tier": "P1",
+      "consequence_tags": [
+        "confidentiality",
+        "dependency-platform",
+        "windows-packaging"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Diagnostic accuracy and redaction remain to be verified on packaged Windows."
+    },
+    {
+      "id": "root-application-entrypoint",
+      "include": [
+        "metroliza.py"
+      ],
+      "exclude": [],
+      "class": "canonical runtime",
+      "primary_owner": 977,
+      "secondary_owners": [
+        976,
+        983,
+        984
+      ],
+      "consequence_tier": "P1",
+      "consequence_tags": [
+        "cancellation",
+        "compatibility",
+        "windows-packaging"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Startup, shutdown, licensing, and packaged entry behavior remain to be audited."
+    },
+    {
+      "id": "root-version-compatibility",
+      "include": [
+        "VersionDate.py"
+      ],
+      "exclude": [],
+      "class": "compatibility runtime",
+      "primary_owner": 984,
+      "secondary_owners": [
+        976
+      ],
+      "consequence_tier": "P2",
+      "consequence_tags": [
+        "compatibility",
+        "release-evidence"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Legacy version import identity and packaged discovery remain to be audited."
+    },
+    {
+      "id": "security-and-integration-configuration",
+      "include": [
+        "config/**"
+      ],
+      "exclude": [],
+      "class": "workflow/configuration",
+      "primary_owner": 983,
+      "secondary_owners": [
+        976,
+        981,
+        982
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "confidentiality",
+        "dependency-platform",
+        "release-evidence"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Example credentials, reviewed findings, and integration defaults require trust-boundary review."
+    },
+    {
+      "id": "packaging-build-code",
+      "include": [
+        "packaging/**"
+      ],
+      "exclude": [
+        "packaging/*.png",
+        "packaging/*.ico"
+      ],
+      "class": "packaging/build",
+      "primary_owner": 976,
+      "secondary_owners": [
+        983,
+        984,
+        985
+      ],
+      "consequence_tier": "P1",
+      "consequence_tags": [
+        "dependency-platform",
+        "release-evidence",
+        "windows-packaging"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Hidden imports, resource layout, artifact checks, and clean builds remain to be falsified."
+    },
+    {
+      "id": "packaging-static-assets",
+      "include": [
+        "packaging/*.png",
+        "packaging/*.ico"
+      ],
+      "exclude": [],
+      "class": "generated/static asset",
+      "primary_owner": 976,
+      "secondary_owners": [
+        983,
+        984
+      ],
+      "consequence_tier": "P2",
+      "consequence_tags": [
+        "dependency-platform",
+        "windows-packaging"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Asset provenance and packaged availability require artifact inspection."
+    },
+    {
+      "id": "archive-index-documentation",
+      "include": [
+        "docs/archive/README.md",
+        "docs/archive/2026/README.md"
+      ],
+      "exclude": [],
+      "class": "active documentation",
+      "primary_owner": 975,
+      "secondary_owners": [
+        985
+      ],
+      "consequence_tier": "P2",
+      "consequence_tags": [
+        "audit-control",
+        "compatibility"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Maintained archive indexes can misroute readers or present stale material as current authority."
+    },
+    {
+      "id": "archived-documentation",
+      "include": [
+        "docs/archive/**"
+      ],
+      "exclude": [
+        "docs/archive/README.md",
+        "docs/archive/2026/README.md"
+      ],
+      "class": "archive/reference",
+      "primary_owner": 975,
+      "secondary_owners": [
+        985
+      ],
+      "consequence_tier": "P3",
+      "consequence_tags": [
+        "audit-control",
+        "compatibility"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Historical material is non-authoritative but may preserve stale claims or recovery context."
+    },
+    {
+      "id": "historical-roadmap-records",
+      "include": [
+        "docs/roadmaps/2026_03_rc2_stabilization_execution.md",
+        "docs/roadmaps/METROLIZA_AUDIT_NEXT_SESSION.md",
+        "docs/roadmaps/OCR_TEST_CLEANUP_NEXT_SESSION_README.md",
+        "docs/roadmaps/OZNAK_METROLIZA_INTEGRATION_AUDIT_PLAN.md",
+        "docs/roadmaps/TESTS_CLEANUP_PLAN.md",
+        "docs/roadmaps/UI_UX_RELEASE_FIX_PLAN.md",
+        "docs/roadmaps/UI_UX_REVAMP_SUMMARY_PLAN.md",
+        "docs/roadmaps/directory_reorganization_long_term.md",
+        "docs/roadmaps/static_population_layer_dashboard_plan.md"
+      ],
+      "exclude": [],
+      "class": "archive/reference",
+      "primary_owner": 975,
+      "secondary_owners": [
+        985
+      ],
+      "consequence_tier": "P3",
+      "consequence_tags": [
+        "audit-control",
+        "compatibility"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Completed and historical roadmap records are context, not proof of current correctness."
+    },
+    {
+      "id": "generated-documentation-assets",
+      "include": [
+        "docs/**/*.pdf",
+        "docs/perf_baseline_snapshot.json",
+        "docs/release_checks/third_party_inventory_260711.json"
+      ],
+      "exclude": [
+        "docs/archive/**"
+      ],
+      "class": "generated/static asset",
+      "primary_owner": 976,
+      "secondary_owners": [
+        980,
+        983,
+        985
+      ],
+      "consequence_tier": "P2",
+      "consequence_tags": [
+        "dependency-platform",
+        "release-evidence"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Regeneration, source parity, notices, and reader/platform behavior remain to be verified."
+    },
+    {
+      "id": "active-documentation",
+      "include": [
+        "docs/**"
+      ],
+      "exclude": [
+        "docs/archive/**",
+        "docs/roadmaps/2026_03_rc2_stabilization_execution.md",
+        "docs/roadmaps/METROLIZA_AUDIT_NEXT_SESSION.md",
+        "docs/roadmaps/OCR_TEST_CLEANUP_NEXT_SESSION_README.md",
+        "docs/roadmaps/OZNAK_METROLIZA_INTEGRATION_AUDIT_PLAN.md",
+        "docs/roadmaps/TESTS_CLEANUP_PLAN.md",
+        "docs/roadmaps/UI_UX_RELEASE_FIX_PLAN.md",
+        "docs/roadmaps/UI_UX_REVAMP_SUMMARY_PLAN.md",
+        "docs/roadmaps/directory_reorganization_long_term.md",
+        "docs/roadmaps/static_population_layer_dashboard_plan.md",
+        "docs/**/*.pdf",
+        "docs/perf_baseline_snapshot.json",
+        "docs/release_checks/third_party_inventory_260711.json"
+      ],
+      "class": "active documentation",
+      "primary_owner": 975,
+      "secondary_owners": [
+        985
+      ],
+      "consequence_tier": "P2",
+      "consequence_tags": [
+        "audit-control",
+        "compatibility",
+        "release-evidence"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Documented maturity, workflow, and support claims remain hypotheses until wave evidence closes them."
+    },
+    {
+      "id": "legacy-modules-compatibility",
+      "include": [
+        "modules/**"
+      ],
+      "exclude": [],
+      "class": "compatibility runtime",
+      "primary_owner": 984,
+      "secondary_owners": [
+        976,
+        985
+      ],
+      "consequence_tier": "P1",
+      "consequence_tags": [
+        "compatibility",
+        "dependency-platform",
+        "windows-packaging"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Shim identity, dynamic consumers, installed imports, and legacy behavior remain to be audited."
+    },
+    {
+      "id": "canonical-package-boundary",
+      "include": [
+        "src/metroliza/__init__.py"
+      ],
+      "exclude": [],
+      "class": "canonical runtime",
+      "primary_owner": 984,
+      "secondary_owners": [
+        976
+      ],
+      "consequence_tier": "P1",
+      "consequence_tags": [
+        "compatibility",
+        "dependency-platform"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Canonical export identity and installed-package behavior remain to be audited."
+    },
+    {
+      "id": "application-build-identity",
+      "include": [
+        "src/metroliza/app/build_provenance.py",
+        "src/metroliza/app/version.py"
+      ],
+      "exclude": [],
+      "class": "canonical runtime",
+      "primary_owner": 976,
+      "secondary_owners": [
+        977,
+        983,
+        984
+      ],
+      "consequence_tier": "P1",
+      "consequence_tags": [
+        "compatibility",
+        "release-evidence",
+        "windows-packaging"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Version and provenance propagation across source, package, logs, and outputs remains unproven."
+    },
+    {
+      "id": "application-security-boundaries",
+      "include": [
+        "src/metroliza/app/backend_diagnostics.py",
+        "src/metroliza/app/license_bootstrap.py",
+        "src/metroliza/app/license_key_manager.py"
+      ],
+      "exclude": [],
+      "class": "canonical runtime",
+      "primary_owner": 983,
+      "secondary_owners": [
+        976,
+        977,
+        984
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "confidentiality",
+        "dependency-platform",
+        "windows-packaging"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Diagnostic exposure and licensing lockout/fallback behavior require adversarial audit."
+    },
+    {
+      "id": "application-lifecycle",
+      "include": [
+        "src/metroliza/app/**"
+      ],
+      "exclude": [
+        "src/metroliza/app/build_provenance.py",
+        "src/metroliza/app/version.py",
+        "src/metroliza/app/backend_diagnostics.py",
+        "src/metroliza/app/license_bootstrap.py",
+        "src/metroliza/app/license_key_manager.py"
+      ],
+      "class": "canonical runtime",
+      "primary_owner": 977,
+      "secondary_owners": [
+        976,
+        983,
+        984
+      ],
+      "consequence_tier": "P1",
+      "consequence_tags": [
+        "cancellation",
+        "compatibility",
+        "windows-packaging"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Startup, event-loop, warmup, object lifetime, and shutdown paths remain to be audited."
+    },
+    {
+      "id": "ui-and-worker-lifecycle",
+      "include": [
+        "src/metroliza/ui/**",
+        "src/metroliza/workers/**"
+      ],
+      "exclude": [],
+      "class": "canonical runtime",
+      "primary_owner": 977,
+      "secondary_owners": [
+        978,
+        979,
+        980,
+        981,
+        982,
+        983,
+        984
+      ],
+      "consequence_tier": "P1",
+      "consequence_tags": [
+        "cancellation",
+        "confidentiality",
+        "data-integrity"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Qt ownership, dirty state, cancellation, late signals, and active-work shutdown remain to be falsified."
+    },
+    {
+      "id": "import-parsing-runtime",
+      "include": [
+        "src/metroliza/parsing/**",
+        "src/metroliza/cmm/**"
+      ],
+      "exclude": [],
+      "class": "canonical runtime",
+      "primary_owner": 978,
+      "secondary_owners": [
+        976,
+        979,
+        983,
+        984
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "confidentiality",
+        "data-integrity",
+        "offline-behavior"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Parser selection, omission, OCR uncertainty, archive safety, provenance, and fallback remain unaudited."
+    },
+    {
+      "id": "report-analytics-services",
+      "include": [
+        "src/metroliza/reports/characteristic_alias_service.py",
+        "src/metroliza/reports/characteristic_mapping_service.py"
+      ],
+      "exclude": [],
+      "class": "canonical runtime",
+      "primary_owner": 980,
+      "secondary_owners": [
+        979,
+        982
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "data-integrity",
+        "numerical-correctness"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Alias/group selection semantics and state isolation remain to be audited."
+    },
+    {
+      "id": "report-persistence-services",
+      "include": [
+        "src/metroliza/reports/cmm_schema.py",
+        "src/metroliza/reports/db.py",
+        "src/metroliza/reports/report_edit_service.py",
+        "src/metroliza/reports/report_metadata_persistence.py",
+        "src/metroliza/reports/report_query_service.py",
+        "src/metroliza/reports/report_repository.py",
+        "src/metroliza/reports/report_schema.py"
+      ],
+      "exclude": [],
+      "class": "canonical runtime",
+      "primary_owner": 979,
+      "secondary_owners": [
+        978,
+        980,
+        983
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "confidentiality",
+        "data-integrity",
+        "output-atomicity"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Transaction ownership, SQL semantics, idempotency, migration, and rollback remain unaudited."
+    },
+    {
+      "id": "report-ingestion-contracts",
+      "include": [
+        "src/metroliza/reports/**"
+      ],
+      "exclude": [
+        "src/metroliza/reports/characteristic_alias_service.py",
+        "src/metroliza/reports/characteristic_mapping_service.py",
+        "src/metroliza/reports/cmm_schema.py",
+        "src/metroliza/reports/db.py",
+        "src/metroliza/reports/report_edit_service.py",
+        "src/metroliza/reports/report_metadata_persistence.py",
+        "src/metroliza/reports/report_query_service.py",
+        "src/metroliza/reports/report_repository.py",
+        "src/metroliza/reports/report_schema.py"
+      ],
+      "class": "canonical runtime",
+      "primary_owner": 978,
+      "secondary_owners": [
+        979,
+        980,
+        983
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "confidentiality",
+        "data-integrity",
+        "offline-behavior"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Source identity, metadata normalization, duplicate policy, and parse-to-store contracts remain to be audited."
+    },
+    {
+      "id": "storage-runtime",
+      "include": [
+        "src/metroliza/storage/**"
+      ],
+      "exclude": [],
+      "class": "canonical runtime",
+      "primary_owner": 979,
+      "secondary_owners": [
+        982,
+        983
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "confidentiality",
+        "data-integrity",
+        "output-atomicity"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Schema, transaction, ownership, locking, and cleanup behavior remain unaudited."
+    },
+    {
+      "id": "analytics-runtime",
+      "include": [
+        "src/metroliza/analytics/**"
+      ],
+      "exclude": [],
+      "class": "canonical runtime",
+      "primary_owner": 980,
+      "secondary_owners": [
+        979,
+        981,
+        982,
+        984
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "data-integrity",
+        "native-parity",
+        "numerical-correctness"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Scope, formulas, edge cases, warnings, determinism, and reference parity remain unaudited."
+    },
+    {
+      "id": "native-build-manifests",
+      "include": [
+        "src/metroliza/native/**/Cargo.*"
+      ],
+      "exclude": [],
+      "class": "packaging/build",
+      "primary_owner": 976,
+      "secondary_owners": [
+        978,
+        980,
+        981,
+        983,
+        984
+      ],
+      "consequence_tier": "P1",
+      "consequence_tags": [
+        "dependency-platform",
+        "native-parity",
+        "windows-packaging"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Locked resolution, toolchain reproducibility, wheel build, and packaged availability remain unaudited."
+    },
+    {
+      "id": "native-component-documentation",
+      "include": [
+        "src/metroliza/native/**/README.md"
+      ],
+      "exclude": [],
+      "class": "active documentation",
+      "primary_owner": 975,
+      "secondary_owners": [
+        976,
+        978,
+        980,
+        981,
+        985
+      ],
+      "consequence_tier": "P2",
+      "consequence_tags": [
+        "audit-control",
+        "native-parity"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Native scope and promotion claims require code, parity, package, and benchmark evidence."
+    },
+    {
+      "id": "native-cmm-runtime",
+      "include": [
+        "src/metroliza/native/cmm_parser/src/**"
+      ],
+      "exclude": [],
+      "class": "canonical runtime",
+      "primary_owner": 978,
+      "secondary_owners": [
+        976,
+        980,
+        984
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "data-integrity",
+        "native-parity",
+        "numerical-correctness"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Parser value, warning, error, and fallback parity remain unaudited."
+    },
+    {
+      "id": "native-chart-runtime",
+      "include": [
+        "src/metroliza/native/chart_renderer/src/**"
+      ],
+      "exclude": [],
+      "class": "canonical runtime",
+      "primary_owner": 981,
+      "secondary_owners": [
+        976,
+        980,
+        984
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "native-parity",
+        "numerical-correctness",
+        "offline-behavior"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Rendered values/specs, fallback, packaging, and Python parity remain unaudited."
+    },
+    {
+      "id": "native-statistics-runtime",
+      "include": [
+        "src/metroliza/native/comparison_stats_bootstrap/src/**",
+        "src/metroliza/native/distribution_fit_ad/src/**",
+        "src/metroliza/native/group_stats_coercion/src/**"
+      ],
+      "exclude": [],
+      "class": "canonical runtime",
+      "primary_owner": 980,
+      "secondary_owners": [
+        976,
+        981,
+        984
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "native-parity",
+        "numerical-correctness"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Numerical, warning, error, stochastic, and fallback parity remain unaudited."
+    },
+    {
+      "id": "native-cmm-bridge",
+      "include": [
+        "src/metroliza/native_bridges/cmm_native_parser.py"
+      ],
+      "exclude": [],
+      "class": "canonical runtime",
+      "primary_owner": 978,
+      "secondary_owners": [
+        976,
+        980,
+        984
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "compatibility",
+        "data-integrity",
+        "native-parity"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Requested/effective backend identity and strict/fallback behavior remain unaudited."
+    },
+    {
+      "id": "native-analytics-bridges",
+      "include": [
+        "src/metroliza/native_bridges/**"
+      ],
+      "exclude": [
+        "src/metroliza/native_bridges/cmm_native_parser.py"
+      ],
+      "class": "canonical runtime",
+      "primary_owner": 980,
+      "secondary_owners": [
+        976,
+        981,
+        984
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "compatibility",
+        "native-parity",
+        "numerical-correctness"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Backend discovery, array coercion, errors, diagnostics, and fallback parity remain unaudited."
+    },
+    {
+      "id": "output-rendering-runtime",
+      "include": [
+        "src/metroliza/charts/**",
+        "src/metroliza/exporting/**"
+      ],
+      "exclude": [],
+      "class": "canonical runtime",
+      "primary_owner": 981,
+      "secondary_owners": [
+        976,
+        977,
+        979,
+        980,
+        983,
+        984
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "confidentiality",
+        "numerical-correctness",
+        "offline-behavior",
+        "output-atomicity"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Cross-renderer parity, injection, fallback, cancellation, and atomic publication remain unaudited."
+    },
+    {
+      "id": "integration-security-runtime",
+      "include": [
+        "src/metroliza/integrations/**"
+      ],
+      "exclude": [],
+      "class": "canonical runtime",
+      "primary_owner": 983,
+      "secondary_owners": [
+        976,
+        981,
+        984
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "confidentiality",
+        "dependency-platform",
+        "offline-behavior"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Credential, host, redirect, retry, redaction, and offline fallback boundaries remain unaudited."
+    },
+    {
+      "id": "industrial-persistent-state",
+      "include": [
+        "src/metroliza/industrial/anomaly/baseline_repository.py",
+        "src/metroliza/industrial/anomaly/detector_config_repository.py",
+        "src/metroliza/industrial/anomaly/event_repository.py",
+        "src/metroliza/industrial/industrial_cache_target.py",
+        "src/metroliza/industrial/industrial_data_repository.py",
+        "src/metroliza/industrial/industrial_data_schema.py",
+        "src/metroliza/industrial/realtime/event_stream_repository.py",
+        "src/metroliza/industrial/realtime/offset_store.py",
+        "src/metroliza/industrial/realtime/sample_repository.py"
+      ],
+      "exclude": [],
+      "class": "canonical runtime",
+      "primary_owner": 979,
+      "secondary_owners": [
+        980,
+        982,
+        983
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "confidentiality",
+        "data-integrity",
+        "output-atomicity"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Cache/sample/event/offset transaction, retry, freshness, and recovery semantics remain unaudited."
+    },
+    {
+      "id": "tabular-persistent-state",
+      "include": [
+        "src/metroliza/tabular/grouping_assignment_store.py"
+      ],
+      "exclude": [],
+      "class": "canonical runtime",
+      "primary_owner": 979,
+      "secondary_owners": [
+        980,
+        982,
+        983
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "data-integrity",
+        "output-atomicity"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Grouping persistence identity, isolation, transaction, and retry semantics remain unaudited."
+    },
+    {
+      "id": "industrial-and-tabular-workflows",
+      "include": [
+        "src/metroliza/industrial/**",
+        "src/metroliza/tabular/**"
+      ],
+      "exclude": [
+        "src/metroliza/industrial/anomaly/baseline_repository.py",
+        "src/metroliza/industrial/anomaly/detector_config_repository.py",
+        "src/metroliza/industrial/anomaly/event_repository.py",
+        "src/metroliza/industrial/industrial_cache_target.py",
+        "src/metroliza/industrial/industrial_data_repository.py",
+        "src/metroliza/industrial/industrial_data_schema.py",
+        "src/metroliza/industrial/realtime/event_stream_repository.py",
+        "src/metroliza/industrial/realtime/offset_store.py",
+        "src/metroliza/industrial/realtime/sample_repository.py",
+        "src/metroliza/tabular/grouping_assignment_store.py"
+      ],
+      "class": "canonical runtime",
+      "primary_owner": 982,
+      "secondary_owners": [
+        977,
+        979,
+        980,
+        981,
+        983,
+        984
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "cancellation",
+        "confidentiality",
+        "data-integrity",
+        "offline-behavior"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Bounds, source identity, partial success, replay, ordering, freshness, and shutdown remain unaudited."
+    },
+    {
+      "id": "shared-security-runtime",
+      "include": [
+        "src/metroliza/shared/custom_logger.py",
+        "src/metroliza/shared/env_utils.py",
+        "src/metroliza/shared/log_context.py",
+        "src/metroliza/shared/logging_utils.py"
+      ],
+      "exclude": [],
+      "class": "canonical runtime",
+      "primary_owner": 983,
+      "secondary_owners": [
+        977,
+        982
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "confidentiality",
+        "data-integrity"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Nested redaction, exception/log exposure, configuration sources, and correlation remain unaudited."
+    },
+    {
+      "id": "shared-lifecycle-runtime",
+      "include": [
+        "src/metroliza/shared/progress_status.py",
+        "src/metroliza/shared/worker_cancellation.py"
+      ],
+      "exclude": [],
+      "class": "canonical runtime",
+      "primary_owner": 977,
+      "secondary_owners": [
+        978,
+        979,
+        981,
+        982
+      ],
+      "consequence_tier": "P1",
+      "consequence_tags": [
+        "cancellation",
+        "data-integrity"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Cancellation timing, progress truth, repeated completion, and cleanup remain unaudited."
+    },
+    {
+      "id": "shared-output-runtime",
+      "include": [
+        "src/metroliza/shared/dashboard_interactivity.py",
+        "src/metroliza/shared/excel_sheet_utils.py"
+      ],
+      "exclude": [],
+      "class": "canonical runtime",
+      "primary_owner": 981,
+      "secondary_owners": [
+        980,
+        983
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "confidentiality",
+        "numerical-correctness",
+        "offline-behavior"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Output escaping, identity, limits, and consumer behavior remain unaudited."
+    },
+    {
+      "id": "shared-analytics-runtime",
+      "include": [
+        "src/metroliza/shared/filter_state.py",
+        "src/metroliza/shared/grouping_filter_core.py",
+        "src/metroliza/shared/list_selection_utils.py",
+        "src/metroliza/shared/numeric_coercion.py",
+        "src/metroliza/shared/stats_number_formatting.py",
+        "src/metroliza/shared/stats_utils.py"
+      ],
+      "exclude": [],
+      "class": "canonical runtime",
+      "primary_owner": 980,
+      "secondary_owners": [
+        979,
+        982,
+        983
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "data-integrity",
+        "numerical-correctness"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Selection, coercion, grouping, formatting, and SQL-adjacent semantics remain unaudited."
+    },
+    {
+      "id": "shared-parsing-runtime",
+      "include": [
+        "src/metroliza/shared/datetime_parsing.py",
+        "src/metroliza/shared/parse_contracts.py"
+      ],
+      "exclude": [],
+      "class": "canonical runtime",
+      "primary_owner": 978,
+      "secondary_owners": [
+        979,
+        980
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "data-integrity",
+        "offline-behavior"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Locale/date and parse-contract error/normalization behavior remain unaudited."
+    },
+    {
+      "id": "shared-compatibility-boundaries",
+      "include": [
+        "src/metroliza/shared/**"
+      ],
+      "exclude": [
+        "src/metroliza/shared/custom_logger.py",
+        "src/metroliza/shared/env_utils.py",
+        "src/metroliza/shared/log_context.py",
+        "src/metroliza/shared/logging_utils.py",
+        "src/metroliza/shared/progress_status.py",
+        "src/metroliza/shared/worker_cancellation.py",
+        "src/metroliza/shared/dashboard_interactivity.py",
+        "src/metroliza/shared/excel_sheet_utils.py",
+        "src/metroliza/shared/filter_state.py",
+        "src/metroliza/shared/grouping_filter_core.py",
+        "src/metroliza/shared/list_selection_utils.py",
+        "src/metroliza/shared/numeric_coercion.py",
+        "src/metroliza/shared/stats_number_formatting.py",
+        "src/metroliza/shared/stats_utils.py",
+        "src/metroliza/shared/datetime_parsing.py",
+        "src/metroliza/shared/parse_contracts.py"
+      ],
+      "class": "canonical runtime",
+      "primary_owner": 984,
+      "secondary_owners": [
+        977,
+        978,
+        980,
+        983
+      ],
+      "consequence_tier": "P1",
+      "consequence_tags": [
+        "compatibility",
+        "data-integrity"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Shared contract ownership, legacy consumers, public exports, and import cycles remain unaudited."
+    },
+    {
+      "id": "resource-runtime-locators",
+      "include": [
+        "src/metroliza/resources/*.py"
+      ],
+      "exclude": [],
+      "class": "canonical runtime",
+      "primary_owner": 976,
+      "secondary_owners": [
+        978,
+        981,
+        984
+      ],
+      "consequence_tier": "P1",
+      "consequence_tags": [
+        "dependency-platform",
+        "offline-behavior",
+        "windows-packaging"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Source, installed, and packaged resource discovery remain unaudited."
+    },
+    {
+      "id": "resource-documentation",
+      "include": [
+        "src/metroliza/resources/**/README.md"
+      ],
+      "exclude": [],
+      "class": "active documentation",
+      "primary_owner": 975,
+      "secondary_owners": [
+        976,
+        978,
+        981,
+        985
+      ],
+      "consequence_tier": "P2",
+      "consequence_tags": [
+        "audit-control",
+        "dependency-platform"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Asset provenance and availability claims require package/runtime evidence."
+    },
+    {
+      "id": "offline-dashboard-asset",
+      "include": [
+        "src/metroliza/resources/html_dashboard_assets/*.js"
+      ],
+      "exclude": [],
+      "class": "generated/static asset",
+      "primary_owner": 981,
+      "secondary_owners": [
+        976,
+        983,
+        984
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "confidentiality",
+        "offline-behavior",
+        "windows-packaging"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Offline availability, integrity, browser behavior, and injection boundaries remain unaudited."
+    },
+    {
+      "id": "ocr-model-assets",
+      "include": [
+        "src/metroliza/resources/ocr_models/**/*.onnx"
+      ],
+      "exclude": [],
+      "class": "generated/static asset",
+      "primary_owner": 978,
+      "secondary_owners": [
+        976,
+        983,
+        984
+      ],
+      "consequence_tier": "P1",
+      "consequence_tags": [
+        "confidentiality",
+        "dependency-platform",
+        "offline-behavior",
+        "windows-packaging"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Model provenance, packaged lookup, unsupported-platform fallback, and OCR uncertainty remain unaudited."
+    },
+    {
+      "id": "bug-sweep-validator-tool",
+      "include": [
+        "scripts/quality/**"
+      ],
+      "exclude": [],
+      "class": "script/tooling",
+      "primary_owner": 975,
+      "secondary_owners": [
+        976,
+        985
+      ],
+      "consequence_tier": "P1",
+      "consequence_tags": [
+        "audit-control",
+        "release-evidence"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "The validator itself requires negative controls, exact-tree execution, and independent review."
+    },
+    {
+      "id": "build-release-tools",
+      "include": [
+        "scripts/__init__.py",
+        "scripts/benchmark_paths.py",
+        "scripts/benchmark_trend_compare.py",
+        "scripts/build_provenance.py",
+        "scripts/check_release_hygiene.py",
+        "scripts/fetch_rapidocr_models.py",
+        "scripts/generate_third_party_inventory.py",
+        "scripts/measure_windows_startup.ps1",
+        "scripts/release_only_google_conversion_smoke.py",
+        "scripts/stage_release_notices.py",
+        "scripts/summarize_startup_profile.py",
+        "scripts/sync_release_metadata.py",
+        "scripts/validate_packaged_pdf_parser.py",
+        "scripts/validate_qt_runtime.py",
+        "scripts/windows_ocr_runtime_diagnostics.py"
+      ],
+      "exclude": [],
+      "class": "script/tooling",
+      "primary_owner": 976,
+      "secondary_owners": [
+        978,
+        980,
+        981,
+        983,
+        984,
+        985
+      ],
+      "consequence_tier": "P1",
+      "consequence_tags": [
+        "dependency-platform",
+        "release-evidence",
+        "windows-packaging"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "False-green exits, clean environments, optional tools, artifacts, and hosted/manual parity remain unaudited."
+    },
+    {
+      "id": "parser-and-ocr-tools",
+      "include": [
+        "scripts/benchmark_header_ocr_crops.py",
+        "scripts/benchmark_header_ocr_modes.py",
+        "scripts/benchmark_openvino_tuning_matrix.py",
+        "scripts/build_parser_plugin_repair_prompt.py",
+        "scripts/build_pdf_corpus_manifest.py",
+        "scripts/compare_header_ocr_crop_results.py",
+        "scripts/compare_ocr_metadata_benchmarks.py",
+        "scripts/create_parser_plugin_workspace.py",
+        "scripts/diagnose_header_ocr_metadata.py",
+        "scripts/explain_parser_resolution.py",
+        "scripts/extract_header_ocr_crops.py",
+        "scripts/inspect_ocr_benchmark_results.py",
+        "scripts/parser_plugin_self_service.py",
+        "scripts/validate_parser_plugins.py"
+      ],
+      "exclude": [],
+      "class": "script/tooling",
+      "primary_owner": 978,
+      "secondary_owners": [
+        976,
+        983,
+        984,
+        985
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "confidentiality",
+        "data-integrity",
+        "offline-behavior"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Generated/sanitized corpus identity, parser evidence, diagnostics, and offline behavior remain unaudited."
+    },
+    {
+      "id": "analytics-audit-tools",
+      "include": [
+        "scripts/benchmark_comparison_stats.py",
+        "scripts/benchmark_distribution_fit_batch.py",
+        "scripts/generate_chart_parity_fixtures.py"
+      ],
+      "exclude": [],
+      "class": "script/tooling",
+      "primary_owner": 980,
+      "secondary_owners": [
+        976,
+        981,
+        985
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "native-parity",
+        "numerical-correctness",
+        "release-evidence"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Benchmark representativeness, oracle independence, deterministic seeds, and fixture drift remain unaudited."
+    },
+    {
+      "id": "long-running-workflow-tools",
+      "include": [
+        "scripts/benchmark_realtime_detectors.py",
+        "scripts/calibrate_realtime_anomaly_models.py",
+        "scripts/generate_realtime_industrial_fixtures.py",
+        "scripts/replay_industrial_stream.py"
+      ],
+      "exclude": [],
+      "class": "script/tooling",
+      "primary_owner": 982,
+      "secondary_owners": [
+        976,
+        979,
+        980,
+        983,
+        985
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "cancellation",
+        "confidentiality",
+        "data-integrity"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Replay identity, bounds, fault handling, seed/config identity, and confidential-source exclusion remain unaudited."
+    },
+    {
+      "id": "security-audit-tool",
+      "include": [
+        "scripts/security_audit.py"
+      ],
+      "exclude": [],
+      "class": "script/tooling",
+      "primary_owner": 983,
+      "secondary_owners": [
+        976,
+        979,
+        980,
+        982,
+        985
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "confidentiality",
+        "dependency-platform",
+        "release-evidence"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Scanner errors, baseline expiry, dependency expansion, redaction, and false negatives remain unaudited."
+    },
+    {
+      "id": "sanitized-test-fixtures",
+      "include": [
+        "tests/fixtures/**",
+        "tests/industrial_analytics_fixtures.py"
+      ],
+      "exclude": [],
+      "class": "fixture",
+      "primary_owner": 985,
+      "secondary_owners": [
+        976,
+        978,
+        979,
+        980,
+        981,
+        982,
+        983,
+        984
+      ],
+      "consequence_tier": "P1",
+      "consequence_tags": [
+        "confidentiality",
+        "data-integrity",
+        "numerical-correctness"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Fixture representativeness, provenance, sanitization, edge coverage, and oracle independence remain to be challenged."
+    },
+    {
+      "id": "bug-sweep-validator-tests",
+      "include": [
+        "tests/test_bug_sweep_coverage.py"
+      ],
+      "exclude": [],
+      "class": "test",
+      "primary_owner": 985,
+      "secondary_owners": [
+        975
+      ],
+      "consequence_tier": "P1",
+      "consequence_tags": [
+        "audit-control"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Coverage-validator tests must challenge malformed metadata, rule overlaps, gaps, and future tree changes."
+    },
+    {
+      "id": "test-and-audit-code",
+      "include": [
+        "tests/**"
+      ],
+      "exclude": [
+        "tests/fixtures/**",
+        "tests/industrial_analytics_fixtures.py",
+        "tests/test_bug_sweep_coverage.py"
+      ],
+      "class": "test",
+      "primary_owner": 985,
+      "secondary_owners": [
+        976,
+        977,
+        978,
+        979,
+        980,
+        981,
+        982,
+        983,
+        984
+      ],
+      "consequence_tier": "P1",
+      "consequence_tags": [
+        "audit-control",
+        "data-integrity",
+        "release-evidence"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Assertions, mocks, skips, environmental assumptions, mutation sensitivity, and claimed boundaries remain to be challenged."
+    }
+  ]
+}
