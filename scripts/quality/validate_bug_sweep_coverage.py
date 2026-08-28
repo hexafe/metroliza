@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import copy
+import hashlib
 import json
 import os
 import re
@@ -15,7 +17,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 GIT_COMMAND_TIMEOUT_SECONDS = 30
 EXPECTED_BASELINE_SHA = "fcb462942e90aeeb64bba84bfe080d556da0efdb"
 EXPECTED_BASELINE_TRACKED_FILE_COUNT = 929
@@ -71,7 +73,9 @@ AUDIT_STATUSES = frozenset(
 TERMINAL_AUDIT_STATUSES = frozenset(
     {"completed", "accepted behavior", "deferred residual risk"}
 )
-TERMINAL_SNAPSHOT_FIELDS = frozenset({"audited_commit_sha", "matched_paths"})
+TERMINAL_SNAPSHOT_FIELDS = frozenset(
+    {"audited_commit_sha", "matched_paths", "rule_record_sha256"}
+)
 DEFERRED_DETAIL_FIELDS = frozenset(
     {"reason", "accountable_owner", "target_issue_or_phase", "next_gate", "preserved_seam"}
 )
@@ -129,6 +133,32 @@ def load_ledger(path: Path) -> dict[str, Any]:
     if not isinstance(document, dict):
         raise CoverageValidationError("coverage ledger root must be a JSON object")
     return document
+
+
+def _canonical_rule_record_bytes(rule: Mapping[str, Any]) -> bytes:
+    """Serialize every rule field except ``terminal_snapshot`` canonically."""
+
+    try:
+        rule_record = copy.deepcopy(
+            {key: value for key, value in rule.items() if key != "terminal_snapshot"}
+        )
+        return json.dumps(
+            rule_record,
+            sort_keys=True,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
+        raise CoverageValidationError(
+            "rule record must be deeply JSON-compatible for canonical serialization"
+        ) from exc
+
+
+def rule_record_sha256(rule: Mapping[str, Any]) -> str:
+    """Return the accepted lowercase SHA-256 for a complete rule record."""
+
+    return hashlib.sha256(_canonical_rule_record_bytes(rule)).hexdigest()
 
 
 def git_tracked_paths(repo_root: Path) -> list[str]:
@@ -618,13 +648,37 @@ def _validate_terminal_snapshot_path(
         )
 
 
+def _validate_rule_record_digest(
+    rule: Mapping[str, Any], digest: object, context: str, errors: list[str]
+) -> None:
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        errors.append(
+            f"{context}: terminal_snapshot.rule_record_sha256 must be a lowercase "
+            "64-character SHA-256"
+        )
+        return
+    try:
+        expected_digest = rule_record_sha256(rule)
+    except CoverageValidationError as exc:
+        errors.append(f"{context}: {exc}")
+        return
+    if digest != expected_digest:
+        errors.append(
+            f"{context}: terminal_snapshot.rule_record_sha256 does not match the "
+            "complete canonical rule record"
+        )
+
+
 def _validate_terminal_snapshot_record(
-    snapshot: Mapping[str, Any], context: str, errors: list[str]
+    rule: Mapping[str, Any],
+    snapshot: Mapping[str, Any],
+    context: str,
+    errors: list[str],
 ) -> None:
     if set(snapshot) != TERMINAL_SNAPSHOT_FIELDS:
         errors.append(
             f"{context}: terminal_snapshot must contain exactly "
-            "audited_commit_sha and matched_paths"
+            "audited_commit_sha, matched_paths, and rule_record_sha256"
         )
     audited_commit_sha = snapshot.get("audited_commit_sha")
     if not isinstance(audited_commit_sha, str) or not re.fullmatch(
@@ -634,6 +688,9 @@ def _validate_terminal_snapshot_record(
             f"{context}: terminal_snapshot.audited_commit_sha must be a lowercase "
             "40-character Git SHA"
         )
+    _validate_rule_record_digest(
+        rule, snapshot.get("rule_record_sha256"), context, errors
+    )
     matched_paths = snapshot.get("matched_paths")
     if not _non_empty_string_list(matched_paths) or not matched_paths:
         errors.append(
@@ -664,7 +721,7 @@ def _validate_terminal_snapshot(
         if not isinstance(snapshot, dict):
             errors.append(f"{context}: {status} coverage requires a terminal_snapshot")
             return
-        _validate_terminal_snapshot_record(snapshot, context, errors)
+        _validate_terminal_snapshot_record(rule, snapshot, context, errors)
     elif snapshot is not None:
         errors.append(
             f"{context}: terminal_snapshot is allowed only for a terminal audit status"
@@ -918,6 +975,7 @@ def _copy_terminal_snapshot(rule: Mapping[str, Any]) -> dict[str, Any] | None:
     return {
         "audited_commit_sha": snapshot["audited_commit_sha"],
         "matched_paths": list(snapshot["matched_paths"]),
+        "rule_record_sha256": snapshot["rule_record_sha256"],
     }
 
 
