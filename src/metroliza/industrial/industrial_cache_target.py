@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sqlite3
 import stat
@@ -10,6 +11,7 @@ from collections.abc import Iterable
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 
 from metroliza.reports.db import sqlite_connection_scope
 
@@ -306,8 +308,9 @@ def _backup_sqlite_database_to_staging(
     staging_path: Path,
     expected_file_identity: _FilesystemObjectIdentity,
     expected_directory_identity: _FilesystemObjectIdentity,
+    staging_handle: BinaryIO,
 ) -> None:
-    """Back up through a pinned connection and reject staging-name substitution."""
+    """Back up consistently, then write only through the pinned staging handle."""
 
     _validate_staging_identity(
         staging_path,
@@ -315,25 +318,76 @@ def _backup_sqlite_database_to_staging(
         expected_directory_identity,
     )
     with (
-        closing(sqlite3.connect(staging_path)) as destination_connection,
         closing(sqlite3.connect(source_path)) as source_connection,
+        # An empty filename gives SQLite a private temporary database.  Keeping
+        # SQLite away from the replaceable staging pathname prevents an alias
+        # race from redirecting backup writes into an unrelated file.
+        closing(sqlite3.connect("")) as snapshot_connection,
     ):
-        # Opening SQLite does not write the destination.  Recheck before backup
-        # so a symlink or hard-link substituted during open cannot receive writes.
-        _validate_staging_identity(
-            staging_path,
-            expected_file_identity,
-            expected_directory_identity,
-        )
-        source_connection.backup(destination_connection)
-        integrity = destination_connection.execute("PRAGMA integrity_check").fetchone()
+        source_connection.backup(snapshot_connection)
+        with closing(
+            snapshot_connection.execute("PRAGMA integrity_check")
+        ) as integrity_cursor:
+            integrity = integrity_cursor.fetchone()
         if integrity is None or str(integrity[0]).lower() != "ok":
             raise RuntimeError("SQLite backup failed integrity validation")
+        snapshot = snapshot_connection.serialize()
+    if not snapshot.startswith(b"SQLite format 3\x00"):
+        raise RuntimeError("SQLite backup failed format validation")
     _validate_staging_identity(
         staging_path,
         expected_file_identity,
         expected_directory_identity,
     )
+    _write_snapshot_to_staging_handle(
+        staging_handle,
+        snapshot,
+        expected_file_identity,
+    )
+    _validate_staging_identity(
+        staging_path,
+        expected_file_identity,
+        expected_directory_identity,
+    )
+
+
+def _write_snapshot_to_staging_handle(
+    staging_handle: BinaryIO,
+    snapshot: bytes,
+    expected_file_identity: _FilesystemObjectIdentity,
+) -> None:
+    """Durably write and verify a snapshot through its already-open file object."""
+
+    if _filesystem_object_identity_from_status(
+        os.fstat(staging_handle.fileno())
+    ) != expected_file_identity:
+        raise RuntimeError("Staging database changed before backup write")
+    staging_handle.seek(0)
+    snapshot_view = memoryview(snapshot)
+    offset = 0
+    while offset < len(snapshot_view):
+        written = staging_handle.write(snapshot_view[offset : offset + 1024 * 1024])
+        if not written:
+            raise OSError("SQLite snapshot write did not make progress")
+        offset += written
+    staging_handle.truncate()
+    staging_handle.flush()
+    os.fsync(staging_handle.fileno())
+
+    written_status = os.fstat(staging_handle.fileno())
+    if (
+        _filesystem_object_identity_from_status(written_status)
+        != expected_file_identity
+        or written_status.st_size != len(snapshot)
+    ):
+        raise RuntimeError("Staging database changed during backup write")
+    expected_digest = hashlib.sha256(snapshot).digest()
+    actual_digest = hashlib.sha256()
+    staging_handle.seek(0)
+    while chunk := staging_handle.read(1024 * 1024):
+        actual_digest.update(chunk)
+    if actual_digest.digest() != expected_digest:
+        raise RuntimeError("SQLite backup failed staged-byte validation")
 
 
 def _publish_snapshot_no_clobber(staging_path: Path, destination_path: Path) -> None:
@@ -395,6 +449,8 @@ def _publish_validated_snapshot(
         source_path,
         forbidden_paths,
     )
+    if destination_path.resolve(strict=False) != canonical_destination:
+        raise RuntimeError("Destination path changed before publication")
     if initial_destination_identity is None:
         if current_destination_identity is not None:
             raise FileExistsError(f"Destination already exists: {destination_path}")
@@ -402,8 +458,6 @@ def _publish_validated_snapshot(
         return
     if current_destination_identity != initial_destination_identity:
         raise RuntimeError("Existing destination changed before publication")
-    if destination_path.resolve(strict=False) != canonical_destination:
-        raise RuntimeError("Existing destination path changed before publication")
     _publish_snapshot_overwrite(
         staging_path,
         destination_path,
@@ -458,7 +512,7 @@ def persist_temporary_industrial_cache(
     try:
         staging_directory.chmod(0o700)
         expected_directory_identity = _directory_identity(staging_directory)
-        with staging_path.open("xb") as staging_handle:
+        with staging_path.open("x+b") as staging_handle:
             expected_file_identity = _filesystem_object_identity_from_status(
                 os.fstat(staging_handle.fileno())
             )
@@ -467,6 +521,7 @@ def persist_temporary_industrial_cache(
                 staging_path,
                 expected_file_identity,
                 expected_directory_identity,
+                staging_handle,
             )
         _validate_staging_identity(
             staging_path,

@@ -519,48 +519,66 @@ def test_prepublication_failures_preserve_authorized_destination(
 
 
 @pytest.mark.parametrize("alias_kind", ["symlink", "hardlink"])
-def test_staging_alias_substitution_is_rejected_before_backup_writes(
+@pytest.mark.parametrize("victim_kind", ["empty", "sqlite"])
+def test_staging_alias_substitution_during_pinned_write_preserves_victim(
     monkeypatch,
     tmp_path,
     alias_kind,
+    victim_kind,
 ):
     target = create_temporary_industrial_cache_target()
     destination = tmp_path / "saved.sqlite"
     victim = tmp_path / "unrelated-victim.sqlite"
-    original = _write_marker_database(victim)
-    real_connect = cache_target_module.sqlite3.connect
+    if victim_kind == "empty":
+        victim.write_bytes(b"")
+        original = b""
+    else:
+        original = _write_marker_database(victim)
+    _populate_cache(target.cache_db_file)
+    real_write = cache_target_module._write_snapshot_to_staging_handle
     substituted = []
 
-    def substituting_connect(database, *args, **kwargs):
-        candidate = Path(database)
-        if candidate.name == "snapshot.sqlite" and not substituted:
+    def substituting_write(staging_handle, *args):
+        candidate = Path(staging_handle.name)
+        held_staging = candidate.with_name("held-snapshot.sqlite")
+        try:
+            candidate.rename(held_staging)
+        except OSError as exc:
+            pytest.skip(f"open staging-file rename is unavailable: {exc}")
+        try:
+            if alias_kind == "symlink":
+                candidate.symlink_to(victim)
+            else:
+                os.link(victim, candidate)
+        except OSError as exc:
+            held_staging.rename(candidate)
+            pytest.skip(f"{alias_kind} aliases are unavailable: {exc}")
+        substituted.append(candidate)
+        try:
+            return real_write(staging_handle, *args)
+        finally:
             candidate.unlink()
-            try:
-                if alias_kind == "symlink":
-                    candidate.symlink_to(victim)
-                else:
-                    os.link(victim, candidate)
-            except OSError as exc:
-                pytest.skip(f"{alias_kind} aliases are unavailable: {exc}")
-            substituted.append(candidate)
-        return real_connect(database, *args, **kwargs)
+            held_staging.rename(candidate)
 
-    monkeypatch.setattr(cache_target_module.sqlite3, "connect", substituting_connect)
+    monkeypatch.setattr(
+        cache_target_module,
+        "_write_snapshot_to_staging_handle",
+        substituting_write,
+    )
     try:
-        _populate_cache(target.cache_db_file)
-        with pytest.raises((RuntimeError, ValueError), match="Staging|symbolic link"):
-            persist_temporary_industrial_cache(target, destination)
+        persisted = persist_temporary_industrial_cache(target, destination)
 
         assert len(substituted) == 1
         assert victim.read_bytes() == original
-        assert not destination.exists()
+        assert persisted.cache_db_file == str(destination.resolve())
+        assert disposable_cache_counts(destination)["industrial_records"] == 1
         assert Path(target.cache_db_file).exists()
         _assert_no_staging_files(destination)
     finally:
         cleanup_temporary_industrial_cache(target)
 
 
-def test_staging_parent_change_is_rejected_before_backup_writes(
+def test_staging_parent_substitution_during_pinned_write_preserves_victim(
     monkeypatch,
     tmp_path,
 ):
@@ -568,32 +586,47 @@ def test_staging_parent_change_is_rejected_before_backup_writes(
     destination = tmp_path / "saved.sqlite"
     victim = tmp_path / "unrelated-victim.sqlite"
     moved_staging = tmp_path / "moved-private-staging"
-    original = _write_marker_database(victim)
-    real_connect = cache_target_module.sqlite3.connect
+    victim.write_bytes(b"")
+    original = victim.read_bytes()
+    _populate_cache(target.cache_db_file)
+    real_write = cache_target_module._write_snapshot_to_staging_handle
     substitutions = []
 
-    def substituting_connect(database, *args, **kwargs):
-        candidate = Path(database)
-        if candidate.name == "snapshot.sqlite" and not substitutions:
-            try:
-                candidate.parent.rename(moved_staging)
-                candidate.parent.mkdir(mode=0o700)
-                candidate.symlink_to(victim)
-            except OSError as exc:
-                pytest.skip(f"staging-directory rename is unavailable: {exc}")
-            substitutions.append(candidate)
-        return real_connect(database, *args, **kwargs)
+    def substituting_write(staging_handle, *args):
+        candidate = Path(staging_handle.name)
+        replacement_parent = candidate.parent
+        try:
+            replacement_parent.rename(moved_staging)
+            replacement_parent.mkdir(mode=0o700)
+            candidate.symlink_to(victim)
+        except OSError as exc:
+            if replacement_parent.exists():
+                candidate.unlink(missing_ok=True)
+                replacement_parent.rmdir()
+            if moved_staging.exists():
+                moved_staging.rename(replacement_parent)
+            pytest.skip(f"staging-directory rename is unavailable: {exc}")
+        substitutions.append(candidate)
+        try:
+            return real_write(staging_handle, *args)
+        finally:
+            candidate.unlink()
+            replacement_parent.rmdir()
+            moved_staging.rename(replacement_parent)
 
-    monkeypatch.setattr(cache_target_module.sqlite3, "connect", substituting_connect)
+    monkeypatch.setattr(
+        cache_target_module,
+        "_write_snapshot_to_staging_handle",
+        substituting_write,
+    )
     try:
-        _populate_cache(target.cache_db_file)
-        with pytest.raises(RuntimeError, match="Staging directory changed"):
-            persist_temporary_industrial_cache(target, destination)
+        persisted = persist_temporary_industrial_cache(target, destination)
 
         assert len(substitutions) == 1
         assert victim.read_bytes() == original
-        assert not destination.exists()
-        assert (moved_staging / "snapshot.sqlite").is_file()
+        assert persisted.cache_db_file == str(destination.resolve())
+        assert disposable_cache_counts(destination)["industrial_records"] == 1
+        assert not moved_staging.exists()
         assert Path(target.cache_db_file).exists()
         _assert_no_staging_files(destination)
     finally:
@@ -653,6 +686,27 @@ def test_temporary_cache_snapshot_preserves_operator_data(tmp_path):
     finally:
         cleanup_temporary_industrial_cache(target)
     assert not source_path.exists()
+
+
+def test_temporary_cache_snapshot_includes_committed_wal_rows(tmp_path):
+    target = create_temporary_industrial_cache_target()
+    destination = tmp_path / "wal-snapshot.sqlite"
+    try:
+        with closing(sqlite3.connect(target.cache_db_file)) as writer:
+            assert writer.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+            with writer:
+                writer.execute("CREATE TABLE wal_probe (marker TEXT NOT NULL)")
+                writer.execute("INSERT INTO wal_probe VALUES ('committed-row')")
+            assert Path(f"{target.cache_db_file}-wal").exists()
+
+            persist_temporary_industrial_cache(target, destination)
+
+        with closing(sqlite3.connect(destination)) as persisted:
+            assert persisted.execute("SELECT marker FROM wal_probe").fetchone() == (
+                "committed-row",
+            )
+    finally:
+        cleanup_temporary_industrial_cache(target)
 
 
 def test_profile_and_sync_metadata_are_treated_as_disposable_operator_data():
