@@ -7,16 +7,16 @@
     "external_observation_date": "2026-08-28",
     "issue": 976,
     "ledger_terminalized": false,
-    "mode": "LOCAL-FIRST / ACTIONS-CI-DEFERRED / PARKED",
+    "mode": "PRESERVATION CHECKPOINT — NOT PARKED / NOT REVIEW-READY / CI DEFERRED",
     "phase": "A",
     "routing": [
       {
         "agent_id": "HD-976-BUILD",
         "lane": "Build / CI / Dependencies / Packaging / Windows",
-        "mode": "LOCAL-FIRST / ACTIONS-CI-DEFERRED / PARKED",
+        "mode": "PRESERVATION CHECKPOINT — NOT PARKED / NOT REVIEW-READY / CI DEFERRED",
         "requested_model": "GPT-5.6 Sol",
         "requested_reasoning": "Ultra",
-        "role": "coordinator / integration / validation / parking",
+        "role": "coordinator / integration / preservation checkpoint",
         "runtime_model": "not visible",
         "runtime_reasoning": "not visible"
       },
@@ -69,6 +69,14 @@
     },
     "runtime_or_delivery_behavior_changed": false,
     "validation_gate_date": "2026-08-29"
+  },
+  "checkpoint_status": {
+    "complete_coverage": "pending",
+    "current_byte_232_test_suite": "interrupted; not accepted as a passing validation gate",
+    "final_parking": "pending",
+    "final_reviews": "not accepted",
+    "final_status_stamp": "not accepted",
+    "status": "PRESERVATION CHECKPOINT — NOT PARKED / NOT REVIEW-READY / CI DEFERRED"
   },
   "audit_implementation": [
     {
@@ -15401,8 +15409,9 @@
   },
   "phase_boundaries": {
     "actions_ci": "not dispatched or rerun; no new/current-packet result claimed; existing exact-base run inspected read-only",
-    "ledger": "deferred to Phase B",
-    "pull_request": "not opened or finalized",
+    "finalization": "current-byte 232-test suite interrupted; final reviews/status stamp not accepted; complete coverage and final parking pending",
+    "ledger": "not terminalized; complete coverage and final parking pending",
+    "pull_request": "not opened; preservation checkpoint is not review-ready",
     "release_artifact": "not created or published"
   },
   "platform_evidence": {
@@ -18390,7 +18399,8 @@
     "requested_reasoning": "Ultra",
     "runtime_model": "not visible",
     "runtime_reasoning": "not visible",
-    "status": "clean independent Sol/Ultra-requested static review; actual runtime not visible",
+    "final_status_accepted": false,
+    "status": "interim pre-stamp static review receipt retained; final reviews and status stamp not accepted; actual runtime not visible",
     "unresolved_p0_p1_p2": 0
   },
   "review_receipt": {

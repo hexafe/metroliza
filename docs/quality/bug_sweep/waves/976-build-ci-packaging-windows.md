@@ -1,6 +1,6 @@
 # Issue #976 Phase-A build, CI, dependency, packaging and Windows audit
 
-Status: **PHASE A PARKED — LEDGER/CI/PR DEFERRED**
+Status: **PRESERVATION CHECKPOINT — NOT PARKED / NOT REVIEW-READY / CI DEFERRED**
 
 ## Identity and boundary
 
@@ -13,12 +13,13 @@ Status: **PHASE A PARKED — LEDGER/CI/PR DEFERRED**
 - This audit changes no workflow, manifest, dependency, packaging runtime/configuration, release metadata or application behavior.
 - The coverage ledger and shared bug-sweep README are not terminalized or modified in Phase A.
 - GitHub Actions were not dispatched or rerun; no new/current-packet result is claimed. Existing exact-base run 33151703847 was inspected and reported read-only. No PR or release artifact was created.
+- The current-byte 232-test suite was interrupted. Final reviews and the status stamp are not accepted; complete coverage and final parking remain pending.
 
 ### Coordinator, worker and reviewer routing
 
 | Agent | Role | Lane | Mode | Requested | Actual |
 |---|---|---|---|---|---|
-| HD-976-BUILD | coordinator / integration / validation / parking | Build / CI / Dependencies / Packaging / Windows | LOCAL-FIRST / ACTIONS-CI-DEFERRED / PARKED | GPT-5.6 Sol / Ultra | not visible / not visible |
+| HD-976-BUILD | coordinator / integration / preservation checkpoint | Build / CI / Dependencies / Packaging / Windows | PRESERVATION CHECKPOINT — NOT PARKED / NOT REVIEW-READY / CI DEFERRED | GPT-5.6 Sol / Ultra | not visible / not visible |
 | HD-976-BUILD/W1-CI-MAP | read-only evidence worker | CI workflow / history / Actions inputs | READ-ONLY / ACTIONS-CI-DEFERRED | GPT-5.6 Sol / Ultra | not visible / not visible |
 | HD-976-BUILD/W2-PACKAGING | read-only evidence worker | Packaging / Windows / resources | READ-ONLY / ACTIONS-CI-DEFERRED | GPT-5.6 Sol / Ultra | not visible / not visible |
 | HD-976-BUILD/W3-DEPS | read-only evidence worker | Dependencies / toolchains / PR inputs | READ-ONLY / ACTIONS-CI-DEFERRED | GPT-5.6 Sol / Ultra | not visible / not visible |
@@ -28,8 +29,8 @@ Status: **PHASE A PARKED — LEDGER/CI/PR DEFERRED**
 
 | Path | Git blob SHA-1 | Content SHA-256 | Bytes | Binding |
 |---|---|---|---|---|
-| scripts/quality/audit_build_delivery.py | 912b18cc2b882d52e614955355bbbee651e85976 | 4d6e43e960c9b434d78f6ec40b6f78e1e2a17793059aa70e1803fa0461307c7e | 529754 | content-addressed Phase-A harness; parked commit binding is a parking gate |
-| tests/test_build_delivery_audit.py | 9728e90dd798bf398d11b62158a7e66a0248f279 | 332b4f86153a1cd446d0d15f063a00b6db4b85468228f510ae55a01ed3db3846 | 175215 | content-addressed Phase-A harness; parked commit binding is a parking gate |
+| scripts/quality/audit_build_delivery.py | 912b18cc2b882d52e614955355bbbee651e85976 | 4d6e43e960c9b434d78f6ec40b6f78e1e2a17793059aa70e1803fa0461307c7e | 529754 | content-addressed Phase-A harness; preserved checkpoint binding; final parking remains pending |
+| tests/test_build_delivery_audit.py | 9728e90dd798bf398d11b62158a7e66a0248f279 | 332b4f86153a1cd446d0d15f063a00b6db4b85468228f510ae55a01ed3db3846 | 175215 | content-addressed Phase-A harness; preserved checkpoint binding; final parking remains pending |
 
 ### Per-invocation validation receipts
 
@@ -651,7 +652,7 @@ Manual PDFs/help content is not embedded by either package manifest; the support
 |---|---|
 | linux installed dependencies | executed in isolated Python 3.11 environments |
 | linux packaged | static manifest and helper probes only; no release artifact accepted |
-| linux source | receipt-bound pre-publication non-self pytest, static, parser, metadata, hygiene and security gates passed; full packet pytest and combined coverage are external post-publication parking gates and are not embedded as pass claims |
+| linux source | receipt-bound pre-publication non-self pytest, static, parser, metadata, hygiene and security gates passed; current-byte 232-test suite was interrupted; complete coverage and final parking remain pending |
 | manual release | not executed; deferred to #901/#920 |
 | windows packaged | not executed; deferred to #901 |
 | windows source | existing workflow evidence inspected; not rerun |
@@ -662,7 +663,7 @@ Windows OCR setup/diagnostic evidence has a confirmed false-green boundary: the 
 
 | ID | Platform/path | Scenario | Exact command or unavailable reason | Harness/subject result | Evidence class / limitation | Owner/gate |
 |---|---|---|---|---|---|---|
-| PF-01 | Linux source happy path | receipt-bound pre-publication non-self tests/static/parser/metadata/security gates | receipt-retained portable logical child argv/environment/cwd are recorded in the per-invocation receipt table; parser operands execute through unretained role-checked held descriptor aliases; full packet pytest and combined coverage remain external post-publication parking gates | exit=0 / pass: receipt-bound non-self pytest, static, parser, metadata, hygiene and security gates; external full-packet pytest and combined coverage are not claimed by this self-referential artifact | actual local Linux source validation / not packaged or Windows evidence | Phase-A local gate |
+| PF-01 | Linux source happy path | receipt-bound pre-publication non-self tests/static/parser/metadata/security gates | receipt-retained portable logical child argv/environment/cwd are recorded in the per-invocation receipt table; parser operands execute through unretained role-checked held descriptor aliases; current-byte 232-test suite was interrupted; complete coverage and final parking remain pending | exit=0 / pass: receipt-bound non-self pytest, static, parser, metadata, hygiene and security gates; external full-packet pytest and combined coverage are not claimed by this self-referential artifact | actual local Linux source validation / not packaged or Windows evidence | Phase-A local gate |
 | PF-02 | Linux isolated dependency resolution | baseline/proposal Python 3.11 family workflows | exact commands recorded under pr_973.families | exit=1 / mixed: many family commands passed, but required Ruff and focused policy commands failed; overall PR #973 remains blocked | actual per-family rows plus observational aggregate; heterogeneous outcomes are not flattened / fresh highest resolution makes 29/35 proposals no-ops; do not sum heterogeneous rows as one suite | #913 and downstream family waves |
 | PF-03 | Windows source/core | exact-base hosted windows-core-smoke | existing run 33151703847 inspected read-only; workflow exact steps retained | exit=0 / success | existing hosted observation; not dispatched by Phase A / does not build or run a packaged executable | #914 / Phase B exact-head CI |
 | PF-04 | Windows packaged happy path | clean-machine onefile/onedir startup, Qt/OCR/native DLL/resource flows | unavailable: no authorized clean Windows package build/execution in Phase A | exit=None / not executed | unavailable/manual / source/helper and resolver evidence cannot substitute | #901 / release acceptance |
@@ -1072,7 +1073,7 @@ The per-invocation table above is authoritative for receipt-retained portable lo
 | Command/gate | Captured display command(s) | Cwd / observed | Exit / result | Subject / binding |
 |---|---|---|---|---|
 | validate_bug_sweep_coverage.py | /tmp/metroliza-976-baseline-venv/bin/python scripts/quality/validate_bug_sweep_coverage.py | /tmp/metroliza-976-validation-checkout-v5 / 2026-08-29 | 0 / 935/935 tracked paths covered; zero uncovered and zero duplicate-primary | hexafe/metroliza develop@bba2b9051822b43af951001e943d7c21141cc2a8 tree=3430377cded559c1c2410ffcc571665403683014 / execution claim is bound by validation_receipt.tested_implementation_refs; regeneration never substitutes current bytes |
-| pre-publication application pytest | env -u QT_QPA_PLATFORMTHEME PYTHONPATH=src:. QT_QPA_PLATFORM=offscreen MPLBACKEND=Agg /tmp/metroliza-976-baseline-venv/bin/python -m pytest tests -q -p no:cacheprovider --ignore=tests/test_build_delivery_audit.py | /tmp/metroliza-976-validation-checkout-v5 / 2026-08-29 | 0 / all non-self-referential application/control-plane tests exited zero; the complete suite including the packet audit is a required external post-publication parking gate | hexafe/metroliza develop@bba2b9051822b43af951001e943d7c21141cc2a8 tree=3430377cded559c1c2410ffcc571665403683014 / execution claim is bound by validation_receipt.tested_implementation_refs; regeneration never substitutes current bytes |
+| pre-publication application pytest | env -u QT_QPA_PLATFORMTHEME PYTHONPATH=src:. QT_QPA_PLATFORM=offscreen MPLBACKEND=Agg /tmp/metroliza-976-baseline-venv/bin/python -m pytest tests -q -p no:cacheprovider --ignore=tests/test_build_delivery_audit.py | /tmp/metroliza-976-validation-checkout-v5 / 2026-08-29 | 0 / all non-self-referential application/control-plane tests exited zero; the current-byte 232-test suite was interrupted; complete coverage and final parking remain pending | hexafe/metroliza develop@bba2b9051822b43af951001e943d7c21141cc2a8 tree=3430377cded559c1c2410ffcc571665403683014 / execution claim is bound by validation_receipt.tested_implementation_refs; regeneration never substitutes current bytes |
 | Ruff full repository | /tmp/metroliza-976-baseline-venv/bin/python -m ruff check --no-cache .; env -u QT_QPA_PLATFORMTHEME PYTHONPATH=src:. QT_QPA_PLATFORM=offscreen MPLBACKEND=Agg /tmp/metroliza-976-baseline-venv/bin/python -m pytest tests/test_complexity_ratchet.py -q -p no:cacheprovider | /tmp/metroliza-976-validation-checkout-v5 / 2026-08-29 | 0 / pass; complexity ratchet also passed | hexafe/metroliza develop@bba2b9051822b43af951001e943d7c21141cc2a8 tree=3430377cded559c1c2410ffcc571665403683014 / execution claim is bound by validation_receipt.tested_implementation_refs; regeneration never substitutes current bytes |
 | compileall | /tmp/metroliza-976-baseline-venv/bin/python -m compileall -q -x '^\./\.git/' . | /tmp/metroliza-976-validation-checkout-v5 / 2026-08-29 | 0 / pass | hexafe/metroliza develop@bba2b9051822b43af951001e943d7c21141cc2a8 tree=3430377cded559c1c2410ffcc571665403683014 / execution claim is bound by validation_receipt.tested_implementation_refs; regeneration never substitutes current bytes |
 | narrow mypy | /tmp/metroliza-976-baseline-venv/bin/python -m mypy --cache-dir /tmp/metroliza-976-validation-mypy-cache-v5 src/metroliza/integrations/google_credentials_hygiene.py src/metroliza/industrial/anomaly/contracts.py src/metroliza/industrial/realtime/stream_contracts.py | /tmp/metroliza-976-validation-checkout-v5 / 2026-08-29 | 0 / no issues in the three workflow-owned source files | hexafe/metroliza develop@bba2b9051822b43af951001e943d7c21141cc2a8 tree=3430377cded559c1c2410ffcc571665403683014 / execution claim is bound by validation_receipt.tested_implementation_refs; regeneration never substitutes current bytes |
@@ -1082,7 +1083,7 @@ The per-invocation table above is authoritative for receipt-retained portable lo
 | secret scan | /tmp/metroliza-976-baseline-venv/bin/python scripts/security_audit.py --secret-scan-only --base-ref bba2b9051822b43af951001e943d7c21141cc2a8 | /tmp/metroliza-976-validation-checkout-v5 / 2026-08-29 | 0 / pass against the authorized base | hexafe/metroliza develop@bba2b9051822b43af951001e943d7c21141cc2a8 tree=3430377cded559c1c2410ffcc571665403683014 / execution claim is bound by validation_receipt.tested_implementation_refs; regeneration never substitutes current bytes |
 | pinned-sibling security audit | git -C /tmp/metroliza-976-security-materialized-v5/hexafe-groupstats rev-parse HEAD; git -C /tmp/metroliza-976-security-materialized-v5/hexafe-groupstats rev-parse HEAD^{tree}; git -C /tmp/metroliza-976-security-materialized-v5/hexafe-groupstats status --porcelain=v1 --untracked-files=all; git -C /tmp/metroliza-976-security-materialized-v5/hexafe-plotstats rev-parse HEAD; git -C /tmp/metroliza-976-security-materialized-v5/hexafe-plotstats rev-parse HEAD^{tree}; git -C /tmp/metroliza-976-security-materialized-v5/hexafe-plotstats status --porcelain=v1 --untracked-files=all; git -C /tmp/metroliza-976-security-materialized-v5/oznak rev-parse HEAD; git -C /tmp/metroliza-976-security-materialized-v5/oznak rev-parse HEAD^{tree}; git -C /tmp/metroliza-976-security-materialized-v5/oznak status --porcelain=v1 --untracked-files=all; /tmp/metroliza-976-baseline-venv/bin/python scripts/security_audit.py --ci --sibling-root /tmp/metroliza-976-security-materialized-v5 | /tmp/metroliza-976-validation-checkout-v5 / 2026-08-29 | 0 / pass against private read-only standalone materializations of the three workflow-pinned sibling commit trees; retained preflights bound those materializations immediately before the audit; live advisory lookup found no known vulnerabilities; only reviewed Bandit baseline findings remained | hexafe/metroliza develop@bba2b9051822b43af951001e943d7c21141cc2a8 tree=3430377cded559c1c2410ffcc571665403683014; hexafe/hexafe-groupstats HEAD@14cc60e7412fa2647a8906f3f8833d0d789fc552 tree=fa1dddfccd39e2d68159612c74f1eeab3bd72566 status=clean; empty porcelain including untracked files; hexafe/hexafe-plotstats HEAD@1e2c72107d342f44a37e5fb78d7d76992ea60315 tree=97c1110ab6e95ec2681cbb70b4eaea01c9a453b5 status=clean; empty porcelain including untracked files; hexafe/oznak HEAD@ed51580dfdec9f91f6320c7937af6d65dd5a1290 tree=60bf39a0d2e31661080dcf0f8c25b6f25dfaf9db status=clean; empty porcelain including untracked files / execution claim is bound by validation_receipt.tested_implementation_refs; regeneration never substitutes current bytes |
 
-Independent review: clean independent Sol/Ultra-requested static review; actual runtime not visible; unresolved P0/P1/P2 = 0.
+Interim review receipt: retained as historical evidence for the pre-stamp packet; actual runtime not visible. Final reviews and the status stamp are not accepted for the current checkpoint.
 
 Review receipt SHA-256: `28020d9e0af2e9b2b7c8319b089e9a3eb29b25c01d83963be8f29a0d68cb4a2e`; reviewed at `2026-08-29`; reviewer identity: `not visible`.
 
@@ -1092,4 +1093,6 @@ Reviewed pre-stamp packet: `docs/quality/bug_sweep/evidence/976-build-delivery.j
 
 All 12 owned rules are audited at the exact baseline but remain non-terminal in the unchanged ledger. Phase B must reconcile then-current `develop`, bind schema-v4 snapshots and rerun final local/review/CI gates. Phase A does not claim ledger, CI, PR, Windows-package or release completion.
 
-**PHASE A PARKED — LEDGER/CI/PR DEFERRED**
+The current-byte 232-test suite was interrupted. Complete coverage and final parking remain pending.
+
+**PRESERVATION CHECKPOINT — NOT PARKED / NOT REVIEW-READY / CI DEFERRED**
