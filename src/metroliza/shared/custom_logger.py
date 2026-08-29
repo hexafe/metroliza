@@ -1,33 +1,40 @@
 import logging
-from typing import Literal
+from typing import Any, Literal
+
+from metroliza.shared.logging_utils import redact_log_text, summarize_exception
 
 
-LOG_ONLY = "log_only"
-LOG_AND_DIALOG = "log_and_dialog"
 LogBehavior = Literal["log_only", "log_and_dialog"]
+LOG_ONLY: LogBehavior = "log_only"
+LOG_AND_DIALOG: LogBehavior = "log_and_dialog"
 logger = logging.getLogger(__name__)
 
 
-def log_exception(exception, *, logger_name=None, context="operation"):
+def log_exception(
+    exception: BaseException,
+    *,
+    logger_name: str | None = None,
+    context: object = "operation",
+) -> None:
     """Log an exception with traceback and operation context, without UI side effects."""
     active_logger = logging.getLogger(logger_name) if logger_name else logger
+    safe_context = redact_log_text(context)
+    safe_structure = summarize_exception(exception)
     active_logger.error(
-        "Unhandled exception during %s: %s",
-        context,
-        exception,
-        exc_info=(type(exception), exception, exception.__traceback__),
+        "Unhandled exception during %s; %s",
+        safe_context,
+        safe_structure,
     )
 
 
-def notify_user(*, message, title="Error", parent=None):
+def notify_user(*, message: str, title: str = "Error", parent: Any = None) -> None:
     """Show a user-facing error notification dialog."""
     try:
         from PyQt6.QtWidgets import QMessageBox
     except (ImportError, OSError, RuntimeError) as exc:
-        logger.error(
-            "Could not show error dialog because Qt failed to import: %s",
+        log_exception(
             exc,
-            exc_info=True,
+            context="Could not show error dialog because Qt failed to import",
         )
         return
 
@@ -35,19 +42,19 @@ def notify_user(*, message, title="Error", parent=None):
 
 
 def handle_exception(
-    exception,
+    exception: BaseException,
     *,
     behavior: LogBehavior = LOG_AND_DIALOG,
-    logger_name=None,
-    context="operation",
-    dialog_title="Error",
-    dialog_message=(
+    logger_name: str | None = None,
+    context: object = "operation",
+    dialog_title: str = "Error",
+    dialog_message: str = (
         "An error occurred.\nPlease check the log file for more information.\n"
         "(or just contact the author :P)"
     ),
-    dialog_parent=None,
-    reraise=True,
-):
+    dialog_parent: Any = None,
+    reraise: bool = True,
+) -> None:
     """Handle an exception with selectable logging and user notification behavior."""
     log_exception(exception, logger_name=logger_name, context=context)
 
@@ -63,19 +70,19 @@ class CustomLogger:
 
     def __init__(
         self,
-        exception,
-        reraise=True,
+        exception: BaseException,
+        reraise: bool = True,
         *,
         behavior: LogBehavior = LOG_AND_DIALOG,
-        logger_name=None,
-        context="operation",
-        dialog_title="Error",
-        dialog_message=(
+        logger_name: str | None = None,
+        context: object = "operation",
+        dialog_title: str = "Error",
+        dialog_message: str = (
             "An error occurred.\nPlease check the log file for more information.\n"
             "(or just contact the author :P)"
         ),
-        dialog_parent=None,
-    ):
+        dialog_parent: Any = None,
+    ) -> None:
         """Initialize the logger with the exception and the messages to show.
 
         Args:
@@ -91,7 +98,7 @@ class CustomLogger:
         self.dialog_parent = dialog_parent
         self.log_and_exit()
 
-    def log_and_exit(self):
+    def log_and_exit(self) -> None:
         """Log the exception and display a user-facing message.
 
         Raises:
