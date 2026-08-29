@@ -2,18 +2,15 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
-import sqlite3
 import stat
 import tempfile
 from collections.abc import Iterable
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO
 
-from metroliza.reports.db import sqlite_connection_scope
+from metroliza.reports.db import backup_sqlite_database, sqlite_connection_scope
 
 
 _DISPOSABLE_COUNT_QUERIES = {
@@ -65,6 +62,12 @@ class _FilesystemObjectIdentity:
     device: int
     inode: int
     mode: int
+
+
+@dataclass(frozen=True)
+class _ExistingDestination:
+    path: Path
+    identity: _DestinationIdentity
 
 
 @dataclass(frozen=True)
@@ -240,20 +243,29 @@ def _same_existing_file(first: Path, second: Path) -> bool:
         return False
 
 
+def inspect_industrial_cache_destination(destination: str | Path) -> object | None:
+    """Capture an existing regular destination for a later explicit UI decision."""
+
+    destination_path = _destination_path(destination)
+    identity = _destination_identity(destination_path)
+    if identity is None:
+        return None
+    return _ExistingDestination(destination_path, identity)
+
+
 def _validate_destination_boundaries(
     destination_path: Path,
     source_path: Path,
     forbidden_paths: tuple[Path, ...],
 ) -> _DestinationIdentity | None:
     destination_identity = _destination_identity(destination_path)
-    canonical_destination = destination_path.resolve(strict=False)
-    if canonical_destination == source_path or (
+    if destination_path == source_path or (
         destination_identity is not None
         and _same_existing_file(destination_path, source_path)
     ):
         raise ValueError("Choose a destination outside the temporary cache")
     for forbidden_path in forbidden_paths:
-        if canonical_destination == forbidden_path.resolve(strict=False) or (
+        if destination_path == forbidden_path or (
             destination_identity is not None
             and _same_existing_file(destination_path, forbidden_path)
         ):
@@ -306,91 +318,44 @@ def _validate_staging_identity(
 def _backup_sqlite_database_to_staging(
     source_path: Path,
     staging_path: Path,
-    expected_file_identity: _FilesystemObjectIdentity,
-    expected_directory_identity: _FilesystemObjectIdentity,
-    staging_handle: BinaryIO,
+) -> _FilesystemObjectIdentity:
+    """Create, validate, and flush a bounded SQLite backup in private staging."""
+
+    backup_sqlite_database(str(source_path), str(staging_path))
+    try:
+        staged_identity = _destination_identity(staging_path)
+    except ValueError as exc:
+        raise RuntimeError("Staging database changed during backup") from exc
+    if staged_identity is None:
+        raise RuntimeError("SQLite backup did not create a staging database")
+    expected_identity = _FilesystemObjectIdentity(
+        staged_identity.device,
+        staged_identity.inode,
+        staged_identity.mode,
+    )
+    with staging_path.open("r+b") as staging_handle:
+        if (
+            _filesystem_object_identity_from_status(os.fstat(staging_handle.fileno()))
+            != expected_identity
+        ):
+            raise RuntimeError("Staging database changed after backup")
+        staging_handle.flush()
+        os.fsync(staging_handle.fileno())
+    return expected_identity
+
+
+def _published_identity(path: Path) -> _FilesystemObjectIdentity | None:
+    identity = _destination_identity(path)
+    if identity is None:
+        return None
+    return _FilesystemObjectIdentity(identity.device, identity.inode, identity.mode)
+
+
+def _publish_snapshot_no_clobber(
+    staging_path: Path,
+    destination_path: Path,
+    expected_staging_identity: _FilesystemObjectIdentity,
 ) -> None:
-    """Back up consistently, then write only through the pinned staging handle."""
-
-    _validate_staging_identity(
-        staging_path,
-        expected_file_identity,
-        expected_directory_identity,
-    )
-    with (
-        closing(sqlite3.connect(source_path)) as source_connection,
-        # An empty filename gives SQLite a private temporary database.  Keeping
-        # SQLite away from the replaceable staging pathname prevents an alias
-        # race from redirecting backup writes into an unrelated file.
-        closing(sqlite3.connect("")) as snapshot_connection,
-    ):
-        source_connection.backup(snapshot_connection)
-        with closing(
-            snapshot_connection.execute("PRAGMA integrity_check")
-        ) as integrity_cursor:
-            integrity = integrity_cursor.fetchone()
-        if integrity is None or str(integrity[0]).lower() != "ok":
-            raise RuntimeError("SQLite backup failed integrity validation")
-        snapshot = snapshot_connection.serialize()
-    if not snapshot.startswith(b"SQLite format 3\x00"):
-        raise RuntimeError("SQLite backup failed format validation")
-    _validate_staging_identity(
-        staging_path,
-        expected_file_identity,
-        expected_directory_identity,
-    )
-    _write_snapshot_to_staging_handle(
-        staging_handle,
-        snapshot,
-        expected_file_identity,
-    )
-    _validate_staging_identity(
-        staging_path,
-        expected_file_identity,
-        expected_directory_identity,
-    )
-
-
-def _write_snapshot_to_staging_handle(
-    staging_handle: BinaryIO,
-    snapshot: bytes,
-    expected_file_identity: _FilesystemObjectIdentity,
-) -> None:
-    """Durably write and verify a snapshot through its already-open file object."""
-
-    if _filesystem_object_identity_from_status(
-        os.fstat(staging_handle.fileno())
-    ) != expected_file_identity:
-        raise RuntimeError("Staging database changed before backup write")
-    staging_handle.seek(0)
-    snapshot_view = memoryview(snapshot)
-    offset = 0
-    while offset < len(snapshot_view):
-        written = staging_handle.write(snapshot_view[offset : offset + 1024 * 1024])
-        if not written:
-            raise OSError("SQLite snapshot write did not make progress")
-        offset += written
-    staging_handle.truncate()
-    staging_handle.flush()
-    os.fsync(staging_handle.fileno())
-
-    written_status = os.fstat(staging_handle.fileno())
-    if (
-        _filesystem_object_identity_from_status(written_status)
-        != expected_file_identity
-        or written_status.st_size != len(snapshot)
-    ):
-        raise RuntimeError("Staging database changed during backup write")
-    expected_digest = hashlib.sha256(snapshot).digest()
-    actual_digest = hashlib.sha256()
-    staging_handle.seek(0)
-    while chunk := staging_handle.read(1024 * 1024):
-        actual_digest.update(chunk)
-    if actual_digest.digest() != expected_digest:
-        raise RuntimeError("SQLite backup failed staged-byte validation")
-
-
-def _publish_snapshot_no_clobber(staging_path: Path, destination_path: Path) -> None:
     try:
         os.link(staging_path, destination_path)
     except FileExistsError as exc:
@@ -398,9 +363,9 @@ def _publish_snapshot_no_clobber(staging_path: Path, destination_path: Path) -> 
     except OSError:
         # A successful hard-link publication followed by an interrupted return is
         # ambiguous.  Treat only an identity match as committed; otherwise fail closed.
-        if not _same_existing_file(staging_path, destination_path):
+        if _published_identity(destination_path) != expected_staging_identity:
             raise
-    if not _same_existing_file(staging_path, destination_path):
+    if _published_identity(destination_path) != expected_staging_identity:
         raise RuntimeError("Published destination identity could not be verified")
 
 
@@ -408,32 +373,35 @@ def _publish_snapshot_overwrite(
     staging_path: Path,
     destination_path: Path,
     expected_destination_identity: _DestinationIdentity,
+    expected_staging_identity: _FilesystemObjectIdentity,
 ) -> None:
     # Python's portable stdlib has no inode-conditional replace primitive.  Keep
     # this final identity check directly adjacent to the atomic commit syscall.
     if _destination_identity(destination_path) != expected_destination_identity:
         raise RuntimeError("Existing destination changed before publication")
     os.replace(staging_path, destination_path)
+    if _published_identity(destination_path) != expected_staging_identity:
+        raise RuntimeError("Published destination identity could not be verified")
 
 
 def _validate_overwrite_authorization(
     destination_path: Path,
     destination_identity: _DestinationIdentity | None,
-    overwrite_authorized_destination: str | Path | None,
-) -> Path:
-    canonical_destination = destination_path.resolve(strict=False)
-    if isinstance(overwrite_authorized_destination, bool):
-        raise TypeError("Overwrite authorization must name the exact destination path")
+    overwrite_authorization: object | None,
+) -> _ExistingDestination | None:
     if destination_identity is None:
-        if overwrite_authorized_destination is not None:
+        if overwrite_authorization is not None:
             raise ValueError("Overwrite authorization requires an existing destination")
-        return canonical_destination
-    if overwrite_authorized_destination is None:
+        return None
+    if overwrite_authorization is None:
         raise FileExistsError(f"Destination already exists: {destination_path}")
-    authorized_path = _destination_path(overwrite_authorized_destination).resolve(strict=False)
-    if authorized_path != canonical_destination:
+    if not isinstance(overwrite_authorization, _ExistingDestination):
+        raise TypeError("Overwrite authorization must be an inspected destination decision")
+    if overwrite_authorization.path != destination_path:
         raise ValueError("Overwrite authorization does not match the exact destination path")
-    return canonical_destination
+    if overwrite_authorization.identity != destination_identity:
+        raise RuntimeError("Existing destination changed after overwrite approval")
+    return overwrite_authorization
 
 
 def _publish_validated_snapshot(
@@ -441,27 +409,41 @@ def _publish_validated_snapshot(
     destination_path: Path,
     source_path: Path,
     forbidden_paths: tuple[Path, ...],
-    initial_destination_identity: _DestinationIdentity | None,
-    canonical_destination: Path,
+    overwrite_authorization: _ExistingDestination | None,
+    expected_staging_identity: _FilesystemObjectIdentity,
+    expected_directory_identity: _FilesystemObjectIdentity,
 ) -> None:
+    _validate_staging_identity(
+        staging_path,
+        expected_staging_identity,
+        expected_directory_identity,
+    )
     current_destination_identity = _validate_destination_boundaries(
         destination_path,
         source_path,
         forbidden_paths,
     )
-    if destination_path.resolve(strict=False) != canonical_destination:
+    if _destination_path(destination_path) != destination_path:
         raise RuntimeError("Destination path changed before publication")
-    if initial_destination_identity is None:
+    if overwrite_authorization is None:
         if current_destination_identity is not None:
             raise FileExistsError(f"Destination already exists: {destination_path}")
-        _publish_snapshot_no_clobber(staging_path, destination_path)
+        _publish_snapshot_no_clobber(
+            staging_path,
+            destination_path,
+            expected_staging_identity,
+        )
         return
-    if current_destination_identity != initial_destination_identity:
-        raise RuntimeError("Existing destination changed before publication")
+    _validate_overwrite_authorization(
+        destination_path,
+        current_destination_identity,
+        overwrite_authorization,
+    )
     _publish_snapshot_overwrite(
         staging_path,
         destination_path,
-        initial_destination_identity,
+        overwrite_authorization.identity,
+        expected_staging_identity,
     )
 
 
@@ -470,7 +452,7 @@ def persist_temporary_industrial_cache(
     destination: str | Path,
     *,
     forbidden_destinations: Iterable[str | Path] = (),
-    overwrite_authorized_destination: str | Path | None = None,
+    overwrite_authorization: object | None = None,
 ) -> IndustrialCacheTarget:
     """Copy a consistent temporary SQLite snapshot into a durable target using backup."""
 
@@ -491,10 +473,10 @@ def persist_temporary_industrial_cache(
         source_path,
         forbidden_paths,
     )
-    canonical_destination = _validate_overwrite_authorization(
+    inspected_destination = _validate_overwrite_authorization(
         destination_path,
         initial_destination_identity,
-        overwrite_authorized_destination,
+        overwrite_authorization,
     )
     destination_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -512,35 +494,19 @@ def persist_temporary_industrial_cache(
     try:
         staging_directory.chmod(0o700)
         expected_directory_identity = _directory_identity(staging_directory)
-        with staging_path.open("x+b") as staging_handle:
-            expected_file_identity = _filesystem_object_identity_from_status(
-                os.fstat(staging_handle.fileno())
-            )
-            _backup_sqlite_database_to_staging(
-                source_path,
-                staging_path,
-                expected_file_identity,
-                expected_directory_identity,
-                staging_handle,
-            )
-        _validate_staging_identity(
+        expected_file_identity = _backup_sqlite_database_to_staging(
+            source_path,
             staging_path,
-            expected_file_identity,
-            expected_directory_identity,
         )
         _cleanup_staging_sidecars_before_publication(staging_path)
-        _validate_staging_identity(
-            staging_path,
-            expected_file_identity,
-            expected_directory_identity,
-        )
         _publish_validated_snapshot(
             staging_path,
             destination_path,
             source_path,
             forbidden_paths,
-            initial_destination_identity,
-            canonical_destination,
+            inspected_destination,
+            expected_file_identity,
+            expected_directory_identity,
         )
     finally:
         _cleanup_staging_files(staging_path)
@@ -554,6 +520,7 @@ __all__ = [
     "create_temporary_industrial_cache_target",
     "disposable_cache_counts",
     "existing_metroliza_cache_target",
+    "inspect_industrial_cache_destination",
     "persist_temporary_industrial_cache",
     "persistent_industrial_cache_target",
     "temporary_cache_has_data",

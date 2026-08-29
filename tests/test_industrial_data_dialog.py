@@ -1028,7 +1028,7 @@ def test_launcher_accepts_exact_extension_normalized_overwrite_after_publication
     authorizations = []
 
     def observed_persist(target, final_destination, **kwargs):
-        authorizations.append(kwargs.get("overwrite_authorized_destination"))
+        authorizations.append(kwargs.get("overwrite_authorization"))
         return real_persist(target, final_destination, **kwargs)
 
     monkeypatch.setattr(
@@ -1070,7 +1070,9 @@ def test_launcher_accepts_exact_extension_normalized_overwrite_after_publication
         assert dialog.cache_target.is_temporary is False
         assert dialog.db_file == str(destination.resolve())
         assert not source.exists()
-        assert authorizations == [destination.resolve()]
+        assert len(authorizations) == 1
+        assert authorizations[0] is not None
+        assert not isinstance(authorizations[0], (bool, str, Path))
         assert publication_observations == [("ok", 1)]
         assert str(destination.resolve()) in confirmations[0]
         with sqlite_connection_scope(str(destination)) as connection:

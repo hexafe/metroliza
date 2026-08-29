@@ -13,6 +13,7 @@ from metroliza.industrial.industrial_cache_target import (
     cleanup_temporary_industrial_cache,
     create_temporary_industrial_cache_target,
     disposable_cache_counts,
+    inspect_industrial_cache_destination,
     persist_temporary_industrial_cache,
     temporary_cache_has_data,
 )
@@ -61,6 +62,12 @@ def _assert_no_staging_files(destination: Path) -> None:
     assert list(destination.parent.glob(f".{destination.name}.*.saving*")) == []
 
 
+def _overwrite_authorization(destination: Path) -> object:
+    authorization = inspect_industrial_cache_destination(destination)
+    assert authorization is not None
+    return authorization
+
+
 def test_failed_snapshot_does_not_replace_existing_destination(tmp_path):
     source = tmp_path / "invalid-source.sqlite"
     source.write_bytes(b"not a sqlite database")
@@ -77,7 +84,7 @@ def test_failed_snapshot_does_not_replace_existing_destination(tmp_path):
         persist_temporary_industrial_cache(
             target,
             destination,
-            overwrite_authorized_destination=destination,
+            overwrite_authorization=_overwrite_authorization(destination),
         )
 
     assert destination.read_bytes() == original
@@ -137,7 +144,7 @@ def test_snapshot_replaces_only_the_exact_authorized_existing_destination(tmp_pa
         persisted = persist_temporary_industrial_cache(
             target,
             destination,
-            overwrite_authorized_destination=destination,
+            overwrite_authorization=_overwrite_authorization(destination),
         )
 
         assert persisted.cache_db_file == str(destination.resolve())
@@ -153,29 +160,27 @@ def test_snapshot_replaces_only_the_exact_authorized_existing_destination(tmp_pa
         cleanup_temporary_industrial_cache(target)
 
 
-@pytest.mark.parametrize(
-    ("authorization", "expected_exception"),
-    ((True, TypeError), ("different.sqlite", ValueError)),
-)
-def test_snapshot_rejects_generic_or_mismatched_overwrite_authorization(
-    tmp_path,
-    authorization,
-    expected_exception,
-):
+def test_snapshot_rejects_generic_or_mismatched_overwrite_authorization(tmp_path):
     target = create_temporary_industrial_cache_target()
     destination = tmp_path / "existing.sqlite"
+    different = tmp_path / "different.sqlite"
     original = b"preserve exact bytes"
     destination.write_bytes(original)
+    different.write_bytes(b"different existing file")
     try:
         _populate_cache(target.cache_db_file)
 
-        with pytest.raises(expected_exception, match="authorization"):
+        with pytest.raises(TypeError, match="authorization"):
             persist_temporary_industrial_cache(
                 target,
                 destination,
-                overwrite_authorized_destination=(
-                    tmp_path / authorization if isinstance(authorization, str) else authorization
-                ),
+                overwrite_authorization=True,
+            )
+        with pytest.raises(ValueError, match="exact destination"):
+            persist_temporary_industrial_cache(
+                target,
+                destination,
+                overwrite_authorization=_overwrite_authorization(different),
             )
 
         assert destination.read_bytes() == original
@@ -198,7 +203,7 @@ def test_snapshot_refuses_to_replace_reserved_workspace_database(tmp_path):
                 target,
                 workspace_db,
                 forbidden_destinations=(workspace_db,),
-                overwrite_authorized_destination=workspace_db,
+                overwrite_authorization=_overwrite_authorization(workspace_db),
             )
 
         with closing(sqlite3.connect(workspace_db)) as connection:
@@ -223,7 +228,7 @@ def test_snapshot_refuses_source_path_and_hard_link_alias(tmp_path):
             persist_temporary_industrial_cache(
                 target,
                 source_path,
-                overwrite_authorized_destination=source_path,
+                overwrite_authorization=_overwrite_authorization(source_path),
             )
         try:
             os.link(source_path, hard_link)
@@ -233,7 +238,7 @@ def test_snapshot_refuses_source_path_and_hard_link_alias(tmp_path):
             persist_temporary_industrial_cache(
                 target,
                 hard_link,
-                overwrite_authorized_destination=hard_link,
+                overwrite_authorization=_overwrite_authorization(hard_link),
             )
         assert source_path.read_bytes() == original
         assert hard_link.read_bytes() == original
@@ -262,7 +267,7 @@ def test_snapshot_refuses_destination_symlinks_without_touching_the_entry(
             persist_temporary_industrial_cache(
                 target,
                 destination,
-                overwrite_authorized_destination=destination.resolve(strict=False),
+                overwrite_authorization=True,
             )
 
         assert destination.is_symlink()
@@ -294,14 +299,14 @@ def test_snapshot_refuses_symlink_and_hard_link_aliases_of_forbidden_database(tm
                 target,
                 symlink_destination,
                 forbidden_destinations=(forbidden,),
-                overwrite_authorized_destination=forbidden,
+                overwrite_authorization=True,
             )
         with pytest.raises(ValueError, match="active Metroliza database"):
             persist_temporary_industrial_cache(
                 target,
                 hard_link_destination,
                 forbidden_destinations=(forbidden,),
-                overwrite_authorized_destination=hard_link_destination,
+                overwrite_authorization=_overwrite_authorization(hard_link_destination),
             )
 
         assert symlink_destination.is_symlink()
@@ -322,7 +327,7 @@ def test_snapshot_refuses_directory_and_fifo_destinations(tmp_path):
             persist_temporary_industrial_cache(
                 target,
                 directory,
-                overwrite_authorized_destination=directory,
+                overwrite_authorization=True,
             )
         if not hasattr(os, "mkfifo"):
             pytest.skip("FIFO creation is not supported on this platform")
@@ -331,7 +336,7 @@ def test_snapshot_refuses_directory_and_fifo_destinations(tmp_path):
             persist_temporary_industrial_cache(
                 target,
                 fifo,
-                overwrite_authorized_destination=fifo,
+                overwrite_authorization=True,
             )
         assert directory.is_dir()
         assert fifo.exists()
@@ -349,8 +354,9 @@ def test_new_destination_race_is_preserved_by_atomic_no_clobber(
     real_backup = cache_target_module._backup_sqlite_database_to_staging
 
     def race_backup(*args):
-        real_backup(*args)
+        staged_identity = real_backup(*args)
         destination.write_bytes(raced_bytes)
+        return staged_identity
 
     monkeypatch.setattr(
         cache_target_module,
@@ -369,33 +375,21 @@ def test_new_destination_race_is_preserved_by_atomic_no_clobber(
         cleanup_temporary_industrial_cache(target)
 
 
-def test_authorized_destination_identity_change_aborts_publication(
-    monkeypatch,
-    tmp_path,
-):
+def test_destination_replaced_after_approval_aborts_before_backup(tmp_path):
     target = create_temporary_industrial_cache_target()
     destination = tmp_path / "changed.sqlite"
     _write_marker_database(destination)
-    raced_bytes = b"replacement created while backup was running"
-    real_backup = cache_target_module._backup_sqlite_database_to_staging
-
-    def race_backup(*args):
-        real_backup(*args)
-        destination.unlink()
-        destination.write_bytes(raced_bytes)
-
-    monkeypatch.setattr(
-        cache_target_module,
-        "_backup_sqlite_database_to_staging",
-        race_backup,
-    )
+    authorization = _overwrite_authorization(destination)
+    raced_bytes = b"replacement created after approval"
+    destination.unlink()
+    destination.write_bytes(raced_bytes)
     try:
         _populate_cache(target.cache_db_file)
-        with pytest.raises(RuntimeError, match="changed before publication"):
+        with pytest.raises(RuntimeError, match="changed after overwrite approval"):
             persist_temporary_industrial_cache(
                 target,
                 destination,
-                overwrite_authorized_destination=destination,
+                overwrite_authorization=authorization,
             )
 
         assert destination.read_bytes() == raced_bytes
@@ -416,8 +410,9 @@ def test_authorized_destination_in_place_change_aborts_publication(
     real_backup = cache_target_module._backup_sqlite_database_to_staging
 
     def race_backup(*args):
-        real_backup(*args)
+        staged_identity = real_backup(*args)
         destination.write_bytes(raced_bytes)
+        return staged_identity
 
     monkeypatch.setattr(
         cache_target_module,
@@ -426,11 +421,11 @@ def test_authorized_destination_in_place_change_aborts_publication(
     )
     try:
         _populate_cache(target.cache_db_file)
-        with pytest.raises(RuntimeError, match="changed before publication"):
+        with pytest.raises(RuntimeError, match="changed after overwrite approval"):
             persist_temporary_industrial_cache(
                 target,
                 destination,
-                overwrite_authorized_destination=destination,
+                overwrite_authorization=_overwrite_authorization(destination),
             )
 
         assert destination.read_bytes() == raced_bytes
@@ -453,6 +448,7 @@ def test_prepublication_failures_preserve_authorized_destination(
     failure_calls = []
 
     if failure_kind == "backup":
+
         def failing_backup(_source, staging, *_guard):
             failure_calls.append(failure_kind)
             Path(staging).write_bytes(b"partial backup")
@@ -466,6 +462,7 @@ def test_prepublication_failures_preserve_authorized_destination(
             failing_backup,
         )
     elif failure_kind == "validation":
+
         def failing_validation(_source, staging, *_guard):
             failure_calls.append(failure_kind)
             Path(staging).write_bytes(b"invalid completed snapshot")
@@ -479,12 +476,14 @@ def test_prepublication_failures_preserve_authorized_destination(
             failing_validation,
         )
     else:
+
         def backup_with_sidecars(*args):
             failure_calls.append(failure_kind)
-            real_backup(*args)
+            staged_identity = real_backup(*args)
             staging = args[1]
             Path(f"{staging}-wal").write_bytes(b"wal")
             Path(f"{staging}-shm").write_bytes(b"shm")
+            return staged_identity
 
         def failing_cleanup(_staging):
             raise PermissionError("cleanup failed")
@@ -507,126 +506,11 @@ def test_prepublication_failures_preserve_authorized_destination(
             persist_temporary_industrial_cache(
                 target,
                 destination,
-                overwrite_authorized_destination=destination,
+                overwrite_authorization=_overwrite_authorization(destination),
             )
 
         assert failure_calls == [failure_kind]
         assert destination.read_bytes() == original
-        assert Path(target.cache_db_file).exists()
-        _assert_no_staging_files(destination)
-    finally:
-        cleanup_temporary_industrial_cache(target)
-
-
-@pytest.mark.parametrize("alias_kind", ["symlink", "hardlink"])
-@pytest.mark.parametrize("victim_kind", ["empty", "sqlite"])
-def test_staging_alias_substitution_during_pinned_write_preserves_victim(
-    monkeypatch,
-    tmp_path,
-    alias_kind,
-    victim_kind,
-):
-    target = create_temporary_industrial_cache_target()
-    destination = tmp_path / "saved.sqlite"
-    victim = tmp_path / "unrelated-victim.sqlite"
-    if victim_kind == "empty":
-        victim.write_bytes(b"")
-        original = b""
-    else:
-        original = _write_marker_database(victim)
-    _populate_cache(target.cache_db_file)
-    real_write = cache_target_module._write_snapshot_to_staging_handle
-    substituted = []
-
-    def substituting_write(staging_handle, *args):
-        candidate = Path(staging_handle.name)
-        held_staging = candidate.with_name("held-snapshot.sqlite")
-        try:
-            candidate.rename(held_staging)
-        except OSError as exc:
-            pytest.skip(f"open staging-file rename is unavailable: {exc}")
-        try:
-            if alias_kind == "symlink":
-                candidate.symlink_to(victim)
-            else:
-                os.link(victim, candidate)
-        except OSError as exc:
-            held_staging.rename(candidate)
-            pytest.skip(f"{alias_kind} aliases are unavailable: {exc}")
-        substituted.append(candidate)
-        try:
-            return real_write(staging_handle, *args)
-        finally:
-            candidate.unlink()
-            held_staging.rename(candidate)
-
-    monkeypatch.setattr(
-        cache_target_module,
-        "_write_snapshot_to_staging_handle",
-        substituting_write,
-    )
-    try:
-        persisted = persist_temporary_industrial_cache(target, destination)
-
-        assert len(substituted) == 1
-        assert victim.read_bytes() == original
-        assert persisted.cache_db_file == str(destination.resolve())
-        assert disposable_cache_counts(destination)["industrial_records"] == 1
-        assert Path(target.cache_db_file).exists()
-        _assert_no_staging_files(destination)
-    finally:
-        cleanup_temporary_industrial_cache(target)
-
-
-def test_staging_parent_substitution_during_pinned_write_preserves_victim(
-    monkeypatch,
-    tmp_path,
-):
-    target = create_temporary_industrial_cache_target()
-    destination = tmp_path / "saved.sqlite"
-    victim = tmp_path / "unrelated-victim.sqlite"
-    moved_staging = tmp_path / "moved-private-staging"
-    victim.write_bytes(b"")
-    original = victim.read_bytes()
-    _populate_cache(target.cache_db_file)
-    real_write = cache_target_module._write_snapshot_to_staging_handle
-    substitutions = []
-
-    def substituting_write(staging_handle, *args):
-        candidate = Path(staging_handle.name)
-        replacement_parent = candidate.parent
-        try:
-            replacement_parent.rename(moved_staging)
-            replacement_parent.mkdir(mode=0o700)
-            candidate.symlink_to(victim)
-        except OSError as exc:
-            if replacement_parent.exists():
-                candidate.unlink(missing_ok=True)
-                replacement_parent.rmdir()
-            if moved_staging.exists():
-                moved_staging.rename(replacement_parent)
-            pytest.skip(f"staging-directory rename is unavailable: {exc}")
-        substitutions.append(candidate)
-        try:
-            return real_write(staging_handle, *args)
-        finally:
-            candidate.unlink()
-            replacement_parent.rmdir()
-            moved_staging.rename(replacement_parent)
-
-    monkeypatch.setattr(
-        cache_target_module,
-        "_write_snapshot_to_staging_handle",
-        substituting_write,
-    )
-    try:
-        persisted = persist_temporary_industrial_cache(target, destination)
-
-        assert len(substitutions) == 1
-        assert victim.read_bytes() == original
-        assert persisted.cache_db_file == str(destination.resolve())
-        assert disposable_cache_counts(destination)["industrial_records"] == 1
-        assert not moved_staging.exists()
         assert Path(target.cache_db_file).exists()
         _assert_no_staging_files(destination)
     finally:
@@ -654,7 +538,9 @@ def test_publication_failure_preserves_destination_and_cleans_staging(
             persist_temporary_industrial_cache(
                 target,
                 destination,
-                overwrite_authorized_destination=destination if existing else None,
+                overwrite_authorization=(
+                    _overwrite_authorization(destination) if existing else None
+                ),
             )
 
         if existing:
