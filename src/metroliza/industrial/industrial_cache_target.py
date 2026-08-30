@@ -5,7 +5,9 @@ from __future__ import annotations
 from collections.abc import Iterable
 from contextlib import closing
 from dataclasses import dataclass
+import os
 from pathlib import Path
+import stat
 import tempfile
 
 from metroliza.reports.db import backup_sqlite_database, sqlite_connection_scope
@@ -43,6 +45,11 @@ _DISPOSABLE_COUNT_QUERIES = {
     "industrial_model_artifacts": "SELECT COUNT(*) FROM industrial_model_artifacts",
 }
 _DISPOSABLE_DATA_TABLES = tuple(_DISPOSABLE_COUNT_QUERIES)
+_SQLITE_DESTINATION_SUFFIXES = (".db", ".sqlite", ".sqlite3")
+_SQLITE_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
+_PRIVATE_DIRECTORY_MODE = 0o700
+_PRIVATE_DATABASE_MODE = 0o600
+_PUBLICATION_PLATFORM = os.name
 
 
 @dataclass(frozen=True)
@@ -158,6 +165,141 @@ def temporary_cache_has_data(target: IndustrialCacheTarget | None) -> bool:
     return any(disposable_cache_counts(target.cache_db_file).values())
 
 
+def _resolved_leaf_path(candidate: str | Path) -> Path:
+    """Resolve a path's parent without following its final filesystem entry."""
+
+    expanded = Path(candidate).expanduser()
+    return expanded.parent.resolve(strict=False) / expanded.name
+
+
+def resolve_industrial_cache_destination(destination: str | Path) -> Path:
+    """Return the absolute, extension-normalized final cache path."""
+
+    candidate = Path(destination).expanduser()
+    if not candidate.name.lower().endswith(_SQLITE_DESTINATION_SUFFIXES):
+        candidate = Path(f"{candidate}.db")
+    return _resolved_leaf_path(candidate)
+
+
+def _is_symlink_or_reparse(status: os.stat_result) -> bool:
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    file_attributes = getattr(status, "st_file_attributes", 0)
+    return stat.S_ISLNK(status.st_mode) or bool(
+        reparse_flag and file_attributes & reparse_flag
+    )
+
+
+def _existing_regular_entry(path: Path) -> bool:
+    """Validate an existing entry without following its final path component."""
+
+    try:
+        status = path.lstat()
+    except FileNotFoundError:
+        return False
+    if _is_symlink_or_reparse(status):
+        raise ValueError("Choose a destination that is not a symbolic link or reparse point")
+    if not stat.S_ISREG(status.st_mode):
+        raise ValueError("Choose a regular file destination")
+    return True
+
+
+def _same_existing_file(first: Path, second: Path) -> bool:
+    try:
+        return os.path.samefile(first, second)
+    except OSError:
+        return False
+
+
+def _validate_destination_absent(
+    destination_path: Path,
+    source_path: Path,
+    forbidden_paths: tuple[Path, ...],
+) -> None:
+    destination_exists = _existing_regular_entry(destination_path)
+    if destination_path == source_path or (
+        destination_exists and _same_existing_file(destination_path, source_path)
+    ):
+        raise ValueError("Choose a destination outside the temporary cache")
+    for forbidden_path in forbidden_paths:
+        if destination_path == forbidden_path or (
+            destination_exists and _same_existing_file(destination_path, forbidden_path)
+        ):
+            raise ValueError(
+                "Choose a separate cache archive; an active Metroliza database cannot be replaced"
+            )
+    if destination_exists:
+        raise FileExistsError(f"Destination already exists: {destination_path}")
+
+
+def _sidecar_paths(database_path: Path) -> tuple[Path, ...]:
+    return tuple(Path(f"{database_path}{suffix}") for suffix in _SQLITE_SIDECAR_SUFFIXES)
+
+
+def _reject_existing_sidecars(destination_path: Path) -> None:
+    for sidecar_path in _sidecar_paths(destination_path):
+        try:
+            sidecar_path.lstat()
+        except FileNotFoundError:
+            continue
+        raise FileExistsError(f"SQLite sidecar already exists: {sidecar_path}")
+
+
+def _prepare_private_staging_database(source_path: Path, staging_path: Path) -> None:
+    backup_sqlite_database(str(source_path), str(staging_path))
+    for sidecar_path in _sidecar_paths(staging_path):
+        sidecar_path.unlink(missing_ok=True)
+
+    try:
+        with staging_path.open("rb") as staging_file:
+            if _PUBLICATION_PLATFORM == "posix":
+                os.fchmod(staging_file.fileno(), _PRIVATE_DATABASE_MODE)
+            os.fsync(staging_file.fileno())
+            opened_status = os.fstat(staging_file.fileno())
+    except OSError as exc:
+        raise RuntimeError("Could not apply private staging permissions") from exc
+    if not stat.S_ISREG(opened_status.st_mode):
+        raise RuntimeError("SQLite backup did not create a regular staging database")
+    if (
+        _PUBLICATION_PLATFORM == "posix"
+        and stat.S_IMODE(opened_status.st_mode) != _PRIVATE_DATABASE_MODE
+    ):
+        raise RuntimeError("Private staging permissions could not be verified")
+
+
+def _cleanup_staging_artifacts(staging_directory: Path, staging_path: Path) -> None:
+    for candidate in (staging_path, *_sidecar_paths(staging_path)):
+        try:
+            candidate.unlink(missing_ok=True)
+        except OSError:
+            pass
+    try:
+        staging_directory.rmdir()
+    except OSError:
+        pass
+
+
+def _atomic_publish_no_replace(staging_path: Path, destination_path: Path) -> None:
+    """Publish once using a platform primitive that cannot replace a destination."""
+
+    try:
+        if _PUBLICATION_PLATFORM == "nt":
+            # Sibling staging keeps this same-volume. Windows os.rename rejects
+            # an existing destination instead of replacing it.
+            os.rename(staging_path, destination_path)
+        elif _PUBLICATION_PLATFORM == "posix":
+            # A hard link creates the final name only when it is still absent.
+            os.link(staging_path, destination_path)
+        else:
+            raise RuntimeError("No supported atomic no-replace publication primitive")
+    except FileExistsError as exc:
+        raise FileExistsError(f"Destination already exists: {destination_path}") from exc
+    except OSError as exc:
+        raise RuntimeError(
+            "The destination filesystem does not support the required atomic no-replace "
+            f"publication: {destination_path}"
+        ) from exc
+
+
 def persist_temporary_industrial_cache(
     target: IndustrialCacheTarget,
     destination: str | Path,
@@ -169,48 +311,46 @@ def persist_temporary_industrial_cache(
     if not target.is_temporary:
         raise ValueError("Only a temporary industrial cache can be saved as a durable cache")
     source_path = Path(target.cache_db_file).expanduser().resolve()
-    destination_path = Path(destination).expanduser().resolve()
-    if source_path == destination_path:
-        raise ValueError("Choose a destination outside the temporary cache")
-    reserved_paths = {
-        Path(candidate).expanduser().resolve()
+    destination_path = resolve_industrial_cache_destination(destination)
+    forbidden_paths = tuple(
+        _resolved_leaf_path(candidate)
         for candidate in forbidden_destinations
         if str(candidate or "").strip()
-    }
-    if destination_path in reserved_paths:
-        raise ValueError(
-            "Choose a separate cache archive; an active Metroliza database cannot be replaced"
-        )
+    )
     if not source_path.is_file():
         raise FileNotFoundError(source_path)
+
+    _validate_destination_absent(destination_path, source_path, forbidden_paths)
+    _reject_existing_sidecars(destination_path)
     destination_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Build and validate a sibling snapshot first.  Writing directly into an
-    # existing destination could corrupt the user's prior cache if backup or
-    # validation failed halfway through.
-    staging_handle = tempfile.NamedTemporaryFile(
-        prefix=f".{destination_path.name}.",
-        suffix=".saving",
-        dir=destination_path.parent,
-        delete=False,
+    staging_directory = Path(
+        tempfile.mkdtemp(
+            prefix=f".{destination_path.name}.",
+            suffix=".saving",
+            dir=destination_path.parent,
+        )
     )
-    staging_path = Path(staging_handle.name)
-    staging_handle.close()
+    staging_path = staging_directory / "snapshot.sqlite"
+    persistent_target = persistent_industrial_cache_target(destination_path)
     try:
-        backup_sqlite_database(str(source_path), str(staging_path))
-        staging_path.replace(destination_path)
-    finally:
-        for candidate in (
-            staging_path,
-            Path(f"{staging_path}-wal"),
-            Path(f"{staging_path}-shm"),
-        ):
-            try:
-                candidate.unlink(missing_ok=True)
-            except OSError:
-                pass
+        if _PUBLICATION_PLATFORM == "posix":
+            staging_directory.chmod(_PRIVATE_DIRECTORY_MODE)
+            if stat.S_IMODE(staging_directory.stat().st_mode) != _PRIVATE_DIRECTORY_MODE:
+                raise RuntimeError("Private staging directory permissions could not be verified")
+        _prepare_private_staging_database(source_path, staging_path)
 
-    return persistent_industrial_cache_target(destination_path)
+        # Recheck every fallible destination condition immediately before the
+        # single commit point. Nothing after a successful primitive may reject
+        # or remove the published destination.
+        if resolve_industrial_cache_destination(destination_path) != destination_path:
+            raise RuntimeError("Destination path changed before publication")
+        _validate_destination_absent(destination_path, source_path, forbidden_paths)
+        _reject_existing_sidecars(destination_path)
+        _atomic_publish_no_replace(staging_path, destination_path)
+        return persistent_target
+    finally:
+        _cleanup_staging_artifacts(staging_directory, staging_path)
 
 
 __all__ = [
@@ -221,5 +361,6 @@ __all__ = [
     "existing_metroliza_cache_target",
     "persist_temporary_industrial_cache",
     "persistent_industrial_cache_target",
+    "resolve_industrial_cache_destination",
     "temporary_cache_has_data",
 ]
