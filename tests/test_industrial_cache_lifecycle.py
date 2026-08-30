@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import stat
 from contextlib import closing
 from pathlib import Path
 
@@ -493,6 +494,127 @@ def test_non_windows_publication_uses_atomic_hard_link(monkeypatch, tmp_path):
         assert len(calls) == 1
         assert calls[0][1] == destination
         assert disposable_cache_counts(destination)["industrial_records"] == 1
+    finally:
+        cleanup_temporary_industrial_cache(target)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX mode bits are unavailable")
+def test_private_staging_mode_is_published_through_atomic_hard_link(monkeypatch, tmp_path):
+    target = create_temporary_industrial_cache_target()
+    destination = tmp_path / "private.sqlite"
+    real_backup = cache_target_module.backup_sqlite_database
+    real_publish = cache_target_module._atomic_publish_no_replace
+    staging_modes = []
+    published_modes = []
+
+    def backup_with_permissive_mode(source, staging):
+        real_backup(source, staging)
+        os.chmod(staging, 0o644)
+
+    def observe_private_staging(staging, final_destination):
+        staging_modes.append(stat.S_IMODE(Path(staging).stat().st_mode))
+        real_publish(staging, final_destination)
+        published_modes.append(stat.S_IMODE(Path(final_destination).stat().st_mode))
+
+    monkeypatch.setattr(
+        cache_target_module,
+        "backup_sqlite_database",
+        backup_with_permissive_mode,
+    )
+    monkeypatch.setattr(
+        cache_target_module,
+        "_atomic_publish_no_replace",
+        observe_private_staging,
+    )
+    try:
+        _populate_cache(target.cache_db_file)
+
+        persist_temporary_industrial_cache(target, destination)
+
+        assert staging_modes == [0o600]
+        assert published_modes == [0o600]
+        assert stat.S_IMODE(destination.stat().st_mode) == 0o600
+    finally:
+        cleanup_temporary_industrial_cache(target)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX fchmod is unavailable")
+def test_private_staging_permission_application_failure_preserves_source(
+    monkeypatch,
+    tmp_path,
+):
+    target = create_temporary_industrial_cache_target()
+    destination = tmp_path / "permission-failure.sqlite"
+
+    def fail_fchmod(_fd, _mode):
+        raise PermissionError("permission denied")
+
+    monkeypatch.setattr(cache_target_module.os, "fchmod", fail_fchmod)
+    try:
+        _populate_cache(target.cache_db_file)
+
+        with pytest.raises(RuntimeError, match="private staging permissions"):
+            persist_temporary_industrial_cache(target, destination)
+
+        assert not destination.exists()
+        assert Path(target.cache_db_file).exists()
+        _assert_no_staging_files(destination)
+    finally:
+        cleanup_temporary_industrial_cache(target)
+
+
+def test_permission_verification_failure_removes_owned_publication(monkeypatch, tmp_path):
+    target = create_temporary_industrial_cache_target()
+    destination = tmp_path / "verification-failure.sqlite"
+
+    def fail_permission_verification(*_args):
+        raise RuntimeError("published permission verification failed")
+
+    monkeypatch.setattr(
+        cache_target_module,
+        "_verify_published_destination",
+        fail_permission_verification,
+    )
+    try:
+        _populate_cache(target.cache_db_file)
+
+        with pytest.raises(RuntimeError, match="permission verification failed"):
+            persist_temporary_industrial_cache(target, destination)
+
+        assert not destination.exists()
+        assert Path(target.cache_db_file).exists()
+        _assert_no_staging_files(destination)
+    finally:
+        cleanup_temporary_industrial_cache(target)
+
+
+def test_permission_verification_failure_never_removes_raced_destination(
+    monkeypatch,
+    tmp_path,
+):
+    target = create_temporary_industrial_cache_target()
+    destination = tmp_path / "raced-verification.sqlite"
+    raced_bytes = b"unrelated destination after publication"
+
+    def replace_then_fail(final_destination, _expected_identity):
+        final_destination.unlink()
+        final_destination.write_bytes(raced_bytes)
+        raise RuntimeError("published permission verification failed")
+
+    monkeypatch.setattr(
+        cache_target_module,
+        "_verify_published_destination",
+        replace_then_fail,
+    )
+    try:
+        _populate_cache(target.cache_db_file)
+
+        with pytest.raises(RuntimeError, match="permission verification failed"):
+            persist_temporary_industrial_cache(target, destination)
+
+        assert destination.read_bytes() == raced_bytes
+        assert Path(target.cache_db_file).exists()
+        _assert_no_staging_files(destination)
     finally:
         cleanup_temporary_industrial_cache(target)
 

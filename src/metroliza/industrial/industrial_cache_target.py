@@ -241,6 +241,9 @@ def _validate_destination_boundaries(
 
 _SQLITE_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
 _WINDOWS_ATOMIC_RENAME_NO_REPLACE = os.name == "nt"
+_POSIX_PRIVATE_MODE_ENFORCEMENT = os.name == "posix"
+_PRIVATE_STAGING_MODE = 0o600
+_GROUP_OR_OTHER_PERMISSION_BITS = stat.S_IRWXG | stat.S_IRWXO
 
 
 def _destination_sidecars(destination_path: Path) -> tuple[Path, ...]:
@@ -308,17 +311,29 @@ def _backup_sqlite_database_to_staging(
         raise RuntimeError("Staging database changed during backup") from exc
     if staged_identity is None:
         raise RuntimeError("SQLite backup did not create a staging database")
-    expected_identity = _FilesystemObjectIdentity(
-        staged_identity.device,
-        staged_identity.inode,
-        staged_identity.mode,
-    )
     with staging_path.open("r+b") as staging_handle:
-        if (
-            _filesystem_object_identity_from_status(os.fstat(staging_handle.fileno()))
-            != expected_identity
-        ):
+        try:
+            opened_identity = _filesystem_object_identity_from_status(
+                os.fstat(staging_handle.fileno())
+            )
+        except OSError as exc:
+            raise RuntimeError("Staging database could not be verified after backup") from exc
+        if opened_identity != staged_identity:
             raise RuntimeError("Staging database changed after backup")
+        if _POSIX_PRIVATE_MODE_ENFORCEMENT:
+            try:
+                os.fchmod(staging_handle.fileno(), _PRIVATE_STAGING_MODE)
+                hardened_status = os.fstat(staging_handle.fileno())
+            except OSError as exc:
+                raise RuntimeError("Could not apply private staging permissions") from exc
+            if stat.S_IMODE(hardened_status.st_mode) != _PRIVATE_STAGING_MODE:
+                raise RuntimeError("Private staging permissions could not be verified")
+        else:
+            try:
+                hardened_status = os.fstat(staging_handle.fileno())
+            except OSError as exc:
+                raise RuntimeError("Staging database could not be verified after backup") from exc
+        expected_identity = _filesystem_object_identity_from_status(hardened_status)
         staging_handle.flush()
         os.fsync(staging_handle.fileno())
     return expected_identity
@@ -326,6 +341,42 @@ def _backup_sqlite_database_to_staging(
 
 def _published_identity(path: Path) -> _FilesystemObjectIdentity | None:
     return _destination_identity(path)
+
+
+def _verify_published_destination(
+    destination_path: Path,
+    expected_staging_identity: _FilesystemObjectIdentity,
+) -> None:
+    published_identity = _published_identity(destination_path)
+    if published_identity != expected_staging_identity:
+        raise RuntimeError("Published destination identity could not be verified")
+    if (
+        _POSIX_PRIVATE_MODE_ENFORCEMENT
+        and published_identity.mode & _GROUP_OR_OTHER_PERMISSION_BITS
+    ):
+        raise RuntimeError("Published destination must not grant group or other permissions")
+
+
+def _remove_published_destination_if_owned(
+    destination_path: Path,
+    expected_staging_identity: _FilesystemObjectIdentity,
+) -> None:
+    """Remove a failed publication only while it remains our exact object."""
+
+    try:
+        is_owned_publication = (
+            _published_identity(destination_path) == expected_staging_identity
+        )
+    except (OSError, ValueError):
+        return
+    if not is_owned_publication:
+        return
+    try:
+        destination_path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise RuntimeError("Could not remove failed cache publication") from exc
 
 
 def _atomic_publish_no_replace(staging_path: Path, destination_path: Path) -> None:
@@ -356,8 +407,6 @@ def _publish_snapshot_no_clobber(
                 "The destination filesystem does not support the required atomic "
                 f"no-replace publication: {destination_path}"
             ) from exc
-    if _published_identity(destination_path) != expected_staging_identity:
-        raise RuntimeError("Published destination identity could not be verified")
 
 
 def _publish_validated_snapshot(
@@ -388,10 +437,13 @@ def _publish_validated_snapshot(
             destination_path,
             expected_staging_identity,
         )
+        _verify_published_destination(destination_path, expected_staging_identity)
         _reject_existing_destination_sidecars(destination_path)
-    except FileExistsError:
-        if _published_identity(destination_path) == expected_staging_identity:
-            destination_path.unlink()
+    except (FileExistsError, RuntimeError):
+        _remove_published_destination_if_owned(
+            destination_path,
+            expected_staging_identity,
+        )
         raise
 
 
