@@ -48,26 +48,10 @@ _DISPOSABLE_DATA_TABLES = tuple(_DISPOSABLE_COUNT_QUERIES)
 
 
 @dataclass(frozen=True)
-class _DestinationIdentity:
-    device: int
-    inode: int
-    mode: int
-    size: int
-    modified_ns: int
-    changed_ns: int
-
-
-@dataclass(frozen=True)
 class _FilesystemObjectIdentity:
     device: int
     inode: int
     mode: int
-
-
-@dataclass(frozen=True)
-class _ExistingDestination:
-    path: Path
-    identity: _DestinationIdentity
 
 
 @dataclass(frozen=True)
@@ -148,6 +132,7 @@ def cleanup_temporary_industrial_cache(target: IndustrialCacheTarget | None) -> 
         Path(target.cache_db_file),
         Path(f"{target.cache_db_file}-wal"),
         Path(f"{target.cache_db_file}-shm"),
+        Path(f"{target.cache_db_file}-journal"),
     ):
         try:
             candidate.unlink(missing_ok=True)
@@ -190,7 +175,7 @@ def _destination_path(candidate: str | Path) -> Path:
     return expanded.parent.resolve(strict=False) / expanded.name
 
 
-def _destination_identity(path: Path) -> _DestinationIdentity | None:
+def _destination_identity(path: Path) -> _FilesystemObjectIdentity | None:
     """Return a regular destination's identity without following its final entry."""
 
     try:
@@ -203,18 +188,7 @@ def _destination_identity(path: Path) -> _DestinationIdentity | None:
         raise ValueError("Choose a destination that is not a symbolic link or reparse point")
     if not stat.S_ISREG(status.st_mode):
         raise ValueError("Choose a regular file destination")
-    return _destination_identity_from_status(status)
-
-
-def _destination_identity_from_status(status: os.stat_result) -> _DestinationIdentity:
-    return _DestinationIdentity(
-        device=status.st_dev,
-        inode=status.st_ino,
-        mode=status.st_mode,
-        size=status.st_size,
-        modified_ns=status.st_mtime_ns,
-        changed_ns=status.st_ctime_ns,
-    )
+    return _filesystem_object_identity_from_status(status)
 
 
 def _filesystem_object_identity_from_status(
@@ -243,21 +217,11 @@ def _same_existing_file(first: Path, second: Path) -> bool:
         return False
 
 
-def inspect_industrial_cache_destination(destination: str | Path) -> object | None:
-    """Capture an existing regular destination for a later explicit UI decision."""
-
-    destination_path = _destination_path(destination)
-    identity = _destination_identity(destination_path)
-    if identity is None:
-        return None
-    return _ExistingDestination(destination_path, identity)
-
-
 def _validate_destination_boundaries(
     destination_path: Path,
     source_path: Path,
     forbidden_paths: tuple[Path, ...],
-) -> _DestinationIdentity | None:
+) -> _FilesystemObjectIdentity | None:
     destination_identity = _destination_identity(destination_path)
     if destination_path == source_path or (
         destination_identity is not None
@@ -275,16 +239,32 @@ def _validate_destination_boundaries(
     return destination_identity
 
 
+_SQLITE_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
+_WINDOWS_ATOMIC_RENAME_NO_REPLACE = os.name == "nt"
+
+
+def _destination_sidecars(destination_path: Path) -> tuple[Path, ...]:
+    return tuple(Path(f"{destination_path}{suffix}") for suffix in _SQLITE_SIDECAR_SUFFIXES)
+
+
+def _reject_existing_destination_sidecars(destination_path: Path) -> None:
+    for sidecar_path in _destination_sidecars(destination_path):
+        try:
+            sidecar_path.lstat()
+        except FileNotFoundError:
+            continue
+        raise FileExistsError(f"SQLite sidecar already exists: {sidecar_path}")
+
+
 def _cleanup_staging_sidecars_before_publication(staging_path: Path) -> None:
-    for candidate in (Path(f"{staging_path}-wal"), Path(f"{staging_path}-shm")):
+    for candidate in _destination_sidecars(staging_path):
         candidate.unlink(missing_ok=True)
 
 
 def _cleanup_staging_files(staging_path: Path) -> None:
     for candidate in (
         staging_path,
-        Path(f"{staging_path}-wal"),
-        Path(f"{staging_path}-shm"),
+        *_destination_sidecars(staging_path),
     ):
         try:
             candidate.unlink(missing_ok=True)
@@ -345,10 +325,18 @@ def _backup_sqlite_database_to_staging(
 
 
 def _published_identity(path: Path) -> _FilesystemObjectIdentity | None:
-    identity = _destination_identity(path)
-    if identity is None:
-        return None
-    return _FilesystemObjectIdentity(identity.device, identity.inode, identity.mode)
+    return _destination_identity(path)
+
+
+def _atomic_publish_no_replace(staging_path: Path, destination_path: Path) -> None:
+    """Atomically publish only when the platform primitive cannot replace a target."""
+
+    if _WINDOWS_ATOMIC_RENAME_NO_REPLACE:
+        # On Windows os.rename fails when dst exists.  Sibling staging keeps this
+        # same-volume, so a successful rename is atomic and no-replace.
+        os.rename(staging_path, destination_path)
+        return
+    os.link(staging_path, destination_path)
 
 
 def _publish_snapshot_no_clobber(
@@ -357,51 +345,19 @@ def _publish_snapshot_no_clobber(
     expected_staging_identity: _FilesystemObjectIdentity,
 ) -> None:
     try:
-        os.link(staging_path, destination_path)
+        _atomic_publish_no_replace(staging_path, destination_path)
     except FileExistsError as exc:
         raise FileExistsError(f"Destination already exists: {destination_path}") from exc
-    except OSError:
-        # A successful hard-link publication followed by an interrupted return is
-        # ambiguous.  Treat only an identity match as committed; otherwise fail closed.
+    except OSError as exc:
+        # A successful primitive followed by an interrupted return is ambiguous.
+        # Treat only an identity match as committed; otherwise fail closed.
         if _published_identity(destination_path) != expected_staging_identity:
-            raise
+            raise RuntimeError(
+                "The destination filesystem does not support the required atomic "
+                f"no-replace publication: {destination_path}"
+            ) from exc
     if _published_identity(destination_path) != expected_staging_identity:
         raise RuntimeError("Published destination identity could not be verified")
-
-
-def _publish_snapshot_overwrite(
-    staging_path: Path,
-    destination_path: Path,
-    expected_destination_identity: _DestinationIdentity,
-    expected_staging_identity: _FilesystemObjectIdentity,
-) -> None:
-    # Python's portable stdlib has no inode-conditional replace primitive.  Keep
-    # this final identity check directly adjacent to the atomic commit syscall.
-    if _destination_identity(destination_path) != expected_destination_identity:
-        raise RuntimeError("Existing destination changed before publication")
-    os.replace(staging_path, destination_path)
-    if _published_identity(destination_path) != expected_staging_identity:
-        raise RuntimeError("Published destination identity could not be verified")
-
-
-def _validate_overwrite_authorization(
-    destination_path: Path,
-    destination_identity: _DestinationIdentity | None,
-    overwrite_authorization: object | None,
-) -> _ExistingDestination | None:
-    if destination_identity is None:
-        if overwrite_authorization is not None:
-            raise ValueError("Overwrite authorization requires an existing destination")
-        return None
-    if overwrite_authorization is None:
-        raise FileExistsError(f"Destination already exists: {destination_path}")
-    if not isinstance(overwrite_authorization, _ExistingDestination):
-        raise TypeError("Overwrite authorization must be an inspected destination decision")
-    if overwrite_authorization.path != destination_path:
-        raise ValueError("Overwrite authorization does not match the exact destination path")
-    if overwrite_authorization.identity != destination_identity:
-        raise RuntimeError("Existing destination changed after overwrite approval")
-    return overwrite_authorization
 
 
 def _publish_validated_snapshot(
@@ -409,7 +365,6 @@ def _publish_validated_snapshot(
     destination_path: Path,
     source_path: Path,
     forbidden_paths: tuple[Path, ...],
-    overwrite_authorization: _ExistingDestination | None,
     expected_staging_identity: _FilesystemObjectIdentity,
     expected_directory_identity: _FilesystemObjectIdentity,
 ) -> None:
@@ -418,33 +373,26 @@ def _publish_validated_snapshot(
         expected_staging_identity,
         expected_directory_identity,
     )
-    current_destination_identity = _validate_destination_boundaries(
+    if _validate_destination_boundaries(
         destination_path,
         source_path,
         forbidden_paths,
-    )
+    ) is not None:
+        raise FileExistsError(f"Destination already exists: {destination_path}")
     if _destination_path(destination_path) != destination_path:
         raise RuntimeError("Destination path changed before publication")
-    if overwrite_authorization is None:
-        if current_destination_identity is not None:
-            raise FileExistsError(f"Destination already exists: {destination_path}")
+    _reject_existing_destination_sidecars(destination_path)
+    try:
         _publish_snapshot_no_clobber(
             staging_path,
             destination_path,
             expected_staging_identity,
         )
-        return
-    _validate_overwrite_authorization(
-        destination_path,
-        current_destination_identity,
-        overwrite_authorization,
-    )
-    _publish_snapshot_overwrite(
-        staging_path,
-        destination_path,
-        overwrite_authorization.identity,
-        expected_staging_identity,
-    )
+        _reject_existing_destination_sidecars(destination_path)
+    except FileExistsError:
+        if _published_identity(destination_path) == expected_staging_identity:
+            destination_path.unlink()
+        raise
 
 
 def persist_temporary_industrial_cache(
@@ -452,7 +400,6 @@ def persist_temporary_industrial_cache(
     destination: str | Path,
     *,
     forbidden_destinations: Iterable[str | Path] = (),
-    overwrite_authorization: object | None = None,
 ) -> IndustrialCacheTarget:
     """Copy a consistent temporary SQLite snapshot into a durable target using backup."""
 
@@ -468,21 +415,17 @@ def persist_temporary_industrial_cache(
     if not source_path.is_file():
         raise FileNotFoundError(source_path)
 
-    initial_destination_identity = _validate_destination_boundaries(
+    if _validate_destination_boundaries(
         destination_path,
         source_path,
         forbidden_paths,
-    )
-    inspected_destination = _validate_overwrite_authorization(
-        destination_path,
-        initial_destination_identity,
-        overwrite_authorization,
-    )
+    ) is not None:
+        raise FileExistsError(f"Destination already exists: {destination_path}")
+    _reject_existing_destination_sidecars(destination_path)
     destination_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Build and validate a sibling snapshot first.  Writing directly into an
-    # existing destination could corrupt the user's prior cache if backup or
-    # validation failed halfway through.
+    # Build and validate a sibling snapshot first.  A failed backup or
+    # validation must never leave a partial durable cache at the final path.
     staging_directory = Path(
         tempfile.mkdtemp(
             prefix=f".{destination_path.name}.",
@@ -504,7 +447,6 @@ def persist_temporary_industrial_cache(
             destination_path,
             source_path,
             forbidden_paths,
-            inspected_destination,
             expected_file_identity,
             expected_directory_identity,
         )
@@ -520,7 +462,6 @@ __all__ = [
     "create_temporary_industrial_cache_target",
     "disposable_cache_counts",
     "existing_metroliza_cache_target",
-    "inspect_industrial_cache_destination",
     "persist_temporary_industrial_cache",
     "persistent_industrial_cache_target",
     "temporary_cache_has_data",

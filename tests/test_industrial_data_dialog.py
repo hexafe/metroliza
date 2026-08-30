@@ -929,14 +929,9 @@ def test_launcher_can_create_persistent_industrial_cache_without_report_context(
     parent.close()
 
 
-@pytest.mark.parametrize(
-    "response_name",
-    ("No", "Cancel"),
-)
-def test_launcher_confirms_extension_normalized_existing_destination(
+def test_launcher_rejects_extension_normalized_existing_destination(
     monkeypatch,
     tmp_path,
-    response_name,
 ):
     _app()
     selected_path = tmp_path / "existing-cache"
@@ -946,9 +941,7 @@ def test_launcher_confirms_extension_normalized_existing_destination(
         connection.execute("INSERT INTO unrelated_marker VALUES ('preserve-me')")
         connection.commit()
     original = destination.read_bytes()
-    confirmations = []
     warnings = []
-    response = getattr(QMessageBox.StandardButton, response_name)
     monkeypatch.setattr(
         industrial_data_dialog.QFileDialog,
         "getSaveFileName",
@@ -957,8 +950,8 @@ def test_launcher_confirms_extension_normalized_existing_destination(
     monkeypatch.setattr(
         industrial_data_dialog.QMessageBox,
         "question",
-        lambda _parent, title, message, *args, **kwargs: (
-            confirmations.append((str(title), str(message), args)) or response
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("existing cache destinations are never confirmed for overwrite")
         ),
     )
     monkeypatch.setattr(
@@ -977,15 +970,7 @@ def test_launcher_confirms_extension_normalized_existing_destination(
         assert dialog.db_file == str(temporary_path)
         assert temporary_path.exists()
         assert destination.read_bytes() == original
-        assert len(confirmations) == 1
-        assert warnings == []
-        assert str(destination.resolve()) in confirmations[0][1]
-        assert "permanently lost" in confirmations[0][1]
-        buttons, default = confirmations[0][2]
-        assert buttons & QMessageBox.StandardButton.Yes
-        assert buttons & QMessageBox.StandardButton.No
-        assert buttons & QMessageBox.StandardButton.Cancel
-        assert default == QMessageBox.StandardButton.No
+        assert warnings and "already exists" in warnings[0][1]
         with sqlite_connection_scope(str(destination)) as connection:
             marker = connection.execute(
                 "SELECT value FROM unrelated_marker"
@@ -1000,97 +985,9 @@ def test_launcher_confirms_extension_normalized_existing_destination(
         dialog.close()
 
 
-def test_launcher_accepts_exact_extension_normalized_overwrite_after_publication(
+def test_save_before_discard_existing_destination_keeps_temporary_cache_and_destination(
     monkeypatch,
     tmp_path,
-):
-    _app()
-    selected_path = tmp_path / "accepted-cache"
-    destination = selected_path.with_suffix(".db")
-    with sqlite_connection_scope(str(destination)) as connection:
-        connection.execute("CREATE TABLE unrelated_marker (value TEXT NOT NULL)")
-        connection.execute("INSERT INTO unrelated_marker VALUES ('replace-me')")
-        connection.commit()
-    monkeypatch.setattr(
-        industrial_data_dialog.QFileDialog,
-        "getSaveFileName",
-        lambda *args, **kwargs: (str(selected_path), "SQLite database (*.db *.sqlite *.sqlite3)"),
-    )
-    confirmations = []
-    monkeypatch.setattr(
-        industrial_data_dialog.QMessageBox,
-        "question",
-        lambda _parent, _title, message, *args, **kwargs: (
-            confirmations.append(str(message)) or QMessageBox.StandardButton.Yes
-        ),
-    )
-    real_persist = industrial_data_dialog.persist_temporary_industrial_cache
-    authorizations = []
-
-    def observed_persist(target, final_destination, **kwargs):
-        authorizations.append(kwargs.get("overwrite_authorization"))
-        return real_persist(target, final_destination, **kwargs)
-
-    monkeypatch.setattr(
-        industrial_data_dialog,
-        "persist_temporary_industrial_cache",
-        observed_persist,
-    )
-    real_cleanup = industrial_data_dialog.cleanup_temporary_industrial_cache
-    publication_observations = []
-
-    def observed_cleanup(target):
-        if (
-            target is not None
-            and target.is_temporary
-            and Path(target.cache_db_file).exists()
-            and destination.exists()
-        ):
-            with sqlite_connection_scope(str(destination)) as connection:
-                integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
-            publication_observations.append(
-                (
-                    integrity,
-                    IndustrialDataRepository(str(destination)).summarize_counts().records,
-                )
-            )
-        real_cleanup(target)
-
-    monkeypatch.setattr(
-        industrial_data_dialog,
-        "cleanup_temporary_industrial_cache",
-        observed_cleanup,
-    )
-    dialog = IndustrialDataDialog(db_file=None)
-    source = Path(dialog.db_file)
-    _populate_industrial_cache(dialog.db_file)
-    try:
-        dialog.create_database_file()
-
-        assert dialog.cache_target.is_temporary is False
-        assert dialog.db_file == str(destination.resolve())
-        assert not source.exists()
-        assert len(authorizations) == 1
-        assert authorizations[0] is not None
-        assert not isinstance(authorizations[0], (bool, str, Path))
-        assert publication_observations == [("ok", 1)]
-        assert str(destination.resolve()) in confirmations[0]
-        with sqlite_connection_scope(str(destination)) as connection:
-            assert connection.execute(
-                "SELECT 1 FROM sqlite_master WHERE name = 'unrelated_marker'"
-            ).fetchone() is None
-    finally:
-        dialog.close()
-
-
-@pytest.mark.parametrize(
-    "overwrite_response_name",
-    ("No", "Cancel"),
-)
-def test_save_before_discard_decline_keeps_temporary_cache_and_destination(
-    monkeypatch,
-    tmp_path,
-    overwrite_response_name,
 ):
     _app()
     destination = tmp_path / "existing.db"
@@ -1102,58 +999,28 @@ def test_save_before_discard_decline_keeps_temporary_cache_and_destination(
     dialog = IndustrialDataDialog(db_file=None)
     source = Path(dialog.db_file)
     _populate_industrial_cache(dialog.db_file)
-    overwrite_response = getattr(QMessageBox.StandardButton, overwrite_response_name)
-    answers = iter((QMessageBox.StandardButton.Save, overwrite_response))
     monkeypatch.setattr(
         industrial_data_dialog.QMessageBox,
         "question",
-        lambda *args, **kwargs: next(answers),
+        lambda *args, **kwargs: QMessageBox.StandardButton.Save,
     )
     monkeypatch.setattr(
         industrial_data_dialog.QFileDialog,
         "getSaveFileName",
         lambda *args, **kwargs: (str(destination), "SQLite database"),
+    )
+    warnings = []
+    monkeypatch.setattr(
+        industrial_data_dialog.QMessageBox,
+        "warning",
+        lambda _parent, _title, message: warnings.append(str(message)),
     )
     try:
         assert dialog._resolve_temporary_cache_before_discard(dialog.cache_target) is False
         assert source.exists()
         assert dialog.cache_target.is_temporary
         assert destination.read_bytes() == original
-    finally:
-        monkeypatch.setattr(
-            industrial_data_dialog.QMessageBox,
-            "question",
-            lambda *args, **kwargs: QMessageBox.StandardButton.Discard,
-        )
-        dialog.close()
-
-
-def test_save_before_discard_accepts_overwrite_without_deleting_temporary_cache(
-    monkeypatch,
-    tmp_path,
-):
-    _app()
-    destination = tmp_path / "existing.db"
-    destination.write_bytes(b"replace after explicit confirmation")
-    dialog = IndustrialDataDialog(db_file=None)
-    source = Path(dialog.db_file)
-    _populate_industrial_cache(dialog.db_file)
-    answers = iter((QMessageBox.StandardButton.Save, QMessageBox.StandardButton.Yes))
-    monkeypatch.setattr(
-        industrial_data_dialog.QMessageBox,
-        "question",
-        lambda *args, **kwargs: next(answers),
-    )
-    monkeypatch.setattr(
-        industrial_data_dialog.QFileDialog,
-        "getSaveFileName",
-        lambda *args, **kwargs: (str(destination), "SQLite database"),
-    )
-    try:
-        assert dialog._resolve_temporary_cache_before_discard(dialog.cache_target) is True
-        assert source.exists()
-        assert dialog.cache_target.is_temporary
-        assert IndustrialDataRepository(str(destination)).summarize_counts().records == 1
+        assert warnings and "already exists" in warnings[0]
     finally:
         monkeypatch.setattr(
             industrial_data_dialog.QMessageBox,

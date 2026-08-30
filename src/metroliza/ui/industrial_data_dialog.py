@@ -27,7 +27,6 @@ from metroliza.industrial.industrial_cache_target import (
     create_temporary_industrial_cache_target,
     disposable_cache_counts,
     existing_metroliza_cache_target,
-    inspect_industrial_cache_destination,
     persist_temporary_industrial_cache,
 )
 from metroliza.industrial.industrial_tabular_bridge import load_industrial_cache_tabular_result
@@ -353,15 +352,6 @@ class IndustrialDataDialog(QDialog):
         if not filename:
             return
         destination = self._normalized_cache_destination(filename)
-        try:
-            confirmed, overwrite_authorization = self._confirm_cache_destination_overwrite(
-                destination
-            )
-        except Exception as exc:
-            QMessageBox.warning(self, self.windowTitle(), f"Could not save cache: {exc}")
-            return
-        if not confirmed:
-            return
         previous = self.cache_target
         generated_target = None
         try:
@@ -375,7 +365,6 @@ class IndustrialDataDialog(QDialog):
                 source_target,
                 destination,
                 forbidden_destinations=self._forbidden_cache_destinations(),
-                overwrite_authorization=overwrite_authorization,
             )
         except Exception as exc:
             QMessageBox.warning(self, self.windowTitle(), f"Could not save cache: {exc}")
@@ -423,22 +412,12 @@ class IndustrialDataDialog(QDialog):
             return False
         destination = self._normalized_cache_destination(filename)
         try:
-            confirmed, overwrite_authorization = self._confirm_cache_destination_overwrite(
-                destination
-            )
-        except Exception as exc:
-            QMessageBox.warning(self, self.windowTitle(), f"Could not save cache: {exc}")
-            return False
-        if not confirmed:
-            return False
-        try:
             persist_temporary_industrial_cache(
                 target,
                 destination,
                 forbidden_destinations=self._forbidden_cache_destinations(
                     *additional_forbidden
                 ),
-                overwrite_authorization=overwrite_authorization,
             )
         except Exception as exc:
             QMessageBox.warning(self, self.windowTitle(), f"Could not save cache: {exc}")
@@ -451,28 +430,6 @@ class IndustrialDataDialog(QDialog):
         if not candidate.name.lower().endswith((".db", ".sqlite", ".sqlite3")):
             candidate = Path(f"{candidate}.db")
         return candidate.parent.resolve(strict=False) / candidate.name
-
-    def _confirm_cache_destination_overwrite(
-        self,
-        destination: Path,
-    ) -> tuple[bool, object | None]:
-        inspected_destination = inspect_industrial_cache_destination(destination)
-        if inspected_destination is None:
-            return True, None
-        answer = QMessageBox.question(
-            self,
-            "Replace existing cache database?",
-            "The exact final cache destination already exists:\n\n"
-            f"{destination}\n\n"
-            "Replace it with the industrial cache? Existing contents will be permanently lost.",
-            QMessageBox.StandardButton.Yes
-            | QMessageBox.StandardButton.No
-            | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.No,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
-            return False, None
-        return True, inspected_destination
 
     def _forbidden_cache_destinations(self, *additional: str) -> tuple[str, ...]:
         active_target = getattr(self, "cache_target", None)
