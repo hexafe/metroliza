@@ -2465,7 +2465,14 @@ class IndustrialAnalyticsDialog(QDialog):
         QMessageBox.information(self, self.windowTitle(), message or "CSV/Excel loading was canceled.")
 
     def on_tabular_load_thread_stopped(self) -> None:
-        self.tabular_load_thread = None
+        thread = self.sender()
+        if not isinstance(thread, TabularAnalyticsLoadThread):
+            thread = self.tabular_load_thread
+        if thread is not None:
+            thread.wait()
+            thread.deleteLater()
+        if self.tabular_load_thread is thread:
+            self.tabular_load_thread = None
         self._sync_ui_state()
 
     def _build_analytics_request(self, *, require_runnable: bool = False) -> IndustrialAnalyticsRequest:
