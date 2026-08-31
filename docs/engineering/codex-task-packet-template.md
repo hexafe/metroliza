@@ -2,7 +2,7 @@
 
 Status: Active template
 Owner: Product/architecture maintainer
-Last reviewed: 2026-08-25
+Last reviewed: 2026-08-31
 
 Use this template for every nontrivial Codex coordinator task and every delegated slice. Delete
 instructional comments, replace every `<placeholder>`, and keep explicit `none` or `not applicable`
@@ -13,6 +13,19 @@ entries where silence would be ambiguous. The policy behind the template is
 
 ```markdown
 # <Issue/task number> — <short outcome>
+
+## Agent identity
+
+AGENT_ID: <stable coordinator or worker ID>
+PARENT_AGENT_ID: <stable parent ID or NONE>
+ISSUE: #<number>
+LANE: <one bounded lane>
+PHASE: <planning / implementation / validation / review / recovery>
+AUTHORIZED_BASE: <branch>@<40-character commit SHA>
+AUTHORIZED_TREE: <40-character tree SHA>
+BRANCH: <exact branch or READ-ONLY>
+REQUESTED_MODEL: <model or stable capability class>
+REQUESTED_REASONING: <mode>
 
 ## Durable authority
 
@@ -30,20 +43,45 @@ entries where silence would be ambiguous. The policy behind the template is
 
 ## Whole-PR routing
 
-- Class: MICRO | BOUNDED INTEGRATION | FEATURE / CROSS-LAYER | CRITICAL / MILESTONE
+- Class: MECHANICAL / RECOVERY / INVENTORY | STANDARD / BOUNDED PATCH / TEST REPAIR / AUDIT FINALIZATION | HIGH / CROSS-LAYER / P0-P1 WITH AN ACCEPTED CONTRACT | ULTRA EXCEPTION
 - Requested coordinator: <model or stable capability class>
 - Requested reasoning: <mode or not specified>
-- Classification rationale: <semantic consequence and acceptance burden>
-- Silent downgrade allowed: no
-- Evidence-based upward escalation: allowed; record before broadening
+- Routing rationale: <bounded contract, unresolved decisions, consequence, and evidence burden>
+- Smaller sufficient route rejected because: <reason, or none — use the smaller route>
+- Silent downgrade, fallback, inheritance, retry, or substitution allowed: no
+- Route deviation authority: <external-orchestrator approval or none>
+
+### Ultra admission — complete only for an Ultra exception
+
+- Explicit external-orchestrator authorization: <URL/comment or not admitted>
+- [ ] A material product, architecture, safety, or milestone decision remains genuinely unresolved
+      across multiple subsystems.
+- [ ] A wrong decision creates high-consequence or long-lived lock-in.
+- [ ] The task primarily requires synthesis, adversarial reasoning, or decision design beyond a
+      bounded GPT-5.6 Sol / High implementation.
+- [ ] The result has one primary Issue and one coherent artifact, proposal, or PR.
+- [ ] A written stop, durable-checkpoint, minion-ownership, and handoff plan exists before work.
+- Admission rationale: <how all five are satisfied, or `not admitted`>
+
+If any box is unchecked, use GPT-5.6 Sol / High or a smaller normal route. `CRITICAL`, `MILESTONE`,
+P0, P1, release, migration, remote/destructive work, or maximum worker risk never admits Ultra
+alone.
 
 ## Delegated slice routing
 
-<!-- Repeat this table row for each slice. Use one coordinator-only row if not delegating. -->
+Read-only minions are the default. State a finite maximum and repeat one row per slice. Any writer
+after the coordinator requires explicit authorization, completely disjoint paths/symbols, and a
+durable checkpoint first.
 
-| Slice | Risk | Planned route | Reasoning | Owned responsibility | Why delegate / why not |
-| --- | --- | --- | --- | --- | --- |
-| <name> | GREEN / YELLOW / RED / CRITICAL | <model/capability> | <mode or n/a> | <one bounded concern> | <context/ownership value or startup-cost reason> |
+- Maximum minions: <integer>
+- Write coordinators: <one by default; authorized exception and evidence if more>
+
+| AGENT_ID | PARENT_AGENT_ID | Slice | Access | Planned route | Exact owned sources/paths/symbols | Why delegate / why not |
+| --- | --- | --- | --- | --- | --- | --- |
+| <child ID> | <parent ID> | <one bounded concern> | READ-ONLY / authorized writer | <model + reasoning> | <non-overlapping ownership> | <independent context/value or startup-cost reason> |
+
+No worker inherits the coordinator route or maximum slice risk automatically. Each uses the
+smallest sufficient route for its own bounded contract.
 
 ## Owned scope
 
@@ -83,19 +121,38 @@ entries where silence would be ambiguous. The policy behind the template is
 - [ ] <Observable outcome mapped to a MUST.>
 - [ ] Final diff contains only the authorized scope.
 - [ ] Actual model/reasoning is observed or reported as `not visible`.
+- [ ] Worker ownership is bounded, read-only by default, and non-overlapping.
+- [ ] Required durable checkpoint and restartable validation receipts exist.
 - [ ] No unsupported test, CI, benchmark, review, merge, release, cost, or remote-action claim.
 
 ## Focused and integrated validation
 
-| Gate | Exact command/check | Expected evidence | Owner | Applicability |
-| --- | --- | --- | --- | --- |
-| Focused | `<command>` | <observable output> | <worker/coordinator> | required |
-| Integration | `<command>` | <observable output> | coordinator | required |
-| Exact-head CI | <workflow/check names> | terminal result + run URL/ID + head SHA | coordinator/orchestrator | <required/n/a> |
-| Windows packaged | <check/manual procedure> | <artifact/clean-machine evidence> | <owner> | <reason or n/a> |
-| Native/Python parity | <check/benchmark> | <parity/fallback/rollback result> | <owner> | <reason or n/a> |
-| Database/SQLite | <check/migration proof> | <atomicity/integrity/rollback result> | <owner> | <reason or n/a> |
-| Security/privacy | <check/adversarial review> | <negative-path/sanitization result> | <owner> | <reason or n/a> |
+Split long work into deterministic, restartable slices. Each completed slice produces a
+machine-readable receipt tied to the exact commit/tree.
+
+| Slice/gate | Exact command/check | Expected evidence | Owner | Receipt destination | Applicability |
+| --- | --- | --- | --- | --- | --- |
+| Focused | `<command>` | <observable output> | <worker/coordinator> | <durable receipt/comment/artifact> | required |
+| Integration | `<command>` | <observable output> | coordinator | <durable receipt> | required |
+| Exact-head CI | <workflow/check names> | observed status + run URL/ID + head SHA | coordinator/orchestrator | <PR report> | <required/n/a> |
+| Windows packaged | <check/manual procedure> | <artifact/clean-machine evidence> | <owner> | <receipt> | <reason or n/a> |
+| Native/Python parity | <check/benchmark> | <parity/fallback/rollback result> | <owner> | <receipt> | <reason or n/a> |
+| Database/SQLite | <check/migration proof> | <atomicity/integrity/rollback result> | <owner> | <receipt> | <reason or n/a> |
+| Security/privacy | <check/adversarial review> | <negative-path/sanitization result> | <owner> | <receipt> | <reason or n/a> |
+
+Receipt schema: `agent_id`, `parent_agent_id`, `head_sha`, `tree_sha`, `command_or_check`,
+`environment_or_fixture`, observed timing when available, `result`, `exit_status`,
+`artifact_or_output_hash`, and `remaining_work`.
+
+## Durable checkpoint and handoff plan
+
+- Trigger before long full-suite/coverage/compatibility/fuzz/mutation/multi-review work: <stage>
+- Durable ref, commit, and tree: <planned remote checkpoint>
+- Changed-path/content-hash evidence: <plan>
+- Preservation label: `PRESERVATION ONLY — NOT PARKED / NOT READY / NOT COMPLETE`
+- Sole valuable copy in `/tmp` or another ephemeral workspace: forbidden
+- Completed/remaining-gate receipt location: <durable location>
+- Next authorized operation and handoff owner: <operation / AGENT_ID>
 
 ## Stop and escalate
 
@@ -127,14 +184,36 @@ inference.
 ```markdown
 ## Post-execution handoff — <slice/coordinator name>
 
+- AGENT_ID: <stable identity>
+- PARENT_AGENT_ID: <stable parent or NONE>
+- Issue/lane/phase: <exact values>
 - Starting base/SHA: <branch> @ <full SHA>
+- Authorized tree: <full tree SHA>
 - Ending head SHA: <full SHA or uncommitted>
+- Ending tree SHA: <full tree SHA or uncommitted>
+- Requested model/reasoning: <requested route>
 - Actual runtime model: <observed model or not visible>
 - Actual reasoning mode: <observed mode or not visible>
-- Inherited coordinator model: yes | no | not visible | not applicable
-- Route deviations: <none or evidence and approval>
+- Route deviations/fallback/substitution: <none or explicit approval and evidence>
+- Routing rationale and smaller-route early-exit result: <evidence>
 - Changed ownership: <exact paths/symbols>
 - Scope check: <clean or exact deviation>
+
+### Worker ownership and receipts
+
+| AGENT_ID | Access | Exact ownership | Requested route | Actual route | Receipt/result |
+| --- | --- | --- | --- | --- | --- |
+| <ID> | READ-ONLY / authorized writer | <sources/paths/symbols> | <model/reasoning> | <observed or not visible> | <durable evidence> |
+
+No overlapping write ownership: <confirmed or blocker>
+
+### Durable checkpoints
+
+| Purpose/status | Ref/commit/tree | Paths/content hashes | Completed gates | Remaining gates |
+| --- | --- | --- | --- | --- |
+| <preservation/final> | <durable evidence> | <evidence> | <bounded receipts> | <exact list> |
+
+Sole valuable copy in `/tmp` or ephemeral storage: no | <blocker and recovery location>
 
 ### MUST evidence
 
@@ -148,6 +227,8 @@ inference.
 | --- | --- | --- | --- |
 | `<command>` | <result/count/conclusion> | <relevant context> | <SHA> |
 
+Machine-readable receipt evidence: <durable locations/hashes and audit result>
+
 ### Findings and corrections
 
 - P0: <none or actionable finding>
@@ -160,6 +241,13 @@ inference.
 
 - Coordinator class adequate: yes | no | not yet known
 - Next materially similar task: <recommended class/model/reasoning and why>
+
+### Draft-to-Ready review inspection
+
+- Draft-to-Ready transition: <timestamp or not performed>
+- Ready-triggered review observed/result: <exact event or none observed after bounded wait>
+- All newer comments inspected through: <timestamp>
+- Every review thread inspected / unresolved count: <result / integer>
 
 ### Remote-operation ledger
 

@@ -2,7 +2,7 @@
 
 Status: Active supporting engineering policy
 Owner: Product/architecture maintainer
-Last reviewed: 2026-08-25
+Last reviewed: 2026-08-31
 
 This playbook expands the concise repository rules in [`../../AGENTS.md`](../../AGENTS.md). It
 defines a reusable orchestration core, then binds that core to Metroliza's engineering and evidence
@@ -32,101 +32,111 @@ The task packet is the active scope boundary. A coordinator or worker must not r
 strategy, broaden the roadmap, or invent missing architecture, security, privacy, data-ownership,
 release, or remote-operation authority. A contradiction or missing authority is a stop condition.
 
-### 2. Two separate routing decisions
+### 2. Two independent, smallest-sufficient routing decisions
 
 Every nontrivial PR has two independent classifications:
 
-1. **Whole-PR coordinator class**, selected from the complete change, consequence, and acceptance
-   burden.
-2. **Worker slice risk**, selected separately for each bounded slice when delegation is useful.
+1. **Whole-task coordinator class**, selected from the bounded contract, unresolved decisions,
+   consequence, and acceptance burden.
+2. **Worker slice route**, selected separately for each explicitly owned slice when delegation is
+   useful.
 
-A GREEN or YELLOW slice never downgrades a FEATURE / CROSS-LAYER or CRITICAL / MILESTONE
-coordinator. The external orchestrator's requested coordinator cannot be silently downgraded.
-Upward escalation is permitted when live evidence reveals greater risk or complexity. If a named
-model is unavailable, use an equivalent or stronger capability only when the runtime allows it;
-escalate before substituting a weaker coordinator.
+The highest-risk worker does not automatically set the coordinator route, and a coordinator does
+not automatically pass its route to every worker. Apply an early-exit test before dispatch: if a
+smaller route can satisfy the bounded contract and evidence burden, the larger route is not
+admitted. File count and severity labels are review signals, not substitutes for this semantic
+test.
 
-### 3. Whole-PR coordinator classes
+An externally selected route cannot be silently downgraded, upgraded, inherited, retried through a
+fallback, or substituted. If the requested route is unavailable or live evidence changes the
+classification, stop and obtain an explicit external-orchestrator decision before dispatching a
+different model or reasoning level.
 
-Capability-class wording is durable even when named models change. The named routes below are the
-currently accepted mapping.
+### 3. Canonical normal coordinator routes
 
-| Class | Default coordinator | Reasoning | Whole-change test |
+Capability-class wording remains useful when named models change. Until an explicit policy update,
+this is the repository's one canonical normal-route table:
+
+| Work class | Coordinator | Reasoning | Bounded-contract test |
 | --- | --- | --- | --- |
-| MICRO | GPT-5.6 Luna | Medium | One explicit correction, accepted contract, focused proof, no new boundary or milestone |
-| BOUNDED INTEGRATION | GPT-5.6 Terra | High | One accepted seam across limited layers/files, without new architecture, security boundary, or phase closure |
-| FEATURE / CROSS-LAYER | GPT-5.6 Sol | High | Normal feature, new durable contract, several layers, production/privacy boundary, or broad evidence |
-| CRITICAL / MILESTONE | GPT-5.6 Sol | Ultra | Security/data-loss/destructive/remote boundary, migration, release/phase completion, or major durable decision |
+| MECHANICAL / RECOVERY / INVENTORY | GPT-5.6 Luna | Medium | Extract, preserve, inventory, or make a predictable correction without opening a product or architecture decision |
+| STANDARD / BOUNDED PATCH / TEST REPAIR / AUDIT FINALIZATION | GPT-5.6 Terra | High | Implement or finalize one accepted seam with bounded ownership and deterministic evidence |
+| HIGH / CROSS-LAYER / P0-P1 WITH AN ACCEPTED CONTRACT | GPT-5.6 Sol | High | Integrate difficult or cross-layer behavior, including a high-severity fix whose product and architecture contract is already accepted |
 
-#### MICRO
+Mechanical includes metadata checks, report extraction, recovery inventory, deterministic status
+normalization, and narrow edits whose contract is fully known. Stop when discovery opens a new
+boundary or decision.
 
-Use only when all relevant facts are already accepted: typically one to three files, one explicit
-correction, no new public/runtime boundary, no security or privacy boundary, no milestone closure,
-and focused validation can prove the outcome.
+Standard includes normal implementation, bounded patches, accepted adapters, focused test repair,
+and finishing an audit from preserved evidence. It does not own unresolved product, architecture,
+safety, migration, destructive, or remote-operation decisions.
 
-#### BOUNDED INTEGRATION
+High includes difficult integration, new cross-layer contracts, security/privacy or data-integrity
+implementation, and P0/P1 fixes after the relevant contract is accepted. Strong validation and
+independent review remain mandatory where consequence requires them; severity does not change the
+reasoning route by itself.
 
-Use for one accepted seam, typically across two to six meaningful files or a small number of
-symbols. It does not own new domain/security architecture, migrations, destructive/remote behavior,
-formal phase closure, or broad requirement-to-evidence reconciliation.
+### 4. Ultra admission contract
 
-#### FEATURE / CROSS-LAYER
+Ultra may be requested only when **all five** conditions are true:
 
-Use for a normal product feature or new durable contract, runtime plus UI plus tests, several
-application layers, a provider/privacy/build boundary, significant negative-path design, broad
-integration evidence, or a defect likely to cause meaningful rework. Routine leaf slices may still
-go to Luna or Terra while Sol retains whole-PR integration and evidence ownership.
+1. A material product, architecture, safety, or milestone decision remains genuinely unresolved
+   across multiple subsystems.
+2. The wrong decision creates high-consequence or long-lived lock-in.
+3. The task primarily requires synthesis, adversarial reasoning, or decision design beyond a
+   bounded GPT-5.6 Sol / High implementation.
+4. The result still has one primary Issue and one coherent artifact, proposal, or PR.
+5. A written stop, durable-checkpoint, minion-ownership, and handoff plan exists before work starts.
 
-#### CRITICAL / MILESTONE
+If any condition is false, use GPT-5.6 Sol / High or a smaller normal route. `CRITICAL`,
+`MILESTONE`, P0, P1, release, migration, remote, destructive, security, or maximum worker risk
+never admits Ultra alone. Ultra also requires explicit external-orchestrator authorization and a
+written rationale naming the unresolved decision and the five satisfied conditions.
 
-Use for security, confidential-data exposure or data-loss risk, database schema/data migration,
-concurrency or atomicity, secrets, release promotion/closure, packaged production decisions,
-remote/destructive work, or a policy/architecture decision whose error would cause broad drift.
-Ultra is high-compute coordination and review, not permission for a monolithic PR or for a remote
-operation.
+Ultra is for exceptional synthesis or adversarial decision work, not a substitute for smaller
+scope, accepted contracts, durable checkpoints, or independent review. A bounded implementation
+inside a critical program stays on its smallest sufficient normal route.
 
-File count is a reviewability signal, not a substitute for semantics. Roughly eight meaningful
-files, 600 net new lines, multiple independent outcomes, or overlapping central-file ownership
-requires re-slicing or concise justification. Staying below a threshold never lowers a semantically
-cross-layer or critical change.
+### 5. Coordinator and minion governance
 
-### 4. Worker slice routing
+Use one write coordinator by default. A second writer is permitted only when the external
+orchestrator explicitly authorizes it, owned paths and symbols are completely disjoint, and the
+first writer's valuable state already has a durable content-addressed checkpoint. No agent may
+hold overlapping write ownership, even sequentially, without a recorded handoff and refreshed
+scope.
 
-| Slice risk | Default worker | Typical bounded ownership |
-| --- | --- | --- |
-| GREEN | GPT-5.6 Luna | Leaf UI/docs/copy, fixtures, mappings, predictable tests, mechanical refactors |
-| YELLOW | GPT-5.6 Terra | Bounded integration, routing/state, accepted adapters, E2E/accessibility workflows |
-| RED | GPT-5.6 Sol | Architecture, durable/public contracts, privacy/exposure boundaries, difficult integration or review |
-| CRITICAL | GPT-5.6 Sol | Security, migrations, data integrity, concurrency, secrets, remote/database or destructive boundaries |
+Minions are read-only by default. A task packet sets a finite maximum, stable child identities,
+exact sources or paths, one bounded responsibility per minion, and a no-mutation rule. If a minion
+must write, it becomes an explicitly authorized additional writer under the stricter rule above.
+Each minion uses the smallest sufficient route for its own slice: GPT-5.6 Luna / Medium for
+mechanical evidence, GPT-5.6 Terra / High for bounded specialist analysis, and GPT-5.6 Sol / High
+for difficult cross-layer or adversarial analysis. Minions never inherit Ultra merely from the
+coordinator or from one maximum-risk slice.
 
-GREEN work stops on ambiguity and does not alter architecture or public/private boundaries. YELLOW
-work integrates accepted contracts but escalates new ownership, security, privacy, or architecture
-decisions. RED and CRITICAL work own difficult boundaries but still remain bounded by the packet.
+Delegation is an ownership and independent-context tool, not a ritual. Skip it when startup and
+context-loading cost exceeds the bounded benefit. One coordinator integrates all receipts and owns
+the final scope, classification, exact-head evidence, and handoff.
 
-Delegation is an ownership and context tool, not a ritual. Skip it when worker startup or
-context-loading cost exceeds the work. Keep write ownership disjoint; never assign concurrent
-workers to overlapping paths or symbols. If per-worker model selection is unavailable, prefer
-sequential bounded work under the selected coordinator. Do not claim economy-model savings by
-spawning inherited expensive agents.
+### 6. Actual-runtime honesty and route deviations
 
-### 5. Actual-runtime honesty
-
-Pre-dispatch records the requested route. Post-execution records only observed runtime evidence:
+Pre-dispatch records the requested model and reasoning. Post-execution records only observed
+runtime evidence:
 
 - requested and actual coordinator model/reasoning;
-- requested and actual worker model/reasoning, and inheritance when visible;
-- routing deviations and their reason.
+- requested and actual worker model/reasoning;
+- every route deviation, its approval, and its evidence.
 
 When model or reasoning identity is unavailable, report `not visible`. Never fabricate or infer a
 model, reasoning mode, token/credit usage, latency, cost, or savings. Do not blame a named model
-when runtime identity was hidden; distinguish model limits from oversized scope, ambiguous packets,
-weak acceptance evidence, and integration failures.
+when runtime identity was hidden; distinguish Product Owner feedback from repository-observable
+delivery outcomes.
 
-The optimization goal is the lowest reasonable total effort to a correct merge. It includes
-context loading, failed attempts, QA/CI reruns, review corrections, follow-up commits, and
-architectural rework—not only the first execution.
+No silent downgrade, fallback, retry, inheritance, or substitution is allowed. Runtime inability
+to honor a requested route is a stop/escalation condition, not permission to choose a nearby route.
+The optimization goal is the lowest reasonable total effort to a correct durable handoff, including
+context loading, failed attempts, correction cycles, CI reruns, review, and rework.
 
-### 6. Task packets and bounded ownership
+### 7. Task packets, identity, and bounded ownership
 
 Every nontrivial task packet uses the
 [`codex-task-packet-template.md`](./codex-task-packet-template.md) and distinguishes:
@@ -135,106 +145,103 @@ Every nontrivial task packet uses the
 - **SHOULD** — expected improvements that must remain inside approved scope;
 - **DEFERRED** — explicitly forbidden or later work.
 
-A packet also states the exact objective, whole-PR class/model/reasoning, delegated slice risk and
-route, owned files/symbols, forbidden surfaces and operations, preserved contracts, observable
-acceptance criteria, focused validation, stop/escalation conditions, and remote-operation policy.
-Workers and coordinators do not silently promote SHOULD or DEFERRED items.
+Every coordinator and minion records `AGENT_ID`, `PARENT_AGENT_ID`, Issue, lane, phase, authorized
+base commit and tree, branch or `READ-ONLY`, requested route, and actual runtime visibility. The
+packet also states the exact objective, routing rationale and early-exit result, owned files and
+symbols, read/write authority, forbidden surfaces and operations, preserved contracts, acceptance,
+validation slices, stop conditions, checkpoint plan, receipt plan, and remote-operation policy.
 
-Orchestration never creates an autonomous unbounded agent loop. Every coordinator and worker stays
-inside a finite packet, bounded ownership, explicit stop conditions, and the recorded authority for
-local and remote operations.
+Orchestration never creates an autonomous unbounded loop. Every participant stays inside a finite
+packet and exact ownership. Workers and coordinators do not silently promote SHOULD or DEFERRED
+items. Prefer one durable/public contract, one primary runtime concern, and one coherent outcome per
+PR; portfolio coordination may sequence multiple Issues but does not merge their write ownership.
 
-Prefer one durable/public contract, one security boundary, one primary runtime concern, and one
-product outcome per PR. Keep behavior changes separate from structural refactors and keep formal
-release/phase closure separate from ordinary implementation when practical.
+### 8. Durable checkpoints, restartable validation, and receipts
 
-### 7. Validation ownership and evidence
+Before a long full-suite, coverage, compatibility, fuzz/mutation, or multi-review stage, preserve
+the current valuable bytes in a remote, content-addressed checkpoint. Record the branch/ref, commit
+and tree SHAs, changed paths, content hashes where useful, completed gates, remaining gates, and
+authorized next operation. A local commit that is not durably available to the next coordinator is
+not sufficient.
 
-Workers run only the focused validation assigned to their slice and return sanitized evidence. The
-coordinator runs the integrated local gate, checks the final diff and scope, and prepares exact-head
-evidence. The external orchestrator independently verifies the exact PR head and merge state.
+No sole valuable copy may remain in `/tmp`, an ephemeral worker workspace, an untracked file, or a
+chat transcript through multiple stages. Temporary artifacts may support a gate only when their
+durable receipt records how to reproduce them and no unique implementation or decision exists only
+there.
 
-Evidence records the exact command or GitHub check, the observed outcome, relevant environment or
-fixture, and the commit SHA. Never turn a mocked/unit result into a manual, packaged, live-service,
-or production claim. An unrelated failing gate is reported and triaged, not silently repaired in
-another Issue's PR.
+A preservation checkpoint must say that it is preservation only and is **not parked, not Ready,
+and not complete**. It does not satisfy final validation, review, CI, parking, or merge gates.
 
-Each repository's active workflow and task packet select the applicable focused, CI, integration,
-manual, data, security, performance, packaging, and release gates. Passing an aggregate automated
-suite never substitutes for an applicable manual or production claim. A gate that cannot apply is
-reported as not applicable with a reason rather than presented as unrun success.
+Partition long validation into deterministic, restartable, bounded slices. Each slice emits a
+machine-readable receipt containing at least agent identity, exact commit/tree, command or check,
+environment/fixture, start/end or duration evidence when observed, result/exit status, output or
+artifact hash/location, and remaining work. One coordinator audits and integrates the receipts.
+The PR report records elapsed time when observed, correction cycles, and durable outputs without
+inventing token or monetary cost.
 
-### 8. Strong-model readiness gate
+### 9. Validation, exact-head review, and CI truthfulness
 
-Before external review, every FEATURE / CROSS-LAYER and CRITICAL / MILESTONE PR must provide:
+Minions run only assigned read-only inspection or focused validation and return sanitized receipts.
+The coordinator runs the integrated local gate, checks the exact diff and scope, and freezes the
+final head before independent review. The external orchestrator independently verifies that exact
+head and the current merge state.
 
-1. a concise MUST-to-evidence matrix;
-2. an exact-head diff and authorized-scope review;
-3. an adversarial gap hunt covering negative paths, confidentiality/security, production or
-   disabled behavior where applicable, source-of-truth consistency, and tests that could pass
-   without proving the claimed invariant;
-4. evidence that a representative broken behavior would fail acceptance validation, or a precise
-   explanation of why that falsification is not applicable to a documentation-only contract;
-5. actionable findings by severity and confirmation that no known risk is hidden by green
-   aggregate results;
-6. correction-cycle count, routing adequacy, and a recommendation for the next materially similar
-   task;
-7. actual model/reasoning evidence or `not visible`.
+Evidence records the exact command or GitHub check, observed outcome, relevant environment or
+fixture, and commit SHA. Never turn unit or mocked evidence into a manual, packaged, live-service,
+or production claim. Report unrelated failures without silently repairing another Issue's scope.
 
-A formal milestone uses Ultra coordination or a separately justified Ultra exact-head review.
-MICRO work does not inherit this full gate; BOUNDED INTEGRATION uses evidence appropriate to its
-accepted seam.
+Automatic Actions, manually dispatched Actions, skipped jobs, cancelled jobs, unavailable CI, and
+infrastructure-blocked CI are distinct states. Only an observed applicable success is green; a
+skipped, unavailable, infrastructure-blocked, pending, cancelled, or unrun check is never silently
+counted as success. Passing aggregate automation never substitutes for an applicable manual gate.
 
-### 9. Review and empirical routing feedback
+Before external review, high/cross-layer and high-consequence PRs provide a MUST-to-evidence
+matrix, exact-head scope review, adversarial gap hunt, representative falsifier where applicable,
+P0/P1/P2 findings, correction-cycle count, routing adequacy, durable checkpoint and receipt
+evidence, and actual runtime identity or `not visible`.
 
-All PRs retain focused validation, required GitHub Actions, GitHub Codex Review, an independent
-exact-head review, and zero unresolved review threads. A changed head invalidates prior exact-head
-readiness. A later blocking comment or newly discovered contradiction reopens readiness even if CI
-is still green.
+Use a sufficiently independent, smallest-sufficient review route. An Ultra-authored policy or
+decision PR normally receives GPT-5.6 Sol / High review; a ceremonial second Ultra review adds no
+evidence. Any changed head invalidates earlier exact-head review and starts a new review cycle.
 
-For each nontrivial PR, record:
+Changing a PR from Draft to Ready creates a separate inspection boundary. Before merge, wait for
+and inspect every Ready-triggered review, all comments newer than the transition, and every review
+thread. Record the transition time, inspection cutoff, result, and unresolved-thread count. Never
+replace an absent Ready-triggered review with an unapproved duplicate manual trigger.
 
-- actionable P0/P1/P2 findings;
-- correction cycles after readiness was first claimed;
-- whether the coordinator class proved adequate;
-- the recommended class for the next materially similar task.
+### 10. Routing feedback and standing merge authorization
 
-Apply the feedback as follows:
+For each nontrivial PR, record actionable P0/P1/P2 findings, correction cycles after readiness was
+first claimed, durable outputs, elapsed time when observed, whether the route proved adequate, and
+the recommended route for the next materially similar task. A post-readiness P1 requires explicit
+routing review, but no finding or repeated cycle automatically upgrades the next task: reapply the
+normal-route tests and, for Ultra, all five admission conditions.
 
-- any P1 after readiness requires explicit routing review;
-- a P2 or repeated correction cycle normally escalates the next similar task by one class when the
-  higher class's semantic criteria apply;
-- otherwise retain the class and strengthen model/reasoning or independent review; CRITICAL /
-  MILESTONE is the ceiling;
-- three materially similar clean PRs may justify considering one lower class;
-- CRITICAL / MILESTONE is never automatically downgraded.
+Prefer one strong independent reviewer over repetitive same-context reviews. Add reviewers for
+disjoint boundaries, not prestige. A focused follow-up may review a changed commit only after
+confirming the current head, scope, and integration state.
 
-Prefer one strong independent reviewer over several repetitive same-context reviews. Add reviewers
-for disjoint critical boundaries, not prestige. A focused follow-up may review the new commit and
-previously accepted boundary after first confirming the current head and integration state.
-
-### 10. Standing merge authorization
-
-Codex coordinators and workers never merge their own PR.
-
-The external project orchestrator has standing Product Owner authorization to squash-merge an
-ordinary green PR only when all are observed:
+Codex coordinators and workers never merge their own PR. The external project orchestrator has
+standing Product Owner authorization to squash-merge an ordinary green PR only when all are
+observed:
 
 - its own independent exact-head review concludes `READY FOR MERGE`;
 - the reviewed head is unchanged;
 - required CI and every applicable project-specific/manual/integration-result gate is
-  terminal-green for that head/current base;
+  terminal-green for that head and current base;
+- the Draft-to-Ready inspection boundary, when used, is complete;
 - zero review threads remain unresolved;
 - no later blocker exists;
 - GitHub reports the PR mergeable.
 
 Update the branch when integration-result checks would otherwise be stale. Any changed head, base
-movement that invalidates evidence, or later blocker revokes the earlier readiness conclusion.
+movement that invalidates evidence, later blocker, or newer uninspected review activity revokes the
+earlier readiness conclusion.
 
 Standing merge authorization does **not** include release promotion, migrations against real data,
 deployment, destructive operations, secrets, billing, external publication, or other remote
 product mutations. It does not authorize force-pushes, long-lived-ref changes, tag operations, or
-closing an Issue before merge evidence. Each such action retains its separate explicit approval.
+closing an Issue before merge evidence. Each such action retains separate explicit approval.
 
 ## Metroliza-specific binding
 

@@ -2,7 +2,7 @@
 
 Status: Active template
 Owner: Product/architecture maintainer
-Last reviewed: 2026-08-25
+Last reviewed: 2026-08-31
 
 Copy this into a nontrivial PR description and replace every `<placeholder>`. Keep `none`, `not
 applicable`, or `not visible` explicit. The report implements the evidence contract in
@@ -35,19 +35,31 @@ Scope deviation: <none, or exact explanation and recorded approval>
 
 ## Routing report
 
-- Whole-PR class: MICRO | BOUNDED INTEGRATION | FEATURE / CROSS-LAYER | CRITICAL / MILESTONE
+- Coordinator AGENT_ID: <stable identity>
+- Coordinator PARENT_AGENT_ID: <stable parent or NONE>
+- Issue/lane/phase: <exact values>
+- Authorized base commit/tree: `<commit>` / `<tree>`
+- Whole-PR class: MECHANICAL / RECOVERY / INVENTORY | STANDARD / BOUNDED PATCH / TEST REPAIR / AUDIT FINALIZATION | HIGH / CROSS-LAYER / P0-P1 WITH AN ACCEPTED CONTRACT | ULTRA EXCEPTION
 - Requested coordinator: <model/capability>
 - Requested reasoning: <mode>
 - Actual coordinator model: <observed value or not visible>
 - Actual coordinator reasoning: <observed value or not visible>
-- Classification rationale: <semantic risk and acceptance burden>
+- Routing rationale: <bounded contract, unresolved decisions, consequence, and evidence burden>
+- Smaller sufficient route rejected because: <reason, or none>
 - Per-agent selection visible: yes | no | partially
-- Coordinator route deviation: <none or evidence/approval>
+- Coordinator downgrade/fallback/substitution: <none or explicit evidence/approval>
+- Ultra authorization and five-condition admission: <URL + rationale, or not admitted>
 - Why delegation was used or skipped: <bounded ownership/context value or startup-cost reason>
 
-| Slice | Risk | Planned model/reasoning | Actual model/reasoning | Inheritance/deviation | Responsibility | Focused validation |
-| --- | --- | --- | --- | --- | --- | --- |
-| <name> | GREEN / YELLOW / RED / CRITICAL | <route and mode> | <observed values or not visible> | <inheritance and route deviation> | <bounded ownership> | `<command>` → <result> |
+| AGENT_ID / PARENT_AGENT_ID | Access | Planned model/reasoning | Actual model/reasoning | Exact non-overlapping ownership | Receipt/result |
+| --- | --- | --- | --- | --- | --- |
+| <child / parent> | READ-ONLY / authorized writer | <route and mode> | <observed values or not visible> | <sources/paths/symbols> | <durable receipt> |
+
+One write coordinator by default: <confirmed or explicit second-writer authorization>
+
+Read-only minions bounded and smallest-sufficient: <confirmed or blocker>
+
+No overlapping write ownership: <confirmed or blocker>
 
 ## MUST-to-evidence matrix
 
@@ -74,6 +86,21 @@ Representative falsifier/broken-case evidence: <test/audit that would fail, or w
 
 Exact reviewed head: `<full SHA>`
 
+Exact reviewed tree: `<full tree SHA>`
+
+### Durable checkpoints and bounded receipts
+
+| Purpose/status | Ref/commit/tree | Exact paths/content hashes | Completed gates | Remaining gates |
+| --- | --- | --- | --- | --- |
+| <preservation/final> | <durable evidence> | <scope/hash evidence> | <receipt IDs/results> | <exact list> |
+
+- Preservation checkpoint truthfully labelled not parked / not Ready / not complete: yes | no | n/a
+- Sole valuable copy in `/tmp` or ephemeral storage: no | <blocker and recovery location>
+- Restartable validation-slice receipt audit: <machine-readable locations/hashes/result>
+- Observed elapsed time: <value or not visible>
+- Durable outputs: <commits/comments/artifacts/receipts>
+- Correction cycles: <integer>
+
 ### Local/focused
 
 | Command/check | Exact result | Head/tree |
@@ -82,17 +109,22 @@ Exact reviewed head: `<full SHA>`
 
 ### GitHub exact-head evidence
 
-| Workflow/check | Run ID or URL | Head SHA | Conclusion | Required/applicable reason |
-| --- | --- | --- | --- | --- |
-| <name> | <ID/URL> | `<SHA>` | success / failure / pending | <reason> |
+| Workflow/check | Trigger | Run ID or URL | Head SHA | Observed state/conclusion | Required/applicable reason |
+| --- | --- | --- | --- | --- | --- |
+| <name> | automatic / manual / none | <ID/URL or unavailable> | `<SHA>` | success / failure / cancelled / skipped / unavailable / infrastructure-blocked / pending | <reason> |
 
 Integration-result/base currentness: <observed status and base SHA>
 
 Manual/conditional gates not run: <gate + why not applicable, or blocker>
 
+Only observed applicable success is green. Skipped, unavailable, infrastructure-blocked,
+cancelled, pending, and unrun states remain distinct and are never silently treated as success.
+
 ## Exact-head and adversarial review
 
 - Final diff reviewed against authorized scope: yes | no
+- Final head frozen before independent review: yes | no
+- Independent review route and sufficiency: <requested/actual model and rationale>
 - Requirement/document consistency: <result>
 - Negative/failure paths: <result or not applicable>
 - Confidentiality/security boundaries: <result>
@@ -120,6 +152,10 @@ Manual/conditional gates not run: <gate + why not applicable, or blocker>
 
 - GitHub Codex Review: <requested at SHA / result / pending>
 - Independent exact-head review: <reviewer/result/SHA or pending>
+- Draft-to-Ready transition: <timestamp or not performed>
+- Ready-triggered review: <observed event/result or none observed after bounded wait>
+- All comments newer than Ready inspected through: <timestamp/result>
+- Every review thread inspected after Ready: yes | no | not applicable
 - Unresolved review-thread count: <integer or not yet observed>
 - Required CI terminal-green: yes | no | pending
 - Head unchanged since readiness review: yes | no | pending
@@ -147,5 +183,5 @@ publication, or other remote product mutations.
 ```
 
 Do not mark the report READY while an exact-head check, review, thread count, mergeability result,
-or applicable conditional gate is unknown. A changed head invalidates earlier exact-head evidence
-and starts a new readiness review cycle.
+applicable conditional gate, or post-Ready review inspection is unknown. A changed head invalidates
+earlier exact-head evidence and starts a new readiness review cycle.

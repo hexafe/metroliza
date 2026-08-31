@@ -39,25 +39,37 @@ independent exact-head review, and merge decision. The Codex coordinator owns bo
 integration, validation, its internal exact-head readiness audit, and PR preparation. Workers own
 only their explicitly assigned slices.
 
-Classify the whole PR separately from any delegated slice:
+Use the smallest sufficient route for the bounded contract. The canonical route table and the five
+mandatory Ultra-admission conditions are in
+[`docs/engineering/codex-model-routing.md`](docs/engineering/codex-model-routing.md):
 
-| Whole-PR class | Default coordinator |
-| --- | --- |
-| MICRO | GPT-5.6 Luna / Medium |
-| BOUNDED INTEGRATION | GPT-5.6 Terra / High |
-| FEATURE / CROSS-LAYER | GPT-5.6 Sol / High |
-| CRITICAL / MILESTONE | GPT-5.6 Sol / Ultra |
+- mechanical, recovery, and inventory work uses GPT-5.6 Luna / Medium;
+- standard work, bounded patches, test repair, and audit finalization use GPT-5.6 Terra / High;
+- high or cross-layer work and P0/P1 implementation with an accepted contract use GPT-5.6 Sol /
+  High.
 
-| Slice risk | Default worker |
-| --- | --- |
-| GREEN | GPT-5.6 Luna |
-| YELLOW | GPT-5.6 Terra |
-| RED | GPT-5.6 Sol |
-| CRITICAL | GPT-5.6 Sol |
+Criticality, a milestone label, P0/P1 severity, or one maximum-risk worker slice never admits or
+forces Ultra by itself. Ultra requires explicit external-orchestrator authorization, a written
+rationale, and all five admission conditions. Apply the early-exit test before dispatch: when a
+smaller route can satisfy the bounded contract, the larger route is not admitted.
 
-An externally selected coordinator cannot be silently downgraded. Escalate upward when evidence
-requires it. Delegate only when bounded ownership or independent context improves the work; skip a
-worker when startup and context-loading cost exceed the slice.
+Use one write coordinator by default. A second writer requires explicit external-orchestrator
+authorization, completely path-disjoint ownership, and a durable content-addressed checkpoint
+first. Minions are read-only by default, use the smallest sufficient route for their own bounded
+slice, and never receive overlapping paths or symbols. Every agent reports its stable identity,
+parent identity, requested model/reasoning, and observed runtime model/reasoning; use `not visible`
+when the latter is unavailable. Never silently downgrade, fall back, or substitute a model or
+reasoning level.
+
+Before long full-suite, coverage, compatibility, fuzz/mutation, or multi-review work, push a
+durable content-addressed preservation checkpoint. Never leave the sole valuable copy in `/tmp` or
+another ephemeral workspace. Label preservation as not parked, not Ready, and not complete; split
+long validation into restartable bounded slices with machine-readable receipts.
+
+Freeze the exact head before independent review. Report automatic Actions, skipped jobs,
+unavailable checks, and infrastructure-blocked checks truthfully; only observed applicable success
+is green. After changing a PR from Draft to Ready, inspect every Ready-triggered review, every newer
+comment, and every review thread before merge.
 
 Every nontrivial packet uses explicit **MUST**, **SHOULD**, and **DEFERRED** sections and follows
 [`docs/engineering/codex-task-packet-template.md`](docs/engineering/codex-task-packet-template.md).

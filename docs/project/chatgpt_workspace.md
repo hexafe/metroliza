@@ -2,7 +2,7 @@
 
 Status: Active workspace convention  
 Owner: Maintainer  
-Last reviewed: 2026-08-25
+Last reviewed: 2026-08-31
 
 ## 1. Purpose
 
@@ -36,14 +36,17 @@ sources of truth.
 Treat the active Issue/specification and repository instructions as task authority; inspect the
 current branch and exact head as execution state. Keep Product Owner, external orchestrator, Codex
 coordinator, and bounded-worker roles distinct. Classify the whole PR separately from worker
-slices; never silently downgrade an externally selected coordinator, and escalate on evidence. Use
-explicit MUST, SHOULD, and DEFERRED task-packet sections with owned and forbidden scope,
-acceptance, validation, stop conditions, and remote-operation policy. Verify the exact head and
-report only observed tests, CI, reviews, model,
-reasoning, usage, cost, merge, release, and remote actions; use `not visible` when runtime identity
-is unavailable. Codex coordinators and workers do not merge their own PRs. Require separate
-approval for release, deployment, migration, destructive, secret, billing, publication, and other
-remote product mutations.
+slices and use the smallest route that can satisfy each bounded contract. Critical, milestone,
+P0/P1, or maximum-worker-risk labels never admit Ultra alone; require explicit authority and every
+canonical Ultra condition. Use one write coordinator by default and read-only, non-overlapping
+minions on their own smallest-sufficient routes. Never silently downgrade, fall back, inherit, or
+substitute a route; report unavailable runtime identity as `not visible`. Use explicit MUST,
+SHOULD, and DEFERRED scope, durable content-addressed checkpoints before long gates, no sole
+valuable copy in `/tmp`, restartable validation slices, and machine-readable receipts. Freeze the
+exact head for review; report skipped, unavailable, and infrastructure-blocked CI honestly; after
+Draft becomes Ready inspect every triggered review, newer comment, and thread. Codex coordinators
+and workers do not merge their own PRs. Require separate approval for release, deployment,
+migration, destructive, secret, billing, publication, and other remote product mutations.
 ```
 
 Use this second block as the Metroliza project instruction:
@@ -56,7 +59,8 @@ and target develop; never rely on the default branch. Use src/metroliza as canon
 only for compatibility. Preserve local-first behavior, SQLite atomicity, bounded processing,
 offline dashboards, deterministic Python fallbacks, Python/Rust parity and representative
 benchmark gates, packaged Windows compatibility, and confidential measurement-data hygiene. Apply
-the coordinator/worker routes and exact-head readiness policy in
+the canonical coordinator/worker routes, five-condition Ultra admission, checkpoint/receipt
+contract, and exact-head readiness policy in
 docs/engineering/codex-model-routing.md. Never claim tests, CI,
 benchmarks, packaged/manual gates, model/reasoning, merge, release, or remote actions without an
 observed result. Record durable decisions and follow-up work in Issues, PRs, or active repository
@@ -347,11 +351,14 @@ Start the chat with:
 
 1. the Issue link/number;
 2. target/base branch;
-3. explicit requested outcome (audit, implementation, review, or evidence);
-4. whole-PR coordinator class/model/reasoning and any delegated-slice route;
-5. the accepted execution packet or a completed
+3. `AGENT_ID`, `PARENT_AGENT_ID`, lane, phase, authorized commit/tree, and branch or `READ-ONLY`;
+4. explicit requested outcome (audit, implementation, review, or evidence);
+5. whole-PR coordinator class/model/reasoning, routing rationale, and smaller-route early-exit;
+6. bounded worker identities, read/write authority, non-overlapping ownership, and planned routes;
+7. durable checkpoint, restartable validation-slice, and machine-readable receipt plan;
+8. the accepted execution packet or a completed
    [`Codex task packet`](../engineering/codex-task-packet-template.md);
-6. any local test/artifact constraint not already in the Issue.
+9. any local test/artifact constraint not already in the Issue.
 
 The first action should be to read the Issue and current branch state through GitHub, not to rely on
 memory from another chat. Read the repository sources of truth before editing and report a moved
@@ -361,34 +368,52 @@ base, contradiction, or missing authority instead of silently adapting the packe
 
 1. **Open Issue** — problem, scope, acceptance criteria, validation tier.
 2. **Create Issue chat** — read Issue, relevant code/docs/tests, and branch state.
-3. **Classify and packet** — select the whole-PR coordinator separately from worker slices; record
-   MUST, SHOULD, DEFERRED, ownership, forbidden work, validation, stops, and remote policy.
-4. **Plan bounded slice** — state affected files/contracts, risks, rollback, and tests.
+3. **Classify and packet** — apply the smallest-sufficient normal route separately to the
+   coordinator and each worker; admit Ultra only with explicit authority and all five conditions.
+   Record identity, rationale, early exit, MUST/SHOULD/DEFERRED, ownership, forbidden work, stops,
+   checkpoints, receipts, validation, and remote policy.
+4. **Plan bounded ownership** — default to one writer and read-only minions; state exact disjoint
+   files/symbols, risks, rollback, and tests.
 5. **Create branch** — use Issue-number naming.
-6. **Implement** — keep scope narrow; surface discoveries early.
-7. **Validate** — run actual focused/full/manual gates as required.
-8. **Open PR** — link Issue and use the
+6. **Implement** — keep scope narrow, surface discoveries early, and preserve valuable bytes before
+   they exist only in an ephemeral workspace.
+7. **Checkpoint** — before long full-suite, coverage, compatibility, fuzz/mutation, or review work,
+   push a content-addressed preservation checkpoint labelled not parked, not Ready, and not
+   complete.
+8. **Validate in bounded slices** — run actual focused/full/manual gates as required and retain
+   restartable machine-readable receipts tied to the exact commit/tree.
+9. **Open draft PR** — link Issue and use the
    [`PR routing report`](../engineering/pr-routing-report-template.md) for evidence, risk, rollback,
    and routing details.
-9. **Review/repair** — coordinator audits the exact diff/readiness; external orchestrator performs
-   the independent exact-head merge review; resolve threads and CI for the unchanged head.
-10. **Merge/close** — only the authorized external orchestrator merges after all standing gates;
+10. **Freeze and review** — coordinator audits the exact diff/readiness; external orchestrator uses
+    a sufficiently independent smallest-sufficient route for exact-head review. Resolve findings,
+    threads, and CI only for the unchanged head.
+11. **Inspect the Ready boundary** — if Draft becomes Ready, wait for and inspect every triggered
+    review, all newer comments, and every thread before any merge decision.
+12. **Merge/close** — only the authorized external orchestrator merges after all standing gates;
     update Issue and durable docs. Codex coordinators/workers do not merge.
-11. **Archive chat** — retain only as history after the GitHub record is complete.
+13. **Archive chat** — retain only as history after the GitHub record is complete.
 
 ## 7. Context handoff template
 
 When moving work between chats, post a concise handoff to the Issue or PR:
 
 ```text
+AGENT_ID / PARENT_AGENT_ID / Issue / lane / phase:
 Current branch/SHA:
+Authorized base/tree and final tree:
 Issue and acceptance criteria status:
 Whole-PR class and requested coordinator/reasoning:
+Routing rationale and smaller-route early-exit result:
 Actual runtime model/reasoning or not visible:
+Worker identities, read/write authority, routes, and non-overlapping ownership:
 Implemented:
+Durable checkpoint ref/SHA/tree, status, paths, and content hashes:
 Validation executed and exact results:
+Restartable machine-readable receipt locations/hashes:
 Review findings (P0/P1/P2) and correction cycles:
 Exact-head CI/review/thread status:
+Draft-to-Ready time and all post-Ready reviews/comments/threads inspection cutoff:
 Open blocker/risk:
 Next bounded action:
 Files/contracts that must not change:
