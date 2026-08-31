@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 import re
 
@@ -198,6 +199,22 @@ def contradiction_hits(text: str, pattern_group: str) -> list[str]:
         for pattern in CONTRADICTION_PATTERNS[pattern_group]
         if pattern.search(normalized)
     ]
+
+
+def policy_source_texts(
+    source_reader: Callable[[Path], str] = read,
+) -> dict[Path, str]:
+    return {path: source_reader(path) for path in POLICY_PATHS}
+
+
+def assert_no_policy_contradictions(policy_texts: dict[Path, str]) -> None:
+    for path in POLICY_PATHS:
+        for pattern_group in CONTRADICTION_PATTERNS:
+            hits = contradiction_hits(policy_texts[path], pattern_group)
+            assert not hits, (
+                "Contradictory routing policy in "
+                f"{path.relative_to(REPO_ROOT)} for {pattern_group}: {hits}"
+            )
 
 
 def test_one_canonical_table_preserves_all_normal_routes() -> None:
@@ -486,6 +503,52 @@ def test_negative_control_patterns_reject_direct_policy_contradictions() -> None
             assert contradiction_hits(example, pattern_group), (
                 f"Negative control was not rejected by {pattern_group}: {example}"
             )
+
+
+def test_every_contradiction_group_is_rejected_in_every_active_policy_source() -> None:
+    sources = policy_source_texts()
+    for path in POLICY_PATHS:
+        for pattern_group, examples in NEGATIVE_CONTROLS.items():
+            falsified_sources = {
+                source_path: (
+                    f"{text}\n\n{examples[0]}"
+                    if source_path == path
+                    else text
+                )
+                for source_path, text in sources.items()
+            }
+            try:
+                assert_no_policy_contradictions(falsified_sources)
+            except AssertionError as error:
+                message = str(error)
+                assert str(path.relative_to(REPO_ROOT)) in message
+                assert pattern_group in message
+            else:
+                raise AssertionError(
+                    "Injected contradiction was not rejected for "
+                    f"{path.relative_to(REPO_ROOT)} / {pattern_group}"
+                )
+
+
+def test_agents_read_path_rejects_silent_requested_model_substitution() -> None:
+    falsifier = "A coordinator may silently substitute the requested model."
+
+    def read_with_agents_falsifier(path: Path) -> str:
+        text = read(path)
+        return f"{text}\n\n{falsifier}" if path == AGENTS_PATH else text
+
+    try:
+        assert_no_policy_contradictions(policy_source_texts(read_with_agents_falsifier))
+    except AssertionError as error:
+        message = str(error)
+        assert "AGENTS.md" in message
+        assert "silent_route_change" in message
+    else:
+        raise AssertionError("AGENTS.md requested-model substitution falsifier was not rejected")
+
+
+def test_all_active_policy_sources_reject_every_contradiction_group() -> None:
+    assert_no_policy_contradictions(policy_source_texts())
 
 
 def test_workspace_propagates_bounded_delivery_and_post_ready_inspection() -> None:
