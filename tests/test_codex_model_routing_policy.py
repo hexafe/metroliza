@@ -17,6 +17,88 @@ POLICY_PATHS = (
     PR_REPORT_PATH,
     WORKSPACE_PATH,
 )
+CONTRADICTION_PATTERNS = {
+    "automatic_ultra": (
+        re.compile(
+            r"\bcritical\s*/\s*milestone\s+"
+            r"(?:automatically\s+)?(?:maps?|routes?|defaults?)\b.{0,80}\bultra\b"
+        ),
+        re.compile(
+            r"\b(?:p0\s*/\s*p1|p0\s+or\s+p1|p0|p1)\s+(?:alone\s+)?"
+            r"(?:admits?|requires?|forces?|routes?)\b.{0,80}\bultra\b"
+        ),
+        re.compile(
+            r"\bmaximum\s+worker\s+risk\s+automatically\s+forces?\b.{0,80}\bultra\b"
+        ),
+    ),
+    "weakened_ultra_admission": (
+        re.compile(
+            r"\b(?:any|only|at\s+least)\s+(?:one|two|three|four|[1-4])\s+"
+            r"(?:of\s+the\s+)?(?:conditions?\s+)?(?:is\s+|are\s+)?"
+            r"(?:sufficient|required)\b"
+        ),
+        re.compile(r"\ball\s+five\s+conditions?\s+(?:are|is)\s+not\s+required\b"),
+    ),
+    "overlapping_or_mutating_workers": (
+        re.compile(
+            r"\b(?:additional|second|multiple|parallel)\s+writers?\b.{0,60}"
+            r"\b(?:may|can|are\s+permitted|are\s+allowed)\b.{0,60}"
+            r"\boverlap(?:ping)?\b.{0,60}\bwithout\b.{0,30}\bauthoriz"
+        ),
+        re.compile(r"\bminions?\s+(?:may|can)\s+(?:mutate|write)\b"),
+        re.compile(r"\bauthorization\s+free\s+overlapping\s+writers?\b"),
+    ),
+    "ephemeral_or_receiptless_long_gate": (
+        re.compile(
+            r"\blong\s+(?:validation\s+)?gates?\b.{0,60}"
+            r"\b(?:may|can|are\s+allowed)\b.{0,100}"
+            r"\bsole\s+valuable\s+copy\b.{0,40}/tmp\b"
+        ),
+        re.compile(
+            r"\b(?:may|can)\b.{0,100}\bsole\s+valuable\s+copy\b.{0,40}/tmp\b"
+            r".{0,60}\b(?:without|no)\s+(?:a\s+)?(?:machine\s+readable\s+)?receipt\b"
+        ),
+    ),
+    "silent_route_change": (
+        re.compile(
+            r"\b(?:may|can|is\s+allowed\s+to|are\s+allowed\s+to)\s+silently\s+"
+            r"(?:downgrade|fall\s+back|substitute)\b"
+        ),
+        re.compile(
+            r"\bsilent\s+(?:downgrade|fallback|substitution)\b.{0,40}"
+            r"\b(?:allowed|permitted)\s*:?\s*(?:yes|true)\b"
+        ),
+        re.compile(
+            r"\b(?:downgrade|fallback|substitution)\b.{0,40}\bwithout\s+"
+            r"(?:escalation|approval|authorization)\b"
+        ),
+    ),
+}
+NEGATIVE_CONTROLS = {
+    "automatic_ultra": (
+        "CRITICAL / MILESTONE automatically maps to GPT-5.6 Sol / Ultra.",
+        "P0/P1 alone admits Ultra.",
+        "Maximum worker risk automatically forces the coordinator to Ultra.",
+    ),
+    "weakened_ultra_admission": (
+        "Any four conditions are sufficient.",
+        "All five conditions are not required.",
+    ),
+    "overlapping_or_mutating_workers": (
+        "Additional writers may overlap without external authorization.",
+        "Minions may mutate.",
+        "Authorization-free overlapping writers are permitted.",
+    ),
+    "ephemeral_or_receiptless_long_gate": (
+        "Long gates may run with the sole valuable copy in /tmp.",
+        "A coordinator may keep the sole valuable copy in /tmp with no receipt.",
+    ),
+    "silent_route_change": (
+        "A coordinator may silently downgrade the selected route.",
+        "Silent fallback allowed: yes.",
+        "Model substitution without escalation is acceptable.",
+    ),
+}
 
 
 def read(path: Path) -> str:
@@ -64,6 +146,25 @@ def markdown_table(markdown: str, header: tuple[str, ...]) -> list[tuple[str, ..
     raise AssertionError(f"Missing Markdown table with header: {header}")
 
 
+def markdown_tables(markdown: str) -> list[tuple[tuple[str, ...], list[tuple[str, ...]]]]:
+    lines = markdown.splitlines()
+    tables: list[tuple[tuple[str, ...], list[tuple[str, ...]]]] = []
+    for index, line in enumerate(lines[:-1]):
+        if not line.startswith("|") or not lines[index + 1].startswith("|"):
+            continue
+        separators = tuple(cell.strip() for cell in lines[index + 1].strip("|").split("|"))
+        if not separators or not all(re.fullmatch(r":?-{3,}:?", cell) for cell in separators):
+            continue
+        header = tuple(normalize(cell) for cell in line.strip("|").split("|"))
+        rows: list[tuple[str, ...]] = []
+        for row in lines[index + 2 :]:
+            if not row.startswith("|"):
+                break
+            rows.append(tuple(cell.strip() for cell in row.strip("|").split("|")))
+        tables.append((header, rows))
+    return tables
+
+
 def numbered_items(markdown: str) -> list[str]:
     items: list[list[str]] = []
     for line in markdown.splitlines():
@@ -79,6 +180,24 @@ def assert_contains_concepts(text: str, concepts: tuple[str, ...]) -> None:
     normalized = normalize(text)
     missing = [concept for concept in concepts if normalize(concept) not in normalized]
     assert not missing, f"Missing policy concepts: {missing}"
+
+
+def assert_field_lines(text: str, fields: tuple[str, ...]) -> None:
+    missing = [
+        field
+        for field in fields
+        if re.search(rf"(?m)^\s*(?:-\s+)?{re.escape(field)}\s*:", text) is None
+    ]
+    assert not missing, f"Missing structural fields: {missing}"
+
+
+def contradiction_hits(text: str, pattern_group: str) -> list[str]:
+    normalized = normalize(text)
+    return [
+        pattern.pattern
+        for pattern in CONTRADICTION_PATTERNS[pattern_group]
+        if pattern.search(normalized)
+    ]
 
 
 def test_one_canonical_table_preserves_all_normal_routes() -> None:
@@ -105,8 +224,21 @@ def test_one_canonical_table_preserves_all_normal_routes() -> None:
         for work_class, (model, reasoning) in expected_routes.items()
     }
 
-    canonical_header = "| Work class | Coordinator | Reasoning | Bounded-contract test |"
-    assert sum(read(path).count(canonical_header) for path in POLICY_PATHS) == 1
+    route_tables: list[tuple[Path, tuple[str, ...]]] = []
+    for path in POLICY_PATHS:
+        for header, _rows in markdown_tables(read(path)):
+            if (
+                any("class" in cell for cell in header)
+                and any("coordinator" in cell for cell in header)
+                and any("reasoning" in cell for cell in header)
+            ):
+                route_tables.append((path, header))
+    assert route_tables == [
+        (
+            ROUTING_PATH,
+            ("work class", "coordinator", "reasoning", "bounded contract test"),
+        )
+    ]
 
 
 def test_ultra_requires_all_five_unweakened_admission_conditions() -> None:
@@ -151,6 +283,7 @@ def test_ultra_requires_all_five_unweakened_admission_conditions() -> None:
             "written rationale",
         ),
     )
+    assert not contradiction_hits(ultra, "weakened_ultra_admission")
 
 
 def test_labels_and_worker_risk_never_admit_or_force_ultra() -> None:
@@ -175,12 +308,22 @@ def test_labels_and_worker_risk_never_admit_or_force_ultra() -> None:
             "larger route is not admitted",
         ),
     )
-    forbidden_table_row = re.compile(
-        r"\|\s*(?:critical(?:\s*/\s*milestone)?|milestone|p0|p1)\s*\|"
-        r"\s*gpt-5\.6\s+sol\s*\|\s*ultra\s*\|",
-        re.IGNORECASE,
-    )
-    assert not forbidden_table_row.search(routing)
+    active_policy = "\n".join(read(path) for path in POLICY_PATHS)
+    assert not contradiction_hits(active_policy, "automatic_ultra")
+    prohibited_rows: list[tuple[Path, tuple[str, ...]]] = []
+    for path in POLICY_PATHS:
+        for _header, rows in markdown_tables(read(path)):
+            for row in rows:
+                normalized_row = normalize(" | ".join(row))
+                if (
+                    "ultra" in normalized_row
+                    and any(
+                        label in normalized_row
+                        for label in ("critical", "milestone", "p0", "p1")
+                    )
+                ):
+                    prohibited_rows.append((path, row))
+    assert not prohibited_rows, f"Severity/label table rows admit Ultra: {prohibited_rows}"
     assert "formal milestone uses ultra" not in routing_normalized
 
 
@@ -202,6 +345,7 @@ def test_one_writer_read_only_minions_and_non_overlapping_ownership_are_required
             "never inherit ultra",
         ),
     )
+    assert not contradiction_hits(governance, "overlapping_or_mutating_workers")
 
 
 def test_checkpoints_tmp_protection_and_restartable_receipts_are_required() -> None:
@@ -230,6 +374,7 @@ def test_checkpoints_tmp_protection_and_restartable_receipts_are_required() -> N
             "remaining work",
         ),
     )
+    assert not contradiction_hits(delivery, "ephemeral_or_receiptless_long_gate")
 
 
 def test_runtime_honesty_and_no_silent_route_substitution_are_required() -> None:
@@ -248,43 +393,99 @@ def test_runtime_honesty_and_no_silent_route_substitution_are_required() -> None
             "stop/escalation condition",
         ),
     )
+    assert not contradiction_hits(runtime, "silent_route_change")
     for path in POLICY_PATHS:
         assert "not visible" in normalize(read(path)), f"{path} omits runtime-identity honesty"
 
 
 def test_task_and_pr_templates_capture_identity_ownership_checkpoints_and_ready_review() -> None:
-    template_requirements = {
-        TASK_PACKET_PATH: (
-            "agent identity",
+    task = read(TASK_PACKET_PATH)
+    assert_field_lines(
+        section(task, "Agent identity"),
+        (
+            "AGENT_ID",
+            "PARENT_AGENT_ID",
+            "ISSUE",
+            "LANE",
+            "PHASE",
+            "AUTHORIZED_BASE",
+            "AUTHORIZED_TREE",
+            "BRANCH",
+            "REQUESTED_MODEL",
+            "REQUESTED_REASONING",
+        ),
+    )
+    assert_contains_concepts(
+        section(task, "Whole-PR routing"),
+        ("routing rationale", "smaller sufficient route", "fallback", "substitution"),
+    )
+    assert_contains_concepts(
+        section(task, "Delegated slice routing"),
+        (
             "agent_id",
             "parent_agent_id",
-            "routing rationale",
-            "exact owned sources/paths/symbols",
             "read-only",
+            "exact owned sources/paths/symbols",
             "non-overlapping ownership",
-            "durable checkpoint",
-            "machine-readable receipt",
-            "draft-to-ready",
+        ),
+    )
+    assert_contains_concepts(
+        section(task, "Durable checkpoint and handoff plan"),
+        ("durable ref", "content-hash evidence", "sole valuable copy", "receipt location"),
+    )
+    assert_contains_concepts(
+        section(task, "Draft-to-Ready review inspection"),
+        (
+            "draft-to-ready transition",
             "ready-triggered review",
             "all newer comments inspected",
             "every review thread inspected",
         ),
-        PR_REPORT_PATH: (
-            "coordinator agent_id",
-            "coordinator parent_agent_id",
-            "routing rationale",
+    )
+
+    pr_report = read(PR_REPORT_PATH)
+    pr_routing = section(pr_report, "Routing report")
+    assert_field_lines(
+        pr_routing,
+        (
+            "Coordinator AGENT_ID",
+            "Coordinator PARENT_AGENT_ID",
+            "Routing rationale",
+        ),
+    )
+    assert_contains_concepts(
+        pr_routing,
+        (
             "exact non-overlapping ownership",
             "read-only minions",
+            "one write coordinator by default",
+        ),
+    )
+    assert_contains_concepts(
+        section(pr_report, "Validation"),
+        (
             "durable checkpoints and bounded receipts",
             "machine-readable",
+            "sole valuable copy",
+        ),
+    )
+    assert_contains_concepts(
+        section(pr_report, "Review and readiness ledger"),
+        (
             "draft-to-ready transition",
             "ready-triggered review",
             "all comments newer than ready inspected",
             "every review thread inspected after ready",
         ),
-    }
-    for path, requirements in template_requirements.items():
-        assert_contains_concepts(read(path), requirements)
+    )
+
+
+def test_negative_control_patterns_reject_direct_policy_contradictions() -> None:
+    for pattern_group, examples in NEGATIVE_CONTROLS.items():
+        for example in examples:
+            assert contradiction_hits(example, pattern_group), (
+                f"Negative control was not rejected by {pattern_group}: {example}"
+            )
 
 
 def test_workspace_propagates_bounded_delivery_and_post_ready_inspection() -> None:
