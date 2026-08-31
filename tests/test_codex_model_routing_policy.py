@@ -29,6 +29,12 @@ CONTRADICTION_PATTERNS = {
             r"(?:admits?|requires?|forces?|routes?)\b.{0,80}\bultra\b"
         ),
         re.compile(
+            r"\b(?:p0\s*/\s*p1|p0\s+or\s+p1|p0|p1)\s+"
+            r"(?:work|tasks?|issues?|fix(?:es)?|changes?)\s+"
+            r"(?:automatically\s+)?(?:admits?|defaults?|forces?|maps?|requires?|routes?|uses?)\b"
+            r".{0,80}\bultra\b"
+        ),
+        re.compile(
             r"\bmaximum\s+worker\s+risk\s+automatically\s+forces?\b.{0,80}\bultra\b"
         ),
     ),
@@ -79,6 +85,13 @@ NEGATIVE_CONTROLS = {
     "automatic_ultra": (
         "CRITICAL / MILESTONE automatically maps to GPT-5.6 Sol / Ultra.",
         "P0/P1 alone admits Ultra.",
+        "P0 work defaults to Ultra.",
+        "P0 task maps to Ultra.",
+        "P0 issue routes to Ultra.",
+        "P1 fix requires Ultra.",
+        "P1 change forces Ultra.",
+        "P0 work admits Ultra.",
+        "P1 task uses Ultra.",
         "Maximum worker risk automatically forces the coordinator to Ultra.",
     ),
     "weakened_ultra_admission": (
@@ -505,29 +518,34 @@ def test_negative_control_patterns_reject_direct_policy_contradictions() -> None
             )
 
 
+def test_automatic_ultra_patterns_allow_explicit_direct_p0_p1_negations() -> None:
+    for statement in (
+        "P0 work does not default to Ultra.",
+        "P0/P1 never admits Ultra alone.",
+    ):
+        assert not contradiction_hits(statement, "automatic_ultra")
+
+
 def test_every_contradiction_group_is_rejected_in_every_active_policy_source() -> None:
     sources = policy_source_texts()
     for path in POLICY_PATHS:
         for pattern_group, examples in NEGATIVE_CONTROLS.items():
-            falsified_sources = {
-                source_path: (
-                    f"{text}\n\n{examples[0]}"
-                    if source_path == path
-                    else text
-                )
-                for source_path, text in sources.items()
-            }
-            try:
-                assert_no_policy_contradictions(falsified_sources)
-            except AssertionError as error:
-                message = str(error)
-                assert str(path.relative_to(REPO_ROOT)) in message
-                assert pattern_group in message
-            else:
-                raise AssertionError(
-                    "Injected contradiction was not rejected for "
-                    f"{path.relative_to(REPO_ROOT)} / {pattern_group}"
-                )
+            for example in examples:
+                falsified_sources = {
+                    source_path: f"{text}\n\n{example}" if source_path == path else text
+                    for source_path, text in sources.items()
+                }
+                try:
+                    assert_no_policy_contradictions(falsified_sources)
+                except AssertionError as error:
+                    message = str(error)
+                    assert str(path.relative_to(REPO_ROOT)) in message
+                    assert pattern_group in message
+                else:
+                    raise AssertionError(
+                        "Injected contradiction was not rejected for "
+                        f"{path.relative_to(REPO_ROOT)} / {pattern_group}: {example}"
+                    )
 
 
 def test_agents_read_path_rejects_silent_requested_model_substitution() -> None:
@@ -545,6 +563,23 @@ def test_agents_read_path_rejects_silent_requested_model_substitution() -> None:
         assert "silent_route_change" in message
     else:
         raise AssertionError("AGENTS.md requested-model substitution falsifier was not rejected")
+
+
+def test_agents_read_path_rejects_direct_p0_ultra_default() -> None:
+    falsifier = "P0 work defaults to Ultra."
+
+    def read_with_agents_falsifier(path: Path) -> str:
+        text = read(path)
+        return f"{text}\n\n{falsifier}" if path == AGENTS_PATH else text
+
+    try:
+        assert_no_policy_contradictions(policy_source_texts(read_with_agents_falsifier))
+    except AssertionError as error:
+        message = str(error)
+        assert "AGENTS.md" in message
+        assert "automatic_ultra" in message
+    else:
+        raise AssertionError("AGENTS.md direct-P0 Ultra-default falsifier was not rejected")
 
 
 def test_all_active_policy_sources_reject_every_contradiction_group() -> None:
