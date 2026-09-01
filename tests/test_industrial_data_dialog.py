@@ -60,6 +60,22 @@ def _app():
     return _QT_APP
 
 
+def _populate_industrial_cache(database: str) -> None:
+    repository = IndustrialDataRepository(database)
+    profile = repository.upsert_source_profile(
+        profile_key="line_a",
+        profile_name="Line A",
+        source_db_alias="line_a",
+        database_type="sqlite",
+        source_object_name="events",
+    )
+    repository.upsert_industrial_records_from_rows(
+        source_profile_id=profile.id,
+        source_db_alias=profile.source_db_alias,
+        rows=({"source_record_key": "row-1", "measurement": 12.5},),
+    )
+
+
 def test_dialog_saves_non_secret_source_metadata_without_credentials(tmp_path):
     _app()
     db_path = str(tmp_path / "metroliza.db")
@@ -904,6 +920,84 @@ def test_launcher_can_create_persistent_industrial_cache_without_report_context(
     assert "report_metadata" not in tables
     dialog.close()
     parent.close()
+
+
+def test_launcher_rejects_extension_normalized_existing_destination(monkeypatch, tmp_path):
+    _app()
+    selected = tmp_path / "existing-cache"
+    destination = Path(f"{selected}.db")
+    destination.write_bytes(b"preserve existing destination")
+    warnings = []
+    monkeypatch.setattr(
+        industrial_data_dialog.QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: (str(selected), "SQLite database (*.db *.sqlite *.sqlite3)"),
+    )
+    monkeypatch.setattr(
+        industrial_data_dialog.QMessageBox,
+        "warning",
+        lambda _parent, _title, message: warnings.append(str(message)),
+    )
+    dialog = IndustrialDataDialog(db_file=None)
+    source = Path(dialog.db_file)
+    _populate_industrial_cache(dialog.db_file)
+    try:
+        dialog.create_database_file()
+
+        assert dialog.cache_target.is_temporary
+        assert dialog.db_file == str(source)
+        assert source.exists()
+        assert destination.read_bytes() == b"preserve existing destination"
+        assert warnings and "already exists" in warnings[0]
+    finally:
+        monkeypatch.setattr(
+            industrial_data_dialog.QMessageBox,
+            "question",
+            lambda *args, **kwargs: QMessageBox.StandardButton.Discard,
+        )
+        dialog.close()
+
+
+def test_non_temporary_create_uses_no_clobber_backend_for_destination_race(
+    monkeypatch,
+    tmp_path,
+):
+    _app()
+    active = tmp_path / "active.db"
+    IndustrialDataRepository(str(active)).ensure_schema()
+    destination = tmp_path / "raced.db"
+    raced_bytes = b"appeared after the file picker returned"
+    warnings = []
+    dialog = IndustrialDataDialog(db_file=str(active))
+    monkeypatch.setattr(
+        industrial_data_dialog.QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: (str(destination), "SQLite database"),
+    )
+    monkeypatch.setattr(
+        industrial_data_dialog.QMessageBox,
+        "warning",
+        lambda _parent, _title, message: warnings.append(str(message)),
+    )
+    real_persist = industrial_data_dialog.persist_temporary_industrial_cache
+
+    def persist_after_race(target, final_destination, **kwargs):
+        destination.write_bytes(raced_bytes)
+        return real_persist(target, final_destination, **kwargs)
+
+    monkeypatch.setattr(
+        industrial_data_dialog,
+        "persist_temporary_industrial_cache",
+        persist_after_race,
+    )
+    try:
+        dialog.create_database_file()
+
+        assert dialog.db_file == str(active)
+        assert destination.read_bytes() == raced_bytes
+        assert warnings and "already exists" in warnings[0]
+    finally:
+        dialog.close()
 
 
 def test_launcher_initializes_cache_and_opens_owned_child_dialogs(monkeypatch, tmp_path):

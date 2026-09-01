@@ -26,7 +26,7 @@ from metroliza.industrial.industrial_cache_target import (
     disposable_cache_counts,
     existing_metroliza_cache_target,
     persist_temporary_industrial_cache,
-    persistent_industrial_cache_target,
+    resolve_industrial_cache_destination,
 )
 from metroliza.industrial.industrial_tabular_bridge import load_industrial_cache_tabular_result
 from metroliza.ui.help_menu import attach_help_menu_to_layout
@@ -350,22 +350,26 @@ class IndustrialDataDialog(QDialog):
         )
         if not filename:
             return
-        if not filename.lower().endswith((".db", ".sqlite", ".sqlite3")):
-            filename = f"{filename}.db"
+        destination = resolve_industrial_cache_destination(filename)
         previous = self.cache_target
+        generated_target = None
         try:
             if previous.is_temporary:
-                target = persist_temporary_industrial_cache(
-                    previous,
-                    filename,
-                    forbidden_destinations=self._forbidden_cache_destinations(),
-                )
+                source_target = previous
             else:
-                IndustrialDataRepository(filename).ensure_schema()
-                target = persistent_industrial_cache_target(filename)
+                generated_target = create_temporary_industrial_cache_target()
+                IndustrialDataRepository(generated_target.cache_db_file).ensure_schema()
+                source_target = generated_target
+            target = persist_temporary_industrial_cache(
+                source_target,
+                destination,
+                forbidden_destinations=self._forbidden_cache_destinations(),
+            )
         except Exception as exc:
             QMessageBox.warning(self, self.windowTitle(), f"Could not save cache: {exc}")
             return
+        finally:
+            cleanup_temporary_industrial_cache(generated_target)
         cleanup_temporary_industrial_cache(previous)
         self.cache_target = target
         self.db_file = target.cache_db_file
@@ -405,12 +409,11 @@ class IndustrialDataDialog(QDialog):
         )
         if not filename:
             return False
-        if not filename.lower().endswith((".db", ".sqlite", ".sqlite3")):
-            filename = f"{filename}.db"
+        destination = resolve_industrial_cache_destination(filename)
         try:
             persist_temporary_industrial_cache(
                 target,
-                filename,
+                destination,
                 forbidden_destinations=self._forbidden_cache_destinations(
                     *additional_forbidden
                 ),
@@ -421,9 +424,14 @@ class IndustrialDataDialog(QDialog):
         return True
 
     def _forbidden_cache_destinations(self, *additional: str) -> tuple[str, ...]:
+        active_target = getattr(self, "cache_target", None)
         destinations = {
             str(candidate)
-            for candidate in (self._workspace_db_file, *additional)
+            for candidate in (
+                self._workspace_db_file,
+                active_target.cache_db_file if active_target is not None else None,
+                *additional,
+            )
             if str(candidate or "").strip()
         }
         return tuple(sorted(destinations))

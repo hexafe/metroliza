@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from contextlib import closing
+import os
 from pathlib import Path
 import sqlite3
+import stat
+from types import SimpleNamespace
 
 import pytest
 
+import metroliza.industrial.industrial_cache_target as cache_target_module
 from metroliza.industrial.industrial_cache_target import (
     IndustrialCacheTarget,
     cleanup_temporary_industrial_cache,
@@ -48,12 +52,21 @@ def _populate_cache(database: str) -> None:
     )
 
 
-def test_failed_snapshot_does_not_replace_existing_destination(tmp_path):
+def _write_marker_database(path: Path) -> bytes:
+    with closing(sqlite3.connect(path)) as connection, connection:
+        connection.execute("CREATE TABLE marker (value TEXT NOT NULL)")
+        connection.execute("INSERT INTO marker VALUES ('preserve-me')")
+    return path.read_bytes()
+
+
+def _assert_no_staging_artifacts(destination: Path) -> None:
+    assert list(destination.parent.glob(f".{destination.name}.*.saving")) == []
+
+
+def test_failed_snapshot_does_not_create_destination(tmp_path):
     source = tmp_path / "invalid-source.sqlite"
     source.write_bytes(b"not a sqlite database")
-    destination = tmp_path / "existing.sqlite"
-    original = b"existing cache must survive"
-    destination.write_bytes(original)
+    destination = tmp_path / "new.sqlite"
     target = IndustrialCacheTarget(
         mode="temporary",
         cache_db_file=str(source),
@@ -63,8 +76,60 @@ def test_failed_snapshot_does_not_replace_existing_destination(tmp_path):
     with pytest.raises(Exception):
         persist_temporary_industrial_cache(target, destination)
 
-    assert destination.read_bytes() == original
-    assert list(tmp_path.glob(".existing.sqlite.*.saving")) == []
+    assert not destination.exists()
+    _assert_no_staging_artifacts(destination)
+
+
+def test_snapshot_preserves_existing_sqlite_destination_by_default(tmp_path):
+    target = create_temporary_industrial_cache_target()
+    destination = tmp_path / "existing.sqlite"
+    try:
+        _populate_cache(target.cache_db_file)
+        original = _write_marker_database(destination)
+
+        with pytest.raises(FileExistsError, match="already exists"):
+            persist_temporary_industrial_cache(target, destination)
+
+        assert destination.read_bytes() == original
+        _assert_no_staging_artifacts(destination)
+    finally:
+        cleanup_temporary_industrial_cache(target)
+
+
+def test_snapshot_preserves_existing_non_sqlite_destination_by_default(tmp_path):
+    target = create_temporary_industrial_cache_target()
+    destination = tmp_path / "existing.sqlite"
+    original = b"unrelated industrial measurements\x00\xff"
+    destination.write_bytes(original)
+    try:
+        _populate_cache(target.cache_db_file)
+
+        with pytest.raises(FileExistsError, match="already exists"):
+            persist_temporary_industrial_cache(target, destination)
+
+        assert destination.read_bytes() == original
+        assert Path(target.cache_db_file).exists()
+        _assert_no_staging_artifacts(destination)
+    finally:
+        cleanup_temporary_industrial_cache(target)
+
+
+def test_extension_normalization_cannot_bypass_existing_destination(tmp_path):
+    target = create_temporary_industrial_cache_target()
+    selected = tmp_path / "existing-cache"
+    destination = Path(f"{selected}.db")
+    original = b"do not replace after extension normalization"
+    destination.write_bytes(original)
+    try:
+        _populate_cache(target.cache_db_file)
+
+        with pytest.raises(FileExistsError, match="already exists"):
+            persist_temporary_industrial_cache(target, selected)
+
+        assert destination.read_bytes() == original
+        assert not selected.exists()
+    finally:
+        cleanup_temporary_industrial_cache(target)
 
 
 def test_snapshot_refuses_to_replace_reserved_workspace_database(tmp_path):
@@ -90,6 +155,327 @@ def test_snapshot_refuses_to_replace_reserved_workspace_database(tmp_path):
             ).fetchone()
         assert marker == "keep-me"
         assert cache_table is None
+    finally:
+        cleanup_temporary_industrial_cache(target)
+
+
+def test_snapshot_refuses_source_and_hard_link_alias_destinations(tmp_path):
+    target = create_temporary_industrial_cache_target()
+    source = Path(target.cache_db_file)
+    hard_link = tmp_path / "source-alias.sqlite"
+    try:
+        _populate_cache(target.cache_db_file)
+        original = source.read_bytes()
+        with pytest.raises(ValueError, match="outside the temporary cache"):
+            persist_temporary_industrial_cache(target, source)
+        try:
+            os.link(source, hard_link)
+        except OSError as exc:
+            pytest.skip(f"hard links are unavailable: {exc}")
+
+        with pytest.raises(ValueError, match="outside the temporary cache"):
+            persist_temporary_industrial_cache(target, hard_link)
+
+        assert source.read_bytes() == original
+        assert hard_link.read_bytes() == original
+    finally:
+        cleanup_temporary_industrial_cache(target)
+
+
+def test_snapshot_refuses_forbidden_hard_link_alias(tmp_path):
+    target = create_temporary_industrial_cache_target()
+    forbidden = tmp_path / "active.db"
+    alias = tmp_path / "active-alias.db"
+    original = _write_marker_database(forbidden)
+    try:
+        _populate_cache(target.cache_db_file)
+        try:
+            os.link(forbidden, alias)
+        except OSError as exc:
+            pytest.skip(f"hard links are unavailable: {exc}")
+
+        with pytest.raises(ValueError, match="active Metroliza database"):
+            persist_temporary_industrial_cache(
+                target,
+                alias,
+                forbidden_destinations=(forbidden,),
+            )
+
+        assert forbidden.read_bytes() == original
+        assert alias.read_bytes() == original
+    finally:
+        cleanup_temporary_industrial_cache(target)
+
+
+def test_snapshot_refuses_symlink_and_non_regular_destinations(tmp_path):
+    target = create_temporary_industrial_cache_target()
+    symlink = tmp_path / "destination.sqlite"
+    symlink_target = tmp_path / "symlink-target.sqlite"
+    directory = tmp_path / "cache-directory.sqlite"
+    directory.mkdir()
+    try:
+        _populate_cache(target.cache_db_file)
+        try:
+            symlink.symlink_to(symlink_target)
+        except OSError as exc:
+            pytest.skip(f"symbolic links are unavailable: {exc}")
+
+        with pytest.raises(ValueError, match="symbolic link|reparse point"):
+            persist_temporary_industrial_cache(target, symlink)
+        with pytest.raises(ValueError, match="regular file"):
+            persist_temporary_industrial_cache(target, directory)
+
+        assert symlink.is_symlink()
+        assert not symlink_target.exists()
+        assert directory.is_dir()
+    finally:
+        cleanup_temporary_industrial_cache(target)
+
+
+def test_reparse_point_detection_is_platform_bounded(monkeypatch):
+    reparse_flag = 0x400
+    monkeypatch.setattr(
+        cache_target_module.stat,
+        "FILE_ATTRIBUTE_REPARSE_POINT",
+        reparse_flag,
+        raising=False,
+    )
+    status = SimpleNamespace(st_mode=stat.S_IFREG, st_file_attributes=reparse_flag)
+
+    assert cache_target_module._is_symlink_or_reparse(status)
+
+
+@pytest.mark.parametrize("suffix", ("-wal", "-shm", "-journal"))
+def test_existing_destination_sidecars_block_publication(tmp_path, suffix):
+    target = create_temporary_industrial_cache_target()
+    destination = tmp_path / "new.sqlite"
+    sidecar = Path(f"{destination}{suffix}")
+    original = b"foreign SQLite sidecar"
+    sidecar.write_bytes(original)
+    try:
+        _populate_cache(target.cache_db_file)
+
+        with pytest.raises(FileExistsError, match="sidecar already exists"):
+            persist_temporary_industrial_cache(target, destination)
+
+        assert not destination.exists()
+        assert sidecar.read_bytes() == original
+        assert Path(target.cache_db_file).exists()
+    finally:
+        cleanup_temporary_industrial_cache(target)
+
+
+def test_destination_created_during_backup_blocks_publication(monkeypatch, tmp_path):
+    target = create_temporary_industrial_cache_target()
+    destination = tmp_path / "raced.sqlite"
+    raced_bytes = b"destination created during backup"
+    real_backup = cache_target_module.backup_sqlite_database
+
+    def backup_with_race(source, staging):
+        real_backup(source, staging)
+        destination.write_bytes(raced_bytes)
+
+    monkeypatch.setattr(cache_target_module, "backup_sqlite_database", backup_with_race)
+    try:
+        _populate_cache(target.cache_db_file)
+
+        with pytest.raises(FileExistsError, match="already exists"):
+            persist_temporary_industrial_cache(target, destination)
+
+        assert destination.read_bytes() == raced_bytes
+        assert Path(target.cache_db_file).exists()
+        _assert_no_staging_artifacts(destination)
+    finally:
+        cleanup_temporary_industrial_cache(target)
+
+
+@pytest.mark.parametrize("suffix", ("-wal", "-shm", "-journal"))
+def test_sidecar_created_during_backup_blocks_publication(
+    monkeypatch,
+    tmp_path,
+    suffix,
+):
+    target = create_temporary_industrial_cache_target()
+    destination = tmp_path / "raced.sqlite"
+    sidecar = Path(f"{destination}{suffix}")
+    raced_bytes = b"sidecar created during backup"
+    real_backup = cache_target_module.backup_sqlite_database
+
+    def backup_with_race(source, staging):
+        real_backup(source, staging)
+        sidecar.write_bytes(raced_bytes)
+
+    monkeypatch.setattr(cache_target_module, "backup_sqlite_database", backup_with_race)
+    try:
+        _populate_cache(target.cache_db_file)
+
+        with pytest.raises(FileExistsError, match="sidecar already exists"):
+            persist_temporary_industrial_cache(target, destination)
+
+        assert not destination.exists()
+        assert sidecar.read_bytes() == raced_bytes
+        _assert_no_staging_artifacts(destination)
+    finally:
+        cleanup_temporary_industrial_cache(target)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX modes are unavailable")
+def test_posix_staging_directory_and_database_are_private_without_umask(
+    monkeypatch,
+    tmp_path,
+):
+    target = create_temporary_industrial_cache_target()
+    destination = tmp_path / "private.sqlite"
+    real_backup = cache_target_module.backup_sqlite_database
+    real_publish = cache_target_module._atomic_publish_no_replace
+    observed: dict[str, int] = {}
+
+    def backup_with_permissive_mode(source, staging):
+        observed["directory"] = stat.S_IMODE(Path(staging).parent.stat().st_mode)
+        real_backup(source, staging)
+        os.chmod(staging, 0o644)
+
+    def observe_staging(staging, final_destination):
+        observed["staging"] = stat.S_IMODE(Path(staging).stat().st_mode)
+        real_publish(staging, final_destination)
+
+    monkeypatch.setattr(cache_target_module, "backup_sqlite_database", backup_with_permissive_mode)
+    monkeypatch.setattr(cache_target_module, "_atomic_publish_no_replace", observe_staging)
+    monkeypatch.setattr(
+        cache_target_module.os,
+        "umask",
+        lambda _mode: (_ for _ in ()).throw(AssertionError("must not change process umask")),
+    )
+    try:
+        _populate_cache(target.cache_db_file)
+
+        persist_temporary_industrial_cache(target, destination)
+
+        assert observed == {"directory": 0o700, "staging": 0o600}
+        assert stat.S_IMODE(destination.stat().st_mode) == 0o600
+    finally:
+        cleanup_temporary_industrial_cache(target)
+
+
+def test_posix_publication_uses_atomic_hard_link(monkeypatch, tmp_path):
+    target = create_temporary_industrial_cache_target()
+    destination = tmp_path / "posix.sqlite"
+    real_link = os.link
+    calls = []
+
+    def observed_link(source, final_destination):
+        calls.append((Path(source), Path(final_destination)))
+        real_link(source, final_destination)
+
+    monkeypatch.setattr(cache_target_module, "_PUBLICATION_PLATFORM", "posix")
+    monkeypatch.setattr(cache_target_module.os, "link", observed_link)
+    try:
+        _populate_cache(target.cache_db_file)
+
+        persist_temporary_industrial_cache(target, destination)
+
+        assert len(calls) == 1
+        assert calls[0][1] == destination
+    finally:
+        cleanup_temporary_industrial_cache(target)
+
+
+def test_windows_publication_uses_atomic_no_replace_rename(monkeypatch, tmp_path):
+    target = create_temporary_industrial_cache_target()
+    destination = tmp_path / "windows.sqlite"
+    real_link = os.link
+    calls = []
+
+    def fake_windows_rename(source, final_destination):
+        source_path = Path(source)
+        final_path = Path(final_destination)
+        calls.append((source_path, final_path))
+        if final_path.exists():
+            raise FileExistsError(final_path)
+        real_link(source_path, final_path)
+        source_path.unlink()
+
+    monkeypatch.setattr(cache_target_module, "_PUBLICATION_PLATFORM", "nt")
+    monkeypatch.setattr(cache_target_module.os, "rename", fake_windows_rename)
+    try:
+        _populate_cache(target.cache_db_file)
+
+        persist_temporary_industrial_cache(target, destination)
+
+        assert len(calls) == 1
+        assert calls[0][1] == destination
+    finally:
+        cleanup_temporary_industrial_cache(target)
+
+
+def test_unsupported_publication_primitive_fails_closed(monkeypatch, tmp_path):
+    target = create_temporary_industrial_cache_target()
+    destination = tmp_path / "unsupported.sqlite"
+    monkeypatch.setattr(cache_target_module, "_PUBLICATION_PLATFORM", "posix")
+    monkeypatch.setattr(
+        cache_target_module.os,
+        "link",
+        lambda *_args: (_ for _ in ()).throw(OSError("hard links unsupported")),
+    )
+    try:
+        _populate_cache(target.cache_db_file)
+
+        with pytest.raises(RuntimeError, match="atomic no-replace"):
+            persist_temporary_industrial_cache(target, destination)
+
+        assert not destination.exists()
+        assert Path(target.cache_db_file).exists()
+        _assert_no_staging_artifacts(destination)
+    finally:
+        cleanup_temporary_industrial_cache(target)
+
+
+def test_successful_commit_has_no_post_publication_rollback(monkeypatch, tmp_path):
+    target = create_temporary_industrial_cache_target()
+    destination = tmp_path / "committed.sqlite"
+    sidecar = Path(f"{destination}-wal")
+    real_publish = cache_target_module._atomic_publish_no_replace
+
+    def publish_then_external_sidecar(staging, final_destination):
+        real_publish(staging, final_destination)
+        sidecar.write_bytes(b"external actor after commit")
+
+    monkeypatch.setattr(
+        cache_target_module,
+        "_atomic_publish_no_replace",
+        publish_then_external_sidecar,
+    )
+    try:
+        _populate_cache(target.cache_db_file)
+
+        persisted = persist_temporary_industrial_cache(target, destination)
+
+        assert persisted.cache_db_file == str(destination.resolve())
+        assert destination.exists()
+        assert sidecar.read_bytes() == b"external actor after commit"
+    finally:
+        cleanup_temporary_industrial_cache(target)
+
+
+def test_permission_failure_cleans_only_staging_and_preserves_source(monkeypatch, tmp_path):
+    if os.name != "posix":
+        pytest.skip("POSIX permissions are unavailable")
+    target = create_temporary_industrial_cache_target()
+    destination = tmp_path / "permission-failure.sqlite"
+    monkeypatch.setattr(
+        cache_target_module.os,
+        "fchmod",
+        lambda *_args: (_ for _ in ()).throw(PermissionError("permission denied")),
+    )
+    try:
+        _populate_cache(target.cache_db_file)
+
+        with pytest.raises(RuntimeError, match="private staging permissions"):
+            persist_temporary_industrial_cache(target, destination)
+
+        assert not destination.exists()
+        assert Path(target.cache_db_file).exists()
+        _assert_no_staging_artifacts(destination)
     finally:
         cleanup_temporary_industrial_cache(target)
 
