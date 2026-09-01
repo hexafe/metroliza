@@ -218,6 +218,51 @@ def test_tabular_analytics_dialog_loads_csv_metrics_and_group_columns(tmp_path) 
         dialog.close()
 
 
+def test_tabular_load_thread_stop_joins_and_schedules_cleanup(tmp_path, monkeypatch) -> None:
+    _app()
+    input_file = tmp_path / "table.csv"
+    pd.DataFrame(
+        {
+            "TraceCode": ["TC-001", "TC-002", "TC-003"],
+            "Length mm": [10.0, 10.2, 10.4],
+        }
+    ).to_csv(input_file, index=False)
+    thread_type = IndustrialAnalyticsDialog.show_tabular_load_screen.__globals__[
+        "TabularAnalyticsLoadThread"
+    ]
+    original_wait = thread_type.wait
+    original_delete_later = thread_type.deleteLater
+    wait_receipts = []
+    delete_later_receipts = []
+
+    def tracked_wait(thread, *args):
+        completed = original_wait(thread, *args)
+        wait_receipts.append((thread, completed, thread.isRunning()))
+        return completed
+
+    def tracked_delete_later(thread):
+        delete_later_receipts.append(thread)
+        return original_delete_later(thread)
+
+    monkeypatch.setattr(thread_type, "wait", tracked_wait)
+    monkeypatch.setattr(thread_type, "deleteLater", tracked_delete_later)
+
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.input_file = str(input_file)
+        dialog.load_metrics()
+        thread = dialog.tabular_load_thread
+        assert thread is not None
+
+        _wait_for_tabular_load(dialog)
+
+        assert wait_receipts == [(thread, True, False)]
+        assert delete_later_receipts == [thread]
+        assert dialog.tabular_load_thread is None
+    finally:
+        dialog.close()
+
+
 def test_tabular_analytics_dialog_uses_workbook_path_only_when_opted_in(tmp_path) -> None:
     _app()
     input_file = tmp_path / "table.csv"
