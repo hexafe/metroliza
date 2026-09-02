@@ -40,6 +40,8 @@ _SENSITIVE_MAPPING_KEYS = frozenset(
     {
         "password",
         "passphrase",
+        "secret",
+        "client_secret",
         "token",
         "access_token",
         "refresh_token",
@@ -58,22 +60,14 @@ _SENSITIVE_MAPPING_KEYS = frozenset(
     }
 )
 _URI_USERINFO_RE = re.compile(r"(?i)(\b[a-z][a-z0-9+.-]{0,31}://|//)[^\s/@]+@")
-_AUTHORIZATION_FIELD_RE = re.compile(
-    r"(?i)((?:\\?[\"'])?\b(?:proxy[-_ ]?)?authorization\b"
-    r"(?:\\?[\"'])?\s*[:=]\s*)"
-)
 _BEARER_RE = re.compile(r"(?i)\b(bearer\s+)[^\s,;\"']+")
-_STRUCTURED_LABEL_RE = re.compile(
-    r"(?i)([\"']?\b(?:"
-    r"dsn|connection[-_ ]?string|sql|query|source|path"
-    r")\b[\"']?\s*[:=]\s*)(?!\[REDACTED\])"
-    r"(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\r\n]+)"
-)
-_VALUE_LABEL_RE = re.compile(
-    r"(?i)([\"']?\b(?:"
-    r"password|passphrase|token|access[-_ ]?token|refresh[-_ ]?token|"
-    r"api[-_ ]?key|private[-_ ]?key|secret[-_ ]?key|credential"
-    r")\b[\"']?\s*[:=]\s*)(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,;&]+)"
+_TERMINAL_SENSITIVE_FIELD_RE = re.compile(
+    r"(?i)(?:\\?[\"'])?\b(?:"
+    r"password|passphrase|secret|client[-_ ]?secret|secret[-_ ]?key|"
+    r"private[-_ ]?key|token|access[-_ ]?token|refresh[-_ ]?token|"
+    r"api[-_ ]?key|credential|(?:proxy[-_ ]?)?authorization|dsn|"
+    r"connection[-_ ]?string|sql|query|source|path"
+    r")\b(?:\\?[\"'])?\s*[:=]\s*"
 )
 
 
@@ -88,16 +82,12 @@ def _bounded_text(value: object) -> str:
     return f"{text[:_MAX_LOG_INPUT]}...[truncated]"
 
 
-def _redact_authorization_tail(text: str) -> str:
-    """Discard content after the first unredacted Authorization field boundary."""
-    search_from = 0
-    while match := _AUTHORIZATION_FIELD_RE.search(text, search_from):
-        field_end = match.end()
-        if text.startswith(_REDACTED, field_end):
-            search_from = field_end + len(_REDACTED)
-            continue
-        return f"{text[:field_end]}{_REDACTED}"
-    return text
+def _contract_terminal_sensitive_field(text: str) -> str:
+    """Discard the untrusted tail after the first explicit sensitive field."""
+    match = _TERMINAL_SENSITIVE_FIELD_RE.search(text)
+    if match is None:
+        return text
+    return f"{text[: match.end()]}{_REDACTED}"
 
 
 def redact_log_text(value: object) -> str:
@@ -109,10 +99,8 @@ def redact_log_text(value: object) -> str:
     """
     text = _bounded_text(value)
     text = _URI_USERINFO_RE.sub(lambda match: f"{match.group(1)}{_REDACTED}@", text)
-    text = _redact_authorization_tail(text)
     text = _BEARER_RE.sub(lambda match: f"{match.group(1)}{_REDACTED}", text)
-    text = _STRUCTURED_LABEL_RE.sub(lambda match: f"{match.group(1)}{_REDACTED}", text)
-    text = _VALUE_LABEL_RE.sub(lambda match: f"{match.group(1)}{_REDACTED}", text)
+    text = _contract_terminal_sensitive_field(text)
     if len(text) <= _MAX_LOG_OUTPUT:
         return text
     return f"{text[:_MAX_LOG_OUTPUT]}...[truncated]"
@@ -344,7 +332,7 @@ class RedactingFormatter(logging.Formatter):
                 budget = max(0, _MAX_LOG_OUTPUT - len(suffix) - len(truncation))
                 rendered = f"{rendered[:budget]}{truncation}"
             rendered = f"{rendered}{suffix}"
-        return redact_log_text(rendered)
+        return rendered
 
 
 @dataclass(frozen=True)

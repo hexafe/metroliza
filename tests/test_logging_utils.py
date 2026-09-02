@@ -504,7 +504,7 @@ class TestLoggingUtils(unittest.TestCase):
                 self.assertNotIn(marker, output)
                 self.assertNotIn("trailing-", output)
 
-    def test_r4_authorization_tail_redaction_is_idempotent_and_complete(self):
+    def test_r5_existing_redaction_marker_does_not_preserve_untrusted_tail(self):
         marker = f"generated-{uuid.uuid4().hex}"
         formatter = RedactingFormatter("%(message)s")
         message = (
@@ -533,15 +533,183 @@ class TestLoggingUtils(unittest.TestCase):
         )
 
         self.assertEqual(formatter.format(repeated_record), output)
-        self.assertEqual(
-            output,
-            (
-                "safe-prefix Authorization: [REDACTED]; retained-structure; "
-                "Proxy Authorization = [REDACTED]"
-            ),
-        )
+        self.assertEqual(output, "safe-prefix Authorization: [REDACTED]")
         self.assertNotIn(marker, output)
+        self.assertNotIn("retained-structure", output)
         self.assertNotIn("intentionally-discarded", output)
+
+    def test_r5_terminal_secret_label_variants_contract_the_rendered_tail(self):
+        formatter = RedactingFormatter("%(levelname)s %(message)s")
+        assignments = (
+            ("client_secret", ": "),
+            ("client-secret", " = "),
+            ("client secret", ":"),
+            ("secret", "="),
+        )
+
+        for label, separator in assignments:
+            markers = [f"generated-{uuid.uuid4().hex}" for _ in range(2)]
+            message = f"safe-prefix {label}{separator}{markers[0]}\nuntrusted-tail={markers[1]}"
+            record = logging.LogRecord(
+                "metroliza_test_r5_terminal_secret_labels",
+                logging.ERROR,
+                __file__,
+                1,
+                message,
+                (),
+                None,
+            )
+
+            with self.subTest(label=label, separator=separator):
+                output = formatter.format(record)
+                self.assertEqual(
+                    output,
+                    f"ERROR safe-prefix {label}{separator}[REDACTED]",
+                )
+                self.assertTrue(all(marker not in output for marker in markers))
+
+    def test_r5_secret_label_variants_redact_top_level_and_nested_mapping_keys(self):
+        formatter = RedactingFormatter("%(message)s")
+        keys = ("client_secret", "client-secret", "client secret", "secret")
+
+        for key in keys:
+            markers = [f"generated-{uuid.uuid4().hex}" for _ in range(2)]
+            top_level = logging.LogRecord(
+                "metroliza_test_r5_top_level_secret_keys",
+                logging.ERROR,
+                __file__,
+                1,
+                f"%({key})s",
+                ({key: markers[0]},),
+                None,
+            )
+            nested = logging.LogRecord(
+                "metroliza_test_r5_nested_secret_keys",
+                logging.ERROR,
+                __file__,
+                1,
+                "payload=%s",
+                ({"safe": "kept", "nested": {key: markers[1]}},),
+                None,
+            )
+
+            with self.subTest(key=key):
+                outputs = (formatter.format(top_level), formatter.format(nested))
+                self.assertTrue(
+                    all(marker not in output for marker in markers for output in outputs)
+                )
+                self.assertTrue(all("[REDACTED]" in output for output in outputs))
+
+    def test_r5_multiline_structured_fields_contract_through_end_of_record(self):
+        formatter = RedactingFormatter("%(levelname)s %(message)s")
+        assignments = (
+            ("sql", ": "),
+            ("query", "="),
+            ("source", " :"),
+            ("path", " = "),
+            ("dsn", ":"),
+            ("connection_string", "="),
+        )
+
+        for label, separator in assignments:
+            markers = [f"generated-{uuid.uuid4().hex}" for _ in range(2)]
+            record = logging.LogRecord(
+                "metroliza_test_r5_multiline_terminal_fields",
+                logging.ERROR,
+                __file__,
+                1,
+                (
+                    f"safe-prefix {label}{separator}{markers[0]}\n"
+                    f"second-sensitive-line {markers[1]}\nfinal-diagnostic"
+                ),
+                (),
+                None,
+            )
+
+            with self.subTest(label=label, separator=separator):
+                output = formatter.format(record)
+                self.assertEqual(
+                    output,
+                    f"ERROR safe-prefix {label}{separator}[REDACTED]",
+                )
+                self.assertTrue(all(marker not in output for marker in markers))
+                self.assertNotIn("final-diagnostic", output)
+
+    def test_r5_authorization_sentinels_do_not_hide_appended_credentials(self):
+        formatter = RedactingFormatter("%(message)s")
+        labels = ("Authorization", "Proxy-Authorization")
+
+        for label in labels:
+            marker = f"generated-{uuid.uuid4().hex}"
+            record = logging.LogRecord(
+                "metroliza_test_r5_appended_authorization",
+                logging.ERROR,
+                __file__,
+                1,
+                f"safe-prefix {label}: [REDACTED], Basic {marker}",
+                (),
+                None,
+            )
+
+            with self.subTest(label=label):
+                output = formatter.format(record)
+                self.assertEqual(output, f"safe-prefix {label}: [REDACTED]")
+                self.assertNotIn(marker, output)
+
+    def test_r5_terminal_field_keeps_only_generated_exception_structure(self):
+        marker = f"generated-{uuid.uuid4().hex}"
+        try:
+            try:
+                cause = ValueError(marker)
+                cause.add_note(marker)
+                raise cause
+            except ValueError as cause:
+                raise ExceptionGroup(marker, [RuntimeError(marker)]) from cause
+        except ExceptionGroup as exception:
+            record = logging.LogRecord(
+                "metroliza_test_r5_terminal_field_structural_suffix",
+                logging.ERROR,
+                __file__,
+                1,
+                f"safe-prefix client_secret={marker}\nuntrusted-tail={marker}",
+                (),
+                (type(exception), exception, exception.__traceback__),
+            )
+
+        output = RedactingFormatter("%(message)s").format(record)
+
+        self.assertTrue(output.startswith("safe-prefix client_secret=[REDACTED] ["))
+        self.assertNotIn(marker, output)
+        for generated_diagnostic in (
+            "exception_types=ExceptionGroup,RuntimeError,ValueError",
+            "chain=present",
+            "group=present",
+            "traceback=present",
+            "notes=present",
+        ):
+            self.assertIn(generated_diagnostic, output)
+
+    def test_r5_unassigned_sensitive_words_remain_unchanged(self):
+        messages = (
+            "secret rotation completed",
+            "query completed",
+            "authorization failed",
+            "path lookup succeeded",
+        )
+        formatter = RedactingFormatter("%(message)s")
+
+        for message in messages:
+            record = logging.LogRecord(
+                "metroliza_test_r5_safe_unassigned_prose",
+                logging.INFO,
+                __file__,
+                1,
+                message,
+                (),
+                None,
+            )
+            with self.subTest(message=message):
+                self.assertEqual(formatter.format(record), message)
 
     def test_r4_already_redacted_authorization_preserves_structural_suffix(self):
         marker = f"generated-{uuid.uuid4().hex}"
@@ -627,12 +795,12 @@ class TestLoggingUtils(unittest.TestCase):
         for safe_text in (
             "safe-list",
             "safe-tuple",
-            "'safe': 7",
             "kept",
             "ordinary count=3 label=ready",
             "percent name=safe-name count=4",
         ):
             self.assertIn(safe_text, output)
+        self.assertNotIn("'safe': 7", output)
         self.assertIn("[REDACTED]", output)
 
     def test_r3_nested_argument_cycles_hostility_and_budget_fail_closed(self):
@@ -780,7 +948,7 @@ class TestLoggingUtils(unittest.TestCase):
             "a hostile str-subclass mapping key repr reached formatted output",
         )
         self.assertIn("'token': [REDACTED]", output)
-        self.assertIn("kept-message", output)
+        self.assertNotIn("kept-message", output)
 
     def test_r3_proxy_authorization_percent_mapping_values_are_redacted(self):
         stream = io.StringIO()
