@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 from unittest.mock import patch
 
+from metroliza.shared import logging_utils as logging_utils_module
 from metroliza.shared.logging_utils import (
     LoggingConfig,
     RedactingFormatter,
@@ -404,6 +405,268 @@ class TestLoggingUtils(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertEqual(redact_log_text(value), value)
 
+    def test_r3_quoted_authorization_labels_are_redacted_in_final_output(self):
+        stream = io.StringIO()
+        markers = [f"generated-{uuid.uuid4().hex}" for _ in range(6)]
+        logger = logging.getLogger("metroliza_test_quoted_authorization")
+        self._reset_logger(logger)
+        logger.propagate = False
+        logger.setLevel(logging.DEBUG)
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(RedactingFormatter("%(levelname)s %(message)s"))
+        logger.addHandler(handler)
+
+        try:
+            logger.error("{'Authorization': 'Basic %s', 'status': 'ready'}", markers[0])
+            logger.error('{"Authorization": "Basic %s", "state": "safe"}', markers[1])
+            logger.error("{'Proxy-Authorization': Basic %s, 'mode': 'safe'}", markers[2])
+            logger.error('{"Proxy-Authorization": Bearer %s, "kind": "safe"}', markers[3])
+            logger.error("{'Authorization': 'Basic %s, 'result': 'safe'}", markers[4])
+            logger.error(
+                '{"Proxy-Authorization": "Basic %s; outcome=safe',
+                markers[5],
+            )
+        finally:
+            self._reset_logger(logger)
+
+        output = stream.getvalue()
+        self.assertFalse(
+            any(marker in output for marker in markers),
+            "quoted authorization credential reached formatted output",
+        )
+        self.assertIn("Authorization", output)
+        self.assertIn("Proxy-Authorization", output)
+        self.assertIn("status", output)
+        self.assertIn("state", output)
+        self.assertIn("mode", output)
+        self.assertIn("kind", output)
+        self.assertIn("result", output)
+        self.assertIn("outcome", output)
+        self.assertGreaterEqual(output.count("[REDACTED]"), len(markers))
+
+    def test_r3_nested_exception_arguments_are_sanitized_recursively(self):
+        stream = io.StringIO()
+        markers = [f"generated-{uuid.uuid4().hex}" for _ in range(5)]
+        logger = logging.getLogger("metroliza_test_nested_exception_arguments")
+        self._reset_logger(logger)
+        logger.propagate = False
+        logger.setLevel(logging.DEBUG)
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(RedactingFormatter("%(levelname)s %(message)s"))
+        logger.addHandler(handler)
+
+        try:
+            logger.error("list=%s", [ValueError(markers[0]), "safe-list"])
+            logger.error("tuple=%s", ("safe-tuple", KeyError(markers[1])))
+            logger.error(
+                "mapping=%s",
+                {
+                    "outer": {"error": RuntimeError(markers[2]), "token": markers[3]},
+                    "safe": 7,
+                },
+            )
+            logger.error(
+                "mixed=%s",
+                [{"safe": ("kept", OSError(markers[4]))}],
+            )
+            logger.info("ordinary count=%d label=%s", 3, "ready")
+            logger.info(
+                "percent name=%(name)s count=%(count)d",
+                {"name": "safe-name", "count": 4},
+            )
+        finally:
+            self._reset_logger(logger)
+
+        output = stream.getvalue()
+        self.assertFalse(
+            any(marker in output for marker in markers),
+            "nested exception or sensitive mapping value reached formatted output",
+        )
+        for exception_type in ("ValueError", "KeyError", "RuntimeError", "OSError"):
+            self.assertIn(exception_type, output)
+        for safe_text in (
+            "safe-list",
+            "safe-tuple",
+            "'safe': 7",
+            "kept",
+            "ordinary count=3 label=ready",
+            "percent name=safe-name count=4",
+        ):
+            self.assertIn(safe_text, output)
+        self.assertIn("[REDACTED]", output)
+
+    def test_r3_nested_argument_cycles_hostility_and_budget_fail_closed(self):
+        stream = io.StringIO()
+        marker = f"generated-{uuid.uuid4().hex}"
+
+        class HostileMapping(dict):
+            def items(self):
+                raise RuntimeError(marker)
+
+        cyclic: list[object] = ["safe-cycle"]
+        cyclic.append(cyclic)
+        over_budget = list(range(1_024))
+        hostile = [HostileMapping({"safe": "value"})]
+
+        logger = logging.getLogger("metroliza_test_bounded_nested_arguments")
+        self._reset_logger(logger)
+        logger.propagate = False
+        logger.setLevel(logging.DEBUG)
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(RedactingFormatter("%(levelname)s %(message)s"))
+        logger.addHandler(handler)
+
+        try:
+            logger.error("cycle=%s", cyclic)
+            logger.error("budget=%s", over_budget)
+            logger.error("hostile=%s", hostile)
+        finally:
+            self._reset_logger(logger)
+
+        output = stream.getvalue()
+        self.assertNotIn(marker, output)
+        self.assertGreaterEqual(
+            output.count("[unsafe log arguments]"),
+            3,
+            "cycle, hostile mapping, or node budget did not fail closed",
+        )
+
+    def test_r3_container_messages_are_sanitized_recursively(self):
+        stream = io.StringIO()
+        markers = [f"generated-{uuid.uuid4().hex}" for _ in range(3)]
+        logger = logging.getLogger("metroliza_test_container_messages")
+        self._reset_logger(logger)
+        logger.propagate = False
+        logger.setLevel(logging.DEBUG)
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(RedactingFormatter("%(levelname)s %(message)s"))
+        logger.addHandler(handler)
+
+        try:
+            logger.error([ValueError(markers[0]), "safe-list-message"])
+            logger.error(("safe-tuple-message", KeyError(markers[1])))
+            logger.error(
+                {"safe": "kept-message", "nested": [RuntimeError(markers[2])]},
+            )
+            logger.info("ordinary scalar message remains readable")
+        finally:
+            self._reset_logger(logger)
+
+        output = stream.getvalue()
+        self.assertFalse(
+            any(marker in output for marker in markers),
+            "an exception nested in a direct container message reached formatted output",
+        )
+        for exception_type in ("ValueError", "KeyError", "RuntimeError"):
+            self.assertIn(exception_type, output)
+        for safe_text in (
+            "safe-list-message",
+            "safe-tuple-message",
+            "kept-message",
+            "ordinary scalar message remains readable",
+        ):
+            self.assertIn(safe_text, output)
+
+    def test_r3_sensitive_str_subclass_mapping_keys_are_redacted(self):
+        stream = io.StringIO()
+        markers = [f"generated-{uuid.uuid4().hex}" for _ in range(3)]
+
+        class HostileSensitiveKey(str):
+            def __str__(self):
+                return "ordinary"
+
+            def strip(self, _chars=None):
+                return "ordinary"
+
+            def casefold(self):
+                return "ordinary"
+
+        logger = logging.getLogger("metroliza_test_str_subclass_mapping_keys")
+        self._reset_logger(logger)
+        logger.propagate = False
+        logger.setLevel(logging.DEBUG)
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(RedactingFormatter("%(levelname)s %(message)s"))
+        logger.addHandler(handler)
+
+        try:
+            for key, marker in zip(("token", "credential", "authorization"), markers):
+                logger.error(f"%({key})s", {HostileSensitiveKey(key): marker})
+        finally:
+            self._reset_logger(logger)
+
+        output = stream.getvalue()
+        self.assertFalse(
+            any(marker in output for marker in markers),
+            "a sensitive str-subclass mapping key bypassed value redaction",
+        )
+        self.assertEqual(output.count("[REDACTED]"), len(markers))
+
+    def test_r3_direct_mapping_message_normalizes_hostile_str_subclass_keys(self):
+        stream = io.StringIO()
+        markers = [f"generated-{uuid.uuid4().hex}" for _ in range(2)]
+
+        class HostileSensitiveKey(str):
+            def __repr__(self):
+                return markers[0]
+
+            def __str__(self):
+                return "ordinary"
+
+            def strip(self, _chars=None):
+                return "ordinary"
+
+            def casefold(self):
+                return "ordinary"
+
+        logger = logging.getLogger("metroliza_test_hostile_mapping_key_repr")
+        self._reset_logger(logger)
+        logger.propagate = False
+        logger.setLevel(logging.DEBUG)
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(RedactingFormatter("%(levelname)s %(message)s"))
+        logger.addHandler(handler)
+
+        try:
+            logger.error(
+                {HostileSensitiveKey("token"): markers[1], "safe": "kept-message"},
+            )
+        finally:
+            self._reset_logger(logger)
+
+        output = stream.getvalue()
+        self.assertFalse(
+            any(marker in output for marker in markers),
+            "a hostile str-subclass mapping key repr reached formatted output",
+        )
+        self.assertIn("'token': [REDACTED]", output)
+        self.assertIn("kept-message", output)
+
+    def test_r3_proxy_authorization_percent_mapping_values_are_redacted(self):
+        stream = io.StringIO()
+        markers = [f"generated-{uuid.uuid4().hex}" for _ in range(3)]
+        keys = ("Proxy-Authorization", "proxy_authorization", "proxy authorization")
+        logger = logging.getLogger("metroliza_test_proxy_authorization_mapping_keys")
+        self._reset_logger(logger)
+        logger.propagate = False
+        logger.setLevel(logging.DEBUG)
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(RedactingFormatter("%(levelname)s %(message)s"))
+        logger.addHandler(handler)
+
+        try:
+            for key, marker in zip(keys, markers):
+                logger.error(f"%({key})s", {key: marker})
+        finally:
+            self._reset_logger(logger)
+
+        output = stream.getvalue()
+        self.assertFalse(
+            any(marker in output for marker in markers),
+            "a Proxy-Authorization percent-mapping value bypassed redaction",
+        )
+        self.assertEqual(output.count("[REDACTED]"), len(markers))
+
     def test_formatter_handles_percent_mappings_objects_and_broken_str(self):
         stream = io.StringIO()
         marker = f"generated-{uuid.uuid4().hex}"
@@ -495,7 +758,445 @@ class TestLoggingUtils(unittest.TestCase):
         self.assertIn("[truncated]", output)
         self.assertLessEqual(len(output), 16_500)
 
-    def test_repeated_setup_reuses_handlers_and_one_redacting_formatter_layer(self):
+    def test_r3_new_managed_handlers_are_prepared_before_add(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            fake_home = root / "home"
+            fake_home.mkdir()
+            fake_cwd = root / "project"
+            fake_cwd.mkdir()
+            logger = logging.getLogger("metroliza_test_handler_add_ordering")
+            self._reset_logger(logger)
+            logger.propagate = False
+            config = LoggingConfig(logging.DEBUG, logging.ERROR, logging.WARNING)
+            observed: list[tuple[bool, int, object]] = []
+            original_add_handler = logger.addHandler
+
+            def record_add_state(handler):
+                is_file = getattr(handler, "_metroliza_file_handler", False)
+                is_console = getattr(handler, "_metroliza_console_handler", False)
+                expected_level = logging.ERROR if is_file else logging.WARNING
+                observed.append(
+                    (
+                        is_file or is_console,
+                        expected_level,
+                        (handler.level, handler.formatter),
+                    )
+                )
+                original_add_handler(handler)
+
+            try:
+                with (
+                    patch("metroliza.shared.logging_utils.logging.getLogger", return_value=logger),
+                    patch("metroliza.shared.logging_utils.Path.home", return_value=fake_home),
+                    patch("metroliza.shared.logging_utils.Path.cwd", return_value=fake_cwd),
+                    patch.object(logger, "addHandler", side_effect=record_add_state),
+                ):
+                    ensure_application_logging(config=config)
+
+                self.assertEqual(len(observed), 3)
+                self.assertTrue(
+                    all(
+                        managed
+                        and actual_level == expected_level
+                        and type(formatter) is RedactingFormatter
+                        for managed, expected_level, (actual_level, formatter) in observed
+                    ),
+                    "a managed handler became reachable before it was fully hardened",
+                )
+            finally:
+                self._reset_logger(logger)
+
+    def test_r3_unsafe_managed_handlers_are_detached_before_formatter_change(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            fake_home = root / "home"
+            fake_home.mkdir()
+            fake_cwd = root / "project"
+            fake_cwd.mkdir()
+            home_log = fake_home / ".metroliza" / "metroliza.log"
+            home_log.parent.mkdir(parents=True)
+            console_stream = io.StringIO()
+
+            logger = logging.getLogger("metroliza_test_handler_rehardening_ordering")
+            self._reset_logger(logger)
+            logger.propagate = False
+            unsafe_file = logging.handlers.RotatingFileHandler(
+                home_log,
+                maxBytes=10 * 1024 * 1024,
+                backupCount=7,
+                encoding="utf-8",
+            )
+            setattr(unsafe_file, "_metroliza_file_handler", True)
+            unsafe_file.setFormatter(logging.Formatter("%(message)s"))
+            unsafe_console = logging.StreamHandler(console_stream)
+            setattr(unsafe_console, "_metroliza_console_handler", True)
+            unsafe_console.setFormatter(logging.Formatter("%(message)s"))
+            logger.addHandler(unsafe_file)
+            logger.addHandler(unsafe_console)
+            formatter_reachability: list[bool] = []
+            original_file_set_formatter = unsafe_file.setFormatter
+            original_console_set_formatter = unsafe_console.setFormatter
+
+            def set_file_formatter(formatter):
+                formatter_reachability.append(unsafe_file in logger.handlers)
+                original_file_set_formatter(formatter)
+
+            def set_console_formatter(formatter):
+                formatter_reachability.append(unsafe_console in logger.handlers)
+                original_console_set_formatter(formatter)
+
+            config = LoggingConfig(logging.DEBUG, logging.ERROR, logging.WARNING)
+            try:
+                with (
+                    patch("metroliza.shared.logging_utils.logging.getLogger", return_value=logger),
+                    patch("metroliza.shared.logging_utils.Path.home", return_value=fake_home),
+                    patch("metroliza.shared.logging_utils.Path.cwd", return_value=fake_cwd),
+                    patch.object(unsafe_file, "setFormatter", side_effect=set_file_formatter),
+                    patch.object(unsafe_console, "setFormatter", side_effect=set_console_formatter),
+                ):
+                    ensure_application_logging(config=config)
+
+                self.assertTrue(formatter_reachability)
+                self.assertFalse(
+                    any(formatter_reachability),
+                    "an unsafe managed handler was reformatted while still reachable",
+                )
+                resulting_file_handlers = [
+                    handler
+                    for handler in logger.handlers
+                    if isinstance(handler, logging.handlers.RotatingFileHandler)
+                ]
+                resulting_console_handlers = [
+                    handler
+                    for handler in logger.handlers
+                    if getattr(handler, "_metroliza_console_handler", False)
+                ]
+                self.assertEqual(len(resulting_file_handlers), 2)
+                self.assertEqual(len(resulting_console_handlers), 1)
+                self.assertTrue(
+                    all(
+                        type(handler.formatter) is RedactingFormatter
+                        for handler in (*resulting_file_handlers, *resulting_console_handlers)
+                    )
+                )
+                for original in (unsafe_file, unsafe_console):
+                    if original not in logger.handlers:
+                        self.assertTrue(original._closed)
+            finally:
+                self._reset_logger(logger)
+
+    def test_r3_removed_managed_handlers_are_hardened_before_close(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            fake_home = root / "home"
+            fake_home.mkdir()
+            fake_cwd = root / "project"
+            fake_cwd.mkdir()
+            obsolete_log = root / "obsolete" / "metroliza.log"
+            obsolete_log.parent.mkdir(parents=True)
+            console_stream = io.StringIO()
+
+            logger = logging.getLogger("metroliza_test_removed_handler_hardening")
+            self._reset_logger(logger)
+            logger.propagate = False
+            obsolete_file = logging.handlers.RotatingFileHandler(
+                obsolete_log,
+                maxBytes=10 * 1024 * 1024,
+                backupCount=7,
+                encoding="utf-8",
+            )
+            setattr(obsolete_file, "_metroliza_file_handler", True)
+            obsolete_file.setFormatter(logging.Formatter("%(message)s"))
+            disabled_console = logging.StreamHandler(console_stream)
+            setattr(disabled_console, "_metroliza_console_handler", True)
+            disabled_console.setFormatter(logging.Formatter("%(message)s"))
+            logger.addHandler(obsolete_file)
+            logger.addHandler(disabled_console)
+            formatter_reachability: list[bool] = []
+            original_file_set_formatter = obsolete_file.setFormatter
+            original_console_set_formatter = disabled_console.setFormatter
+
+            def set_file_formatter(formatter):
+                formatter_reachability.append(obsolete_file in logger.handlers)
+                original_file_set_formatter(formatter)
+
+            def set_console_formatter(formatter):
+                formatter_reachability.append(disabled_console in logger.handlers)
+                original_console_set_formatter(formatter)
+
+            config = LoggingConfig(logging.INFO, logging.INFO, None)
+            try:
+                with (
+                    patch("metroliza.shared.logging_utils.logging.getLogger", return_value=logger),
+                    patch("metroliza.shared.logging_utils.Path.home", return_value=fake_home),
+                    patch("metroliza.shared.logging_utils.Path.cwd", return_value=fake_cwd),
+                    patch.object(obsolete_file, "setFormatter", side_effect=set_file_formatter),
+                    patch.object(
+                        disabled_console,
+                        "setFormatter",
+                        side_effect=set_console_formatter,
+                    ),
+                ):
+                    ensure_application_logging(config=config)
+
+                self.assertTrue(formatter_reachability)
+                self.assertFalse(
+                    any(formatter_reachability),
+                    "a removed handler was hardened while still reachable",
+                )
+                for held_handler in (obsolete_file, disabled_console):
+                    self.assertNotIn(held_handler, logger.handlers)
+                    self.assertTrue(held_handler._closed)
+                    self.assertIs(type(held_handler.formatter), RedactingFormatter)
+            finally:
+                self._reset_logger(logger)
+
+    def test_r3_duplicate_managed_handlers_are_collapsed_and_closed_safely(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            fake_home = root / "home"
+            fake_home.mkdir()
+            fake_cwd = root / "project"
+            fake_cwd.mkdir()
+            home_log = fake_home / ".metroliza" / "metroliza.log"
+            home_log.parent.mkdir(parents=True)
+
+            logger = logging.getLogger("metroliza_test_duplicate_managed_handlers")
+            self._reset_logger(logger)
+            logger.propagate = False
+            duplicate_files = [
+                logging.handlers.RotatingFileHandler(
+                    home_log,
+                    maxBytes=10 * 1024 * 1024,
+                    backupCount=7,
+                    encoding="utf-8",
+                )
+                for _ in range(2)
+            ]
+            duplicate_consoles = [logging.StreamHandler(io.StringIO()) for _ in range(2)]
+            for handler in duplicate_files:
+                setattr(handler, "_metroliza_file_handler", True)
+                handler.setFormatter(logging.Formatter("%(message)s"))
+                logger.addHandler(handler)
+            for handler in duplicate_consoles:
+                setattr(handler, "_metroliza_console_handler", True)
+                handler.setFormatter(logging.Formatter("%(message)s"))
+                logger.addHandler(handler)
+
+            config = LoggingConfig(logging.INFO, logging.INFO, logging.INFO)
+            try:
+                with (
+                    patch("metroliza.shared.logging_utils.logging.getLogger", return_value=logger),
+                    patch("metroliza.shared.logging_utils.Path.home", return_value=fake_home),
+                    patch("metroliza.shared.logging_utils.Path.cwd", return_value=fake_cwd),
+                ):
+                    ensure_application_logging(config=config)
+
+                resulting_files = [
+                    handler
+                    for handler in logger.handlers
+                    if isinstance(handler, logging.handlers.RotatingFileHandler)
+                ]
+                resulting_consoles = [
+                    handler
+                    for handler in logger.handlers
+                    if getattr(handler, "_metroliza_console_handler", False)
+                ]
+                self.assertEqual(len(resulting_files), 2)
+                self.assertEqual(
+                    len({Path(handler.baseFilename).resolve() for handler in resulting_files}),
+                    2,
+                )
+                self.assertEqual(len(resulting_consoles), 1)
+                self.assertTrue(
+                    all(
+                        type(handler.formatter) is RedactingFormatter
+                        for handler in (*resulting_files, *resulting_consoles)
+                    )
+                )
+
+                removed_files = [
+                    handler for handler in duplicate_files if handler not in logger.handlers
+                ]
+                removed_consoles = [
+                    handler for handler in duplicate_consoles if handler not in logger.handlers
+                ]
+                self.assertEqual(len(removed_files), 1)
+                self.assertEqual(len(removed_consoles), 1)
+                for held_handler in (*removed_files, *removed_consoles):
+                    self.assertTrue(held_handler._closed)
+                    self.assertIs(type(held_handler.formatter), RedactingFormatter)
+            finally:
+                self._reset_logger(logger)
+
+    def test_r3_repeated_fallback_setup_retains_one_managed_sink(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            fake_home = root / "home_file"
+            fake_home.write_text("not a directory", encoding="utf-8")
+            fake_cwd = root / "cwd_file"
+            fake_cwd.write_text("not a directory", encoding="utf-8")
+            fallback_root = root / "runtime"
+            logger = logging.getLogger("metroliza_test_repeated_fallback_setup")
+            self._reset_logger(logger)
+            logger.propagate = False
+            config = LoggingConfig(logging.INFO, logging.INFO, None)
+
+            try:
+                with (
+                    patch("metroliza.shared.logging_utils.logging.getLogger", return_value=logger),
+                    patch("metroliza.shared.logging_utils.Path.home", return_value=fake_home),
+                    patch("metroliza.shared.logging_utils.Path.cwd", return_value=fake_cwd),
+                    patch(
+                        "metroliza.shared.logging_utils.tempfile.gettempdir",
+                        return_value=str(fallback_root),
+                    ),
+                ):
+                    ensure_application_logging(config=config)
+                    first_handlers = tuple(logger.handlers)
+                    ensure_application_logging(config=config)
+
+                fallback_handlers = [
+                    handler
+                    for handler in logger.handlers
+                    if getattr(handler, "_metroliza_file_handler", False)
+                ]
+                self.assertEqual(len(first_handlers), 1)
+                self.assertEqual(len(fallback_handlers), 1)
+                self.assertIs(fallback_handlers[0], first_handlers[0])
+                self.assertFalse(fallback_handlers[0]._closed)
+                self.assertIs(type(fallback_handlers[0].formatter), RedactingFormatter)
+                self.assertEqual(
+                    Path(fallback_handlers[0].baseFilename).resolve(),
+                    (fallback_root / "metroliza" / "metroliza.log").resolve(),
+                )
+            finally:
+                self._reset_logger(logger)
+
+    def test_r3_aliased_primary_paths_create_one_rotating_handler(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            fake_home = root / "home"
+            fake_home.mkdir()
+            fake_cwd = fake_home / ".metroliza"
+            fake_cwd.mkdir()
+            logger = logging.getLogger("metroliza_test_aliased_primary_paths")
+            self._reset_logger(logger)
+            logger.propagate = False
+            config = LoggingConfig(logging.INFO, logging.INFO, None)
+
+            try:
+                with (
+                    patch("metroliza.shared.logging_utils.logging.getLogger", return_value=logger),
+                    patch("metroliza.shared.logging_utils.Path.home", return_value=fake_home),
+                    patch("metroliza.shared.logging_utils.Path.cwd", return_value=fake_cwd),
+                ):
+                    ensure_application_logging(config=config)
+                    first_handlers = tuple(logger.handlers)
+                    ensure_application_logging(config=config)
+
+                file_handlers = [
+                    handler
+                    for handler in logger.handlers
+                    if isinstance(handler, logging.handlers.RotatingFileHandler)
+                ]
+                self.assertEqual(len(first_handlers), 1)
+                self.assertEqual(len(file_handlers), 1)
+                self.assertEqual(
+                    Path(file_handlers[0].baseFilename).resolve(),
+                    (fake_cwd / "metroliza.log").resolve(),
+                )
+                self.assertIs(type(file_handlers[0].formatter), RedactingFormatter)
+            finally:
+                self._reset_logger(logger)
+
+    def test_r3_concurrent_setup_is_serialized_without_duplicate_handlers(self):
+        class CoordinatedLock:
+            def __init__(self):
+                self._lock = threading.RLock()
+                self._state_lock = threading.Lock()
+                self._second_attempt = threading.Event()
+                self.attempts = 0
+                self.active = 0
+                self.max_active = 0
+
+            def __enter__(self):
+                with self._state_lock:
+                    self.attempts += 1
+                    attempt = self.attempts
+                if attempt == 1:
+                    self._lock.acquire()
+                    if not self._second_attempt.wait(timeout=5):
+                        self._lock.release()
+                        raise AssertionError("second setup did not attempt serialized entry")
+                else:
+                    self._second_attempt.set()
+                    self._lock.acquire()
+                with self._state_lock:
+                    self.active += 1
+                    self.max_active = max(self.max_active, self.active)
+                return self
+
+            def __exit__(self, _exc_type, _exc_value, _traceback):
+                with self._state_lock:
+                    self.active -= 1
+                self._lock.release()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            fake_home = root / "home"
+            fake_home.mkdir()
+            fake_cwd = root / "project"
+            fake_cwd.mkdir()
+            logger = logging.getLogger("metroliza_test_serialized_setup")
+            self._reset_logger(logger)
+            logger.propagate = False
+            config = LoggingConfig(logging.INFO, logging.INFO, logging.INFO)
+            coordinated_lock = CoordinatedLock()
+            start = threading.Barrier(2)
+            failures: list[str] = []
+
+            def configure():
+                try:
+                    start.wait()
+                    ensure_application_logging(config=config)
+                except BaseException as exc:
+                    failures.append(type(exc).__name__)
+
+            workers = [threading.Thread(target=configure) for _ in range(2)]
+            try:
+                with (
+                    patch("metroliza.shared.logging_utils.logging.getLogger", return_value=logger),
+                    patch("metroliza.shared.logging_utils.Path.home", return_value=fake_home),
+                    patch("metroliza.shared.logging_utils.Path.cwd", return_value=fake_cwd),
+                    patch.object(
+                        logging_utils_module,
+                        "_LOGGING_SETUP_LOCK",
+                        coordinated_lock,
+                        create=True,
+                    ),
+                ):
+                    for worker in workers:
+                        worker.start()
+                    for worker in workers:
+                        worker.join(timeout=10)
+
+                self.assertFalse(any(worker.is_alive() for worker in workers))
+                self.assertFalse(failures)
+                self.assertEqual(coordinated_lock.attempts, 2)
+                self.assertEqual(coordinated_lock.max_active, 1)
+                self.assertEqual(len(logger.handlers), 3)
+                self.assertEqual(len({id(handler) for handler in logger.handlers}), 3)
+                self.assertTrue(
+                    all(
+                        type(handler.formatter) is RedactingFormatter for handler in logger.handlers
+                    )
+                )
+            finally:
+                self._reset_logger(logger)
+
+    def test_r3_repeated_setup_reuses_handlers_and_one_redacting_formatter_layer(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             fake_home = root / "home"

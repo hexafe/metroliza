@@ -10,6 +10,7 @@ import logging.handlers
 import os
 import re
 import tempfile
+import threading
 from collections.abc import Mapping
 from copy import copy
 from dataclasses import dataclass
@@ -29,7 +30,12 @@ _MAX_LOG_INPUT = 16_384
 _MAX_LOG_OUTPUT = 16_384
 _MAX_EXCEPTION_NODES = 32
 _MAX_TRACEBACK_FRAMES = 64
+_MAX_FORMAT_ARGUMENT_DEPTH = 8
+_MAX_FORMAT_ARGUMENT_NODES = 128
 _REDACTED = "[REDACTED]"
+_UNSAFE_LOG_ARGUMENTS = "[unsafe log arguments]"
+_UNSAFE_FORMAT_ARGUMENTS = object()
+_LOGGING_SETUP_LOCK = threading.RLock()
 _SENSITIVE_MAPPING_KEYS = frozenset(
     {
         "password",
@@ -42,6 +48,7 @@ _SENSITIVE_MAPPING_KEYS = frozenset(
         "secret_key",
         "credential",
         "authorization",
+        "proxy_authorization",
         "dsn",
         "connection_string",
         "sql",
@@ -52,8 +59,8 @@ _SENSITIVE_MAPPING_KEYS = frozenset(
 )
 _URI_USERINFO_RE = re.compile(r"(?i)(\b[a-z][a-z0-9+.-]{0,31}://|//)[^\s/@]+@")
 _AUTHORIZATION_RE = re.compile(
-    r"(?i)\b((?:proxy[-_ ]?)?authorization\s*[:=]\s*)"
-    r"(?:[\"']?(?:bearer|basic)\s+)?[^\s,;\"']+"
+    r"(?i)([\"']?\b(?:proxy[-_ ]?)?authorization\b[\"']?\s*[:=]\s*)"
+    r"[\"']?(?:(?:bearer|basic)\s+)?[^\s,;\"']+[\"']?"
 )
 _BEARER_RE = re.compile(r"(?i)\b(bearer\s+)[^\s,;\"']+")
 _STRUCTURED_LABEL_RE = re.compile(
@@ -200,30 +207,92 @@ def summarize_exception(exception: BaseException) -> str:
 
 
 def _normalized_key(value: object) -> str | None:
-    if type(value) is not str:
+    if not isinstance(value, str):
         return None
-    normalized = re.sub(r"[-\s]+", "_", value.strip().casefold())
+    safe_value = value if type(value) is str else str.__str__(value)
+    normalized = re.sub(r"[-\s]+", "_", safe_value.strip().casefold())
     return normalized if normalized in _SENSITIVE_MAPPING_KEYS else None
 
 
-def _safe_argument(value: object) -> object:
+@dataclass
+class _ArgumentTraversal:
+    active_containers: set[int]
+    nodes: int = 0
+
+
+def _consume_argument_node(state: _ArgumentTraversal) -> None:
+    state.nodes += 1
+    if state.nodes > _MAX_FORMAT_ARGUMENT_NODES:
+        raise ValueError("log argument node budget exceeded")
+
+
+def _sanitize_argument_mapping(
+    value: Mapping[object, object], *, depth: int, state: _ArgumentTraversal
+) -> dict[object, object]:
+    sanitized: dict[object, object] = {}
+    for key, item in value.items():
+        safe_key = _sanitize_format_argument(key, depth=depth + 1, state=state)
+        if _normalized_key(key):
+            _consume_argument_node(state)
+            safe_item = _REDACTED
+        else:
+            safe_item = _sanitize_format_argument(item, depth=depth + 1, state=state)
+        sanitized[safe_key] = safe_item
+    return sanitized
+
+
+def _sanitize_format_argument(value: object, *, depth: int, state: _ArgumentTraversal) -> object:
+    if depth > _MAX_FORMAT_ARGUMENT_DEPTH:
+        raise ValueError("log argument depth exceeded")
+    _consume_argument_node(state)
+    if isinstance(value, str):
+        return value if type(value) is str else str.__str__(value)
     if isinstance(value, BaseException):
         return summarize_exception(value)
-    return value
+    if not isinstance(value, (list, tuple, Mapping)):
+        return value
+
+    identity = id(value)
+    if identity in state.active_containers:
+        raise ValueError("cyclic log arguments")
+    state.active_containers.add(identity)
+    try:
+        if isinstance(value, list):
+            return [_sanitize_format_argument(item, depth=depth + 1, state=state) for item in value]
+        if isinstance(value, tuple):
+            return tuple(
+                _sanitize_format_argument(item, depth=depth + 1, state=state) for item in value
+            )
+        return _sanitize_argument_mapping(value, depth=depth, state=state)
+    finally:
+        state.active_containers.discard(identity)
 
 
 def _safe_format_arguments(arguments: object) -> object:
-    if isinstance(arguments, tuple):
-        return tuple(_safe_argument(value) for value in arguments)
-    if isinstance(arguments, Mapping):
-        try:
-            return {
-                key: _REDACTED if _normalized_key(key) else _safe_argument(value)
-                for key, value in arguments.items()
-            }
-        except BaseException:
-            return {}
-    return arguments
+    try:
+        return _sanitize_format_argument(
+            arguments,
+            depth=0,
+            state=_ArgumentTraversal(active_containers=set()),
+        )
+    except BaseException:
+        return _UNSAFE_FORMAT_ARGUMENTS
+
+
+def _sanitize_record_message_and_arguments(record: logging.LogRecord) -> None:
+    if isinstance(record.msg, BaseException):
+        record.msg = summarize_exception(record.msg)
+        record.args = ()
+        return
+
+    if isinstance(record.msg, (list, tuple, Mapping)):
+        record.msg = _safe_format_arguments(record.msg)
+    safe_arguments = _safe_format_arguments(record.args)
+    if record.msg is _UNSAFE_FORMAT_ARGUMENTS or safe_arguments is _UNSAFE_FORMAT_ARGUMENTS:
+        record.msg = _UNSAFE_LOG_ARGUMENTS
+        record.args = ()
+    else:
+        record.args = safe_arguments
 
 
 class RedactingFormatter(logging.Formatter):
@@ -232,12 +301,7 @@ class RedactingFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         safe_record = copy(record)
         structural: list[str] = []
-
-        if isinstance(safe_record.msg, BaseException):
-            safe_record.msg = summarize_exception(safe_record.msg)
-            safe_record.args = ()
-        else:
-            safe_record.args = _safe_format_arguments(safe_record.args)
+        _sanitize_record_message_and_arguments(safe_record)
 
         if safe_record.exc_info:
             exception = safe_record.exc_info[1]
@@ -359,7 +423,151 @@ def resolve_logging_config() -> LoggingConfig:
     return LoggingConfig(global_level=global_level, file_level=file_level, console_level=console_level)
 
 
-def _configure_file_handlers(logger: logging.Logger, formatter: logging.Formatter, file_level: int) -> None:
+def _prepare_managed_handler(
+    handler: logging.Handler,
+    *,
+    marker: str,
+    level: int,
+    formatter: RedactingFormatter,
+) -> None:
+    setattr(handler, marker, True)
+    handler.setLevel(level)
+    handler.setFormatter(formatter)
+
+
+def _add_managed_handler(
+    logger: logging.Logger,
+    handler: logging.Handler,
+    *,
+    marker: str,
+    level: int,
+    formatter: RedactingFormatter,
+) -> None:
+    _prepare_managed_handler(handler, marker=marker, level=level, formatter=formatter)
+    logger.addHandler(handler)
+
+
+def _harden_attached_handler(
+    logger: logging.Logger,
+    handler: logging.Handler,
+    *,
+    marker: str,
+    level: int,
+    formatter: RedactingFormatter,
+) -> None:
+    if type(handler.formatter) is RedactingFormatter:
+        setattr(handler, marker, True)
+        handler.setLevel(level)
+        return
+
+    handler.acquire()
+    try:
+        logger.removeHandler(handler)
+        _prepare_managed_handler(handler, marker=marker, level=level, formatter=formatter)
+        logger.addHandler(handler)
+    finally:
+        handler.release()
+
+
+def _remove_and_close_handler(
+    logger: logging.Logger,
+    handler: logging.Handler,
+    formatter: RedactingFormatter,
+) -> None:
+    handler.acquire()
+    try:
+        logger.removeHandler(handler)
+        handler.setFormatter(formatter)
+        handler.close()
+    finally:
+        handler.release()
+
+
+def _has_expected_rotation(handler: logging.Handler | None) -> bool:
+    return (
+        isinstance(handler, logging.handlers.RotatingFileHandler)
+        and handler.maxBytes == _FILE_MAX_BYTES
+        and handler.backupCount == _FILE_BACKUP_COUNT
+    )
+
+
+def _collect_managed_file_handlers(
+    logger: logging.Logger,
+    allowed_paths: set[Path],
+    formatter: RedactingFormatter,
+) -> dict[Path, logging.FileHandler]:
+    handlers_by_path: dict[Path, logging.FileHandler] = {}
+    for handler in list(logger.handlers):
+        if not isinstance(handler, logging.FileHandler) or not getattr(
+            handler, "baseFilename", None
+        ):
+            continue
+
+        resolved_path = Path(handler.baseFilename).resolve()
+        is_managed = (
+            getattr(handler, "_metroliza_file_handler", False)
+            or resolved_path.name == LOG_FILE_NAME
+        )
+        if not is_managed:
+            continue
+        if resolved_path not in allowed_paths:
+            _remove_and_close_handler(logger, handler, formatter)
+            continue
+
+        current = handlers_by_path.get(resolved_path)
+        if current is None:
+            handlers_by_path[resolved_path] = handler
+        elif _has_expected_rotation(handler) and not _has_expected_rotation(current):
+            _remove_and_close_handler(logger, current, formatter)
+            handlers_by_path[resolved_path] = handler
+        else:
+            _remove_and_close_handler(logger, handler, formatter)
+    return handlers_by_path
+
+
+def _ensure_file_handler(
+    logger: logging.Logger,
+    log_path: Path,
+    handler: logging.FileHandler | None,
+    formatter: RedactingFormatter,
+    file_level: int,
+) -> bool:
+    if not _has_expected_rotation(handler):
+        if handler is not None:
+            _remove_and_close_handler(logger, handler, formatter)
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            rotating_handler = logging.handlers.RotatingFileHandler(
+                str(log_path),
+                maxBytes=_FILE_MAX_BYTES,
+                backupCount=_FILE_BACKUP_COUNT,
+                encoding="utf-8",
+            )
+        except OSError:
+            return False
+        _add_managed_handler(
+            logger,
+            rotating_handler,
+            marker="_metroliza_file_handler",
+            level=file_level,
+            formatter=formatter,
+        )
+        return True
+
+    assert handler is not None
+    _harden_attached_handler(
+        logger,
+        handler,
+        marker="_metroliza_file_handler",
+        level=file_level,
+        formatter=formatter,
+    )
+    return True
+
+
+def _configure_file_handlers(
+    logger: logging.Logger, formatter: RedactingFormatter, file_level: int
+) -> None:
     """Ensure managed file handlers exist and use expected rotation settings.
 
     Existing Metroliza-managed handlers that target unexpected paths are removed.
@@ -372,63 +580,40 @@ def _configure_file_handlers(logger: logging.Logger, formatter: logging.Formatte
         Path.home() / '.metroliza' / LOG_FILE_NAME,
         Path.cwd() / LOG_FILE_NAME,
     ]
-    target_resolved_paths = {path.resolve() for path in target_paths}
-
-    existing_file_handlers = {
-        Path(handler.baseFilename).resolve(): handler
-        for handler in logger.handlers
-        if isinstance(handler, logging.FileHandler) and getattr(handler, 'baseFilename', None)
-    }
-
-    for handler in list(logger.handlers):
-        if not isinstance(handler, logging.FileHandler) or not getattr(handler, 'baseFilename', None):
-            continue
-
-        resolved_path = Path(handler.baseFilename).resolve()
-        is_metroliza_handler = getattr(handler, '_metroliza_file_handler', False) or resolved_path.name == LOG_FILE_NAME
-        if is_metroliza_handler and resolved_path not in target_resolved_paths:
-            logger.removeHandler(handler)
-            handler.close()
+    target_paths_by_resolved = {path.resolve(): path for path in target_paths}
+    target_resolved_paths = set(target_paths_by_resolved)
+    fallback_resolved_path = fallback_log_path.resolve()
+    existing_file_handlers = _collect_managed_file_handlers(
+        logger,
+        target_resolved_paths | {fallback_resolved_path},
+        formatter,
+    )
 
     configured_handlers = 0
-    for index, log_path in enumerate([*target_paths, fallback_log_path]):
-        if index >= len(target_paths) and configured_handlers > 0:
-            break
-
-        resolved_path = log_path.resolve()
+    for resolved_path, log_path in target_paths_by_resolved.items():
         handler = existing_file_handlers.get(resolved_path)
-        requires_rotation_handler = not isinstance(handler, logging.handlers.RotatingFileHandler)
-        has_expected_rotation = (
-            isinstance(handler, logging.handlers.RotatingFileHandler)
-            and handler.maxBytes == _FILE_MAX_BYTES
-            and handler.backupCount == _FILE_BACKUP_COUNT
-        )
+        if _ensure_file_handler(logger, log_path, handler, formatter, file_level):
+            configured_handlers += 1
 
-        if handler is None or requires_rotation_handler or not has_expected_rotation:
-            if handler is not None:
-                logger.removeHandler(handler)
-                handler.close()
-            try:
-                log_path.parent.mkdir(parents=True, exist_ok=True)
-                handler = logging.handlers.RotatingFileHandler(
-                    str(log_path),
-                    maxBytes=_FILE_MAX_BYTES,
-                    backupCount=_FILE_BACKUP_COUNT,
-                    encoding='utf-8',
-                )
-            except OSError:
-                continue
-            setattr(handler, '_metroliza_file_handler', True)
-            logger.addHandler(handler)
-        else:
-            setattr(handler, '_metroliza_file_handler', True)
-
-        handler.setLevel(file_level)
-        handler.setFormatter(formatter)
-        configured_handlers += 1
+    fallback_handler = existing_file_handlers.get(fallback_resolved_path)
+    if configured_handlers:
+        if fallback_handler is not None and fallback_resolved_path not in target_resolved_paths:
+            _remove_and_close_handler(logger, fallback_handler, formatter)
+        return
+    _ensure_file_handler(
+        logger,
+        fallback_log_path,
+        fallback_handler,
+        formatter,
+        file_level,
+    )
 
 
-def _configure_console_handler(logger: logging.Logger, formatter: logging.Formatter, console_level: int | None) -> None:
+def _configure_console_handler(
+    logger: logging.Logger,
+    formatter: RedactingFormatter,
+    console_level: int | None,
+) -> None:
     """Ensure a managed console handler matches the requested configuration.
 
     Args:
@@ -438,25 +623,44 @@ def _configure_console_handler(logger: logging.Logger, formatter: logging.Format
             managed console handler.
     """
 
-    console_handler = next((
+    console_handlers = [
         handler
         for handler in logger.handlers
-        if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler)
-        and getattr(handler, '_metroliza_console_handler', False)
-    ), None)
+        if isinstance(handler, logging.StreamHandler)
+        and not isinstance(handler, logging.FileHandler)
+        and getattr(handler, "_metroliza_console_handler", False)
+    ]
 
     if console_level is None:
-        if console_handler is not None:
-            logger.removeHandler(console_handler)
+        for console_handler in console_handlers:
+            _remove_and_close_handler(logger, console_handler, formatter)
         return
+
+    console_handler = next(
+        (handler for handler in console_handlers if type(handler.formatter) is RedactingFormatter),
+        console_handlers[0] if console_handlers else None,
+    )
+    for duplicate in console_handlers:
+        if duplicate is not console_handler:
+            _remove_and_close_handler(logger, duplicate, formatter)
 
     if console_handler is None:
         console_handler = logging.StreamHandler()
-        setattr(console_handler, '_metroliza_console_handler', True)
-        logger.addHandler(console_handler)
-
-    console_handler.setLevel(console_level)
-    console_handler.setFormatter(formatter)
+        _add_managed_handler(
+            logger,
+            console_handler,
+            marker="_metroliza_console_handler",
+            level=console_level,
+            formatter=formatter,
+        )
+    else:
+        _harden_attached_handler(
+            logger,
+            console_handler,
+            marker="_metroliza_console_handler",
+            level=console_level,
+            formatter=formatter,
+        )
 
 
 def ensure_application_logging(config: LoggingConfig | None = None, level: int | None = None):
@@ -471,17 +675,22 @@ def ensure_application_logging(config: LoggingConfig | None = None, level: int |
     Returns:
         The effective :class:`LoggingConfig` applied to logging.
     """
-    logger = logging.getLogger()
-    formatter = RedactingFormatter(
-        '%(asctime)s %(levelname)s [%(name)s] [%(threadName)s] %(message)s'
-    )
+    with _LOGGING_SETUP_LOCK:
+        logger = logging.getLogger()
+        formatter = RedactingFormatter(
+            "%(asctime)s %(levelname)s [%(name)s] [%(threadName)s] %(message)s"
+        )
 
-    resolved_config = config or resolve_logging_config()
-    if level is not None and config is None:
-        resolved_config = LoggingConfig(global_level=level, file_level=level, console_level=resolved_config.console_level)
-    logger.setLevel(resolved_config.global_level)
+        resolved_config = config or resolve_logging_config()
+        if level is not None and config is None:
+            resolved_config = LoggingConfig(
+                global_level=level,
+                file_level=level,
+                console_level=resolved_config.console_level,
+            )
+        logger.setLevel(resolved_config.global_level)
 
-    _configure_file_handlers(logger, formatter, resolved_config.file_level)
-    _configure_console_handler(logger, formatter, resolved_config.console_level)
+        _configure_file_handlers(logger, formatter, resolved_config.file_level)
+        _configure_console_handler(logger, formatter, resolved_config.console_level)
 
-    return resolved_config
+        return resolved_config
