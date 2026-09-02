@@ -58,9 +58,9 @@ _SENSITIVE_MAPPING_KEYS = frozenset(
     }
 )
 _URI_USERINFO_RE = re.compile(r"(?i)(\b[a-z][a-z0-9+.-]{0,31}://|//)[^\s/@]+@")
-_AUTHORIZATION_RE = re.compile(
-    r"(?i)([\"']?\b(?:proxy[-_ ]?)?authorization\b[\"']?\s*[:=]\s*)"
-    r"[\"']?(?:(?:bearer|basic)\s+)?[^\s,;\"']+[\"']?"
+_AUTHORIZATION_FIELD_RE = re.compile(
+    r"(?i)((?:\\?[\"'])?\b(?:proxy[-_ ]?)?authorization\b"
+    r"(?:\\?[\"'])?\s*[:=]\s*)"
 )
 _BEARER_RE = re.compile(r"(?i)\b(bearer\s+)[^\s,;\"']+")
 _STRUCTURED_LABEL_RE = re.compile(
@@ -88,6 +88,18 @@ def _bounded_text(value: object) -> str:
     return f"{text[:_MAX_LOG_INPUT]}...[truncated]"
 
 
+def _redact_authorization_tail(text: str) -> str:
+    """Discard content after the first unredacted Authorization field boundary."""
+    search_from = 0
+    while match := _AUTHORIZATION_FIELD_RE.search(text, search_from):
+        field_end = match.end()
+        if text.startswith(_REDACTED, field_end):
+            search_from = field_end + len(_REDACTED)
+            continue
+        return f"{text[:field_end]}{_REDACTED}"
+    return text
+
+
 def redact_log_text(value: object) -> str:
     """Redact explicit sensitive labels and connection forms from bounded text.
 
@@ -97,7 +109,7 @@ def redact_log_text(value: object) -> str:
     """
     text = _bounded_text(value)
     text = _URI_USERINFO_RE.sub(lambda match: f"{match.group(1)}{_REDACTED}@", text)
-    text = _AUTHORIZATION_RE.sub(lambda match: f"{match.group(1)}{_REDACTED}", text)
+    text = _redact_authorization_tail(text)
     text = _BEARER_RE.sub(lambda match: f"{match.group(1)}{_REDACTED}", text)
     text = _STRUCTURED_LABEL_RE.sub(lambda match: f"{match.group(1)}{_REDACTED}", text)
     text = _VALUE_LABEL_RE.sub(lambda match: f"{match.group(1)}{_REDACTED}", text)

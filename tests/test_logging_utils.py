@@ -436,13 +436,153 @@ class TestLoggingUtils(unittest.TestCase):
         )
         self.assertIn("Authorization", output)
         self.assertIn("Proxy-Authorization", output)
-        self.assertIn("status", output)
-        self.assertIn("state", output)
-        self.assertIn("mode", output)
-        self.assertIn("kind", output)
-        self.assertIn("result", output)
-        self.assertIn("outcome", output)
+        for intentionally_discarded_tail in (
+            "status",
+            "state",
+            "mode",
+            "kind",
+            "result",
+            "outcome",
+        ):
+            self.assertNotIn(intentionally_discarded_tail, output)
         self.assertGreaterEqual(output.count("[REDACTED]"), len(markers))
+
+    def test_r4_authorization_fields_fail_closed_through_rendered_record_tail(self):
+        formatter = RedactingFormatter("%(levelname)s %(message)s")
+        cases = (
+            (
+                "safe-prefix {'Authorization': ['Basic {marker}', 'alternate']} trailing-list",
+                "ERROR safe-prefix {'Authorization': [REDACTED]",
+            ),
+            (
+                'safe-prefix {"Authorization": ["Basic {marker}", "alternate"]} trailing-json',
+                'ERROR safe-prefix {"Authorization": [REDACTED]',
+            ),
+            (
+                "safe-prefix Authorization = ('Bearer {marker}', 'alternate') trailing-tuple",
+                "ERROR safe-prefix Authorization = [REDACTED]",
+            ),
+            (
+                "safe-prefix {'Proxy-Authorization': "
+                "{'nested': {'credential': 'Bearer {marker}'}}} trailing-mapping",
+                "ERROR safe-prefix {'Proxy-Authorization': [REDACTED]",
+            ),
+            (
+                "safe-prefix PROXY_AUTHORIZATION: {'value': 'Basic {marker}'} trailing-underscore",
+                "ERROR safe-prefix PROXY_AUTHORIZATION: [REDACTED]",
+            ),
+            (
+                "safe-prefix Authorization: [Basic {marker}\ntrailing-multiline",
+                "ERROR safe-prefix Authorization: [REDACTED]",
+            ),
+            (
+                "safe-prefix Authorization: ]}}Basic {marker} trailing-malformed",
+                "ERROR safe-prefix Authorization: [REDACTED]",
+            ),
+            (
+                r'safe-prefix {\"Authorization\": [\"Basic {marker}\"]} trailing-escaped',
+                r'ERROR safe-prefix {\"Authorization\": [REDACTED]',
+            ),
+        )
+
+        for template, expected in cases:
+            marker = f"generated-{uuid.uuid4().hex}"
+            message = template.replace("{marker}", marker)
+            record = logging.LogRecord(
+                "metroliza_test_r4_authorization_tail",
+                logging.ERROR,
+                __file__,
+                1,
+                message,
+                (),
+                None,
+            )
+
+            with self.subTest(shape=template[:48]):
+                output = formatter.format(record)
+                self.assertEqual(output, expected)
+                self.assertNotIn(marker, output)
+                self.assertNotIn("trailing-", output)
+
+    def test_r4_authorization_tail_redaction_is_idempotent_and_complete(self):
+        marker = f"generated-{uuid.uuid4().hex}"
+        formatter = RedactingFormatter("%(message)s")
+        message = (
+            "safe-prefix Authorization: [REDACTED]; retained-structure; "
+            f"Proxy Authorization = ('Basic {marker}',) intentionally-discarded"
+        )
+        record = logging.LogRecord(
+            "metroliza_test_r4_authorization_idempotence",
+            logging.ERROR,
+            __file__,
+            1,
+            message,
+            (),
+            None,
+        )
+
+        output = formatter.format(record)
+        repeated_record = logging.LogRecord(
+            "metroliza_test_r4_authorization_idempotence_repeat",
+            logging.ERROR,
+            __file__,
+            1,
+            output,
+            (),
+            None,
+        )
+
+        self.assertEqual(formatter.format(repeated_record), output)
+        self.assertEqual(
+            output,
+            (
+                "safe-prefix Authorization: [REDACTED]; retained-structure; "
+                "Proxy Authorization = [REDACTED]"
+            ),
+        )
+        self.assertNotIn(marker, output)
+        self.assertNotIn("intentionally-discarded", output)
+
+    def test_r4_already_redacted_authorization_preserves_structural_suffix(self):
+        marker = f"generated-{uuid.uuid4().hex}"
+        exception = RuntimeError(marker)
+        record = logging.LogRecord(
+            "metroliza_test_r4_authorization_structural_suffix",
+            logging.ERROR,
+            __file__,
+            1,
+            "safe-prefix Authorization: [REDACTED]",
+            (),
+            (type(exception), exception, exception.__traceback__),
+        )
+
+        output = RedactingFormatter("%(message)s").format(record)
+
+        self.assertTrue(output.startswith("safe-prefix Authorization: [REDACTED] ["))
+        self.assertIn("exception_types=RuntimeError", output)
+        self.assertIn("chain=absent", output)
+        self.assertNotIn(marker, output)
+
+    def test_r4_unassigned_authorization_prose_remains_unchanged(self):
+        messages = (
+            "authorization failed",
+            "proxy authorization unavailable",
+            "AuthorizationHandler failed safely",
+        )
+        formatter = RedactingFormatter("%(message)s")
+
+        for message in messages:
+            record = logging.LogRecord(
+                "metroliza_test_r4_safe_authorization_prose",
+                logging.INFO,
+                __file__,
+                1,
+                message,
+                (),
+                None,
+            )
+            with self.subTest(message=message):
+                self.assertEqual(formatter.format(record), message)
 
     def test_r3_nested_exception_arguments_are_sanitized_recursively(self):
         stream = io.StringIO()
