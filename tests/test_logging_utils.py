@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from unittest.mock import patch
 
-from modules.logging_utils import (
+from metroliza.shared.logging_utils import (
     LoggingConfig,
     RedactingFormatter,
     ensure_application_logging,
@@ -37,9 +37,11 @@ class TestLoggingUtils(unittest.TestCase):
             logger.propagate = False
 
             try:
-                with patch("modules.logging_utils.logging.getLogger", return_value=logger), patch(
-                    "modules.logging_utils.Path.home", return_value=fake_home
-                ), patch("modules.logging_utils.Path.cwd", return_value=fake_cwd):
+                with patch(
+                    "metroliza.shared.logging_utils.logging.getLogger", return_value=logger
+                ), patch("metroliza.shared.logging_utils.Path.home", return_value=fake_home), patch(
+                    "metroliza.shared.logging_utils.Path.cwd", return_value=fake_cwd
+                ):
                     ensure_application_logging(level=logging.ERROR)
                     logger.error("google drive export failed")
 
@@ -67,9 +69,11 @@ class TestLoggingUtils(unittest.TestCase):
             logger.propagate = False
 
             try:
-                with patch("modules.logging_utils.logging.getLogger", return_value=logger), patch(
-                    "modules.logging_utils.Path.home", return_value=fake_home
-                ), patch("modules.logging_utils.Path.cwd", return_value=fake_cwd):
+                with patch(
+                    "metroliza.shared.logging_utils.logging.getLogger", return_value=logger
+                ), patch("metroliza.shared.logging_utils.Path.home", return_value=fake_home), patch(
+                    "metroliza.shared.logging_utils.Path.cwd", return_value=fake_cwd
+                ):
                     ensure_application_logging(level=logging.INFO)
 
                 file_handlers = [h for h in logger.handlers if isinstance(h, logging.FileHandler)]
@@ -95,10 +99,13 @@ class TestLoggingUtils(unittest.TestCase):
             logger.propagate = False
 
             try:
-                with patch("modules.logging_utils.logging.getLogger", return_value=logger), patch(
-                    "modules.logging_utils.Path.home", return_value=fake_home
-                ), patch("modules.logging_utils.Path.cwd", return_value=fake_cwd), patch(
-                    "modules.logging_utils.tempfile.gettempdir", return_value=str(fallback_root)
+                with patch(
+                    "metroliza.shared.logging_utils.logging.getLogger", return_value=logger
+                ), patch("metroliza.shared.logging_utils.Path.home", return_value=fake_home), patch(
+                    "metroliza.shared.logging_utils.Path.cwd", return_value=fake_cwd
+                ), patch(
+                    "metroliza.shared.logging_utils.tempfile.gettempdir",
+                    return_value=str(fallback_root),
                 ):
                     ensure_application_logging(level=logging.ERROR)
                     logger.error("startup log path fallback worked")
@@ -132,9 +139,11 @@ class TestLoggingUtils(unittest.TestCase):
             logger.addHandler(legacy_cwd_handler)
 
             try:
-                with patch("modules.logging_utils.logging.getLogger", return_value=logger), patch(
-                    "modules.logging_utils.Path.home", return_value=fake_home
-                ), patch("modules.logging_utils.Path.cwd", return_value=fake_cwd):
+                with patch(
+                    "metroliza.shared.logging_utils.logging.getLogger", return_value=logger
+                ), patch("metroliza.shared.logging_utils.Path.home", return_value=fake_home), patch(
+                    "metroliza.shared.logging_utils.Path.cwd", return_value=fake_cwd
+                ):
                     ensure_application_logging(level=logging.INFO)
 
                 file_handlers = [h for h in logger.handlers if isinstance(h, logging.FileHandler)]
@@ -183,9 +192,9 @@ class TestLoggingUtils(unittest.TestCase):
             }
             try:
                 with patch.dict("os.environ", env, clear=False), patch(
-                    "modules.logging_utils.logging.getLogger", return_value=logger
-                ), patch("modules.logging_utils.Path.home", return_value=fake_home), patch(
-                    "modules.logging_utils.Path.cwd", return_value=fake_cwd
+                    "metroliza.shared.logging_utils.logging.getLogger", return_value=logger
+                ), patch("metroliza.shared.logging_utils.Path.home", return_value=fake_home), patch(
+                    "metroliza.shared.logging_utils.Path.cwd", return_value=fake_cwd
                 ):
                     config = ensure_application_logging()
 
@@ -234,9 +243,9 @@ class TestLoggingUtils(unittest.TestCase):
             }
             try:
                 with patch.dict("os.environ", env, clear=False), patch(
-                    "modules.logging_utils.logging.getLogger", return_value=logger
-                ), patch("modules.logging_utils.Path.home", return_value=fake_home), patch(
-                    "modules.logging_utils.Path.cwd", return_value=fake_cwd
+                    "metroliza.shared.logging_utils.logging.getLogger", return_value=logger
+                ), patch("metroliza.shared.logging_utils.Path.home", return_value=fake_home), patch(
+                    "metroliza.shared.logging_utils.Path.cwd", return_value=fake_cwd
                 ):
                     config = ensure_application_logging()
                     logger.debug("debug message should be filtered")
@@ -269,9 +278,11 @@ class TestLoggingUtils(unittest.TestCase):
             logger.propagate = False
 
             try:
-                with patch("modules.logging_utils.logging.getLogger", return_value=logger), patch(
-                    "modules.logging_utils.Path.home", return_value=fake_home
-                ), patch("modules.logging_utils.Path.cwd", return_value=fake_cwd):
+                with patch(
+                    "metroliza.shared.logging_utils.logging.getLogger", return_value=logger
+                ), patch("metroliza.shared.logging_utils.Path.home", return_value=fake_home), patch(
+                    "metroliza.shared.logging_utils.Path.cwd", return_value=fake_cwd
+                ):
                     ensure_application_logging(level=logging.INFO)
                     logger.info("metadata check")
 
@@ -297,9 +308,11 @@ class TestLoggingUtils(unittest.TestCase):
             config = LoggingConfig(logging.DEBUG, logging.DEBUG, logging.DEBUG)
 
             try:
-                with patch("modules.logging_utils.logging.getLogger", return_value=logger), patch(
-                    "modules.logging_utils.Path.home", return_value=fake_home
-                ), patch("modules.logging_utils.Path.cwd", return_value=fake_cwd), patch(
+                with patch(
+                    "metroliza.shared.logging_utils.logging.getLogger", return_value=logger
+                ), patch("metroliza.shared.logging_utils.Path.home", return_value=fake_home), patch(
+                    "metroliza.shared.logging_utils.Path.cwd", return_value=fake_cwd
+                ), patch(
                     "sys.stderr", console
                 ):
                     ensure_application_logging(config=config)
@@ -495,9 +508,11 @@ class TestLoggingUtils(unittest.TestCase):
             config = LoggingConfig(logging.INFO, logging.INFO, logging.INFO)
 
             try:
-                with patch("modules.logging_utils.logging.getLogger", return_value=logger), patch(
-                    "modules.logging_utils.Path.home", return_value=fake_home
-                ), patch("modules.logging_utils.Path.cwd", return_value=fake_cwd):
+                with patch(
+                    "metroliza.shared.logging_utils.logging.getLogger", return_value=logger
+                ), patch("metroliza.shared.logging_utils.Path.home", return_value=fake_home), patch(
+                    "metroliza.shared.logging_utils.Path.cwd", return_value=fake_cwd
+                ):
                     ensure_application_logging(config=config)
                     first_handlers = tuple(logger.handlers)
                     ensure_application_logging(config=config)

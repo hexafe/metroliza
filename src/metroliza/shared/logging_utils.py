@@ -133,6 +133,17 @@ def _traceback_frame_count(exception: BaseException) -> int:
     return count
 
 
+def _linked_exception(exception: BaseException) -> BaseException | None:
+    cause = _exception_attribute(exception, "__cause__", None)
+    context = _exception_attribute(exception, "__context__", None)
+    suppressed = _exception_attribute(exception, "__suppress_context__", False) is True
+    if isinstance(cause, BaseException):
+        return cause
+    if not suppressed and isinstance(context, BaseException):
+        return context
+    return None
+
+
 def summarize_exception(exception: BaseException) -> str:
     """Describe exception structure without reading messages, notes, or traceback text."""
     if not isinstance(exception, BaseException):
@@ -164,12 +175,7 @@ def summarize_exception(exception: BaseException) -> str:
         if isinstance(notes, (list, tuple)) and notes:
             notes_present = True
 
-        cause = _exception_attribute(current, "__cause__", None)
-        context = _exception_attribute(current, "__context__", None)
-        suppressed = _exception_attribute(current, "__suppress_context__", False) is True
-        linked = cause if isinstance(cause, BaseException) else None
-        if linked is None and not suppressed and isinstance(context, BaseException):
-            linked = context
+        linked = _linked_exception(current)
         if linked is not None:
             chain_present = True
             pending.append(linked)

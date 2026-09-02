@@ -3,7 +3,7 @@ import io
 import logging
 import uuid
 
-from modules import custom_logger
+from metroliza.shared import custom_logger
 
 
 def test_notify_user_does_not_raise_when_qt_import_fails(monkeypatch, caplog):
