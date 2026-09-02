@@ -1,12 +1,20 @@
+import io
 import logging
 import logging.handlers
 import tempfile
 import threading
 import unittest
+import uuid
 from pathlib import Path
 from unittest.mock import patch
 
-from modules.logging_utils import ensure_application_logging, resolve_logging_config
+from modules.logging_utils import (
+    LoggingConfig,
+    RedactingFormatter,
+    ensure_application_logging,
+    redact_log_text,
+    resolve_logging_config,
+)
 
 
 class TestLoggingUtils(unittest.TestCase):
@@ -270,6 +278,235 @@ class TestLoggingUtils(unittest.TestCase):
                 home_log = (fake_home / ".metroliza" / "metroliza.log").read_text(encoding="utf-8")
                 self.assertIn("[metroliza_test_logging_metadata]", home_log)
                 self.assertIn(f"[{threading.current_thread().name}]", home_log)
+            finally:
+                self._reset_logger(logger)
+
+    def test_managed_file_and_console_outputs_redact_final_exception_fields(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            fake_home = root / "home"
+            fake_home.mkdir()
+            fake_cwd = root / "project"
+            fake_cwd.mkdir()
+            console = io.StringIO()
+            markers = [f"generated-{uuid.uuid4().hex}" for _ in range(5)]
+
+            logger = logging.getLogger("metroliza_test_managed_redaction")
+            self._reset_logger(logger)
+            logger.propagate = False
+            config = LoggingConfig(logging.DEBUG, logging.DEBUG, logging.DEBUG)
+
+            try:
+                with patch("modules.logging_utils.logging.getLogger", return_value=logger), patch(
+                    "modules.logging_utils.Path.home", return_value=fake_home
+                ), patch("modules.logging_utils.Path.cwd", return_value=fake_cwd), patch(
+                    "sys.stderr", console
+                ):
+                    ensure_application_logging(config=config)
+                    logger.error("password=%s", markers[0])
+                    try:
+                        try:
+                            raise ValueError(f"token={markers[1]}")
+                        except ValueError as inner:
+                            inner.add_note(f"source={markers[2]}")
+                            raise RuntimeError(markers[3]) from inner
+                    except RuntimeError as chained:
+                        group = ExceptionGroup(markers[4], [chained, KeyError(markers[4])])
+                        logger.error(
+                            "safe exception context",
+                            exc_info=(type(group), group, group.__traceback__),
+                        )
+
+                    record = logger.makeRecord(
+                        logger.name,
+                        logging.ERROR,
+                        __file__,
+                        1,
+                        "safe cached-field context",
+                        (),
+                        None,
+                    )
+                    record.exc_text = f"credential={markers[2]}"
+                    record.stack_info = f"path={markers[3]}"
+                    logger.handle(record)
+                    logger.info("ordinary safe diagnostic remains readable")
+
+                home_log = (fake_home / ".metroliza" / "metroliza.log").read_text(
+                    encoding="utf-8"
+                )
+                for output in (home_log, console.getvalue()):
+                    self.assertTrue(all(marker not in output for marker in markers))
+                    self.assertIn("[REDACTED]", output)
+                    self.assertIn("ExceptionGroup", output)
+                    self.assertIn("RuntimeError", output)
+                    self.assertIn("ValueError", output)
+                    self.assertIn("KeyError", output)
+                    self.assertIn("chain=present", output)
+                    self.assertIn("group=present", output)
+                    self.assertIn("traceback=present", output)
+                    self.assertIn("notes=present", output)
+                    self.assertIn("cached_exception_text=present", output)
+                    self.assertIn("stack_info=present", output)
+                    self.assertIn("ordinary safe diagnostic remains readable", output)
+            finally:
+                self._reset_logger(logger)
+
+    def test_redaction_is_limited_to_explicit_reviewable_classes(self):
+        marker = f"generated-{uuid.uuid4().hex}"
+        sensitive = (
+            f"password={marker}",
+            f'{{"password": "{marker}"}}',
+            f"passphrase: {marker}",
+            f"token={marker}",
+            f"access_token={marker}",
+            f"refresh-token={marker}",
+            f"api key={marker}",
+            f"private_key={marker}",
+            f"secret-key={marker}",
+            f"credential={marker}",
+            f"Authorization: Bearer {marker}",
+            f"Bearer {marker}",
+            f"postgresql://generated:{marker}@localhost/db",
+            f"https://localhost/path?token={marker}&page=1",
+            f"dsn=Server=localhost;Password={marker}",
+            f"connection_string=Server=localhost;Token={marker}",
+            f"sql=SELECT value FROM generated WHERE value='{marker}'",
+            f"query=SELECT '{marker}'",
+            f"source=return '{marker}'",
+            f"path=/generated/{marker}",
+        )
+        for value in sensitive:
+            with self.subTest(value=value[:40]):
+                output = redact_log_text(value)
+                self.assertNotIn(marker, output)
+                self.assertIn("[REDACTED]", output)
+
+        safe = (
+            "tokenizer=wordpiece status=ok",
+            "passwordless authentication enabled",
+            "query completed successfully",
+            "ordinary safe diagnostic remains readable",
+        )
+        for value in safe:
+            with self.subTest(value=value):
+                self.assertEqual(redact_log_text(value), value)
+
+    def test_formatter_handles_percent_mappings_objects_and_broken_str(self):
+        stream = io.StringIO()
+        marker = f"generated-{uuid.uuid4().hex}"
+
+        class SensitiveObject:
+            def __str__(self):
+                return f"token={marker}"
+
+        class BrokenObject:
+            def __str__(self):
+                raise RuntimeError(marker)
+
+        logger = logging.getLogger("metroliza_test_format_arguments")
+        self._reset_logger(logger)
+        logger.propagate = False
+        logger.setLevel(logging.DEBUG)
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(RedactingFormatter("%(levelname)s %(message)s"))
+        logger.addHandler(handler)
+
+        try:
+            logger.error("password=%s", marker)
+            logger.error("%(credential)s", {"credential": marker})
+            logger.error("object=%s", SensitiveObject())
+            logger.error("exception=%s", RuntimeError(marker))
+            logger.error("broken=%s", BrokenObject())
+            logger.info("safe count=%d", 3)
+        finally:
+            self._reset_logger(logger)
+
+        output = stream.getvalue()
+        self.assertNotIn(marker, output)
+        self.assertIn("[REDACTED]", output)
+        self.assertIn("RuntimeError", output)
+        self.assertIn("log_message=[unformattable]", output)
+        self.assertIn("safe count=3", output)
+
+    def test_formatter_does_not_mutate_record_seen_by_other_handlers(self):
+        marker = f"generated-{uuid.uuid4().hex}"
+        exception = RuntimeError(marker)
+        arguments = (marker,)
+        exc_info = (type(exception), exception, exception.__traceback__)
+        record = logging.LogRecord(
+            "metroliza_test_record_isolation",
+            logging.ERROR,
+            __file__,
+            1,
+            "password=%s",
+            arguments,
+            exc_info,
+        )
+        record.exc_text = f"token={marker}"
+        record.stack_info = f"source={marker}"
+
+        output = RedactingFormatter("%(message)s").format(record)
+
+        self.assertNotIn(marker, output)
+        self.assertEqual(record.msg, "password=%s")
+        self.assertEqual(record.args, arguments)
+        self.assertIs(record.exc_info, exc_info)
+        self.assertEqual(record.exc_text, f"token={marker}")
+        self.assertEqual(record.stack_info, f"source={marker}")
+
+    def test_formatter_bounds_output_and_survives_hostile_exception_name(self):
+        marker = f"generated-{uuid.uuid4().hex}"
+
+        class HostileName(str):
+            def __format__(self, _format_spec):
+                return marker
+
+        class GeneratedError(RuntimeError):
+            pass
+
+        GeneratedError.__name__ = HostileName("GeneratedError")
+        record = logging.LogRecord(
+            "metroliza_test_bounded_output",
+            logging.ERROR,
+            __file__,
+            1,
+            "safe %s",
+            ("x" * 100_000,),
+            (GeneratedError, GeneratedError(marker), None),
+        )
+
+        output = RedactingFormatter("%(message)s").format(record)
+
+        self.assertNotIn(marker, output)
+        self.assertIn("exception_types=Exception", output)
+        self.assertIn("[truncated]", output)
+        self.assertLessEqual(len(output), 16_500)
+
+    def test_repeated_setup_reuses_handlers_and_one_redacting_formatter_layer(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            fake_home = root / "home"
+            fake_home.mkdir()
+            fake_cwd = root / "project"
+            fake_cwd.mkdir()
+            logger = logging.getLogger("metroliza_test_redaction_idempotence")
+            self._reset_logger(logger)
+            logger.propagate = False
+            config = LoggingConfig(logging.INFO, logging.INFO, logging.INFO)
+
+            try:
+                with patch("modules.logging_utils.logging.getLogger", return_value=logger), patch(
+                    "modules.logging_utils.Path.home", return_value=fake_home
+                ), patch("modules.logging_utils.Path.cwd", return_value=fake_cwd):
+                    ensure_application_logging(config=config)
+                    first_handlers = tuple(logger.handlers)
+                    ensure_application_logging(config=config)
+
+                self.assertEqual(tuple(logger.handlers), first_handlers)
+                self.assertEqual(len(first_handlers), 3)
+                self.assertTrue(
+                    all(type(handler.formatter) is RedactingFormatter for handler in first_handlers)
+                )
             finally:
                 self._reset_logger(logger)
 
