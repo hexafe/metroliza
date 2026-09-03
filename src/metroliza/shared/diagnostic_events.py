@@ -19,6 +19,7 @@ _BASE_EXCEPTION_CAUSE_DESCRIPTOR = BaseException.__dict__.get("__cause__")
 _BASE_EXCEPTION_CONTEXT_DESCRIPTOR = BaseException.__dict__.get("__context__")
 _BASE_EXCEPTION_SUPPRESSION_DESCRIPTOR = BaseException.__dict__.get("__suppress_context__")
 _BASE_EXCEPTION_GROUP_EXCEPTIONS_DESCRIPTOR = BaseExceptionGroup.__dict__.get("exceptions")
+_UUID_INT_DESCRIPTOR = uuid.UUID.__dict__.get("int")
 _SAFE_EXCEPTION_DESCRIPTOR_TYPES = (types.GetSetDescriptorType, types.MemberDescriptorType)
 
 
@@ -85,33 +86,74 @@ class SourceClass(str, Enum):
     UNKNOWN = "unknown"
 
 
-_CANONICAL_DIAGNOSTIC_OPERATIONS = (
-    DiagnosticOperation.UNHANDLED_EXCEPTION,
-    DiagnosticOperation.QT_DIALOG_IMPORT_FAILURE,
+_DIAGNOSTIC_EVENT_CODE_LITERALS = (
+    (DiagnosticEventCode.LEGACY_LOG_SUPPRESSED, "legacy_log_suppressed"),
+    (DiagnosticEventCode.INVALID_DIAGNOSTIC_EVENT, "invalid_diagnostic_event"),
+    (DiagnosticEventCode.EXCEPTION_DIAGNOSTIC, "exception_diagnostic"),
 )
-_CANONICAL_EXCEPTION_KINDS = (
-    ExceptionKind.UNKNOWN_EXCEPTION,
-    ExceptionKind.BASE_EXCEPTION_GROUP,
-    ExceptionKind.EXCEPTION_GROUP,
-    ExceptionKind.IMPORT_ERROR,
-    ExceptionKind.KEY_ERROR,
-    ExceptionKind.OS_ERROR,
-    ExceptionKind.RUNTIME_ERROR,
-    ExceptionKind.TYPE_ERROR,
-    ExceptionKind.VALUE_ERROR,
+_DIAGNOSTIC_OPERATION_LITERALS = (
+    (DiagnosticOperation.UNHANDLED_EXCEPTION, "unhandled_exception"),
+    (DiagnosticOperation.QT_DIALOG_IMPORT_FAILURE, "qt_dialog_import_failure"),
 )
-_CANONICAL_SOURCE_CLASSES = (
-    SourceClass.APPLICATION,
-    SourceClass.EXTERNAL,
-    SourceClass.UNKNOWN,
+_EXCEPTION_KIND_LITERALS = (
+    (ExceptionKind.UNKNOWN_EXCEPTION, "unknown_exception"),
+    (ExceptionKind.BASE_EXCEPTION_GROUP, "base_exception_group"),
+    (ExceptionKind.EXCEPTION_GROUP, "exception_group"),
+    (ExceptionKind.IMPORT_ERROR, "import_error"),
+    (ExceptionKind.KEY_ERROR, "key_error"),
+    (ExceptionKind.OS_ERROR, "os_error"),
+    (ExceptionKind.RUNTIME_ERROR, "runtime_error"),
+    (ExceptionKind.TYPE_ERROR, "type_error"),
+    (ExceptionKind.VALUE_ERROR, "value_error"),
+)
+_SOURCE_CLASS_LITERALS = (
+    (SourceClass.APPLICATION, "application"),
+    (SourceClass.EXTERNAL, "external"),
+    (SourceClass.UNKNOWN, "unknown"),
 )
 
 
-def _is_canonical_member(value: object, canonical_members: tuple[object, ...]) -> bool:
-    for member in canonical_members:
+def _canonical_literal(
+    value: object,
+    approved: tuple[tuple[object, str], ...],
+    error_message: str,
+) -> str:
+    for member, literal in approved:
         if value is member:
-            return True
-    return False
+            return literal
+    raise DiagnosticEventValidationError(error_message)
+
+
+def _event_code_literal(value: object) -> str:
+    return _canonical_literal(
+        value,
+        _DIAGNOSTIC_EVENT_CODE_LITERALS,
+        "unsupported diagnostic event code",
+    )
+
+
+def _operation_literal(value: object) -> str:
+    return _canonical_literal(
+        value,
+        _DIAGNOSTIC_OPERATION_LITERALS,
+        "unsupported diagnostic operation",
+    )
+
+
+def _exception_kind_literal(value: object) -> str:
+    return _canonical_literal(
+        value,
+        _EXCEPTION_KIND_LITERALS,
+        "unsupported exception kind",
+    )
+
+
+def _source_class_literal(value: object) -> str:
+    return _canonical_literal(
+        value,
+        _SOURCE_CLASS_LITERALS,
+        "unsupported source class",
+    )
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -121,8 +163,7 @@ class LegacyLogSuppressedEvent:
     source_class: SourceClass
 
     def __init__(self, source_class: SourceClass) -> None:
-        if not _is_canonical_member(source_class, _CANONICAL_SOURCE_CLASSES):
-            raise DiagnosticEventValidationError("unsupported source class")
+        _source_class_literal(source_class)
         object.__setattr__(self, "source_class", source_class)
 
 
@@ -133,8 +174,7 @@ class InvalidDiagnosticEvent:
     source_class: SourceClass
 
     def __init__(self, source_class: SourceClass) -> None:
-        if not _is_canonical_member(source_class, _CANONICAL_SOURCE_CLASSES):
-            raise DiagnosticEventValidationError("unsupported source class")
+        _source_class_literal(source_class)
         object.__setattr__(self, "source_class", source_class)
 
 
@@ -166,10 +206,8 @@ class ExceptionDiagnosticEvent:
         group_member_count: int,
         structure_truncated: bool,
     ) -> None:
-        if not _is_canonical_member(operation, _CANONICAL_DIAGNOSTIC_OPERATIONS):
-            raise DiagnosticEventValidationError("unsupported diagnostic operation")
-        if not _is_canonical_member(exception_kind, _CANONICAL_EXCEPTION_KINDS):
-            raise DiagnosticEventValidationError("unsupported exception kind")
+        _operation_literal(operation)
+        _exception_kind_literal(exception_kind)
         object.__setattr__(self, "operation", operation)
         object.__setattr__(self, "exception_kind", exception_kind)
         object.__setattr__(self, "correlation_id", uuid.uuid4())
@@ -314,8 +352,7 @@ def build_exception_diagnostic_event(
     operation: DiagnosticOperation,
 ) -> ExceptionDiagnosticEvent:
     """Build a structural exception event without reading exception payload text."""
-    if not _is_canonical_member(operation, _CANONICAL_DIAGNOSTIC_OPERATIONS):
-        raise DiagnosticEventValidationError("unsupported diagnostic operation")
+    _operation_literal(operation)
     if not isinstance(exception, BaseException):
         return ExceptionDiagnosticEvent(
             operation=operation,
@@ -395,13 +432,15 @@ def _bounded_integer(value: object, maximum: int) -> bool:
 def _uuid_hex(value: object) -> str:
     if type(value) is not uuid.UUID:
         raise DiagnosticEventValidationError("invalid correlation identifier")
+    if type(_UUID_INT_DESCRIPTOR) is not types.MemberDescriptorType:
+        raise DiagnosticEventValidationError("invalid correlation identifier")
     try:
-        encoded = value.hex
+        integer = _UUID_INT_DESCRIPTOR.__get__(value, uuid.UUID)
     except BaseException:
         raise DiagnosticEventValidationError("invalid correlation identifier") from None
-    if len(encoded) != 32 or any(character not in "0123456789abcdef" for character in encoded):
+    if type(integer) is not int or integer < 0 or integer.bit_length() > 128:
         raise DiagnosticEventValidationError("invalid correlation identifier")
-    return encoded
+    return f"{integer:032x}"
 
 
 def _exception_payload(event: ExceptionDiagnosticEvent) -> dict[str, object]:
@@ -419,10 +458,8 @@ def _exception_payload(event: ExceptionDiagnosticEvent) -> dict[str, object]:
     except BaseException:
         raise DiagnosticEventValidationError("malformed exception event") from None
 
-    if not _is_canonical_member(operation, _CANONICAL_DIAGNOSTIC_OPERATIONS):
-        raise DiagnosticEventValidationError("invalid diagnostic operation")
-    if not _is_canonical_member(exception_kind, _CANONICAL_EXCEPTION_KINDS):
-        raise DiagnosticEventValidationError("invalid exception kind")
+    operation_literal = _operation_literal(operation)
+    exception_kind_literal = _exception_kind_literal(exception_kind)
     if type(has_traceback) is not bool or type(structure_truncated) is not bool:
         raise DiagnosticEventValidationError("invalid diagnostic boolean")
     bounds = (
@@ -436,9 +473,9 @@ def _exception_payload(event: ExceptionDiagnosticEvent) -> dict[str, object]:
         raise DiagnosticEventValidationError("invalid diagnostic count")
 
     return {
-        "event_code": DiagnosticEventCode.EXCEPTION_DIAGNOSTIC.value,
-        "operation": operation.value,
-        "exception_kind": exception_kind.value,
+        "event_code": _event_code_literal(DiagnosticEventCode.EXCEPTION_DIAGNOSTIC),
+        "operation": operation_literal,
+        "exception_kind": exception_kind_literal,
         "correlation_id": _uuid_hex(correlation_id),
         "has_traceback": has_traceback,
         "traceback_frames": traceback_frames,
@@ -455,14 +492,16 @@ def _source_payload(event: DiagnosticEvent) -> dict[str, object]:
         source_class = event.source_class
     except BaseException:
         raise DiagnosticEventValidationError("malformed source event") from None
-    if not _is_canonical_member(source_class, _CANONICAL_SOURCE_CLASSES):
-        raise DiagnosticEventValidationError("invalid source class")
+    source_class_literal = _source_class_literal(source_class)
     code = (
         DiagnosticEventCode.LEGACY_LOG_SUPPRESSED
         if type(event) is LegacyLogSuppressedEvent
         else DiagnosticEventCode.INVALID_DIAGNOSTIC_EVENT
     )
-    return {"event_code": code.value, "source_class": source_class.value}
+    return {
+        "event_code": _event_code_literal(code),
+        "source_class": source_class_literal,
+    }
 
 
 def serialize_diagnostic_event(event: object) -> str:
